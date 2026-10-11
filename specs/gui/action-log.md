@@ -194,6 +194,7 @@ Texts are the exact strings, with `{…}` for the values that vary.
 | Scene | — | User / MCP | the reason a reframe was refused, **failed**, whether a busy node, nothing active on the bench, a cluster, a track with no patch or at infinity, or a reset of a node already in its own frame |
 | Edit | — | User / MCP | `Baked transform of {label}: {deg} deg, {d} scene units ({from} → {to})`, with `, x{scale}` before the transition when the scale is not `1` ([edits/bake-transform.md](edits/bake-transform.md)) |
 | Edit | — | User / MCP | `Deleted point {index} in {label} ({from} → {to})` |
+| Edit | — | MCP | `Deleted {n} points in {label} ({from} → {to})`, when a list of more than one point is deleted as one version |
 | Edit | — | User / MCP | `Deleted image {name} from {label} ({from} → {to})` |
 | Edit | — | User / MCP | `Added observation of point {index} in {image} ({label}): ZNCC {z}, {d} px from the click ({from} → {to})` |
 | Edit | — | User / MCP | `Created point in {image} ({label}), radius {r} px ({from} → {to})` |

@@ -512,6 +512,13 @@ impl PyEditedReconstruction {
         self.inner.delete_point(index).map_err(value_err)
     }
 
+    /// Delete every point in `indices`, or none of them. Every index is checked
+    /// before any is deleted, so a refusal leaves the value as it was;
+    /// duplicates count once, and an empty list changes nothing.
+    fn delete_points(&mut self, indices: Vec<u32>) -> PyResult<()> {
+        self.inner.delete_points(&indices).map_err(value_err)
+    }
+
     /// Replace the point at `index` with `record`, and give back the index the
     /// replacement took. The base index it occupies is remembered, so a
     /// materialisation puts it back in its place.

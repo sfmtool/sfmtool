@@ -13,11 +13,11 @@ shortcut. The radius is fixed at 24 logical pixels. Nothing is open.
 Amends [`../gui/viewport-navigation.md`](../gui/viewport-navigation.md) (a
 tool that takes the unmodified left drag),
 [`../gui/viewport-hud.md`](../gui/viewport-hud.md) (a second floating control
-beside the HUD), [`../gui/document-model.md`](../gui/document-model.md) § "Two
-kinds of edit" (a point edit that deletes many points), and
-[`../gui/mcp-server.md`](../gui/mcp-server.md) (`delete_points`, the tool
-state, and a `drag` input tool). When it is filed, the edit itself becomes
-`gui/edits/delete-brush.md`.
+beside the HUD), and [`../gui/mcp-server.md`](../gui/mcp-server.md) (the tool
+state and a `drag` input tool). When it is filed, the edit itself becomes
+`gui/edits/delete-brush.md`. The point edit that deletes many points, which a
+stroke commits, already exists in core, in the viewer and on the wire, and is
+specified in the standing specs named under "Interfaces".
 
 ## Purpose
 
@@ -160,9 +160,11 @@ reconstruction to use the delete brush.`
 
 ### What the version says
 
-The version's label and its Action Log entry say `Deleted 3412 points in
-<label>`, with `1 point` in the singular, and the Action Log entry carries the
-version step text as every edit's does. The entry has no "brush" suffix,
+The version is `AppState::delete_points`'s, so its label and its Action Log
+entry are that edit's: `Deleted 3412 points in <label>`, or `Deleted point 7 in
+<label>` for a stroke that painted one point, with the version step text the
+Action Log entry carries for every edit
+([`../gui/document-model.md`](../gui/document-model.md) § "Two kinds of edit"). The entry has no "brush" suffix,
 because the version is the same whether the brush or the wire deleted the
 points.
 
@@ -182,22 +184,10 @@ check is made once, at the commit.
 
 ### Core: `EditedReconstruction::delete_points`
 
-```rust
-impl EditedReconstruction {
-    /// Delete every point in `indices`, or none of them.
-    ///
-    /// Every index is checked before any is deleted, so a refusal leaves the
-    /// value as it was. Duplicates are allowed and count once.
-    pub fn delete_points(&mut self, indices: &[u32]) -> Result<(), EditError>;
-}
-```
-
-It is the many-point form of `delete_point`, beside it in
-[`crates/sfmtool-core/src/reconstruction/edited.rs`](../../crates/sfmtool-core/src/reconstruction/edited.rs),
-and it is atomic because a version must not hold half a stroke. It is bound
-through `sfmtool-py` as `EditedReconstruction.delete_points`, so a script can
-make the same edit offline (`specs/gui/edits/README.md`: every edit family's
-mechanism is a core function bound through `sfmtool-py`).
+This exists. It is the atomic many-point form of `delete_point`, bound through
+`sfmtool-py` as `EditedReconstruction.delete_points`, and is specified in
+[`../core/reconstruction/edited-reconstruction.md`](../core/reconstruction/edited-reconstruction.md)
+§ "Rust API".
 
 A point edit's unshared cost is its overlay, so a stroke of `N` points costs
 `4N` bytes per version beyond the overlay it shares, and the overlay is cloned
@@ -206,27 +196,19 @@ against the 4 GiB history budget.
 
 ### Viewer: `AppState::delete_points`
 
-```rust
-impl AppState {
-    /// Delete the points `points` of reconstruction `recon` as one version.
-    ///
-    /// `points` need not be sorted or unique. Returns the sentence the caller
-    /// reports when there is nothing to delete or the node is busy.
-    pub(crate) fn delete_points(&mut self, recon: ReconId, points: &[u32]) -> Result<(), String>;
-}
-```
-
-It sits beside `delete_point` in `state/edits.rs`, which becomes the
-one-element call of it, so the two cannot drift apart in their labels, their
-maps or how they move the selection. The brush is reported out of the viewport
-as a gesture, as every point gesture is (`PointGesture`), because the panel
-holds the node borrowed while it draws.
+This exists: `AppState::delete_points(recon, points)` deletes a list of one
+reconstruction's points as one version, and `delete_point` is its one-element
+call. It is specified in
+[`../gui/document-model.md`](../gui/document-model.md) § "Two kinds of edit".
+The brush is reported out of the viewport as a gesture, as every point gesture
+is (`PointGesture`), because the panel holds the node borrowed while it draws,
+and the gesture's handler calls `delete_points`.
 
 ### Wire
 
-- **`delete_points`** `{reconstruction_label, points: [int]}`: the same edit,
-  one version, with the same reply shape as `delete_point`. It is how an agent
-  cleans a reconstruction and how a test makes a large delete without a pointer.
+- **`delete_points`** `{reconstruction_label, points: [int]}` exists and is
+  specified in [`../gui/mcp-server.md`](../gui/mcp-server.md) §
+  "`delete_point` / `delete_points` / `delete_camera_image`".
 - **The tool state** is one field on `get_viewer_3d_display` /
   `set_viewer_3d_display`: `tool` (`"navigate"` or `"delete_brush"`).
 - **`drag`** `{x, y, path: [[x, y], ...], button, modifiers}`, an input tool
@@ -307,14 +289,8 @@ release.
 
 ## Testing
 
-- **Core:** `delete_points` deletes each index once; a list holding an index
-  out of range or already deleted refuses and leaves the value unchanged;
-  duplicates count once; an empty list is a no-op. A Python test through the
-  binding.
-- **Viewer state** (headless, `state/edits/tests`): `delete_points` pushes one
-  version whose map is the sorted unique list, its label in the singular and the
-  plural, the selection cleared when it was one of the points, and one Ctrl+Z
-  restores all of them; `delete_point` still produces what it did.
+- **Core and viewer state:** `delete_points` is tested where it is specified
+  (the standing specs named under "Interfaces").
 - **The stroke** (headless, `viewer_3d/tests.rs`): with a synthetic pick region,
   the capsule test paints the pixels within the radius of the segment and no
   others; pixels of a reconstruction other than the selected one are neither
@@ -327,8 +303,7 @@ release.
 - **The flag** (`scene_renderer/upload/tests.rs`, `noop` backend): previewed
   points get `4` and go back to `1` when the pointer moves off them; painted
   points get `3`, go back to `1` on cancel, and to `0` after the commit.
-- **Wire** (`mcp/tests/edit.rs`): `delete_points` makes one version and its
-  reply names it; `set_viewer_3d_display` switches the tool and refuses
+- **Wire** (`mcp/tests/edit.rs`): `set_viewer_3d_display` switches the tool and refuses
   `delete_brush` while the Move Camera lock is held.
 - **End to end** (`ui_basic`, once `drag` exists): a drag across a known
   region of the seoul bull ground truth deletes points, and their count matches

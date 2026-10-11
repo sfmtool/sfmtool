@@ -113,8 +113,8 @@ place.
 
 ## The tool surface
 
-Eighty-nine tools. Seventeen read -- sixteen that answer with JSON, and
-`screenshot`, which closes the loop by handing back a picture -- sixty-seven
+Ninety tools. Seventeen read -- sixteen that answer with JSON, and
+`screenshot`, which closes the loop by handing back a picture -- sixty-eight
 write, four send input, and one writes a file. `get_widgets` and the four
 input tools, `click`, `hover`, `press_key` and `type_text`, read and press the
 viewer's widgets the way a person's eyes, mouse and keyboard do (§ "`get_widgets`", § "`click` /
@@ -158,6 +158,7 @@ viewer's widgets the way a person's eyes, mouse and keyboard do (§ "`get_widget
 | `undo` / `redo` | write | Step one reconstruction's history back or forward a version |
 | `jump_to_version` | write | Move its cursor straight to a version |
 | `delete_point` | write | Delete one 3D point and its track |
+| `delete_points` | write | Delete many 3D points of one reconstruction and their tracks, as one version |
 | `retriangulate_point` | write | Re-solve one 3D point from its own observations at the poses and lenses the reconstruction holds |
 | `retriangulate_all_points` | write | Re-solve every 3D point the same way, on a worker thread |
 | `prune_covered_observations` | write | Retire every observation a finer tracked one covers, and drop the points left with fewer than two, on a worker thread |
@@ -212,7 +213,7 @@ viewer's widgets the way a person's eyes, mouse and keyboard do (§ "`get_widget
 | `type_text` | input | Type a string into the focused text input, or into one named by its widget id |
 
 Every tool is annotated: the sixteen reads and `screenshot` carry
-`readOnlyHint: true`, the sixty-seven writes `destructiveHint: false` (none of
+`readOnlyHint: true`, the sixty-eight writes `destructiveHint: false` (none of
 them touches a file on disk: `close_reconstruction` unloads, it does not
 delete; `set_window_layout` changes the window and the dock, not the layout file
 the menu saves; an **edit** makes a new version of a loaded value, which the
@@ -2971,7 +2972,7 @@ re-read rather than reuse. A qualified `pt3d_<hash>_<index>` id survives, which
 is what it is for.
 
 **Point edits close up at the next whole new base.** A point edit
-(`delete_point`, `retriangulate_point`, `commit_bench_track`) keeps every other
+(`delete_point`, `delete_points`, `retriangulate_point`, `commit_bench_track`) keeps every other
 index where it was by leaving the gone point's slot open. Every edit that gives
 the node a whole new base, and a `save_reconstruction` that is not a minimal
 copy, first folds those pending point edits into the value: a deleted point's
@@ -3154,11 +3155,12 @@ an override only says something about a copy written somewhere else. Stating one
 on a plain save writes a version carrying the stated metadata, since the metadata
 is inside the content hash ([saving.md](saving.md) § "Materialise on save").
 
-### `delete_point` / `delete_camera_image`
+### `delete_point` / `delete_points` / `delete_camera_image`
 
 ```jsonc
 // delete_point        { "reconstruction_label": "seoul_bull", "point": 1207 }
 // delete_point        { "reconstruction_label": "seoul_bull", "point": "pt3d_a1b2c3d4_1207" }
+// delete_points       { "reconstruction_label": "seoul_bull", "points": [1207, 88, 3410] }
 // delete_camera_image { "reconstruction_label": "seoul_bull", "camera_image": 3 }
 // delete_camera_image { "reconstruction_label": "seoul_bull",
 //                       "camera_image": "images/IMG_0042.jpg" }
@@ -3174,6 +3176,18 @@ is a coordinate in the reconstruction the call named, not in the selected one; a
 qualified `pt3d_<hash>_<index>` id that resolves to a different node is refused
 naming both. The resolution is `goto_point`'s, the same one `get_point` and the
 Go to Point dialog use, so an id means the same thing wherever it is sent.
+
+**`delete_points` is many point deletes as one version**, which one undo
+reverses. It is `AppState::delete_points`, the call `delete_point` makes with a
+one-element list ([document-model.md](document-model.md) § "Two kinds of edit"), so
+the reply has `delete_point`'s shape. `points` are bare indexes into the
+reconstruction the call names; they need not be sorted, and an index named twice
+counts once. Every index is checked before any is deleted, so a list naming a
+point that is out of range or already deleted is refused whole, as is an empty
+list. The label names the point when the list holds one (`Deleted point 1207 in
+seoul_bull`) and counts them otherwise (`Deleted 3 points in seoul_bull`). It is
+how an agent cleans a reconstruction, and how a test makes a large delete
+without a pointer.
 
 ### `move_camera_image`
 
@@ -5057,7 +5071,10 @@ where a test hands no host over.
   the fixture a resection and an adjustment both need, one thing rather than
   five near-copies of it. What is asserted is the boundary and not the edit:
   `delete_point` pushes a version whose serial, label and `report` the reply
-  names, and leaves that one sentence in the log as `Mcp`; `delete_camera_image`
+  names, and leaves that one sentence in the log as `Mcp`; `delete_points`
+  pushes one version for its whole list with the same reply, and a list naming
+  a dead point, an empty list or one that is not whole numbers is refused and
+  pushes nothing; `delete_camera_image`
   shrinks the image table; the resection and the adjustment push a
   version and report the estimate and the residuals. What each family *does* to
   a reconstruction is asserted in `state::edits::tests`, over the same
@@ -5263,7 +5280,7 @@ where a test hands no host over.
   and the panel list in the prose above are asserted against `catalog()` and
   `Tab::ALL`, because a number written out in words is the first thing to go
   stale.
-- **The catalog is eighty-nine tools**, seventeen of them reads, four of the
+- **The catalog is ninety tools**, seventeen of them reads, four of the
   `Input` kind and one of the `Save` kind, those five carrying
   `destructiveHint: true`;
   `set_window_layout`'s schema advertises `sfm_explorer_layout`, `window` and

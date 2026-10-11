@@ -203,6 +203,7 @@ value.
 impl AppState {
     pub fn delete_selected_point(&mut self) -> Result<(), String>;
     pub fn delete_point(&mut self, point: PointRef) -> Result<(), String>;
+    pub fn delete_points(&mut self, recon: ReconId, points: &[u32]) -> Result<(), String>;
     pub fn delete_image(&mut self, image: ImageRef) -> Result<(), String>;
     pub fn undo(&mut self, id: ReconId) -> Result<(), String>;
     pub fn redo(&mut self, id: ReconId) -> Result<(), String>;
@@ -216,6 +217,20 @@ the overlay and shares the base pointer -- calls
 `EditedReconstruction::delete_point`, and pushes the result. The base is the same
 `Arc`, every other index still means what it meant, and the version's unshared
 cost is one `u32`.
+
+**Deleting many points is the same edit, once.** `delete_points` deletes a list
+of one reconstruction's points as one version through
+`EditedReconstruction::delete_points`, which checks every index before it
+deletes any, so a list naming a point that is out of range or already deleted
+pushes nothing. The list need not be sorted or unique; the version's map is
+`PointMap::Removed` of the sorted list with duplicates dropped, which is the
+order the map's lookup needs. `delete_point` is its one-element call, so the two
+cannot come to differ in their labels, their maps or how they move the
+selection. The label names the point when there is one (`Deleted point 7 in
+run_a`) and counts them otherwise (`Deleted 3412 points in run_a`). A version of
+`N` deleted points costs `4N` bytes beyond the overlay it shares. MCP reaches it
+as `delete_points` ([mcp-server.md](mcp-server.md) § "`delete_point` /
+`delete_points` / `delete_camera_image`").
 
 **A point edit that creates is the same shape.** A commit of a bench track reads
 the point's whole record, rewrites its track, and calls
@@ -236,7 +251,7 @@ same indexes: an observation in the deleted image is dropped, and an item left
 with none is discarded ([bench.md](bench.md) § "One history for the pair").
 
 An edit that cannot run changes nothing and returns the sentence saying why: no
-point selected, a point already deleted, an image already gone, or the node's
+point selected, an empty list of points, a point already deleted, an image already gone, or the node's
 last image, which cannot be deleted because a reconstruction with no images is
 not one.
 
@@ -476,6 +491,8 @@ the type lives, in `crates/sfmtool-core/src/reconstruction/edited/tests.rs`.
 
 `crates/sfm-explorer/src/state/edits/tests.rs` covers the two edits end to end --
 that a point edit leaves the base the same `Arc` and moves the count by one, that
+a many-point delete is one version whose map is the sorted unique list and which
+one undo reverses, that
 a bulk edit produces a new base with an empty overlay under the same `ReconId`,
 that a refused edit leaves the history alone, and what the Action Log records.
 

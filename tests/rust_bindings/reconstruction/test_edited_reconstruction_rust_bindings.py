@@ -134,6 +134,23 @@ class TestPointEdits:
         with pytest.raises(ValueError, match="no live point"):
             edited.delete_point(0)
 
+    def test_delete_points_deletes_each_named_point_once(self, edited):
+        edited.delete_points([])
+        assert edited.point_count == edited.base_point_count
+        edited.delete_points([3, 1, 3])
+        assert edited.point_count == edited.base_point_count - 2
+        assert edited.point(1) is None and edited.point(3) is None
+        assert edited.point(0) is not None
+
+    def test_delete_points_refuses_the_whole_list_for_one_bad_index(self, edited):
+        edited.delete_point(2)
+        with pytest.raises(ValueError, match="no live point at edited index 2"):
+            edited.delete_points([0, 1, 2])
+        with pytest.raises(ValueError, match="no live point"):
+            edited.delete_points([0, edited.index_bound])
+        assert edited.point_count == edited.base_point_count - 1
+        assert edited.point(0) is not None and edited.point(1) is not None
+
 
 class TestMaterialisation:
     def test_reads_agree_under_the_row_map(self, edited):

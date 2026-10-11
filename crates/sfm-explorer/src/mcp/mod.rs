@@ -267,6 +267,11 @@ pub(crate) enum Command {
         reconstruction_label: String,
         point: crate::goto_point::PointQuery,
     },
+    /// Delete many points of one reconstruction as one version.
+    DeletePoints {
+        reconstruction_label: String,
+        points: Vec<u32>,
+    },
     /// Re-solve one point from its own observations, at the poses and the
     /// lenses the reconstruction already holds.
     RetriangulatePoint {
@@ -1427,6 +1432,10 @@ pub(crate) fn apply_with_window(
             reconstruction_label,
             point,
         } => done(edit::delete_point(state, &reconstruction_label, &point)),
+        Command::DeletePoints {
+            reconstruction_label,
+            points,
+        } => done(edit::delete_points(state, &reconstruction_label, &points)),
         Command::RetriangulatePoint {
             reconstruction_label,
             point,

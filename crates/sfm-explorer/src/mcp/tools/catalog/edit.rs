@@ -122,6 +122,34 @@ pub(super) fn specs() -> Vec<ToolSpec> {
             ),
         },
         ToolSpec {
+            name: "delete_points",
+            description: "Delete many 3D points of one reconstruction, and their tracks, as one \
+                          version that one undo reverses. The same point edit as delete_point, \
+                          with the same reply: every other point keeps its index, and the \
+                          deleted slots close up first under a later edit that gives the node a \
+                          new base, as delete_point describes. The list need not be sorted, and \
+                          a point named twice counts once. Every index is checked first: a list \
+                          naming a point that is out of range or already deleted is refused and \
+                          deletes nothing, and so is an empty list.",
+            kind: Write,
+            schema: object(
+                &[],
+                &[
+                    ("reconstruction_label", edited_label_schema()),
+                    (
+                        "points",
+                        json!({
+                            "type": "array",
+                            "items": { "type": "integer", "minimum": 0 },
+                            "description":
+                                "The points to delete, by their indexes in the reconstruction \
+                                 reconstruction_label names.",
+                        }),
+                    ),
+                ],
+            ),
+        },
+        ToolSpec {
             name: "retriangulate_point",
             description: "Re-solve one 3D point from its own observations, at the poses and the \
                           lenses the reconstruction already holds. Moves no camera and no other \

@@ -112,6 +112,118 @@ fn deleting_a_point_twice_is_refused_and_leaves_the_history_alone() {
     assert_eq!(state.scene[0].history.versions().len(), versions);
 }
 
+// ── Delete points: the many-point form ──────────────────────────────────
+
+#[test]
+fn deleting_many_points_pushes_one_version_mapped_by_the_sorted_unique_list() {
+    let mut state = state();
+    let id = node(&state);
+    let count = state.scene[0].point_count();
+    state.action_log.clear();
+
+    state
+        .delete_points(id, &[9, 2, 30, 9])
+        .expect("live points");
+
+    let node = &state.scene[0];
+    assert_eq!(node.history.versions().len(), 2, "one version for the list");
+    assert_eq!(node.point_count(), count - 3);
+    for point in [2, 9, 30] {
+        assert!(node.is_point_deleted(point), "point {point} survived");
+    }
+    assert_eq!(
+        node.history.map_into_cursor(),
+        Some(&crate::document::PointMap::Removed(vec![2, 9, 30]))
+    );
+    assert_eq!(
+        node.history.current_version().label,
+        "Deleted 3 points in demo"
+    );
+    let texts = texts(&state);
+    assert_eq!(texts.len(), 1, "{texts:?}");
+    assert!(
+        texts[0].starts_with("Deleted 3 points in demo ("),
+        "{}",
+        texts[0]
+    );
+}
+
+#[test]
+fn deleting_one_point_through_the_list_names_it_as_delete_point_does() {
+    let mut state = state();
+    let id = node(&state);
+    state.delete_points(id, &[4, 4]).expect("a live point");
+    state
+        .delete_point(PointRef::new(id, 6))
+        .expect("a live point");
+
+    let labels: Vec<&str> = state.scene[0]
+        .history
+        .versions()
+        .iter()
+        .map(|version| version.label.as_str())
+        .collect();
+    assert_eq!(
+        labels[1..],
+        ["Deleted point 4 in demo", "Deleted point 6 in demo"]
+    );
+    assert_eq!(
+        state.scene[0].history.map_into_cursor(),
+        Some(&crate::document::PointMap::Removed(vec![6]))
+    );
+}
+
+#[test]
+fn deleting_many_points_clears_a_selection_on_one_and_one_undo_restores_them_all() {
+    let mut state = state();
+    let id = node(&state);
+    state.selected_point = Some(PointRef::new(id, 11));
+    state.delete_points(id, &[3, 11, 20]).expect("live points");
+    assert_eq!(
+        state.selected_point, None,
+        "a deleted point stayed selected"
+    );
+
+    state.undo(id).expect("one edit to undo");
+    for point in [3, 11, 20] {
+        assert!(
+            !state.scene[0].is_point_deleted(point),
+            "{point} stayed gone"
+        );
+    }
+    assert_eq!(state.selected_point, None, "an undo does not guess");
+
+    state.selected_point = Some(PointRef::new(id, 12));
+    state.delete_points(id, &[3, 11]).expect("live points");
+    assert_eq!(
+        state.selected_point,
+        Some(PointRef::new(id, 12)),
+        "a surviving selection keeps its index"
+    );
+}
+
+#[test]
+fn a_list_naming_a_dead_point_or_nothing_is_refused_and_pushes_nothing() {
+    let mut state = state();
+    let id = node(&state);
+    state
+        .delete_point(PointRef::new(id, 5))
+        .expect("a live point");
+    let versions = state.scene[0].history.versions().len();
+
+    let why = state.delete_points(id, &[1, 5]).expect_err("a dead point");
+    assert!(why.starts_with("Cannot delete those points:"), "{why}");
+    assert!(
+        !state.scene[0].is_point_deleted(1),
+        "half the list was deleted"
+    );
+    assert_eq!(
+        state.delete_points(id, &[]),
+        Err("No points to delete.".to_string())
+    );
+    assert_eq!(state.scene[0].history.versions().len(), versions);
+}
+
 // ── Delete image: the bulk edit ─────────────────────────────────────────
 
 #[test]

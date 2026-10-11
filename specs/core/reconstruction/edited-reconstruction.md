@@ -333,6 +333,7 @@ impl EditedReconstruction {
 
     // The point edits.
     pub fn delete_point(&mut self, index: u32) -> Result<(), EditError>;
+    pub fn delete_points(&mut self, indices: &[u32]) -> Result<(), EditError>; // all or none
     pub fn replace_point(&mut self, index: u32, record: PointRecord)
         -> Result<u32, EditError>;
     pub fn add_point(&mut self, record: PointRecord) -> Result<u32, EditError>;
@@ -391,7 +392,12 @@ A record must carry **exactly** the base's optional columns, no more and no
 fewer, which is what lets column presence be answered from the base alone and
 never from a walk; `add_point` refuses otherwise, with an `EditError` naming the
 column. Every edit validates before it pushes, so a refused record leaves the
-addition set exactly as it was.
+addition set exactly as it was. `delete_points` is the many-point form of
+`delete_point` and holds to the same rule across its list: every index is checked
+before any is deleted, so one index that names no live point refuses the whole
+list and leaves the deleted set as it was. An index named twice counts once, and
+an empty list changes nothing. It is atomic because the viewer pushes the list as
+one version, and a version must not hold half of it.
 
 There is no copy-on-write and no interior mutability. `&mut self` on an edit is
 a write to the *overlay*, which the version owns; the base behind the `Arc` is
@@ -770,6 +776,8 @@ that omits or invents one is a visible failure. What they pin:
   from the surviving indexes onto the materialised rows, a modified point lands
   back at the base index it replaced, and a version that changed no patch shares
   the base's bitmap array by pointer.
+- `delete_points` deletes each index it names once, duplicates included, and
+  a list holding an index out of range or already deleted deletes nothing.
 - A record is refused, with the addition set untouched, when it carries the
   wrong columns, an image the base does not hold, a bitmap of the wrong
   resolution, or no observations at all.

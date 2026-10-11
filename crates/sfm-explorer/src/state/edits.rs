@@ -635,20 +635,47 @@ impl AppState {
         self.delete_point(point)
     }
 
-    /// Delete one point, named by ref.
+    /// Delete one point, named by ref: the one-element call of
+    /// [`Self::delete_points`].
     pub(crate) fn delete_point(&mut self, point: PointRef) -> Result<(), String> {
-        let index = self.editable_node_index(point.recon)?;
+        self.delete_points(point.recon, &[point.point])
+    }
+
+    /// Delete the points `points` of reconstruction `recon` as one version.
+    ///
+    /// `points` need not be sorted or unique. Every index is checked before
+    /// any is deleted, so a refusal pushes nothing. The version's map is the
+    /// sorted unique list, as [`PointMap::Removed`] requires. Its label names
+    /// the point when there is one (`Deleted point 7 in <label>`) and counts
+    /// them otherwise (`Deleted 3412 points in <label>`). Returns the sentence
+    /// the caller reports when there is nothing to delete, an index names no
+    /// live point, or the node is busy.
+    pub(crate) fn delete_points(&mut self, recon: ReconId, points: &[u32]) -> Result<(), String> {
+        let index = self.editable_node_index(recon)?;
+        let mut removed = points.to_vec();
+        removed.sort_unstable();
+        removed.dedup();
         let node = &mut self.scene[index];
         let mut next = node.history.current().clone();
-        next.delete_point(point.point)
-            .map_err(|e| format!("Cannot delete that point: {e}"))?;
         let label = node.label.clone();
-        let text = format!("Deleted point {} in {label}", point.point);
+        let text = match removed.as_slice() {
+            [] => return Err("No points to delete.".to_string()),
+            [one] => {
+                next.delete_point(*one)
+                    .map_err(|e| format!("Cannot delete that point: {e}"))?;
+                format!("Deleted point {one} in {label}")
+            }
+            many => {
+                next.delete_points(many)
+                    .map_err(|e| format!("Cannot delete those points: {e}"))?;
+                format!("Deleted {} points in {label}", many.len())
+            }
+        };
         let serial = node
             .history
-            .push(next, PointMap::Removed(vec![point.point]), text.clone());
+            .push(next, PointMap::Removed(removed), text.clone());
         let parent = version_before(node, serial);
-        self.follow_selection_forward(point.recon);
+        self.follow_selection_forward(recon);
         self.action_log
             .record(Kind::Edit, version_step_text(&text, parent, serial));
         Ok(())

@@ -267,6 +267,47 @@ fn point_edits_leave_the_base_arc_alone() {
     assert_eq!(base.point_count(), 6);
 }
 
+/// `delete_points` deletes each named point once, duplicates included, and an
+/// empty list changes nothing.
+#[test]
+fn delete_points_deletes_each_named_point_once() {
+    let base = Arc::new(fixture(6));
+    let mut edited = EditedReconstruction::new(Arc::clone(&base));
+    edited.delete_points(&[]).unwrap();
+    assert_eq!(edited, EditedReconstruction::new(Arc::clone(&base)));
+
+    let added = edited.add_point(new_record(5, 8)).unwrap();
+    edited.delete_points(&[4, 1, added, 4]).unwrap();
+    assert_eq!(edited.point_count(), 4);
+    for i in [1, 4, added] {
+        assert!(edited.is_deleted(i), "point {i} is deleted");
+    }
+    for i in [0u32, 2, 3, 5] {
+        assert!(edited.point(i).is_some(), "point {i} is untouched");
+    }
+}
+
+/// A list naming any point that is not live -- past the end, or already
+/// deleted -- deletes nothing, wherever in the list that index stands.
+#[test]
+fn delete_points_refuses_the_whole_list_for_one_bad_index() {
+    let base = Arc::new(fixture(6));
+    let mut edited = EditedReconstruction::new(Arc::clone(&base));
+    edited.delete_point(2).unwrap();
+    let before = edited.clone();
+
+    assert_eq!(
+        edited.delete_points(&[0, 1, 6]),
+        Err(EditError::NoSuchPoint(6))
+    );
+    assert_eq!(edited, before, "an index past the end deletes nothing");
+    assert_eq!(
+        edited.delete_points(&[0, 2, 3]),
+        Err(EditError::NoSuchPoint(2))
+    );
+    assert_eq!(edited, before, "an index already deleted deletes nothing");
+}
+
 #[test]
 fn indexes_are_stable_across_every_point_edit() {
     let base = Arc::new(fixture(6));

@@ -331,6 +331,10 @@ pub(crate) fn parse(
             reconstruction_label: args.required_string("reconstruction_label")?,
             point: args.point("point")?,
         },
+        "delete_points" => Command::DeletePoints {
+            reconstruction_label: args.required_string("reconstruction_label")?,
+            points: args.point_indexes("points")?,
+        },
         "delete_camera_image" => Command::DeleteCameraImage {
             reconstruction_label: args.required_string("reconstruction_label")?,
             camera_image: args.camera_image("camera_image")?,
@@ -1490,6 +1494,28 @@ impl Args<'_> {
                     release_focal: inner.optional_bool("release_focal")?,
                     release_distortion: inner.optional_bool("release_distortion")?,
                 })
+            })
+            .collect()
+    }
+
+    /// Point indexes into the named reconstruction, as a list of whole
+    /// numbers. A point index is a `u32` everywhere below this.
+    fn point_indexes(&self, key: &str) -> Result<Vec<u32>, ToolError> {
+        let expected = "an array of point indexes";
+        let value = self
+            .map
+            .get(key)
+            .ok_or_else(|| self.error(format!("needs {key}: {expected}.")))?;
+        let array = value
+            .as_array()
+            .ok_or_else(|| self.wrong_type(key, expected, value))?;
+        array
+            .iter()
+            .map(|element| {
+                element
+                    .as_u64()
+                    .and_then(|index| u32::try_from(index).ok())
+                    .ok_or_else(|| self.wrong_type(key, expected, value))
             })
             .collect()
     }

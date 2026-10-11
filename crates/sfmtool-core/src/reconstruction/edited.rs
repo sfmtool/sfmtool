@@ -982,6 +982,20 @@ impl EditedReconstruction {
         Ok(())
     }
 
+    /// Delete every point in `indices`, or none of them.
+    ///
+    /// Every index is checked before any is deleted, so a refusal leaves the
+    /// value as it was. Duplicates are allowed and count once, and an empty
+    /// list changes nothing. This is the many-point form of
+    /// [`Self::delete_point`].
+    pub fn delete_points(&mut self, indices: &[u32]) -> Result<(), EditError> {
+        if let Some(&bad) = indices.iter().find(|&&i| self.point(i).is_none()) {
+            return Err(EditError::NoSuchPoint(bad));
+        }
+        self.deleted_points.extend(indices.iter().copied());
+        Ok(())
+    }
+
     /// Replace the point at `index` with `record`, and give back the index the
     /// replacement took.
     ///

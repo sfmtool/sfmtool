@@ -183,6 +183,13 @@ pub(super) fn delete_point(state: &mut AppState, label: &str, query: &PointQuery
     edited(state, id, |state| state.delete_point(point))
 }
 
+/// `delete_points`: many points of one reconstruction deleted as one version,
+/// with the reply `delete_point` gives.
+pub(super) fn delete_points(state: &mut AppState, label: &str, points: &[u32]) -> JsonReply {
+    let id = resolve_reconstruction(state, Some(label))?;
+    edited(state, id, |state| state.delete_points(id, points))
+}
+
 /// `retriangulate_point`: one point re-solved from its own observations, at
 /// the poses and the lenses the reconstruction already holds.
 ///

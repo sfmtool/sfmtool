@@ -98,6 +98,68 @@ fn delete_point_pushes_a_version_the_reply_names() {
     assert_eq!(last, (Actor::Mcp, false, report.to_string()));
 }
 
+/// Many points deleted in one call are one version, and the reply has
+/// `delete_point`'s shape.
+#[test]
+fn delete_points_pushes_one_version_the_reply_names() {
+    let (mut state, mut viewer) = editable();
+    let reply = call(
+        &mut state,
+        &mut viewer,
+        "delete_points",
+        json!({ "reconstruction_label": "run_a", "points": [7, 3, 5, 3] }),
+    );
+
+    assert_eq!(version_count(&state), 2);
+    for point in [3, 5, 7] {
+        assert!(state.scene[0].is_point_deleted(point), "{point} survived");
+    }
+    assert_eq!(reply["reconstruction_label"], "run_a");
+    let serial = state.scene[0].history.current_version().serial.to_string();
+    assert_eq!(reply["serial"], serial);
+    assert_eq!(reply["cursor"], serial);
+    assert_eq!(reply["label"], "Deleted 3 points in run_a");
+    assert_eq!(reply["dirty"], true);
+    assert_eq!(reply["changed"], true);
+    let report = reply["report"].as_str().expect("a report");
+    assert!(report.starts_with("Deleted 3 points in run_a"), "{report}");
+    assert!(report.contains(&serial), "{report}");
+    let last = rows(&state).pop().expect("one entry per edit");
+    assert_eq!(last, (Actor::Mcp, false, report.to_string()));
+}
+
+/// A list naming a dead point, an empty list and a list that is not one of
+/// whole numbers are each refused, and none of them pushes a version.
+#[test]
+fn delete_points_refuses_a_list_it_cannot_delete_whole() {
+    let (mut state, mut viewer) = editable();
+    call(
+        &mut state,
+        &mut viewer,
+        "delete_point",
+        json!({ "reconstruction_label": "run_a", "point": 4 }),
+    );
+    for (points, expected) in [
+        (json!([1, 4]), "no live point at edited index 4"),
+        (json!([]), "No points to delete."),
+        (json!([1, -2]), "points"),
+        (json!("1, 2"), "points"),
+    ] {
+        let error = refused_call(
+            &mut state,
+            &mut viewer,
+            "delete_points",
+            json!({ "reconstruction_label": "run_a", "points": points }),
+        );
+        assert!(error.0.contains(expected), "{points}: {error}");
+        assert_eq!(version_count(&state), 2, "{points}");
+    }
+    assert!(
+        !state.scene[0].is_point_deleted(1),
+        "half a list was deleted"
+    );
+}
+
 /// A retriangulated point pushes a version, and the report names the verdict
 /// its own observations supported rather than merely that something happened.
 #[test]

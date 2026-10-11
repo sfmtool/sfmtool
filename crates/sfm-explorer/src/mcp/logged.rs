@@ -65,6 +65,7 @@ impl Command {
             Command::JumpToVersion { .. } => "jump_to_version",
             Command::SaveReconstruction { .. } => "save_reconstruction",
             Command::DeletePoint { .. } => "delete_point",
+            Command::DeletePoints { .. } => "delete_points",
             Command::RetriangulatePoint { .. } => "retriangulate_point",
             Command::RetriangulateAllPoints { .. } => "retriangulate_all_points",
             Command::PruneCoveredObservations { .. } => "prune_covered_observations",
@@ -129,6 +130,10 @@ impl Command {
     pub(super) fn edits(&self) -> Option<&str> {
         match self {
             Command::DeletePoint {
+                reconstruction_label,
+                ..
+            }
+            | Command::DeletePoints {
                 reconstruction_label,
                 ..
             }
@@ -303,6 +308,7 @@ impl Command {
             | Command::Redo { .. }
             | Command::JumpToVersion { .. }
             | Command::DeletePoint { .. }
+            | Command::DeletePoints { .. }
             | Command::RetriangulatePoint { .. }
             | Command::RetriangulateAllPoints { .. }
             | Command::PruneCoveredObservations { .. }
