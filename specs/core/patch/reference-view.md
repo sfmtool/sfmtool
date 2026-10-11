@@ -264,6 +264,12 @@ missing viewing angle passes, since only an angle shown to be at or past the
 facing limit turns the view away. When no view left after the
 agreement test has a self-similarity reading, the rule picks nothing.
 
+Each criterion is a test the view passes or fails in turn, so the rule does
+not weigh one against another: below 65° the viewing angle plays no part in
+the pick. Ranking the views by one cost that every criterion enters, with only
+a coverage floor and a rendered tile kept as hard limits, is proposed in
+[../../drafts/reference-view-score-amendment.md](../../drafts/reference-view-score-amendment.md).
+
 ### Each threshold and its reason
 
 | Constant | Value | Reason |
@@ -362,7 +368,10 @@ into the point's own track, in `tracks/reference_observations`.
   of 18,991 points (3%) take the fused mean by this rule. The evaluation's
   pick, which Track View and the wire show, is the rule's and is not changed
   by it, so for these points the row Track View marks as the reference is not
-  the stored bitmap's tile.
+  the stored bitmap's tile. Storing a view's tile, and naming it, for every
+  point that has a view meeting the proposed cost's hard limits, in place of
+  the fused mean in this case and the one above, is proposed in
+  [../../drafts/reference-view-score-amendment.md](../../drafts/reference-view-score-amendment.md).
 
 **The reference says what to render.** `tracks/reference_observations`
 names, per point, the observation its bitmap is, or is to be, rendered from,

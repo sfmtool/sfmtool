@@ -176,6 +176,12 @@ So the weights read obliquity only from the angle, never from the Jacobian's ani
 ## Part 5: computing the patch bitmap
 
 **Built: the reference-view rule.** The rule that picks the single reference view is built and runs in every bench evaluation, as [core/patch/reference-view.md](../core/patch/reference-view.md) describes: candidates with coverage of at least 0.99, a clipped share of at most 0.05, a viewing angle of at most 65° and no ninth of the tile more than 0.3 below the track's typical agreement there; of those within 0.15 of the best candidate's median pairwise ZNCC, the one with the smallest self-similarity radius; the 65° angle limit, the cell check and then coverage and clipping dropped in turn when no view passes, with a view at 90° or more, which sees the patch edge on or from behind, never a candidate. It was tuned against hand picks on 77 tracks.
+[reference-view-score-amendment.md](reference-view-score-amendment.md)
+proposes replacing its tests and fallbacks with one cost per view, which the
+self-similarity radius, the viewing angle and soft penalties for agreement,
+the cell deficit, coverage and clipping all enter, and storing the pick's tile,
+in place of the fused mean, for every point that has a view meeting that
+cost's hard limits.
 
 The built rule reads neither of two signals the measurements of Part 4 list. It reads no zoom: it judges sharpness by the self-similarity radius alone, measured on each view's own tile at the patch resolution. And it reads no brightness or colour: a gate on how typical a view's brightness and colour are of the track was tried during tuning and left out, because it turned away views the hand picks chose.
 
