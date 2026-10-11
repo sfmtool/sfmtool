@@ -586,6 +586,9 @@ def main() -> None:
     args = ap.parse_args()
     bound = args.angle_bound
     lines: list[str] = []
+    # The report holds σ and °, which a Windows pipe's default code page
+    # cannot encode.
+    sys.stdout.reconfigure(encoding="utf-8")
 
     def out(s=""):
         print(s)
