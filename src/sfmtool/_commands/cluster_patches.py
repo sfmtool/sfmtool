@@ -109,6 +109,22 @@ from .._cli_utils import timed_command
     ),
 )
 @click.option(
+    "--rotation-starts",
+    "rotation_starts",
+    type=click.IntRange(min=1),
+    default=12,
+    show_default=True,
+    help=(
+        "Before the affine fit, score the reference's patch against each "
+        "member at this many rotations of its SIFT seed, evenly spaced over a "
+        "full turn with the seed's own rotation first, and start the fit from "
+        "the best-scoring one. The two SIFT orientations can disagree across "
+        "a scale change, and the fit cannot turn far from where it starts. 1 "
+        "starts only from the SIFT seed. See "
+        "specs/core/patch/cluster-patch-refinement.md."
+    ),
+)
+@click.option(
     "--piecewise/--no-piecewise",
     "piecewise",
     default=False,
@@ -133,6 +149,7 @@ def cluster_patches(
     max_member_zncc_self_similarity_radius,
     regate_at_refined_shape,
     max_capped_cells,
+    rotation_starts,
     piecewise,
 ):
     """Refine a cluster-bearing .matches file into patch clusters.
@@ -140,7 +157,8 @@ def cluster_patches(
     Per cluster: exclude members whose own patch does not pin a position,
     pick a reference member (largest SIFT scale), refine a
     Gaussian-windowed-ZNCC affine warp from the reference's patch to every
-    other member (seeded from the SIFT affine shapes), vet members by
+    other member (seeded from the SIFT affine shapes, at the best-scoring of
+    --rotation-starts rotations of that seed), vet members by
     achieved ZNCC and translation drift, read each surviving member's own
     patch again at its refined shape and refuse those that do not pin a
     position there as a whole or have too many cells that do not, and keep
@@ -174,6 +192,7 @@ def cluster_patches(
             piecewise,
             regate_at_refined_shape,
             max_capped_cells,
+            rotation_starts,
         )
     except click.UsageError:
         raise

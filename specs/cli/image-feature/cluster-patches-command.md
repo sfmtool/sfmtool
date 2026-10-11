@@ -46,6 +46,7 @@ sfm cluster-patches -i clusters.matches [-o out.matches] [OPTIONS...]
 | `--max-member-zncc-self-similarity-radius` | float ≥ 0 | 2.5 | Member gate: exclude members whose own patch's ZNCC self-similarity radius (template-grid px) is above this, before reference selection and refinement; `0` disables, `3` or more turns nothing out |
 | `--regate-at-refined-shape/--no-regate-at-refined-shape` | flag | on | Read the member gate again, with the same bar, on each member's own patch at its refined shape and position, for every member that passes the ZNCC and shift gates; a member over the bar there is `rejected_unlocalizable_refined`. Off when the bar is `0` |
 | `--max-capped-cells` | int in [0, 9] | 8 | The most of the nine cells of a member's own patch at its refined shape that may read the largest ZNCC self-similarity radius, `3`; a member with more is `rejected_unlocalizable_cells`. `9` turns nothing out |
+| `--rotation-starts` | int ≥ 1 | 12 | Before the affine fit, score the reference's patch against each member at this many rotations of its SIFT seed, evenly spaced over a full turn with the seed's own rotation first, and start the fit from the best-scoring one. `1` starts only from the SIFT seed |
 | `--piecewise/--no-piecewise` | flag | off | After the affine fit, register each of the reference's nine cells separately against each kept member's image at the member's refined shape, store the per-cell entries in the output, and move the member's shape and position by an affine map fitted to the cells' shifts where the whole-patch ZNCC does not fall |
 
 The `patch_size` default sits at SIFT's ~12× descriptor window — the template
@@ -74,6 +75,13 @@ patch's three-by-three split that read `3`
 ([gates at the refined shape](../../core/patch/cluster-patch-refinement.md#the-member-gate-at-the-refined-shape)).
 Their defaults were chosen on five captures, four with ground-truth poses
 ([measurements](../../core/patch/cluster-patch-refinement-measurements.md#gates-at-the-refined-shape-2026-10-09)).
+`--rotation-starts` sets the
+[rotation starts](../../core/patch/cluster-patch-refinement.md#rotation-starts):
+the two SIFT orientations a member's seed is built from can disagree across a
+scale change, because each is read from a window sized by its own feature, and
+the affine fit cannot turn far from where it starts. Each start costs one
+score, so twelve add a few percent to the run
+([measurements](../../core/patch/cluster-patch-refinement-measurements.md#rotation-multi-start-2026-10-11)).
 `--piecewise` runs the piecewise refinement of
 [cluster-patch-refinement.md](../../core/patch/cluster-patch-refinement.md#piecewise-refinement)
 with its default parameters (`move_shape` true): it measures the cells, and
@@ -142,7 +150,8 @@ consumer reads the cells.
    stored signal computed in the same kernel call, no CLI knobs) —
    `refine_options` = the CLI parameters (`patch_size`, `resolution`,
    `min_zncc`, `max_shift_px`, `max_member_zncc_self_similarity_radius`,
-   `regate_at_refined_shape`, `max_capped_cells`, `piecewise`, with
+   `regate_at_refined_shape`, `max_capped_cells`, `rotation_starts`,
+   `piecewise`, with
    `regate_at_refined_shape` false when the bar is `0` and the gate does not
    run; a
    file written before the gate read the radius carries

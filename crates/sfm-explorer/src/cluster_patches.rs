@@ -1030,6 +1030,7 @@ fn matches_data(
                 "max_member_zncc_self_similarity_radius": refine_defaults.max_member_zncc_self_similarity_radius,
                 "regate_at_refined_shape": refine_defaults.regate_at_refined_shape,
                 "max_capped_cells": refine_defaults.max_capped_cells,
+                "rotation_starts": refine_defaults.rotation_starts,
             }),
         }),
         two_view_geometries: None,

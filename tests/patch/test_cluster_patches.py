@@ -78,6 +78,7 @@ def test_cluster_patches_end_to_end(cluster_matches_file: Path):
     assert data["refine_options"]["max_member_zncc_self_similarity_radius"] == 2.5
     assert data["refine_options"]["regate_at_refined_shape"] is True
     assert data["refine_options"]["max_capped_cells"] == 8
+    assert data["refine_options"]["rotation_starts"] == 12
     # Without --piecewise the file carries no per-cell columns.
     assert data["refine_options"]["piecewise"] is False
     assert "min_cell_zncc" not in data["refine_options"]

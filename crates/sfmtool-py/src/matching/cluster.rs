@@ -420,6 +420,13 @@ pub fn clusters_to_pair_matches(
 ///         that may read the largest radius, 3 ("3 or further"); a member with
 ///         more is marked rejected_unlocalizable_cells. 9 or more turns
 ///         nothing out. None takes the Rust default (8).
+///     rotation_starts: How many rotations of the SIFT seed the cascade may
+///         start from. The reference's patch is scored against the member at
+///         this many rotations evenly spaced over a full turn, the seed's own
+///         first, each about the member's tile centre at the seed's
+///         translation and scale, and the cascade runs once from the
+///         best-scoring one. 1 starts only from the SIFT seed; 0 reads as 1.
+///         None takes the Rust default (12).
 ///     max_iters: Nelder-Mead iterations per cascade stage (default 120).
 ///     piecewise: Run the piecewise refinement after the cascade for every
 ///         kept member: the nine cells of the reference's patch are
@@ -478,6 +485,7 @@ pub fn clusters_to_pair_matches(
 ///     for every other member and throughout when both gates are off; not
 ///     stored in the ``.matches`` section. ``regate_at_refined_shape`` (bool)
 ///     and ``max_capped_cells`` (int) are the two gates' settings the run
+///     used, and ``rotation_starts`` (int) the number of rotation starts it
 ///     used, the Rust defaults where the arguments were None;
 ///     ``regate_at_refined_shape`` is False when the member gate's bar is 0,
 ///     since the whole grid's gate shares that bar and does not run. With
@@ -511,6 +519,7 @@ pub fn clusters_to_pair_matches(
                     min_zncc = 0.85, max_shift_px = 3.0,
                     max_member_zncc_self_similarity_radius = 2.5,
                     regate_at_refined_shape = None, max_capped_cells = None,
+                    rotation_starts = None,
                     max_iters = 120, piecewise = false, move_shape = None,
                     cell_shift_bound_px = None, min_cell_zncc = None,
                     min_cell_curvature = None, update_tolerance_px = None,
@@ -533,6 +542,7 @@ pub fn refine_cluster_patches<'py>(
     max_member_zncc_self_similarity_radius: f64,
     regate_at_refined_shape: Option<bool>,
     max_capped_cells: Option<u8>,
+    rotation_starts: Option<u32>,
     max_iters: u32,
     piecewise: bool,
     move_shape: Option<bool>,
@@ -612,6 +622,7 @@ pub fn refine_cluster_patches<'py>(
         regate_at_refined_shape: regate_at_refined_shape
             .unwrap_or(defaults.regate_at_refined_shape),
         max_capped_cells: max_capped_cells.unwrap_or(defaults.max_capped_cells),
+        rotation_starts: rotation_starts.unwrap_or(defaults.rotation_starts).max(1),
         max_iters,
         piecewise: piecewise.then(|| {
             let default = PiecewiseParams::default();
@@ -715,6 +726,7 @@ pub fn refine_cluster_patches<'py>(
     // Whether the whole grid's gate ran, so a bar of 0 records it off.
     dict.set_item("regate_at_refined_shape", params.refined_shape_gate_is_on())?;
     dict.set_item("max_capped_cells", params.max_capped_cells)?;
+    dict.set_item("rotation_starts", params.rotation_starts)?;
     dict.set_item("member_shift_px", result.member_shift_px.into_pyarray(py))?;
     dict.set_item("member_consistency_residual", consistency.into_pyarray(py))?;
     let cell_keys = [

@@ -22,6 +22,7 @@ use sfmtool_core::features::kdforest::{KdForestParams, KdfOpenOptions, LazyKdFor
 use sfmtool_core::patch::cluster_refine::{
     refine_cluster_patches, warp_consistency_residuals, ClusterRefineParams, FeatureGeometry,
     MemberStatus, DEFAULT_MAX_CAPPED_CELLS, DEFAULT_REGATE_AT_REFINED_SHAPE,
+    DEFAULT_ROTATION_STARTS,
 };
 use sfmtool_core::patch::normal_refine::PatchWindow;
 
@@ -353,6 +354,7 @@ fn the_file_holds_what_the_two_cli_steps_make_from_the_same_index() {
             "max_member_zncc_self_similarity_radius": 2.5,
             "regate_at_refined_shape": DEFAULT_REGATE_AT_REFINED_SHAPE,
             "max_capped_cells": DEFAULT_MAX_CAPPED_CELLS,
+            "rotation_starts": DEFAULT_ROTATION_STARTS,
         })
     );
 }

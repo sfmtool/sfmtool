@@ -68,7 +68,8 @@ use kernels::{
 pub use consistency::warp_consistency_residuals;
 pub use params::{
     capped_cell_count, ClusterRefineParams, ClusterRefineResult, FeatureGeometry, MemberStatus,
-    CELL_COUNT, DEFAULT_MAX_CAPPED_CELLS, DEFAULT_REGATE_AT_REFINED_SHAPE, REFERENCE_UNREFINABLE,
+    CELL_COUNT, DEFAULT_MAX_CAPPED_CELLS, DEFAULT_REGATE_AT_REFINED_SHAPE, DEFAULT_ROTATION_STARTS,
+    REFERENCE_UNREFINABLE,
 };
 pub use piecewise::{
     member_cell_data, CellRefinement, CellStatus, LoopStop, PiecewiseParams, ACCEPT_ZNCC_TOLERANCE,
@@ -717,14 +718,36 @@ fn build_template(
     })
 }
 
-/// Refine one non-reference member: the shift → similarity → affine
-/// Nelder-Mead cascade on the negated windowed ZNCC. Returns
+/// The seed warps the cascade may start from: `M₀` turned by each of the
+/// [`ClusterRefineParams::rotation_starts`] rotations evenly spaced over a
+/// full turn, `R(2πk/K)·M₀` for `k = 0 .. K`. The first is `M₀` itself.
+/// Turning on the left turns the member's samples about its tile centre and
+/// keeps the seed's scale, skew and translation.
+fn rotation_start_warps(m0: &Mat2, starts: u32) -> Vec<Mat2> {
+    let starts = starts.max(1);
+    (0..starts)
+        .map(|k| {
+            if k == 0 {
+                return *m0;
+            }
+            let angle = std::f64::consts::TAU * k as f64 / starts as f64;
+            let (sin, cos) = angle.sin_cos();
+            mul2(&[[cos, -sin], [sin, cos]], m0)
+        })
+        .collect()
+}
+
+/// Refine one non-reference member: score the template against the member at
+/// each rotation start ([`rotation_start_warps`]) with no optimisation, then
+/// run the shift → similarity → affine
+/// Nelder-Mead cascade on the negated windowed ZNCC from the best-scoring
+/// start. Returns
 /// `(zncc, parts, shift_px, absolute 2×3 affine)`, where `parts` is the same
 /// final map read over the middle of the grid and over each cell of the ZNCC
 /// grid ([`eval_zncc_parts`]) and the affine's leading 2×2 is the member's
 /// absolute affine shape `S = W·S_ref`, last column its refined absolute
-/// keypoint position; `None` when the seed support is out of frame (→
-/// `NotEvaluated`).
+/// keypoint position; `None` when the support is out of frame at every
+/// rotation start (→ `NotEvaluated`).
 #[allow(clippy::too_many_arguments)]
 fn refine_member(
     pyramid: &ImageU8Pyramid,
@@ -738,13 +761,11 @@ fn refine_member(
     params: &ClusterRefineParams,
 ) -> Option<(f64, PartZncc, f64, [[f64; 3]; 2])> {
     let a_ref_inv = inv2(&ref_geo.a);
-    let m0 = mul2(&mem_geo.a, &a_ref_inv);
     let num_levels = pyramid.num_levels();
-    let mut tiles = TileCache::default();
 
-    let mut eval_raw = |t: [f64; 2], d: Mat2| -> Option<f64> {
+    let eval_in = |tiles: &mut TileCache, m0: &Mat2, t: [f64; 2], d: Mat2| -> Option<f64> {
         let id = [[1.0 + d[0][0], d[0][1]], [d[1][0], 1.0 + d[1][1]]];
-        let b = mul2(&mul2(&id, &m0), &ref_geo.a);
+        let b = mul2(&mul2(&id, m0), &ref_geo.a);
         let map = warp_map(mem_geo.pos, t, &b, step, off);
         let level = level_for_map(&map, num_levels);
         let lmap = map_at_level(&map, level);
@@ -754,7 +775,39 @@ fn refine_member(
         prof::EVAL.time(|| eval_zncc(&lmap, tile, tables, tmpl))
     };
 
-    // Seed support out of frame → the member is not evaluated.
+    // The rotation starts: one score each at the seed's translation and
+    // scale. A start whose support leaves the frame is skipped; the
+    // best-scoring start seeds the cascade, ties to the earliest (the SIFT
+    // seed itself is the first). Out of frame at every start → the member is
+    // not evaluated. The scores read tiles of their own: a tile is centred on
+    // the mean of the region it covers, so tiles grown by the other starts'
+    // renders would change the last bits of every cascade score, and the
+    // cascade from the seed would no longer be the single-start one.
+    let seed_m0 = mul2(&mem_geo.a, &a_ref_inv);
+    let m0 = if params.rotation_starts <= 1 {
+        seed_m0
+    } else {
+        let mut start_tiles = TileCache::default();
+        let mut best_start: Option<(f64, Mat2)> = None;
+        for m0 in rotation_start_warps(&seed_m0, params.rotation_starts) {
+            let Some(z) = eval_in(&mut start_tiles, &m0, [0.0, 0.0], [[0.0; 2]; 2]) else {
+                continue;
+            };
+            prof::count(&prof::N_EVALS_START, 1);
+            let better = match best_start {
+                None => true,
+                Some((best, _)) => z > best || (best.is_nan() && !z.is_nan()),
+            };
+            if better {
+                best_start = Some((z, m0));
+            }
+        }
+        best_start?.1
+    };
+    let mut tiles = TileCache::default();
+    let mut eval_raw = |t: [f64; 2], d: Mat2| eval_in(&mut tiles, &m0, t, d);
+
+    // Start support out of frame → the member is not evaluated.
     eval_raw([0.0, 0.0], [[0.0; 2]; 2])?;
     prof::count(&prof::N_EVALS_SHIFT, 1);
 

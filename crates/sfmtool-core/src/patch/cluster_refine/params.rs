@@ -94,6 +94,9 @@ pub const DEFAULT_REGATE_AT_REFINED_SHAPE: bool = true;
 /// The default of [`ClusterRefineParams::max_capped_cells`].
 pub const DEFAULT_MAX_CAPPED_CELLS: u8 = 8;
 
+/// The default of [`ClusterRefineParams::rotation_starts`].
+pub const DEFAULT_ROTATION_STARTS: u32 = 12;
+
 /// Sentinel in [`ClusterRefineResult::reference_members`] for a cluster with
 /// no usable reference; the same value as [`CLUSTER_REFERENCE_UNREFINABLE`].
 pub const REFERENCE_UNREFINABLE: u32 = CLUSTER_REFERENCE_UNREFINABLE;
@@ -164,6 +167,23 @@ pub struct ClusterRefineParams {
     /// matches anything. [`CELL_COUNT`] (`9`) or more turns nothing out. See
     /// [`Self::admits_capped_cells`].
     pub max_capped_cells: u8,
+    /// How many rotations of the SIFT seed the cascade may start from. Before
+    /// the cascade, the reference template is scored against the member at
+    /// this many rotations of the seed warp, evenly spaced over a full turn
+    /// with the seed's own rotation first. Each turns the member's samples
+    /// about its tile centre and keeps the seed's translation, scale and
+    /// skew, and each costs one render and one windowed ZNCC, the objective
+    /// of the cascade's first stage, with no optimisation. The cascade then
+    /// runs once, from the best-scoring start (ties to the earliest). A start
+    /// whose support leaves the frame is skipped; a member out of frame at
+    /// every start is [`MemberStatus::NotEvaluated`].
+    ///
+    /// The two SIFT orientations a seed is built from can disagree across a
+    /// scale change, because each is read from a window sized by its own
+    /// feature, and the cascade's small simplex steps cannot leave a wrong
+    /// rotation basin. `1` starts only from the SIFT seed; `0` reads as `1`.
+    /// Default [`DEFAULT_ROTATION_STARTS`], `12`.
+    pub rotation_starts: u32,
     /// Nelder-Mead iterations per cascade stage.
     pub max_iters: u32,
     /// Simplex value-spread stop threshold for the affine stage (the stored
@@ -215,6 +235,7 @@ impl Default for ClusterRefineParams {
             max_member_zncc_self_similarity_radius: DEFAULT_MAX_MEMBER_ZNCC_SELF_SIMILARITY_RADIUS,
             regate_at_refined_shape: DEFAULT_REGATE_AT_REFINED_SHAPE,
             max_capped_cells: DEFAULT_MAX_CAPPED_CELLS,
+            rotation_starts: DEFAULT_ROTATION_STARTS,
             max_iters: 120,
             convergence: 1e-5,
             // Tuned on dino_dog_toy (85 images, 105K clusters): together

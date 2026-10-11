@@ -72,7 +72,11 @@ pub static N_REFINED_GATE_REVERTED: AtomicU64 = AtomicU64::new(0);
 pub static N_REFINES: AtomicU64 = AtomicU64::new(0);
 /// Objective evaluations (calls of `eval_zncc`, all cascade stages).
 pub static N_EVALS: AtomicU64 = AtomicU64::new(0);
-/// Objective evaluations spent in the shift stage (includes the seed check).
+/// Objective evaluations spent scoring the rotation starts, one per start
+/// whose support is in frame (none with one start).
+pub static N_EVALS_START: AtomicU64 = AtomicU64::new(0);
+/// Objective evaluations spent in the shift stage (includes the check of the
+/// chosen start).
 pub static N_EVALS_SHIFT: AtomicU64 = AtomicU64::new(0);
 /// Objective evaluations spent in the similarity stage.
 pub static N_EVALS_SIM: AtomicU64 = AtomicU64::new(0);
@@ -110,6 +114,7 @@ pub fn reset() {
             &N_REFINED_GATE_REVERTED,
             &N_REFINES,
             &N_EVALS,
+            &N_EVALS_START,
             &N_EVALS_SHIFT,
             &N_EVALS_SIM,
             &N_EVALS_AFFINE,
@@ -175,12 +180,14 @@ pub fn report(clusters: usize, wall_secs: f64) {
             },
         )
     };
+    let (st, st_r) = per_refine(&N_EVALS_START);
     let (sh, sh_r) = per_refine(&N_EVALS_SHIFT);
     let (si, si_r) = per_refine(&N_EVALS_SIM);
     let (af, af_r) = per_refine(&N_EVALS_AFFINE);
     eprintln!(
-        "[sfmtool-profile]   evals by stage: shift {sh} ({sh_r:.1}/refine)  \
-         sim {si} ({si_r:.1}/refine)  affine {af} ({af_r:.1}/refine)",
+        "[sfmtool-profile]   evals by stage: start {st} ({st_r:.1}/refine)  \
+         shift {sh} ({sh_r:.1}/refine)  sim {si} ({si_r:.1}/refine)  \
+         affine {af} ({af_r:.1}/refine)",
     );
     eprintln!(
         "[sfmtool-profile]   refined-shape gates read {} (rejected {}, moves reverted {})  \

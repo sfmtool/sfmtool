@@ -658,7 +658,9 @@ refinement measured and which members stand.
   gates read at the refined shape (absent from a file written before them;
   `regate_at_refined_shape` is false whenever the whole-patch gate did not
   run, including when `max_member_zncc_self_similarity_radius` is `0`, the bar
-  that gate shares),
+  that gate shares), `rotation_starts`, how many rotations of each
+  member's seed were scored before the fit (absent from a file written before
+  the refinement had them, which started from the seed alone),
   and `piecewise`, whether the per-cell refinement ran. When it ran, the
   piecewise refinement's settings sit beside it as flat keys: `move_shape`
   (whether the refinement was allowed to change the member's shape),

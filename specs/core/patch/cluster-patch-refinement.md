@@ -136,6 +136,7 @@ pub fn capped_cell_count(cells: &[[f64; 3]; 3]) -> usize;
 pub const CELL_COUNT: u8 = 9;
 pub const DEFAULT_REGATE_AT_REFINED_SHAPE: bool = true;
 pub const DEFAULT_MAX_CAPPED_CELLS: u8 = 8;
+pub const DEFAULT_ROTATION_STARTS: u32 = 12;
 
 impl ClusterRefineParams {
     pub fn member_self_similarity_gate_is_on(&self) -> bool;
@@ -391,6 +392,51 @@ more slowly than it stops making *progress*; without it most members ran to the
 iteration cap long after the score stopped moving. There is no multi-view
 congealing pass — at raw-cluster sizes it measurably adds nothing over pairwise
 refinement.
+
+### Rotation starts
+
+The cascade starts from one seed, and its simplex steps (0.05 for `φ`, about
+3°) are small. It corrects a seed rotation that is a few degrees off, and does
+not leave the basin of one that is tens of degrees off. Before the cascade, the
+template is therefore scored against the member at `K = rotation_starts`
+rotations of the seed, and the cascade runs once, from the best-scoring one:
+
+```
+M₀,k = R(2πk/K) · M₀,   k = 0 … K−1
+```
+
+`k = 0` is the SIFT seed itself. Multiplying on the left turns the member's
+samples about the member's tile centre (the grid's centre maps to `pos_mem + t`
+under every start), and keeps the seed's scale, skew and translation, since
+`R · M₀` has the singular values of `M₀`. Each start costs one evaluation of
+the cascade's own objective at `t = 0`, `D = 0` (one render of the member tile
+and one windowed ZNCC), with no optimisation. A start whose support leaves the
+frame scores nothing and is skipped. The best score wins, ties to the lowest
+`k`, so the SIFT seed wins a tie. The cascade then runs from `M₀,k` exactly as
+it would from `M₀`, and everything after it, the gates included, reads the
+warp it returns. The start scores read tiles of their own, and the cascade
+builds its tiles afresh: a tile is centred on the mean of the region it covers
+(see [Implementation notes](#implementation-notes)), so tiles grown by the
+other starts' renders would change the last bits of every later score and,
+through the simplex's path, sometimes its end. A member whose seed scores best
+therefore gets the single-start result bit for bit. `t` and the shift gate stay measured from the detection's
+position, which no start moves. A member whose support leaves the frame at
+every start is `NotEvaluated`, as a member whose seed support left the frame
+is with one start. `K = 1` is the seed alone and reproduces the single-start
+refinement bit for bit; `0` reads as `1`.
+
+The seed's rotation is wrong because the two SIFT orientations it is built from
+disagree. Each is the peak of a gradient-orientation histogram read from a
+window sized by its own feature's scale, so across a scale change the two
+windows cover different stretches of the surface, and the dominant gradient of
+one is not the dominant gradient of the other. On ground-truth true pairs of
+five datasets, 11 to 20% of the pairs at mid scale ratios had a SIFT seed more
+than 20° from the true rotation, and the single-start cascade recovered half of
+those. With twelve starts it recovered 80% of them, at 1.03 times the time per
+pair, while the share of lookalike impostor pairs passing `min_zncc = 0.85` rose
+by 0.1 to 0.3 points. The measurements, including the effect on whole cluster
+files, are in
+[cluster-patch-refinement-measurements.md](cluster-patch-refinement-measurements.md#rotation-multi-start-2026-10-11).
 
 ### Pyramid levels
 
@@ -1066,6 +1112,7 @@ template edge length while the kernel's `radius` is a half-width;
 | `max_member_zncc_self_similarity_radius` | `2.5` | Member gate on the ZNCC self-similarity radius of the member's own patch, template-grid px; `0` disables it (CLI `--max-member-zncc-self-similarity-radius`) |
 | `regate_at_refined_shape` | `true` | Read that gate again, with the same bar, on the member's grid at its refined shape (`DEFAULT_REGATE_AT_REFINED_SHAPE`; CLI `--regate-at-refined-shape/--no-regate-at-refined-shape`) |
 | `max_capped_cells` | `8` | The most capped cells the member's grid at its refined shape may have; `9` turns the gate off (`DEFAULT_MAX_CAPPED_CELLS`; CLI `--max-capped-cells`) |
+| `rotation_starts` | `12` | How many rotations of the SIFT seed, evenly spaced over a full turn, are scored before the cascade, which starts from the best; `1` is the seed alone, `0` reads as `1` ([Rotation starts](#rotation-starts); `DEFAULT_ROTATION_STARTS`; CLI `--rotation-starts`) |
 | `max_iters` | `120` | Nelder-Mead iterations per cascade stage |
 | `convergence` | `1e-5` | Simplex value-spread stop, affine stage |
 | `intermediate_convergence` | `1e-4` | …and for the shift and similarity stages, which only seed the next |
@@ -1114,7 +1161,7 @@ refine_cluster_patches(
     min_zncc=0.85, max_shift_px=3.0,
     max_member_zncc_self_similarity_radius=2.5,
     regate_at_refined_shape=None, max_capped_cells=None,
-    max_iters=120, piecewise=False, move_shape=None,
+    rotation_starts=None, max_iters=120, piecewise=False, move_shape=None,
     cell_shift_bound_px=None, min_cell_zncc=None, min_cell_curvature=None,
     update_tolerance_px=None, max_iterations=None, progress=None,
 ) -> dict
@@ -1146,9 +1193,9 @@ float64, `member_zncc` `(M,)` float32, `member_zncc_middle` `(M,)` float32,
 computed inside the same call — and the two readings of the gates at the
 refined shape, `member_refined_zncc_self_similarity_radius` `(M,)` float32 and
 `member_refined_zncc_self_similarity_radius_grid` `(M, 3, 3)` float32, which the
-file does not store. `regate_at_refined_shape=None` and `max_capped_cells=None`
-take the Rust defaults, and the dict reports the values the call ran with under
-the same two keys.
+file does not store. `regate_at_refined_shape=None`, `max_capped_cells=None`
+and `rotation_starts=None` take the Rust defaults, and the dict reports the
+values the call ran with under the same three keys.
 
 `piecewise=True` runs the piecewise stage; the six `PiecewiseParams` settings
 are keyword arguments under their field names, each `None` for the Rust default,
@@ -1211,6 +1258,16 @@ a *flat* member image rather than an unrelated smooth texture is behaviour, not
 test convenience: over the ~50 effective samples of the window the affine
 optimizer can chase an unrelated smooth texture to a spurious ZNCC above the
 permissive 0.85 gate, which then trips the shift gate instead.
+**Rotation starts**: the start warps are the seed turned by multiples of
+`360°/K`, the first the seed itself, each with the seed's determinant and
+norm; a member whose photograph is the reference's turned by 60°, 150° and
+−105° about the keypoint, with its seed left unturned, is kept at the default
+with the true rotation and a support-grid RMSE under 0.3 px, and is not
+recovered with one start; the default is 12; two runs are bit-identical;
+where the seed scores best, twelve starts give the one-start result bit for
+bit; and with one start the recovery cases and the 60° member reproduce
+fingerprints of every output recorded from the single-start build (checked on
+x86-64 with AVX2, where they were recorded).
 
 `cluster_refine/piecewise/tests.rs` covers the piecewise stage. **The
 measurement**, on a synthetic planar cluster seen from a tilted view with the

@@ -126,7 +126,31 @@ fn run_recovery_case(
     shift_px: [f64; 2],
     max_rmse: f64,
 ) -> ClusterRefineResult {
-    let params = ClusterRefineParams::default();
+    run_recovery_case_with(
+        &ClusterRefineParams::default(),
+        scale,
+        rot_deg,
+        shear,
+        dlog_s,
+        drot_deg,
+        shift_px,
+        max_rmse,
+    )
+}
+
+/// [`run_recovery_case`] with the given settings.
+#[allow(clippy::too_many_arguments)]
+fn run_recovery_case_with(
+    params: &ClusterRefineParams,
+    scale: f64,
+    rot_deg: f64,
+    shear: f64,
+    dlog_s: f64,
+    drot_deg: f64,
+    shift_px: [f64; 2],
+    max_rmse: f64,
+) -> ClusterRefineResult {
+    let params = params.clone();
     let a_true = mul2(
         &mul2(&[[scale, 0.0], [0.0, scale]], &rot2(rot_deg)),
         &[[1.0, shear], [0.0, 1.0]],
@@ -1177,4 +1201,245 @@ fn the_whole_grid_gate_reads_the_member_at_its_refined_shape() {
         kept.refined_zncc_self_similarity_radius[1].to_bits(),
         result.refined_zncc_self_similarity_radius[1].to_bits()
     );
+}
+
+// ── Rotation starts ─────────────────────────────────────────────────────────
+
+/// A two-member cluster whose member image is the reference image turned by
+/// `rot_deg` about the keypoint, with the member's SIFT seed left unturned
+/// (the same shape as the reference's), refined with `rotation_starts`
+/// starts. Returns the result, the angle in degrees by which the recovered
+/// reference-to-member warp `W = S·S_ref⁻¹` differs from the true turn, and
+/// its support-grid RMSE against the truth in px. Both members have the same
+/// scale, so the first is the reference.
+fn run_turned_member(rot_deg: f64, rotation_starts: u32) -> (ClusterRefineResult, f64, f64) {
+    let params = ClusterRefineParams {
+        rotation_starts,
+        ..ClusterRefineParams::default()
+    };
+    let centre = [64.0, 64.0];
+    let a_ref = [[2.5, 0.0], [0.0, 2.5]];
+    let turn = rot2(rot_deg);
+    let turn_inv = rot2(-rot_deg);
+    let img1 = make_image(128, 128, texture);
+    let img2 = make_image(128, 128, |x, y| {
+        let p = matvec(&turn_inv, [x - centre[0], y - centre[1]]);
+        texture(p[0] + centre[0], p[1] + centre[1])
+    });
+    let feats = [
+        ImageFeatures::new(&[(centre, a_ref)]),
+        ImageFeatures::new(&[(centre, a_ref)]),
+    ];
+    let pyramids = [pyramid(&img1), pyramid(&img2)];
+    let result = refine_cluster_patches(
+        &pyramids,
+        &geometry(&feats),
+        &[0, 2],
+        &[0, 1],
+        &[0, 0],
+        &params,
+        None,
+    );
+    assert_eq!(result.reference_members[0], 0);
+    let rec = result.member_affine_shapes.index_axis(ndarray::Axis(0), 1);
+    let s_mem = [[rec[[0, 0]], rec[[0, 1]]], [rec[[1, 0]], rec[[1, 1]]]];
+    let w = mul2(&s_mem, &inv2(&a_ref));
+    // The rotation of `W`'s closest similarity, against the true turn.
+    let angle = (w[1][0] - w[0][1]).atan2(w[0][0] + w[1][1]).to_degrees();
+    let mut err = (angle - rot_deg).rem_euclid(360.0);
+    if err > 180.0 {
+        err = 360.0 - err;
+    }
+    let p = [
+        result.member_positions[[1, 0]],
+        result.member_positions[[1, 1]],
+    ];
+    let res = params.resolution as usize;
+    let step = 2.0 * params.radius / res as f64;
+    let off = 0.5 * step - params.radius;
+    let mut sq_sum = 0.0;
+    for row in 0..res {
+        for col in 0..res {
+            let u = [col as f64 * step + off, row as f64 * step + off];
+            let x = matvec(&a_ref, u);
+            let got = matvec(&w, x);
+            let want = matvec(&turn, x);
+            sq_sum += (p[0] + got[0] - centre[0] - want[0]).powi(2)
+                + (p[1] + got[1] - centre[1] - want[1]).powi(2);
+        }
+    }
+    let rmse = (sq_sum / (res * res) as f64).sqrt();
+    (result, err, rmse)
+}
+
+#[test]
+fn rotation_starts_default_is_twelve() {
+    assert_eq!(ClusterRefineParams::default().rotation_starts, 12);
+    assert_eq!(DEFAULT_ROTATION_STARTS, 12);
+}
+
+#[test]
+fn rotation_start_warps_turn_the_seed_and_keep_its_singular_values() {
+    let m0 = [[1.3, 0.2], [-0.1, 0.8]];
+    let fro = |a: &Mat2| a.iter().flatten().map(|v| v * v).sum::<f64>();
+    let warps = rotation_start_warps(&m0, 12);
+    assert_eq!(warps.len(), 12);
+    assert_eq!(warps[0], m0, "the first start is the seed itself");
+    for (k, w) in warps.iter().enumerate() {
+        // `R·M₀` keeps the determinant and the Frobenius norm of `M₀`.
+        assert!((det2(w) - det2(&m0)).abs() < 1e-12, "start {k}");
+        assert!((fro(w) - fro(&m0)).abs() < 1e-12, "start {k}");
+        let turn = mul2(w, &inv2(&m0));
+        let angle = turn[1][0].atan2(turn[0][0]).to_degrees().rem_euclid(360.0);
+        let want = 30.0 * k as f64;
+        let diff = (angle - want).abs().min(360.0 - (angle - want).abs());
+        assert!(diff < 1e-9, "start {k}: {angle}");
+    }
+    assert_eq!(rotation_start_warps(&m0, 1), vec![m0]);
+    assert_eq!(rotation_start_warps(&m0, 0), vec![m0], "0 reads as 1");
+}
+
+#[test]
+fn rotation_starts_recover_a_member_turned_away_from_its_seed() {
+    for rot_deg in [60.0, 150.0, -105.0] {
+        let (result, err, rmse) = run_turned_member(rot_deg, DEFAULT_ROTATION_STARTS);
+        assert_eq!(
+            result.member_status[1],
+            MemberStatus::Kept,
+            "turn {rot_deg}: zncc {}, shift {}",
+            result.member_zncc[1],
+            result.member_shift_px[1],
+        );
+        assert!(
+            result.member_zncc[1] as f64 >= ClusterRefineParams::default().min_zncc,
+            "turn {rot_deg}: zncc {}",
+            result.member_zncc[1]
+        );
+        assert!(err < 1.0, "turn {rot_deg}: rotation off by {err:.2} deg");
+        assert!(rmse < 0.3, "turn {rot_deg}: support-grid RMSE {rmse:.3} px");
+    }
+}
+
+#[test]
+fn one_rotation_start_does_not_recover_a_member_turned_away_from_its_seed() {
+    for rot_deg in [60.0, 150.0] {
+        let (result, err, _) = run_turned_member(rot_deg, 1);
+        let recovered = result.member_status[1] == MemberStatus::Kept && err < 5.0;
+        assert!(
+            !recovered,
+            "turn {rot_deg}: one start recovered it (status {:?}, zncc {}, off by {err:.2} deg)",
+            result.member_status[1], result.member_zncc[1],
+        );
+    }
+}
+
+#[test]
+fn rotation_starts_are_deterministic() {
+    let run = || run_turned_member(150.0, DEFAULT_ROTATION_STARTS).0;
+    let (a, b) = (run(), run());
+    assert_eq!(result_fingerprint(&a), result_fingerprint(&b));
+    assert_eq!(a.member_status, b.member_status);
+}
+
+/// A fingerprint of the outputs a refinement returns, over the bits of each
+/// value (FNV-1a).
+fn result_fingerprint(r: &ClusterRefineResult) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut eat = |bits: u64| {
+        for byte in bits.to_le_bytes() {
+            h ^= byte as u64;
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    };
+    r.reference_members.iter().for_each(|&v| eat(v as u64));
+    r.member_status.iter().for_each(|&v| eat(v as u64));
+    r.member_positions.iter().for_each(|v| eat(v.to_bits()));
+    r.member_affine_shapes.iter().for_each(|v| eat(v.to_bits()));
+    r.member_zncc.iter().for_each(|v| eat(v.to_bits() as u64));
+    r.member_zncc_middle
+        .iter()
+        .for_each(|v| eat(v.to_bits() as u64));
+    r.member_zncc_grid
+        .iter()
+        .flatten()
+        .flatten()
+        .for_each(|v| eat(v.to_bits() as u64));
+    r.member_shift_px
+        .iter()
+        .for_each(|v| eat(v.to_bits() as u64));
+    h
+}
+
+/// The cases of [`synthetic_recovery_across_warp_range`] and one member
+/// turned 60° from its seed, with one rotation start, fingerprinted.
+fn one_start_fingerprints() -> Vec<u64> {
+    let one = ClusterRefineParams {
+        rotation_starts: 1,
+        ..ClusterRefineParams::default()
+    };
+    let cases: [(f64, f64, f64, f64, f64, [f64; 2], f64); 5] = [
+        (1.0, 0.0, 0.0, 0.07, 4.0, [1.0, 0.0], 0.3),
+        (0.8, -12.0, 0.1, -0.07, -4.0, [0.0, 1.0], 0.3),
+        (1.25, 20.0, 0.0, 0.07, 4.0, [0.7, -0.7], 0.32),
+        (1.5, 8.0, 0.15, -0.05, 3.0, [-0.7, 0.7], 0.3),
+        (0.9, -20.0, -0.15, 0.05, -3.0, [-1.0, 0.0], 0.3),
+    ];
+    cases
+        .into_iter()
+        .map(|(s, r, sh, ds, dr, t, max)| {
+            result_fingerprint(&run_recovery_case_with(&one, s, r, sh, ds, dr, t, max))
+        })
+        .chain([result_fingerprint(&run_turned_member(60.0, 1).0)])
+        .collect()
+}
+
+/// What the refinement returned for [`one_start_fingerprints`]' cases before
+/// it had rotation starts, recorded from that build on x86-64 with AVX2.
+const SEED_ONLY_FINGERPRINTS: [u64; 6] = [
+    0x3186_920f_f147_665d,
+    0x7c60_f171_5290_12a8,
+    0xdb16_139b_1df1_53f1,
+    0xac03_bfe7_9358_f855,
+    0xbc76_570f_0e9b_2fcb,
+    0xe29d_d590_f945_8600,
+];
+
+/// One rotation start reproduces, bit for bit, what the refinement returned
+/// before it had rotation starts. The fingerprints were recorded on x86-64
+/// with AVX2, and the scalar kernel rounds differently, so the comparison
+/// runs only there.
+#[test]
+fn one_rotation_start_reproduces_the_seed_only_refinement() {
+    #[cfg(target_arch = "x86_64")]
+    {
+        if !std::arch::is_x86_feature_detected!("avx2") {
+            return;
+        }
+        let got = one_start_fingerprints();
+        assert_eq!(got, SEED_ONLY_FINGERPRINTS, "{got:#018x?}");
+    }
+}
+
+/// Where the SIFT seed scores best among the starts, the cascade runs from it
+/// on tiles of its own, so the result is the single-start result bit for bit.
+#[test]
+fn a_seed_that_scores_best_reproduces_the_single_start_result() {
+    let one = ClusterRefineParams {
+        rotation_starts: 1,
+        ..ClusterRefineParams::default()
+    };
+    let twelve = ClusterRefineParams::default();
+    for (s, r, sh, ds, dr, t) in [
+        (1.0, 0.0, 0.0, 0.07, 4.0, [1.0, 0.0]),
+        (1.25, 20.0, 0.0, 0.07, 4.0, [0.7, -0.7]),
+        (0.9, -20.0, -0.15, 0.05, -3.0, [-1.0, 0.0]),
+    ] {
+        let a = run_recovery_case_with(&one, s, r, sh, ds, dr, t, 0.32);
+        let b = run_recovery_case_with(&twelve, s, r, sh, ds, dr, t, 0.32);
+        assert_eq!(
+            result_fingerprint(&a),
+            result_fingerprint(&b),
+            "scale {s}, rotation {r}"
+        );
+    }
 }

@@ -96,6 +96,7 @@ class TestRefineClusterPatches:
             "member_refined_zncc_self_similarity_radius_grid",
             "regate_at_refined_shape",
             "max_capped_cells",
+            "rotation_starts",
             "member_cell_shift_px",
             "member_cell_zncc",
             "member_cell_status",
@@ -133,6 +134,7 @@ class TestRefineClusterPatches:
         # kept member's own grid there; the reference is not read.
         assert result["regate_at_refined_shape"] is True
         assert result["max_capped_cells"] == 8
+        assert result["rotation_starts"] == 12
         radius = result["member_refined_zncc_self_similarity_radius"]
         grid = result["member_refined_zncc_self_similarity_radius_grid"]
         assert radius.dtype == np.float32 and radius.shape == (2,)
@@ -309,6 +311,29 @@ class TestRefineClusterPatches:
             max_member_zncc_self_similarity_radius=0.0,
         )
         assert result["member_status"][1] == STATUS_REJECTED_LOW_ZNCC
+
+    def test_rotation_starts_recover_a_turned_member(self):
+        # The member's photograph is the reference's turned half a turn
+        # about the keypoint at the image centre, and its SIFT seed is not
+        # turned. One of the twelve default starts is the half turn; the SIFT
+        # seed alone is 180 degrees off and does not recover it.
+        images, pos, aff, starts, m_img, m_feat = _inputs(shift=(0.0, 0.0))
+        images[1] = np.ascontiguousarray(np.rot90(images[0], 2))
+        result = refine_cluster_patches(images, pos, aff, starts, m_img, m_feat)
+        assert result["rotation_starts"] == 12
+        assert result["member_status"][1] == STATUS_KEPT
+        assert result["member_zncc"][1] > 0.95
+        shape = result["member_affine_shapes"][1] / 3.0
+        angle = np.degrees(
+            np.arctan2(shape[1, 0] - shape[0, 1], shape[0, 0] + shape[1, 1])
+        )
+        assert abs(abs(angle) - 180.0) < 1.0, angle
+
+        one = refine_cluster_patches(
+            images, pos, aff, starts, m_img, m_feat, rotation_starts=1
+        )
+        assert one["rotation_starts"] == 1
+        assert one["member_status"][1] != STATUS_KEPT
 
     def test_capped_cell_gate_refuses_a_member(self):
         # Texture in the left third of the patch and a flat surface over the

@@ -50,6 +50,7 @@ def _run_cluster_patches(
     piecewise: bool = False,
     regate_at_refined_shape: bool | None = None,
     max_capped_cells: int | None = None,
+    rotation_starts: int | None = None,
 ):
     import os
     from concurrent.futures import ThreadPoolExecutor
@@ -158,6 +159,7 @@ def _run_cluster_patches(
             max_member_zncc_self_similarity_radius=max_member_zncc_self_similarity_radius,
             regate_at_refined_shape=regate_at_refined_shape,
             max_capped_cells=max_capped_cells,
+            rotation_starts=rotation_starts,
             piecewise=piecewise,
             progress=counter,
         )
@@ -228,6 +230,7 @@ def _run_cluster_patches(
             # passed None).
             "regate_at_refined_shape": result["regate_at_refined_shape"],
             "max_capped_cells": result["max_capped_cells"],
+            "rotation_starts": result["rotation_starts"],
             "piecewise": piecewise,
             # The piecewise refinement's settings, as flat keys beside
             # `piecewise`, when the stage ran.
