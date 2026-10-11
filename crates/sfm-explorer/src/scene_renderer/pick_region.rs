@@ -64,7 +64,7 @@ impl PixelRect {
     }
 
     /// How many pixels the rectangle holds.
-    pub(crate) fn area(self) -> usize {
+    fn area(self) -> usize {
         self.width as usize * self.height as usize
     }
 
