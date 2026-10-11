@@ -18,7 +18,9 @@ state). When it is filed, the edit itself becomes
 `gui/edits/delete-brush.md`. The point edit that deletes many points, which a
 stroke commits, already exists in core, in the viewer and on the wire, and is
 specified in the standing specs named under "Interfaces". So does the `drag`
-input tool that drives a stroke over MCP.
+input tool that drives a stroke over MCP, and so do the renderer's region read
+of the pick buffer and the mask words that draw painted points (see
+"Implementation notes").
 
 ## Purpose
 
@@ -222,60 +224,47 @@ and the gesture's handler calls `delete_points`.
 
 ### Reading the circle from the pick buffer
 
-The pick for a click reads a 5×5 pixel patch around the cursor
-(`scene_renderer/readback.rs`). A stroke reads a larger region of the same R32
-pick texture: the bounding box of the area the circle swept since the last
-frame, which is a capsule from the previous cursor position to the current one,
-thickened by the radius in physical pixels. Each pixel inside the capsule whose
-tag is `PICK_TAG_POINT` decodes to a node and point index through the
-per-reconstruction pick ranges, as a click's pick does, and joins the painted
-set if it belongs to the reconstruction the stroke recorded at the press.
+The renderer's region read exists: a rectangle of the pick buffer requested a
+frame ahead, decoded per pixel to a point, and the pure capsule test that picks
+one reconstruction's points out of it
+([`../gui/camera-views.md`](../gui/camera-views.md) § "Region reads"). It
+replaces the 5×5 hover read on a frame that requests one. What the brush adds:
 
-Reading the swept capsule rather than the circle at each frame's position is
-what stops a fast drag from leaving gaps: the pointer can move further than the
-diameter between two frames.
-
-The preview reads the circle's own bounding box at the pointer, with the same
-decode. It needs a region read on every frame the brush is on and the pointer is
-over the viewport, because the view can move under a still pointer; when neither
-the pointer nor the view changed since the last read, the last result stands and
-nothing is copied. The brush's region read replaces the 5×5 hover read on those
-frames rather than adding to it.
-
-The preview's region is small: the 24-pixel radius at a pixels-per-point of 2
-is a 97 × 97 box, 37 kB of `u32`. A stroke's capsule is longer in proportion to
-how far the pointer moved in a frame; a 400-pixel flick at the same scale is
-about 900 × 100, 360 kB. Rows are padded to wgpu's 256-byte row alignment as the
-existing copy pads them. The existing readback blocks on the buffer map each
-frame (`readback.rs`); that wait should be measured for the largest capsules,
-and the read moved to a mapping that resolves a frame later if it shows in the
-frame time.
-
-A readback resolves a frame after its copy, as a click's does. On release the
-commit waits for the last capsule's readback, so the final segment of a stroke
-is not lost; the release is held for that one frame and then the edit runs.
+- **A stroke reads the swept capsule**: the segment from the previous cursor
+  position to the current one, thickened by the radius in physical pixels,
+  requested as `PixelRect::around_capsule` and filtered with
+  `points_in_capsule` for the reconstruction the stroke recorded at the press.
+  Reading the swept capsule rather than the circle at each frame's position is
+  what stops a fast drag from leaving gaps: the pointer can move further than
+  the diameter between two frames.
+- **The preview reads the circle** (a capsule of zero length) at the pointer.
+  It needs a region read on every frame the brush is on and the pointer is over
+  the viewport, because the view can move under a still pointer; when neither
+  the pointer nor the view changed since the last read, the last result stands
+  and nothing is requested.
+- **On release the commit waits for the last capsule's readback**, so the final
+  segment of a stroke is not lost; the release is held for the frames until it
+  arrives and then the edit runs.
+- **The map blocks** (`pick_region.rs`), as the 5×5 read's does. A 400-pixel
+  flick at a pixels-per-point of 2 is about 900 × 100 pixels, 360 kB. That wait
+  should be measured for the largest capsules, and the read moved to a mapping
+  that resolves a frame later if it shows in the frame time.
 
 ### Drawing the painted points
 
-The point buffers already carry one `u32` flag per point beside the instance
-data, written by `SceneRenderer::update_point_mask`
-(`scene_renderer/upload/overlay.rs`): `0` deleted, `1` alive, `2` alive and
-drawn in the hover cyan, which the Move Camera lock uses for the points its
-camera observes. The brush adds `3`, **alive and painted**, drawn in a red the
-fragment shader picks by the same branch. It is a new value in the existing
-word, not a second buffer, following the comment there that keeps highlights
-in that word. The preview adds `4`, **alive and under the brush**, drawn in the
-pale red. The brush and the lock are never on together, but the brush gets its
-own values and colours so that the highlights do not mean the same thing. The
-preview set changes on most frames the pointer moves, which makes the run
-coalescing below matter for the preview as much as for the stroke.
-
-`update_point_mask` writes one 4-byte `write_buffer` per changed index. A stroke
-can add thousands of points in one frame, so the change list should be written
-as contiguous runs, one `write_buffer` per run, or the whole buffer rewritten
-when the changes exceed some fraction of it. Which one is worth it should be
-measured on a dense cloud (the 1.4M-point example in `scene-graph.md`) before
-picking.
+The mask words exist: `3` alive and painted (red) and `4` alive and under the
+brush (pale red), in the per-point word `SceneRenderer::update_point_mask`
+writes, drawn on splats and on surfels
+([`../gui/point-cloud-rendering.md`](../gui/point-cloud-rendering.md) §
+"Per-Point Data"). The brush passes its painted set and its preview set as the
+`painted` and `under_brush` sets of the `PointMarks` the frame hands
+`update_point_mask`, beside the deleted set. The mask write goes out as runs of
+consecutive positions, one `write_buffer` per run; the preview set changes on
+most frames the pointer moves, and whether bridging gaps between runs or
+rewriting the whole buffer is cheaper on a dense cloud (the 1.4M-point example
+in `scene-graph.md`) was not measured
+([`../gui/document-model.md`](../gui/document-model.md) § "Change detection by
+identity").
 
 ### Who owns the stroke
 
@@ -290,18 +279,19 @@ release.
 
 - **Core and viewer state:** `delete_points` is tested where it is specified
   (the standing specs named under "Interfaces").
+- **The region read and the mask words** are tested where they are built:
+  `scene_renderer/pick_region/tests.rs` (the capsule selects the pixels within
+  the radius of the segment and no others, and skips another reconstruction's)
+  and `scene_renderer/upload/tests.rs` (words `4` and `3` written and reset to
+  `1`, and `3` becoming `0` once the painted set is the deleted set).
 - **The stroke** (headless, `viewer_3d/tests.rs`): with a synthetic pick region,
-  the capsule test paints the pixels within the radius of the segment and no
-  others; pixels of a reconstruction other than the selected one are neither
+  pixels of a reconstruction other than the selected one are neither
   previewed nor painted; with none selected nothing is painted; a selection
   change while the button is held cancels the stroke; the preview at
   a position equals the set a press-and-release there paints; Esc while held paints nothing and pushes nothing; a release with an
   empty set pushes nothing; a press with the right button down on Windows does
   not start a stroke; with the brush on, an Alt + left drag orbits (in both the
   free view and camera view) and paints nothing.
-- **The flag** (`scene_renderer/upload/tests.rs`, `noop` backend): previewed
-  points get `4` and go back to `1` when the pointer moves off them; painted
-  points get `3`, go back to `1` on cancel, and to `0` after the commit.
 - **Wire** (`mcp/tests/edit.rs`): `set_viewer_3d_display` switches the tool
   and refuses `delete_brush` while the Move Camera lock is held.
 - **End to end** (`ui_basic`, driven by `drag`): a drag across a known

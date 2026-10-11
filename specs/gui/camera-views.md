@@ -315,16 +315,84 @@ Every frame, the pixel under the cursor is read back:
 ```rust
 pub struct ReadbackResult {
     pub depth: Option<f32>,          // nearest valid depth in 5x5 region
-    pub pick: Option<(u32, u32)>,    // (tag, index) of picked entity
+    pub pick: Option<PickTarget>,    // the picked entity, decoded to a typed ref
 }
 ```
 
 Cached accessors for the hover overlay:
 - `hover_depth() -> Option<f32>` — depth under cursor
-- `hover_pick_id() -> u32` — raw pick ID (tag | index) under cursor
+- `hover_pick() -> Option<PickTarget>` — entity under cursor
 
 The 5×5 fuzzy search makes it easy to hover over and click on thin wireframe lines.
 Both hover tooltip and click selection use the same readback result.
+
+### Region reads
+
+The delete brush ([../drafts/delete-brush.md](../drafts/delete-brush.md)) needs
+every point shown inside its circle, not the one under the cursor, so the
+renderer also reads a rectangle of the pick buffer
+([scene_renderer/pick_region.rs](../../crates/sfm-explorer/src/scene_renderer/pick_region.rs)).
+It is requested a frame ahead and answered a frame later, as the 5×5 read is:
+
+1. During its frame the viewport sets `Viewer3D::pick_region_request` to a
+   `PixelRect`, in physical pixels of the scene texture.
+2. The next frame's scene encoding takes the request, and
+   `copy_pick_region(device, encoder, rect)` cuts the rectangle to the texture
+   and copies it to a staging buffer, rows padded to wgpu's 256-byte alignment.
+   The staging buffer grows to the largest region asked for and is kept.
+3. After the present, `read_pick_region(device)` maps it and decodes it into a
+   `PickRegion`, which `App` stores in `Viewer3D::pick_region`, where the
+   viewport's next frame reads it. Each pixel tagged `PICK_TAG_POINT` decodes
+   through the per-reconstruction pick ranges as a click's pick does, to a
+   `PointRef`; any other pixel, and an id outside every range, is `None`.
+
+**A region read replaces the hover read on its frame.** The 5×5 copy runs beside
+it only when a click is waiting on its pick, since Alt+click still sets the
+target while the brush is on. On a frame with a region read and no 5×5 read,
+nothing is hovered: the hovered point and image are cleared, and
+`hover_depth` and `hover_pick` read as none.
+
+The capsule test is a pure function, so it is tested without a GPU:
+
+```rust
+pub(crate) fn points_in_capsule(
+    region: &PickRegion,
+    recon: ReconId,
+    from: [f32; 2],
+    to: [f32; 2],
+    radius: f32,
+) -> HashSet<u32>;
+```
+
+It returns the indexes of `recon`'s points shown by a pixel of the region whose
+centre, `(x + 0.5, y + 0.5)`, lies within `radius` of the segment from `from` to
+`to`, all in physical pixels. That capsule is the area a circle sweeps between
+two cursor positions, so a fast drag leaves no gaps; `from == to` is the circle
+itself. Pixels of other reconstructions are skipped. The indexes are the edited
+indexes the pick buffer carries. `PixelRect::around_capsule(from, to, radius)` is
+the smallest rectangle holding every pixel the capsule can select, and is what a
+caller requests. The answer to a request made in frame N is read after frame
+N + 1's present, so the viewport sees it in frame N + 2; a caller that asks on
+every frame keeps the capsules it asked for and matches each answer by the
+rectangle it named (`PickRegion::requested`; `PickRegion::rect` is that
+rectangle cut to the texture):
+
+```rust
+// Frame N: ask for the area the circle swept since the last request.
+let rect = PixelRect::around_capsule(from, to, radius);
+viewer.pick_region_request = Some(rect);
+asked.push((rect, from, to));
+// Each frame: select from whatever answer has arrived.
+if let Some(region) = viewer.pick_region.take() {
+    if let Some(&(_, from, to)) = asked.iter().find(|(rect, ..)| *rect == region.requested()) {
+        painted.extend(points_in_capsule(&region, recon, from, to, radius));
+    }
+}
+```
+
+The map blocks until the copy is done, as the 5×5 read's does. A preview's
+region is small (a 24-pixel radius at a pixels-per-point of 2 is 97 × 97 pixels,
+37 kB); a stroke's grows with how far the pointer moved in a frame.
 
 ### Click handling in Viewer3D
 

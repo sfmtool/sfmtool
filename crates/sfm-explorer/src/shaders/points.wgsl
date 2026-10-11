@@ -40,8 +40,10 @@ struct VertexInput {
     @location(2) color_packed: u32,         // instance: packed RGBA8
     // instance: 0 = the version in view has deleted this point, 1 = it is in
     // the reconstruction, 2 = it is in the reconstruction and the viewport is
-    // calling it out. Its own buffer, written where an edit or a highlight
-    // moved and nowhere else, so neither rewrites the instance buffer.
+    // calling it out, 3 = it is in the reconstruction and the delete brush has
+    // painted it, 4 = it is in the reconstruction and under the delete brush's
+    // circle. Its own buffer, written where an edit or a mark moved and
+    // nowhere else, so neither rewrites the instance buffer.
     @location(3) alive: u32,
 }
 
@@ -52,21 +54,22 @@ struct VertexOutput {
     @location(2) view_depth: f32,
     // Global pick index of this point: recon.point_pick_base + instance index.
     @location(3) @interpolate(flat) point3d_index: u32,
-    // 1 = the viewport is calling this point out, and the fragment shader
-    // draws it in the hover tint.
-    @location(4) @interpolate(flat) highlighted: u32,
+    // The instance's mask word, 1 to 4 (a deleted point never reaches the
+    // fragment shader): which of the viewport's colours, if any, replaces the
+    // point's own.
+    @location(4) @interpolate(flat) mark: u32,
 }
 
 @vertex
 fn vs_main(in: VertexInput) -> VertexOutput {
     var out: VertexOutput;
     out.uv = in.quad_pos;
-    out.highlighted = select(0u, 1u, in.alive == 2u);
+    out.mark = in.alive;
 
     // A deleted point emits a clipped vertex, so it draws nothing, occludes
     // nothing and answers no pick — the same treatment a hidden point at
     // infinity gets below.
-    if in.alive == 0u {
+    if in.alive == MASK_DELETED {
         out.clip_pos = vec4<f32>(0.0, 0.0, -1.0, 1.0);
         out.view_depth = 0.0;
         out.color = vec3<f32>(0.0);
@@ -154,10 +157,16 @@ fn fs_main(in: VertexOutput) -> FragOutput {
     // A called-out point takes the hover variant of the same tint: it is the
     // weakest of the three, because the selection and the pointer are about
     // one point and a call-out is about a set.
+    // The delete brush's two reds come first, over the selection too: they
+    // say what releasing the stroke will do to the point.
     var color = in.color;
-    if in.point3d_index == uniforms.selected_point_index {
+    if in.mark == MASK_PAINTED {
+        color = BRUSH_PAINTED_COLOR;
+    } else if in.mark == MASK_UNDER_BRUSH {
+        color = BRUSH_UNDER_COLOR;
+    } else if in.point3d_index == uniforms.selected_point_index {
         color = vec3<f32>(1.0, 1.0, 0.0);
-    } else if in.point3d_index == uniforms.hovered_point_index || in.highlighted == 1u {
+    } else if in.point3d_index == uniforms.hovered_point_index || in.mark == MASK_HIGHLIGHTED {
         color = vec3<f32>(0.0, 1.0, 1.0);
     }
     out.color = vec4<f32>(color, 1.0);

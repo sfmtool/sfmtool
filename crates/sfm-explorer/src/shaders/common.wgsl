@@ -5,7 +5,8 @@
 // each value is written once. Each shader still declares its own
 // `var<uniform> recon: ReconUniforms` binding, because the binding index
 // differs between pipelines. A test in `scene_renderer/pipelines/tests.rs`
-// checks the `PICK_TAG_*` values here against `scene_renderer/picking.rs`.
+// checks the `PICK_TAG_*` values here against `scene_renderer/picking.rs`, and
+// the `MASK_*` values against `scene_renderer/upload/overlay.rs`.
 
 // Per-reconstruction block: which node this draw belongs to. Mirrors
 // `ReconUniforms` in `scene_renderer/gpu_types.rs`; every scene shader reads
@@ -38,3 +39,19 @@ const PICK_TAG_POINT: u32 = 0x80000000u;
 // depth test against the cleared background but loses to all finite geometry.
 const INF_DEPTH: f32 = 1e-6;
 
+// Per-point mask words, matching `MASK_*` in `scene_renderer/upload/overlay.rs`:
+// the second instance buffer the point and patch pipelines step with their
+// instances carries one per point.
+const MASK_DELETED: u32 = 0x00000000u;
+const MASK_ALIVE: u32 = 0x00000001u;
+const MASK_HIGHLIGHTED: u32 = 0x00000002u;
+const MASK_PAINTED: u32 = 0x00000003u;
+const MASK_UNDER_BRUSH: u32 = 0x00000004u;
+
+// The delete brush's colours, which replace a point's own outright as the
+// selection's yellow and the hover's cyan do. A saturated red for a point the
+// stroke being held has painted, and a pale red for one under the circle
+// before a press: the same hue, so the preview reads as what a press would do,
+// and lighter, so it reads as not done yet.
+const BRUSH_PAINTED_COLOR: vec3<f32> = vec3<f32>(1.0, 0.1, 0.1);
+const BRUSH_UNDER_COLOR: vec3<f32> = vec3<f32>(1.0, 0.6, 0.6);

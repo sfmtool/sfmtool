@@ -294,6 +294,10 @@ and pick ID textures every frame using `wgpu::Buffer::map_async`. This serves:
 - **Fuzzy matching**: Center-first search (center pixel → 3x3 → 5x5) makes it
   easy to click on thin wireframe lines
 
+On a frame the viewport asks for a larger rectangle of the pick buffer instead,
+that region read replaces the 5x5 hover read
+([camera-views.md](camera-views.md) § "Region reads").
+
 ### Track Ray Visualization
 
 When a 3D point is selected, track rays show the observation rays from each
@@ -446,7 +450,8 @@ eviction.
 - **Buffer re-upload on change**: Frustum edges are re-uploaded (~2.5 MB) when
   selection changes, rather than maintaining a separate selection uniform buffer.
   This is simpler and fast enough.
-- **Single depth readback**: One 5x5 region per frame, not full-screen readback
+- **Single depth readback**: One 5x5 region per frame, or one requested pick
+  rectangle, not full-screen readback
 - **Lazy image loading**: Thumbnails loaded on reconstruction open; full-res
   photographs decoded on demand, off the GUI thread, into a shared cache under a
   byte budget ([../core/camera/photograph-cache.md](../core/camera/photograph-cache.md))

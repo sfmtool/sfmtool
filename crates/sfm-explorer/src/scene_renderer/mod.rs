@@ -24,6 +24,7 @@ mod capture;
 mod compass;
 mod distorted_mesh;
 mod gpu_types;
+mod pick_region;
 mod picking;
 mod pipelines;
 mod readback;
@@ -49,8 +50,16 @@ pub use gpu_types::{
     DEFAULT_FRUSTUM_SIZE_MULTIPLIER, DEFAULT_LENGTH_SCALE_MULTIPLIER,
     DEFAULT_TARGET_FOG_MULTIPLIER, DEFAULT_TARGET_SIZE_MULTIPLIER,
 };
+#[expect(
+    unused_imports,
+    reason = "the delete brush's stroke and preview are its first callers"
+)]
+pub(crate) use pick_region::points_in_capsule;
+pub(crate) use pick_region::{PickRegion, PixelRect};
 pub use picking::PickTarget;
 pub use recon::NodeDisplay;
+/// The viewport's marks on a node's points, which [`SceneRenderer::update_point_mask`] draws.
+pub(crate) use upload::PointMarks;
 /// What an upload did, which is what the frame's phase note beside it says.
 pub(crate) use upload::Uploaded;
 
@@ -181,6 +190,14 @@ pub struct SceneRenderer {
     hover_depth: Option<f32>,
     /// Most recently read-back hover pick, already decoded to a typed ref.
     hover_pick: Option<PickTarget>,
+
+    // ── GPU readback (a requested rectangle of the pick buffer) ──
+    /// Staging buffer for a region read, grown to the largest region asked
+    /// for. See `pick_region.rs`.
+    region_staging: Option<wgpu::Buffer>,
+    /// The rectangle a region copy was enqueued for this frame, as requested
+    /// and as cut to the texture, until it is read.
+    region_pending: Option<(PixelRect, PixelRect)>,
 }
 
 impl SceneRenderer {
@@ -259,6 +276,8 @@ impl SceneRenderer {
             readback_pending: false,
             hover_depth: None,
             hover_pick: None,
+            region_staging: None,
+            region_pending: None,
         }
     }
 

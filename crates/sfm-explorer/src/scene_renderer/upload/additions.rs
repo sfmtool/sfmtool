@@ -87,20 +87,29 @@ impl SceneRenderer {
 
         // An addition that has itself been deleted or replaced keeps its row so
         // the indexes after it do not move, so the mask starts from the sets
-        // rather than all-alive as the base's does. The highlight comes from
-        // the bundle, which is where the last frame's write left it: it is a
-        // viewport statement rather than a document one, and the rebuild must
-        // not drop it any more than it drops the deleted set.
+        // rather than all-alive as the base's does. The marks come from the
+        // bundle, which is where the last frame's write left them: they are
+        // viewport statements rather than document ones, and the rebuild must
+        // not drop them any more than it drops the deleted set.
         let base_count = edited.base_point_count() as u32;
-        let highlighted = self
+        let (highlighted, painted, under_brush) = self
             .recons
             .get(&id)
-            .map(|bundle| bundle.masked_highlighted.clone())
-            .unwrap_or_default();
-        let alive: Vec<u32> = (0..instances.len() as u32)
-            .map(|k| {
-                super::overlay::mask_word(base_count + k, &edited.deleted_points, &highlighted)
+            .map(|bundle| {
+                (
+                    bundle.masked_highlighted.clone(),
+                    bundle.masked_painted.clone(),
+                    bundle.masked_under_brush.clone(),
+                )
             })
+            .unwrap_or_default();
+        let marks = super::overlay::PointMarks {
+            highlighted: &highlighted,
+            painted: &painted,
+            under_brush: &under_brush,
+        };
+        let alive: Vec<u32> = (0..instances.len() as u32)
+            .map(|k| super::overlay::mask_word(base_count + k, &edited.deleted_points, marks))
             .collect();
         let point_alive_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("addition point liveness"),
@@ -123,7 +132,7 @@ impl SceneRenderer {
             added,
             base_count,
             &edited.deleted_points,
-            &highlighted,
+            marks,
             &sfmtool_core::progress::Progress::none(),
         );
 

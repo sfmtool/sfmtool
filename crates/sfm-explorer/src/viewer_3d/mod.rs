@@ -283,6 +283,13 @@ pub struct Viewer3D {
     pub panel_size: [u32; 2],
     /// Mouse position in texture pixels (set each frame from hover pos).
     pub hover_pixel: Option<[u32; 2]>,
+    /// A rectangle of the pick buffer to read on the next frame, in texture
+    /// pixels, in place of the 5×5 hover read. Taken when the copy is encoded,
+    /// so a frame that wants one sets it again.
+    pub(crate) pick_region_request: Option<crate::scene_renderer::PixelRect>,
+    /// The region the last request read, decoded; replaced when the next
+    /// request is read, and kept until then.
+    pub(crate) pick_region: Option<crate::scene_renderer::PickRegion>,
     /// Whether the Alt key is currently held.
     pub alt_held: bool,
     /// Supernova effect activation level (0.0 = off, 1.0 = fully on).
@@ -450,6 +457,8 @@ impl Viewer3D {
             camera_lock: None,
             panel_size: [0, 0],
             hover_pixel: None,
+            pick_region_request: None,
+            pick_region: None,
             alt_held: false,
             supernova_active: 0.0,
             supernova_view_pos: [0.0, 0.0, 5.0],

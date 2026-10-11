@@ -14,6 +14,12 @@ mod atlas;
 mod bg_image;
 mod frustums;
 mod overlay;
+pub(crate) use overlay::PointMarks;
+/// The mask words, for the test that checks them against `common.wgsl`.
+#[cfg(test)]
+pub(super) use overlay::{
+    MASK_ALIVE, MASK_DELETED, MASK_HIGHLIGHTED, MASK_PAINTED, MASK_UNDER_BRUSH,
+};
 mod patches;
 mod points;
 mod thumbnails;

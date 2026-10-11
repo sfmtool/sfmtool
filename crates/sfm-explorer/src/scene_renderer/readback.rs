@@ -196,6 +196,18 @@ impl SceneRenderer {
         Some(ReadbackResult { depth, pick })
     }
 
+    /// Whether a 5×5 copy was enqueued this frame and not yet read.
+    pub(crate) fn readback_pending(&self) -> bool {
+        self.readback_pending
+    }
+
+    /// Forget the last hover read, for a frame whose region read stood in for
+    /// it: the depth and the entity under the cursor are no longer known.
+    pub(crate) fn clear_hover(&mut self) {
+        self.hover_depth = None;
+        self.hover_pick = None;
+    }
+
     /// Returns the most recently read-back hover depth value.
     pub fn hover_depth(&self) -> Option<f32> {
         self.hover_depth

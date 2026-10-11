@@ -34,7 +34,7 @@ struct VertexInput {
     @location(4) v_halfvec: vec3<f32>,    // instance: v axis × half-extent
     @location(5) atlas_layer: u32,        // instance: compacted atlas cell index
     @location(6) point_index: u32,        // instance: recon.points index (picking)
-    @location(7) alive: u32,              // instance: 0 = the version deleted this point
+    @location(7) alive: u32,              // instance: the point's mask word (common.wgsl)
 }
 
 struct VertexOutput {
@@ -42,14 +42,19 @@ struct VertexOutput {
     @location(0) uv: vec2<f32>,
     @location(1) @interpolate(flat) atlas_layer: u32,
     @location(2) @interpolate(flat) point_index: u32,
+    // The mask word: a point the delete brush has painted, or one under its
+    // circle, draws its surfel in the brush's red as its splat does. The
+    // highlight (2) is drawn on splats only.
+    @location(3) @interpolate(flat) mark: u32,
 }
 
 @vertex
 fn vs_main(in: VertexInput) -> VertexOutput {
     var out: VertexOutput;
+    out.mark = in.alive;
     // A deleted point's surfel collapses to a clipped vertex, the same way a
     // back-facing one does below.
-    if in.alive == 0u {
+    if in.alive == MASK_DELETED {
         out.clip_pos = vec4<f32>(0.0, 0.0, -1.0, 1.0);
         return out;
     }
@@ -136,7 +141,13 @@ fn fs_main(in: VertexOutput) -> FragOutput {
     // Tint the surfel's texel before the opacity multiply — the tint is a
     // color, `patch_opacity` a translucency, and mixing in the wrong order
     // would make a tinted patch's strength depend on how transparent it is.
-    let rgb = mix(texel.rgb, recon.tint_color.rgb, recon.tint_color.a);
+    var rgb = mix(texel.rgb, recon.tint_color.rgb, recon.tint_color.a);
+    // The delete brush's reds replace the texel outright, as on a splat.
+    if in.mark == MASK_PAINTED {
+        rgb = BRUSH_PAINTED_COLOR;
+    } else if in.mark == MASK_UNDER_BRUSH {
+        rgb = BRUSH_UNDER_COLOR;
+    }
     // Premultiplied alpha: hard coverage from the discard above; the global
     // patch_opacity uniform is the only translucency source.
     out.color = vec4<f32>(rgb * uniforms.patch_opacity, uniforms.patch_opacity);

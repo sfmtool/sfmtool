@@ -73,7 +73,7 @@ impl SceneRenderer {
             &recon.point_set,
             0,
             &std::collections::HashSet::new(),
-            &std::collections::HashSet::new(),
+            super::overlay::PointMarks::none(),
             progress,
         );
         let packed = patch.as_ref().map_or(0, |patch| patch.count as usize);
@@ -170,7 +170,7 @@ impl SceneRenderer {
     /// points one edit added, and a breakdown of a fraction of a millisecond is
     /// noise under an entry whose subject is the edit.
     ///
-    /// `deleted` and `highlighted` are the sets the liveness buffer is built
+    /// `deleted` and `marks` are the sets the liveness buffer is built
     /// from, in the index space the instances carry -- base indexes for the
     /// base, edited indexes for the additions. They are parameters rather than
     /// an assumption because the two callers answer them differently: a new
@@ -186,7 +186,7 @@ impl SceneRenderer {
         point_set: &sfmtool_core::PointSet,
         index_offset: u32,
         deleted: &std::collections::HashSet<u32>,
-        highlighted: &std::collections::HashSet<u32>,
+        marks: super::overlay::PointMarks<'_>,
         progress: &Progress<'_>,
     ) -> Option<PatchResources> {
         let (Some(u_halfvecs), Some(v_halfvecs)) = (
@@ -350,7 +350,7 @@ impl SceneRenderer {
             .enumerate()
             .map(|(slot, instance)| (instance.point_index, slot as u32))
             .collect();
-        let alive = patch_liveness(&instances, deleted, highlighted);
+        let alive = patch_liveness(&instances, deleted, marks);
         let alive_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("patch liveness"),
             contents: bytemuck::cast_slice(&alive),
@@ -441,7 +441,8 @@ impl SceneRenderer {
 }
 
 /// The liveness buffer one atlas starts from: `MASK_DELETED` for a slot whose
-/// point the version has deleted, `MASK_ALIVE` for the rest.
+/// point the version has deleted, the word of the viewport's mark for a marked
+/// one, `MASK_ALIVE` for the rest.
 ///
 /// **A rebuilt atlas cannot rely on the frame's mask write to put the deleted
 /// set back over the top of it.** That write is a *difference*: it walks the
@@ -460,7 +461,7 @@ impl SceneRenderer {
 pub(super) fn patch_liveness(
     instances: &[PatchInstance],
     deleted: &std::collections::HashSet<u32>,
-    highlighted: &std::collections::HashSet<u32>,
+    marks: super::overlay::PointMarks<'_>,
 ) -> Vec<u32> {
     if instances.is_empty() {
         // At least one entry, so an empty atlas still has a bindable buffer.
@@ -468,7 +469,7 @@ pub(super) fn patch_liveness(
     }
     instances
         .iter()
-        .map(|instance| super::overlay::mask_word(instance.point_index, deleted, highlighted))
+        .map(|instance| super::overlay::mask_word(instance.point_index, deleted, marks))
         .collect()
 }
 

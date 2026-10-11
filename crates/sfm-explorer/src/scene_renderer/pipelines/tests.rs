@@ -234,3 +234,27 @@ fn the_wgsl_pick_tags_match_the_rust_ones() {
         );
     }
 }
+
+#[test]
+fn the_wgsl_mask_words_match_the_rust_ones() {
+    // The mask writer puts these words in the per-point buffers and the point
+    // and patch shaders branch on them, so the two sides must agree. They are
+    // written once on each side, in `common.wgsl` and `upload/overlay.rs`.
+    use super::super::upload::{
+        MASK_ALIVE, MASK_DELETED, MASK_HIGHLIGHTED, MASK_PAINTED, MASK_UNDER_BRUSH,
+    };
+    let common = include_str!("../../shaders/common.wgsl");
+    for (name, rust_value) in [
+        ("MASK_DELETED", MASK_DELETED),
+        ("MASK_ALIVE", MASK_ALIVE),
+        ("MASK_HIGHLIGHTED", MASK_HIGHLIGHTED),
+        ("MASK_PAINTED", MASK_PAINTED),
+        ("MASK_UNDER_BRUSH", MASK_UNDER_BRUSH),
+    ] {
+        assert_eq!(
+            wgsl_u32_const(common, name),
+            rust_value,
+            "{name} differs between common.wgsl and upload/overlay.rs"
+        );
+    }
+}

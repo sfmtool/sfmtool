@@ -69,10 +69,34 @@ struct PointInstance {
 16 bytes per point. 10M points = 160 MB of GPU buffer. The alpha byte carries
 the points-at-infinity flag (see [Points at Infinity](#points-at-infinity)).
 
-A second instance buffer steps alongside it, one `u32` per point: `1` alive, `0`
-deleted. The shader emits a clipped vertex for a masked point, so it draws
-nothing, occludes nothing and answers no pick. That is how an edit's deleted set
-reaches the pass without rewriting the instance buffer.
+A second instance buffer steps alongside it, one `u32` per point, the **mask
+word**. That is how an edit's deleted set, and the sets of points the viewport
+calls out, reach the pass without rewriting the instance buffer:
+
+| Word | Constant | The point is | Drawn as |
+|------|----------|--------------|----------|
+| `0` | `MASK_DELETED` | deleted by the version in view | nothing: a clipped vertex, which occludes nothing and answers no pick |
+| `1` | `MASK_ALIVE` | live | its own colour |
+| `2` | `MASK_HIGHLIGHTED` | live, and observed by a camera being moved (the Move Camera lock, `crate::camera_lock`) | the hover cyan, `(0, 1, 1)` |
+| `3` | `MASK_PAINTED` | live, and painted by the delete brush's stroke being held | red, `(1.0, 0.1, 0.1)` |
+| `4` | `MASK_UNDER_BRUSH` | live, and under the delete brush's circle before a press | pale red, `(1.0, 0.6, 0.6)` |
+
+The words are declared in
+[upload/overlay.rs](../../crates/sfm-explorer/src/scene_renderer/upload/overlay.rs)
+and in [common.wgsl](../../crates/sfm-explorer/src/shaders/common.wgsl), with the
+two brush colours, and a test in `scene_renderer/pipelines/tests.rs` checks that
+the two sides agree. A point in more than one set takes one word, chosen by
+`mask_word`: deleted, then painted, then under the brush, then highlighted. The
+colours replace the point's own outright and are not tinted, as the selection's
+yellow and the hover's cyan are not. The two reds come before the selection and
+the hover in the fragment shader, because they say what releasing the stroke
+will do to the point. They share a hue so the circle's preview reads as what a
+press would paint, and the preview's is the paler one because nothing has been
+done yet. The delete brush that sets `3` and `4` is specified in
+[../drafts/delete-brush.md](../drafts/delete-brush.md).
+
+`SceneRenderer::update_point_mask` writes the words; see
+[document-model.md](document-model.md) § "Change detection by identity".
 
 ### The overlay's additions
 
@@ -134,9 +158,12 @@ are passed to the fragment shader for circle clipping.
 
 The fragment shader:
 1. Discards fragments where `length(uv) > 1.0` (circle clipping)
-2. Outputs premultiplied RGBA color to the color target
-3. Outputs positive linear view-space depth to the depth target
-4. Outputs `PICK_TAG_POINT | instance_index` to the pick target
+2. Replaces the point's colour, first match wins: the brush's red or pale red
+   for mask word `3` or `4`, the selection's yellow for the selected point, the
+   hover's cyan for the hovered point or mask word `2` (see "Per-Point Data")
+3. Outputs premultiplied RGBA color to the color target
+4. Outputs positive linear view-space depth to the depth target
+5. Outputs `PICK_TAG_POINT | instance_index` to the pick target
 
 ### Three Render Targets
 

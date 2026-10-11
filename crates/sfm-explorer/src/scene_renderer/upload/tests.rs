@@ -1680,12 +1680,7 @@ fn sync(
     if renderer.additions_changed(id, edited) {
         renderer.upload_additions(device, queue, id, edited);
     }
-    renderer.update_point_mask(
-        queue,
-        id,
-        &edited.deleted_points,
-        &std::collections::HashSet::new(),
-    );
+    renderer.update_point_mask(queue, id, &edited.deleted_points, super::PointMarks::none());
     uploaded
 }
 
@@ -2038,7 +2033,7 @@ fn a_rebuilt_addition_atlas_starts_from_the_deleted_set() {
         &queue,
         RECON,
         &edited.deleted_points,
-        &std::collections::HashSet::new(),
+        super::PointMarks::none(),
     );
     assert_eq!(
         written, 0,
@@ -2091,10 +2086,9 @@ fn patch_liveness_marks_the_slots_of_deleted_points() {
     };
     let instances = [instance(40), instance(41), instance(42)];
     let deleted: std::collections::HashSet<u32> = [3, 40].into_iter().collect();
-    let none = std::collections::HashSet::new();
 
     assert_eq!(
-        super::patches::patch_liveness(&instances, &deleted, &none),
+        super::patches::patch_liveness(&instances, &deleted, super::PointMarks::none()),
         vec![
             super::overlay::MASK_DELETED,
             super::overlay::MASK_ALIVE,
@@ -2104,8 +2098,12 @@ fn patch_liveness_marks_the_slots_of_deleted_points() {
     // The highlight survives a rebuild too: it is a viewport statement the
     // frame's write would likewise have nothing to say about.
     let lit: std::collections::HashSet<u32> = [40, 41].into_iter().collect();
+    let marks = super::PointMarks {
+        highlighted: &lit,
+        ..super::PointMarks::none()
+    };
     assert_eq!(
-        super::patches::patch_liveness(&instances, &deleted, &lit),
+        super::patches::patch_liveness(&instances, &deleted, marks),
         vec![
             super::overlay::MASK_DELETED,
             super::overlay::MASK_HIGHLIGHTED,
@@ -2113,9 +2111,25 @@ fn patch_liveness_marks_the_slots_of_deleted_points() {
         ],
         "deleted wins over highlighted, as it does in the mask write",
     );
+    // So do the delete brush's marks.
+    let painted: std::collections::HashSet<u32> = [41].into_iter().collect();
+    let under_brush: std::collections::HashSet<u32> = [42].into_iter().collect();
+    let marks = super::PointMarks {
+        painted: &painted,
+        under_brush: &under_brush,
+        ..super::PointMarks::none()
+    };
+    assert_eq!(
+        super::patches::patch_liveness(&instances, &deleted, marks),
+        vec![
+            super::overlay::MASK_DELETED,
+            super::overlay::MASK_PAINTED,
+            super::overlay::MASK_UNDER_BRUSH,
+        ],
+    );
     // An empty atlas still needs a bindable buffer.
     assert_eq!(
-        super::patches::patch_liveness(&[], &deleted, &none),
+        super::patches::patch_liveness(&[], &deleted, super::PointMarks::none()),
         vec![super::overlay::MASK_ALIVE],
     );
 }
@@ -2458,13 +2472,114 @@ fn update_point_mask_reports_the_entries_it_wrote() {
     r.upload_points(&device, RECON, &recon, &SILENT);
 
     let deleted: std::collections::HashSet<u32> = [1, 4].into_iter().collect();
-    let none = std::collections::HashSet::new();
-    assert_eq!(r.update_point_mask(&queue, RECON, &deleted, &none), 2);
+    let none = super::PointMarks::none();
+    assert_eq!(r.update_point_mask(&queue, RECON, &deleted, none), 2);
     assert_eq!(
-        r.update_point_mask(&queue, RECON, &deleted, &none),
+        r.update_point_mask(&queue, RECON, &deleted, none),
         0,
         "the mask already said this, and a frame that wrote nothing opens no phase",
     );
+}
+
+/// The delete brush's two words over the life of a stroke: the points under
+/// the circle take `4` and go back to `1` when it moves off them, the painted
+/// points take `3`, go back to `1` on a cancel, and to `0` once the deletion
+/// is the version's. Read from the sets the writes were diffed against, since
+/// the `noop` backend keeps no buffer contents.
+#[test]
+fn the_brush_marks_are_written_and_reset() {
+    use super::overlay::{MASK_ALIVE, MASK_DELETED, MASK_PAINTED, MASK_UNDER_BRUSH};
+    use std::collections::HashSet;
+    let (device, queue) = device();
+    let recon = demo(8);
+    let mut r = SceneRenderer::new();
+    r.upload_points(&device, RECON, &recon, &SILENT);
+    let empty = HashSet::new();
+    let set = |indexes: &[u32]| -> HashSet<u32> { indexes.iter().copied().collect() };
+    let words = |r: &SceneRenderer| -> Vec<u32> {
+        (0..8).map(|i| r.masked_word(RECON, i).unwrap()).collect()
+    };
+    let (a, d) = (MASK_ALIVE, MASK_DELETED);
+    let (p, u) = (MASK_PAINTED, MASK_UNDER_BRUSH);
+
+    // The circle over 2 and 3, then moved to 3 and 5.
+    let under = set(&[2, 3]);
+    let marks = |painted, under_brush| super::PointMarks {
+        painted,
+        under_brush,
+        ..super::PointMarks::none()
+    };
+    assert_eq!(
+        r.update_point_mask(&queue, RECON, &empty, marks(&empty, &under)),
+        2
+    );
+    assert_eq!(words(&r), [a, a, u, u, a, a, a, a]);
+    let under = set(&[3, 5]);
+    assert_eq!(
+        r.update_point_mask(&queue, RECON, &empty, marks(&empty, &under)),
+        2
+    );
+    assert_eq!(words(&r), [a, a, a, u, a, u, a, a]);
+
+    // A press paints them, and a cancel puts them back.
+    let painted = set(&[3, 5]);
+    r.update_point_mask(&queue, RECON, &empty, marks(&painted, &empty));
+    assert_eq!(words(&r), [a, a, a, p, a, p, a, a]);
+    r.update_point_mask(&queue, RECON, &empty, marks(&empty, &empty));
+    assert_eq!(words(&r), [a; 8]);
+
+    // A stroke that commits: the painted points become the deleted ones.
+    r.update_point_mask(&queue, RECON, &empty, marks(&painted, &empty));
+    r.update_point_mask(&queue, RECON, &painted, marks(&empty, &empty));
+    assert_eq!(words(&r), [a, a, a, d, a, d, a, a]);
+}
+
+/// Which word wins when a point is in more than one set.
+#[test]
+fn mask_word_ranks_deleted_then_painted_then_under_the_brush_then_highlighted() {
+    use super::overlay::MASK_UNDER_BRUSH;
+    use super::overlay::{mask_word, MASK_DELETED, MASK_HIGHLIGHTED, MASK_PAINTED};
+    let all: std::collections::HashSet<u32> = [0, 1, 2, 3].into_iter().collect();
+    let from_1: std::collections::HashSet<u32> = [1, 2, 3].into_iter().collect();
+    let from_2: std::collections::HashSet<u32> = [2, 3].into_iter().collect();
+    let only_0: std::collections::HashSet<u32> = [0].into_iter().collect();
+    let marks = super::PointMarks {
+        highlighted: &all,
+        under_brush: &from_1,
+        painted: &from_2,
+    };
+    let words: Vec<u32> = (0..4).map(|i| mask_word(i, &only_0, marks)).collect();
+    // 0 is deleted; 1 is under the brush and highlighted; 2 and 3 are painted.
+    assert_eq!(
+        words,
+        [MASK_DELETED, MASK_UNDER_BRUSH, MASK_PAINTED, MASK_PAINTED]
+    );
+    let words: Vec<u32> = (0..4)
+        .map(|i| {
+            mask_word(
+                i,
+                &std::collections::HashSet::new(),
+                super::PointMarks {
+                    highlighted: &all,
+                    ..super::PointMarks::none()
+                },
+            )
+        })
+        .collect();
+    assert_eq!(words, [MASK_HIGHLIGHTED; 4]);
+}
+
+/// The mask write's entries become one `write_buffer` per run of consecutive
+/// positions.
+#[test]
+fn mask_entries_are_written_as_contiguous_runs() {
+    use super::overlay::contiguous_runs;
+    assert_eq!(
+        contiguous_runs(&[(1, 10), (2, 20), (3, 30), (7, 70), (9, 90), (10, 100)]),
+        vec![(1, vec![10, 20, 30]), (7, vec![70]), (9, vec![90, 100])],
+    );
+    assert_eq!(contiguous_runs(&[(0, 5)]), vec![(0, vec![5])]);
+    assert!(contiguous_runs(&[]).is_empty());
 }
 
 // ── detail stages ─────────────────────────────────────────────

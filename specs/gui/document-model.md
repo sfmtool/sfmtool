@@ -314,7 +314,7 @@ if renderer.base_changed(id, &base) {
     renderer.upload_patches(device, queue, id, recon);
     renderer.set_uploaded_base(id, base);
 }
-renderer.update_deleted_mask(queue, id, &node.edited().deleted_points);
+renderer.update_point_mask(queue, id, &node.edited().deleted_points, marks);
 ```
 
 `base_changed` is a pointer comparison against the stored `Arc`
@@ -350,13 +350,25 @@ sizing that reads it, where the user put it.
 
 **The deleted set reaches the shaders as a mask.** Each bundle carries, beside
 its point instance buffer, a second instance buffer of one `u32` per point: `1`
-alive, `0` deleted. `update_deleted_mask` writes only the entries the set moved,
-so an edit costs four bytes per point it touched rather than a rewrite of the
-node. The point shader emits a clipped vertex for a masked point, so it draws
-nothing, occludes nothing and answers no pick. Patches carry the same mask, one
-entry per surfel; because the patch instances and the atlas are compacted over
-the points that carry a bitmap, the bundle keeps the point-index-to-slot map the
-mask write needs.
+alive, `0` deleted, and `2` to `4` alive and called out by the viewport
+(`marks`, a `PointMarks`: the points a camera being moved observes, and the delete
+brush's painted points and the points under its circle; the words and their
+colours are in [point-cloud-rendering.md](point-cloud-rendering.md) § "Per-Point
+Data"). `update_point_mask` writes only the entries that the deleted set or a
+mark moved, so an edit costs four bytes per point it touched rather than a
+rewrite of the node. The point shader emits a clipped vertex for a masked point,
+so it draws nothing, occludes nothing and answers no pick. Patches carry the same
+mask, one entry per surfel; because the patch instances and the atlas are
+compacted over the points that carry a bitmap, the bundle keeps the
+point-index-to-slot map the mask write needs.
+
+The changed entries of each buffer are written as runs of consecutive
+positions, one `write_buffer` per run, rather than one 4-byte write per entry. A
+stroke of the delete brush can change thousands of entries in a frame, and those
+indexes are scattered through the point order, since the order is not spatial,
+so many runs are one entry long. Two alternatives were not measured: bridging a
+short gap between runs by rewriting the unchanged words in it, and rewriting the
+whole buffer once the changes exceed some fraction of it.
 
 **The overlay's additions are a second set of buffers.** A point the overlay adds
 has no instance in the base's buffers, and putting one there would mean

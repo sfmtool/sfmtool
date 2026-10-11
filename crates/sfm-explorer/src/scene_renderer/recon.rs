@@ -30,9 +30,10 @@ use crate::scene::NodeTint;
 /// `Option`s.
 pub(super) struct PatchResources {
     pub instance_buffer: wgpu::Buffer,
-    /// Per-patch liveness, `1` alive and `0` deleted, as a second instance
-    /// buffer stepping with `instance_buffer`. Rewritten entry by entry when
-    /// the overlay's deleted set changes; never rebuilt for a point edit.
+    /// Per-patch mask word, the same word the point buffer holds for the
+    /// patch's point, as a second instance buffer stepping with
+    /// `instance_buffer`. Rewritten where the overlay's deleted set or the
+    /// viewport's marks change; never rebuilt for a point edit.
     pub alive_buffer: wgpu::Buffer,
     /// Which instance slot each point that carries a patch was packed into.
     /// The atlas and the instance buffer are compacted, so a patch's slot is
@@ -188,12 +189,19 @@ pub(super) struct ReconResources {
     /// calling a set of points out, which today is the points a camera being
     /// moved observes. Diffed the same way, and for the same reason.
     pub masked_highlighted: HashSet<u32>,
+    /// Which indexes the mask currently marks as painted by the delete brush.
+    /// Diffed the same way.
+    pub masked_painted: HashSet<u32>,
+    /// Which indexes the mask currently marks as under the delete brush's
+    /// circle. Diffed the same way.
+    pub masked_under_brush: HashSet<u32>,
 
     // ── points ──
     pub point_instance_buffer: Option<wgpu::Buffer>,
-    /// Per-point liveness, `1` alive and `0` deleted, as a second instance
-    /// buffer stepping with `point_instance_buffer`. The overlay's deleted set
-    /// reaches the point shader through this and nothing else.
+    /// Per-point mask word (`0` deleted, `1` alive, `2` to `4` alive and
+    /// marked; see `upload::overlay`), as a second instance buffer stepping
+    /// with `point_instance_buffer`. The overlay's deleted set and the
+    /// viewport's marks reach the point shader through this and nothing else.
     pub point_alive_buffer: Option<wgpu::Buffer>,
     pub point_count: u32,
     /// Global point uniforms + this node's `ReconUniforms`.
@@ -300,6 +308,8 @@ impl ReconResources {
             uploaded_base: None,
             masked_deleted: HashSet::new(),
             masked_highlighted: HashSet::new(),
+            masked_painted: HashSet::new(),
+            masked_under_brush: HashSet::new(),
             point_instance_buffer: None,
             point_alive_buffer: None,
             point_count: 0,
@@ -336,6 +346,16 @@ impl ReconResources {
     /// How many addition instances this bundle draws.
     pub(super) fn addition_count(&self) -> u32 {
         self.additions.as_ref().map_or(0, |a| a.point_count)
+    }
+
+    /// The marks the mask last written for this bundle holds.
+    #[cfg(test)]
+    pub(super) fn masked_marks(&self) -> super::upload::PointMarks<'_> {
+        super::upload::PointMarks {
+            highlighted: &self.masked_highlighted,
+            painted: &self.masked_painted,
+            under_brush: &self.masked_under_brush,
+        }
     }
 
     /// Every surfel atlas this bundle holds, in draw order: the base's, then

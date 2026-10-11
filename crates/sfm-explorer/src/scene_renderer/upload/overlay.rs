@@ -28,19 +28,85 @@ pub(crate) const MASK_ALIVE: u32 = 1;
 /// The mask word of a live point the viewport is calling out: drawn in the
 /// hover tint for as long as whatever is calling it out lasts.
 pub(crate) const MASK_HIGHLIGHTED: u32 = 2;
+/// The mask word of a live point the delete brush has painted in the stroke
+/// being held: drawn in the painted red.
+pub(crate) const MASK_PAINTED: u32 = 3;
+/// The mask word of a live point under the delete brush's circle before a
+/// press: drawn in the pale red.
+pub(crate) const MASK_UNDER_BRUSH: u32 = 4;
 
-/// The mask word one point index takes under a deleted set and a highlight set.
+/// The viewport's marks on one node's points, in the index space the mask is
+/// keyed on (edited indexes). Each set picks a mask word other than
+/// [`MASK_ALIVE`] for a live point; [`mask_word`] says which wins when a point
+/// is in more than one.
+#[derive(Clone, Copy)]
+pub(crate) struct PointMarks<'a> {
+    /// The points a camera being moved observes ([`crate::camera_lock`]).
+    pub(crate) highlighted: &'a HashSet<u32>,
+    /// The points the stroke being held has painted.
+    pub(crate) painted: &'a HashSet<u32>,
+    /// The points under the brush's circle before a press.
+    pub(crate) under_brush: &'a HashSet<u32>,
+}
+
+/// The set every mark of [`PointMarks::none`] borrows.
+static NO_POINTS: std::sync::LazyLock<HashSet<u32>> = std::sync::LazyLock::new(HashSet::new);
+
+impl PointMarks<'static> {
+    /// No marks: every live point takes [`MASK_ALIVE`].
+    pub(crate) fn none() -> Self {
+        Self {
+            highlighted: &NO_POINTS,
+            painted: &NO_POINTS,
+            under_brush: &NO_POINTS,
+        }
+    }
+}
+
+/// The mask word one point index takes under a deleted set and the viewport's
+/// marks.
 ///
-/// The one place the three words are chosen, so a buffer *built* from the two
-/// sets and a buffer *corrected* entry by entry cannot come to disagree about
-/// what a given index means.
-pub(crate) fn mask_word(index: u32, deleted: &HashSet<u32>, highlighted: &HashSet<u32>) -> u32 {
+/// The one place the words are chosen, so a buffer *built* from the sets and a
+/// buffer *corrected* entry by entry cannot come to disagree about what a given
+/// index means. Deleted wins over every mark, since a deleted point draws
+/// nothing. Painted wins over under-the-brush, so a painted point keeps its red
+/// when the circle passes over it again. The brush's two marks win over the
+/// highlight, though the brush and the Move Camera lock are never on together.
+pub(crate) fn mask_word(index: u32, deleted: &HashSet<u32>, marks: PointMarks<'_>) -> u32 {
     if deleted.contains(&index) {
         MASK_DELETED
-    } else if highlighted.contains(&index) {
+    } else if marks.painted.contains(&index) {
+        MASK_PAINTED
+    } else if marks.under_brush.contains(&index) {
+        MASK_UNDER_BRUSH
+    } else if marks.highlighted.contains(&index) {
         MASK_HIGHLIGHTED
     } else {
         MASK_ALIVE
+    }
+}
+
+/// Split `(position, word)` entries, sorted by position with no repeats, into
+/// runs of consecutive positions: each run is its first position and the words
+/// to write from there, one `write_buffer` apiece.
+pub(super) fn contiguous_runs(entries: &[(u32, u32)]) -> Vec<(u32, Vec<u32>)> {
+    let mut runs: Vec<(u32, Vec<u32>)> = Vec::new();
+    for &(position, word) in entries {
+        match runs.last_mut() {
+            Some((start, words)) if *start + words.len() as u32 == position => words.push(word),
+            _ => runs.push((position, vec![word])),
+        }
+    }
+    runs
+}
+
+/// Write `entries` into `buffer`, one `write_buffer` per run of consecutive
+/// positions. Sorts them first, since a patch slot's order need not follow its
+/// point index's.
+fn write_runs(queue: &wgpu::Queue, buffer: &wgpu::Buffer, entries: &mut [(u32, u32)]) {
+    entries.sort_unstable_by_key(|&(position, _)| position);
+    for (start, words) in contiguous_runs(entries) {
+        queue.write_buffer(buffer, u64::from(start) * 4, bytemuck::cast_slice(&words));
     }
 }
 
@@ -82,21 +148,25 @@ impl SceneRenderer {
         }
     }
 
-    /// Bring `id`'s point mask in line with `deleted` and `highlighted`.
+    /// Bring `id`'s point mask in line with `deleted` and `marks`.
     ///
-    /// One `u32` per point, carrying both answers because they are one word to
+    /// One `u32` per point, carrying every answer because they are one word to
     /// the shader: `0` deleted, `1` alive, `2` alive and drawn in the hover
-    /// tint. Written only for the indexes that entered or left either set, in
-    /// the point buffer and -- for a point that carries a surfel -- the patch
-    /// buffer, so an edit costs its own size rather than the node's. An index at
-    /// or above the base's point count is an addition, and is masked in the
-    /// additions' own buffers, which the overlay owns alongside the mask.
+    /// tint, `3` alive and painted by the delete brush, `4` alive and under the
+    /// brush's circle ([`mask_word`] picks it). Written only for the indexes
+    /// that entered or left any of the sets, in the point buffer and -- for a
+    /// point that carries a surfel -- the patch buffer, so an edit costs its own
+    /// size rather than the node's. An index at or above the base's point count
+    /// is an addition, and is masked in the additions' own buffers, which the
+    /// overlay owns alongside the mask. The changed entries of each buffer go
+    /// out as runs of consecutive positions, one `write_buffer` per run.
     ///
-    /// The highlight is a *viewport* statement rather than a document one --
-    /// today, the points a camera being moved observes
-    /// ([`crate::camera_lock`]) -- and it rides in this word because a second
-    /// per-point buffer would mean a second vertex attribute and a second
-    /// pipeline layout for one temporary colour.
+    /// The marks are *viewport* statements rather than document ones -- the
+    /// points a camera being moved observes ([`crate::camera_lock`]), and the
+    /// delete brush's painted points and the points under its circle -- and
+    /// they ride in this word because a second per-point buffer would mean a
+    /// second vertex attribute and a second pipeline layout for a temporary
+    /// colour.
     ///
     /// Returns how many indexes it wrote, which is what the frame's phase note
     /// says beside the time: this runs on every frame for every node, so zero
@@ -106,12 +176,16 @@ impl SceneRenderer {
         queue: &wgpu::Queue,
         id: ReconId,
         deleted: &HashSet<u32>,
-        highlighted: &HashSet<u32>,
+        marks: PointMarks<'_>,
     ) -> usize {
         let Some(bundle) = self.recons.get_mut(&id) else {
             return 0;
         };
-        if bundle.masked_deleted == *deleted && bundle.masked_highlighted == *highlighted {
+        if bundle.masked_deleted == *deleted
+            && bundle.masked_highlighted == *marks.highlighted
+            && bundle.masked_painted == *marks.painted
+            && bundle.masked_under_brush == *marks.under_brush
+        {
             return 0;
         }
         let mut changed: Vec<u32> = bundle
@@ -119,30 +193,35 @@ impl SceneRenderer {
             .symmetric_difference(deleted)
             .copied()
             .collect();
-        changed.extend(
-            bundle
-                .masked_highlighted
-                .symmetric_difference(highlighted)
-                .copied(),
-        );
+        for (was, now) in [
+            (&bundle.masked_highlighted, marks.highlighted),
+            (&bundle.masked_painted, marks.painted),
+            (&bundle.masked_under_brush, marks.under_brush),
+        ] {
+            changed.extend(was.symmetric_difference(now).copied());
+        }
         changed.sort_unstable();
         changed.dedup();
         let written = changed.len();
+
+        // Each buffer's entries, as (position in that buffer, word). `changed`
+        // is ascending, so the point rows already are; a patch slot need not
+        // follow its point's order, and `write_runs` sorts.
+        let mut points = Vec::new();
+        let mut patches = Vec::new();
+        let mut addition_points = Vec::new();
+        let mut addition_patches = Vec::new();
         for index in changed {
-            let alive = mask_word(index, deleted, highlighted);
+            let word = mask_word(index, deleted, marks);
             if index < bundle.point_count {
-                if let Some(buffer) = &bundle.point_alive_buffer {
-                    queue.write_buffer(buffer, u64::from(index) * 4, bytemuck::bytes_of(&alive));
-                }
+                points.push((index, word));
             }
-            if let Some(patch) = &bundle.patch {
-                if let Some(&slot) = patch.slot_of_point.get(&index) {
-                    queue.write_buffer(
-                        &patch.alive_buffer,
-                        u64::from(slot) * 4,
-                        bytemuck::bytes_of(&alive),
-                    );
-                }
+            if let Some(&slot) = bundle
+                .patch
+                .as_ref()
+                .and_then(|patch| patch.slot_of_point.get(&index))
+            {
+                patches.push((slot, word));
             }
             // An addition's own instance, whose row is its edited index less
             // the base's point count. Its surfel is keyed on the edited index,
@@ -150,27 +229,46 @@ impl SceneRenderer {
             if let Some(additions) = &bundle.additions {
                 if let Some(row) = index.checked_sub(bundle.point_count) {
                     if row < additions.point_count {
-                        queue.write_buffer(
-                            &additions.point_alive_buffer,
-                            u64::from(row) * 4,
-                            bytemuck::bytes_of(&alive),
-                        );
+                        addition_points.push((row, word));
                     }
                 }
-                if let Some(patch) = &additions.patch {
-                    if let Some(&slot) = patch.slot_of_point.get(&index) {
-                        queue.write_buffer(
-                            &patch.alive_buffer,
-                            u64::from(slot) * 4,
-                            bytemuck::bytes_of(&alive),
-                        );
-                    }
+                if let Some(&slot) = additions
+                    .patch
+                    .as_ref()
+                    .and_then(|patch| patch.slot_of_point.get(&index))
+                {
+                    addition_patches.push((slot, word));
                 }
             }
         }
-        bundle.masked_deleted = deleted.clone();
-        bundle.masked_highlighted = highlighted.clone();
+        if let Some(buffer) = &bundle.point_alive_buffer {
+            write_runs(queue, buffer, &mut points);
+        }
+        if let Some(patch) = &bundle.patch {
+            write_runs(queue, &patch.alive_buffer, &mut patches);
+        }
+        if let Some(additions) = &bundle.additions {
+            write_runs(queue, &additions.point_alive_buffer, &mut addition_points);
+            if let Some(patch) = &additions.patch {
+                write_runs(queue, &patch.alive_buffer, &mut addition_patches);
+            }
+        }
+        bundle.masked_deleted.clone_from(deleted);
+        bundle.masked_highlighted.clone_from(marks.highlighted);
+        bundle.masked_painted.clone_from(marks.painted);
+        bundle.masked_under_brush.clone_from(marks.under_brush);
         written
+    }
+
+    /// The word `id`'s mask holds for `index`, as the last
+    /// [`Self::update_point_mask`] left it. For the tests, which cannot read a
+    /// buffer back from the `noop` backend and so assert on the sets the
+    /// writes were diffed against.
+    #[cfg(test)]
+    pub(crate) fn masked_word(&self, id: ReconId, index: u32) -> Option<u32> {
+        self.recons
+            .get(&id)
+            .map(|bundle| mask_word(index, &bundle.masked_deleted, bundle.masked_marks()))
     }
 
     /// How many base indexes `id`'s mask currently marks as deleted. For the

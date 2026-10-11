@@ -219,10 +219,14 @@ frame arrays **and** the bitmaps being `Some`):
 
 Called from `App::prepare_uploads` (`app.rs:224-388`) beside `upload_thumbnails`.
 
-Each instance also has an entry in a liveness buffer, `1` alive and `0` deleted,
-which is how an edit's deleted set reaches this pass. Because the instances are
-compacted, a point's slot is not its point index, so the bundle keeps the
-point-index-to-slot map the mask write needs.
+Each instance also has an entry in a liveness buffer, its point's mask word
+([point-cloud-rendering.md](point-cloud-rendering.md) § "Per-Point Data"), which
+is how an edit's deleted set reaches this pass. A deleted point's surfel is a
+clipped vertex, and the surfel of a point the delete brush has painted, or has
+under its circle, is drawn in the brush's red or pale red in place of its texels,
+as the point's splat is. The highlight (`2`) is drawn on splats only. Because the
+instances are compacted, a point's slot is not its point index, so the bundle
+keeps the point-index-to-slot map the mask write needs.
 
 ### The overlay's additions get a second atlas
 
