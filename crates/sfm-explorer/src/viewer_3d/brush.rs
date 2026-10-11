@@ -239,7 +239,7 @@ impl Viewer3D {
     /// HUD's reason: it is an `egui::Area` on a layer above the viewport, so a
     /// click on it never reaches the viewport, and its rect joins the HUD's in
     /// the gates of the input paths that read the pointer geometrically.
-    pub fn show_tool_strip(&mut self, ui: &mut egui::Ui, log: &mut ActionLog) {
+    pub(crate) fn show_tool_strip(&mut self, ui: &mut egui::Ui, log: &mut ActionLog) {
         let viewport = ui.available_rect_before_wrap();
         if viewport.width() <= 0.0 || viewport.height() <= 0.0 {
             self.tool_strip_rect = None;

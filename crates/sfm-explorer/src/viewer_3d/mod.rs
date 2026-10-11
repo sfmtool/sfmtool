@@ -415,7 +415,7 @@ pub struct Viewer3D {
     /// Screen rect the tool strip occupied on the last frame it was built.
     /// Excluded from the input paths that read the pointer geometrically, as
     /// [`Self::hud_rect`] is.
-    pub tool_strip_rect: Option<Rect>,
+    tool_strip_rect: Option<Rect>,
 }
 
 /// What the entry that stages a point's track on the bench is called, in both
