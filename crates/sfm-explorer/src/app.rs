@@ -883,9 +883,9 @@ impl App {
 
         let mut raw_input = egui_winit_state.take_egui_input(window);
 
-        // An agent's `click`, `hover`, `press_key` or `type_text`: the next
-        // step's events, behind the real mouse and keyboard's, before anything
-        // below reads the frame's modifiers.
+        // An agent's `click`, `hover`, `drag`, `press_key` or `type_text`: the
+        // next step's events, behind the real mouse and keyboard's, before
+        // anything below reads the frame's modifiers.
         #[cfg(feature = "mcp")]
         self.feed_mcp_input(&mut raw_input.events);
 

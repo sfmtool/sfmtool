@@ -510,9 +510,9 @@ pub(crate) struct App {
     /// where the `wgpu::Device` already is.
     #[cfg(feature = "mcp")]
     pub(crate) mcp_deferred: Vec<(mcp::Deferred, tokio::sync::oneshot::Sender<mcp::Reply>)>,
-    /// The `click`, `hover`, `press_key` and `type_text` calls, run one after
-    /// another: each feeds its events to egui a step per frame before the pass
-    /// and is answered after the pass of its last frame.
+    /// The `click`, `hover`, `drag`, `press_key` and `type_text` calls, run one
+    /// after another: each feeds its events to egui a step per frame before the
+    /// pass and is answered after the pass of its last frame.
     #[cfg(feature = "mcp")]
     pub(crate) mcp_input: mcp::InputQueue,
     /// Whether the window surface was configured with `COPY_SRC`, which is what

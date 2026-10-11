@@ -2718,11 +2718,12 @@ None of those is a click or a key on a widget, which is what the tools are for.
 On Linux and macOS `pointer_in_rect` reads egui's pointer, and they all follow
 the synthetic one.
 
-The same button state is how the 3D viewport tells its drags apart on Windows:
-a middle drag pans and a right drag zooms only when
-`platform::windows::mouse_button_state` says that button is down. A synthetic
-`drag` with `mouse_button` `middle` or `right` sets egui's button and not that
-state, so over the 3D viewport on Windows it moves the camera as a left drag
+The 3D viewport tells a middle drag from a right drag by that button state
+alone: a middle drag pans and a right drag zooms only when
+`platform::windows::mouse_button_state` says that button is down, and on Linux
+and macOS it does not read the button at all. A synthetic `drag` with
+`mouse_button` `middle` or `right` sets egui's button and not that state, so
+over the 3D viewport, on every platform, it moves the camera as a left drag
 with the same modifiers does. Shift for a pan and Ctrl for a zoom are read from
 egui and work.
 
@@ -4463,7 +4464,7 @@ What this arrangement gives:
   and the present, into the frame's own encoder, and only in a frame that has
   such a screenshot waiting (§ "screenshot", "Mechanics"). Everything after that
   — the map, the crop, the PNG — is still in the readback phase.
-- **Input is the one thing fed into the egui pass.** `click`, `hover`,
+- **Input is the one thing fed into the egui pass.** `click`, `hover`, `drag`,
   `press_key` and `type_text` are applied in the drain like every command, which
   checks what the window snapshot can check (a minimized window, a panel that
   is closed or behind a tab, a point outside the target's last laid-out size)
@@ -5576,8 +5577,8 @@ Other candidates, in rough order of value:
   GUI thread pumping, so every queued tool call would time out behind a window
   only the human can answer. A `click` can still press a menu item that opens
   one, as a person's click would, and the same wait follows.
-- **No input below egui.** `click`, `hover`, `press_key` and `type_text` put
-  events into egui's input, so they never pass through `winit`, the keyboard
+- **No input below egui.** `click`, `hover`, `drag`, `press_key` and
+  `type_text` put events into egui's input, so they never pass through `winit`, the keyboard
   layout or an input method (§ "What synthetic input does not exercise"). The
   command vocabulary stays the way an agent changes the viewer; the input tools
   are for what only a widget does and for testing the widgets themselves.

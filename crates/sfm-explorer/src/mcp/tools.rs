@@ -42,8 +42,8 @@ pub(crate) enum ToolKind {
     /// exists at all: it is the only call on this surface that can overwrite
     /// something the human cannot undo by name.
     Save,
-    /// Presses what a person could press: `click`, `hover`, `press_key` and
-    /// `type_text`. What the input then does is decided by the widget it lands
+    /// Presses what a person could press: `click`, `hover`, `drag`, `press_key`
+    /// and `type_text`. What the input then does is decided by the widget it lands
     /// on, and that includes File ▸ Save, File ▸ Quit and the items that open a
     /// file chooser, so these are advertised as destructive with `Save`.
     Input,

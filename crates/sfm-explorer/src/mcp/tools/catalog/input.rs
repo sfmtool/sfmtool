@@ -91,10 +91,11 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                             "type": "string",
                             "enum": ["left", "middle", "right"],
                             "description":
-                                "Which button is held. Omit for left. On Windows the 3D Viewer \
-                                 reads which button is down from the operating system, which \
-                                 this input does not reach, so there a middle or right drag \
-                                 moves the camera as a left drag does.",
+                                "Which button is held. Omit for left. The 3D Viewer tells a \
+                                 middle or right drag apart only by the operating system's \
+                                 button state on Windows, which this input does not reach, so \
+                                 over it a middle or right drag moves the camera as a left \
+                                 drag does.",
                         }),
                     ),
                     ("modifiers", modifiers_schema("for the whole drag")),

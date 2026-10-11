@@ -630,7 +630,7 @@ pub(crate) enum Command {
         panel: Option<crate::dock::Tab>,
         crop: Option<[u32; 4]>,
     },
-    /// Pointer or keyboard input into the window: `click`, `hover`,
+    /// Pointer or keyboard input into the window: `click`, `hover`, `drag`,
     /// `press_key` and `type_text`, delivered over the next few frames as the
     /// events a real mouse and keyboard make.
     Input(input::InputCommand),
