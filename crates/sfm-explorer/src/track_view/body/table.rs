@@ -81,8 +81,9 @@ pub(crate) const ROW_HEIGHT: f32 = TILE_SIZE + 6.0;
 const KEEP_WIDTH: f32 = 64.0;
 /// Width of the *Zoom* column: room for `0.21/0.45×` with its sort triangle.
 const ZOOM_WIDTH: f32 = 76.0;
-/// The *Reference* column's width: room for `ninth differs` over `65°, 83%`.
-const REFERENCE_WIDTH: f32 = 112.0;
+/// The *Reference* column's width: room for `×12.34 ninth differs` over
+/// `65°, 83%`.
+const REFERENCE_WIDTH: f32 = 124.0;
 /// Width of the *From* column: room for its longest cell, `feature 123456`.
 const FROM_WIDTH: f32 = 110.0;
 /// Width of the *Name* column, the last one. A name longer than this is

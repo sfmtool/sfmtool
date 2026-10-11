@@ -1128,9 +1128,9 @@ impl AppState {
         // judged nothing: the evaluation that follows renders the new one,
         // judges the rows and logs what it moved.
         // The row named is the one the render will take (core's
-        // `bitmap_target`), which is the rule's pick unless only its last
-        // fallback reached it (the render is then the mean of the views) or no
-        // reading has given the rule a pick yet (the render runs the rule).
+        // `bitmap_target`), which is the rule's pick unless the rule picks no
+        // row (the render is then the mean of the views) or no reading has
+        // given the rule a pick yet (the render runs the rule).
         // Where fewer than two `in` rows carry a keypoint the render makes a
         // bitmap for judging instead, from every row with one.
         let keyed_ins = next

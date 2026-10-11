@@ -3984,12 +3984,13 @@ the `in` rows, in a ninth whose typical agreement is at least `0.5`; and
 "costliest_term", "excluded_by", "side"}`, the reference-view rule's decision
 ([`../core/patch/reference-view.md`](../core/patch/reference-view.md) § "The
 rule"). The rule gives each row a cost in grid px and picks the lowest:
-`cost` is the row's, null for a row left out, and `cost_ratio` its cost over
-the pick's, `1` on the pick and null where the cost or the ratio is infinite or
-there is none; `terms` is `{"radius", "radius_read", "angle_term",
-"agreement", "cells", "coverage", "clipped"}`, the self-similarity radius in
-grid px and whether it is the row's own, the angle term in grid px and the
-four penalties, each `1` inside its band, or null for a row left out;
+`cost` is the row's, null for a row left out and where it is infinite (a row
+edge on to the patch), and `cost_ratio` its cost over the pick's, `1` on the
+pick and null where the cost or the ratio is infinite or there is none;
+`terms` is `{"radius", "radius_read", "angle_term", "agreement", "cells",
+"coverage", "clipped"}`, the self-similarity radius in grid px and whether it
+is the row's own, the angle term in grid px (null where it is infinite) and
+the four penalties, each `1` inside its band, or null for a row left out;
 `costliest_term` is the term that adds most to the row's cost over the pick's
 (`sharpness`, `angle`, `agreement`, `cells`, `coverage`, `clipped`), null for
 the pick and a row left out; `excluded_by` is why the rule left the row out
@@ -3997,7 +3998,8 @@ the pick and a row left out; `excluded_by` is why the rule left the row out
 `other_side` for a row behind the patch where another sees its front), or
 null; and `side` is `front`, or `back` where every row the rule could pick
 sees the patch from behind and the angles are measured against the flipped
-normal. These are null on an `out` row, which the rule
+normal, or null where no row can be picked. These are null on an `out` row,
+which the rule
 does not consider, and `stage_data` reports the row the rule picked as
 `reference_view_observation`, null where it picked none; a step that turns a
 row `out` clears its standing and has the rule pick again among the rows still
