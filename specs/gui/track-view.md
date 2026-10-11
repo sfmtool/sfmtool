@@ -1414,9 +1414,8 @@ coverage, for less than 99% of its tile on the photograph; and clipping, for
 more than 5% of the photograph under the tile clipped. It picks the lowest
 cost. A row with no tile, less than 90% of it on the photograph, or a viewing
 angle of 90° or more (edge on or from behind, where no patch is drawn) is never
-picked. The agreements are read plain, and the parameters are not
-yet tuned. Every other row's first line is its cost over the pick's and the
-word for its **costliest term**, the term that adds most to its cost over the
+picked. The agreements are read plain. Every other row's first line is its
+cost over the pick's and the word for its **costliest term**, the term that adds most to its cost over the
 pick's: `less sharp`, `oblique`, `agrees less`, `ninth differs`, `partial` or
 `clipped`, as in `×1.25 oblique` (`×∞` for an infinite ratio). A row
 the rule left out reads `partial` for the coverage floor, `no tile` or `back

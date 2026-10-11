@@ -75,7 +75,7 @@ pub struct ReferenceReadings {
     pub viewing_angle_deg: Option<f64>, pub cell_deficit: Option<f64>,
     pub pair_zncc: Option<f64>, pub semi_major: Option<f64>, pub semi_minor: Option<f64>,
 }
-pub struct ReferenceViewOptions {      // impl Default: the starting values below
+pub struct ReferenceViewOptions {      // impl Default: the values below
     pub normal_error_deg: f64,          // σ_n
     pub agreement_band: f64, pub agreement_scale: f64,
     pub cell_deficit_band: f64, pub cell_deficit_scale: f64,
@@ -166,7 +166,7 @@ reading a table of views needs to see beside each row. A `ReferenceStanding` add
 cost and the **costliest term**, the term that adds most to the view's cost
 over the pick's, so a row can be read on its own. The parameters are a
 `ReferenceViewOptions` rather than constants so that tuning can sweep them
-without rebuilding; every caller passes the `Default` for now, the bench
+without rebuilding; every caller passes the `Default`, the bench
 through `EvaluateOptions::reference_view` and the stored bitmap's render
 through `KeypointSubpixelParams::reference_view`.
 
@@ -313,7 +313,7 @@ uniform spread over `R`, so the root mean square shift is `c · tan θ` grid px
 (`ReferenceViewOptions::angle_scale`). It is added to the radius in
 quadrature, as two independent spreads in the same unit: a view facing the
 patch costs its radius alone, and the angle term overtakes the radius only
-where `c · tan θ` approaches it. With the starting `σ_n = 3°` and `R = 24`,
+where `c · tan θ` approaches it. With the default `σ_n = 3°` and `R = 24`,
 `c ≈ 0.36` grid px, and `c · tan θ` is about `0.21` at 30°, `0.36` at 45°,
 `0.78` at 65° and `2.06` at 80°. With `σ_n = 0` the term is `0` and the rule
 ranks by the radius and the penalties alone.
@@ -409,25 +409,28 @@ radius of `0` gives, is passed over.
 
 ### Each parameter and its reason
 
-Every value of `ReferenceViewOptions` is a starting value and is **not yet
-tuned**, except `min_coverage`, which is set by decision. How they are to be
-set is in
-[../../drafts/reference-view-score-amendment.md](../../drafts/reference-view-score-amendment.md)
-§ "How the values will be set".
+The values of `ReferenceViewOptions` were measured against the maintainer's
+hand picks of the reference view, on the two ground truths and on a pool of
+tracks from ten datasets ([§ "How the values were measured"](#how-the-values-were-measured)).
+The held-out half confirmed none of the values the tuning half of the hand
+picks preferred, so every default is the value the cost was first built
+with. The hand picks decide only some of the values, and for the rest the
+table says what they rule out.
+`min_coverage` is set by decision and was not swept.
 
 | Field | Default | Reason |
 |---|---|---|
-| `normal_error_deg`, `σ_n` | `3` | The normal error the angle term expects. An oblique tile depends most on the patch model, since an error in the normal shears it by an amount that grows with `tan θ`. Not tuned. |
-| `agreement_band` | `0.15` | Sharp views correlate worse with blurrier ones, so a narrow band penalises exactly the sharp views. The previous rule's margin, `0.15`, was set against hand picks. Not tuned as a band. |
-| `agreement_scale` | `0.15` | A view `0.30` below the best counts as twice as blurry. Not tuned. |
-| `cell_deficit_band` | `0.3` | A view that agrees overall but not in one part of the tile: an occluder, a shadow edge, parallax within the tile. The previous rule's bar, `0.3`, was set against hand picks. Not tuned as a band. |
-| `cell_deficit_scale` | `0.3` | A cell deficit of `0.6` counts as twice as blurry. Not tuned. |
-| `coverage_band` | `0.99` | A partial tile holds only part of the patch; `0.99` lets a sample or two at a corner fall off the photograph. Not tuned. |
-| `coverage_scale` | `0.03` | A view covering `0.96` of its tile counts as twice as blurry, and one at the floor of `0.9` four times. Not tuned. |
-| `clipped_band` | `0.05` | A clipped region holds neither texture nor its true colour. Not tuned. |
-| `clipped_scale` | `0.05` | A view with a tenth of its pixels clipped counts as twice as blurry. Not tuned. |
+| `normal_error_deg`, `σ_n` | `3` | The normal error the angle term expects. An oblique tile depends most on the patch model, since an error in the normal shears it by an amount that grows with `tan θ`. Measured: the term is worth having. Against `σ_n = 0` it changes 85 of 679 pool picks, the `σ_n = 0` pick losing on its angle term in 77 of them, matches the hand pick within 10° of its viewing angle on 63 of 77 hand picks against 60, picks above 65° on 76 of 1,318 tracks against 93 (the previous rule with its 65° gate: 75), and on the 129 ground-truth tracks whose pick it changes the other views align with a mean error of 0.335 px against 0.407. The hand picks do not tell `2` to `6` apart (lenient 69 of 77, exact 26 to 28), and lose from `8` up (`12`: 61 lenient); at `8` the angle term at 45° is `0.97` grid px at `R = 24`, as large as a typical radius. |
+| `agreement_band` | `0.15` | Sharp views correlate worse with blurrier ones, so a narrow band penalises exactly the sharp views. The previous rule's margin, `0.15`, was set against hand picks. Measured: the hand picks do not tell `0.075` to `0.4` apart (exact 28 or 29, lenient 69 to 71 of 77) and lose exact matches below `0.05` (`0.025`: 23); the tuning half's best, `0.05`, matched 2 fewer held-out picks exactly. `0.075` matches one more pick exactly and one more leniently on each half, which is within what one case moves. The ground truths favour a narrower band: the mean error over the 639 tracks is 0.414 px at `0.075` and 0.403 at `0.05`, against 0.434 at `0.15`. |
+| `agreement_scale` | `0.15` | A view `0.30` below the best counts as twice as blurry. Measured: from `0.015` to `1.5` it changes no more than one hand pick. |
+| `cell_deficit_band` | `0.3` | A view that agrees overall but not in one part of the tile: an occluder, a shadow edge, parallax within the tile. The previous rule's bar, `0.3`, was set against hand picks. Measured: `0.25` and `0.3` match 28 hand picks of 77 exactly and 69 or 70 leniently; `0.1`, the tuning half's best, matches 3 more leniently but 4 fewer exactly, all 4 of them on the held-out half; from `0.35` up the lenient count falls (`0.4`: 67). |
+| `cell_deficit_scale` | `0.3` | A cell deficit of `0.6` counts as twice as blurry. Measured: `0.03` to `0.6` give the same counts over the 77 hand picks; from `0.9` up the lenient count falls (`1.5`: 65). |
+| `coverage_band` | `0.99` | A partial tile holds only part of the patch; `0.99` lets a sample or two at a corner fall off the photograph. Measured: no hand pick turns on it, from `0.95` to `1`; 15 of the 679 pool tracks have an eligible view covering between `0.9` and `0.99`. |
+| `coverage_scale` | `0.03` | A view covering `0.96` of its tile counts as twice as blurry, and one at the floor of `0.9` four times. Measured: no hand pick turns on it, from `0.003` to `0.3`. |
+| `clipped_band` | `0.05` | A clipped region holds neither texture nor its true colour. Measured: below `0.05` the hand picks lose (`0`: 23 exact and 66 lenient of 77, against 28 and 69); above it they hardly change. 95 of the 679 pool tracks have an eligible view clipped past `0.05`. |
+| `clipped_scale` | `0.05` | A view with a tenth of its pixels clipped counts as twice as blurry. Measured: below `0.05` one exact match is lost; from `0.05` to `0.5` the hand picks change by at most one. |
 | `min_coverage` | `0.9` | The hard limit ([§ "Hard limits"](#hard-limits)). Set by decision. |
-| `unread_radius` | `1` grid px | The radius every view takes where no view has one. The per-dataset medians of the stored bitmap's radius run from 0.40 to 1.06 grid px ([§ "Cost of the stored bitmap"](#cost-of-the-stored-bitmap)). Not tuned. |
+| `unread_radius` | `1` grid px | The radius every view takes where no view has one. The per-dataset medians of the stored bitmap's radius run from 0.40 to 1.06 grid px ([§ "Cost of the stored bitmap"](#cost-of-the-stored-bitmap)). Not measured: no eligible view of the 679 pool tracks lacks a radius, so no track reads it. |
 
 Two constants are part of how the cell deficit is read rather than of the
 rule:
@@ -437,38 +440,135 @@ rule:
 | `REFERENCE_MIN_JUDGED_CELL_ZNCC` | `0.5` | A cell whose views do not agree, because it holds no texture they share, says nothing about any one view. |
 | `REFERENCE_MIN_CELL_SAMPLES` | `16` | Below it a cell's ZNCC is read off a handful of samples. |
 
-**What was measured on the previous rule.** The bands start at the thresholds
-of the rule this one replaced, which passed the views through all-or-nothing
-tests (coverage at least `0.99`, clipped share at most `0.05`, viewing angle at
-most `65°`, cell deficit at most `0.3`, pair ZNCC within `0.15` of the best
-candidate's, with the tests dropped in turn where no view passed) and then
-took the smallest radius. Those thresholds were set against hand picks of the
-reference view on 77 tracks from ten datasets, split in half by dataset with
-the thresholds chosen on one half: on the held-out half that rule picked the
-hand-picked view on 10 of 38 tracks and a view as sharp and as typical as it,
-within 0.1 px of semi-major axis and 0.05 of pair ZNCC, on 35 of 38 (chance is
-about one in nine for the first). Cell bars from `0.2` to `0.4` gave the same
-agreement on the tuning half, and margins from `0.10` to `0.20` were within one
-case of each other; where an earlier margin of `0.05` missed, the hand-picked
-view sat `0.06` to `0.21` below the best. The `65°` gate changed no pick on the
-review cases and 0.9% of picks over the whole datasets; on the two ground
-truths, removing it made the picks it changed localize the other views 0.12 px
-worse on average (15 tracks). Two signals were tried and left out: a
-brightness and colour gate, which turned away views the hand picks chose, and
-a contrast floor, which the agreement margin already covered. None of these
-numbers has been measured on the cost this rule reads.
+**Why one cost rather than a series of tests.** The rule the cost replaced
+passed the views through all-or-nothing tests (coverage at least `0.99`,
+clipped share at most `0.05`, viewing angle at most `65°`, cell deficit at
+most `0.3`, pair ZNCC within `0.15` of the best candidate's, the tests
+dropped in turn where no view passed) and then took the smallest radius. The
+angle counted only as a gate, so among the views under 65° it had no say: a
+view at 20° with a radius of 0.62 grid px lost to one at 55° with 0.60, though
+the first depends far less on the patch's normal being right. Each other test
+behaved the same way: a view just past a threshold was out however good it was
+on the rest, and a view just inside one counted the same as one far inside
+it. Where every test was dropped, the point stored a mean of its views and
+named no reference. The cost weighs every reading against the others, and the
+bands of its penalties start at those thresholds.
+
+**Why a hinge.** Each penalty is `1` exactly inside its band, so a view that
+passes every one of the previous rule's tests is ranked by its effective
+radius alone; it grows past the band without a step, so a view slightly past
+a band is slightly worse rather than out; and it has two parameters, each with
+a plain meaning, the fewest that set both where the penalty starts and how
+fast it grows. A quadratic past the band, a softplus or an exponential would
+each give up one of these.
+
+**Back-facing views were once ranked.** An earlier design picked from the
+views behind the patch where every view saw it from behind, with the angle
+measured against the flipped normal (`θ' = 180° − θ`). Back-facing views are
+left out instead because no patch is drawn on them
+([§ "Hard limits"](#hard-limits)); none of the 679 pool tracks has one.
+
+### How the values were measured
+
+With the harness in [`scripts/reference_view/`](../../../scripts/reference_view/README.md),
+on 2026-10-11:
+
+- **The hand picks.** The maintainer picked, on 2026-10-06, the view whose
+  tile should stand for the point on 79 tracks of nine datasets (the two
+  ground truths, 15 each, and seven of each of seven solves) and marked two
+  as bad tracks, so 77 are scored. Each case's point was found again by its
+  views' images and keypoints, put on the bench with exactly those views and
+  evaluated, and the rule run in Python over the readings: the Python rule
+  gives the Rust rule's pick on all 1,318 tracks measured, and its costs to
+  within a relative `4e-16`. The cases were split in half by dataset with a
+  seeded split, 39 for tuning and 38 held out. A pick matches **exactly**
+  when it is the hand-picked view, and **leniently** when it is at most 0.1
+  grid px blurrier and at most 0.05 less typical (pair ZNCC) than the hand
+  pick, so a view as sharp and as typical as it; chance is about one in nine
+  for the first. The lenient count reads no angle, so it is also counted with
+  the two views' viewing angles within 10° of each other.
+- **The sweep.** Each parameter was swept alone from the starting values:
+  `σ_n` from `0` to `20`, each band around the previous rule's threshold and
+  each scale from a tenth of its band to several times it. The candidate for
+  each parameter is the middle of the run of values tied best on the tuning
+  half, by lenient count and then exact count, and it is kept only where the
+  held-out half scores at least as well on both counts and better on one.
+  Four parameters had a candidate other than their starting value on the
+  tuning half (`σ_n` `4`, `agreement_band` `0.05`, `cell_deficit_band` `0.1`,
+  `cell_deficit_scale` `0.03`), each one or two picks better there, and the
+  held-out half confirmed none of them; for the other seven the starting
+  value is in the tuning half's best run.
+- **The pool**: the 79 review cases and 60 tracks of three or more
+  observations sampled from each of ten datasets with a fixed seed (the nine
+  of the hand picks and the OmniCoast 360° rig), 679 tracks.
+- **The ground truths**: every point of three or more observations of the
+  seoul_bull and kerry_park ground truths, 639 tracks. For each eligible view
+  of each track, the other views were aligned to its tile by the localizer
+  with its gates off, and each view's error is its distance from the point's
+  projection at the stored pose. A pick's error is the mean error of the other
+  views aligned to it; where two rules pick differently, the two are compared
+  on the views that are neither pick. A few tracks whose views align badly to
+  any tile carry the means, so the median difference is given beside the
+  mean.
+
+| Hand picks: exact / lenient / lenient within 10° | Tuning (39) | Held out (38) | All (77) |
+|---|---|---|---|
+| **The defaults** | **14 / 34 / 31** | **14 / 35 / 32** | **28 / 69 / 63** |
+| `σ_n = 0` | 13 / 34 / 30 | 14 / 34 / 30 | 27 / 68 / 60 |
+| The previous rule of gates, on the same readings | 12 / 35 / 30 | 15 / 35 / 31 | 27 / 70 / 61 |
+
+The cost matches the hand picks as well as the rule of gates it replaced: one
+more exactly, one fewer leniently, two more within the angle bound, on the
+same readings. Over the pool it picks differently from the previous rule on
+141 of 679 tracks, the previous rule's pick losing on the angle term in 76 of
+them, on sharpness in 32 and on clipping in 22. On the ground truths those
+changes come to a mean error of 0.371 px against the previous rule's 0.329 on
+152 tracks, better on 74 and worse on 78, a median difference of `+0.002`
+px: the mean is carried by one kerry_park track, 4.4 px worse, without which
+the mean difference is `+0.013` px. The angle term holds the oblique picks to
+what the 65° gate allowed: 76 picks above 65° on 1,318 tracks, against the
+previous rule's 75 and 93 with `σ_n = 0`.
+
+**What was measured on the previous rule.** The thresholds the bands start at
+were set against the same hand picks with the same split procedure on the
+readings of 2026-10-06: on the held-out half that rule picked the hand-picked
+view on 10 of 38 tracks and a view as sharp and as typical as it on 35 of 38.
+Cell bars from `0.2` to `0.4` gave the same agreement on the tuning half, and
+margins from `0.10` to `0.20` were within one case of each other; where an
+earlier margin of `0.05` missed, the hand-picked view sat `0.06` to `0.21`
+below the best. The `65°` gate changed no pick on the review cases and 0.9% of
+picks over the whole datasets; on the two ground truths, removing it made the
+picks it changed localize the other views 0.12 px worse on average (15
+tracks). Two signals were tried and left out: a brightness and colour gate,
+which turned away views the hand picks chose, and a contrast floor, which the
+agreement margin already covered.
 
 ### Why the agreement is read plain
 
-The previous rule's agreement and cell tests could have read blur-matched
+The agreement penalty and the cell readings could read blur-matched
 agreement instead ([blur-matched-zncc.md](blur-matched-zncc.md)): before two
 views' tiles are correlated, a tile sharper than the other along every
 direction is blurred by a round Gaussian to the other's sharpness along its
 sharpest direction, so a sharp view is counted as disagreeing less for detail
-a blurrier view lacks. That was measured on the previous rule against the same
-hand picks, with the thresholds tuned the same way (seeded split by dataset,
-best lenient then exact, the middle of a tied run), from the bench's own
-readings:
+a blurrier view lacks.
+
+**On the cost.** Each measured track's pair ZNCC was read again from its tiles
+with blur matching: each pair correlated with the sharper tile as the bitmap
+(`score_against_bitmap`), blurred where the score against the stored bitmap
+would blur it, the median taken over the other views. Read the same way
+without blur matching, the tiles' pair ZNCC is the bench's to within `1e-3` on
+all but 27 of 5,798 rows. Blur matching moves 120 of the 859 rows' pair ZNCC,
+by `+0.017` on average, and changes the pick on none of the 77 hand-picked
+cases and on 2 of the 670 pool tracks that have the reading (a track whose
+patch is at infinity is not read); swept on blur-matched readings, the
+agreement band and scale give the same counts as on plain ones within one
+case. The band already lets a sharp view sit `0.15` below the best unpenalised,
+the protection blur matching would give it, so the rule reads the plain pair
+ZNCC. The cell deficit was not measured blur-matched on the cost.
+
+**On the previous rule.** There the agreement and cell tests were gates, and
+were measured the same way against the same hand picks, with the thresholds
+tuned on the readings of 2026-10-06:
 
 | Readings | Margin, cell bar | Tune exact / lenient (39) | Held-out (38) | All (77) |
 |---|---|---|---|---|
@@ -482,18 +582,10 @@ readings:
 
 Blur matching picked the hand pick exactly on as many tracks as the plain
 readings, within the lenient bounds on one more, changed the pick on 4 of 661
-pool tracks (0.6%), and added 0.13 ms (2%) to a track's evaluation. There the
-agreement test was a gate on whether a candidate agreed with the track rather
-than a ranking of the candidates, so taking away a sharp view's penalty for
-detail the others lack rarely changed which view passed. The rule reads plain
-readings, and blur matching is read where it changed the result: in each
-observation's score against the stored bitmap
-([blur-matched-zncc.md](blur-matched-zncc.md) § "Scores against the stored
-bitmap"). A penalty that acts on every view, rather than a gate, may be more
-sensitive to it, so the tuning measures the agreement penalty on blur-matched
-pair ZNCC beside the plain one
-([../../drafts/reference-view-score-amendment.md](../../drafts/reference-view-score-amendment.md)
-§ "How the values will be set").
+pool tracks (0.6%), and added 0.13 ms (2%) to a track's evaluation. Blur
+matching is read where it changed the result: in each observation's score
+against the stored bitmap ([blur-matched-zncc.md](blur-matched-zncc.md)
+§ "Scores against the stored bitmap").
 
 ## The stored bitmap
 
@@ -535,7 +627,12 @@ into the point's own track, in `tracks/reference_observations`.
   point with no bitmap. The floor is set so that a tile under it is not a
   reference, so the rule does not fall back to the most covered view under
   it, nor to a mean of the views. A point with fewer than two views gets no
-  bitmap either.
+  bitmap either. With every stored reference cleared, the rule finds no
+  eligible view for 57 of the 1,171 points of the BadlandPanorama solve, every
+  one of whose views has less than 90% of its tile on the photograph, for 1
+  of the 18,992 points of a `dino_dog_toy` solve, and for none of the points
+  of the eight other datasets of
+  [§ "How the values were measured"](#how-the-values-were-measured).
 - **A fused mean already in a file** stays readable. A file older than
   `.sfmr` version 12, or one written before the stored bitmap stopped being a
   mean of the views, can hold a fused mean beside `-1`; readers treat it as
@@ -749,8 +846,8 @@ bench's evaluation runs the rule with `EvaluateOptions::reference_view`, the
 stored bitmap's render and the sub-pixel refiner with
 `KeypointSubpixelParams::reference_view`, and
 every other caller (the localizer, normal refinement, and the bench's
-restatement of the rule after a verdict moves) with the `Default`; every one
-is the `Default` for now.
+restatement of the rule after a verdict moves) with the `Default`, which
+`EvaluateOptions` and `KeypointSubpixelParams` also hold by default.
 `MIN_TILT_ANGLE_DEG = 0.1` is in
 [obliquity.rs](../../../crates/sfmtool-core/src/patch/normal_refine/obliquity.rs).
 The bench renders the tiles at the reconstruction's patch resolution with the

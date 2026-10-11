@@ -36,8 +36,10 @@ pub struct ReferenceReadings {
 ///
 /// Each soft penalty is a hinge `1 + max(0, x − band) / scale`, `1` inside
 /// its band and `2` at one scale past it, so a scale is the excess at which a
-/// view counts as twice as blurry. The defaults are starting values and are
-/// not tuned, except [`Self::min_coverage`], which is set by decision.
+/// view counts as twice as blurry. The defaults were measured against hand
+/// picks of the reference view and on two ground truths
+/// (`specs/core/patch/reference-view.md` § "How the values were measured"),
+/// except [`Self::min_coverage`], which is set by decision.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ReferenceViewOptions {
     /// `σ_n`, the error in the patch's normal the angle term expects, in

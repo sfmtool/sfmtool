@@ -444,8 +444,8 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           costliest_term, the term that adds most to its cost over the pick's \
                           (sharpness, angle, agreement, cells, coverage or clipped; null for \
                           the pick and a row left out); excluded_by, why the rule left the row \
-                          out (no_tile, coverage, back_facing) or null. The parameters are not yet \
-                          tuned. These are null on an out observation, which the rule does not \
+                          out (no_tile, coverage, back_facing) or null. These are null on an \
+                          out observation, which the rule does not \
                           consider. stage_data.reference_observation is the index of the \
                           reference in use, the row the stored bitmap is rendered from, null \
                           for a track with no bitmap or a bitmap that is the render of no row \

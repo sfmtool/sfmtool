@@ -44,7 +44,7 @@ pub(super) const REFERENCE_TIP: &str = "The track's reference, the row its patch
     photograph; and clipping, for more than 5% of the photograph under the tile clipped to \
     black or white. A row with less than 90% of its tile on the photograph is never picked, \
     and neither is a row that sees the patch at 90\u{b0} or more, edge on or from behind, \
-    where no patch is drawn. The parameters are not yet tuned.\n\n\
+    where no patch is drawn.\n\n\
     The first line is reference or pick, or for any other row its cost over the pick's and \
     the term that adds most to it: less sharp, oblique, agrees less, ninth differs, partial \
     or clipped, as in \u{d7}1.25 oblique; or, for a row the rule left out, partial, no tile \
