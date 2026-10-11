@@ -454,3 +454,60 @@ fn a_patch_no_view_covers_to_the_floor_has_no_pick() {
     )
     .is_none());
 }
+
+/// A patch larger than the photographs' frame and turned 45° in its plane,
+/// so that in every view its four corners fall off the photograph while the
+/// disk the fused mean reads stays on it: no view reaches the coverage floor
+/// of 0.9, so the rule picks nothing, and the bitmap is the fused mean of the
+/// views with no reference.
+#[test]
+fn with_no_eligible_view_the_bitmap_is_the_fused_mean() {
+    let scene = Scene::new();
+    let views = scene.views();
+    let params = KeypointSubpixelParams {
+        resolution: 24,
+        ..Default::default()
+    };
+    let diamond = OrientedPatch::from_center_normal(
+        Point3::new(0.0, 0.0, 4.0),
+        -Vector3::z(),
+        Vector3::new(1.0, 1.0, 0.0).normalize(),
+        [1.16, 1.16],
+    );
+    let keypoints: Vec<[f64; 2]> = (0..3).map(|i| scene.keypoint(i, 0.0, 0.0)).collect();
+    let render = render_reference(
+        &diamond,
+        &views,
+        &[0, 1, 2],
+        &keypoints.iter().map(|&k| Some(k)).collect::<Vec<_>>(),
+        24,
+        params.sampler,
+        &params.reference_view,
+        &Progress::none(),
+    );
+    let choice = &render.reading.choice;
+    assert_eq!(choice.reference, None, "{:?}", render.reading.readings);
+    assert!(choice
+        .costs
+        .iter()
+        .all(|c| *c == Err(ReferenceExclusion::Coverage)));
+    let fused = crate::patch::keypoint_subpixel::fuse_patch_bitmap(
+        &diamond,
+        &views,
+        &[0, 1, 2],
+        &keypoints,
+        &params,
+    )
+    .expect("a fused mean renders");
+    let bitmap = render_patch_bitmap(
+        &diamond,
+        &views,
+        &[0, 1, 2],
+        &keypoints,
+        &params,
+        &Progress::none(),
+    )
+    .expect("the fused mean");
+    assert_eq!(bitmap.reference, None);
+    assert_eq!(bitmap.rgba, fused);
+}
