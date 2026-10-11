@@ -440,6 +440,7 @@ fn a_patch_no_view_covers_to_the_floor_has_no_pick() {
     let (edge, keypoints, render) = edge_render(&scene, -1.3);
     let choice = &render.reading.choice;
     assert_eq!(choice.reference, None, "{:?}", render.reading.readings);
+    assert_eq!(choice.costs.len(), 3);
     assert!(choice
         .costs
         .iter()
@@ -459,7 +460,9 @@ fn a_patch_no_view_covers_to_the_floor_has_no_pick() {
 /// so that in every view its four corners fall off the photograph while the
 /// disk the fused mean reads stays on it: no view reaches the coverage floor
 /// of 0.9, so the rule picks nothing, and the bitmap is the fused mean of the
-/// views with no reference.
+/// views with no reference. The half-extent sits in the middle of the narrow
+/// range that does this: at 1.14 a view reaches the floor, and at 1.20 the
+/// fused mean no longer renders.
 #[test]
 fn with_no_eligible_view_the_bitmap_is_the_fused_mean() {
     let scene = Scene::new();
@@ -472,7 +475,7 @@ fn with_no_eligible_view_the_bitmap_is_the_fused_mean() {
         Point3::new(0.0, 0.0, 4.0),
         -Vector3::z(),
         Vector3::new(1.0, 1.0, 0.0).normalize(),
-        [1.16, 1.16],
+        [1.17, 1.17],
     );
     let keypoints: Vec<[f64; 2]> = (0..3).map(|i| scene.keypoint(i, 0.0, 0.0)).collect();
     let render = render_reference(
@@ -487,6 +490,7 @@ fn with_no_eligible_view_the_bitmap_is_the_fused_mean() {
     );
     let choice = &render.reading.choice;
     assert_eq!(choice.reference, None, "{:?}", render.reading.readings);
+    assert_eq!(choice.costs.len(), 3);
     assert!(choice
         .costs
         .iter()

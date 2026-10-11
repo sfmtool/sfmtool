@@ -838,7 +838,8 @@ samples on the photograph; that where every view sees the patch from behind a
 view's tile is stored and named; that a patch whose best view covers between
 0.9 and 0.99 of its tile stores that view's tile and names it; and that a patch
 no view covers to 0.9 has no pick, and, with no view wholly in frame, no
-bitmap.
+bitmap; and that a patch every view leaves under 0.9 while the disk the fused
+mean reads stays in frame stores the fused mean with no reference.
 [display_bitmaps/tests.rs](../../../crates/sfmtool-core/src/patch/display_bitmaps/tests.rs)
 checks, on the seoul_bull ground truth, that the whole-cloud render names a
 reference within each point's own track, also when some images have no view
