@@ -3864,6 +3864,13 @@ unit-tested in `normal.rs` itself.
   too, whatever the pins, and where the pick carries no keypoint the stored
   bitmap stands. A track built on the bench with a bitmap that names no row
   follows the same rule.
+- Where the rule finds no `in` row eligible (the patch turned so they see it
+  from behind): a bitmap that names a row, with no pin holding it, stands
+  with its reference; a track with no bitmap whose every row is back-facing
+  gets no bitmap for judging and no row is scored; and one whose `in` rows
+  are back-facing while some `out` rows face the patch gets a bitmap for
+  judging that is an `out` row's tile, names no reference, and scores every
+  row.
 - `set_reference` pins the row and drops the stale bitmap; the next render is
   from the row, while the rule's pick is still reported; setting it again
   changes nothing; it is refused on an `out` row and at the cluster stage.

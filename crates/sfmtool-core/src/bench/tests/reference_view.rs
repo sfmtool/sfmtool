@@ -1652,13 +1652,16 @@ fn a_track_whose_in_rows_are_ineligible_is_judged_against_an_out_row() {
         let standing = o.track.as_ref().unwrap().reference_view.unwrap();
         assert_eq!(standing.cost, Err(ReferenceExclusion::BackFacing));
     }
-    // The bitmap is the tile of the out row that scores 1 against it.
+    // The bitmap is the tile of the out row that scores about 1 against it:
+    // that row is scored as any other, not set aside as a held reference's.
+    let score = |i: usize| {
+        let m = rendered.observations[i].track.as_ref().unwrap();
+        m.plain_zncc.unwrap_or(f64::NEG_INFINITY)
+    };
     let from = (0..4)
-        .find(|&i| {
-            let m = rendered.observations[i].track.as_ref().unwrap();
-            m.plain_zncc == Some(1.0)
-        })
-        .expect("an out row's tile is the bitmap");
+        .max_by(|&a, &b| score(a).total_cmp(&score(b)))
+        .unwrap();
+    assert!(score(from) > 0.999, "an out row's tile is the bitmap");
     let resolution = EvaluateOptions::default().patch_resolution(&edited.base) as usize;
     let tile = bitmap_from_tile(&tile_of_row(&rendered, &views, from, resolution));
     let stored: Vec<u8> = payload.bitmap.as_ref().unwrap().iter().copied().collect();
