@@ -1573,6 +1573,9 @@ fn a_bitmap_naming_a_row_stands_where_no_in_row_is_eligible() {
     )
     .expect("the track reads");
     assert_eq!(rule_pick(&read), None, "no row is eligible");
+    // The repaint turns most rows `out` against the unturned bitmap; at least
+    // one stays `in`, so the check below is not vacuous.
+    assert!(!read.in_observations().is_empty());
     for o in read
         .observations
         .iter()
