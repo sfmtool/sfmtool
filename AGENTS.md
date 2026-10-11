@@ -120,6 +120,17 @@ state, not function arguments. 26 public settings structs in `sfmtool-core` stil
 
 `audit-hygiene` § E checks these in detail.
 
+### Implementing a change
+
+Whenever you implement a change in this repository — a bug fix, a feature or
+one step of one, a spec or doc correction, a refactor — use the
+`implement-change` skill (`skills/implement-change/SKILL.md`). It has an
+implementer agent make the change and an independent auditor agent check it,
+repeating until the auditor finds nothing that needs rework. Other skills that
+implement changes, such as `fix-report-findings`, call it for each change. The
+implementer and auditor agents that skill launches are the exception: they do
+the work directly and do not invoke it again.
+
 ### Opening a pull request
 
 **Every PR body follows `.github/PULL_REQUEST_TEMPLATE.md`** — read it before
@@ -253,13 +264,15 @@ empty-handed". Name the thing and say what it does.
 - `reports/` — dated snapshots from the audit skills (`audit-hygiene`,
   `audit-specs`, `gui-bug-bash`, `suggest-next-steps`). See "Quality reports"
   below.
-- `skills/` — the six project skills (`audit-hygiene`, `audit-specs`,
-  `fix-report-findings`, `gui-bug-bash`, `implement-random-idea`,
-  `suggest-next-steps`), checked in here and symlinked into `.claude/skills/`.
-  `gui-bug-bash` carries scripts that launch a viewer on a random port and call
-  its MCP endpoint over HTTP. `fix-report-findings` works through open report
-  findings, one branch per finding, with a fixer agent and an independent
-  auditor agent for each.
+- `skills/` — the seven project skills (`audit-hygiene`, `audit-specs`,
+  `fix-report-findings`, `gui-bug-bash`, `implement-change`,
+  `implement-random-idea`, `suggest-next-steps`), checked in here and
+  symlinked into `.claude/skills/`. `gui-bug-bash` carries scripts that launch
+  a viewer on a random port and call its MCP endpoint over HTTP.
+  `implement-change` makes one change on a branch with an implementer agent
+  and an independent auditor agent. `fix-report-findings` picks and orders
+  open report findings and runs `implement-change` for each, one branch per
+  finding.
 - `.github/workflows/` — `ci.yml` (Linux runs `scripts/coverage.sh` as two
   parallel jobs, `test-linux-rust` and `test-linux-python`, each uploading
   its own lcov to codecov;
