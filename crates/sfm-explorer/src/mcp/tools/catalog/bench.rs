@@ -853,8 +853,8 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           a piece's side, and where the fitted centres give only one line the \
                           tilt about that line is left as it was. Every method's turn stops \
                           where any observation's camera would see the patch past the tilt \
-                          cap, and the step ends by reading the track back and fusing its \
-                          bitmap. Refused at the cluster stage, at infinity, and with fewer \
+                          cap, and the step ends by rendering its bitmap again and reading \
+                          the track back. Refused at the cluster stage, at infinity, and with fewer \
                           than two in observations. Runs on a worker thread and answers as \
                           fit_bench_track does.",
             kind: Write,

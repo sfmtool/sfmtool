@@ -1753,7 +1753,7 @@ fn converting_pushes_one_embedded_patches_version_over_the_same_rows() {
             "point {point} came from elsewhere"
         );
     }
-    // With no photographs in this fixture there is nothing to fuse, but the
+    // With no photographs in this fixture there is nothing to render, but the
     // conversion still produces its frames and inline keypoints.
     assert!(!state.scene[0].has_patch_data());
 }

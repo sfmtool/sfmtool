@@ -448,7 +448,7 @@ fn the_reference_cell_names_the_cost_and_the_term_that_adds_most_to_it() {
         (
             ReferenceExclusion::BackFacing,
             "back facing",
-            "sees the patch at 71.6\u{b0}, edge on or from behind",
+            "sees the patch at 120.0\u{b0}, edge on or from behind",
         ),
     ] {
         let standing = ReferenceStanding {
@@ -456,7 +456,12 @@ fn the_reference_cell_names_the_cost_and_the_term_that_adds_most_to_it() {
             reference: false,
             ..picked_standing()
         };
-        let left_out = cell(&row(standing));
+        let mut excluded = row(standing);
+        if exclusion == ReferenceExclusion::BackFacing {
+            let slot = excluded.track.as_mut().expect("a track slot");
+            slot.viewing_angle_deg = Some(120.0);
+        }
+        let left_out = cell(&excluded);
         assert!(
             left_out.text.starts_with(&format!("{word}\n")),
             "{}",
@@ -2392,7 +2397,7 @@ fn the_headline_leaves_the_condition_number_off_a_bearing() {
 }
 
 /// The track's own patch sits left of the toolbar, under the header, and the
-/// controls start to its right. Before a fit fuses the observations the
+/// controls start to its right. Before a fit renders its bitmap the
 /// demo's track, from a reconstruction that stores no bitmaps, has none and
 /// the slot is empty; after it the slot shows the patch bitmap.
 #[test]
@@ -2416,7 +2421,7 @@ fn the_track_s_patch_sits_left_of_the_toolbar() {
         .start_bench_fit(id, &label)
         .expect("a framed track with three sightings fits");
     state.finish_background_task();
-    assert!(bitmap(&state), "the fit fused no bitmap");
+    assert!(bitmap(&state), "the fit rendered no bitmap");
     let painted = crate::test_support::painted_text_rects(&ctx, input(Vec::new()), |ui| {
         panel.show(ui, &state);
     });

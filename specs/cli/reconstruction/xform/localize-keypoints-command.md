@@ -20,8 +20,9 @@ point's **reference render**: the `R×R` render of the point's reference
 observation at its stored keypoint. The reference observation is the one the
 point stores in `tracks/reference_observations`, and where it stores none, the
 reference-view rule's pick from the views' renders at their stored keypoints
-(where the rule picks none it would store, the template is the views' fused
-mean and no view is the reference). The reference's keypoint is not moved.
+(where the rule finds no eligible view, there is no reference render: no view
+is the reference, and every view keeps its stored keypoint, unscored). The
+reference's keypoint is not moved.
 Every other view renders one tile around its stored keypoint and searches the
 shift, within `±search` patch-grid px, at which it best matches the reference
 render. Views that drift too far, leave the frame, graze the patch plane

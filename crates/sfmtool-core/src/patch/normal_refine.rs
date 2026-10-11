@@ -14,9 +14,8 @@
 //! result types), `parameterization` (sphere exp-map), `support` (window /
 //! patch placement), `level` (per-level frozen support), `znorm` (render +
 //! z-normalize), `consensus` (the `Φ` objective) and `search` (coarse-to-fine).
-//! This module wires them
-//! together into the public [`refine_patch_normal`] / [`refine_patch_cloud_normals`]
-//! entry points.
+//! This module wires them together into the public [`refine_patch_normal`] /
+//! [`refine_patch_cloud_normals`] entry points.
 
 use nalgebra::{Point3, Vector3};
 use rayon::prelude::*;
@@ -37,7 +36,6 @@ mod params;
 pub mod prof;
 mod search;
 mod support;
-
 mod view_subset;
 mod znorm;
 
@@ -59,7 +57,6 @@ pub(in crate::patch) use support::{
     build_support, grid_bounds, grid_cell_centres, middle_span, view_render_patch, view_samplers,
     window_weights, PartZncc, Parts, Support, ViewSamplers,
 };
-
 pub(in crate::patch) use znorm::{
     normalized_stack, weighted_moments_pub, znorm_write, znormalize_into_kept,
 };

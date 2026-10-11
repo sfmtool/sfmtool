@@ -1043,7 +1043,7 @@ are good references, not exact truth: a built track can beat the GT ZNCC.
 | Clusters with a member near a pixel, with every member's image, refined position, shape, status and ZNCC | `ctx.clusters_near` (the raw arrays are on `ctx.dataset`: `cluster_starts`, `member_*`, `reference_members`, `cluster_radius`) |
 | Nearby 3D patches, including ones with no image overlap | `ctx.points_near` |
 | Evaluating a track without moving it | `bench.evaluate` |
-| Fitting it (localize, refine, re-triangulate, re-fuse) | `bench.fit` |
+| Fitting it (localize, refine, re-triangulate, render the bitmap again) | `bench.fit` |
 | Moving between cluster and track stage | `bench.set_stage` |
 | Hand moves | `bench.tilt_patch`, `translate_patch`, `translate_patch_to_pixel`, `resize_patch`, `spin_patch`, `sight_observation` |
 | Aligning a subset of views to the reference render | `PatchCloud.localize_keypoints(view_sets=…, reference_images=…)` |

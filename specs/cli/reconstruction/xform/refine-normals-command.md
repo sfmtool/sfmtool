@@ -293,17 +293,14 @@ through the refined patch at that view's stored keypoint, with alpha `255` on
 the samples on the photograph and `0` elsewhere, and the point's
 `tracks/reference_observations` row names that observation
 ([reference-view.md](../../../core/patch/reference-view.md) § "The stored
-bitmap"). Where the rule picks no view, the texture is the cross-view
-**fusion** of the kept views at the optimum: RGB the robust IRLS-weighted mean
-(an unweighted mean under `objective=mean`) and alpha a per-pixel cross-view
-agreement confidence, and the point names no observation. A point whose
+bitmap"). Where the rule finds no eligible view, the point gets no texture (a
+zero row) and names no observation. A point whose
 `tracks/reference_observations` entry already names an observation keeps it,
 and only a point at `-1` takes the rule's pick. Every point with a reference
 then has its texture rendered again from that observation through the refined
 patch as the file stores it, in `f32` (`render_from_references` in
 [`_patch_compaction.py`](../../../../src/sfmtool/_patch_compaction.py)), so
-dropping and adding the bitmaps later gives the same bytes; a fusion stays as
-the refinement rendered it. Rendering costs a
+dropping and adding the bitmaps later gives the same bytes. Rendering costs a
 tile render and a self-similarity reading per view and member coherence's
 matrix per patch. It is on by default so the refined reconstruction carries its
 per-point patch textures and can display them without re-rendering; a multi-stage

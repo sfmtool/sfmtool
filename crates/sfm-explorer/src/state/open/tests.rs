@@ -38,7 +38,7 @@ pub(crate) fn saved_with_photographs(dir: &Path) -> PathBuf {
     let (w, h) = (camera.width, camera.height);
     for (i, image) in recon.image_table.images.iter_mut().enumerate() {
         image.name = format!("images/photo_{i:02}.png");
-        // A pattern rather than a flat field, as the bench fixture's: a fuse
+        // A pattern rather than a flat field, as the bench fixture's: a render
         // of a flat field is a flat tile, which says nothing about where it
         // was sampled.
         let photo = image::RgbImage::from_fn(w, h, |x, y| {
