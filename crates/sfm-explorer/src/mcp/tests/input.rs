@@ -39,6 +39,20 @@ struct Clicks {
     triple_clicked: u32,
 }
 
+/// What the test drag pad in the Background Task panel saw.
+#[derive(Default, Debug, Clone, PartialEq)]
+struct Drags {
+    started: u32,
+    stopped: u32,
+    /// The frames it was dragged in, by the button that dragged it.
+    by_primary: u32,
+    by_secondary: u32,
+    /// The frames it was dragged in with Shift held.
+    with_shift: u32,
+    /// The sum of its drag deltas, in points.
+    moved: egui::Vec2,
+}
+
 /// The pixels and features the Image Detail panel draws from, synthesized as
 /// its own tests synthesize them.
 struct Photograph {
@@ -80,18 +94,20 @@ struct Harness {
     scene_graph: SceneGraphPanel,
     photograph: Photograph,
     clicks: Clicks,
+    drags: Drags,
     names: WidgetNames,
 }
 
-/// The tab bodies: the real Scene and Image Detail panels; a combo box and a
-/// button that counts its clicks in the Background Task panel; a label for
-/// every other panel.
+/// The tab bodies: the real Scene and Image Detail panels; a button that
+/// counts its clicks and a pad that records its drags in the Background Task
+/// panel; a label for every other panel.
 struct Tabs<'a> {
     state: &'a mut AppState,
     scene_graph: &'a mut SceneGraphPanel,
     image_detail: &'a mut crate::image_detail::ImageDetail,
     photograph: &'a Photograph,
     clicks: &'a mut Clicks,
+    drags: &'a mut Drags,
 }
 
 impl TabViewer for Tabs<'_> {
@@ -145,6 +161,18 @@ impl TabViewer for Tabs<'_> {
                 self.clicks.clicked += u32::from(response.clicked());
                 self.clicks.double_clicked += u32::from(response.double_clicked());
                 self.clicks.triple_clicked += u32::from(response.triple_clicked());
+                let (_, pad) =
+                    ui.allocate_exact_size(egui::vec2(200.0, 120.0), egui::Sense::drag());
+                pad.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Other, true, "Pad"));
+                let drags = &mut *self.drags;
+                drags.started += u32::from(pad.drag_started());
+                drags.stopped += u32::from(pad.drag_stopped());
+                if pad.dragged() {
+                    drags.by_primary += u32::from(pad.dragged_by(egui::PointerButton::Primary));
+                    drags.by_secondary += u32::from(pad.dragged_by(egui::PointerButton::Secondary));
+                    drags.with_shift += u32::from(ui.input(|input| input.modifiers.shift));
+                    drags.moved += pad.drag_delta();
+                }
             }
             other => {
                 ui.label(format!("{} body", other.title()));
@@ -183,6 +211,7 @@ impl Harness {
             scene_graph: SceneGraphPanel::new(),
             photograph,
             clicks: Clicks::default(),
+            drags: Drags::default(),
             names: WidgetNames::default(),
         };
         harness.settle();
@@ -212,6 +241,7 @@ impl Harness {
             scene_graph,
             photograph,
             clicks,
+            drags,
             ..
         } = self;
         let mut output = ctx.run_ui(input, |root_ui| {
@@ -227,6 +257,7 @@ impl Harness {
                         image_detail: &mut chrome.image_detail,
                         photograph,
                         clicks,
+                        drags,
                     },
                 );
                 state.dock = dock;
@@ -478,6 +509,141 @@ fn a_click_opens_a_menu_bar_menu_and_a_click_on_an_item_runs_it() {
     let dialogs = reply["dialogs"].as_array().expect("dialogs");
     assert_eq!(dialogs.len(), 1, "{reply:#}");
     assert_eq!(dialogs[0]["title"], json!("Go to Point"));
+}
+
+// ── drag ────────────────────────────────────────────────────────────────
+
+/// The test pad in a Background Task listing.
+fn the_pad(harness: &mut Harness) -> Value {
+    let panel = harness.listing(Some(Tab::BackgroundTask));
+    the(&panel["widgets"], "Pad").clone()
+}
+
+/// A path across the pad, in the panel's pixels: from inside its left edge,
+/// right by 30, 60 and 90 pixels, the last 15 pixels lower.
+fn across(pad: &Value) -> Vec<[f64; 2]> {
+    let left = pad["rect_px"][0].as_f64().expect("a rect_px") + 20.0;
+    let [_, y] = centre(pad);
+    let y = y.round();
+    vec![
+        [left, y],
+        [left + 30.0, y],
+        [left + 60.0, y],
+        [left + 90.0, y + 15.0],
+    ]
+}
+
+/// A drag presses at the first point, moves through the rest one frame each
+/// with the button held, and releases at the last: one drag start and one
+/// stop, a delta that sums to the path's span, and one MCP row naming both
+/// ends.
+#[test]
+fn a_drag_presses_at_the_first_point_and_releases_at_the_last() {
+    let mut harness = Harness::new();
+    let pad = the_pad(&mut harness);
+    let path = across(&pad);
+    let since = harness.state.action_log.revision();
+
+    let reply = harness.ok(
+        "drag",
+        json!({ "panel_name": Tab::BackgroundTask.wire_name(), "path_px": path }),
+    );
+    let [first, last] = [path[0], path[path.len() - 1]];
+    assert_eq!(reply["at_px"], json!([last[0] as i64, last[1] as i64]));
+    assert_eq!(reply["hit"]["widget"], pad["widget"]);
+    assert_eq!(reply["dialogs"], json!([]));
+    assert_eq!(reply["menus"], json!([]));
+
+    let drags = harness.drags.clone();
+    assert_eq!((drags.started, drags.stopped), (1, 1), "{drags:?}");
+    // Dragged from the press through the last move; the release ends it.
+    assert_eq!(drags.by_primary, path.len() as u32, "{drags:?}");
+    assert_eq!(drags.by_secondary, 0);
+    assert_eq!(drags.with_shift, 0);
+    let span = egui::vec2(
+        ((last[0] - first[0]) as f32) / PIXELS_PER_POINT,
+        ((last[1] - first[1]) as f32) / PIXELS_PER_POINT,
+    );
+    assert!(
+        (drags.moved - span).length() < 1e-3,
+        "moved {:?}, the path spans {span:?}",
+        drags.moved
+    );
+
+    let rows = harness.rows_since(since);
+    assert_eq!(rows.len(), 1, "{rows:#?}");
+    assert_eq!(
+        rows[0].text,
+        format!(
+            "drag {} {},{} on \"Pad\" to {},{} through 4 points",
+            Tab::BackgroundTask.wire_name(),
+            first[0] as i64,
+            first[1] as i64,
+            last[0] as i64,
+            last[1] as i64
+        )
+    );
+    assert_eq!(rows[0].actor, Actor::Mcp);
+    assert_eq!(rows[0].kind, Kind::Input);
+}
+
+/// `mouse_button` and `modifiers` are held for the whole drag, and the
+/// modifiers are let go afterwards.
+#[test]
+fn a_drag_holds_its_button_and_modifiers_throughout() {
+    let mut harness = Harness::new();
+    let pad = the_pad(&mut harness);
+    let path = across(&pad);
+    let since = harness.state.action_log.revision();
+
+    harness.ok(
+        "drag",
+        json!({
+            "panel_name": Tab::BackgroundTask.wire_name(),
+            "path_px": path,
+            "mouse_button": "right",
+            "modifiers": ["shift"],
+        }),
+    );
+    let drags = harness.drags.clone();
+    assert_eq!((drags.started, drags.stopped), (1, 1), "{drags:?}");
+    assert_eq!(drags.by_secondary, path.len() as u32, "{drags:?}");
+    assert_eq!(drags.by_primary, 0);
+    assert_eq!(drags.with_shift, path.len() as u32, "{drags:?}");
+    assert!(!harness.ctx.input(|input| input.modifiers.shift));
+
+    let rows = harness.rows_since(since);
+    assert_eq!(rows.len(), 1, "{rows:#?}");
+    assert!(
+        rows[0]
+            .text
+            .starts_with(&format!("drag right {} ", Tab::BackgroundTask.wire_name()))
+            && rows[0].text.ends_with(" through 4 points with Shift"),
+        "{}",
+        rows[0].text
+    );
+}
+
+/// A path with any point outside the target is refused before the button
+/// goes down, as one failed row, so nothing is dragged.
+#[test]
+fn a_drag_with_a_point_outside_its_target_is_refused_before_the_press() {
+    let mut harness = Harness::new();
+    let pad = the_pad(&mut harness);
+    let mut path = across(&pad);
+    path[2][1] = -1.0;
+    let since = harness.state.action_log.revision();
+
+    let error = harness.refused(
+        "drag",
+        json!({ "panel_name": Tab::BackgroundTask.wire_name(), "path_px": path }),
+    );
+    assert!(error.0.contains("Background Task panel's body"), "{error}");
+    assert_eq!(harness.drags, Drags::default());
+    let rows = harness.rows_since(since);
+    assert_eq!(rows.len(), 1, "{rows:#?}");
+    assert!(rows[0].failed);
+    assert_eq!(rows[0].text, format!("drag failed: {error}"));
 }
 
 /// `count: 2` is one double click: egui reports a click for each press, and
@@ -921,6 +1087,26 @@ fn the_input_tools_parse_what_they_advertise() {
     assert!(refuse("type_text", json!({ "text": "" }))
         .0
         .contains("nothing to type"));
+    assert!(refuse("drag", json!({})).0.contains("needs path_px"));
+    assert!(refuse("drag", json!({ "path_px": [[1, 2]] }))
+        .0
+        .contains("from 2 to 120 points"));
+    let long: Vec<[i64; 2]> = (0..121).map(|i| [i, 1]).collect();
+    assert!(refuse("drag", json!({ "path_px": long }))
+        .0
+        .contains("from 2 to 120 points"));
+    assert!(refuse("drag", json!({ "path_px": [[1, 2], [1, 2, 3]] }))
+        .0
+        .contains("an array of points [x, y]"));
+    assert!(refuse("drag", json!({ "path_px": [[1, 2], [3, "4"]] }))
+        .0
+        .contains("an array of points [x, y]"));
+    assert!(refuse(
+        "drag",
+        json!({ "path_px": [[1, 2], [3, 4]], "mouse_button": "back" })
+    )
+    .0
+    .contains("left, middle and right"));
 }
 
 // ── The wire vocabulary ─────────────────────────────────────────────────
@@ -937,6 +1123,10 @@ fn input_replies_speak_the_wire_vocabulary() {
     );
     let hover = harness.ok("hover", json!({ "panel_name": "scene", "at_px": [1, 1] }));
     harness.ok("press_key", json!({ "key": "Escape" }));
+    let drag = harness.ok(
+        "drag",
+        json!({ "panel_name": "scene", "path_px": [[1, 1], [5, 5]] }),
+    );
     harness.state.open_goto_point();
     harness.settle();
     let key = harness.ok("press_key", json!({ "key": "End" }));
@@ -977,7 +1167,7 @@ fn input_replies_speak_the_wire_vocabulary() {
         }
     }
     let mut seen = std::collections::BTreeSet::new();
-    for reply in [&click, &hover, &key, &text] {
+    for reply in [&click, &hover, &drag, &key, &text] {
         keys(reply, &mut seen);
     }
     for key in &seen {
@@ -997,6 +1187,14 @@ fn input_replies_speak_the_wire_vocabulary() {
         .collect();
     click_keys.sort_unstable();
     assert_eq!(click_keys, ["at_px", "dialogs", "hit", "menus"]);
+    let mut drag_keys: Vec<&str> = drag
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    drag_keys.sort_unstable();
+    assert_eq!(drag_keys, click_keys);
     let mut key_keys: Vec<&str> = key
         .as_object()
         .unwrap()

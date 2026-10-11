@@ -1,9 +1,10 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! The four input tools: the pointer and the keyboard, as a person uses them.
+//! The five input tools: the pointer and the keyboard, as a person uses them.
 
 use super::*;
+use crate::mcp::input::MAX_DRAG_POINTS;
 use ToolKind::Input;
 
 pub(super) fn specs() -> Vec<ToolSpec> {
@@ -65,6 +66,55 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                     ("widget", widget_schema()),
                 ],
                 &[],
+            ),
+        },
+        ToolSpec {
+            name: "drag",
+            description: "Drag in the window the way a person's mouse does: the pointer moves \
+                          to the first point of path_px and a frame is drawn, the button goes \
+                          down there in the next, the pointer moves to each later point in a \
+                          frame of its own with the button held, the button is released at the \
+                          last point in the frame after, and the reply is built from the frame \
+                          after that. The points are in the pixels of the window or of \
+                          panel_name's body, as click's at_px is. It orbits, pans and zooms \
+                          the 3D Viewer as a person's drag does, with the modifiers the \
+                          viewport reads, and moves what a person can drag. The reply gives \
+                          at_px (the last point, where the pointer stays), hit (the widget \
+                          under the press, or null) and the dialogs and menus open afterwards.",
+            kind: Input,
+            schema: object(
+                &[
+                    ("panel_name", panel_name_schema("path_px is a path in")),
+                    (
+                        "mouse_button",
+                        json!({
+                            "type": "string",
+                            "enum": ["left", "middle", "right"],
+                            "description":
+                                "Which button is held. Omit for left. On Windows the 3D Viewer \
+                                 reads which button is down from the operating system, which \
+                                 this input does not reach, so there a middle or right drag \
+                                 moves the camera as a left drag does.",
+                        }),
+                    ),
+                    ("modifiers", modifiers_schema("for the whole drag")),
+                ],
+                &[(
+                    "path_px",
+                    json!({
+                        "type": "array",
+                        "items": at_px_schema(),
+                        "minItems": 2,
+                        "maxItems": MAX_DRAG_POINTS,
+                        "description":
+                            "The points [x, y] the pointer passes through, one per frame: the \
+                             press at the first and the release at the last. Every point has \
+                             to be inside the target, or the call is refused naming its size \
+                             before the button goes down. egui reads a drag from how far the \
+                             pointer moves between frames, so a step of a few pixels moves \
+                             little, and a long step moves as far as a fast hand.",
+                    }),
+                )],
             ),
         },
         ToolSpec {

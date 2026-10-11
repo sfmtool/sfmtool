@@ -369,6 +369,15 @@ fn representative_tool_calls() -> Vec<(&'static str, Value)> {
         ),
         ("hover", json!({ "widget": "003233f928812d8a" })),
         (
+            "drag",
+            json!({
+                "panel_name": "viewer_3d",
+                "path_px": [[10, 10], [40, 10]],
+                "mouse_button": "left",
+                "modifiers": ["alt"],
+            }),
+        ),
+        (
             "press_key",
             json!({ "key": "Z", "modifiers": ["command"], "panel_name": "viewer_3d" }),
         ),
@@ -1004,8 +1013,8 @@ fn only_the_reads_are_annotated_read_only() {
         ]
     );
     // Sixteen JSON reads, the one read that hands back a picture, sixty-eight
-    // writes, four input tools, and the one that writes a file.
-    assert_eq!(catalog.len(), 90, "the catalog has grown or shrunk");
+    // writes, five input tools, and the one that writes a file.
+    assert_eq!(catalog.len(), 91, "the catalog has grown or shrunk");
     assert_eq!(
         catalog
             .iter()
@@ -1013,8 +1022,8 @@ fn only_the_reads_are_annotated_read_only() {
             .count(),
         68
     );
-    // One tool can overwrite a file by name, and four can press what a person
-    // can press, File ▸ Save included; those five are the ones annotated
+    // One tool can overwrite a file by name, and five can press what a person
+    // can press, File ▸ Save included; those six are the ones annotated
     // destructive.
     let saves: Vec<&str> = catalog
         .iter()
@@ -1027,7 +1036,7 @@ fn only_the_reads_are_annotated_read_only() {
         .filter(|spec| spec.kind == ToolKind::Input)
         .map(|spec| spec.name)
         .collect();
-    assert_eq!(inputs, ["click", "hover", "press_key", "type_text"]);
+    assert_eq!(inputs, ["click", "hover", "drag", "press_key", "type_text"]);
 }
 
 /// The spec's prose carries counts the code owns, and a count written out in
@@ -1068,10 +1077,15 @@ fn the_spec_s_counts_are_the_catalog_s_and_the_panels() {
         .iter()
         .filter(|spec| spec.kind == ToolKind::Write)
         .count();
+    let inputs = catalog
+        .iter()
+        .filter(|spec| spec.kind == ToolKind::Input)
+        .count();
     for sentence in [
         format!(
-            "{} write, four send input, and one writes a file",
-            spelled(writes)
+            "{} write, {} send input, and one writes a file",
+            spelled(writes),
+            spelled(inputs)
         ),
         format!("the {} writes `destructivehint: false`", spelled(writes)),
     ] {

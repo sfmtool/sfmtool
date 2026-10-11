@@ -2012,3 +2012,75 @@ fn taking_a_camera_in_hand_reaches_a_real_window() {
     click_item(&menu, "Cancel Camera Move");
     wait_for_line("Cancelled the camera move of image_000.jpg");
 }
+
+/// A `drag` reaches the 3D viewport of a real window: an unmodified left drag
+/// across it orbits the camera about its target, so the position `get_scene`
+/// reports moves and the distance to the target does not.
+#[test]
+fn a_drag_across_the_viewport_orbits_the_camera() {
+    let viewer = McpViewer::launch_demo();
+    viewer.ok(
+        "set_window_layout",
+        json!({
+            "layout": { "main": { "tabs": ["viewer_3d"], "active": "viewer_3d" }, "windows": [] },
+        }),
+    );
+    // The node is appended before the window opens; the framing that follows
+    // its load would otherwise move the camera under the drag.
+    let deadline = Instant::now() + CONTENT_TIMEOUT;
+    loop {
+        let scene = viewer.call("get_scene", json!({}));
+        if scene["structuredContent"]["scene"][0]["label"].is_string() {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the demo node never appeared: {scene}"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    viewer.ok("set_view", json!({ "fit": null }));
+    let view = || viewer.ok("get_scene", json!({}))["view"].clone();
+    let before = view();
+    let size = &before["derived"]["viewport_px"];
+    let [width, height] = [
+        size[0].as_f64().expect("a viewport width"),
+        size[1].as_f64().expect("a viewport height"),
+    ];
+    let [x, y] = [(width / 2.0).round(), (height / 2.0).round()];
+    let path: Vec<[f64; 2]> = (0..5)
+        .map(|i| [x - 80.0 + 40.0 * f64::from(i), y])
+        .collect();
+
+    let reply = viewer.ok(
+        "drag",
+        json!({ "panel_name": "viewer_3d", "path_px": path }),
+    );
+    assert_eq!(reply["at_px"], json!([x as i64 + 80, y as i64]), "{reply}");
+
+    let after = view();
+    let position = |view: &Value| -> Vec<f64> {
+        view["position"]
+            .as_array()
+            .expect("a position")
+            .iter()
+            .map(|n| n.as_f64().expect("a number"))
+            .collect()
+    };
+    let moved: f64 = position(&before)
+        .iter()
+        .zip(position(&after))
+        .map(|(a, b)| (a - b).powi(2))
+        .sum::<f64>()
+        .sqrt();
+    let distance = before["target_distance"].as_f64().expect("a distance");
+    assert!(
+        moved > distance * 1e-3,
+        "the camera did not move: {before} then {after}"
+    );
+    let after_distance = after["target_distance"].as_f64().expect("a distance");
+    assert!(
+        (after_distance - distance).abs() <= distance * 1e-6,
+        "an orbit keeps the target distance: {distance} then {after_distance}"
+    );
+}

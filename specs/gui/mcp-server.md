@@ -113,12 +113,13 @@ place.
 
 ## The tool surface
 
-Ninety tools. Seventeen read -- sixteen that answer with JSON, and
+Ninety-one tools. Seventeen read -- sixteen that answer with JSON, and
 `screenshot`, which closes the loop by handing back a picture -- sixty-eight
-write, four send input, and one writes a file. `get_widgets` and the four
-input tools, `click`, `hover`, `press_key` and `type_text`, read and press the
-viewer's widgets the way a person's eyes, mouse and keyboard do (§ "`get_widgets`", § "`click` /
-`hover`", § "`press_key` / `type_text`").
+write, five send input, and one writes a file. `get_widgets` and the five
+input tools, `click`, `hover`, `drag`, `press_key` and `type_text`, read and
+press the viewer's widgets the way a person's eyes, mouse and keyboard do
+(§ "`get_widgets`", § "`click` / `hover`", § "`drag`", § "`press_key` /
+`type_text`").
 
 | Tool | Kind | What it does |
 |------|------|--------------|
@@ -209,6 +210,7 @@ viewer's widgets the way a person's eyes, mouse and keyboard do (§ "`get_widget
 | `get_widgets` | read | Every widget drawn in the window or one panel, with its rectangle, role, name and state, and the dialogs and menus open above the dock |
 | `click` | input | Press and release a mouse button at a point of the window or a panel, or on a widget from a listing, as a person's mouse does, and report what was under the pointer and the dialogs and menus open after it |
 | `hover` | input | Move the pointer to a point or a widget and leave it there |
+| `drag` | input | Press a mouse button at the first point of a path, move through the rest one point per frame with the button held, and release at the last |
 | `press_key` | input | Press and release one key, with modifiers, optionally with the pointer moved over a panel first |
 | `type_text` | input | Type a string into the focused text input, or into one named by its widget id |
 
@@ -220,22 +222,22 @@ the menu saves; an **edit** makes a new version of a loaded value, which the
 human can undo), and every one of them `openWorldHint: false`. Every
 `inputSchema` is closed (`additionalProperties: false`).
 
-**Five tools are annotated `destructiveHint: true`**, and a client that treats
+**Six tools are annotated `destructiveHint: true`**, and a client that treats
 a destructive tool differently, with a confirmation or a stricter policy,
-should treat these five differently and none of the others:
+should treat these six differently and none of the others:
 
 - **`save_reconstruction`**, the one tool whose `ToolKind` is `Save`. It is the
   only call that names a file and can overwrite what no undo brings back.
-- **The four input tools**, `click`, `hover`, `press_key` and `type_text`, whose
-  `ToolKind` is `Input`. Each does no more than press what a person could
-  press, but what it presses is decided by the widget it lands on, and that
-  includes the viewer's own destructive items: a click on File ▸ Save writes
-  the file as a person's click does, File ▸ Quit closes the viewer, and an item
-  that opens a file chooser (`Open...`, `Save As...`, the Panels menu's `Save
-  Layout...` and `Load Layout...`) stops the GUI thread until the human answers
-  it, so every call waits behind it (§ "Non-goals"). A sequence of them can
-  reach anything the menus can, so the annotation is on each call rather than
-  on the few that land on those items.
+- **The five input tools**, `click`, `hover`, `drag`, `press_key` and
+  `type_text`, whose `ToolKind` is `Input`. Each does no more than press what a
+  person could press, but what it presses is decided by the widget it lands
+  on, and that includes the viewer's own destructive items: a click on File ▸
+  Save writes the file as a person's click does, File ▸ Quit closes the viewer,
+  and an item that opens a file chooser (`Open...`, `Save As...`, the Panels
+  menu's `Save Layout...` and `Load Layout...`) stops the GUI thread until the
+  human answers it, so every call waits behind it (§ "Non-goals"). A sequence
+  of them can reach anything the menus can, so the annotation is on each call
+  rather than on the few that land on those items.
 
 ### The wire vocabulary
 
@@ -2555,6 +2557,66 @@ its last event, one back to the state egui held before. Each `Key` and
 them: `command` is `ctrl` and `command` everywhere but macOS, where it is
 `mac_cmd` and `command`.
 
+### `drag`
+
+```jsonc
+{ "panel_name": "viewer_3d", "path_px": [[400, 300], [430, 300], [460, 300]] }   // orbit
+{ "panel_name": "viewer_3d", "path_px": [[400, 300], [400, 360]],
+  "modifiers": ["shift"] }                                                      // pan
+{ "path_px": [[600, 40], [640, 40]], "mouse_button": "right" }                  // in window pixels
+```
+
+`drag` presses a mouse button at the first point of `path_px`, moves the
+pointer through the rest of the points one per frame with the button held, and
+releases it at the last point. It drives what only a held button reaches, such
+as the 3D viewport's orbit, pan and zoom drags and a bench handle drag. `click`
+presses and releases in one frame, so it cannot hold a button across frames.
+
+`path_px` is the whole path, from 2 to 120 points `[x, y]`, in the physical
+pixels of the window or, with `panel_name`, of that panel's body, the space
+`click`'s `at_px` is in. The press point is the path's first point rather than
+a separate argument, so the path is one list with no point said twice. There is
+no `widget` form: a drag is aimed at points, and a caller that has a widget
+reads its `rect_px` from the listing. `mouse_button` and `modifiers` are
+`click`'s, and the modifiers are held from the press through the release. A
+path of one point is refused, because a press and release at one point is
+`click`; so is a path longer than 120 points, because each point is a frame and
+the call has to be answered within the transport's ten seconds
+(`input::MAX_DRAG_POINTS`).
+
+**What happens**, one step per frame:
+
+1. A frame is drawn with no input, and every point of the path is resolved
+   against it, so a point outside the target is refused before the button goes
+   down.
+2. The pointer moves to the first point.
+3. The button goes down there.
+4. The pointer moves to each later point, one frame each, with the button held.
+5. The button is released at the last point, in a frame of its own: egui does
+   not count a press and release in one frame as a drag.
+6. One more frame is drawn, and the reply is built after it.
+
+egui reads a drag as the distance the pointer moves between frames, so the
+spacing of the points sets how fast the pointer moves. The 3D viewport turns
+each frame's move into an orbit, pan or zoom step, so a path that covers the
+same distance in more points moves the camera the same amount over more frames.
+
+**The reply** is `click`'s: `at_px` is the last point, where the pointer stays;
+`hit` is the topmost widget that takes a press at the first point, in the frame
+the press was resolved against, or `null`; and `dialogs` and `menus` are those
+open after the release. What the drag did is read back with the tool that
+reports it, `get_scene`'s `view` for the camera.
+
+**Refusals** are `click`'s, and are made for every point of the path: a point
+outside the target, a panel that is closed or behind another tab, and a
+minimized window. Each is one failed Action Log row, before the button goes
+down.
+
+**In the Action Log**, kind `Input`, written in the frame of the press: `drag
+viewer_3d 400,300 to 460,300 through 3 points`, with ` right` or ` middle` after
+`drag` for another button, ` on "…"` after the first point as for `click`, and
+` with Shift` at the end for modifiers.
+
 ### `press_key` / `type_text`
 
 ```jsonc
@@ -2655,6 +2717,14 @@ egui's hover and works; the viewport's keys do not check the pointer at all.
 None of those is a click or a key on a widget, which is what the tools are for.
 On Linux and macOS `pointer_in_rect` reads egui's pointer, and they all follow
 the synthetic one.
+
+The same button state is how the 3D viewport tells its drags apart on Windows:
+a middle drag pans and a right drag zooms only when
+`platform::windows::mouse_button_state` says that button is down. A synthetic
+`drag` with `mouse_button` `middle` or `right` sets egui's button and not that
+state, so over the 3D viewport on Windows it moves the camera as a left drag
+with the same modifiers does. Shift for a pan and Ctrl for a zoom are read from
+egui and work.
 
 ### `get_window_layout`
 
@@ -4545,12 +4615,12 @@ testable without a window:
 | `window` | The `window` block renderer, and nothing else: what a window *is*, how a placement is applied, and the `WindowHost` seam are `crate::window`'s, unconditional because Panels ▸ Save Layout… needs them in every build |
 | `frame` | The three phases `run_ui_and_paint` calls: the drain, the surface copy, and the deferred screenshot; and the two calls from the egui pass, which feed an input step's events in and read the frame's widgets out |
 | `widgets` | The widget listing of one captured frame, and the lookups the input tools aim with |
-| `input` | The four input tools: the parsed command, the steps each runs a frame at a time, their Action Log rows and replies, and the queue on `App` that runs them one after another |
+| `input` | The five input tools: the parsed command, the steps each runs a frame at a time, their Action Log rows and replies, and the queue on `App` that runs them one after another |
 | `mod::apply_as_agent` | The drain's application phase without the channel: the Action Log's actor switch, one `apply` per command, and the query and refusal entries |
 | `server` | The `rmcp` handler and the `axum` / `tokio` plumbing |
 
 `Command`, in [`mcp/mod.rs`](../../crates/sfm-explorer/src/mcp/mod.rs), is the
-command vocabulary: one variant per tool, except that the four input tools
+command vocabulary: one variant per tool, except that the five input tools
 share `Input`, holding the arguments as the parse left them. A reconstruction
 is named by its label, which `apply` resolves against `AppState::scene`; an
 `Option<String>` label means the selected reconstruction when the argument is
@@ -5279,8 +5349,8 @@ where a test hands no host over.
   and the panel list in the prose above are asserted against `catalog()` and
   `Tab::ALL`, because a number written out in words is the first thing to go
   stale.
-- **The catalog is ninety tools**, seventeen of them reads, four of the
-  `Input` kind and one of the `Save` kind, those five carrying
+- **The catalog is ninety-one tools**, seventeen of them reads, five of the
+  `Input` kind and one of the `Save` kind, those six carrying
   `destructiveHint: true`;
   `set_window_layout`'s schema advertises `sfm_explorer_layout`, `window` and
   `layout`, with the `window` section's five keys under it, and `screenshot`'s
@@ -5326,7 +5396,15 @@ where a test hands no host over.
   refused in the words above as one failed row; the parse refuses no target,
   two targets, `panel_name` beside `widget`, a third click, an unknown button or
   modifier, a malformed id and empty text; and every field a listing or an
-  input reply carries is a spelled-out wire name.
+  input reply carries is a spelled-out wire name. A `drag` across a drag-sensing
+  pad in the Background Task panel starts one drag and stops one, its deltas sum
+  to the path's span, and it writes one row naming both ends; `mouse_button` and
+  `modifiers` are held in every frame of it and the modifiers are released
+  afterwards; a path with one point outside the target is refused before the
+  press; and the parse refuses a missing path, one of fewer than 2 or more than
+  120 points, and a point that is not two numbers. In the windowed suite,
+  `ui_basic`, a left `drag` across the 3D viewport orbits the camera: the
+  position `get_scene` reports moves and the target distance does not.
 - **Schema and parser cannot drift**: the cached catalog schema supplies the
   accepted top-level argument names to the parser, so a tool has one declaration
   of that vocabulary. The parser also derives the accepted names of every
@@ -5590,11 +5668,11 @@ Other candidates, in rough order of value:
   `hold_ms` argument would cover them. There is none because `set_view` already
   moves the camera exactly, so only a test of the fly handling itself would need
   it.
-- **Drag and scroll.** The input tools press, move and type, and do not drag or
-  scroll, which the 3D viewport and Image Detail read. Both panels have
+- **Scroll.** The input tools press, move, drag and type, and do not scroll,
+  which the 3D viewport and Image Detail read. Both panels have
   command-vocabulary equivalents (`set_view`, `set_image_detail_view`), so an
-  agent does not need them for the viewer's own operations, only to test the
-  pointer handling itself.
+  agent does not need it for the viewer's own operations, only to test the
+  scroll handling itself.
 - **Tooltips.** egui draws them on their own `Tooltip` layer after a hover
   delay, and the listing skips that layer. Listing them as a third kind in
   `menus` would be easy, but a test would have to wait out the delay.

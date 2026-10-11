@@ -14,10 +14,11 @@ Amends [`../gui/viewport-navigation.md`](../gui/viewport-navigation.md) (a
 tool that takes the unmodified left drag),
 [`../gui/viewport-hud.md`](../gui/viewport-hud.md) (a second floating control
 beside the HUD), and [`../gui/mcp-server.md`](../gui/mcp-server.md) (the tool
-state and a `drag` input tool). When it is filed, the edit itself becomes
+state). When it is filed, the edit itself becomes
 `gui/edits/delete-brush.md`. The point edit that deletes many points, which a
 stroke commits, already exists in core, in the viewer and on the wire, and is
-specified in the standing specs named under "Interfaces".
+specified in the standing specs named under "Interfaces". So does the `drag`
+input tool that drives a stroke over MCP.
 
 ## Purpose
 
@@ -211,13 +212,11 @@ and the gesture's handler calls `delete_points`.
   "`delete_point` / `delete_points` / `delete_camera_image`".
 - **The tool state** is one field on `get_viewer_3d_display` /
   `set_viewer_3d_display`: `tool` (`"navigate"` or `"delete_brush"`).
-- **`drag`** `{x, y, path: [[x, y], ...], button, modifiers}`, an input tool
-  beside `click` and `hover`: press at the first point, move through the path
-  one point per frame, release at the last. `click` presses and releases in one
-  frame, so nothing on the wire can hold a button across frames, and without
-  `drag` a stroke cannot be driven from MCP, so `gui-bug-bash` cannot exercise
-  the brush. It is useful beyond the brush (orbit, bench handles), and it can
-  ship separately.
+- **`drag`** `{panel_name, path_px, mouse_button, modifiers}` exists and is
+  specified in [`../gui/mcp-server.md`](../gui/mcp-server.md) § "`drag`". It
+  is how a stroke is driven from MCP, and so how `gui-bug-bash` exercises the
+  brush: `click` presses and releases in one frame, and cannot hold a button
+  across frames.
 
 ## Implementation notes
 
@@ -305,7 +304,7 @@ release.
   points get `3`, go back to `1` on cancel, and to `0` after the commit.
 - **Wire** (`mcp/tests/edit.rs`): `set_viewer_3d_display` switches the tool
   and refuses `delete_brush` while the Move Camera lock is held.
-- **End to end** (`ui_basic`, once `drag` exists): a drag across a known
+- **End to end** (`ui_basic`, driven by `drag`): a drag across a known
   region of the seoul bull ground truth deletes points, and their count matches
   the Action Log entry.
 

@@ -152,9 +152,11 @@ Each of these found at least one real bug in the first run.
   `max_dimension` around 1000.
 - **Drive the real gestures.** `get_widgets` gives ids and rectangles, and
   `click` (with `count: 2`, `mouse_button: "right"`, `modifiers`), `hover`,
-  `press_key` and `type_text` reach the same code paths as a person. The
-  context menus of Image Detail and the Scene tree are listed in `click`'s
-  reply as soon as they open.
+  `drag`, `press_key` and `type_text` reach the same code paths as a person.
+  `drag` holds a button along `path_px`, one point per frame, which is what
+  orbits the 3D viewport and moves a bench handle. The context menus of Image
+  Detail and the Scene tree are listed in `click`'s reply as soon as they
+  open.
 - **Change the layout.** `get_window_layout`, edit the document, and
   `set_window_layout`: put two panels in one dock node, or split ones that
   share a node. The stock layout (from `--no-default-layout`) is only one

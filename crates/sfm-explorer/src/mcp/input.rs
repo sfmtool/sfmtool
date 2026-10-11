@@ -1,8 +1,8 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Synthetic pointer and keyboard input: `click`, `hover`, `press_key` and
-//! `type_text`.
+//! Synthetic pointer and keyboard input: `click`, `hover`, `drag`,
+//! `press_key` and `type_text`.
 //!
 //! The input goes into egui's `RawInput.events` as the same `egui::Event`s
 //! `egui_winit` makes from a real mouse and keyboard, so a click reaches the
@@ -35,7 +35,15 @@ use crate::action_log::{Actor, Kind};
 use crate::dock::Tab;
 use crate::state::AppState;
 
-/// One of the four input tools, parsed.
+/// The most points a `drag` path takes.
+///
+/// Each point after the first is a frame, and a call is answered within the
+/// transport's ten seconds or not at all; 120 frames is two seconds at 60
+/// frames a second and six at 20, so a path this long is answered on a viewer
+/// drawing a heavy scene too.
+pub(crate) const MAX_DRAG_POINTS: usize = 120;
+
+/// One of the five input tools, parsed.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum InputCommand {
     /// Press and release a mouse button, once or twice.
@@ -48,6 +56,17 @@ pub(crate) enum InputCommand {
     },
     /// Move the pointer and leave it there.
     Hover { target: PointerTarget },
+    /// Press a mouse button at the first point of a path, move through the
+    /// rest one point per frame, and release at the last.
+    Drag {
+        /// The panel whose body the points are in, or `None` for the window.
+        panel: Option<Tab>,
+        /// At least two points, in the target's pixels; the parse refuses
+        /// fewer, and more than [`MAX_DRAG_POINTS`].
+        path_px: Vec<[f64; 2]>,
+        button: egui::PointerButton,
+        modifiers: ModifierKeys,
+    },
     /// Press one key and release it in the next frame.
     PressKey {
         key: egui::Key,
@@ -71,6 +90,7 @@ impl InputCommand {
         match self {
             InputCommand::Click { .. } => "click",
             InputCommand::Hover { .. } => "hover",
+            InputCommand::Drag { .. } => "drag",
             InputCommand::PressKey { .. } => "press_key",
             InputCommand::TypeText { .. } => "type_text",
         }
@@ -80,6 +100,7 @@ impl InputCommand {
     pub(crate) fn panel(&self) -> Option<Tab> {
         match self {
             InputCommand::Click { target, .. } | InputCommand::Hover { target } => target.panel(),
+            InputCommand::Drag { panel, .. } => *panel,
             InputCommand::PressKey { over, .. } => over.as_ref().and_then(PointerTarget::panel),
             InputCommand::TypeText { .. } => None,
         }
@@ -100,6 +121,15 @@ impl InputCommand {
         }
     }
 
+    /// Every point the command names in its target's pixels: the point of a
+    /// pointer tool, or each point of a drag's path.
+    pub(crate) fn points_px(&self) -> Vec<[f64; 2]> {
+        match self {
+            InputCommand::Drag { path_px, .. } => path_px.clone(),
+            _ => self.at_px().into_iter().collect(),
+        }
+    }
+
     fn steps(&self) -> VecDeque<Step> {
         use Step::*;
         match self {
@@ -112,6 +142,12 @@ impl InputCommand {
                 steps.into()
             }
             InputCommand::Hover { .. } => [Look, Move, Settle].into(),
+            InputCommand::Drag { path_px, .. } => {
+                let mut steps = vec![Look, Move, Down];
+                steps.extend((1..path_px.len()).map(DragTo));
+                steps.extend([Up, Settle]);
+                steps.into()
+            }
             InputCommand::PressKey { over: Some(_), .. } => {
                 [Look, Move, KeyDown, KeyUp, Settle].into()
             }
@@ -129,6 +165,10 @@ impl InputCommand {
             InputCommand::Click { target, .. } | InputCommand::Hover { target } => {
                 Some(target.clone())
             }
+            InputCommand::Drag { panel, path_px, .. } => Some(PointerTarget::At {
+                panel: *panel,
+                at_px: path_px.first().copied(),
+            }),
             InputCommand::PressKey { over, .. } => over.clone(),
             InputCommand::TypeText { widget, .. } => widget.map(PointerTarget::Widget),
         }
@@ -136,9 +176,9 @@ impl InputCommand {
 
     fn modifiers(&self) -> ModifierKeys {
         match self {
-            InputCommand::Click { modifiers, .. } | InputCommand::PressKey { modifiers, .. } => {
-                *modifiers
-            }
+            InputCommand::Click { modifiers, .. }
+            | InputCommand::Drag { modifiers, .. }
+            | InputCommand::PressKey { modifiers, .. } => *modifiers,
             InputCommand::Hover { .. } | InputCommand::TypeText { .. } => ModifierKeys::default(),
         }
     }
@@ -230,6 +270,12 @@ enum Step {
     Press,
     /// The second press and release of a double click.
     PressAgain,
+    /// Press the button of a drag at the first point of its path, and hold it.
+    Down,
+    /// Move the held pointer to this point of the drag's path.
+    DragTo(usize),
+    /// Release the button of a drag at the last point of its path.
+    Up,
     /// Press the key.
     KeyDown,
     /// Release it.
@@ -261,6 +307,9 @@ pub(crate) struct PendingInput {
     /// The widgets of the last frame drawn for this command.
     frame: Option<Arc<WidgetFrame>>,
     aim: Option<Aim>,
+    /// Every point of a drag's path, aimed in the frame its first move was
+    /// aimed in; empty for the other tools.
+    path: Vec<Aim>,
     /// The `hit` block of the reply.
     hit: Value,
     /// The modifiers egui held before this command pressed its own, restored
@@ -276,6 +325,7 @@ impl PendingInput {
             drawn: None,
             frame: None,
             aim: None,
+            path: Vec::new(),
             hit: Value::Null,
             before: None,
         }
@@ -333,6 +383,16 @@ impl PendingInput {
             Step::Move => {
                 let aim = self.aim(names)?;
                 self.aim = Some(aim);
+                if let InputCommand::Drag { panel, path_px, .. } = &self.command {
+                    // The whole path is aimed in this one frame, so a point
+                    // outside the target is refused before the button goes
+                    // down and every point is in the same coordinates.
+                    let frame = self.frame.as_deref().expect("a look precedes every move");
+                    self.path = path_px
+                        .iter()
+                        .map(|at| aim_point(frame, *panel, *at))
+                        .collect::<Result<_, _>>()?;
+                }
                 // What the pointer arrives over, from the frame egui resolves
                 // the move against.
                 let frame = self.frame.clone().expect("a look precedes every move");
@@ -358,11 +418,7 @@ impl PendingInput {
                     self.hit = frame.hit_block(frame.topmost_at(aim.window_px));
                     if let InputCommand::Click { modifiers, .. } = &self.command {
                         let mut text = String::from("click");
-                        if button == egui::PointerButton::Secondary {
-                            text.push_str(" right");
-                        } else if button == egui::PointerButton::Middle {
-                            text.push_str(" middle");
-                        }
+                        text.push_str(button_text(button));
                         if count == 2 {
                             text.push_str(" twice");
                         }
@@ -385,6 +441,60 @@ impl PendingInput {
                     });
                 }
                 Ok(events)
+            }
+            Step::Down => {
+                let InputCommand::Drag {
+                    button,
+                    modifiers: m,
+                    ..
+                } = &self.command
+                else {
+                    return Ok(Vec::new());
+                };
+                let (button, m) = (*button, *m);
+                let aim = self.aim.expect("a move precedes the press");
+                let last = *self.path.last().expect("a drag has a path");
+                // The press is resolved against the frame the pointer arrived
+                // in, as a click's is.
+                let frame = self.frame.clone().expect("a move precedes the press");
+                self.hit = frame.hit_block(frame.topmost_at(aim.window_px));
+                let mut text = format!("drag{} {}", button_text(button), self.where_text(aim));
+                text.push_str(&on_text(frame.name_at(aim.window_px)));
+                text.push_str(&format!(
+                    " to {},{} through {} points",
+                    number_text(last.at_px[0]),
+                    number_text(last.at_px[1]),
+                    self.path.len()
+                ));
+                if !m.is_empty() {
+                    text.push_str(&format!(" with {}", m.text()));
+                }
+                state.action_log.record_as(Actor::Mcp, Kind::Input, text);
+                let mut events: Vec<egui::Event> = self.hold(held).into_iter().collect();
+                events.push(egui::Event::PointerButton {
+                    pos: aim.pos,
+                    button,
+                    pressed: true,
+                    modifiers,
+                });
+                Ok(events)
+            }
+            Step::DragTo(index) => {
+                let aim = self.path[index];
+                self.aim = Some(aim);
+                Ok(vec![egui::Event::PointerMoved(aim.pos)])
+            }
+            Step::Up => {
+                let InputCommand::Drag { button, .. } = &self.command else {
+                    return Ok(Vec::new());
+                };
+                let aim = self.aim.expect("a move precedes the release");
+                Ok(vec![egui::Event::PointerButton {
+                    pos: aim.pos,
+                    button: *button,
+                    pressed: false,
+                    modifiers,
+                }])
             }
             Step::KeyDown | Step::KeyUp => {
                 let InputCommand::PressKey {
@@ -509,24 +619,14 @@ impl PendingInput {
             .expect("only a command with a target moves the pointer");
         match target {
             PointerTarget::At { panel, at_px } => {
-                let [left, top, width, height] = frame.target_px(panel).map_err(|_| {
-                    ToolError::new(format!(
-                        "The {} panel was not laid out in the frame this call was aimed in. It \
-                         may have been closed since the call was made.",
-                        panel.map_or("window's", |panel| panel.title())
-                    ))
-                })?;
-                let at = at_px.unwrap_or([f64::from(width) / 2.0, f64::from(height) / 2.0]);
-                check_inside(at, [width, height], panel)?;
-                let window_px = [
-                    (f64::from(left) + at[0]) as f32,
-                    (f64::from(top) + at[1]) as f32,
-                ];
-                Ok(Aim {
-                    pos: frame.to_points(window_px),
-                    window_px,
-                    at_px: at,
-                })
+                let at = match at_px {
+                    Some(at) => at,
+                    None => {
+                        let [_, _, width, height] = target_px(frame, panel)?;
+                        [f64::from(width) / 2.0, f64::from(height) / 2.0]
+                    }
+                };
+                aim_point(frame, panel, at)
             }
             PointerTarget::Widget(value) => {
                 let widget = frame
@@ -591,7 +691,7 @@ impl PendingInput {
         let listing = frame.listing(panel, None)?;
         let mut out = Map::new();
         match &self.command {
-            InputCommand::Click { .. } | InputCommand::Hover { .. } => {
+            InputCommand::Click { .. } | InputCommand::Hover { .. } | InputCommand::Drag { .. } => {
                 let at = self.aim.map_or([0.0, 0.0], |aim| aim.at_px);
                 out.insert(
                     "at_px".into(),
@@ -608,6 +708,42 @@ impl PendingInput {
             }
         }
         Ok(ToolOutput::Json(Value::Object(out)))
+    }
+}
+
+/// Where a point of a panel's body, or of the window, is.
+fn aim_point(frame: &WidgetFrame, panel: Option<Tab>, at: [f64; 2]) -> Result<Aim, ToolError> {
+    let [left, top, width, height] = target_px(frame, panel)?;
+    check_inside(at, [width, height], panel)?;
+    let window_px = [
+        (f64::from(left) + at[0]) as f32,
+        (f64::from(top) + at[1]) as f32,
+    ];
+    Ok(Aim {
+        pos: frame.to_points(window_px),
+        window_px,
+        at_px: at,
+    })
+}
+
+/// The target's rectangle in window pixels, or the refusal for a panel the
+/// frame did not lay out.
+fn target_px(frame: &WidgetFrame, panel: Option<Tab>) -> Result<[u32; 4], ToolError> {
+    frame.target_px(panel).map_err(|_| {
+        ToolError::new(format!(
+            "The {} panel was not laid out in the frame this call was aimed in. It may have been \
+             closed since the call was made.",
+            panel.map_or("window's", |panel| panel.title())
+        ))
+    })
+}
+
+/// ` right` or ` middle` after the tool's name, or nothing for the left button.
+fn button_text(button: egui::PointerButton) -> &'static str {
+    match button {
+        egui::PointerButton::Secondary => " right",
+        egui::PointerButton::Middle => " middle",
+        _ => "",
     }
 }
 

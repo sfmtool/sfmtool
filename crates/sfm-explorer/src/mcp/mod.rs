@@ -1094,7 +1094,7 @@ pub(crate) enum Outcome {
 
 /// A command whose answer cannot exist yet.
 ///
-/// Four tools are in here, waiting on different things, and the four input
+/// Four tools are in here, waiting on different things, and the five input
 /// tools. `App` holds the first four until the readback phase and answers them
 /// there, after the frame they were waiting on has been drawn and presented --
 /// which is also where the `wgpu::Device` already is, and so what keeps
@@ -1917,12 +1917,15 @@ pub(crate) fn apply_with_window(
             }
             // Against the size the target was last laid out at; the frame the
             // pointer is aimed in checks again.
-            if let Some(at) = command.at_px() {
+            let points = command.points_px();
+            if !points.is_empty() {
                 let source = panel.map_or(ScreenshotSource::Window, ScreenshotSource::Panel);
                 let size = screenshot_size(state, viewer, source, None);
                 if size[0] > 0 && size[1] > 0 {
-                    if let Err(error) = input::check_inside(at, size, panel) {
-                        return done(Err(error));
+                    for at in points {
+                        if let Err(error) = input::check_inside(at, size, panel) {
+                            return done(Err(error));
+                        }
                     }
                 }
             }

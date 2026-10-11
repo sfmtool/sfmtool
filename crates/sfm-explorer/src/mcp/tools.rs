@@ -19,7 +19,7 @@ use serde_json::{json, Map, Value};
 use sfmtool_core::bench::{check_label, BenchError};
 use sfmtool_core::reconstruction::prune_covered::PruneCoveredOptions;
 
-use super::input::{InputCommand, ModifierKeys, PointerTarget};
+use super::input::{InputCommand, ModifierKeys, PointerTarget, MAX_DRAG_POINTS};
 use super::{
     Angles, CameraImageSel, CloseTarget, Command, DisplayChange, Movement, Placement, RelativeView,
     SelectionScope, ToolError, ViewCommand,
@@ -665,6 +665,15 @@ pub(crate) fn parse(
         }),
         "hover" => Command::Input(InputCommand::Hover {
             target: pointer_target(&args)?,
+        }),
+        "drag" => Command::Input(InputCommand::Drag {
+            panel: match args.map.get("panel_name") {
+                None | Some(Value::Null) => None,
+                Some(_) => Some(args.panel("panel_name")?),
+            },
+            path_px: args.drag_path("path_px")?,
+            button: args.mouse_button("mouse_button")?,
+            modifiers: args.modifier_keys("modifiers")?,
         }),
         "press_key" => {
             let panel = match args.map.get("panel_name") {
@@ -1800,6 +1809,44 @@ impl Args<'_> {
                  right."
             ))),
         }
+    }
+
+    /// A drag's path: from 2 to [`MAX_DRAG_POINTS`] points `[x, y]`.
+    fn drag_path(&self, key: &str) -> Result<Vec<[f64; 2]>, ToolError> {
+        let expected = "an array of points [x, y]";
+        let value = self
+            .map
+            .get(key)
+            .filter(|value| !value.is_null())
+            .ok_or_else(|| {
+                self.error(format!(
+                    "needs {key}, the points [x, y] the pointer passes through, the press at the \
+                     first and the release at the last."
+                ))
+            })?;
+        let array = value
+            .as_array()
+            .ok_or_else(|| self.wrong_type(key, expected, value))?;
+        if array.len() < 2 || array.len() > MAX_DRAG_POINTS {
+            return Err(self.error(format!(
+                "wants {key} to hold from 2 to {MAX_DRAG_POINTS} points — got {}. A press and \
+                 release at one point is a click, and each point is a frame, so a longer path \
+                 would outlast the call.",
+                array.len()
+            )));
+        }
+        array
+            .iter()
+            .map(|point| {
+                let pair = point.as_array().filter(|pair| pair.len() == 2);
+                let numbers =
+                    pair.map(|pair| pair.iter().map(|n| n.as_f64().filter(|n| n.is_finite())));
+                match numbers.map(|mut n| (n.next().flatten(), n.next().flatten())) {
+                    Some((Some(x), Some(y))) => Ok([x, y]),
+                    _ => Err(self.wrong_type(key, expected, value)),
+                }
+            })
+            .collect()
     }
 
     /// The modifier keys a call holds, none when it names none.
