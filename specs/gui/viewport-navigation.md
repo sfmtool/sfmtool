@@ -65,8 +65,8 @@ during Zoom to Fit to center on the point cloud.
 | Edit on Bench | Double-click a point | Select that point, put its track on the bench, raise Track View, and pan so the target lands on the point, or turn toward a point at infinity (see [The point context menu](#the-point-context-menu)) |
 
 The viewport has one tool, navigation, and every binding above belongs to it. A
-delete brush that takes the unmodified left drag while the other bindings stay
-as they are is proposed in
+delete brush that takes the unmodified left drag, moves orbit to Alt + left drag
+in its place, and leaves the other bindings as they are is proposed in
 [../drafts/delete-brush.md](../drafts/delete-brush.md).
 
 ### The point context menu

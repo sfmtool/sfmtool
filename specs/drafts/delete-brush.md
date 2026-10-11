@@ -92,11 +92,19 @@ lock banner is (`viewer_3d/mod.rs`).
 - **Esc while the button is held cancels the stroke**: the painted points go
   back to their colours and nothing is deleted. This follows the bench handle
   drag (`viewer_3d/input.rs`), which Esc cancels in the same way.
+- **Alt + left drag orbits.** Orbit is the unmodified left drag in Navigate,
+  which the brush takes, so while the brush is on, Alt + left drag orbits
+  around the target in its place. In Navigate, Alt + left drag is the nodal pan;
+  the brush gives that up, because cleanup alternates between orbiting and
+  erasing and the nodal pan is rarely wanted there. In camera view Alt + left
+  drag already orbits, so there it means the same in both tools. Alt + click
+  still sets the target, as in Navigate.
 - **Everything else still navigates.** The brush claims only the unmodified
-  left press. Middle drag, right drag, every modified left drag (Alt, Shift,
-  Ctrl), the scroll wheel, pinch, the precision touchpad's two-finger pan and
-  the fly keys work as in Navigate, so the person can orbit, pan and zoom
-  without changing tools. A right *click* still opens the point menu. On
+  left press. Middle drag, right drag, Shift and Ctrl left drags, Alt + Shift
+  left drag, the scroll wheel, pinch, the precision touchpad's two-finger pan
+  (which orbits when unmodified) and the fly keys work as in Navigate, so the
+  person can orbit, pan and zoom without changing tools. A right *click* still
+  opens the point menu. On
   Windows every button is reported as Primary
   (`platform::other_mouse_button_down`), so the brush checks that no other
   button is down, as the bench handle drag does; otherwise a right-drag zoom
@@ -314,7 +322,8 @@ release.
   change while the button is held cancels the stroke; the preview at
   a position equals the set a press-and-release there paints; Esc while held paints nothing and pushes nothing; a release with an
   empty set pushes nothing; a press with the right button down on Windows does
-  not start a stroke.
+  not start a stroke; with the brush on, an Alt + left drag orbits (in both the
+  free view and camera view) and paints nothing.
 - **The flag** (`scene_renderer/upload/tests.rs`, `noop` backend): previewed
   points get `4` and go back to `1` when the pointer moves off them; painted
   points get `3`, go back to `1` on cancel, and to `0` after the commit.
