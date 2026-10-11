@@ -64,6 +64,11 @@ during Zoom to Fit to center on the point cloud.
 | Point menu | Right button click on a point | Select that point and open its context menu (see [The point context menu](#the-point-context-menu)) |
 | Edit on Bench | Double-click a point | Select that point, put its track on the bench, raise Track View, and pan so the target lands on the point, or turn toward a point at infinity (see [The point context menu](#the-point-context-menu)) |
 
+The viewport has one tool, navigation, and every binding above belongs to it. A
+delete brush that takes the unmodified left drag while the other bindings stay
+as they are is proposed in
+[../drafts/delete-brush.md](../drafts/delete-brush.md).
+
 ### The point context menu
 
 A right **click** on a point -- press and release inside egui's drag threshold
