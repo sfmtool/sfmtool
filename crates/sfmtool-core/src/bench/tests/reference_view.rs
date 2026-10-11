@@ -1616,6 +1616,59 @@ fn a_track_with_no_eligible_row_gets_no_bitmap_for_judging() {
     assert!(unscored(&rendered), "no row is scored");
 }
 
+/// A track with no bitmap whose `in` rows are all back-facing while some
+/// `out` rows are not gets no bitmap from its `in` rows, and a bitmap for
+/// judging from the rule's pick among every row with a keypoint: an `out`
+/// row's tile, naming no reference, with every row scored against it.
+#[test]
+fn a_track_whose_in_rows_are_ineligible_is_judged_against_an_out_row() {
+    let truth = GroundTruth::load();
+    let views = truth.views();
+    let (read, edited) = truth.evaluated_track();
+    assert!(read.observations.len() >= 8);
+    // Turn the normal 80° about `u`, so rows 0-3 still face the patch and
+    // rows 4-7 see it from behind.
+    let mut track = read.clone();
+    if let crate::bench::Stage::Track(payload) = &mut track.stage {
+        let placement = payload.placement.as_mut().expect("a placed track");
+        let (n, theta) = (placement.normal(), 80f64.to_radians());
+        placement.v_axis = placement.v_axis * theta.cos() + n * theta.sin();
+        payload.drop_bitmap();
+    }
+    for i in 0..8 {
+        let verdict = if i < 4 { Verdict::Out } else { Verdict::In };
+        track = set_verdict(&track, i, verdict).expect("a live row").0;
+    }
+    let rendered = render_with(&track, &edited, &views);
+    let payload = rendered.track().unwrap();
+    assert!(payload.bitmap_for_judging, "a bitmap for judging");
+    assert_eq!(payload.reference, None);
+    assert_eq!(rule_pick(&rendered), None, "no in row is eligible");
+    for o in rendered
+        .observations
+        .iter()
+        .filter(|o| o.verdict == Verdict::In)
+    {
+        let standing = o.track.as_ref().unwrap().reference_view.unwrap();
+        assert_eq!(standing.cost, Err(ReferenceExclusion::BackFacing));
+    }
+    // The bitmap is the tile of the out row that scores 1 against it.
+    let from = (0..4)
+        .find(|&i| {
+            let m = rendered.observations[i].track.as_ref().unwrap();
+            m.plain_zncc == Some(1.0)
+        })
+        .expect("an out row's tile is the bitmap");
+    let resolution = EvaluateOptions::default().patch_resolution(&edited.base) as usize;
+    let tile = bitmap_from_tile(&tile_of_row(&rendered, &views, from, resolution));
+    let stored: Vec<u8> = payload.bitmap.as_ref().unwrap().iter().copied().collect();
+    assert_eq!(stored, tile);
+    assert!(rendered
+        .observations
+        .iter()
+        .all(|o| o.track.as_ref().is_some_and(|m| m.plain_zncc.is_some())));
+}
+
 /// Unpinning the held reference, pinning it again and unpinning it once more
 /// is decided from the pins as they stand: where the rule by then picks that
 /// same row, the second unpin waits for no render and keeps every score, as
