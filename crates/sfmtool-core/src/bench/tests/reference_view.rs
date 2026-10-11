@@ -29,7 +29,7 @@ use crate::patch::member_coherence::{member_zncc_matrix, MemberCoherenceParams};
 use crate::patch::normal_refine::{refine_patch_normal, NormalRefineParams};
 use crate::patch::normal_refine::{PatchWindow, ProjectedImage};
 use crate::patch::reference_view::{
-    finite_middle, render_view_tile, ReferenceViewOptions, ViewTile,
+    finite_middle, render_view_tile, ReferenceExclusion, ReferenceViewOptions, ViewTile,
 };
 use crate::patch::self_similarity::{
     zncc_self_similarity_parts, PatchTile, SelfSimilarityEllipseUnits, SelfSimilarityParams,
@@ -1532,6 +1532,85 @@ fn a_bench_built_track_with_a_bitmap_naming_no_row_is_rendered_from_the_pick() {
     let first = render_with(&track, &edited, &views);
     let pick = rule_pick(&first).expect("the rule picks one");
     assert_rendered_from(&first, &views, &edited, pick, "a bench-built track");
+}
+
+/// `track` with its track-stage patch turned to face away from every camera
+/// that sees it (negating `v` negates the normal `u × v`), and nothing else
+/// changed: its bitmap, reference and pins stay.
+fn turned_away(track: &EditableTrack) -> EditableTrack {
+    let mut turned = track.clone();
+    if let crate::bench::Stage::Track(payload) = &mut turned.stage {
+        let placement = payload.placement.as_mut().expect("a placed track");
+        placement.v_axis = -placement.v_axis;
+    }
+    turned
+}
+
+/// A track whose bitmap names a row, with every row unpinned so no pin holds
+/// the reference, whose `in` rows all become back-facing: the rule finds no
+/// eligible row, so no render would replace the bitmap, and it stands with
+/// its reference (`bitmap_target`).
+#[test]
+fn a_bitmap_naming_a_row_stands_where_no_in_row_is_eligible() {
+    let truth = GroundTruth::load();
+    let views = truth.views();
+    let (track, edited, _, _) = track_with_another_reference(&truth);
+    let every: Vec<usize> = (0..track.observations.len()).collect();
+    let (unpinned, _) = unpin_verdicts(&track, &every).expect("live rows");
+    let unpinned = render_with(&unpinned, &edited, &views);
+    let reference = unpinned.track().unwrap().reference.expect("a reference");
+    let bitmap = unpinned.track().unwrap().bitmap.clone();
+    assert!(bitmap.is_some());
+    assert!(!unpinned.observations[reference].pinned);
+
+    let turned = turned_away(&unpinned);
+    let (read, _) = evaluate(
+        &turned,
+        &edited,
+        &views,
+        &EvaluateOptions::default(),
+        &Progress::none(),
+    )
+    .expect("the track reads");
+    assert_eq!(rule_pick(&read), None, "no row is eligible");
+    for o in read
+        .observations
+        .iter()
+        .filter(|o| o.verdict == Verdict::In)
+    {
+        let standing = o.track.as_ref().unwrap().reference_view.unwrap();
+        assert_eq!(standing.cost, Err(ReferenceExclusion::BackFacing));
+    }
+    assert_eq!(read.track().unwrap().reference, Some(reference));
+    assert_eq!(bitmap_target(&read), None, "the bitmap stands");
+    // The rendering evaluation renders nothing over it.
+    let rendered = render_with(&turned, &edited, &views);
+    let payload = rendered.track().unwrap();
+    assert_eq!(payload.reference, Some(reference));
+    assert_eq!(payload.bitmap, bitmap);
+    assert!(!payload.bitmap_for_judging);
+}
+
+/// A track with no bitmap whose rows are all back-facing gets no bitmap from
+/// its `in` rows, and no bitmap for judging either: the rule finds no row
+/// eligible among every row with a keypoint, so no row is scored.
+#[test]
+fn a_track_with_no_eligible_row_gets_no_bitmap_for_judging() {
+    let truth = GroundTruth::load();
+    let views = truth.views();
+    let (read, edited) = truth.evaluated_track();
+    let mut turned = turned_away(&read);
+    if let crate::bench::Stage::Track(payload) = &mut turned.stage {
+        payload.drop_bitmap();
+    }
+    assert!(turned.in_observations().len() >= 2);
+    let rendered = render_with(&turned, &edited, &views);
+    let payload = rendered.track().unwrap();
+    assert!(payload.bitmap.is_none(), "no bitmap");
+    assert!(!payload.bitmap_for_judging);
+    assert_eq!(payload.reference, None);
+    assert_eq!(rule_pick(&rendered), None);
+    assert!(unscored(&rendered), "no row is scored");
 }
 
 /// Unpinning the held reference, pinning it again and unpinning it once more
