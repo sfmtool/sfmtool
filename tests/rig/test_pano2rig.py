@@ -3,7 +3,6 @@
 
 """Tests for pano2rig and insv2rig modules."""
 
-import cv2
 import numpy as np
 import pytest
 from click.testing import CliRunner
@@ -17,6 +16,7 @@ from sfmtool.rig.pano2rig import (
     write_pano_camrig,
 )
 from sfmtool.cli import main
+from sfmtool.fileio import read_image_rgb, write_image_rgb
 
 
 # =============================================================================
@@ -159,7 +159,7 @@ class TestConvertPanoramas:
         input_dir.mkdir()
         for i in range(count):
             img = _make_test_equirect(width, height)
-            cv2.imwrite(str(input_dir / f"pano_{i:03d}.jpg"), img)
+            write_image_rgb(input_dir / f"pano_{i:03d}.jpg", img)
         return input_dir
 
     def test_cubemap_conversion(self, tmp_path):
@@ -185,20 +185,18 @@ class TestConvertPanoramas:
         _, face_size, _ = convert_panoramas(input_dir, output_dir, face_size=64)
         assert face_size == 64
 
-        face_img = cv2.imread(str(output_dir / "front" / "frame_000000.jpg"))
+        face_img = read_image_rgb(output_dir / "front" / "frame_000000.jpg")
         assert face_img.shape[:2] == (64, 64)
 
     def test_face_keeps_the_panorama_colour(self, tmp_path):
         # One colour whose channels all differ, so a red/blue swap between the
         # read and the write shows in the face.
-        from sfmtool.fileio import read_image_rgb
-
         rgb = (200, 50, 10)
         input_dir = tmp_path / "input"
         input_dir.mkdir()
-        pano_bgr = np.empty((200, 400, 3), dtype=np.uint8)
-        pano_bgr[...] = rgb[::-1]  # cv2.imwrite takes BGR
-        cv2.imwrite(str(input_dir / "pano_000.jpg"), pano_bgr)
+        pano = np.empty((200, 400, 3), dtype=np.uint8)
+        pano[...] = rgb
+        write_image_rgb(input_dir / "pano_000.jpg", pano)
         output_dir = tmp_path / "output"
 
         convert_panoramas(input_dir, output_dir, face_size=32)
@@ -308,7 +306,7 @@ class TestPano2rigCLI:
         input_dir = tmp_path / "input"
         input_dir.mkdir()
         img = _make_test_equirect(400, 200)
-        cv2.imwrite(str(input_dir / "test_pano.jpg"), img)
+        write_image_rgb(input_dir / "test_pano.jpg", img)
 
         workspace_dir = tmp_path / "workspace"
         workspace_dir.mkdir()

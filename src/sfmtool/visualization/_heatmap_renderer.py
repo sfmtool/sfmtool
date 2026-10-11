@@ -11,7 +11,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from .._sfmtool.fileio import read_image_rgb
+from .._sfmtool.fileio import read_image_rgb, write_image_rgb
 from .._sfmtool.geometry import RotQuaternion
 from ._colormap import value_to_color
 
@@ -138,7 +138,7 @@ def render_heatmap_overlay(
     valid_values = feature_values[~np.isnan(feature_values)]
     if len(valid_values) == 0:
         # No valid values, save original image
-        cv2.imwrite(str(output_path), cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
+        write_image_rgb(output_path, image)
         return
 
     if vmin is None:
@@ -173,7 +173,7 @@ def render_heatmap_overlay(
 
     # Save result
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    cv2.imwrite(str(output_path), cv2.cvtColor(result, cv2.COLOR_RGB2BGR))
+    write_image_rgb(output_path, result)
 
 
 def _add_colorbar(

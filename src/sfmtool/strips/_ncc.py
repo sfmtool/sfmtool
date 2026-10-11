@@ -54,7 +54,7 @@ def render_track_strip(
     per_view_scores: bool = False,
     normal_offsets: list[tuple[float, float] | None] | None = None,
 ) -> tuple[np.ndarray, float, int]:
-    """Render a point's observations as a horizontal BGR patch strip, returning
+    """Render a point's observations as a horizontal RGB patch strip, returning
     ``(strip, mean_pairwise_ncc, n_views)``. Tiles are labeled by image index;
     ``obs_imgs`` is expected pre-sorted by the caller.
 
@@ -103,19 +103,15 @@ def render_track_strip(
         p8 = np.clip(pf, 0, 255).astype(np.uint8)
         src_sz = p8.shape[0]
         p8 = cv2.resize(p8, (tile, tile), interpolation=cv2.INTER_NEAREST)
-        # Patches arrive RGB (the source images are loaded RGB); this is the cv2
-        # boundary where the tile is annotated and handed to the BGR montage, so
-        # convert RGB→BGR here.
-        bgr = (
-            cv2.cvtColor(p8, cv2.COLOR_RGB2BGR)
-            if p8.ndim == 3
-            else cv2.cvtColor(p8, cv2.COLOR_GRAY2BGR)
-        )
+        # Patches arrive RGB, as the source images are read, and the montage is
+        # RGB, so a colour tile is annotated as it is and a grey one is
+        # expanded to three channels.
+        rgb = p8 if p8.ndim == 3 else cv2.cvtColor(p8, cv2.COLOR_GRAY2RGB)
         if inner is not None:
             off, sz = inner
             scale = tile / src_sz
             x0, x1 = round(off * scale), round((off + sz) * scale)
-            cv2.rectangle(bgr, (x0, x0), (x1 - 1, x1 - 1), (0, 255, 0), 1)
+            cv2.rectangle(rgb, (x0, x0), (x1 - 1, x1 - 1), (0, 255, 0), 1)
         if normal_offsets is not None and normal_offsets[k] is not None:
             # Obliquity marker: box centre = fronto-parallel; the dot at (s, t)
             # (patch tangent frame, |(s,t)| <= 1) drifts to the box edge as the
@@ -132,44 +128,44 @@ def render_track_strip(
             bh = 0.5 * (bx1 - bx0)
             dx, dy = round(bc + s * bh), round(bc + t * bh)
             c0 = round(bc)
-            cv2.line(bgr, (c0, c0), (dx, dy), (255, 0, 255), 1, cv2.LINE_AA)
+            cv2.line(rgb, (c0, c0), (dx, dy), (255, 0, 255), 1, cv2.LINE_AA)
             cv2.circle(
-                bgr, (dx, dy), max(2, tile // 36), (255, 0, 255), -1, cv2.LINE_AA
+                rgb, (dx, dy), max(2, tile // 36), (255, 0, 255), -1, cv2.LINE_AA
             )
-            cv2.circle(bgr, (c0, c0), 1, (255, 255, 255), -1)
+            cv2.circle(rgb, (c0, c0), 1, (255, 255, 255), -1)
         cv2.putText(
-            bgr,
+            rgb,
             str(img_idx),
             (2, 12),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.34,
-            (0, 255, 255),
+            (255, 255, 0),  # yellow
             1,
             cv2.LINE_AA,
         )
         if per_view is not None:
             cv2.putText(
-                bgr,
+                rgb,
                 f"n{per_view[k]:+.2f}",
                 (2, tile - 16),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.34,
-                (0, 255, 255),
+                (255, 255, 0),  # yellow
                 1,
                 cv2.LINE_AA,
             )
             if reproj_errs is not None:
                 cv2.putText(
-                    bgr,
+                    rgb,
                     f"e{reproj_errs[k]:.1f}",
                     (2, tile - 4),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.34,
-                    (0, 255, 255),
+                    (255, 255, 0),  # yellow
                     1,
                     cv2.LINE_AA,
                 )
-        tiles.append(bgr)
+        tiles.append(rgb)
 
     sep_col = np.full((tile, sep, 3), 40, np.uint8)
     row: list[np.ndarray] = []

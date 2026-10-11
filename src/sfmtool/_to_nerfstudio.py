@@ -16,7 +16,13 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from ._sfmtool.fileio import image_has_alpha, read_image_rgb, read_image_rgba
+from ._sfmtool.fileio import (
+    image_has_alpha,
+    read_image_rgb,
+    read_image_rgba,
+    write_image_rgb,
+    write_image_rgba,
+)
 from ._sfmtool.reconstruction import SfmrReconstruction
 from ._sfmtool.geometry import RotQuaternion
 
@@ -181,18 +187,14 @@ def _build_pyramid_for_image(
         new_w = max(1, w // factor)
         new_h = max(1, h // factor)
         downscaled = cv2.resize(src_image, (new_w, new_h), interpolation=cv2.INTER_AREA)
-        # cv2.imwrite takes BGR or BGRA.
-        to_bgr = cv2.COLOR_RGBA2BGRA if src_image.shape[2] == 4 else cv2.COLOR_RGB2BGR
-        downscaled = cv2.cvtColor(downscaled, to_bgr)
         level_dir = output_dir / f"images_{factor}"
         level_dir.mkdir(parents=True, exist_ok=True)
-        ok = cv2.imwrite(
-            str(level_dir / basename),
-            downscaled,
-            [cv2.IMWRITE_JPEG_QUALITY, int(jpeg_quality)],
-        )
-        if not ok:
-            raise RuntimeError(f"Failed to write pyramid image: {level_dir / basename}")
+        if src_image.shape[2] == 4:
+            write_image_rgba(level_dir / basename, downscaled)
+        else:
+            write_image_rgb(
+                level_dir / basename, downscaled, jpeg_quality=int(jpeg_quality)
+            )
 
 
 def export_to_nerfstudio(

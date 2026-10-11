@@ -93,7 +93,7 @@ image.
 
 The Python extraction backend (`extract_sift_with_sfmtool`) processes images in
 three stages: load+decode (`sfmtool.fileio.read_image_rgb`, see
-[reading-photographs.md](../../core/camera/reading-photographs.md)), extract (the Rust core, GIL released,
+[reading-and-writing-images.md](../../core/camera/reading-and-writing-images.md)), extract (the Rust core, GIL released,
 internally rayon-parallel), then save (`write_sift`, zstd+ZIP). Measured
 per-image stage split (ms): extract dominates at **85–91%** of the work;
 load+thumbnail+save together are only **~7% on large images (2040×1536), ~15% on

@@ -82,28 +82,28 @@ def consensus(cores):
     return np.stack([np.asarray(c, np.float64) for c in cores]).mean(0)
 
 
-YELLOW = (0, 220, 220)
+YELLOW = (220, 220, 0)
 GREEN = (0, 200, 0)
-RED = (0, 0, 230)
+RED = (230, 0, 0)
 WHITE = (245, 245, 245)
 CYAN = (60, 200, 255)
 GREY = (200, 200, 200)
 
 
-def _to_bgr(img, disp):
+def _to_rgb(img, disp):
     p8 = np.clip(img, 0, 255).astype(np.uint8)
-    # The tile is RGB or grey; OpenCV draws on BGR.
-    bgr = cv2.cvtColor(p8, cv2.COLOR_RGB2BGR if p8.ndim == 3 else cv2.COLOR_GRAY2BGR)
-    return cv2.resize(bgr, (disp, disp), interpolation=cv2.INTER_NEAREST)
+    # The tile is RGB or grey, and the montage is RGB.
+    rgb = p8 if p8.ndim == 3 else cv2.cvtColor(p8, cv2.COLOR_GRAY2RGB)
+    return cv2.resize(rgb, (disp, disp), interpolation=cv2.INTER_NEAREST)
 
 
 def _ref_panel(img, disp, label, accent, bot_label=None):
-    bgr = _to_bgr(img, disp)
-    cv2.rectangle(bgr, (0, 0), (disp - 1, disp - 1), accent, 2)
-    chip(bgr, label, (4, 14), accent, 0.34)
+    rgb = _to_rgb(img, disp)
+    cv2.rectangle(rgb, (0, 0), (disp - 1, disp - 1), accent, 2)
+    chip(rgb, label, (4, 14), accent, 0.34)
     if bot_label is not None:
-        chip(bgr, bot_label, (4, disp - 7), accent, 0.34)
-    return bgr
+        chip(rgb, bot_label, (4, disp - 7), accent, 0.34)
+    return rgb
 
 
 def _box(img, col0, row0, size, scale, color):
@@ -113,16 +113,16 @@ def _box(img, col0, row0, size, scale, color):
 
 
 def _ctx_tile(ctx_img, disp, margin, res, border, top_label, acc=None, bot_label=None):
-    bgr = _to_bgr(ctx_img, disp)
+    rgb = _to_rgb(ctx_img, disp)
     scale = disp / ctx_img.shape[0]
-    _box(bgr, margin, margin, res, scale, WHITE)  # core @ projection
+    _box(rgb, margin, margin, res, scale, WHITE)  # core @ projection
     if acc is not None:
-        _box(bgr, margin + acc[0], margin + acc[1], res, scale, CYAN)  # core @ aligned
-    cv2.rectangle(bgr, (0, 0), (disp - 1, disp - 1), border, 3)
-    chip(bgr, top_label, (4, 14), border, 0.34)
+        _box(rgb, margin + acc[0], margin + acc[1], res, scale, CYAN)  # core @ aligned
+    cv2.rectangle(rgb, (0, 0), (disp - 1, disp - 1), border, 3)
+    chip(rgb, top_label, (4, 14), border, 0.34)
     if bot_label is not None:
-        chip(bgr, bot_label, (4, disp - 7), CYAN, 0.32)
-    return bgr
+        chip(rgb, bot_label, (4, disp - 7), CYAN, 0.32)
+    return rgb
 
 
 def gather(recon, cloud, images, args):

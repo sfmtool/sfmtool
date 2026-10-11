@@ -57,7 +57,7 @@ from sfmtool.reconstruction import SfmrReconstruction
 from sfmtool.patches import OrientedPatch, PatchCloud
 from sfmtool.geometry import RigidTransform
 from sfmtool.flow import ImagePyramid, WarpMap
-from sfmtool.fileio import read_image_rgb, read_matches, read_sift
+from sfmtool.fileio import read_image_rgb, read_matches, read_sift, write_image_rgb
 
 
 def find_sift_paths(workspace: str, names: list[str]) -> dict[str, str]:
@@ -505,13 +505,13 @@ def strips_mode_3d(
             r = np.hstack([r, np.zeros((r.shape[0], width - r.shape[1], 3), np.uint8)])
         padded.extend((r, sep_row))
     montage = np.vstack(padded[:-1])
-    cv2.imwrite(out, montage)
+    write_image_rgb(out, montage)
     print(f"wrote {out}  ({montage.shape[1]}x{montage.shape[0]})")
     return 0
 
 
 def render_track_strip(track, patch_of, w, *, tile, inner=None, sep=2):
-    """Render one track's observations as a horizontal BGR patch strip.
+    """Render one track's observations as a horizontal RGB patch strip.
 
     Patches are rendered at the renderer's size and displayed at ``tile`` px. If
     ``inner = (offset, size)`` (context mode), NCC is scored on that central
@@ -540,24 +540,24 @@ def render_track_strip(track, patch_of, w, *, tile, inner=None, sep=2):
         p8 = np.clip(pf, 0, 255).astype(np.uint8)
         src_sz = p8.shape[0]
         p8 = cv2.resize(p8, (tile, tile), interpolation=cv2.INTER_NEAREST)
-        # The patch is RGB or grey; OpenCV draws on BGR.
-        bgr = cv2.cvtColor(p8, cv2.COLOR_RGB2BGR if p8.ndim == 3 else cv2.COLOR_GRAY2BGR)
+        # The patch is RGB or grey, and the strip is RGB.
+        rgb = p8 if p8.ndim == 3 else cv2.cvtColor(p8, cv2.COLOR_GRAY2RGB)
         if inner is not None:
             off, sz = inner
             scale = tile / src_sz
             x0, x1 = round(off * scale), round((off + sz) * scale)
-            cv2.rectangle(bgr, (x0, x0), (x1 - 1, x1 - 1), (0, 255, 0), 1)
+            cv2.rectangle(rgb, (x0, x0), (x1 - 1, x1 - 1), (0, 255, 0), 1)
         cv2.putText(
-            bgr,
+            rgb,
             str(img_idx),
             (2, 12),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.34,
-            (0, 255, 255),
+            (255, 255, 0),  # yellow
             1,
             cv2.LINE_AA,
         )
-        tiles.append(bgr)
+        tiles.append(rgb)
 
     sep_col = np.full((tile, sep, 3), 40, np.uint8)
     row = []
@@ -630,7 +630,7 @@ def strips_mode(
             r = np.hstack([r, np.zeros((r.shape[0], width - r.shape[1], 3), np.uint8)])
         padded.extend((r, sep_row))
     montage = np.vstack(padded[:-1])
-    cv2.imwrite(out, montage)
+    write_image_rgb(out, montage)
     print(f"wrote {out}  ({montage.shape[1]}x{montage.shape[0]})")
     return 0
 

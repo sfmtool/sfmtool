@@ -6,10 +6,10 @@
 from pathlib import Path
 
 import click
-import cv2
 import numpy as np
 
 from ..motion.ratio_band import classify_ratio, out_of_band
+from .._sfmtool.fileio import write_image_rgb
 from ._flow_display import _draw_flow_legend, _flow_to_color
 
 
@@ -149,7 +149,7 @@ def _save_flow_images(
     local_color = _flow_to_color(local_u, local_v)
     _draw_flow_legend(local_color)
     local_path = output_dir / f"{base_name}_from_{from_number}_to_{to_local_number}.jpg"
-    cv2.imwrite(str(local_path), local_color)
+    write_image_rgb(local_path, local_color)
 
     # Stride flow: from → from+N
     if stride_u is not None and stride_v is not None:
@@ -158,7 +158,7 @@ def _save_flow_images(
         stride_path = (
             output_dir / f"{base_name}_from_{from_number}_to_{to_stride_number}.jpg"
         )
-        cv2.imwrite(str(stride_path), stride_color)
+        write_image_rgb(stride_path, stride_color)
 
 
 def _print_sample_point(result: dict):

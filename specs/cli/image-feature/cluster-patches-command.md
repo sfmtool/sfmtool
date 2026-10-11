@@ -103,7 +103,7 @@ consumer reads the cells.
    scattered back to those rows, sized by `feature_counts[i]` — which presents
    them exactly as a `.sift` read would.
 3. **Refine.** Load the images with `sfmtool.fileio.read_image_rgb`
-   ([reading-photographs.md](../../core/camera/reading-photographs.md)),
+   ([reading-and-writing-images.md](../../core/camera/reading-and-writing-images.md)),
    decoded through a thread pool (the decoder releases the GIL; the
    embed-patches pattern), with results collected in submission order. The
    arrays are RGB, as the kernel takes them; the viewer hands it the same.

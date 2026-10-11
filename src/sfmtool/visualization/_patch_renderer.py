@@ -30,7 +30,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from .._sfmtool.fileio import read_image_rgb
+from .._sfmtool.fileio import read_image_rgb, write_image_rgb
 from .._sfmtool.reconstruction import SfmrReconstruction
 from .._sfmtool.geometry import RotQuaternion
 
@@ -102,10 +102,9 @@ def _quad_corners(
     )
 
 
-def _normal_to_bgr(normals: np.ndarray) -> np.ndarray:
-    """Map unit normals to BGR colours via ``(n + 1) / 2 -> [0, 255]``."""
-    rgb = (np.clip((normals + 1.0) * 0.5, 0.0, 1.0) * 255.0).astype(np.uint8)
-    return rgb[:, ::-1]  # RGB -> BGR
+def _normal_to_rgb(normals: np.ndarray) -> np.ndarray:
+    """Map unit normals to RGB colours via ``(n + 1) / 2 -> [0, 255]``."""
+    return (np.clip((normals + 1.0) * 0.5, 0.0, 1.0) * 255.0).astype(np.uint8)
 
 
 def _render_image(
@@ -114,9 +113,9 @@ def _render_image(
     quads_world: np.ndarray,
     centers: np.ndarray,
     normals: np.ndarray,
-    normal_bgr: np.ndarray,
+    normal_rgb: np.ndarray,
     point_ids: np.ndarray,
-    colors_bgr: np.ndarray,
+    colors_rgb: np.ndarray,
     bitmaps: np.ndarray | None,
     patch_w: np.ndarray,
     *,
@@ -131,7 +130,7 @@ def _render_image(
 ) -> tuple[np.ndarray, int]:
     """Composite all visible patches onto one source image; return (canvas, n).
 
-    ``quads_world`` and ``normal_bgr`` are precomputed once by the caller (they
+    ``quads_world`` and ``normal_rgb`` are precomputed once by the caller (they
     do not depend on the image), so this only does the per-image projection.
     """
     cam = recon.cameras[int(recon.camera_indexes[img_idx])]
@@ -143,8 +142,8 @@ def _render_image(
     trans = np.asarray(recon.translations[img_idx])
 
     img_path = Path(recon.workspace_dir) / recon.image_names[img_idx]
-    # The canvas is drawn on and written by OpenCV, which takes BGR.
-    canvas = cv2.cvtColor(read_image_rgb(img_path), cv2.COLOR_RGB2BGR)
+    # The canvas is RGB, as read, and so are the colours drawn on it.
+    canvas = read_image_rgb(img_path)
     if upscale != 1.0:
         canvas = cv2.resize(
             canvas, None, fx=upscale, fy=upscale, interpolation=cv2.INTER_CUBIC
@@ -205,12 +204,8 @@ def _render_image(
             dst = (quad - [cx0, cy0]).astype(np.float32)
             m = cv2.getPerspectiveTransform(src, dst)
             tw, th = cx1 - cx0, cy1 - cy0
-            # The canvas is a cv2-loaded BGR frame, so convert the stored RGB
-            # bitmap to BGR before compositing onto it.
-            bmp_bgr = cv2.cvtColor(
-                np.ascontiguousarray(bmp[:, :, :3]), cv2.COLOR_RGB2BGR
-            )
-            warped = cv2.warpPerspective(bmp_bgr, m, (tw, th))
+            bmp_rgb = np.ascontiguousarray(bmp[:, :, :3])
+            warped = cv2.warpPerspective(bmp_rgb, m, (tw, th))
             warped_a = cv2.warpPerspective(bmp[:, :, 3], m, (tw, th))
             norm_a = warped_a.astype(np.float32) / 255.0
             if opaque_threshold is not None:
@@ -226,9 +221,9 @@ def _render_image(
             ).astype(np.uint8)
         elif mode in ("normal", "flat"):
             color = (
-                tuple(int(c) for c in normal_bgr[i])
+                tuple(int(c) for c in normal_rgb[i])
                 if mode == "normal"
-                else tuple(int(c) for c in colors_bgr[i])
+                else tuple(int(c) for c in colors_rgb[i])
             )
             mask = np.zeros((cy1 - cy0, cx1 - cx0), np.uint8)
             cv2.fillConvexPoly(mask, np.round(quad - [cx0, cy0]).astype(np.int32), 255)
@@ -243,7 +238,7 @@ def _render_image(
                 canvas,
                 [np.round(quad).astype(np.int32)],
                 isClosed=True,
-                color=border_color[::-1],  # RGB -> BGR for cv2
+                color=border_color,
                 thickness=border_thickness,
                 lineType=cv2.LINE_AA,
             )
@@ -297,7 +292,7 @@ def render_patches(
         )
 
     centers, u_vec, v_vec, normals, point_ids, w = collect_patches(recon)
-    colors_bgr = np.asarray(recon.colors)[point_ids][:, ::-1]
+    colors_rgb = np.asarray(recon.colors)[point_ids]
     bitmaps = recon.patch_bitmaps
     if bitmaps is not None:
         bitmaps = np.asarray(bitmaps)
@@ -310,7 +305,7 @@ def render_patches(
     # Precompute everything that doesn't depend on the image: the scaled quad
     # corners and the per-patch normal colours.
     quads_world = _quad_corners(centers, u_vec * scale, v_vec * scale)
-    normal_bgr = _normal_to_bgr(normals)
+    normal_rgb = _normal_to_rgb(normals)
 
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -325,9 +320,9 @@ def render_patches(
             quads_world,
             centers,
             normals,
-            normal_bgr,
+            normal_rgb,
             point_ids,
-            colors_bgr,
+            colors_rgb,
             bitmaps,
             w,
             mode=mode,
@@ -343,7 +338,7 @@ def render_patches(
         # e.g. fisheye_left/frame_05 vs fisheye_right/frame_05).
         stem = Path(name).with_suffix("").as_posix().replace("/", "__")
         out_path = output_dir / f"{stem}_{mode}.png"
-        cv2.imwrite(str(out_path), canvas)
+        write_image_rgb(out_path, canvas)
         results.append((name, n_drawn, out_path))
         if progress is not None:
             progress(name, n_drawn, out_path)

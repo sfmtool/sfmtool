@@ -3,13 +3,13 @@
 
 """Tests for the heatmap command and visualization utilities."""
 
-import cv2
 import numpy as np
 import pytest
 from click.testing import CliRunner
 
 from sfmtool._commands.heatmap import _insert_metric_before_number, _output_stem
 from sfmtool.cli import main
+from sfmtool.fileio import read_image_rgb, write_image_rgb
 from sfmtool.visualization import (
     COLORMAPS,
     apply_colormap,
@@ -247,7 +247,7 @@ class TestRenderHeatmapOverlay:
         img = np.zeros((100, 200, 3), dtype=np.uint8)
         img[:] = (128, 128, 128)
         img_path = tmp_path / "test.jpg"
-        cv2.imwrite(str(img_path), img)
+        write_image_rgb(img_path, img)
 
         positions = np.array([[50.0, 50.0], [150.0, 50.0]], dtype=np.float32)
         values = np.array([0.0, 1.0], dtype=np.float64)
@@ -264,7 +264,7 @@ class TestRenderHeatmapOverlay:
         )
 
         assert output_path.exists()
-        result = cv2.imread(str(output_path))
+        result = read_image_rgb(output_path)
         assert result is not None
         # Wider than input due to colorbar
         assert result.shape[1] > 200
@@ -273,7 +273,7 @@ class TestRenderHeatmapOverlay:
         """Rendering without colorbar should match input width."""
         img = np.zeros((100, 200, 3), dtype=np.uint8)
         img_path = tmp_path / "test.jpg"
-        cv2.imwrite(str(img_path), img)
+        write_image_rgb(img_path, img)
 
         positions = np.array([[50.0, 50.0]], dtype=np.float32)
         values = np.array([0.5], dtype=np.float64)
@@ -287,14 +287,14 @@ class TestRenderHeatmapOverlay:
             show_colorbar=False,
         )
 
-        result = cv2.imread(str(output_path))
+        result = read_image_rgb(output_path)
         assert result.shape[1] == 200
 
     def test_nan_values_handled(self, tmp_path):
         """NaN values should not crash rendering."""
         img = np.zeros((100, 200, 3), dtype=np.uint8)
         img_path = tmp_path / "test.jpg"
-        cv2.imwrite(str(img_path), img)
+        write_image_rgb(img_path, img)
 
         positions = np.array([[50.0, 50.0], [100.0, 50.0]], dtype=np.float32)
         values = np.array([np.nan, 1.0], dtype=np.float64)
@@ -307,7 +307,7 @@ class TestRenderHeatmapOverlay:
         """All NaN values should save the original image."""
         img = np.ones((100, 200, 3), dtype=np.uint8) * 200
         img_path = tmp_path / "test.jpg"
-        cv2.imwrite(str(img_path), img)
+        write_image_rgb(img_path, img)
 
         positions = np.array([[50.0, 50.0]], dtype=np.float32)
         values = np.array([np.nan], dtype=np.float64)
@@ -315,6 +315,30 @@ class TestRenderHeatmapOverlay:
         output_path = tmp_path / "output.png"
         render_heatmap_overlay(img_path, positions, values, output_path)
         assert output_path.exists()
+
+    def test_overlay_keeps_the_colormap_colour(self, tmp_path):
+        """A feature at the top of the "error" map is drawn red, not blue."""
+        img = np.full((100, 200, 3), 128, dtype=np.uint8)
+        img_path = tmp_path / "grey.png"
+        write_image_rgb(img_path, img)
+
+        output_path = tmp_path / "output.png"
+        render_heatmap_overlay(
+            img_path,
+            np.array([[150.0, 50.0]], dtype=np.float32),
+            np.array([1.0]),
+            output_path,
+            colormap="error",
+            vmin=0.0,
+            vmax=1.0,
+            radius=6,
+            alpha=1.0,
+            show_colorbar=False,
+        )
+
+        result = read_image_rgb(output_path)
+        assert tuple(result[50, 150]) == (255, 0, 0)
+        assert tuple(result[10, 10]) == (128, 128, 128)
 
     def test_missing_image_raises(self, tmp_path):
         output_path = tmp_path / "output.png"

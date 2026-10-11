@@ -25,7 +25,7 @@ class TestGetColorPalette:
         colors = get_color_palette(10)
         assert len(colors) == 10
 
-    def test_valid_bgr_tuples(self):
+    def test_valid_rgb_tuples(self):
         colors = get_color_palette(10)
         for color in colors:
             assert len(color) == 3
@@ -40,6 +40,10 @@ class TestGetColorPalette:
     def test_single_color(self):
         colors = get_color_palette(1)
         assert len(colors) == 1
+
+    def test_tuples_are_in_rgb_order(self):
+        # Hue 0 at 0.9 saturation and value is red: its first channel leads.
+        assert (229, 22, 22) in get_color_palette(3)
 
     def test_deterministic(self):
         colors1 = get_color_palette(5)

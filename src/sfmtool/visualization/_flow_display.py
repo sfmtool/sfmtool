@@ -20,7 +20,7 @@ from .._sfmtool.flow import (
     advect_points as _rust_advect_points,
     compute_optical_flow as _rust_compute_optical_flow,
 )
-from .._sfmtool.fileio import read_image_rgb
+from .._sfmtool.fileio import read_image_rgb, write_image_rgb
 from .._histogram_utils import print_histogram
 from ..sift.file import SiftReader, get_sift_path_for_image
 from ._common import get_color_palette
@@ -64,7 +64,7 @@ def _flow_to_color(flow_u: np.ndarray, flow_v: np.ndarray) -> np.ndarray:
     strong flow is vivid color. Value is always full brightness, so small
     motions show as pastel tints rather than vanishing into black.
 
-    Returns BGR image (uint8).
+    Returns an RGB image (uint8).
     """
     mag = np.sqrt(flow_u**2 + flow_v**2)
     angle = np.arctan2(flow_v, flow_u)
@@ -78,7 +78,7 @@ def _flow_to_color(flow_u: np.ndarray, flow_v: np.ndarray) -> np.ndarray:
     hsv[:, :, 1] = (mag_norm * 255).astype(np.uint8)  # Saturation = magnitude
     hsv[:, :, 2] = 255  # Value = full brightness
 
-    return cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+    return cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)
 
 
 def _resolve_recon_image_index(
@@ -191,9 +191,9 @@ def draw_flow_visualization(
         output_path = Path(output_path)
 
     # Load images
-    # The overlays are drawn and written by OpenCV, which takes BGR.
-    img1_bgr = cv2.cvtColor(read_image_rgb(image1_path), cv2.COLOR_RGB2BGR)
-    img2_bgr = cv2.cvtColor(read_image_rgb(image2_path), cv2.COLOR_RGB2BGR)
+    # The overlays are drawn in RGB, the order the images are read in.
+    img1 = read_image_rgb(image1_path)
+    img2 = read_image_rgb(image2_path)
 
     sfmr_pairs: list[tuple[int, int]] = []
     if recon is not None:
@@ -207,8 +207,8 @@ def draw_flow_visualization(
         sfmr_pairs = _get_shared_feature_pairs(recon, image1_idx, image2_idx)
 
     # Convert to grayscale for flow computation
-    gray1 = cv2.cvtColor(img1_bgr, cv2.COLOR_BGR2GRAY)
-    gray2 = cv2.cvtColor(img2_bgr, cv2.COLOR_BGR2GRAY)
+    gray1 = cv2.cvtColor(img1, cv2.COLOR_RGB2GRAY)
+    gray2 = cv2.cvtColor(img2, cv2.COLOR_RGB2GRAY)
 
     # Compute optical flow using Rust DIS implementation
     print(f"Computing optical flow ({preset} preset)...")
@@ -249,7 +249,7 @@ def draw_flow_visualization(
     advected = _rust_advect_points(positions1_f32, flow_u, flow_v)
 
     # Build spatial index for image2 keypoints (for proximity matching)
-    h2, w2 = img2_bgr.shape[:2]
+    h2, w2 = img2.shape[:2]
 
     # Find which advected points land near an image2 keypoint
     in_bounds = (
@@ -371,8 +371,8 @@ def draw_flow_visualization(
 
     if recon is not None:
         _draw_comparison_mode(
-            img1_bgr=img1_bgr,
-            img2_bgr=img2_bgr,
+            img1=img1,
+            img2=img2,
             positions1=positions1,
             positions2=positions2,
             advected=advected,
@@ -388,8 +388,8 @@ def draw_flow_visualization(
         )
     else:
         _draw_flow_only_mode(
-            img1_bgr=img1_bgr,
-            img2_bgr=img2_bgr,
+            img1=img1,
+            img2=img2,
             positions1=positions1,
             positions2=positions2,
             advected=advected,
@@ -405,8 +405,8 @@ def draw_flow_visualization(
 
 
 def _draw_flow_only_mode(
-    img1_bgr: np.ndarray,
-    img2_bgr: np.ndarray,
+    img1: np.ndarray,
+    img2: np.ndarray,
     positions1: np.ndarray,
     positions2: np.ndarray,
     advected: np.ndarray,
@@ -426,7 +426,7 @@ def _draw_flow_only_mode(
     near, one palette colour per hit. The flow color field is saved as a
     separate image.
     """
-    h2, w2 = img2_bgr.shape[:2]
+    h2, w2 = img2.shape[:2]
 
     # Find which advected points land near an image2 keypoint
     in_bounds = (
@@ -452,7 +452,7 @@ def _draw_flow_only_mode(
     _save_flow_color_image(flow_u, flow_v, output_path)
 
     # --- Draw image 1: source with keypoints ---
-    vis1 = img1_bgr.copy()
+    vis1 = img1.copy()
 
     # Draw source keypoints for hits
     if max_features is not None:
@@ -464,7 +464,7 @@ def _draw_flow_only_mode(
         cv2.circle(vis1, pt, feature_size, colors[i % len(colors)], -1)
 
     # --- Draw image 2: advected positions with arrows ---
-    vis2 = img2_bgr.copy()
+    vis2 = img2.copy()
 
     for i, (qi, ti) in enumerate(hit_pairs):
         src = (int(advected[qi, 0]), int(advected[qi, 1]))
@@ -481,8 +481,8 @@ def _draw_flow_only_mode(
 
 
 def _draw_comparison_mode(
-    img1_bgr: np.ndarray,
-    img2_bgr: np.ndarray,
+    img1: np.ndarray,
+    img2: np.ndarray,
     positions1: np.ndarray,
     positions2: np.ndarray,
     advected: np.ndarray,
@@ -503,7 +503,7 @@ def _draw_comparison_mode(
     - RED: sfmr correspondences where flow disagrees (advected pos far from matched keypoint)
     - YELLOW: flow hits that are NOT sfmr correspondences
     """
-    h2, w2 = img2_bgr.shape[:2]
+    h2, w2 = img2.shape[:2]
 
     # Compute distance from advected position to SfMR target for each correspondence
     sfmr_distances = []  # (feat1_idx, feat2_idx, distance)
@@ -556,13 +556,13 @@ def _draw_comparison_mode(
     # --- Save standalone flow color image ---
     _save_flow_color_image(flow_u, flow_v, output_path)
 
-    # Colors (BGR)
+    # Colors (RGB)
     GREEN = (0, 200, 0)
-    RED = (0, 0, 200)
-    YELLOW = (0, 200, 200)
+    RED = (200, 0, 0)
+    YELLOW = (200, 200, 0)
 
     # --- Draw image 1: source keypoints colored by category ---
-    vis1 = img1_bgr.copy()
+    vis1 = img1.copy()
 
     for feat1_idx, _feat2_idx in yellow_pairs:
         if feat1_idx < len(positions1):
@@ -580,7 +580,7 @@ def _draw_comparison_mode(
             cv2.circle(vis1, pt, feature_size, GREEN, -1)
 
     # --- Draw image 2: target keypoints and advected positions ---
-    vis2 = img2_bgr.copy()
+    vis2 = img2.copy()
 
     # Yellow: flow-only hits (dot at advected position)
     for feat1_idx, feat2_idx in yellow_pairs:
@@ -597,7 +597,7 @@ def _draw_comparison_mode(
         cv2.circle(vis2, tgt, feature_size, RED, -1)
         if feat1_idx < len(advected):
             adv = (int(advected[feat1_idx, 0]), int(advected[feat1_idx, 1]))
-            if 0 <= adv[0] < w2 and 0 <= adv[1] < img2_bgr.shape[0]:
+            if 0 <= adv[0] < w2 and 0 <= adv[1] < img2.shape[0]:
                 cv2.line(vis2, tgt, adv, RED, line_thickness)
 
     # Green: flow agrees with sfmr (draw both, they should be close)
@@ -611,13 +611,13 @@ def _draw_comparison_mode(
     _save_output(vis1, vis2, output_path, side_by_side)
 
 
-def _direction_color_bgr(u: float, v: float) -> tuple[int, int, int]:
+def _direction_color(u: float, v: float) -> tuple[int, int, int]:
     """Get the hue-wheel color for a unit flow direction, fully saturated."""
     angle = np.arctan2(v, u)
     hue = int((angle + np.pi) / (2 * np.pi) * 179)
     hsv = np.array([[[hue, 255, 255]]], dtype=np.uint8)
-    bgr = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
-    return int(bgr[0, 0, 0]), int(bgr[0, 0, 1]), int(bgr[0, 0, 2])
+    rgb = cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)
+    return int(rgb[0, 0, 0]), int(rgb[0, 0, 1]), int(rgb[0, 0, 2])
 
 
 def _draw_flow_legend(image: np.ndarray) -> None:
@@ -658,7 +658,7 @@ def _draw_flow_legend(image: np.ndarray) -> None:
 
     y = padding
     for label, u, v in directions:
-        color = _direction_color_bgr(u, v)
+        color = _direction_color(u, v)
         # Draw swatch
         x0 = padding
         cv2.rectangle(image, (x0, y), (x0 + swatch_size, y + swatch_size), color, -1)
@@ -693,7 +693,7 @@ def _save_flow_color_image(
     stem = output_path.stem
     suffix = output_path.suffix
     flow_path = output_path.parent / f"{stem}_flow{suffix}"
-    cv2.imwrite(str(flow_path), flow_color)
+    write_image_rgb(flow_path, flow_color)
     print(f"Saved flow color image to {flow_path}")
 
 
@@ -718,13 +718,13 @@ def _save_output(
                 scale = target_h / h2
                 vis2 = cv2.resize(vis2, (int(vis2.shape[1] * scale), target_h))
         combined = np.hstack([vis1, vis2])
-        cv2.imwrite(str(output_path), combined)
+        write_image_rgb(output_path, combined)
         print(f"Saved side-by-side visualization to {output_path}")
     else:
         stem = output_path.stem
         suffix = output_path.suffix
         path_a = output_path.parent / f"{stem}_A{suffix}"
         path_b = output_path.parent / f"{stem}_B{suffix}"
-        cv2.imwrite(str(path_a), vis1)
-        cv2.imwrite(str(path_b), vis2)
+        write_image_rgb(path_a, vis1)
+        write_image_rgb(path_b, vis2)
         print(f"Saved visualizations to {path_a} and {path_b}")

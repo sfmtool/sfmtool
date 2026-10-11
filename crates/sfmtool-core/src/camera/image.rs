@@ -2,11 +2,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Image containers shared across the crate: [`ImageU8`], a packed `u8` image
-//! with 1, 3 or 4 interleaved channels; [`ImageU8Pyramid`], a stack of
+//! with 1, 3 or 4 interleaved channels, read from and written to image files;
+//! [`ImageU8Pyramid`], a stack of
 //! successive 2x box-filtered downsamples of one; and [`ImageF32WithGrad`], a
 //! float image carrying its per-channel `x` and `y` gradients. The resampling
 //! functions in [`remap`](super::remap) read and write them, and the patch,
 //! spherical-tile, bench and photograph-cache code hold them.
+
+/// The JPEG quality a caller of [`ImageU8::write`] passes when it has no
+/// reason to choose another. It is 95, the default of OpenCV's
+/// `cv2.imwrite`, so a JPEG keeps the quality OpenCV gives it.
+pub const DEFAULT_JPEG_QUALITY: u8 = 95;
 
 /// A multi-channel image stored as packed u8 values.
 ///
@@ -75,6 +81,91 @@ impl ImageU8 {
         ::image::ImageReader::open(path)?
             .with_guessed_format()?
             .decode()
+    }
+
+    /// Encode the image to the file at `path`, in the format the path's
+    /// extension names (case does not matter).
+    ///
+    /// `.jpg` / `.jpeg` write a baseline JPEG at `jpeg_quality`, 1 to 100,
+    /// with no chroma subsampling; callers pass [`DEFAULT_JPEG_QUALITY`]
+    /// unless they choose otherwise. `.png` writes a lossless PNG at the
+    /// `png` crate's fast compression with adaptive filtering. Any other
+    /// extension whose format the `image` crate encodes 8-bit pixels to
+    /// (`.tif`, `.bmp`, `.webp`, ...) is written with that crate's defaults,
+    /// and `jpeg_quality` is ignored for all but JPEG. The channels are
+    /// written as they are held: 1 is grey, 3 is RGB and 4 is RGBA. Every
+    /// format is written at 8 bits per channel.
+    ///
+    /// The file is encoded in memory first, so a failed encode leaves no file
+    /// behind. The errors are
+    /// [`ImageError::Unsupported`](::image::ImageError::Unsupported) for an
+    /// extension that names no format the crate encodes, or a channel count
+    /// the format cannot hold, among them 4 channels to JPEG, whose alpha is
+    /// refused rather than dropped;
+    /// [`ImageError::Parameter`](::image::ImageError::Parameter) for a
+    /// `jpeg_quality` outside 1 to 100 when writing a JPEG; and
+    /// [`ImageError::IoError`](::image::ImageError::IoError) when the file
+    /// cannot be written.
+    pub fn write(
+        &self,
+        path: &std::path::Path,
+        jpeg_quality: u8,
+    ) -> Result<(), ::image::ImageError> {
+        use ::image::error::{
+            ImageFormatHint, ParameterError, ParameterErrorKind, UnsupportedError,
+            UnsupportedErrorKind,
+        };
+        use ::image::{ExtendedColorType, ImageEncoder, ImageFormat};
+
+        let format = ImageFormat::from_path(path)?;
+        let color = match self.channels {
+            1 => ExtendedColorType::L8,
+            3 => ExtendedColorType::Rgb8,
+            4 => ExtendedColorType::Rgba8,
+            n => unreachable!("an ImageU8 has 1, 3 or 4 channels, not {n}"),
+        };
+        let mut bytes = Vec::new();
+        match format {
+            ImageFormat::Jpeg => {
+                if !(1..=100).contains(&jpeg_quality) {
+                    return Err(::image::ImageError::Parameter(ParameterError::from_kind(
+                        ParameterErrorKind::Generic(format!(
+                            "JPEG quality {jpeg_quality} is outside 1 to 100"
+                        )),
+                    )));
+                }
+                if self.channels == 4 {
+                    return Err(::image::ImageError::Unsupported(
+                        UnsupportedError::from_format_and_kind(
+                            ImageFormatHint::Exact(ImageFormat::Jpeg),
+                            UnsupportedErrorKind::Color(color),
+                        ),
+                    ));
+                }
+                ::image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, jpeg_quality)
+                    .write_image(&self.data, self.width, self.height, color)?;
+            }
+            ImageFormat::Png => {
+                ::image::codecs::png::PngEncoder::new_with_quality(
+                    &mut bytes,
+                    ::image::codecs::png::CompressionType::Fast,
+                    ::image::codecs::png::FilterType::Adaptive,
+                )
+                .write_image(&self.data, self.width, self.height, color)?;
+            }
+            _ => {
+                ::image::write_buffer_with_format(
+                    &mut std::io::Cursor::new(&mut bytes),
+                    &self.data,
+                    self.width,
+                    self.height,
+                    color,
+                    format,
+                )?;
+            }
+        }
+        std::fs::write(path, bytes)?;
+        Ok(())
     }
 
     /// Create a zeroed image with the given dimensions and channel count.

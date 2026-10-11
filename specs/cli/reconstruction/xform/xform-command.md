@@ -693,7 +693,7 @@ and a resize, and the two give the same bytes. That is why it is read first.
 **The photograph**, for an image whose `.sift` is missing or unverified:
 `workspace_dir / name` is decoded to RGB by `sfmtool.fileio.read_image_rgb`,
 with its EXIF orientation ignored
-([reading-photographs.md](../../../core/camera/reading-photographs.md)), and
+([reading-and-writing-images.md](../../../core/camera/reading-and-writing-images.md)), and
 resized to 128 x 128 by area averaging. That is the SIFT extractors' own decode
 and resize ([extract_sfmtool.py](../../../../src/sfmtool/sift/extract_sfmtool.py),
 `thumbnail_of_rgb`), so each row is byte-identical to the `.sift` thumbnail an

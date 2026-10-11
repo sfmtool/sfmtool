@@ -4,7 +4,7 @@
 """Lay rendered patch strips out into the labeled side-by-side montage image.
 
 Given fully-rendered rows (each a left/right strip plus its text labels), this
-handles only pixels: per-row label panels, group dividers, the title/legend/
+handles only pixels, in RGB: per-row label panels, group dividers, the title/legend/
 column header bars, and writing the stacked PNG. All the ranking and scoring
 decisions live in ``_compare``.
 """
@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import cv2
 import numpy as np
+
+from .._sfmtool.fileio import write_image_rgb
 
 # One montage row: (group_label_or_None, head, line_ref, line_tgt,
 #                   ref_strip_or_None, tgt_strip_or_None).
@@ -58,7 +60,7 @@ def _text_bar(
             (x + 6, height - 8),
             cv2.FONT_HERSHEY_SIMPLEX,
             scale,
-            (255, 255, 0),
+            (0, 255, 255),  # cyan
             1,
             cv2.LINE_AA,
         )
@@ -146,7 +148,7 @@ def assemble_montage(
         scale=0.45,
     )
     montage = np.vstack([title_bar, legend_bar, cols_bar, body])
-    cv2.imwrite(str(out_path), montage)
+    write_image_rgb(out_path, montage)
     return montage.shape[1], montage.shape[0]
 
 
@@ -206,5 +208,5 @@ def assemble_point_strips(
         scale=0.45,
     )
     montage = np.vstack([title_bar, *legend_bars, cols_bar, body])
-    cv2.imwrite(str(out_path), montage)
+    write_image_rgb(out_path, montage)
     return montage.shape[1], montage.shape[0]

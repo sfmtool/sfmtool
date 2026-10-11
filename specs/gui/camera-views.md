@@ -612,8 +612,10 @@ bg_image_loaded: Option<ImageRef>       // which image is loaded
 
 When viewing camera N:
 - If `bg_image_loaded` already names this image: texture is loaded, skip
-- Otherwise: load from disk, decode to RGBA, create GPU texture at full
-  resolution, rebuild bind group
+- Otherwise: load from disk, decode to RGBA with `ImageU8::read_rgba` (the
+  file's contents choose the decoder and the EXIF orientation is ignored, as
+  in [reading-and-writing-images.md](../core/camera/reading-and-writing-images.md)),
+  create GPU texture at full resolution, rebuild bind group
 
 When exiting camera view: `clear_bg_image()` releases the texture and bind
 group. (Future enhancement: retain the texture for faster re-entry.)

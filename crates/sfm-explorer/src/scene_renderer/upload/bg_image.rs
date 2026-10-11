@@ -9,6 +9,7 @@ use super::super::gpu_types::{
 };
 use super::super::SceneRenderer;
 use crate::scene::ImageRef;
+use sfmtool_core::camera::image::ImageU8;
 use sfmtool_core::SfmrReconstruction;
 use wgpu::util::DeviceExt;
 
@@ -34,7 +35,10 @@ impl SceneRenderer {
             return;
         };
         let image_path = recon.workspace_dir.join(&img.name);
-        let dyn_image = match image::open(&image_path) {
+        // The photograph decoder every reader shares: the contents choose the
+        // format, and the EXIF orientation is ignored, so the texture lines up
+        // with the camera's width and height.
+        let photograph = match ImageU8::read_rgba(&image_path) {
             Ok(img) => img,
             Err(e) => {
                 log::warn!("Failed to load bg image {}: {}", image_path.display(), e);
@@ -42,8 +46,8 @@ impl SceneRenderer {
             }
         };
 
-        let rgba = dyn_image.to_rgba8();
-        let (w, h) = (rgba.width(), rgba.height());
+        let (w, h) = (photograph.width(), photograph.height());
+        let rgba = photograph.into_data();
 
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("bg image"),

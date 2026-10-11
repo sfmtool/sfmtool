@@ -7,6 +7,7 @@ import cv2
 import numpy as np
 import pytest
 
+from sfmtool.fileio import read_image_rgb, write_image_rgb
 from sfmtool.sift.file import (
     SiftExtractionError,
     SiftReader,
@@ -519,7 +520,7 @@ def _create_test_image(path, size=512):
                 ] = 0
     cv2.circle(image, (128, 128), 50, (100, 100, 100), -1)
     cv2.circle(image, (384, 128), 40, (80, 80, 80), -1)
-    cv2.imwrite(str(path), image)
+    write_image_rgb(path, image)
     return image
 
 
@@ -673,9 +674,14 @@ def test_draw_sift_features(tmp_path):
     draw_sift_features(str(image_path), str(output_path), feature_tool="opencv")
 
     assert output_path.exists()
-    drawn = cv2.imread(str(output_path))
-    assert drawn is not None
+    drawn = read_image_rgb(output_path).astype(int)
     assert drawn.shape[:2] == (512, 512)
+    # The source is grey, so every saturated pixel is drawn: the ellipses are
+    # green and the centres red, in RGB order.
+    r, g, b = drawn[..., 0], drawn[..., 1], drawn[..., 2]
+    assert ((g > 200) & (r < 60) & (b < 60)).any()
+    assert ((r > 200) & (g < 60) & (b < 60)).any()
+    assert not ((b > 200) & (r < 60) & (g < 60)).any()
 
 
 def test_draw_sift_features_with_filter(tmp_path):

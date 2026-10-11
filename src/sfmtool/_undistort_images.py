@@ -22,7 +22,13 @@ import numpy as np
 
 from ._sfmtool import THUMBNAIL_SIZE
 from ._sfmtool.reconstruction import SfmrReconstruction
-from ._sfmtool.fileio import image_has_alpha, read_image_rgb, read_image_rgba
+from ._sfmtool.fileio import (
+    image_has_alpha,
+    read_image_rgb,
+    read_image_rgba,
+    write_image_rgb,
+    write_image_rgba,
+)
 from ._sfmtool.flow import WarpMap
 
 
@@ -364,11 +370,10 @@ def undistort_reconstruction_images(
         output_image_path = output_dir / image_name
         output_image_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # cv2.imwrite takes BGR or BGRA.
-        to_bgr = cv2.COLOR_RGBA2BGRA if has_alpha else cv2.COLOR_RGB2BGR
-        success = cv2.imwrite(str(output_image_path), cv2.cvtColor(undistorted, to_bgr))
-        if not success:
-            raise RuntimeError(f"Failed to save undistorted image: {output_image_path}")
+        if has_alpha:
+            write_image_rgba(output_image_path, undistorted)
+        else:
+            write_image_rgb(output_image_path, undistorted)
 
         # Step 3: Generate the RGB thumbnail from the undistorted image
         thumbnail_rgb = cv2.resize(

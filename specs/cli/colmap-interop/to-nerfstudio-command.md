@@ -191,10 +191,12 @@ indirection than code. The reference `ns-process-data` output is also
 
 For each level `i` in `1..=num_downscales`, the originals are downsampled by
 `2**i` with `cv2.INTER_AREA` (better antialiasing than bilinear for
-shrinking) and written to `images_{2**i}/` as JPEG at `--jpeg-quality`. Each
+shrinking) and written to `images_{2**i}/` under the original's basename, in
+the format its extension names, by `write_image_rgb` (a JPEG at
+`--jpeg-quality`) or, for a source with alpha, `write_image_rgba`. Each
 source image is read once and emits all pyramid levels in a single pass. It is
 read with `read_image_rgb`, or `read_image_rgba` when it has an alpha channel
-([reading-photographs.md](../../core/camera/reading-photographs.md)), so the
+([reading-and-writing-images.md](../../core/camera/reading-and-writing-images.md)), so the
 levels have 8 bits per channel, keep a source's alpha, and hold a grey source as
 3 channels. `images/` is a byte copy of each original (§ "5. Image Placement
 and Filenames"), so a 16-bit source gives a 16-bit image in `images/` beside

@@ -214,8 +214,9 @@ def render_rows(recon, cloud, images, args):
 def _panel(img, label, tile):
     p8 = np.clip(img, 0, 255).astype(np.uint8)
     big = cv2.resize(p8, (tile, tile), interpolation=cv2.INTER_NEAREST)
-    # The tile is RGB or grey; OpenCV draws on BGR.
-    big = cv2.cvtColor(big, cv2.COLOR_GRAY2BGR if big.ndim == 2 else cv2.COLOR_RGB2BGR)
+    # The tile is RGB or grey, and the montage is RGB.
+    if big.ndim == 2:
+        big = cv2.cvtColor(big, cv2.COLOR_GRAY2RGB)
     cv2.rectangle(big, (0, 0), (tile - 1, 15), (15, 15, 15), -1)
     cv2.putText(
         big,

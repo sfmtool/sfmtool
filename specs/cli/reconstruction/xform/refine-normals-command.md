@@ -34,7 +34,7 @@ naturally — with three characteristics that shape the design:
    `.sift` files via `recon.workspace_dir` / `recon.image_names` /
    `recon.metadata()`. This op reads the **images** the same way, resolving
    `workspace_dir / image_name`, decoded by `read_image_rgb`
-   ([reading-photographs.md](../../../core/camera/reading-photographs.md)).
+   ([reading-and-writing-images.md](../../../core/camera/reading-and-writing-images.md)).
    A missing image is a hard error
    (`FileNotFoundError`), mirroring the SIFT-reading filters.
 

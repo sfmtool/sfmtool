@@ -184,7 +184,7 @@ index's file name as `index`, and its content hash as `index_content_xxh128`.
 pixels the file is the command-line steps' file array for array, down to the
 bits of every float. The decoded pixels are the same too: the viewer and the
 command line both decode with `ImageU8::read_rgb`
-([reading-photographs.md](../core/camera/reading-photographs.md)) and hand the
+([reading-and-writing-images.md](../core/camera/reading-and-writing-images.md)) and hand the
 refinement RGB, so every array is identical.
 
 ### Progress and stopping

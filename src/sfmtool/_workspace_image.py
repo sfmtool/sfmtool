@@ -25,8 +25,9 @@ def read_workspace_image(workspace_dir: str | Path, image_name: str) -> np.ndarr
     it is there and in every SIFT extractor. The Rust patch/bitmap renderers
     sample source pixels in their native channel order, so feeding them RGB
     makes the stored ``patch_bitmaps_y_x_rgba`` genuinely RGB (as its name,
-    the ``.sfmr`` spec, and the GUI atlas all require). Consumers that hand an
-    array to cv2 for drawing or ``imwrite`` must convert RGB→BGR at that sink.
+    the ``.sfmr`` spec, and the GUI atlas all require). Code that draws on the
+    array with cv2 gives its colours in RGB order, and
+    ``sfmtool.fileio.write_image_rgb`` writes it out as it is.
 
     ``image_name`` is the workspace-relative path as stored in
     ``recon.image_names``. Raises ``FileNotFoundError`` if the file is missing

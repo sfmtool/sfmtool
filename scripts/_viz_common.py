@@ -23,7 +23,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from sfmtool.fileio import read_image_rgb
+from sfmtool.fileio import read_image_rgb, write_image_rgb
 from sfmtool.patches import PatchCloud
 from sfmtool.reconstruction import SfmrReconstruction
 
@@ -94,7 +94,7 @@ def run_over_recons(args, render_fn, stem: str) -> None:
             print(f"{args.label}: nothing to render{suffix}", flush=True)
             continue
         out = args.out_dir / f"{stem}_{args.label}.jpg"
-        cv2.imwrite(str(out), canvas, [cv2.IMWRITE_JPEG_QUALITY, 92])
+        write_image_rgb(out, canvas, jpeg_quality=92)
         print(f"{args.label}: wrote {out}  {stats}", flush=True)
 
 
@@ -102,8 +102,8 @@ def run_over_recons(args, render_fn, stem: str) -> None:
 
 
 def load_images(recon) -> list[np.ndarray]:
-    """Every image of ``recon``, RGB as read. The kernels take them as they
-    are; a tile drawn with OpenCV is converted to BGR at the drawing step."""
+    """Every image of ``recon``, RGB as read, the order the kernels and the
+    montage canvas both use."""
     ws = recon.workspace_dir
     return [read_image_rgb(os.path.join(ws, name)) for name in recon.image_names]
 
@@ -236,7 +236,7 @@ CANVAS_BG = 28
 
 
 def new_canvas(width: int, height: int) -> np.ndarray:
-    """A montage canvas: a ``height x width`` BGR image of the dark background grey."""
+    """A montage canvas: a ``height x width`` RGB image of the dark background grey."""
     return np.full((height, width, 3), CANVAS_BG, np.uint8)
 
 

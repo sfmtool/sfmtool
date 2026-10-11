@@ -12,7 +12,7 @@ import numpy as np
 import pycolmap
 
 from ..camera.cameras import colmap_camera_from_intrinsics, get_intrinsic_matrix
-from .._sfmtool.fileio import read_image_rgb
+from .._sfmtool.fileio import read_image_rgb, write_image_rgb
 from ..sift.file import SiftReader, get_sift_path_for_image
 from .._sfmtool.analysis import epipolar_curves
 from .._sfmtool.geometry import RotQuaternion
@@ -179,10 +179,10 @@ class _UndistortedPair:
     undist_cam1: pycolmap.Camera
     undist_cam2: pycolmap.Camera
 
-    def bgr_images(self) -> tuple[np.ndarray, np.ndarray]:
-        """The undistorted images as BGR arrays, ready to draw on."""
-        img1 = cv2.cvtColor(self.bitmap1.to_array(), cv2.COLOR_RGB2BGR)
-        img2 = cv2.cvtColor(self.bitmap2.to_array(), cv2.COLOR_RGB2BGR)
+    def rgb_images(self) -> tuple[np.ndarray, np.ndarray]:
+        """The undistorted images as RGB arrays of their own, ready to draw on."""
+        img1 = np.array(self.bitmap1.to_array())
+        img2 = np.array(self.bitmap2.to_array())
         return img1, img2
 
 
@@ -606,21 +606,21 @@ def _save_output(
         output[:h1, :w1] = img1
         output[:h2, w1 : w1 + w2] = img2
 
-        cv2.imwrite(str(output_path), output)
+        write_image_rgb(output_path, output)
         print(f"Visualized pairs to: {output_path} (side-by-side)")
     elif save_which == "both":
         stem = output_path.stem
         ext = output_path.suffix
         output_path_other = output_path.with_name(f"{stem}_other{ext}")
 
-        cv2.imwrite(str(output_path), img1)
-        cv2.imwrite(str(output_path_other), img2)
+        write_image_rgb(output_path, img1)
+        write_image_rgb(output_path_other, img2)
         print(f"Visualized pairs to: {output_path} and {output_path_other}")
     elif save_which == "first":
-        cv2.imwrite(str(output_path), img1)
+        write_image_rgb(output_path, img1)
         print(f"Visualized pairs to: {output_path}")
     elif save_which == "second":
-        cv2.imwrite(str(output_path), img2)
+        write_image_rgb(output_path, img2)
         print(f"Visualized pairs to: {output_path}")
     else:
         raise ValueError(
@@ -764,7 +764,7 @@ def draw_epipolar_visualization(
             rectification = _compute_rectification(undistorted, poses)
             rect_pts1 = rectification.rectify_points_1(positions1[feat1_indices])
             rect_pts2 = rectification.rectify_points_2(positions2[feat2_indices])
-        img1, img2 = undistorted.bgr_images()
+        img1, img2 = undistorted.rgb_images()
         img1 = rectification.rectify_image_1(img1)
         img2 = rectification.rectify_image_2(img2)
         _draw_rectified(
@@ -774,7 +774,7 @@ def draw_epipolar_visualization(
         undistorted = _read_and_undistort(
             recon, image1_idx, image2_idx, image1_path, image2_path
         )
-        img1, img2 = undistorted.bgr_images()
+        img1, img2 = undistorted.rgb_images()
         _draw_undistorted(
             img1,
             img2,
@@ -789,13 +789,10 @@ def draw_epipolar_visualization(
         )
     else:
         try:
-            rgb1 = read_image_rgb(image1_path)
-            rgb2 = read_image_rgb(image2_path)
+            img1 = read_image_rgb(image1_path)
+            img2 = read_image_rgb(image2_path)
         except OSError as e:
             raise ValueError(f"Failed to load image files: {e}") from e
-        # The drawing and imwrite are OpenCV's, which take BGR.
-        img1 = cv2.cvtColor(rgb1, cv2.COLOR_RGB2BGR)
-        img2 = cv2.cvtColor(rgb2, cv2.COLOR_RGB2BGR)
         _draw_on_original(
             img1,
             img2,

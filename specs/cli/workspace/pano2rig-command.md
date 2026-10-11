@@ -42,6 +42,10 @@ output_dir/
   cubemap.camrig
 ```
 
+The faces are JPEGs at `--jpeg-quality`, 8 bits per channel, written by
+`write_image_rgb`
+([reading-and-writing-images.md](../../core/camera/reading-and-writing-images.md)).
+
 `cubemap.camrig` is a six-sensor `cubemap` rig written into `output_dir` — the rig
 root. All six faces share one square 90°-FOV `PINHOLE` camera and one optical centre,
 so every `sensor_from_rig` translation is zero and only the rotation varies per face;

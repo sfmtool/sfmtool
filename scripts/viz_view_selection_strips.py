@@ -76,14 +76,14 @@ def geometric_candidates(
 
 def _draw_tile(tile, idx, score, color, kind, tile_px):
     p8 = np.clip(tile, 0, 255).astype(np.uint8)
-    # The tile is RGB or grey; OpenCV draws on BGR.
-    bgr = cv2.cvtColor(p8, cv2.COLOR_RGB2BGR if p8.ndim == 3 else cv2.COLOR_GRAY2BGR)
-    bgr = cv2.resize(bgr, (tile_px, tile_px), interpolation=cv2.INTER_NEAREST)
-    cv2.rectangle(bgr, (0, 0), (tile_px - 1, tile_px - 1), color, 3)
-    chip(bgr, f"{kind}{idx}", (3, 12), color, 0.3)
+    # The tile is RGB or grey, and the montage is RGB.
+    rgb = p8 if p8.ndim == 3 else cv2.cvtColor(p8, cv2.COLOR_GRAY2RGB)
+    rgb = cv2.resize(rgb, (tile_px, tile_px), interpolation=cv2.INTER_NEAREST)
+    cv2.rectangle(rgb, (0, 0), (tile_px - 1, tile_px - 1), color, 3)
+    chip(rgb, f"{kind}{idx}", (3, 12), color, 0.3)
     if score is not None:
-        chip(bgr, f"{score:+.2f}", (3, tile_px - 5), color, 0.3)
-    return bgr
+        chip(rgb, f"{score:+.2f}", (3, tile_px - 5), color, 0.3)
+    return rgb
 
 
 def render_strips(recon, cloud, images, args) -> tuple[np.ndarray | None, dict]:
@@ -218,7 +218,7 @@ def render_strips(recon, cloud, images, args) -> tuple[np.ndarray | None, dict]:
         for i in track_full[: args.max_track]:
             tiles.append(
                 _draw_tile(
-                    render(i), i, to_template(i), (0, 220, 220), "trk", args.tile
+                    render(i), i, to_template(i), (220, 220, 0), "trk", args.tile
                 )
             )
         vetted = sorted(a for a in x["admitted"] if a not in x["track"])
@@ -231,7 +231,7 @@ def render_strips(recon, cloud, images, args) -> tuple[np.ndarray | None, dict]:
         for i in x["rejected"][: args.max_rej]:
             s = to_template(i)
             rej_scores_all.append(s)
-            tiles.append(_draw_tile(render(i), i, s, (0, 0, 230), "rej", args.tile))
+            tiles.append(_draw_tile(render(i), i, s, (230, 0, 0), "rej", args.tile))
         rendered.append((x, tiles))
 
     stats = _summarize(rows_info, rej_scores_all, args)

@@ -13,7 +13,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from .._sfmtool.fileio import image_dimensions, read_image_rgb
+from .._sfmtool.fileio import image_dimensions, read_image_rgb, write_image_rgb
 from .._sfmtool.geometry import RotQuaternion
 
 # Per-sensor frame filename template. The `%06d` field is both the output
@@ -195,11 +195,7 @@ def convert_panoramas(
             face = extract_perspective_face(pano, rotation, face_size)
 
             out_path = face_dirs[i] / frame_name
-            cv2.imwrite(
-                str(out_path),
-                cv2.cvtColor(face, cv2.COLOR_RGB2BGR),  # cv2.imwrite takes BGR
-                [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality],
-            )
+            write_image_rgb(out_path, face, jpeg_quality=jpeg_quality)
 
     return len(pano_paths), face_size, face_names
 

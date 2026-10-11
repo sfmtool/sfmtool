@@ -41,7 +41,7 @@ def draw_sift_features(
     """
     import cv2
 
-    from ..fileio import read_image_rgb
+    from ..fileio import read_image_rgb, write_image_rgb
     from .file import SiftReader, get_sift_path_for_image
 
     image_path = Path(image_path)
@@ -51,11 +51,9 @@ def draw_sift_features(
         raise FileNotFoundError(f"Image not found: {image_path}")
 
     try:
-        rgb = read_image_rgb(image_path)
+        image = read_image_rgb(image_path)
     except OSError as e:
         raise ValueError(f"Failed to load image: {image_path}") from e
-    # The drawing and imwrite below are OpenCV's, which take BGR.
-    image = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
 
     sift_path = get_sift_path_for_image(
         image_path,
@@ -91,10 +89,11 @@ def draw_sift_features(
         circle = np.stack([np.cos(t), np.sin(t)])
         ring = np.asarray(affine_matrix, dtype=float) @ circle
         pts = np.rint(ring.T + [center_x, center_y]).astype(np.int32).reshape(-1, 1, 2)
-        cv2.polylines(image, [pts], True, (0, 255, 0), 1)  # green in BGR
-        cv2.circle(image, center, 2, (0, 0, 255), -1)  # red center
+        # OpenCV draws a colour tuple in the image's channel order, here RGB.
+        cv2.polylines(image, [pts], True, (0, 255, 0), 1)  # green
+        cv2.circle(image, center, 2, (255, 0, 0), -1)  # red centre
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    cv2.imwrite(str(output_path), image)
+    write_image_rgb(output_path, image)
     print(f"Drew {len(positions)} features on {image_path.name}")
     print(f"  Saved to: {output_path}")

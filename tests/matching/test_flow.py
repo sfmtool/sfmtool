@@ -70,9 +70,9 @@ class TestGetColorPalette:
         colors = get_color_palette(10)
         assert len(colors) == 10
 
-    def test_valid_bgr(self):
+    def test_valid_rgb(self):
         colors = get_color_palette(5)
-        for b, g, r in colors:
+        for r, g, b in colors:
             assert 0 <= b <= 255
             assert 0 <= g <= 255
             assert 0 <= r <= 255
@@ -99,9 +99,17 @@ class TestFlowToColor:
         flow_u = np.zeros((50, 50), dtype=np.float32)
         flow_v = np.zeros((50, 50), dtype=np.float32)
         result = _flow_to_color(flow_u, flow_v)
-        # Zero magnitude → saturation=0, value=255 → white in BGR
+        # Zero magnitude → saturation=0, value=255 → white
         center = result[25, 25]
         assert center[0] == 255 and center[1] == 255 and center[2] == 255
+
+    def test_rightward_flow_is_cyan(self):
+        # Hue is 0 (red) at angle -pi, so rightward flow (angle 0) is half way
+        # round, cyan: no red, full green and blue, in RGB order.
+        flow_u = np.full((50, 50), 10.0, dtype=np.float32)
+        result = _flow_to_color(flow_u, np.zeros_like(flow_u))
+        r, g, b = (int(c) for c in result[25, 25])
+        assert r < 10 and g > 240 and b > 240
 
     def test_nonzero_flow_has_color(self):
         flow_u = np.full((50, 50), 10.0, dtype=np.float32)

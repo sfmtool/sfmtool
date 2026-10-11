@@ -34,7 +34,7 @@ def _corner_label(tile: np.ndarray, text: str) -> None:
         (3, tile.shape[0] - 5),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.32,
-        (0, 255, 255),
+        (255, 255, 0),  # yellow
         1,
         cv2.LINE_AA,
     )
@@ -224,17 +224,16 @@ class _SolveStrips:
         alpha blending, and — when the bitmap carries an alpha channel — its alpha
         shown as a grayscale tile beside it.
 
-        The stored colour channels are RGB; this tile feeds the BGR montage
-        (written via cv2), so convert RGB→BGR here."""
+        The stored colour channels are RGB, as the montage is."""
         if bmp.ndim == 3:
-            color = cv2.cvtColor(np.ascontiguousarray(bmp[..., :3]), cv2.COLOR_RGB2BGR)
+            color = np.ascontiguousarray(bmp[..., :3])
         else:
-            color = cv2.cvtColor(bmp, cv2.COLOR_GRAY2BGR)
+            color = cv2.cvtColor(bmp, cv2.COLOR_GRAY2RGB)
         rgb_t = cv2.resize(color, (tile, tile), interpolation=cv2.INTER_NEAREST)
         _corner_label(rgb_t, "rgb")
         if not (bmp.ndim == 3 and bmp.shape[-1] == 4):
             return rgb_t
-        alpha = cv2.cvtColor(np.ascontiguousarray(bmp[..., 3]), cv2.COLOR_GRAY2BGR)
+        alpha = cv2.cvtColor(np.ascontiguousarray(bmp[..., 3]), cv2.COLOR_GRAY2RGB)
         a_t = cv2.resize(alpha, (tile, tile), interpolation=cv2.INTER_NEAREST)
         _corner_label(a_t, "A")
         sep = np.full((tile, 2, 3), 60, np.uint8)
@@ -243,7 +242,7 @@ class _SolveStrips:
     def reference_patch(
         self, pid: int, *, tile: int, max_views: int | None = None
     ) -> np.ndarray | None:
-        """Render the point's reference patch as a BGR tile (``tile`` tall).
+        """Render the point's reference patch as an RGB tile (``tile`` tall).
 
         For a stored bitmap, the un-blended RGB patch plus its alpha as a
         grayscale tile beside it (so the tile is wider than it is tall).
@@ -266,14 +265,9 @@ class _SolveStrips:
         cores = [self._render_view(patch, i, self.patch) for i in obs_imgs]
         mean = np.stack([np.asarray(c, np.float64) for c in cores]).mean(0)
         p8 = np.clip(mean, 0, 255).astype(np.uint8)
-        # `cores` are RGB (rendered from RGB source images); convert to BGR for
-        # the cv2-written montage.
-        bgr = (
-            cv2.cvtColor(p8, cv2.COLOR_RGB2BGR)
-            if p8.ndim == 3
-            else cv2.cvtColor(p8, cv2.COLOR_GRAY2BGR)
-        )
-        return cv2.resize(bgr, (tile, tile), interpolation=cv2.INTER_NEAREST)
+        # `cores` are RGB, rendered from the RGB source images, as the montage is.
+        rgb = p8 if p8.ndim == 3 else cv2.cvtColor(p8, cv2.COLOR_GRAY2RGB)
+        return cv2.resize(rgb, (tile, tile), interpolation=cv2.INTER_NEAREST)
 
     def tri_angle(self, pid: int) -> float:
         """Max angle (degrees) between viewing rays to this point — its

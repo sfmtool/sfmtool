@@ -271,3 +271,99 @@ fn image_has_alpha_reads_the_header() {
     assert!(!image_has_alpha(&rgb).unwrap());
     assert!(image_has_alpha(&dir.path().join("missing.png")).is_err());
 }
+
+// -----------------------------------------------------------------------
+// Writing image files
+// -----------------------------------------------------------------------
+
+/// A `width x height` image whose bytes vary in every channel, so a swapped or
+/// dropped channel changes the data.
+fn gradient(width: u32, height: u32, channels: u32) -> ImageU8 {
+    let data = (0..width * height * channels)
+        .map(|i| ((i * 37 + i / channels * 11) % 256) as u8)
+        .collect();
+    ImageU8::new(width, height, channels, data)
+}
+
+#[test]
+fn write_png_round_trips_grey_rgb_and_rgba_exactly() {
+    let dir = tempfile::tempdir().unwrap();
+    for channels in [1, 3, 4] {
+        let image = gradient(17, 9, channels);
+        let path = dir.path().join(format!("c{channels}.png"));
+        image.write(&path, DEFAULT_JPEG_QUALITY).unwrap();
+        let back = match channels {
+            4 => ImageU8::read_rgba(&path).unwrap(),
+            _ => ImageU8::read_rgb(&path).unwrap(),
+        };
+        assert_eq!((back.width(), back.height()), (17, 9));
+        if channels == 1 {
+            let grey: Vec<u8> = back.data().chunks(3).map(|p| p[0]).collect();
+            assert_eq!(grey, image.data());
+        } else {
+            assert_eq!(back.data(), image.data(), "{channels} channels");
+        }
+    }
+}
+
+#[test]
+fn write_jpeg_is_close_and_its_quality_sets_its_size() {
+    let dir = tempfile::tempdir().unwrap();
+    // A smooth image, as a photograph is, so the JPEG error stays small.
+    let (w, h) = (64u32, 48u32);
+    let data = (0..h)
+        .flat_map(|y| (0..w).flat_map(move |x| [(x * 4) as u8, (y * 5) as u8, 128]))
+        .collect();
+    let image = ImageU8::new(w, h, 3, data);
+
+    let q95 = dir.path().join("q95.jpg");
+    let q30 = dir.path().join("q30.JPEG");
+    image.write(&q95, DEFAULT_JPEG_QUALITY).unwrap();
+    image.write(&q30, 30).unwrap();
+
+    let back = ImageU8::read_rgb(&q95).unwrap();
+    let max_error = back
+        .data()
+        .iter()
+        .zip(image.data())
+        .map(|(a, b)| a.abs_diff(*b))
+        .max()
+        .unwrap();
+    assert!(max_error <= 6, "max error {max_error} at quality 95");
+    let size = |p: &std::path::Path| std::fs::metadata(p).unwrap().len();
+    assert!(size(&q30) < size(&q95));
+}
+
+#[test]
+fn write_refuses_what_it_cannot_encode_and_leaves_no_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let rgba = gradient(4, 4, 4);
+    let rgb = gradient(4, 4, 3);
+
+    let jpeg = dir.path().join("alpha.jpg");
+    assert!(matches!(
+        rgba.write(&jpeg, DEFAULT_JPEG_QUALITY),
+        Err(::image::ImageError::Unsupported(_))
+    ));
+    assert!(!jpeg.exists());
+
+    let unknown = dir.path().join("image.xyz");
+    assert!(matches!(
+        rgb.write(&unknown, DEFAULT_JPEG_QUALITY),
+        Err(::image::ImageError::Unsupported(_))
+    ));
+    assert!(!unknown.exists());
+
+    let bad_quality = dir.path().join("q0.jpg");
+    assert!(matches!(
+        rgb.write(&bad_quality, 0),
+        Err(::image::ImageError::Parameter(_))
+    ));
+    assert!(!bad_quality.exists());
+
+    let missing_dir = dir.path().join("missing").join("image.png");
+    assert!(matches!(
+        rgb.write(&missing_dir, DEFAULT_JPEG_QUALITY),
+        Err(::image::ImageError::IoError(_))
+    ));
+}

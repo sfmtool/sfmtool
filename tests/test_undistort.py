@@ -167,7 +167,7 @@ class TestUndistortReconstructionImages:
             undistorted_path = output_dir_path / image_name
             assert undistorted_path.exists(), f"Missing undistorted image: {image_name}"
 
-            img = cv2.imread(str(undistorted_path))
+            img = read_image_rgb(undistorted_path)
             assert img is not None, f"Failed to load undistorted image: {image_name}"
             assert img.shape[0] > 0 and img.shape[1] > 0
 
@@ -251,7 +251,7 @@ class TestUndistortReconstructionImages:
             cam = cameras[cam_idxs[i]]
             original_image = workspace_dir / image_name
             if original_image.exists():
-                orig = cv2.imread(str(original_image))
+                orig = read_image_rgb(original_image)
                 orig_height, orig_width = orig.shape[:2]
 
                 # Dimensions should match since we pass the source dimensions
@@ -279,8 +279,8 @@ class TestUndistortReconstructionImages:
         workspace_dir = Path(recon.workspace_dir)
         image_name = recon.image_names[0]
 
-        orig_array = cv2.imread(str(workspace_dir / image_name))
-        undist_array = cv2.imread(str(output_dir_path / image_name))
+        orig_array = read_image_rgb(workspace_dir / image_name)
+        undist_array = read_image_rgb(output_dir_path / image_name)
 
         assert orig_array.shape == undist_array.shape
 
@@ -742,6 +742,27 @@ def test_undistorting_an_rgba_png_keeps_its_alpha(seoul_bull_workspace, tmp_path
     np.testing.assert_array_equal(thumbnail[64, 64], rgb)
     # The JPEG sources stay without alpha.
     assert not image_has_alpha(output_dir / recon.image_names[1])
+
+
+def test_undistorting_an_rgb_png_keeps_its_colour(seoul_bull_workspace, tmp_path):
+    h, w = _source_shape(seoul_bull_workspace, 0)
+    rgb = (200, 50, 10)
+    bgr = np.empty((h, w, 3), dtype=np.uint8)
+    bgr[...] = rgb[::-1]  # cv2.imwrite takes BGR
+    sfmr = _as_png(seoul_bull_workspace, 0, bgr)
+
+    recon, output_dir, _, _ = _run_undistort(sfmr, tmp_path)
+
+    out = output_dir / recon.image_names[0]
+    assert not image_has_alpha(out)
+    written = read_image_rgb(out)
+    oh, ow = written.shape[:2]
+    np.testing.assert_array_equal(written[oh // 2, ow // 2], rgb)
+    # The JPEG sources are written as JPEGs, in RGB order too.
+    jpeg = read_image_rgb(output_dir / recon.image_names[1])
+    source = read_image_rgb(Path(recon.workspace_dir) / recon.image_names[1])
+    assert jpeg.shape == source.shape
+    assert np.abs(jpeg.astype(int).mean((0, 1)) - source.mean((0, 1))).max() < 3
 
 
 def test_undistorting_a_16_bit_png_writes_8_bits(seoul_bull_workspace, tmp_path):

@@ -12,9 +12,8 @@ import subprocess
 from pathlib import Path
 
 import click
-import cv2
 
-from .._sfmtool.fileio import image_dimensions, read_image_rgb
+from .._sfmtool.fileio import image_dimensions, read_image_rgb, write_image_rgb
 
 _FISHEYE_SENSOR_NAMES = ["fisheye_left", "fisheye_right"]
 
@@ -206,13 +205,8 @@ def _extract_side_by_side(
             right = frame[:, mid:]
 
             frame_name = frame_file.name
-            # cv2.imwrite takes BGR.
-            cv2.imwrite(
-                str(sensor_dirs[0] / frame_name), cv2.cvtColor(left, cv2.COLOR_RGB2BGR)
-            )
-            cv2.imwrite(
-                str(sensor_dirs[1] / frame_name), cv2.cvtColor(right, cv2.COLOR_RGB2BGR)
-            )
+            write_image_rgb(sensor_dirs[0] / frame_name, left)
+            write_image_rgb(sensor_dirs[1] / frame_name, right)
         click.echo()
 
     finally:

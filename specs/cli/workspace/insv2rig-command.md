@@ -50,7 +50,9 @@ sensor looks down its local **−Z** with **+X right, +Y up** (see the
    side-by-side)
 2. Extracts frames with `ffmpeg`, named `frame_%06d.jpg`
 3. Splits each frame into left and right fisheye images, under `fisheye_left/`
-   and `fisheye_right/`
+   and `fisheye_right/`, each written by `write_image_rgb` as a JPEG at
+   quality 95
+   ([reading-and-writing-images.md](../../core/camera/reading-and-writing-images.md))
 4. Writes a `.camrig` camera rig file
 
 ## Output

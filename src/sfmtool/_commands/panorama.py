@@ -176,9 +176,9 @@ def panorama(
         sfm panorama result.sfmr -o pano.png --camrig tiles.camrig \\
             --equirect-width 4096
     """
-    import cv2
     import numpy as np
 
+    from ..fileio import write_image_rgb
     from ..rig.panorama import (
         render_equirect_panorama,
         resolve_panorama_rig,
@@ -266,11 +266,9 @@ def panorama(
         # Uncovered samples are NaN; flatten them to black for image output.
         pano = np.where(np.isnan(pano), 0.0, pano)
         pano_u8 = np.clip(pano, 0, 255).astype(np.uint8)
-        bgr = cv2.cvtColor(pano_u8, cv2.COLOR_RGB2BGR)
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        if not cv2.imwrite(str(output_path), bgr):
-            raise RuntimeError(f"Failed to write panorama to {output_path}")
+        write_image_rgb(output_path, pano_u8)
         click.echo(f"Wrote panorama: {output_path}")
 
     except Exception as e:

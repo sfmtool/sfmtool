@@ -1,15 +1,16 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Python bindings for reading image files: the header-only reads
-//! `image_dimensions` and `image_has_alpha`, and the full decodes
-//! `read_image_rgb` and `read_image_rgba`.
+//! Python bindings for reading and writing image files: the header-only reads
+//! `image_dimensions` and `image_has_alpha`, the full decodes
+//! `read_image_rgb` and `read_image_rgba`, and the encoders `write_image_rgb`
+//! and `write_image_rgba`.
 
 use std::path::PathBuf;
 
-use numpy::{IntoPyArray, PyArray3};
+use numpy::{IntoPyArray, PyArray3, PyReadonlyArrayDyn, PyUntypedArrayMethods};
 use pyo3::prelude::*;
-use sfmtool_core::camera::image::ImageU8;
+use sfmtool_core::camera::image::{ImageU8, DEFAULT_JPEG_QUALITY};
 
 /// Read an image file's `(width, height)` from its header alone.
 ///
@@ -103,10 +104,115 @@ fn read_error(path: &std::path::Path, e: image::ImageError) -> PyErr {
     }
 }
 
+/// Encode a `y_x_rgb` `uint8` array, `(H, W, 3)`, to the image file at
+/// `path`, in the format the path's extension names.
+///
+/// The inverse of `read_image_rgb`: the array is indexed row, column, channel,
+/// with the channels in RGB order. A non-contiguous array, such as a slice of a
+/// wider image, is copied before it is encoded. `.jpg` / `.jpeg` write a JPEG
+/// at `jpeg_quality` (1 to 100; the default 95 is OpenCV's), `.png` a lossless
+/// PNG at fast compression, and any other extension the `image` crate encodes
+/// 8-bit pixels to (`.tif`, `.bmp`, `.webp`, ...) is written with that crate's
+/// defaults. Every format is written at 8 bits per channel. The image is
+/// encoded by `ImageU8::write` with the GIL released, and in memory first, so
+/// a failed encode leaves no file behind.
+///
+/// Raises `TypeError` when `pixels` is not a `uint8` array; `ValueError` when
+/// it is not `(H, W, 3)`, when `jpeg_quality` is outside 1 to 100, or when
+/// the extension names no format the writer encodes; `FileNotFoundError` when
+/// the parent directory does not exist; and `OSError` when the file cannot be
+/// written otherwise. Each message names the path.
+#[pyfunction]
+#[pyo3(signature = (path, pixels, *, jpeg_quality = DEFAULT_JPEG_QUALITY as i64))]
+pub fn write_image_rgb(
+    py: Python<'_>,
+    path: PathBuf,
+    pixels: &Bound<'_, PyAny>,
+    jpeg_quality: i64,
+) -> PyResult<()> {
+    if !(1..=100).contains(&jpeg_quality) {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "jpeg_quality must be 1 to 100, got {jpeg_quality}"
+        )));
+    }
+    let image = to_image(pixels, 3, "write_image_rgb", "(H, W, 3) RGB")?;
+    let written = py.detach(|| image.write(&path, jpeg_quality as u8));
+    written.map_err(|e| write_error(&path, e))
+}
+
+/// Encode a `y_x_rgba` `uint8` array, `(H, W, 4)`, to the image file at
+/// `path`, in the format the path's extension names.
+///
+/// The inverse of `read_image_rgba`, with `write_image_rgb`'s rules for the
+/// layout, the formats and the errors. The format must hold an alpha channel:
+/// writing to `.jpg` / `.jpeg` raises `ValueError` rather than drop the alpha,
+/// so a caller with an opaque image writes its colour channels with
+/// `write_image_rgb`.
+#[pyfunction]
+pub fn write_image_rgba(py: Python<'_>, path: PathBuf, pixels: &Bound<'_, PyAny>) -> PyResult<()> {
+    let image = to_image(pixels, 4, "write_image_rgba", "(H, W, 4) RGBA")?;
+    let written = py.detach(|| image.write(&path, DEFAULT_JPEG_QUALITY));
+    written.map_err(|e| write_error(&path, e))
+}
+
+/// The `ImageU8` holding `pixels`, which must be a `uint8` array of shape
+/// `(H, W, channels)`; it is copied, so a non-contiguous array is accepted.
+fn to_image(
+    pixels: &Bound<'_, PyAny>,
+    channels: usize,
+    function: &str,
+    layout: &str,
+) -> PyResult<ImageU8> {
+    let array = pixels
+        .extract::<PyReadonlyArrayDyn<'_, u8>>()
+        .map_err(|_| {
+            pyo3::exceptions::PyTypeError::new_err(format!(
+                "{function} takes a uint8 numpy array, {layout}"
+            ))
+        })?;
+    let (height, width) = match array.shape() {
+        [h, w, c] if *c == channels => (*h, *w),
+        shape => {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "{function} takes a {layout} array, got shape {shape:?}"
+            )))
+        }
+    };
+    let (Ok(width), Ok(height)) = (u32::try_from(width), u32::try_from(height)) else {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "{function}: a {width} x {height} image is too large to encode"
+        )));
+    };
+    let data = match array.as_slice() {
+        Ok(slice) => slice.to_vec(),
+        Err(_) => array.as_array().iter().copied().collect(),
+    };
+    Ok(ImageU8::new(width, height, channels as u32, data))
+}
+
+/// The Python exception for an image file that could not be written, naming
+/// `path`: `ValueError` for a format, channel count or quality the writer does
+/// not take, `FileNotFoundError` for a missing parent directory, and `OSError`
+/// otherwise.
+fn write_error(path: &std::path::Path, e: image::ImageError) -> PyErr {
+    let message = format!("could not write image {}: {e}", path.display());
+    match &e {
+        image::ImageError::Unsupported(_)
+        | image::ImageError::Parameter(_)
+        | image::ImageError::Limits(_) => pyo3::exceptions::PyValueError::new_err(message),
+        image::ImageError::IoError(io) if io.kind() == std::io::ErrorKind::NotFound => {
+            pyo3::exceptions::PyFileNotFoundError::new_err(message)
+        }
+        _ => pyo3::exceptions::PyOSError::new_err(message),
+    }
+}
+
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(image_dimensions, m)?)?;
     m.add_function(wrap_pyfunction!(image_has_alpha, m)?)?;
     m.add_function(wrap_pyfunction!(read_image_rgb, m)?)?;
     m.add_function(wrap_pyfunction!(read_image_rgba, m)?)?;
+    m.add_function(wrap_pyfunction!(write_image_rgb, m)?)?;
+    m.add_function(wrap_pyfunction!(write_image_rgba, m)?)?;
     Ok(())
 }
