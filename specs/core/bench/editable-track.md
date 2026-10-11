@@ -636,7 +636,7 @@ pub fn score_bitmap(
 // `evaluate`'s reading, then, for a track-stage track with a placement and
 // either no bitmap, a bitmap an unpin left pending its render, or an unpinned
 // reference row the rule does not pick, a render from the held reference or the rule's pick (the fused mean where the
-// rule picks none or only through its last fallback), `score_bitmap`, and the
+// rule picks none), `score_bitmap`, and the
 // repaint, which judges the scores against the new bitmap. Where the repaint
 // moves a verdict and the rule, rerun over the rows still `in`, picks another
 // row, the bitmap moves to it and the rows are scored and judged again, until
@@ -705,6 +705,7 @@ pub struct EvaluateOptions {
     pub localize: KeypointLocalizeParams,   // open_localizer, one round
     pub max_seed_offset_px: f64,            // how far a seed may sit, 64
     pub max_cache_bytes: usize,             // one round's tiles, 256 MiB
+    pub reference_view: ReferenceViewOptions, // the reference-view rule's, default
 }
 
 pub struct FitOptions {
@@ -1516,18 +1517,21 @@ Across the `in` rows that have a tile it then writes:
   **typical agreement**, the median of the rows' `pair_zncc_grid` in that
   ninth, over the ninths whose typical agreement is at least `0.5`;
 - `reference_view`: a `ReferenceStanding`, the rule's decision about the row:
-  `rejected_by`, `None` for the reference view and otherwise the first test
-  that turned the row away (`Coverage`, `Clipped`, `Angle`, `Cells`,
-  `Agreement` or `Sharpness`), and `fallback`, which tests the rule dropped
-  for the track because no row passed them.
+  `cost`, its `ReferenceCost` (the cost in grid px and the radius, angle term
+  and four penalties it is the product of) or the `ReferenceExclusion` that
+  left it out (`NoTile`, `Coverage` or `OtherSide`); `reference`, whether it
+  is the pick; `pick_cost`, the pick's cost, with `cost_ratio()` the row's
+  cost over it; `costliest_term`, the `ReferenceTerm` that adds most to the
+  row's cost over the pick's (`None` for the pick and a row left out); and
+  `side`, the `PatchSide` the rule measured the track's angles on.
 
 The readings are `read_track`'s
 ([../patch/reference-view.md](../patch/reference-view.md)), the same the stored
 bitmap is picked by, and plain: no tile is blurred. An `out` row is not
 considered: its agreement readings are `None`. A contested `in` row, whose
 image another observation holds, is never `in` beside it, so the rule reads
-one row per image. The rule picks exactly one row wherever some candidate has
-a self-similarity reading. No bar judges these readings, and the painting
+one row per image. The rule picks exactly one row wherever some row is
+eligible: it renders a tile with at least 90% of it on the photograph. No bar judges these readings, and the painting
 proposes the same verdicts with or without them.
 
 **The scores against the stored bitmap.** Where the track carries a bitmap on
@@ -1623,11 +1627,10 @@ row `TrackPayload::bitmap` is, or is to be, rendered from. With a bitmap, the
 bitmap is that row's render. `None` means the track has no reference
 observation, and a bitmap beside it is not the render of one of its rows: a
 fused mean, or, for a point read from a file, the render of an observation an
-edit has since removed from the point. Where the reference-view rule reaches its pick only through its
-last fallback, the bitmap is the fused mean and the reference is `None`, so
-the row marked as the reference view is then not the bitmap's row
+edit has since removed from the point. Where the reference-view rule picks
+no row, the bitmap is the fused mean and the reference is `None`
 ([../patch/reference-view.md](../patch/reference-view.md) § "The stored
-bitmap", `ReferenceRender::stored_reference`). Without a bitmap it is the
+bitmap"). Without a bitmap it is the
 reference the track carries until the next render. `create_track` reads the
 point's stored reference with or without a bitmap, so a point from a file
 whose bitmaps were dropped comes onto the bench with its reference, and a
@@ -1640,14 +1643,13 @@ reference is `None` beside a bitmap that is not one for judging (a point
 stored at `-1` with a fused mean, a file older than `.sfmr` v12, which the
 loader reads as `-1`, or a fused mean a render made on the bench) has its
 bitmap rendered from the reference-view rule's pick at the first evaluation
-that reads a pick the rule reached other than through its last fallback
+that renders where the rule picks a row
 (`bitmap_target`, `evaluate_rendering_bitmap`), and the reference becomes that
 pick. Pins play no part, since no row holds such a bitmap. This is the rule
 every writer follows: a render runs the reference-view rule for a point at
-`-1`. Where the rule picks none or reaches its pick only through its last
-fallback, the render would give the fused mean again, so the mean and the
-`None` reference stand, and a later evaluation whose reading picks a row
-another way moves the bitmap. A plain `evaluate`, which renders nothing,
+`-1`. Where the rule picks none, the render would give the fused mean again,
+so the mean and the `None` reference stand, and a later evaluation whose
+reading picks a row moves the bitmap. A plain `evaluate`, which renders nothing,
 scores the rows against the mean. A commit after the render saves the pick as
 the point's reference observation.
 
@@ -1847,9 +1849,8 @@ first evaluation. So putting a track on the bench and doing
 nothing shows the numbers the reconstruction already holds plus the verdict
 column, with one exception: a point stored at `-1` whose bitmap names no row
 has that bitmap rendered from the reference-view rule's pick at the first
-evaluation that reads a pick the rule reached other than through its last
-fallback, and its rows are scored against that render (§ "The stored bitmap's
-reference").
+evaluation that renders where the rule picks a row, and its rows are scored
+against that render (§ "The stored bitmap's reference").
 
 A `sift_files` reconstruction is put on the bench like any other: inspecting a
 track is allowed everywhere, and it is the commit that refuses to write one
@@ -2706,9 +2707,9 @@ and the reference stays. Otherwise the bitmap is `render_patch_bitmap`
 bitmap"), run over the `in` views at the keypoints the fit settled: the tile of
 the `in` sighting the reference-view rule picks, rendered at its keypoint,
 named in `TrackPayload::reference`, or the fused mean of the `in` sightings,
-naming none, where the rule picks none or reaches its pick only through its
-last fallback ([../patch/reference-view.md](../patch/reference-view.md) §
-"The stored bitmap", `ReferenceRender::stored_reference`). It moves nothing.
+naming none, where the rule picks none
+([../patch/reference-view.md](../patch/reference-view.md) § "The stored
+bitmap"). It moves nothing.
 Its grid is the reconstruction's own bitmap grid where it stores one, so what
 is rendered is a tile the column can hold and a commit can write. The
 evaluation the fit ends with reads its pick from the same readings, so where
@@ -3341,10 +3342,14 @@ carries the reference view's readings where the row has them:
 `pair_zncc`, `cell_deficit` and `bitmap_blur_sigma` as floats,
 `sharper_than_bitmap` as a bool,
 `pair_zncc_grid` as a `(3, 3)` float64 array, and `reference_view` as a dict
-`{"is_reference", "rejected_by", "fallback"}` with the test and the fallback
-by name (`"coverage"`, `"clipped"`, `"angle"`, `"cells"`, `"agreement"`,
-`"sharpness"` or `None`; `"none"`, `"without_angle"`,
-`"without_angle_or_cells"` or `"without_any"`).
+`{"is_reference", "cost", "cost_ratio", "terms", "costliest_term",
+"excluded_by", "side"}`: the row's cost and its cost over the pick's,
+`terms` a dict of the radius (with `radius_read`), the angle term and the
+four penalties, the costliest term by name (`"sharpness"`, `"angle"`,
+`"agreement"`, `"cells"`, `"coverage"`, `"clipped"` or `None`), the exclusion
+by name (`"no_tile"`, `"coverage"`, `"other_side"` or `None`), and the side
+(`"front"` or `"back"`) ([../patch/reference-view.md](../patch/reference-view.md)
+§ "Python bindings").
 `EditableTrack.reference_observation` is the reference in use, the row the
 stored bitmap is the tile of, or `None`; `EditableTrack.reference_view_observation`
 is the row the last evaluation's reference-view rule picked, or `None`.
@@ -3798,8 +3803,8 @@ unit-tested in `normal.rs` itself.
 - A track of the seoul_bull ground truth, read against its checked-in
   photographs, carries the viewing angle, coverage, clipped share and pair ZNCC
   grid on every row; the reference-view rule picks exactly one row, with
-  coverage of at least 0.99 and under the angle limit, with no fallback, and
-  every row turned away for sharpness is no sharper than it.
+  coverage of at least 0.9 and facing the patch, at the lowest cost, and every
+  other row with a cost names its costliest term.
 - On the same track, each row's self-similarity readings (radius, middle,
   grid and ellipse) are those of its tile rendered directly: the patch
   anchored on the keypoint, the sampler rule's sampler, and
@@ -3854,10 +3859,10 @@ unit-tested in `normal.rs` itself.
   and `verdicts_if_unpinned` proposes as for any track with no held
   reference; the first evaluation that renders renders from the rule's pick
   with every row still pinned and names it, and a commit saves the pick.
-  Where the rule reaches its pick only through its last fallback the mean and
-  `-1` stay, and a reading that reaches a pick another way moves the bitmap
-  whatever the pins. A track built on the bench with a fused mean follows the
-  same rule.
+  A point no view of which covers its tile whole is rendered from the pick
+  too, whatever the pins, and where the pick carries no keypoint the mean
+  stands. A track built on the bench with a fused mean follows the same
+  rule.
 - `set_reference` pins the row and drops the stale bitmap; the next render is
   from the row, while the rule's pick is still reported; setting it again
   changes nothing; it is refused on an `out` row and at the cluster stage.

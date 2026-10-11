@@ -33,6 +33,7 @@ use serde_json::{json, Value};
 use sfmtool_core::bench::{
     Bench, Edge, EditableTrack, Observation, Provenance, Stage, StageKind, Thresholds, Viewpoint,
 };
+use sfmtool_core::patch::reference_view::ReferenceStanding;
 use sfmtool_core::patch::self_similarity::{
     PatchEllipse, SelfSimilarityEllipse, SelfSimilarityEllipseUnits,
 };
@@ -1667,9 +1668,8 @@ fn stage_data(track: &EditableTrack, recon: Option<&sfmtool_core::SfmrReconstruc
                 // The reference in use: the row the stored bitmap is rendered
                 // from, as an index into `observations`, or null for a track
                 // with no bitmap or one whose bitmap is the render of no row,
-                // a fused mean, which the first evaluation that reads a pick
-                // the rule reached other than through its last fallback
-                // renders from that pick. It can differ from the rule's pick below while
+                // a fused mean, which the first evaluation that renders where
+                // the rule picks a row renders from that pick. It can differ from the rule's pick below while
                 // its row is pinned, between an unpin and the render that moves
                 // it to the pick, and where the pick alternated between rows
                 // within one evaluation.
@@ -1821,12 +1821,10 @@ fn track_measurement(observation: &Observation, world_unit: Option<&str>) -> Val
         "pair_zncc": finite(measured.pair_zncc),
         "pair_zncc_grid": grid(measured.pair_zncc_grid),
         "cell_deficit": finite(measured.cell_deficit),
-        // What the reference-view rule decided about an `in` row.
-        "reference_view": measured.reference_view.map(|standing| json!({
-            "is_reference": standing.is_reference(),
-            "rejected_by": standing.rejected_by.map(|test| test.name()),
-            "fallback": standing.fallback.name(),
-        })),
+        // What the reference-view rule decided about an `in` row: its cost
+        // and the terms it is the product of, its cost over the pick's and
+        // the term that adds most to it, or why the rule left it out.
+        "reference_view": measured.reference_view.map(reference_view_json),
         // Present only when the last fit refused the walk and left this sighting
         // at its seed: how far the correlation peak sat, the pixel it sat at
         // and the scores of the tile there against the stored bitmap, plain
@@ -1842,6 +1840,35 @@ fn track_measurement(observation: &Observation, world_unit: Option<&str>) -> Val
         "walked_blur_matched_zncc_middle": finite(measured.walked_blur_matched_zncc_middle),
         "walked_blur_matched_zncc_grid": grid(measured.walked_blur_matched_zncc_grid),
         "reason": measured.reason.map(|reason| reason.to_string()),
+    })
+}
+
+/// What the reference-view rule decided about an `in` row, as the wire
+/// carries it: `{"is_reference", "cost", "cost_ratio", "terms",
+/// "costliest_term", "excluded_by", "side"}`. Its own function, since inside
+/// the measurement's `json!` the nested objects pass the macro's recursion
+/// limit.
+fn reference_view_json(standing: ReferenceStanding) -> Value {
+    let cost = standing.cost.ok();
+    let terms = cost.map(|c| {
+        json!({
+            "radius": finite(Some(c.radius)),
+            "radius_read": c.radius_read,
+            "angle_term": finite(Some(c.angle_term)),
+            "agreement": finite(Some(c.agreement)),
+            "cells": finite(Some(c.cells)),
+            "coverage": finite(Some(c.coverage)),
+            "clipped": finite(Some(c.clipped)),
+        })
+    });
+    json!({
+        "is_reference": standing.is_reference(),
+        "cost": finite(cost.map(|c| c.cost)),
+        "cost_ratio": finite(standing.cost_ratio()),
+        "terms": terms,
+        "costliest_term": standing.costliest_term.map(|t| t.name()),
+        "excluded_by": standing.cost.err().map(|e| e.name()),
+        "side": standing.side.map(|s| s.name()),
     })
 }
 

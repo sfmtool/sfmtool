@@ -6,7 +6,7 @@
 
 use super::agreement::{cell_agreement, finite_middle, CellAgreement};
 use super::tile::ViewTile;
-use super::{choose_reference_view, ReferenceChoice, ReferenceReadings};
+use super::{choose_reference_view, ReferenceChoice, ReferenceReadings, ReferenceViewOptions};
 use crate::camera::sampler::SamplerChoice;
 use crate::patch::cloud::OrientedPatch;
 use crate::patch::member_coherence::{member_zncc_matrix_reporting, MemberCoherenceParams};
@@ -52,7 +52,7 @@ pub fn readings_of(
 /// The semi-axes `[major, minor]`, in grid px, of the self-similarity ellipse
 /// of the whole of `tile`, read the overlap way over its samples on the
 /// photograph with the default parameters: the reading the bench takes of
-/// each view's tile and the rule ranks the candidates by. `None` for a tile
+/// each view's tile and the rule reads as its radius. `None` for a tile
 /// under 3 a side.
 pub fn tile_semi_axes(tile: &ViewTile) -> Option<[f64; 2]> {
     let resolution = tile.resolution();
@@ -97,6 +97,8 @@ pub fn tile_semi_axes(tile: &ViewTile) -> Option<[f64; 2]> {
 /// Two views of one image share the matrix row of the first of them, as
 /// member coherence counts an image once.
 ///
+/// The rule runs with `options`, at the tiles' resolution `R`.
+///
 /// # Panics
 ///
 /// Panics if `members`, `keypoints`, `tiles` and `semi_axes` are not parallel,
@@ -110,6 +112,7 @@ pub fn read_track(
     tiles: &[&ViewTile],
     semi_axes: &[Option<[f64; 2]>],
     sampler: SamplerChoice,
+    options: &ReferenceViewOptions,
     progress: &Progress<'_>,
 ) -> TrackReading {
     let k = members.len();
@@ -149,7 +152,7 @@ pub fn read_track(
             )
         })
         .collect();
-    let choice = choose_reference_view(&readings);
+    let choice = choose_reference_view(&readings, resolution as usize, options);
     TrackReading {
         pair_zncc,
         cells,

@@ -37,7 +37,6 @@ impl PyPatchCloud {
     /// reconstruction whose bitmaps were dropped renders the same bitmaps
     /// again. Where it stores ``-1``, the reference-view rule picks the
     /// observation among the point's whole track; where the rule picks none,
-    /// or reaches its pick only through its last fallback (``"without_any"``),
     /// the bitmap is the fused mean of the views and names no observation. For
     /// a point at ``-1``, a bitmap here equals what :meth:`refine_keypoints`
     /// renders for a patch whose keypoints it did not move and whose every

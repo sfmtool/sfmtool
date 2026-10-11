@@ -338,7 +338,7 @@ def _cull_by_zncc_self_similarity_radius(
 
     The radius is read from each point's stored ``bitmaps`` (the reference
     view's render, or the views' fused mean where the reference-view rule picks
-    none or reaches its pick only through its last fallback; scattered per
+    none; scattered per
     source point) the overlap way, by the same pass rule the
     ``xform`` filter uses (``points_passing_zncc_self_similarity_radius``): at or
     below the bar passes, a ``NaN`` radius fails, and a point whose bitmap has

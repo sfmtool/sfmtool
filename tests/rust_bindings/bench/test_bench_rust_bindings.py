@@ -530,33 +530,51 @@ class TestEvaluating:
             assert 0.0 <= entry["clipped_share"] <= 1.0
             # A committed point's rows are all in, so each is judged.
             standing = entry["reference_view"]
-            assert set(standing) == {"is_reference", "rejected_by", "fallback"}
+            assert set(standing) == {
+                "is_reference",
+                "cost",
+                "cost_ratio",
+                "terms",
+                "costliest_term",
+                "excluded_by",
+                "side",
+            }
             assert entry["pair_zncc_grid"].shape == (3, 3)
             assert -1.0 <= entry["pair_zncc"] <= 1.0
+            assert standing["side"] == "front"
+            if standing["excluded_by"] is not None:
+                assert standing["excluded_by"] in {"no_tile", "coverage", "other_side"}
+                assert standing["cost"] is None and standing["terms"] is None
+                continue
+            assert set(standing["terms"]) == {
+                "radius",
+                "radius_read",
+                "angle_term",
+                "agreement",
+                "cells",
+                "coverage",
+                "clipped",
+            }
+            for factor in ("agreement", "cells", "coverage", "clipped"):
+                assert standing["terms"][factor] >= 1.0
             if standing["is_reference"]:
-                assert standing["rejected_by"] is None
+                assert standing["costliest_term"] is None
+                assert standing["cost_ratio"] == 1.0
                 picked.append(i)
             else:
-                assert standing["rejected_by"] in {
+                assert standing["costliest_term"] in {
+                    "sharpness",
+                    "angle",
+                    "agreement",
+                    "cells",
                     "coverage",
                     "clipped",
-                    "angle",
-                    "cells",
-                    "agreement",
-                    "sharpness",
                 }
-            assert standing["fallback"] in {
-                "none",
-                "without_angle",
-                "without_angle_or_cells",
-                "without_any",
-            }
+                assert standing["cost_ratio"] >= 1.0
         assert len(picked) == 1
         reference = rows[picked[0]]
-        if reference["reference_view"]["fallback"] == "none":
-            assert reference["coverage"] >= 0.99
-            assert reference["viewing_angle_deg"] <= 65.0
-            assert reference["clipped_share"] <= 0.05
+        assert reference["coverage"] >= 0.9
+        assert reference["viewing_angle_deg"] < 90.0
 
     def test_a_fit_stores_the_reference_row_s_tile_and_scores_the_rest(
         self, edited, images, long_track_point

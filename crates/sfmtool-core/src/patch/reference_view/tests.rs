@@ -484,7 +484,10 @@ fn a_view_with_an_occluder_in_one_cell_carries_the_deficit() {
     assert!(agreement.typical[1][2] > 0.9);
     for (v, deficit) in agreement.deficit.iter().enumerate() {
         if v == 3 {
-            assert!(*deficit > REFERENCE_MAX_CELL_DEFICIT, "{deficit}");
+            assert!(
+                *deficit > ReferenceViewOptions::default().cell_deficit_band,
+                "{deficit}"
+            );
         } else {
             assert!(*deficit < 0.1, "view {v}: {deficit}");
         }
@@ -520,8 +523,8 @@ fn cells_the_track_does_not_agree_on_are_not_judged() {
 
 // ---- The rule -------------------------------------------------------------------
 
-/// A view that passes every candidate test, with median pairwise ZNCC `pair`
-/// and self-similarity semi-major axis `radius`.
+/// A view inside every band, at 20°, with median pairwise ZNCC `pair` and
+/// self-similarity semi-major axis `radius`.
 fn good(pair: f64, radius: f64) -> ReferenceReadings {
     ReferenceReadings {
         coverage: Some(1.0),
@@ -534,192 +537,290 @@ fn good(pair: f64, radius: f64) -> ReferenceReadings {
     }
 }
 
-#[test]
-fn each_candidate_test_turns_away_the_view_that_fails_it() {
-    let mut views = vec![good(0.9, 0.3); 6];
-    views[0].coverage = Some(0.98);
-    views[1].clipped_share = Some(0.06);
-    views[2].viewing_angle_deg = Some(65.5);
-    views[3].cell_deficit = Some(0.31);
-    views[4].semi_major = Some(0.8);
-    let choice = choose_reference_view(&views);
-    assert_eq!(choice.fallback, ReferenceFallback::None);
-    assert_eq!(choice.reference, Some(5));
-    assert_eq!(
-        choice.rejected_by,
-        vec![
-            Some(ReferenceTest::Coverage),
-            Some(ReferenceTest::Clipped),
-            Some(ReferenceTest::Angle),
-            Some(ReferenceTest::Cells),
-            Some(ReferenceTest::Sharpness),
-            None,
-        ]
-    );
+/// The rule at the default options on 24 px tiles.
+fn choose(views: &[ReferenceReadings]) -> ReferenceChoice {
+    choose_reference_view(views, 24, &ReferenceViewOptions::default())
+}
+
+fn cost_of(choice: &ReferenceChoice, i: usize) -> ReferenceCost {
+    choice.costs[i].expect("the view has a cost")
+}
+
+fn close(a: f64, b: f64) -> bool {
+    (a - b).abs() < 1e-9
 }
 
 #[test]
-fn the_thresholds_are_inclusive() {
-    let mut view = good(0.9, 0.3);
-    view.coverage = Some(REFERENCE_MIN_COVERAGE);
-    view.clipped_share = Some(REFERENCE_MAX_CLIPPED_SHARE);
-    view.viewing_angle_deg = Some(REFERENCE_MAX_VIEWING_ANGLE_DEG);
-    view.cell_deficit = Some(REFERENCE_MAX_CELL_DEFICIT);
-    // Exactly the margin below the best, so the sharpest view stays in.
-    let margin = good(0.9 - REFERENCE_AGREEMENT_MARGIN, 0.2);
-    let choice = choose_reference_view(&[view, good(0.9, 0.4), margin]);
-    assert_eq!(choice.fallback, ReferenceFallback::None);
-    assert_eq!(choice.reference, Some(2));
-    assert_eq!(choice.rejected_by[0], Some(ReferenceTest::Sharpness));
-}
-
-#[test]
-fn the_agreement_margin_keeps_sharp_views_close_to_the_best_and_drops_the_rest() {
-    let views = [good(0.95, 0.9), good(0.82, 0.3), good(0.79, 0.1)];
-    let choice = choose_reference_view(&views);
+fn a_view_facing_the_patch_beats_a_slightly_sharper_oblique_one() {
+    let mut oblique = good(0.9, 0.60);
+    oblique.viewing_angle_deg = Some(55.0);
+    let facing = good(0.9, 0.62);
+    let choice = choose(&[oblique, facing]);
     assert_eq!(choice.reference, Some(1));
-    assert_eq!(choice.rejected_by[2], Some(ReferenceTest::Agreement));
-    assert_eq!(choice.rejected_by[0], Some(ReferenceTest::Sharpness));
+    assert_eq!(choice.side, Some(PatchSide::Front));
+    let c = ReferenceViewOptions::default().angle_scale(24);
+    assert!((c - 0.3628).abs() < 1e-3, "{c}");
+    let oblique_cost = cost_of(&choice, 0);
+    assert!(close(oblique_cost.angle_term, c * 55f64.to_radians().tan()));
+    assert!(
+        (oblique_cost.cost - 0.79).abs() < 0.01,
+        "{}",
+        oblique_cost.cost
+    );
+    assert!((cost_of(&choice, 1).cost - 0.63).abs() < 0.01);
+    let standing = choice.standing(0).unwrap();
+    assert_eq!(standing.costliest_term, Some(ReferenceTerm::Angle));
+    assert!(!standing.is_reference());
+    assert!(choice.standing(1).unwrap().is_reference());
+    // With no normal error the angle has no say, and the sharper view wins.
+    let options = ReferenceViewOptions {
+        normal_error_deg: 0.0,
+        ..ReferenceViewOptions::default()
+    };
+    let choice = choose_reference_view(&[oblique, facing], 24, &options);
+    assert_eq!(choice.reference, Some(0));
+    assert_eq!(cost_of(&choice, 0).angle_term, 0.0);
 }
 
 #[test]
-fn the_margin_is_measured_from_the_best_candidate_only() {
-    // A view that fails a candidate test does not set the best agreement.
-    let mut grazing = good(0.99, 0.5);
-    grazing.viewing_angle_deg = Some(80.0);
-    let choice = choose_reference_view(&[grazing, good(0.8, 0.4), good(0.7, 0.2)]);
-    assert_eq!(choice.reference, Some(2));
+fn each_penalty_is_one_inside_its_band_and_grows_at_its_scale_past_it() {
+    let options = ReferenceViewOptions::default();
+    // The agreement shortfall is read against the best view, the first.
+    let mut views = vec![good(0.9, 0.5); 9];
+    views[1].pair_zncc = Some(0.9 - options.agreement_band);
+    views[2].pair_zncc = Some(0.9 - options.agreement_band - options.agreement_scale);
+    views[3].cell_deficit = Some(options.cell_deficit_band);
+    views[4].cell_deficit = Some(options.cell_deficit_band + options.cell_deficit_scale);
+    views[5].coverage = Some(options.coverage_band);
+    views[6].coverage = Some(options.coverage_band - 2.0 * options.coverage_scale);
+    views[7].clipped_share = Some(options.clipped_band);
+    views[8].clipped_share = Some(options.clipped_band + 0.5 * options.clipped_scale);
+    let choice = choose(&views);
+    let c = |i| cost_of(&choice, i);
+    assert!(close(c(1).agreement, 1.0));
+    assert!(close(c(2).agreement, 2.0));
+    assert!(close(c(3).cells, 1.0));
+    assert!(close(c(4).cells, 2.0));
+    assert!(close(c(5).coverage, 1.0));
+    assert!(close(c(6).coverage, 3.0));
+    assert!(close(c(7).clipped, 1.0));
+    assert!(close(c(8).clipped, 1.5));
+    // Each factor multiplies the effective radius, and a view inside every
+    // band costs its effective radius alone.
+    let base = c(0).effective_radius();
+    assert!(close(c(0).cost, base));
+    for (i, factor) in [(2, 2.0), (4, 2.0), (6, 3.0), (8, 1.5)] {
+        assert!(close(c(i).cost, base * factor), "view {i}");
+    }
+    // The terms each view's cost turns on.
+    let term = |i: usize| choice.standing(i).unwrap().costliest_term;
+    assert_eq!(term(2), Some(ReferenceTerm::Agreement));
+    assert_eq!(term(4), Some(ReferenceTerm::Cells));
+    assert_eq!(term(6), Some(ReferenceTerm::Coverage));
+    assert_eq!(term(8), Some(ReferenceTerm::Clipped));
+    assert!(close(
+        choice.standing(2).unwrap().cost_ratio().unwrap(),
+        2.0
+    ));
 }
 
 #[test]
-fn a_tie_on_the_semi_major_axis_goes_to_the_smaller_semi_minor_then_the_earlier_view() {
+fn the_coverage_floor_keeps_a_view_at_it_and_excludes_one_under_it() {
+    let floor = ReferenceViewOptions::default().min_coverage;
+    let mut at = good(0.9, 0.3);
+    at.coverage = Some(floor);
+    let mut under = good(0.9, 0.1);
+    under.coverage = Some(floor - 1e-9);
+    let mut no_tile = good(0.9, 0.1);
+    no_tile.coverage = None;
+    let choice = choose(&[under, at, no_tile]);
+    assert_eq!(choice.reference, Some(1));
+    assert_eq!(choice.costs[0], Err(ReferenceExclusion::Coverage));
+    assert_eq!(choice.costs[2], Err(ReferenceExclusion::NoTile));
+    // At the floor the coverage penalty is 4.
+    assert!(close(cost_of(&choice, 1).coverage, 4.0));
+    let standing = choice.standing(0).unwrap();
+    assert_eq!(standing.costliest_term, None);
+    assert_eq!(standing.cost_ratio(), None);
+    // With no eligible view the rule picks nothing and names no side.
+    let choice = choose(&[under, no_tile]);
+    assert_eq!(choice.reference, None);
+    assert_eq!(choice.side, None);
+    assert_eq!(choice.standing(0).unwrap().pick_cost, None);
+    let choice = choose(&[]);
+    assert_eq!(choice.reference, None);
+    assert!(choice.costs.is_empty());
+}
+
+#[test]
+fn a_track_seen_only_from_behind_is_picked_by_the_angle_to_the_flipped_normal() {
+    let mut grazing = good(0.9, 0.5);
+    grazing.viewing_angle_deg = Some(100.0);
+    let mut facing_back = good(0.9, 0.5);
+    facing_back.viewing_angle_deg = Some(150.0);
+    let choice = choose(&[grazing, facing_back]);
+    assert_eq!(choice.side, Some(PatchSide::Back));
+    assert_eq!(choice.reference, Some(1));
+    let c = ReferenceViewOptions::default().angle_scale(24);
+    assert!(close(
+        cost_of(&choice, 1).angle_term,
+        c * 30f64.to_radians().tan()
+    ));
+    assert!(close(
+        cost_of(&choice, 0).angle_term,
+        c * 80f64.to_radians().tan()
+    ));
+    assert_eq!(choice.standing(0).unwrap().side, Some(PatchSide::Back));
+}
+
+#[test]
+fn with_views_on_both_sides_the_pick_is_made_among_the_facing_ones() {
+    // The view behind the patch is the sharpest and agrees best, and is still
+    // left out; a view with no angle stays in.
+    let mut behind = good(0.99, 0.1);
+    behind.viewing_angle_deg = Some(120.0);
+    let facing = good(0.9, 0.5);
+    let mut unread = good(0.9, 0.6);
+    unread.viewing_angle_deg = None;
+    let choice = choose(&[behind, facing, unread]);
+    assert_eq!(choice.side, Some(PatchSide::Front));
+    assert_eq!(choice.costs[0], Err(ReferenceExclusion::OtherSide));
+    assert!(choice.costs[2].is_ok());
+    assert_eq!(choice.reference, Some(1));
+    // The best pair ZNCC is read among the views the pick is made from.
+    assert!(close(cost_of(&choice, 1).agreement, 1.0));
+}
+
+#[test]
+fn a_view_at_exactly_ninety_degrees_costs_infinitely_much() {
+    let mut edge_on = good(0.9, 0.1);
+    edge_on.viewing_angle_deg = Some(90.0);
+    let mut grazing = good(0.9, 0.9);
+    grazing.viewing_angle_deg = Some(85.0);
+    let choice = choose(&[edge_on, grazing]);
+    assert_eq!(choice.side, Some(PatchSide::Front));
+    assert_eq!(choice.reference, Some(1));
+    assert_eq!(cost_of(&choice, 0).cost, f64::INFINITY);
+    assert_eq!(
+        choice.standing(0).unwrap().costliest_term,
+        Some(ReferenceTerm::Angle)
+    );
+    // Where every view is edge on, every cost is infinite and the tie breaks
+    // pick: the smaller semi-minor axis.
+    let mut other = edge_on;
+    other.semi_minor = Some(0.01);
+    let choice = choose(&[edge_on, other]);
+    assert_eq!(choice.side, Some(PatchSide::Back));
+    assert_eq!(choice.reference, Some(1));
+}
+
+#[test]
+fn a_missing_radius_takes_the_largest_one_read_or_the_unread_radius() {
+    let mut unread = good(0.9, 0.1);
+    unread.semi_major = None;
+    let choice = choose(&[unread, good(0.9, 0.4), good(0.9, 0.7)]);
+    let cost = cost_of(&choice, 0);
+    assert!(!cost.radius_read);
+    assert!(close(cost.radius, 0.7));
+    assert!(cost_of(&choice, 1).radius_read);
+    assert_eq!(choice.reference, Some(1));
+    // With no radius anywhere every view takes the unread radius, and the
+    // angle and the penalties pick.
+    let mut a = unread;
+    a.viewing_angle_deg = Some(40.0);
+    let b = unread;
+    let choice = choose(&[a, b]);
+    let unread_radius = ReferenceViewOptions::default().unread_radius;
+    assert!(close(cost_of(&choice, 0).radius, unread_radius));
+    assert!(close(cost_of(&choice, 1).radius, unread_radius));
+    assert_eq!(choice.reference, Some(1));
+}
+
+#[test]
+fn a_missing_pair_angle_clipped_share_or_cell_deficit_is_filled_in() {
+    let options = ReferenceViewOptions::default();
+    // No pair ZNCC: the largest shortfall among the views that have one.
+    let mut no_pair = good(0.9, 0.3);
+    no_pair.pair_zncc = None;
+    let low = good(0.9 - options.agreement_band - options.agreement_scale, 0.5);
+    let choice = choose(&[no_pair, good(0.9, 0.5), low]);
+    assert!(close(cost_of(&choice, 0).agreement, 2.0));
+    // Where no view has one, every agreement penalty is 1.
+    let choice = choose(&[no_pair, no_pair]);
+    assert!(close(cost_of(&choice, 0).agreement, 1.0));
+
+    // No angle: the largest angle term among the views that have one.
+    let mut no_angle = good(0.9, 0.3);
+    no_angle.viewing_angle_deg = None;
+    let mut oblique = good(0.9, 0.5);
+    oblique.viewing_angle_deg = Some(60.0);
+    let choice = choose(&[no_angle, good(0.9, 0.5), oblique]);
+    assert!(close(
+        cost_of(&choice, 0).angle_term,
+        cost_of(&choice, 2).angle_term
+    ));
+    // Where no view has one, the angle term is 0.
+    let choice = choose(&[no_angle, no_angle]);
+    assert_eq!(cost_of(&choice, 0).angle_term, 0.0);
+    assert_eq!(choice.side, Some(PatchSide::Front));
+
+    // No clipped share or cell deficit: a factor of 1.
+    let mut neither = good(0.9, 0.3);
+    neither.clipped_share = None;
+    neither.cell_deficit = None;
+    let choice = choose(&[neither]);
+    assert_eq!(choice.reference, Some(0));
+    assert!(close(cost_of(&choice, 0).clipped, 1.0));
+    assert!(close(cost_of(&choice, 0).cells, 1.0));
+}
+
+#[test]
+fn a_tie_on_the_cost_goes_to_the_smaller_semi_minor_then_the_earlier_view() {
     let mut a = good(0.9, 0.4);
     a.semi_minor = Some(0.3);
     let mut b = good(0.9, 0.4);
     b.semi_minor = Some(0.2);
-    assert_eq!(choose_reference_view(&[a, b]).reference, Some(1));
-    assert_eq!(choose_reference_view(&[b, b]).reference, Some(0));
+    let mut none = good(0.9, 0.4);
+    none.semi_minor = None;
+    assert_eq!(choose(&[a, b]).reference, Some(1));
+    assert_eq!(choose(&[b, b]).reference, Some(0));
+    assert_eq!(choose(&[none, a]).reference, Some(1));
 }
 
 #[test]
-fn when_no_view_passes_the_rule_drops_the_angle_then_the_cells_then_usability() {
-    // Every view grazes: the angle test is dropped and nothing else.
-    let mut views = vec![good(0.9, 0.5); 3];
-    for v in &mut views {
-        v.viewing_angle_deg = Some(75.0);
-    }
-    views[1].coverage = Some(0.5);
-    let choice = choose_reference_view(&views);
-    assert_eq!(choice.fallback, ReferenceFallback::WithoutAngle);
-    assert_eq!(choice.rejected_by[1], Some(ReferenceTest::Coverage));
+fn the_costliest_terms_parts_sum_to_the_cost_over_the_picks() {
+    let pick = good(0.9, 0.4);
+    let mut other = good(0.6, 0.5);
+    other.viewing_angle_deg = Some(50.0);
+    other.cell_deficit = Some(0.45);
+    other.coverage = Some(0.97);
+    other.clipped_share = Some(0.07);
+    let choice = choose(&[pick, other]);
     assert_eq!(choice.reference, Some(0));
-
-    // Every view also fails the cell check.
-    for v in &mut views {
-        v.cell_deficit = Some(0.5);
+    let (own, picked) = (cost_of(&choice, 1), cost_of(&choice, 0));
+    let parts: Vec<(ReferenceTerm, f64)> = own
+        .ln_parts()
+        .iter()
+        .zip(picked.ln_parts())
+        .map(|(&(term, a), (_, b))| (term, a - b))
+        .collect();
+    let sum: f64 = parts.iter().map(|(_, p)| p).sum();
+    let standing = choice.standing(1).unwrap();
+    assert!(close(sum, standing.cost_ratio().unwrap().ln()));
+    let largest = parts
+        .iter()
+        .max_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|&(term, _)| term);
+    assert_eq!(standing.costliest_term, largest);
+    // Each factor's own part is its log, as the pick's factors are 1.
+    for (term, part) in &parts {
+        let factor = match term {
+            ReferenceTerm::Agreement => own.agreement,
+            ReferenceTerm::Cells => own.cells,
+            ReferenceTerm::Coverage => own.coverage,
+            ReferenceTerm::Clipped => own.clipped,
+            _ => continue,
+        };
+        assert!(close(*part, factor.ln()), "{term}");
     }
-    let choice = choose_reference_view(&views);
-    assert_eq!(choice.fallback, ReferenceFallback::WithoutAngleOrCells);
-    assert_eq!(choice.reference, Some(0));
-    assert_eq!(choice.rejected_by[1], Some(ReferenceTest::Coverage));
-
-    // And every view is partial: every view is a candidate.
-    views[0].coverage = Some(0.9);
-    views[2].clipped_share = Some(0.5);
-    views[2].coverage = Some(1.0);
-    let choice = choose_reference_view(&views);
-    assert_eq!(choice.fallback, ReferenceFallback::WithoutAny);
-    assert!(choice.reference.is_some());
-}
-
-#[test]
-fn a_view_that_passes_a_dropped_test_does_not_bring_it_back() {
-    // One view passes everything but the cell check, another everything but
-    // the angle: no view passes all four, so the angle is dropped and the
-    // first view, which fails the cells, stays out.
-    let mut grazing = good(0.9, 0.5);
-    grazing.viewing_angle_deg = Some(70.0);
-    let mut occluded = good(0.9, 0.1);
-    occluded.cell_deficit = Some(0.6);
-    let choice = choose_reference_view(&[occluded, grazing]);
-    assert_eq!(choice.fallback, ReferenceFallback::WithoutAngle);
-    assert_eq!(choice.reference, Some(1));
-    assert_eq!(choice.rejected_by[0], Some(ReferenceTest::Cells));
-}
-
-#[test]
-fn missing_readings_fail_coverage_and_angle_and_pass_clipped_and_cells() {
-    let mut no_coverage = good(0.9, 0.1);
-    no_coverage.coverage = None;
-    let mut no_angle = good(0.9, 0.1);
-    no_angle.viewing_angle_deg = None;
-    let mut no_clip_or_cells = good(0.9, 0.3);
-    no_clip_or_cells.clipped_share = None;
-    no_clip_or_cells.cell_deficit = None;
-    let choice = choose_reference_view(&[no_coverage, no_angle, no_clip_or_cells]);
-    assert_eq!(choice.reference, Some(2));
-    assert_eq!(choice.rejected_by[0], Some(ReferenceTest::Coverage));
-    assert_eq!(choice.rejected_by[1], Some(ReferenceTest::Angle));
-}
-
-#[test]
-fn a_view_without_a_pairwise_reading_is_held_out_unless_none_has_one() {
-    let mut unscored = good(0.9, 0.1);
-    unscored.pair_zncc = None;
-    let choice = choose_reference_view(&[unscored, good(0.5, 0.4)]);
-    assert_eq!(choice.reference, Some(1));
-    assert_eq!(choice.rejected_by[0], Some(ReferenceTest::Agreement));
-    let mut other = good(0.9, 0.4);
-    other.pair_zncc = None;
-    let choice = choose_reference_view(&[unscored, other]);
-    assert_eq!(choice.reference, Some(0));
-}
-
-#[test]
-fn no_views_or_no_radius_picks_nothing() {
-    let choice = choose_reference_view(&[]);
-    assert_eq!(choice.reference, None);
-    assert!(choice.rejected_by.is_empty());
-    let mut flat = good(0.9, 0.1);
-    flat.semi_major = None;
-    let choice = choose_reference_view(&[flat]);
-    assert_eq!(choice.reference, None);
-    assert_eq!(choice.rejected_by, vec![Some(ReferenceTest::Sharpness)]);
-}
-
-#[test]
-fn a_view_of_the_patch_edge_on_or_from_behind_is_never_a_candidate() {
-    // The sharpest view sees the patch's back, the next is edge on, and the
-    // third grazes: no view passes the 65° limit, the fallback drops it, and
-    // the facing limit still turns the first two away.
-    let mut back = good(0.9, 0.1);
-    back.viewing_angle_deg = Some(111.0);
-    let mut edge_on = good(0.9, 0.2);
-    edge_on.viewing_angle_deg = Some(REFERENCE_FACING_LIMIT_DEG);
-    let mut grazing = good(0.9, 0.5);
-    grazing.viewing_angle_deg = Some(89.0);
-    let choice = choose_reference_view(&[back, edge_on, grazing]);
-    assert_eq!(choice.fallback, ReferenceFallback::WithoutAngle);
-    assert_eq!(choice.reference, Some(2));
-    assert_eq!(choice.rejected_by[0], Some(ReferenceTest::Angle));
-    assert_eq!(choice.rejected_by[1], Some(ReferenceTest::Angle));
-
-    // With every other test dropped as well, the facing limit still holds.
-    let mut views = [back, edge_on, grazing];
-    for v in &mut views {
-        v.coverage = Some(0.5);
-        v.cell_deficit = Some(0.9);
-    }
-    let choice = choose_reference_view(&views);
-    assert_eq!(choice.fallback, ReferenceFallback::WithoutAny);
-    assert_eq!(choice.reference, Some(2));
-    assert_eq!(choice.rejected_by[0], Some(ReferenceTest::Angle));
-
-    // Where every view faces away, the rule picks nothing.
-    let choice = choose_reference_view(&[back, edge_on]);
-    assert_eq!(choice.reference, None);
-    assert_eq!(
-        choice.rejected_by,
-        vec![Some(ReferenceTest::Angle), Some(ReferenceTest::Angle)]
-    );
 }

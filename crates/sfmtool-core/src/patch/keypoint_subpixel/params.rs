@@ -8,6 +8,7 @@
 //! [`KeypointLocalizeParams`](crate::patch::keypoint_localize::KeypointLocalizeParams).
 
 use crate::patch::normal_refine::{PatchWindow, SamplerChoice};
+use crate::patch::reference_view::ReferenceViewOptions;
 
 /// Tunables for [`refine_patch_keypoints`](super::refine_patch_keypoints).
 ///
@@ -69,14 +70,16 @@ pub struct KeypointSubpixelParams {
     /// [`KeypointRefinement::reference`] names whether this is set or not
     /// ([`crate::patch::stored_bitmap`]).
     /// Where the point has no reference observation and the reference-view
-    /// rule picks none it would store
-    /// ([`ReferenceRender::stored_reference`](crate::patch::stored_bitmap::ReferenceRender::stored_reference)),
-    /// the views are re-rendered at their final offsets, IRLS view weights
+    /// rule picks none, the views are re-rendered at their final offsets, IRLS view weights
     /// built from those cores, and the views rendered full-grid and fused
     /// (weighted-mean RGB + agreement·coverage alpha). Points at infinity go
     /// through the same path (`w = 0` rendering is first-class here). Off by
     /// default.
     pub render_bitmaps: bool,
+    /// The reference-view rule's options, where the stored bitmap's render
+    /// runs the rule
+    /// ([`render_patch_bitmap`](crate::patch::stored_bitmap::render_patch_bitmap)).
+    pub reference_view: ReferenceViewOptions,
 }
 
 impl Default for KeypointSubpixelParams {
@@ -93,6 +96,7 @@ impl Default for KeypointSubpixelParams {
             line_search_max: 8,
             min_grazing_cos: 0.1,
             render_bitmaps: false,
+            reference_view: ReferenceViewOptions::default(),
         }
     }
 }

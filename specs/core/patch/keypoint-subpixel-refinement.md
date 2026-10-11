@@ -243,6 +243,7 @@ re-anchored patch centre, as the localizer does
 | `line_search_max` | 8 | backtracking attempts before a step is abandoned |
 | `min_grazing_cos` | 0.1 | the reference resolution's grazing pre-filter, shared with the localizer; it moves no view in or out of the refinement |
 | `render_bitmaps` | `false` | also render the point's stored bitmap ("Outputs") |
+| `reference_view` | `ReferenceViewOptions::default()` | the reference-view rule's options, where the refiner resolves a reference and where the stored bitmap's render (`render_patch_bitmap`) runs the rule ([reference-view.md](reference-view.md#each-parameter-and-its-reason)) |
 
 ## Sampling
 
@@ -361,9 +362,8 @@ its stored bitmap from it is in
 ### The fused mean
 
 Where the point has no reference observation and the reference-view rule picks
-no view (no candidate has a self-similarity reading, or every view sees the
-patch edge on or from behind), or reaches its pick only through its last
-fallback, `without_any` (no view passed the coverage and clipping tests), the
+no view (no view is eligible: none renders a tile with at least 90% of it on
+the photograph), the
 stored bitmap is the views' fused mean: the views are rendered at their final
 offsets, IRLS view weights are built from those cores, and the kept views are
 rendered whole (`PatchViewStack`) and fused, weighted-mean RGB and

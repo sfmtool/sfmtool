@@ -31,8 +31,7 @@ use crate::patch::member_coherence::{member_zncc_matrix, MemberCoherenceParams};
 use crate::patch::normal_refine::{refine_patch_normal, NormalRefineParams};
 use crate::patch::normal_refine::{PatchWindow, ProjectedImage};
 use crate::patch::reference_view::{
-    finite_middle, render_view_tile, ReferenceFallback, ReferenceTest, ViewTile,
-    REFERENCE_MAX_VIEWING_ANGLE_DEG, REFERENCE_MIN_COVERAGE,
+    finite_middle, render_view_tile, PatchSide, ReferenceViewOptions, ViewTile,
 };
 use crate::patch::self_similarity::{
     zncc_self_similarity_parts, PatchTile, SelfSimilarityEllipseUnits, SelfSimilarityParams,
@@ -144,7 +143,7 @@ fn keypoint_of(track: &EditableTrack, i: usize) -> [f64; 2] {
 }
 
 #[test]
-fn an_evaluation_picks_a_whole_view_facing_the_patch_on_a_ground_truth_track() {
+fn an_evaluation_picks_the_lowest_cost_view_on_a_ground_truth_track() {
     let truth = GroundTruth::load();
     let (read, _) = truth.evaluated_track();
 
@@ -158,28 +157,25 @@ fn an_evaluation_picks_a_whole_view_facing_the_patch_on_a_ground_truth_track() {
         assert!(m.clipped_share.is_some(), "row {i}");
         assert!(m.pair_zncc_grid.is_some(), "row {i}");
         let standing = m.reference_view.expect("an in row has a standing");
-        assert_eq!(standing.fallback, ReferenceFallback::None);
+        assert_eq!(standing.side, Some(PatchSide::Front));
         if standing.is_reference() {
             picked.push(i);
         }
     }
     assert_eq!(picked.len(), 1, "one reference view");
     let reference = read.observations[picked[0]].track.as_ref().unwrap();
-    assert!(reference.coverage.unwrap() >= REFERENCE_MIN_COVERAGE);
-    assert!(reference.viewing_angle_deg.unwrap() <= REFERENCE_MAX_VIEWING_ANGLE_DEG);
+    assert!(reference.coverage.unwrap() >= ReferenceViewOptions::default().min_coverage);
+    assert!(reference.viewing_angle_deg.unwrap() < 90.0);
     assert!(reference.pair_zncc.is_some());
-    // The reference is the sharpest of the views that passed every other test.
-    let radius = |i: usize| {
-        read.observations[i]
-            .track
-            .as_ref()
-            .and_then(|m| m.zncc_self_similarity_radius)
-            .unwrap()
-    };
+    // The reference has the lowest cost, and every other row with a cost
+    // names the term that adds most to it.
+    let pick_cost = reference.reference_view.unwrap().cost.unwrap().cost;
     for (i, observation) in read.observations.iter().enumerate() {
         let standing = observation.track.as_ref().unwrap().reference_view.unwrap();
-        if standing.rejected_by == Some(ReferenceTest::Sharpness) {
-            assert!(radius(i) >= radius(picked[0]), "row {i}");
+        assert_eq!(standing.pick_cost, Some(pick_cost));
+        if let Ok(cost) = standing.cost {
+            assert!(cost.cost >= pick_cost, "row {i}");
+            assert_eq!(standing.costliest_term.is_none(), i == picked[0], "row {i}");
         }
     }
 }
@@ -600,12 +596,13 @@ fn committing_an_unedited_display_pick_saves_it() {
     assert_eq!(named, vec![2]);
 }
 
-// ---- The last fallback: the fused mean stands ------------------------------
+// ---- A point no view covers whole: the pick is stored ------------------------
 
-/// A ground-truth point the reference-view rule reaches only through its last
-/// fallback ([`ReferenceFallback::WithoutAny`]), with a fused mean of its views
-/// that renders, so the fused mean is stored with no reference.
-const WITHOUT_ANY_POINT: usize = 53;
+/// A ground-truth point no view of which has its tile wholly on the
+/// photograph with little clipped: under a rule of gates, no view passed the
+/// coverage and clipping tests, and the point stored a fused mean. The rule
+/// now picks a view with a coverage or clipping penalty, and it is stored.
+const PARTIAL_POINT: usize = 53;
 
 /// Point `p`'s patch, its images and its stored keypoints.
 fn point_inputs(recon: &SfmrReconstruction, p: usize) -> (OrientedPatch, Vec<u32>, Vec<[f64; 2]>) {
@@ -628,10 +625,10 @@ fn anchors(keypoints: &[[f64; 2]]) -> Vec<Option<[f64; 2]>> {
 }
 
 #[test]
-fn a_last_fallback_pick_stores_the_fused_mean_with_no_reference() {
+fn a_point_no_view_covers_whole_stores_the_rule_s_pick() {
     let truth = GroundTruth::load();
     let views = truth.views();
-    let (patch, images, keypoints) = point_inputs(&truth.recon, WITHOUT_ANY_POINT);
+    let (patch, images, keypoints) = point_inputs(&truth.recon, PARTIAL_POINT);
     let params = KeypointSubpixelParams {
         resolution: 24,
         ..Default::default()
@@ -643,16 +640,19 @@ fn a_last_fallback_pick_stores_the_fused_mean_with_no_reference() {
         &anchors(&keypoints),
         24,
         params.sampler,
+        &params.reference_view,
         &Progress::none(),
     );
-    assert_eq!(
-        render.reading.choice.fallback,
-        ReferenceFallback::WithoutAny
-    );
-    assert!(render.reading.choice.reference.is_some(), "the rule picks");
-    assert_eq!(render.stored_reference(), None);
-    let fused = fuse_patch_bitmap(&patch, &views, &images, &keypoints, &params)
-        .expect("a fused mean renders");
+    let choice = &render.reading.choice;
+    let pick = choice.reference.expect("the rule picks");
+    // Every view that has a cost pays a coverage or clipping penalty.
+    for cost in choice.costs.iter().flatten() {
+        assert!(
+            cost.coverage > 1.0 || cost.clipped > 1.0,
+            "{:?}",
+            render.reading.readings
+        );
+    }
     let stored = render_patch_bitmap(
         &patch,
         &views,
@@ -662,15 +662,15 @@ fn a_last_fallback_pick_stores_the_fused_mean_with_no_reference() {
         &Progress::none(),
     )
     .expect("a bitmap");
-    assert_eq!(stored.reference, None);
-    assert_eq!(stored.rgba, fused);
+    assert_eq!(stored.reference, Some(pick));
+    assert_eq!(stored.rgba, bitmap_from_tile(&render.tiles[pick]));
 }
 
 #[test]
-fn the_sub_pixel_refiner_stores_the_fused_mean_for_a_last_fallback_pick() {
+fn the_sub_pixel_refiner_names_a_reference_for_a_point_no_view_covers_whole() {
     let truth = GroundTruth::load();
     let views = truth.views();
-    let (patch, images, keypoints) = point_inputs(&truth.recon, WITHOUT_ANY_POINT);
+    let (patch, images, keypoints) = point_inputs(&truth.recon, PARTIAL_POINT);
     let params = KeypointSubpixelParams {
         resolution: 24,
         render_bitmaps: true,
@@ -684,33 +684,18 @@ fn the_sub_pixel_refiner_stores_the_fused_mean_for_a_last_fallback_pick() {
         None,
         &params,
     );
-    // The rule runs over the views the refiner kept, at their final keypoints.
-    let render = render_reference(
-        &patch,
-        &views,
-        &out.views,
-        &anchors(&out.keypoints),
-        24,
-        params.sampler,
-        &Progress::none(),
-    );
-    assert_eq!(
-        render.reading.choice.fallback,
-        ReferenceFallback::WithoutAny
-    );
-    assert_eq!(out.reference, None);
-    assert!(out.representative.is_some(), "the fused mean");
+    let reference = out.reference.expect("a reference view");
+    assert_eq!(out.scores[reference], 1.0);
+    assert!(out.representative.is_some());
 }
 
 #[test]
-fn the_localizer_aligns_to_the_fused_mean_for_a_last_fallback_pick() {
-    // With no reference given and a rule that reaches its pick only by its
-    // last fallback, the template is the fused mean: no view is the
-    // reference, so none scores the 1.0 of a view against its own render, and
-    // every kept view is scored against the mean.
+fn the_localizer_aligns_to_a_view_for_a_point_no_view_covers_whole() {
+    // With no reference given, the rule's pick is the template: it scores the
+    // 1.0 of a view against its own render.
     let truth = GroundTruth::load();
     let views = truth.views();
-    let (patch, images, keypoints) = point_inputs(&truth.recon, WITHOUT_ANY_POINT);
+    let (patch, images, keypoints) = point_inputs(&truth.recon, PARTIAL_POINT);
     let params = KeypointLocalizeParams {
         resolution: 24,
         ..open_localizer()
@@ -723,18 +708,20 @@ fn the_localizer_aligns_to_the_fused_mean_for_a_last_fallback_pick() {
         None,
         &params,
     );
-    assert_eq!(out.reference, None);
-    assert!(out.views.len() >= 2, "{:?}", out.views);
-    for (&v, &z) in out.views.iter().zip(&out.zncc) {
-        assert!(z.is_finite() && z < 1.0, "view {v} scores {z}");
-    }
+    let reference = out.reference.expect("a reference view");
+    let k = out
+        .views
+        .iter()
+        .position(|&v| v == reference)
+        .expect("a kept view");
+    assert_eq!(out.zncc[k], 1.0);
 }
 
 #[test]
 fn normal_refinement_stores_the_bitmap_its_reference_names() {
     let truth = GroundTruth::load();
     let all = truth.views();
-    let (patch, images, keypoints) = point_inputs(&truth.recon, WITHOUT_ANY_POINT);
+    let (patch, images, keypoints) = point_inputs(&truth.recon, PARTIAL_POINT);
     let views: Vec<ProjectedImage<'_>> = images
         .iter()
         .map(|&i| {
@@ -754,8 +741,7 @@ fn normal_refinement_stores_the_bitmap_its_reference_names() {
     let out = refine_patch_normal(&patch, &views, 24, &params, Some(&anchors(&keypoints)));
     let rgba = out.representative.as_ref().expect("a bitmap");
     // The stored bitmap agrees with its reference: the named view's tile at
-    // the refined frame, and no view named where the rule's pick does not
-    // stand.
+    // the refined frame.
     let all_views: Vec<u32> = (0..views.len() as u32).collect();
     let render = render_reference(
         &out.patch,
@@ -764,17 +750,17 @@ fn normal_refinement_stores_the_bitmap_its_reference_names() {
         &anchors(&keypoints),
         24,
         KeypointSubpixelParams::default().sampler,
+        &ReferenceViewOptions::default(),
         &Progress::none(),
     );
-    assert_eq!(out.reference, render.stored_reference());
-    if let Some(r) = out.reference {
-        assert_eq!(rgba, &bitmap_from_tile(&render.tiles[r]));
-    }
+    assert_eq!(out.reference, render.reading.choice.reference);
+    let r = out.reference.expect("a reference view");
+    assert_eq!(rgba, &bitmap_from_tile(&render.tiles[r]));
 }
 
 /// [`score_bitmap`] after [`render_bitmap_in_place`] writes the scores the
-/// next [`evaluate`] reads against that bitmap, here for a fused mean, which
-/// names no reference, so every row is scored.
+/// next [`evaluate`] reads against that bitmap, here for the tile of a pick
+/// whose view does not cover its tile whole.
 #[test]
 fn rendering_then_scoring_matches_an_evaluation_of_the_rendered_track() {
     let truth = GroundTruth::load();
@@ -783,7 +769,7 @@ fn rendering_then_scoring_matches_an_evaluation_of_the_rendered_track() {
     let (bench, report) = create_track(
         &Bench::new(),
         &edited,
-        WITHOUT_ANY_POINT as u32,
+        PARTIAL_POINT as u32,
         &CreateTrackOptions::default(),
     )
     .expect("the point is live");
@@ -793,7 +779,11 @@ fn rendering_then_scoring_matches_an_evaluation_of_the_rendered_track() {
     let rendered = render_bitmap_in_place(&read, &edited, &views, &FitOptions::default());
     let payload = rendered.track().unwrap();
     assert!(payload.bitmap.is_some());
-    assert_eq!(payload.reference, None, "the fused mean names no row");
+    assert_eq!(
+        payload.reference,
+        rule_pick(&read),
+        "the render names the pick"
+    );
     let scored = score_bitmap(&rendered, &edited, &views, &options, &Progress::none()).unwrap();
     let (again, _) = evaluate(&rendered, &edited, &views, &options, &Progress::none()).unwrap();
     for (i, (a, b)) in scored
@@ -1473,45 +1463,33 @@ fn a_track_at_minus_one_is_rendered_from_the_rule_s_pick_at_its_first_evaluation
     assert_eq!(images[at as usize], first.observations[picked].image);
 }
 
-/// Where the rule reaches its pick only through its last fallback, the render
-/// gives the fused mean the track at `-1` already stores, so the mean and
-/// `-1` stay; once a reading reaches a pick another way, the bitmap moves to
-/// it, whatever the pins.
+/// A track at `-1` whose views are all cut by the photograph's border or
+/// clipped still has its fused mean moved to the rule's pick at the first
+/// evaluation that renders, whatever the pins; a pick with no keypoint is a
+/// row no render takes the tile of, so the mean stands there.
 #[test]
-fn a_track_at_minus_one_keeps_its_fused_mean_until_the_rule_picks_without_its_last_fallback() {
+fn a_track_at_minus_one_no_view_covers_whole_is_rendered_from_the_pick() {
     let truth = GroundTruth::load();
     let views = truth.views();
-    let (track, edited) = track_at_minus_one(&truth, WITHOUT_ANY_POINT);
+    let (track, edited) = track_at_minus_one(&truth, PARTIAL_POINT);
+    assert!(track.observations.iter().all(|o| o.pinned));
+    let (plain, _) = evaluate(
+        &track,
+        &edited,
+        &views,
+        &EvaluateOptions::default(),
+        &Progress::none(),
+    )
+    .expect("the track reads");
+    let pick = rule_pick(&plain).expect("the rule picks one");
+    assert_eq!(bitmap_target(&plain), Some(Some(pick)));
+
     let first = render_with(&track, &edited, &views);
-    let stored = track.track().unwrap().bitmap.clone();
-    assert_eq!(first.track().unwrap().reference, None);
-    assert_eq!(first.track().unwrap().bitmap, stored);
-    let pick = rule_pick(&first).expect("the rule picks one");
-    let standing = |t: &EditableTrack| {
-        t.observations[pick]
-            .track
-            .as_ref()
-            .and_then(|m| m.reference_view)
-            .expect("a reading")
-    };
-    assert_eq!(standing(&first).fallback, ReferenceFallback::WithoutAny);
-    assert_eq!(bitmap_target(&first), None);
+    assert_eq!(rule_pick(&first), Some(pick));
+    assert_eq!(first.track().unwrap().reference, Some(pick));
+    assert_rendered_from(&first, &views, &edited, pick, "the first evaluation");
 
-    // A reading that reaches the same pick without the last fallback, as a
-    // later step's reading can.
-    let mut reread = first.clone();
-    reread.observations[pick]
-        .track
-        .as_mut()
-        .and_then(|m| m.reference_view.as_mut())
-        .expect("a reading")
-        .fallback = ReferenceFallback::None;
-    assert!(reread.observations.iter().all(|o| o.pinned));
-    assert_eq!(bitmap_target(&reread), Some(Some(pick)));
-
-    // A pick with no keypoint is a row no render takes the tile of, so the
-    // mean stands rather than being rendered again at every evaluation.
-    let mut unkeyed = reread.clone();
+    let mut unkeyed = plain.clone();
     unkeyed.observations[pick].track.as_mut().unwrap().keypoint = None;
     assert_eq!(bitmap_target(&unkeyed), None);
 }
@@ -1635,19 +1613,9 @@ fn a_repaint_that_moves_the_pick_rerenders_and_rejudges_in_the_same_evaluation()
             assert_eq!(rule_pick(&read), Some(row));
             assert_rendered_from(&read, &views, &edited, row, "moved within the call");
         }
-        // The rule reached no pick it stores among the rows left, so the
-        // bitmap is the fused mean.
-        None => {
-            let stored = read.observations.iter().position(|o| {
-                o.track
-                    .as_ref()
-                    .and_then(|m| m.reference_view)
-                    .is_some_and(|s| {
-                        s.is_reference() && s.fallback != ReferenceFallback::WithoutAny
-                    })
-            });
-            assert_eq!(stored, None);
-        }
+        // The rule picked no row among the rows left, so the bitmap is the
+        // fused mean.
+        None => assert_eq!(rule_pick(&read), None),
     }
     let scored = read.observations[pick].track.as_ref().unwrap().plain_zncc;
     assert!(

@@ -18,14 +18,11 @@
 //! sampler rule picks for that view. Only the tiles are read: no coarser grid,
 //! and no pixels of the photograph outside them.
 //!
-//! Where the rule picks no view, which happens only where no candidate has a
-//! self-similarity reading or every view sees the patch edge on or from
-//! behind, and where it reaches its pick only through its last fallback
-//! ([`ReferenceRender::stored_reference`]), the bitmap is the fused mean of
-//! the views
+//! Where the rule picks no view, which happens only where no view is eligible
+//! (none renders a tile with enough of its samples on the photograph), the
+//! bitmap is the fused mean of the views
 //! ([`fuse_patch_bitmap`](crate::patch::keypoint_subpixel::fuse_patch_bitmap)),
-//! and no observation is named as its reference. A last-fallback pick is
-//! stored only where no fused mean renders.
+//! and no observation is named as its reference.
 //!
 //! **The scores.** [`BitmapScorer`] scores observations' tiles against the
 //! bitmap, plain and blur-matched. Only the bitmap is ever blurred: where its
@@ -56,8 +53,7 @@ use crate::patch::normal_refine::{
 };
 use crate::patch::pair_sharpness::{bitmap_blur, DEFAULT_MIN_ELLIPSE_RATIO};
 use crate::patch::reference_view::{
-    read_track, render_view_tile, tile_semi_axes, ReferenceChoice, ReferenceFallback, TrackReading,
-    ViewTile,
+    read_track, render_view_tile, tile_semi_axes, ReferenceViewOptions, TrackReading, ViewTile,
 };
 use crate::progress::{Cancelled, Progress};
 
@@ -71,8 +67,7 @@ pub struct PatchBitmap {
     pub rgba: Vec<u8>,
     /// The view whose render the bitmap is, as an index into the views it
     /// was rendered from; `None` where the bitmap is the fused mean of the
-    /// views, because the reference-view rule picked none or reached its pick
-    /// only through its last fallback ([`ReferenceRender::stored_reference`]).
+    /// views, because the reference-view rule picked none.
     pub reference: Option<usize>,
 }
 
@@ -114,32 +109,6 @@ pub struct ReferenceRender {
     pub reading: TrackReading,
 }
 
-impl ReferenceRender {
-    /// The view whose tile stands as the stored bitmap: the rule's pick,
-    /// unless the rule reached it only by its last fallback
-    /// ([`ReferenceFallback::WithoutAny`]), which drops every candidate test
-    /// but the facing limit -- coverage, clipped share, viewing angle and the
-    /// cell readings -- because no view passed them all. A view can fail them
-    /// for a tile cut by its photograph's border, a clipped share over the
-    /// limit, or no coverage reading at all. Such a pick may be a tile with few
-    /// samples on its photograph, so the stored bitmap is the fused mean
-    /// instead, which fills every sample some view covers, and the pick only
-    /// where no fused mean renders. `None` then, and where the rule picked no
-    /// view.
-    pub fn stored_reference(&self) -> Option<usize> {
-        stored_view(&self.reading.choice)
-    }
-}
-
-/// The view of `choice` whose tile stands as the stored bitmap
-/// ([`ReferenceRender::stored_reference`]), for a caller that ran the rule
-/// over tiles it rendered itself, as the bench's evaluation does.
-pub fn stored_view(choice: &ReferenceChoice) -> Option<usize> {
-    choice
-        .reference
-        .filter(|_| choice.fallback != ReferenceFallback::WithoutAny)
-}
-
 /// Render each of `view_set`'s views of `patch` at its keypoint and run the
 /// reference-view rule over the tiles.
 ///
@@ -151,12 +120,13 @@ pub fn stored_view(choice: &ReferenceChoice) -> Option<usize> {
 /// taken across them ([`read_track`]). Each render, both the tiles here and
 /// the ones member coherence makes for the rule's pair ZNCCs, is timed in the
 /// detail phase of `progress` named for its sampler (`render bilinear_mip`,
-/// `render anisotropic`, ...).
+/// `render anisotropic`, ...). The rule runs with `options`.
 ///
 /// # Panics
 ///
 /// Panics if `keypoints` is not parallel to `view_set` or a view index is out
 /// of range.
+#[allow(clippy::too_many_arguments)]
 pub fn render_reference(
     patch: &OrientedPatch,
     views: &[ProjectedImage<'_>],
@@ -164,6 +134,7 @@ pub fn render_reference(
     keypoints: &[Option<[f64; 2]>],
     resolution: u32,
     sampler: SamplerChoice,
+    options: &ReferenceViewOptions,
     progress: &Progress<'_>,
 ) -> ReferenceRender {
     assert_eq!(
@@ -182,7 +153,7 @@ pub fn render_reference(
     let semi_axes: Vec<Option<[f64; 2]>> = tiles.iter().map(tile_semi_axes).collect();
     let refs: Vec<&ViewTile> = tiles.iter().collect();
     let reading = read_track(
-        patch, views, view_set, keypoints, &refs, &semi_axes, sampler, progress,
+        patch, views, view_set, keypoints, &refs, &semi_axes, sampler, options, progress,
     );
     ReferenceRender {
         tiles,
@@ -193,15 +164,14 @@ pub fn render_reference(
 
 /// Render `patch`'s stored bitmap from `view_set`'s views at `keypoints`: the
 /// tile of the view the reference-view rule picks ([`render_reference`],
-/// [`bitmap_from_tile`]), or, where it picks none or reaches its pick only
-/// through its last fallback ([`ReferenceRender::stored_reference`]), the
-/// fused mean of the views ([`fuse_patch_bitmap_reporting`]) with no
-/// reference; a last-fallback pick where no fused mean renders. `None` with
-/// fewer than two views, or where the rule picks none and fewer than two
-/// views render in frame for the mean.
+/// [`bitmap_from_tile`]), or, where it picks none, the fused mean of the views
+/// ([`fuse_patch_bitmap_reporting`]) with no reference. `None` with fewer
+/// than two views, or where the rule picks none and fewer than two views
+/// render in frame for the mean.
 ///
-/// Of `params`, `resolution` and `sampler` shape the tiles; the fused mean
-/// also reads `window` and `robust_iters`. Moves nothing.
+/// Of `params`, `resolution` and `sampler` shape the tiles and
+/// `reference_view` is the rule's options; the fused mean also reads `window`
+/// and `robust_iters`. Moves nothing.
 ///
 /// ```no_run
 /// # use sfmtool_core::patch::cloud::OrientedPatch;
@@ -248,22 +218,19 @@ pub fn render_patch_bitmap(
         &anchors,
         params.resolution,
         params.sampler,
+        &params.reference_view,
         progress,
     );
-    let pick = |r: usize| PatchBitmap {
-        rgba: bitmap_from_tile(&render.tiles[r]),
-        reference: Some(r),
-    };
-    match render.stored_reference() {
-        Some(r) => Some(pick(r)),
+    match render.reading.choice.reference {
+        Some(r) => Some(PatchBitmap {
+            rgba: bitmap_from_tile(&render.tiles[r]),
+            reference: Some(r),
+        }),
         None => fuse_patch_bitmap_reporting(patch, views, view_set, keypoints, params, progress)
             .map(|rgba| PatchBitmap {
                 rgba,
                 reference: None,
-            })
-            // A pick only the last fallback reached, where no fused mean
-            // renders either.
-            .or_else(|| render.reading.choice.reference.map(pick)),
+            }),
     }
 }
 

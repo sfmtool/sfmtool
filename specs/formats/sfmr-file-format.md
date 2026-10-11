@@ -1409,9 +1409,9 @@ rules are checked on the flags alone.
   bitmap is not the render of one of its observations. It is a fused
   mean of its views, alpha their agreement and coverage (every bitmap written
   before version 12, and a point for which the reference-view rule picked no
-  view or reached its pick only through its last fallback, `without_any`; see
+  view; see
   [../core/patch/reference-view.md](../core/patch/reference-view.md) § "The
-  stored bitmap", `ReferenceRender::stored_reference`, and a point whose
+  stored bitmap", and a point whose
   stored reference a writer that aligns keypoints and renders bitmaps could
   no longer use; § 9, "Keeping it true"), or the render of an observation that
   a later edit removed from the point, which keeps the bitmap (same place).
@@ -1659,8 +1659,7 @@ Which observation each point's patch bitmap is, or is to be, rendered from:
   that aligns keypoints and renders bitmaps, a stored one that writer could no
   longer render usefully and no pick to replace it (see "Keeping it true"). A
   stored bitmap is then not the render of one of its observations -- a fused
-  mean (from before version 12, or where the reference-view rule picks no view
-  or reaches its pick only through its last fallback, `without_any`), or the
+  mean (from before version 12, or where the reference-view rule picks no view), or the
   render of an observation that has since been removed from the point -- and
   a later render runs the reference-view rule for the point and records its
   pick.

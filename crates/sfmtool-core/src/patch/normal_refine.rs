@@ -22,6 +22,7 @@ use nalgebra::{Point3, Vector3};
 use rayon::prelude::*;
 
 use crate::patch::cloud::{mean_viewing_normal, OrientedPatch, PatchCloud};
+use crate::patch::reference_view::ReferenceViewOptions;
 use crate::patch::stored_bitmap::{bitmap_from_tile, render_reference};
 use crate::patch::PatchCounter;
 use crate::progress::{Cancelled, Progress};
@@ -399,8 +400,7 @@ fn refine_patch_normal_impl(
     // The stored bitmap (optional): the tile of the view the reference-view
     // rule picks among every input view (not only a `max_refine_views`
     // subset), rendered through the refined patch at each view's keypoint.
-    // Where it picks none, or reaches its pick only through its last fallback
-    // (`ReferenceRender::stored_reference`), the fused mean of the winner's
+    // Where it picks none, the fused mean of the winner's
     // already-rendered view stack, which needs no extra render or IRLS pass and
     // spans the full R×R grid, filling every pixel a kept view covers. That
     // stack holds only the views the refinement scored, so under a
@@ -421,10 +421,13 @@ fn refine_patch_normal_impl(
                         &anchors,
                         resolution,
                         params.sampler,
+                        &ReferenceViewOptions::default(),
                         progress,
                     );
                     render
-                        .stored_reference()
+                        .reading
+                        .choice
+                        .reference
                         .map(|r| (bitmap_from_tile(&render.tiles[r]), r))
                 })
                 .flatten();

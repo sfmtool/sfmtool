@@ -47,7 +47,7 @@ use crate::patch::keypoint_localize::{
 use crate::patch::member_coherence::MemberCoherenceParams;
 use crate::patch::normal_refine::ProjectedImage;
 use crate::patch::reference_view::{
-    choose_reference_view, read_track, render_view_tile, ReferenceFallback, ReferenceReadings,
+    choose_reference_view, read_track, render_view_tile, ReferenceReadings, ReferenceViewOptions,
     ViewTile,
 };
 use crate::patch::self_similarity::{
@@ -134,6 +134,9 @@ pub struct EvaluateOptions {
     /// window with it. The default is 256 MiB, which is a couple of hundred
     /// views at the offset bound and thousands at the default search radius.
     pub max_cache_bytes: usize,
+    /// The reference-view rule's options, with which the evaluation picks
+    /// the reference view among the `in` rows.
+    pub reference_view: ReferenceViewOptions,
 }
 
 /// [`EvaluateOptions::max_seed_offset_px`]'s default: 64 patch-grid px.
@@ -159,6 +162,7 @@ impl Default for EvaluateOptions {
             localize: open_localizer(),
             max_seed_offset_px: DEFAULT_MAX_SEED_OFFSET_PX,
             max_cache_bytes: DEFAULT_MAX_CACHE_BYTES,
+            reference_view: ReferenceViewOptions::default(),
         }
     }
 }
@@ -602,8 +606,8 @@ fn evaluate_keeping_tiles(
 ///    rendered from is the reference the track holds
 ///    ([`EditableTrack::held_reference`]) where it holds one, and otherwise
 ///    the rule's pick, so the reference and the pick are one row on an
-///    unpinned track; where the rule picks none, or reaches its pick only
-///    through its last fallback, the bitmap is the fused mean. Where that
+///    unpinned track; where the rule picks none, the bitmap is the fused
+///    mean. Where that
 ///    render gives no bitmap (fewer than two `in` rows carry a keypoint, a
 ///    rule the render from the reading's tile and the render of its own
 ///    share), a **bitmap for judging** is rendered instead
@@ -766,9 +770,8 @@ pub(super) fn settle(
 
 /// The row `track`'s bitmap is to be rendered from, when it is to be
 /// rendered: `Some(Some(row))` for that row's tile, `Some(None)` for the
-/// render's own rule (the fused mean where the reference-view rule picks none
-/// or reaches its pick only through its last fallback), and `None` when the
-/// bitmap stands.
+/// render's own rule (the fused mean where the reference-view rule picks
+/// none), and `None` when the bitmap stands.
 ///
 /// A track with no placement has nothing to render. One with no bitmap is
 /// rendered, from the reference it holds or the rule's pick, and so is one
@@ -778,27 +781,23 @@ pub(super) fn settle(
 ///
 /// A bitmap that names no row (a fused mean, or one stored before the
 /// reference was recorded, which a point at `-1` carries) moves to the rule's
-/// pick where the rule's last reading reached it other than through its last
-/// fallback, whatever the pins, as every writer renders a point at `-1`; the
-/// render then names the pick as the reference. Where the rule picks none or
-/// reaches its pick only through its last fallback, it stands, since the
-/// render would give the fused mean again. Where the rule has not read the
-/// track yet, there is no pick to move to, and where the pick carries no
-/// keypoint or fewer than two `in` rows do, no render takes the pick's tile,
-/// so it stands there too.
+/// pick from the rule's last reading, whatever the pins, as every writer
+/// renders a point at `-1`; the render then names the pick as the reference.
+/// Where the rule picks none, it stands, since the render would give the
+/// fused mean again. Where the rule has not read the track yet, there is no
+/// pick to move to, and where the pick carries no keypoint or fewer than two
+/// `in` rows do, no render takes the pick's tile, so it stands there too.
 ///
 /// A bitmap that names a row stands where its pinned row holds the
 /// reference, whatever the rule picks, and where the rule has not read the
 /// track yet: no row carries a standing to name a pick. Otherwise it moves to
-/// the rule's pick when that is another row; where the rule's pick is one
-/// only its last fallback reached, it moves to the fused mean unless it is
-/// that row's tile already, which is what the render gives where no fused
-/// mean renders.
+/// the rule's pick when that is another row, and to the fused mean where the
+/// rule picks none.
 pub fn bitmap_target(track: &EditableTrack) -> Option<Option<usize>> {
     let payload = track.track()?;
     payload.placement.as_ref()?;
     let held = track.held_reference();
-    let stored = stored_pick(track);
+    let stored = track.reference_view_pick();
     if payload.bitmap.is_none() || track.bitmap_pending() {
         return Some(held.or(stored));
     }
@@ -808,11 +807,11 @@ pub fn bitmap_target(track: &EditableTrack) -> Option<Option<usize>> {
         return (keyed_in_rows(track) >= 2).then_some(held.or(stored));
     }
     let Some(reference) = payload.reference else {
-        // A bitmap that names no row moves to a pick the rule reached other
-        // than through its last fallback (a reading of the rule is implied),
-        // where a render can take that row's tile: the row carries a keypoint
-        // and two `in` rows do. Otherwise the render would ignore the row and
-        // could give the fused mean again, at every rendering evaluation.
+        // A bitmap that names no row moves to the rule's pick (a reading of
+        // the rule is implied), where a render can take that row's tile: the
+        // row carries a keypoint and two `in` rows do. Otherwise the render
+        // would ignore the row and could give the fused mean again, at every
+        // rendering evaluation.
         let keyed = |row: usize| {
             track.observations[row]
                 .track
@@ -836,7 +835,7 @@ pub fn bitmap_target(track: &EditableTrack) -> Option<Option<usize>> {
     }
     match stored {
         Some(pick) => (pick != reference).then_some(Some(pick)),
-        None => (track.reference_view_pick() != Some(reference)).then_some(None),
+        None => Some(None),
     }
 }
 
@@ -850,21 +849,6 @@ fn keyed_in_rows(track: &EditableTrack) -> usize {
             o.verdict == Verdict::In && o.track.as_ref().is_some_and(|m| m.keypoint.is_some())
         })
         .count()
-}
-
-/// The row whose tile the reference-view rule's last reading of `track` says
-/// stands as the stored bitmap
-/// ([`stored_view`](crate::patch::stored_bitmap::stored_view)): its pick, unless only its
-/// last fallback reached it or it picked none.
-fn stored_pick(track: &EditableTrack) -> Option<usize> {
-    track.observations.iter().position(|o| {
-        o.track
-            .as_ref()
-            .and_then(|m| m.reference_view)
-            .is_some_and(|standing| {
-                standing.is_reference() && standing.fallback != ReferenceFallback::WithoutAny
-            })
-    })
 }
 
 /// `track` with its bitmap rendered from `from` ([`bitmap_target`]) and every
@@ -2120,6 +2104,7 @@ fn read_reference_view(
         &refs,
         &semi_axes,
         options.localize.sampler,
+        &options.reference_view,
         &phase,
     );
     for (k, (i, _)) in tiles.iter().enumerate() {
@@ -2405,8 +2390,10 @@ fn walked_tiles(
 /// them describing the old `in` set. Here an `out` row loses its pair ZNCC,
 /// pair ZNCC grid, cell deficit and its standing, which an `out` row never
 /// carries, and the rule runs again over the rows that are still `in` and that
-/// it decided on last time, from the readings they carry. Those readings were
-/// taken under the old set; the next evaluation reads them under the new one.
+/// it decided on last time, from the readings they carry, with the default
+/// [`ReferenceViewOptions`] at the resolution their tiles were read at. Those
+/// readings were taken under the old set; the next evaluation reads them
+/// under the new one.
 /// A row turned `in` since the reading has no pair readings and no standing
 /// until then, because the rule has not read it. So the reference view is
 /// always an `in` row, and there is at most one. The bitmap scores stay: they
@@ -2460,7 +2447,15 @@ pub(super) fn restate_reference_view(track: &mut EditableTrack) {
             }
         })
         .collect();
-    let choice = choose_reference_view(&readings);
+    // The tiles' resolution, which every row the rule read was rendered at.
+    let resolution = rows
+        .iter()
+        .find_map(|&i| {
+            let m = track.observations[i].track.as_ref()?;
+            m.reading_options.map(|o| o.resolution as usize)
+        })
+        .unwrap_or_else(|| open_localizer().resolution as usize);
+    let choice = choose_reference_view(&readings, resolution, &ReferenceViewOptions::default());
     for (k, &i) in rows.iter().enumerate() {
         if let Some(measurement) = track.observations[i].track.as_mut() {
             measurement.reference_view = choice.standing(k);

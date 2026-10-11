@@ -483,8 +483,9 @@ pub struct TrackMeasurement {
     /// no reading in any judged cell.
     pub cell_deficit: Option<f64>,
     /// What the reference-view rule decided about this observation: picked as
-    /// the **reference view**, or the test that turned it away, and which
-    /// tests the rule dropped for the track
+    /// the **reference view**, or its cost and the term that adds most to it
+    /// over the pick's, or why the rule left it out, and the side of the
+    /// patch the rule measured the angles on
     /// ([`choose_reference_view`](crate::patch::reference_view::choose_reference_view)).
     /// `None` for an `out` observation, which the rule does not consider.
     pub reference_view: Option<ReferenceStanding>,
@@ -801,7 +802,7 @@ pub struct TrackPayload {
     /// stored with no reference (`-1`) beside a bitmap that names no row
     /// comes on with `None`, and the first evaluation that renders the bitmap
     /// ([`evaluate_rendering_bitmap`](super::evaluate::evaluate_rendering_bitmap))
-    /// and reads a pick the rule reached other than through its last fallback
+    /// where the rule picks a row
     /// renders the bitmap from that pick and sets it here, whatever the pins
     /// ([`bitmap_target`](super::evaluate::bitmap_target)). A commit
     /// writes this reference as the point's reference observation, beside the

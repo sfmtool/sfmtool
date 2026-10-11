@@ -23,9 +23,9 @@ use crate::patch::keypoint_subpixel::{fuse_patch_bitmap_reporting, KeypointSubpi
 use crate::patch::normal_refine::{
     build_support, znormalize_into_kept, PatchWindow, ProjectedImage, SamplerChoice, Support,
 };
-use crate::patch::reference_view::render_view_tile;
+use crate::patch::reference_view::{render_view_tile, ReferenceViewOptions};
 use crate::patch::stored_bitmap::{
-    bitmap_from_tile, bitmap_planes, render_reference, stored_view, BitmapScorer,
+    bitmap_from_tile, bitmap_planes, render_reference, BitmapScorer,
 };
 use crate::progress::Progress;
 
@@ -65,12 +65,10 @@ pub(in crate::patch) fn faces_view(
 ///
 /// `view_set` and `seeds` are parallel; `given` is the position in them of the caller's reference,
 /// which is the reference. With none, only views that pass the grazing pre-filter ([`faces_view`]
-/// at `min_grazing_cos`) are candidates: the reference-view rule reads the facing views' renders at
-/// their starting keypoints (a view with no seed rendered through the patch itself) and its pick is
-/// the reference, unless it picks none or reaches its pick only by its last fallback, where the
-/// stored bitmap is the fused mean of the facing views ([`stored_view`]) and that mean is the
-/// template. Where no fused mean renders, a last-fallback pick is the reference after all, as it is
-/// the stored bitmap then
+/// at `min_grazing_cos`) are candidates: the reference-view rule, run with `reference_view`, reads
+/// the facing views' renders at their starting keypoints (a view with no seed rendered through the
+/// patch itself) and its pick is the reference, unless it picks none, where the stored bitmap is
+/// the fused mean of the facing views and that mean is the template
 /// ([`render_patch_bitmap`](crate::patch::stored_bitmap::render_patch_bitmap)).
 #[allow(clippy::too_many_arguments)]
 pub(in crate::patch) fn resolve_reference(
@@ -84,6 +82,7 @@ pub(in crate::patch) fn resolve_reference(
     window: PatchWindow,
     sampler: SamplerChoice,
     robust_iters: u32,
+    reference_view: &ReferenceViewOptions,
     progress: &Progress<'_>,
 ) -> ResolvedReference {
     let facing: Vec<usize> = (0..view_set.len())
@@ -98,10 +97,16 @@ pub(in crate::patch) fn resolve_reference(
     let view_set: Vec<u32> = facing.iter().map(|&k| view_set[k]).collect();
     let seeds: Vec<Option<[f64; 2]>> = facing.iter().map(|&k| seeds[k]).collect();
     let render = render_reference(
-        patch, views, &view_set, &seeds, resolution, sampler, progress,
+        patch,
+        views,
+        &view_set,
+        &seeds,
+        resolution,
+        sampler,
+        reference_view,
+        progress,
     );
-    let choice = &render.reading.choice;
-    if let Some(anchor) = stored_view(choice) {
+    if let Some(anchor) = render.reading.choice.reference {
         return ResolvedReference {
             anchor: Some(facing[anchor]),
             fused: None,
@@ -126,14 +131,8 @@ pub(in crate::patch) fn resolve_reference(
         };
         fuse_patch_bitmap_reporting(patch, views, &view_set, &keypoints, &params, progress)
     });
-    // Where no fused mean renders either, the rule's pick is the stored bitmap
-    // after all, and so the reference.
     ResolvedReference {
-        anchor: if fused.is_none() {
-            choice.reference.map(|pick| facing[pick])
-        } else {
-            None
-        },
+        anchor: None,
         fused,
     }
 }
@@ -299,6 +298,7 @@ pub(super) fn align_to_reference(
             params.window,
             params.sampler,
             params.robust_iters,
+            &ReferenceViewOptions::default(),
             progress,
         )
     });

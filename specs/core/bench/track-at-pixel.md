@@ -149,8 +149,7 @@ drops the bitmap rendered over the square as it stood, so every reading after
 a move renders the bitmap again where the patch stands. The render is the one
 a fit ends with: the tile of the held reference or of the `in` sighting the
 reference-view rule picks, at its keypoint, or the fused mean of the `in`
-sightings where the rule picks none or reaches its pick only through its last
-fallback ([../patch/reference-view.md](../patch/reference-view.md) § "The
+sightings where the rule picks none ([../patch/reference-view.md](../patch/reference-view.md) § "The
 stored bitmap"), on the reconstruction's own bitmap grid where it stores one,
 and the colour is read off the tile's centre. Every row is then scored against
 the new bitmap, so the rows' bitmap scores are the new bitmap's. A

@@ -9,7 +9,7 @@ use crate::camera::{CameraIntrinsics, CameraModel};
 use crate::geometry::RigidTransform;
 use crate::patch::blur_matched::test_tiles::{grained, textured};
 use crate::patch::pair_sharpness::MAX_MATCHED_LENGTH;
-use crate::patch::reference_view::choose_reference_view;
+use crate::patch::reference_view::{choose_reference_view, PatchSide, ReferenceExclusion};
 
 fn window() -> PatchWindow {
     PatchWindow::GaussianDisk { sigma: 0.6 }
@@ -293,12 +293,13 @@ fn the_bitmap_is_the_picked_view_s_tile() {
         &keypoints.iter().map(|&k| Some(k)).collect::<Vec<_>>(),
         24,
         params.sampler,
+        &params.reference_view,
         &Progress::none(),
     );
     let picked = render.reading.choice.reference.expect("a view is picked");
     // The pick is the rule's on the readings taken.
     assert_eq!(
-        choose_reference_view(&render.reading.readings).reference,
+        choose_reference_view(&render.reading.readings, 24, &params.reference_view).reference,
         Some(picked)
     );
     // The sharp view has the shortest radius and is the pick.
@@ -323,10 +324,10 @@ fn the_bitmap_is_the_picked_view_s_tile() {
     }
 }
 
-/// Where the rule picks no view, here because every view sees the patch from
-/// behind, the bitmap is the fused mean and names no reference.
+/// Where every view sees the patch from behind, the rule measures the angles
+/// against the flipped normal and picks a view, and the bitmap is its tile.
 #[test]
-fn with_no_view_picked_the_bitmap_is_the_fused_mean() {
+fn a_patch_seen_only_from_behind_stores_a_view_s_tile() {
     let scene = Scene::new();
     let views = scene.views();
     let backwards = patch(Vector3::z());
@@ -335,6 +336,18 @@ fn with_no_view_picked_the_bitmap_is_the_fused_mean() {
         resolution: 24,
         ..Default::default()
     };
+    let render = render_reference(
+        &backwards,
+        &views,
+        &[0, 1, 2],
+        &keypoints.iter().map(|&k| Some(k)).collect::<Vec<_>>(),
+        24,
+        params.sampler,
+        &params.reference_view,
+        &Progress::none(),
+    );
+    assert_eq!(render.reading.choice.side, Some(PatchSide::Back));
+    let picked = render.reading.choice.reference.expect("a view is picked");
     let bitmap = render_patch_bitmap(
         &backwards,
         &views,
@@ -343,16 +356,9 @@ fn with_no_view_picked_the_bitmap_is_the_fused_mean() {
         &params,
         &Progress::none(),
     )
-    .expect("a mean");
-    assert_eq!(bitmap.reference, None);
-    let fused = crate::patch::keypoint_subpixel::fuse_patch_bitmap(
-        &backwards,
-        &views,
-        &[0, 1, 2],
-        &keypoints,
-        &params,
-    );
-    assert_eq!(Some(bitmap.rgba), fused);
+    .expect("a bitmap");
+    assert_eq!(bitmap.reference, Some(picked));
+    assert_eq!(bitmap.rgba, bitmap_from_tile(&render.tiles[picked]));
     // Fewer than two views render no bitmap at all.
     assert!(render_patch_bitmap(
         &patch(-Vector3::z()),
@@ -365,15 +371,10 @@ fn with_no_view_picked_the_bitmap_is_the_fused_mean() {
     .is_none());
 }
 
-/// A patch every view clips: the rule reaches a pick only by dropping the
-/// coverage and clipping tests, and such a pick does not stand as the stored
-/// bitmap ahead of the fused mean. Here no view has the patch wholly in frame,
-/// so no fused mean renders either, and the pick is stored after all.
-#[test]
-fn a_pick_no_view_covers_is_not_stored() {
-    let scene = Scene::new();
+/// A patch near the photographs' edge, at `x` on the plane, its tiles
+/// rendered with the default options.
+fn edge_render(scene: &Scene, x: f64) -> (OrientedPatch, Vec<[f64; 2]>, ReferenceRender) {
     let views = scene.views();
-    let x = -1.2;
     let edge = OrientedPatch::from_center_normal(
         Point3::new(x, 0.0, 4.0),
         -Vector3::z(),
@@ -381,28 +382,37 @@ fn a_pick_no_view_covers_is_not_stored() {
         [0.25, 0.25],
     );
     let keypoints: Vec<[f64; 2]> = (0..3).map(|i| scene.keypoint(i, x, 0.0)).collect();
-    let params = KeypointSubpixelParams {
-        resolution: 24,
-        ..Default::default()
-    };
     let render = render_reference(
         &edge,
         &views,
         &[0, 1, 2],
         &keypoints.iter().map(|&k| Some(k)).collect::<Vec<_>>(),
         24,
-        params.sampler,
+        KeypointSubpixelParams::default().sampler,
+        &ReferenceViewOptions::default(),
         &Progress::none(),
     );
-    assert_eq!(
-        render.reading.choice.fallback,
-        ReferenceFallback::WithoutAny,
-        "{:?}",
-        render.reading.readings
-    );
-    assert!(render.reading.choice.reference.is_some(), "the rule picks");
-    assert_eq!(render.stored_reference(), None);
-    let picked = render.reading.choice.reference;
+    (edge, keypoints, render)
+}
+
+/// A patch every view cuts with its photograph's border, the best view
+/// covering between the floor of 0.9 and 0.99 of its tile: that view is
+/// picked, with its coverage penalty, and stored and named.
+#[test]
+fn a_view_between_the_coverage_floor_and_full_coverage_is_stored() {
+    let scene = Scene::new();
+    let views = scene.views();
+    let params = KeypointSubpixelParams {
+        resolution: 24,
+        ..Default::default()
+    };
+    let (edge, keypoints, render) = edge_render(&scene, -1.2);
+    let readings = &render.reading.readings;
+    let picked = render.reading.choice.reference.expect("a view is picked");
+    let coverage = readings[picked].coverage.unwrap();
+    assert!((0.9..0.99).contains(&coverage), "{readings:?}");
+    let cost = render.reading.choice.costs[picked].unwrap();
+    assert!(cost.coverage > 1.0, "{cost:?}");
     let bitmap = render_patch_bitmap(
         &edge,
         &views,
@@ -411,6 +421,36 @@ fn a_pick_no_view_covers_is_not_stored() {
         &params,
         &Progress::none(),
     )
-    .expect("the pick, with no fused mean to stand instead");
-    assert_eq!(bitmap.reference, picked);
+    .expect("the pick's tile");
+    assert_eq!(bitmap.reference, Some(picked));
+    assert_eq!(bitmap.rgba, bitmap_from_tile(&render.tiles[picked]));
+}
+
+/// A patch no view covers to the floor of 0.9: the rule picks nothing, and
+/// with no view wholly in frame no fused mean renders either, so there is no
+/// bitmap.
+#[test]
+fn a_patch_no_view_covers_to_the_floor_has_no_pick() {
+    let scene = Scene::new();
+    let views = scene.views();
+    let params = KeypointSubpixelParams {
+        resolution: 24,
+        ..Default::default()
+    };
+    let (edge, keypoints, render) = edge_render(&scene, -1.3);
+    let choice = &render.reading.choice;
+    assert_eq!(choice.reference, None, "{:?}", render.reading.readings);
+    assert!(choice
+        .costs
+        .iter()
+        .all(|c| *c == Err(ReferenceExclusion::Coverage)));
+    assert!(render_patch_bitmap(
+        &edge,
+        &views,
+        &[0, 1, 2],
+        &keypoints,
+        &params,
+        &Progress::none(),
+    )
+    .is_none());
 }

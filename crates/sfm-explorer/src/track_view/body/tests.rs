@@ -280,27 +280,55 @@ fn the_reference_column_marks_the_row_the_rule_picks() {
     }
 }
 
+/// A standing of the reference-view rule for the Track View tests: the pick,
+/// at a cost of 0.5 grid px, on the patch's front.
+fn picked_standing() -> sfmtool_core::patch::reference_view::ReferenceStanding {
+    use sfmtool_core::patch::reference_view::{PatchSide, ReferenceCost, ReferenceStanding};
+    ReferenceStanding {
+        cost: Ok(ReferenceCost {
+            radius: 0.5,
+            radius_read: true,
+            angle_term: 0.0,
+            agreement: 1.0,
+            cells: 1.0,
+            coverage: 1.0,
+            clipped: 1.0,
+            cost: 0.5,
+        }),
+        reference: true,
+        pick_cost: Some(0.5),
+        costliest_term: None,
+        side: Some(PatchSide::Front),
+    }
+}
+
+/// A standing of a row that is not the pick: its cost `cost` against the
+/// pick's 0.5, `term` adding the most.
+fn costlier_standing(
+    cost: f64,
+    term: sfmtool_core::patch::reference_view::ReferenceTerm,
+) -> sfmtool_core::patch::reference_view::ReferenceStanding {
+    let pick = picked_standing();
+    let mut own = pick.cost.unwrap();
+    own.cost = cost;
+    sfmtool_core::patch::reference_view::ReferenceStanding {
+        cost: Ok(own),
+        reference: false,
+        costliest_term: Some(term),
+        ..pick
+    }
+}
+
 /// The *Reference* cell's words and hover for each standing, for an `out` row
 /// and for a track that could not be evaluated.
 #[test]
-fn the_reference_cell_names_the_test_that_turned_a_row_away() {
+fn the_reference_cell_names_the_cost_and_the_term_that_adds_most_to_it() {
     use sfmtool_core::bench::{Observation, Provenance, TrackMeasurement};
     use sfmtool_core::patch::reference_view::{
-        ReferenceFallback, ReferenceStanding, ReferenceTest,
+        PatchSide, ReferenceExclusion, ReferenceStanding, ReferenceTerm,
     };
-    use sfmtool_core::patch::self_similarity::{SelfSimilarityEllipse, SelfSimilarityEllipseUnits};
 
-    let ellipse = SelfSimilarityEllipseUnits {
-        grid_px: SelfSimilarityEllipse {
-            axes: [1.5, 0.8],
-            axes_is_at_least: [false, false],
-            major_angle: 0.0,
-            matrix: [[2.25, 0.0], [0.0, 0.64]],
-        },
-        image_px: None,
-        patch: None,
-    };
-    let row = |rejected_by: Option<ReferenceTest>, fallback: ReferenceFallback| Observation {
+    let row = |standing: ReferenceStanding| Observation {
         image: 0,
         provenance: Provenance::Origin,
         verdict: Verdict::In,
@@ -310,16 +338,12 @@ fn the_reference_cell_names_the_test_that_turned_a_row_away() {
             keypoint: Some([10.0, 12.0]),
             viewing_angle_deg: Some(71.6),
             tilt_direction_deg: Some(-35.0),
-            coverage: Some(1.0),
+            coverage: Some(0.85),
             clipped_share: Some(0.004),
             pair_zncc: Some(0.834),
             cell_deficit: Some(0.12),
             pair_zncc_grid: Some([[0.9, 0.8, f64::NAN], [0.7, 0.6, 0.5], [0.4, 0.3, 0.2]]),
-            zncc_self_similarity_ellipse: Some(ellipse),
-            reference_view: Some(ReferenceStanding {
-                rejected_by,
-                fallback,
-            }),
+            reference_view: Some(standing),
             ..TrackMeasurement::default()
         }),
     };
@@ -339,12 +363,13 @@ fn the_reference_cell_names_the_test_that_turned_a_row_away() {
         super::reference::reference_cell(0, o, StageKind::Track, &current, &rows_of(o))
     };
 
-    let picked = cell(&row(None, ReferenceFallback::None));
+    let picked = cell(&row(picked_standing()));
     assert_eq!(picked.mark, super::reference::ReferenceMark::Pick);
     assert_eq!(picked.text, "pick\n72\u{b0}, 83%");
     let hover = picked.hover.expect("a hover");
     assert!(hover.contains("The reference view"), "{hover}");
     assert!(hover.contains("no patch bitmap yet"), "{hover}");
+    assert!(hover.contains("Cost 0.50 grid px"), "{hover}");
     assert!(
         hover.contains("Viewing angle 71.6\u{b0}, leaning -35\u{b0}"),
         "{hover}"
@@ -352,81 +377,104 @@ fn the_reference_cell_names_the_test_that_turned_a_row_away() {
     assert!(hover.contains("Clipped 0.4%"), "{hover}");
     assert!(hover.contains("   90   80    -"), "{hover}");
 
-    for (test, word, why) in [
+    for (term, word, why) in [
         (
-            ReferenceTest::Coverage,
-            "partial",
-            "of its tile is on the photograph",
-        ),
-        (ReferenceTest::Clipped, "clipped", "is clipped, over the 5%"),
-        (
-            ReferenceTest::Angle,
-            "oblique",
-            "sees the patch at 71.6\u{b0}, over the 65\u{b0}",
-        ),
-        (
-            ReferenceTest::Cells,
-            "ninth differs",
-            "0.12 below the track's typical agreement",
-        ),
-        (
-            ReferenceTest::Agreement,
-            "agrees less",
-            "more than 15 points below",
-        ),
-        (
-            ReferenceTest::Sharpness,
+            ReferenceTerm::Sharpness,
             "less sharp",
-            "smaller self-similarity radius",
+            "its self-similarity radius adding the most",
+        ),
+        (ReferenceTerm::Angle, "oblique", "its viewing angle"),
+        (
+            ReferenceTerm::Agreement,
+            "agrees less",
+            "its agreement with the other rows",
+        ),
+        (ReferenceTerm::Cells, "ninth differs", "a ninth of its tile"),
+        (
+            ReferenceTerm::Coverage,
+            "partial",
+            "the part of its tile off the photograph",
+        ),
+        (
+            ReferenceTerm::Clipped,
+            "clipped",
+            "the clipped part of its photograph",
         ),
     ] {
-        let rejected = cell(&row(Some(test), ReferenceFallback::None));
-        assert_eq!(rejected.mark, super::reference::ReferenceMark::None);
+        let costlier = cell(&row(costlier_standing(0.625, term)));
+        assert_eq!(costlier.mark, super::reference::ReferenceMark::None);
         assert!(
-            rejected.text.starts_with(&format!("{word}\n")),
+            costlier.text.starts_with(&format!("\u{d7}1.25 {word}\n")),
             "{}",
-            rejected.text
+            costlier.text
         );
-        let hover = rejected.hover.expect("a hover");
-        assert!(hover.starts_with("Not the reference view: "), "{hover}");
-        assert!(hover.contains(why), "{test}: {hover}");
+        let hover = costlier.hover.expect("a hover");
+        assert!(
+            hover.starts_with("Not the reference view: its cost is \u{d7}1.25 the pick's"),
+            "{hover}"
+        );
+        assert!(hover.contains(why), "{term}: {hover}");
+        // Each factor beside its band and scale.
+        assert!(
+            hover.contains("Agreement \u{d7}1.00: 1 within 15 points"),
+            "{hover}"
+        );
+        assert!(hover.contains("Coverage \u{d7}1.00: 1 from 99%"), "{hover}");
     }
 
-    // A row turned away for sharpness with no self-similarity radius was not
-    // compared, and the hover says that rather than naming a sharper row.
-    let mut unmeasured = row(Some(ReferenceTest::Sharpness), ReferenceFallback::None);
-    unmeasured
-        .track
-        .as_mut()
-        .expect("a track slot")
-        .zncc_self_similarity_ellipse = None;
-    let hover = cell(&unmeasured).hover.expect("a hover");
-    assert!(hover.contains("has no self-similarity radius"), "{hover}");
-    assert!(!hover.contains("smaller self-similarity radius"), "{hover}");
-
-    // A dropped test is said in the hover.
-    let dropped = cell(&row(None, ReferenceFallback::WithoutAngle));
-    assert!(dropped
-        .hover
-        .expect("a hover")
-        .contains("dropped the 65\u{b0} angle limit"));
-
-    // Once the 65° limit is dropped, a row turned away by the angle sees the
-    // patch edge on or from behind.
-    let mut behind = row(Some(ReferenceTest::Angle), ReferenceFallback::WithoutAngle);
-    behind
-        .track
-        .as_mut()
-        .expect("a track slot")
-        .viewing_angle_deg = Some(111.0);
-    let hover = cell(&behind).hover.expect("a hover");
+    // An infinite cost, of a row edge on to the patch.
+    let edge_on = cell(&row(costlier_standing(f64::INFINITY, ReferenceTerm::Angle)));
     assert!(
-        hover.contains("sees the patch at 111.0\u{b0}, edge on or from behind"),
-        "{hover}"
+        edge_on.text.starts_with("\u{d7}\u{221e} oblique\n"),
+        "{}",
+        edge_on.text
     );
 
+    // A radius that is not the row's own, and angles measured from behind.
+    let mut standing = costlier_standing(0.625, ReferenceTerm::Sharpness);
+    if let Ok(cost) = standing.cost.as_mut() {
+        cost.radius_read = false;
+    }
+    standing.side = Some(PatchSide::Back);
+    let hover = cell(&row(standing)).hover.expect("a hover");
+    assert!(hover.contains("not the row's own"), "{hover}");
+    assert!(hover.contains("flipped normal"), "{hover}");
+
+    // The rows the rule left out.
+    for (exclusion, word, why) in [
+        (ReferenceExclusion::NoTile, "no tile", "it renders no tile"),
+        (
+            ReferenceExclusion::Coverage,
+            "partial",
+            "85.0% of its tile is on the photograph, under the 90%",
+        ),
+        (
+            ReferenceExclusion::OtherSide,
+            "other side",
+            "sees the patch from behind",
+        ),
+    ] {
+        let standing = ReferenceStanding {
+            cost: Err(exclusion),
+            reference: false,
+            ..picked_standing()
+        };
+        let left_out = cell(&row(standing));
+        assert!(
+            left_out.text.starts_with(&format!("{word}\n")),
+            "{}",
+            left_out.text
+        );
+        let hover = left_out.hover.expect("a hover");
+        assert!(
+            hover.starts_with("Left out of the reference view: "),
+            "{hover}"
+        );
+        assert!(hover.contains(why), "{exclusion}: {hover}");
+    }
+
     // An `out` row carries its own readings and no standing.
-    let mut out = row(None, ReferenceFallback::None);
+    let mut out = row(picked_standing());
     out.verdict = Verdict::Out;
     let slot = out.track.as_mut().expect("a track slot");
     slot.reference_view = None;
@@ -440,7 +488,7 @@ fn the_reference_cell_names_the_test_that_turned_a_row_away() {
 
     // Nothing at the cluster stage or for a track that could not be evaluated.
     let refused = crate::bench::live::Evaluation::Refused("no frame".to_string());
-    let picked = row(None, ReferenceFallback::None);
+    let picked = row(picked_standing());
     let rows = rows_of(&picked);
     assert_eq!(
         super::reference::reference_cell(0, &picked, StageKind::Track, &refused, &rows).text,
@@ -460,11 +508,9 @@ fn the_reference_cell_names_the_test_that_turned_a_row_away() {
 fn the_reference_column_marks_the_reference_and_the_rule_s_pick() {
     use super::reference::{reference_cell, ReferenceMark, ReferenceRows};
     use sfmtool_core::bench::{Observation, Provenance, TrackMeasurement};
-    use sfmtool_core::patch::reference_view::{
-        ReferenceFallback, ReferenceStanding, ReferenceTest,
-    };
+    use sfmtool_core::patch::reference_view::{ReferenceStanding, ReferenceTerm};
 
-    let row = |image: u32, rejected_by: Option<ReferenceTest>| Observation {
+    let row = |image: u32, standing: ReferenceStanding| Observation {
         image,
         provenance: Provenance::Origin,
         verdict: Verdict::In,
@@ -474,18 +520,15 @@ fn the_reference_column_marks_the_reference_and_the_rule_s_pick() {
             keypoint: Some([10.0, 12.0]),
             viewing_angle_deg: Some(20.0),
             pair_zncc: Some(0.9),
-            reference_view: Some(ReferenceStanding {
-                rejected_by,
-                fallback: ReferenceFallback::None,
-            }),
+            reference_view: Some(standing),
             ..TrackMeasurement::default()
         }),
     };
     let current = crate::bench::live::Evaluation::Current;
     let rows = [
-        row(10, Some(ReferenceTest::Sharpness)),
-        row(11, Some(ReferenceTest::Agreement)),
-        row(12, None),
+        row(10, costlier_standing(0.6, ReferenceTerm::Sharpness)),
+        row(11, costlier_standing(0.9, ReferenceTerm::Agreement)),
+        row(12, picked_standing()),
     ];
     let cells = |marks: &ReferenceRows| {
         rows.iter()
@@ -503,7 +546,6 @@ fn the_reference_column_marks_the_reference_and_the_rule_s_pick() {
         has_bitmap: true,
         reference_pinned: true,
         judging: false,
-        pick_by_last_fallback: false,
     };
     let drawn = cells(&agreed);
     assert_eq!(drawn[2].mark, ReferenceMark::Reference);
@@ -514,7 +556,7 @@ fn the_reference_column_marks_the_reference_and_the_rule_s_pick() {
     );
     assert_eq!(drawn[0].mark, ReferenceMark::None);
     assert!(
-        drawn[0].text.starts_with("less sharp\n"),
+        drawn[0].text.starts_with("\u{d7}1.20 less sharp\n"),
         "{}",
         drawn[0].text
     );
@@ -631,21 +673,14 @@ fn the_reference_column_marks_the_reference_and_the_rule_s_pick() {
         };
         assert!(hover.contains(says), "{hover}");
     }
-    // A fused mean moves to the pick at the next evaluation that renders,
-    // unless the rule reached the pick only through its last fallback.
-    for (pick_by_last_fallback, says) in [
-        (false, "renders it from this row"),
-        (true, "so the mean stays"),
-    ] {
-        let fused = ReferenceRows {
-            reference: None,
-            reference_image: None,
-            pick_by_last_fallback,
-            ..agreed
-        };
-        let hover = cells(&fused)[2].hover.clone().expect("a hover");
-        assert!(hover.contains(says), "{hover}");
-    }
+    // A fused mean moves to the pick at the next evaluation that renders.
+    let fused = ReferenceRows {
+        reference: None,
+        reference_image: None,
+        ..agreed
+    };
+    let hover = cells(&fused)[2].hover.clone().expect("a hover");
+    assert!(hover.contains("renders it from this row"), "{hover}");
     // A bitmap for judging: only the pick is marked, and its hover says the
     // bitmap is not one the track keeps.
     let judging = ReferenceRows {

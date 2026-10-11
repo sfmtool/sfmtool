@@ -239,10 +239,7 @@ pub struct NormalRefineResult {
     /// `(row, col, channel)` order (length `R·R·4`): the tile of the view
     /// [`Self::reference`] names, the view the reference-view rule picks
     /// ([`crate::patch::stored_bitmap`]), with alpha 255 on the samples on the
-    /// photograph. Where the rule picks none, or reaches its pick only through
-    /// its last fallback
-    /// ([`ReferenceRender::stored_reference`](crate::patch::stored_bitmap::ReferenceRender::stored_reference)),
-    /// the fused mean of the refined views (the `max_refine_views` subset
+    /// photograph. Where the rule picks none, the fused mean of the refined views (the `max_refine_views` subset
     /// under a cap): RGB
     /// the cross-view fused colour (a robust IRLS-weighted mean under
     /// [`Objective::RobustWeighted`], an unweighted mean under

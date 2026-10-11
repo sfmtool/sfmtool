@@ -2638,13 +2638,36 @@ fn fit_and_set_stage_run_as_background_tasks_and_the_evaluation_follows_them() {
             "{track}"
         );
         let standing = &measured["reference_view"];
-        assert!(standing["fallback"].is_string(), "{track}");
-        assert!(standing.get("agreement_read").is_none(), "{track}");
+        assert_eq!(standing["side"], json!("front"), "{track}");
+        assert!(standing.get("rejected_by").is_none(), "{track}");
+        assert!(standing.get("fallback").is_none(), "{track}");
+        if standing["excluded_by"].is_string() {
+            assert!(standing["cost"].is_null(), "{track}");
+            assert!(standing["terms"].is_null(), "{track}");
+            continue;
+        }
+        assert!(standing["cost"].is_number(), "{track}");
+        for term in [
+            "radius",
+            "angle_term",
+            "agreement",
+            "cells",
+            "coverage",
+            "clipped",
+        ] {
+            assert!(standing["terms"][term].is_number(), "{term}: {track}");
+        }
+        assert!(standing["terms"]["radius_read"].is_boolean(), "{track}");
         if standing["is_reference"] == json!(true) {
-            assert!(standing["rejected_by"].is_null(), "{track}");
+            assert!(standing["costliest_term"].is_null(), "{track}");
+            assert_eq!(standing["cost_ratio"], json!(1.0), "{track}");
             picked.push(i);
         } else {
-            assert!(standing["rejected_by"].is_string(), "{track}");
+            assert!(standing["costliest_term"].is_string(), "{track}");
+            assert!(
+                standing["cost_ratio"].as_f64().is_some_and(|r| r >= 1.0),
+                "{track}"
+            );
         }
     }
     assert_eq!(picked.len(), 1, "{track}");

@@ -814,7 +814,8 @@ fn without_bitmaps_the_stored_reference_observation_is_the_template() {
 /// their keypoints, and its render is the template.
 #[test]
 fn without_a_stored_reference_the_rule_picks_one() {
-    use crate::patch::stored_bitmap::{render_reference, stored_view};
+    use crate::patch::reference_view::ReferenceViewOptions;
+    use crate::patch::stored_bitmap::render_reference;
     let points: Vec<(Point3<f64>, &[u32])> = grid_points().into_iter().map(|p| (p, FOUR)).collect();
     let mut cap = capture(&points);
     let options = fixed();
@@ -842,9 +843,10 @@ fn without_a_stored_reference_the_rule_picks_one() {
                     &kps,
                     options.localize.resolution,
                     options.localize.sampler,
+                    &ReferenceViewOptions::default(),
                     &Progress::none(),
                 );
-                stored_view(&render.reading.choice)
+                render.reading.choice.reference
             })
             .collect()
     };
@@ -866,12 +868,11 @@ fn without_a_stored_reference_the_rule_picks_one() {
     }
 }
 
-/// Where the rule picks no view it would store (here every camera sees the
-/// patch from behind its frame, so no view is a candidate), the template is the
-/// fused mean of the references, as the stored bitmap would be, and no
-/// reference is left out of the bars.
+/// Where every reference sees the patch from behind its frame, the rule
+/// measures the angles against the flipped normal and still picks one, and
+/// its render is the template, left out of the bars.
 #[test]
-fn where_the_rule_picks_none_the_template_is_the_fused_mean() {
+fn where_every_reference_sees_the_patch_from_behind_the_rule_still_picks_one() {
     let points: Vec<(Point3<f64>, &[u32])> = grid_points().into_iter().map(|p| (p, FOUR)).collect();
     let mut cap = capture(&points);
     let n = points.len();
@@ -884,9 +885,9 @@ fn where_the_rule_picks_none_the_template_is_the_fused_mean() {
     assert_eq!(report.accepted, n, "{:?}", report.refusal_counts());
     for (p, (world, _)) in points.iter().enumerate() {
         let c = &report.candidates[p];
-        assert_eq!(c.template, Some(TemplateKind::FusedMean));
-        assert_eq!(c.reference_observation, None);
-        assert_eq!(c.bar_zncc().count(), 4);
+        assert_eq!(c.template, Some(TemplateKind::ReferenceObservation));
+        assert!(c.reference_observation.is_some());
+        assert_eq!(c.bar_zncc().count(), 3);
         let expected = cap.project(TARGET, *world);
         let kp = c.keypoint.unwrap();
         let err = (kp[0] - expected[0]).hypot(kp[1] - expected[1]);

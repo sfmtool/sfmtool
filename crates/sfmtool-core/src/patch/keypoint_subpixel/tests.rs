@@ -1160,11 +1160,14 @@ fn with_no_reference_given_the_rule_picks_one_and_it_is_not_moved() {
         &seeds,
         p.resolution,
         p.sampler,
+        &crate::patch::reference_view::ReferenceViewOptions::default(),
         &Progress::none(),
     );
     let pick = rule
-        .stored_reference()
-        .expect("the rule picks a view it would store on this scene");
+        .reading
+        .choice
+        .reference
+        .expect("the rule picks a view on this scene");
 
     let res = refine_patch_keypoints(&patch, &views, &set, Some(&seeds), None, &p);
     assert_eq!(res.reference, Some(pick));

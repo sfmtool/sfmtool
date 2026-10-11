@@ -559,8 +559,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           no row (reference_observation null with a bitmap, a point stored at \
                           -1) is held by no pin, so unpinning hands nothing on there: the \
                           evaluation renders it from the rule's pick whatever the pins, unless \
-                          the rule reached its pick only through its last fallback, where the \
-                          mean stays. in and \
+                          the rule picks no row, where the mean stays. in and \
                           out name one observation; pin and unpin name one with observation, or \
                           several with observations, a list of indexes or \"all\", as one \
                           version. A track cannot see one image twice, so turning an observation \

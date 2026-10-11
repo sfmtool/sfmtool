@@ -18,9 +18,7 @@
 
 use sfmtool_core::bench::{EditableTrack, Observation, StageKind, TrackMeasurement};
 use sfmtool_core::patch::reference_view::{
-    ReferenceFallback, ReferenceStanding, ReferenceTest, REFERENCE_AGREEMENT_MARGIN,
-    REFERENCE_FACING_LIMIT_DEG, REFERENCE_MAX_CELL_DEFICIT, REFERENCE_MAX_CLIPPED_SHARE,
-    REFERENCE_MAX_VIEWING_ANGLE_DEG, REFERENCE_MIN_COVERAGE,
+    PatchSide, ReferenceExclusion, ReferenceStanding, ReferenceTerm, ReferenceViewOptions,
 };
 
 use crate::bench::live::Evaluation;
@@ -35,23 +33,25 @@ pub(super) const REFERENCE_TIP: &str = "The track's reference, the row its patch
     reference's row is pinned every render keeps it; a track put on the bench from a point has \
     every row pinned. Where the bitmap is the mean of the rows that are in, is one for judging \
     only, or there is no bitmap yet, only the pick is marked. A mean stays only until the first \
-    evaluation that renders from a pick the rule reached other than through its last fallback, \
-    which makes that pick the reference; with a pick reached only that way, the mean stays.\n\n\
-    A candidate has at least 99% of its tile on the photograph, at most 5% of the photograph \
-    under the tile clipped to black or white, a viewing angle of at most 65\u{b0}, and no ninth \
-    of the tile where it agrees with the other rows more than 0.3 below the track's typical \
-    agreement there. Of the candidates whose pair ZNCC, the median of its ZNCCs with the \
-    other rows that are in, is within 15 points of the best candidate's, the rule picks the one with \
-    the smallest self-similarity radius. When no row passes, it drops the 65\u{b0} limit, then \
-    the check of the ninths, then the coverage and clipping tests; a row that sees the patch \
-    edge on or from behind, at 90\u{b0} or more, is never picked.\n\n\
-    The first line is reference or pick, or for any other row the test that turned it away: \
-    partial, clipped, oblique, ninth differs, agrees less, or less sharp, read against the \
-    rule's pick. The second is the viewing angle, the angle between the patch's normal and the \
-    direction to the camera, and the pair ZNCC the rule read. Hover a cell for every reading. \
-    An out row is not considered.\n\n\
-    Sorting by this column puts the reference first, then the pick, then the rows nearest to \
-    being picked.";
+    evaluation that renders where the rule picks a row, which makes that pick the reference.\n\n\
+    The rule gives each row a cost in grid px and picks the lowest. The cost is the row's \
+    self-similarity radius, combined with an angle term that grows with the viewing angle, \
+    times four penalties, each 1 inside its band: agreement, for a pair ZNCC (the median of \
+    the row's ZNCCs with the other rows that are in) more than 15 points below the best; the \
+    ninths, for a ninth of the tile where it agrees with the other rows more than 0.3 below \
+    the track's typical agreement there; coverage, for less than 99% of the tile on the \
+    photograph; and clipping, for more than 5% of the photograph under the tile clipped to \
+    black or white. A row with less than 90% of its tile on the photograph is never picked, \
+    and where some row sees the patch at under 90\u{b0}, a row that sees it from behind is \
+    left out. The parameters are not yet tuned.\n\n\
+    The first line is reference or pick, or for any other row its cost over the pick's and \
+    the term that adds most to it: less sharp, oblique, agrees less, ninth differs, partial \
+    or clipped, as in \u{d7}1.25 oblique; or, for a row the rule left out, partial, no tile \
+    or other side. The second is the viewing angle, the angle between the patch's normal and \
+    the direction to the camera, and the pair ZNCC the rule read. Hover a cell for the cost's \
+    terms and every reading. An out row is not considered.\n\n\
+    Sorting by this column puts the reference first, then the pick, then the rows by their \
+    cost over the pick's, and last the rows the rule left out.";
 
 /// How a row's *Reference* cell is marked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -94,10 +94,6 @@ pub(crate) struct ReferenceRows {
     /// Whether the track's bitmap is one for judging only
     /// (`TrackPayload::bitmap_for_judging`).
     pub(crate) judging: bool,
-    /// Whether the rule reached its pick only through its last fallback
-    /// (`ReferenceFallback::WithoutAny`), where a bitmap that names no row
-    /// stays the fused mean rather than moving to the pick.
-    pub(crate) pick_by_last_fallback: bool,
 }
 
 impl ReferenceRows {
@@ -118,11 +114,6 @@ impl ReferenceRows {
                 .and_then(|r| track.observations.get(r))
                 .is_some_and(|o| o.pinned),
             judging: track.track().is_some_and(|p| p.bitmap_for_judging),
-            pick_by_last_fallback: pick
-                .and_then(|p| track.observations.get(p))
-                .and_then(|o| o.track.as_ref())
-                .and_then(|m| m.reference_view)
-                .is_some_and(|s| s.fallback == ReferenceFallback::WithoutAny),
         }
     }
 
@@ -147,8 +138,9 @@ impl ReferenceRows {
 /// What one row's *Reference* cell draws.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ReferenceCell {
-    /// The cell's two lines: `reference`, `pick` or the test that turned the
-    /// row away, then the viewing angle and the pair ZNCC; or `-` where
+    /// The cell's two lines: `reference`, `pick`, the row's cost over the pick's
+    /// and the word for its costliest term, or why the rule left it out; then
+    /// the viewing angle and the pair ZNCC; or `-` where
     /// nothing has measured the row.
     pub(crate) text: String,
     /// The hover text with what the mark means, every reading and the reason,
@@ -196,9 +188,9 @@ pub(super) fn reference_cell(
             | ReferenceMark::ReferenceNotPick
             | ReferenceMark::ReferenceWithoutPick,
             _,
-        ) => "reference",
-        (ReferenceMark::Pick, _) => "pick",
-        (ReferenceMark::None, None) => "-",
+        ) => "reference".to_string(),
+        (ReferenceMark::Pick, _) => "pick".to_string(),
+        (ReferenceMark::None, None) => "-".to_string(),
         (ReferenceMark::None, Some(standing)) => standing_word(standing),
     };
     let angle = m
@@ -280,18 +272,12 @@ fn mark_sentences(mark: ReferenceMark, pinned: bool, rows: &ReferenceRows) -> St
                  from the rows with a keypoint, in or out, for the bars to score the rows \
                  against, and never committed. There is no reference to mark."
                 .to_string(),
-            None if rows.has_bitmap => format!(
-                "The reference-view rule's pick. The patch bitmap is the mean of the rows \
-                 that are in, the render of no row, so there is no reference to mark. {} Set \
-                 as reference on this row renders the bitmap from it.",
-                if rows.pick_by_last_fallback {
-                    "The rule reached this row only through its last fallback, where the \
-                     render is that mean, so the mean stays."
-                } else {
-                    "The next evaluation that renders the bitmap renders it from this row and \
-                     makes this row the reference."
-                }
-            ),
+            None if rows.has_bitmap => "The reference-view rule's pick. The patch bitmap is \
+                 the mean of the rows that are in, the render of no row, so there is no \
+                 reference to mark. The next evaluation that renders the bitmap renders it \
+                 from this row and makes this row the reference. Set as reference on this row \
+                 renders the bitmap from it."
+                .to_string(),
             None => "The reference-view rule's pick. The track has no patch bitmap yet; the \
                  next render makes one."
                 .to_string(),
@@ -318,25 +304,57 @@ pub(super) fn grid_lines(grid: [[f64; 3]; 3]) -> Vec<String> {
         .collect()
 }
 
-/// The first line of a cell: `reference`, or the word for the test that
-/// turned the row away.
-fn standing_word(standing: ReferenceStanding) -> &'static str {
-    match standing.rejected_by {
-        None => "reference",
-        Some(ReferenceTest::Coverage) => "partial",
-        Some(ReferenceTest::Clipped) => "clipped",
-        Some(ReferenceTest::Angle) => "oblique",
-        Some(ReferenceTest::Cells) => "ninth differs",
-        Some(ReferenceTest::Agreement) => "agrees less",
-        Some(ReferenceTest::Sharpness) => "less sharp",
+/// The word for the term that adds most to a row's cost over the pick's.
+fn term_word(term: ReferenceTerm) -> &'static str {
+    match term {
+        ReferenceTerm::Sharpness => "less sharp",
+        ReferenceTerm::Angle => "oblique",
+        ReferenceTerm::Agreement => "agrees less",
+        ReferenceTerm::Cells => "ninth differs",
+        ReferenceTerm::Coverage => "partial",
+        ReferenceTerm::Clipped => "clipped",
+    }
+}
+
+/// The word for why the rule left a row out.
+fn exclusion_word(exclusion: ReferenceExclusion) -> &'static str {
+    match exclusion {
+        ReferenceExclusion::NoTile => "no tile",
+        ReferenceExclusion::Coverage => "partial",
+        ReferenceExclusion::OtherSide => "other side",
+    }
+}
+
+/// A row's cost over the pick's, `×1.25`, or `×∞` for an infinite one.
+fn ratio_text(ratio: f64) -> String {
+    if ratio.is_finite() {
+        format!("\u{d7}{ratio:.2}")
+    } else {
+        "\u{d7}\u{221e}".to_string()
+    }
+}
+
+/// The first line of a cell: `reference`, or the row's cost over the pick's
+/// and the word for its costliest term, or the word for why the rule left it
+/// out.
+fn standing_word(standing: ReferenceStanding) -> String {
+    if standing.is_reference() {
+        return "reference".to_string();
+    }
+    match (standing.cost, standing.cost_ratio()) {
+        (Err(exclusion), _) => exclusion_word(exclusion).to_string(),
+        (Ok(_), Some(ratio)) => match standing.costliest_term {
+            Some(term) => format!("{} {}", ratio_text(ratio), term_word(term)),
+            None => ratio_text(ratio),
+        },
+        (Ok(_), None) => "-".to_string(),
     }
 }
 
 /// Where row `index`, `observation`, stands for ordering by the column: the
-/// reference in use first, then the rule's pick, then the rows nearest to
-/// being picked, and last the rows a candidate test turned away, in the
-/// reverse of the order the rule applies them. `None` for a row with nothing
-/// to order by.
+/// reference in use first, then the rule's pick, then the rows by their cost
+/// over the pick's, and last the rows the rule left out. `None` for a row
+/// with nothing to order by.
 pub(super) fn reference_rank(
     index: usize,
     observation: &Observation,
@@ -354,15 +372,122 @@ pub(super) fn reference_rank(
 
 /// [`reference_rank`] of a row the rule stood somewhere on.
 fn standing_rank(standing: ReferenceStanding) -> f64 {
-    match standing.rejected_by {
-        None => 0.0,
-        Some(ReferenceTest::Sharpness) => 1.0,
-        Some(ReferenceTest::Agreement) => 2.0,
-        Some(ReferenceTest::Cells) => 3.0,
-        Some(ReferenceTest::Angle) => 4.0,
-        Some(ReferenceTest::Clipped) => 5.0,
-        Some(ReferenceTest::Coverage) => 6.0,
+    if standing.is_reference() {
+        return 0.0;
     }
+    match standing.cost {
+        // An infinite ratio sorts after every finite one and before the rows
+        // left out.
+        Ok(_) => standing
+            .cost_ratio()
+            .filter(|r| r.is_finite())
+            .unwrap_or(f64::MAX),
+        Err(_) => f64::INFINITY,
+    }
+}
+
+/// The phrase for the term that adds most to a row's cost, in a sentence.
+fn term_phrase(term: ReferenceTerm) -> &'static str {
+    match term {
+        ReferenceTerm::Sharpness => "its self-similarity radius",
+        ReferenceTerm::Angle => "its viewing angle",
+        ReferenceTerm::Agreement => "its agreement with the other rows",
+        ReferenceTerm::Cells => "a ninth of its tile that differs from the other rows",
+        ReferenceTerm::Coverage => "the part of its tile off the photograph",
+        ReferenceTerm::Clipped => "the clipped part of its photograph",
+    }
+}
+
+/// The lines that say what the rule decided about a row and why.
+fn decision_lines(standing: ReferenceStanding, m: &TrackMeasurement) -> Vec<String> {
+    let options = ReferenceViewOptions::default();
+    let percent = |v: f64| format!("{:.1}%", 100.0 * v);
+    let mut lines = Vec::new();
+    match standing.cost {
+        Err(exclusion) => lines.push(format!(
+            "Left out of the reference view: {}.",
+            match exclusion {
+                ReferenceExclusion::NoTile => "it renders no tile".to_string(),
+                ReferenceExclusion::Coverage => format!(
+                    "{} of its tile is on the photograph, under the {:.0}% a reference needs",
+                    m.coverage.map_or("-".to_string(), percent),
+                    100.0 * options.min_coverage
+                ),
+                ReferenceExclusion::OtherSide => "it sees the patch from behind, while \
+                     another row that is in sees its front"
+                    .to_string(),
+            }
+        )),
+        Ok(cost) => {
+            if standing.is_reference() {
+                lines.push(
+                    "The reference view: the rule picks this row's tile, the lowest cost."
+                        .to_string(),
+                );
+            } else {
+                let ratio = standing.cost_ratio().map_or("-".to_string(), ratio_text);
+                lines.push(match standing.costliest_term {
+                    Some(term) => format!(
+                        "Not the reference view: its cost is {ratio} the pick's, {} adding \
+                         the most.",
+                        term_phrase(term)
+                    ),
+                    None => format!("Not the reference view: its cost is {ratio} the pick's."),
+                });
+            }
+            let finite = |v: f64| {
+                if v.is_finite() {
+                    format!("{v:.2}")
+                } else {
+                    "\u{221e}".to_string()
+                }
+            };
+            lines.push(format!(
+                "Cost {} grid px: the radius {:.2}{} and the angle term {}, then:",
+                finite(cost.cost),
+                cost.radius,
+                if cost.radius_read {
+                    ""
+                } else {
+                    " (not the row's own: the largest any row has, or the default where none \
+                     has one)"
+                },
+                finite(cost.angle_term)
+            ));
+            lines.push(format!(
+                "Agreement \u{d7}{:.2}: 1 within {:.0} points of the best pair ZNCC, plus 1 \
+                 for every {:.0} points further.",
+                cost.agreement,
+                100.0 * options.agreement_band,
+                100.0 * options.agreement_scale
+            ));
+            lines.push(format!(
+                "Ninths \u{d7}{:.2}: 1 up to a cell deficit of {:.2}, plus 1 for every {:.2} more.",
+                cost.cells, options.cell_deficit_band, options.cell_deficit_scale
+            ));
+            lines.push(format!(
+                "Coverage \u{d7}{:.2}: 1 from {:.0}% of the tile, plus 1 for every {:.0}% less.",
+                cost.coverage,
+                100.0 * options.coverage_band,
+                100.0 * options.coverage_scale
+            ));
+            lines.push(format!(
+                "Clipped \u{d7}{:.2}: 1 up to {:.0}% of the photograph, plus 1 for every {:.0}% \
+                 more.",
+                cost.clipped,
+                100.0 * options.clipped_band,
+                100.0 * options.clipped_scale
+            ));
+        }
+    }
+    if standing.side == Some(PatchSide::Back) {
+        lines.push(
+            "Every row sees the patch from behind, so the angles are measured against the \
+             flipped normal."
+                .to_string(),
+        );
+    }
+    lines
 }
 
 /// The cell's hover text: the decision and why, then every reading.
@@ -374,18 +499,7 @@ pub(super) fn reference_hover(m: &TrackMeasurement) -> String {
             "Not considered for the reference view: the rule reads only the rows that are in."
                 .to_string(),
         ),
-        Some(standing) => {
-            lines.push(match standing.rejected_by {
-                None => "The reference view: the rule picks this row's tile.".to_string(),
-                Some(test) => format!(
-                    "Not the reference view: {}.",
-                    rejection(test, standing.fallback, m)
-                ),
-            });
-            if let Some(dropped) = fallback_sentence(standing.fallback) {
-                lines.push(dropped.to_string());
-            }
-        }
+        Some(standing) => lines.extend(decision_lines(standing, m)),
     }
     lines.push(String::new());
     if let Some(angle) = m.viewing_angle_deg {
@@ -423,76 +537,4 @@ pub(super) fn reference_hover(m: &TrackMeasurement) -> String {
         lines.extend(grid_lines(grid));
     }
     lines.join("\n")
-}
-
-/// Why `test` turned a row away under `fallback`, with the row's own reading
-/// against the threshold.
-fn rejection(test: ReferenceTest, fallback: ReferenceFallback, m: &TrackMeasurement) -> String {
-    let or_dash = |v: Option<f64>, f: &dyn Fn(f64) -> String| v.map_or("-".to_string(), f);
-    match test {
-        ReferenceTest::Coverage => format!(
-            "{} of its tile is on the photograph, under the {:.0}% a reference needs",
-            or_dash(m.coverage, &|c| format!("{:.1}%", 100.0 * c)),
-            100.0 * REFERENCE_MIN_COVERAGE
-        ),
-        ReferenceTest::Clipped => format!(
-            "{} of the photograph under its tile is clipped, over the {:.0}% a reference may have",
-            or_dash(m.clipped_share, &|c| format!("{:.1}%", 100.0 * c)),
-            100.0 * REFERENCE_MAX_CLIPPED_SHARE
-        ),
-        ReferenceTest::Angle if fallback != ReferenceFallback::None => format!(
-            "it sees the patch at {}, edge on or from behind: at or past the {:.0}\u{b0} that \
-             no reference may reach",
-            or_dash(m.viewing_angle_deg, &|a| format!("{a:.1}\u{b0}")),
-            REFERENCE_FACING_LIMIT_DEG
-        ),
-        ReferenceTest::Angle => format!(
-            "it sees the patch at {}, over the {:.0}\u{b0} a reference may be at",
-            or_dash(m.viewing_angle_deg, &|a| format!("{a:.1}\u{b0}")),
-            REFERENCE_MAX_VIEWING_ANGLE_DEG
-        ),
-        ReferenceTest::Cells => format!(
-            "in one ninth of the tile it agrees with the other rows {} below the track's \
-             typical agreement there, over the {} allowed",
-            or_dash(m.cell_deficit, &|d| format!("{d:.2}")),
-            REFERENCE_MAX_CELL_DEFICIT
-        ),
-        ReferenceTest::Agreement => format!(
-            "its pair ZNCC is more than {:.0} points below the best candidate's",
-            100.0 * REFERENCE_AGREEMENT_MARGIN
-        ),
-        // The rule compares the self-similarity ellipse's semi-major axis. A row
-        // without one was not compared at all, and where no row left had one
-        // the rule picked nothing.
-        ReferenceTest::Sharpness
-            if !m
-                .zncc_self_similarity_ellipse
-                .is_some_and(|e| e.grid_px.axes[0].is_finite()) =>
-        {
-            "it passed every other test, but it has no self-similarity radius, so the rule \
-             could not compare its sharpness with the other candidates'"
-                .to_string()
-        }
-        ReferenceTest::Sharpness => "it passed every test, and a candidate with a smaller \
-             self-similarity radius did too"
-            .to_string(),
-    }
-}
-
-/// The sentence for a fallback, or `None` when every test applied.
-fn fallback_sentence(fallback: ReferenceFallback) -> Option<&'static str> {
-    match fallback {
-        ReferenceFallback::None => None,
-        ReferenceFallback::WithoutAngle => {
-            Some("No row passed every test, so the rule dropped the 65\u{b0} angle limit.")
-        }
-        ReferenceFallback::WithoutAngleOrCells => Some(
-            "No row passed every test, so the rule dropped the 65\u{b0} angle limit and the \
-             check of the ninths.",
-        ),
-        ReferenceFallback::WithoutAny => Some(
-            "No row passed the coverage and clipping tests, so every row that faces the patch \
-             was a candidate.",
-        ),
-    }
 }

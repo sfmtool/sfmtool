@@ -146,13 +146,11 @@ placed against the same pixels every score on the bench reads them against.
 2. Where the caller passes none, or the one it passes is turned away by the
    grazing pre-filter, the reference-view rule picks one from the views' renders
    at their starting keypoints, as every render of the stored bitmap does.
-3. Where the rule picks none it would store (it picks no view, or reaches its
-   pick only through its last fallback), the template is the **fused mean** of
+3. Where the rule picks no view, the template is the **fused mean** of
    the views at their starting keypoints (the IRLS-weighted mean of
    [keypoint-subpixel-refinement.md](keypoint-subpixel-refinement.md#the-fused-mean)),
    which is then the point's stored bitmap. No view is held fixed, and every
-   view is searched. Where no fused mean renders either, the rule's
-   last-fallback pick is the reference after all.
+   view is searched.
 
 A view set of one view is its own reference. The resolution is one function,
 `resolve_reference`, which the sub-pixel refiner calls too, with the same

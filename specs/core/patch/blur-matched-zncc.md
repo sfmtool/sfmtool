@@ -816,7 +816,7 @@ row reads 1. The Python tests are in
   stored bitmap"). The kernels that still build a weighted mean as their
   template (normal refinement, and the localizer, the sub-pixel refiner and
   the stored bitmap where the point has no reference and the rule picks no
-  view or reaches its pick only through its last fallback) read their
+  view) read their
   residuals plain; each would blur-match them only on its own measurement.
 - **Deconvolution.** A blurry tile is not sharpened; the sharper one is
   blurred.

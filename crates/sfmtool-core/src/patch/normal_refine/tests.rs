@@ -1810,9 +1810,10 @@ fn stored_bitmap_reference_spans_every_view_under_a_view_cap() {
         &vec![None; views.len()],
         resolution,
         params.sampler,
+        &crate::patch::reference_view::ReferenceViewOptions::default(),
         &crate::progress::Progress::none(),
     );
-    assert_eq!(full.stored_reference(), Some(r));
+    assert_eq!(full.reading.choice.reference, Some(r));
     assert_eq!(
         result.representative.as_deref(),
         Some(crate::patch::stored_bitmap::bitmap_from_tile(&full.tiles[r]).as_slice())

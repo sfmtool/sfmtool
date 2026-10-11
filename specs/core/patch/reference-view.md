@@ -9,12 +9,15 @@ patch, a blown-out highlight holds no texture, and a view with an occluder in
 front of one corner disagrees with the others there. This spec describes the
 measurements that say what each view's tile can contribute, and the
 **reference-view rule**, which picks the one view whose tile is stored as the
-point's patch bitmap: a view that covers the patch, is not clipped or grazing,
-agrees with the other views everywhere in the tile and nearly as well as the
-best of them overall, and among those is the sharpest. The bench measures every
-track it evaluates this way and reports the pick, and every operation that
-renders a point's bitmap stores the picked view's tile as it is and records
-which observation it is ([§ "The stored bitmap"](#the-stored-bitmap)).
+point's patch bitmap. It gives each view a cost in grid px: the tile's
+sharpness, combined with a term for how oblique the view is, and multiplied by
+penalties for a view that agrees less with the others, differs from them in
+part of the tile, falls partly off its photograph or is clipped. The view with
+the lowest cost is picked; a view that renders no tile or has less than 90% of
+it on the photograph never is. The bench measures every track it evaluates this
+way and reports the pick, and every operation that renders a point's bitmap
+stores the picked view's tile as it is and records which observation it is
+([§ "The stored bitmap"](#the-stored-bitmap)).
 
 The design behind the measurements, and the case for storing the view that
 holds the most detail rather than a mean of the views, is in
@@ -28,7 +31,8 @@ bitmap".
 The measurements and the rule live in
 [reference_view.rs](../../../crates/sfmtool-core/src/patch/reference_view.rs)
 with its submodules [tile.rs](../../../crates/sfmtool-core/src/patch/reference_view/tile.rs),
-[agreement.rs](../../../crates/sfmtool-core/src/patch/reference_view/agreement.rs)
+[agreement.rs](../../../crates/sfmtool-core/src/patch/reference_view/agreement.rs),
+[rule.rs](../../../crates/sfmtool-core/src/patch/reference_view/rule.rs)
 and [track.rs](../../../crates/sfmtool-core/src/patch/reference_view/track.rs);
 the stored bitmap in
 [stored_bitmap.rs](../../../crates/sfmtool-core/src/patch/stored_bitmap.rs).
@@ -70,18 +74,45 @@ pub struct ReferenceReadings {
     pub viewing_angle_deg: Option<f64>, pub cell_deficit: Option<f64>,
     pub pair_zncc: Option<f64>, pub semi_major: Option<f64>, pub semi_minor: Option<f64>,
 }
-pub enum ReferenceTest { Coverage, Clipped, Angle, Cells, Agreement, Sharpness }
-pub enum ReferenceFallback { None, WithoutAngle, WithoutAngleOrCells, WithoutAny }
-impl ReferenceFallback {
-    pub fn applies(self, test: ReferenceTest) -> bool; // the angle test always applies
+pub struct ReferenceViewOptions {      // impl Default: the starting values below
+    pub normal_error_deg: f64,          // σ_n
+    pub agreement_band: f64, pub agreement_scale: f64,
+    pub cell_deficit_band: f64, pub cell_deficit_scale: f64,
+    pub coverage_band: f64, pub coverage_scale: f64,
+    pub clipped_band: f64, pub clipped_scale: f64,
+    pub min_coverage: f64,              // the hard limit
+    pub unread_radius: f64,             // r where no view has a radius
+}
+impl ReferenceViewOptions { pub fn angle_scale(&self, resolution: usize) -> f64; } // c
+pub enum ReferenceTerm { Sharpness, Angle, Agreement, Cells, Coverage, Clipped }
+pub enum ReferenceExclusion { NoTile, Coverage, OtherSide }
+pub enum PatchSide { Front, Back }      // Back: angles measured against −n
+pub struct ReferenceCost {
+    pub radius: f64, pub radius_read: bool, // r, and whether it is the view's own
+    pub angle_term: f64,                    // c·tan θ, grid px
+    pub agreement: f64, pub cells: f64, pub coverage: f64, pub clipped: f64,
+    pub cost: f64,
+}
+impl ReferenceCost {
+    pub fn effective_radius(&self) -> f64;                 // √(r² + angle_term²)
+    pub fn ln_parts(&self) -> [(ReferenceTerm, f64); 6];   // ln cost, split by term
 }
 pub struct ReferenceChoice {
     pub reference: Option<usize>,
-    pub fallback: ReferenceFallback,
-    pub rejected_by: Vec<Option<ReferenceTest>>,
+    pub side: Option<PatchSide>,
+    pub costs: Vec<Result<ReferenceCost, ReferenceExclusion>>,
 }
-pub struct ReferenceStanding { pub rejected_by: Option<ReferenceTest>, pub fallback: ReferenceFallback }
-pub fn choose_reference_view(views: &[ReferenceReadings]) -> ReferenceChoice;
+pub struct ReferenceStanding {
+    pub cost: Result<ReferenceCost, ReferenceExclusion>,
+    pub reference: bool,
+    pub pick_cost: Option<f64>,
+    pub costliest_term: Option<ReferenceTerm>,
+    pub side: Option<PatchSide>,
+}
+impl ReferenceStanding { pub fn is_reference(&self) -> bool; pub fn cost_ratio(&self) -> Option<f64>; }
+impl ReferenceChoice { pub fn standing(&self, i: usize) -> Option<ReferenceStanding>; }
+pub fn choose_reference_view(views: &[ReferenceReadings], resolution: usize,
+    options: &ReferenceViewOptions) -> ReferenceChoice;
 
 // The rule over one track's tiles: the pair ZNCC from member coherence's
 // matrix, the cells from the tiles, and the pick.
@@ -96,22 +127,20 @@ pub fn readings_of(tile: &ViewTile, pair_zncc: Option<f64>, cell_deficit: Option
     semi_axes: Option<[f64; 2]>) -> ReferenceReadings;
 pub fn read_track(patch: &OrientedPatch, views: &[ProjectedImage<'_>], members: &[u32],
     keypoints: &[Option<[f64; 2]>], tiles: &[&ViewTile], semi_axes: &[Option<[f64; 2]>],
-    sampler: SamplerChoice, progress: &Progress<'_>) -> TrackReading;
+    sampler: SamplerChoice, options: &ReferenceViewOptions,
+    progress: &Progress<'_>) -> TrackReading;
 
 // patch::stored_bitmap
 pub struct PatchBitmap { pub rgba: Vec<u8>, pub reference: Option<usize> }
 pub fn bitmap_from_tile(tile: &ViewTile) -> Vec<u8>; // alpha 255 on the photograph
 pub struct ReferenceRender { pub tiles: Vec<ViewTile>, pub semi_axes: Vec<Option<[f64; 2]>>,
     pub reading: TrackReading }
-impl ReferenceRender {
-    pub fn stored_reference(&self) -> Option<usize>; // the pick, unless reached by WithoutAny
-}
 pub fn render_reference(patch: &OrientedPatch, views: &[ProjectedImage<'_>], view_set: &[u32],
     keypoints: &[Option<[f64; 2]>], resolution: u32, sampler: SamplerChoice,
-    progress: &Progress<'_>) -> ReferenceRender;
+    options: &ReferenceViewOptions, progress: &Progress<'_>) -> ReferenceRender;
 pub fn render_patch_bitmap(patch: &OrientedPatch, views: &[ProjectedImage<'_>],
     view_set: &[u32], keypoints: &[[f64; 2]], params: &KeypointSubpixelParams,
-    progress: &Progress<'_>) -> Option<PatchBitmap>;
+    progress: &Progress<'_>) -> Option<PatchBitmap>; // the rule with params.reference_view
 pub struct PatchBitmapColumn { pub bitmaps: Array4<u8>, pub reference_observations: Vec<i32> }
 pub enum UnreferencedPoints { Pick, Skip } // what a point at -1 gets
 pub fn render_patch_cloud_bitmaps(cloud: &PatchCloud, recon: &SfmrReconstruction,
@@ -127,14 +156,22 @@ pub fn viewing_angle(patch: &OrientedPatch, cam_from_world: &RigidTransform) -> 
 
 **Why it is shaped this way.** The rule is a pure function over a slice of
 per-view readings rather than a function of tiles and a reconstruction, so the
-thresholds and the fallbacks can be tested on constructed numbers, and a caller
-that holds its readings from elsewhere (the slots of a bench row a verdict
-moved under) runs the same rule. Each reading is an `Option` because the views
+cost and its terms can be tested on constructed numbers, and a caller that
+holds its readings from elsewhere (the slots of a bench row a verdict moved
+under) runs the same rule. It takes the tiles' resolution because the angle
+term is in grid px of that grid. Each reading is an `Option` because the views
 of a real track do not all have every one: a tile that misses the photograph
 has no clipped share, and a view member coherence could not score has no pair
-ZNCC. The answer names, for every view, the first test that turned it away,
-because that is what a person reading a table of views needs to see beside
-each row, and the fallback once, because it is a fact about the track.
+ZNCC. The answer gives, for every view, its cost and the terms it is the
+product of, or why the view was left out, because that is what a person
+reading a table of views needs to see beside each row, and the side once,
+because it is a fact about the track. A `ReferenceStanding` adds the pick's
+cost and the **costliest term**, the term that adds most to the view's cost
+over the pick's, so a row can be read on its own. The parameters are a
+`ReferenceViewOptions` rather than constants so that tuning can sweep them
+without rebuilding; every caller passes the `Default` for now, the bench
+through `EvaluateOptions::reference_view` and the stored bitmap's render
+through `KeypointSubpixelParams::reference_view`.
 
 `read_track` takes the readings across one track's tiles and runs the rule, and
 both the bench's evaluation and the stored bitmap call it, so the view a bench
@@ -156,16 +193,21 @@ function serves both, so the angle the bench reports and the cosine the prior
 weights by cannot disagree.
 
 ```rust
-use sfmtool_core::patch::reference_view::{choose_reference_view, ReferenceReadings};
+use sfmtool_core::patch::reference_view::{
+    choose_reference_view, ReferenceReadings, ReferenceViewOptions,
+};
 
 let readings: Vec<ReferenceReadings> = /* one per view */;
-let choice = choose_reference_view(&readings);
+let choice = choose_reference_view(&readings, 24, &ReferenceViewOptions::default());
 if let Some(i) = choice.reference {
-    println!("view {i} is the reference ({:?})", choice.fallback);
+    println!("view {i} is the reference ({:?} side)", choice.side);
 }
-for (i, rejected) in choice.rejected_by.iter().enumerate() {
-    if let Some(test) = rejected {
-        println!("view {i}: turned away by {test}");
+for i in 0..readings.len() {
+    let standing = choice.standing(i).unwrap();
+    match (standing.cost, standing.cost_ratio(), standing.costliest_term) {
+        (Err(why), _, _) => println!("view {i}: left out ({})", why.name()),
+        (Ok(_), Some(ratio), Some(term)) => println!("view {i}: ×{ratio:.2}, mostly {term}"),
+        _ => {}
     }
 }
 ```
@@ -234,78 +276,214 @@ is the whole tile's reading over its samples on the photograph
 
 ## The rule
 
-1. **Candidates** are the views that pass every one of:
-   - **coverage** at least `REFERENCE_MIN_COVERAGE`;
-   - **clipped** share at most `REFERENCE_MAX_CLIPPED_SHARE`;
-   - **angle** at most `REFERENCE_MAX_VIEWING_ANGLE_DEG`;
-   - **cells**: cell deficit at most `REFERENCE_MAX_CELL_DEFICIT`.
+Each view the pick is made from gets a cost in grid px, and the view with the
+lowest cost is the reference (`choose_reference_view`):
 
-   When no view passes, the angle test's `REFERENCE_MAX_VIEWING_ANGLE_DEG`
-   limit is dropped; when still none passes, the cell check too; and then
-   coverage and clipping, so every view that faces the patch is a candidate. A
-   test dropped for the track is dropped for every view of it. The angle test
-   keeps a limit of `REFERENCE_FACING_LIMIT_DEG` (`90°`) under every fallback:
-   a view at `90°` sees the patch edge on and one past it sees the patch's back,
-   so its tile is not a picture of the patch's face, and it is turned away by
-   `angle` whichever tests are dropped. Where every view is at `90°` or more,
-   the rule picks nothing.
-2. **Agreement**: of the candidates, those whose pair ZNCC is within
-   `REFERENCE_AGREEMENT_MARGIN` of the best candidate's. A view with no pair
-   ZNCC fails this test, unless no candidate has one, when the test passes
-   every candidate.
-3. **Sharpness**: of those, the one with the smallest self-similarity
-   semi-major axis; a tie goes to the smaller semi-minor axis, then to the
-   earlier view.
+```
+cost = r_eff · A · K · C · P
+r_eff = √(r² + (c · tan θ)²)
+c = (R / √12) · σ_n
+```
 
-A missing coverage or viewing angle fails its test, since a candidate has to
-show that it meets it; a missing clipped share or cell deficit passes, since
-nothing is there to count against the view. Once the 65° limit is dropped a
-missing viewing angle passes, since only an angle shown to be at or past the
-facing limit turns the view away. When no view left after the
-agreement test has a self-similarity reading, the rule picks nothing.
+- `r` is the self-similarity semi-major axis of the view's `R×R` tile, in grid
+  px.
+- `θ` is the viewing angle, measured on the side of the patch the pick is made
+  on ([§ "The side"](#the-side)).
+- `A`, `K`, `C` and `P` are the penalties for agreement, the ninths, coverage
+  and clipping ([§ "The penalties"](#the-penalties)), each `1` inside its band.
 
-Each criterion is a test the view passes or fails in turn, so the rule does
-not weigh one against another: below 65° the viewing angle plays no part in
-the pick. Ranking the views by one cost that every criterion enters, with only
-a coverage floor and a rendered tile kept as hard limits, is proposed in
-[../../drafts/reference-view-score-amendment.md](../../drafts/reference-view-score-amendment.md).
+A tie on the cost goes to the smaller semi-minor axis, a missing one counting
+as infinite, and then to the earlier view.
 
-### Each threshold and its reason
+**Why a product on an effective radius.** The cost stays in the unit of the
+radius, so a cost reads as "this view counts as if its tile were this blurry".
+The radius depends on the texture as well as on the view and is only compared
+within one track; a penalty that multiplies makes the same relative trade-off
+on a track of fine texture as on one of coarse texture, where a penalty added
+in grid px would weigh more on the first. A factor of `2` reads as "this view
+counts as twice as blurry".
+
+### The angle term
+
+An error `σ_n` in the patch's normal, in radians, tilts the patch's plane
+about its centre. A sample at distance `d` from the centre, along the
+direction the plane tilts, moves out of the plane by about `d · σ_n`, and a
+view at angle `θ` sees that step as a shift of about `d · σ_n · tan θ` along
+its tilt direction ([§ "The measurements"](#the-measurements)). The tile is
+anchored on the keypoint, so its centre does not move. Over an `R×R` tile the
+root mean square of `d` along one axis is `R/√12`, the standard deviation of a
+uniform spread over `R`, so the root mean square shift is `c · tan θ` grid px
+(`ReferenceViewOptions::angle_scale`). It is added to the radius in
+quadrature, as two independent spreads in the same unit: a view facing the
+patch costs its radius alone, and the angle term overtakes the radius only
+where `c · tan θ` approaches it. With the starting `σ_n = 3°` and `R = 24`,
+`c ≈ 0.36` grid px, and `c · tan θ` is about `0.21` at 30°, `0.36` at 45°,
+`0.78` at 65° and `2.06` at 80°. With `σ_n = 0` the term is `0` and the rule
+ranks by the radius and the penalties alone.
+
+A view at exactly `90°` has an infinite angle term and so an infinite cost: it
+is ranked after every view with a finite cost, and is picked only where every
+view the pick is made from has an infinite cost, by the tie breaks.
+
+### The penalties
+
+Each penalty is a **hinge**, `1` up to a band `x₀` and growing linearly past
+it with a scale `s`:
+
+```
+F(x) = 1 + max(0, x − x₀) / s
+```
+
+so `s` is the excess over the band at which the view counts as twice as
+blurry. Inside the band the factor is exactly `1`, so a view within every band
+is ranked by `r_eff` alone; past it the factor grows without a step, so a view
+slightly past a band is slightly worse rather than out.
+
+| Factor | Reading `x` |
+|---|---|
+| `A`, agreement | the shortfall of the view's pair ZNCC below the best pair ZNCC among the views the pick is made from |
+| `K`, the ninths | the cell deficit |
+| `C`, coverage | the shortfall of the coverage below `coverage_band`, with a band of `0` |
+| `P`, clipping | the clipped share |
+
+**A sharp view is not penalised for detail the others lack.** A sharp view
+correlates worse with blurrier views, since its detail is missing from them.
+The agreement penalty reads the shortfall below the best view's pair ZNCC
+rather than an absolute level, and its band keeps a view within `0.15` of the
+best unpenalised. The cell deficit measures a view's ninths against the
+track's typical agreement, so a sharp view is not penalised by it either.
+
+### Hard limits
+
+A view that fails either of two limits is never the reference, whatever its
+cost, and is left out of the views the pick is made from
+(`ReferenceExclusion`):
+
+- **No tile** (`no_tile`): the view has no coverage reading.
+- **Coverage under `min_coverage`** (`coverage`), `0.9`: a bitmap taken from
+  the view's tile would have holes over a tenth of the patch or more. This
+  floor is set by decision and is not tuned. Between it and `coverage_band`
+  the coverage penalty applies.
+
+A view meeting both is **eligible**.
+
+### The side
+
+A tile samples the same points of the patch's grid in every view, so a tile
+rendered from behind the patch is laid out like one from in front. The rule
+picks a side of the patch first and measures every angle on it
+(`PatchSide`):
+
+- **Front.** Where some eligible view sees the patch at less than `90°`, the
+  pick is made from the eligible views at `90°` or less and those with no
+  angle reading, with `θ` as read. A view past `90°` sees the patch's back and
+  is left out (`other_side`).
+- **Back.** Where every eligible view with an angle reading sees the patch at
+  `90°` or more, the pick is made from all of them, with the angle measured
+  against the flipped normal: `θ' = 180° − θ`. All of these views see the
+  patch from the same side; the likely cause is a normal that points into the
+  surface, and under that reading `θ'` is the angle each view sees the
+  surface at.
+
+Where views see the patch from both sides, the front is kept, so a track with
+a view facing the patch picks among the facing views, and only a track whose
+every eligible view is behind the patch is picked on the back.
+
+### Missing readings
+
+A reading the view does not have never makes it look better than a view that
+has it:
+
+- **No radius**: `r` is the largest radius among the views the pick is made
+  from, so the view ranks as no sharper than the bluntest view that was read
+  (`ReferenceCost::radius_read` is `false`). Where no view has one, every view
+  takes `unread_radius`, and the angle and the penalties pick.
+- **No pair ZNCC**: the shortfall is the largest among the views that have
+  one. Where none has one, `A = 1` for every view.
+- **No viewing angle**: the angle term is the largest among the views that
+  have an angle. Where none has one, it is `0` for every view.
+- **No clipped share or cell deficit**: the factor is `1`, since nothing is
+  there to count against the view.
+
+Where no view is eligible the rule picks nothing.
+
+### The costliest term
+
+`ln cost` splits exactly into one part per term,
+`ln r + ln(r_eff / r) + ln A + ln K + ln C + ln P` (`ReferenceCost::ln_parts`,
+the terms `sharpness`, `angle`, `agreement`, `cells`, `coverage` and
+`clipped`), so a view's `ln(cost / pick cost)` splits into the differences of
+those parts. The **costliest term** is the term with the largest difference:
+the one that adds most to the view's cost over the pick's. Track View and the
+wire name it beside each row. A difference that is not a number, which only a
+radius of `0` or two infinite angle terms give, is passed over.
+
+### Each parameter and its reason
+
+Every value of `ReferenceViewOptions` is a starting value and is **not yet
+tuned**, except `min_coverage`, which is set by decision. How they are to be
+set is in
+[../../drafts/reference-view-score-amendment.md](../../drafts/reference-view-score-amendment.md)
+§ "How the values will be set".
+
+| Field | Default | Reason |
+|---|---|---|
+| `normal_error_deg`, `σ_n` | `3` | The normal error the angle term expects. An oblique tile depends most on the patch model, since an error in the normal shears it by an amount that grows with `tan θ`. Not tuned. |
+| `agreement_band` | `0.15` | Sharp views correlate worse with blurrier ones, so a narrow band penalises exactly the sharp views. The previous rule's margin, `0.15`, was set against hand picks. Not tuned as a band. |
+| `agreement_scale` | `0.15` | A view `0.30` below the best counts as twice as blurry. Not tuned. |
+| `cell_deficit_band` | `0.3` | A view that agrees overall but not in one part of the tile: an occluder, a shadow edge, parallax within the tile. The previous rule's bar, `0.3`, was set against hand picks. Not tuned as a band. |
+| `cell_deficit_scale` | `0.3` | A cell deficit of `0.6` counts as twice as blurry. Not tuned. |
+| `coverage_band` | `0.99` | A partial tile holds only part of the patch; `0.99` lets a sample or two at a corner fall off the photograph. Not tuned. |
+| `coverage_scale` | `0.03` | A view covering `0.96` of its tile counts as twice as blurry, and one at the floor of `0.9` four times. Not tuned. |
+| `clipped_band` | `0.05` | A clipped region holds neither texture nor its true colour. Not tuned. |
+| `clipped_scale` | `0.05` | A view with a tenth of its pixels clipped counts as twice as blurry. Not tuned. |
+| `min_coverage` | `0.9` | The hard limit ([§ "Hard limits"](#hard-limits)). Set by decision. |
+| `unread_radius` | `1` grid px | The radius every view takes where no view has one. The per-dataset medians of the stored bitmap's radius run from 0.40 to 1.06 grid px ([§ "Cost of the stored bitmap"](#cost-of-the-stored-bitmap)). Not tuned. |
+
+Two constants are part of how the cell deficit is read rather than of the
+rule:
 
 | Constant | Value | Reason |
 |---|---|---|
-| `REFERENCE_MIN_COVERAGE` | `0.99` | A partial tile holds only part of the patch, so a bitmap taken from it would be missing the rest. Not tuned. |
-| `REFERENCE_MAX_CLIPPED_SHARE` | `0.05` | A clipped region holds neither texture nor its true colour. Not tuned. |
-| `REFERENCE_MAX_VIEWING_ANGLE_DEG` | `65°` | An oblique tile depends most on the patch model. It changed no pick on the review cases and 0.9% of picks over the whole datasets; on the two ground truths, removing it made the picks it changes localize the other views 0.12 px worse on average (15 tracks). Kept for that reason rather than fitted. |
-| `REFERENCE_FACING_LIMIT_DEG` | `90°` | A view at `90°` sees the patch edge on and one past it sees its back, so its tile is not a picture of the patch's face. Kept under every fallback. A geometric limit, not tuned. |
-| `REFERENCE_MAX_CELL_DEFICIT` | `0.3` | Catches a view that agrees overall but not in one part of the tile: an occluder, a shadow edge, parallax within the tile. Values from `0.2` to `0.4` gave the same agreement with the hand picks on the tuning half; `0.3` is the middle. |
 | `REFERENCE_MIN_JUDGED_CELL_ZNCC` | `0.5` | A cell whose views do not agree, because it holds no texture they share, says nothing about any one view. |
 | `REFERENCE_MIN_CELL_SAMPLES` | `16` | Below it a cell's ZNCC is read off a handful of samples. |
-| `REFERENCE_AGREEMENT_MARGIN` | `0.15` | Sharp views correlate worse with blurrier ones, since the detail they carry is missing from the others, so a narrow margin turns away exactly the sharp views. Where the earlier margin of `0.05` missed, the hand-picked view sat `0.06` to `0.21` below the best. `0.10` to `0.20` were within one case of each other on the tuning half. |
 
-The values were set against hand picks of the reference view on 77 tracks from
-ten datasets, split in half by dataset with the thresholds chosen on one half:
-on the held-out half the rule picks the hand-picked view on 10 of 38 tracks and
-a view as sharp and as typical as it, within 0.1 px of semi-major axis and 0.05
-of pair ZNCC, on 35 of 38 (chance is about one in nine for the first). Two
-signals were tried and left out: a brightness and colour gate, which turned away
-views the hand picks chose, and a contrast floor, which the agreement margin
-already covers.
+**What was measured on the previous rule.** The bands start at the thresholds
+of the rule this one replaced, which passed the views through all-or-nothing
+tests (coverage at least `0.99`, clipped share at most `0.05`, viewing angle at
+most `65°`, cell deficit at most `0.3`, pair ZNCC within `0.15` of the best
+candidate's, with the tests dropped in turn where no view passed) and then
+took the smallest radius. Those thresholds were set against hand picks of the
+reference view on 77 tracks from ten datasets, split in half by dataset with
+the thresholds chosen on one half: on the held-out half that rule picked the
+hand-picked view on 10 of 38 tracks and a view as sharp and as typical as it,
+within 0.1 px of semi-major axis and 0.05 of pair ZNCC, on 35 of 38 (chance is
+about one in nine for the first). Cell bars from `0.2` to `0.4` gave the same
+agreement on the tuning half, and margins from `0.10` to `0.20` were within one
+case of each other; where an earlier margin of `0.05` missed, the hand-picked
+view sat `0.06` to `0.21` below the best. The `65°` gate changed no pick on the
+review cases and 0.9% of picks over the whole datasets; on the two ground
+truths, removing it made the picks it changed localize the other views 0.12 px
+worse on average (15 tracks). Two signals were tried and left out: a
+brightness and colour gate, which turned away views the hand picks chose, and
+a contrast floor, which the agreement margin already covered. None of these
+numbers has been measured on the cost this rule reads.
 
 ### Why the agreement is read plain
 
-Both tests could read blur-matched agreement instead
-([blur-matched-zncc.md](blur-matched-zncc.md)): before two views' tiles are
-correlated, a tile sharper than the other along every direction is blurred by a
-round Gaussian to the other's sharpness along its sharpest direction, so a sharp
-view is counted as disagreeing less for detail a blurrier view lacks. That was
-measured against the same hand picks, with the thresholds tuned the same way
-(seeded split by dataset, best lenient then exact, the middle of a tied run),
-from the bench's own readings:
+The previous rule's agreement and cell tests could have read blur-matched
+agreement instead ([blur-matched-zncc.md](blur-matched-zncc.md)): before two
+views' tiles are correlated, a tile sharper than the other along every
+direction is blurred by a round Gaussian to the other's sharpness along its
+sharpest direction, so a sharp view is counted as disagreeing less for detail
+a blurrier view lacks. That was measured on the previous rule against the same
+hand picks, with the thresholds tuned the same way (seeded split by dataset,
+best lenient then exact, the middle of a tied run), from the bench's own
+readings:
 
 | Readings | Margin, cell bar | Tune exact / lenient (39) | Held-out (38) | All (77) |
 |---|---|---|---|---|
-| **Plain (the rule)** | **0.15, 0.3** | **18 / 35** | **10 / 35** | **28 / 70** |
+| **Plain** | **0.15, 0.3** | **18 / 35** | **10 / 35** | **28 / 70** |
 | Blur-matched agreement only | 0.15, 0.3 | 18 / 35 | 10 / 35 | 28 / 70 |
 | Blur-matched cells only | 0.15, 0.3 | 18 / 35 | 10 / 35 | 28 / 70 |
 | Both blur-matched, every difference | 0.15, 0.3 | 18 / 36 | 10 / 35 | 28 / 71 |
@@ -315,14 +493,18 @@ from the bench's own readings:
 
 Blur matching picked the hand pick exactly on as many tracks as the plain
 readings, within the lenient bounds on one more, changed the pick on 4 of 661
-pool tracks (0.6%), and added 0.13 ms (2%) to a track's evaluation. The
-agreement test is a gate on whether a candidate agrees with the track rather
-than a ranking of the candidates, and the rule ranks by the radius, so taking
-away a sharp view's penalty for detail the others lack rarely changes which
-view passes. The rule reads plain readings, and blur matching is read where it
-changes the result: in each observation's score against the stored bitmap
+pool tracks (0.6%), and added 0.13 ms (2%) to a track's evaluation. There the
+agreement test was a gate on whether a candidate agreed with the track rather
+than a ranking of the candidates, so taking away a sharp view's penalty for
+detail the others lack rarely changed which view passed. The rule reads plain
+readings, and blur matching is read where it changed the result: in each
+observation's score against the stored bitmap
 ([blur-matched-zncc.md](blur-matched-zncc.md) § "Scores against the stored
-bitmap").
+bitmap"). A penalty that acts on every view, rather than a gate, may be more
+sensitive to it, so the tuning measures the agreement penalty on blur-matched
+pair ZNCC beside the plain one
+([../../drafts/reference-view-score-amendment.md](../../drafts/reference-view-score-amendment.md)
+§ "How the values will be set").
 
 ## The stored bitmap
 
@@ -349,29 +531,22 @@ into the point's own track, in `tracks/reference_observations`.
 - **What a single view costs.** It keeps that view's noise, and any highlight or
   occluder the measurements missed. The bitmap also changes all at once when
   another view comes to rank higher.
-- **Where the rule picks no view.** That happens only where no candidate has a
-  self-similarity reading, or every view sees the patch edge on or from behind.
-  The bitmap is then the fused mean of the views
+- **Every pick is stored.** The rule's pick is always the view whose tile is
+  stored, so the row Track View marks as the rule's pick is the stored
+  bitmap's tile wherever the bitmap was rendered by the rule.
+- **Where the rule picks no view.** That happens only where no view is
+  eligible: none renders a tile, or none has `min_coverage` of its tile on the
+  photograph ([§ "Hard limits"](#hard-limits)). The bitmap is then the fused
+  mean of the views
   ([keypoint-subpixel-refinement.md](keypoint-subpixel-refinement.md) § "The
-  fused mean"), and the point names no reference observation (`-1`). A point
-  with fewer than two views gets no bitmap.
-- **Where the rule's pick is not stored.** A pick the rule reaches only by its
-  last fallback, `without_any`, is one no view passed the coverage and clipping
-  tests for: every candidate's tile has too little of the patch on its
-  photograph, has no coverage reading, or has too large a share of clipped
-  (blown-out) pixels. Such a tile can hold few samples or little texture, so
-  the stored bitmap is the fused mean instead,
-  which fills every sample some view covers, and the point names no reference
-  (`ReferenceRender::stored_reference`). Where no fused mean renders either,
-  because no view has the patch in frame, the pick is stored after all, since
-  a part of the patch is better than none. On a solve of `dino_dog_toy`, 559
-  of 18,991 points (3%) take the fused mean by this rule. The evaluation's
-  pick, which Track View and the wire show, is the rule's and is not changed
-  by it, so for these points the row Track View marks as the reference is not
-  the stored bitmap's tile. Storing a view's tile, and naming it, for every
-  point that has a view meeting the proposed cost's hard limits, in place of
-  the fused mean in this case and the one above, is proposed in
-  [../../drafts/reference-view-score-amendment.md](../../drafts/reference-view-score-amendment.md).
+  fused mean"), and the point names no reference observation (`-1`); where no
+  fused mean renders either, because fewer than two views have the patch in
+  frame, the point gets no bitmap. A point with fewer than two views gets no
+  bitmap. Giving a point with no eligible view no bitmap rather than the fused
+  mean, and removing the fused mean everywhere it stands in for a reference,
+  is specified in
+  [../../drafts/reference-view-score-amendment.md](../../drafts/reference-view-score-amendment.md)
+  § "The stored bitmap".
 
 **The reference says what to render.** `tracks/reference_observations`
 names, per point, the observation its bitmap is, or is to be, rendered from,
@@ -408,7 +583,7 @@ renders usefully, and a stored reference whose core does not render at its
 keypoint (out of frame), or that is past the obliquity cut (`embed-patches`'
 `--max-obliquity-deg`, or the localizer's grazing pre-filter), is replaced by
 the rule's pick, which is recorded, or by `-1` with the fused mean where the
-rule picks no view it would store, though the observation stays in the track.
+rule picks no view, though the observation stays in the track.
 A writer that aligns keypoints and writes no bitmap (`xform
 --localize-keypoints`, `--refine-keypoints bitmaps=false`) keeps each stored
 reference instead, since no bitmap is written for it to disagree with. The
@@ -465,7 +640,7 @@ Every operation that renders the stored bitmap renders it this way:
 The localizer, the sub-pixel refiner and Add Image to Tracks align each view
 to the same reference render: the tile of the point's reference observation
 at its keypoint, or the rule's pick where the point stores none, and the fused
-mean where the rule picks none it would store
+mean where the rule picks none
 ([patch-keypoint-localization.md](patch-keypoint-localization.md)). Normal
 refinement keeps its own weighted consensus of the views, since it chooses a
 normal rather than placing views
@@ -484,7 +659,7 @@ coherence's matrix, but the pair ZNCC grid is read from the tiles already
 rendered, with each pair's own support and every sample weighted equally.
 Member coherence renders only the samples inside its window's disk and common
 to every view, so its corner cells would hold only the part of their square
-inside the disk, and the cell check was measured on whole cells. The cost is
+inside the disk, and the cell readings were measured on whole cells. The cost is
 one extra member-coherence render per view and `k(k − 1)/2` pairs of nine
 cells; on the review tracks (6 to 26 views) the bench's `reference view` phase
 takes 0.4 to 2.4 ms, about 9% of an evaluation.
@@ -513,7 +688,7 @@ ray reads 111°.
 **The self-similarity of a tile that crosses the border.** The bench reads a
 tile's self-similarity over its samples on the photograph, so a partial tile
 is judged on what it holds. A view with up to 1% of its tile off the photograph
-still passes the coverage test.
+pays no coverage penalty.
 
 ## Cost of the stored bitmap
 
@@ -541,7 +716,9 @@ instead for each tile's self-similarity and member coherence's matrix; the two
 come out within 10% of each other. `sfm xform --add-patch-bitmaps` over the
 1,095 points of OmniCoast takes 2.1 s, the photographs' decode included.
 
-**What it stores.** On the same 661 tracks the evaluation's pick, the view whose
+**What it stores.** Measured on the previous rule of gates
+([§ "Each parameter and its reason"](#each-parameter-and-its-reason)): on the
+same 661 tracks the evaluation's pick, the view whose
 tile `render_patch_bitmap` stored and the bench payload's reference were the
 same row on every track, and the rule picked a view on every one. The stored
 bitmap's self-similarity semi-major axis fell from a median of 1.21 grid px for
@@ -565,8 +742,17 @@ the fused mean to 0.66 for the reference view's tile (p10 0.48 to 0.27, p90
 
 ## Parameters
 
-The rule's thresholds are the constants above, defined in
-[reference_view.rs](../../../crates/sfmtool-core/src/patch/reference_view.rs).
+The rule's parameters are the fields of `ReferenceViewOptions`, defined in
+[rule.rs](../../../crates/sfmtool-core/src/patch/reference_view/rule.rs), and
+the cell readings' constants are in
+[reference_view.rs](../../../crates/sfmtool-core/src/patch/reference_view.rs)
+([§ "Each parameter and its reason"](#each-parameter-and-its-reason)). The
+bench's evaluation runs the rule with `EvaluateOptions::reference_view`, the
+stored bitmap's render and the sub-pixel refiner with
+`KeypointSubpixelParams::reference_view`, and
+every other caller (the localizer, normal refinement, and the bench's
+restatement of the rule after a verdict moves) with the `Default`; every one
+is the `Default` for now.
 `MIN_TILT_ANGLE_DEG = 0.1` is in
 [obliquity.rs](../../../crates/sfmtool-core/src/patch/normal_refine/obliquity.rs).
 The bench renders the tiles at the reconstruction's patch resolution with the
@@ -583,11 +769,18 @@ The bench's readings cross on each observation's `"track"` dict
 ([editable-track.md](../bench/editable-track.md) § "Python bindings"):
 `viewing_angle_deg`, `tilt_direction_deg`, `coverage`, `clipped_share`,
 `pair_zncc` and `cell_deficit` as floats, `pair_zncc_grid` as a `(3, 3)`
-float64 array, and `reference_view` as a dict `{"is_reference",
-"rejected_by", "fallback"}`, with `rejected_by` one of `"coverage"`,
-`"clipped"`, `"angle"`, `"cells"`, `"agreement"`, `"sharpness"` or `None`, and
-`fallback` one of `"none"`, `"without_angle"`, `"without_angle_or_cells"`,
-`"without_any"`. Each is absent where the row has no such reading.
+float64 array, and `reference_view` as a dict `{"is_reference", "cost",
+"cost_ratio", "terms", "costliest_term", "excluded_by", "side"}`: `cost` the
+row's cost in grid px and `cost_ratio` its cost over the pick's, floats or
+`None` for a row left out; `terms` a dict `{"radius", "radius_read",
+"angle_term", "agreement", "cells", "coverage", "clipped"}` of the radius
+(`radius_read` whether it is the row's own), the angle term and the four
+penalties, or `None` for a row left out; `costliest_term` one of
+`"sharpness"`, `"angle"`, `"agreement"`, `"cells"`, `"coverage"`, `"clipped"`,
+or `None` for the pick and a row left out; `excluded_by` one of `"no_tile"`,
+`"coverage"`, `"other_side"` or `None`; and `side` `"front"` or `"back"`, or
+`None` where no row is eligible. Each reading is absent where the row has no
+such reading.
 `EditableTrack.reference_observation` is the row the stored bitmap is the tile
 of, the reference in use, and `EditableTrack.reference_view_observation` the
 row the rule picked.
@@ -629,24 +822,35 @@ identical tiles, flat and short cells, an occluder in one cell and cells the
 track does not agree on; the clipped share of a tile rendered through a
 fisheye camera, against a count of every pixel centre inside the polygon of its
 border samples projected one at a time, and of a tile cut by the photograph's
-edge; and each of the rule's tests, its inclusive thresholds, the margin's
-reference point, the tie breaks, every fallback, the facing limit under every
-fallback, and missing readings.
+edge. On constructed readings it checks the rule: a view at 20° with a radius
+of 0.62 grid px picked over one at 55° with 0.60, and the sharper one picked
+with no normal error; each penalty `1` inside its band and growing at its
+scale past it; a view at the coverage floor eligible and one just under it and
+one with no tile left out; a track whose every view is behind the patch picked
+by `θ'`, and one with views on both sides picked among the facing ones; each
+kind of missing reading, including a track where no view has a radius; a view
+at exactly 90°; the tie breaks; and the costliest term's parts summing to the
+log of a view's cost over the pick's.
 [stored_bitmap/tests.rs](../../../crates/sfmtool-core/src/patch/stored_bitmap/tests.rs)
 checks, on three synthetic views of a painted plane, that the stored bitmap is
 the tile of the view the rule picks (the sharp one), with alpha marking the
-samples on the photograph; that where every view sees the patch from behind
-the bitmap is the fused mean and names no reference; and that a pick reached
-only by the `without_any` fallback is not what `stored_reference` returns,
-with the pick stored after all where no fused mean renders.
+samples on the photograph; that where every view sees the patch from behind a
+view's tile is stored and named; that a patch whose best view covers between
+0.9 and 0.99 of its tile stores that view's tile and names it; and that a patch
+no view covers to 0.9 has no pick, and, with no view wholly in frame, no
+bitmap.
 [display_bitmaps/tests.rs](../../../crates/sfmtool-core/src/patch/display_bitmaps/tests.rs)
 checks, on the seoul_bull ground truth, that the whole-cloud render names a
 reference within each point's own track, also when some images have no view
 (so the index is the observation's, not its place among the views to hand).
 [bench/tests/reference_view.rs](../../../crates/sfmtool-core/src/bench/tests/reference_view.rs)
 evaluates a track of the seoul_bull ground truth and checks that the rule picks
-exactly one view, with coverage of at least 0.99 and under the angle limit, and
-that every view it turned away for sharpness is no sharper; that each row's
+exactly one view, with coverage of at least 0.9 and facing the patch, at the
+lowest cost, and that every other row with a cost names its costliest term;
+that a point no view of which covers its tile whole stores the rule's pick, and
+that the sub-pixel refiner, the localizer and normal refinement name a
+reference for it, and that a track at `-1` on it is rendered from the pick at
+its first rendering evaluation; that each row's
 self-similarity readings are those of its tile rendered directly; that each
 row's pair ZNCC is the median of its row of `member_zncc_matrix` called
 directly; that rendering the bitmap where the track stands stores the tile of

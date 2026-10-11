@@ -121,9 +121,9 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           and reference_view_observation, the row the reference-view rule \
                           picked, which can differ from it, or null. For a point stored at -1 \
                           with a mean bitmap, the evaluation that renders the bitmap from the \
-                          pick reports the two equal; where the rule reached its pick only \
-                          through its last fallback, the mean stays and reference_observation \
-                          is null. While evaluating, the measurements are the \
+                          pick reports the two equal; where the rule picks no row, the mean \
+                          stays and reference_observation is null. While evaluating, the \
+                          measurements are the \
                           last ones landed. Any other point has no evaluation block.",
             kind: Read,
             schema: object(&[], &[("point", point_schema())]),
@@ -427,26 +427,33 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           below the track's typical agreement (the median over the in \
                           observations) in a ninth where that typical agreement is at least \
                           0.5; and reference_view, the reference-view \
-                          rule's decision: is_reference, rejected_by (null for the reference, \
-                          else the first test that turned it away: coverage under 0.99, \
-                          clipped over 0.05, angle over 65 degrees, or at or past 90 once that \
-                          limit is dropped, cells for a cell deficit over 0.3, agreement \
-                          for a pair ZNCC more than 0.15 below the best \
-                          candidate's, or sharpness for a candidate a sharper one beat or one \
-                          with no self-similarity radius), and \
-                          fallback (none, or which tests the rule dropped because no view \
-                          passed them: without_angle, without_angle_or_cells, without_any; \
-                          without_angle drops only the 65 degree limit). \
-                          These are null on an out observation, which the rule does not \
+                          rule's decision. The rule gives each row a cost in grid px, its \
+                          self-similarity radius r combined with the angle term c tan(theta) \
+                          as sqrt(r^2 + (c tan(theta))^2), times four penalties that are 1 \
+                          inside their band (agreement, for a pair ZNCC more than 0.15 below \
+                          the best; cells, for a cell deficit over 0.3; coverage, under 0.99; \
+                          clipped, over 0.05), and picks the lowest cost. A row with no tile \
+                          or under 0.9 coverage is never picked, and where some row sees the \
+                          patch at under 90 degrees, a row past 90 is left out. The fields: \
+                          is_reference; cost, in grid px; cost_ratio, its cost over the \
+                          pick's; terms, {radius, radius_read (whether r is the row's own \
+                          radius), angle_term, agreement, cells, coverage, clipped}; \
+                          costliest_term, the term that adds most to its cost over the pick's \
+                          (sharpness, angle, agreement, cells, coverage or clipped; null for \
+                          the pick and a row left out); excluded_by, why the rule left the row \
+                          out (no_tile, coverage, other_side) or null; and side, front, or \
+                          back where every row sees the patch from behind and the angles are \
+                          measured against the flipped normal. The parameters are not yet \
+                          tuned. These are null on an out observation, which the rule does not \
                           consider. stage_data.reference_observation is the index of the \
                           reference in use, the row the stored bitmap is rendered from, null \
                           for a track with no bitmap or a bitmap that is the render of no row \
                           (a mean of the rows, one stored before the reference was recorded, or \
                           the render of an observation since removed from the point); such a \
                           bitmap is rendered from the rule's pick, which becomes the \
-                          reference, at the first evaluation that reads a pick the rule \
-                          reached other than through its last fallback, whatever the pins, \
-                          and stays the mean where the rule reaches its pick only that way; \
+                          reference, at the first evaluation that renders where the rule \
+                          picks a row, whatever the pins, and stays the mean where the rule \
+                          picks none; \
                           has_bitmap says whether there is a bitmap, and bitmap_for_judging \
                           whether it was rendered only so the bars can score the rows of a \
                           track fewer than two in rows of which carry a keypoint: from the \

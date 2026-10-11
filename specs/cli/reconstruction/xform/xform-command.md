@@ -744,8 +744,7 @@ this reason. A point at `-1` gets the tile of the observation the
 reference-view rule picks among its track, rendered at that observation's
 keypoint, and its entry records which observation it is
 ([reference-view.md](../../../core/patch/reference-view.md) § "The stored
-bitmap"); where the rule picks none, or reaches its pick only through its last
-fallback, the fused mean of the views, recording `-1`. A `-1` beside a stored
+bitmap"); where the rule picks none, the fused mean of the views, recording `-1`. A `-1` beside a stored
 bitmap means the point has no reference observation in its track; the bitmap
 can then be the render of an observation a step removed from the point, since
 `--filter-by-image-range`, `--include-by-distribution` and the other steps

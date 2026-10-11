@@ -1,9 +1,21 @@
 # One score per view for the reference-view rule (amendment)
 
-**Status:** Draft
+**Status:** Draft. Built in part:
+- **Built: the cost.** `choose_reference_view(views, resolution, options)` ranks the views by the cost of § "The cost", with the hard limits, the facing side, the missing-reading rules and the tie breaks of this draft, and `ReferenceViewOptions` carries every parameter at the starting values of this draft. `ReferenceTest`, `ReferenceFallback`, `rejected_by`, `fallback` and the constants `REFERENCE_MIN_COVERAGE`, `REFERENCE_MAX_CLIPPED_SHARE`, `REFERENCE_MAX_VIEWING_ANGLE_DEG`, `REFERENCE_FACING_LIMIT_DEG`, `REFERENCE_MAX_CELL_DEFICIT` and `REFERENCE_AGREEMENT_MARGIN` are gone. [core/patch/reference-view.md](../core/patch/reference-view.md) § "The rule" describes it.
+- **Built: its output, everywhere the rule's output is read.** The bench's `TrackMeasurement::reference_view` standing, the wire's and the bindings' `reference_view` dict of § "What changes elsewhere", and Track View's *Reference* column with the cost ratio and the costliest term's word ([gui/track-view.md](../gui/track-view.md), [gui/mcp-server.md](../gui/mcp-server.md), [core/bench/editable-track.md](../core/bench/editable-track.md)). `ReferenceRows::pick_by_last_fallback` and Track View's hover for a last-fallback pick are gone.
+- **Built: every pick is stored.** With no last fallback, the stored bitmap is the rule's pick wherever the rule picks a view, so a point whose views are all partial (coverage between `0.9` and `0.99`), clipped or behind the patch stores a view's tile and names it. `ReferenceRender::stored_reference` and `stored_view` are gone with the fallback, since each had come to return the pick; their callers read `TrackReading::choice.reference`.
+- **Not built: the fused mean's removal.** Where no view is eligible, the stored bitmap, the localizer's and the sub-pixel refiner's template, Add Image to Tracks' template, normal refinement's `representative` and the bench's bitmap for judging are still the fused mean, with the reference `-1`, as before; § "The stored bitmap" and § "What still reads the fused mean" remain to be built, together.
+- **Not built: the tuning.** The values are this draft's starting values; § "How the values will be set" remains.
+
+Where the built code departs from this draft's proposed API, and why:
+- `ReferenceStanding` is `{ cost: Result<ReferenceCost, ReferenceExclusion>, reference: bool, pick_cost: Option<f64>, costliest_term: Option<ReferenceTerm>, side: Option<PatchSide> }`, with `is_reference()` and `cost_ratio()`. It carries the pick's cost so a row reads its ratio without the rest of the track, which the bench's slots, the wire and Track View all need.
+- `ReferenceCost` has `effective_radius()` and `ln_parts()`, the split the costliest term is read from, so a test and a reader can check that the parts sum; `ReferenceViewOptions::angle_scale(resolution)` gives `c`.
+- The back side is taken where every eligible view **with an angle reading** is at `90°` or more and at least one has one; a track whose eligible views have no angle reading at all is picked on the front, with an angle term of `0`. A view with no angle on the front side is among the views the pick is made from, as the draft says.
+- The options are threaded as `EvaluateOptions::reference_view` (the bench's reading) and `KeypointSubpixelParams::reference_view` (the stored bitmap's render, and the sub-pixel refiner's own reference resolution); the localizer, normal refinement and the bench's restatement of the rule after a verdict moves use the `Default`. The restatement reads `R` from the rows' `reading_options`, since it has no options to hand.
+- The wire's and the bindings' `terms` also carry `radius_read`, which Track View's hover shows; `cost` and `cost_ratio` are null where they are not finite.
 
 Amends [`../core/patch/reference-view.md`](../core/patch/reference-view.md)
-§ "The rule", § "Each threshold and its reason" and § "The stored bitmap",
+§ "The rule", § "Each parameter and its reason" and § "The stored bitmap",
 which points back here, and the reference-view rule of
 [`sharper-patch-bitmap.md`](sharper-patch-bitmap.md) Part 5, which also points
 back here. Where it is built it also changes
@@ -34,7 +46,10 @@ The draft specifies the form of the cost, each term and each parameter, with
 starting values. The values are not tuned; § "How the values will be set"
 describes how the implementation sets them, and this draft states no results.
 
-## What the rule does today, and the two problems
+## What the rule did before this amendment, and the two problems
+
+This section describes the rule as it stood before the cost of this draft was
+built.
 
 [`choose_reference_view`](../../crates/sfmtool-core/src/patch/reference_view.rs)
 takes a `ReferenceReadings` per view and:
@@ -58,9 +73,8 @@ only through `without_any` (`ReferenceRender::stored_reference`). There it is
 the fused mean of the views, and the point records the reference `-1` (a
 `without_any` pick is stored after all where no fused mean renders). On a
 solve of `dino_dog_toy`, 559 of 18,991 points take the fused mean through
-`without_any`, as
-[reference-view.md](../core/patch/reference-view.md#the-stored-bitmap)
-reports.
+`without_any`, as reference-view.md § "The stored bitmap" reported
+before the cost was built.
 
 **Problem 1: the angle has no say below 65°, and each criterion acts alone.**
 The angle is only a gate, so among the views under 65° it does not count at
@@ -141,7 +155,7 @@ the two read about `0.63` and `0.74`.
 
 The term replaces the 65° gate. On the two ground truths, removing the gate
 made the 15 picks it changed localize the other views 0.12 px worse on average
-([reference-view.md](../core/patch/reference-view.md#each-threshold-and-its-reason));
+([reference-view.md](../core/patch/reference-view.md#each-parameter-and-its-reason));
 the tuning checks that the angle term does not bring those picks back
 (§ "How the values will be set").
 
@@ -190,7 +204,7 @@ count as twice as blurry; a view at the coverage floor of `0.9`
 agreement margin exists today: a sharp view correlates worse with blurrier
 views, since its detail is missing from them, and where the earlier margin of
 `0.05` missed, the hand-picked view sat `0.06` to `0.21` below the best
-([reference-view.md](../core/patch/reference-view.md#each-threshold-and-its-reason)).
+([reference-view.md](../core/patch/reference-view.md#each-parameter-and-its-reason)).
 The agreement term keeps that protection in two ways: the reading is the
 shortfall below the best view's pair ZNCC, not an absolute level, and the
 band `x₀` starts at the margin, so a sharp view within `0.15` of the best pays

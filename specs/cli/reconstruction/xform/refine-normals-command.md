@@ -293,8 +293,7 @@ through the refined patch at that view's stored keypoint, with alpha `255` on
 the samples on the photograph and `0` elsewhere, and the point's
 `tracks/reference_observations` row names that observation
 ([reference-view.md](../../../core/patch/reference-view.md) § "The stored
-bitmap"). Where the rule picks no view, or reaches its pick only through its
-last fallback, the texture is the cross-view
+bitmap"). Where the rule picks no view, the texture is the cross-view
 **fusion** of the kept views at the optimum: RGB the robust IRLS-weighted mean
 (an unweighted mean under `objective=mean`) and alpha a per-pixel cross-view
 agreement confidence, and the point names no observation. A point whose

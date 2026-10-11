@@ -33,6 +33,7 @@ use super::{
 use crate::patch::cloud::OrientedPatch;
 use crate::patch::keypoint_subpixel::ReferenceTemplate;
 use crate::patch::normal_refine::{build_support, znormalize_into_kept, ProjectedImage, Support};
+use crate::patch::reference_view::ReferenceViewOptions;
 use crate::progress::Progress;
 
 /// Below this windowed norm² a channel of one core is flat and contributes `0`
@@ -266,6 +267,7 @@ impl TrackReferences {
                     params.window,
                     params.sampler,
                     params.robust_iters,
+                    &ReferenceViewOptions::default(),
                     &Progress::none(),
                 );
                 match (resolved.anchor, resolved.fused) {

@@ -446,8 +446,7 @@ pub fn fit(
 /// observation ([`TrackPayload::reference`]) where its row holds it, `in`,
 /// with a keypoint and pinned ([`EditableTrack::held_reference`]), and
 /// otherwise the tile of the `in` sighting the reference-view rule picks (or the mean of the `in` sightings' tiles where
-/// it picks none or reaches its pick only through its last fallback, see
-/// [`ReferenceRender::stored_reference`](crate::patch::stored_bitmap::ReferenceRender::stored_reference)),
+/// it picks none),
 /// with [`TrackPayload::reference`] naming that sighting, on the
 /// reconstruction's own bitmap grid where it stores one, and the colour at its
 /// centre.
@@ -1244,7 +1243,7 @@ pub(super) fn triangulate_rays(
 /// keypoint ([`render_view_tile`]), and that row is the reference. Otherwise
 /// the bitmap is [`render_patch_bitmap`]: the tile of the observation the reference-view
 /// rule picks among the `in` observations, or the fused mean where it picks
-/// none or reaches its pick only through its last fallback. Nothing moves: the
+/// none. Nothing moves: the
 /// keypoints are the ones the fit already settled. The grid is the
 /// reconstruction's own bitmap grid where it stores one, so what is rendered
 /// is a tile the column can hold. The second value is the row of the track

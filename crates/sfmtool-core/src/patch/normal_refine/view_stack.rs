@@ -57,8 +57,7 @@ fn sample_rgb(img: &crate::camera::image::ImageU8, col: u32, row: u32, channels:
 ///
 /// Shared with the sibling `keypoint_subpixel` module (via the
 /// `normal_refine` re-export), which fuses a point's mean bitmap at the final
-/// refined keypoints where the reference-view rule picks no view or reaches
-/// its pick only through its last fallback (`ReferenceRender::stored_reference`).
+/// refined keypoints where the reference-view rule picks no view.
 pub(in crate::patch) struct PatchViewStack {
     resolution: u32,
     /// One full `R×R` render per kept view.

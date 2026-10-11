@@ -863,7 +863,7 @@ reference whose row is pinned, `in` and has a keypoint
 (`EditableTrack::held_reference`), it writes that row's tile as the bitmap
 and keeps the reference; otherwise it writes the tile of the `in`
 sighting the reference-view rule picks (or the fused mean of them where it
-picks none or reaches its pick only through its last fallback; [../core/patch/reference-view.md](../core/patch/reference-view.md)
+picks none; [../core/patch/reference-view.md](../core/patch/reference-view.md)
 § "The stored bitmap"), and the
 colour at its centre, moving nothing. It then scores every row against the new
 bitmap (core's `score_bitmap`), since the evaluation's own bitmap scores were
@@ -909,10 +909,9 @@ the reference is on:
   made to render a file's display bitmaps for a point the file stores no
   reference for, is held the same way. A point the file stores at `-1` beside
   a bitmap that names no row (a fused mean, or a file older than `.sfmr` v12)
-  has no reference for a pin to hold: the first evaluation that reads a pick
-  the rule reached other than through its last fallback renders the bitmap
-  from that pick and makes it the reference, whatever the pins, and with a
-  pick reached only through that fallback the mean stays.
+  has no reference for a pin to hold: the first evaluation that renders where
+  the rule picks a row renders the bitmap from that pick and makes it the
+  reference, whatever the pins, and where the rule picks none the mean stays.
 - **An unpinned reference row hands it to the rule.** Unpinning the row
   (`AppState::unpin_bench_verdicts`, Track View's pin or *Unpin*, the wire's
   `set_bench_track_verdict` with `unpin`) moves the reference to the rule's

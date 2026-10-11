@@ -409,13 +409,34 @@ fn observation_to_dict<'py>(py: Python<'py>, o: &Observation) -> PyResult<Bound<
         if let Some(sharper) = m.sharper_than_bitmap {
             t.set_item("sharper_than_bitmap", sharper)?;
         }
-        // What the reference-view rule decided about the row: picked, or the
-        // test that turned it away, and the tests it dropped for the track.
+        // What the reference-view rule decided about the row: picked, or its
+        // cost over the pick's and the term that adds most to it, or why the
+        // rule left it out, and the side of the patch the angles were
+        // measured on.
         if let Some(standing) = m.reference_view {
             let r = PyDict::new(py);
             r.set_item("is_reference", standing.is_reference())?;
-            r.set_item("rejected_by", standing.rejected_by.map(|t| t.name()))?;
-            r.set_item("fallback", standing.fallback.name())?;
+            let cost = standing.cost.ok();
+            r.set_item("cost", cost.map(|c| c.cost))?;
+            r.set_item("cost_ratio", standing.cost_ratio())?;
+            let terms = match cost {
+                Some(c) => {
+                    let d = PyDict::new(py);
+                    d.set_item("radius", c.radius)?;
+                    d.set_item("radius_read", c.radius_read)?;
+                    d.set_item("angle_term", c.angle_term)?;
+                    d.set_item("agreement", c.agreement)?;
+                    d.set_item("cells", c.cells)?;
+                    d.set_item("coverage", c.coverage)?;
+                    d.set_item("clipped", c.clipped)?;
+                    Some(d)
+                }
+                None => None,
+            };
+            r.set_item("terms", terms)?;
+            r.set_item("costliest_term", standing.costliest_term.map(|t| t.name()))?;
+            r.set_item("excluded_by", standing.cost.err().map(|e| e.name()))?;
+            r.set_item("side", standing.side.map(|s| s.name()))?;
             t.set_item("reference_view", r)?;
         }
         // The same readings over each ninth of the tile, as `(3, 3)` arrays.
@@ -608,9 +629,8 @@ impl PyEditableTrack {
     /// the row is unpinned the next render (``evaluate(...,
     /// render_bitmap=True)``, :func:`fit`) moves it to the rule's pick.
     /// A point stored at ``-1`` with a bitmap that names no row reads
-    /// ``None`` until the first evaluation that renders and reads a pick the
-    /// rule reached other than through its last fallback, which renders the
-    /// bitmap from that pick whatever the pins and makes it the reference.
+    /// ``None`` until the first evaluation that renders where the rule picks a
+    /// row, which renders the bitmap from that pick whatever the pins and makes it the reference.
     /// :func:`set_reference` makes a row the reference and pins it.
     #[getter]
     fn reference_observation(&self) -> Option<usize> {
