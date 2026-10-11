@@ -52,7 +52,7 @@ Save the spec under `specs/` in the appropriate subdirectory.
 
 Break the spec into small, individually testable steps. For each step:
 
-1. Implement (in this main session, or dispatch a subagent for a well-scoped chunk).
+1. Implement the step with the `implement-change` skill, which runs an implementer agent and an independent auditor agent on it.
 2. Add or update tests.
 3. Run the relevant format/lint/test commands per `CLAUDE.md`:
    - Python: `pixi run fmt && pixi run check && pixi run test`
