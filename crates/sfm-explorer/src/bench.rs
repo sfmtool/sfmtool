@@ -1128,8 +1128,7 @@ impl AppState {
         // judged nothing: the evaluation that follows renders the new one,
         // judges the rows and logs what it moved.
         // The row named is the one the render will take (core's
-        // `bitmap_target`), which is the rule's pick unless the rule picks no
-        // row (the render is then the mean of the views) or no reading has
+        // `bitmap_target`), which is the rule's pick unless no reading has
         // given the rule a pick yet (the render runs the rule).
         // Where fewer than two `in` rows carry a keypoint the render makes a
         // bitmap for judging instead, from every row with one.
@@ -1151,9 +1150,7 @@ impl AppState {
                 .map(|row| {
                     self.image_name(ImageRef::new(id, next.observations[row].image as usize))
                 })
-                .unwrap_or_else(|| {
-                    "the rule's pick at the render, or the mean of the views".to_string()
-                });
+                .unwrap_or_else(|| "the rule's pick at the render".to_string());
             format!("waiting for the bitmap to be rendered from {from}")
         });
         let text = match &one {
@@ -2598,7 +2595,8 @@ pub(crate) fn patch_resolution(recon: &sfmtool_core::SfmrReconstruction) -> u32 
 
 /// The reference in use on a track-stage track: the row its stored bitmap is
 /// rendered from, or `None` where it has no bitmap, where the bitmap is the
-/// render of no row (a fused mean), and at the cluster stage. Track View's
+/// render of no row (a fused mean an older file stores, or a bitmap for
+/// judging), and at the cluster stage. Track View's
 /// *Reference* column marks it, and the wire's `stage_data` names it
 /// `reference_observation`.
 pub(crate) fn reference_in_use(track: &EditableTrack) -> Option<usize> {

@@ -115,14 +115,15 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           another row, which the bars cannot judge until then), has_bitmap, \
                           whether the point has a stored bitmap its rows are scored against, \
                           bitmap_for_judging, whether that bitmap was rendered only for the \
-                          bars because fewer than two in rows carry a keypoint, \
+                          bars because the in rows give no bitmap, \
                           reference_observation, \
                           the row that bitmap is rendered from (the reference in use), or null, \
                           and reference_view_observation, the row the reference-view rule \
                           picked, which can differ from it, or null. For a point stored at -1 \
-                          with a mean bitmap, the evaluation that renders the bitmap from the \
-                          pick reports the two equal; where the rule picks no row, the mean \
-                          stays and reference_observation is null. While evaluating, the \
+                          with a bitmap that is the render of no row, the evaluation that \
+                          renders the bitmap from the pick reports the two equal; where the \
+                          rule picks no row, that bitmap stays and reference_observation is \
+                          null. While evaluating, the \
                           measurements are the \
                           last ones landed. Any other point has no evaluation block.",
             kind: Read,
@@ -434,34 +435,33 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           as sqrt(r^2 + (c tan(theta))^2), times four penalties that are 1 \
                           inside their band (agreement, for a pair ZNCC more than 0.15 below \
                           the best; cells, for a cell deficit over 0.3; coverage, under 0.99; \
-                          clipped, over 0.05), and picks the lowest cost. A row with no tile \
-                          or under 0.9 coverage is never picked, and where some row sees the \
-                          patch at under 90 degrees, a row past 90 is left out. The fields: \
+                          clipped, over 0.05), and picks the lowest cost. A row with no tile, \
+                          under 0.9 coverage, or a viewing angle of 90 degrees or more (edge \
+                          on or from behind) is never picked. The fields: \
                           is_reference; cost, in grid px; cost_ratio, its cost over the \
                           pick's; terms, {radius, radius_read (whether r is the row's own \
                           radius), angle_term, agreement, cells, coverage, clipped}; \
                           costliest_term, the term that adds most to its cost over the pick's \
                           (sharpness, angle, agreement, cells, coverage or clipped; null for \
                           the pick and a row left out); excluded_by, why the rule left the row \
-                          out (no_tile, coverage, other_side) or null; and side, front, or \
-                          back where every row sees the patch from behind and the angles are \
-                          measured against the flipped normal. The parameters are not yet \
+                          out (no_tile, coverage, back_facing) or null. The parameters are not yet \
                           tuned. These are null on an out observation, which the rule does not \
                           consider. stage_data.reference_observation is the index of the \
                           reference in use, the row the stored bitmap is rendered from, null \
                           for a track with no bitmap or a bitmap that is the render of no row \
-                          (a mean of the rows, one stored before the reference was recorded, or \
-                          the render of an observation since removed from the point); such a \
-                          bitmap is rendered from the rule's pick, which becomes the \
-                          reference, at the first evaluation that renders where the rule \
-                          picks a row, whatever the pins, and stays the mean where the rule \
-                          picks none; \
+                          (a mean of the views an older file stores, one stored before the \
+                          reference was recorded, or the render of an observation since \
+                          removed from the point); such a bitmap is rendered from the rule's \
+                          pick, which becomes the reference, at the first evaluation that \
+                          renders where the rule picks a row, whatever the pins, and stays \
+                          where the rule picks none; \
                           has_bitmap says whether there is a bitmap, and bitmap_for_judging \
                           whether it was rendered only so the bars can score the rows of a \
-                          track fewer than two in rows of which carry a keypoint: from the \
-                          rule's pick among every row with a keypoint, naming no row, never \
-                          committed, and replaced by the next evaluation once two in rows \
-                          carry one. \
+                          track whose in rows give no bitmap (fewer than two carry a \
+                          keypoint, or the rule finds none eligible): from the rule's pick \
+                          among every row with a keypoint, naming no row, never committed, \
+                          and replaced by the next evaluation once the in rows give one; \
+                          where the rule finds no row eligible there is none. \
                           stage_data.reference_view_observation is the index of the row the \
                           rule picked from the current readings, or null. While the reference's \
                           row is pinned every render renders from it, whichever row the rule \

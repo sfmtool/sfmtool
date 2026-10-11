@@ -687,18 +687,19 @@ that stores no patch, a track with no bitmap rendered yet, or a cluster with no 
 the slot is an empty frame of the same size, so the controls beside it do not
 move when a step fills it. Its hover text (`track_patch_hover`) says which it
 is, or what would fill it; for a track-stage bitmap, that it is the render of
-the reference observation, the row the *Reference* column marks, or the mean
-of the views where there is none. Two bitmaps a bench track can hold are not
+the reference observation, the row the *Reference* column marks, or, where an
+older file stores none, a mean of the views. Two bitmaps a bench track can hold are not
 that (`patch::BitmapKind`):
 
 - **A bitmap for judging** (`TrackPayload::bitmap_for_judging`), which the
-  live evaluation renders where fewer than two `in` rows carry a keypoint, is
+  live evaluation renders where the `in` rows give no patch (fewer than two
+  carry a keypoint, or the rule finds none of them eligible), is
   drawn at a third of its brightness, in the slot and in the track's chip in
   the recent items strip alike (`patch::track_patch_image`). Its hover says it
   is not the track's patch: it was rendered from the rows with a keypoint, `in`
   or `out`, only for the bars to score the rows against, no row is its
-  reference, a commit does not write it, and the first evaluation after two
-  `in` rows carry a keypoint renders the patch.
+  reference, a commit does not write it, and the first evaluation whose `in`
+  rows give a patch renders the patch.
 - **A patch an unpin left pending its render** (`EditableTrack::bitmap_pending`)
   is drawn as it is, and its hover says it is kept only until the next render
   replaces it, that no row is scored against it meanwhile, and that a commit
@@ -1096,7 +1097,7 @@ that is not there prints a bare `-`, with no unit.
 | Proj. err | absent | the reprojection error: how far the keypoint sits from the point's projection, or, before the track is triangulated, from its patch's centre's, over the same residual as the ray angle, comparable across lenses and depths: `0.65 px` over `0.08°` |
 | Shift | how far the refinement moved the member off its seed, in patch-grid px: `1.20 px` | how far the correlation peak against the render of the track's reference, looked for within the shift bar, sits from the observation's own keypoint, in patch-grid px on the patch's plane; `0` on the reference's own row |
 | Zoom | `-` | patch-grid px, at the reconstruction's patch resolution `R`, per photograph pixel at the patch's centre, the reciprocals of the two singular values of the Jacobian there of the warp from the patch grid to the photograph, least over most, each to two significant digits: `0.71/1.3×`, and both numbers even where the two print the same, `0.19/0.19×`; `-` for a track with no patch yet, an observation with nothing saying where it sits, a patch whose centre is behind the camera or outside the camera model's domain, and a patch seen edge on |
-| Reference | `-` | `reference` over the viewing angle and pair ZNCC (`24°, 87%`) on the reference in use, on a green cell where the reference-view rule picks it too, a red one where the rule picks another row, and a cell with no fill where the rule picks no row; `pick` on a grey cell for the rule's pick where it is not the reference; on any other row its cost over the pick's and the word for its costliest term, `×1.25 oblique`, the word one of `less sharp`, `oblique`, `agrees less`, `ninth differs`, `partial` or `clipped`, or for a row the rule left out `partial`, `no tile` or `other side`; an `out` row, which the rule does not consider, prints `-` over its angle; hovering the cell says what the mark means and how to accept the pick, then the decision, the cost's terms beside their bands and scales, and every reading |
+| Reference | `-` | `reference` over the viewing angle and pair ZNCC (`24°, 87%`) on the reference in use, on a green cell where the reference-view rule picks it too, a red one where the rule picks another row, and a cell with no fill where the rule picks no row; `pick` on a grey cell for the rule's pick where it is not the reference; on any other row its cost over the pick's and the word for its costliest term, `×1.25 oblique`, the word one of `less sharp`, `oblique`, `agrees less`, `ninth differs`, `partial` or `clipped`, or for a row the rule left out `partial`, `no tile` or `back facing`; an `out` row, which the rule does not consider, prints `-` over its angle; hovering the cell says what the mark means and how to accept the pick, then the decision, the cost's terms beside their bands and scales, and every reading |
 | Status | the kernel's `member_status` | `walked 19 grid px (ZNCC 87% / 41% there), kept at seed` where the last fit refused to move it, the ZNCC being the blur-matched score against the stored bitmap of the tile at the walked peak (left out where there is none); the reason's own sentence where the localizer could not read the row or the row has no score against the bitmap (`there is no bitmap to score it against`, or `the bitmap is to be rendered again before the row is scored` while an unpin leaves it pending its render); `localized` where the evaluation read it; `not evaluated` where nothing has been read |
 | From (Edited) | the provenance | the provenance |
 | Name | the image's file name elided in its middle to fit, the start of the path and the end of the file name both kept; hovering the name shows it whole | the same |
@@ -1374,9 +1375,10 @@ pick alternated between rows. The marks (`reference::ReferenceRows`,
 
 - **The reference is the rule's pick:** its cell reads `reference` on a green
   fill.
-- **The rule picks no row:** the reference's cell reads `reference` with no
-  fill (`ReferenceMark::ReferenceWithoutPick`), since there is no pick to
-  accept in its place.
+- **The rule picks no row:** no `in` row is eligible, and the reference's cell
+  reads `reference` with no fill (`ReferenceMark::ReferenceWithoutPick`),
+  since there is no pick to accept in its place; the bitmap stands, since no
+  render would replace it.
 - **It is not:** the reference's cell reads `reference` on a red fill, and the
   pick's own cell reads `pick` on a grey fill. Unpinning the reference's row,
   or *Set as reference* on the pick, makes the pick the reference, and the
@@ -1385,13 +1387,14 @@ pick alternated between rows. The marks (`reference::ReferenceRows`,
   the pick becomes the reference at the next evaluation after a step (an
   evaluation that stopped because the pick alternated between rows leaves it
   until the next step), and the reference's hover that pinning its row keeps it.
-- **No reference:** where the bitmap is the fused mean of the `in` rows, the
-  render of no row, is a bitmap for judging, or the track has no bitmap yet,
-  only the pick is marked, `pick` on a grey fill. The pick's hover says which:
-  for a bitmap for judging, that fewer than two `in` rows carry a keypoint and
-  the bitmap is rendered from the rows with one, in or out, and never
-  committed; for a fused mean, that the next evaluation that renders renders
-  the bitmap from the pick and makes it the reference, and that *Set as
+- **No reference:** where the bitmap is the render of no row (a mean of the
+  views an older file stores), is a bitmap for judging, or the track has no
+  bitmap yet, only the pick is marked, `pick` on a grey fill. The pick's hover
+  says which: for a bitmap for judging, that fewer than two `in` rows carry a
+  keypoint and the bitmap is rendered from the rows with one, in or out, and
+  never committed; for a bitmap that names no row, that the next evaluation
+  that renders renders the bitmap from the pick and makes it the reference,
+  and that *Set as
   reference* on the pick renders the bitmap from it. So on a point stored at
   `-1` the pick is grey only until the first evaluation that renders, and from
   then on it is the green reference
@@ -1409,15 +1412,15 @@ ninths, for a ninth where the row agrees with the other rows more than 0.3
 below the track's **typical agreement** there, the median over the `in` rows;
 coverage, for less than 99% of its tile on the photograph; and clipping, for
 more than 5% of the photograph under the tile clipped. It picks the lowest
-cost. A row with no tile or less than 90% of it on the photograph is never
-picked, and where some row sees the patch at under 90°, a row that sees it from
-behind is left out. The agreements are read plain, and the parameters are not
+cost. A row with no tile, less than 90% of it on the photograph, or a viewing
+angle of 90° or more (edge on or from behind, where no patch is drawn) is never
+picked. The agreements are read plain, and the parameters are not
 yet tuned. Every other row's first line is its cost over the pick's and the
 word for its **costliest term**, the term that adds most to its cost over the
 pick's: `less sharp`, `oblique`, `agrees less`, `ninth differs`, `partial` or
-`clipped`, as in `×1.25 oblique` (`×∞` for a row edge on to the patch). A row
-the rule left out reads `partial` for the coverage floor, `no tile` or `other
-side`. The column says *ninth* for a cell of the ZNCC grid, since a *cell* in
+`clipped`, as in `×1.25 oblique` (`×∞` for an infinite ratio). A row
+the rule left out reads `partial` for the coverage floor, `no tile` or `back
+facing`. The column says *ninth* for a cell of the ZNCC grid, since a *cell* in
 the table is one row's entry in one column. Its second line is the viewing
 angle, the angle between the patch's normal and the direction to the camera at
 the keypoint, and the pair ZNCC the rule read, in percent.
@@ -1425,17 +1428,17 @@ Hovering the cell gives, on a marked row, what the mark means and how to
 change it, and then (`reference::reference_hover`) the decision in a sentence,
 naming the costliest term or why the row was left out; the cost, the radius
 (and, where it is not the row's own, that it is the largest any row has or the
-default), the angle term, and each penalty beside its band and scale; that the
-angles are measured against the flipped normal where every row sees the patch
-from behind; and every reading: the viewing angle
+default), the angle term, and each penalty beside its band and scale; for a
+back-facing row, its viewing angle and that no patch is drawn on it; and every
+reading: the viewing angle
 and the tilt direction (the direction in the patch's plane the ray from the
 camera leans along, from `u` towards `v`), the coverage, the clipped share,
 the pair ZNCC, the cell deficit, and the pair ZNCC of each ninth. Sorting by
 the column puts the reference first, then the pick, then the rows by their
 cost over the pick's, and last the rows the rule left out. The cell
 prints `-` at the cluster stage, before the track is evaluated, and where it
-could not be evaluated. Where the rule picks no row, a render the rule decides
-stores the fused mean of the `in` rows, naming no row
+could not be evaluated. Where the rule picks no row, no render the rule
+decides gives a bitmap
 ([`../core/patch/reference-view.md`](../core/patch/reference-view.md) § "The
 stored bitmap"). On a file with patch placements but no stored bitmaps, the bitmap
 is the one SfM Explorer rendered for display when it opened the file, and the
@@ -2121,13 +2124,14 @@ texels, so their geometry is checked without reading pixels off the screen.
     ZNCC cell's `whole` and `mid` percent form and `-` for a missing middle; the
     Status cell's sentences, including the walk with and without its ZNCC; the
     *Reference* cell's pick, its cost ratio and word for each costliest term,
-    the words for a row left out, an infinite cost, a radius not the row's own
-    and a pick made from behind, the angle and pair ZNCC on every row, its
+    the words for a row left out, the back-facing row's angle in its hover,
+    an infinite cost and a radius not the row's own, the angle and pair ZNCC
+    on every row, its
     hover readings with each penalty's band and scale, and `-` at the
     cluster stage and for a refused evaluation; the column's two marks,
     `reference` on the reference and `pick` on a pick that is not the
     reference, green for a reference the rule picks, red for one it does not
-    with the pick grey, the pick alone for a track whose bitmap is a fused mean
+    with the pick grey, the pick alone for a track whose bitmap names no row
     or that has none, and the hover naming the other row and how to accept the
     pick; the track-stage *ZNCC* cell's blur-matched score against the stored
     bitmap, the plain one in the hover only, `100%` on the reference, `-` with the reason in

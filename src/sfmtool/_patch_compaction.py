@@ -181,8 +181,8 @@ def compact_to_embedded_patches(
             keypoints, ...}`` with the kept image indices and refined keypoints.
             A dict's optional ``reference_image`` names the image of the
             reference observation its views were aligned to, whose tile the
-            point's bitmap is (``None``: they were aligned to a fused mean, or
-            to nothing), and becomes the point's reference observation (see
+            point's bitmap is (``None``: they were aligned to nothing), and
+            becomes the point's reference observation (see
             below).
         image_file_hashes: One 16-byte XXH128 per image (see
             :func:`image_file_hashes_from_images`), parallel to ``recon.image_names``.
@@ -211,7 +211,7 @@ def compact_to_embedded_patches(
     the bitmap and the reference agree (unless ``keep_stored_references``,
     above). Where the localization carries
     ``reference_image``, that is the image; ``None`` gives ``-1`` (the views
-    were aligned to a fused mean, which is then the bitmap, or to nothing).
+    were aligned to nothing, and there is no bitmap).
     The kernels align to a point's stored reference whenever it is in the
     view set and renders, so a stored reference survives a refinement that
     moves keypoints or the frame, and is replaced only where it could not be
@@ -428,7 +428,7 @@ def render_from_references(
     ``references``. Every point with a reference then gets that observation's
     tile rendered from ``recon`` itself
     (``PatchCloud.render_bitmaps(referenced_only=True)``), and a point left at
-    ``-1`` keeps its bitmap from ``bitmaps``, a fused mean. So a refinement
+    ``-1`` keeps its row from ``bitmaps``, which a refinement leaves zero. So a refinement
     that moves keypoints or the frame keeps each point's reference, and each
     referenced bitmap is rendered from the ``f32`` keypoints and frame the
     file stores rather than the refiner's ``f64`` ones, which makes it

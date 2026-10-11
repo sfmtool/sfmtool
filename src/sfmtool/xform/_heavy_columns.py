@@ -231,11 +231,9 @@ class AddPatchBitmapsTransform:
     dropped the bitmaps) gets that observation's tile and keeps the
     reference. A point at ``-1`` gets the tile of the observation the
     reference-view rule picks, and the reference observation column records
-    which (``PatchCloud.render_bitmaps``); where the rule picks none, the
-    bitmap is the observations' fused mean and the column records ``-1``. A point at ``-1``
-    with fewer than two observations, or one where the rule picks none and
-    fewer than two observations render in frame for the mean, gets a zero
-    row.
+    which (``PatchCloud.render_bitmaps``). A point at ``-1`` with fewer than
+    two observations, or one where the rule finds no eligible view, gets a
+    zero row and keeps ``-1``.
     """
 
     # Precondition checked per-step by `apply_transforms` (see `_apply.py`).

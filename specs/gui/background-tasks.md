@@ -390,7 +390,8 @@ first and its photograph second
 loading"). The bitmaps are the render `sfm xform --add-patch-bitmaps` runs,
 `render_patch_cloud_bitmaps`, through `render_patch_bitmap_column`: each point
 from the reference observation the file stores for it, and a point the file
-stores at `-1` from the reference-view rule's pick (or the fused mean). The
+stores at `-1` from the reference-view rule's pick (a zero row, and `-1`, where
+the rule finds no eligible view). The
 render returns the reference each row is the tile of; the open puts a pick it
 made for a point at `-1` into the value's references, marked
 `PointSet::display_only_references`, so Track View marks the row the display

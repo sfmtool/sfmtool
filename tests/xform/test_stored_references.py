@@ -143,8 +143,8 @@ def _assert_references_follow_their_images(
 
 def _assert_drop_then_add_reproduces(out: SfmrReconstruction, sampler="per_view"):
     """Dropping and adding the bitmaps gives every point that has a reference
-    the same reference and the same bitmap bytes. A point at -1 (a fused mean)
-    gets the reference-view rule's pick, which may differ."""
+    the same reference and the same bitmap bytes. A point at -1 has no bitmap
+    and is left out of the comparison."""
     again = AddPatchBitmapsTransform(resolution=RESOLUTION, sampler=sampler).apply(
         DropPatchBitmapsTransform().apply(out)
     )
@@ -449,7 +449,7 @@ def test_writers_without_bitmaps_keep_a_reference_nothing_was_aligned_to(embedde
     ``--refine-keypoints bitmaps=false`` keeps every stored reference, and
     ``--localize-keypoints`` keeps it wherever its image is still in the
     rebuilt track. ``--refine-keypoints`` with bitmaps replaces it by the
-    reference its views were aligned to, or ``-1`` with the fused mean."""
+    reference its views were aligned to, or ``-1`` with no bitmap."""
     recon, points = _unrenderable_references(embedded)
     stored = np.asarray(recon.reference_observations)
 

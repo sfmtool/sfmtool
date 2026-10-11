@@ -411,8 +411,7 @@ fn observation_to_dict<'py>(py: Python<'py>, o: &Observation) -> PyResult<Bound<
         }
         // What the reference-view rule decided about the row: picked, or its
         // cost over the pick's and the term that adds most to it, or why the
-        // rule left it out, and the side of the patch the angles were
-        // measured on.
+        // rule left it out.
         if let Some(standing) = m.reference_view {
             let r = PyDict::new(py);
             r.set_item("is_reference", standing.is_reference())?;
@@ -436,7 +435,6 @@ fn observation_to_dict<'py>(py: Python<'py>, o: &Observation) -> PyResult<Bound<
             r.set_item("terms", terms)?;
             r.set_item("costliest_term", standing.costliest_term.map(|t| t.name()))?;
             r.set_item("excluded_by", standing.cost.err().map(|e| e.name()))?;
-            r.set_item("side", standing.side.map(|s| s.name()))?;
             t.set_item("reference_view", r)?;
         }
         // The same readings over each ninth of the tile, as `(3, 3)` arrays.

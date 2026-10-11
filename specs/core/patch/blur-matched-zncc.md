@@ -436,9 +436,10 @@ to the rule's pick, or with *Set as reference*
 reference").
 
 **The reference's own score is 1** and is not computed: the bitmap is its tile.
-A bitmap that names no reference (a fused mean, one stored before the
-reference was recorded, or the render of an observation since removed from
-the point) scores every observation.
+A bitmap that names no reference (a fused mean an older file stores, a
+bitmap for judging, one stored before the reference was recorded, or the
+render of an observation since removed from the point) scores every
+observation.
 
 **What reads the scores.** The bench writes both for every row it evaluates:
 the plain score (`plain_zncc`, `plain_zncc_middle`, `plain_zncc_grid`) and the
@@ -811,13 +812,11 @@ row reads 1. The Python tests are in
   peak's curvature; and Add Image to Tracks' pair rule, which reads the
   search's plain pairwise ZNCCs between views rather than a score against the
   template.
-- **The fused means' IRLS residuals.** The stored bitmap is the reference
+- **Weighted means' IRLS residuals.** The stored bitmap is the reference
   view's tile, not a mean ([reference-view.md](reference-view.md) § "The
-  stored bitmap"). The kernels that still build a weighted mean as their
-  template (normal refinement, and the localizer, the sub-pixel refiner and
-  the stored bitmap where the point has no reference and the rule picks no
-  view) read their
-  residuals plain; each would blur-match them only on its own measurement.
+  stored bitmap"). Normal refinement, which still builds a weighted mean of
+  the views as its consensus, reads its residuals plain; it would blur-match
+  them only on its own measurement.
 - **Deconvolution.** A blurry tile is not sharpened; the sharper one is
   blurred.
 - **Choosing a patch's size.** No caller reads the blur-matched readings of a

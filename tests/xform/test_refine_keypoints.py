@@ -35,7 +35,6 @@ def test_parse_empty_runs_defaults():
     assert t.window == "gaussian_disk"
     assert t.window_sigma == 0.6
     assert t.sampler == "per_view"
-    assert t.robust_iters == 3
     assert t.max_gn_steps == 10
     assert t.convergence_px == 0.01
     assert t.max_offset_px == 2.0
@@ -46,14 +45,13 @@ def test_parse_key_value_overrides():
     """Each key=value token overrides the matching default with the right type."""
     t = parse_refine_keypoints_params(
         "resolution=16,window=gaussian,window_sigma=0.8,sampler=anisotropic,"
-        "robust_iters=2,max_gn_steps=5,convergence_px=0.02,max_offset_px=1.5"
+        "max_gn_steps=5,convergence_px=0.02,max_offset_px=1.5"
     )
     assert t.resolution == 16
     assert isinstance(t.resolution, int)
     assert t.window == "gaussian"
     assert t.window_sigma == 0.8
     assert t.sampler == "anisotropic"
-    assert t.robust_iters == 2
     assert t.max_gn_steps == 5
     assert t.convergence_px == 0.02
     assert t.max_offset_px == 1.5
@@ -124,7 +122,6 @@ def test_parse_duplicate_key_rejected():
         "window=bogus",
         "window_sigma=0",
         "sampler=bogus",
-        "robust_iters=0",
         "max_gn_steps=0",
         "convergence_px=0",
         "max_offset_px=0",

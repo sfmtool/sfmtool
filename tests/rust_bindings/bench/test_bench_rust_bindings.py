@@ -537,13 +537,11 @@ class TestEvaluating:
                 "terms",
                 "costliest_term",
                 "excluded_by",
-                "side",
             }
             assert entry["pair_zncc_grid"].shape == (3, 3)
             assert -1.0 <= entry["pair_zncc"] <= 1.0
-            assert standing["side"] == "front"
             if standing["excluded_by"] is not None:
-                assert standing["excluded_by"] in {"no_tile", "coverage", "other_side"}
+                assert standing["excluded_by"] in {"no_tile", "coverage", "back_facing"}
                 assert standing["cost"] is None and standing["terms"] is None
                 continue
             assert set(standing["terms"]) == {

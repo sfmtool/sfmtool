@@ -2355,7 +2355,7 @@ pub(crate) fn position_text(payload: &sfmtool_core::bench::TrackPayload) -> Stri
 
 /// The track's own patch, at [`STORED_PATCH_SIZE`], left of the headline, the
 /// toolbar and the boxes: at the track stage the patch bitmap (the reference
-/// view's tile, or the fused mean where the rule picks none), which for the
+/// view's tile), which for the
 /// viewed track is the point's stored patch and which a commit writes as it,
 /// and at the cluster stage the template the members register onto. It carries
 /// no label, since the picture says what it is. With nothing to show -- a point
@@ -2403,11 +2403,12 @@ fn show_track_patch(
 fn track_patch_hover(stage: StageKind, mode: BodyMode, kind: patch::BitmapKind) -> &'static str {
     match (stage, mode, kind) {
         (StageKind::Track, BodyMode::Edited, patch::BitmapKind::Judging) => {
-            "A bitmap for judging, drawn dimmed: not the track's patch. Fewer than two \
-             rows that are in carry a keypoint, so it was rendered from the rows with a \
+            "A bitmap for judging, drawn dimmed: not the track's patch. The rows that are \
+             in give no patch (fewer than two carry a keypoint, or the reference-view rule \
+             finds none of them eligible), so it was rendered from the rows with a \
              keypoint, in or out, only for the bars to score the rows against. No row is \
-             its reference and a commit does not write it; the first evaluation after two \
-             rows that are in carry a keypoint renders the track's patch"
+             its reference and a commit does not write it; the first evaluation whose rows \
+             that are in give a patch renders the track's patch"
         }
         (StageKind::Track, BodyMode::Edited, patch::BitmapKind::Pending) => {
             "The track's patch, kept until the next render replaces it: the reference's row \
@@ -2415,13 +2416,13 @@ fn track_patch_hover(stage: StageKind, mode: BodyMode, kind: patch::BitmapKind) 
              against it. A commit before that render writes it as the point's stored patch"
         }
         (StageKind::Track, BodyMode::Viewed, _) => {
-            "The point's stored patch: the render of its reference observation, or the mean \
-             of its views where it has none"
+            "The point's stored patch: the render of its reference observation, or, where \
+             an older file stores none, a mean of its views"
         }
         (StageKind::Track, BodyMode::Edited, patch::BitmapKind::Patch) => {
             "The track's patch: the render of its reference observation, the row marked in \
-             the Reference column, or the mean of its views where it has none; a commit \
-             writes it as the point's stored patch"
+             the Reference column, or, where an older file stores none, a mean of its \
+             views; a commit writes it as the point's stored patch"
         }
         (StageKind::Cluster, _, _) => "The cluster's template, which every member registers onto",
     }

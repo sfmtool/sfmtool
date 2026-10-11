@@ -606,16 +606,17 @@ fn evaluate_keeping_tiles(
 ///    rendered from is the reference the track holds
 ///    ([`EditableTrack::held_reference`]) where it holds one, and otherwise
 ///    the rule's pick, so the reference and the pick are one row on an
-///    unpinned track; where the rule picks none, the bitmap is the fused
-///    mean. Where that
-///    render gives no bitmap (fewer than two `in` rows carry a keypoint, a
+///    unpinned track; where the rule finds no eligible row, nothing is
+///    rendered and the bitmap stands. Where the track has no bitmap and that
+///    render gives none (fewer than two `in` rows carry a keypoint, a
 ///    rule the render from the reading's tile and the render of its own
-///    share), a **bitmap for judging** is rendered instead
-///    ([`TrackPayload::bitmap_for_judging`]), from the rule's pick among every
-///    row with a keypoint, `in` or `out`, so the bars still have scores to
-///    judge and a loosened bar can turn rows back `in`. It stands while fewer
-///    than two `in` rows carry a keypoint; once two do, the next pass renders
-///    by the usual rule. Every row is scored against
+///    share, or no `in` row is eligible), a **bitmap for judging** is
+///    rendered instead ([`TrackPayload::bitmap_for_judging`]), from the rule's
+///    pick among every row with a keypoint, `in` or `out`, so the bars still
+///    have scores to judge and a loosened bar can turn rows back `in`; where
+///    no row is eligible there is none, and no row is scored. It stands while
+///    fewer than two `in` rows carry a keypoint; once two do, the next pass
+///    renders by the usual rule. Every row is scored against
 ///    the new bitmap ([`score_bitmap`]).
 /// 2. **Repaint.** The bars judge those scores ([`apply_thresholds`]).
 /// 3. When the repaint moved a verdict, the rule has been run again over the
@@ -770,8 +771,8 @@ pub(super) fn settle(
 
 /// The row `track`'s bitmap is to be rendered from, when it is to be
 /// rendered: `Some(Some(row))` for that row's tile, `Some(None)` for the
-/// render's own rule (the fused mean where the reference-view rule picks
-/// none), and `None` when the bitmap stands.
+/// render's own rule (its pick, or no bitmap where it finds no eligible row),
+/// and `None` when the bitmap stands.
 ///
 /// A track with no placement has nothing to render. One with no bitmap is
 /// rendered, from the reference it holds or the rule's pick, and so is one
@@ -779,20 +780,20 @@ pub(super) fn settle(
 /// ([`TrackPayload::bitmap_for_judging`]) once a row is `in`; while none is,
 /// that bitmap stands.
 ///
-/// A bitmap that names no row (a fused mean, or one stored before the
-/// reference was recorded, which a point at `-1` carries) moves to the rule's
-/// pick from the rule's last reading, whatever the pins, as every writer
-/// renders a point at `-1`; the render then names the pick as the reference.
-/// Where the rule picks none, it stands, since the render would give the
-/// fused mean again. Where the rule has not read the track yet, there is no
+/// A bitmap that names no row (a fused mean an older file stores, or one
+/// stored before the reference was recorded, which a point at `-1` carries)
+/// moves to the rule's pick from the rule's last reading, whatever the pins,
+/// as every writer renders a point at `-1`; the render then names the pick as
+/// the reference. Where the rule picks none, it stands, since no render would
+/// replace it. Where the rule has not read the track yet, there is no
 /// pick to move to, and where the pick carries no keypoint or fewer than two
 /// `in` rows do, no render takes the pick's tile, so it stands there too.
 ///
 /// A bitmap that names a row stands where its pinned row holds the
 /// reference, whatever the rule picks, and where the rule has not read the
 /// track yet: no row carries a standing to name a pick. Otherwise it moves to
-/// the rule's pick when that is another row, and to the fused mean where the
-/// rule picks none.
+/// the rule's pick when that is another row, and stands where the rule picks
+/// none, since no render would replace it.
 pub fn bitmap_target(track: &EditableTrack) -> Option<Option<usize>> {
     let payload = track.track()?;
     payload.placement.as_ref()?;
@@ -810,8 +811,8 @@ pub fn bitmap_target(track: &EditableTrack) -> Option<Option<usize>> {
         // A bitmap that names no row moves to the rule's pick (a reading of
         // the rule is implied), where a render can take that row's tile: the
         // row carries a keypoint and two `in` rows do. Otherwise the render
-        // would ignore the row and could give the fused mean again, at every
-        // rendering evaluation.
+        // would ignore the row and could pick another, at every rendering
+        // evaluation.
         let keyed = |row: usize| {
             track.observations[row]
                 .track
@@ -833,10 +834,7 @@ pub fn bitmap_target(track: &EditableTrack) -> Option<Option<usize>> {
     if held == Some(reference) {
         return None;
     }
-    match stored {
-        Some(pick) => (pick != reference).then_some(Some(pick)),
-        None => Some(None),
-    }
+    stored.filter(|&pick| pick != reference).map(Some)
 }
 
 /// How many of `track`'s `in` rows carry a keypoint: the rows a render of

@@ -170,10 +170,11 @@ impl<'a> PatchTile<'a> {
     /// whose alpha is above 0; without one, every sample, returned as `None`.
     ///
     /// A stored bitmap that is a view's tile has alpha 0 where the tile fell
-    /// off the photograph. A fused mean writes alpha 0 where no view covered the
-    /// sample, where only one view did, and where the views disagree so much
-    /// that the confidence rounds to 0; its colour there is zero or one view's
-    /// reading, so none of those samples is treated as data.
+    /// off the photograph. A fused mean an older file stores has alpha 0 where
+    /// no view covered the sample, where only one view did, and where the
+    /// views disagree so much that the confidence rounds to 0; its colour there
+    /// is zero or one view's reading, so none of those samples is treated as
+    /// data.
     ///
     /// # Panics
     ///

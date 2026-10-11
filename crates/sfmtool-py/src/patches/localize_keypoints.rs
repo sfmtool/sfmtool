@@ -78,8 +78,6 @@ impl PyPatchCloud {
     ///         ``"anisotropic"`` or ``"bilinear_mip"`` for each view from its
     ///         zoom), or one sampler for every view, ``"bilinear_mip"``,
     ///         ``"bilinear"`` or ``"anisotropic"``.
-    ///     robust_iters: IRLS passes for the fused mean that is the template where
-    ///         the reference-view rule picks no reference it would store.
     ///     point_indexes: If given, localize only for the patches with these source
     ///         point ids; ``None`` (default) localizes for every patch.
     ///     starting_keypoints: Optional explicit per-view seeds:
@@ -129,9 +127,9 @@ impl PyPatchCloud {
     ///     ``1.0`` for the reference, NaN for a view that was not searched and
     ///     for every view when both gates are off.
     ///     ``reference_image`` is the image index of the reference observation
-    ///     the views were aligned to, or ``None`` where the rule picked none it
-    ///     would store (the template was the fused mean of the views) or nothing
-    ///     rendered. A given reference that grazes the patch plane (fails
+    ///     the views were aligned to, or ``None`` where the rule found no
+    ///     eligible view or nothing rendered; every view is then kept at its
+    ///     starting keypoint, unscored. A given reference that grazes the patch plane (fails
     ///     ``min_grazing_cos``) is dropped with the other grazing views, and
     ///     the rule's pick from the views left is the reference reported
     ///     instead. Otherwise the reference is always kept when it renders;
@@ -145,7 +143,7 @@ impl PyPatchCloud {
         recon, images, *, view_sets=None, search=6.0, max_shift_px=3.0,
         min_relative_zncc=0.7, min_absolute_zncc=0.5, max_member_zncc_self_similarity_radius=2.5,
         min_grazing_cos=0.1, resolution=24, window="gaussian_disk",
-        window_sigma=0.6, sampler="per_view", robust_iters=3,
+        window_sigma=0.6, sampler="per_view",
         point_indexes=None, starting_keypoints=None,
         search_strategy="exhaustive", reference_images=None, progress=None
     ))]
@@ -166,7 +164,6 @@ impl PyPatchCloud {
         window: &str,
         window_sigma: f64,
         sampler: &str,
-        robust_iters: u32,
         point_indexes: Option<Vec<u32>>,
         starting_keypoints: Option<std::collections::HashMap<u32, Vec<Option<[f64; 2]>>>>,
         search_strategy: &str,
@@ -203,7 +200,6 @@ impl PyPatchCloud {
             resolution,
             window,
             sampler,
-            robust_iters,
             search_strategy,
         };
 

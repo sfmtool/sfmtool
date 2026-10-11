@@ -394,7 +394,8 @@ pub fn normal_preconditions(track: &EditableTrack) -> Result<(), NormalError> {
 /// the normal the patch has and from the mean viewing direction and searches
 /// [`NormalRefineParams::angular_range_deg`] around each, so a normal further
 /// away than that is reached by pressing it again. The patch is then turned
-/// with [`tilt_patch`], read back and fused, and its centre does not move.
+/// with [`tilt_patch`], its bitmap rendered again and read back, and its
+/// centre does not move.
 ///
 /// `images` is one [`ProjectedImage`] per image of `edited`, as for every
 /// photometric step of the bench.

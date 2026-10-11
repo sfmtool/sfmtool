@@ -2424,6 +2424,45 @@ fn a_fractional_shift_on_one_axis_does_not_show_up_on_the_other() {
 }
 
 #[test]
+fn with_no_eligible_view_there_is_no_reference_and_nothing_moves() {
+    // The patch's normal is turned away from every camera, so every view sees
+    // it from behind and the reference-view rule finds no eligible view. With
+    // no reference given there is no template: every view is kept at its
+    // starting keypoint, unscored.
+    let offs = [[0.0, 0.0], [0.5, 0.0], [0.0, 0.4], [-0.3, 0.3]];
+    let scene = four_view_scene(offs, [texture; 4]);
+    let views = scene.views();
+    let mut patch = plane_patch();
+    patch.v_axis = -patch.v_axis;
+    assert!(views
+        .iter()
+        .all(|v| !patch.is_front_facing(v.cam_from_world)));
+    let set = [0u32, 1, 2, 3];
+    let seeds: Vec<Option<[f64; 2]>> = (0..4)
+        .map(|k| {
+            let [x, y] = projection(&views, k);
+            Some([x + 0.4, y - 0.3])
+        })
+        .collect();
+    for strategy in STRATEGIES {
+        let res = localize_patch_keypoints(
+            &patch,
+            &views,
+            &set,
+            Some(&seeds),
+            None,
+            &with_strategy(strategy),
+        );
+        assert_eq!(res.reference, None, "{strategy:?}");
+        assert_eq!(res.views, set.to_vec(), "{strategy:?}");
+        assert!(res.zncc.iter().all(|z| z.is_nan()), "{:?}", res.zncc);
+        for (k, kp) in res.keypoints.iter().enumerate() {
+            assert_eq!(*kp, seeds[k].unwrap(), "{strategy:?}: view {k} moved");
+        }
+    }
+}
+
+#[test]
 fn with_no_reference_given_the_rule_picks_one_and_it_is_not_moved() {
     // No reference: the reference-view rule reads the views' renders at their
     // starting keypoints and its pick is the reference. The result names it,

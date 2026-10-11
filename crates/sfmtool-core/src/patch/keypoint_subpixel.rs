@@ -11,8 +11,9 @@
 //! render `T`, the template the localizer aligns views to
 //! ([`keypoint_localize`](super::keypoint_localize)): the reference
 //! observation's render at its own keypoint, which is never blurred and never
-//! moved, or the fused mean of the views where the reference-view rule picks no
-//! reference it would store. It does no grid search; the only membership change
+//! moved. Where the point has no reference observation and the reference-view
+//! rule finds no eligible view, there is no template and no view moves. It does
+//! no grid search; the only membership change
 //! is the projection gate (a view in which `project_i(X_p)` fails has no
 //! projection-anchored offset to report, so it is dropped). Each accepted step
 //! raises the ECC score against `T` and stays in frame, so no view ends worse
@@ -66,13 +67,8 @@
 
 use crate::camera::image::ImageF32WithGrad;
 use crate::patch::cloud::{OrientedPatch, PatchCloud};
-use crate::patch::keypoint_localize::{
-    project, resolve_reference, seed_offset, shifted_center, ResolvedReference,
-};
-use crate::patch::normal_refine::{
-    build_support, irls_view_weights, ConsensusScratch, PatchViewStack, ProjectedImage, Support,
-    AGREEMENT_SIGMA,
-};
+use crate::patch::keypoint_localize::{project, resolve_reference, seed_offset, shifted_center};
+use crate::patch::normal_refine::{build_support, ProjectedImage, Support};
 use crate::progress::{Cancelled, Progress};
 use rayon::prelude::*;
 
@@ -86,7 +82,7 @@ pub use params::{KeypointRefinement, KeypointSubpixelParams};
 
 // Rendering + scoring kernels consumed by the Gauss–Newton orchestration below.
 use crate::camera::sampler::render_phase;
-use crate::patch::normal_refine::{Sampler, ViewSamplers};
+use crate::patch::normal_refine::Sampler;
 use crate::patch::reference_view::render_view_tile;
 use crate::patch::stored_bitmap::bitmap_from_tile;
 use crate::patch::PatchCounter;
@@ -194,26 +190,14 @@ pub fn refine_patch_keypoints_reporting(
             starting_keypoints,
             reference,
             params,
-            BitmapKind::Reference,
             progress,
         )
     })
 }
 
-/// Which bitmap [`KeypointSubpixelParams::render_bitmaps`] renders.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum BitmapKind {
-    /// The reference observation's tile, the fused mean where there is none
-    /// (the reference-view rule picks none): the stored bitmap.
-    Reference,
-    /// The fused mean of the views ([`fuse_patch_bitmap`]).
-    FusedMean,
-}
-
 /// Untimed body of [`refine_patch_keypoints`] (split so the enclosing
 /// [`prof::TOTAL`] phase is a single wrap covering both batch entries — the
 /// Rust [`refine_patch_cloud_keypoints`] and the PyO3 binding's inlined loop).
-#[allow(clippy::too_many_arguments)]
 fn refine_patch_keypoints_impl(
     patch: &OrientedPatch,
     views: &[ProjectedImage<'_>],
@@ -221,7 +205,6 @@ fn refine_patch_keypoints_impl(
     starting_keypoints: Option<&[Option<[f64; 2]>]>,
     reference: Option<usize>,
     params: &KeypointSubpixelParams,
-    bitmap: BitmapKind,
     progress: &Progress<'_>,
 ) -> KeypointRefinement {
     let resolution = params.resolution.max(2);
@@ -307,46 +290,37 @@ fn refine_patch_keypoints_impl(
         .collect();
 
     // What the views are aligned to: the caller's reference, else the
-    // reference-view rule's pick at the starting keypoints, else the fused
-    // mean, resolved by the function the localizer uses, with its grazing
-    // pre-filter. The fuse-only pass moves nothing, so it decides nothing here.
-    let resolved = match bitmap {
-        BitmapKind::FusedMean => ResolvedReference {
-            anchor: None,
-            fused: None,
-        },
-        BitmapKind::Reference => prof::REFERENCE.time(|| {
-            // Matched by image, so a reference given at a repeated image's
-            // dropped slot is kept.
-            let given = reference
-                .and_then(|k| view_set.get(k))
-                .and_then(|&img| states.iter().position(|st| st.idx == img));
-            let set: Vec<u32> = states.iter().map(|st| st.idx).collect();
-            let seeds: Vec<Option<[f64; 2]>> = states.iter().map(|st| st.keypoint).collect();
-            resolve_reference(
-                patch,
-                views,
-                &set,
-                &seeds,
-                given,
-                params.min_grazing_cos,
-                resolution,
-                params.window,
-                params.sampler,
-                params.robust_iters,
-                &params.reference_view,
-                progress,
-            )
-        }),
-    };
-    let mut anchor = resolved.anchor;
+    // reference-view rule's pick at the starting keypoints, resolved by the
+    // function the localizer uses, with its grazing pre-filter. Where the rule
+    // finds no eligible view there is none.
+    let mut anchor = prof::REFERENCE.time(|| {
+        // Matched by image, so a reference given at a repeated image's
+        // dropped slot is kept.
+        let given = reference
+            .and_then(|k| view_set.get(k))
+            .and_then(|&img| states.iter().position(|st| st.idx == img));
+        let set: Vec<u32> = states.iter().map(|st| st.idx).collect();
+        let seeds: Vec<Option<[f64; 2]>> = states.iter().map(|st| st.keypoint).collect();
+        resolve_reference(
+            patch,
+            views,
+            &set,
+            &seeds,
+            given,
+            params.min_grazing_cos,
+            resolution,
+            params.sampler,
+            &params.reference_view,
+            progress,
+        )
+    });
 
-    // The template `T`: the reference's core at its own keypoint, or the fused
-    // mean's, z-normalized with `√w` folded in. Never blurred. A reference
-    // whose keypoint does not map onto the patch plane has no core there.
-    let template: Option<Vec<f32>> = match (anchor, &resolved.fused) {
-        (Some(a), _) if !states[a].seed_is_keypoint => None,
-        (Some(a), _) => {
+    // The template `T`: the reference's core at its own keypoint,
+    // z-normalized with `√w` folded in. Never blurred. A reference whose
+    // keypoint does not map onto the patch plane has no core there.
+    let template: Option<Vec<f32>> = match anchor {
+        Some(a) if !states[a].seed_is_keypoint => None,
+        Some(a) => {
             let st = &states[a];
             core_value(
                 patch,
@@ -367,17 +341,12 @@ fn refine_patch_keypoints_impl(
                 znorm.clone()
             })
         }
-        (None, Some(fused)) => {
-            bitmap_core(fused, resolution as usize, &support, channels, &mut raw);
-            znorm_core(&raw, &support, channels, &mut znorm);
-            Some(znorm.clone())
-        }
-        (None, None) => None,
+        None => None,
     };
     // As in the localizer, a reference whose core cannot be rendered at its
     // keypoint (out of frame, flat, or off the patch plane) is no reference:
-    // nothing is aligned, every view keeps its seed unscored, and the stored
-    // bitmap, when rendered, is the fused mean.
+    // nothing is aligned, every view keeps its seed unscored, and no stored
+    // bitmap is rendered.
     if template.is_none() {
         anchor = None;
     }
@@ -412,29 +381,21 @@ fn refine_patch_keypoints_impl(
     // The reference is reported whether or not the bitmap is rendered: callers
     // that refine without it still store which observation the keypoints were
     // aligned to.
-    out.reference = anchor.filter(|_| bitmap == BitmapKind::Reference);
+    out.reference = anchor;
     if params.render_bitmaps {
         // The stored bitmap is the reference's tile at its keypoint, which the
-        // refinement did not move; where there is no reference, the fused mean
-        // of the views at their final keypoints.
-        match anchor.filter(|_| bitmap == BitmapKind::Reference) {
-            Some(a) => {
-                let st = &states[a];
-                let tile = render_view_tile(
-                    patch,
-                    &views[st.idx as usize],
-                    Some(out.keypoints[a]),
-                    resolution as usize,
-                    params.sampler,
-                    progress,
-                );
-                out.representative = Some(bitmap_from_tile(&tile));
-            }
-            None => {
-                out.representative = render_representative(
-                    patch, views, &states, &tiles, &support, wpp_u, wpp_v, params, progress,
-                );
-            }
+        // refinement did not move; where there is no reference there is none.
+        if let Some(a) = anchor {
+            let st = &states[a];
+            let tile = render_view_tile(
+                patch,
+                &views[st.idx as usize],
+                Some(out.keypoints[a]),
+                resolution as usize,
+                params.sampler,
+                progress,
+            );
+            out.representative = Some(bitmap_from_tile(&tile));
         }
     }
     out
@@ -458,107 +419,6 @@ fn bitmap_core(
             out[c * n + k] = f32::from(bitmap[p * 4 + c.min(2)]);
         }
     }
-}
-
-/// Fuse the point's representative RGBA texture at the **final** per-view
-/// keypoints (the [`KeypointSubpixelParams::render_bitmaps`] path). The views are
-/// re-rendered (support-only) at their final offsets to rebuild the final IRLS
-/// view weights at the views' final positions — then the live
-/// views are rendered full-grid ([`PatchViewStack`]) at the finalize-identical
-/// keypoints and fused with those weights ([`AGREEMENT_SIGMA`]). Returns `None`
-/// when fewer than two views render in frame at their final offsets — there
-/// is nothing to fuse, so the point has no valid representative (the
-/// caller's culled-point signal). Infinity patches (`w = 0`) take the same path.
-#[allow(clippy::too_many_arguments)]
-fn render_representative(
-    patch: &OrientedPatch,
-    views: &[ProjectedImage<'_>],
-    states: &[ViewState],
-    tiles: &[Option<RefineTile>],
-    support: &Support,
-    wpp_u: f64,
-    wpp_v: f64,
-    params: &KeypointSubpixelParams,
-    progress: &Progress<'_>,
-) -> Option<Vec<u8>> {
-    if states.len() < 2 {
-        return None;
-    }
-    let resolution = params.resolution.max(2);
-    let channels = views[states[0].idx as usize].pyramid.level(0).channels() as usize;
-    let n = support.pixels.len();
-    let mut raw = vec![0f32; channels * n];
-    let mut znorm = vec![0f32; channels * n];
-    let mut xs: Vec<f32> = Vec::new();
-    let mut live: Vec<usize> = Vec::new();
-    for (si, st) in states.iter().enumerate() {
-        if core_value(
-            patch,
-            &views[st.idx as usize],
-            tiles[si].as_ref(),
-            st.off[0],
-            st.off[1],
-            wpp_u,
-            wpp_v,
-            resolution,
-            st.sampler,
-            support,
-            channels,
-            &mut raw,
-        ) {
-            znorm_core(&raw, support, channels, &mut znorm);
-            live.push(si);
-            xs.extend_from_slice(&znorm);
-        }
-    }
-    if live.len() < 2 {
-        return None;
-    }
-
-    // Final IRLS view weights over the final-offset cores (parallel to `live`).
-    let mut sc = ConsensusScratch::default();
-    prof::CONSENSUS.time(|| {
-        irls_view_weights(
-            &xs,
-            live.len(),
-            channels,
-            n,
-            params.robust_iters,
-            None,
-            &mut sc,
-        )
-    });
-    let weights: Vec<f64> = sc.w[..live.len()].to_vec();
-
-    // Anchor each live view's full-grid render at its final keypoint — the same
-    // `shifted_center → project` (with projection fallback) `finalize` reports, so
-    // the stored bitmap matches the keypoints the caller writes out.
-    let mut view_keypoints: Vec<Option<[f64; 2]>> = vec![None; views.len()];
-    // Each live view's own sampler, so the fused render reads it as the cores
-    // that weighted it did.
-    let mut samplers: Vec<Sampler> = vec![Sampler::BilinearMip; views.len()];
-    let mut kept: Vec<usize> = Vec::with_capacity(live.len());
-    for &si in &live {
-        let st = &states[si];
-        samplers[st.idx as usize] = st.sampler;
-        let center = shifted_center(patch, st.off[0], st.off[1], wpp_u, wpp_v);
-        let (kx, ky) =
-            project(&views[st.idx as usize], &center, patch.w).unwrap_or((st.proj[0], st.proj[1]));
-        view_keypoints[st.idx as usize] = Some([kx, ky]);
-        kept.push(st.idx as usize);
-    }
-    Some(prof::REPR_FUSE.time(|| {
-        let stack = PatchViewStack::render(
-            patch,
-            views,
-            &kept,
-            resolution,
-            ViewSamplers::Frozen(&samplers),
-            Some(&view_keypoints),
-            progress,
-        );
-        stack.fuse(&weights, AGREEMENT_SIGMA)
-    }))
 }
 
 /// Reused per-view scratch for [`refine_one_view`]: the value core `g`, the two
@@ -963,76 +823,6 @@ pub fn refine_patch_cloud_keypoints(
         .into_iter()
         .map(|o| o.expect("every patch ran when nothing was cancelled"))
         .collect())
-}
-
-/// Fuse `patch`'s RGBA mean of `views` at `keypoints`, moving nothing: the
-/// IRLS-weighted mean colour of the views' renders, with alpha the views'
-/// agreement times their coverage. `None` when fewer than two views render in
-/// frame.
-///
-/// The stored bitmap is the reference view's render
-/// ([`render_patch_bitmap`](crate::patch::stored_bitmap::render_patch_bitmap)),
-/// which falls back to this mean where the reference-view rule picks no view.
-/// This is the sub-pixel kernel's fuse run with no Gauss-Newton step, so the
-/// keypoints come out where they went in and the pass only renders and
-/// blends. `keypoints` is parallel to `view_set`, in
-/// source-image pixels. Of `params`, `resolution`, `window`, `sampler` and
-/// `robust_iters` shape the render; the solve knobs are overridden.
-///
-/// # Panics
-///
-/// Panics if `keypoints.len() != view_set.len()` or a view index is out of
-/// range for `views`.
-pub fn fuse_patch_bitmap(
-    patch: &OrientedPatch,
-    views: &[ProjectedImage<'_>],
-    view_set: &[u32],
-    keypoints: &[[f64; 2]],
-    params: &KeypointSubpixelParams,
-) -> Option<Vec<u8>> {
-    fuse_patch_bitmap_reporting(patch, views, view_set, keypoints, params, &Progress::none())
-}
-
-/// [`fuse_patch_bitmap`] reporting to `progress`: a detailed `progress` times
-/// the renders of each sampler in its own detail phase.
-///
-/// # Panics
-///
-/// As [`fuse_patch_bitmap`].
-pub fn fuse_patch_bitmap_reporting(
-    patch: &OrientedPatch,
-    views: &[ProjectedImage<'_>],
-    view_set: &[u32],
-    keypoints: &[[f64; 2]],
-    params: &KeypointSubpixelParams,
-    progress: &Progress<'_>,
-) -> Option<Vec<u8>> {
-    assert_eq!(
-        keypoints.len(),
-        view_set.len(),
-        "keypoints must be parallel to view_set"
-    );
-    let seeds: Vec<Option<[f64; 2]>> = keypoints.iter().map(|&k| Some(k)).collect();
-    let params = KeypointSubpixelParams {
-        // Nothing moves: the keypoints are settled, and this pass is the fuse.
-        max_gn_steps: 0,
-        render_bitmaps: true,
-        ..params.clone()
-    };
-    prof::TOTAL
-        .time(|| {
-            refine_patch_keypoints_impl(
-                patch,
-                views,
-                view_set,
-                Some(&seeds),
-                None,
-                &params,
-                BitmapKind::FusedMean,
-                progress,
-            )
-        })
-        .representative
 }
 
 #[cfg(test)]

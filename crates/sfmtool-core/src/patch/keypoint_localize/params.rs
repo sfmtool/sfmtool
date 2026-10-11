@@ -102,9 +102,6 @@ pub struct KeypointLocalizeParams {
     /// at the patch resolution ([`SamplerChoice::for_observation`]), and every
     /// tile of the view, the wider context tile included, is rendered with it.
     pub sampler: SamplerChoice,
-    /// IRLS reweighting passes for the fused mean that is the template
-    /// where the reference-view rule picks no reference it would store.
-    pub robust_iters: u32,
     /// How each view's shift grid is traversed; see [`SearchStrategy`].
     pub search_strategy: SearchStrategy,
 }
@@ -149,7 +146,7 @@ impl Default for KeypointLocalizeParams {
             resolution: 24,
             window: PatchWindow::GaussianDisk { sigma: 0.6 },
             sampler: SamplerChoice::per_view(),
-            robust_iters: 3,
+
             search_strategy: SearchStrategy::Exhaustive,
         }
     }
@@ -166,7 +163,8 @@ impl Default for KeypointLocalizeParams {
 ///
 /// Where there is nothing to align to (the reference's tile leaves the frame,
 /// is flat or its keypoint does not map onto the patch plane, or there is no
-/// reference and no fused mean renders), [`reference`](Self::reference) is
+/// reference and the reference-view rule finds no eligible view),
+/// [`reference`](Self::reference) is
 /// `None` and no view is searched: every view, the given reference included, is
 /// kept at its starting keypoint, exactly as given (the projection where it was
 /// given none or it does not map onto the patch plane), with a `NaN` ZNCC, and
@@ -202,7 +200,6 @@ pub struct KeypointLocalization {
     pub blur_matched_zncc: Vec<f64>,
     /// The image index of the reference observation the views were aligned
     /// to. `None` where there was none to align to: the reference-view rule
-    /// picked no reference it would store, so the template was the fused mean
-    /// of the views, or nothing rendered to align to (see above).
+    /// found no eligible view, or nothing rendered to align to (see above).
     pub reference: Option<u32>,
 }

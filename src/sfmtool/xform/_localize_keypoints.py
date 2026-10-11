@@ -78,7 +78,6 @@ _OPTION_VALIDATORS = {
     "sampler": _check(
         lambda v: v in _SAMPLERS, f"sampler must be one of {_SAMPLERS}, got {{!r}}"
     ),
-    "robust_iters": _check(lambda v: v >= 1, "robust_iters must be >= 1, got {}"),
     "search_strategy": _check(
         lambda v: v in _SEARCH_STRATEGIES,
         f"search_strategy must be one of {_SEARCH_STRATEGIES}, got {{!r}}",

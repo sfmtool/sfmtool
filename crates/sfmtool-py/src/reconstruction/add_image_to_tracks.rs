@@ -67,7 +67,6 @@ fn template_kind_name(kind: TemplateKind) -> &'static str {
     match kind {
         TemplateKind::StoredBitmap => "stored_bitmap",
         TemplateKind::ReferenceObservation => "reference_observation",
-        TemplateKind::FusedMean => "fused_mean",
     }
 }
 
@@ -239,7 +238,7 @@ impl PyEditedReconstruction {
     ///     before it was scored), ``reference_pair_zncc``
     ///     (row-major ``n × n``) and ``pair_zncc`` (plain, the pair rule's),
     ///     with ``template`` (``"stored_bitmap"``,
-    ///     ``"reference_observation"``, ``"fused_mean"``, or ``None`` before the
+    ///     ``"reference_observation"``, or ``None`` before the
     ///     template was settled) and ``reference_observation`` (``int64``, the
     ///     position in ``references`` of the point's reference observation, whose
     ///     score no bar reads; ``-1`` for none). Raises ``ValueError`` with

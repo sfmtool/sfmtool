@@ -156,7 +156,7 @@ impl std::error::Error for CreateTrackError {}
 /// observation comes on as the track's reference, and with every row pinned it is held until a
 /// person unpins its row. So putting a track on the bench and doing nothing shows the numbers the
 /// reconstruction already holds, plus the verdict column, with one exception: a point stored at
-/// `-1` whose bitmap names no row (a fused mean, or a bitmap stored before the reference was
+/// `-1` whose bitmap names no row (a fused mean an older file stores, or a bitmap stored before the reference was
 /// recorded) has its bitmap rendered from the reference-view rule's pick at the first evaluation
 /// that renders the bitmap ([`evaluate_rendering_bitmap`](super::evaluate::evaluate_rendering_bitmap))
 /// where the rule picks a row, and its rows are then

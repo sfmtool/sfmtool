@@ -647,14 +647,15 @@ fn patch_at(world: Point3<f64>) -> OrientedPatch {
     patch
 }
 
-/// A stored bitmap column for `points`, each the fused mean of its observing
-/// views at the projections of its position moved by `shift`, on a 24 px grid.
-fn fused_bitmaps(
+/// A stored bitmap column for `points`, each its reference view's tile among
+/// its observing views at the projections of its position moved by `shift`,
+/// on a 24 px grid.
+fn stored_bitmaps(
     cap: &Capture,
     points: &[(Point3<f64>, &[u32])],
     shift: Vector3<f64>,
 ) -> ndarray::Array4<u8> {
-    use crate::patch::keypoint_subpixel::fuse_patch_bitmap;
+    use crate::patch::stored_bitmap::render_patch_bitmap;
     let r = 24usize;
     let poses = poses_of(cap);
     let camera = pinhole();
@@ -675,13 +676,20 @@ fn fused_bitmaps(
             resolution: r as u32,
             ..KeypointSubpixelParams::default()
         };
-        let bitmap =
-            fuse_patch_bitmap(&patch_at(*world), &views, observing, &kps, &params).unwrap();
+        let bitmap = render_patch_bitmap(
+            &patch_at(*world),
+            &views,
+            observing,
+            &kps,
+            &params,
+            &Progress::none(),
+        )
+        .unwrap();
         column
             .index_axis_mut(ndarray::Axis(0), p)
             .as_slice_mut()
             .unwrap()
-            .copy_from_slice(&bitmap);
+            .copy_from_slice(&bitmap.rgba);
     }
     column
 }
@@ -690,7 +698,7 @@ fn fused_bitmaps(
 fn a_stored_bitmap_template_finds_the_same_keypoint() {
     let points: Vec<(Point3<f64>, &[u32])> = grid_points().into_iter().map(|p| (p, FOUR)).collect();
     let mut cap = capture(&points);
-    let column = fused_bitmaps(&cap, &points, Vector3::zeros());
+    let column = stored_bitmaps(&cap, &points, Vector3::zeros());
     cap.recon.point_set.patch_bitmaps_y_x_rgba = Some(std::sync::Arc::new(column));
     let options = AddImageToTracksOptions {
         template: TemplateSource::StoredBitmap,
@@ -725,7 +733,7 @@ fn the_template_is_the_stored_bitmap_where_there_is_one() {
     let mut cap = capture(&points);
     // Four grid px along the patch's u axis.
     let shift = Vector3::new(0.04, 0.0, 0.0);
-    let column = fused_bitmaps(&cap, &points, shift);
+    let column = stored_bitmaps(&cap, &points, shift);
     cap.recon.point_set.patch_bitmaps_y_x_rgba = Some(std::sync::Arc::new(column));
     for (template, moved) in [
         (TemplateSource::StoredBitmap, shift),
@@ -868,11 +876,12 @@ fn without_a_stored_reference_the_rule_picks_one() {
     }
 }
 
-/// Where every reference sees the patch from behind its frame, the rule
-/// measures the angles against the flipped normal and still picks one, and
-/// its render is the template, left out of the bars.
+/// Where every reference sees the patch from behind its frame, every view is
+/// back-facing and the rule finds no eligible view; with no stored bitmap or
+/// reference observation to use instead there is no template, and no point is
+/// extended.
 #[test]
-fn where_every_reference_sees_the_patch_from_behind_the_rule_still_picks_one() {
+fn where_every_reference_sees_the_patch_from_behind_no_point_is_extended() {
     let points: Vec<(Point3<f64>, &[u32])> = grid_points().into_iter().map(|p| (p, FOUR)).collect();
     let mut cap = capture(&points);
     let n = points.len();
@@ -881,18 +890,17 @@ fn where_every_reference_sees_the_patch_from_behind_the_rule_still_picks_one() {
         |(_, k)| if k == 1 { HALF_EXTENT as f32 } else { 0.0 },
     );
     cap.recon.point_set.patch_v_halfvec_xyz = Some(v);
-    let (_, report) = run(&cap, &fixed());
-    assert_eq!(report.accepted, n, "{:?}", report.refusal_counts());
-    for (p, (world, _)) in points.iter().enumerate() {
-        let c = &report.candidates[p];
-        assert_eq!(c.template, Some(TemplateKind::ReferenceObservation));
-        assert!(c.reference_observation.is_some());
-        assert_eq!(c.bar_zncc().count(), 3);
-        let expected = cap.project(TARGET, *world);
-        let kp = c.keypoint.unwrap();
-        let err = (kp[0] - expected[0]).hypot(kp[1] - expected[1]);
-        assert!(err < 0.1, "point {p}: {err} px");
+    let (out, report) = run(&cap, &fixed());
+    assert_eq!(report.accepted, 0);
+    assert_eq!(Refusal::NoReferenceView.name(), "no_reference_view");
+    for c in &report.candidates {
+        assert_eq!(c.refusal, Some(Refusal::NoReferenceView));
+        assert_eq!(c.template, None);
     }
+    assert_eq!(
+        out.point_set.observation_counts,
+        cap.recon.point_set.observation_counts
+    );
 }
 
 /// A texture fine enough that the references' renders carry detail on the
@@ -936,7 +944,7 @@ fn the_new_views_score_is_blur_matched_against_the_template() {
     }
     cap.recon.point_set.reference_observations = Some(vec![2; n]);
     cap.recon.point_set.observation_confidence = Some(vec![200; cap.recon.point_set.tracks.len()]);
-    let column = fused_bitmaps(&cap, &points, Vector3::zeros());
+    let column = stored_bitmaps(&cap, &points, Vector3::zeros());
     cap.recon.point_set.patch_bitmaps_y_x_rgba = Some(std::sync::Arc::new(column.clone()));
     let poses = poses_of(&cap);
     let camera = pinhole();

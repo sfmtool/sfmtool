@@ -182,7 +182,7 @@ pub struct PointSet {
     /// ([`render_patch_cloud_bitmaps`](crate::patch::stored_bitmap::render_patch_cloud_bitmaps)).
     /// [`NO_REFERENCE_OBSERVATION`] (`-1`) where the point has no reference
     /// observation in its track: a bitmap beside it is not the render of one
-    /// of its observations (a fused mean, or the render of an observation an
+    /// of its observations (a fused mean an older file stores, or the render of an observation an
     /// edit has since removed, which keeps the bitmap), and a later render
     /// runs the reference-view rule for the point. Persisted as
     /// `tracks/reference_observations` (version 12+).

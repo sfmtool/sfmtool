@@ -69,8 +69,7 @@ pub struct FitOptions {
     pub localize: KeypointLocalizeParams,
     /// The sub-pixel kernel, chained after the discrete one, and the render of
     /// the patch bitmap: its resolution and sampler shape the reference view's
-    /// tile, and its window and robust iterations the fused mean where that
-    /// is stored.
+    /// tile.
     pub refine: KeypointSubpixelParams,
     /// The evaluation a fit ends with, which is where every number it reports
     /// comes from. A caller that reads with its own search radius fits with the
@@ -525,9 +524,10 @@ fn rendered_in_place(
 /// `track` with a bitmap for judging
 /// ([`TrackPayload::bitmap_for_judging`]) rendered where its patch stands: the
 /// render of the reference-view rule's pick among every row that carries a
-/// keypoint, `in` or `out`, or their fused mean where the rule picks none. It
-/// names no reference and leaves the track's colour alone. The track comes
-/// back unchanged where it has no placement or the render gives no bitmap.
+/// keypoint, `in` or `out`. It names no reference and leaves the track's
+/// colour alone. The track comes back unchanged where it has no placement or
+/// the render gives no bitmap: fewer than two rows carry a keypoint, or the
+/// rule finds no eligible row.
 pub(super) fn render_bitmap_for_judging(
     track: &EditableTrack,
     edited: &EditedReconstruction,
@@ -1242,8 +1242,8 @@ pub(super) fn triangulate_rays(
 /// evaluation passes the row it chose), the bitmap is that row's tile at its
 /// keypoint ([`render_view_tile`]), and that row is the reference. Otherwise
 /// the bitmap is [`render_patch_bitmap`]: the tile of the observation the reference-view
-/// rule picks among the `in` observations, or the fused mean where it picks
-/// none. Nothing moves: the
+/// rule picks among the `in` observations, or no bitmap where it finds no
+/// eligible observation. Nothing moves: the
 /// keypoints are the ones the fit already settled. The grid is the
 /// reconstruction's own bitmap grid where it stores one, so what is rendered
 /// is a tile the column can hold. The second value is the row of the track
@@ -1301,9 +1301,5 @@ fn render_bitmap(
     };
     // The kernel renders RGBA; the column takes as many channels as it carries.
     let (bitmap, color) = column_bitmap(&rendered.rgba, resolution, channels);
-    (
-        Some(bitmap),
-        rendered.reference.map(|r| rows[r]),
-        Some(color),
-    )
+    (Some(bitmap), Some(rows[rendered.reference]), Some(color))
 }

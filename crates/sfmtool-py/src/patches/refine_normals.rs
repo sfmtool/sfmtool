@@ -108,8 +108,8 @@ impl PyPatchCloud {
     ///         anchored center), so there is no speed penalty either way.
     ///     render_bitmaps: If true, also render each refined patch's stored
     ///         bitmap at the found normal, the tile of the view the
-    ///         reference-view rule picks among every input view (the fused
-    ///         mean of the refined views where it picks none),
+    ///         reference-view rule picks among every input view (none where
+    ///         it finds no eligible view),
     ///         and return them scattered to per-3D-point rows (see ``bitmaps``
     ///         below). Costs a tile render and a self-similarity reading per
     ///         view and member coherence's matrix per patch, so it is off by
@@ -121,10 +121,11 @@ impl PyPatchCloud {
     /// updated to the refined normals in place. When ``render_bitmaps`` is true,
     /// also ``bitmaps``: a ``(P, R, R, 4)`` uint8 array of the stored bitmaps
     /// scattered to **per-3D-point** rows (``P`` = ``recon`` point count,
-    /// ``R`` = ``resolution``), zero rows for points with no refined patch — ready
+    /// ``R`` = ``resolution``), zero rows for points with no refined patch or
+    /// no bitmap — ready
     /// to pass straight to ``clone_with_changes(patch_bitmaps=...)`` — and
     /// ``reference_images``: a ``(P,)`` int64 array of the image whose tile each
-    /// point's bitmap is, ``-1`` for a fused mean or no bitmap.
+    /// point's bitmap is, ``-1`` for no bitmap.
     #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (
         recon, images, *, resolution=24, angular_range_deg=25.0, init_steps=7,
@@ -375,7 +376,7 @@ impl PyPatchCloud {
                 });
             let stride = r * r * 4;
             let mut flat = vec![0u8; npoints * stride];
-            // The image whose tile each point's bitmap is, -1 for a fused mean.
+            // The image whose tile each point's bitmap is, -1 for no bitmap.
             let mut reference_images = vec![-1i64; npoints];
             for ((res, &pid), pv) in results
                 .iter()

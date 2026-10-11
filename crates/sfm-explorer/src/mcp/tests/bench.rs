@@ -2638,7 +2638,7 @@ fn fit_and_set_stage_run_as_background_tasks_and_the_evaluation_follows_them() {
             "{track}"
         );
         let standing = &measured["reference_view"];
-        assert_eq!(standing["side"], json!("front"), "{track}");
+        assert!(standing.get("side").is_none(), "{track}");
         assert!(standing.get("rejected_by").is_none(), "{track}");
         assert!(standing.get("fallback").is_none(), "{track}");
         if standing["excluded_by"].is_string() {

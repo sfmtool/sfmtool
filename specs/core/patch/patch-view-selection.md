@@ -127,7 +127,7 @@ overwrite each other.
 
 The per-patch kernels of the other batches are different, and each has a plain
 function beside a `_reporting` one that takes a `Progress`:
-`refine_patch_normal`, `refine_patch_keypoints`, `fuse_patch_bitmap` and
+`refine_patch_normal`, `refine_patch_keypoints` and
 `member_zncc_matrix`. None of them checks for cancellation or reports phases
 or counts of its own; the `Progress` only times its renders under each sampler
 in detail phases. The plain function is a single call of the `_reporting` one

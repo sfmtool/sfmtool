@@ -261,8 +261,8 @@ def test_compact_writes_references_naming_observations_of_the_compacted_tracks(
 
     # The reference the views were aligned to wins over the stored one, so the
     # keypoints, the bitmap and the reference agree: a localization naming
-    # another image of the track records that image, one naming None (a fused
-    # mean, or nothing aligned) records -1, and one that does not say keeps
+    # another image of the track records that image, one naming None (nothing
+    # aligned) records -1, and one that does not say keeps
     # the stored reference.
     relocs = _localizations_from_recon(new)
     want: dict[int, int] = {}

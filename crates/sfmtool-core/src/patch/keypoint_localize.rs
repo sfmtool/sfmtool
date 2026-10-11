@@ -15,8 +15,8 @@
 //! blurred. The reference is the caller's (the point's stored reference, or the
 //! reference a bench track holds), or where there is none the reference-view
 //! rule picks one from the views' renders at their starting keypoints. Where
-//! the rule picks none it would store, the template is the fused mean of the
-//! views, which is then the point's stored bitmap. The reference observation's
+//! the rule finds no eligible view there is no template, and every view keeps
+//! its starting keypoint, unscored. The reference observation's
 //! keypoint is returned as given. Every other view
 //! has one context tile rendered around its starting keypoint, its own tile is
 //! read by the member self-similarity gate, and the tile is searched once for
@@ -62,10 +62,10 @@ pub use params::{
     KeypointLocalization, KeypointLocalizeParams, SearchStrategy,
     DEFAULT_MAX_MEMBER_ZNCC_SELF_SIMILARITY_RADIUS,
 };
-pub use reference::{TemplateKind, TrackReferences, ViewScore, ViewSearch};
+pub use reference::{NoTemplate, TemplateKind, TrackReferences, ViewScore, ViewSearch};
 pub use seed::keypoint_grid_offset;
 
-pub(super) use align::{resolve_reference, ResolvedReference};
+pub(super) use align::resolve_reference;
 pub(super) use seed::seed_offset;
 
 // Search machinery, re-exported into this module's namespace for the sibling

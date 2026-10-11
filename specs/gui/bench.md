@@ -862,8 +862,9 @@ the patch as it now lies at the keypoints. Where the track holds a defined
 reference whose row is pinned, `in` and has a keypoint
 (`EditableTrack::held_reference`), it writes that row's tile as the bitmap
 and keeps the reference; otherwise it writes the tile of the `in`
-sighting the reference-view rule picks (or the fused mean of them where it
-picks none; [../core/patch/reference-view.md](../core/patch/reference-view.md)
+sighting the reference-view rule picks (or nothing, the bitmap standing,
+where it finds none eligible;
+[../core/patch/reference-view.md](../core/patch/reference-view.md)
 § "The stored bitmap"), and the
 colour at its centre, moving nothing. It then scores every row against the new
 bitmap (core's `score_bitmap`), since the evaluation's own bitmap scores were
@@ -884,15 +885,16 @@ bitmap the track shows. So a tilted patch shows its texture again
 as soon as the evaluation lands, and can be committed into a reconstruction
 that stores a bitmap per point without a fit first. The bitmap is installed with
 the measurements, under the same rule: no version and no Action Log row. A track with fewer than two
-`in` sightings that carry a keypoint has no patch to render, and gets a
+`in` sightings that carry a keypoint, or none the rule finds eligible, has no
+patch to render, and gets a
 **bitmap for judging** instead (core's `TrackPayload::bitmap_for_judging`):
 the tile of the rule's pick among every row that carries a keypoint, `in` or
-`out`, or their fused mean, rendered only so that the bars have scores to
+`out` (none where no row is eligible), rendered only so that the bars have scores to
 judge and a loosened bar can turn rows back `in`. It names no reference, a
 commit does not write it, and Track View draws it dimmed with a hover saying
 it is not the track's patch ([track-view.md](track-view.md) § "The header").
-The first evaluation after two `in` rows carry a keypoint renders the patch by
-the usual rule in its place.
+The first evaluation whose `in` rows give a patch renders it by the usual
+rule in its place.
 
 ### The reference
 
@@ -908,10 +910,11 @@ the reference is on:
   stays until the person unpins its row. A display-only pick, the one the viewer
   made to render a file's display bitmaps for a point the file stores no
   reference for, is held the same way. A point the file stores at `-1` beside
-  a bitmap that names no row (a fused mean, or a file older than `.sfmr` v12)
+  a bitmap that names no row (a fused mean an older file stores, or a file
+  older than `.sfmr` v12)
   has no reference for a pin to hold: the first evaluation that renders where
   the rule picks a row renders the bitmap from that pick and makes it the
-  reference, whatever the pins, and where the rule picks none the mean stays.
+  reference, whatever the pins, and where the rule picks none that bitmap stays.
 - **An unpinned reference row hands it to the rule.** Unpinning the row
   (`AppState::unpin_bench_verdicts`, Track View's pin or *Unpin*, the wire's
   `set_bench_track_verdict` with `unpin`) moves the reference to the rule's

@@ -41,7 +41,7 @@ def test_parse_key_value_overrides():
     t = parse_localize_keypoints_params(
         "min_views=3,search=8,max_shift_px=2.5,"
         "min_relative_zncc=0.5,min_grazing_cos=0.2,resolution=16,"
-        "window=gaussian,window_sigma=0.8,sampler=anisotropic,robust_iters=2,"
+        "window=gaussian,window_sigma=0.8,sampler=anisotropic,"
         "search_strategy=exhaustive"
     )
     assert t.min_views == 3
@@ -55,7 +55,6 @@ def test_parse_key_value_overrides():
         "window": "gaussian",
         "window_sigma": 0.8,
         "sampler": "anisotropic",
-        "robust_iters": 2,
         "search_strategy": "exhaustive",
     }
     assert isinstance(t.options["resolution"], int)
@@ -163,7 +162,6 @@ def test_parse_duplicate_key_rejected():
         "window=bogus",
         "window_sigma=0",
         "sampler=bogus",
-        "robust_iters=0",
         "search_strategy=bogus",
     ],
 )

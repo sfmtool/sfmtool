@@ -394,7 +394,7 @@ fn upgrade(
         )
     };
 
-    // 3-4. Localize, refine, re-triangulate, fuse and read back: the track
+    // 3-4. Localize, refine, re-triangulate, render the bitmap and read back: the track
     //      stage's own fit, over seeds that are the cluster's refined positions.
     let (mut next, report) = fit_track(&seeded, edited, images, &frame, options, progress)?;
     // A cluster measurement is a registration against a reference and a

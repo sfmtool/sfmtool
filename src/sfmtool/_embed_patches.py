@@ -69,8 +69,8 @@ def _refine_subpixel(
     Returns:
         ``(localizations, bitmaps, valid)``. Each refined localization dict
         carries ``reference_image``, the image of the reference observation the
-        refiner aligned its views to (``None`` where the template was a fused
-        mean). With ``render_bitmaps=True``, ``bitmaps`` is a
+        refiner aligned its views to (``None`` where there was none). With
+        ``render_bitmaps=True``, ``bitmaps`` is a
         ``(point_count, R, R, 4)`` uint8 array of the stored bitmaps (each that
         reference's tile) at the FINAL per-view keypoints, scattered per
         source-point index (zero rows where no valid bitmap), and ``valid`` the
@@ -140,7 +140,7 @@ def _refine_subpixel(
 
     # The refiner aligned each point's views to one reference observation,
     # whose tile its bitmap is; the localization dict carries its image
-    # (``None`` for a fused mean) so the compaction can record which
+    # (``None`` where there is none) so the compaction can record which
     # observation it is.
     reference_by_pid: dict[int, int | None] = {
         int(r["point_index"]): r.get("reference_image") for r in refined
@@ -337,9 +337,8 @@ def _cull_by_zncc_self_similarity_radius(
     ``specs/core/patch/zncc-self-similarity-radius.md``.
 
     The radius is read from each point's stored ``bitmaps`` (the reference
-    view's render, or the views' fused mean where the reference-view rule picks
-    none; scattered per
-    source point) the overlap way, by the same pass rule the
+    view's render, scattered per source point) the overlap way, by the same
+    pass rule the
     ``xform`` filter uses (``points_passing_zncc_self_similarity_radius``): at or
     below the bar passes, a ``NaN`` radius fails, and a point whose bitmap has
     no sample carrying data (no bitmap) has no reading and is kept. The radius
@@ -443,7 +442,7 @@ def embed_patches(
        observation, so it seeds at the point's projection.
        The final round's sub-pixel pass also renders each point's **stored
        bitmap** at the final keypoints: the tile of that reference
-       observation, or the views' fused mean where there is none (points at
+       observation, or none where there is no reference (points at
        infinity included — they render through the same ``w``-aware path),
        and reports per-point validity and the reference's image, which the
        output records as the point's reference observation. After the compaction, every

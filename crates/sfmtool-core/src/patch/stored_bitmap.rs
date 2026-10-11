@@ -19,10 +19,8 @@
 //! and no pixels of the photograph outside them.
 //!
 //! Where the rule picks no view, which happens only where no view is eligible
-//! (none renders a tile with enough of its samples on the photograph), the
-//! bitmap is the fused mean of the views
-//! ([`fuse_patch_bitmap`](crate::patch::keypoint_subpixel::fuse_patch_bitmap)),
-//! and no observation is named as its reference.
+//! (none renders a tile with enough of its samples on the photograph and sees
+//! the patch from in front), the point gets no bitmap.
 //!
 //! **The scores.** [`BitmapScorer`] scores observations' tiles against the
 //! bitmap, plain and blur-matched. Only the bitmap is ever blurred: where its
@@ -47,7 +45,7 @@ use crate::patch::blur_matched::{
     BlurScratch, TilePlanes,
 };
 use crate::patch::cloud::{OrientedPatch, PatchCloud};
-use crate::patch::keypoint_subpixel::{fuse_patch_bitmap_reporting, KeypointSubpixelParams};
+use crate::patch::keypoint_subpixel::KeypointSubpixelParams;
 use crate::patch::normal_refine::{
     grid_bounds, middle_span, window_weights, PatchWindow, ProjectedImage,
 };
@@ -66,9 +64,8 @@ pub struct PatchBitmap {
     /// The `R·R·4` RGBA texture, row-major.
     pub rgba: Vec<u8>,
     /// The view whose render the bitmap is, as an index into the views it
-    /// was rendered from; `None` where the bitmap is the fused mean of the
-    /// views, because the reference-view rule picked none.
-    pub reference: Option<usize>,
+    /// was rendered from: the reference-view rule's pick.
+    pub reference: usize,
 }
 
 /// The RGBA bitmap of a view's tile: its colour as rendered, a grey tile's
@@ -164,14 +161,11 @@ pub fn render_reference(
 
 /// Render `patch`'s stored bitmap from `view_set`'s views at `keypoints`: the
 /// tile of the view the reference-view rule picks ([`render_reference`],
-/// [`bitmap_from_tile`]), or, where it picks none, the fused mean of the views
-/// ([`fuse_patch_bitmap_reporting`]) with no reference. `None` with fewer
-/// than two views, or where the rule picks none and fewer than two views
-/// render in frame for the mean.
+/// [`bitmap_from_tile`]). `None` with fewer than two views, or where the rule
+/// picks none because no view is eligible.
 ///
 /// Of `params`, `resolution` and `sampler` shape the tiles and
-/// `reference_view` is the rule's options; the fused mean also reads `window`
-/// and `robust_iters`. Moves nothing.
+/// `reference_view` is the rule's options. Moves nothing.
 ///
 /// ```no_run
 /// # use sfmtool_core::patch::cloud::OrientedPatch;
@@ -185,7 +179,7 @@ pub fn render_reference(
 /// if let Some(bitmap) =
 ///     render_patch_bitmap(patch, views, &[0, 1, 2], &keypoints, &params, &Progress::none())
 /// {
-///     println!("{} bytes, reference view {:?}", bitmap.rgba.len(), bitmap.reference);
+///     println!("{} bytes, reference view {}", bitmap.rgba.len(), bitmap.reference);
 /// }
 /// # }
 /// ```
@@ -221,17 +215,10 @@ pub fn render_patch_bitmap(
         &params.reference_view,
         progress,
     );
-    match render.reading.choice.reference {
-        Some(r) => Some(PatchBitmap {
-            rgba: bitmap_from_tile(&render.tiles[r]),
-            reference: Some(r),
-        }),
-        None => fuse_patch_bitmap_reporting(patch, views, view_set, keypoints, params, progress)
-            .map(|rgba| PatchBitmap {
-                rgba,
-                reference: None,
-            }),
-    }
+    render.reading.choice.reference.map(|r| PatchBitmap {
+        rgba: bitmap_from_tile(&render.tiles[r]),
+        reference: r,
+    })
 }
 
 /// The stored bitmap column of a reconstruction's points and the reference
@@ -251,9 +238,9 @@ pub struct PatchBitmapColumn {
 /// reference observation is `-1`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnreferencedPoints {
-    /// Run the reference-view rule and render its pick (or the fused mean),
-    /// reporting the pick: what `--add-patch-bitmaps` and the viewer's
-    /// display render do.
+    /// Run the reference-view rule and render its pick, reporting the pick
+    /// (a zero row and `-1` where it picks none): what `--add-patch-bitmaps`
+    /// and the viewer's display render do.
     Pick,
     /// Render nothing: a zero row and `-1`. For a caller that has bitmaps for
     /// those points already and re-renders only the points with a reference.
@@ -289,8 +276,8 @@ type RenderedRow = (Vec<u8>, i32);
 /// what `tracks/reference_observations` holds. A point with no patch in
 /// `cloud` (a zero patch frame) gets a zero row and keeps the reference `recon`
 /// stores for it, since the observation is still in its track; a point at `-1`
-/// left with no bitmap or a fused-mean bitmap gets `-1`, and a point with no
-/// bitmap a zero row. `done`, when given, is bumped once per patch, and `progress` receives
+/// left with no bitmap, because it has fewer than two views to hand or the rule
+/// finds no eligible view, gets a zero row and `-1`. `done`, when given, is bumped once per patch, and `progress` receives
 /// a `patches` count about every hundredth of the way through and is polled
 /// for cancellation before each patch.
 ///
@@ -384,10 +371,7 @@ pub fn render_patch_cloud_bitmaps(
                 None if unreferenced == UnreferencedPoints::Skip => None,
                 None => {
                     render_patch_bitmap(patch, &present, &view_set, &keypoints, params, progress)
-                        .map(|b| {
-                            let reference = b.reference.map_or(-1, |r| within[r] as i32);
-                            (b.rgba, reference)
-                        })
+                        .map(|b| (b.rgba, within[b.reference] as i32))
                 }
             };
             if let Some(counter) = done {

@@ -26,8 +26,7 @@ pub static TOTAL: Phase = Phase::new("localize_total");
 // Leaf phases (non-overlapping; they partition the bulk of TOTAL).
 /// Per-point decision of what the views are aligned to: nothing where the
 /// caller names the reference, else the reference-view rule over the renders
-/// at the starting keypoints, and the fused mean where the rule picks no
-/// reference it would store. Its renders are timed here, not in [`RENDER`].
+/// at the starting keypoints. Its renders are timed here, not in [`RENDER`].
 pub static REFERENCE: Phase = Phase::new("reference");
 /// Per-view context tile render (`render_context`), one per view, and the
 /// reference's own tile.

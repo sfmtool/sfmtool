@@ -50,7 +50,7 @@ left out.
 frames and inline keypoints but no bitmaps has them rendered from its
 photographs by the render SfM Explorer's open runs for its display patch
 bitmaps (each point's tile from the reference observation the file stores for
-it, or for a point at `-1` the reference view's tile or the fused mean, as
+it, or for a point at `-1` the reference view's tile, as
 [reference-view.md](../../core/patch/reference-view.md) § "The stored
 bitmap" describes);
 when no photograph can be read, the points are drawn as splats. A point with no

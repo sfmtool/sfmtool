@@ -214,7 +214,7 @@ Each reads the renders at the patch resolution `R`. Which strategy, and how many
 
 ### The weighted mean
 
-The stored bitmap is the reference view's render, so the weighted mean below no longer computes it. It is kept for normal refinement, which still builds a consensus of the views, for the fused-mean fallback where a point has no reference and the rule picks none it would store, and for comparison in the evaluation; the localization decision (Part 9) replaced the other consensus templates with the reference render.
+The stored bitmap is the reference view's render, so the weighted mean below no longer computes it. It is kept for normal refinement, which still builds a consensus of the views; the fused-mean fallback where a point has no reference and the rule picks none was removed by [reference-view-score-amendment.md](reference-view-score-amendment.md); the localization decision (Part 9) replaced the other consensus templates with the reference render.
 
 Each view's weight in the mean becomes
 

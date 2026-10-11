@@ -18,7 +18,7 @@
 
 use sfmtool_core::bench::{EditableTrack, Observation, StageKind, TrackMeasurement};
 use sfmtool_core::patch::reference_view::{
-    PatchSide, ReferenceExclusion, ReferenceStanding, ReferenceTerm, ReferenceViewOptions,
+    ReferenceExclusion, ReferenceStanding, ReferenceTerm, ReferenceViewOptions,
 };
 
 use crate::bench::live::Evaluation;
@@ -31,9 +31,10 @@ pub(super) const REFERENCE_TIP: &str = "The track's reference, the row its patch
     cell where it does not. Then the rule's pick reads pick, on a grey cell: unpinning the \
     reference's row, or Set as reference on the pick, makes the pick the reference. While the \
     reference's row is pinned every render keeps it; a track put on the bench from a point has \
-    every row pinned. Where the bitmap is the mean of the rows that are in, is one for judging \
-    only, or there is no bitmap yet, only the pick is marked. A mean stays only until the first \
-    evaluation that renders where the rule picks a row, which makes that pick the reference.\n\n\
+    every row pinned. Where the bitmap is the render of no row (a mean of the views an older \
+    file stores), is one for judging only, or there is no bitmap yet, only the pick is marked. \
+    Such a bitmap stays only until the first evaluation that renders where the rule picks a \
+    row, which makes that pick the reference.\n\n\
     The rule gives each row a cost in grid px and picks the lowest. The cost is the row's \
     self-similarity radius, combined with an angle term that grows with the viewing angle, \
     times four penalties, each 1 inside its band: agreement, for a pair ZNCC (the median of \
@@ -42,12 +43,12 @@ pub(super) const REFERENCE_TIP: &str = "The track's reference, the row its patch
     the track's typical agreement there; coverage, for less than 99% of the tile on the \
     photograph; and clipping, for more than 5% of the photograph under the tile clipped to \
     black or white. A row with less than 90% of its tile on the photograph is never picked, \
-    and where some row sees the patch at under 90\u{b0}, a row that sees it from behind is \
-    left out. The parameters are not yet tuned.\n\n\
+    and neither is a row that sees the patch at 90\u{b0} or more, edge on or from behind, \
+    where no patch is drawn. The parameters are not yet tuned.\n\n\
     The first line is reference or pick, or for any other row its cost over the pick's and \
     the term that adds most to it: less sharp, oblique, agrees less, ninth differs, partial \
     or clipped, as in \u{d7}1.25 oblique; or, for a row the rule left out, partial, no tile \
-    or other side. The second is the viewing angle, the angle between the patch's normal and \
+    or back facing. The second is the viewing angle, the angle between the patch's normal and \
     the direction to the camera, and the pair ZNCC the rule read. Hover a cell for the cost's \
     terms and every reading. An out row is not considered.\n\n\
     Sorting by this column puts the reference first, then the pick, then the rows by their \
@@ -76,7 +77,7 @@ pub(crate) enum ReferenceMark {
 pub(crate) struct ReferenceRows {
     /// The reference in use and its image: the row the stored bitmap is
     /// rendered from ([`crate::bench::reference_in_use`]), or `None` where the
-    /// track has no bitmap or its bitmap is a fused mean.
+    /// track has no bitmap or its bitmap is the render of no row.
     pub(crate) reference: Option<usize>,
     /// The reference's image index, for the hover.
     pub(crate) reference_image: Option<u32>,
@@ -86,7 +87,8 @@ pub(crate) struct ReferenceRows {
     /// The pick's image index, for the hover.
     pub(crate) pick_image: Option<u32>,
     /// Whether the track has a patch bitmap a commit writes: with one and no
-    /// reference, the bitmap is a fused mean.
+    /// reference, the bitmap is the render of no row (a fused mean an older
+    /// file stores).
     pub(crate) has_bitmap: bool,
     /// Whether the reference's row is pinned, which holds the reference
     /// whatever the rule picks.
@@ -273,7 +275,7 @@ fn mark_sentences(mark: ReferenceMark, pinned: bool, rows: &ReferenceRows) -> St
                  against, and never committed. There is no reference to mark."
                 .to_string(),
             None if rows.has_bitmap => "The reference-view rule's pick. The patch bitmap is \
-                 the mean of the rows that are in, the render of no row, so there is no \
+                 the render of no row, so there is no \
                  reference to mark. The next evaluation that renders the bitmap renders it \
                  from this row and makes this row the reference. Set as reference on this row \
                  renders the bitmap from it."
@@ -321,7 +323,7 @@ fn exclusion_word(exclusion: ReferenceExclusion) -> &'static str {
     match exclusion {
         ReferenceExclusion::NoTile => "no tile",
         ReferenceExclusion::Coverage => "partial",
-        ReferenceExclusion::OtherSide => "other side",
+        ReferenceExclusion::BackFacing => "back facing",
     }
 }
 
@@ -413,9 +415,11 @@ fn decision_lines(standing: ReferenceStanding, m: &TrackMeasurement) -> Vec<Stri
                     m.coverage.map_or("-".to_string(), percent),
                     100.0 * options.min_coverage
                 ),
-                ReferenceExclusion::OtherSide => "it sees the patch from behind, while \
-                     another row that is in sees its front"
-                    .to_string(),
+                ReferenceExclusion::BackFacing => format!(
+                    "it sees the patch at {}, edge on or from behind, where no patch is drawn",
+                    m.viewing_angle_deg
+                        .map_or("90\u{b0} or more".to_string(), |a| format!("{a:.1}\u{b0}"))
+                ),
             }
         )),
         Ok(cost) => {
@@ -479,13 +483,6 @@ fn decision_lines(standing: ReferenceStanding, m: &TrackMeasurement) -> Vec<Stri
                 100.0 * options.clipped_scale
             ));
         }
-    }
-    if standing.side == Some(PatchSide::Back) {
-        lines.push(
-            "Every row sees the patch from behind, so the angles are measured against the \
-             flipped normal."
-                .to_string(),
-        );
     }
     lines
 }

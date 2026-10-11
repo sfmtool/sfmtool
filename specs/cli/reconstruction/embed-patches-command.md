@@ -95,8 +95,8 @@ input track reshaped (expanded by vetting, trimmed by drops), not copied through
   pass, to its reference render: the `R×R` tile of its reference observation at
   that observation's starting keypoint. The reference is the reference-view
   rule's pick from the views' renders at their starting keypoints; where the
-  rule picks none it would store, the template is the views' fused mean and no
-  view is the reference. An observed view starts at its stored (SIFT) keypoint,
+  rule finds no eligible view, there is no template and no view is the
+  reference, and every view keeps its starting keypoint. An observed view starts at its stored (SIFT) keypoint,
   and a view the vetting added starts at the point's projection. The
   reference's keypoint is not moved. Every other view is searched once within
   `±--search` patch-grid px of its start, and the sub-pixel refiner then
@@ -107,8 +107,8 @@ input track reshaped (expanded by vetting, trimmed by drops), not copied through
   reference the output records. Round 1's sub-pixel pass therefore sees only
   the views the cut keeps, so the round-1 bitmaps the early self-similarity
   cull reads (below) are rendered from that set: a point whose reference the
-  cut drops is read from its new reference's tile, and a fused mean averages
-  no grazing view. With `--max-obliquity-deg` below `90`, the set of points
+  cut drops is read from its new reference's tile. With `--max-obliquity-deg`
+  below `90`, the set of points
   that cull removes can differ slightly from a run that cut after round 1's
   sub-pixel pass.
 - **Observation thresholds.** A view is dropped if it can't be localized
@@ -129,8 +129,9 @@ input track reshaped (expanded by vetting, trimmed by drops), not copied through
   still runs render-only at the localizer's keypoints), and
   `tracks/reference_observations` records which observation it is
   ([reference-view.md](../../core/patch/reference-view.md) § "The stored
-  bitmap"). Where the views were aligned to the fused mean, the bitmap is the
-  views' fused mean and the point records `-1`. Points at infinity go through the same
+  bitmap"). Where the views were aligned to nothing, because the rule finds no
+  eligible view, the point gets no bitmap and is dropped (below). Points at
+  infinity go through the same
   `w`-aware render path and get a real bitmap — no zero-row exemption. An
   input that is already `embedded_patches` and stores reference observations
   keeps them wherever the views are aligned to them: each round's kernels are
@@ -149,8 +150,7 @@ input track reshaped (expanded by vetting, trimmed by drops), not copied through
   records the rule's pick over the views left. Every point with a reference, kept or picked, then has its bitmap
   rendered again from that observation through the compacted value's stored
   `f32` keypoints and frame (`render_from_references`), so dropping and adding
-  the bitmaps later gives the same bytes; a fused mean stays as the pass
-  rendered it.
+  the bitmaps later gives the same bytes.
 - **Observation readings.** Once the bitmaps and the references are final,
   every observation of the output is rendered again at its stored keypoint, as
   the bitmaps are, and read for the
@@ -181,8 +181,8 @@ input track reshaped (expanded by vetting, trimmed by drops), not copied through
   view's zoom a reader can work out which sampler rendered it.
 - **Track thresholds.** A point is dropped whole when its support count falls
   below `--min-views`, or when the sub-pixel stage produced **no valid
-  bitmap** for it (fewer than two views, or no reference view and fewer than two
-  of its views render at their final keypoints for the fused mean) —
+  bitmap** for it (fewer than two views, or no reference view because the
+  reference-view rule finds no eligible view) —
   the same rule for finite and infinity points, so no kept point carries an
   all-black bitmap.
 - **Image identity.** For each surviving image, `images/image_file_hashes[i]` is

@@ -1407,14 +1407,15 @@ rules are checked on the flags alone.
   rendered, alpha `255` on the samples on the photograph and `0` on the rest.
   A point whose reference is `-1` has no reference observation in use, so its
   bitmap is not the render of one of its observations. It is a fused
-  mean of its views, alpha their agreement and coverage (every bitmap written
-  before version 12, and a point for which the reference-view rule picked no
-  view; see
-  [../core/patch/reference-view.md](../core/patch/reference-view.md) § "The
-  stored bitmap", and a point whose
-  stored reference a writer that aligns keypoints and renders bitmaps could
-  no longer use; § 9, "Keeping it true"), or the render of an observation that
-  a later edit removed from the point, which keeps the bitmap (same place).
+  mean of its views, alpha their agreement and coverage, which every bitmap
+  written before version 12 is and a file written before the stored bitmap
+  stopped being a mean can hold, and which a reader treats as any bitmap
+  beside `-1`; or the render of an observation that a later edit removed from
+  the point, which keeps the bitmap (§ 9, "Keeping it true"); or a zero row.
+  A writer that renders a point the reference-view rule finds no eligible
+  view for writes a zero row and `-1`
+  ([../core/patch/reference-view.md](../core/patch/reference-view.md) § "The
+  stored bitmap").
 
 ### 9. Tracks
 
@@ -1659,7 +1660,8 @@ Which observation each point's patch bitmap is, or is to be, rendered from:
   that aligns keypoints and renders bitmaps, a stored one that writer could no
   longer render usefully and no pick to replace it (see "Keeping it true"). A
   stored bitmap is then not the render of one of its observations -- a fused
-  mean (from before version 12, or where the reference-view rule picks no view), or the
+  mean (from before version 12, or a file written before the stored bitmap
+  stopped being a mean), or the
   render of an observation that has since been removed from the point -- and
   a later render runs the reference-view rule for the point and records its
   pick.
@@ -1690,8 +1692,8 @@ Which observation each point's patch bitmap is, or is to be, rendered from:
   -- its core does not render at its keypoint (out of frame), or it is past
   the obliquity cut (`embed-patches`' `--max-obliquity-deg`, or the
   localizer's grazing pre-filter) -- it is replaced by the reference-view
-  rule's pick over the views kept, which is recorded, or by `-1` with the
-  fused mean as the bitmap where the rule picks no view it would store; the
+  rule's pick over the views kept, which is recorded, or by `-1` with no
+  bitmap (a zero row) where the rule finds no eligible view; the
   stored observation can stay in the track. That includes a writer that zeroes a
   point's patch frame (`--convert-infinity` where a point's patch has no extent
   to keep): the point then has no patch and a zero bitmap row, and keeps its
@@ -2348,7 +2350,7 @@ introduced this way, and a writer that picked its version by content would make
 
 | Change | Detail |
 |---|---|
-| `tracks/reference_observations.{N}.int32.zst` | New column, **required with the patch frame** (`points3d/metadata.json` `has_uv_frames: true`) and absent otherwise: per point, the index within its own track of the observation its patch bitmap is, or is to be, rendered from, `-1` where the point has no reference observation in its track (its bitmap, if any, is then a fused mean or the render of an observation since removed). Folded into `tracks_xxh128` in its lexicographic slot, after `point_indexes`. No metadata key is added, since `has_uv_frames` says whether it is present. |
+| `tracks/reference_observations.{N}.int32.zst` | New column, **required with the patch frame** (`points3d/metadata.json` `has_uv_frames: true`) and absent otherwise: per point, the index within its own track of the observation its patch bitmap is, or is to be, rendered from, `-1` where the point has no reference observation in its track (its bitmap, if any, is then a fused mean an older file stores or the render of an observation since removed). Folded into `tracks_xxh128` in its lexicographic slot, after `point_indexes`. No metadata key is added, since `has_uv_frames` says whether it is present. |
 | `points3d/patch_bitmaps_y_x_rgba` | Writers store a point's reference view's render, with alpha `255` on the samples on the photograph and `0` elsewhere, in place of a fused mean of the views ([../core/patch/reference-view.md](../core/patch/reference-view.md) § "The stored bitmap"). The entry's layout is unchanged. |
 | `tracks/` observation readings | Eight new **optional** columns, present together: each observation's self-similarity ellipse (`zncc_self_similarity_ellipse_axes`, `_axes_is_at_least`, `_major_angle`), the `cos_view_angle`, `tilt_angle` and `zoom` of its render, and its `plain_bitmap_zncc` and `blur_matched_bitmap_zncc` against the stored bitmap ([Observation readings](#observation-readings-optional-version-12)). Each folded into `tracks_xxh128` in its lexicographic slot when present. |
 | `tracks/metadata.json` `has_observation_readings`, `observation_reading_options` | New keys, written only with the readings: the flag, and the reading's options and the sampler threshold the renders were made under. |

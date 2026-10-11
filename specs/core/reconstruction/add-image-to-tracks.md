@@ -70,7 +70,7 @@ pub struct PairRule { pub statistic: PairStatistic, pub factor: f64 }
 pub enum PairStatistic { Min, Mean, Max }
 pub enum PositionGate { Off, MaxPx(f64), ImageMad { k: f64, floor_px: f64 } }
 pub enum TemplateSource { Rendered, StoredBitmap }
-pub enum TemplateKind { StoredBitmap, ReferenceObservation, FusedMean }
+pub enum TemplateKind { StoredBitmap, ReferenceObservation }
 
 pub struct AddImageToTracksReport {
     pub image: usize,
@@ -117,7 +117,7 @@ score against the template (`zncc`) and its plain ZNCC against each reference
 compared with its bar. A caller can see why a point was not
 added, and a harness can re-judge without re-running. The refusals are
 `no_patch`, `not_in_frame`, `grazing`, `back_facing`, `too_few_references`,
-`unlocalizable`, `no_peak`, `peak_at_edge`, `unscorable`, `below_floor`,
+`no_reference_view`, `unlocalizable`, `no_peak`, `peak_at_edge`, `unscorable`, `below_floor`,
 `below_bar`, `too_far` and `shared_keypoint`.
 
 The call itself is refused (`AddImageToTracksError`) for an image index out of
@@ -152,18 +152,22 @@ For a point `p` with existing observations in images `J`, and the target image
 2. **Template.** Each existing observation in a decoded image (a reference) is
    rendered on the patch grid anchored at its own keypoint (the in-plane offset
    its keypoint states, as the bench and the bitmap render anchor it). Fewer
-   than two references in frame is `too_few_references`. The template
-   (`TemplateKind`) is the first of these that applies:
+   than two references in frame, or no channel textured in all of them, is
+   `too_few_references`. The template (`TemplateKind`) is the first of these
+   that applies:
    - with `TemplateSource::StoredBitmap`, the point's stored bitmap where it has
      a textured one, on the bitmap's own grid (`StoredBitmap`);
    - the render of the point's reference observation at its own keypoint, which
      is the bitmap the point would store: its `reference_observations` entry
      where that observation rendered, else the [reference-view
      rule](../patch/reference-view.md)'s pick from the references' renders
-     (`ReferenceObservation`);
-   - the fused mean of the references' renders, where the point has no
-     reference observation and the rule picks none it would store
-     (`FusedMean`).
+     (`ReferenceObservation`).
+
+   Where neither applies, because the point has no reference observation to
+   use and the rule finds no eligible reference
+   ([reference-view.md](../patch/reference-view.md#hard-limits)), there is no
+   template and the point is not extended: `no_reference_view`. A reference
+   observation whose render is flat is `too_few_references`.
 
    The template the search and the sub-pixel step read is never blurred. The
    pairwise ZNCCs between references, which only the pair rule reads, are read
@@ -189,8 +193,8 @@ For a point `p` with existing observations in images `J`, and the target image
    ([../patch/blur-matched-zncc.md](../patch/blur-matched-zncc.md) § "Scores
    against the stored bitmap"): the target's tile rendered at its final
    keypoint and each reference's at its own keypoint, each scored by
-   `BitmapScorer` against the template as an RGBA bitmap (the stored bitmap,
-   the reference observation's render or the fused mean), the bitmap alone
+   `BitmapScorer` against the template as an RGBA bitmap (the stored bitmap or
+   the reference observation's render), the bitmap alone
    blurred to the tile's sharpness where it is sharper along every direction.
    The target's is `zncc`, each reference's `reference_zncc` (`1.0` for the
    reference observation where the template is its render), so the target's is
@@ -370,8 +374,8 @@ Rust enums; `basis` is the pooled statistic and `track_basis` the track's. The
 report's per-candidate numbers come back as columns under `candidates`: numpy
 arrays for the scalars and `(N, 2)` arrays for the keypoints, lists for the
 ragged fields (`reference_zncc`, `reference_pair_zncc`, `pair_zncc`).
-`template` is a list of `"stored_bitmap"`, `"reference_observation"`,
-`"fused_mean"` or `None`, and `reference_observation` an `int64` array with `-1`
+`template` is a list of `"stored_bitmap"`, `"reference_observation"` or
+`None`, and `reference_observation` an `int64` array with `-1`
 for none. A refused call raises `ValueError`.
 
 ```python
@@ -386,10 +390,12 @@ Unit tests in
 [add_image_to_tracks/tests.rs](../../../crates/sfmtool-core/src/reconstruction/add_image_to_tracks/tests.rs)
 on a synthetic capture (pinhole cameras over a textured plane): a removed
 observation is found again within 0.1 px of its projection; the same with a
-stored bitmap as the template, fused by `fuse_patch_bitmap`, which pins the
+stored bitmap as the template, rendered by `render_patch_bitmap`, which pins the
 bitmap's grid orientation; the template is the stored bitmap where there is
-one, else the stored reference observation's render, else the rule's pick, else
-the fused mean, and the bars read the references' scores against it; existing
+one, else the stored reference observation's render, else the rule's pick, and
+the bars read the references' scores against it; a point whose every
+reference sees its patch from behind has no eligible reference and is refused
+as `no_reference_view`, with no template; existing
 observations, positions and frames come back
 unchanged and tracks stay in image order; a reference observation moves with
 its observation where the new one lands before it in the track and stays where

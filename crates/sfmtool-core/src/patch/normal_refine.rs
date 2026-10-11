@@ -13,8 +13,8 @@
 //! The implementation is split across sibling modules: `params` (config /
 //! result types), `parameterization` (sphere exp-map), `support` (window /
 //! patch placement), `level` (per-level frozen support), `znorm` (render +
-//! z-normalize), `consensus` (the `Φ` objective), `search` (coarse-to-fine),
-//! and `view_stack` (the multi-view render substrate). This module wires them
+//! z-normalize), `consensus` (the `Φ` objective) and `search` (coarse-to-fine).
+//! This module wires them
 //! together into the public [`refine_patch_normal`] / [`refine_patch_cloud_normals`]
 //! entry points.
 
@@ -37,7 +37,7 @@ mod params;
 pub mod prof;
 mod search;
 mod support;
-mod view_stack;
+
 mod view_subset;
 mod znorm;
 
@@ -59,13 +59,13 @@ pub(in crate::patch) use support::{
     build_support, grid_bounds, grid_cell_centres, middle_span, view_render_patch, view_samplers,
     window_weights, PartZncc, Parts, Support, ViewSamplers,
 };
-pub(in crate::patch) use view_stack::{PatchViewStack, AGREEMENT_SIGMA};
+
 pub(in crate::patch) use znorm::{
     normalized_stack, weighted_moments_pub, znorm_write, znormalize_into_kept,
 };
 
 // Internal helpers used by the orchestration below.
-use obliquity::{fill_kept_obliquity_priors, fronto_prior};
+use obliquity::fronto_prior;
 use search::{build_final_context, coarse_to_fine, eval_phi, grid_confidence};
 use support::repose_patch;
 
@@ -281,80 +281,41 @@ fn refine_patch_normal_impl(
     let valid_view_count = ctx.kept.len() as u32;
 
     // Final scoring: score the init and every survivor over the same frozen
-    // support `ctx`, so Φ is never below the init's. Only the bitmap path needs
-    // the per-view render kept around, so it scores through a `PatchViewStack`
-    // (retaining the *winner's* stack + consensus weights, which the
-    // representative then fuses with no extra render or IRLS pass); the default
-    // path stays on the lean masked-only `eval_phi`, paying nothing for a feature
-    // it doesn't use. `extra` carries the winner's stack only in the bitmap path.
-    type Winner = Option<(Vec<f64>, PatchViewStack)>;
-    let score = |n: &Vector3<f64>| -> Option<(f64, Winner)> {
-        prof::count(&prof::N_EVAL, 1);
-        if params.render_bitmap {
-            let stack = PatchViewStack::render(
-                &repose_patch(patch, n),
-                views,
-                &ctx.kept,
-                resolution,
-                samplers,
-                view_keypoints,
-                progress,
-            );
-            // Obliquity view-weight (A) for this candidate, in the stack's (=
-            // ctx.kept) view order; the fused representative reuses these weights.
-            // This pass runs once per survivor (not per grid candidate) and already
-            // renders a full stack, so a local prior buffer is negligible here.
-            let mut priors = Vec::new();
-            let priors_active = fill_kept_obliquity_priors(
-                &mut priors,
-                &view_dirs,
-                &ctx.kept,
-                n,
-                params.obliquity_weight_power,
-            );
-            let (phi, weights) =
-                stack.score(&ctx, params, priors_active.then_some(priors.as_slice()))?;
-            Some((phi, Some((weights, stack))))
-        } else {
-            let phi = eval_phi(
-                patch,
-                n,
-                &ctx,
-                views,
-                &view_dirs,
-                resolution,
-                params,
-                params.objective,
-                view_keypoints,
-                samplers,
-                progress,
-            )?;
-            Some((phi, None))
-        }
+    // support `ctx`, so Φ is never below the init's.
+    let score = |n: &Vector3<f64>| -> Option<f64> {
+        eval_phi(
+            patch,
+            n,
+            &ctx,
+            views,
+            &view_dirs,
+            resolution,
+            params,
+            params.objective,
+            view_keypoints,
+            samplers,
+            progress,
+        )
     };
 
     // Rank by the objective Φ + fronto prior (B); report the *pure* Φ. The prior
     // lets a more-frontal normal win a near-tie the flat-Φ regime produces, so the
     // reported `photoconsistency` can dip below `init_photoconsistency` (by at most
     // the prior gap) when the prior is active — the intended fronto-parallel pull.
-    let init = score(&init_n);
-    let phi_init = init.as_ref().map(|(phi, _)| *phi);
+    let phi_init = score(&init_n);
     let mut best_n = init_n;
     let mut best_phi = phi_init.unwrap_or(f64::NEG_INFINITY);
     let mut best_obj = phi_init.map_or(f64::NEG_INFINITY, |p| {
         p + fronto_prior(&view_dirs, &init_n, params.fronto_prior_weight)
     });
-    // The winner's rendered stack + consensus weights (bitmap path only).
-    let mut best: Winner = init.and_then(|(_, extra)| extra);
     let mut improved = false;
     for n in &survivors {
-        if let Some((phi, extra)) = score(n) {
+        if let Some(phi) = score(n) {
             let obj = phi + fronto_prior(&view_dirs, n, params.fronto_prior_weight);
             if obj > best_obj {
                 best_obj = obj;
                 best_phi = phi;
                 best_n = *n;
-                best = extra;
                 improved = true;
             }
         }
@@ -400,44 +361,30 @@ fn refine_patch_normal_impl(
     // The stored bitmap (optional): the tile of the view the reference-view
     // rule picks among every input view (not only a `max_refine_views`
     // subset), rendered through the refined patch at each view's keypoint.
-    // Where it picks none, the fused mean of the winner's
-    // already-rendered view stack, which needs no extra render or IRLS pass and
-    // spans the full R×R grid, filling every pixel a kept view covers. That
-    // stack holds only the views the refinement scored, so under a
-    // `max_refine_views` cap the mean fills only the samples some view of that
-    // subset covers, while the pick spans every input view. `best` is `Some` exactly in
-    // the bitmap path (and then non-empty, since `best_phi` is finite).
-    let (representative, reference) = match &best {
-        Some((weights, stack)) => {
-            let picked = (all_views.len() >= 2)
-                .then(|| {
-                    let set: Vec<u32> = (0..all_views.len() as u32).collect();
-                    let anchors: Vec<Option<[f64; 2]>> = all_view_keypoints
-                        .map_or_else(|| vec![None; all_views.len()], <[Option<[f64; 2]>]>::to_vec);
-                    let render = render_reference(
-                        &refined,
-                        all_views,
-                        &set,
-                        &anchors,
-                        resolution,
-                        params.sampler,
-                        &ReferenceViewOptions::default(),
-                        progress,
-                    );
-                    render
-                        .reading
-                        .choice
-                        .reference
-                        .map(|r| (bitmap_from_tile(&render.tiles[r]), r))
-                })
-                .flatten();
-            match picked {
-                Some((rgba, r)) => (Some(rgba), Some(r)),
-                None => (Some(stack.fuse(weights, AGREEMENT_SIGMA)), None),
-            }
-        }
-        None => (None, None),
-    };
+    // Where it picks none, there is no bitmap.
+    let picked = (params.render_bitmap && all_views.len() >= 2)
+        .then(|| {
+            let set: Vec<u32> = (0..all_views.len() as u32).collect();
+            let anchors: Vec<Option<[f64; 2]>> = all_view_keypoints
+                .map_or_else(|| vec![None; all_views.len()], <[Option<[f64; 2]>]>::to_vec);
+            let render = render_reference(
+                &refined,
+                all_views,
+                &set,
+                &anchors,
+                resolution,
+                params.sampler,
+                &ReferenceViewOptions::default(),
+                progress,
+            );
+            render
+                .reading
+                .choice
+                .reference
+                .map(|r| (bitmap_from_tile(&render.tiles[r]), r))
+        })
+        .flatten();
+    let (representative, reference) = picked.unzip();
 
     NormalRefineResult {
         patch: refined,

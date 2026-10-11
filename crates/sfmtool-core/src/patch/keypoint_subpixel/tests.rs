@@ -873,10 +873,9 @@ fn batch_matches_per_patch() {
 //
 // With `render_bitmaps = true` the refiner also renders each point's stored
 // RGBA bitmap: the reference observation's tile at its keypoint, which the
-// refinement did not move, or the fused mean of the views at their final
-// keypoints where there is no reference. A well-observed point — finite OR at
-// infinity — gets a real (nonzero) texture, and a point with fewer than two
-// usable views gets `None`, which `sfm embed-patches` uses to drop it.
+// refinement did not move. A well-observed point — finite OR at infinity —
+// gets a real (nonzero) texture, and a point with fewer than two usable views,
+// or no reference, gets `None`, which `sfm embed-patches` uses to drop it.
 
 /// True when some pixel of the flat R·R·4 texture has a nonzero alpha.
 fn has_nonzero_alpha(rep: &[u8]) -> bool {
@@ -884,7 +883,7 @@ fn has_nonzero_alpha(rep: &[u8]) -> bool {
 }
 
 #[test]
-fn render_bitmaps_fuses_representative_for_finite_point() {
+fn render_bitmaps_stores_the_pick_for_a_finite_point() {
     // Four aligned, textured views and no reference given: the rule picks one,
     // and the bitmap must exist, have the R·R·4 shape, and carry nonzero RGB +
     // alpha.
@@ -907,24 +906,24 @@ fn render_bitmaps_fuses_representative_for_finite_point() {
     let res = refine_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, None, &p);
     let rep = res
         .representative
-        .expect("a well-observed finite point fuses a representative");
+        .expect("a well-observed finite point stores a bitmap");
     assert!(res.reference.is_some(), "the rule picks a reference here");
     assert_eq!(rep.len(), (RES * RES * 4) as usize);
     assert!(
         has_nonzero_alpha(&rep),
-        "aligned views must agree somewhere (alpha > 0)"
+        "the tile must carry data somewhere (alpha > 0)"
     );
     assert!(
         rep.as_chunks::<4>().0.iter().any(|px| px[0] > 0),
-        "the fused texture must carry real image content"
+        "the texture must carry real image content"
     );
 }
 
 #[test]
-fn render_bitmaps_fuses_representative_for_infinity_point() {
+fn render_bitmaps_stores_the_reference_for_an_infinity_point() {
     // The same contract for a w = 0 point at infinity: it is NOT skipped (unlike
-    // normal refinement) — the direction-patch render path fuses a real
-    // representative, fixing the all-black infinity bitmaps.
+    // normal refinement) — the direction-patch render path renders a real
+    // texture, fixing the all-black infinity bitmaps.
     let scene = Scene::infinity(
         &[[0.0, 0.0, 0.0], [8.0, 0.0, 0.0], [0.0, -5.0, 3.0]],
         &[[0.0; 2]; 3],
@@ -939,17 +938,17 @@ fn render_bitmaps_fuses_representative_for_infinity_point() {
     let res = refine_patch_keypoints(&patch, &views, &[0, 1, 2], None, Some(0), &p);
     let rep = res
         .representative
-        .expect("a well-observed infinity point fuses a representative");
+        .expect("a well-observed infinity point stores a bitmap");
     assert_eq!(rep.len(), (RES * RES * 4) as usize);
     assert!(
         has_nonzero_alpha(&rep),
-        "aligned infinity views must agree somewhere (alpha > 0)"
+        "the infinity tile must carry data somewhere (alpha > 0)"
     );
 }
 
 #[test]
 fn render_bitmaps_lone_view_has_no_representative() {
-    // One view = no cross-view consensus: the representative must be `None` (the
+    // One view = nothing to align: the representative must be `None` (the
     // culled-point signal), not a single-view or zero texture.
     let centers = [[0.4, 0.0, 0.0]];
     let offs = [[0.0; 2]];
@@ -1025,37 +1024,37 @@ fn render_bitmaps_stores_the_reference_tile() {
 }
 
 #[test]
-fn fuse_patch_bitmap_moves_nothing_and_needs_two_views() {
-    let scene = Scene::new(
-        &[[0.4, 0.0, 0.0], [-0.4, 0.0, 0.0], [0.0, 0.4, 0.0]],
-        &[[0.0; 2]; 3],
-        &[texture as fn(f64, f64) -> f64; 3],
-    );
+fn with_no_eligible_view_nothing_moves_and_nothing_is_scored() {
+    // The patch's normal is turned away from every camera, so every view sees
+    // it from behind and the reference-view rule finds no eligible view: there
+    // is no reference and no template, every view keeps its seed, unscored,
+    // and there is no stored bitmap.
+    let scene = four_view_scene([[0.0; 2]; 4]);
     let views = scene.views();
-    let patch = plane_patch();
-    let keypoints: Vec<[f64; 2]> = (0..3)
-        .map(|i| {
-            let (x, y) = project(&views[i], &patch.center, patch.w).unwrap();
-            [x, y]
+    let mut patch = plane_patch();
+    patch.v_axis = -patch.v_axis;
+    assert!(views
+        .iter()
+        .all(|v| !patch.is_front_facing(v.cam_from_world)));
+    let seeds: Vec<Option<[f64; 2]>> = (0..4)
+        .map(|k| {
+            let (x, y) = project(&views[k], &patch.center, patch.w).unwrap();
+            Some([x + 0.4, y - 0.3])
         })
         .collect();
-    let fused = fuse_patch_bitmap(&patch, &views, &[0, 1, 2], &keypoints, &params())
-        .expect("three aligned views fuse");
-    assert_eq!(fused.len(), (RES * RES * 4) as usize);
-    assert!(has_nonzero_alpha(&fused));
-    // The fuse does not pick a reference: it is the mean, not one view's tile.
-    let tile = render_view_tile(
-        &patch,
-        &views[0],
-        Some(keypoints[0]),
-        RES as usize,
-        params().sampler,
-        &Progress::none(),
-    );
-    assert_ne!(fused, bitmap_from_tile(&tile));
-    assert!(fuse_patch_bitmap(&patch, &views, &[0], &keypoints[..1], &params()).is_none());
+    let p = KeypointSubpixelParams {
+        render_bitmaps: true,
+        ..params()
+    };
+    let res = refine_patch_keypoints(&patch, &views, &[0, 1, 2, 3], Some(&seeds), None, &p);
+    assert_eq!(res.views, vec![0, 1, 2, 3]);
+    assert_eq!(res.reference, None);
+    assert!(res.scores.iter().all(|s| s.is_nan()), "{:?}", res.scores);
+    for (k, (&kp, seed)) in res.keypoints.iter().zip(&seeds).enumerate() {
+        assert_eq!(kp, seed.unwrap(), "view {k} moved with nothing to align to");
+    }
+    assert!(res.representative.is_none(), "no reference, no bitmap");
 }
-
 // ── Aligning every view to the reference render ─────────────────────────────
 
 /// The four fronto cameras of the planted-offset tests, view `k` rendering the
@@ -1710,8 +1709,8 @@ fn the_reference_is_reported_without_rendering_bitmaps() {
 fn a_reference_out_of_frame_is_no_reference() {
     // The reference's keypoint is far outside its frame, so its core cannot
     // be rendered there. As in the localizer, that is no reference: nothing
-    // is aligned, every view keeps its seed unscored, and the stored bitmap
-    // is the fused mean of the other views.
+    // is aligned, every view keeps its seed unscored, and there is no stored
+    // bitmap.
     let scene = four_view_scene([[0.0; 2]; 4]);
     let views = scene.views();
     let patch = plane_patch();
@@ -1738,7 +1737,7 @@ fn a_reference_out_of_frame_is_no_reference() {
             "view {k} moved {err} px with nothing to align to"
         );
     }
-    assert!(res.representative.is_some(), "the fused mean of views 1-3");
+    assert!(res.representative.is_none(), "no reference, no bitmap");
 }
 
 #[test]

@@ -4,11 +4,11 @@
 //! Aligning every view of a point to its reference render, in one pass.
 //!
 //! The template is the point's stored bitmap as the views' starting keypoints
-//! render it: the reference observation's `R×R` render at its own keypoint, or,
-//! where the point has no reference observation and the reference-view rule
-//! picks none it would store, the fused mean of the views. Each other view is
-//! searched once against it. The reference observation's keypoint is not
-//! moved. See `specs/core/patch/patch-keypoint-localization.md`.
+//! render it: the reference observation's `R×R` render at its own keypoint.
+//! Each other view is searched once against it. The reference observation's
+//! keypoint is not moved. Where the point has no reference observation and the
+//! reference-view rule finds no eligible view, there is nothing to align to.
+//! See `specs/core/patch/patch-keypoint-localization.md`.
 
 use super::search::{search_shift, search_shift_plus_descent, SearchScratch};
 use super::{
@@ -19,26 +19,14 @@ use super::{
 use crate::camera::sampler::Sampler;
 use crate::numeric::median_in_place;
 use crate::patch::cloud::OrientedPatch;
-use crate::patch::keypoint_subpixel::{fuse_patch_bitmap_reporting, KeypointSubpixelParams};
 use crate::patch::normal_refine::{
-    build_support, znormalize_into_kept, PatchWindow, ProjectedImage, SamplerChoice, Support,
+    build_support, znormalize_into_kept, ProjectedImage, SamplerChoice, Support,
 };
 use crate::patch::reference_view::{render_view_tile, ReferenceViewOptions};
 use crate::patch::stored_bitmap::{
     bitmap_from_tile, bitmap_planes, render_reference, BitmapScorer,
 };
 use crate::progress::Progress;
-
-/// What a point's views are aligned to: the position among them of the
-/// reference observation, or the fused mean that is the stored bitmap where
-/// there is none.
-pub(in crate::patch) struct ResolvedReference {
-    /// The position of the reference observation among the views.
-    pub(in crate::patch) anchor: Option<usize>,
-    /// The fused mean of the views, `R×R` RGBA, where there is no reference
-    /// observation and the mean renders.
-    pub(in crate::patch) fused: Option<Vec<u8>>,
-}
 
 /// Whether `view` sees `patch` at least `min_grazing_cos` away from edge-on:
 /// the absolute cosine between the viewing direction (camera to point, or the
@@ -59,17 +47,18 @@ pub(in crate::patch) fn faces_view(
     dn > 1e-12 && (d.dot(&patch.normal()) / dn).abs() >= min_grazing_cos
 }
 
-/// Decide what the views are aligned to. The localizer and the sub-pixel
-/// refiner both call this, so given the same views and keypoints they align to
-/// the same reference render.
+/// Decide what the views are aligned to: the position among them of the
+/// reference observation, or `None` where there is none. The localizer and the
+/// sub-pixel refiner both call this, so given the same views and keypoints they
+/// align to the same reference render.
 ///
 /// `view_set` and `seeds` are parallel; `given` is the position in them of the caller's reference,
 /// which is the reference. With none, only views that pass the grazing pre-filter ([`faces_view`]
 /// at `min_grazing_cos`) are candidates: the reference-view rule, run with `reference_view`, reads
 /// the facing views' renders at their starting keypoints (a view with no seed rendered through the
-/// patch itself) and its pick is the reference, unless it picks none, where the stored bitmap is
-/// the fused mean of the facing views and that mean is the template
-/// ([`render_patch_bitmap`](crate::patch::stored_bitmap::render_patch_bitmap)).
+/// patch itself) and its pick is the reference, as
+/// [`render_patch_bitmap`](crate::patch::stored_bitmap::render_patch_bitmap) stores it. Where the
+/// rule finds no eligible view there is no reference.
 #[allow(clippy::too_many_arguments)]
 pub(in crate::patch) fn resolve_reference(
     patch: &OrientedPatch,
@@ -79,20 +68,15 @@ pub(in crate::patch) fn resolve_reference(
     given: Option<usize>,
     min_grazing_cos: f64,
     resolution: u32,
-    window: PatchWindow,
     sampler: SamplerChoice,
-    robust_iters: u32,
     reference_view: &ReferenceViewOptions,
     progress: &Progress<'_>,
-) -> ResolvedReference {
+) -> Option<usize> {
     let facing: Vec<usize> = (0..view_set.len())
         .filter(|&k| faces_view(patch, &views[view_set[k] as usize], min_grazing_cos))
         .collect();
     if given.is_some() || facing.len() < 2 {
-        return ResolvedReference {
-            anchor: given.or((facing.len() == 1).then(|| facing[0])),
-            fused: None,
-        };
+        return given.or((facing.len() == 1).then(|| facing[0]));
     }
     let view_set: Vec<u32> = facing.iter().map(|&k| view_set[k]).collect();
     let seeds: Vec<Option<[f64; 2]>> = facing.iter().map(|&k| seeds[k]).collect();
@@ -106,35 +90,7 @@ pub(in crate::patch) fn resolve_reference(
         reference_view,
         progress,
     );
-    if let Some(anchor) = render.reading.choice.reference {
-        return ResolvedReference {
-            anchor: Some(facing[anchor]),
-            fused: None,
-        };
-    }
-    let projections: Vec<Option<[f64; 2]>> = view_set
-        .iter()
-        .map(|&i| project(&views[i as usize], &patch.center, patch.w).map(|(x, y)| [x, y]))
-        .collect();
-    let keypoints: Option<Vec<[f64; 2]>> = seeds
-        .iter()
-        .zip(&projections)
-        .map(|(seed, proj)| seed.or(*proj))
-        .collect();
-    let fused = keypoints.and_then(|keypoints| {
-        let params = KeypointSubpixelParams {
-            resolution,
-            window,
-            sampler,
-            robust_iters,
-            ..Default::default()
-        };
-        fuse_patch_bitmap_reporting(patch, views, &view_set, &keypoints, &params, progress)
-    });
-    ResolvedReference {
-        anchor: None,
-        fused,
-    }
+    render.reading.choice.reference.map(|anchor| facing[anchor])
 }
 
 /// One view of the point that survived the pre-filter.
@@ -284,7 +240,7 @@ pub(super) fn align_to_reference(
     let given = reference
         .and_then(|k| view_set.get(k))
         .and_then(|&img| states.iter().position(|st| st.idx == img));
-    let resolved = prof::REFERENCE.time(|| {
+    let anchor = prof::REFERENCE.time(|| {
         let set: Vec<u32> = states.iter().map(|st| st.idx).collect();
         let seeds: Vec<Option<[f64; 2]>> = states.iter().map(|st| st.seed).collect();
         resolve_reference(
@@ -295,22 +251,19 @@ pub(super) fn align_to_reference(
             given,
             params.min_grazing_cos,
             resolution,
-            params.window,
             params.sampler,
-            params.robust_iters,
             &ReferenceViewOptions::default(),
             progress,
         )
     });
     progress.check_cancel()?;
-    let anchor = resolved.anchor;
 
     // The template, never blurred. The reference's tile is rendered at its
     // keypoint; one whose keypoint does not map onto the patch plane has no
     // tile there, and so no template.
-    let template = match (anchor, &resolved.fused) {
-        (Some(a), _) if !states[a].start_is_seed => None,
-        (Some(a), _) => {
+    let template = match anchor {
+        Some(a) if !states[a].start_is_seed => None,
+        Some(a) => {
             let st = &states[a];
             prof::count(&prof::N_RENDER, 1);
             let tile = prof::RENDER.time(|| {
@@ -334,15 +287,14 @@ pub(super) fn align_to_reference(
                 None
             }
         }
-        (None, Some(bitmap)) => Template::from_bitmap(bitmap, 4, r, &support),
-        (None, None) => None,
+        None => None,
     };
 
     let Some(template) = template else {
         // Nothing to align to (the reference's tile leaves the frame, is flat
-        // or cannot be placed at its keypoint, or no fused mean renders): there
-        // is no reference, every view stays at its start, unscored, and the
-        // keypoints mean what they meant before.
+        // or cannot be placed at its keypoint, or the rule finds no eligible
+        // view): there is no reference, every view stays at its start,
+        // unscored, and the keypoints mean what they meant before.
         for st in &mut states {
             st.placed = true;
         }
@@ -419,24 +371,19 @@ pub(super) fn align_to_reference(
     let reference = anchor.map(|a| states[a].idx);
     // The template as a stored bitmap, which the agreement gates read each
     // placed view against blur-matched: the reference's render at its
-    // keypoint, as a stored bitmap renders it, or the fused mean. Only built
-    // where a gate is on.
+    // keypoint, as a stored bitmap renders it. Only built where a gate is on.
     let gates_on = gate_is_on(params.min_absolute_zncc) || gate_is_on(params.min_relative_zncc);
-    let bitmap = if !gates_on {
-        None
-    } else if let Some(a) = anchor {
+    let bitmap = anchor.filter(|_| gates_on).map(|a| {
         let st = &states[a];
-        Some(bitmap_from_tile(&render_view_tile(
+        bitmap_from_tile(&render_view_tile(
             patch,
             &views[st.idx as usize],
             Some(st.seed.unwrap_or(st.proj)),
             r,
             params.sampler,
             progress,
-        )))
-    } else {
-        resolved.fused.clone()
-    };
+        ))
+    });
     states.retain(|st| st.localizable);
     let mut out = finish(
         patch,

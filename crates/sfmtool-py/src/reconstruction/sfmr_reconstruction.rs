@@ -429,8 +429,9 @@ impl PySfmrReconstruction {
     /// render; without them the column stays, and a later render
     /// (``sfm xform --add-patch-bitmaps``) renders each point from it. ``-1``
     /// where the point has no reference observation in its track: a stored
-    /// bitmap is then not the render of one of its observations (a fused mean,
-    /// or the render of an observation since removed from the point, which an
+    /// bitmap is then not the render of one of its observations (a fused mean
+    /// an older file stores, or the render of an observation since removed
+    /// from the point, which an
     /// image subset or filter keeps), and a later render runs the
     /// reference-view rule for the point. A
     /// file below version 12 with patch frames reads with every row ``-1``.

@@ -232,8 +232,8 @@ pub(crate) fn track_patch_image(track: &EditableTrack) -> Option<egui::ColorImag
 /// written.
 ///
 /// One channel is repeated across RGB, three are RGB, and a fourth, the
-/// alpha (on the photograph for a view's tile, the cross-view confidence for a
-/// fused mean), is dropped for an opaque alpha. What the
+/// alpha (on the photograph for a view's tile, the cross-view confidence for
+/// a fused mean an older file stores), is dropped for an opaque alpha. What the
 /// header's patch slot draws at the track stage: the patch bitmap, which
 /// for a track read from a point is that point's stored patch and which a
 /// commit writes as it.

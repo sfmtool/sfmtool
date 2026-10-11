@@ -716,8 +716,8 @@ stored patch bitmap, which the rows' `plain_zncc` and `blur_matched_zncc`
 scores are read against (the bars judge `blur_matched_zncc`), and
 `bitmap_for_judging` whether that bitmap is one for judging only (below);
 `reference_observation` is the reference in use, the row the bitmap is rendered
-from, null for a bitmap that is the render of no row (a mean of the rows, one
-stored before the reference was recorded, or the render of an observation since
+from, null for a bitmap that is the render of no row (a mean of the views an
+older file stores, one stored before the reference was recorded, or the render of an observation since
 removed from the point) or where there is no bitmap; and
 `reference_view_observation` is the row the reference-view rule picked. All
 three are as `stage_data` reports them on the bench. On a file with patch
@@ -3545,8 +3545,8 @@ median projected keypoint scale across its views, each observation's keypoint is
 copied verbatim from its `.sift` detection, and each image's identity hash is
 read from the `.sift` metadata. No photometric adaptation runs. The viewer then
 renders each point's stored bitmap at those stored frames and keypoints from
-readable photographs (the reference view's tile, or the fused mean where the
-reference-view rule picks none;
+readable photographs (the reference view's tile, and no bitmap where the
+reference-view rule finds no eligible view;
 [../core/patch/reference-view.md](../core/patch/reference-view.md)
 § "The stored bitmap"), using the same render-only path as file
 opening. The result
@@ -4082,24 +4082,22 @@ three, null in a ninth with no reading; `cell_deficit`, the most its
 `pair_zncc_grid` falls below the track's typical agreement, the median over
 the `in` rows, in a ninth whose typical agreement is at least `0.5`; and
 `reference_view`, `{"is_reference", "cost", "cost_ratio", "terms",
-"costliest_term", "excluded_by", "side"}`, the reference-view rule's decision
+"costliest_term", "excluded_by"}`, the reference-view rule's decision
 ([`../core/patch/reference-view.md`](../core/patch/reference-view.md) § "The
 rule"). The rule gives each row a cost in grid px and picks the lowest:
-`cost` is the row's, null for a row left out and where it is infinite (a row
-edge on to the patch), and `cost_ratio` its cost over the pick's, `1` on the
-pick and null where the cost or the ratio is infinite or there is none;
+`cost` is the row's, null for a row left out and where it is not finite, and
+`cost_ratio` its cost over the pick's, `1` on the pick and null where the cost
+or the ratio is not finite or there is none;
 `terms` is `{"radius", "radius_read", "angle_term", "agreement", "cells",
 "coverage", "clipped"}`, the self-similarity radius in grid px and whether it
-is the row's own, the angle term in grid px (null where it is infinite) and
+is the row's own, the angle term in grid px (null where it is not finite) and
 the four penalties, each `1` inside its band, or null for a row left out;
 `costliest_term` is the term that adds most to the row's cost over the pick's
 (`sharpness`, `angle`, `agreement`, `cells`, `coverage`, `clipped`), null for
 the pick and a row left out; `excluded_by` is why the rule left the row out
 (`no_tile`, `coverage` for less than 90% of its tile on the photograph, or
-`other_side` for a row behind the patch where another sees its front), or
-null; and `side` is `front`, or `back` where every row the rule could pick
-sees the patch from behind and the angles are measured against the flipped
-normal, or null where no row can be picked. These are null on an `out` row,
+`back_facing` for a row that sees the patch at 90° or more, edge on or from
+behind, where no patch is drawn), or null. These are null on an `out` row,
 which the rule
 does not consider, and `stage_data` reports the row the rule picked as
 `reference_view_observation`, null where it picked none; a step that turns a
@@ -4114,17 +4112,18 @@ only until the next render replaces it: an unpin handed the reference to the
 reference-view rule, whose pick is another row, so no row is scored against it
 and each read row's `reason` says so; the live evaluation's render, or pinning
 the reference's row again, ends it. `stage_data.bitmap_for_judging` says whether that bitmap is
-one rendered only so the bars can score the rows of a track fewer than two
-`in` rows of which carry a keypoint, so that no render from the `in` rows
-makes a bitmap: from the rule's pick among every row with a keypoint, `in` or
-`out`, so that loosening a bar can bring rows back. It names no row, a commit
+one rendered only so the bars can score the rows of a track whose `in` rows
+make no bitmap, because fewer than two of them carry a keypoint or the rule
+finds none of them eligible: from the rule's pick among every row with a
+keypoint, `in` or `out`, so that loosening a bar can bring rows back, and none
+where no row is eligible. It names no row, a commit
 does not write it (where the reconstruction stores bitmaps the commit is
 refused, and elsewhere it writes no reference observation), and the next
-evaluation after two `in` rows carry a keypoint replaces it
+evaluation whose `in` rows make a bitmap replaces it
 ([`../core/bench/editable-track.md`](../core/bench/editable-track.md) § "The
 stored bitmap's reference"). It is null where the track has no bitmap and for a bitmap
-that is the render of no row: a fused mean of the `in` rows, where the rule
-picks no row, one stored before the
+that is the render of no row: a bitmap for judging, a fused mean an older
+file stores, one stored before the
 reference was recorded, or the render of an observation an edit has since
 removed from the point
 ([`../core/patch/reference-view.md`](../core/patch/reference-view.md) § "The
@@ -4134,7 +4133,7 @@ a point stored at `-1` with a
 bitmap (every point of a file older than `.sfmr` v12 that stores bitmaps) the
 evaluation that renders from that pick reports `reference_observation` and
 `reference_view_observation` equal, on the bench and in `get_point`'s
-evaluation block alike; where the rule picks no row,
+evaluation block alike; where the rule picks no row, that bitmap stands and
 `reference_observation` stays null. Which row it is follows the pin of the row that holds it
 ([bench.md](bench.md) § "The reference"). While that row is pinned every render
 renders from it, whichever row the rule picks, so `reference_observation` and

@@ -333,10 +333,7 @@ pub(super) fn consensus_phi(
 
 /// [`consensus_phi`] plus the per-view consensus weights that produced it,
 /// normalized to `Σwᵢ = 1` (uniform `1/views` under [`Objective::MeanPairwise`],
-/// the IRLS weights under [`Objective::RobustWeighted`]). Callers that re-use the
-/// weights — the representative fusion, which down-weights the same outlier views
-/// in the blended colour as the consensus does in `Φ` — take this variant so the
-/// IRLS pass is not run twice.
+/// the IRLS weights under [`Objective::RobustWeighted`]).
 ///
 /// `view_priors` (if given, length `views`) is the multiplicative obliquity prior
 /// on the robust weights (use A); it is applied only under

@@ -338,7 +338,7 @@ pub(in crate::bench) fn fixture_with_columns(
         for (k, value) in rendered.rgba.iter().enumerate() {
             bitmaps[[i, k / (4 * r), (k / 4) % r, k % 4]] = *value;
         }
-        *reference = rendered.reference.map_or(-1, |k| k as i32);
+        *reference = rendered.reference as i32;
     }
     recon.point_set.patch_bitmaps_y_x_rgba = Some(Arc::new(bitmaps));
     recon.point_set.reference_observations = Some(references);

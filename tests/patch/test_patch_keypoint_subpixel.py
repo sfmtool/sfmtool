@@ -553,10 +553,9 @@ def test_refine_keypoints_render_bitmaps_returns_reference_bitmaps(
     seoul_bull_workspace: Path,
 ):
     """``render_bitmaps=True`` adds a per-point ``bitmap``: an ``(R, R, 4)`` uint8
-    texture rendered at the final keypoints (the reference view's tile, or the
-    fused mean where the reference-view rule picks none) for a point with a
-    valid cross-view consensus, or ``None`` for one without (fewer than two usable
-    views — the culled-point signal). Without the flag the key is absent, so the
+    texture rendered at the final keypoints (the reference view's tile) for a
+    point with a reference, or ``None`` for one without (fewer than two usable
+    views, or no eligible view — the culled-point signal). Without the flag the key is absent, so the
     existing return shape is preserved."""
     recon = SfmrReconstruction.load(seoul_bull_workspace).to_embedded_patches(
         extent_value=5.0

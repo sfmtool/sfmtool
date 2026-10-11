@@ -60,9 +60,9 @@ parallelism of its own):
    `max_shift_px` semantics. Views the localizer rejects are gone. A
    candidate has no stored reference, so the [reference-view
    rule](reference-view.md) picks one from the views' renders at their
-   seeds, and every other view is aligned to that render in one pass (to
-   the views' fused mean where the rule picks none it would store;
-   [patch-keypoint-localization.md](patch-keypoint-localization.md)).
+   seeds, and every other view is aligned to that render in one pass (where
+   the rule finds no eligible view, nothing is aligned and every view keeps
+   its seed; [patch-keypoint-localization.md](patch-keypoint-localization.md)).
 2. **Sub-pixel refinement** (`refine_subpixel`; `false` skips) seeded at the
    localized keypoints, against the reference the localizer aligned them to.
 3. **Triangulation** from the refined keypoints' camera rays.

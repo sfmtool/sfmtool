@@ -9,7 +9,7 @@ use crate::camera::{CameraIntrinsics, CameraModel};
 use crate::geometry::RigidTransform;
 use crate::patch::blur_matched::test_tiles::{grained, textured};
 use crate::patch::pair_sharpness::MAX_MATCHED_LENGTH;
-use crate::patch::reference_view::{choose_reference_view, PatchSide, ReferenceExclusion};
+use crate::patch::reference_view::{choose_reference_view, ReferenceExclusion};
 
 fn window() -> PatchWindow {
     PatchWindow::GaussianDisk { sigma: 0.6 }
@@ -313,7 +313,7 @@ fn the_bitmap_is_the_picked_view_s_tile() {
         &Progress::none(),
     )
     .expect("a bitmap");
-    assert_eq!(bitmap.reference, Some(picked));
+    assert_eq!(bitmap.reference, picked);
     assert_eq!(bitmap.rgba, bitmap_from_tile(&render.tiles[picked]));
     let tile = &render.tiles[picked];
     for (k, pixel) in bitmap.rgba.as_chunks::<4>().0.iter().enumerate() {
@@ -324,10 +324,10 @@ fn the_bitmap_is_the_picked_view_s_tile() {
     }
 }
 
-/// Where every view sees the patch from behind, the rule measures the angles
-/// against the flipped normal and picks a view, and the bitmap is its tile.
+/// Where every view sees the patch from behind, every view is back-facing and
+/// none is eligible, so there is no bitmap.
 #[test]
-fn a_patch_seen_only_from_behind_stores_a_view_s_tile() {
+fn a_patch_seen_only_from_behind_has_no_bitmap() {
     let scene = Scene::new();
     let views = scene.views();
     let backwards = patch(Vector3::z());
@@ -346,9 +346,13 @@ fn a_patch_seen_only_from_behind_stores_a_view_s_tile() {
         &params.reference_view,
         &Progress::none(),
     );
-    assert_eq!(render.reading.choice.side, Some(PatchSide::Back));
-    let picked = render.reading.choice.reference.expect("a view is picked");
-    let bitmap = render_patch_bitmap(
+    let choice = &render.reading.choice;
+    assert_eq!(choice.reference, None, "{:?}", render.reading.readings);
+    assert!(choice
+        .costs
+        .iter()
+        .all(|c| *c == Err(ReferenceExclusion::BackFacing)));
+    assert!(render_patch_bitmap(
         &backwards,
         &views,
         &[0, 1, 2],
@@ -356,9 +360,7 @@ fn a_patch_seen_only_from_behind_stores_a_view_s_tile() {
         &params,
         &Progress::none(),
     )
-    .expect("a bitmap");
-    assert_eq!(bitmap.reference, Some(picked));
-    assert_eq!(bitmap.rgba, bitmap_from_tile(&render.tiles[picked]));
+    .is_none());
     // Fewer than two views render no bitmap at all.
     assert!(render_patch_bitmap(
         &patch(-Vector3::z()),
@@ -422,13 +424,12 @@ fn a_view_between_the_coverage_floor_and_full_coverage_is_stored() {
         &Progress::none(),
     )
     .expect("the pick's tile");
-    assert_eq!(bitmap.reference, Some(picked));
+    assert_eq!(bitmap.reference, picked);
     assert_eq!(bitmap.rgba, bitmap_from_tile(&render.tiles[picked]));
 }
 
-/// A patch no view covers to the floor of 0.9: the rule picks nothing, and
-/// with no view wholly in frame no fused mean renders either, so there is no
-/// bitmap.
+/// A patch no view covers to the floor of 0.9: the rule picks nothing, so
+/// there is no bitmap.
 #[test]
 fn a_patch_no_view_covers_to_the_floor_has_no_pick() {
     let scene = Scene::new();
@@ -458,13 +459,10 @@ fn a_patch_no_view_covers_to_the_floor_has_no_pick() {
 
 /// A patch larger than the photographs' frame and turned 45° in its plane,
 /// so that in every view its four corners fall off the photograph while the
-/// disk the fused mean reads stays on it: no view reaches the coverage floor
-/// of 0.9, so the rule picks nothing, and the bitmap is the fused mean of the
-/// views with no reference. The half-extent sits in the middle of the narrow
-/// range that does this: at 1.14 a view reaches the floor, and at 1.20 the
-/// fused mean no longer renders.
+/// middle of its tile stays on it: no view reaches the coverage floor of 0.9,
+/// so the rule picks nothing and there is no bitmap.
 #[test]
-fn with_no_eligible_view_the_bitmap_is_the_fused_mean() {
+fn with_no_eligible_view_there_is_no_bitmap() {
     let scene = Scene::new();
     let views = scene.views();
     let params = KeypointSubpixelParams {
@@ -495,15 +493,7 @@ fn with_no_eligible_view_the_bitmap_is_the_fused_mean() {
         .costs
         .iter()
         .all(|c| *c == Err(ReferenceExclusion::Coverage)));
-    let fused = crate::patch::keypoint_subpixel::fuse_patch_bitmap(
-        &diamond,
-        &views,
-        &[0, 1, 2],
-        &keypoints,
-        &params,
-    )
-    .expect("a fused mean renders");
-    let bitmap = render_patch_bitmap(
+    assert!(render_patch_bitmap(
         &diamond,
         &views,
         &[0, 1, 2],
@@ -511,7 +501,5 @@ fn with_no_eligible_view_the_bitmap_is_the_fused_mean() {
         &params,
         &Progress::none(),
     )
-    .expect("the fused mean");
-    assert_eq!(bitmap.reference, None);
-    assert_eq!(bitmap.rgba, fused);
+    .is_none());
 }

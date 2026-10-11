@@ -241,7 +241,8 @@ class RefineNormalsTransform:
             # and a point at -1 takes the view the reference-view rule picked
             # at the refined normal. Every bitmap with a reference is rendered
             # again from the stored (f32) frame, so dropping and adding the
-            # bitmaps later gives the same bytes; a fusion stays as rendered.
+            # bitmaps later gives the same bytes; a point with no eligible view
+            # has no bitmap (a zero row).
             out = recon.clone_with_changes(normals=normals, patches=cloud)
             bitmaps, references = render_from_references(
                 out,

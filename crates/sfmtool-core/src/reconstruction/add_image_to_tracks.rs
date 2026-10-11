@@ -37,7 +37,7 @@ use crate::geometry::RigidTransform;
 use crate::numeric::median_in_place;
 use crate::patch::cloud::OrientedPatch;
 use crate::patch::keypoint_localize::{
-    project_unclipped, KeypointLocalizeParams, TemplateKind, TrackReferences,
+    project_unclipped, KeypointLocalizeParams, NoTemplate, TemplateKind, TrackReferences,
 };
 use crate::patch::keypoint_subpixel::{
     refine_view_against_reference, KeypointSubpixelParams, ReferenceTemplate,
@@ -182,7 +182,7 @@ pub enum TemplateSource {
     /// The bitmap the point would store, rendered from its references at their
     /// keypoints: its reference observation's render (the stored
     /// `reference_observations` entry, or the reference-view rule's pick where
-    /// it has none), or the fused mean where the rule would store that.
+    /// it has none).
     Rendered,
     /// The point's stored patch bitmap, where the value has one for it; the
     /// rendered template where it does not.
@@ -221,8 +221,8 @@ pub struct AddImageToTracksOptions {
     /// self-similarity gate (`max_member_zncc_self_similarity_radius`, `0`
     /// disables it). Its per-view drop gates are not read.
     pub localize: KeypointLocalizeParams,
-    /// The sub-pixel solve's step and convergence settings; its grid, window,
-    /// sampler and robust iterations are taken from [`Self::localize`].
+    /// The sub-pixel solve's step and convergence settings; its grid, window
+    /// and sampler are taken from [`Self::localize`].
     pub refine: KeypointSubpixelParams,
 }
 
@@ -274,8 +274,13 @@ pub enum Refusal {
     /// that observe the point.
     BackFacing,
     /// Fewer than two existing observations render in frame in a decoded image,
-    /// or no template renders from them.
+    /// no channel is textured in all of them, or the reference observation's
+    /// render is flat.
     TooFewReferences,
+    /// The point has no stored bitmap or reference observation to use, and the
+    /// reference-view rule finds no eligible view among the existing
+    /// observations, so there is no template.
+    NoReferenceView,
     /// The new view's own core pins no 2D position: its ZNCC self-similarity
     /// radius is over the localizer's member bar.
     Unlocalizable,
@@ -306,6 +311,7 @@ impl Refusal {
             Refusal::Grazing => "grazing",
             Refusal::BackFacing => "back_facing",
             Refusal::TooFewReferences => "too_few_references",
+            Refusal::NoReferenceView => "no_reference_view",
             Refusal::Unlocalizable => "unlocalizable",
             Refusal::NoPeak => "no_peak",
             Refusal::PeakAtEdge => "peak_at_edge",
@@ -632,7 +638,7 @@ pub fn add_image_to_tracks(
         resolution: localize.resolution,
         window: localize.window,
         sampler: localize.sampler,
-        robust_iters: localize.robust_iters,
+
         min_grazing_cos: localize.min_grazing_cos,
         ..options.refine.clone()
     };
@@ -909,7 +915,7 @@ impl Context<'_, '_> {
         // texture (a point the file stores no bitmap for) leaves the rendered
         // template in its place.
         let bitmap_row = self.bitmaps.map(|b| b.index_axis(ndarray::Axis(0), pi));
-        let Some(references) = TrackReferences::build(
+        let references = match TrackReferences::build(
             &patch,
             &local,
             &local_refs,
@@ -917,9 +923,16 @@ impl Context<'_, '_> {
             reference,
             bitmap_row.as_ref().and_then(|r| r.as_slice()),
             self.localize,
-        ) else {
-            out.refusal = Some(Refusal::TooFewReferences);
-            return out;
+        ) {
+            Ok(references) => references,
+            Err(NoTemplate::TooFewReferences) => {
+                out.refusal = Some(Refusal::TooFewReferences);
+                return out;
+            }
+            Err(NoTemplate::NoReferenceView) => {
+                out.refusal = Some(Refusal::NoReferenceView);
+                return out;
+            }
         };
         out.references = references
             .references
@@ -996,7 +1009,7 @@ impl Context<'_, '_> {
     /// the tile's sharpness where blur matching selects it. The template is
     /// the point's stored bitmap under [`TemplateSource::StoredBitmap`], and
     /// otherwise the bitmap the point would store, its reference observation's
-    /// render (or the fused mean), so a point with no stored bitmap is scored
+    /// render, so a point with no stored bitmap is scored
     /// against the render it would store. The reference observation reads `1`
     /// where the template is its render. `local` is the measured point's
     /// views, the target first; `ref_keypoints` is parallel to `local[1..]`.

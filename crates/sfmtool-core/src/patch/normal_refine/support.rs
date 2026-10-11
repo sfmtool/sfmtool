@@ -361,8 +361,8 @@ pub(in crate::patch) fn view_render_patch<'a>(
 
 /// Which sampler each view of a multi-view render uses.
 ///
-/// A render that runs once per call ([`super::PatchViewStack::render`] for a
-/// fuse, a member gate's matrix, view selection's reference) applies the
+/// A render that runs once per call (a member gate's matrix, view selection's
+/// reference) applies the
 /// caller's [`SamplerChoice`] to each observation
 /// ([`SamplerChoice::for_observation`]). Normal refinement
 /// renders the same views under many candidate normals, and the Jacobian a

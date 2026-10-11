@@ -15,13 +15,12 @@ use crate::camera::{CameraIntrinsics, CameraModel};
 use crate::geometry::RigidTransform;
 use crate::patch::cloud::OrientedPatch;
 use crate::patch::keypoint_localize::{localize_patch_keypoints, KeypointLocalizeParams};
-use crate::patch::keypoint_subpixel::{
-    fuse_patch_bitmap, refine_patch_keypoints, KeypointSubpixelParams,
-};
+use crate::patch::keypoint_subpixel::{refine_patch_keypoints, KeypointSubpixelParams};
 use crate::patch::member_coherence::{validate_member_coherence, MemberCoherenceParams};
 use crate::patch::normal_refine::{
     normalized_stack, view_samplers, LevelContext, ProjectedImage, ViewSamplers,
 };
+use crate::patch::stored_bitmap::render_patch_bitmap;
 use crate::patch::view_selection::{select_patch_views, ViewSelectParams};
 use crate::progress::Progress;
 
@@ -171,10 +170,10 @@ fn unmoved_views_render_the_same_tiles_and_moved_views_do_not() {
     );
 }
 
-/// Where the rule moves no view, the fused bitmap is bit for bit the one
-/// `bilinear_mip` fuses; where it moves them, it is not.
+/// Where the rule moves no view, the stored bitmap is bit for bit the one
+/// `bilinear_mip` renders; where it moves them, it is not.
 #[test]
-fn the_fuse_changes_only_where_a_view_moves() {
+fn the_stored_bitmap_changes_only_where_a_view_moves() {
     let cams = [camera(500.0), camera(500.0), camera(500.0)];
     let poses = [pose(-0.2), pose(0.0), pose(0.2)];
     let pyr = pyramid();
@@ -187,27 +186,32 @@ fn the_fuse_changes_only_where_a_view_moves() {
             pyramid: &pyr,
         })
         .collect();
-    let fuse = |patch: &OrientedPatch, sampler: SamplerChoice| {
+    let render = |patch: &OrientedPatch, sampler: SamplerChoice| {
         let kps = keypoints(patch, &views);
         let params = KeypointSubpixelParams {
             resolution: R,
             sampler,
             ..KeypointSubpixelParams::default()
         };
-        fuse_patch_bitmap(patch, &views, &[0, 1, 2], &kps, &params).expect("fuses")
+        render_patch_bitmap(patch, &views, &[0, 1, 2], &kps, &params, &Progress::none())
+            .expect("a bitmap")
+            .rgba
     };
     let mip = SamplerChoice::Fixed(Sampler::BilinearMip);
     let facing = tilted(0.0);
     assert_eq!(
-        fuse(&facing, SamplerChoice::per_view()),
-        fuse(&facing, mip),
+        render(&facing, SamplerChoice::per_view()),
+        render(&facing, mip),
         "no view moved, so the bitmap must not change"
     );
     let turned = tilted(65.0);
-    assert_ne!(fuse(&turned, SamplerChoice::per_view()), fuse(&turned, mip));
+    assert_ne!(
+        render(&turned, SamplerChoice::per_view()),
+        render(&turned, mip)
+    );
     assert_eq!(
-        fuse(&turned, SamplerChoice::per_view()),
-        fuse(&turned, SamplerChoice::Fixed(Sampler::Anisotropic)),
+        render(&turned, SamplerChoice::per_view()),
+        render(&turned, SamplerChoice::Fixed(Sampler::Anisotropic)),
         "every view of the turned square moves"
     );
 }
@@ -376,8 +380,8 @@ fn the_kernels_choose_the_sampler_the_bench_reads() {
 /// `v` axis (the sub-pixel refiner, the localizer, normal refinement) would
 /// see this square facing the camera and compressed alike on both axes, and
 /// would keep `bilinear_mip`; the stored frame is sheared 30°, which
-/// `bilinear_mip` reads at level 3 and the sampler rule moves. The fuse
-/// follows the stored frame, as the bench does.
+/// `bilinear_mip` reads at level 3 and the sampler rule moves. The stored
+/// bitmap's render follows the stored frame, as the bench does.
 #[test]
 fn every_kernel_reads_the_rule_from_the_stored_frame() {
     let cams = [camera(500.0), camera(500.0)];
@@ -416,17 +420,19 @@ fn every_kernel_reads_the_rule_from_the_stored_frame() {
             Sampler::Anisotropic
         );
     }
-    let fuse = |sampler: SamplerChoice| {
+    let render = |sampler: SamplerChoice| {
         let params = KeypointSubpixelParams {
             resolution: R,
             sampler,
             ..KeypointSubpixelParams::default()
         };
-        fuse_patch_bitmap(&sheared, &views, &[0, 1], &kps, &params).expect("fuses")
+        render_patch_bitmap(&sheared, &views, &[0, 1], &kps, &params, &Progress::none())
+            .expect("a bitmap")
+            .rgba
     };
     assert_eq!(
-        fuse(rule),
-        fuse(SamplerChoice::Fixed(Sampler::Anisotropic)),
-        "the fuse read the rule from a rebuilt frame"
+        render(rule),
+        render(SamplerChoice::Fixed(Sampler::Anisotropic)),
+        "the stored bitmap's render read the rule from a rebuilt frame"
     );
 }

@@ -392,7 +392,8 @@ pub fn commit(
         )),
         // The track's reference observation: its place in the sorted track.
         // With a bitmap it is the observation the bitmap is the render of (a
-        // fused mean names none, and so does a bitmap for judging); without
+        // fused mean an older file stores names none, and so does a bitmap
+        // for judging); without
         // one, the reference the track carries: the row a held reference
         // names, or one a step made stale. After an unpin that hands the
         // reference to the rule, the bitmap stays until the next render, so
@@ -503,10 +504,9 @@ pub fn commit(
 /// The colour the committed point carries: the centre of the patch bitmap
 /// when there is one, and the colour the payload carries otherwise.
 ///
-/// The bitmap is the reference view's render, or the fused mean of the `in`
-/// observations where the rule picked no view, so its centre is the colour
-/// one photograph (or that mean) shows at the point, and the point's colour
-/// agrees with its own bitmap.
+/// The bitmap is the reference view's render, or a fused mean an older file
+/// stores, so its centre is the colour one photograph (or that mean) shows at
+/// the point, and the point's colour agrees with its own bitmap.
 fn bitmap_color(payload: &TrackPayload) -> [u8; 3] {
     let Some(bitmap) = payload.committable_bitmap() else {
         return payload.color;

@@ -733,7 +733,7 @@ fn representative_is_none_unless_requested() {
 }
 
 #[test]
-fn representative_fuses_consistent_views_with_high_agreement() {
+fn representative_is_the_reference_view_s_tile() {
     let scene = Scene::new(&[
         [0.8, 0.0, 0.0],
         [-0.8, 0.0, 0.0],
@@ -751,8 +751,8 @@ fn representative_fuses_consistent_views_with_high_agreement() {
     let rep = result.representative.expect("bitmap should be rendered");
     assert_eq!(rep.len(), r * r * 4);
 
-    // Center pixel: well inside the gaussian-disk support and covered by every
-    // view. Source is single-channel, so the fused RGB is grey.
+    // Center pixel: well inside the gaussian-disk support. Source is
+    // single-channel, so the tile's RGB is grey.
     let center = (r / 2 * r + r / 2) * 4;
     let (cr, cg, cb, ca) = (
         rep[center],
@@ -762,15 +762,12 @@ fn representative_fuses_consistent_views_with_high_agreement() {
     );
     assert_eq!(cr, cg);
     assert_eq!(cg, cb);
-    // All four views observe the same texture, so cross-view agreement is high
-    // (alpha approaches the coverage ceiling of 255·(1 − 1/4) ≈ 191 for 4 views).
-    assert!(
-        ca > 180,
-        "agreement alpha should be high for identical views, got {ca}"
-    );
+    // The picked view's tile has the centre on its photograph: alpha 255.
+    assert_eq!(ca, 255, "the centre sample carries data");
+    assert!(result.reference.is_some(), "the rule picks a view");
 
-    // Fusion is a (weighted) mean of identical renders, so it matches a single
-    // view's render of the same patch at the same pixel.
+    // Every view observes the same texture, so the picked view's tile matches
+    // view 0's render of the same patch at the same pixel.
     let map = WarpMap::from_patch(
         &result.patch,
         views[0].camera,
@@ -781,7 +778,7 @@ fn representative_fuses_consistent_views_with_high_agreement() {
     let v0 = img0.get_pixel((r / 2) as u32, (r / 2) as u32, 0) as i32;
     assert!(
         (cr as i32 - v0).abs() <= 4,
-        "fused grey {cr} should match the single-view render {v0}"
+        "the tile's grey {cr} should match the single-view render {v0}"
     );
 }
 

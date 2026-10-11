@@ -315,14 +315,14 @@ impl SamplerChoice {
     /// ray does not meet the patch.
     ///
     /// The one placement every kernel reads the rule from, whatever frame it
-    /// then renders through: the bench's tiles, the fuse, the localizer's and
+    /// then renders through: the bench's tiles, the stored bitmap's render, the localizer's and
     /// the refiner's search tiles, the gates and Track View all choose a
     /// view's sampler here, once per view, so they choose the same one for
     /// the same observation at the same keypoint. A kernel that rebuilds the
     /// frame it renders (an orthonormal one, a wider one, one shifted by a
     /// search) does not change that choice.
     ///
-    /// Each kernel passes the keypoint it starts from: the fuse, the gates and
+    /// Each kernel passes the keypoint it starts from: the stored bitmap's render, the gates and
     /// view selection's track views the stored keypoint, the bench and the
     /// localizer the seed of the round, the sub-pixel refiner the seed the
     /// localizer handed it, and view selection's candidates, which have no

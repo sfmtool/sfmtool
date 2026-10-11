@@ -206,7 +206,6 @@ _REFINE_KEYPOINTS_KEYS: dict[str, Callable[[str], object]] = {
     "window": str,
     "window_sigma": float,
     "sampler": str,
-    "robust_iters": int,
     "max_gn_steps": int,
     "convergence_px": float,
     "max_offset_px": float,
@@ -283,7 +282,6 @@ _LOCALIZE_KEYPOINTS_KEYS: dict[str, Callable[[str], object]] = {
     "window": str,
     "window_sigma": float,
     "sampler": str,
-    "robust_iters": int,
     "search_strategy": str,
 }
 

@@ -141,9 +141,9 @@ pub enum ReferenceExclusion {
     NoTile,
     /// Its coverage is under [`ReferenceViewOptions::min_coverage`].
     Coverage,
-    /// It sees the patch from the other side than the side the rule picks
-    /// from ([`PatchSide`]).
-    OtherSide,
+    /// It sees the patch at a viewing angle of `90°` or more, edge on or from
+    /// behind, where no patch is drawn.
+    BackFacing,
 }
 
 impl ReferenceExclusion {
@@ -152,7 +152,7 @@ impl ReferenceExclusion {
         match self {
             ReferenceExclusion::NoTile => "no_tile",
             ReferenceExclusion::Coverage => "coverage",
-            ReferenceExclusion::OtherSide => "other_side",
+            ReferenceExclusion::BackFacing => "back_facing",
         }
     }
 }
@@ -160,27 +160,6 @@ impl ReferenceExclusion {
 impl std::fmt::Display for ReferenceExclusion {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.name())
-    }
-}
-
-/// The side of the patch the rule measures every viewing angle on.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum PatchSide {
-    /// Against the patch's normal `n`, as the angle is read: some eligible
-    /// view sees the patch at under `90°`.
-    Front,
-    /// Against the flipped normal `−n`, `θ' = 180° − θ`: every eligible view
-    /// with an angle reading sees the patch at `90°` or more.
-    Back,
-}
-
-impl PatchSide {
-    /// The side's name as the wire and the bindings spell it.
-    pub fn name(self) -> &'static str {
-        match self {
-            PatchSide::Front => "front",
-            PatchSide::Back => "back",
-        }
     }
 }
 
@@ -194,8 +173,7 @@ pub struct ReferenceCost {
     pub radius: f64,
     /// Whether [`Self::radius`] is the view's own reading.
     pub radius_read: bool,
-    /// `c · tan θ`, in grid px, `θ` measured on the side the rule picks from;
-    /// infinite at `90°`.
+    /// `c · tan θ`, in grid px.
     pub angle_term: f64,
     /// The agreement penalty, `1` or more.
     pub agreement: f64,
@@ -238,9 +216,6 @@ pub struct ReferenceChoice {
     /// The view it picks, as an index into the readings: the one with the
     /// lowest cost. `None` where no view is eligible (or there are no views).
     pub reference: Option<usize>,
-    /// The side the angles were measured on; `None` where no view is
-    /// eligible.
-    pub side: Option<PatchSide>,
     /// Per view: its cost, or why it was left out of the views the rule picks
     /// from.
     pub costs: Vec<Result<ReferenceCost, ReferenceExclusion>>,
@@ -261,14 +236,13 @@ impl ReferenceChoice {
             reference: self.reference == Some(i),
             pick_cost: pick.map(|p| p.cost),
             costliest_term,
-            side: self.side,
         })
     }
 }
 
 /// The term whose part of `ln cost − ln pick.cost` is the largest. A part
-/// that is not a number, which only a radius of `0` or two infinite angle
-/// terms give, is passed over; `None` where every part is.
+/// that is not a number, which only a radius of `0` gives, is passed over;
+/// `None` where every part is.
 fn costliest_term(cost: &ReferenceCost, pick: &ReferenceCost) -> Option<ReferenceTerm> {
     cost.ln_parts()
         .into_iter()
@@ -298,8 +272,6 @@ pub struct ReferenceStanding {
     /// with the largest part of `ln cost − ln pick_cost` in the split of
     /// [`ReferenceCost::ln_parts`]. `None` for the pick and an excluded view.
     pub costliest_term: Option<ReferenceTerm>,
-    /// The side the rule measured the track's angles on.
-    pub side: Option<PatchSide>,
 }
 
 impl ReferenceStanding {
@@ -339,15 +311,10 @@ fn largest(values: impl Iterator<Item = f64>) -> Option<f64> {
 /// of the pair ZNCC below the best one, the cell deficit, the shortfall of
 /// the coverage below its band, and the clipped share.
 ///
-/// - **Hard limits.** A view with no coverage reading (no tile) or a coverage
-///   under [`ReferenceViewOptions::min_coverage`] is never picked. The others
-///   are **eligible**.
-/// - **The side.** Where some eligible view sees the patch at under `90°`,
-///   the pick is made from the eligible views at `90°` or less and those with
-///   no angle, and the views past `90°` are left out. Where every eligible
-///   view with an angle sees the patch at `90°` or more, the pick is made from
-///   every eligible view, with `θ' = 180° − θ`. A view at exactly `90°` has
-///   an infinite angle term (unless `σ_n` is `0`).
+/// - **Hard limits.** A view with no coverage reading (no tile), a coverage
+///   under [`ReferenceViewOptions::min_coverage`] or a viewing angle of `90°`
+///   or more (edge on or from behind) is never picked. The others are
+///   **eligible**, and the pick is made from them.
 /// - **Missing readings.** A view with no radius takes the largest radius
 ///   among the views the pick is made from, or
 ///   [`ReferenceViewOptions::unread_radius`] where none has one; a view with
@@ -388,56 +355,26 @@ pub fn choose_reference_view(
     let finite = |v: Option<f64>| v.filter(|x| x.is_finite());
     let angle = |v: &ReferenceReadings| v.viewing_angle_deg.filter(|a| !a.is_nan());
     // The hard limits.
-    let mut costs: Vec<Result<ReferenceCost, ReferenceExclusion>> = views
+    let exclusions: Vec<Option<ReferenceExclusion>> = views
         .iter()
         .map(|v| match v.coverage.filter(|c| !c.is_nan()) {
-            None => Err(ReferenceExclusion::NoTile),
-            Some(c) if c < options.min_coverage => Err(ReferenceExclusion::Coverage),
-            // Eligible: the view gets its cost below if the side keeps it, and
-            // is left out as on the other side if not.
-            Some(_) => Err(ReferenceExclusion::OtherSide),
+            None => Some(ReferenceExclusion::NoTile),
+            Some(c) if c < options.min_coverage => Some(ReferenceExclusion::Coverage),
+            Some(_) if angle(v).is_some_and(|a| a >= 90.0) => Some(ReferenceExclusion::BackFacing),
+            Some(_) => None,
         })
         .collect();
-    let eligible: Vec<usize> = (0..views.len())
-        .filter(|&i| {
-            !matches!(
-                costs[i],
-                Err(ReferenceExclusion::NoTile | ReferenceExclusion::Coverage)
-            )
-        })
-        .collect();
-    if eligible.is_empty() {
-        return ReferenceChoice {
-            reference: None,
-            side: None,
-            costs,
-        };
-    }
-    // The side.
-    let back = eligible.iter().any(|&i| angle(&views[i]).is_some())
-        && eligible
-            .iter()
-            .all(|&i| angle(&views[i]).is_none_or(|a| a >= 90.0));
-    let side = if back {
-        PatchSide::Back
-    } else {
-        PatchSide::Front
-    };
-    let from: Vec<usize> = eligible
-        .into_iter()
-        .filter(|&i| back || angle(&views[i]).is_none_or(|a| a <= 90.0))
+    let from: Vec<usize> = (0..views.len())
+        .filter(|&i| exclusions[i].is_none())
         .collect();
 
     // The readings the costs read, with the missing ones filled in.
     let c = options.angle_scale(resolution);
     let angle_term = |a: f64| {
-        let theta = if back { 180.0 - a } else { a };
         if c == 0.0 {
             0.0
-        } else if theta >= 90.0 {
-            f64::INFINITY
         } else {
-            c * theta.max(0.0).to_radians().tan()
+            c * a.max(0.0).to_radians().tan()
         }
     };
     let unread_radius = largest(from.iter().filter_map(|&i| finite(views[i].semi_major)))
@@ -451,8 +388,7 @@ pub fn choose_reference_view(
     )
     .unwrap_or(0.0);
 
-    for &i in &from {
-        let v = &views[i];
+    let cost_of = |v: &ReferenceReadings| {
         let own_radius = finite(v.semi_major);
         let radius = own_radius.unwrap_or(unread_radius);
         let angle_term = angle(v).map_or(unread_angle_term, angle_term);
@@ -468,8 +404,7 @@ pub fn choose_reference_view(
         let clipped = finite(v.clipped_share).map_or(1.0, |s| {
             hinge(s, options.clipped_band, options.clipped_scale)
         });
-        let cost = radius.hypot(angle_term) * agreement * cells * coverage * clipped;
-        costs[i] = Ok(ReferenceCost {
+        ReferenceCost {
             radius,
             radius_read: own_radius.is_some(),
             angle_term,
@@ -477,9 +412,14 @@ pub fn choose_reference_view(
             cells,
             coverage,
             clipped,
-            cost,
-        });
-    }
+            cost: radius.hypot(angle_term) * agreement * cells * coverage * clipped,
+        }
+    };
+    let costs: Vec<Result<ReferenceCost, ReferenceExclusion>> = views
+        .iter()
+        .zip(&exclusions)
+        .map(|(v, exclusion)| exclusion.map_or_else(|| Ok(cost_of(v)), Err))
+        .collect();
 
     // The lowest cost, a tie going to the smaller semi-minor axis and then to
     // the earlier view.
@@ -498,9 +438,5 @@ pub fn choose_reference_view(
             reference = Some(i);
         }
     }
-    ReferenceChoice {
-        reference,
-        side: Some(side),
-        costs,
-    }
+    ReferenceChoice { reference, costs }
 }

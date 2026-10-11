@@ -151,12 +151,11 @@ pub struct NormalRefineParams {
     pub fronto_prior_weight: f64,
     /// Whether to render the per-patch stored bitmap
     /// ([`NormalRefineResult::representative`]) at the found normal. Off by
-    /// default: it costs one extra full-grid source render per kept view per
-    /// patch (the search and scoring only touch the masked common support),
-    /// and, for the reference-view rule, a tile render and a self-similarity
-    /// reading per input view and member coherence's matrix per patch, so it
-    /// is computed only when a caller wants to persist the patch bitmaps. When
-    /// `false`, [`NormalRefineResult::representative`] is `None`.
+    /// default: the reference-view rule costs a tile render and a
+    /// self-similarity reading per input view and member coherence's matrix
+    /// per patch, so it is computed only when a caller wants to persist the
+    /// patch bitmaps. When `false`, [`NormalRefineResult::representative`] is
+    /// `None`.
     pub render_bitmap: bool,
     /// Cap on the per-patch **refinement basis**: when `> 0` and a patch has
     /// more views than this, refine over only the `K` most normal-informative
@@ -239,18 +238,13 @@ pub struct NormalRefineResult {
     /// `(row, col, channel)` order (length `R·R·4`): the tile of the view
     /// [`Self::reference`] names, the view the reference-view rule picks
     /// ([`crate::patch::stored_bitmap`]), with alpha 255 on the samples on the
-    /// photograph. Where the rule picks none, the fused mean of the refined views (the `max_refine_views` subset
-    /// under a cap): RGB
-    /// the cross-view fused colour (a robust IRLS-weighted mean under
-    /// [`Objective::RobustWeighted`], an unweighted mean under
-    /// [`Objective::MeanPairwise`]) and alpha a per-pixel cross-view agreement
-    /// confidence (`0` where no kept view covers the pixel). `None` when
-    /// [`NormalRefineParams::render_bitmap`] is `false`, or the patch was not
-    /// refined (too few valid views).
+    /// photograph. `None` when [`NormalRefineParams::render_bitmap`] is
+    /// `false`, the patch was not refined (too few valid views), or the rule
+    /// finds no eligible view.
     pub representative: Option<Vec<u8>>,
     /// The view, as an index into the caller's `views` (every input view, also
     /// when [`NormalRefineParams::max_refine_views`] refined over a subset),
-    /// whose tile [`Self::representative`] is; `None` for a fused mean or no
+    /// whose tile [`Self::representative`] is; `None` where there is no
     /// bitmap.
     pub reference: Option<usize>,
 }

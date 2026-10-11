@@ -217,9 +217,7 @@ fn a_missing_view_leaves_each_reference_naming_its_own_observation() {
             &params,
             &Progress::none(),
         );
-        let want = rendered
-            .and_then(|b| b.reference)
-            .map_or(-1, |r| (kept[r] - offsets[p]) as i32);
+        let want = rendered.map_or(-1, |b| (kept[b.reference] - offsets[p]) as i32);
         assert_eq!(column.reference_observations[p], want, "point {p}");
         if want >= 0 && kept[0] > offsets[p] {
             checked += 1;
@@ -297,6 +295,53 @@ fn a_stored_reference_is_rendered_from_and_kept() {
         differs * 2 > moved,
         "most moved references draw another tile: {differs} of {moved}"
     );
+}
+
+/// A point at `-1` whose every view sees its patch from behind has no eligible
+/// view, so the whole-cloud render gives it a zero row and keeps `-1`, while
+/// every other point renders as before.
+#[test]
+fn a_point_with_no_eligible_view_gets_a_zero_row_and_no_reference() {
+    let mut recon = seoul_bull();
+    let count = recon.point_count();
+    recon.point_set.reference_observations = Some(vec![NO_REFERENCE; count]);
+    let cache = PhotographCache::new(1 << 30, DISPLAY_PYRAMID_LEVELS);
+    let render = |recon: &SfmrReconstruction| {
+        render_patch_bitmap_column(recon, &cache, &Progress::none())
+            .expect("not cancelled")
+            .expect("the photographs are readable")
+    };
+    let before = render(&recon);
+    let p = before
+        .reference_observations
+        .iter()
+        .position(|&r| r >= 0)
+        .expect("some point has a pick");
+
+    // Turn point `p`'s patch to face away from every camera that sees it:
+    // negating `v` negates the normal `u × v`.
+    let v = recon
+        .point_set
+        .patch_v_halfvec_xyz
+        .as_mut()
+        .expect("the ground truth has patch frames");
+    for k in 0..3 {
+        v[[p, k]] = -v[[p, k]];
+    }
+    let after = render(&recon);
+    assert_eq!(after.reference_observations[p], NO_REFERENCE);
+    let row_len = after.bitmaps.len() / count;
+    let flat_after = after.bitmaps.as_slice().unwrap();
+    let flat_before = before.bitmaps.as_slice().unwrap();
+    let row = p * row_len..(p + 1) * row_len;
+    assert!(flat_before[row.clone()].iter().any(|&b| b != 0));
+    assert!(flat_after[row].iter().all(|&b| b == 0), "a zero row");
+    for q in (0..count).filter(|&q| q != p) {
+        assert_eq!(
+            after.reference_observations[q], before.reference_observations[q],
+            "point {q}"
+        );
+    }
 }
 
 const NO_REFERENCE: i32 = sfmtool_sfmr_format::NO_REFERENCE_OBSERVATION;

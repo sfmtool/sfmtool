@@ -1658,8 +1658,9 @@ fn stage_data(track: &EditableTrack, recon: Option<&sfmtool_core::SfmrReconstruc
                 "placement": super::render::placement(payload.placement.as_ref()),
                 "has_bitmap": payload.bitmap.is_some(),
                 // Whether that bitmap is one for judging only: rendered from
-                // every row with a keypoint because fewer than two `in` rows
-                // carry one. It names no row and a commit does not write it.
+                // every row with a keypoint because the `in` rows give no
+                // bitmap (fewer than two carry a keypoint, or none is
+                // eligible). It names no row and a commit does not write it.
                 "bitmap_for_judging": payload.bitmap_for_judging,
                 // Whether that bitmap is kept only until the next render
                 // replaces it: an unpin handed the reference to the rule,
@@ -1667,9 +1668,10 @@ fn stage_data(track: &EditableTrack, recon: Option<&sfmtool_core::SfmrReconstruc
                 "bitmap_pending": track.bitmap_pending(),
                 // The reference in use: the row the stored bitmap is rendered
                 // from, as an index into `observations`, or null for a track
-                // with no bitmap or one whose bitmap is the render of no row,
-                // a fused mean, which the first evaluation that renders where
-                // the rule picks a row renders from that pick. It can differ from the rule's pick below while
+                // with no bitmap or one whose bitmap is the render of no row
+                // (a fused mean an older file stores, or a bitmap for
+                // judging), which the first evaluation that renders where the
+                // rule picks a row renders from that pick. It can differ from the rule's pick below while
                 // its row is pinned, between an unpin and the render that moves
                 // it to the pick, and where the pick alternated between rows
                 // within one evaluation.
@@ -1845,7 +1847,7 @@ fn track_measurement(observation: &Observation, world_unit: Option<&str>) -> Val
 
 /// What the reference-view rule decided about an `in` row, as the wire
 /// carries it: `{"is_reference", "cost", "cost_ratio", "terms",
-/// "costliest_term", "excluded_by", "side"}`. Its own function, since inside
+/// "costliest_term", "excluded_by"}`. Its own function, since inside
 /// the measurement's `json!` the nested objects pass the macro's recursion
 /// limit.
 fn reference_view_json(standing: ReferenceStanding) -> Value {
@@ -1868,7 +1870,6 @@ fn reference_view_json(standing: ReferenceStanding) -> Value {
         "terms": terms,
         "costliest_term": standing.costliest_term.map(|t| t.name()),
         "excluded_by": standing.cost.err().map(|e| e.name()),
-        "side": standing.side.map(|s| s.name()),
     })
 }
 

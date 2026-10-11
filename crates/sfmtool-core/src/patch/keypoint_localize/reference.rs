@@ -9,8 +9,8 @@
 //! template is the point's stored bitmap where the caller supplies one, else
 //! the bitmap the point would store: its reference observation rendered at its
 //! own keypoint, or, where it has none, the reference-view rule's pick from the
-//! existing observations rendered at theirs, or the fused mean where the rule
-//! would store that. The new view is searched once against the template and
+//! existing observations rendered at theirs. Where the rule finds no eligible
+//! view there is no template. The new view is searched once against the template and
 //! scored. Nothing about the existing observations moves. See
 //! `specs/core/reconstruction/add-image-to-tracks.md`, which is the operation
 //! built on it.
@@ -50,9 +50,18 @@ pub enum TemplateKind {
     /// keypoint: the point's stored reference observation, or the
     /// reference-view rule's pick where it has none.
     ReferenceObservation,
-    /// The fused mean of the references at their keypoints, where the point
-    /// has no reference observation and the rule picks none it would store.
-    FusedMean,
+}
+
+/// Why [`TrackReferences::build`] settled no template.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoTemplate {
+    /// Fewer than two references render in frame, no channel is textured in
+    /// all of them, or the reference observation's render is flat.
+    TooFewReferences,
+    /// The point has no reference observation and the reference-view rule
+    /// finds no eligible view among the references (none passes the grazing
+    /// pre-filter, or none is eligible).
+    NoReferenceView,
 }
 
 /// A point's existing observations (its references), each rendered on the
@@ -97,7 +106,7 @@ pub struct TrackReferences {
     /// The template, never blurred.
     template: Template,
     /// The `R×R` RGBA bitmap the template was read from, where it is a stored
-    /// bitmap or the fused mean.
+    /// bitmap.
     bitmap: Option<Vec<u8>>,
     /// The reference observation's image index and keypoint, where the
     /// template is its render.
@@ -151,12 +160,16 @@ impl TrackReferences {
     /// and textured it is the template. Otherwise the template is the bitmap
     /// the point would store ([`TemplateKind`]): the reference observation's
     /// render at its keypoint where it rendered, else the reference-view rule's
-    /// pick from the references' renders at their keypoints, or their fused
-    /// mean where the rule would store that. Of `params`, `resolution`,
-    /// `window`, `sampler` and `robust_iters` (the fused mean's) are read.
+    /// pick from the references' renders at their keypoints. Of `params`,
+    /// `resolution`, `window`, `sampler` and `min_grazing_cos` are read.
     ///
-    /// `None` when fewer than two references render in frame, no channel is
-    /// textured in all of them, or no template renders.
+    /// # Errors
+    ///
+    /// [`NoTemplate::TooFewReferences`] when fewer than two references render
+    /// in frame, no channel is textured in all of them, or the reference
+    /// observation's render is flat; [`NoTemplate::NoReferenceView`] when there
+    /// is no stored bitmap or reference observation to use and the rule finds
+    /// no eligible view.
     ///
     /// # Panics
     ///
@@ -170,7 +183,7 @@ impl TrackReferences {
         reference: Option<usize>,
         bitmap: Option<&[u8]>,
         params: &KeypointLocalizeParams,
-    ) -> Option<Self> {
+    ) -> Result<Self, NoTemplate> {
         assert_eq!(
             references.len(),
             keypoints.len(),
@@ -225,7 +238,7 @@ impl TrackReferences {
             }
         }
         if raws.len() < 2 {
-            return None;
+            return Err(NoTemplate::TooFewReferences);
         }
         let channels = raws.iter().map(|(c, _)| *c).min().unwrap();
         let mut flat = vec![0f32; raws.len() * channels * n];
@@ -242,7 +255,8 @@ impl TrackReferences {
             support.total_weight,
             &support.sqrt_weights,
             &mut xs,
-        )?;
+        )
+        .ok_or(NoTemplate::TooFewReferences)?;
         let views_n = raws.len();
         let cn = kept * n;
         let cores: Vec<Vec<f32>> = (0..views_n).map(|v| xs[v * cn..][..cn].to_vec()).collect();
@@ -256,7 +270,7 @@ impl TrackReferences {
             None => {
                 let seeds: Vec<Option<[f64; 2]>> =
                     kept_keypoints.iter().copied().map(Some).collect();
-                let resolved = resolve_reference(
+                let a = resolve_reference(
                     patch,
                     views,
                     &kept_refs,
@@ -264,24 +278,15 @@ impl TrackReferences {
                     given,
                     params.min_grazing_cos,
                     resolution,
-                    params.window,
                     params.sampler,
-                    params.robust_iters,
                     &ReferenceViewOptions::default(),
                     &Progress::none(),
-                );
-                match (resolved.anchor, resolved.fused) {
-                    (Some(a), _) => {
-                        let (ch, raw) = &raws[a];
-                        let template = Template::from_raw(raw, *ch, &support)?;
-                        (template, TemplateKind::ReferenceObservation, Some(a), None)
-                    }
-                    (None, Some(fused)) => {
-                        let template = Template::from_bitmap(&fused, 4, r, &support)?;
-                        (template, TemplateKind::FusedMean, None, Some(fused))
-                    }
-                    (None, None) => return None,
-                }
+                )
+                .ok_or(NoTemplate::NoReferenceView)?;
+                let (ch, raw) = &raws[a];
+                let template =
+                    Template::from_raw(raw, *ch, &support).ok_or(NoTemplate::TooFewReferences)?;
+                (template, TemplateKind::ReferenceObservation, Some(a), None)
             }
         };
         let rendered_from =
@@ -310,7 +315,7 @@ impl TrackReferences {
         let anchor = reference
             .filter(|&a| rendered_from(a))
             .map(|a| (kept_refs[a], kept_keypoints[a]));
-        Some(Self {
+        Ok(Self {
             references: kept_refs,
             template_kind,
             reference,

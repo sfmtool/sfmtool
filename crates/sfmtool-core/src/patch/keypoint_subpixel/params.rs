@@ -38,9 +38,6 @@ pub struct KeypointSubpixelParams {
     /// with the same `frac` the value uses), so value and gradient stay
     /// LOD-consistent.
     pub sampler: SamplerChoice,
-    /// IRLS reweighting passes for the fused mean, which is the template where
-    /// the point has no reference observation, and the stored bitmap there.
-    pub robust_iters: u32,
     /// Maximum forward-additive Gauss–Newton steps per view.
     pub max_gn_steps: u32,
     /// Stop a view's GN solve once the accepted step magnitude falls below this
@@ -68,13 +65,9 @@ pub struct KeypointSubpixelParams {
     /// [`KeypointRefinement::representative`]): the reference observation's
     /// `R×R` tile at its keypoint, which the refinement does not move, the one
     /// [`KeypointRefinement::reference`] names whether this is set or not
-    /// ([`crate::patch::stored_bitmap`]).
-    /// Where the point has no reference observation and the reference-view
-    /// rule picks none, the views are re-rendered at their final offsets, IRLS view weights
-    /// built from those cores, and the views rendered full-grid and fused
-    /// (weighted-mean RGB + agreement·coverage alpha). Points at infinity go
-    /// through the same path (`w = 0` rendering is first-class here). Off by
-    /// default.
+    /// ([`crate::patch::stored_bitmap`]). Where there is no reference
+    /// observation, no bitmap is rendered. Points at infinity go through the
+    /// same path (`w = 0` rendering is first-class here). Off by default.
     pub render_bitmaps: bool,
     /// The reference-view rule's options, where the stored bitmap's render
     /// runs the rule
@@ -88,7 +81,6 @@ impl Default for KeypointSubpixelParams {
             resolution: 24,
             window: PatchWindow::GaussianDisk { sigma: 0.6 },
             sampler: SamplerChoice::per_view(),
-            robust_iters: 3,
             max_gn_steps: 10,
             convergence_px: 0.01,
             max_offset_px: 2.0,
@@ -125,19 +117,16 @@ pub struct KeypointRefinement {
     pub scores: Vec<f64>,
     /// The point's stored bitmap (`R·R·4` RGBA, row-major), only when
     /// [`KeypointSubpixelParams::render_bitmaps`] is set: the tile of the
-    /// reference observation [`Self::reference`] names, at its keypoint, or the
-    /// fused mean of the views at their final keypoints where there is none.
-    /// `None` when fewer than two views survive the projection gate, or when
-    /// there is no reference and fewer than two views render in frame at their
-    /// final offsets for the fused mean -- the uniform "culled point" signal,
-    /// for finite and infinity points alike.
+    /// reference observation [`Self::reference`] names, at its keypoint.
+    /// `None` wherever [`Self::reference`] is -- the uniform "culled point"
+    /// signal, for finite and infinity points alike.
     pub representative: Option<Vec<u8>>,
     /// The reference observation the views were aligned to, as an index into
     /// [`Self::views`], reported whether or not
     /// [`KeypointSubpixelParams::render_bitmaps`] is set: the view whose tile
-    /// [`Self::representative`] is. `None` where the template was the fused
-    /// mean, or there was none (fewer than two views, or the reference's core
-    /// is out of frame at its keypoint or does not map onto the patch plane,
-    /// in which case no view moves).
+    /// [`Self::representative`] is. `None` where there was none (fewer than
+    /// two views, no view the reference-view rule finds eligible, or the
+    /// reference's core is out of frame at its keypoint or does not map onto
+    /// the patch plane), in which case no view moves.
     pub reference: Option<usize>,
 }

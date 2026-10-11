@@ -119,7 +119,7 @@ def test_candidates_report_the_template_and_the_reference(without_image, pyramid
     assert cands["reference_observation"].shape == (n,)
     assert cands["reference_observation"].dtype == np.int64
     assert len(cands["reference_zncc"]) == n
-    kinds = {"stored_bitmap", "reference_observation", "fused_mean", None}
+    kinds = {"stored_bitmap", "reference_observation", None}
     seen_reference = False
     for k in range(n):
         template = cands["template"][k]
@@ -154,6 +154,7 @@ def test_every_rule_and_gate_is_accepted(without_image, pyramids):
             "grazing",
             "back_facing",
             "too_few_references",
+            "no_reference_view",
             "unlocalizable",
             "no_peak",
             "peak_at_edge",

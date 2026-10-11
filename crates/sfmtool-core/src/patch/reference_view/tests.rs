@@ -557,7 +557,6 @@ fn a_view_facing_the_patch_beats_a_slightly_sharper_oblique_one() {
     let facing = good(0.9, 0.62);
     let choice = choose(&[oblique, facing]);
     assert_eq!(choice.reference, Some(1));
-    assert_eq!(choice.side, Some(PatchSide::Front));
     let c = ReferenceViewOptions::default().angle_scale(24);
     assert!((c - 0.3628).abs() < 1e-3, "{c}");
     let oblique_cost = cost_of(&choice, 0);
@@ -642,10 +641,9 @@ fn the_coverage_floor_keeps_a_view_at_it_and_excludes_one_under_it() {
     let standing = choice.standing(0).unwrap();
     assert_eq!(standing.costliest_term, None);
     assert_eq!(standing.cost_ratio(), None);
-    // With no eligible view the rule picks nothing and names no side.
+    // With no eligible view the rule picks nothing.
     let choice = choose(&[under, no_tile]);
     assert_eq!(choice.reference, None);
-    assert_eq!(choice.side, None);
     assert_eq!(choice.standing(0).unwrap().pick_cost, None);
     let choice = choose(&[]);
     assert_eq!(choice.reference, None);
@@ -653,28 +651,27 @@ fn the_coverage_floor_keeps_a_view_at_it_and_excludes_one_under_it() {
 }
 
 #[test]
-fn a_track_seen_only_from_behind_is_picked_by_the_angle_to_the_flipped_normal() {
+fn a_track_seen_only_from_behind_has_no_eligible_view() {
     let mut grazing = good(0.9, 0.5);
     grazing.viewing_angle_deg = Some(100.0);
     let mut facing_back = good(0.9, 0.5);
     facing_back.viewing_angle_deg = Some(150.0);
     let choice = choose(&[grazing, facing_back]);
-    assert_eq!(choice.side, Some(PatchSide::Back));
-    assert_eq!(choice.reference, Some(1));
-    let c = ReferenceViewOptions::default().angle_scale(24);
-    assert!(close(
-        cost_of(&choice, 1).angle_term,
-        c * 30f64.to_radians().tan()
-    ));
-    assert!(close(
-        cost_of(&choice, 0).angle_term,
-        c * 80f64.to_radians().tan()
-    ));
-    assert_eq!(choice.standing(0).unwrap().side, Some(PatchSide::Back));
+    assert_eq!(choice.reference, None);
+    assert_eq!(
+        choice.costs,
+        vec![
+            Err(ReferenceExclusion::BackFacing),
+            Err(ReferenceExclusion::BackFacing)
+        ]
+    );
+    let standing = choice.standing(1).unwrap();
+    assert_eq!(standing.pick_cost, None);
+    assert_eq!(standing.costliest_term, None);
 }
 
 #[test]
-fn with_views_on_both_sides_the_pick_is_made_among_the_facing_ones() {
+fn with_views_on_both_sides_the_pick_is_made_among_the_front_facing_ones() {
     // The view behind the patch is the sharpest and agrees best, and is still
     // left out; a view with no angle stays in.
     let mut behind = good(0.99, 0.1);
@@ -683,8 +680,7 @@ fn with_views_on_both_sides_the_pick_is_made_among_the_facing_ones() {
     let mut unread = good(0.9, 0.6);
     unread.viewing_angle_deg = None;
     let choice = choose(&[behind, facing, unread]);
-    assert_eq!(choice.side, Some(PatchSide::Front));
-    assert_eq!(choice.costs[0], Err(ReferenceExclusion::OtherSide));
+    assert_eq!(choice.costs[0], Err(ReferenceExclusion::BackFacing));
     assert!(choice.costs[2].is_ok());
     assert_eq!(choice.reference, Some(1));
     // The best pair ZNCC is read among the views the pick is made from.
@@ -692,26 +688,24 @@ fn with_views_on_both_sides_the_pick_is_made_among_the_facing_ones() {
 }
 
 #[test]
-fn a_view_at_exactly_ninety_degrees_costs_infinitely_much() {
+fn a_view_at_exactly_ninety_degrees_is_excluded() {
     let mut edge_on = good(0.9, 0.1);
     edge_on.viewing_angle_deg = Some(90.0);
     let mut grazing = good(0.9, 0.9);
     grazing.viewing_angle_deg = Some(85.0);
     let choice = choose(&[edge_on, grazing]);
-    assert_eq!(choice.side, Some(PatchSide::Front));
+    assert_eq!(choice.costs[0], Err(ReferenceExclusion::BackFacing));
     assert_eq!(choice.reference, Some(1));
-    assert_eq!(cost_of(&choice, 0).cost, f64::INFINITY);
-    assert_eq!(
-        choice.standing(0).unwrap().costliest_term,
-        Some(ReferenceTerm::Angle)
-    );
-    // Where every view is edge on, every cost is infinite and the tie breaks
-    // pick: the smaller semi-minor axis.
-    let mut other = edge_on;
-    other.semi_minor = Some(0.01);
-    let choice = choose(&[edge_on, other]);
-    assert_eq!(choice.side, Some(PatchSide::Back));
-    assert_eq!(choice.reference, Some(1));
+    assert!(cost_of(&choice, 1).cost.is_finite());
+    // Where every view is edge on, none is eligible.
+    let choice = choose(&[edge_on, edge_on]);
+    assert_eq!(choice.reference, None);
+    // A view just short of 90° is eligible, with a large but finite cost.
+    let mut nearly = edge_on;
+    nearly.viewing_angle_deg = Some(89.9);
+    let choice = choose(&[nearly]);
+    assert_eq!(choice.reference, Some(0));
+    assert!(cost_of(&choice, 0).cost.is_finite());
 }
 
 #[test]
@@ -762,7 +756,14 @@ fn a_missing_pair_angle_clipped_share_or_cell_deficit_is_filled_in() {
     // Where no view has one, the angle term is 0.
     let choice = choose(&[no_angle, no_angle]);
     assert_eq!(cost_of(&choice, 0).angle_term, 0.0);
-    assert_eq!(choice.side, Some(PatchSide::Front));
+    // Where every view with an angle is back-facing, the views with none are
+    // eligible and take an angle term of 0.
+    let mut behind = good(0.9, 0.1);
+    behind.viewing_angle_deg = Some(120.0);
+    let choice = choose(&[behind, no_angle]);
+    assert_eq!(choice.costs[0], Err(ReferenceExclusion::BackFacing));
+    assert_eq!(choice.reference, Some(1));
+    assert_eq!(cost_of(&choice, 1).angle_term, 0.0);
 
     // No clipped share or cell deficit: a factor of 1.
     let mut neither = good(0.9, 0.3);

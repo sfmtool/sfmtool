@@ -52,8 +52,6 @@ impl PyPatchCloud {
     ///         zoom), or one sampler for every view, ``"bilinear_mip"``,
     ///         ``"bilinear"`` or ``"anisotropic"`` (value and gradient are rendered with the same
     ///         sampler).
-    ///     robust_iters: IRLS passes for the fused mean that is the template (and
-    ///         the stored bitmap) where the point has no reference observation.
     ///     max_gn_steps: Max forward-additive Gauss–Newton steps per view.
     ///     convergence_px: Stop a view's solve once an accepted step is below this
     ///         many patch-grid px.
@@ -94,8 +92,8 @@ impl PyPatchCloud {
     ///     render_bitmaps: If true, also render each point's stored bitmap at
     ///         the **final** refined keypoints and return it per point (see
     ///         ``bitmap`` below): the ``R×R`` tile of the reference observation
-    ///         the views were aligned to, at its keypoint, or the fused mean of
-    ///         the views where there is none. Points at infinity take the same
+    ///         the views were aligned to, at its keypoint, or ``None`` where
+    ///         there is none. Points at infinity take the same
     ///         render path (they are refined, not skipped). Off by default.
     ///     reference_images: Optional mapping ``point_index -> image_index`` naming
     ///         each point's reference observation, the view whose render is the
@@ -119,20 +117,21 @@ impl PyPatchCloud {
     ///     uses: ``1.0`` for the reference observation, NaN for a view that
     ///     could not be scored. ``reference_image`` is the image index of the
     ///     reference observation the views were aligned to, whether or not
-    ///     ``render_bitmaps`` is set, or ``None`` where the template was the
-    ///     fused mean of the views, or where the reference's core could not be
-    ///     rendered at its keypoint (then no view moves). When
+    ///     ``render_bitmaps`` is set, or ``None`` where there is none: fewer
+    ///     than two views survive, the reference-view rule finds no eligible
+    ///     view, or the reference's core could not be rendered at its keypoint
+    ///     (then no view moves). When
     ///     ``render_bitmaps`` is true each dict also carries ``bitmap``: the
-    ///     ``(R, R, 4)`` uint8 RGBA stored bitmap, the reference's tile (or the
-    ///     fused mean), or ``None`` when fewer than two views survive, the
-    ///     uniform culled-point signal, finite and infinity alike.
+    ///     ``(R, R, 4)`` uint8 RGBA stored bitmap, the reference's tile, or
+    ///     ``None`` wherever ``reference_image`` is, the uniform culled-point
+    ///     signal, finite and infinity alike.
     // This is a Python docstring (rendered by `help()`), not Rust prose: its
     // indented `Args:` / `Returns:` continuation paragraphs read as Markdown
     // indented code blocks, which rustdoc then tries to parse as Rust.
     #[allow(rustdoc::invalid_rust_codeblocks)]
     #[pyo3(signature = (
         recon, images, *, view_sets=None, resolution=24, window="gaussian_disk",
-        window_sigma=0.6, sampler="per_view", robust_iters=3, max_gn_steps=10,
+        window_sigma=0.6, sampler="per_view", max_gn_steps=10,
         convergence_px=0.01, max_offset_px=2.0, min_grazing_cos=0.1, point_indexes=None,
         starting_keypoints=None, render_bitmaps=false, reference_images=None,
         progress=None
@@ -148,7 +147,6 @@ impl PyPatchCloud {
         window: &str,
         window_sigma: f64,
         sampler: &str,
-        robust_iters: u32,
         max_gn_steps: u32,
         convergence_px: f64,
         max_offset_px: f64,
@@ -190,7 +188,6 @@ impl PyPatchCloud {
             resolution,
             window,
             sampler,
-            robust_iters,
             max_gn_steps,
             convergence_px,
             max_offset_px,

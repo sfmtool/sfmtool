@@ -12,7 +12,8 @@ is the one the point stores, or the reference-view rule's pick where it stores
 none, and its keypoint is not moved; a point that stored none records the pick.
 With ``bitmaps`` each refined point records the reference its views were
 aligned to, so a stored one that does not render at its keypoint gives way to
-``-1`` and the fused mean; without, a point keeps the reference it stores.
+the rule's pick, or to ``-1`` and no bitmap where the rule finds no eligible
+view; without, a point keeps the reference it stores.
 The track structure (``track_image_indexes`` / ``track_point_indexes`` /
 ``observation_counts``) is untouched. Because the refinement is photometric it
 reads the workspace's source images (``workspace_dir / image_name``), the same
@@ -73,7 +74,6 @@ class RefineKeypointsTransform:
         window: str = "gaussian_disk",
         window_sigma: float = 0.6,
         sampler: str = "per_view",
-        robust_iters: int = 3,
         max_gn_steps: int = 10,
         convergence_px: float = 0.01,
         max_offset_px: float = 2.0,
@@ -81,8 +81,6 @@ class RefineKeypointsTransform:
         if resolution < 2:
             raise ValueError(f"resolution must be >= 2, got {resolution}")
         validate_patch_params(window=window, window_sigma=window_sigma, sampler=sampler)
-        if robust_iters < 1:
-            raise ValueError(f"robust_iters must be >= 1, got {robust_iters}")
         if max_gn_steps < 1:
             raise ValueError(f"max_gn_steps must be >= 1, got {max_gn_steps}")
         if convergence_px <= 0:
@@ -97,7 +95,6 @@ class RefineKeypointsTransform:
         self.window = window
         self.window_sigma = window_sigma
         self.sampler = sampler
-        self.robust_iters = robust_iters
         self.max_gn_steps = max_gn_steps
         self.convergence_px = convergence_px
         self.max_offset_px = max_offset_px
@@ -130,7 +127,6 @@ class RefineKeypointsTransform:
             window=self.window,
             window_sigma=self.window_sigma,
             sampler=self.sampler,
-            robust_iters=self.robust_iters,
             max_gn_steps=self.max_gn_steps,
             convergence_px=self.convergence_px,
             max_offset_px=self.max_offset_px,
@@ -197,7 +193,7 @@ class RefineKeypointsTransform:
         # The reference observation each point's views were aligned to: its
         # stored one where that is in the track and renders, else the
         # reference-view rule's pick, or none (-1) where they were aligned to
-        # a fused mean or to nothing. Each refined point records that one, so
+        # nothing. Each refined point records that one, so
         # its keypoints, bitmap and reference agree; a point the refiner did
         # not return keeps what it stores. A stored reference the refiner
         # used keeps its own observation, even in an image the point is
@@ -241,7 +237,7 @@ class RefineKeypointsTransform:
             )
             # Every bitmap with a reference is rendered again from the stored
             # (f32) keypoints, so dropping and adding the bitmaps later gives
-            # the same bytes; a point at -1 keeps the refiner's fused mean.
+            # the same bytes; a point at -1 has no bitmap (a zero row).
             moved = recon.clone_with_changes(
                 keypoints_xy=kxy, patches=cloud, reference_observations=references
             )

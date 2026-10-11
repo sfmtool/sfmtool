@@ -691,7 +691,7 @@ let tile = render_tile(view.pyramid, &mut map, sampler);
   (`EvaluateOptions::localize.sampler`), so they show the sampler the bench
   used.
 - **Which keypoint.** Each kernel reads the rule at the keypoint it starts
-  from: the fuse, the member gates and view selection's track views at the
+  from: the stored bitmap's render, the member gates and view selection's track views at the
   stored keypoint, the bench and the localizer at the seed of the round, the
   sub-pixel refiner at the seed the localizer hands it, and view selection's
   candidates, which have no keypoint, at the projection. Within one pipeline
@@ -826,9 +826,8 @@ read.
   axis, `BilinearMip` reads a level clamped at the top of the pyramid and
   aliases, and the anisotropic sampler raises the ZNCC by 0.059.
 - **A view the rule leaves on `BilinearMip` renders the same tile, bit for
-  bit**, so a point none of whose views moves keeps its bitmap, whether that is
-  the reference view's tile or the fused mean. Measured on the fused mean the
-  files stored when the rule was chosen, none of the 2,549 such points across
+  bit**, so a point none of whose views moves keeps its bitmap. Measured on the
+  fused mean the files stored when the rule was chosen, none of the 2,549 such points across
   the samples changed, and the fused bitmaps of the points with a moved view
   changed by a median mean absolute difference of 0.3–4.0 grey levels.
 - **No bench verdict changes at the current bars** (in 0, out 0 over 3,828
@@ -913,7 +912,7 @@ table above.
 | normal refinement | 1.00, 1.02 | 1.03 |
 | localizer | 0.99, 1.00 | 1.08 |
 | member coherence | 1.02, 1.00 | 1.19 |
-| fuse | 0.98, 0.82 | 1.24 |
+| fuse (the fused-mean bitmap the files then stored) | 0.98, 0.82 | 1.24 |
 
 The times of one batch spread by 2–42% over its five runs, by 30% or more
 for the gallery sculpture's localizer and normal refinement in one run each,

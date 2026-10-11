@@ -15,8 +15,8 @@ point's **reference render**, the `R×R` render of its reference observation at
 its stored keypoint, in one pass. The reference observation is the one the
 point stores in `tracks/reference_observations`, and where it stores none, the
 reference-view rule's pick from the views' renders at their stored keypoints;
-where the rule picks none it would store, the template is the views' fused mean
-and no view is the reference. The reference's keypoint is not moved. The
+where the rule finds no eligible view, there is no template and no view is the
+reference, and every keypoint stays where it is. The reference's keypoint is not moved. The
 binding does no grid search, **changes no view membership**, and is **never
 worse than the seed** (a step is accepted only if it raises the ECC score and
 stays in frame). Points at infinity are refined like finite ones, not skipped.
@@ -90,7 +90,7 @@ exactly, so the CLI re-specifies nothing and the two layers cannot drift.
 | `window`               | `gaussian_disk` | `refine_keypoints` (`gaussian_disk`/`gaussian`/`uniform`) |
 | `window_sigma`         | `0.6`           | `refine_keypoints`                             |
 | `sampler`              | `per_view`      | `refine_keypoints` (`per_view`/`bilinear`/`bilinear_mip`/`anisotropic`; `per_view` applies the sampler rule to each view, `anisotropic` where `bilinear_mip` would read its less compressed axis at least 1.5× too coarsely and `bilinear_mip` otherwise; `bilinear_mip` takes one bilinear tap from the mip level nearest the warp's compression, bounding the aliasing `bilinear` suffers on cross-scale views at the same cost; `anisotropic` resolves oblique footprints; the value+gradient render this step reads has no AVX2 kernel and costs 2.8–7× the `bilinear_mip` one) |
-| `robust_iters`         | `3`             | `refine_keypoints` (IRLS passes for the fused mean, where it is the template) |
+
 | `max_gn_steps`         | `10`            | `refine_keypoints` (Gauss–Newton steps per view) |
 | `convergence_px`       | `0.01`          | `refine_keypoints` (per-view stop, patch-grid px) |
 | `max_offset_px`        | `2.0`           | `refine_keypoints` (max per-view drift from the seed, patch-grid px) |
@@ -121,8 +121,8 @@ round a near-edge value up to exactly width/height, which the writer's
 **Persisting the patch bitmaps (`bitmaps`).** With `bitmaps` (the default) the
 binding additionally renders each point's stored bitmap at the **final**
 refined keypoints, the tile of the reference observation the views were
-aligned to, or the fused mean of the views, naming no observation, where there
-is none ([reference-view.md](../../../core/patch/reference-view.md) § "The
+aligned to, or no bitmap where there is none
+([reference-view.md](../../../core/patch/reference-view.md) § "The
 stored bitmap"), and the command scatters them into a `(point_count, R, R, 4)`
 uint8 array (zero rows where the point produced no bitmap) and records each
 point's reference observation, attached via
@@ -134,8 +134,8 @@ itself is unchanged — keypoints moved, not the surfel). A point whose
 where its views were aligned to it, which is wherever it renders at its
 keypoint; each refined point records the reference its views were aligned
 to, so a point at `-1` takes the rule's pick, and a point whose stored
-reference does not render, and so aligned nothing, records `-1` and keeps the
-fused mean the refiner rendered. Every point with a
+reference does not render, and so aligned nothing, records `-1` and gets a
+zero row. Every point with a
 reference then has its bitmap rendered again from that observation at its
 refined keypoint as the file stores it, in `f32` (`render_from_references` in
 [`_patch_compaction.py`](../../../../src/sfmtool/_patch_compaction.py), through

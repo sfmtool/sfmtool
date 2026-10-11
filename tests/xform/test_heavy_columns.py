@@ -379,7 +379,7 @@ def test_add_patch_bitmaps_moves_nothing_and_stores_the_reference_view_render(
     # and picks the same reference images, reached here through its own
     # per-patch loop rather than the cloud form the step calls.
     images = load_workspace_images(bare)
-    fused = bare.patches.refine_keypoints(
+    unmoved = bare.patches.refine_keypoints(
         bare, images, resolution=16, max_gn_steps=0, render_bitmaps=True
     )
     expected = np.zeros_like(np.asarray(added.patch_bitmaps))
@@ -387,7 +387,7 @@ def test_add_patch_bitmaps_moves_nothing_and_stores_the_reference_view_render(
     offsets = np.concatenate([[0], np.cumsum(added.observation_counts)[:-1]]).astype(
         int
     )
-    for entry in fused:
+    for entry in unmoved:
         point = int(entry["point_index"])
         reference_image = entry["reference_image"]
         if refs[point] < 0:

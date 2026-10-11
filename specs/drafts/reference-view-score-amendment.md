@@ -1,16 +1,22 @@
 # One score per view for the reference-view rule (amendment)
 
-**Status:** Draft. Built in part:
-- **Built: the cost.** `choose_reference_view(views, resolution, options)` ranks the views by the cost of § "The cost", with the hard limits, the facing side, the missing-reading rules and the tie breaks of this draft, and `ReferenceViewOptions` carries every parameter at the starting values of this draft. `ReferenceTest`, `ReferenceFallback`, `rejected_by`, `fallback` and the constants `REFERENCE_MIN_COVERAGE`, `REFERENCE_MAX_CLIPPED_SHARE`, `REFERENCE_MAX_VIEWING_ANGLE_DEG`, `REFERENCE_FACING_LIMIT_DEG`, `REFERENCE_MAX_CELL_DEFICIT` and `REFERENCE_AGREEMENT_MARGIN` are gone. [core/patch/reference-view.md](../core/patch/reference-view.md) § "The rule" describes it.
+**Status:** Draft. Built but for the tuning:
+- **Built: the cost.** `choose_reference_view(views, resolution, options)` ranks the views by the cost of § "The cost", with the hard limits (back-facing views among them, § "Back-facing views"), the missing-reading rules and the tie breaks of this draft, and `ReferenceViewOptions` carries every parameter at the starting values of this draft. `ReferenceTest`, `ReferenceFallback`, `rejected_by`, `fallback` and the constants `REFERENCE_MIN_COVERAGE`, `REFERENCE_MAX_CLIPPED_SHARE`, `REFERENCE_MAX_VIEWING_ANGLE_DEG`, `REFERENCE_FACING_LIMIT_DEG`, `REFERENCE_MAX_CELL_DEFICIT` and `REFERENCE_AGREEMENT_MARGIN` are gone. [core/patch/reference-view.md](../core/patch/reference-view.md) § "The rule" describes it.
 - **Built: its output, everywhere the rule's output is read.** The bench's `TrackMeasurement::reference_view` standing, the wire's and the bindings' `reference_view` dict of § "What changes elsewhere", and Track View's *Reference* column with the cost ratio and the costliest term's word ([gui/track-view.md](../gui/track-view.md), [gui/mcp-server.md](../gui/mcp-server.md), [core/bench/editable-track.md](../core/bench/editable-track.md)). `ReferenceRows::pick_by_last_fallback` and Track View's hover for a last-fallback pick are gone.
-- **Built: every pick is stored.** With no last fallback, the stored bitmap is the rule's pick wherever the rule picks a view, so a point whose views are all partial (coverage between `0.9` and `0.99`), clipped or behind the patch stores a view's tile and names it. `ReferenceRender::stored_reference` and `stored_view` are gone with the fallback, since each had come to return the pick; their callers read `TrackReading::choice.reference`.
-- **Not built: the fused mean's removal.** Where no view is eligible, the stored bitmap, the localizer's and the sub-pixel refiner's template, Add Image to Tracks' template, normal refinement's `representative` and the bench's bitmap for judging are still the fused mean, with the reference `-1`, as before; § "The stored bitmap" and § "What still reads the fused mean" remain to be built, together.
+- **Built: every pick is stored.** With no last fallback, the stored bitmap is the rule's pick wherever the rule picks a view, so a point whose views are all partial (coverage between `0.9` and `0.99`) or clipped stores a view's tile and names it. `ReferenceRender::stored_reference` and `stored_view` are gone with the fallback, since each had come to return the pick; their callers read `TrackReading::choice.reference`.
+- **Built: back-facing views are excluded.** A view at `90°` or more is left out as `ReferenceExclusion::BackFacing` (`back_facing`, Track View's `back facing`), and a track whose every view is back-facing has no eligible view. This reverses the facing side this draft first proposed; § "Back-facing views" gives the decision and its reason. `PatchSide`, `ReferenceChoice::side`, `ReferenceStanding::side`, the wire's and the bindings' `side` and Track View's hover line for a pick made from behind are gone.
+- **Built: the fused mean's removal**, as § "The stored bitmap" and § "What still reads the fused mean" describe: a point with no eligible view gets no bitmap and `-1`; the localizer and the sub-pixel refiner align nothing there; Add Image to Tracks refuses such a point as `no_reference_view`; normal refinement's `representative` and `reference` are `None` there; and the bench's bitmap for judging is the pick or none. `fuse_patch_bitmap`, `fuse_patch_bitmap_reporting`, `BitmapKind`, `TemplateKind::FusedMean`, `ResolvedReference`, `PatchViewStack` (with `fuse`) and `robust_iters` of the localizer and the sub-pixel refiner are gone.
 - **Not built: the tuning.** The values are this draft's starting values; § "How the values will be set" remains.
 
 Where the built code departs from this draft's proposed API, and why:
-- `ReferenceStanding` is `{ cost: Result<ReferenceCost, ReferenceExclusion>, reference: bool, pick_cost: Option<f64>, costliest_term: Option<ReferenceTerm>, side: Option<PatchSide> }`, with `is_reference()` and `cost_ratio()`. It carries the pick's cost so a row reads its ratio without the rest of the track, which the bench's slots, the wire and Track View all need.
+- `ReferenceStanding` is `{ cost: Result<ReferenceCost, ReferenceExclusion>, reference: bool, pick_cost: Option<f64>, costliest_term: Option<ReferenceTerm> }`, with `is_reference()` and `cost_ratio()`. It carries the pick's cost so a row reads its ratio without the rest of the track, which the bench's slots, the wire and Track View all need.
 - `ReferenceCost` has `effective_radius()` and `ln_parts()`, the split the costliest term is read from, so a test and a reader can check that the parts sum; `ReferenceViewOptions::angle_scale(resolution)` gives `c`.
-- The back side is taken where every eligible view **with an angle reading** is at `90°` or more and at least one has one; a track whose eligible views have no angle reading at all is picked on the front, with an angle term of `0`. A view with no angle on the front side is among the views the pick is made from, as the draft says.
+- A view with no angle reading is not back-facing and is eligible; it takes the largest angle term among the eligible views that have an angle, or `0` where none has one.
+- `PatchBitmap::reference` is a `usize`, since a bitmap is now always the pick's tile.
+- `TrackReferences::build` returns `Result<TrackReferences, NoTemplate>`, `NoTemplate` being `TooFewReferences` or `NoReferenceView`, so Add Image to Tracks can tell its two refusals apart. A reference observation whose render is flat stays `too_few_references`, as it was.
+- `PatchViewStack` is removed as a whole, not only its `fuse`: normal refinement's bitmap path scored its survivors through the stack only so the fuse could reuse the render and the weights, and now scores them with the same `eval_phi` as the path without a bitmap.
+- `robust_iters` fed only the fused mean: the IRLS view weights it set were read by no output but the fused representative, so it is removed from `KeypointLocalizeParams`, `KeypointSubpixelParams`, `localize_keypoints`, `refine_keypoints` and the two commands' keys.
+- On the bench, a bitmap that names a row where the rule then finds no eligible `in` row stands with its reference, since no render would replace it (`bitmap_target`); where the track has no bitmap, the render for judging runs, and gives none where no row is eligible.
 - The options are threaded as `EvaluateOptions::reference_view` (the bench's reading) and `KeypointSubpixelParams::reference_view` (the stored bitmap's render, and the sub-pixel refiner's own reference resolution); the localizer, normal refinement and the bench's restatement of the rule after a verdict moves use the `Default`. The restatement reads `R` from the rows' `reading_options`, since it has no options to hand.
 - The wire's and the bindings' `terms` also carry `radius_read`, which Track View's hover shows; `cost` and `cost_ratio` are null where they are not finite.
 
@@ -19,7 +25,7 @@ Amends [`../core/patch/reference-view.md`](../core/patch/reference-view.md)
 which points back here, and the reference-view rule of
 [`sharper-patch-bitmap.md`](sharper-patch-bitmap.md) Part 5, which also points
 back here. Where it is built it also changes
-[`../core/patch/keypoint-subpixel-refinement.md`](../core/patch/keypoint-subpixel-refinement.md#the-fused-mean),
+[`../core/patch/keypoint-subpixel-refinement.md`](../core/patch/keypoint-subpixel-refinement.md#outputs),
 [`../core/patch/patch-keypoint-localization.md`](../core/patch/patch-keypoint-localization.md),
 [`../core/reconstruction/add-image-to-tracks.md`](../core/reconstruction/add-image-to-tracks.md),
 [`../core/patch/patch-normal-refinement.md`](../core/patch/patch-normal-refinement.md),
@@ -106,8 +112,8 @@ c = (R / √12) · σ_n
 
 - `r_v` is the self-similarity semi-major axis of the view's `R×R` tile, in
   grid px: the reading the rule ranks by today.
-- `θ_v` is the viewing angle, measured on the side of the patch the pick is
-  made on (§ "The facing side").
+- `θ_v` is the viewing angle, under `90°` for every eligible view
+  (§ "Back-facing views").
 - `A_v`, `K_v`, `C_v` and `P_v` are the soft penalties for agreement, cell
   deficit, coverage and clipping (§ "The soft penalties"), each `1` inside its
   tolerance band.
@@ -159,9 +165,8 @@ made the 15 picks it changed localize the other views 0.12 px worse on average
 the tuning checks that the angle term does not bring those picks back
 (§ "How the values will be set").
 
-**A view at exactly `90°`** has `tan θ` infinite and so an infinite cost. It is
-ranked after every view with a finite cost, so it is picked only where every
-view the pick is made from has an infinite cost.
+**A view at exactly `90°`** is back-facing and is never the reference
+(§ "Back-facing views"), so every angle term the rule ranks by is finite.
 
 ### The soft penalties
 
@@ -246,7 +251,7 @@ makes a view look better than one that has it:
 
 ## Hard limits
 
-Two limits stay all-or-nothing. A view that fails either is never the
+Three limits stay all-or-nothing. A view that fails any of them is never the
 reference, whatever its cost:
 
 - **No tile.** A view that renders no tile, so has no coverage reading.
@@ -255,49 +260,38 @@ reference, whatever its cost:
   have holes over a tenth of the patch or more. This floor is the maintainer's
   decision and is not tuned. Between `0.9` and `0.99` the coverage penalty
   applies.
+- **Back-facing.** A view at a viewing angle of `90°` or more
+  (§ "Back-facing views").
 
-A view meeting both is **eligible**. The 65° angle gate, the cell and clipping
-gates and every fallback are removed.
+A view meeting all three is **eligible**. The 65° angle gate, the cell and
+clipping gates and every fallback are removed.
 
-### The facing side
+### Back-facing views
 
-Today a view at `90°` or more is turned away under every fallback, since it
-sees the patch edge on or from behind. The rule now picks a side of the patch
-first and measures every angle on it:
+A view at `90°` or more sees the patch edge on or from behind, and is never the
+reference, whatever the other views are (`ReferenceExclusion::BackFacing`). A
+track whose every view is back-facing has no eligible view, and so no bitmap
+(§ "The stored bitmap"). A view with no angle reading is not back-facing.
 
-- **Where any eligible view sees the patch at less than `90°`**, the pick is
-  made from the eligible views at `90°` or less (and those with no angle
-  reading), with `θ` as read. The views at more than `90°` are excluded, as
-  they are today.
-- **Where every eligible view sees the patch at `90°` or more**, the pick is
-  made from all of them, with the angle measured against the flipped normal
-  `−n`: `θ' = 180° − θ`.
-
-Why measuring against `−n` is sound there: a tile samples the same points of
-the patch's grid in every view, so a tile rendered from behind the patch is
-laid out like one from in front, sample for sample, and all the views of such
-a point see the patch from the same side. The likely cause is a normal that
-points into the surface, and under that reading `θ'` is the angle each view
-sees the surface at. The fused mean the stored bitmap holds today for these
-points is a mean of the same tiles (it leaves out a view that does not
-project the point, not a view behind the patch), so a single view's
-tile is as consistent with the others as the mean was, and sharper. Normal
-refinement's obliquity prior already weights by `|v̂ · n|`, which is the same
-for both sides.
-
-**Views on both sides.** Where some views face the patch and some see it from
-behind, the facing side is kept, as above, and the views behind are excluded.
-That keeps today's pick on every track that has a facing view (up to the
-cost's own changes), and changes only the points that store a fused mean
-today because every view is at `90°` or more. The alternative, picking the
-side that more views, or the lowest-cost view, see, would turn a point's
-reference to the back of its patch on a track where most views happen to be
-behind a normal that is nearly edge on to them, which is a normal that normal
-refinement should correct rather than one the reference should follow. The
-mixed tracks are counted during the tuning.
+This is the maintainer's decision, and it reverses what this draft first
+proposed: to pick a side of the patch, and, where every eligible view sees the
+patch at `90°` or more, to pick among them with the angle measured against the
+flipped normal (`θ' = 180° − θ`). The reason is that patches are not drawn on
+such views. The 3D viewer culls a patch whose outward normal faces away from
+the camera ([`patch.wgsl`](../../crates/sfm-explorer/src/shaders/patch.wgsl),
+at `dot(u × v, camera − centre) ≤ 0`, which takes in `90°` exactly), Image
+Detail draws no ghost outline of a bench track's patch in a view that sees its
+back face (`OrientedPatch::is_front_facing`, in
+[`image_detail/bench_track.rs`](../../crates/sfm-explorer/src/image_detail/bench_track.rs)),
+and view selection admits no candidate view the patch does not face
+([`view_selection.rs`](../../crates/sfmtool-core/src/patch/view_selection.rs)).
+A view the patch is never drawn on is not one whose tile should stand for the
+patch. A track seen only from behind has a normal that points into the
+surface, which normal refinement should correct; the reference does not follow
+it.
 
 The best pair ZNCC that the agreement shortfall is read against is the best
-among the views the pick is made from: eligible and on the chosen side.
+among the views the pick is made from: the eligible ones.
 
 ## The stored bitmap
 
@@ -308,7 +302,8 @@ always the stored view, and `render_patch_bitmap` returns the pick's tile or
 nothing.
 
 **A point with no eligible view gets no bitmap** and the reference `-1`: no
-view has 90% of the patch on its photograph, or none renders a tile. The
+view has 90% of the patch on its photograph, none renders a tile, or every
+view is back-facing. The
 maintainer set the floor so that a tile under it is not a reference, so the
 rule does not fall back to the most covered view under it. The kernels report
 no bitmap the way they report a point with fewer than two views today
@@ -348,7 +343,7 @@ that picks a row, which is now every evaluation where some row is eligible).
   its template (`TemplateKind::FusedMean`, `"fused_mean"` in Python) where the
   point has no reference and the rule picks none it would store. That template
   goes: where no reference is eligible, the point is not extended, with a new
-  skip reason beside `too_few_references` (proposed: `no_reference_view`).
+  skip reason beside `too_few_references`, `no_reference_view`.
 - **The bench's bitmap for judging** is the rule's pick among every row with a
   keypoint, or their fused mean today; it becomes the pick, or no bitmap where
   no row is eligible.
@@ -382,8 +377,7 @@ pub struct ReferenceViewOptions {   // impl Default, the starting values above
     pub unread_radius: f64,         // 1, r where no view has a radius
 }
 pub enum ReferenceTerm { Sharpness, Angle, Agreement, Cells, Coverage, Clipped }
-pub enum ReferenceExclusion { NoTile, Coverage, OtherSide }
-pub enum PatchSide { Front, Back }   // Back: angles measured against −n
+pub enum ReferenceExclusion { NoTile, Coverage, BackFacing }
 pub struct ReferenceCost {
     pub radius: f64, pub radius_read: bool, // r, and whether it was the view's own
     pub angle_term: f64,                    // c·tanθ, grid px
@@ -393,7 +387,6 @@ pub struct ReferenceCost {
 }
 pub struct ReferenceChoice {
     pub reference: Option<usize>,
-    pub side: Option<PatchSide>,
     pub costs: Vec<Result<ReferenceCost, ReferenceExclusion>>,
 }
 pub fn choose_reference_view(views: &[ReferenceReadings], resolution: usize,
@@ -402,8 +395,8 @@ pub fn choose_reference_view(views: &[ReferenceReadings], resolution: usize,
 
 - `ReferenceTest`, `ReferenceFallback`, `ReferenceChoice::fallback` and
   `ReferenceChoice::rejected_by` go. `REFERENCE_MAX_VIEWING_ANGLE_DEG` goes,
-  replaced by the angle term, and `REFERENCE_FACING_LIMIT_DEG` by the choice
-  of side. The constants `REFERENCE_MIN_COVERAGE`,
+  replaced by the angle term, and `REFERENCE_FACING_LIMIT_DEG` by the
+  back-facing limit. The constants `REFERENCE_MIN_COVERAGE`,
   `REFERENCE_MAX_CLIPPED_SHARE`, `REFERENCE_MAX_CELL_DEFICIT` and
   `REFERENCE_AGREEMENT_MARGIN` become the bands of `ReferenceViewOptions`,
   so the tuning can sweep them without rebuilding. `REFERENCE_MIN_JUDGED_CELL_ZNCC` and
@@ -425,12 +418,12 @@ pub fn choose_reference_view(views: &[ReferenceReadings], resolution: usize,
 
 **The wire** ([mcp-server.md](../gui/mcp-server.md#the-bench-family)): each
 `in` row's `reference_view` becomes `{"is_reference", "cost", "cost_ratio",
-"terms", "costliest_term", "excluded_by", "side"}`, with `cost_ratio` the
+"terms", "costliest_term", "excluded_by"}`, with `cost_ratio` the
 row's cost over the pick's, `terms` an object of the radius, the angle term
 and the four factors, `costliest_term` one of `"sharpness"`, `"angle"`,
 `"agreement"`, `"cells"`, `"coverage"`, `"clipped"` or null for the pick,
-`excluded_by` one of `"no_tile"`, `"coverage"`, `"other_side"` or null, and
-`side` `"front"` or `"back"`. `rejected_by` and `fallback` go.
+and `excluded_by` one of `"no_tile"`, `"coverage"`, `"back_facing"` or null.
+`rejected_by` and `fallback` go.
 `reference_view_observation` stays and is null only where no row is eligible.
 
 **The Python bindings** carry the same dict on each observation's `"track"`
@@ -442,10 +435,10 @@ the reference and the pick stay (green, red, grey). Every other row's first
 line is its cost over the pick's and the word for its costliest term, with
 today's words (`less sharp`, `oblique`, `agrees less`, `ninth differs`,
 `partial`, `clipped`), for example `×1.25 oblique`; an excluded row reads
-`partial` for the coverage floor, `no tile` or `other side`. The second line
+`partial` for the coverage floor, `no tile` or `back facing`. The second line
 stays the viewing angle and the pair ZNCC. The hover lists the radius (and
-whether it was the row's own), the angle term, each factor beside its band
-and scale, and the side. The *No reference* case for a fused mean and
+whether it was the row's own), the angle term and each factor beside its band
+and scale. The *No reference* case for a fused mean and
 `ReferenceRows::pick_by_last_fallback` go; `ReferenceMark::ReferenceWithoutPick`
 stays for a track where no row is eligible.
 
@@ -496,11 +489,14 @@ addition.
 On constructed readings: the case of Problem 1 picking the 20° view; each
 penalty `1` inside its band and growing at its scale past it; a view at the
 coverage floor eligible and one just under it excluded; a track whose every
-view is behind the patch picking by `θ'`, and a track with views on both sides
-picking among the facing ones; each kind of missing reading, including a track
-where no view has a radius; a view at exactly 90°; the tie breaks; and the
-costliest term of each view summing with the others to its cost over the
-pick's. On the stored bitmap: that a point whose every view is behind the
-patch, and one whose best view covers between 0.9 and 0.99 of its tile, store
-a view's tile and name it, and that a point with no view at 0.9 coverage gets
-no bitmap and `-1`.
+view is behind the patch with no eligible view, and a track with views on
+both sides picking among the front-facing ones; each kind of missing reading,
+including a track where no view has a radius; a view at exactly 90° excluded;
+the tie breaks; and the costliest term of each view summing with the others
+to its cost over the pick's. On the stored bitmap: that a point whose best
+view covers between 0.9 and 0.99 of its tile stores that view's tile and
+names it, and that a point whose every view is behind the patch, and one with
+no view at 0.9 coverage, get no bitmap and `-1`, as a whole-cloud render gives
+such a point a zero row and `-1`. The localizer and the sub-pixel refiner
+leave every keypoint where it was, unscored, where no view is eligible, and
+Add Image to Tracks refuses such a point as `no_reference_view`.

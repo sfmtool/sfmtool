@@ -35,8 +35,8 @@ pub use agreement::{cell_agreement, pair_zncc_grid, CellAgreement};
 #[cfg(test)]
 pub(crate) use agreement::{cell_agreement_from_pairs, finite_middle};
 pub use rule::{
-    choose_reference_view, PatchSide, ReferenceChoice, ReferenceCost, ReferenceExclusion,
-    ReferenceReadings, ReferenceStanding, ReferenceTerm, ReferenceViewOptions,
+    choose_reference_view, ReferenceChoice, ReferenceCost, ReferenceExclusion, ReferenceReadings,
+    ReferenceStanding, ReferenceTerm, ReferenceViewOptions,
 };
 pub use tile::{clipped_share, render_view_tile, ViewTile};
 pub use track::{read_track, readings_of, tile_semi_axes, TrackReading};

@@ -30,7 +30,7 @@ across views, and everything refined on top of it. Implemented in
 |----------|-------------|
 | [patch-keypoint-localization.md](patch-keypoint-localization.md) | Placing each view of a point by aligning it, in one pass, to the point's reference render; the gates, and how the alignment was measured against congealing. |
 | [keypoint-localization-search-cache.md](keypoint-localization-search-cache.md) | The per-view context tile and the AVX2 search kernels that make the search affordable; the "+"-descent and the whole-grid search. |
-| [keypoint-subpixel-refinement.md](keypoint-subpixel-refinement.md) | Forward-additive ECC Gauss-Newton subpixel refinement against the reference render, with an analytic Jacobian; the stored bitmap and the fused mean. |
+| [keypoint-subpixel-refinement.md](keypoint-subpixel-refinement.md) | Forward-additive ECC Gauss-Newton subpixel refinement against the reference render, with an analytic Jacobian; the stored bitmap of the reference observation. |
 
 ## Clusters and tracks
 

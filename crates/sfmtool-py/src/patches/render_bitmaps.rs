@@ -36,8 +36,8 @@ impl PyPatchCloud {
     /// the observation rendered, and it is returned unchanged, so a
     /// reconstruction whose bitmaps were dropped renders the same bitmaps
     /// again. Where it stores ``-1``, the reference-view rule picks the
-    /// observation among the point's whole track; where the rule picks none,
-    /// the bitmap is the fused mean of the views and names no observation. For
+    /// observation among the point's whole track; where the rule finds no
+    /// eligible view, the point gets a zero row and ``-1``. For
     /// a point at ``-1``, a bitmap here equals what :meth:`refine_keypoints`
     /// renders for a patch whose keypoints it did not move and whose every
     /// view passes the refiner's projection gate, since the refiner runs the
@@ -72,9 +72,9 @@ impl PyPatchCloud {
     ///     takes them. A point with a stored reference whose photograph is
     ///     missing gets a zero row and keeps its reference. A point with no
     ///     patch (a zero patch frame) gets a zero row and keeps the reference
-    ///     it stores. A point at ``-1`` with fewer than two observations, or
-    ///     any point at ``-1`` with ``referenced_only``, gets a zero row and
-    ///     ``-1``.
+    ///     it stores. A point at ``-1`` with fewer than two observations or no
+    ///     eligible view, or any point at ``-1`` with ``referenced_only``, gets
+    ///     a zero row and ``-1``.
     // This is a Python docstring (rendered by `help()`), not Rust prose: its
     // indented `Args:` / `Returns:` continuation paragraphs read as Markdown
     // indented code blocks, which rustdoc then tries to parse as Rust.

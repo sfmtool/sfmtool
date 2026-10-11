@@ -758,16 +758,17 @@ pub struct TrackPayload {
     /// [`Self::at_infinity`].
     pub placement: Option<OrientedPatch>,
     /// The `(R, R, C)` patch bitmap: the render of the reference observation
-    /// [`Self::reference`] names, or, where it names none, a mean of the `in`
-    /// observations' renders (a bitmap fused before the reference was recorded,
-    /// or one the reference-view rule found no view for).
+    /// [`Self::reference`] names, or, where it names none, a bitmap that is not
+    /// the render of one of the track's observations (a fused mean an older
+    /// file stores, or a bitmap for judging).
     pub bitmap: Option<Array3<u8>>,
     /// The track's **reference observation**, as an index into the track's
     /// observations: the observation [`Self::bitmap`] is, or is to be,
     /// rendered from. With a bitmap, the bitmap is that observation's render.
     /// `None` means the track has no reference observation: a bitmap beside
-    /// it is not the render of an observation the track has (a fused mean, or
-    /// the render of an observation since removed from the point). Without a
+    /// it is not the render of an observation the track has (a fused mean an
+    /// older file stores, the render of an observation since removed from the
+    /// point, or a bitmap for judging). Without a
     /// bitmap it is the reference the track carries until the next render,
     /// read from the point's stored reference or kept from a bitmap a step
     /// made stale.
@@ -813,9 +814,10 @@ pub struct TrackPayload {
     /// because no `in` row could hold the reference. The live evaluation
     /// ([`evaluate_rendering_bitmap`](super::evaluate::evaluate_rendering_bitmap))
     /// makes one where the render from the `in` rows gives no bitmap (every
-    /// row is `out`, or fewer than two `in` rows carry a keypoint), from the
-    /// reference-view rule's pick among every row that carries a keypoint,
-    /// `in` or `out`. Without it, a track whose `in` set emptied could never
+    /// row is `out`, fewer than two `in` rows carry a keypoint, or the
+    /// reference-view rule finds no `in` row eligible), from the rule's pick
+    /// among every row that carries a keypoint, `in` or `out`, where it picks
+    /// one. Without it, a track whose `in` set emptied could never
     /// be scored again, and loosening a bar could bring no row back.
     ///
     /// It names no reference ([`Self::reference`] is `None`), a step that

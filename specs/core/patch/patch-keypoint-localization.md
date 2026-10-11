@@ -146,11 +146,10 @@ placed against the same pixels every score on the bench reads them against.
 2. Where the caller passes none, or the one it passes is turned away by the
    grazing pre-filter, the reference-view rule picks one from the views' renders
    at their starting keypoints, as every render of the stored bitmap does.
-3. Where the rule picks no view, the template is the **fused mean** of
-   the views at their starting keypoints (the IRLS-weighted mean of
-   [keypoint-subpixel-refinement.md](keypoint-subpixel-refinement.md#the-fused-mean)),
-   which is then the point's stored bitmap. No view is held fixed, and every
-   view is searched.
+3. Where the rule finds no eligible view
+   ([reference-view.md](reference-view.md#hard-limits)), there is no
+   reference and no template: every view keeps its starting keypoint, unscored
+   (step 3 of the algorithm below), and the point has no stored bitmap.
 
 A view set of one view is its own reference. The resolution is one function,
 `resolve_reference`, which the sub-pixel refiner calls too, with the same
@@ -194,8 +193,8 @@ For one point with view set `G`:
    the view is chosen once, at that keypoint.
 3. **Resolve the reference** and render the template, as above. Where nothing
    renders to align to (the reference's tile leaves the frame or is flat at its
-   keypoint, its keypoint does not map onto the patch plane, or no fused mean
-   renders), there is no reference: every view, the given reference included,
+   keypoint, its keypoint does not map onto the patch plane, or the rule finds
+   no eligible view), there is no reference: every view, the given reference included,
    keeps its starting keypoint exactly as given, unscored, and still faces the
    `max_shift_px` gate. The refiner does the
    same, so both report no reference for such a point.
@@ -225,7 +224,7 @@ For one point with view set `G`:
    bench reads a row against the stored bitmap
    ([blur-matched-zncc.md](blur-matched-zncc.md) § "Scores against the stored
    bitmap"): the template as a stored bitmap (the reference's tile rendered at
-   its keypoint by `render_view_tile`, or the fused mean), the view's tile
+   its keypoint by `render_view_tile`), the view's tile
    rendered at its final keypoint, and `BitmapScorer` blurring the bitmap
    alone to the tile's sharpness where it is sharper along every direction.
    The bitmap's blur assessment is read once per point, when the first view
@@ -239,7 +238,7 @@ the continuous refiner
 ([keypoint-subpixel-refinement.md](keypoint-subpixel-refinement.md)), which runs
 after this. It resolves the reference by the same function, with the same
 grazing pre-filter, so given the reference this reports it aligns to the same
-observation's render; where this aligned to the fused mean, it resolves again
+observation's render; where this reports no reference, it resolves again
 from the kept views at their new keypoints.
 
 **Every render is from the source photograph.** The context tile is rendered
@@ -289,7 +288,7 @@ input order:
   `NaN` for a view that was not searched, and for every view when both gates
   are off;
 - `reference`: the image index of the reference observation the views were
-  aligned to, or `None` where they were aligned to the fused mean or to nothing.
+  aligned to, or `None` where they were aligned to nothing.
 
 ## Parameters (defaults)
 
@@ -304,7 +303,7 @@ input order:
 | `resolution` | 24 | the `R×R` patch grid the template and the ZNCC are scored on |
 | `window` | `GaussianDisk { sigma: 0.6 }` | per-pixel scoring weight and support, shared with [normal refinement](patch-normal-refinement.md) |
 | `sampler` | the sampler rule | which sampler renders each view's tiles, chosen once per view at its starting keypoint ([image-warping.md](../camera/image-warping.md) § "Choosing the sampler per view"), so the localizer reads a view through the sampler the bench and the stored bitmap read it through |
-| `robust_iters` | 3 | IRLS passes for the fused mean, where it is the template |
+
 | `search_strategy` | `Exhaustive` | how each view's shift grid is traversed: `Exhaustive` or `PlusDescent`; see [How the alignment was measured](#how-the-alignment-was-measured) |
 
 The patch size is carried by the frame the kernel is handed (the `(u, v)`
@@ -686,8 +685,8 @@ faster.
 **The render path is shared.** Each view's context tile is rendered by
 `WarpMap::from_patch` and the sampler's remap, over the patch cloud's frame
 ([patch-cloud.md](patch-cloud.md)), which is camera-model agnostic through
-`ray_to_pixel`. The z-normalization and the fused mean's robust consensus are
-shared with [normal refinement](patch-normal-refinement.md) (`pub(super)`), not
+`ray_to_pixel`. The z-normalization is shared with
+[normal refinement](patch-normal-refinement.md) (`pub(super)`), not
 duplicated, and the reference-view rule's render is
 `stored_bitmap::render_reference`, the one every writer of the stored bitmap
 calls.

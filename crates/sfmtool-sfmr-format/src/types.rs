@@ -1050,7 +1050,8 @@ pub struct SfmrData {
     /// this observation. [`NO_REFERENCE_OBSERVATION`] (`-1`) where the point
     /// has no reference observation in its track: a stored bitmap is then not
     /// the render of one of the point's observations -- a fused mean (from
-    /// before version 12, or where the reference-view rule stores one), or the
+    /// before version 12, or a file written before the stored bitmap stopped
+    /// being a mean), or the
     /// render of an observation that has since been removed from the point --
     /// and a later render runs the reference-view rule for the point. A writer that
     /// drops the bitmaps keeps the column, since it is required with the patch

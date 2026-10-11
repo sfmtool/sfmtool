@@ -198,12 +198,12 @@ thereafter (the per-round obliquity drop).
    ([keypoint-subpixel-refinement](keypoint-subpixel-refinement.md)) then
    refines the keypoints against the same reference **and renders each point's
    stored bitmap at them** (`refine_keypoints(render_bitmaps=True)`): the tile
-   of the reference observation, rendered at its keypoint, or the fused mean of
-   the views where there is none — points at infinity included, via the same
-   `w`-aware render path — reporting per-point validity and the reference's
-   image, which the output records as the point's reference observation (a point
-   with fewer than two views, or with no reference and fewer than two views in
-   frame for the mean, gets no bitmap).
+   of the reference observation, rendered at its keypoint — points at infinity
+   included, via the same `w`-aware render path — reporting per-point validity
+   and the reference's image, which the output records as the point's
+   reference observation (a point with fewer than two views, or with no
+   reference because the reference-view rule finds no eligible view, gets no
+   bitmap).
 6. **Cull unsupported points (per point).** Drop any point whose kept-view count
    fell below `min_views`, **and** any point the sub-pixel pass produced no
    valid bitmap for — one uniform rule for finite and infinity points

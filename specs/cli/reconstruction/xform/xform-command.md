@@ -565,8 +565,8 @@ each point keeps its stored reference in `tracks/reference_observations`, as
 the observation of that image in its rebuilt track, wherever that image is
 still in the track, since no bitmap is written for it to disagree with; a
 point that stores none, or whose stored image left the track, records the
-reference its views were aligned to, or `-1` where they were aligned to the
-fused mean) —
+reference its views were aligned to, or `-1` where they were aligned to
+nothing) —
 re-run `--refine-keypoints` or `--refine-normals` to regenerate them (both
 render bitmaps by default); there is no `bitmaps` key on this op. Because it is
 photometric it reads the workspace source images, so those must still be
@@ -744,7 +744,8 @@ this reason. A point at `-1` gets the tile of the observation the
 reference-view rule picks among its track, rendered at that observation's
 keypoint, and its entry records which observation it is
 ([reference-view.md](../../../core/patch/reference-view.md) § "The stored
-bitmap"); where the rule picks none, the fused mean of the views, recording `-1`. A `-1` beside a stored
+bitmap"); where the rule finds no eligible view, the point gets a zero row and
+keeps `-1`. A `-1` beside a stored
 bitmap means the point has no reference observation in its track; the bitmap
 can then be the render of an observation a step removed from the point, since
 `--filter-by-image-range`, `--include-by-distribution` and the other steps
@@ -769,10 +770,9 @@ For a point at `-1`, its bitmap therefore equals what `--refine-keypoints`
 renders for a patch whose keypoints it did not move and whose every view passes the refiner's projection
 gate (the refiner runs the rule over the views that pass it), and what the
 bench commits. `--refine-normals` picks the reference view among every input
-view as well, but where it stores the fused mean it fuses the views the normal
-refinement kept, with an obliquity weight, so a file whose bitmaps came
-from `--refine-normals` does not round-trip bit-exactly through
-`--drop-patch-bitmaps --add-patch-bitmaps`.
+view as well, records it, and renders every point with a reference again from
+the stored keypoints and frame; a point the rule finds no eligible view for
+gets no bitmap there either.
 
 #### What the four steps do not touch
 

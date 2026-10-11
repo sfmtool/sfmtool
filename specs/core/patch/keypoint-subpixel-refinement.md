@@ -60,14 +60,6 @@ pub fn refine_view_against_reference(
     target_keypoint: [f64; 2],
     params: &KeypointSubpixelParams,
 ) -> Option<([f64; 2], f64)>;              // the keypoint and its ECC score
-
-pub fn fuse_patch_bitmap(
-    patch: &OrientedPatch,
-    views: &[ProjectedImage<'_>],
-    view_set: &[u32],
-    keypoints: &[[f64; 2]],
-    params: &KeypointSubpixelParams,
-) -> Option<Vec<u8>>;
 ```
 
 **Why it is shaped this way.**
@@ -89,10 +81,10 @@ pub fn fuse_patch_bitmap(
   `0.1`, about 84°) runs before each round's sub-pixel pass and drops a
   reference like any other view; the refiner is then given a reference that
   is not in its view set, sets it aside, and the rule picks again from the
-  views left, which is the reference the output records. Where the localizer aligned to the fused mean (it
-  reported no reference), the refiner resolves again from the views and
+  views left, which is the reference the output records. Where the localizer
+  reported no reference, the refiner resolves again from the views and
   keypoints it is handed, which are the localizer's kept views at their new
-  keypoints: the rule may then pick a view it would store, and that view's
+  keypoints: the rule may then find an eligible view, and that view's
   render is the point's stored bitmap after the refinement, so it is what the
   refiner aligns to.
 - **`refine_view_against_reference` refines one view and nothing else.** Adding
@@ -105,8 +97,6 @@ pub fn fuse_patch_bitmap(
   refinement's grid, the reference does not render in frame or has a different
   channel count from the target, the target does not project into its frame,
   or the target's core is out of frame at its seed.
-- **`fuse_patch_bitmap` is the same kernel with nothing moving** (below), for a
-  caller whose keypoints are settled and that wants only the fused mean.
 - **The batch form is parallel over points** (rayon). Its `Progress` receives a
   `patches` count, is polled for cancellation before each patch, and, when
   detailed, times each sampler's renders in its own detail phase. The PyO3
@@ -183,24 +173,20 @@ Accuracy," ICCV 2005; generalized to parametric alignment in Evangelidis &
 Psarakis 2008). It is the continuous form of the score the localizer's grid
 search maximizes.
 
-**The template is the reference render**, fixed for the whole pass:
-
-- the point's reference observation's core at its own starting keypoint,
-  rendered with that observation's sampler; or
-- where the point has no reference observation and the reference-view rule
-  picks none it would store, the **fused mean** of the views at their starting
-  keypoints (below), with no view held fixed.
+**The template is the reference render**, fixed for the whole pass: the point's
+reference observation's core at its own starting keypoint, rendered with that
+observation's sampler.
 
 It is never blurred: a blurred template places views no closer and lowers the
 peak's curvature ([sharper-patch-bitmap.md](../../drafts/sharper-patch-bitmap.md)
 Part 6). Since `T` does not depend on the offsets, the views are independent of
-each other, and each is refined **once**. Where nothing renders to align to
-(fewer than two views project, the reference's core is out of frame or flat at
-its keypoint, or its keypoint does not map onto the patch plane), every view
-keeps its seed, unscored, and there is no reference: the localizer does the
-same, so a point whose reference cannot be rendered comes out of both kernels
-with `reference` `None`, and its stored bitmap, when rendered, is the fused
-mean.
+each other, and each is refined **once**. Where there is nothing to align to
+(fewer than two views project, the point has no reference observation and the
+reference-view rule finds no eligible view, the reference's core is out of
+frame or flat at its keypoint, or its keypoint does not map onto the patch
+plane), every view keeps its seed, unscored, and there is no reference: the
+localizer does the same, so such a point comes out of both kernels with
+`reference` `None`, and it has no stored bitmap.
 
 ## Algorithm: ECC (forward-additive Gauss–Newton)
 
@@ -235,7 +221,7 @@ re-anchored patch centre, as the localizer does
 | `resolution` | 24 | the `R×R` grid the template and the per-view ECC are scored on |
 | `window` | `GaussianDisk { sigma: 0.6 }` | per-pixel scoring weight and support |
 | `sampler` | the sampler rule | which sampler renders each view, chosen once per view at its seed keypoint ("Sampling") |
-| `robust_iters` | 3 | IRLS passes for the fused mean, where it is the template and the stored bitmap |
+
 | `max_gn_steps` | 10 | Gauss–Newton steps per view |
 | `convergence_px` | 0.01 | stop once an accepted step is below this, patch-grid px |
 | `max_offset_px` | 2 | the furthest a view may move from its seed, patch-grid px |
@@ -260,7 +246,7 @@ fractional `δ`, through the existing render machinery.
   read too coarsely and `BilinearMip` otherwise
   ([image-warping.md](../camera/image-warping.md) § "Choosing the sampler per
   view"). **Each view's sampler is chosen once**, for the observation at its
-  seed keypoint, and the refine tile, every core read and the fused mean use
+  seed keypoint, and the refine tile and every core read use
   it: the core only slides in the patch's plane, so its Jacobian, and the
   choice, hardly change as it moves. The reference's tile the stored bitmap is
   taken from (`render_view_tile`) applies the same rule on its own, at its
@@ -332,8 +318,8 @@ adapted to fractional reads:
   template: `1.0` for the reference, `NaN` where the view could not be scored
   (fewer than two views, or no template rendered);
 - `reference`: the reference observation the views were aligned to, as an index
-  into `views`, or `None` where the template was the fused mean or there was
-  none. It is reported whether or not `render_bitmaps` is on, so a caller that
+  into `views`, or `None` where there was none. It is reported whether or not
+  `render_bitmaps` is on, so a caller that
   refines without bitmaps still stores which observation the keypoints were
   aligned to; with `render_bitmaps` it names the view `representative` is the
   tile of;
@@ -341,8 +327,7 @@ adapted to fractional reads:
   `refine_keypoints(render_bitmaps=True)`), the point's **stored bitmap**,
   `R·R·4` RGBA, as [reference-view.md](reference-view.md#the-stored-bitmap)
   describes: the reference's `R×R` tile at its keypoint, which the refinement
-  did not move, or, where there is no reference, the fused mean of the views at
-  their final keypoints.
+  did not move, or `None` where there is no reference.
 
 Two properties of the bitmap matter to consumers:
 
@@ -350,44 +335,24 @@ Two properties of the bitmap matter to consumers:
   choice by default, the same sampler its refinement read it with.
 - **`None` is the uniform culled-point signal.** A point with fewer than two
   views after the projection gate has no bitmap, and so does a point with no
-  reference where fewer than two views render in frame for the fused mean,
-  finite and infinity alike (a `w = 0` point renders through the same path and
-  gets a real bitmap, not a zero row). `sfm embed-patches` **drops** such points
-  instead of keeping them with an all-black bitmap.
+  reference, finite and infinity alike (a `w = 0` point renders through the
+  same path and gets a real bitmap, not a zero row). `sfm embed-patches`
+  **drops** such points instead of keeping them with an all-black bitmap.
 
 How `sfm embed-patches` records each point's reference observation and renders
 its stored bitmap from it is in
 [embed-patches-command.md](../../cli/reconstruction/embed-patches-command.md).
 
-### The fused mean
+### The stored bitmap of settled keypoints
 
-Where the point has no reference observation and the reference-view rule picks
-no view (no view is eligible: none renders a tile with at least 90% of it on
-the photograph), the
-stored bitmap is the views' fused mean: the views are rendered at their final
-offsets, IRLS view weights are built from those cores, and the kept views are
-rendered whole (`PatchViewStack`) and fused, weighted-mean RGB and
-agreement·coverage alpha, the fusion normal refinement uses
-(`PatchViewStack::fuse`, shared between the two modules). The mean weights each
-view by its agreement with the mean alone, which favours views as blurry as the
-mean over sharper ones, which is why it is the fallback rather than the stored
-bitmap ([../../drafts/sharper-patch-bitmap.md](../../drafts/sharper-patch-bitmap.md)).
-The same mean, at the starting keypoints, is the template where there is no
-reference.
-
-**Fusing without refining.** `fuse_patch_bitmap(patch, views, view_set,
-keypoints, params)` renders the fused mean for a patch whose keypoints are
-settled: the kernel above with `max_gn_steps = 0` and the mean asked for,
-seeded at `keypoints`, so nothing moves, no reference is resolved, and the pass
-only renders and blends. It returns `None` when fewer than two views render in
-frame. The stored bitmap of settled keypoints is
-[`render_patch_bitmap`](../../../crates/sfmtool-core/src/patch/stored_bitmap.rs),
-which calls it as its fallback, and `render_patch_cloud_bitmaps` is its
-whole-cloud form, parallel over points: `PatchCloud.render_bitmaps`, `sfm xform
---add-patch-bitmaps`, the viewer's display bitmaps for a file that carries
-patch frames and no bitmaps, and a bench fit
-([reference-view.md](reference-view.md#the-stored-bitmap)).
-
+The stored bitmap of a point whose keypoints are settled is
+[`render_patch_bitmap`](../../../crates/sfmtool-core/src/patch/stored_bitmap.rs):
+the tile of the view the reference-view rule picks among the views at the
+given keypoints, moving nothing, or `None` where it finds no eligible view.
+`render_patch_cloud_bitmaps` is its whole-cloud form, parallel over points:
+`PatchCloud.render_bitmaps`, `sfm xform --add-patch-bitmaps`, the viewer's
+display bitmaps for a file that carries patch frames and no bitmaps, and a
+bench fit ([reference-view.md](reference-view.md#the-stored-bitmap)).
 ## Validation
 
 It produces a better sub-pixel result than a parabolic or discrete estimate, so
@@ -422,6 +387,9 @@ it is not validated by equivalence to one:
   warp and the projection already handle `w = 0`, so the same objective,
   sampling and Jacobian apply; normal refinement, by contrast, skips such
   patches.)
+- **No eligible view.** A patch every view sees from behind has no reference:
+  every view keeps its seed, unscored, and there is no stored bitmap
+  ([keypoint_subpixel/tests.rs](../../../crates/sfmtool-core/src/patch/keypoint_subpixel/tests.rs)).
 - **Guard correctness.** A flat, out-of-frame or non-improving case keeps the
   seed. A seed outside the basin is a contract violation the refiner does not
   detect: it may converge to a wrong nearby optimum.
