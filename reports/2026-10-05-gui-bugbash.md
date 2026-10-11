@@ -151,8 +151,8 @@ in `press_key`.
 ## 4. No drag or scroll input (medium)
 
 > _Status (2026-10-11): **Partially done** — a `drag` input tool
-> (`{panel_name, path_px, mouse_button, modifiers}`, one point per frame) landed in
-> PR #934; there is no `scroll` yet._
+> (`{panel_name, path_px, mouse_button, modifiers}`, one point per frame)
+> landed in PR #934; there is no `scroll` yet._
 
 The MCP input tools are `click`, `hover`, `press_key` and `type_text`. Every
 navigation gesture the tutorial teaches (drag to orbit, Shift+drag to pan,
