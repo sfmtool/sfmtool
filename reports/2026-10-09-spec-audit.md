@@ -320,7 +320,7 @@ Non-goals/deferrals checked: 3; no longer hold: 0
   - **Points at infinity are not mentioned.** The first step, `materialize_infinity_for_export` (:254), places `w = 0` points at a finite depth, so the output has none. Add a subsection.
   - Stdout: the paths are printed twice (`_undistort_images.py:605-611` and `undistort.py:119-122`), and the counts line is cameras/points/observations. "a single summary line" contradicts its own two-line example.
   - Errors: a missing `.sift`, an unreadable image and a failed `imwrite` also become `ClickException`.
-    > _Status (2026-10-10): **Not done** — still open for the spec, with one word changed: `undistort` writes through `write_image_rgb` / `write_image_rgba` now, not `imwrite`, and a failed write (`OSError`, or `ValueError` for a format that cannot be written at 8 bits) still becomes `ClickException`, branch `python-image-writes-via-rust`._
+    > _Status (2026-10-10): **Not done** — the finding's `imwrite` now reads `write_image_rgb` / `write_image_rgba`; a failed write still becomes `ClickException`, branch `python-image-writes-via-rust`._
   - The thumbnail is embedded in the output `.sfmr` as well as the `.sift`.
   - "a future revision may call `SfmrReconstruction.recompute_reprojection_errors()`" names a method that does not exist. Delete or move to `specs/drafts/`.
   - Failure 4: "produced by `_build_sfmr_data_dict` / `SfmrReconstruction.from_data`" → "computed from the surviving points when the output `.sfmr` is built". Failure 5: "explicitly ruled out as unnecessary" → "Descriptors are not re-extracted".

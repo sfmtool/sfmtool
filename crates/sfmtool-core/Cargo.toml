@@ -19,9 +19,10 @@ half = "2"
 # Photograph decoding (display thumbnails, display patch bitmaps) and the JPEG
 # atlas pages `web_export` writes.
 image = "0.25"
-# JPEG encoding for `ImageU8::write`: 4:2:0 chroma subsampling and a SIMD
-# forward DCT, so a JPEG is the size and speed OpenCV's is at the same quality,
-# which the `image` crate's own encoder (4:4:4 only) is not. Licensed
+# JPEG encoding for `ImageU8::write`: with 4:2:0 chroma subsampling a JPEG
+# matches the size of OpenCV's at the same quality, and one thread writes it at
+# about half OpenCV's speed; the `image` crate's own encoder (4:4:4 only) writes
+# files 14% larger at a quarter of OpenCV's speed. Licensed
 # "(MIT OR Apache-2.0) AND IJG"; the IJG credit is in THIRD-PARTY-NOTICES.md.
 jpeg-encoder = { version = "0.7.1", features = ["simd"] }
 nalgebra = "0.35"

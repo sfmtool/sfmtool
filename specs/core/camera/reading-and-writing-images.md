@@ -3,8 +3,10 @@
 sfmtool decodes an image file into pixels with one decoder and encodes pixels
 into an image file with one encoder, in Rust and in Python alike, so a value
 computed from the pixels is the same whichever side computed it, and no image
-array is in BGR order on its way to or from a file. Both are the `image` crate's, behind
-`ImageU8::read_rgb`, `ImageU8::read_rgba` and `ImageU8::write`; Python reaches
+array is in BGR order on its way to or from a file. They are behind
+`ImageU8::read_rgb`, `ImageU8::read_rgba` and `ImageU8::write`: the `image`
+crate decodes every format and encodes every format but JPEG, and the
+`jpeg-encoder` crate encodes JPEG. Python reaches
 the same functions through the bindings `sfmtool.fileio.read_image_rgb`,
 `read_image_rgba`, `write_image_rgb` and `write_image_rgba`. Every reader
 ignores the EXIF orientation tag, so a pixel is addressed by the row and column
@@ -66,12 +68,15 @@ which reads its width and height the same way.
 
 The writer errors, each naming the path: `TypeError` for an array that is not
 `uint8`; `ValueError` for an array of the wrong shape or with a side of 0, a
-side over 65535 in a JPEG, a `jpeg_quality` outside 1 to 100 (checked for
-every format, though only a JPEG uses it), an extension that names no format
-the encoder writes 8-bit pixels to, or `write_image_rgba` to a JPEG;
+`jpeg_quality` outside 1 to 100 (checked for every format, though only a JPEG
+uses it), an extension that names no format the encoder writes 8-bit pixels
+to, `write_image_rgba` to a JPEG, or an image the format's encoder refuses,
+such as a side over 65535 in a JPEG or over 16384 in a WebP;
 `FileNotFoundError` when the parent directory does not exist; and `OSError`
 when the file cannot be written otherwise. In Rust these are
-`ImageError::Unsupported`, `ImageError::Parameter` and `ImageError::IoError`.
+`ImageError::Unsupported`, `ImageError::Parameter`, `ImageError::Encoding` (the
+encoder's refusal; the image is encoded in memory, so it is never a file
+error) and `ImageError::IoError`.
 
 ## Layout
 
@@ -108,7 +113,9 @@ since OpenCV draws a tuple in whatever channel order the array has.
 - **Formats, reading.** The file's contents, not its extension, choose the
   decoder, so a PNG saved under a `.jpg` name reads as a PNG. The workspace
   `image` dependency is built with the crate's default formats, among them
-  JPEG, PNG, TIFF, BMP and WebP.
+  JPEG, PNG, TIFF, BMP and WebP. The decoder has limits of its own: it
+  refuses a WebP 16384 pixels wide, the largest WebP allows and one OpenCV
+  reads, with `OSError`.
 - **Formats, writing.** The output path's extension, in any case, chooses the
   encoder. `.jpg` and `.jpeg` write a baseline JPEG; `.png` writes a lossless
   PNG; any other extension whose format the `image` crate encodes 8-bit pixels
@@ -119,20 +126,33 @@ since OpenCV draws a tuple in whatever channel order the array has.
   writing its image back out under the same name raises `ValueError`. The
   image is encoded in memory, written to a temporary file beside the path and
   renamed into place, so a failed encode or write leaves neither a partial
-  file nor a changed old one.
+  file nor a changed old one. On Windows a file another process holds open,
+  as Python's `open` does, cannot be replaced by a rename, though it can be
+  written; there the bytes are written to the path directly instead, and a
+  failure part way through that write can leave a partial file.
 - **JPEG quality.** `jpeg_quality` is 1 to 100 and defaults to
   `DEFAULT_JPEG_QUALITY`, 95, the default of OpenCV's `cv2.imwrite`, so a
   command that names no quality gets the quality OpenCV gave it. Commands
   with a `--jpeg-quality` option (`pano2rig`, `to-nerfstudio`) pass it
   through. The encoder is the `jpeg-encoder` crate's, set as libjpeg's
   defaults are: 4:2:0 chroma subsampling, each chroma sample the average of
-  its 2 x 2 block, and the standard Huffman tables (its optimized tables are
-  off, because with them it wrote 4:2:0 files that decoded wrongly). On the 85
-  `dino_dog_toy` photographs (2040 x 1536) at quality 95 its files are the
-  size of OpenCV's (65.6 MB against 65.4 MB) with the same mean absolute
-  error after decoding (0.197 grey levels against 0.196), and one thread
-  writes them in 1.9 s against OpenCV's 1.0 s; with the GIL released, eight
-  threads take 0.4 s. `jpeg-encoder` is licensed "(MIT OR Apache-2.0) AND
+  its 2 x 2 block, and the standard Huffman tables. Its optimized Huffman
+  tables are off because with them it writes each component in a scan of
+  its own: those files are valid and OpenCV decodes them, but our reader
+  (`image` 0.25.10 with zune-jpeg 0.5.15) returns wrong pixels for them
+  without an error.
+- **JPEG size, error and time.** Measured on the 85 `dino_dog_toy`
+  photographs (2040 x 1536) at quality 95, against `cv2.imwrite` at the same
+  quality. The size is the total of the 85 files. The error is the mean of
+  `|decoded - source|` over every `uint8` value (H x W x 3) of all 85
+  images, where each file is decoded with `read_image_rgb` and the source is
+  the photograph as `read_image_rgb` reads it. The time is the best of three
+  runs writing all 85 from one thread, the arrays already in memory. The files
+  are the size of OpenCV's (65.6 MB against 65.4 MB), with the same error
+  (0.225 grey levels against 0.224). One thread takes 2.1 to 2.3 s; OpenCV
+  took 1.0 to 2.2 s across runs on a shared machine, so the writer runs at
+  about half OpenCV's speed on one thread at worst. With the GIL released,
+  eight threads take 0.4 to 0.5 s. `jpeg-encoder` is licensed "(MIT OR Apache-2.0) AND
   IJG", and the credit the IJG licence asks for is in
   [THIRD-PARTY-NOTICES.md](../../../THIRD-PARTY-NOTICES.md).
 - **PNG compression.** A PNG is written at the `png` crate's fast compression

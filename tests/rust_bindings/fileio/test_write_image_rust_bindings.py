@@ -4,6 +4,7 @@
 """Tests for the image writers ``sfmtool.fileio.write_image_rgb`` and
 ``write_image_rgba``, the Rust encoder that Python writes images with."""
 
+import sys
 from pathlib import Path
 
 import cv2
@@ -140,6 +141,26 @@ def test_a_jpeg_side_over_65535_raises_value_error(tmp_path):
     with pytest.raises(ValueError, match="65535"):
         write_image_rgb(tmp_path / "wide.jpg", np.zeros((1, 65536, 3), np.uint8))
     assert list(tmp_path.iterdir()) == []
+
+
+def test_an_image_the_encoder_refuses_raises_value_error(tmp_path):
+    # WebP sides are at most 16384; the WebP encoder refuses a longer one.
+    with pytest.raises(ValueError, match="wide.webp"):
+        write_image_rgb(tmp_path / "wide.webp", np.zeros((1, 16385, 3), np.uint8))
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows file sharing")
+def test_a_file_held_open_by_python_is_replaced(tmp_path):
+    # Python opens a file on Windows without letting it be deleted, so the
+    # rename into place is refused and the writer writes the file in place.
+    path = tmp_path / "held.png"
+    write_image_rgb(path, _noise((4, 4, 3)))
+    second = _noise((3, 5, 3), seed=7)
+    with open(path, "rb"):
+        write_image_rgb(path, second)
+    np.testing.assert_array_equal(read_image_rgb(path), second)
+    assert [p.name for p in tmp_path.iterdir()] == ["held.png"]
 
 
 def test_the_wrong_shape_or_dtype_raises(tmp_path):

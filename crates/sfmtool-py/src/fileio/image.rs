@@ -119,11 +119,14 @@ fn read_error(path: &std::path::Path, e: image::ImageError) -> PyErr {
 /// encoded by `ImageU8::write` with the GIL released, in memory first, and
 /// then written to a temporary file beside `path` that is renamed into place,
 /// so a failed write leaves neither a partial file nor a changed old one.
+/// Where another process holds `path` open and the rename is refused, as on
+/// Windows, the file is written in place instead.
 ///
 /// Raises `TypeError` when `pixels` is not a `uint8` array; `ValueError` when
-/// it is not `(H, W, 3)` with `H` and `W` at least 1, when a side is too long
-/// for the format (65535 for JPEG), when `jpeg_quality` is outside 1 to 100,
-/// or when the extension names no format the writer encodes;
+/// it is not `(H, W, 3)` with `H` and `W` at least 1, when `jpeg_quality` is
+/// outside 1 to 100, when the extension names no format the writer encodes,
+/// or when the format's encoder refuses the image, such as a side longer than
+/// the format allows (65535 for JPEG, 16384 for WebP);
 /// `FileNotFoundError` when the parent directory does not exist; and `OSError`
 /// when the file cannot be written otherwise. Each message names the path.
 #[pyfunction]
@@ -195,14 +198,17 @@ fn to_image(
 }
 
 /// The Python exception for an image file that could not be written, naming
-/// `path`: `ValueError` for a format, channel count or quality the writer does
-/// not take, `FileNotFoundError` for a missing parent directory, and `OSError`
-/// otherwise.
+/// `path`: `ValueError` for a format, channel count, size or quality the
+/// writer does not take, `FileNotFoundError` for a missing parent directory,
+/// and `OSError` otherwise. An encoding error is a `ValueError`: the image is
+/// encoded in memory, so the encoder fails only on an image it refuses, never
+/// on the file.
 fn write_error(path: &std::path::Path, e: image::ImageError) -> PyErr {
     let message = format!("could not write image {}: {e}", path.display());
     match &e {
         image::ImageError::Unsupported(_)
         | image::ImageError::Parameter(_)
+        | image::ImageError::Encoding(_)
         | image::ImageError::Limits(_) => pyo3::exceptions::PyValueError::new_err(message),
         image::ImageError::IoError(io) if io.kind() == std::io::ErrorKind::NotFound => {
             pyo3::exceptions::PyFileNotFoundError::new_err(message)

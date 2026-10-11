@@ -475,3 +475,66 @@ fn write_jpeg_subsamples_chroma_420_and_decodes_cleanly() {
     let grey_back = ImageU8::read_rgb(&grey_path).unwrap();
     assert_eq!((grey_back.width(), grey_back.height()), (19, 11));
 }
+
+/// A file another process holds open, without letting it be deleted, as
+/// Python's `open` does on Windows, cannot be replaced by a rename; the write
+/// falls back to writing it in place.
+#[cfg(windows)]
+#[test]
+fn write_replaces_a_file_held_open_without_delete_sharing() {
+    use std::os::windows::fs::OpenOptionsExt;
+    const FILE_SHARE_READ: u32 = 0x1;
+    const FILE_SHARE_WRITE: u32 = 0x2;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("held.png");
+    gradient(4, 4, 3)
+        .write(&path, DEFAULT_JPEG_QUALITY)
+        .unwrap();
+    let held = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+        .open(&path)
+        .unwrap();
+
+    let second = gradient(5, 3, 3);
+    second.write(&path, DEFAULT_JPEG_QUALITY).unwrap();
+    drop(held);
+    assert_eq!(ImageU8::read_rgb(&path).unwrap().data(), second.data());
+    let names: Vec<_> = std::fs::read_dir(dir.path()).unwrap().collect();
+    assert_eq!(names.len(), 1, "the temporary file is removed");
+}
+
+/// With optimized Huffman tables, `jpeg-encoder` writes a 4:2:0 JPEG with each
+/// component in a scan of its own. The file is valid, and OpenCV decodes it,
+/// but our reader (`image` 0.25.10 with zune-jpeg 0.5.15) returns wrong pixels
+/// for it without an error. `ImageU8::write` keeps those tables off for that
+/// reason; this test passes once the reader decodes such files.
+#[test]
+#[ignore = "image 0.25.10 / zune-jpeg 0.5.15 misdecode a JPEG with one scan per component"]
+fn read_decodes_a_jpeg_with_one_scan_per_component() {
+    let dir = tempfile::tempdir().unwrap();
+    let (w, h) = (64u16, 64u16);
+    let data: Vec<u8> = (0..u32::from(h))
+        .flat_map(|y| (0..u32::from(w)).flat_map(move |x| [200, (x * 4) as u8, (y * 4) as u8]))
+        .collect();
+    let mut bytes = Vec::new();
+    let mut encoder = jpeg_encoder::Encoder::new(&mut bytes, DEFAULT_JPEG_QUALITY);
+    encoder.set_sampling_factor(jpeg_encoder::SamplingFactor::R_4_2_0);
+    encoder.set_optimized_huffman_tables(true);
+    encoder
+        .encode(&data, w, h, jpeg_encoder::ColorType::Rgb)
+        .unwrap();
+    let path = dir.path().join("scans.jpg");
+    std::fs::write(&path, &bytes).unwrap();
+
+    let back = ImageU8::read_rgb(&path).unwrap();
+    let mean_error = back
+        .data()
+        .iter()
+        .zip(&data)
+        .map(|(a, b)| f64::from(a.abs_diff(*b)))
+        .sum::<f64>()
+        / data.len() as f64;
+    assert!(mean_error < 6.0, "mean error {mean_error}");
+}

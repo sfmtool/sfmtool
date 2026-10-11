@@ -99,16 +99,24 @@ impl ImageU8 {
     ///
     /// The file is encoded in memory, written to a temporary file beside
     /// `path` and renamed into place, so a failed encode or write leaves
-    /// neither a partial file nor a changed old one. The errors are
+    /// neither a partial file nor a changed old one. Where the rename is
+    /// refused because another process holds `path` open (Windows reports
+    /// this as permission denied), the bytes are written to `path` directly
+    /// instead, as a plain `std::fs::write` would, and a failure part way
+    /// through that write can leave a partial file.
+    ///
+    /// The errors are
     /// [`ImageError::Unsupported`](::image::ImageError::Unsupported) for an
     /// extension that names no format the crate encodes, or a channel count
     /// the format cannot hold, among them 4 channels to JPEG, whose alpha is
     /// refused rather than dropped;
     /// [`ImageError::Parameter`](::image::ImageError::Parameter) for a
     /// `jpeg_quality` outside 1 to 100, a channel count other than 1, 3 or 4,
-    /// a side of 0, or a side over 65535 in a JPEG; and
-    /// [`ImageError::IoError`](::image::ImageError::IoError) when the file
-    /// cannot be written.
+    /// a side of 0, or a side over 65535 in a JPEG;
+    /// [`ImageError::Encoding`](::image::ImageError::Encoding) when the
+    /// format's encoder refuses the image, such as a WebP side over 16384;
+    /// and [`ImageError::IoError`](::image::ImageError::IoError) when the
+    /// file cannot be written.
     pub fn write(
         &self,
         path: &std::path::Path,
@@ -173,8 +181,13 @@ impl ImageU8 {
                 encoder.set_sampling_factor(jpeg_encoder::SamplingFactor::R_4_2_0);
                 encoder
                     .set_chroma_subsampling_method(jpeg_encoder::ChromaSubsamplingMethod::Average);
-                // Optimized Huffman tables stay off: with them, jpeg-encoder 0.7.1
-                // wrote 4:2:0 files our own reader decoded to garbage.
+                // Optimized Huffman tables stay off, though off is the
+                // default, to record the choice: with them the encoder writes
+                // each component in a scan of its own. Those files are valid
+                // and OpenCV decodes them, but our reader (image 0.25.10 with
+                // zune-jpeg 0.5.15) returns wrong pixels for them without an
+                // error; see the ignored test
+                // `read_decodes_a_jpeg_with_one_scan_per_component`.
                 encoder.set_optimized_huffman_tables(false);
                 let color_type = if self.channels == 1 {
                     jpeg_encoder::ColorType::Luma
@@ -308,8 +321,13 @@ impl ImageU8 {
 
 /// Write `bytes` to `path` through a temporary file beside it that is renamed
 /// into place, so a failed write leaves neither a partial file at `path` nor a
-/// changed old one. The temporary file is removed when the write or the rename
-/// fails.
+/// changed old one. The temporary file is removed whether or not the write
+/// succeeds.
+///
+/// On Windows a file another process holds open cannot be replaced by a
+/// rename, which fails with permission denied, though it can still be
+/// written. In that case the bytes are written to `path` directly, as
+/// `std::fs::write` alone would.
 fn write_via_temporary(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
     // The process id and a per-process count keep two writers apart, whether
     // they are threads of one process or separate processes.
@@ -317,11 +335,15 @@ fn write_via_temporary(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<
     let count = COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let name = path.file_name().unwrap_or_default().to_string_lossy();
     let temporary = path.with_file_name(format!(".{name}.{}-{count}.tmp", std::process::id()));
-    let written =
-        std::fs::write(&temporary, bytes).and_then(|()| std::fs::rename(&temporary, path));
-    if written.is_err() {
-        let _ = std::fs::remove_file(&temporary);
-    }
+    let written = std::fs::write(&temporary, bytes)
+        .and_then(|()| std::fs::rename(&temporary, path))
+        .or_else(|e| match e.kind() {
+            std::io::ErrorKind::PermissionDenied if !path.is_dir() => std::fs::write(path, bytes),
+            _ => Err(e),
+        });
+    // Gone already after a rename; still there after a failure or the direct
+    // write.
+    let _ = std::fs::remove_file(&temporary);
     written
 }
 

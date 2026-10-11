@@ -2,8 +2,8 @@
 
 sfmtool is licensed under the Apache License 2.0 (see `LICENSE`). The compiled
 extension in its wheels, and the `sfm-explorer` viewer, link Rust crates under
-their own licences. This file holds the notices those licences ask a binary
-distribution to carry.
+their own licences. This file carries the notice the Independent JPEG Group's
+licence requires of a program distributed as executable code.
 
 ## Independent JPEG Group
 
