@@ -288,7 +288,7 @@ fn picked_standing() -> sfmtool_core::patch::reference_view::ReferenceStanding {
         cost: Ok(ReferenceCost {
             radius: 0.5,
             radius_read: true,
-            angle_term: 0.0,
+            angle: 1.0,
             agreement: 1.0,
             cells: 1.0,
             coverage: 1.0,

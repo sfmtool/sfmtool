@@ -16,17 +16,23 @@ Reads ``measure.py``'s output in ``<dir>`` and prints:
    tuning half by the lenient count and then the exact count, or the starting
    value where it lies in such a run. A candidate is kept only where the
    held-out half scores at least as well on both counts and better on one.
-4. The counts for the starting values, ``σ_n = 0``, the chosen values where
-   they differ and the previous rule of gates, on each half and on all: exact,
-   lenient, and lenient within ``--angle-bound`` degrees of the hand pick's
-   viewing angle, and the two-sided lenient count.
-5. The agreement penalty read on blur-matched pair ZNCC beside the plain one.
-6. The pool: picks that change between two rules, and the term of the second
+4. The forms of the angle factor (``angle_factors``: the rule's
+   ``1 + k·tan θ``, ``1 / cos^p θ``, ``1 + k·tan φ`` with ``φ`` the median
+   angle to the other views' rays, and the quadrature the rule replaced),
+   each swept, with the hand-pick counts, the ground truths' error, the pool
+   picks that change against the quadrature and the previous rule, and the
+   value each form's procedure chooses.
+5. The counts for the starting values, ``angle_weight = 0``, the quadrature,
+   the chosen values where they differ and the previous rule of gates, on
+   each half and on all: exact, lenient, and lenient within ``--angle-bound``
+   degrees of the hand pick's viewing angle, and the two-sided lenient count.
+6. The agreement penalty read on blur-matched pair ZNCC beside the plain one.
+7. The pool: picks that change between two rules, and the term of the second
    rule's costs the first rule's pick loses on.
-7. The ground truths: for the tracks whose pick changes, the error of the
+8. The ground truths: for the tracks whose pick changes, the error of the
    other views aligned to each pick's tile, against the projection of the
    point, and the mean error over every track as some parameters are swept.
-8. What the pool's readings exercise, and the points with no eligible view.
+9. What the pool's readings exercise, and the points with no eligible view.
 
 A hand pick is matched **exactly** when the rule picks the hand-picked row,
 and **leniently** when it picks a row at most 0.1 grid px blurrier (semi-major
@@ -54,7 +60,7 @@ TERMS = ("sharpness", "angle", "agreement", "cells", "coverage", "clipped")
 class Options:
     """``ReferenceViewOptions``, field for field."""
 
-    normal_error_deg: float = 3.0
+    angle_weight: float = 0.25
     agreement_band: float = 0.15
     agreement_scale: float = 0.15
     cell_deficit_band: float = 0.3
@@ -71,7 +77,24 @@ START = Options()
 
 # The values each parameter is swept over, the others held.
 SWEEP = {
-    "normal_error_deg": [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 5, 6, 8, 10, 12, 15, 20],
+    "angle_weight": [
+        0.0,
+        0.05,
+        0.1,
+        0.15,
+        0.2,
+        0.25,
+        0.3,
+        0.35,
+        0.4,
+        0.5,
+        0.6,
+        0.75,
+        1.0,
+        1.25,
+        1.5,
+        2.0,
+    ],
     "agreement_band": [
         0.0,
         0.025,
@@ -122,6 +145,25 @@ SWEEP = {
 }
 
 
+# The forms of the angle factor compared (``angle_factors``), and the values
+# each is swept over. ``T`` is the rule's form; its values are
+# ``SWEEP["angle_weight"]``.
+FORMS = {
+    "Q": [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0],
+    "T": SWEEP["angle_weight"],
+    "C": [0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0],
+    "M": SWEEP["angle_weight"],
+}
+FORM_NAMES = {
+    "Q": "r_eff = √(r² + (c·tan θ)²), σ_n",
+    "T": "r · (1 + k·tan θ), k",
+    "C": "r / cos^p θ, p",
+    "M": "r · (1 + k·tan φ), k",
+}
+# The quadrature at σ_n = 3°, the angle term the rule's factor replaced.
+QUADRATURE = ("Q", 3.0)
+
+
 def _finite(v):
     return v if v is not None and math.isfinite(v) else None
 
@@ -135,9 +177,58 @@ def _hinge(x, band, scale):
     return 1.0 + max(x - band, 0.0) / scale
 
 
-def choose(rows, resolution, o: Options, pair_key="pair_zncc"):
+def _ray_angle(a, b):
+    """The angle between two unit rays, in degrees."""
+    d = sum(x * y for x, y in zip(a, b))
+    return math.degrees(math.acos(max(-1.0, min(1.0, d))))
+
+
+def angle_factors(rows, pick_from, o: Options, form=None):
+    """Per row of ``pick_from``, its angle factor.
+
+    ``form`` is ``None`` for the Rust rule's, ``1 + k·tan θ`` with ``k`` the
+    ``angle_weight``, or one of the forms the rule's was chosen from, as
+    ``(name, value)``:
+
+    - ``("T", k)``: ``1 + k·tan θ``, the rule's form at another weight;
+    - ``("C", p)``: ``1 / cos^p θ``;
+    - ``("M", k)``: ``1 + k·tan φ``, ``φ`` the median angle between the
+      row's ray (patch centre to camera centre, ``measure.py``'s ``ray``) and
+      each other eligible row's; ``0`` for a row with no other ray to compare
+      with. For a patch at infinity every ray is minus the patch's bearing,
+      so every ``φ`` is ``0`` and every factor ``1``;
+    - ``("Q", σ_n)``: the quadrature the rule replaced, ``√(r² + (c·tan θ)²)
+      / r`` with ``c = (R/√12)·σ_n`` (``σ_n`` in degrees). It reads the
+      radius, so ``choose`` computes it, and it is not handled here.
+
+    A row with no reading takes the largest factor among the rows of
+    ``pick_from`` that have one, or ``1`` where none has."""
+    name, value = ("T", o.angle_weight) if form is None else form
+    own = {}
+    for i in pick_from:
+        a = _angle(rows[i])
+        if name == "T" and a is not None:
+            own[i] = 1.0 + value * math.tan(math.radians(max(a, 0.0)))
+        elif name == "C" and a is not None:
+            own[i] = math.cos(math.radians(max(a, 0.0))) ** -value
+        elif name == "M" and rows[i].get("ray") is not None:
+            others = [
+                _ray_angle(rows[i]["ray"], rows[j]["ray"])
+                for j in pick_from
+                if j != i and rows[j].get("ray") is not None
+            ]
+            phi = float(np.median(others)) if others else 0.0
+            own[i] = 1.0 + value * math.tan(math.radians(phi))
+    unread = max(own.values()) if own else 1.0
+    return {i: own.get(i, unread) for i in pick_from}
+
+
+def choose(rows, resolution, o: Options, pair_key="pair_zncc", form=None):
     """``choose_reference_view`` over the rule rows of one track: the index
-    of the pick (or ``None``), and per row its cost dict or exclusion name."""
+    of the pick (or ``None``), and per row its cost dict or exclusion name.
+
+    ``form`` replaces the angle factor with another form of it, for their
+    comparison (``angle_factors``); ``None`` is the Rust rule's."""
     exclusions = []
     for v in rows:
         c = v["coverage"]
@@ -150,10 +241,6 @@ def choose(rows, resolution, o: Options, pair_key="pair_zncc"):
         else:
             exclusions.append(None)
     pick_from = [i for i, e in enumerate(exclusions) if e is None]
-    c = resolution / math.sqrt(12.0) * math.radians(o.normal_error_deg)
-
-    def angle_term(a):
-        return 0.0 if c == 0.0 else c * math.tan(math.radians(max(a, 0.0)))
 
     def largest(values):
         values = [x for x in values if x is not None]
@@ -169,20 +256,31 @@ def choose(rows, resolution, o: Options, pair_key="pair_zncc"):
         return None if best_pair is None or p is None else best_pair - p
 
     unread_shortfall = largest(shortfall(rows[i]) for i in pick_from)
-    unread_angle = largest(
-        angle_term(_angle(rows[i])) for i in pick_from if _angle(rows[i]) is not None
-    )
-    if unread_angle is None:
-        unread_angle = 0.0
+    quadrature = form is not None and form[0] == "Q"
+    if quadrature:
+        c = resolution / math.sqrt(12.0) * math.radians(form[1])
+
+        def angle_term(i):
+            a = _angle(rows[i])
+            return None if a is None else c * math.tan(math.radians(max(a, 0.0)))
+
+        terms = {i: angle_term(i) for i in pick_from}
+        unread_term = largest(terms.values()) or 0.0
+    else:
+        factors = angle_factors(rows, pick_from, o, form)
 
     costs = []
-    for v, exclusion in zip(rows, exclusions):
+    for i, (v, exclusion) in enumerate(zip(rows, exclusions)):
         if exclusion is not None:
             costs.append(exclusion)
             continue
         own = _finite(v["semi_major"])
         radius = own if own is not None else unread_radius
-        at = angle_term(_angle(v)) if _angle(v) is not None else unread_angle
+        if quadrature:
+            term = terms[i] if terms[i] is not None else unread_term
+            angle = math.hypot(radius, term) / radius
+        else:
+            angle = factors[i]
         s = shortfall(v)
         if s is None:
             s = unread_shortfall
@@ -201,12 +299,12 @@ def choose(rows, resolution, o: Options, pair_key="pair_zncc"):
         costs.append(
             dict(
                 radius=radius,
-                angle_term=at,
+                angle=angle,
                 agreement=agreement,
                 cells=cells,
                 coverage=coverage,
                 clipped=clipped,
-                cost=math.hypot(radius, at) * agreement * cells * coverage * clipped,
+                cost=radius * angle * agreement * cells * coverage * clipped,
             )
         )
 
@@ -226,10 +324,9 @@ def choose(rows, resolution, o: Options, pair_key="pair_zncc"):
 
 
 def ln_parts(cost):
-    r_eff = math.hypot(cost["radius"], cost["angle_term"])
     return [
         math.log(cost["radius"]),
-        math.log(r_eff / cost["radius"]),
+        math.log(cost["angle"]),
         math.log(cost["agreement"]),
         math.log(cost["cells"]),
         math.log(cost["coverage"]),
@@ -315,7 +412,7 @@ def check_against_rust(tracks):
                 "cells",
                 "coverage",
                 "clipped",
-                "angle_term",
+                "angle",
                 "radius",
             ):
                 if abs(c[term] - rust["terms"][term]) > 1e-12 * max(1.0, abs(c[term])):
@@ -404,9 +501,12 @@ def score_picks(cases, picks, angle_bound):
     return exact, lenient, bounded, two_sided
 
 
-def score(cases, o: Options, angle_bound, pair_key="pair_zncc"):
-    """``score_picks`` of the rule's picks at ``o``."""
-    picks = [choose(c.track.rows, c.track.resolution, o, pair_key)[0] for c in cases]
+def score(cases, o: Options, angle_bound, pair_key="pair_zncc", form=None):
+    """``score_picks`` of the rule's picks at ``o``, with the angle factor of
+    ``form`` (``angle_factors``)."""
+    picks = [
+        choose(c.track.rows, c.track.resolution, o, pair_key, form)[0] for c in cases
+    ]
     return score_picks(cases, picks, angle_bound)
 
 
@@ -576,6 +676,96 @@ def compare_localization(changed):
     return np.array(ea), np.array(eb)
 
 
+def mean_error(gt, pick):
+    """The mean and median, over the ground-truth tracks, of the other views'
+    error aligned to ``pick``'s tile."""
+    e = [localization_error(t, pick(t)) for t in gt if pick(t) is not None]
+    e = [x for x in e if x is not None]
+    return np.mean(e), np.median(e)
+
+
+def gt_change(gt, pick_a, pick_b):
+    """For the ground-truth tracks whose pick differs between two rules: the
+    count, and the mean error of the views other than both picks aligned to
+    each pick's tile."""
+    ch, _ = changes_between(gt, pick_a, pick_b)
+    ea, eb = compare_localization(ch)
+    if not len(ea):
+        return f"{len(ch):3d}"
+    return f"{len(ch):3d} {ea.mean():.3f}->{eb.mean():.3f}"
+
+
+def compare_forms(tracks, gt, tune, held, cases, bound, previous, out):
+    """Section 4: each form of the angle factor swept, and its value chosen.
+
+    A form's starting value is the swept value whose picks differ from the
+    quadrature's at ``σ_n = 3`` on the fewest pool tracks, so the form changes
+    the rule as little as it can. Its candidate is the middle of the run of
+    values tied best on the tuning half, by lenient then exact count, kept
+    only where the held-out half scores at least as well on both counts as
+    the starting value and better on one."""
+
+    def cached(form):
+        picks = {}
+
+        def pick(t):
+            key = id(t)
+            if key not in picks:
+                picks[key] = choose(t.rows, t.resolution, START, form=form)[0]
+            return picks[key]
+
+        return pick
+
+    def scores(pick, cs):
+        return score_picks(cs, [pick(c.track) for c in cs], bound)
+
+    quadrature = cached(QUADRATURE)
+    out(
+        "  Per value: hand picks exact / lenient / lenient within the bound on the"
+        " tuning half | held out | all; the ground truths' mean error over every"
+        " track; the pool picks that differ from the quadrature's (Q) and the"
+        " previous rule's; the ground-truth picks that differ, with the other"
+        " views' mean error aligned to the old pick and to the new; picks above 65°"
+        " over the pool and the ground truths"
+    )
+    chosen = {}
+    for name, values in FORMS.items():
+        out(f"  {name}: {FORM_NAMES[name]}")
+        pickers = {v: cached((name, v)) for v in values}
+        for v in values:
+            pick = pickers[v]
+            above = sum(
+                1
+                for x in tracks + gt
+                if pick(x) is not None and (_angle(x.rows[pick(x)]) or 0.0) > 65.0
+            )
+            out(
+                f"    {v:<5g} {fmt(scores(pick, tune))} | {fmt(scores(pick, held))}"
+                f" | {fmt(scores(pick, cases))} | gt {mean_error(gt, pick)[0]:.3f}"
+                f" | pool vs Q {sum(pick(x) != quadrature(x) for x in tracks):3d}"
+                f" vs previous {sum(pick(x) != previous(x) for x in tracks):3d}"
+                f" | gt vs Q {gt_change(gt, quadrature, pick)}"
+                f" vs previous {gt_change(gt, previous, pick)} | >65° {above}"
+            )
+        start = min(
+            values, key=lambda v: sum(pickers[v](x) != quadrature(x) for x in tracks)
+        )
+        runs, candidate = best_runs([(v, scores(pickers[v], tune)) for v in values])
+        if any(start in r for r in runs):
+            out(f"    start {start:g} is in a best run on the tuning half: kept")
+            chosen[name] = start
+            continue
+        hs, hc = scores(pickers[start], held), scores(pickers[candidate], held)
+        confirmed = hc[0] >= hs[0] and hc[1] >= hs[1] and hc[:2] != hs[:2]
+        out(
+            f"    start {start:g}, candidate {candidate:g}: held out {fmt(hs)} -> {fmt(hc)}:"
+            f" {'confirmed' if confirmed else 'not confirmed, start kept'}"
+        )
+        chosen[name] = candidate if confirmed else start
+    out(f"  chosen: {chosen}")
+    return chosen
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("directory")
@@ -640,21 +830,33 @@ def main() -> None:
     }
     out(f"  chosen changes: {changed or 'none'}")
 
-    sigma0 = replace(START, normal_error_deg=0.0)
-    settings = [("starting values", START), ("σ_n = 0", sigma0)]
+    weight0 = replace(START, angle_weight=0.0)
+    settings = [
+        ("starting values", START, None),
+        ("angle_weight = 0", weight0, None),
+        ("quadrature σ_n = 3", START, QUADRATURE),
+    ]
     if tuned != START:
-        settings.append(("chosen values", tuned))
+        settings.append(("chosen values", tuned, None))
 
-    def rule(o, pair_key="pair_zncc"):
-        return lambda t: choose(t.rows, t.resolution, o, pair_key)[0]
+    def rule(o, pair_key="pair_zncc", form=None):
+        return lambda t: choose(t.rows, t.resolution, o, pair_key, form)[0]
 
     def previous(t):
         return previous_rule(t.rows)
 
-    pickers = [(label, rule(o)) for label, o in settings]
+    gt = [t for t in (all_tracks or tracks) if t.localized]
+    out()
+    out(
+        "4. The angle factor's form, each swept with the other parameters at the"
+        " starting values"
+    )
+    compare_forms(tracks, gt, tune, held, cases, bound, previous, out)
+
+    pickers = [(label, rule(o, form=f)) for label, o, f in settings]
     pickers.append(("previous rule", previous))
     out()
-    out(f"4. Counts, exact / lenient / lenient within {bound:g}°")
+    out(f"5. Counts, exact / lenient / lenient within {bound:g}°")
     out(
         f"  {'':18s} tuning ({len(tune)})     held out ({len(held)})   all ({len(cases)})"
     )
@@ -674,7 +876,7 @@ def main() -> None:
         out(f"  {label:18s} {t[3]:2d} / {h[3]:2d} / {a[3]:2d}")
 
     out()
-    out("5. The agreement penalty on blur-matched pair ZNCC")
+    out("6. The agreement penalty on blur-matched pair ZNCC")
     with_bm = [
         c for c in cases if any(x.get("bm_pair_zncc") is not None for x in c.track.rows)
     ]
@@ -692,10 +894,13 @@ def main() -> None:
         f" (mean {np.mean(moved) if moved else 0:+.3f}); the tiles' plain pair ZNCC is"
         f" within {max(gap) if gap else 0:.1e} of the bench's"
     )
-    for label, o in settings:
-        plain = score(cases, o, bound, "pair_zncc")
-        bm = score(cases, o, bound, "bm_or_plain")
-        n = sum(rule(o)(c.track) != rule(o, "bm_or_plain")(c.track) for c in cases)
+    for label, o, f in settings:
+        plain = score(cases, o, bound, "pair_zncc", f)
+        bm = score(cases, o, bound, "bm_or_plain", f)
+        n = sum(
+            rule(o, form=f)(c.track) != rule(o, "bm_or_plain", f)(c.track)
+            for c in cases
+        )
         out(
             f"  {label:18s} plain {fmt(plain)}   blur-matched {fmt(bm)}   picks that differ {n}"
         )
@@ -713,10 +918,11 @@ def main() -> None:
         out(f"    tuning half, blur-matched, {field} (exact/lenient): {cells}")
 
     out()
-    out("6. Pool: picks that change, and the term the old pick loses on")
+    out("7. Pool: picks that change, and the term the old pick loses on")
     out(f"  {len(tracks)} tracks: the review cases and each dataset's sampled tracks")
     comparisons = [
-        ("σ_n = 0 -> starting", rule(sigma0), rule(START), START),
+        ("angle_weight = 0 -> starting", rule(weight0), rule(START), START),
+        ("quadrature -> starting", rule(START, form=QUADRATURE), rule(START), START),
         ("previous rule -> starting", previous, rule(START), START),
     ]
     if tuned != START:
@@ -731,9 +937,8 @@ def main() -> None:
 
     out()
     out(
-        "7. Ground truths: the other views aligned to a pick's tile, error from the projection (px)"
+        "8. Ground truths: the other views aligned to a pick's tile, error from the projection (px)"
     )
-    gt = [t for t in (all_tracks or tracks) if t.localized]
     out(f"  {len(gt)} ground-truth tracks of three or more views")
     for label, pa, pb, _ in comparisons:
         ch, _ = changes_between(gt, pa, pb)
@@ -745,11 +950,6 @@ def main() -> None:
                 f" ({d.mean():+.3f}, median {np.median(d):+.3f});"
                 f" better on {(d < 0).sum()}, worse on {(d > 0).sum()}"
             )
-
-    def mean_error(pick):
-        e = [localization_error(t, pick(t)) for t in gt if pick(t) is not None]
-        e = [x for x in e if x is not None]
-        return np.mean(e), np.median(e)
 
     best = [
         min(
@@ -763,13 +963,13 @@ def main() -> None:
     out(
         f"  Mean over every track of the other views' error (the best view per track {np.mean(best):.3f}):"
     )
-    for field in ("normal_error_deg", "agreement_band", "cell_deficit_band"):
+    for field in ("angle_weight", "agreement_band", "cell_deficit_band"):
         cells = [
-            f"{v:g}:{mean_error(rule(replace(tuned, **{field: v})))[0]:.3f}"
+            f"{v:g}:{mean_error(gt, rule(replace(tuned, **{field: v})))[0]:.3f}"
             for v in SWEEP[field]
         ]
         out(f"    {field}: " + "  ".join(cells))
-    m = mean_error(previous)
+    m = mean_error(gt, previous)
     out(f"    previous rule: {m[0]:.3f}")
     above = {}
     for label, pick in pickers:
@@ -783,7 +983,7 @@ def main() -> None:
     )
 
     out()
-    out("8. What the readings exercise, over the pool")
+    out("9. What the readings exercise, over the pool")
     facts = Counter()
     for t in tracks:
         eligible_rows = [x for x in t.rows if x["rule"]["excluded_by"] is None]

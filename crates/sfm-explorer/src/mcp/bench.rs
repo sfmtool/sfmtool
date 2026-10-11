@@ -1856,7 +1856,7 @@ fn reference_view_json(standing: ReferenceStanding) -> Value {
         json!({
             "radius": finite(Some(c.radius)),
             "radius_read": c.radius_read,
-            "angle_term": finite(Some(c.angle_term)),
+            "angle": finite(Some(c.angle)),
             "agreement": finite(Some(c.agreement)),
             "cells": finite(Some(c.cells)),
             "coverage": finite(Some(c.coverage)),

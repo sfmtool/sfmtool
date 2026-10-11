@@ -1404,8 +1404,9 @@ pick alternated between rows. The marks (`reference::ReferenceRows`,
 
 A track-stage evaluation runs the reference-view rule over the `in`
 rows ([`../core/patch/reference-view.md`](../core/patch/reference-view.md)): it
-gives each row a cost in grid px, the row's self-similarity radius combined
-with an angle term that grows with the viewing angle, times four penalties,
+gives each row a cost in grid px, the row's self-similarity radius times an
+angle factor that grows with the tangent of the viewing angle (`1` facing the
+patch, `1.25` at 45°), times four penalties,
 each 1 inside its band: agreement, for a pair ZNCC (the median of the row's
 ZNCCs with the other `in` rows) more than 15 points below the best; the
 ninths, for a ninth where the row agrees with the other rows more than 0.3
@@ -1427,7 +1428,8 @@ Hovering the cell gives, on a marked row, what the mark means and how to
 change it, and then (`reference::reference_hover`) the decision in a sentence,
 naming the costliest term or why the row was left out; the cost, the radius
 (and, where it is not the row's own, that it is the largest any row has or the
-default), the angle term, and each penalty beside its band and scale; for a
+default), the angle factor beside its weight, and each penalty beside its
+band and scale; for a
 back-facing row, its viewing angle and that no patch is drawn on it; and every
 reading: the viewing angle
 and the tilt direction (the direction in the patch's plane the ray from the

@@ -2445,15 +2445,7 @@ pub(super) fn restate_reference_view(track: &mut EditableTrack) {
             }
         })
         .collect();
-    // The tiles' resolution, which every row the rule read was rendered at.
-    let resolution = rows
-        .iter()
-        .find_map(|&i| {
-            let m = track.observations[i].track.as_ref()?;
-            m.reading_options.map(|o| o.resolution as usize)
-        })
-        .unwrap_or_else(|| open_localizer().resolution as usize);
-    let choice = choose_reference_view(&readings, resolution, &ReferenceViewOptions::default());
+    let choice = choose_reference_view(&readings, &ReferenceViewOptions::default());
     for (k, &i) in rows.iter().enumerate() {
         if let Some(measurement) = track.observations[i].track.as_mut() {
             measurement.reference_view = choice.standing(k);

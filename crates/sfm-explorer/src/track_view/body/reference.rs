@@ -36,8 +36,9 @@ pub(super) const REFERENCE_TIP: &str = "The track's reference, the row its patch
     Such a bitmap stays only until the first evaluation that renders where the rule picks a \
     row, which makes that pick the reference.\n\n\
     The rule gives each row a cost in grid px and picks the lowest. The cost is the row's \
-    self-similarity radius, combined with an angle term that grows with the viewing angle, \
-    times four penalties, each 1 inside its band: agreement, for a pair ZNCC (the median of \
+    self-similarity radius, times an angle factor that grows with the tangent of the viewing \
+    angle (1 facing the patch, 1.25 at 45\u{b0}), times four penalties, each 1 inside its \
+    band: agreement, for a pair ZNCC (the median of \
     the row's ZNCCs with the other rows that are in) more than 15 points below the best; the \
     ninths, for a ninth of the tile where it agrees with the other rows more than 0.3 below \
     the track's typical agreement there; coverage, for less than 99% of the tile on the \
@@ -447,7 +448,7 @@ fn decision_lines(standing: ReferenceStanding, m: &TrackMeasurement) -> Vec<Stri
                 }
             };
             lines.push(format!(
-                "Cost {} grid px: the radius {:.2}{} and the angle term {}, then:",
+                "Cost {} grid px: the radius {:.2}{}, then:",
                 finite(cost.cost),
                 cost.radius,
                 if cost.radius_read {
@@ -456,7 +457,11 @@ fn decision_lines(standing: ReferenceStanding, m: &TrackMeasurement) -> Vec<Stri
                     " (not the row's own: the largest any row has, or the default where none \
                      has one)"
                 },
-                finite(cost.angle_term)
+            ));
+            lines.push(format!(
+                "Angle \u{d7}{}: 1 + {:.2} \u{d7} the tangent of the viewing angle.",
+                finite(cost.angle),
+                options.angle_weight
             ));
             lines.push(format!(
                 "Agreement \u{d7}{:.2}: 1 within {:.0} points of the best pair ZNCC, plus 1 \

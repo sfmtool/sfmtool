@@ -537,9 +537,9 @@ fn good(pair: f64, radius: f64) -> ReferenceReadings {
     }
 }
 
-/// The rule at the default options on 24 px tiles.
+/// The rule at the default options.
 fn choose(views: &[ReferenceReadings]) -> ReferenceChoice {
-    choose_reference_view(views, 24, &ReferenceViewOptions::default())
+    choose_reference_view(views, &ReferenceViewOptions::default())
 }
 
 fn cost_of(choice: &ReferenceChoice, i: usize) -> ReferenceCost {
@@ -557,28 +557,79 @@ fn a_view_facing_the_patch_beats_a_slightly_sharper_oblique_one() {
     let facing = good(0.9, 0.62);
     let choice = choose(&[oblique, facing]);
     assert_eq!(choice.reference, Some(1));
-    let c = ReferenceViewOptions::default().angle_scale(24);
-    assert!((c - 0.3628).abs() < 1e-3, "{c}");
+    let k = ReferenceViewOptions::default().angle_weight;
+    assert_eq!(k, 0.25);
     let oblique_cost = cost_of(&choice, 0);
-    assert!(close(oblique_cost.angle_term, c * 55f64.to_radians().tan()));
+    assert!(close(
+        oblique_cost.angle,
+        1.0 + k * 55f64.to_radians().tan()
+    ));
     assert!(
-        (oblique_cost.cost - 0.79).abs() < 0.01,
+        (oblique_cost.cost - 0.81).abs() < 0.01,
         "{}",
         oblique_cost.cost
     );
-    assert!((cost_of(&choice, 1).cost - 0.63).abs() < 0.01);
+    assert!((cost_of(&choice, 1).cost - 0.68).abs() < 0.01);
     let standing = choice.standing(0).unwrap();
     assert_eq!(standing.costliest_term, Some(ReferenceTerm::Angle));
     assert!(!standing.is_reference());
     assert!(choice.standing(1).unwrap().is_reference());
-    // With no normal error the angle has no say, and the sharper view wins.
+    // With no angle weight the angle has no say, and the sharper view wins.
     let options = ReferenceViewOptions {
-        normal_error_deg: 0.0,
+        angle_weight: 0.0,
         ..ReferenceViewOptions::default()
     };
-    let choice = choose_reference_view(&[oblique, facing], 24, &options);
+    let choice = choose_reference_view(&[oblique, facing], &options);
     assert_eq!(choice.reference, Some(0));
-    assert_eq!(cost_of(&choice, 0).angle_term, 0.0);
+    assert_eq!(cost_of(&choice, 0).angle, 1.0);
+}
+
+#[test]
+fn the_angle_factor_is_one_facing_the_patch_and_grows_with_tan_theta() {
+    let options = ReferenceViewOptions::default();
+    let k = options.angle_weight;
+    assert_eq!(options.angle_factor(0.0), 1.0);
+    // A negative angle, which only a rounding gives, counts as facing.
+    assert_eq!(options.angle_factor(-1.0), 1.0);
+    assert!(close(options.angle_factor(45.0), 1.0 + k));
+    for angle in [10.0, 30.0, 60.0, 80.0, 89.9] {
+        let factor = options.angle_factor(angle);
+        assert!(
+            close(factor - 1.0, k * f64::to_radians(angle).tan()),
+            "{angle}"
+        );
+        assert!(factor > options.angle_factor(angle - 5.0), "{angle}");
+    }
+    // The factor multiplies the radius: the same pair of angles trades the
+    // same share of radius on a sharp track as on a blurry one.
+    for scale in [0.5, 1.0, 3.0] {
+        let mut oblique = good(0.9, 0.97 * scale);
+        oblique.viewing_angle_deg = Some(40.0);
+        let mut facing = good(0.9, scale);
+        facing.viewing_angle_deg = Some(10.0);
+        let choice = choose(&[oblique, facing]);
+        assert_eq!(choice.reference, Some(1), "scale {scale}");
+        let ratio = choice.standing(0).unwrap().cost_ratio().unwrap();
+        let expected = 0.97 * options.angle_factor(40.0) / options.angle_factor(10.0);
+        assert!(close(ratio, expected), "scale {scale}");
+    }
+}
+
+#[test]
+fn a_view_at_19_degrees_beats_a_slightly_sharper_one_at_29() {
+    // seoul_bull point 10: the views of the hand pick (19°, radius 1.584
+    // grid px) and of the next sharpest (29°, 1.572), the rest of their
+    // readings within every band. The angle added in quadrature to the
+    // radius gave them 1.589 and 1.585 and picked the second.
+    let mut hand_pick = good(0.911, 1.584);
+    hand_pick.viewing_angle_deg = Some(18.9);
+    let mut oblique = good(0.906, 1.572);
+    oblique.viewing_angle_deg = Some(29.3);
+    let choice = choose(&[oblique, hand_pick]);
+    assert_eq!(choice.reference, Some(1));
+    let standing = choice.standing(0).unwrap();
+    assert_eq!(standing.costliest_term, Some(ReferenceTerm::Angle));
+    assert!(standing.cost_ratio().unwrap() > 1.03);
 }
 
 #[test]
@@ -604,9 +655,9 @@ fn each_penalty_is_one_inside_its_band_and_grows_at_its_scale_past_it() {
     assert!(close(c(6).coverage, 3.0));
     assert!(close(c(7).clipped, 1.0));
     assert!(close(c(8).clipped, 1.5));
-    // Each factor multiplies the effective radius, and a view inside every
-    // band costs its effective radius alone.
-    let base = c(0).effective_radius();
+    // Each factor multiplies the radius and the angle factor, and a view
+    // inside every band costs those two alone.
+    let base = c(0).radius * c(0).angle;
     assert!(close(c(0).cost, base));
     for (i, factor) in [(2, 2.0), (4, 2.0), (6, 3.0), (8, 1.5)] {
         assert!(close(c(i).cost, base * factor), "view {i}");
@@ -743,27 +794,24 @@ fn a_missing_pair_angle_clipped_share_or_cell_deficit_is_filled_in() {
     let choice = choose(&[no_pair, no_pair]);
     assert!(close(cost_of(&choice, 0).agreement, 1.0));
 
-    // No angle: the largest angle term among the views that have one.
+    // No angle: the largest angle factor among the views that have one.
     let mut no_angle = good(0.9, 0.3);
     no_angle.viewing_angle_deg = None;
     let mut oblique = good(0.9, 0.5);
     oblique.viewing_angle_deg = Some(60.0);
     let choice = choose(&[no_angle, good(0.9, 0.5), oblique]);
-    assert!(close(
-        cost_of(&choice, 0).angle_term,
-        cost_of(&choice, 2).angle_term
-    ));
-    // Where no view has one, the angle term is 0.
+    assert!(close(cost_of(&choice, 0).angle, cost_of(&choice, 2).angle));
+    // Where no view has one, the angle factor is 1.
     let choice = choose(&[no_angle, no_angle]);
-    assert_eq!(cost_of(&choice, 0).angle_term, 0.0);
+    assert_eq!(cost_of(&choice, 0).angle, 1.0);
     // Where every view with an angle is back-facing, the views with none are
-    // eligible and take an angle term of 0.
+    // eligible and take an angle factor of 1.
     let mut behind = good(0.9, 0.1);
     behind.viewing_angle_deg = Some(120.0);
     let choice = choose(&[behind, no_angle]);
     assert_eq!(choice.costs[0], Err(ReferenceExclusion::BackFacing));
     assert_eq!(choice.reference, Some(1));
-    assert_eq!(cost_of(&choice, 1).angle_term, 0.0);
+    assert_eq!(cost_of(&choice, 1).angle, 1.0);
 
     // No clipped share or cell deficit: a factor of 1.
     let mut neither = good(0.9, 0.3);
@@ -813,15 +861,22 @@ fn the_costliest_terms_parts_sum_to_the_cost_over_the_picks() {
         .max_by(|a, b| a.1.total_cmp(&b.1))
         .map(|&(term, _)| term);
     assert_eq!(standing.costliest_term, largest);
-    // Each factor's own part is its log, as the pick's factors are 1.
+    // Each part is the log of the view's factor over the pick's: the pick's
+    // penalties are 1, and its angle factor is that of 20°.
     for (term, part) in &parts {
-        let factor = match term {
+        let ratio = match term {
+            ReferenceTerm::Sharpness => own.radius / picked.radius,
+            ReferenceTerm::Angle => own.angle / picked.angle,
             ReferenceTerm::Agreement => own.agreement,
             ReferenceTerm::Cells => own.cells,
             ReferenceTerm::Coverage => own.coverage,
             ReferenceTerm::Clipped => own.clipped,
-            _ => continue,
         };
-        assert!(close(*part, factor.ln()), "{term}");
+        assert!(close(*part, ratio.ln()), "{term}");
     }
+    assert!(picked.angle > 1.0);
+    assert!(close(
+        picked.angle,
+        ReferenceViewOptions::default().angle_factor(20.0)
+    ));
 }

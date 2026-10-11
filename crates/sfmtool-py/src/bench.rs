@@ -423,7 +423,7 @@ fn observation_to_dict<'py>(py: Python<'py>, o: &Observation) -> PyResult<Bound<
                     let d = PyDict::new(py);
                     d.set_item("radius", c.radius)?;
                     d.set_item("radius_read", c.radius_read)?;
-                    d.set_item("angle_term", c.angle_term)?;
+                    d.set_item("angle", c.angle)?;
                     d.set_item("agreement", c.agreement)?;
                     d.set_item("cells", c.cells)?;
                     d.set_item("coverage", c.coverage)?;

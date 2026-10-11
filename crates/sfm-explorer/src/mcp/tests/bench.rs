@@ -2649,7 +2649,7 @@ fn fit_and_set_stage_run_as_background_tasks_and_the_evaluation_follows_them() {
         assert!(standing["cost"].is_number(), "{track}");
         for term in [
             "radius",
-            "angle_term",
+            "angle",
             "agreement",
             "cells",
             "coverage",

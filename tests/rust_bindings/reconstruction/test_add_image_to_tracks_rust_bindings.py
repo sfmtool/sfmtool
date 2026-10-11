@@ -85,13 +85,14 @@ def test_removed_observations_are_found_again(without_image, pyramids):
         if cands["accepted"][k] and int(p) in removed
     }
     # Every point here is at -1, so the reference-view rule picks each
-    # template. With its default parameters 66 of the 85 removed observations
-    # are found; with no angle term (normal_error_deg 0) the rule picks other
-    # templates on a few points and 68 are. The measurement that set those
-    # parameters (specs/core/patch/reference-view.md, "How the values were
-    # measured") found the angle term better on the hand picks and on the
-    # ground truths, so the bar stays at 75% rather than the 80% the rule of
-    # gates cleared.
+    # template. With its default parameters 67 of the 85 removed observations
+    # are found (66 when the angle was added to the radius in quadrature);
+    # with no angle factor (angle_weight 0) the rule picks other templates on
+    # a few points and 68 are. The measurement that set those parameters
+    # (specs/core/patch/reference-view.md, "How the values were measured")
+    # found the angle factor better on the hand picks and on the ground
+    # truths, so the bar stays at 75% rather than the 80% the rule of gates
+    # cleared.
     assert len(found) >= 0.75 * len(removed)
     errors = [float(np.hypot(*(found[p] - removed[p]))) for p in found]
     assert np.median(errors) < 0.5

@@ -299,7 +299,7 @@ fn the_bitmap_is_the_picked_view_s_tile() {
     let picked = render.reading.choice.reference.expect("a view is picked");
     // The pick is the rule's on the readings taken.
     assert_eq!(
-        choose_reference_view(&render.reading.readings, 24, &params.reference_view).reference,
+        choose_reference_view(&render.reading.readings, &params.reference_view).reference,
         Some(picked)
     );
     // The sharp view has the shortest radius and is the pick.

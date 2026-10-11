@@ -97,7 +97,7 @@ pub fn tile_semi_axes(tile: &ViewTile) -> Option<[f64; 2]> {
 /// Two views of one image share the matrix row of the first of them, as
 /// member coherence counts an image once.
 ///
-/// The rule runs with `options`, at the tiles' resolution `R`.
+/// The rule runs with `options`.
 ///
 /// # Panics
 ///
@@ -152,7 +152,7 @@ pub fn read_track(
             )
         })
         .collect();
-    let choice = choose_reference_view(&readings, resolution as usize, options);
+    let choice = choose_reference_view(&readings, options);
     TrackReading {
         pair_zncc,
         cells,

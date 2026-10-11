@@ -28,8 +28,10 @@ parameters over a copy of the rule written in Python.
   the case's views at the case's keypoints, evaluates it, and samples
   `--pool` (60) more points of three or more observations with a fixed seed.
   Each row carries the readings the rule reads (coverage, clipped share,
-  viewing angle, cell deficit, pair ZNCC, the self-similarity semi-axes) and
-  the rule's standing at this build's defaults. `--blur-matched` adds each
+  viewing angle, cell deficit, pair ZNCC, the self-similarity semi-axes), its
+  `ray` (the unit direction from the patch's centre to the camera centre,
+  which only the comparison of the angle factor's forms reads) and the rule's
+  standing at this build's defaults. `--blur-matched` adds each
   row's pair ZNCC read from the rows' tiles, plain and blur-matched;
   `--localize` (the ground truths) aligns every view to each eligible row's
   tile in turn and records each view's distance from the point's projection;
@@ -43,7 +45,13 @@ parameters over a copy of the rule written in Python.
   (the middle of the best tied run by lenient then exact count), keeps it
   only where the held-out half confirms it, and prints the counts, the
   blur-matched agreement, the pool's changed picks, the ground truths'
-  localization error and the counts of points with no eligible view.
+  localization error and the counts of points with no eligible view. Its
+  section 4 compares four forms of the angle factor, each swept the same
+  way: the rule's `1 + k·tan θ`, `1 / cos^p θ`, `1 + k·tan φ` with `φ` the
+  median angle between a row's `ray` and the other eligible rows', and the
+  angle in quadrature the rule replaced, `√(r² + (c·tan θ)²) / r`; a form's
+  starting value is the one whose picks differ least from the quadrature's
+  at `σ_n = 3°` over the pool.
 
 ```bash
 OUT=<a directory outside the repository>
@@ -64,8 +72,12 @@ develop --release`). The output directory must not be under `test-data` or
 ## How the tables in reference-view.md were made
 
 The tables and figures in reference-view.md § "How the values were measured"
-(2026-10-11) are this harness's output, run as above with the default seeds
-(`--seed 20261011` for the pool and for the split). All 79 cases were found:
+and § "The form of the angle factor" (2026-10-11) are this harness's output,
+run as above with the default seeds (`--seed 20261011` for the pool and for
+the split), on a build whose rule has the angle factor `1 + k·tan θ`. The
+readings do not depend on the rule, but section 1's check reads the rule's
+costs and terms, so it needs a build whose rule is the one `analyze.py`
+copies. All 79 cases were found:
 72 exactly, every view at its keypoint and the point at its index of
 2026-10-06; the 7 `xmas` cases in a subset rebuilt on 2026-10-11 under that
 day's `embed_patches`, since the file of 2026-10-06 was not kept. There the
