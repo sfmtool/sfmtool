@@ -259,7 +259,7 @@ impl TabContext<'_> {
             // rather than in the viewport because both halves need the state
             // mutably, and it is borrowed out of for the whole of that call.
             self.apply_bench_gesture(focused.as_ref().map(|(label, _, _)| label.as_str()));
-            // A released stroke of the delete brush: its painted points
+            // A released stroke of the eraser brush: its painted points
             // deleted as one version, applied here for the same reason.
             if let Some(gesture) = self.viewer_3d.brush_gesture.take() {
                 gesture.apply(self.state);

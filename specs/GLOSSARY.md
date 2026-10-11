@@ -185,6 +185,16 @@ What `get_widgets` and the input tools report about the viewer's window, in
 |------|-------|-----|-----|
 | **dialog** / **menu** | what is drawn above the dock and its panels, reported in the `dialogs` and `menus` blocks: a **dialog** is one of the viewer's own egui windows (`Go to Point`, `Bundle Adjust`, …), and a **menu** an egui popup, of kind `menu`, `context_menu`, `submenu` or `dropdown` | `overlay`, `layer` | *overlay* already names the Image Detail panel's drawing layers and the viewport HUD, and *layer* names those and a **depth layer**, so by the wire vocabulary rule neither can name these as well |
 
+## Viewer tools
+
+The tools on the 3D viewport's tool strip, in
+`crates/sfm-explorer/src/viewer_3d/brush.rs` and
+[gui/edits/eraser-brush.md](gui/edits/eraser-brush.md).
+
+| Word | Means | Not | Why |
+|------|-------|-----|-----|
+| **eraser brush** | the paint tool that deletes the visible points of the selected reconstruction a stroke passes over: `Tool::EraserBrush`, the `tool` value `"eraser_brush"` on `get_viewer_3d_display` / `set_viewer_3d_display`, the tool strip's **Eraser brush** button and the Action Log's `Eraser brush tool` | `delete brush`, `delete_brush` | the tool's name and its icon, an eraser, say the same thing, and the name no longer reads as the verb for the edit. *Delete* stays the word for the edit the stroke commits (`delete_points`, the `Deleted N points in <label>` version), so the tool is an eraser and what it does is delete |
+
 ## Rendering a view's tile
 
 The words for how a patch kernel resamples a photograph into a patch's grid,

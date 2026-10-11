@@ -397,11 +397,11 @@ pub struct Viewer3D {
     /// aims at is then the very layout the window produces, rather than a
     /// second layout built to be aimed at.
     pub(crate) menu_entry_rects: Vec<(&'static str, Rect)>,
-    /// What an unmodified left drag does: navigate, or paint with the delete
+    /// What an unmodified left drag does: navigate, or paint with the eraser
     /// brush. Navigate at launch, chosen on the tool strip, and never
     /// persisted across runs.
     pub(crate) tool: brush::Tool,
-    /// The delete brush's stroke, from the press until it is reported or
+    /// The eraser brush's stroke, from the press until it is reported or
     /// cancelled. Held here for the reason [`Self::bench_drag`] is.
     pub(crate) brush_stroke: Option<brush::BrushStroke>,
     /// The points under the brush's circle before a press.
@@ -777,7 +777,7 @@ impl Viewer3D {
             self.view_initialized = true;
         }
 
-        // --- The delete brush and the bench figure's handles, before the
+        // --- The eraser brush and the bench figure's handles, before the
         // viewport's own input ---
         //
         // A stroke of the brush deletes points and a drag that began on a

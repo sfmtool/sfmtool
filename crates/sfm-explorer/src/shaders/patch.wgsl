@@ -42,7 +42,7 @@ struct VertexOutput {
     @location(0) uv: vec2<f32>,
     @location(1) @interpolate(flat) atlas_layer: u32,
     @location(2) @interpolate(flat) point_index: u32,
-    // The mask word: a point the delete brush has painted, or one under its
+    // The mask word: a point the eraser brush has painted, or one under its
     // circle, draws its surfel in the brush's red as its splat does. The
     // highlight (2) is drawn on splats only.
     @location(3) @interpolate(flat) mark: u32,
@@ -142,7 +142,7 @@ fn fs_main(in: VertexOutput) -> FragOutput {
     // color, `patch_opacity` a translucency, and mixing in the wrong order
     // would make a tinted patch's strength depend on how transparent it is.
     var rgb = mix(texel.rgb, recon.tint_color.rgb, recon.tint_color.a);
-    // The delete brush's reds replace the texel outright, as on a splat.
+    // The eraser brush's reds replace the texel outright, as on a splat.
     if in.mark == MASK_PAINTED {
         rgb = BRUSH_PAINTED_COLOR;
     } else if in.mark == MASK_UNDER_BRUSH {

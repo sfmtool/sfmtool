@@ -66,7 +66,7 @@ during Zoom to Fit to center on the point cloud.
 
 Every binding above belongs to the viewport's **Navigate** tool, which is on at
 launch. The tool strip at the viewport's left edge chooses between it and the
-**delete brush** ([edits/delete-brush.md](edits/delete-brush.md)), which takes
+**eraser brush** ([edits/eraser-brush.md](edits/eraser-brush.md)), which takes
 the unmodified left drag to paint points and delete them on release. With the
 brush on, Alt + left drag orbits in free view as well as in camera view, in
 place of the nodal pan, a click selects nothing, and bench handles take no

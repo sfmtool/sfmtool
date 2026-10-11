@@ -1,11 +1,11 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! The delete brush: the tool strip that chooses it, the preview of the points
+//! The eraser brush: the tool strip that chooses it, the preview of the points
 //! under its circle, and the stroke that paints the points it passes over and
 //! deletes them on release as one version.
 //!
-//! See `specs/gui/edits/delete-brush.md`. The brush reads what is on screen
+//! See `specs/gui/edits/eraser-brush.md`. The brush reads what is on screen
 //! through the renderer's region read (`specs/gui/camera-views.md` § "Region
 //! reads"): a frame that wants one names a rectangle in
 //! [`Viewer3D::pick_region_request`], and the answer arrives in
@@ -52,18 +52,18 @@ pub(crate) enum Tool {
     #[default]
     Navigate,
     /// Paint points and delete them on release.
-    DeleteBrush,
+    EraserBrush,
 }
 
 impl Tool {
     /// Every tool, in the strip's order from the top.
-    pub(crate) const ALL: [Tool; 2] = [Tool::Navigate, Tool::DeleteBrush];
+    pub(crate) const ALL: [Tool; 2] = [Tool::Navigate, Tool::EraserBrush];
 
     /// The name on the wire.
     pub(crate) fn wire_name(self) -> &'static str {
         match self {
             Tool::Navigate => "navigate",
-            Tool::DeleteBrush => "delete_brush",
+            Tool::EraserBrush => "eraser_brush",
         }
     }
 
@@ -78,7 +78,7 @@ impl Tool {
     pub(crate) fn label(self) -> &'static str {
         match self {
             Tool::Navigate => "Navigate",
-            Tool::DeleteBrush => "Delete brush",
+            Tool::EraserBrush => "Eraser brush",
         }
     }
 
@@ -86,8 +86,8 @@ impl Tool {
     fn tooltip(self) -> &'static str {
         match self {
             Tool::Navigate => "Navigate: orbit, pan and zoom the view, and click to select.",
-            Tool::DeleteBrush => {
-                "Delete brush: drag over points to delete them from the selected reconstruction."
+            Tool::EraserBrush => {
+                "Eraser brush: drag over points to delete them from the selected reconstruction."
             }
         }
     }
@@ -123,7 +123,7 @@ struct Asked {
     frame: u64,
 }
 
-/// A stroke of the delete brush, from the press until the edit is reported or
+/// A stroke of the eraser brush, from the press until the edit is reported or
 /// the stroke is cancelled.
 ///
 /// Held on the viewport, as the bench handle drag is, because what the stroke
@@ -225,7 +225,7 @@ impl Viewer3D {
             .as_ref()
             .filter(|stroke| stroke.node == id)
             .map(|stroke| &stroke.painted);
-        let under = (self.tool == Tool::DeleteBrush && self.brush_stroke.is_none())
+        let under = (self.tool == Tool::EraserBrush && self.brush_stroke.is_none())
             .then_some(&self.brush_preview)
             .filter(|preview| preview.node == Some(id))
             .map(|preview| &preview.points);
@@ -311,7 +311,7 @@ impl Viewer3D {
         });
         if let Some(stroke) = &mut self.brush_stroke {
             if !stroke.cancelled
-                && (escape || stroke.node != node || self.tool != Tool::DeleteBrush)
+                && (escape || stroke.node != node || self.tool != Tool::EraserBrush)
             {
                 stroke.cancelled = true;
                 stroke.painted.clear();
@@ -325,7 +325,7 @@ impl Viewer3D {
         // says whether this press was the left button alone.
         let plain = !(modifiers.alt || modifiers.ctrl || modifiers.command || modifiers.shift)
             && !crate::platform::other_mouse_button_down();
-        if self.tool == Tool::DeleteBrush
+        if self.tool == Tool::EraserBrush
             && self.brush_stroke.is_none()
             && pressed
             && plain
@@ -347,7 +347,7 @@ impl Viewer3D {
                 });
             }
         }
-        if self.tool != Tool::DeleteBrush {
+        if self.tool != Tool::EraserBrush {
             self.brush_preview = BrushPreview::default();
         }
         self.brush_stroke.is_some()
@@ -417,7 +417,7 @@ impl Viewer3D {
                     });
                 }
             }
-        } else if self.tool == Tool::DeleteBrush {
+        } else if self.tool == Tool::EraserBrush {
             match response.hover_pos() {
                 Some(pos) => {
                     let at = texture_px(pos, rect, ppp);
@@ -502,7 +502,7 @@ impl Viewer3D {
         painter: &egui::Painter,
         response: &egui::Response,
     ) {
-        if self.tool != Tool::DeleteBrush {
+        if self.tool != Tool::EraserBrush {
             return;
         }
         let pos = match &self.brush_stroke {
@@ -561,7 +561,7 @@ fn tool_button(ui: &mut egui::Ui, tool: Tool, selected: bool) -> egui::Response 
         let color = visuals.fg_stroke.color;
         match tool {
             Tool::Navigate => paint_cursor_icon(painter, rect, color),
-            Tool::DeleteBrush => paint_eraser_icon(painter, rect, color),
+            Tool::EraserBrush => paint_eraser_icon(painter, rect, color),
         }
     }
     response

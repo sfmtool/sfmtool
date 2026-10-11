@@ -2111,7 +2111,7 @@ fn patch_liveness_marks_the_slots_of_deleted_points() {
         ],
         "deleted wins over highlighted, as it does in the mask write",
     );
-    // So do the delete brush's marks.
+    // So do the eraser brush's marks.
     let painted: std::collections::HashSet<u32> = [41].into_iter().collect();
     let under_brush: std::collections::HashSet<u32> = [42].into_iter().collect();
     let marks = super::PointMarks {
@@ -2481,7 +2481,7 @@ fn update_point_mask_reports_the_entries_it_wrote() {
     );
 }
 
-/// The delete brush's two words over the life of a stroke: the points under
+/// The eraser brush's two words over the life of a stroke: the points under
 /// the circle take `4` and go back to `1` when it moves off them, the painted
 /// points take `3`, go back to `1` on a cancel, and to `0` once the deletion
 /// is the version's. Read from the sets the writes were diffed against, since

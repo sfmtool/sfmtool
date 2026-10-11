@@ -1,8 +1,8 @@
-# Delete Brush
+# Eraser Brush
 
 A reconstruction often has clusters of bad points: floaters in front of the
 subject, sky, a spray of points from one bad image, background nobody wants.
-The delete brush is a paint tool in the SfM Explorer's 3D viewport for removing
+The eraser brush is a paint tool in the SfM Explorer's 3D viewport for removing
 them: the cursor becomes a circle, the person drags it across the points they
 want gone, the points it passes over turn red, and when the mouse button is
 released those points are deleted from the selected reconstruction as one
@@ -35,7 +35,7 @@ them is on:
 | Icon | Tool | Tooltip |
 |------|------|---------|
 | Mouse pointer (top) | **Navigate**: everything the viewport's navigation does ([`../viewport-navigation.md`](../viewport-navigation.md)) | `Navigate: orbit, pan and zoom the view, and click to select.` |
-| Eraser (below) | **Delete brush** | `Delete brush: drag over points to delete them from the selected reconstruction.` |
+| Eraser (below) | **Eraser brush** | `Eraser brush: drag over points to delete them from the selected reconstruction.` |
 
 The icons are drawn with the painter rather than taken from a font, so they do
 not depend on which glyphs egui's bundled fonts carry. Each button reports
@@ -45,7 +45,7 @@ itself to accessibility as a radio button named for its tool, which is how
 The strip holds nothing else. A tool is chosen by clicking its icon, and there
 is no keyboard shortcut for either. The viewer starts in Navigate, and the tool
 (`Viewer3D::tool`) is kept for the session and not saved. A choice writes a
-`Display` entry to the Action Log, `Delete brush tool` or `Navigate tool`; two
+`Display` entry to the Action Log, `Eraser brush tool` or `Navigate tool`; two
 choices less than a second apart fold into one entry holding the last.
 
 The strip follows the HUD's input rules
@@ -192,9 +192,9 @@ small against the 4 GiB history budget.
 ## The wire
 
 - **The tool** is one field of `get_viewer_3d_display` /
-  `set_viewer_3d_display`: `tool`, `"navigate"` or `"delete_brush"`
+  `set_viewer_3d_display`: `tool`, `"navigate"` or `"eraser_brush"`
   ([`../mcp-server.md`](../mcp-server.md) § "`get_viewer_3d_display` /
-  `set_viewer_3d_display`"). Setting `delete_brush` while a camera is being
+  `set_viewer_3d_display`"). Setting `eraser_brush` while a camera is being
   moved is refused, and the call changes nothing.
 - **`drag`** `{panel_name, path_px, mouse_button, modifiers}` is how a stroke
   is driven from MCP, and so how `gui-bug-bash` exercises the brush
@@ -310,7 +310,7 @@ detection by identity").
   lock switches to Navigate and refuses the brush; and the tool strip's buttons
   choose the tool and record it.
 - **Wire** (`mcp/tests/edit.rs`): `set_viewer_3d_display` switches the tool,
-  refuses an unknown one, and refuses `delete_brush` while the Move Camera lock
+  refuses an unknown one, and refuses `eraser_brush` while the Move Camera lock
   is held, applying none of the call's other fields.
 - **End to end** (`ui_basic`): the tool strip's button turns the brush on in a
   real window, a `drag` across the middle of the seoul bull ground truth seen

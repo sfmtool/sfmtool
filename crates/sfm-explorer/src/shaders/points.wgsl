@@ -40,8 +40,8 @@ struct VertexInput {
     @location(2) color_packed: u32,         // instance: packed RGBA8
     // instance: 0 = the version in view has deleted this point, 1 = it is in
     // the reconstruction, 2 = it is in the reconstruction and the viewport is
-    // calling it out, 3 = it is in the reconstruction and the delete brush has
-    // painted it, 4 = it is in the reconstruction and under the delete brush's
+    // calling it out, 3 = it is in the reconstruction and the eraser brush has
+    // painted it, 4 = it is in the reconstruction and under the eraser brush's
     // circle. Its own buffer, written where an edit or a mark moved and
     // nowhere else, so neither rewrites the instance buffer.
     @location(3) alive: u32,
@@ -157,7 +157,7 @@ fn fs_main(in: VertexOutput) -> FragOutput {
     // A called-out point takes the hover variant of the same tint: it is the
     // weakest of the three, because the selection and the pointer are about
     // one point and a call-out is about a set.
-    // The delete brush's two reds come first, over the selection too: they
+    // The eraser brush's two reds come first, over the selection too: they
     // say what releasing the stroke will do to the point.
     var color = in.color;
     if in.mark == MASK_PAINTED {

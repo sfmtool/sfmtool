@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Reading a rectangle of the pick buffer, and finding the points in it that a
-//! capsule covers: what the delete brush reads where a click reads 5×5 pixels.
+//! capsule covers: what the eraser brush reads where a click reads 5×5 pixels.
 //!
 //! See `specs/gui/camera-views.md` § "Region reads". The copy and the read run
 //! through [`SceneRenderer`]; the rectangle, the decoded region and the capsule
@@ -272,7 +272,7 @@ impl SceneRenderer {
         if !rx.recv().map(|r| r.is_ok()).unwrap_or(false) {
             return None;
         }
-        // What `specs/gui/edits/delete-brush.md` § "The map blocks" was
+        // What `specs/gui/edits/eraser-brush.md` § "The map blocks" was
         // measured with.
         log::debug!(
             "pick region {}x{}: map wait {:.3} ms",

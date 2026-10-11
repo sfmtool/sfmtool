@@ -143,8 +143,8 @@ against a bright point cloud.
 ### The tool strip sits beside the HUD and is not part of it
 
 The viewport's tool strip, two icon buttons at the left edge that choose
-between Navigate and the delete brush
-([`edits/delete-brush.md`](edits/delete-brush.md)), is a second floating
+between Navigate and the eraser brush
+([`edits/eraser-brush.md`](edits/eraser-brush.md)), is a second floating
 control in the HUD's style: an `egui::Area` on the same layer, built by
 `show_tool_strip` beside `show_hud` before the viewport claims its rect. It is
 not a HUD section, because the HUD holds display settings and collapses to a

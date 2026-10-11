@@ -328,7 +328,7 @@ Both hover tooltip and click selection use the same readback result.
 
 ### Region reads
 
-The delete brush ([edits/delete-brush.md](edits/delete-brush.md)) needs
+The eraser brush ([edits/eraser-brush.md](edits/eraser-brush.md)) needs
 every point shown inside its circle, not the one under the cursor, so the
 renderer also reads a rectangle of the pick buffer
 ([scene_renderer/pick_region.rs](../../crates/sfm-explorer/src/scene_renderer/pick_region.rs)).

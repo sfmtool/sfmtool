@@ -13,7 +13,7 @@
 //! As with `set_image_detail_display`, **every refusal of a value is at the
 //! parse**: the ranges are static, so [`parse_change`] checks the whole call
 //! before a `Command` exists. The one refusal [`set`] makes is of the state:
-//! the delete brush while a camera is in hand. A call naming a good field and
+//! the eraser brush while a camera is in hand. A call naming a good field and
 //! a bad one, or the brush during a lock, changes nothing.
 
 use serde_json::{json, Map, Value};
@@ -39,16 +39,16 @@ pub(super) fn get(state: &AppState, viewer: &Viewer3D) -> JsonReply {
 /// field set to the value it had leaves no row. The tool is recorded as the
 /// tool strip records it.
 ///
-/// The delete brush is refused while a camera is in hand, before anything is
+/// The eraser brush is refused while a camera is in hand, before anything is
 /// written, as the tool strip greys its button then.
 pub(super) fn set(
     state: &mut AppState,
     viewer: &mut Viewer3D,
     change: &Viewer3dDisplayChange,
 ) -> JsonReply {
-    if change.tool == Some(Tool::DeleteBrush) && viewer.brush_refusal().is_some() {
+    if change.tool == Some(Tool::EraserBrush) && viewer.brush_refusal().is_some() {
         return Err(ToolError::new(format!(
-            "set_viewer_3d_display cannot choose the delete brush now: {BRUSH_LOCK_REFUSAL}"
+            "set_viewer_3d_display cannot choose the eraser brush now: {BRUSH_LOCK_REFUSAL}"
         )));
     }
     let before = Viewer3dDisplay::snapshot(state, viewer);
@@ -164,9 +164,9 @@ pub(super) fn properties() -> Vec<(&'static str, Value)> {
             "enum": tool_names(),
             "description": "What an unmodified left drag in the viewport does, the tool strip's \
                             choice: navigate (orbit, pan, zoom and click to select) or \
-                            delete_brush (paint the visible points of the selected \
+                            eraser_brush (paint the visible points of the selected \
                             reconstruction and delete them on release, as one version; Alt + \
-                            left drag orbits). delete_brush is refused while a camera is being \
+                            left drag orbits). eraser_brush is refused while a camera is being \
                             moved.",
         }),
     ));

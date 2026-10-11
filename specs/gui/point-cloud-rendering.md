@@ -78,8 +78,8 @@ calls out, reach the pass without rewriting the instance buffer:
 | `0` | `MASK_DELETED` | deleted by the version in view | nothing: a clipped vertex, which occludes nothing and answers no pick |
 | `1` | `MASK_ALIVE` | live | its own colour |
 | `2` | `MASK_HIGHLIGHTED` | live, and observed by a camera being moved (the Move Camera lock, `crate::camera_lock`) | the hover cyan, `(0, 1, 1)` |
-| `3` | `MASK_PAINTED` | live, and painted by the delete brush's stroke being held | red, `(1.0, 0.1, 0.1)` |
-| `4` | `MASK_UNDER_BRUSH` | live, and under the delete brush's circle before a press | pale red, `(1.0, 0.6, 0.6)` |
+| `3` | `MASK_PAINTED` | live, and painted by the eraser brush's stroke being held | red, `(1.0, 0.1, 0.1)` |
+| `4` | `MASK_UNDER_BRUSH` | live, and under the eraser brush's circle before a press | pale red, `(1.0, 0.6, 0.6)` |
 
 The words are declared in
 [upload/overlay.rs](../../crates/sfm-explorer/src/scene_renderer/upload/overlay.rs)
@@ -92,8 +92,8 @@ yellow and the hover's cyan are not. The two reds come before the selection and
 the hover in the fragment shader, because they say what releasing the stroke
 will do to the point. They share a hue so the circle's preview reads as what a
 press would paint, and the preview's is the paler one because nothing has been
-done yet. The delete brush that sets `3` and `4` is specified in
-[edits/delete-brush.md](edits/delete-brush.md).
+done yet. The eraser brush that sets `3` and `4` is specified in
+[edits/eraser-brush.md](edits/eraser-brush.md).
 
 `SceneRenderer::update_point_mask` writes the words; see
 [document-model.md](document-model.md) § "Change detection by identity".

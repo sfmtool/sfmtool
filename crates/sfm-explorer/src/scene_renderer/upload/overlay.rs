@@ -28,10 +28,10 @@ pub(crate) const MASK_ALIVE: u32 = 1;
 /// The mask word of a live point the viewport is calling out: drawn in the
 /// hover tint for as long as whatever is calling it out lasts.
 pub(crate) const MASK_HIGHLIGHTED: u32 = 2;
-/// The mask word of a live point the delete brush has painted in the stroke
+/// The mask word of a live point the eraser brush has painted in the stroke
 /// being held: drawn in the painted red.
 pub(crate) const MASK_PAINTED: u32 = 3;
-/// The mask word of a live point under the delete brush's circle before a
+/// The mask word of a live point under the eraser brush's circle before a
 /// press: drawn in the pale red.
 pub(crate) const MASK_UNDER_BRUSH: u32 = 4;
 
@@ -152,7 +152,7 @@ impl SceneRenderer {
     ///
     /// One `u32` per point, carrying every answer because they are one word to
     /// the shader: `0` deleted, `1` alive, `2` alive and drawn in the hover
-    /// tint, `3` alive and painted by the delete brush, `4` alive and under the
+    /// tint, `3` alive and painted by the eraser brush, `4` alive and under the
     /// brush's circle ([`mask_word`] picks it). Written only for the indexes
     /// that entered or left any of the sets, in the point buffer and -- for a
     /// point that carries a surfel -- the patch buffer, so an edit costs its own
@@ -163,7 +163,7 @@ impl SceneRenderer {
     ///
     /// The marks are *viewport* statements rather than document ones -- the
     /// points a camera being moved observes ([`crate::camera_lock`]), and the
-    /// delete brush's painted points and the points under its circle -- and
+    /// eraser brush's painted points and the points under its circle -- and
     /// they ride in this word because a second per-point buffer would mean a
     /// second vertex attribute and a second pipeline layout for a temporary
     /// colour.

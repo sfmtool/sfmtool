@@ -202,7 +202,7 @@ pub(crate) enum Command {
     GetViewer3dDisplay,
     /// The fields the call named, each already checked against its slider's
     /// range and rounded to the decimals the slider shows, so
-    /// [`apply_with_window`] writes and records, refusing only the delete
+    /// [`apply_with_window`] writes and records, refusing only the eraser
     /// brush while a camera is in hand.
     SetViewer3dDisplay {
         change: Viewer3dDisplayChange,

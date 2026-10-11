@@ -189,10 +189,10 @@ pub(super) struct ReconResources {
     /// calling a set of points out, which today is the points a camera being
     /// moved observes. Diffed the same way, and for the same reason.
     pub masked_highlighted: HashSet<u32>,
-    /// Which indexes the mask currently marks as painted by the delete brush.
+    /// Which indexes the mask currently marks as painted by the eraser brush.
     /// Diffed the same way.
     pub masked_painted: HashSet<u32>,
-    /// Which indexes the mask currently marks as under the delete brush's
+    /// Which indexes the mask currently marks as under the eraser brush's
     /// circle. Diffed the same way.
     pub masked_under_brush: HashSet<u32>,
 

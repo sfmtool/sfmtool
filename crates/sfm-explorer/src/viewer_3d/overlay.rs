@@ -221,7 +221,7 @@ impl Viewer3D {
                 super::brush::Tool::Navigate => {
                     "Drag: orbit | Shift: pan | Scroll: zoom | Alt+drag: free-look | WASD: fly | Alt: target"
                 }
-                super::brush::Tool::DeleteBrush => {
+                super::brush::Tool::EraserBrush => {
                     "Drag: delete points | Esc: cancel stroke | Alt+drag: orbit | Shift: pan | Scroll: zoom | WASD: fly"
                 }
             };

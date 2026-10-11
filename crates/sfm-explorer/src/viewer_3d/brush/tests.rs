@@ -1,7 +1,7 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Headless tests of the delete brush: the preview, the stroke, its
+//! Headless tests of the eraser brush: the preview, the stroke, its
 //! cancellation and its commit, and the tool strip.
 //!
 //! `Viewer3D::show` runs through `Context::run_ui` as it does in
@@ -80,7 +80,7 @@ impl Rig {
             gpu: Gpu::default(),
             rect: egui::Rect::NOTHING,
         };
-        rig.viewer.tool = Tool::DeleteBrush;
+        rig.viewer.tool = Tool::EraserBrush;
         rig.frames(2, egui::pos2(300.0, 300.0));
         rig
     }
@@ -466,7 +466,7 @@ fn with_the_brush_on_alt_drag_orbits_and_paints_nothing() {
         (rig.viewer.camera.camera.position - position).norm()
     };
     assert!(
-        drag(Tool::DeleteBrush) > 1e-6,
+        drag(Tool::EraserBrush) > 1e-6,
         "the brush's Alt drag did not orbit"
     );
     assert!(
@@ -529,7 +529,7 @@ fn the_tool_strip_chooses_the_tool() {
     let strip = rig.viewer.tool_strip_rect.expect("the strip was drawn");
     let lower = egui::pos2(strip.center().x, strip.bottom() - 19.0);
     let upper = egui::pos2(strip.center().x, strip.top() + 19.0);
-    for (at, tool) in [(lower, Tool::DeleteBrush), (upper, Tool::Navigate)] {
+    for (at, tool) in [(lower, Tool::EraserBrush), (upper, Tool::Navigate)] {
         rig.frame(vec![egui::Event::PointerMoved(at)], at);
         rig.frame(vec![button(at, true, egui::Modifiers::NONE)], at);
         rig.frame(vec![button(at, false, egui::Modifiers::NONE)], at);

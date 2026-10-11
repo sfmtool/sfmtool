@@ -1321,7 +1321,7 @@ toggles are master switches over every node, and the per-node eyes stay with
     "target_fog_multiplier": 10.0,    //           0.5 to 100, 1 decimal
     "show_controls_help": true,       // Debug
     "show_fps": true,
-    "tool": "navigate"                // the tool strip: "navigate" or "delete_brush"
+    "tool": "navigate"                // the tool strip: "navigate" or "eraser_brush"
   }
 }
 ```
@@ -1333,7 +1333,7 @@ omitted one alone:
 { "point_size_log2": 1.5, "show_target_indicator": true }
 { "show_grid": false, "show_camera_images": false }
 { "maintain_z_up": true }
-{ "tool": "delete_brush" }
+{ "tool": "eraser_brush" }
 ```
 
 The reply is the whole document, exactly as `get_viewer_3d_display` would return
@@ -1368,11 +1368,11 @@ view is looking through a camera, whose own up is kept. A screenshot taken
 straight after the call can therefore show the view part way through the turn.
 
 **`tool` is the tool strip's choice**, what an unmodified left drag in the
-viewport does: `"navigate"` or `"delete_brush"`
-([edits/delete-brush.md](edits/delete-brush.md)). It is here rather than in a
+viewport does: `"navigate"` or `"eraser_brush"`
+([edits/eraser-brush.md](edits/eraser-brush.md)). It is here rather than in a
 tool of its own because it is viewport state an agent sets before a `drag` and
 reads back beside the rest, as `maintain_z_up` is. A change is recorded as the
-strip's click records it, `Delete brush tool` or `Navigate tool`. With the
+strip's click records it, `Eraser brush tool` or `Navigate tool`. With the
 brush on, a `drag` across the viewport paints and deletes; the version lands a
 frame or two after the `drag` replies.
 
@@ -1394,7 +1394,7 @@ above it. A call naming a good
 field and a bad one changes nothing, and the refusal is a protocol error
 (§ "Errors"), so it leaves no Action Log row. An unknown `tool` is refused the
 same way, with the list of tools. **The one refusal made after the parse** is
-of the state: `tool: "delete_brush"` while a camera is being moved (the Move
+of the state: `tool: "eraser_brush"` while a camera is being moved (the Move
 Camera lock, [edits/move-camera.md](edits/move-camera.md)), which the strip
 greys its button for. It is a domain error, and the call's other fields are not
 applied either. **A number inside its range is

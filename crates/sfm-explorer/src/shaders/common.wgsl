@@ -48,7 +48,7 @@ const MASK_HIGHLIGHTED: u32 = 0x00000002u;
 const MASK_PAINTED: u32 = 0x00000003u;
 const MASK_UNDER_BRUSH: u32 = 0x00000004u;
 
-// The delete brush's colours, which replace a point's own outright as the
+// The eraser brush's colours, which replace a point's own outright as the
 // selection's yellow and the hover's cyan do. A saturated red for a point the
 // stroke being held has painted, and a pale red for one under the circle
 // before a press: the same hue, so the preview reads as what a press would do,

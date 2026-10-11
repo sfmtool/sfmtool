@@ -2085,7 +2085,7 @@ fn a_drag_across_the_viewport_orbits_the_camera() {
     );
 }
 
-/// The delete brush in a real window: the tool strip's button turns it on, a
+/// The eraser brush in a real window: the tool strip's button turns it on, a
 /// `drag` across the middle of the seoul bull ground truth deletes the points
 /// it passes over as one version, and the count in the Action Log entry is the
 /// count the reconstruction lost.
@@ -2120,13 +2120,13 @@ fn a_brush_stroke_deletes_the_points_it_passes_over() {
 
     let brush = viewer.wait_for(
         json!({ "panel_name": "viewer_3d" }),
-        "the tool strip's Delete brush button never appeared",
-        |listing| find_widget(listing, "radio_button", "Delete brush").cloned(),
+        "the tool strip's Eraser brush button never appeared",
+        |listing| find_widget(listing, "radio_button", "Eraser brush").cloned(),
     );
     viewer.click(json!({ "widget": brush["widget"] }));
     let display = viewer.ok("get_viewer_3d_display", json!({}));
     assert_eq!(
-        display["viewer_3d_display"]["tool"], "delete_brush",
+        display["viewer_3d_display"]["tool"], "eraser_brush",
         "{display}"
     );
 

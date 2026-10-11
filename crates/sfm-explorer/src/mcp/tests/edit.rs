@@ -2348,15 +2348,15 @@ fn set_viewer_3d_display_switches_the_tool() {
         &mut state,
         &mut viewer,
         "set_viewer_3d_display",
-        json!({ "tool": "delete_brush" }),
+        json!({ "tool": "eraser_brush" }),
     );
-    assert_eq!(reply["viewer_3d_display"]["tool"], "delete_brush");
-    assert_eq!(viewer.tool, Tool::DeleteBrush);
+    assert_eq!(reply["viewer_3d_display"]["tool"], "eraser_brush");
+    assert_eq!(viewer.tool, Tool::EraserBrush);
     assert!(
         state
             .action_log
             .entries()
-            .any(|e| e.text == "Delete brush tool"),
+            .any(|e| e.text == "Eraser brush tool"),
         "{:?}",
         rows(&state)
     );
@@ -2367,11 +2367,11 @@ fn set_viewer_3d_display_switches_the_tool() {
         "set_viewer_3d_display",
         json!({ "tool": "lasso" }),
     );
-    assert!(error.0.contains("navigate, delete_brush"), "{error}");
-    assert_eq!(viewer.tool, Tool::DeleteBrush);
+    assert!(error.0.contains("navigate, eraser_brush"), "{error}");
+    assert_eq!(viewer.tool, Tool::EraserBrush);
 }
 
-/// The delete brush is refused while a camera is in hand, whole: the call's
+/// The eraser brush is refused while a camera is in hand, whole: the call's
 /// other fields are not applied either, and the lock is left as it was.
 #[test]
 fn set_viewer_3d_display_refuses_the_brush_while_a_camera_is_in_hand() {
@@ -2383,7 +2383,7 @@ fn set_viewer_3d_display_refuses_the_brush_while_a_camera_is_in_hand() {
         &mut state,
         &mut viewer,
         "set_viewer_3d_display",
-        json!({ "tool": "delete_brush", "show_grid": !grid }),
+        json!({ "tool": "eraser_brush", "show_grid": !grid }),
     );
     assert!(error.0.contains("camera is being moved"), "{error}");
     assert_eq!(viewer.tool, Tool::Navigate);
