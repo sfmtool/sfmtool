@@ -2589,6 +2589,14 @@ fn carry_keypoints(
 /// so the same pixel.) One that no longer projects at all is left with no
 /// keypoint and the reason that says so, rather than with a stale one.
 ///
+/// **A sighting carried off its photograph, or to no pixel at all, is turned
+/// `out` and unpinned.** A keypoint is kept, so the row still says where the
+/// patch went, but a pixel
+/// outside `[0, width) x [0, height)` is no place on the photograph and cannot
+/// be committed; a pin, even an `in` one a person set, was a ruling on a place
+/// the sighting has left. A row turned `out` here takes the reference-view
+/// restatement a painting gives one.
+///
 /// Returns how many keypoints were written, which is how many photographs still
 /// hold the patch.
 fn place_keypoints(
@@ -2598,8 +2606,10 @@ fn place_keypoints(
     place: impl Fn(Point3<f64>) -> Point3<f64>,
 ) -> usize {
     let mut placed = 0;
+    let mut turned_out = false;
     for observation in &mut track.observations {
         let keypoint = observation.track.as_ref().and_then(|m| m.keypoint);
+        let mut off_photograph = false;
         let landed =
             view_of(edited, observation.image)
                 .ok()
@@ -2616,8 +2626,18 @@ fn place_keypoints(
                         // Never localized, so there is no offset to keep.
                         None => was.center,
                     };
-                    camera.project_homogeneous(&cam_from_world, place(from).coords, was.w)
+                    let pixel =
+                        camera.project_homogeneous(&cam_from_world, place(from).coords, was.w);
+                    off_photograph = !pixel.is_some_and(|pixel| on_photograph(&camera, pixel));
+                    pixel
                 });
+        if off_photograph {
+            observation.pinned = false;
+            if observation.verdict == Verdict::In {
+                observation.verdict = Verdict::Out;
+                turned_out = true;
+            }
+        }
         observation.track = Some(match landed {
             Some(pixel) => {
                 placed += 1;
@@ -2632,7 +2652,20 @@ fn place_keypoints(
             },
         });
     }
+    if turned_out {
+        restate_reference_view(track);
+    }
     placed
+}
+
+/// Whether `pixel` lies on the photograph: inside `[0, width) x [0, height)`,
+/// the sensor's half-open extent that [`Unmeasured::OffSensor`] is written
+/// against and that a `.sfmr` file holds every keypoint to.
+fn on_photograph(camera: &crate::camera::CameraIntrinsics, pixel: [f64; 2]) -> bool {
+    pixel[0] >= 0.0
+        && pixel[1] >= 0.0
+        && pixel[0] < f64::from(camera.width)
+        && pixel[1] < f64::from(camera.height)
 }
 
 /// Drop every track measurement but the keypoint it was read at.
@@ -2722,6 +2755,11 @@ pub struct ThresholdReport {
 /// they carry. A row turned `in` has no standing until an evaluation reads it.
 /// This is what keeps an evaluation's repaint from leaving an `out` row named
 /// as the reference view.
+///
+/// **A row the reading found off its photograph is unpinned first**, and the
+/// painting then turns it `out` (`proposed_verdict`): its keypoint names no
+/// place on the photograph, so a commit could not write it, and a pin was a
+/// ruling on a place the sighting no longer holds.
 pub fn apply_thresholds(track: &EditableTrack) -> (EditableTrack, ThresholdReport) {
     let mut report = ThresholdReport {
         turned_in: 0,
@@ -2730,6 +2768,16 @@ pub fn apply_thresholds(track: &EditableTrack) -> (EditableTrack, ThresholdRepor
         unmeasured: 0,
         changed: false,
     };
+    let stage = track.stage_kind();
+    let mut lifted = false;
+    let mut unpinned = track.clone();
+    for observation in &mut unpinned.observations {
+        if observation.pinned && found_off_photograph(observation, stage) {
+            observation.pinned = false;
+            lifted = true;
+        }
+    }
+    let track = &unpinned;
     let mut next = track.clone();
     for (i, painted) in paint(track, &[]).into_iter().enumerate() {
         let observation = &track.observations[i];
@@ -2749,11 +2797,19 @@ pub fn apply_thresholds(track: &EditableTrack) -> (EditableTrack, ThresholdRepor
         }
         next.observations[i].verdict = verdict;
     }
-    report.changed = report.turned_in + report.turned_out > 0;
-    if report.changed {
+    let moved = report.turned_in + report.turned_out > 0;
+    report.changed = moved || lifted;
+    if moved {
         restate_reference_view(&mut next);
     }
     (next, report)
+}
+
+/// Whether the track stage's reading found `observation` off its photograph
+/// ([`Unmeasured::OffSensor`]).
+fn found_off_photograph(observation: &Observation, stage: StageKind) -> bool {
+    stage == StageKind::Track
+        && observation.track.as_ref().and_then(|m| m.reason) == Some(Unmeasured::OffSensor)
 }
 
 /// The verdict each observation of `track` would take were its own verdict
@@ -3006,12 +3062,17 @@ pub fn bar_checks(
 
 /// What the bars propose for one observation at `stage`, before the one `in`
 /// per image is settled: `in` when no bar of [`bar_checks`] fails it, and
-/// `None` when nothing at that stage has measured it.
+/// `None` when nothing at that stage has measured it. An observation the track
+/// stage's evaluation found off its photograph ([`Unmeasured::OffSensor`]) is
+/// `out` without a reading: it names no place on the photograph to keep.
 fn proposed_verdict(
     observation: &Observation,
     stage: StageKind,
     thresholds: &Thresholds,
 ) -> Option<Verdict> {
+    if found_off_photograph(observation, stage) {
+        return Some(Verdict::Out);
+    }
     bar_checks(observation, stage, thresholds).map(|checks| {
         if checks.clears_every_bar() {
             Verdict::In

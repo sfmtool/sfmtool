@@ -2102,6 +2102,14 @@ the moved centre no longer projects into is left with no keypoint and
 the normal and the size are untouched. Nothing is pinned: where the patch is
 says nothing about whether any sighting belongs to it.
 
+**A sighting carried off its photograph is turned `out` and unpinned**, by
+every step that moves the patch (this one, the resize and the tilt). Off means
+a keypoint outside `[0, width) x [0, height)` or no keypoint at all. The
+keypoint is kept, so the row still says where the patch went, but it names no
+place on the photograph, and a `.sfmr` file refuses it; a pin, even an `in` one
+a person set, was a ruling on a place the sighting has left. A row turned out
+this way has its reference-view standing restated as a painting's would be.
+
 Two refusals, each attached to the part of `by` that earns it. A **bearing**
 (`w == 0`) has its moved centre renormalized, which leaves every corner the
 direction it was, so a tangential `by` is carried like any other; a `by` with a
@@ -2207,7 +2215,8 @@ thing, which is where each photograph sees the patch's content against where
 the geometry puts its middle. A sighting the turned patch no longer projects
 into is left with no keypoint and `Unmeasured::NoProjection`. Nothing is
 pinned: which way the patch faces says nothing about whether a sighting belongs
-to it.
+to it. A sighting the turn carries off its photograph is turned `out` and
+unpinned, as a translation's is.
 
 **A tilt stops `MAX_TILT_DEG` from any observation.** With `e_i` the unit
 vector from the centre to observation `i`'s camera centre, a normal is *allowed*
@@ -2440,8 +2449,11 @@ bars say about the latest reading: a row a search or a pixel gesture added joins
 the track when its first reading clears every bar, a row a step moved past a bar
 is turned out by the evaluation that follows, and one a fit moved back within
 the bars is turned in again. A pinned verdict is never moved, which is why a
-point's rows arrive pinned. The bars judge the scores against the bitmap, so a
-row with no score, on a track with no bitmap, is left where it is;
+point's rows arrive pinned, with the one exception below. The bars judge the scores against the bitmap, so a
+row with no score, on a track with no bitmap, is left where it is; the one
+exception is a row the reading found off its photograph (`OffSensor`), which
+the bars unpin and turn `out` even where it was pinned, since it names no place
+a commit could write and its pin was a ruling on a place it has left;
 `evaluate_rendering_bitmap` renders the bitmap first where it is missing or
 moves to the rule's pick, and repaints after the scores against it are read.
 Where that repaint moves the rule's pick to another row on a track whose
@@ -3646,7 +3658,9 @@ respectively; the bearing's edge resize and the turn are run under the lens.
   the projection of `c' + a_i u + b_i v`, computed from the pair read before the
   move; the sightings move by different amounts.
 - A patch pushed out past the cameras leaves every sighting with no keypoint and
-  `NoProjection`, drops the bitmap and the measurements and pins nothing; a
+  `NoProjection`, turned `out` and unpinned, and drops the bitmap and the
+  measurements; a slide that carries some sightings off their photographs turns
+  those out and unpins them and leaves the verdict and pin of every other; a
   translation inside the patch's own tolerance reports `changed: false`; a
   distance that is not a finite number, a bearing and a cluster are refused.
 - A tilt is the least rotation: its axis is perpendicular to both normals, so
@@ -3661,8 +3675,9 @@ respectively; the bearing's edge resize and the turn are run under the lens.
   camera and 69 off the other, so starting outside one cap, is turned back
   inside without being stopped.
 - A sighting whose own piece of the patch swings behind its camera is left with
-  no keypoint and `NoProjection` while the centred one survives; the bitmap and
-  the measurements go and nothing is pinned. A direction that is not one, a
+  no keypoint and `NoProjection`, turned `out` and unpinned, while the centred
+  one survives; the bitmap and the measurements go and nothing is pinned. A
+  direction that is not one, a
   track at infinity and a cluster are refused, and a tilt onto the normal the
   patch already shows reports `changed: false`.
 

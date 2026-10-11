@@ -971,6 +971,39 @@ fn a_row_the_localizer_refused_is_not_judged_on_its_bitmap_score() {
     assert_eq!(report.unmeasured, 1);
 }
 
+/// A row the evaluation found off its photograph has no reading for the bars
+/// to judge, and they turn it out rather than leave its `in` standing, pinned
+/// or not: a commit would write a keypoint no photograph holds.
+#[test]
+fn a_row_found_off_its_photograph_is_unpinned_and_painted_out() {
+    let mut track = scored_track([0.95, 0.95]);
+    track.observations[1].verdict = Verdict::In;
+    *slot(&mut track, 1) = TrackMeasurement {
+        keypoint: slot(&mut track, 1).keypoint,
+        reason: Some(Unmeasured::OffSensor),
+        ..TrackMeasurement::default()
+    };
+    let (painted, report) = apply_thresholds(&track);
+    assert_eq!(painted.observations[0].verdict, Verdict::In);
+    assert_eq!(painted.observations[1].verdict, Verdict::Out);
+    assert_eq!((report.turned_out, report.unmeasured), (1, 0));
+
+    // A pin set while the row was on the photograph does not keep it in.
+    track.observations[1].pinned = true;
+    let (painted, report) = apply_thresholds(&track);
+    assert_eq!(painted.observations[1].verdict, Verdict::Out);
+    assert!(!painted.observations[1].pinned);
+    assert_eq!(report.turned_out, 1);
+    assert_eq!(verdicts_if_unpinned(&track)[1], Some(Verdict::Out));
+
+    // Already out, a pinned row loses only its pin, and that is a change.
+    track.observations[1].verdict = Verdict::Out;
+    let (painted, report) = apply_thresholds(&track);
+    assert!(!painted.observations[1].pinned);
+    assert_eq!(report.turned_out, 0);
+    assert!(report.changed);
+}
+
 /// A render for [`settle`](super::evaluate::settle) that installs a blank
 /// bitmap naming `from` and scores the row rendered from `1` and every other
 /// row `0.1`, as the render of one view against another reads where the two
@@ -5059,6 +5092,50 @@ fn a_translation_with_both_parts_moves_the_centre_by_their_sum() {
     // The axes do not turn, so the second call reads the same `n` the first did.
     assert_eq!(placement_of(&both).u_axis, was.u_axis);
     assert_eq!(placement_of(&both).v_axis, was.v_axis);
+}
+
+/// A move that carries a sighting off its photograph turns it out and lifts
+/// its pin, keeping the keypoint so the row still says where the patch went;
+/// a sighting the move leaves on its photograph keeps its verdict and its pin.
+#[test]
+fn a_move_that_carries_a_sighting_off_its_photograph_turns_it_out_and_unpins_it() {
+    let scene = Scene::new();
+    let edited = edited_fixture(&scene, WORLD);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let track = track_of(&bench, &label);
+    assert!(track
+        .observations
+        .iter()
+        .all(|o| o.pinned && o.verdict == Verdict::In));
+
+    let mut went_off = 0;
+    let mut stayed_on = 0;
+    for step in [0.05, 0.2, 0.5, 1.0, 2.0, 5.0] {
+        let (next, _) =
+            translate_patch(&track, &edited, Vector3::new(step, 0.0, 0.0)).expect("a move");
+        for (was, now) in track.observations.iter().zip(&next.observations) {
+            let (camera, _) = view(&edited, now.image as usize);
+            let on = now
+                .track
+                .as_ref()
+                .and_then(|m| m.keypoint)
+                .is_some_and(|k| {
+                    let [x, y] = [f64::from(k[0]), f64::from(k[1])];
+                    x >= 0.0 && y >= 0.0 && x < camera.width as f64 && y < camera.height as f64
+                });
+            if on {
+                stayed_on += 1;
+                assert_eq!((now.verdict, now.pinned), (was.verdict, was.pinned));
+            } else {
+                went_off += 1;
+                assert_eq!((now.verdict, now.pinned), (Verdict::Out, false), "{now:?}");
+            }
+        }
+    }
+    assert!(
+        went_off > 0 && stayed_on > 0,
+        "{went_off} off, {stayed_on} on"
+    );
 }
 
 /// **One implementation of each edit.** The pixel form is the unprojection in
