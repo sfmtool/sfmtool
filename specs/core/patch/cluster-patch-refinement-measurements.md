@@ -2,7 +2,7 @@
 
 This file records the fleet measurements behind the piecewise refinement of [cluster-patch-refinement.md](cluster-patch-refinement.md#piecewise-refinement), and the ground-truth measurements behind [cell-plane-normals.md](cell-plane-normals.md). The piecewise refinement registers each kept member's nine cells against the cluster's template, starting at the member's cascade shape, fits a robust affine map to the cell shifts to find the cells that disagree with the others, and stores the shifts with a status per cell in the `.matches` file. By default it also applies the fitted map as an update of the shape, by a loop that keeps the cascade's ZNCC from falling (`PiecewiseParams::move_shape`, on by default); with `move_shape` off it is a measurement only and leaves the member's shape as the cascade found it. The measurements bear on whether the stage runs by default (`sfm cluster-patches --piecewise`), and on the defaults of `min_cell_zncc` (provisionally `0.8`) and of `min_cell_curvature` (provisionally `0.02`).
 
-The first five sections were measured at commit `f787be3b` on 43 fleet entries, when the stage was a loop that applied every fitted update to the shape: agreement with the cascade's shapes, the cell statistics, the wall time, and the seed stage on the two checked-in ground truths. The later sections repeat parts of that on five entries: after the loop was given an acceptance rule that keeps the cascade's ZNCC, after the default was changed to the measurement with the loop behind `move_shape`, and after the robust fit's residual scale was changed to the factor for two-dimensional residuals. The next two sections measure the cell plane normals against the two checked-in ground truths. The two after them record a blind human review of the loop's moved shapes against the cascade's, which reversed the earlier decision to leave the shape to the cascade, and repeat the subset with the loop as the default. The next measures two gates that read each member's own patch again at its refined shape, against the ground truths of four of the five entries, and the last repeats the cell plane normals on files written at the current defaults. While these measurements were taken the stage was specified in a draft proposal, since folded into the spec; "the draft" in the sections below means that proposal.
+The first five sections were measured at commit `f787be3b` on 43 fleet entries, when the stage was a loop that applied every fitted update to the shape: agreement with the cascade's shapes, the cell statistics, the wall time, and the seed stage on the two checked-in ground truths. The later sections repeat parts of that on five entries: after the loop was given an acceptance rule that keeps the cascade's ZNCC, after the default was changed to the measurement with the loop behind `move_shape`, and after the robust fit's residual scale was changed to the factor for two-dimensional residuals. The next two sections measure the cell plane normals against the two checked-in ground truths. The two after them record a blind human review of the loop's moved shapes against the cascade's, which reversed the earlier decision to leave the shape to the cascade, and repeat the subset with the loop as the default. The next measures two gates that read each member's own patch again at its refined shape, against the ground truths of four of the five entries, the one after repeats the cell plane normals on files written at the current defaults, and the last measures the cascade's [rotation starts](cluster-patch-refinement.md#rotation-starts) on three entries, against the ground truths of all three. While these measurements were taken the stage was specified in a draft proposal, since folded into the spec; "the draft" in the sections below means that proposal.
 
 ## Setup of the fleet run (f787be3b)
 
@@ -1162,3 +1162,58 @@ Few of the changed clusters are matched to a ground-truth point. At 3 px one mov
 
 - **The cell plane normal figures hold at the current defaults.** [cell-plane-normals.md](cell-plane-normals.md#what-the-measurements-show) quotes this section's numbers. The question of the [precision gate draft](../../drafts/cell-plane-normal-precision-gate.md#open-questions) whether the moved shapes change the normals is answered: on these ground truths they do not, measurably.
 - Nothing else changes. The displacements against the shapes, and the gate on the normal's precision, stay open for the reasons in the sections above.
+
+## Rotation multi-start (2026-10-11)
+
+**Question.** The cascade starts from the seed `M₀ = A_mem·A_ref⁻¹`, whose rotation is the difference of the two SIFT orientations, and its small simplex steps do not leave a wrong rotation basin. The [rotation starts](cluster-patch-refinement.md#rotation-starts) score the template against the member at twelve rotations of the seed, the seed first, and run the cascade once from the best. What does that change on whole cluster files, does it raise the share of kept members the ground truth calls wrong, and what does it cost?
+
+**Motivation.** Measured on branch `bootstrap-core-migration` at `24b11838`, on pairs of observations of one ground-truth point across five datasets refined as a member against its reference, apart from the matcher. For 11.5% to 19.9% of the right pairs at scale ratios of 1/4 to 0.7, the SIFT seed's rotation was more than 20° from the ground truth's map, and the single-start cascade brought half of those to the map. Scoring twelve evenly spaced rotations and cascading the best one brought 80% of them, raised the share of lookalike impostor pairs reaching ZNCC 0.85 by 0.1 to 0.3 points, and cost 1.03 times the time per pair. Cascading the best two or three rotations recovered a few points more at 2.2 and 3.3 times the time, and raised the impostors more. That measurement scored some starts blur-matched; scored plain throughout, as the refinement does, it picked the same rotations to within 0.5 points of coverage.
+
+**Method.**
+
+- **Code.** Branch `feat/cluster-rotation-multistart` (from `main` at `f84a234c`) with the change that adds this section, the extension rebuilt with `pixi run maturin develop --release`.
+- **Machine.** Windows 11, Intel Core i9-14900HX (32 logical processors). Other programs were open, and the wall times vary between repeats by more than the change, so the cost is read from the profile's counts.
+- **Data.** The unrefined cluster files of three entries: `SeoulBull` (`20261007-00-cluster-seoul_bull_sculpture_1-17-clusters.matches`, 4,407 clusters, 10,959 members), `KerryPark480` (`kerry_park-clusters.matches`, 13,699 clusters, 39,481 members) and `DnDTabletop` (`20260718-01-cluster-20250112_044748489_1-1681x5-clusters.matches`, 483,767 clusters, 2,192,233 members), copied to a scratch directory.
+- **Runs.** `sfm cluster-patches` at its defaults (patch size 12, resolution 25, both gates at the refined shape on, no piecewise stage), once with `--rotation-starts 1` and once with the default, 12. The cost runs repeated each twice with `SFMTOOL_PROFILE=1`.
+- **Ground truth.** As in [Gates at the refined shape](#gates-at-the-refined-shape-2026-10-09): a kept member is *wrong* when its refined position lies further than `max(3, 5·m)` px of its own photograph from the epipolar half-line of its reference's detection, `m` the file's median of that distance over kept members, under `seoul_bull_sculpture_ground_truth.sfmr`, `kerry_park_ground_truth.sfmr` and `DnDTabletop`'s `gt-clean-10-obscull-ba.sfmr`. Every kept member is judged. The bar is 3 px on `SeoulBull` and `KerryPark480` and 4.68 px on `DnDTabletop`, the same in both runs. A newly kept member is judged in the twelve-start file and a newly refused one in the one-start file.
+
+**Result: few members change, and the kept wrong share does not move.**
+
+| entry | kept, 1 start / 12 | kept wrong, 1 start / 12 | status changed | newly kept (wrong) | newly refused (wrong) | not evaluated, 1 start / 12 |
+|---|---|---|---|---|---|---|
+| SeoulBull | 2,821 / 2,822 | 4.18% / 4.18% | 15 | 3 (1) | 2 (1) | 754 / 745 |
+| KerryPark480 | 15,571 / 15,579 | 15.96% / 15.97% | 20 | 10 (3) | 2 (0) | 1,536 / 1,529 |
+| DnDTabletop | 1,370,539 / 1,370,918 | 9.50% / 9.50% | 1,249 | 558 (125, 22.4%) | 179 (27, 15.1%) | 76,729 / 76,061 |
+
+The references do not change, since the reference is chosen before any member is refined. Of the members fitted in both runs, 95.6%, 97.2% and 99.5% have bit-identical shapes and positions, and 90, 194 and 875 end turned more than 15° from where the single start left them.
+
+Status changes on `DnDTabletop`, the only entry with more than a handful:
+
+| 1 start → 12 | members |
+|---|---|
+| `not_evaluated` → `kept` | 402 |
+| `rejected_shift` → `rejected_low_zncc` | 170 |
+| `not_evaluated` → `rejected_low_zncc` | 134 |
+| `kept` → `rejected_low_zncc` | 133 |
+| `not_evaluated` → `rejected_shift` | 130 |
+| `rejected_low_zncc` → `kept` | 96 |
+| `rejected_low_zncc` → `rejected_shift` | 66 |
+| `rejected_shift` → `kept` | 56 |
+| `kept` → `rejected_shift` | 44 |
+| 7 other changes | 18 |
+
+Most of the change is not a recovered rotation but a member that is evaluated at all: a member whose support leaves the frame at its seed but not at some other start was `not_evaluated` with one start and is fitted from that start with twelve (668 members on `DnDTabletop`, 9 and 7 on the other two). The newly kept members are wrong more often than the kept members as a whole, 22.4% against 9.5% on `DnDTabletop`, but they are 0.04% of the kept set, and the kept wrong share is unchanged to two decimals on every entry. The start is chosen on its score at the seed's position and scale, not on the score the cascade ends at, so a member can end lower from the chosen start than it would from the seed; that is the way a `kept` member becomes `rejected_low_zncc`.
+
+These files are mostly pairs at similar scale, where the SIFT orientations agree; the badly seeded pairs of the motivation are at scale ratios of 1/4 to 0.7, and the files hold few of them.
+
+**Cost.** From the profile. The counts are the same on every repeat; the CPU times are each run's thread-summed refinement time and vary between repeats by more than the change.
+
+| entry | evaluations per refined member, 1 start / 12 (of them, start scores) | evaluations | tile builds | refinement CPU, s, 1 start / 12, two repeats each |
+|---|---|---|---|---|
+| SeoulBull | 207.8 / 220.4 (11.2) | +6.0% | +88% | 5.40, 5.77 / 5.98, 6.54 |
+| KerryPark480 | 213.3 / 225.2 (11.8) | +5.6% | +94% | 29.1, 30.8 / 31.1, 28.6 |
+| DnDTabletop | 176.5 / 188.5 (11.8) | +6.8% | +73% | 2,181, 2,854 / 2,333, 2,496 |
+
+Each member that reaches the cascade costs up to twelve start scores, fewer where a start leaves the frame, and the 668, 9 and 7 newly evaluated members add their cascades. The start scores build tiles of their own, which nearly doubles the tile builds. With one start, evaluations are 50% to 56% of refinement CPU and tile builds 1.3% to 4.7%, so the counts put the cost of twelve starts at about 4% to 7% of refinement CPU. The command's wall time was 0.47 to 0.55 s on `SeoulBull` and 1.21 to 1.59 s on `KerryPark480` in both settings; on `DnDTabletop` it was 92 to 127 s with one start and 95 to 106 s with twelve.
+
+**What this decides.** Twelve starts are the default. They do not raise the share of kept members the ground truth calls wrong on any of the three entries, they evaluate members whose seed support leaves the frame, and they cost about 6% more objective evaluations, an estimated 4% to 7% of refinement CPU. The benefit the true pairs show, at scale ratios these three files rarely hold, is not visible in their counts.
