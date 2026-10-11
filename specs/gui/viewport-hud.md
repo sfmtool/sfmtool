@@ -140,6 +140,18 @@ scene shows through and it reads as floating over the viewport rather than
 bolted to it. Not lower: slider tracks and checkmarks have to stay legible
 against a bright point cloud.
 
+### The tool strip sits beside the HUD and is not part of it
+
+The viewport's tool strip, two icon buttons at the left edge that choose
+between Navigate and the delete brush
+([`edits/delete-brush.md`](edits/delete-brush.md)), is a second floating
+control in the HUD's style: an `egui::Area` on the same layer, built by
+`show_tool_strip` beside `show_hud` before the viewport claims its rect. It is
+not a HUD section, because the HUD holds display settings and collapses to a
+gear, while the current tool changes what a left drag does and has to stay
+visible. Its rect, `tool_strip_rect`, is excluded from the same input paths
+as `hud_rect` (below).
+
 ### The lock banner borrows the style and is not part of the panel
 
 While a camera is being moved by hand ([`edits/move-camera.md`](edits/move-camera.md))
@@ -236,7 +248,7 @@ constructed before input handling but drawn after it.
 
 | Path | Rule |
 |------|------|
-| **Scroll / zoom** | `handle_scroll` is gated on `platform::pointer_in_rect(ctx, rect)`. That helper is a raw geometric containment test — on Windows it reads the OS cursor position directly and knows nothing about egui layers. It must become `pointer_in_rect(rect) && !pointer_in_rect(hud_rect)`, computed in the same logical coordinate space. |
+| **Scroll / zoom** | `handle_scroll` is gated on `platform::pointer_in_rect(ctx, rect)`. That helper is a raw geometric containment test — on Windows it reads the OS cursor position directly and knows nothing about egui layers. So the gate is `pointer_in_rect(rect)` with `hud_rect` and the tool strip's `tool_strip_rect` excluded, each tested in the same logical coordinate space. |
 | **Gestures** | Same gate, same fix — `handle_gestures` and `handle_pinch` take `pointer_over` from the same helper. |
 | **Drag / orbit** | An `Area` on a higher layer claims the pointer, leaving `response.dragged()` false. **Verified against egui 0.34, re-verified on 0.36**: `hit_test` keeps only the top-most layer covering the search area, so the painter's `WidgetRect` never reaches `hits.click` / `hits.drag`, and `dragged()`, `clicked()` and `hovered()` are all false. No `hud_rect` fallback is needed; `hud/tests.rs` pins the behaviour so a future egui change surfaces as a test failure rather than a viewport that orbits while a slider is dragged. |
 | **Click / pick** | Excluded by the same mechanism as drag. A click that starts on the HUD must never deselect the current entity. `hover_pixel` follows for free: `Response::hover_pos` returns `None` when the response is not hovered, so the HUD never feeds the depth/pick readback either. |
@@ -253,7 +265,7 @@ adjustments to existing ones.
 | State | Home | Rationale |
 |-------|------|-----------|
 | The setting values themselves | `AppState` (unchanged) | The renderer already reads them there; moving them would be churn for no gain |
-| `hud_open`, `hud_rect` | `Viewer3D` | Per-viewport UI state, same place as `camera_view` and `hover_pixel` |
+| `hud_open`, `hud_rect`, `tool_strip_rect` | `Viewer3D` | Per-viewport UI state, same place as `camera_view` and `hover_pixel` |
 | `maintain_z_up` | `Viewer3D` | Navigation state, beside the camera it turns, as the field of view the same section edits is. Q and E in the viewport's own input turn it off |
 | Per-section collapsed flags | egui's own `CollapsingState` memory, under the stable ids from `hud::section_id` | Already exactly session-scoped, with per-section defaults via `load_with_default_open`; duplicating it into `Viewer3D` fields would only add a sync step. The explicit ids keep it addressable from outside the HUD |
 

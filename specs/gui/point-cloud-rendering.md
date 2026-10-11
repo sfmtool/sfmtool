@@ -93,7 +93,7 @@ the hover in the fragment shader, because they say what releasing the stroke
 will do to the point. They share a hue so the circle's preview reads as what a
 press would paint, and the preview's is the paler one because nothing has been
 done yet. The delete brush that sets `3` and `4` is specified in
-[../drafts/delete-brush.md](../drafts/delete-brush.md).
+[edits/delete-brush.md](edits/delete-brush.md).
 
 `SceneRenderer::update_point_mask` writes the words; see
 [document-model.md](document-model.md) § "Change detection by identity".

@@ -1320,7 +1320,8 @@ toggles are master switches over every node, and the per-node eyes stay with
     "target_size_multiplier": 0.3,    //           0.05 to 5, 2 decimals
     "target_fog_multiplier": 10.0,    //           0.5 to 100, 1 decimal
     "show_controls_help": true,       // Debug
-    "show_fps": true
+    "show_fps": true,
+    "tool": "navigate"                // the tool strip: "navigate" or "delete_brush"
   }
 }
 ```
@@ -1332,6 +1333,7 @@ omitted one alone:
 { "point_size_log2": 1.5, "show_target_indicator": true }
 { "show_grid": false, "show_camera_images": false }
 { "maintain_z_up": true }
+{ "tool": "delete_brush" }
 ```
 
 The reply is the whole document, exactly as `get_viewer_3d_display` would return
@@ -1365,12 +1367,21 @@ does when the checkbox is ticked
 view is looking through a camera, whose own up is kept. A screenshot taken
 straight after the call can therefore show the view part way through the turn.
 
+**`tool` is the tool strip's choice**, what an unmodified left drag in the
+viewport does: `"navigate"` or `"delete_brush"`
+([edits/delete-brush.md](edits/delete-brush.md)). It is here rather than in a
+tool of its own because it is viewport state an agent sets before a `drag` and
+reads back beside the rest, as `maintain_z_up` is. A change is recorded as the
+strip's click records it, `Delete brush tool` or `Navigate tool`. With the
+brush on, a `drag` across the viewport paints and deletes; the version lands a
+frame or two after the `drag` replies.
+
 **`show_patches` is settable without patch data.** The HUD greys its checkbox
 when no loaded reconstruction carries patch bitmaps, but the value is a master
 switch with nothing to draw, and refusing it would make an agent check for
 patch data before setting a layer it may want for the next file it opens.
 
-**Refusals are atomic, and they happen at the parse.** Every field's range is
+**Refusals are atomic, and all but one happen at the parse.** Every field's range is
 the range of the HUD's slider for it, read from one list
 (`viewer_3d::display::Field`), which the HUD builds its sliders from as well, so
 the two cannot drift. A number outside its range or not finite, a value of the
@@ -1381,7 +1392,12 @@ and are compared as the decimals the message and the schema write them as, so
 `0.001` is accepted for `length_scale` although `0.001` as an `f32` is a little
 above it. A call naming a good
 field and a bad one changes nothing, and the refusal is a protocol error
-(§ "Errors"), so it leaves no Action Log row. **A number inside its range is
+(§ "Errors"), so it leaves no Action Log row. An unknown `tool` is refused the
+same way, with the list of tools. **The one refusal made after the parse** is
+of the state: `tool: "delete_brush"` while a camera is being moved (the Move
+Camera lock, [edits/move-camera.md](edits/move-camera.md)), which the strip
+greys its button for. It is a domain error, and the call's other fields are not
+applied either. **A number inside its range is
 rounded to the decimals its slider shows**, because the slider rounds the value
 it holds to those decimals on every frame it is drawn: a `point_size_log2` of
 `1.53` would become `1.5` the next time the HUD was open, and rounding on the
