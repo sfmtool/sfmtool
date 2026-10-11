@@ -5,9 +5,10 @@
 Decided: a brush tool in the 3D viewport that deletes the points painted over
 in one stroke, highlights them while the stroke is held, and deletes them on
 release as one version. Before the press, the circle shows the points it would
-paint. It has no depth modes and no unpaint gesture. A small tool strip in the
-viewport chooses between the brush and ordinary navigation; the choice does not
-go in the HUD. The default radius is 24 logical pixels. Nothing is open.
+paint. It has no depth modes and no unpaint gesture. A tool strip of two icons
+in the viewport, chosen with the mouse only, switches between ordinary
+navigation and the brush; the choice does not go in the HUD and has no keyboard
+shortcut. The radius is fixed at 24 logical pixels. Nothing is open.
 
 Amends [`../gui/viewport-navigation.md`](../gui/viewport-navigation.md) (a
 tool that takes the unmodified left drag),
@@ -37,16 +38,18 @@ ends, so it leaves the design of multi-select open.
 ### Choosing the tool
 
 A **tool strip** floats at the left edge of the 3D viewport, centred
-vertically. It holds two toggle buttons, one of which is always on:
+vertically. It holds two icon buttons, one above the other, and exactly one of
+them is on:
 
-| Button | Tool | Key |
-|--------|------|-----|
-| Arrow | **Navigate**: everything the viewport does today | Esc (when no stroke is held) |
-| Brush | **Delete brush** | B toggles between the two |
+| Icon | Tool | Tooltip |
+|------|------|---------|
+| Mouse cursor (top) | **Navigate**: everything the viewport does today | `Navigate: orbit, pan and zoom the view, and click to select.` |
+| Eraser brush (below) | **Delete brush** | `Delete brush: drag over points to delete them from the selected reconstruction.` |
 
-When the brush is on, a radius slider sits directly below its button, from 4 to
-200 logical pixels, defaulting to 24. The tool and the radius are remembered for
-the session and not saved.
+The strip holds nothing else: no radius control and no other settings. A tool is
+chosen by clicking its icon, and there is no keyboard shortcut for either. The
+viewer starts in Navigate, and the tool is remembered for the session and not
+saved.
 
 The strip follows the HUD's input rules
 ([`../gui/viewport-hud.md`](../gui/viewport-hud.md) § "Input arbitration"): it
@@ -66,8 +69,9 @@ between the lock's start and its commit.
 
 ### The stroke
 
-With the brush on, the pointer over the viewport shows a circle outline of the
-current radius, drawn on the viewport's painter, and the crosshair cursor at
+With the brush on, the pointer over the viewport shows a circle outline of
+radius 24 logical pixels, a constant (`BRUSH_RADIUS`), drawn on the viewport's
+painter, and the crosshair cursor at
 its centre. egui has no circle cursor, so the circle is painted the way the
 lock banner is (`viewer_3d/mod.rs`).
 
@@ -215,9 +219,8 @@ holds the node borrowed while it draws.
 - **`delete_points`** `{reconstruction_label, points: [int]}`: the same edit,
   one version, with the same reply shape as `delete_point`. It is how an agent
   cleans a reconstruction and how a test makes a large delete without a pointer.
-- **The tool state** is two fields on `get_viewer_3d_display` /
-  `set_viewer_3d_display`: `tool` (`"navigate"` or `"delete_brush"`) and
-  `brush_radius` (logical pixels).
+- **The tool state** is one field on `get_viewer_3d_display` /
+  `set_viewer_3d_display`: `tool` (`"navigate"` or `"delete_brush"`).
 - **`drag`** `{x, y, path: [[x, y], ...], button, modifiers}`, an input tool
   beside `click` and `hover`: press at the first point, move through the path
   one point per frame, release at the last. `click` presses and releases in one
@@ -250,13 +253,14 @@ the pointer nor the view changed since the last read, the last result stands and
 nothing is copied. The brush's region read replaces the 5×5 hover read on those
 frames rather than adding to it.
 
-The region is at most a few hundred pixels on a side: a 200-pixel radius at a
-pixels-per-point of 2 is an 800 × 800 box, 2.5 MB of `u32`; the default
-24-pixel radius at the same scale is 97 × 97, 37 kB. Rows are padded to wgpu's
-256-byte row alignment as the existing copy pads them. The existing readback
-blocks on the buffer map each frame (`readback.rs`); at the largest radius that
-wait should be measured, and the read moved to a mapping that resolves a frame
-later if it shows in the frame time.
+The preview's region is small: the 24-pixel radius at a pixels-per-point of 2
+is a 97 × 97 box, 37 kB of `u32`. A stroke's capsule is longer in proportion to
+how far the pointer moved in a frame; a 400-pixel flick at the same scale is
+about 900 × 100, 360 kB. Rows are padded to wgpu's 256-byte row alignment as the
+existing copy pads them. The existing readback blocks on the buffer map each
+frame (`readback.rs`); that wait should be measured for the largest capsules,
+and the read moved to a mapping that resolves a frame later if it shows in the
+frame time.
 
 A readback resolves a frame after its copy, as a click's does. On release the
 commit waits for the last capsule's readback, so the final segment of a stroke
