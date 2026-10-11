@@ -55,19 +55,34 @@ def test_a_non_contiguous_array_is_copied(tmp_path):
     np.testing.assert_array_equal(read_image_rgb(tmp_path / "view.png"), view)
 
 
+@pytest.mark.parametrize(
+    "writer,channels", [(write_image_rgb, 3), (write_image_rgba, 4)]
+)
+def test_a_fortran_ordered_array_is_written_in_row_order(tmp_path, writer, channels):
+    pixels = _noise((9, 14, channels), seed=2)
+    fortran = np.asfortranarray(pixels)
+    assert not fortran.flags.c_contiguous and fortran.flags.f_contiguous
+    writer(tmp_path / "fortran.png", fortran)
+    reader = read_image_rgba if channels == 4 else read_image_rgb
+    np.testing.assert_array_equal(reader(tmp_path / "fortran.png"), pixels)
+
+
 def test_jpeg_is_close_to_the_source_and_to_opencv(tmp_path):
     rgb = read_image_rgb(_PHOTO)
     write_image_rgb(tmp_path / "rust.jpg", rgb)
     cv2.imwrite(str(tmp_path / "cv.jpg"), cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
 
-    back = read_image_rgb(tmp_path / "rust.jpg").astype(np.int16)
-    error = np.abs(back - rgb)
-    assert error.mean() < 1.0
-    # Both writers default to quality 95; the Rust encoder keeps full-resolution
-    # chroma where OpenCV subsamples it, so its file is somewhat larger.
+    # Both files decode cleanly with our reader, and the Rust one is as close
+    # to the source as OpenCV's (4:2:0 costs a little on this detailed image).
+    rust_error = np.abs(read_image_rgb(tmp_path / "rust.jpg").astype(np.int16) - rgb)
+    cv_error = np.abs(read_image_rgb(tmp_path / "cv.jpg").astype(np.int16) - rgb)
+    assert rust_error.mean() < 2.0
+    assert rust_error.mean() < 1.1 * cv_error.mean()
+    # Both writers default to quality 95 and subsample chroma 4:2:0, so the
+    # files come out about the same size.
     rust_size = (tmp_path / "rust.jpg").stat().st_size
     cv_size = (tmp_path / "cv.jpg").stat().st_size
-    assert 0.8 * cv_size < rust_size < 1.5 * cv_size
+    assert 0.85 * cv_size < rust_size < 1.15 * cv_size
 
 
 def test_jpeg_quality_defaults_to_95(tmp_path):
@@ -106,9 +121,25 @@ def test_an_unwritable_path_raises_naming_it(tmp_path):
 
 
 @pytest.mark.parametrize("quality", [0, 101, -5])
-def test_a_jpeg_quality_outside_1_to_100_raises(tmp_path, quality):
+@pytest.mark.parametrize("name", ["q.jpg", "q.png"])
+def test_a_jpeg_quality_outside_1_to_100_raises_for_every_format(
+    tmp_path, quality, name
+):
     with pytest.raises(ValueError, match="jpeg_quality"):
-        write_image_rgb(tmp_path / "q.jpg", _noise((4, 4, 3)), jpeg_quality=quality)
+        write_image_rgb(tmp_path / name, _noise((4, 4, 3)), jpeg_quality=quality)
+
+
+@pytest.mark.parametrize("shape", [(0, 4, 3), (4, 0, 3), (0, 0, 3)])
+def test_an_empty_array_raises_value_error(tmp_path, shape):
+    with pytest.raises(ValueError, match="non-empty"):
+        write_image_rgb(tmp_path / "empty.png", np.zeros(shape, np.uint8))
+    assert not (tmp_path / "empty.png").exists()
+
+
+def test_a_jpeg_side_over_65535_raises_value_error(tmp_path):
+    with pytest.raises(ValueError, match="65535"):
+        write_image_rgb(tmp_path / "wide.jpg", np.zeros((1, 65536, 3), np.uint8))
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_the_wrong_shape_or_dtype_raises(tmp_path):

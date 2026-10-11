@@ -65,12 +65,13 @@ cannot be decoded raises `OSError`; both messages name the path.
 which reads its width and height the same way.
 
 The writer errors, each naming the path: `TypeError` for an array that is not
-`uint8`; `ValueError` for an array of the wrong shape, a `jpeg_quality`
-outside 1 to 100, an extension that names no format the encoder writes, or
-`write_image_rgba` to a JPEG; `FileNotFoundError` when the parent directory
-does not exist; and `OSError` when the file cannot be written otherwise. In
-Rust these are `ImageError::Unsupported`, `ImageError::Parameter` and
-`ImageError::IoError`.
+`uint8`; `ValueError` for an array of the wrong shape or with a side of 0, a
+side over 65535 in a JPEG, a `jpeg_quality` outside 1 to 100 (checked for
+every format, though only a JPEG uses it), an extension that names no format
+the encoder writes 8-bit pixels to, or `write_image_rgba` to a JPEG;
+`FileNotFoundError` when the parent directory does not exist; and `OSError`
+when the file cannot be written otherwise. In Rust these are
+`ImageError::Unsupported`, `ImageError::Parameter` and `ImageError::IoError`.
 
 ## Layout
 
@@ -112,19 +113,28 @@ since OpenCV draws a tuple in whatever channel order the array has.
   encoder. `.jpg` and `.jpeg` write a baseline JPEG; `.png` writes a lossless
   PNG; any other extension whose format the `image` crate encodes 8-bit pixels
   to (`.tif`, `.bmp`, `.webp`, ...) is written with that crate's defaults,
-  which for WebP is lossless. The image is encoded in memory and then written,
-  so a failed encode leaves no file behind.
+  which write WebP lossless and TIFF uncompressed. A format that holds only
+  floating-point pixels, OpenEXR (`.exr`) or Radiance HDR (`.hdr`), cannot be
+  written at 8 bits: `undistort` and `to-nerfstudio` read such a source, but
+  writing its image back out under the same name raises `ValueError`. The
+  image is encoded in memory, written to a temporary file beside the path and
+  renamed into place, so a failed encode or write leaves neither a partial
+  file nor a changed old one.
 - **JPEG quality.** `jpeg_quality` is 1 to 100 and defaults to
   `DEFAULT_JPEG_QUALITY`, 95, the default of OpenCV's `cv2.imwrite`, so a
   command that names no quality gets the quality OpenCV gave it. Commands
   with a `--jpeg-quality` option (`pano2rig`, `to-nerfstudio`) pass it
-  through. The encoder is the `image` crate's own baseline encoder, which
-  keeps the chroma at full resolution (no 4:2:0 subsampling). On the 85
-  `dino_dog_toy` photographs (2040 x 1536) at quality 95
-  its files are 14% larger than OpenCV's (74.8 MB against 65.4 MB), their
-  mean absolute error is 0.23 grey levels against OpenCV's 0.20, and one
-  thread encodes them in 4.2 s against OpenCV's 1.0 s; with the GIL released,
-  eight threads take 0.8 s.
+  through. The encoder is the `jpeg-encoder` crate's, set as libjpeg's
+  defaults are: 4:2:0 chroma subsampling, each chroma sample the average of
+  its 2 x 2 block, and the standard Huffman tables (its optimized tables are
+  off, because with them it wrote 4:2:0 files that decoded wrongly). On the 85
+  `dino_dog_toy` photographs (2040 x 1536) at quality 95 its files are the
+  size of OpenCV's (65.6 MB against 65.4 MB) with the same mean absolute
+  error after decoding (0.197 grey levels against 0.196), and one thread
+  writes them in 1.9 s against OpenCV's 1.0 s; with the GIL released, eight
+  threads take 0.4 s. `jpeg-encoder` is licensed "(MIT OR Apache-2.0) AND
+  IJG", and the credit the IJG licence asks for is in
+  [THIRD-PARTY-NOTICES.md](../../../THIRD-PARTY-NOTICES.md).
 - **PNG compression.** A PNG is written at the `png` crate's fast compression
   with adaptive row filtering. On the same 85 photographs that is 4% smaller
   than OpenCV's default PNG (381.6 MB against 397.8 MB) and 3.7 times faster
@@ -174,7 +184,7 @@ tag:
 
 ## Code that writes images
 
-Every image file sfmtool writes goes through `write_image_rgb` or
+Every image file sfmtool's Python code writes goes through `write_image_rgb` or
 `write_image_rgba`:
 
 - `undistort`, with alpha when the source has it, and `to-nerfstudio`'s
@@ -187,6 +197,12 @@ Every image file sfmtool writes goes through `write_image_rgb` or
 - The strip montages of `compare --strips` and `inspect --strips`.
 - The scripts' montages and crops (`_viz_common`'s at quality 92,
   `patch_crossval`, `kdf_constellation_eval`).
+
+Two Rust writers encode with their own settings rather than through
+`ImageU8::write`, because they encode to memory rather than to a file: the
+`web-export` atlas pages, JPEGs from the `image` crate's encoder at
+`--jpeg-quality` ([web_export/atlas.rs](../../../crates/sfmtool-core/src/web_export/atlas.rs)),
+and the viewer's MCP screenshots, PNGs from the `image` crate's PNG encoder.
 
 Tests that need an image no sfmtool writer produces, a 16-bit PNG or a file
 written by an encoder independent of the one under test, write it with OpenCV.

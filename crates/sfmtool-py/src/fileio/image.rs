@@ -108,20 +108,24 @@ fn read_error(path: &std::path::Path, e: image::ImageError) -> PyErr {
 /// `path`, in the format the path's extension names.
 ///
 /// The inverse of `read_image_rgb`: the array is indexed row, column, channel,
-/// with the channels in RGB order. A non-contiguous array, such as a slice of a
-/// wider image, is copied before it is encoded. `.jpg` / `.jpeg` write a JPEG
-/// at `jpeg_quality` (1 to 100; the default 95 is OpenCV's), `.png` a lossless
-/// PNG at fast compression, and any other extension the `image` crate encodes
-/// 8-bit pixels to (`.tif`, `.bmp`, `.webp`, ...) is written with that crate's
-/// defaults. Every format is written at 8 bits per channel. The image is
-/// encoded by `ImageU8::write` with the GIL released, and in memory first, so
-/// a failed encode leaves no file behind.
+/// with the channels in RGB order. An array in any other memory layout, such
+/// as a slice of a wider image or a Fortran-ordered array, is copied to row
+/// order before it is encoded. `.jpg` / `.jpeg` write a 4:2:0 JPEG at
+/// `jpeg_quality` (the default 95 is OpenCV's), `.png` a lossless PNG at fast
+/// compression, and any other extension the `image` crate encodes 8-bit pixels
+/// to (`.tif`, `.bmp`, `.webp`, ...) is written with that crate's defaults.
+/// `jpeg_quality` must be 1 to 100 whatever the format, though only a JPEG
+/// uses it. Every format is written at 8 bits per channel. The image is
+/// encoded by `ImageU8::write` with the GIL released, in memory first, and
+/// then written to a temporary file beside `path` that is renamed into place,
+/// so a failed write leaves neither a partial file nor a changed old one.
 ///
 /// Raises `TypeError` when `pixels` is not a `uint8` array; `ValueError` when
-/// it is not `(H, W, 3)`, when `jpeg_quality` is outside 1 to 100, or when
-/// the extension names no format the writer encodes; `FileNotFoundError` when
-/// the parent directory does not exist; and `OSError` when the file cannot be
-/// written otherwise. Each message names the path.
+/// it is not `(H, W, 3)` with `H` and `W` at least 1, when a side is too long
+/// for the format (65535 for JPEG), when `jpeg_quality` is outside 1 to 100,
+/// or when the extension names no format the writer encodes;
+/// `FileNotFoundError` when the parent directory does not exist; and `OSError`
+/// when the file cannot be written otherwise. Each message names the path.
 #[pyfunction]
 #[pyo3(signature = (path, pixels, *, jpeg_quality = DEFAULT_JPEG_QUALITY as i64))]
 pub fn write_image_rgb(
@@ -156,7 +160,8 @@ pub fn write_image_rgba(py: Python<'_>, path: PathBuf, pixels: &Bound<'_, PyAny>
 }
 
 /// The `ImageU8` holding `pixels`, which must be a `uint8` array of shape
-/// `(H, W, channels)`; it is copied, so a non-contiguous array is accepted.
+/// `(H, W, channels)` with `H` and `W` at least 1. It is copied in row order,
+/// so an array in any memory layout is accepted.
 fn to_image(
     pixels: &Bound<'_, PyAny>,
     channels: usize,
@@ -171,10 +176,10 @@ fn to_image(
             ))
         })?;
     let (height, width) = match array.shape() {
-        [h, w, c] if *c == channels => (*h, *w),
+        [h, w, c] if *c == channels && *h > 0 && *w > 0 => (*h, *w),
         shape => {
             return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                "{function} takes a {layout} array, got shape {shape:?}"
+                "{function} takes a non-empty {layout} array, got shape {shape:?}"
             )))
         }
     };
@@ -183,10 +188,9 @@ fn to_image(
             "{function}: a {width} x {height} image is too large to encode"
         )));
     };
-    let data = match array.as_slice() {
-        Ok(slice) => slice.to_vec(),
-        Err(_) => array.as_array().iter().copied().collect(),
-    };
+    // `as_slice` alone would also accept a Fortran-ordered array and hand back
+    // its column-major bytes; the macro takes the slice only in row order.
+    let data = to_contiguous!(array).into_owned();
     Ok(ImageU8::new(width, height, channels as u32, data))
 }
 

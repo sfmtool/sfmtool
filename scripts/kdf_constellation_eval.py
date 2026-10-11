@@ -567,7 +567,9 @@ def dump_disagreements(records, images, out_dir: Path, limit: int):
     something the solve missed; if they do not, the candidate is wrong.
     """
     try:
-        import cv2  # noqa: F401 -- `crop` resamples with it
+        # Only checks that OpenCV is installed: `crop` imports it again to
+        # resample, and without it the crops are skipped below.
+        import cv2  # noqa: F401
 
         from sfmtool.fileio import read_image_rgb, write_image_rgb
     except ImportError:

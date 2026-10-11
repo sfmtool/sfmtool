@@ -86,24 +86,27 @@ impl ImageU8 {
     /// Encode the image to the file at `path`, in the format the path's
     /// extension names (case does not matter).
     ///
-    /// `.jpg` / `.jpeg` write a baseline JPEG at `jpeg_quality`, 1 to 100,
-    /// with no chroma subsampling; callers pass [`DEFAULT_JPEG_QUALITY`]
-    /// unless they choose otherwise. `.png` writes a lossless PNG at the
-    /// `png` crate's fast compression with adaptive filtering. Any other
-    /// extension whose format the `image` crate encodes 8-bit pixels to
-    /// (`.tif`, `.bmp`, `.webp`, ...) is written with that crate's defaults,
-    /// and `jpeg_quality` is ignored for all but JPEG. The channels are
-    /// written as they are held: 1 is grey, 3 is RGB and 4 is RGBA. Every
-    /// format is written at 8 bits per channel.
+    /// `.jpg` / `.jpeg` write a baseline JPEG with 4:2:0 chroma subsampling
+    /// at `jpeg_quality`; callers pass [`DEFAULT_JPEG_QUALITY`] unless they
+    /// choose otherwise. `.png` writes a lossless PNG at the `png` crate's
+    /// fast compression with adaptive filtering. Any other extension whose
+    /// format the `image` crate encodes 8-bit pixels to (`.tif`, `.bmp`,
+    /// `.webp`, ...) is written with that crate's defaults, which leave a
+    /// TIFF uncompressed. `jpeg_quality` must be 1 to 100 whatever the
+    /// format, though only a JPEG uses it. The channels are written as they
+    /// are held: 1 is grey, 3 is RGB and 4 is RGBA. Every format is written
+    /// at 8 bits per channel.
     ///
-    /// The file is encoded in memory first, so a failed encode leaves no file
-    /// behind. The errors are
+    /// The file is encoded in memory, written to a temporary file beside
+    /// `path` and renamed into place, so a failed encode or write leaves
+    /// neither a partial file nor a changed old one. The errors are
     /// [`ImageError::Unsupported`](::image::ImageError::Unsupported) for an
     /// extension that names no format the crate encodes, or a channel count
     /// the format cannot hold, among them 4 channels to JPEG, whose alpha is
     /// refused rather than dropped;
     /// [`ImageError::Parameter`](::image::ImageError::Parameter) for a
-    /// `jpeg_quality` outside 1 to 100 when writing a JPEG; and
+    /// `jpeg_quality` outside 1 to 100, a channel count other than 1, 3 or 4,
+    /// a side of 0, or a side over 65535 in a JPEG; and
     /// [`ImageError::IoError`](::image::ImageError::IoError) when the file
     /// cannot be written.
     pub fn write(
@@ -112,38 +115,80 @@ impl ImageU8 {
         jpeg_quality: u8,
     ) -> Result<(), ::image::ImageError> {
         use ::image::error::{
-            ImageFormatHint, ParameterError, ParameterErrorKind, UnsupportedError,
+            EncodingError, ImageFormatHint, ParameterError, ParameterErrorKind, UnsupportedError,
             UnsupportedErrorKind,
         };
-        use ::image::{ExtendedColorType, ImageEncoder, ImageFormat};
+        use ::image::{ExtendedColorType, ImageEncoder, ImageError, ImageFormat};
 
+        let parameter_error = |message: String| {
+            ImageError::Parameter(ParameterError::from_kind(ParameterErrorKind::Generic(
+                message,
+            )))
+        };
         let format = ImageFormat::from_path(path)?;
+        if !(1..=100).contains(&jpeg_quality) {
+            return Err(parameter_error(format!(
+                "JPEG quality {jpeg_quality} is outside 1 to 100"
+            )));
+        }
+        if self.width == 0 || self.height == 0 {
+            return Err(parameter_error(format!(
+                "a {} x {} image has no pixels to write",
+                self.width, self.height
+            )));
+        }
         let color = match self.channels {
             1 => ExtendedColorType::L8,
             3 => ExtendedColorType::Rgb8,
             4 => ExtendedColorType::Rgba8,
-            n => unreachable!("an ImageU8 has 1, 3 or 4 channels, not {n}"),
+            n => {
+                return Err(parameter_error(format!(
+                    "an image to write has 1, 3 or 4 channels, not {n}"
+                )))
+            }
         };
         let mut bytes = Vec::new();
         match format {
             ImageFormat::Jpeg => {
-                if !(1..=100).contains(&jpeg_quality) {
-                    return Err(::image::ImageError::Parameter(ParameterError::from_kind(
-                        ParameterErrorKind::Generic(format!(
-                            "JPEG quality {jpeg_quality} is outside 1 to 100"
-                        )),
-                    )));
-                }
                 if self.channels == 4 {
-                    return Err(::image::ImageError::Unsupported(
+                    return Err(ImageError::Unsupported(
                         UnsupportedError::from_format_and_kind(
                             ImageFormatHint::Exact(ImageFormat::Jpeg),
                             UnsupportedErrorKind::Color(color),
                         ),
                     ));
                 }
-                ::image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, jpeg_quality)
-                    .write_image(&self.data, self.width, self.height, color)?;
+                let (Ok(width), Ok(height)) =
+                    (u16::try_from(self.width), u16::try_from(self.height))
+                else {
+                    return Err(parameter_error(format!(
+                        "a {} x {} image is too large for a JPEG, whose sides are \
+                         at most 65535",
+                        self.width, self.height
+                    )));
+                };
+                let mut encoder = jpeg_encoder::Encoder::new(&mut bytes, jpeg_quality);
+                // 4:2:0 with each chroma sample the average of its 2x2 block,
+                // as libjpeg and so OpenCV write it, whatever the quality.
+                encoder.set_sampling_factor(jpeg_encoder::SamplingFactor::R_4_2_0);
+                encoder
+                    .set_chroma_subsampling_method(jpeg_encoder::ChromaSubsamplingMethod::Average);
+                // Optimized Huffman tables stay off: with them, jpeg-encoder 0.7.1
+                // wrote 4:2:0 files our own reader decoded to garbage.
+                encoder.set_optimized_huffman_tables(false);
+                let color_type = if self.channels == 1 {
+                    jpeg_encoder::ColorType::Luma
+                } else {
+                    jpeg_encoder::ColorType::Rgb
+                };
+                encoder
+                    .encode(&self.data, width, height, color_type)
+                    .map_err(|e| {
+                        ImageError::Encoding(EncodingError::new(
+                            ImageFormatHint::Exact(ImageFormat::Jpeg),
+                            e,
+                        ))
+                    })?;
             }
             ImageFormat::Png => {
                 ::image::codecs::png::PngEncoder::new_with_quality(
@@ -164,7 +209,7 @@ impl ImageU8 {
                 )?;
             }
         }
-        std::fs::write(path, bytes)?;
+        write_via_temporary(path, &bytes)?;
         Ok(())
     }
 
@@ -259,6 +304,25 @@ impl ImageU8 {
             data: out_data,
         }
     }
+}
+
+/// Write `bytes` to `path` through a temporary file beside it that is renamed
+/// into place, so a failed write leaves neither a partial file at `path` nor a
+/// changed old one. The temporary file is removed when the write or the rename
+/// fails.
+fn write_via_temporary(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    // The process id and a per-process count keep two writers apart, whether
+    // they are threads of one process or separate processes.
+    static COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let count = COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    let temporary = path.with_file_name(format!(".{name}.{}-{count}.tmp", std::process::id()));
+    let written =
+        std::fs::write(&temporary, bytes).and_then(|()| std::fs::rename(&temporary, path));
+    if written.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    written
 }
 
 /// Whether the image file at `path` stores an alpha channel, read from its

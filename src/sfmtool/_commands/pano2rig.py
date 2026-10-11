@@ -36,7 +36,7 @@ from .._workspace import find_workspace_for_path
 )
 @click.option(
     "--jpeg-quality",
-    type=int,
+    type=click.IntRange(min=1, max=100),
     default=95,
     help="JPEG quality for output face images (1-100, default: 95).",
 )

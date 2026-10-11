@@ -88,3 +88,6 @@ crates/
 ## License
 
 Apache-2.0
+
+The JPEG encoder in the compiled extension is based in part on the work of
+the Independent JPEG Group; see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).

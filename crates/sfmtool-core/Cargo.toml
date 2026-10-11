@@ -19,6 +19,11 @@ half = "2"
 # Photograph decoding (display thumbnails, display patch bitmaps) and the JPEG
 # atlas pages `web_export` writes.
 image = "0.25"
+# JPEG encoding for `ImageU8::write`: 4:2:0 chroma subsampling and a SIMD
+# forward DCT, so a JPEG is the size and speed OpenCV's is at the same quality,
+# which the `image` crate's own encoder (4:4:4 only) is not. Licensed
+# "(MIT OR Apache-2.0) AND IJG"; the IJG credit is in THIRD-PARTY-NOTICES.md.
+jpeg-encoder = { version = "0.7.1", features = ["simd"] }
 nalgebra = "0.35"
 ndarray = "0.17"
 # Build-once / query-many KD-tree for the spatial index (`spatial.rs`). Default

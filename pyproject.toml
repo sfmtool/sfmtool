@@ -10,7 +10,7 @@ name = "sfmtool"
 version = "0.3"
 requires-python = ">=3.14"
 license = "Apache-2.0"
-license-files = ["LICENSE"]
+license-files = ["LICENSE", "THIRD-PARTY-NOTICES.md"]
 description = "Structure from Motion toolkit built on COLMAP: a CLI, file formats and a 3D viewer"
 readme = "README.md"
 authors = [{ name = "Mark Wiebe" }]

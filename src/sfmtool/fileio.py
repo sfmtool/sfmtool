@@ -5,7 +5,9 @@
 `.camrig` formats, COLMAP binary and database interop, the image readers
 `read_image_rgb` and `read_image_rgba` (the decoder the Rust code reads
 photographs with; `y_x_rgb` / `y_x_rgba` `uint8` arrays, EXIF orientation
-ignored), the header reads `image_dimensions` and `image_has_alpha`, and
+ignored), their inverses the image writers `write_image_rgb` and
+`write_image_rgba` (the Rust encoder; the format comes from the extension), the
+header reads `image_dimensions` and `image_has_alpha`, and
 `write_web_export`.
 
 This module is the public home of the `sfmtool._sfmtool.fileio` bindings. It
