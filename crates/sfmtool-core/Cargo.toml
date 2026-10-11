@@ -25,6 +25,21 @@ image = "0.25"
 # files 14% larger at a quarter of OpenCV's speed. Licensed
 # "(MIT OR Apache-2.0) AND IJG"; the IJG credit is in THIRD-PARTY-NOTICES.md.
 jpeg-encoder = { version = "0.7.1", features = ["simd"] }
+# JPEG decoding for `ImageU8::read_rgb` / `read_rgba`. The `image` crate's JPEG
+# decoder, zune-jpeg 0.5.15, returns wrong pixels without an error for a
+# baseline JPEG that stores each component in a scan of its own; this crate
+# decodes those as OpenCV does, at the same speed. A JPEG that ends before its
+# end-of-image marker is still decoded by zune-jpeg, since this crate does not
+# fill the missing part with grey as libjpeg does, unless it has a scan of
+# fewer components than its frame (see `decode_jpeg`). It is in maintenance mode:
+# its README says image-rs is moving to zune-jpeg, and its last release is
+# 0.3.2 (2025-06). Switch back to the `image` crate's decoder once a stable
+# zune-jpeg release passes `read_decodes_a_jpeg_with_one_scan_per_component`.
+# Default features off, so it does not use rayon (the photograph cache decodes
+# inside a `OnceLock` and must not); it is still not single-threaded, since for
+# an image wider than 128 px it starts one OS thread per colour component. The
+# `rayon` feature measured 3% faster on one image.
+jpeg-decoder = { version = "0.3.2", default-features = false }
 nalgebra = "0.35"
 ndarray = "0.17"
 # Build-once / query-many KD-tree for the spatial index (`spatial.rs`). Default

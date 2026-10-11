@@ -20,12 +20,8 @@ use sfmtool_core::camera::image::{ImageU8, DEFAULT_JPEG_QUALITY};
 /// the extension, choose the decoder, as in `read_image_rgb`.
 #[pyfunction]
 pub fn image_dimensions(path: PathBuf) -> PyResult<(u32, u32)> {
-    let dimensions = || -> Result<(u32, u32), image::ImageError> {
-        image::ImageReader::open(&path)?
-            .with_guessed_format()?
-            .into_dimensions()
-    };
-    dimensions().map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))
+    sfmtool_core::camera::image::image_dimensions(&path)
+        .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))
 }
 
 /// Whether the image file at `path` stores an alpha channel, from its header
@@ -45,8 +41,9 @@ pub fn image_has_alpha(path: PathBuf) -> PyResult<bool> {
 /// The layout is the one a `.sfmr` file stores its thumbnails in
 /// (`images/thumbnails_y_x_rgb`): row, column, then the channels in RGB order,
 /// C-contiguous. This is the decoder the Rust code reads photographs with
-/// (`ImageU8::read_rgb`, the `image` crate), so the pixels equal the ones the
-/// viewer, the bench and the photograph cache read, bit for bit. The EXIF
+/// (`ImageU8::read_rgb`: the `jpeg-decoder` crate for a JPEG, the `image`
+/// crate otherwise), so the pixels equal the ones the viewer, the bench and
+/// the photograph cache read, bit for bit. The EXIF
 /// orientation is ignored: the array has the width and height stored in the
 /// file, as the SIFT extractors and the camera intrinsics do. A grey image has
 /// its value repeated in the three channels, an alpha channel is dropped, and

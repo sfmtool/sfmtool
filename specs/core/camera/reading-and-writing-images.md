@@ -1,12 +1,12 @@
 # Reading and Writing Images
 
-sfmtool decodes an image file into pixels with one decoder and encodes pixels
-into an image file with one encoder, in Rust and in Python alike, so a value
+sfmtool decodes an image file into pixels with one reader and encodes pixels
+into an image file with one writer, in Rust and in Python alike, so a value
 computed from the pixels is the same whichever side computed it, and no image
 array is in BGR order on its way to or from a file. They are behind
-`ImageU8::read_rgb`, `ImageU8::read_rgba` and `ImageU8::write`: the `image`
-crate decodes every format and encodes every format but JPEG, and the
-`jpeg-encoder` crate encodes JPEG. Python reaches
+`ImageU8::read_rgb`, `ImageU8::read_rgba` and `ImageU8::write`: the
+`jpeg-decoder` and `jpeg-encoder` crates decode and encode JPEG, and the
+`image` crate every other format. Python reaches
 the same functions through the bindings `sfmtool.fileio.read_image_rgb`,
 `read_image_rgba`, `write_image_rgb` and `write_image_rgba`. Every reader
 ignores the EXIF orientation tag, so a pixel is addressed by the row and column
@@ -27,6 +27,7 @@ impl ImageU8 {
     pub fn write(&self, path: &Path, jpeg_quality: u8) -> Result<(), image::ImageError>;
 }
 pub fn image_has_alpha(path: &Path) -> Result<bool, image::ImageError>; // header only
+pub fn image_dimensions(path: &Path) -> Result<(u32, u32), image::ImageError>; // header only
 ```
 
 ```python
@@ -64,7 +65,14 @@ write takes one. A caller that writes back what it read picks the pair by
 The reader errors: a missing file raises `FileNotFoundError` and a file that
 cannot be decoded raises `OSError`; both messages name the path.
 `image_has_alpha` reads the file's header alone, beside `image_dimensions`,
-which reads its width and height the same way.
+which reads its width and height the same way (core's `image_has_alpha` and
+`image_dimensions` in [image.rs](../../../crates/sfmtool-core/src/camera/image.rs)).
+Both read a JPEG's markers up to its frame header with the decoder that
+reads its pixels, so they refuse the frame headers the reader refuses. A
+file whose frame header reads can still be refused by the reader, from a
+later segment (a damaged Huffman table, quantization table or scan header)
+or from its pixels, such as a 12-bit lossless JPEG: it has dimensions but
+cannot be read.
 
 The writer errors, each naming the path: `TypeError` for an array that is not
 `uint8`; `ValueError` for an array of the wrong shape or with a side of 0, a
@@ -113,9 +121,55 @@ since OpenCV draws a tuple in whatever channel order the array has.
 - **Formats, reading.** The file's contents, not its extension, choose the
   decoder, so a PNG saved under a `.jpg` name reads as a PNG. The workspace
   `image` dependency is built with the crate's default formats, among them
-  JPEG, PNG, TIFF, BMP and WebP. The decoder has limits of its own: it
-  refuses a WebP 16384 pixels wide, the largest WebP allows and one OpenCV
-  reads, with `OSError`.
+  JPEG, PNG, TIFF, BMP and WebP, and every format but JPEG is decoded with
+  it. A JPEG is decoded with the `jpeg-decoder` crate instead, because the
+  `image` crate's JPEG decoder, zune-jpeg 0.5.15, returns wrong pixels
+  without an error for a baseline JPEG that stores each component in a scan
+  of its own. `jpeg-decoder` reads those as OpenCV does, and on the
+  `test-data` photographs its values differ from OpenCV's by 0.04 to 0.08
+  grey levels on average. Called from one thread, it decodes the 85
+  `dino_dog_toy` photographs in 0.9 s, as zune-jpeg and OpenCV do; it does
+  not use rayon, but for an image wider than 128 px it starts one OS thread
+  per colour component. A CMYK or YCCK JPEG becomes RGB within one grey level
+  of OpenCV's conversion. The reader reads a JPEG into memory once (a file
+  over 1 GiB is refused, twice the largest decode the limit below allows)
+  and decodes it with `jpeg-decoder`, which reads past the end of the bytes
+  only when the file ends before its end-of-image marker: it lacks only the
+  marker, was cut part way through, or has segment lengths that run past its
+  end. A complete file, including one followed by trailing data or another
+  JPEG, never does. A file that does is decoded again, from the same bytes,
+  by one of two rules. A sequential (baseline or extended) JPEG with a scan
+  that holds fewer components than the frame, such as one with one scan per
+  component, is decoded by `jpeg-decoder` with an end-of-image marker
+  appended, since zune-jpeg misreads such a file even when it is whole. A
+  file of this kind that lacks only its marker reads within a few grey
+  levels of the complete file; in one cut part way through a scan, the part
+  the scan did not reach decodes from zero bits as a dark textured pattern
+  rather than grey. One cut before every component's scan has begun is
+  refused, since `jpeg-decoder` requires data for each component (zune-jpeg
+  returned wrong pixels for it), as is one with restart markers cut part way
+  through a scan. Every other
+  such file is read by the `image` crate's decoder, zune-jpeg, as every
+  JPEG was before, because `jpeg-decoder` does not fill missing data as
+  libjpeg does: it refuses the file at its end, or, given an appended
+  marker, fills the missing part with that texture and still refuses a cut
+  file with restart markers. zune-jpeg, like libjpeg and so OpenCV, fills
+  the missing part with flat grey (128) and reads restart markers, and a
+  file that lacks only its marker reads within a few grey levels of the
+  complete file. `jpeg-decoder` is in
+  maintenance mode (image-rs is
+  moving to zune-jpeg; its last release is 0.3.2, 2025-06), so the reader
+  goes back to the `image` crate's decoder once a stable zune-jpeg release
+  passes `read_decodes_a_jpeg_with_one_scan_per_component`. The decoders have
+  limits of their own, each raised as `OSError`: the `image` crate refuses a
+  WebP 16384 pixels wide, the largest WebP allows and one OpenCV reads. The
+  JPEG reader refuses, from the frame header and before decoding any scan, a
+  JPEG that would decode to more than 512 MiB and a lossless JPEG of a
+  precision other than 8 bits. Of the JPEG precisions it reads
+  only 8 bits: it refuses every DCT frame (baseline, extended or
+  progressive) of any other precision, among them 12-bit colour and grey,
+  and every lossless frame of a precision other than 8. Only an 8-bit
+  lossless JPEG is read.
 - **Formats, writing.** The output path's extension, in any case, chooses the
   encoder. `.jpg` and `.jpeg` write a baseline JPEG; `.png` writes a lossless
   PNG; any other extension whose format the `image` crate encodes 8-bit pixels
@@ -137,10 +191,11 @@ since OpenCV draws a tuple in whatever channel order the array has.
   through. The encoder is the `jpeg-encoder` crate's, set as libjpeg's
   defaults are: 4:2:0 chroma subsampling, each chroma sample the average of
   its 2 x 2 block, and the standard Huffman tables. Its optimized Huffman
-  tables are off because with them it writes each component in a scan of
-  its own: those files are valid and OpenCV decodes them, but our reader
-  (`image` 0.25.10 with zune-jpeg 0.5.15) returns wrong pixels for them
-  without an error.
+  tables are off. They make the 85 `dino_dog_toy` photographs 25% smaller
+  (49.1 MB against 65.6 MB) and take about 2.5 times as long to write, but
+  with them the encoder writes each component in a scan of its own, which
+  zune-jpeg 0.5.15, and so any program reading through the `image` crate,
+  decodes to wrong pixels without an error.
 - **JPEG size, error and time.** Measured on the 85 `dino_dog_toy`
   photographs (2040 x 1536) at quality 95, against `cv2.imwrite` at the same
   quality. The size is the total of the 85 files. The error is the mean of
@@ -149,7 +204,7 @@ since OpenCV draws a tuple in whatever channel order the array has.
   the photograph as `read_image_rgb` reads it. The time is the best of three
   runs writing all 85 from one thread, the arrays already in memory. The files
   are the size of OpenCV's (65.6 MB against 65.4 MB), with the same error
-  (0.225 grey levels against 0.224). One thread takes 2.1 to 2.3 s; OpenCV
+  (0.210 grey levels against 0.210). One thread takes 2.1 to 2.3 s; OpenCV
   took 1.0 to 2.2 s across runs on a shared machine, so the writer runs at
   about half OpenCV's speed on one thread at worst. With the GIL released,
   eight threads take 0.4 to 0.5 s. `jpeg-encoder` is licensed "(MIT OR Apache-2.0) AND

@@ -117,10 +117,15 @@ low-risk overlaps:
   order and re-raises decode/extract errors in order); the bounded look-ahead
   caps memory to ~*K* decoded frames + pyramids. This hides disk-read latency
   **and** overlaps one image's serial floor with another's parallel work, so the
-  cores the per-image rayon leaves idle on small images get filled. Because both
-  `read_image_rgb` and the Rust extract release the GIL and rayon's *single global
-  pool* caps total CPU threads at the core count, more in-flight images never
-  oversubscribe — they just keep that pool fed. *K* must therefore scale *with*
+  cores the per-image rayon leaves idle on small images get filled. Both
+  `read_image_rgb` and the Rust extract release the GIL, and rayon's *single
+  global pool* caps the extract's threads at the core count, so more in-flight
+  extracts keep that pool fed rather than adding threads. The decodes are
+  outside that pool: each runs on its Python worker thread, and for a JPEG wider
+  than 128 px `jpeg-decoder` also starts one OS thread per colour component for
+  the decode. So while images are being decoded the runnable threads can exceed
+  the core count. A decode is short beside an extract (about 13 ms against
+  several hundred on dino, below), so that overlap is brief. *K* must scale *with*
   the core count to fill a many-core host, so it defaults to `os.cpu_count()`,
   bounded only by memory: each in-flight image holds a decoded frame plus its
   f32 gaussian pyramid (`_EXTRACT_BYTES_PER_SOURCE_PIXEL` ≈ 192 B per source
@@ -177,9 +182,13 @@ small slice when extract dominates (few cores, large images) but a growing
 fraction as cores scale and extract collapses toward its ~165 ms serial floor.
 
 **Why the save goes on the rayon pool, not a worker thread (the contention
-trap).** Decode is I/O-bound (`read_image_rgb` waits on disk and releases the GIL),
-so prefetching it on a Python thread is free — it never burns a core. The save is
-*CPU-bound* (single-stream zstd). An earlier attempt offloaded it to a dedicated
+trap).** The decode is prefetched on Python threads (`read_image_rgb` releases
+the GIL). It is not free: besides waiting on the disk it uses CPU, about 13 ms per
+dino image, on its Python thread and, for a JPEG wider than 128 px, on the one
+thread per colour component `jpeg-decoder` starts. Those threads are outside the
+rayon pool too, so they can deschedule a rayon worker in the way described next;
+that cost has not been measured separately, and a decode is about half a save's
+CPU time. The save is *CPU-bound* (single-stream zstd). An earlier attempt offloaded it to a dedicated
 `ThreadPoolExecutor` writer thread; that **regressed ~25–30%** (wall *and*
 CPU-seconds) on a fully-subscribed box. Root cause: a separate OS thread pushes
 the runnable-thread count to *N+1* on *N* cores, so the kernel deschedules a

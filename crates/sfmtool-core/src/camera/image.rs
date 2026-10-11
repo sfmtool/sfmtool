@@ -60,7 +60,7 @@ impl ImageU8 {
     /// alpha channel is dropped, and a 16-bit image is scaled to 8 bits. The
     /// file's contents, not its extension, choose the decoder.
     pub fn read_rgb(path: &std::path::Path) -> Result<Self, ::image::ImageError> {
-        let rgb = Self::decode(path)?.to_rgb8();
+        let rgb = Self::decode(path)?.into_rgb8();
         Ok(Self::new(rgb.width(), rgb.height(), 3, rgb.into_raw()))
     }
 
@@ -71,16 +71,29 @@ impl ImageU8 {
     /// where it has one and 255 (opaque) where it has none, so `alpha > 0`
     /// marks pixels with data, as in a reconstruction's stored patch bitmaps.
     pub fn read_rgba(path: &std::path::Path) -> Result<Self, ::image::ImageError> {
-        let rgba = Self::decode(path)?.to_rgba8();
+        let rgba = Self::decode(path)?.into_rgba8();
         Ok(Self::new(rgba.width(), rgba.height(), 4, rgba.into_raw()))
     }
 
     /// Decode the file at `path` with the decoder its contents name, not its
     /// extension, so a PNG saved under a `.jpg` name still reads.
+    ///
+    /// A JPEG is decoded by the `jpeg-decoder` crate and every other format by
+    /// the `image` crate. The `image` crate's JPEG decoder, zune-jpeg 0.5.15,
+    /// returns wrong pixels without an error for a baseline JPEG that stores
+    /// each component in a scan of its own, which `jpeg-encoder` writes when
+    /// its optimized Huffman tables are on. A JPEG that ends before its
+    /// end-of-image marker is decoded by zune-jpeg, which fills the missing
+    /// part with grey as libjpeg does, unless it is a sequential JPEG with a
+    /// scan of fewer components than the frame, which zune-jpeg misreads; that
+    /// one stays with `jpeg-decoder` (see `decode_jpeg`).
     fn decode(path: &std::path::Path) -> Result<::image::DynamicImage, ::image::ImageError> {
-        ::image::ImageReader::open(path)?
-            .with_guessed_format()?
-            .decode()
+        let reader = ::image::ImageReader::open(path)?.with_guessed_format()?;
+        if reader.format() == Some(::image::ImageFormat::Jpeg) {
+            decode_jpeg(reader.into_inner())
+        } else {
+            reader.decode()
+        }
     }
 
     /// Encode the image to the file at `path`, in the format the path's
@@ -183,11 +196,11 @@ impl ImageU8 {
                     .set_chroma_subsampling_method(jpeg_encoder::ChromaSubsamplingMethod::Average);
                 // Optimized Huffman tables stay off, though off is the
                 // default, to record the choice: with them the encoder writes
-                // each component in a scan of its own. Those files are valid
-                // and OpenCV decodes them, but our reader (image 0.25.10 with
-                // zune-jpeg 0.5.15) returns wrong pixels for them without an
-                // error; see the ignored test
-                // `read_decodes_a_jpeg_with_one_scan_per_component`.
+                // each component in a scan of its own. Those files are valid,
+                // and our reader and OpenCV decode them, but zune-jpeg 0.5.15,
+                // the `image` crate's JPEG decoder, returns wrong pixels for
+                // them without an error, so other programs built on that
+                // crate would misread our files.
                 encoder.set_optimized_huffman_tables(false);
                 let color_type = if self.channels == 1 {
                     jpeg_encoder::ColorType::Luma
@@ -356,10 +369,306 @@ fn write_via_temporary(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<
 /// [`ImageU8::read_rgb`] otherwise.
 pub fn image_has_alpha(path: &std::path::Path) -> Result<bool, ::image::ImageError> {
     use ::image::ImageDecoder;
-    let decoder = ::image::ImageReader::open(path)?
-        .with_guessed_format()?
-        .into_decoder()?;
-    Ok(decoder.color_type().has_alpha())
+    let reader = ::image::ImageReader::open(path)?.with_guessed_format()?;
+    if reader.format() == Some(::image::ImageFormat::Jpeg) {
+        // A JPEG holds no alpha. Its markers up to the frame header are read
+        // by `jpeg-decoder`, as in `ImageU8::read_rgb` and `image_dimensions`,
+        // so a frame header one of them refuses the others refuse too. The
+        // reader can still refuse a file whose frame header reads, from a
+        // later segment (a table or scan header) or its pixel data.
+        jpeg_header(reader.into_inner())?;
+        return Ok(false);
+    }
+    Ok(reader.into_decoder()?.color_type().has_alpha())
+}
+
+/// The `(width, height)` stored in the header of the image file at `path`,
+/// read from the header alone, never the pixel data.
+///
+/// The contents, not the extension, choose the decoder, as in
+/// [`ImageU8::read_rgb`], and a JPEG's header is read by the decoder that
+/// reads its pixels. The EXIF orientation is not applied.
+pub fn image_dimensions(path: &std::path::Path) -> Result<(u32, u32), ::image::ImageError> {
+    let reader = ::image::ImageReader::open(path)?.with_guessed_format()?;
+    if reader.format() == Some(::image::ImageFormat::Jpeg) {
+        let info = jpeg_header(reader.into_inner())?;
+        return Ok((u32::from(info.width), u32::from(info.height)));
+    }
+    reader.into_dimensions()
+}
+
+/// Read a JPEG's header with the `jpeg-decoder` crate, up to its frame header.
+fn jpeg_header<R: std::io::Read>(
+    reader: R,
+) -> Result<jpeg_decoder::ImageInfo, ::image::ImageError> {
+    let mut decoder = jpeg_decoder::Decoder::new(reader);
+    decoder.read_info().map_err(jpeg_error)?;
+    Ok(decoder.info().expect("set by a successful read_info"))
+}
+
+/// Decode the JPEG `reader` holds, ignoring the EXIF orientation as the
+/// `image` crate does.
+///
+/// The file is read into memory once (a file over [`MAX_JPEG_FILE_BYTES`] is
+/// refused) and decoded with the `jpeg-decoder` crate. That decode reads past
+/// the end of the bytes only when the file ends before its end-of-image
+/// marker: it is cut short, lacks only the marker, or has segment lengths
+/// that run past its end. Such a file is decoded again, from the same bytes,
+/// by one of two rules:
+///
+/// - A sequential (baseline or extended) JPEG with a scan that holds fewer
+///   components than the frame, such as one with one scan per component, is
+///   decoded by `jpeg-decoder` with an end-of-image marker appended. zune-jpeg
+///   misreads such a file even when it is whole. The part a cut scan did not
+///   reach decodes from zero bits, as a dark textured pattern rather than
+///   grey. A file of this kind cut before every component's scan has begun
+///   is refused (`jpeg-decoder` requires data for each component), as is one
+///   with restart markers cut part way through a scan.
+/// - Every other such file is decoded by the `image` crate's decoder
+///   (zune-jpeg), as the reader decoded every JPEG before. `jpeg-decoder`
+///   would refuse it at the end of the file, or, given an appended marker,
+///   fill the missing part with that texture and still refuse a cut file with
+///   restart markers. zune-jpeg fills it with flat grey (128), as libjpeg and
+///   so OpenCV do, and reads restart markers.
+///
+/// A grey file decodes to grey and a colour one to RGB. A CMYK or YCCK file
+/// becomes RGB with `r = (255 - c) * (255 - k) / 255` and so on, on the
+/// inverted CMYK `jpeg-decoder` returns, which is within one grey level of
+/// OpenCV's conversion.
+///
+/// Refused from the frame header, before any scan is decoded: a frame whose
+/// decoded buffer would exceed the `image` crate's default allocation limit,
+/// 512 MiB, and a lossless frame of a precision other than 8 bits (read from
+/// the frame header, since `jpeg-decoder` returns 2 bytes per sample for it
+/// while naming an 8-bit pixel format). `jpeg-decoder` itself refuses a DCT
+/// frame (baseline, extended or progressive) of any precision but 8, so a
+/// 12-bit JPEG is refused in colour and grey alike.
+fn decode_jpeg<R: std::io::Read>(reader: R) -> Result<::image::DynamicImage, ::image::ImageError> {
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    reader
+        .take(MAX_JPEG_FILE_BYTES + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_JPEG_FILE_BYTES {
+        return Err(insufficient_memory());
+    }
+    let mut source = EndTrackingReader::new(&bytes);
+    let decoded = decode_jpeg_with_jpeg_decoder(&mut source, &bytes);
+    if !source.reached_end {
+        return decoded;
+    }
+    let layout = jpeg_layout(&bytes);
+    if layout.sequential
+        && layout
+            .scan_components
+            .iter()
+            .any(|&n| n < layout.frame_components)
+    {
+        let mut ended = bytes.clone();
+        ended.extend_from_slice(&[0xFF, 0xD9]);
+        return decode_jpeg_with_jpeg_decoder(&mut EndTrackingReader::new(&ended), &ended);
+    }
+    ::image::load_from_memory_with_format(&bytes, ::image::ImageFormat::Jpeg)
+}
+
+/// The largest JPEG file [`decode_jpeg`] reads into memory, 1 GiB: twice the
+/// decoded size the `image` crate's default limit allows. A larger file is
+/// refused before it is read, as its pixels would be refused anyway unless
+/// it is padded with data after the image.
+const MAX_JPEG_FILE_BYTES: u64 = 1 << 30;
+
+/// The `image` crate's error for a decode that would need too much memory.
+fn insufficient_memory() -> ::image::ImageError {
+    ::image::ImageError::Limits(::image::error::LimitError::from_kind(
+        ::image::error::LimitErrorKind::InsufficientMemory,
+    ))
+}
+
+/// Decode a JPEG from `source` with `jpeg-decoder`, refusing what
+/// [`decode_jpeg`] lists before decoding any scan. `bytes` is the whole file,
+/// for the frame header's precision.
+fn decode_jpeg_with_jpeg_decoder(
+    source: &mut EndTrackingReader<'_>,
+    bytes: &[u8],
+) -> Result<::image::DynamicImage, ::image::ImageError> {
+    use ::image::{DynamicImage, GrayImage, RgbImage};
+    use jpeg_decoder::{CodingProcess, PixelFormat};
+
+    let mut decoder = jpeg_decoder::Decoder::new(source);
+    decoder.read_info().map_err(jpeg_error)?;
+    let info = decoder.info().expect("set by a successful read_info");
+    let (width, height) = (u32::from(info.width), u32::from(info.height));
+    let channels: u64 = match info.pixel_format {
+        PixelFormat::L8 => 1,
+        PixelFormat::RGB24 => 3,
+        PixelFormat::CMYK32 => 4,
+        PixelFormat::L16 => return Err(jpeg_unsupported("greyscale JPEG of more than 8 bits")),
+    };
+    if info.coding_process == CodingProcess::Lossless && jpeg_layout(bytes).precision != Some(8) {
+        return Err(jpeg_unsupported(
+            "lossless JPEG of a precision other than 8 bits",
+        ));
+    }
+    let expected = u64::from(width) * u64::from(height) * channels;
+    if let Some(limit) = ::image::Limits::default().max_alloc {
+        if expected > limit {
+            return Err(insufficient_memory());
+        }
+    }
+    let pixels = decoder.decode().map_err(jpeg_error)?;
+    if pixels.len() as u64 != expected {
+        return Err(jpeg_error(jpeg_decoder::Error::Format(
+            "decoded buffer does not match the image size".to_owned(),
+        )));
+    }
+    match info.pixel_format {
+        PixelFormat::L8 => Ok(DynamicImage::ImageLuma8(
+            GrayImage::from_raw(width, height, pixels).expect("the buffer length is checked"),
+        )),
+        PixelFormat::RGB24 => Ok(DynamicImage::ImageRgb8(
+            RgbImage::from_raw(width, height, pixels).expect("the buffer length is checked"),
+        )),
+        PixelFormat::CMYK32 => {
+            let rgb = pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .flat_map(|&[c, m, y, k]| {
+                    let k = 255 - u32::from(k);
+                    let channel = |c: u8| (((255 - u32::from(c)) * k + 127) / 255) as u8;
+                    [channel(c), channel(m), channel(y)]
+                })
+                .collect();
+            Ok(DynamicImage::ImageRgb8(
+                RgbImage::from_raw(width, height, rgb).expect("the buffer length is checked"),
+            ))
+        }
+        PixelFormat::L16 => unreachable!("refused before decoding"),
+    }
+}
+
+/// What a JPEG's marker segments say about how it is coded, as far as
+/// [`jpeg_layout`] could read them.
+#[derive(Debug, Default, PartialEq)]
+struct JpegLayout {
+    /// The sample precision in bits of the first frame header, if one was read.
+    precision: Option<u8>,
+    /// Whether that frame is sequential DCT with Huffman coding (SOF0 baseline
+    /// or SOF1 extended), the frames a scan may hold some components of
+    /// without being progressive.
+    sequential: bool,
+    /// The number of components in that frame.
+    frame_components: u8,
+    /// The number of components each scan header holds, in file order.
+    scan_components: Vec<u8>,
+}
+
+/// Read the marker segments of the JPEG `bytes` up to its end-of-image
+/// marker or the end of the bytes, finding each marker as `jpeg-decoder`'s
+/// `read_marker` does: bytes up to the next `FF` are skipped (scan data, or
+/// stray bytes between segments, which libjpeg also allows), any further
+/// `FF` fill bytes are skipped, and `FF 00`, a stuffed byte inside scan data,
+/// is not a marker. A segment whose length runs past the end ends the read.
+fn jpeg_layout(bytes: &[u8]) -> JpegLayout {
+    let mut layout = JpegLayout::default();
+    let mut at = 0;
+    let next_marker = |at: &mut usize| -> Option<u8> {
+        loop {
+            while *bytes.get(*at)? != 0xFF {
+                *at += 1;
+            }
+            *at += 1;
+            let mut byte = *bytes.get(*at)?;
+            while byte == 0xFF {
+                *at += 1;
+                byte = *bytes.get(*at)?;
+            }
+            *at += 1;
+            if byte != 0x00 {
+                return Some(byte);
+            }
+        }
+    };
+    while let Some(marker) = next_marker(&mut at) {
+        match marker {
+            // SOI, TEM and the restart markers have no segment.
+            0x01 | 0xD0..=0xD8 => continue,
+            // End of image.
+            0xD9 => break,
+            _ => {}
+        }
+        // A 2-byte length that counts itself, then the body.
+        let Some(&[high, low]) = bytes.get(at..at + 2) else {
+            break;
+        };
+        let length = usize::from(u16::from_be_bytes([high, low]));
+        let Some(body) = bytes.get(at + 2..at + length.max(2)) else {
+            break;
+        };
+        match marker {
+            // SOF0-SOF15, other than DHT (C4), JPG (C8) and DAC (CC).
+            0xC0..=0xCF if !matches!(marker, 0xC4 | 0xC8 | 0xCC) => {
+                if layout.precision.is_none() && body.len() >= 6 {
+                    layout.precision = Some(body[0]);
+                    layout.frame_components = body[5];
+                    layout.sequential = matches!(marker, 0xC0 | 0xC1);
+                }
+            }
+            0xDA => layout.scan_components.extend(body.first()),
+            _ => {}
+        }
+        at += length.max(2);
+    }
+    layout
+}
+
+/// A reader over a JPEG held in memory that records whether a read asked for
+/// bytes past its end. `jpeg-decoder` stops at the end-of-image marker, so it
+/// reads past the end only of a file that is cut short, lacks the marker, or
+/// has segment lengths that run past its end.
+struct EndTrackingReader<'a> {
+    rest: &'a [u8],
+    reached_end: bool,
+}
+
+impl<'a> EndTrackingReader<'a> {
+    fn new(bytes: &'a [u8]) -> Self {
+        Self {
+            rest: bytes,
+            reached_end: false,
+        }
+    }
+}
+
+impl std::io::Read for EndTrackingReader<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = self.rest.read(buf)?;
+        if n < buf.len() {
+            self.reached_end = true;
+        }
+        Ok(n)
+    }
+}
+
+/// The `image` crate's error for a JPEG feature the reader does not support.
+fn jpeg_unsupported(feature: &str) -> ::image::ImageError {
+    use ::image::error::{ImageFormatHint, UnsupportedError, UnsupportedErrorKind};
+    ::image::ImageError::Unsupported(UnsupportedError::from_format_and_kind(
+        ImageFormatHint::Exact(::image::ImageFormat::Jpeg),
+        UnsupportedErrorKind::GenericFeature(feature.to_owned()),
+    ))
+}
+
+/// The `image` crate's error for a `jpeg-decoder` error.
+fn jpeg_error(e: jpeg_decoder::Error) -> ::image::ImageError {
+    use ::image::error::{DecodingError, ImageFormatHint};
+    match e {
+        jpeg_decoder::Error::Io(io) => ::image::ImageError::IoError(io),
+        e => ::image::ImageError::Decoding(DecodingError::new(
+            ImageFormatHint::Exact(::image::ImageFormat::Jpeg),
+            e,
+        )),
+    }
 }
 
 /// Gaussian pyramid of [`ImageU8`] images for anisotropic resampling.

@@ -4,6 +4,7 @@
 """Tests for the image readers ``sfmtool.fileio.read_image_rgb`` and
 ``read_image_rgba``, the Rust decoder that Python reads photographs with."""
 
+import base64
 import struct
 from pathlib import Path
 
@@ -124,6 +125,41 @@ def test_exif_orientation_is_ignored(tmp_path):
     from sfmtool._workspace_image import read_workspace_image
 
     np.testing.assert_array_equal(read_workspace_image(tmp_path, tagged.name), rgb)
+
+
+# A 37 x 23 baseline JPEG at 4:2:0 with each component in a scan of its own,
+# written by the `jpeg-encoder` crate with its optimized Huffman tables on.
+# zune-jpeg 0.5.15, the `image` crate's JPEG decoder, decodes it to wrong
+# pixels without an error.
+_ONE_SCAN_PER_COMPONENT_JPEG = """
+/9j/4AAQSkZJRgABAgAAAQABAAD/wAARCAAXACUDACIAAREBAhEB/9sAQwAFAwQEBAMFBAQEBQUF
+BgcMCAcHBwcPCwsJDBEPEhIRDxERExYcFxMUGhURERghGBodHR8fHxMXIiQiHiQcHh8e/9sAQwEF
+BQUHBgcOCAgOHhQRFB4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4e
+Hh4eHh4e/8QAFgABAQEAAAAAAAAAAAAAAAAABgcI/8QALBABAAECBAIJBQEAAAAAAAAAAQIDEQAF
+EiExQQQTIlFhcYGR8DJSobHB4f/EABcBAQEBAQAAAAAAAAAAAAAAAAYHBAj/xAAlEQAABAUEAgMA
+AAAAAAAAAAAAAQISAwQFEVEGIjGBIZGhweH/2gAIAQAAAD8AlOThpY2tvux8PLD/ACqjLTFPueKW
+sH+YV5XSdV2Ldvq3bg7n9/GHmT0urDrLdl47d42/t8J8tjGdG850g4GsX94yZlFBagqRsg7WOW78
+9sK8ogQkJF0x7UuW/wAvh9lFBlAUbxC6HjuPfz/OEmUUo2NEpfUS2AA7/HiYoWX0UohOkoBptFT0
+tjG+TUY6yKp2RdLy4fPPDzKqOtYz1RIu6Wtwvw9MJ8ipydLANOw3C1+Xjz93FByekdZHS3LltO2z
+zv5W78JuidFqVOjxYMZot5MT9Pr74//aAAgBAREAPwDFUtMnIck53XHvICVLTJyHJOd1a3vIKr0K
+px7vj9HaRSkFD7FgBilIKX2LH2AK5CA4/A//2gAIAQIRAD8AudVjOuJrVYzrgREmtxi31hRia1hR
+gZEUbjH/2Q==
+"""
+
+
+def test_a_jpeg_with_one_scan_per_component_reads_as_opencv_reads_it(tmp_path):
+    jpeg = base64.b64decode(_ONE_SCAN_PER_COMPONENT_JPEG)
+    assert jpeg.count(b"\xff\xda") == 3  # three start-of-scan markers
+    path = tmp_path / "scans.jpg"
+    path.write_bytes(jpeg)
+
+    rgb = read_image_rgb(path)
+    assert rgb.shape == (23, 37, 3)
+    cv_rgb = cv2.cvtColor(cv2.imread(str(path)), cv2.COLOR_BGR2RGB)
+    diff = np.abs(rgb.astype(np.int16) - cv_rgb)
+    assert diff.mean() < 1.0
+    np.testing.assert_array_equal(read_image_rgba(path)[..., :3], rgb)
+    assert not image_has_alpha(path)
 
 
 def test_a_missing_file_raises_file_not_found_naming_the_path(tmp_path):

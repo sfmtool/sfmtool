@@ -428,8 +428,10 @@ impl PhotographCache {
     /// Must not use rayon. It runs inside a slot's `get_or_init`, and a rayon
     /// worker waiting in a nested join may steal another `get_many` item for
     /// the same path, which would re-enter that `OnceLock` on the same thread
-    /// and deadlock. The file decode and `ImageU8Pyramid::from_image` are
-    /// serial.
+    /// and deadlock. Neither the file decode nor `ImageU8Pyramid::from_image`
+    /// uses rayon's global pool. The decode may start threads of its own (one
+    /// per colour component in `jpeg-decoder`, a private pool in `exr`), which
+    /// take no work from the global pool; see the photograph-cache spec.
     fn decode(&self, path: &Path) -> Option<Arc<ImageU8Pyramid>> {
         let image = ImageU8::read_rgb(path).ok()?;
         Some(Arc::new(ImageU8Pyramid::from_image(image, self.levels)))
