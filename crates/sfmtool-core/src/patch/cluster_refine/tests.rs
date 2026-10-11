@@ -1370,6 +1370,11 @@ fn result_fingerprint(r: &ClusterRefineResult) -> u64 {
     h
 }
 
+/// One case of [`run_recovery_case_with`]: scale, rotation in degrees, shear,
+/// seed log-scale error, seed rotation error in degrees, shift in pixels, and
+/// the largest accepted RMSE.
+type RecoveryCase = (f64, f64, f64, f64, f64, [f64; 2], f64);
+
 /// The cases of [`synthetic_recovery_across_warp_range`] and one member
 /// turned 60° from its seed, with one rotation start, fingerprinted.
 fn one_start_fingerprints() -> Vec<u64> {
@@ -1377,7 +1382,7 @@ fn one_start_fingerprints() -> Vec<u64> {
         rotation_starts: 1,
         ..ClusterRefineParams::default()
     };
-    let cases: [(f64, f64, f64, f64, f64, [f64; 2], f64); 5] = [
+    let cases: [RecoveryCase; 5] = [
         (1.0, 0.0, 0.0, 0.07, 4.0, [1.0, 0.0], 0.3),
         (0.8, -12.0, 0.1, -0.07, -4.0, [0.0, 1.0], 0.3),
         (1.25, 20.0, 0.0, 0.07, 4.0, [0.7, -0.7], 0.32),
