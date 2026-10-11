@@ -367,18 +367,23 @@ impl Viewer3D {
 
     /// Handles mouse drag interactions (orbit, pan, zoom, nodal pan).
     ///
-    /// `bench_owns_pointer` is the one thing that stops it: a gesture that began
-    /// on one of the bench figure's handles is an edit of the track, and the
-    /// pointer can only mean one of the two.
+    /// `owns_pointer` is the one thing that stops it: a stroke of the delete
+    /// brush deletes points and a gesture that began on one of the bench
+    /// figure's handles is an edit of the track, and the pointer can only mean
+    /// one thing.
+    ///
+    /// With the delete brush on, Alt + left drag orbits in free view as it
+    /// does in camera view, since the brush has taken the unmodified left drag
+    /// that orbits in Navigate.
     pub(super) fn handle_drag(
         &mut self,
         ui: &egui::Ui,
         response: &egui::Response,
         rect: Rect,
         fly_keys_held: bool,
-        bench_owns_pointer: bool,
+        owns_pointer: bool,
     ) {
-        if bench_owns_pointer {
+        if owns_pointer {
             return;
         }
         let any_button_dragging = ui.input(|i| {
@@ -449,8 +454,9 @@ impl Viewer3D {
                     rect.height() as f64,
                 );
             } else if modifiers.alt {
-                if self.camera_view.is_some() {
-                    // Alt+drag in camera view = orbit — exits camera view
+                if self.camera_view.is_some() || self.tool == super::brush::Tool::DeleteBrush {
+                    // Alt+drag in camera view, or with the brush on, = orbit —
+                    // exits camera view
                     self.leave_camera_view();
                     self.camera.orbit(delta.x as f64, delta.y as f64);
                 } else {

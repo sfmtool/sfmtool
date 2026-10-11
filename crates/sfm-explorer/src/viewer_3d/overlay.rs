@@ -214,9 +214,17 @@ impl Viewer3D {
             );
         }
 
-        // Bottom-right: controls help
+        // Bottom-right: controls help, for the tool that is on, since the two
+        // read the left drag differently.
         if show_controls_help {
-            let controls = "Drag: orbit | Shift: pan | Scroll: zoom | Alt+drag: free-look | WASD: fly | Alt: target";
+            let controls = match self.tool {
+                super::brush::Tool::Navigate => {
+                    "Drag: orbit | Shift: pan | Scroll: zoom | Alt+drag: free-look | WASD: fly | Alt: target"
+                }
+                super::brush::Tool::DeleteBrush => {
+                    "Drag: delete points | Esc: cancel stroke | Alt+drag: orbit | Shift: pan | Scroll: zoom | WASD: fly"
+                }
+            };
             painter.text(
                 Pos2::new(rect.right() - 10.0, rect.bottom() - 10.0),
                 egui::Align2::RIGHT_BOTTOM,

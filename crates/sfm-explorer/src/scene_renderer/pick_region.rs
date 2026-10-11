@@ -32,13 +32,6 @@ impl PixelRect {
     /// `(x, y)` covers `x .. x + 1` and has its centre at `x + 0.5`. Cut at the
     /// texture's top and left edges; [`SceneRenderer::copy_pick_region`] cuts it
     /// at the other two.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the delete brush's stroke and preview are its first callers"
-        )
-    )]
     pub(crate) fn around_capsule(from: [f32; 2], to: [f32; 2], radius: f32) -> Self {
         let radius = radius.max(0.0);
         // A centre `c` is at most `radius` from the segment only if it is within
@@ -113,39 +106,21 @@ impl PickRegion {
 
     /// The rectangle the request named, which is what a caller that asks on
     /// every frame matches an answer to its question by.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the delete brush's stroke and preview are its first callers"
-        )
-    )]
     pub(crate) fn requested(&self) -> PixelRect {
         self.requested
     }
 
     /// The rectangle this region was read from, which is the requested one cut
-    /// to the texture.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the delete brush's stroke and preview are its first callers"
-        )
-    )]
+    /// to the texture. Read by the region tests; the brush matches an answer
+    /// by [`Self::requested`] alone.
+    #[cfg(test)]
     pub(crate) fn rect(&self) -> PixelRect {
         self.rect
     }
 
     /// The point the pixel `(x, y)` of the scene texture shows, or `None`
     /// when it shows none or lies outside the region.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the delete brush's stroke and preview are its first callers"
-        )
-    )]
+    #[cfg(test)]
     pub(crate) fn point_at(&self, x: u32, y: u32) -> Option<PointRef> {
         let col = x.checked_sub(self.rect.x)?;
         let row = y.checked_sub(self.rect.y)?;
@@ -165,13 +140,6 @@ impl PickRegion {
 /// `(x + 0.5, y + 0.5)`. Pixels of other reconstructions are skipped, as are
 /// capsule pixels outside the region. The indexes are the edited indexes the
 /// pick buffer carries.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the delete brush's stroke and preview are its first callers"
-    )
-)]
 pub(crate) fn points_in_capsule(
     region: &PickRegion,
     recon: ReconId,
@@ -296,6 +264,7 @@ impl SceneRenderer {
         let row_bytes = padded_row_bytes(rect.width) as usize;
         let slice = staging.slice(..(row_bytes * rect.height as usize) as u64);
         let (tx, rx) = std::sync::mpsc::channel();
+        let waited = std::time::Instant::now();
         slice.map_async(wgpu::MapMode::Read, move |result| {
             let _ = tx.send(result);
         });
@@ -303,6 +272,14 @@ impl SceneRenderer {
         if !rx.recv().map(|r| r.is_ok()).unwrap_or(false) {
             return None;
         }
+        // What `specs/gui/edits/delete-brush.md` § "The map blocks" was
+        // measured with.
+        log::debug!(
+            "pick region {}x{}: map wait {:.3} ms",
+            rect.width,
+            rect.height,
+            waited.elapsed().as_secs_f64() * 1e3
+        );
         let data = slice.get_mapped_range().ok()?;
         let points = decode_rows(&data, rect, row_bytes, |id| {
             match self.pick_tables.resolve(id) {

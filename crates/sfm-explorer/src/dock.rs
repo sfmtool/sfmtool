@@ -185,6 +185,10 @@ impl TabContext<'_> {
             // every pointer input path.
             self.viewer_3d
                 .show_hud(ui, self.state, self.diagnostics, self.handler_ok);
+            // The tool strip at the left edge, for the same reason and in the
+            // same way.
+            self.viewer_3d
+                .show_tool_strip(ui, &mut self.state.action_log);
         }
         // Read before the node is borrowed out of the scene: the status
         // line is derived from the whole log, and the viewport call
@@ -255,6 +259,11 @@ impl TabContext<'_> {
             // rather than in the viewport because both halves need the state
             // mutably, and it is borrowed out of for the whole of that call.
             self.apply_bench_gesture(focused.as_ref().map(|(label, _, _)| label.as_str()));
+            // A released stroke of the delete brush: its painted points
+            // deleted as one version, applied here for the same reason.
+            if let Some(gesture) = self.viewer_3d.brush_gesture.take() {
+                gesture.apply(self.state);
+            }
         } else {
             // Nothing selected is nothing on a bench: the figure would
             // otherwise hang in the scene after the node that held it closed.

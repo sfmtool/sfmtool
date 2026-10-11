@@ -2084,3 +2084,111 @@ fn a_drag_across_the_viewport_orbits_the_camera() {
         "an orbit keeps the target distance: {distance} then {after_distance}"
     );
 }
+
+/// The delete brush in a real window: the tool strip's button turns it on, a
+/// `drag` across the middle of the seoul bull ground truth deletes the points
+/// it passes over as one version, and the count in the Action Log entry is the
+/// count the reconstruction lost.
+#[test]
+fn a_brush_stroke_deletes_the_points_it_passes_over() {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../test-data/images/seoul_bull_sculpture/seoul_bull_sculpture_ground_truth.sfmr"
+    );
+    let viewer = McpViewer::launched(ui_test_lock(), None, &["--no-default-layout", path]);
+    let deadline = Instant::now() + CONTENT_TIMEOUT;
+    let label = loop {
+        let scene = viewer.call("get_scene", json!({}));
+        if let Some(label) = scene["structuredContent"]["scene"][0]["label"].as_str() {
+            break label.to_string();
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the reconstruction never appeared: {scene}"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    viewer.ok(
+        "set_window_layout",
+        json!({
+            "layout": { "main": { "tabs": ["viewer_3d"], "active": "viewer_3d" }, "windows": [] },
+        }),
+    );
+    // Through the first photograph the bull fills the middle of the viewport,
+    // where the stroke below runs.
+    viewer.ok("set_view", json!({ "look_through": { "camera_image": 0 } }));
+
+    let brush = viewer.wait_for(
+        json!({ "panel_name": "viewer_3d" }),
+        "the tool strip's Delete brush button never appeared",
+        |listing| find_widget(listing, "radio_button", "Delete brush").cloned(),
+    );
+    viewer.click(json!({ "widget": brush["widget"] }));
+    let display = viewer.ok("get_viewer_3d_display", json!({}));
+    assert_eq!(
+        display["viewer_3d_display"]["tool"], "delete_brush",
+        "{display}"
+    );
+
+    let points = || -> i64 {
+        let scene = viewer.ok("get_scene", json!({}));
+        scene["scene"][0]["counts"]["points"]
+            .as_i64()
+            .unwrap_or_else(|| panic!("no point count: {scene}"))
+    };
+    let before = points();
+    let view = viewer.ok("get_scene", json!({}))["view"].clone();
+    let size = &view["derived"]["viewport_px"];
+    let [width, height] = [
+        size[0].as_f64().expect("a viewport width"),
+        size[1].as_f64().expect("a viewport height"),
+    ];
+    let [x, y] = [(width / 2.0).round(), (height / 2.0).round()];
+    let stroke: Vec<[f64; 2]> = (0..6)
+        .map(|i| [x - 100.0 + 40.0 * f64::from(i), y])
+        .collect();
+    viewer.ok(
+        "drag",
+        json!({ "panel_name": "viewer_3d", "path_px": stroke }),
+    );
+
+    // The release waits for its last region read, a frame or two after the
+    // drag's reply.
+    let prefix = "Deleted ";
+    let suffix = format!(" points in {label}");
+    let deadline = Instant::now() + CONTENT_TIMEOUT;
+    let deleted = loop {
+        let log = viewer.ok(
+            "get_action_log",
+            json!({ "since_revision": 0, "limit": 200 }),
+        );
+        let texts: Vec<String> = log["entries"]
+            .as_array()
+            .map(|entries| {
+                entries
+                    .iter()
+                    .filter_map(|e| e["text"].as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let found = texts.iter().find_map(|text| {
+            let rest = text.strip_prefix(prefix)?;
+            let (count, _) = rest.split_once(suffix.as_str())?;
+            count.parse::<i64>().ok()
+        });
+        if let Some(count) = found {
+            break count;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "no '{prefix}N{suffix}' line; the log holds {texts:?}"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    assert!(deleted > 1, "the stroke deleted {deleted} points");
+    assert_eq!(
+        before - points(),
+        deleted,
+        "the entry's count is not the points lost"
+    );
+}

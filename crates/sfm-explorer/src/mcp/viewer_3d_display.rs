@@ -2,24 +2,26 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! `get_viewer_3d_display` and `set_viewer_3d_display`: the 3D viewport's
-//! display controls, the checkboxes and sliders of its HUD, as one flat
-//! document.
+//! display controls, the checkboxes and sliders of its HUD, and the tool its
+//! tool strip has on, as one flat document.
 //!
 //! The fields, their wire names, their ranges and their Action Log texts all
 //! come from [`crate::viewer_3d::display::Field`], the list the HUD draws its
 //! widgets from, so a range here and a slider's range are one constant, and the
 //! row an agent's change leaves is the row a person's click leaves.
 //!
-//! As with `set_image_detail_display`, **every refusal is at the parse**: the
-//! ranges are static, so [`parse_change`] checks the whole call before a
-//! `Command` exists and [`set`] cannot fail. A call naming a good field and a
-//! bad one changes nothing.
+//! As with `set_image_detail_display`, **every refusal of a value is at the
+//! parse**: the ranges are static, so [`parse_change`] checks the whole call
+//! before a `Command` exists. The one refusal [`set`] makes is of the state:
+//! the delete brush while a camera is in hand. A call naming a good field and
+//! a bad one, or the brush during a lock, changes nothing.
 
 use serde_json::{json, Map, Value};
 
 use super::tools::Args;
 use super::{JsonReply, ToolError, Viewer3dDisplayChange};
 use crate::state::AppState;
+use crate::viewer_3d::brush::{Tool, BRUSH_LOCK_REFUSAL};
 use crate::viewer_3d::display::{
     record_viewer_3d_display_changes, Control, Field, FieldValue, Viewer3dDisplay,
 };
@@ -34,30 +36,46 @@ pub(super) fn get(state: &AppState, viewer: &Viewer3D) -> JsonReply {
 /// changed, and answer with the whole document.
 ///
 /// The record is the diff of the document before and after the write, so a
-/// field set to the value it had leaves no row.
+/// field set to the value it had leaves no row. The tool is recorded as the
+/// tool strip records it.
+///
+/// The delete brush is refused while a camera is in hand, before anything is
+/// written, as the tool strip greys its button then.
 pub(super) fn set(
     state: &mut AppState,
     viewer: &mut Viewer3D,
     change: &Viewer3dDisplayChange,
 ) -> JsonReply {
+    if change.tool == Some(Tool::DeleteBrush) && viewer.brush_refusal().is_some() {
+        return Err(ToolError::new(format!(
+            "set_viewer_3d_display cannot choose the delete brush now: {BRUSH_LOCK_REFUSAL}"
+        )));
+    }
     let before = Viewer3dDisplay::snapshot(state, viewer);
     for &(field, value) in &change.fields {
         field.write(state, viewer, value);
     }
     let after = Viewer3dDisplay::snapshot(state, viewer);
     record_viewer_3d_display_changes(&mut state.action_log, &before, &after);
+    if let Some(tool) = change.tool {
+        viewer.set_tool(tool, &mut state.action_log);
+    }
     Ok(document(state, viewer))
 }
 
 /// The document both tools answer with: every field under its wire name, in
-/// the HUD's order.
+/// the HUD's order, and the tool.
 fn document(state: &AppState, viewer: &Viewer3D) -> Value {
-    let fields: Map<String, Value> = Viewer3dDisplay::snapshot(state, viewer)
+    let mut fields: Map<String, Value> = Viewer3dDisplay::snapshot(state, viewer)
         .fields()
         .map(|(field, value)| (field.wire_name().to_string(), wire_value(value)))
         .collect();
+    fields.insert(TOOL.to_string(), json!(viewer.tool.wire_name()));
     json!({ "viewer_3d_display": fields })
 }
+
+/// The tool's name in the document.
+const TOOL: &str = "tool";
 
 /// A value as the wire carries it.
 ///
@@ -77,9 +95,10 @@ fn wire_value(value: FieldValue) -> Value {
     }
 }
 
-/// Every argument `set_viewer_3d_display` takes, and the whole of what it
-/// refuses: a value of the wrong type, a number that is not finite or is
-/// outside its slider's range, and a call that names nothing.
+/// Every argument `set_viewer_3d_display` takes, and the whole of what its
+/// parse refuses: a value of the wrong type, a number that is not finite or is
+/// outside its slider's range, a tool it does not know, and a call that names
+/// nothing.
 ///
 /// A number inside the range is rounded to the decimals its slider shows,
 /// which is what the slider itself does to the value it holds whenever the HUD
@@ -108,10 +127,24 @@ pub(super) fn parse_change(args: &Args) -> Result<Viewer3dDisplayChange, ToolErr
             fields.push((field, value));
         }
     }
-    if fields.is_empty() {
+    let tool = match args.optional_string(TOOL)? {
+        None => None,
+        Some(name) => Some(Tool::from_wire_name(&name).ok_or_else(|| {
+            args.error(format!(
+                "does not know the tool {name:?} — the tools are {}.",
+                tool_names().join(", ")
+            ))
+        })?),
+    };
+    if fields.is_empty() && tool.is_none() {
         return Err(args.error("was given nothing to change."));
     }
-    Ok(Viewer3dDisplayChange { fields })
+    Ok(Viewer3dDisplayChange { fields, tool })
+}
+
+/// Every tool's wire name, in the tool strip's order.
+fn tool_names() -> Vec<&'static str> {
+    Tool::ALL.map(Tool::wire_name).to_vec()
 }
 
 /// The schema of `set_viewer_3d_display`'s arguments: one optional property per
@@ -120,10 +153,24 @@ pub(super) fn parse_change(args: &Args) -> Result<Viewer3dDisplayChange, ToolErr
 /// Built from the same list the parse walks, so the catalog walk in
 /// `mcp::tests` holds the two to one statement.
 pub(super) fn properties() -> Vec<(&'static str, Value)> {
-    Field::ALL
+    let mut properties: Vec<(&'static str, Value)> = Field::ALL
         .into_iter()
         .map(|field| (field.wire_name(), property(field)))
-        .collect()
+        .collect();
+    properties.push((
+        TOOL,
+        json!({
+            "type": "string",
+            "enum": tool_names(),
+            "description": "What an unmodified left drag in the viewport does, the tool strip's \
+                            choice: navigate (orbit, pan, zoom and click to select) or \
+                            delete_brush (paint the visible points of the selected \
+                            reconstruction and delete them on release, as one version; Alt + \
+                            left drag orbits). delete_brush is refused while a camera is being \
+                            moved.",
+        }),
+    ));
+    properties
 }
 
 fn property(field: Field) -> Value {

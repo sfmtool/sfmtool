@@ -536,11 +536,21 @@ impl App {
             // tint for the lock's duration: they are the ones the commit will
             // move, and telling them from the fixed ones is the whole of what
             // the reviewer is steering by.
+            //
+            // The delete brush's marks go beside them: the points its stroke
+            // has painted, and the points under its circle before a press.
             let mut marks = crate::scene_renderer::PointMarks::none();
             if let Some(lock) = self.viewer_3d.camera_lock.as_ref() {
                 if lock.image.recon == id {
                     marks.highlighted = &lock.highlighted;
                 }
+            }
+            let (painted, under_brush) = self.viewer_3d.brush_marks(id);
+            if let Some(painted) = painted {
+                marks.painted = painted;
+            }
+            if let Some(under_brush) = under_brush {
+                marks.under_brush = under_brush;
             }
             let mut phase = uploads.phase("deleted mask");
             let written = self.scene_renderer.update_point_mask(
@@ -1104,7 +1114,17 @@ impl App {
         // Only when the 3D viewer has pointer focus (hover_pixel is set for
         // the current frame). This avoids stale one-frame-delayed readback
         // results from overwriting hover state after the pointer left.
-        if self.viewer_3d.hover_pixel.is_some() {
+        //
+        // With the delete brush on, the circle's preview stands in for the
+        // single-point hover, so the viewport hovers nothing, whether or not
+        // this frame read a region.
+        if self.viewer_3d.hover_pixel.is_some()
+            && self.viewer_3d.tool == crate::viewer_3d::brush::Tool::DeleteBrush
+        {
+            self.scene_renderer.clear_hover();
+            self.state.hovered_image = None;
+            self.state.hovered_point = None;
+        } else if self.viewer_3d.hover_pixel.is_some() {
             match readback.pick {
                 Some(PickTarget::Image(image)) => {
                     self.state.hovered_image = Some(image);

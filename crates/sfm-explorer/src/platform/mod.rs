@@ -198,6 +198,10 @@ pub fn pointer_in_rect(ctx: &egui::Context, rect: egui::Rect) -> bool {
 /// pan, and none of those is a handle being grabbed. Elsewhere there is nothing
 /// to disambiguate.
 pub fn other_mouse_button_down() -> bool {
+    #[cfg(test)]
+    if TEST_OTHER_BUTTON_DOWN.with(|down| down.get()) {
+        return true;
+    }
     #[cfg(target_os = "windows")]
     {
         windows::mouse_button_state() & (windows::BUTTON_MIDDLE | windows::BUTTON_RIGHT) != 0
@@ -217,6 +221,21 @@ pub fn other_mouse_button_down() -> bool {
 thread_local! {
     static TEST_POINTER_POS: std::cell::Cell<Option<egui::Pos2>> =
         const { std::cell::Cell::new(None) };
+}
+
+// Test-only override of `other_mouse_button_down`, thread-local for the
+// reason the pointer's is: a headless test stands for a Windows window whose
+// right or middle button is down, which no synthesized egui input can say.
+#[cfg(test)]
+thread_local! {
+    static TEST_OTHER_BUTTON_DOWN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Test-only: say that a button other than the primary one is down, as the
+/// Windows button state would, for the current thread.
+#[cfg(test)]
+pub fn set_test_other_button_down(down: bool) {
+    TEST_OTHER_BUTTON_DOWN.with(|d| d.set(down));
 }
 
 /// Test-only: place the platform's tracked pointer at `pos` (logical points),

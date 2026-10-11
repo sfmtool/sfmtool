@@ -2332,3 +2332,70 @@ fn get_action_log_reports_what_a_drawn_action_cost() {
         "a plausible number of milliseconds, got {took}",
     );
 }
+
+// ── The 3D viewport's tool ──────────────────────────────────────────────
+
+/// `set_viewer_3d_display` switches the tool, and the document reads it back
+/// under `tool`, as the tool strip would show it.
+#[test]
+fn set_viewer_3d_display_switches_the_tool() {
+    use crate::viewer_3d::brush::Tool;
+    let (mut state, mut viewer) = editable();
+    let read = ok(&mut state, &mut viewer, Command::GetViewer3dDisplay);
+    assert_eq!(read["viewer_3d_display"]["tool"], "navigate");
+
+    let reply = call(
+        &mut state,
+        &mut viewer,
+        "set_viewer_3d_display",
+        json!({ "tool": "delete_brush" }),
+    );
+    assert_eq!(reply["viewer_3d_display"]["tool"], "delete_brush");
+    assert_eq!(viewer.tool, Tool::DeleteBrush);
+    assert!(
+        state
+            .action_log
+            .entries()
+            .any(|e| e.text == "Delete brush tool"),
+        "{:?}",
+        rows(&state)
+    );
+
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "set_viewer_3d_display",
+        json!({ "tool": "lasso" }),
+    );
+    assert!(error.0.contains("navigate, delete_brush"), "{error}");
+    assert_eq!(viewer.tool, Tool::DeleteBrush);
+}
+
+/// The delete brush is refused while a camera is in hand, whole: the call's
+/// other fields are not applied either, and the lock is left as it was.
+#[test]
+fn set_viewer_3d_display_refuses_the_brush_while_a_camera_is_in_hand() {
+    use crate::viewer_3d::brush::Tool;
+    let (mut state, mut viewer) = editable();
+    hold_the_camera(&mut state, &mut viewer, 1);
+    let grid = state.show_grid;
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "set_viewer_3d_display",
+        json!({ "tool": "delete_brush", "show_grid": !grid }),
+    );
+    assert!(error.0.contains("camera is being moved"), "{error}");
+    assert_eq!(viewer.tool, Tool::Navigate);
+    assert_eq!(state.show_grid, grid, "the other field was applied");
+    assert!(viewer.camera_lock.is_some(), "the lock was ended");
+
+    // Navigate is not refused: it is what the lock leaves the viewport in.
+    let reply = call(
+        &mut state,
+        &mut viewer,
+        "set_viewer_3d_display",
+        json!({ "tool": "navigate" }),
+    );
+    assert_eq!(reply["viewer_3d_display"]["tool"], "navigate");
+}

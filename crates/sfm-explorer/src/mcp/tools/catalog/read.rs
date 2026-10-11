@@ -253,8 +253,10 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           show_patches, show_points_at_infinity, show_target_indicator), the \
                           sizes (point_size_log2, infinity_point_px, length_scale), the patch \
                           sliders, maintain_z_up, the Advanced sliders and the two Debug \
-                          overlays. These decide what a screenshot of the viewer_3d panel \
-                          shows. The field of view is in get_scene's view block instead.",
+                          overlays, and tool, the tool strip's choice of what an unmodified \
+                          left drag does (navigate or delete_brush). These decide what a \
+                          screenshot of the viewer_3d panel shows. The field of view is in \
+                          get_scene's view block instead.",
             kind: Read,
             schema: object(&[], &[]),
         },

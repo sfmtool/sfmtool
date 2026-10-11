@@ -156,6 +156,10 @@ pub(crate) fn enter(viewer: &mut Viewer3D, state: &mut AppState) -> Result<(), S
 
     snap_to(viewer, &lock.stored, node);
     viewer.camera_lock = Some(lock);
+    // The delete brush would push a version between the lock's start and its
+    // commit, so the lock leaves it, and the tool strip greys it until the
+    // lock ends. A stroke held now is cancelled on the next frame.
+    viewer.tool = crate::viewer_3d::brush::Tool::Navigate;
     state.action_log.record(
         Kind::View,
         format!("Moving the camera of {basename} ({label})"),

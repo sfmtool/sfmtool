@@ -487,6 +487,7 @@ fn get_viewer_3d_display_returns_the_defaults() {
         .map(String::as_str)
         .collect();
     let mut expected: Vec<&str> = Field::ALL.iter().map(|field| field.wire_name()).collect();
+    expected.push("tool");
     names.sort_unstable();
     expected.sort_unstable();
     assert_eq!(names, expected);

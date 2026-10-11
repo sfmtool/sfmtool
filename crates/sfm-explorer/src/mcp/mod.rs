@@ -198,11 +198,12 @@ pub(crate) enum Command {
         request: ImageDetailViewRequest,
     },
     /// The 3D viewport's display controls, the HUD's checkboxes and sliders,
-    /// as one flat document.
+    /// and the tool strip's tool, as one flat document.
     GetViewer3dDisplay,
     /// The fields the call named, each already checked against its slider's
     /// range and rounded to the decimals the slider shows, so
-    /// [`apply_with_window`] only writes and records.
+    /// [`apply_with_window`] writes and records, refusing only the delete
+    /// brush while a camera is in hand.
     SetViewer3dDisplay {
         change: Viewer3dDisplayChange,
     },
@@ -703,13 +704,15 @@ pub(crate) struct ImageDetailDisplayChange {
 }
 
 /// A `set_viewer_3d_display` request: the fields it named with the value for
-/// each, in the document's order. A field the call did not name is not in it.
+/// each, in the document's order, and the tool when it named one. A field the
+/// call did not name is not in it.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub(crate) struct Viewer3dDisplayChange {
     pub(crate) fields: Vec<(
         crate::viewer_3d::display::Field,
         crate::viewer_3d::display::FieldValue,
     )>,
+    pub(crate) tool: Option<crate::viewer_3d::brush::Tool>,
 }
 
 /// A `set_image_detail_view` request: which photograph to look at, the one
