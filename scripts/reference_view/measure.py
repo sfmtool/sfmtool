@@ -19,9 +19,12 @@ instead of a sample.
 
 Each track is one JSON line in ``<out>/<dataset>.jsonl`` (``-all.jsonl`` with
 ``--all``) with each row's readings as the rule reads them (coverage, clipped
-share, viewing angle, cell deficit, pair ZNCC, the self-similarity semi-axes)
-and what the rule decided at this build's defaults (cost, terms, exclusion,
-pick). ``analyze.py`` reads the files.
+share, viewing angle, cell deficit, pair ZNCC, the self-similarity semi-axes),
+its ``ray``, the unit direction from the patch's centre to the camera centre
+(minus the patch's bearing, the same for every row, for a patch at infinity),
+which the rule does not read but ``analyze.py`` compares a form of the angle
+factor on, and what the rule decided at this build's defaults (cost, terms,
+exclusion, pick). ``analyze.py`` reads the files.
 
 - ``--blur-matched`` also reads each row's pair ZNCC from the rows' tiles
   rendered with ``OrientedPatch.render_view_tile``, plain and blur-matched
@@ -116,6 +119,7 @@ def run(args, sfmr: Path, tolerance: float, out_dir: Path) -> None:
     tpi = np.asarray(recon.track_point_indexes)
     kxy = np.asarray(recon.keypoints_xy, float)
     image_of = {n: i for i, n in enumerate(names)}
+    centres = _camera_centres(recon)
 
     jobs: list[tuple[str, int, dict | None]] = []
     case_points: set[int] = set()
@@ -173,7 +177,7 @@ def run(args, sfmr: Path, tolerance: float, out_dir: Path) -> None:
                 case=case["id"] if case else None,
                 resolution=resolution,
                 placement=_placement(track.placement),
-                rows=_rows(track, names),
+                rows=_rows(track, names, centres),
             )
             if args.blur_matched:
                 _blur_matched_pairs(record, recon, pyramids, resolution)
@@ -236,8 +240,28 @@ def _placement(placement):
     }
 
 
-def _rows(track, names):
+def _camera_centres(recon):
+    """Each image's camera centre in world coordinates, ``-Rᵀ t``."""
+    q = np.asarray(recon.quaternions_wxyz, float)
+    t = np.asarray(recon.translations, float)
+    return np.array([-_rotation(qi).T @ ti for qi, ti in zip(q, t)])
+
+
+def _ray(placement, centre):
+    """The unit direction from the patch's centre to a camera centre. For a
+    patch at infinity (``w = 0``) it is minus the patch's bearing, the same
+    for every camera."""
+    if placement is None:
+        return None
+    c = np.asarray(placement["center"], float)
+    d = -c if placement["w"] == 0.0 else centre - c
+    n = np.linalg.norm(d)
+    return None if n == 0.0 else (d / n).tolist()
+
+
+def _rows(track, names, centres):
     rows = []
+    placement = _placement(track.placement)
     for row, obs in enumerate(track.observations):
         m = obs.get("track") or {}
         ellipse = (m.get("zncc_self_similarity_ellipse") or {}).get("grid_px")
@@ -251,6 +275,7 @@ def _rows(track, names):
                 image_name=names[obs["image"]],
                 verdict=obs["verdict"],
                 keypoint=None if keypoint is None else [float(v) for v in keypoint],
+                ray=_ray(placement, centres[int(obs["image"])]),
                 semi_major=None if axes is None else axes[0],
                 semi_minor=None if axes is None else axes[1],
                 **{k: (None if m.get(k) is None else float(m[k])) for k in READINGS},
@@ -370,17 +395,22 @@ def _project(recon, image, xyzw):
     camera, _ = _camera_pose(recon, image)
     q = np.asarray(recon.quaternions_wxyz)[image]
     t = np.asarray(recon.translations)[image]
+    rot = _rotation(q)
+    xc = rot @ xyzw[:3] + xyzw[3] * t
+    px = camera.ray_to_pixel_batch((xc / np.linalg.norm(xc))[None])[0]
+    return px if np.all(np.isfinite(px)) else None
+
+
+def _rotation(q):
+    """The rotation matrix of a ``wxyz`` unit quaternion."""
     w_, x, y, z = q
-    rot = np.array(
+    return np.array(
         [
             [1 - 2 * (y * y + z * z), 2 * (x * y - z * w_), 2 * (x * z + y * w_)],
             [2 * (x * y + z * w_), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w_)],
             [2 * (x * z - y * w_), 2 * (y * z + x * w_), 1 - 2 * (x * x + y * y)],
         ]
     )
-    xc = rot @ xyzw[:3] + xyzw[3] * t
-    px = camera.ray_to_pixel_batch((xc / np.linalg.norm(xc))[None])[0]
-    return px if np.all(np.isfinite(px)) else None
 
 
 def _localize(recon, pyramids, tracks, resolution):
