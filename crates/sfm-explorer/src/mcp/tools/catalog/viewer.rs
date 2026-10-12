@@ -289,9 +289,10 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           it. The panel does not have to be open — this is what it will show when \
                           show_panel opens it — and nothing here selects an image: \
                           select_camera_image chooses the photograph the overlay is drawn on. An \
-                          unknown overlay_mode, an off-ladder distortion_scale or grid_cols, a \
-                          max_features below 1 and a feature_size_px whose min exceeds its max \
-                          are refused whole, leaving the call's other fields unapplied.",
+                          unknown overlay_mode or intrinsics field, an off-ladder \
+                          distortion_scale or grid_cols, a max_features below 1 and a \
+                          feature_size_px whose min exceeds its max are refused whole, leaving \
+                          the call's other fields unapplied.",
             kind: Write,
             schema: object(
                 &[
