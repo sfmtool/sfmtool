@@ -252,8 +252,20 @@ example: "rms 0.13 px, radial 0.013 px, max 0.29 px over θ ≤ 84.5°; aspect
 fy/fx 0.9978 dropped". A spline fit is constrained to stay monotone, so it has
 an inverse; where that constraint bound, the line adds its range, for example
 "monotone constraint bound at 1 angle, 113.2°", because there the proposed
-curve is the closest invertible one rather than the current one. The
-observation comparison and the preview's triangulation need the reconstruction,
+curve is the closest invertible one rather than the current one.
+
+The fit releases the focal length and the distortion parameters, and keeps the
+principal point fixed: the lens fit copies it from the source
+([`../core/camera/refit-camera-intrinsics.md`](../core/camera/refit-camera-intrinsics.md)),
+and the proposal offers no control that frees it. The reason is that nothing
+would follow it up. The bundle adjustment that refines a switched camera,
+sfmtool's own solve behind the viewer's Bundle Adjust edit and `sfm xform
+--bundle-adjust` on a spline camera, never frees the principal point; only the
+pycolmap adjustment can, and it does not take a spline camera. A principal
+point moved by the switch would therefore be fitted to the old model's curve
+alone and then held there by every later adjustment.
+
+The observation comparison and the preview's triangulation need the reconstruction,
 and are computed by the proposal's job (§ "The job" below).
 
 While the proposal is open, the rest of the panel compares the two models:
@@ -871,9 +883,6 @@ without waiting out the motion.
   [`move-camera-preview-amendment.md`](move-camera-preview-amendment.md)
   previews a re-triangulation under Move Camera by writing over the base's
   rows, and could use the same preview buffers and blend.
-- **Whether the switch should release the principal point** for a model whose
-  source never fitted it. Today nothing releases it anywhere, and the switch
-  keeps that.
 
 The regularization weight is an open question of the fit itself, in
 [`../core/camera/refit-camera-intrinsics.md`](../core/camera/refit-camera-intrinsics.md).
