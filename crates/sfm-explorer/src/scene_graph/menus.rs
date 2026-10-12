@@ -66,6 +66,11 @@ pub(super) fn node_context_menu(ui: &mut egui::Ui, node: &mut SceneNode, out: &m
     }
 }
 
+/// What the Camera Intrinsics row's entry that opens a camera model proposal is
+/// called, in the menu and in the tests that aim at it. The Edit menu's entry
+/// has the same name.
+pub(crate) const SWITCH_CAMERA_MODEL: &str = "Switch Camera Model…";
+
 /// What the entry that writes a node's display transform into its
 /// reconstruction is called, in the menu and in the tests that aim at it.
 pub(crate) const BAKE_TRANSFORM: &str = "Bake Transform";
@@ -77,7 +82,7 @@ pub(crate) const BAKE_TRANSFORM: &str = "Bake Transform";
 /// on every sibling entry that makes one; then both need a transform to act
 /// on, which is the one gate [`crate::scene::SceneNode::has_transform`] states.
 fn show_transform_entries(ui: &mut egui::Ui, node: &SceneNode, out: &mut TreeOutput) {
-    let refusal = out.busy_refusal(node.id).map(str::to_string).or_else(|| {
+    let refusal = out.edit_refusal(node.id).map(str::to_string).or_else(|| {
         (!node.has_transform()).then(|| crate::display_transform::IN_OWN_FRAME_HINT.to_string())
     });
     let reset = ui
@@ -125,7 +130,7 @@ pub(crate) const BUNDLE_ADJUST: &str = "Bundle Adjust...";
 /// every sibling entry.
 fn show_bundle_adjust_entry(ui: &mut egui::Ui, node: &SceneNode, out: &mut TreeOutput) {
     let refusal = out
-        .busy_refusal(node.id)
+        .edit_refusal(node.id)
         .map(str::to_string)
         .or_else(|| crate::bundle_adjust_prompt::refusal(node.edited()));
     let entry = ui
@@ -153,7 +158,7 @@ pub(crate) const RETRIANGULATE_ALL_POINTS: &str = "Retriangulate All Points";
 /// [`show_convert_entry`] is, and on `AppState`'s own sentence so the greyed
 /// entry and a call that asks anyway give one answer.
 fn show_retriangulate_entry(ui: &mut egui::Ui, node: &SceneNode, out: &mut TreeOutput) {
-    let refusal = crate::state::edits::retriangulate_refusal(node, out.busy_refusal(node.id));
+    let refusal = crate::state::edits::retriangulate_refusal(node, out.edit_refusal(node.id));
     let entry = ui
         .add_enabled(
             refusal.is_none(),
@@ -186,7 +191,7 @@ pub(crate) const PRUNE_COVERED_OBSERVATIONS: &str = "Prune Covered Observations"
 /// other decides which tracks should still be saying it. Greyed rather than
 /// hidden when it cannot run, on `AppState`'s own sentence.
 fn show_prune_covered_entry(ui: &mut egui::Ui, node: &SceneNode, out: &mut TreeOutput) {
-    let refusal = crate::state::edits::prune_covered_refusal(node, out.busy_refusal(node.id));
+    let refusal = crate::state::edits::prune_covered_refusal(node, out.edit_refusal(node.id));
     let entry = ui
         .add_enabled(
             refusal.is_none(),
@@ -217,7 +222,7 @@ fn show_prune_covered_entry(ui: &mut egui::Ui, node: &SceneNode, out: &mut TreeO
 /// built. The hover text is `AppState`'s own sentence, so the greyed entry and
 /// a call that asks anyway give one answer.
 fn show_convert_entry(ui: &mut egui::Ui, node: &SceneNode, out: &mut TreeOutput) {
-    let refusal = crate::state::edits::convert_refusal(node, out.busy_refusal(node.id));
+    let refusal = crate::state::edits::convert_refusal(node, out.edit_refusal(node.id));
     let entry = ui
         .add_enabled(
             refusal.is_none(),

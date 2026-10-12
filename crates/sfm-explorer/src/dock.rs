@@ -199,7 +199,7 @@ impl TabContext<'_> {
         let busy = self
             .state
             .selected_recon
-            .and_then(|id| self.state.busy_refusal(id));
+            .and_then(|id| self.state.edit_refusal(id));
         // What the viewport is told about the node's bench: the focused item,
         // which its bench layer draws as scene geometry. Read out here, before
         // the node is borrowed out of the scene, for the reason `busy` above
@@ -1078,8 +1078,15 @@ impl TabContext<'_> {
     }
 
     /// The Camera Intrinsics tab: the selected camera's model and its derived
-    /// quantities, for the camera and image the selection names.
+    /// quantities, for the camera and image the selection names, and the
+    /// camera model proposal when one is open on that camera.
     fn show_intrinsics_detail(&mut self, ui: &mut egui::Ui) {
+        // Read before the node is borrowed out of the scene, since it asks
+        // the whole state.
+        let switch_refusal = self
+            .state
+            .selected_camera
+            .and_then(|camera| self.state.switch_model_refusal(camera));
         let node = selected_node(&self.state.scene, self.state.selected_recon);
         if let Some(node) = node {
             // Both indices are read out of the *selected* node: the
@@ -1089,9 +1096,14 @@ impl TabContext<'_> {
             // there is no third recon for this panel to follow.
             let selected_camera = self.state.selected_camera.and_then(|c| c.index_in(node.id));
             let selected_image = self.state.selected_image_in(node.id);
-            let response = self
-                .intrinsics_detail
-                .show(ui, node, selected_camera, selected_image);
+            let response = self.intrinsics_detail.show(
+                ui,
+                node,
+                selected_camera,
+                selected_image,
+                self.state.camera_model_proposal.as_mut(),
+                switch_refusal.as_deref(),
+            );
             if response.has_pointer {
                 // The panel raises neither hover channel, so owning the
                 // pointer means clearing both: a highlight left over
@@ -1103,8 +1115,34 @@ impl TabContext<'_> {
             if let Some(image) = response.select_image {
                 self.state.select_image(Some(image));
             }
-            if let Some(camera) = response.refit_spline {
-                self.state.open_refit_spline(camera);
+            if let Some(camera) = response.switch_model {
+                let moved = crate::camera_model_proposal::open_in_window(
+                    self.viewer_3d,
+                    self.state,
+                    camera,
+                    false,
+                );
+                if let Some(moved) = moved {
+                    self.forget_recon(moved);
+                }
+            }
+            match response.proposal {
+                Some((camera, crate::intrinsics_detail::ProposalAction::Apply)) => {
+                    // A refusal is already an Action Log row, written by the
+                    // apply in the words the greyed button carries.
+                    if let Ok(applied) = self.state.apply_camera_model_proposal(camera.recon) {
+                        if let Some(id) = applied.pushed() {
+                            self.forget_recon(id);
+                        }
+                    }
+                }
+                Some((camera, crate::intrinsics_detail::ProposalAction::Cancel)) => {
+                    self.state.drop_camera_model_proposal(
+                        camera.recon,
+                        crate::camera_model_proposal::Dropped::Cancelled,
+                    );
+                }
+                None => {}
             }
         } else {
             ui.centered_and_justified(|ui| {
@@ -1265,10 +1303,19 @@ impl TabContext<'_> {
             {
                 self.forget_recon(moved);
             }
+            // So is a camera model proposal open on it, which is applied by
+            // the same rule. Where that starts the background task the node
+            // is busy, and the close below is refused with the busy sentence.
+            if let Some(switched) = self.state.end_camera_model_proposal_on(id) {
+                self.forget_recon(switched);
+            }
             // A node whose cursor is not at its file is a question, not a
             // close: the prompt asks it, and `app.rs` carries out whichever
-            // answer comes back on a later frame.
-            if self.state.is_dirty(id) {
+            // answer comes back on a later frame. A busy node is refused
+            // before the question, since no answer could close it.
+            if let Some(why) = self.state.busy_refusal(id) {
+                self.state.action_log.fail(Kind::File, why);
+            } else if self.state.is_dirty(id) {
                 self.state
                     .close_prompt
                     .ask(crate::close_prompt::PendingClose::Node(id));

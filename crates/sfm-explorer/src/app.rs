@@ -251,6 +251,21 @@ impl App {
         #[cfg(feature = "mcp")]
         self.drain_mcp(&window);
 
+        // After the drain, so a selection an agent moved this frame ends a
+        // camera model proposal on the node it left before the panels draw:
+        // a step away from the proposal's node applies it, and a proposal
+        // whose node has gone or whose version is no longer current is
+        // dropped (`crate::camera_model_proposal`).
+        if let Some(id) = self.state.tend_camera_model_proposal() {
+            forget_selected(
+                Some(id),
+                &mut self.image_browser,
+                &mut self.image_detail,
+                &mut self.track_view,
+                &mut self.intrinsics_detail,
+            );
+        }
+
         // Keep the window title in step with the loaded file. Compared against
         // the last applied title rather than set unconditionally: `set_title`
         // is a window-manager round-trip, and this runs every frame.
@@ -1080,6 +1095,20 @@ impl App {
                 }
                 if let Some((id, position)) = scene_graph.take_bench_edit() {
                     app_state.edit_bench_item_at(id, position);
+                }
+                // A Camera Intrinsics row's `Switch Camera Model…`, which
+                // raises the Camera Intrinsics panel on the proposal.
+                if let Some(camera) = scene_graph.take_switch_camera_model() {
+                    let moved = crate::camera_model_proposal::open_in_window(
+                        viewer_3d, app_state, camera, true,
+                    );
+                    forget_selected(
+                        moved,
+                        image_browser,
+                        image_detail,
+                        track_view,
+                        intrinsics_detail,
+                    );
                 }
             });
         });

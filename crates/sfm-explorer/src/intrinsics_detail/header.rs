@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The identity line — which node, which camera, which model, how big, how
-//! many images — and the `Copy ▾` menu that gets the numbers out.
+//! many images — the `Switch Model…` button that opens a camera model
+//! proposal, and the `Copy ▾` menu that gets the numbers out.
 //!
 //! The reconstruction's name is in the line because several nodes can be loaded
 //! at once and a [`crate::scene::CameraRef`] carries a `ReconId`; without it
@@ -20,18 +21,21 @@ use super::format;
 use crate::scene::SceneNode;
 
 /// `kerry_park · Camera #0 · OPENCV_FISHEYE · 480×480 · 26 images
-/// [Refit spline…] [Copy ▾]`
+/// [Switch Model…] [Copy ▾]`
 ///
-/// Returns whether `Refit spline…` was clicked. The button is greyed, with the
-/// reason as its hover text, for a camera with no spline.
+/// Returns whether `Switch Model…` was clicked. The button is greyed, with
+/// `refusal` as its hover text, where no proposal can be opened on the camera
+/// (`AppState::switch_model_refusal`), or while this camera's proposal is
+/// already open below it.
 pub(super) fn show_header(
     ui: &mut egui::Ui,
     node: &SceneNode,
     index: usize,
     camera: &CameraIntrinsics,
     pose: Option<&Pose>,
+    refusal: Option<&str>,
 ) -> bool {
-    let mut refit = false;
+    let mut switch = false;
     let uses = node
         .recon()
         .image_table
@@ -68,19 +72,23 @@ pub(super) fn show_header(
 
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             show_copy_menu(ui, camera, pose);
-            let why = crate::refit_spline_prompt::refit_spline_refusal(camera);
-            refit = ui
-                .add_enabled(why.is_none(), egui::Button::new("Refit spline…"))
-                .on_disabled_hover_text(why.unwrap_or_default())
+            switch = ui
+                .add_enabled(refusal.is_none(), egui::Button::new(SWITCH_MODEL))
+                .on_disabled_hover_text(refusal.unwrap_or_default())
                 .on_hover_text(
-                    "Refit this camera's spline to another coefficient count or domain end, \
-                     over its whole domain, as one version.",
+                    "Fit this camera to another camera model, or refit its spline to another \
+                     coefficient count or domain end, and compare the two before applying. \
+                     Apply switches the camera and retriangulates the tracks its images \
+                     observe, as one version.",
                 )
                 .clicked();
         });
     });
-    refit
+    switch
 }
+
+/// What the header's button that opens a camera model proposal is called.
+pub(super) const SWITCH_MODEL: &str = "Switch Model…";
 
 /// The `Copy ▾` menu.
 fn show_copy_menu(ui: &mut egui::Ui, camera: &CameraIntrinsics, pose: Option<&Pose>) {

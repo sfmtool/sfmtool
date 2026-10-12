@@ -329,6 +329,25 @@ pub(crate) enum Command {
         reconstruction_label: String,
         request: crate::state::edits::SwitchCameraModelRequest,
     },
+    /// `switch_camera_model { proposal: true }`: apply the camera model
+    /// proposal open on the node, as its Apply does. `camera` is the
+    /// `camera_intrinsics_index` the call named, if it named one, which must be
+    /// the proposal's.
+    ApplyCameraModelProposal {
+        reconstruction_label: String,
+        camera: Option<usize>,
+    },
+    /// Open or refit a camera model proposal on one camera, as the Camera
+    /// Intrinsics panel's `Switch Model…` does. Every field of the request but
+    /// the camera is `None` where the call left it out.
+    ProposeCameraModel {
+        reconstruction_label: String,
+        request: crate::state::edits::SwitchCameraModelRequest,
+    },
+    /// Drop the proposal open on the node, as its Cancel does.
+    CancelCameraModelProposal {
+        reconstruction_label: String,
+    },
     /// Convert one node's observations from `sift_files` to
     /// `embedded_patches`, then render bitmaps from readable photographs
     /// without photometric adaptation.
@@ -1515,6 +1534,24 @@ pub(crate) fn apply_with_window(
             &reconstruction_label,
             &request,
         )),
+        Command::ApplyCameraModelProposal {
+            reconstruction_label,
+            camera,
+        } => edit::apply_camera_model_proposal(state, &reconstruction_label, camera),
+        Command::ProposeCameraModel {
+            reconstruction_label,
+            request,
+        } => done(edit::propose_camera_model(
+            state,
+            &reconstruction_label,
+            &request,
+        )),
+        Command::CancelCameraModelProposal {
+            reconstruction_label,
+        } => done(edit::cancel_camera_model_proposal(
+            state,
+            &reconstruction_label,
+        )),
         Command::ConvertToEmbeddedPatches {
             reconstruction_label,
         } => edit::convert_to_embedded_patches(state, &reconstruction_label),
@@ -2310,7 +2347,9 @@ fn loaded_list(state: &AppState) -> String {
 ///
 /// A fourth thing happens before an **editing** command is applied: a camera the
 /// human is holding on the node it names ([`crate::camera_lock`]) is ended, as a
-/// commit when it has been moved. An edit landing under a held lock would leave
+/// commit when it has been moved, and a camera model proposal open on that node
+/// ([`crate::camera_model_proposal`]) is applied, or dropped when its fit was
+/// refused. An edit landing under a held lock would leave
 /// the reviewer holding a camera whose stored pose had moved beneath them, and
 /// the lock is the viewport's rather than the state's -- which is why the step
 /// is here, where the GUI thread applies the command, and not in the tool.
@@ -2346,6 +2385,17 @@ pub(crate) fn apply_as_agent(
             stale.extend(
                 edits.and_then(|id| crate::camera_lock::exit_implicitly_for(viewer, state, id)),
             );
+            // A camera model proposal open on the node an edit names, or on
+            // the node a close names, is applied first by the implicit rule,
+            // as an edit ending a held lock commits it. Where that starts the
+            // background task, the command meets the busy node and is refused
+            // with its sentence.
+            if let Some(id) = command
+                .ends_proposal()
+                .and_then(|label| resolve_reconstruction(state, Some(label)).ok())
+            {
+                stale.extend(state.end_camera_model_proposal_on(id));
+            }
             // A view command that leaves camera view (a fit, a look-through, a
             // placement, an explicit exit, a move or an orbit) is a step away
             // from a camera in hand, exactly as `,` and `.` are: the lock ends

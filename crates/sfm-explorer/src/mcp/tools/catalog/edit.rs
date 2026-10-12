@@ -454,27 +454,50 @@ pub(super) fn specs() -> Vec<ToolSpec> {
         ToolSpec {
             name: "switch_camera_model",
             description: "Switch one camera intrinsics record to a camera model fitted to it, \
-                          and install the answer as the reconstruction's next version. The new \
-                          model is fitted to the old one where the old one is trusted; poses, \
-                          points, keypoints and tracks do not move, and the stored errors of \
-                          the points the camera's images observe are recomputed. No index \
-                          moves unless a point edit is pending, in which case the deleted \
-                          slots close up first, as delete_point describes. With \
-                          camera_model omitted the target is the camera's own model, which for an \
-                          SFMTOOL_FISHEYE or SFMTOOL_PINHOLE camera is a refit of its spline \
-                          to another coefficient count or domain end: fitted over the whole \
-                          new domain and kept monotone, the domain end kept exactly unless \
-                          spline_domain_deg is given. This is how a spline's count or domain \
-                          changes; bundle_adjust then refines the coefficients it has. The \
-                          reply carries the version, the Action Log sentence, and fit: the \
-                          fit's rms and max pixel distance from the old camera, \
-                          theta_fit_deg and its source, the spline domain, the range of \
-                          incidence angles where the monotonicity constraint bound, and the \
-                          median reprojection error of the camera's observations before and \
-                          after. A refusal names the camera and the rule.",
+                          and install the answer as the reconstruction's next version. Two \
+                          forms. The direct form, with camera_intrinsics_index and the fit's \
+                          arguments, is a lens-only switch: the new model is fitted to the old \
+                          one where the old one is trusted; poses, points, keypoints and \
+                          tracks do not move, and the stored errors of the points the camera's \
+                          images observe are recomputed. No index moves unless a point edit is \
+                          pending, in which case the deleted slots close up first, as \
+                          delete_point describes. With camera_model omitted the target is the \
+                          camera's own model, which for an SFMTOOL_FISHEYE or SFMTOOL_PINHOLE \
+                          camera is a refit of its spline to another coefficient count or \
+                          domain end: fitted over the whole new domain and kept monotone, the \
+                          domain end kept exactly unless spline_domain_deg is given. This is \
+                          how a spline's count or domain changes; bundle_adjust then refines \
+                          the coefficients it has. The direct form's reply carries the \
+                          version, the Action Log sentence, and fit: the fit's rms and max \
+                          pixel distance from the old camera, theta_fit_deg and its source, the \
+                          spline domain, the range of incidence angles where the monotonicity \
+                          constraint bound, and the median reprojection error of the camera's \
+                          observations before and after. A camera model proposal open on the \
+                          reconstruction (propose_camera_model) is applied first; cancel it \
+                          first to make the direct switch alone. The proposal form, with \
+                          proposal: true and none of the fit's arguments, applies the open \
+                          proposal as the panel's Apply does: the switch and the \
+                          retriangulation of every track the camera's images observe, in one \
+                          version. It runs on a worker thread, so one still going after 200 ms \
+                          replies with running: true and an operation_id instead of the \
+                          version; on a reconstruction whose observations carry no inline \
+                          keypoints it is the switch alone, and the sentence says why. A \
+                          refusal names the camera and the rule.",
             kind: Write,
             schema: object(
                 &[
+                    (
+                        "camera_intrinsics_index",
+                        json!({
+                            "type": "integer",
+                            "minimum": 0,
+                            "description": "The camera's index in the reconstruction's camera \
+                                            table, as get_camera_intrinsics takes it. Required \
+                                            in the direct form; in the proposal form, \
+                                            optional and refused unless it is the proposal's \
+                                            camera.",
+                        }),
+                    ),
                     (
                         "camera_model",
                         json!({
@@ -526,6 +549,89 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                                  angle alone.",
                         }),
                     ),
+                    (
+                        "proposal",
+                        flag(
+                            "Apply the camera model proposal open on the reconstruction \
+                             instead of fitting one: the switch and the retriangulation of the \
+                             camera's tracks, as one version. Takes none of the fit's \
+                             arguments.",
+                        ),
+                    ),
+                ],
+                &[("reconstruction_label", edited_label_schema())],
+            ),
+        },
+        ToolSpec {
+            name: "propose_camera_model",
+            description: "Open a camera model proposal on one camera, or refit the one open on \
+                          it, exactly as the Camera Intrinsics panel's Switch Model... and its \
+                          controls do, and select that camera. The proposal is the camera \
+                          fitted to another model, or a spline camera refitted to another \
+                          coefficient count or domain end, shown in the panel beside the \
+                          current camera before it is applied; it pushes no version. Each \
+                          argument takes the default switch_camera_model gives it. A call whose \
+                          fit arguments equal the open proposal's keeps it and its generation. \
+                          A fit the core refuses still opens a proposal, which carries the \
+                          refusal and cannot be applied; an unknown model, or a coeff_count on \
+                          a model without a spline, opens nothing. Refused on a busy \
+                          reconstruction, on one with no posed image, and while a proposal is \
+                          open on another camera of the same reconstruction. A proposal open \
+                          on another reconstruction is applied first, as selecting another \
+                          reconstruction applies it. The reply is the proposed block \
+                          get_camera_intrinsics also reports. Apply with switch_camera_model \
+                          { proposal: true }, drop with cancel_camera_model_proposal; an undo, \
+                          a redo or a history jump on the reconstruction drops it, and any \
+                          other edit tool naming the reconstruction, a close, or selecting \
+                          another reconstruction applies it.",
+            kind: Write,
+            schema: object(
+                &[
+                    (
+                        "camera_model",
+                        json!({
+                            "type": "string",
+                            "description":
+                                "The target model, case-insensitive. Omit for the camera's own \
+                                 model, which for a spline camera is the refit of its spline.",
+                        }),
+                    ),
+                    (
+                        "coeff_count",
+                        json!({
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 32,
+                            "description":
+                                "The spline coefficient count of a spline target. Omit for the \
+                                 camera's own count when the target is its own spline model, \
+                                 and 8 otherwise.",
+                        }),
+                    ),
+                    (
+                        "spline_domain_deg",
+                        json!({
+                            "type": "number",
+                            "exclusiveMinimum": 0,
+                            "maximum": 180,
+                            "description":
+                                "Where a spline target's domain ends, in degrees. Omit to keep \
+                                 the camera's own in a refit of its spline, and for the far \
+                                 image corner otherwise.",
+                        }),
+                    ),
+                    (
+                        "theta_fit_deg",
+                        json!({
+                            "type": "number",
+                            "exclusiveMinimum": 0,
+                            "maximum": 180,
+                            "description":
+                                "The largest incidence angle the fit samples. Omit for the \
+                                 default; given, even a refit of a spline is fitted over this \
+                                 angle alone.",
+                        }),
+                    ),
                 ],
                 &[
                     ("reconstruction_label", edited_label_schema()),
@@ -540,6 +646,13 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                     ),
                 ],
             ),
+        },
+        ToolSpec {
+            name: "cancel_camera_model_proposal",
+            description: "Drop the camera model proposal open on one reconstruction, as the \
+                          panel's Cancel does. Nothing changes. Refused when none is open on it.",
+            kind: Write,
+            schema: object(&[], &[("reconstruction_label", edited_label_schema())]),
         },
         ToolSpec {
             name: "convert_to_embedded_patches",

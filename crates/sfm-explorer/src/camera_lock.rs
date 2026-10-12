@@ -97,6 +97,9 @@ pub(crate) fn refusal(state: &AppState, viewer: &Viewer3D) -> Option<String> {
     let Some(node) = state.node(view.image.recon) else {
         return Some("That reconstruction is no longer loaded".to_string());
     };
+    if state.camera_model_proposal_on(node.id).is_some() {
+        return Some("Apply or cancel the camera model proposal first".to_string());
+    }
     let Some(image) = node.recon().image_table.images.get(view.image.index()) else {
         return Some("That image is no longer in the reconstruction".to_string());
     };

@@ -462,6 +462,14 @@ pub(super) fn get_camera_intrinsics(
             }),
         );
     }
+    // The camera model proposal open on this camera, beside the camera it
+    // would replace.
+    if let Some(proposal) = state
+        .camera_model_proposal_on(id)
+        .filter(|proposal| proposal.camera == index)
+    {
+        object.insert("proposed".into(), render::camera_model_proposal(proposal));
+    }
     Ok(out)
 }
 

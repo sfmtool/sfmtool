@@ -359,6 +359,58 @@ pub(super) fn camera_intrinsics(camera: &sfmtool_core::CameraIntrinsics) -> Valu
     })
 }
 
+/// The `proposed` block: an open camera model proposal as `get_camera_intrinsics`
+/// and `propose_camera_model` report it.
+///
+/// What the proposal was fitted from (`request`, with `null` where the default
+/// holds), its `generation`, and either the proposed `camera` and the `fit`
+/// report or the fit's `refusal`. `fit_report` is the one line the panel
+/// shows under its controls.
+pub(super) fn camera_model_proposal(
+    proposal: &crate::camera_model_proposal::CameraModelProposal,
+) -> Value {
+    let inputs = &proposal.inputs;
+    let (camera, fit, refusal) = match &proposal.fit {
+        Ok(refit) => {
+            let constraint = &refit.monotone_constraint;
+            let fit = json!({
+                "camera_model_before": proposal.source.model_name(),
+                "camera_model_after": refit.camera.model_name(),
+                "theta_fit_deg": refit.theta_fit_deg,
+                "theta_fit_source": refit.theta_fit_source.as_str(),
+                "spline_domain_deg": refit.spline_domain_deg,
+                "rms_px": refit.rms_px,
+                "radial_rms_px": refit.radial_rms_px,
+                "max_px": refit.max_px,
+                "dropped": refit.dropped.iter().map(ToString::to_string).collect::<Vec<_>>(),
+                "monotone_constraint": {
+                    "active": constraint.active,
+                    "active_angles": constraint.active_angles,
+                    "range_deg": constraint.range_deg,
+                },
+            });
+            (camera_intrinsics(&refit.camera), fit, Value::Null)
+        }
+        Err(why) => (Value::Null, Value::Null, json!(why)),
+    };
+    json!({
+        "camera_intrinsics_index": proposal.camera,
+        "camera_model": inputs.camera_model,
+        "refit_spline": proposal.is_spline_refit(inputs.camera_model),
+        "request": {
+            "camera_model": inputs.camera_model,
+            "coeff_count": inputs.coeff_count,
+            "theta_fit_deg": inputs.theta_fit_deg,
+            "spline_domain_deg": inputs.spline_domain_deg,
+        },
+        "generation": proposal.generation,
+        "camera": camera,
+        "fit": fit,
+        "fit_report": proposal.fit_line(),
+        "refusal": refusal,
+    })
+}
+
 /// How many track observations each image carries, by image index.
 ///
 /// One pass over `tracks` rather than a filter per image: `list_camera_images`

@@ -70,13 +70,18 @@ pub(super) fn opened_reply(
 
 pub(super) fn close_reconstruction(state: &mut AppState, target: CloseTarget) -> JsonReply {
     let closed: Vec<String> = match target {
+        // A camera model proposal open on a node being closed is applied
+        // first, as the window's close applies it; where that starts the
+        // background task, the close meets a busy node and is refused.
         CloseTarget::All => {
             let labels: Vec<String> = state.scene.iter().map(|n| n.label.clone()).collect();
+            state.end_camera_model_proposal_implicitly();
             state.close_all().map_err(ToolError::new)?;
             labels
         }
         CloseTarget::One(label) => {
             let id = resolve_reconstruction(state, Some(&label))?;
+            state.end_camera_model_proposal_on(id);
             state.close_node(id).map_err(ToolError::new)?;
             vec![label]
         }

@@ -2399,3 +2399,340 @@ fn set_viewer_3d_display_refuses_the_brush_while_a_camera_is_in_hand() {
     );
     assert_eq!(reply["viewer_3d_display"]["tool"], "navigate");
 }
+
+// ── The camera model proposal ───────────────────────────────────────────
+
+/// Every point position `run_a` holds.
+fn point_positions(state: &AppState) -> Vec<[f64; 3]> {
+    state.scene[0]
+        .recon()
+        .point_set
+        .points
+        .iter()
+        .map(|p| [p.position.x, p.position.y, p.position.z])
+        .collect()
+}
+
+/// `switch_camera_model { proposal: true }` parses to the proposal's Apply,
+/// and refuses the fit's arguments; `propose_camera_model` parses to the
+/// request the panel's controls make.
+#[test]
+fn the_proposal_tools_parse() {
+    let parse = |name: &str, arguments: Value| {
+        let map = arguments.as_object().cloned().expect("an object");
+        tools::parse(name, Some(&map))
+    };
+    assert_eq!(
+        parse(
+            "switch_camera_model",
+            json!({ "reconstruction_label": "a", "proposal": true })
+        )
+        .expect("a well-formed call"),
+        Command::ApplyCameraModelProposal {
+            reconstruction_label: "a".to_string(),
+            camera: None,
+        }
+    );
+    let error = parse(
+        "switch_camera_model",
+        json!({ "reconstruction_label": "a", "proposal": true, "coeff_count": 6 }),
+    )
+    .expect_err("a fit argument with the proposal form");
+    assert!(error.0.contains("takes no coeff_count"), "{error}");
+    assert_eq!(
+        parse(
+            "propose_camera_model",
+            json!({
+                "reconstruction_label": "a",
+                "camera_intrinsics_index": 1,
+                "camera_model": "SFMTOOL_FISHEYE",
+                "theta_fit_deg": 80.0
+            })
+        )
+        .expect("a well-formed call"),
+        Command::ProposeCameraModel {
+            reconstruction_label: "a".to_string(),
+            request: crate::state::edits::SwitchCameraModelRequest {
+                camera: 1,
+                camera_model: Some("SFMTOOL_FISHEYE".to_string()),
+                theta_fit_deg: Some(80.0),
+                ..Default::default()
+            },
+        }
+    );
+    assert_eq!(
+        parse(
+            "cancel_camera_model_proposal",
+            json!({ "reconstruction_label": "a" })
+        )
+        .expect("a well-formed call"),
+        Command::CancelCameraModelProposal {
+            reconstruction_label: "a".to_string(),
+        }
+    );
+}
+
+/// `propose_camera_model` pushes nothing and answers with the `proposed`
+/// block; the same call again keeps the generation, a changed one advances
+/// it; `get_camera_intrinsics` reports the block; and
+/// `cancel_camera_model_proposal` drops it, refusing when none is open.
+#[test]
+fn propose_camera_model_opens_a_proposal_and_pushes_nothing() {
+    let (mut state, mut viewer) = editable();
+    with_flat_spline_cameras(&mut state);
+    let arguments = json!({ "reconstruction_label": "run_a", "camera_intrinsics_index": 0 });
+    let reply = call(
+        &mut state,
+        &mut viewer,
+        "propose_camera_model",
+        arguments.clone(),
+    );
+    let proposed = &reply["proposed"];
+    assert_eq!(proposed["camera_model"], "SFMTOOL_PINHOLE");
+    assert_eq!(proposed["refit_spline"], true);
+    assert_eq!(proposed["request"]["coeff_count"], 4);
+    assert_eq!(proposed["request"]["spline_domain_deg"], Value::Null);
+    assert_eq!(proposed["fit"]["theta_fit_source"], "spline_domain");
+    assert!(proposed["fit_report"].as_str().unwrap().starts_with("rms "));
+    assert_eq!(proposed["camera"]["camera_model"], "SFMTOOL_PINHOLE");
+    let generation = proposed["generation"].as_u64().expect("a generation");
+    assert_eq!(version_count(&state), 1);
+
+    let again = call(&mut state, &mut viewer, "propose_camera_model", arguments);
+    assert_eq!(again["proposed"]["generation"].as_u64(), Some(generation));
+    let changed = call(
+        &mut state,
+        &mut viewer,
+        "propose_camera_model",
+        json!({
+            "reconstruction_label": "run_a",
+            "camera_intrinsics_index": 0,
+            "coeff_count": 6
+        }),
+    );
+    assert_eq!(
+        changed["proposed"]["generation"].as_u64(),
+        Some(generation + 1)
+    );
+
+    let read = call(
+        &mut state,
+        &mut viewer,
+        "get_camera_intrinsics",
+        json!({ "reconstruction_label": "run_a", "camera_intrinsics_index": 0 }),
+    );
+    assert_eq!(read["proposed"]["request"]["coeff_count"], 6);
+    assert_eq!(read["camera_model"], "SFMTOOL_PINHOLE");
+
+    call(
+        &mut state,
+        &mut viewer,
+        "cancel_camera_model_proposal",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    let read = call(
+        &mut state,
+        &mut viewer,
+        "get_camera_intrinsics",
+        json!({ "reconstruction_label": "run_a", "camera_intrinsics_index": 0 }),
+    );
+    assert!(read.get("proposed").is_none(), "{read}");
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "cancel_camera_model_proposal",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    assert!(
+        error.0.contains("No camera model proposal is open"),
+        "{error}"
+    );
+    assert_eq!(version_count(&state), 1);
+}
+
+/// An unknown model and a count on a model without a spline open nothing; a
+/// fit the core refuses opens a proposal carrying the refusal.
+#[test]
+fn propose_camera_model_refuses_a_target_and_carries_a_refused_fit() {
+    let (mut state, mut viewer) = editable();
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "propose_camera_model",
+        json!({
+            "reconstruction_label": "run_a",
+            "camera_intrinsics_index": 0,
+            "camera_model": "NOT_A_MODEL"
+        }),
+    );
+    assert!(error.0.contains("camera 0"), "{error}");
+    assert!(state.camera_model_proposal.is_none());
+
+    let reply = call(
+        &mut state,
+        &mut viewer,
+        "propose_camera_model",
+        json!({
+            "reconstruction_label": "run_a",
+            "camera_intrinsics_index": 0,
+            "camera_model": "SFMTOOL_PINHOLE",
+            "spline_domain_deg": 95.0
+        }),
+    );
+    assert_eq!(reply["proposed"]["camera"], Value::Null);
+    assert!(
+        reply["proposed"]["refusal"]
+            .as_str()
+            .is_some_and(|why| why.contains("camera 0")),
+        "{reply}"
+    );
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "switch_camera_model",
+        json!({ "reconstruction_label": "run_a", "proposal": true }),
+    );
+    assert!(error.0.contains("refused"), "{error}");
+}
+
+/// The proposal form applies the open proposal as the `Switch camera model`
+/// background task: one version that switches the camera and moves its
+/// tracks, labelled with the retriangulation; an undo over the wire puts both
+/// back.
+#[test]
+fn switch_camera_model_with_proposal_applies_it_and_moves_the_tracks() {
+    let (mut state, mut viewer) = editable();
+    for point in state.scene[0].recon_mut().point_set.points.iter_mut() {
+        point.position.y += 0.01;
+    }
+    let before = point_positions(&state);
+    let model_before = state.scene[0].recon().image_table.cameras[0]
+        .model_name()
+        .to_string();
+    call(
+        &mut state,
+        &mut viewer,
+        "propose_camera_model",
+        json!({
+            "reconstruction_label": "run_a",
+            "camera_intrinsics_index": 0,
+            "camera_model": "SFMTOOL_PINHOLE"
+        }),
+    );
+    let map = json!({ "reconstruction_label": "run_a", "proposal": true })
+        .as_object()
+        .cloned()
+        .expect("an object");
+    let command = tools::parse("switch_camera_model", Some(&map)).expect("a well-formed call");
+    let pending = match agent(&mut state, &mut viewer, command) {
+        Outcome::Deferred(super::super::Deferred::Background(pending)) => pending,
+        Outcome::Done(Err(e)) => panic!("expected a deferral, got refusal: {e}"),
+        _ => panic!("the proposal's Apply must defer"),
+    };
+    assert_eq!(pending.operation_name, "Switch camera model");
+    assert!(state.camera_model_proposal.is_none());
+    state.finish_background_task();
+    let reply = match super::super::edit::background_reply(&state, &pending).expect("it finished") {
+        Ok(ToolOutput::Json(value)) => value,
+        Ok(ToolOutput::Png { .. }) => panic!("expected JSON, got an image"),
+        Err(e) => panic!("expected success, got refusal: {e}"),
+    };
+    assert_eq!(
+        reply["label"],
+        format!(
+            "Switched camera 0 of run_a from {model_before} to SFMTOOL_PINHOLE and \
+             retriangulated its tracks"
+        )
+    );
+    let report = reply["report"].as_str().expect("a report");
+    assert!(report.contains("points moved"), "{report}");
+    assert_eq!(version_count(&state), 2);
+    assert_ne!(point_positions(&state), before, "no track moved");
+
+    call(
+        &mut state,
+        &mut viewer,
+        "undo",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    assert_eq!(point_positions(&state), before);
+    assert_eq!(
+        state.scene[0].recon().image_table.cameras[0].model_name(),
+        model_before
+    );
+}
+
+/// The direct form is an edit tool naming the node, so it applies an open
+/// proposal first; the Apply makes the node busy and the direct switch is
+/// refused with the busy sentence. With no proposal open, it moves no point.
+#[test]
+fn a_direct_switch_applies_an_open_proposal_first() {
+    let (mut state, mut viewer) = editable();
+    call(
+        &mut state,
+        &mut viewer,
+        "propose_camera_model",
+        json!({
+            "reconstruction_label": "run_a",
+            "camera_intrinsics_index": 0,
+            "camera_model": "SFMTOOL_PINHOLE"
+        }),
+    );
+    let direct = json!({
+        "reconstruction_label": "run_a",
+        "camera_intrinsics_index": 0,
+        "camera_model": "SFMTOOL_FISHEYE"
+    });
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "switch_camera_model",
+        direct.clone(),
+    );
+    assert!(
+        error.0.contains("Switch camera model is still running"),
+        "{error}"
+    );
+    assert!(state.camera_model_proposal.is_none());
+    state.finish_background_task();
+    assert_eq!(version_count(&state), 2);
+
+    let before = point_positions(&state);
+    call(&mut state, &mut viewer, "switch_camera_model", direct);
+    assert_eq!(version_count(&state), 3);
+    assert_eq!(
+        point_positions(&state),
+        before,
+        "the direct switch moved a point"
+    );
+}
+
+/// An undo over the wire drops an open proposal.
+#[test]
+fn an_undo_over_the_wire_drops_the_proposal() {
+    let (mut state, mut viewer) = editable();
+    call(
+        &mut state,
+        &mut viewer,
+        "delete_point",
+        json!({ "reconstruction_label": "run_a", "point": 3 }),
+    );
+    call(
+        &mut state,
+        &mut viewer,
+        "propose_camera_model",
+        json!({
+            "reconstruction_label": "run_a",
+            "camera_intrinsics_index": 0,
+            "camera_model": "SFMTOOL_PINHOLE"
+        }),
+    );
+    call(
+        &mut state,
+        &mut viewer,
+        "undo",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    assert!(state.camera_model_proposal.is_none());
+    assert_eq!(state.scene[0].history.cursor(), 0);
+}

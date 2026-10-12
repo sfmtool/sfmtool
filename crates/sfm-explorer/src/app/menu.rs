@@ -177,22 +177,32 @@ pub(super) fn show(
                 }
                 ui.separator();
                 let point = app_state.selected_point;
+                // A camera model proposal open on the node greys its edits,
+                // with the sentence the edit itself would refuse with.
+                let point_refusal = match point {
+                    None => Some("Select a 3D point to delete it".to_string()),
+                    Some(point) => app_state.proposal_refusal(point.recon),
+                };
                 let delete_point = ui
                     .add_enabled(
-                        point.is_some(),
+                        point_refusal.is_none(),
                         egui::Button::new("Delete Point")
                             .shortcut_text(ui.ctx().format_shortcut(&DELETE_POINT_SHORTCUT)),
                     )
-                    .on_disabled_hover_text("Select a 3D point to delete it");
+                    .on_disabled_hover_text(point_refusal.unwrap_or_default());
                 if delete_point.clicked() {
                     let outcome = app_state.delete_selected_point();
                     edit_outcome(app_state, Some(outcome));
                     ui.close();
                 }
                 let image = app_state.selected_image;
+                let image_refusal = match image {
+                    None => Some("Select an image to delete it".to_string()),
+                    Some(image) => app_state.proposal_refusal(image.recon),
+                };
                 let delete_image = ui
-                    .add_enabled(image.is_some(), egui::Button::new("Delete Image"))
-                    .on_disabled_hover_text("Select an image to delete it");
+                    .add_enabled(image_refusal.is_none(), egui::Button::new("Delete Image"))
+                    .on_disabled_hover_text(image_refusal.unwrap_or_default());
                 if delete_image.clicked() {
                     let outcome = image.map(|image| app_state.delete_image(image));
                     edit_outcome(app_state, outcome);
@@ -256,6 +266,43 @@ pub(super) fn show(
                     .on_disabled_hover_text("No camera is being moved");
                 if cancel_move.clicked() {
                     crate::camera_lock::cancel(viewer_3d, app_state);
+                    ui.close();
+                }
+                ui.separator();
+                // The selected camera's proposal, in the Camera Intrinsics
+                // panel. Greyed on the proposal's own gate, so this entry, the
+                // panel's button and the Scene tree's agree.
+                let camera = app_state.selected_camera;
+                let switch_refusal = match camera {
+                    None => {
+                        Some("Select a camera or an image to switch its camera model".to_string())
+                    }
+                    Some(camera) => app_state.switch_model_refusal(camera),
+                };
+                let switch = ui
+                    .add_enabled(
+                        switch_refusal.is_none(),
+                        egui::Button::new(crate::scene_graph::SWITCH_CAMERA_MODEL),
+                    )
+                    .on_disabled_hover_text(switch_refusal.unwrap_or_default())
+                    .on_hover_text(
+                        "Fit the selected camera to another camera model, or refit its \
+                         spline, in the Camera Intrinsics panel, and compare the two before \
+                         applying.",
+                    );
+                if switch.clicked() {
+                    if let Some(camera) = camera {
+                        let moved = crate::camera_model_proposal::open_in_window(
+                            viewer_3d, app_state, camera, true,
+                        );
+                        forget_selected(
+                            moved,
+                            image_browser,
+                            image_detail,
+                            track_view,
+                            intrinsics_detail,
+                        );
+                    }
                     ui.close();
                 }
             });

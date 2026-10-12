@@ -3895,3 +3895,69 @@ fn an_unsaved_node_s_build_entry_is_greyed_with_the_save_first_sentence() {
         .expect("nowhere to write it");
     assert!(why.starts_with("Save demo first"), "{why}");
 }
+
+// ── The Camera Intrinsics rows' menu ────────────────────────────────────
+
+/// A camera row's menu offers `Switch Camera Model…`, which the panel keeps
+/// for `app.rs` to open, since opening it raises the Camera Intrinsics panel.
+#[test]
+fn a_camera_rows_menu_offers_switch_camera_model() {
+    let mut state = AppState::new();
+    state.append_node(two_camera_node("/runs/run_a.sfmr"));
+    let id = state.scene[0].id;
+    let (mut panel, ctx) = settled(&mut state);
+
+    open_context_menu(&mut panel, &ctx, &mut state, row_id(id, "intrinsics_1"));
+    let response = click(
+        &mut panel,
+        &ctx,
+        &mut state,
+        row_id(id, "switch_camera_model_1"),
+    );
+    let camera = crate::scene::CameraRef::new(id, 1);
+    assert_eq!(response.switch_camera_model, Some(camera));
+    assert_eq!(panel.take_switch_camera_model(), Some(camera));
+    assert_eq!(panel.take_switch_camera_model(), None);
+}
+
+/// The entry is greyed on another camera of a node with a proposal open, and
+/// the node's own edits are greyed with the proposal's sentence.
+#[test]
+fn a_proposal_greys_the_other_cameras_entry_and_the_nodes_edits() {
+    let mut state = resectable_scene();
+    let id = state.scene[0].id;
+    {
+        let recon = state.scene[0].recon_mut();
+        let second = recon.image_table.cameras[0].clone();
+        recon.image_table.cameras.push(second);
+        for image in recon.image_table.images.iter_mut().skip(4) {
+            image.camera_index = 1;
+        }
+    }
+    state
+        .open_camera_model_proposal(crate::scene::CameraRef::new(id, 0), None)
+        .expect("opens");
+    let (mut panel, ctx) = settled(&mut state);
+
+    open_context_menu(&mut panel, &ctx, &mut state, row_id(id, "intrinsics_1"));
+    let response = click(
+        &mut panel,
+        &ctx,
+        &mut state,
+        row_id(id, "switch_camera_model_1"),
+    );
+    assert_eq!(response.switch_camera_model, None, "the greyed entry ran");
+
+    run_frame(&mut panel, &ctx, &mut state, Vec::new());
+    open_context_menu(&mut panel, &ctx, &mut state, row_id(id, "node_label"));
+    let response = click(
+        &mut panel,
+        &ctx,
+        &mut state,
+        row_id(id, "retriangulate_all_points"),
+    );
+    assert_eq!(
+        response.retriangulate_all_points, None,
+        "a node with a proposal open offered another edit"
+    );
+}

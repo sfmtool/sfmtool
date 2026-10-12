@@ -120,6 +120,22 @@ impl Operation {
         kind: Kind::Edit,
     };
 
+    /// One camera of one node switched to the camera model its proposal was
+    /// fitted to, and the tracks its images observe retriangulated through the
+    /// new model, as one version: the camera model proposal's Apply
+    /// (`specs/gui/edits/switch-camera-model.md`).
+    ///
+    /// Cancellable on either side of the switch, which takes no `Progress`
+    /// and is a fit and a pass over the camera's observations, and inside
+    /// `sfmtool_core::reconstruction::retriangulate_points`, which polls the
+    /// flag between its stages and hands back `RetriangulateError::Cancelled`
+    /// rather than a value with some of the tracks re-solved.
+    pub(crate) const SWITCH_CAMERA_MODEL: Operation = Operation {
+        name: "Switch camera model",
+        cancellable: true,
+        kind: Kind::Edit,
+    };
+
     /// One node's coarse observations retired where a finer tracked one covers
     /// them (`specs/gui/edits/prune-covered-observations.md`).
     ///
@@ -313,11 +329,12 @@ impl Operation {
     /// a declaration nothing checks is a declaration that rots.
     // Read by that test alone, which is what it is for.
     #[cfg(test)]
-    pub(crate) const ALL: [Operation; 16] = [
+    pub(crate) const ALL: [Operation; 17] = [
         Operation::OPEN,
         Operation::BUNDLE_ADJUST,
         Operation::TO_EMBEDDED_PATCHES,
         Operation::RETRIANGULATE_ALL_POINTS,
+        Operation::SWITCH_CAMERA_MODEL,
         Operation::PRUNE_COVERED_OBSERVATIONS,
         Operation::ADD_IMAGE_TO_TRACKS,
         Operation::BENCH_FIT,
@@ -678,6 +695,11 @@ impl AppState {
         job: Job,
     ) -> Result<(), String> {
         if let Some(why) = self.running_refusal() {
+            return Err(why);
+        }
+        // The one task that can start on a node with a proposal open is the
+        // proposal's own Apply, which ends the proposal before it starts.
+        if let Some(why) = self.proposal_refusal(id) {
             return Err(why);
         }
         let label = self

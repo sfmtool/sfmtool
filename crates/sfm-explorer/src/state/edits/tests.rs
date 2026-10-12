@@ -2719,29 +2719,6 @@ fn spline_camera_state() -> (AppState, ReconId) {
 }
 
 #[test]
-fn the_refit_dialog_reads_its_fields_off_a_spline_camera_and_refuses_the_rest() {
-    let (state, _) = spline_camera_state();
-    let edited = state.scene[0].edited();
-    let gates = crate::refit_spline_prompt::RefitSplineGates::of(edited, 1).expect("a spline");
-    assert_eq!(
-        (gates.camera, gates.camera_model, gates.coeff_count),
-        (1, "SFMTOOL_PINHOLE", 4)
-    );
-    assert!(
-        (gates.domain_deg - 45.0).abs() < 1e-9,
-        "{}",
-        gates.domain_deg
-    );
-    // The node has inline keypoints, so the outermost observation is known.
-    assert!(gates.keypoint_extent.observed.is_some());
-
-    let why = crate::refit_spline_prompt::RefitSplineGates::of(edited, 0).expect_err("a pinhole");
-    assert!(why.contains("SIMPLE_PINHOLE camera has no spline"), "{why}");
-    let why = crate::refit_spline_prompt::RefitSplineGates::of(edited, 7).expect_err("no camera");
-    assert!(why.contains("Camera 7 does not exist"), "{why}");
-}
-
-#[test]
 fn a_refit_of_a_spline_pushes_one_version_labelled_with_the_change() {
     let (mut state, id) = spline_camera_state();
     let request = crate::state::edits::SwitchCameraModelRequest {

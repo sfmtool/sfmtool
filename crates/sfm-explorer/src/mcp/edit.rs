@@ -476,6 +476,117 @@ pub(super) fn switch_camera_model(
     Ok(reply)
 }
 
+/// `propose_camera_model`: open or refit the camera model proposal on one
+/// camera, as the Camera Intrinsics panel's `Switch Model…` and its controls
+/// do, and answer with the `proposed` block. Pushes nothing.
+///
+/// Every argument takes the default `switch_camera_model` gives it: an omitted
+/// `camera_model` is the camera's own, which for a spline camera is the refit
+/// of its spline, and an omitted `coeff_count` is the count
+/// `RefitTarget::coeff_count_for` gives. A call whose fit inputs equal the open
+/// proposal's keeps it and its generation. A model name the core does not
+/// know, and a count on a model without a spline, are refused and open
+/// nothing; a fit the core refuses opens a proposal carrying the refusal, as
+/// the panel shows one.
+pub(super) fn propose_camera_model(
+    state: &mut AppState,
+    label: &str,
+    request: &crate::state::edits::SwitchCameraModelRequest,
+) -> JsonReply {
+    use sfmtool_core::camera::refit_intrinsics::RefitTarget;
+
+    let id = resolve_reconstruction(state, Some(label))?;
+    let node = state.node(id).expect("just resolved");
+    let cameras = &node.recon().image_table.cameras;
+    let source = cameras.get(request.camera).ok_or_else(|| {
+        ToolError::new(format!(
+            "camera_intrinsics_index {} does not exist; {} has {} camera(s).",
+            request.camera,
+            node.label,
+            cameras.len()
+        ))
+    })?;
+    let named = request
+        .camera_model
+        .as_deref()
+        .unwrap_or(source.model_name());
+    let target = RefitTarget::from_name(named, request.coeff_count)
+        .map_err(|e| ToolError::new(format!("camera {}: {e}", request.camera)))?;
+    let inputs = crate::camera_model_proposal::ProposalInputs {
+        camera_model: target.model_name(),
+        coeff_count: target.coeff_count_for(source),
+        theta_fit_deg: request.theta_fit_deg,
+        spline_domain_deg: request.spline_domain_deg,
+    };
+    let camera = crate::scene::CameraRef::new(id, request.camera);
+    state
+        .open_camera_model_proposal(camera, Some(inputs))
+        .map_err(ToolError::new)?;
+    let proposal = state
+        .camera_model_proposal_on(id)
+        .expect("a proposal was just opened");
+    Ok(json!({
+        "reconstruction_label": label,
+        "proposed": super::render::camera_model_proposal(proposal),
+    }))
+}
+
+/// `cancel_camera_model_proposal`: drop the proposal open on the node, as its
+/// Cancel does.
+pub(super) fn cancel_camera_model_proposal(state: &mut AppState, label: &str) -> JsonReply {
+    let id = resolve_reconstruction(state, Some(label))?;
+    if !state.drop_camera_model_proposal(id, crate::camera_model_proposal::Dropped::Cancelled) {
+        return Err(ToolError::new(format!(
+            "No camera model proposal is open on {label}."
+        )));
+    }
+    Ok(json!({ "reconstruction_label": label, "cancelled": true }))
+}
+
+/// `switch_camera_model { proposal: true }`: apply the proposal open on the
+/// node, as its Apply does.
+///
+/// Where the node's observations carry a pixel this is the `Switch camera
+/// model` background task, and the reply is a background edit's: the version
+/// when it finishes within [`REPLY_DIRECTLY_WITHIN`], and a handle otherwise.
+/// On a node whose observations carry none it is the switch alone, on the GUI
+/// thread, and the reply is the version at once.
+pub(super) fn apply_camera_model_proposal(
+    state: &mut AppState,
+    label: &str,
+    camera: Option<usize>,
+) -> super::Outcome {
+    let id = match resolve_reconstruction(state, Some(label)) {
+        Ok(id) => id,
+        Err(error) => return super::Outcome::Done(Err(error)),
+    };
+    if let (Some(named), Some(open)) = (camera, state.camera_model_proposal_on(id)) {
+        if named != open.camera {
+            return super::Outcome::Done(Err(ToolError::new(format!(
+                "The proposal open on {label} is for camera_intrinsics_index {}, not {named}.",
+                open.camera
+            ))));
+        }
+    }
+    let mut started = false;
+    let reply = edited(state, id, |state| {
+        let applied = state.apply_camera_model_proposal(id)?;
+        started = applied == crate::state::edits::ProposalApplied::Started;
+        Ok(())
+    });
+    if !started {
+        return super::Outcome::Done(reply.map(super::ToolOutput::Json));
+    }
+    let task = state.background_task().expect("the operation just started");
+    super::Outcome::Deferred(Deferred::Background(BackgroundReply {
+        operation_id: task.id,
+        operation_name: task.operation.name,
+        answer: super::Answer::Version(id),
+        label: task.label.clone(),
+        started: task.started,
+    }))
+}
+
 /// A number the wire can carry: `null` where it is not finite.
 fn finite(value: f64) -> Value {
     if value.is_finite() {

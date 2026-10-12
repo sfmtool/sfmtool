@@ -75,6 +75,9 @@ impl Command {
             Command::AddCameraImageToTracks { .. } => "add_camera_image_to_tracks",
             Command::BundleAdjust { .. } => "bundle_adjust",
             Command::SwitchCameraModel { .. } => "switch_camera_model",
+            Command::ApplyCameraModelProposal { .. } => "switch_camera_model",
+            Command::ProposeCameraModel { .. } => "propose_camera_model",
+            Command::CancelCameraModelProposal { .. } => "cancel_camera_model_proposal",
             Command::ConvertToEmbeddedPatches { .. } => "convert_to_embedded_patches",
             Command::GetBench { .. } => "get_bench",
             Command::GetBenchTrack { .. } => "get_bench_track",
@@ -168,6 +171,16 @@ impl Command {
                 reconstruction_label,
                 ..
             }
+            | Command::ApplyCameraModelProposal {
+                reconstruction_label,
+                ..
+            }
+            // Not an edit, but it opens a proposal, which ends a held lock as
+            // an edit does.
+            | Command::ProposeCameraModel {
+                reconstruction_label,
+                ..
+            }
             | Command::BakeReconstructionTransform {
                 reconstruction_label,
             }
@@ -182,6 +195,41 @@ impl Command {
                 ..
             } => Some(reconstruction_label),
             _ => None,
+        }
+    }
+
+    /// The node on which an open camera model proposal is ended, by the
+    /// implicit rule, before this command is applied.
+    ///
+    /// Every command [`Self::edits`] names but the two that are the proposal's
+    /// own (opening one, and applying it), and the commands that give a node a
+    /// version which that list leaves out. A close ends it in
+    /// `close_reconstruction` itself, which knows which nodes it closes.
+    pub(super) fn ends_proposal(&self) -> Option<&str> {
+        match self {
+            Command::ApplyCameraModelProposal { .. } | Command::ProposeCameraModel { .. } => None,
+            Command::PruneCoveredObservations {
+                reconstruction_label,
+                ..
+            }
+            | Command::CreateTrackAtPixel {
+                reconstruction_label,
+                ..
+            }
+            | Command::FindNearbyTracks {
+                reconstruction_label,
+                ..
+            }
+            // A reframe pushes a version too, though it is not an edit.
+            | Command::SetReconstructionTransform {
+                reconstruction_label,
+                ..
+            }
+            | Command::SetReconstructionTransformFromPatch {
+                reconstruction_label,
+                ..
+            } => Some(reconstruction_label),
+            _ => self.edits(),
         }
     }
 
@@ -228,6 +276,14 @@ impl Command {
             // base with another camera, which is what the intrinsics panel and
             // the image overlay cached their curves from.
             | Command::SwitchCameraModel {
+                reconstruction_label,
+                ..
+            }
+            // Its Apply pushes the switch alone on the GUI thread on a node
+            // whose observations carry no pixel, which is the direct switch's
+            // case; the version the background task pushes otherwise drops the
+            // caches when it lands.
+            | Command::ApplyCameraModelProposal {
                 reconstruction_label,
                 ..
             }
@@ -318,6 +374,7 @@ impl Command {
             | Command::AddCameraImageToTracks { .. }
             | Command::BundleAdjust { .. }
             | Command::SwitchCameraModel { .. }
+            | Command::ApplyCameraModelProposal { .. }
             | Command::BakeReconstructionTransform { .. }
             | Command::ConvertToEmbeddedPatches { .. }
             // The one bench step whose row is an `Edit`, because it is one
@@ -387,7 +444,11 @@ impl Command {
             | Command::SetImageDetailView { .. }
             | Command::SetViewer3dDisplay { .. }
             | Command::SetTimingDetail { .. } => Kind::Display,
-            Command::SetView { .. } => Kind::View,
+            // A proposal is viewer state, as a camera held in hand is; its
+            // rows are `View` rows until Apply writes an `Edit`.
+            Command::SetView { .. }
+            | Command::ProposeCameraModel { .. }
+            | Command::CancelCameraModelProposal { .. } => Kind::View,
             // Its own kind: what the input then does is recorded as it would be
             // for a person, under whatever kind that is.
             Command::Input(_) => Kind::Input,

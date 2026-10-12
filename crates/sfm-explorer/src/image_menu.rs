@@ -73,6 +73,9 @@ pub(crate) struct ImageMenu {
     /// `None`: an operation running on it, or the node's own reasons
     /// ([`crate::add_image_to_tracks::node_refusal`]).
     add_to_tracks: Option<String>,
+    /// Why every entry is greyed while a camera model proposal is open on the
+    /// node ([`crate::camera_model_proposal::PROPOSAL_OPEN_HINT`]), or `None`.
+    proposal: Option<String>,
     /// Per image, where its photograph would come from.
     ///
     /// A path is looked at lazily, by [`Self::add_to_tracks_refusal`], so a
@@ -97,6 +100,9 @@ impl ImageMenu {
     /// files say: an image with no pose, then too few other posed images, then
     /// the cluster-patches file.
     pub(crate) fn resect_refusal(&self, index: usize) -> Option<&str> {
+        if let Some(why) = self.proposal.as_deref() {
+            return Some(why);
+        }
         if !self.posed.get(index).copied().unwrap_or(false) {
             return Some(NOT_POSED_HINT);
         }
@@ -114,6 +120,9 @@ impl ImageMenu {
     /// The image's pose first, then the node's reasons, then the photograph,
     /// the one reason that costs a look at the file system.
     pub(crate) fn add_to_tracks_refusal(&self, index: usize) -> Option<&str> {
+        if let Some(why) = self.proposal.as_deref() {
+            return Some(why);
+        }
         if !self.posed.get(index).copied().unwrap_or(false) {
             return Some(crate::add_image_to_tracks::NOT_POSED_HINT);
         }
@@ -180,6 +189,7 @@ impl AppState {
             posed,
             cluster_patches: self.resect_cluster_patches_refusal(id),
             add_to_tracks,
+            proposal: self.proposal_refusal(id),
             photographs,
         })
     }
@@ -252,11 +262,14 @@ pub(crate) fn show(
     // from correspondences, this hands the camera to the reviewer. It enters
     // camera view first, because the lock *is* camera view with the camera
     // coming along.
-    let move_camera = ui.add(egui::Button::new(ENTRIES[2].1)).on_hover_text(
-        "Look through this image and take its camera in hand: every navigation \
-         input moves it, and M or Enter keeps the pose as a version of this \
-         reconstruction.",
-    );
+    let move_camera = ui
+        .add_enabled(menu.proposal.is_none(), egui::Button::new(ENTRIES[2].1))
+        .on_disabled_hover_text(menu.proposal.clone().unwrap_or_default())
+        .on_hover_text(
+            "Look through this image and take its camera in hand: every navigation \
+             input moves it, and M or Enter keeps the pose as a version of this \
+             reconstruction.",
+        );
     mark(MOVE_CAMERA, &move_camera);
     if move_camera.clicked() {
         chosen = Some(ImageMenuAction::MoveCamera);
@@ -265,10 +278,13 @@ pub(crate) fn show(
     ui.separator();
     // No confirmation: this is an edit with a history behind it, and Undo is
     // the answer to a mis-click, as it is for the entries above.
-    let delete = ui.add(egui::Button::new(ENTRIES[3].1)).on_hover_text(
-        "Remove this image from the reconstruction, with its observations and any \
-         track left with none. Undo (Ctrl+Z) puts it back.",
-    );
+    let delete = ui
+        .add_enabled(menu.proposal.is_none(), egui::Button::new(ENTRIES[3].1))
+        .on_disabled_hover_text(menu.proposal.clone().unwrap_or_default())
+        .on_hover_text(
+            "Remove this image from the reconstruction, with its observations and any \
+             track left with none. Undo (Ctrl+Z) puts it back.",
+        );
     mark(DELETE_IMAGE, &delete);
     if delete.clicked() {
         chosen = Some(ImageMenuAction::Delete);

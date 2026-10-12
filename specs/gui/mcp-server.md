@@ -113,8 +113,8 @@ place.
 
 ## The tool surface
 
-Ninety-one tools. Seventeen read -- sixteen that answer with JSON, and
-`screenshot`, which closes the loop by handing back a picture -- sixty-eight
+Ninety-three tools. Seventeen read -- sixteen that answer with JSON, and
+`screenshot`, which closes the loop by handing back a picture -- seventy
 write, five send input, and one writes a file. `get_widgets` and the five
 input tools, `click`, `hover`, `drag`, `press_key` and `type_text`, read and
 press the viewer's widgets the way a person's eyes, mouse and keyboard do
@@ -168,7 +168,9 @@ press the viewer's widgets the way a person's eyes, mouse and keyboard do
 | `resect_camera_image` | write | Re-estimate one image's pose as the node's next version |
 | `add_camera_image_to_tracks` | write | Add one image's observations of the points it sees, as the node's next version, on a worker thread |
 | `bundle_adjust` | write | Refine every pose and point of one reconstruction, on a worker thread |
-| `switch_camera_model` | write | Switch one camera to a model fitted to it, or refit its spline to another count or domain, as one version |
+| `switch_camera_model` | write | Switch one camera to a model fitted to it, or refit its spline to another count or domain, as one version; or apply the open camera model proposal, retriangulating the camera's tracks |
+| `propose_camera_model` | write | Open or refit a camera model proposal on one camera, as the Camera Intrinsics panel's *Switch Model…* does; no version |
+| `cancel_camera_model_proposal` | write | Drop the camera model proposal open on one reconstruction; no version |
 | `convert_to_embedded_patches` | write | Change one reconstruction's observations from `.sift` feature indexes to inline keypoints against a patch frame, on a worker thread |
 | `cancel_background_task` | write | Stop the operation running on a worker, when it can be stopped |
 | `get_bench` | read | One reconstruction's bench: every item on it, and the focused item when it is on that bench |
@@ -215,7 +217,7 @@ press the viewer's widgets the way a person's eyes, mouse and keyboard do
 | `type_text` | input | Type a string into the focused text input, or into one named by its widget id |
 
 Every tool is annotated: the sixteen reads and `screenshot` carry
-`readOnlyHint: true`, the sixty-eight writes `destructiveHint: false` (none of
+`readOnlyHint: true`, the seventy writes `destructiveHint: false` (none of
 them touches a file on disk: `close_reconstruction` unloads, it does not
 delete; `set_window_layout` changes the window and the dock, not the layout file
 the menu saves; an **edit** makes a new version of a loaded value, which the
@@ -761,7 +763,12 @@ observations, and among every feature of the images' `.sift` files, each as a
 radius and an incidence angle under this camera's model. `detected` is `null`
 where no `.sift` file can be read. The files' positions are read on every call,
 a few milliseconds per camera, and the angle is the one to give
-`switch_camera_model`'s `spline_domain_deg`.
+`switch_camera_model`'s and `propose_camera_model`'s `spline_domain_deg`.
+
+While a camera model proposal is open on the camera
+(§ "`propose_camera_model` / `cancel_camera_model_proposal`"),
+`get_camera_intrinsics` carries it as a `proposed` block beside the camera it
+would replace, the block `propose_camera_model` answers with.
 
 `list_camera_images` defaults to 50 rows and caps at 500 (`read::MAX_LIMIT`).
 An `offset` past the end is an empty page and not a refusal: a caller walking a
@@ -2407,8 +2414,7 @@ Scene panel learns that a menu is over part of it.
 ```
 
 - **`dialogs`** are the viewer's own egui windows: `Bundle Adjust`, `Unsaved
-  changes`, `Go to Point`, `Refit Spline`, `Save As Minimal` and `Load Demo
-  Data`. None of them is modal: a click outside one reaches whatever is under
+  changes`, `Go to Point`, `Save As Minimal` and `Load Demo Data`. None of them is modal: a click outside one reaches whatever is under
   it, as it does for a person. The operating system's file chooser is not an
   egui window, and it stops the GUI thread, so it is never in this block
   (§ "Non-goals"). A floating dock window holds panels, not a dialog, and is
@@ -3072,7 +3078,9 @@ edit"). The fold moves no image index. So `move_camera_image`, `switch_camera_mo
 index of their own, renumber points whenever a point edit is pending, and
 renumber nothing otherwise. `move_camera_image` and `switch_camera_model` are
 with the renumbering edits in what the drain forgets afterwards either way: the
-panels' cached geometry and lens curves.
+panels' cached geometry and lens curves. The proposal form of
+`switch_camera_model` runs in the background, and the frame its version lands
+in forgets them.
 
 **A camera the human is holding is committed first.** An edit arriving on a node
 somebody is placing a camera on with the Move Camera lock ends that lock before
@@ -3080,6 +3088,24 @@ it lands, as a commit when the camera has been moved and silently otherwise
 ([edits/move-camera.md](edits/move-camera.md)). The lock is viewport state, so
 the step is the drain's rather than any tool's (§ "Threading"), and it holds for
 every edit in this family rather than for `move_camera_image` alone.
+`propose_camera_model` ends a held lock the same way, since the panel's
+*Switch Model…* does.
+
+**A camera model proposal open on the node is applied first.** An edit tool
+naming a node with a proposal open (§ "`propose_camera_model` /
+`cancel_camera_model_proposal`") applies the proposal by the implicit rule
+before it runs, as the window does when the human steps away from the node,
+and drops it instead where its fit was refused. The tools that count are every
+one of this family that gives the node a version, the two reframes
+(`set_reconstruction_transform`, `set_reconstruction_transform_from_patch`),
+`create_track_at_pixel`,
+`find_nearby_tracks`, `commit_bench_track` and `close_reconstruction`; the
+cursor moves drop the proposal instead (§ "`undo` / `redo` /
+`jump_to_version`"). The Apply runs as the `Switch camera model` background
+task on a node whose observations carry a pixel, so the tool that set it off
+then meets a busy node and is refused with the busy sentence; the agent waits
+for the task as for any other and calls again. An agent that wants the direct
+switch alone cancels the proposal first.
 
 ### `get_reconstruction_history`
 
@@ -3151,7 +3177,9 @@ The ends are refusals in the state's own words: *"Nothing to undo in
 its value, or one on the way to it, was released to keep `seoul_bull` inside the
 history budget."* A node with an operation running on it refuses all three with
 the sentence every other edit of it gets (*"`seoul_bull` is busy: Bundle adjust is
-still running."*). The three share one gate and one walk
+still running."*). A camera model proposal open on the node is dropped by a
+move the gate lets through, with a `View` row saying so, since it was fitted to
+the camera of the version the cursor leaves. The three share one gate and one walk
 (`AppState::move_cursor` in
 [state/edits.rs](../../crates/sfm-explorer/src/state/edits.rs)), so these are
 the same sentences the Edit menu and the Edit History panel log; the wire's
@@ -3454,20 +3482,26 @@ retry, since the version may well have been pushed.
 // switch_camera_model { "reconstruction_label": "kerry_park",
 //                       "camera_intrinsics_index": 0, "coeff_count": 12,
 //                       "spline_domain_deg": 108.8 }
+// switch_camera_model { "reconstruction_label": "kerry_park", "proposal": true }
 ```
 
-One camera switched to a model fitted to it, applied directly as the node's
-next version ([edits/switch-camera-model.md](edits/switch-camera-model.md)), by
-the reconstruction-level switch
+One camera switched to a model fitted to it, as the node's next version
+([edits/switch-camera-model.md](edits/switch-camera-model.md)), by the
+reconstruction-level switch
 ([../core/reconstruction/switch-camera-model.md](../core/reconstruction/switch-camera-model.md)).
-Poses, points, keypoints and tracks do not move, and nothing is renumbered
-unless a point edit is pending (§ "The editing family"); the
-stored errors of the points the camera's images observe are recomputed. It is
-the step the Camera Intrinsics panel's `Refit spline…` takes, with any target
-model.
+Two forms.
+
+**The direct form** is a lens-only switch, the operation `sfm xform
+--camera-model` also makes. Poses, points, keypoints and tracks do not move, and
+nothing is renumbered unless a point edit is pending (§ "The editing family");
+the stored errors of the points the camera's images observe are recomputed. An
+agent that wants the camera's tracks moved as well opens a proposal, or follows
+the direct switch with `retriangulate_all_points`. It is an edit tool naming the
+node, so a proposal open on it is applied first (§ "The editing family"); an
+agent that wants the direct switch alone cancels the proposal first.
 
 - `camera_intrinsics_index` names the camera, as `get_camera_intrinsics` takes
-  it.
+  it. Required in this form.
 - `camera_model` is the target, case-insensitive. Omitted, it is the camera's own
   model, and for an `SFMTOOL_FISHEYE` or `SFMTOOL_PINHOLE` camera the switch is
   then a **refit of its spline**: fitted over the whole new domain and kept
@@ -3495,6 +3529,93 @@ kerry_park from OPENCV_FISHEYE to SFMTOOL_FISHEYE` for a change of model. A
 camera the node does not have, a count on a model without a spline, and a
 domain end the model cannot have are refused naming the camera, and push
 nothing. It runs on the GUI thread: a fit takes milliseconds.
+
+**The proposal form**, `proposal: true`, applies the camera model proposal open
+on the node, as the panel's Apply does: the switch with the proposal's request,
+followed by the retriangulation of every track the camera's images observe, in
+one version labelled as the direct switch with `and retriangulated its tracks`
+added. It takes none of the fit's arguments, which the proposal already states,
+and refuses them; a `camera_intrinsics_index`, when given, has to be the
+proposal's camera. It runs as the `Switch camera model` background task and
+replies as a background edit does (§ "`retriangulate_point` /
+`retriangulate_all_points`"): the version and its sentence, which carries the
+fit's numbers and the retriangulation's counts, when it finishes within 200 ms,
+and a handle otherwise. On a node whose observations carry no inline keypoints
+it is the switch alone, on the GUI thread, and the sentence says why the tracks
+were not retriangulated; that reply is the version at once, without the `fit`
+object. Refused, leaving the proposal open: no proposal open on the node, a fit
+the core refused, a busy node or viewer, and a switch refused because a `.sift`
+file cannot be read.
+
+### `propose_camera_model` / `cancel_camera_model_proposal`
+
+```jsonc
+// propose_camera_model { "reconstruction_label": "kerry_park",
+//                        "camera_intrinsics_index": 0,
+//                        "camera_model": "SFMTOOL_FISHEYE" }
+{ "reconstruction_label": "kerry_park",
+  "proposed": {
+    "camera_intrinsics_index": 0, "camera_model": "SFMTOOL_FISHEYE",
+    "refit_spline": false,
+    "request": { "camera_model": "SFMTOOL_FISHEYE", "coeff_count": 8,
+                 "theta_fit_deg": null, "spline_domain_deg": null },
+    "generation": 1,
+    "camera": { "camera_model": "SFMTOOL_FISHEYE", "width": 480, "height": 480,
+                "params": { … } },
+    "fit": { "camera_model_before": "OPENCV_FISHEYE",
+             "camera_model_after": "SFMTOOL_FISHEYE",
+             "theta_fit_deg": 84.5, "theta_fit_source": "trusted_bound",
+             "spline_domain_deg": 150.1, "rms_px": 0.130, "radial_rms_px": 0.013,
+             "max_px": 0.292,
+             "dropped": ["aspect fy/fx 0.9978 dropped (single focal)"],
+             "monotone_constraint": { "active": false, "active_angles": 0,
+                                      "range_deg": null } },
+    "fit_report": "rms 0.130 px, radial 0.013 px, max 0.292 px over θ ≤ 84.5°; aspect fy/fx 0.9978 dropped (single focal)",
+    "refusal": null } }
+
+// cancel_camera_model_proposal { "reconstruction_label": "kerry_park" }
+{ "reconstruction_label": "kerry_park", "cancelled": true }
+```
+
+`propose_camera_model` opens a camera model proposal on one camera, or refits
+the one open on it, exactly as the Camera Intrinsics panel's *Switch Model…* and
+its controls do ([edits/switch-camera-model.md](edits/switch-camera-model.md)
+§ "The proposal"), and selects that camera. It pushes nothing. Every argument
+takes the name and the default `switch_camera_model` gives it, so an omitted
+`camera_model` is the camera's own, which for a spline camera is the refit of
+its spline, and an omitted `coeff_count` is the camera's own count for its own
+spline model and 8 otherwise. Unlike the panel's Model list, the call takes a
+camera's own polynomial model, and `theta_fit_deg` on a spline camera's own
+model; the proposal it opens is the core's answer to that request, and the
+panel shows it as it was opened.
+
+A call whose fit arguments equal the open proposal's keeps it and its
+`generation`; any other change refits and advances the generation. An unknown
+model, and a `coeff_count` on a model without a spline, open nothing and are
+refused. A fit the core refuses still opens a proposal, with `camera` and `fit`
+`null` and the core's sentence in `refusal`, and it cannot be applied. The call
+is refused on a busy node, on a node with no posed image, and while a proposal
+is open on another camera of the same node, the three reasons the panel greys
+its entries for. A proposal open on another node is applied first, since
+opening this one selects another node. A held Move Camera lock on the node is
+ended first (§ "The editing family").
+
+The `proposed` block, which `get_camera_intrinsics` also carries for the
+camera, holds what the proposal was fitted from (`request`, `null` where the
+default holds), `refit_spline` for a spline camera's own model, its
+`generation`, the proposed `camera` as `get_camera_intrinsics` spells one, the
+`fit` report (`camera_model_before`, `camera_model_after`, `theta_fit_deg` and
+`theta_fit_source`, `spline_domain_deg`, `rms_px`, `radial_rms_px`, `max_px`,
+`dropped` as sentences, and `monotone_constraint`), and `fit_report`, the one
+line the panel shows under its controls. The observation comparison and the
+preview's triangulation are not in it; they are
+[../drafts/switch-camera-model.md](../drafts/switch-camera-model.md)'s.
+
+`cancel_camera_model_proposal` drops the proposal open on the node, as the
+panel's Cancel does, and is refused when none is open. Apply is
+`switch_camera_model { proposal: true }`. An undo, a redo or a jump on the node
+drops the proposal; an edit tool naming the node, a close, or selecting another
+node applies it (§ "The editing family").
 
 ### `add_camera_image_to_tracks`
 
@@ -5381,7 +5502,7 @@ where a test hands no host over.
   and the panel list in the prose above are asserted against `catalog()` and
   `Tab::ALL`, because a number written out in words is the first thing to go
   stale.
-- **The catalog is ninety-one tools**, seventeen of them reads, five of the
+- **The catalog is ninety-three tools**, seventeen of them reads, five of the
   `Input` kind and one of the `Save` kind, those six carrying
   `destructiveHint: true`;
   `set_window_layout`'s schema advertises `sfm_explorer_layout`, `window` and
@@ -5552,10 +5673,10 @@ tool would be an edit like the others under this model, but it has real work
 behind it (a partial-parameter merge against `CameraModel`, and the re-upload of
 every frustum, distorted mesh and image quad built from the lens that changed),
 and it would need an edit spec of its own beside the rest in
-[edits/](edits/README.md). Showing a model switch as a proposal an agent can
-inspect before applying it, `propose_camera_model` and the proposal form of
-`switch_camera_model`, is specified in
-[../drafts/switch-camera-model.md](../drafts/switch-camera-model.md).
+[edits/](edits/README.md). A model switch can be shown as a proposal an agent
+inspects before applying it, with `propose_camera_model` and the proposal form
+of `switch_camera_model` (§ "`propose_camera_model` /
+`cancel_camera_model_proposal`").
 
 ### Loose images, and the names held for them
 
@@ -5657,6 +5778,7 @@ Other candidates, in rough order of value:
 | `switch_camera_model` `camera_model` | the camera's own model | Which makes the call a refit of a spline camera's spline. |
 | `switch_camera_model` `coeff_count` | the camera's own count for its own spline model, else `8` (`DEFAULT_COEFF_COUNT`) | A refit changes only what it names. |
 | `switch_camera_model` `spline_domain_deg` | the camera's own domain end in a refit, else the far image corner | Kept exactly, not taken through degrees and back. |
+| `propose_camera_model` arguments | as `switch_camera_model`'s | The proposal is the fit the direct form would make for the same arguments. |
 
 ## Open questions
 

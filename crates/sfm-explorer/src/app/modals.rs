@@ -39,22 +39,6 @@ pub(super) fn show(root_ui: &mut egui::Ui, parts: &mut UiParts<'_>, requests: &m
         let _ = app_state.start_bundle_adjust(answer.recon, &options);
     }
 
-    // The `Refit spline…` dialog, and the switch it asks for. The switch is a
-    // quick fit and runs here; it records its own Action Log row, success or
-    // refusal, and a new base means every panel cache of the node describes a
-    // value it no longer holds.
-    if let Some(answer) = app_state.refit_spline_prompt.show(root_ui.ctx()) {
-        if app_state
-            .switch_camera_model(answer.recon, &answer.request())
-            .is_ok()
-        {
-            image_browser.forget_recon(answer.recon);
-            image_detail.forget_recon(answer.recon);
-            track_view.forget_recon(answer.recon);
-            intrinsics_detail.forget_recon(answer.recon);
-        }
-    }
-
     // The workspace path a minimal copy records. The file was chosen in the
     // native dialog `File > Save As Minimal...` opened, and nothing has been
     // written yet, so this frame's answer is the save itself; a cancelled prompt
@@ -101,6 +85,17 @@ pub(super) fn show(root_ui: &mut egui::Ui, parts: &mut UiParts<'_>, requests: &m
     }
 
     if std::mem::take(close_all_requested) {
+        // Closing a camera model proposal's node applies the proposal first,
+        // as closing that node alone does.
+        if let Some(switched) = app_state.end_camera_model_proposal_implicitly() {
+            forget_selected(
+                Some(switched),
+                image_browser,
+                image_detail,
+                track_view,
+                intrinsics_detail,
+            );
+        }
         if app_state.any_dirty() {
             app_state
                 .close_prompt

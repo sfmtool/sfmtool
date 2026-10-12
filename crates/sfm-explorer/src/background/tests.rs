@@ -487,6 +487,25 @@ fn real_task(operation: Operation) -> RealTask {
                 _workspace: None,
             }
         }
+        // The proposal's Apply, over the retriangulation's fixture: its pinhole
+        // camera switched to SFMTOOL_PINHOLE and its tracks retriangulated.
+        "Switch camera model" => {
+            let (state, id) = adjustable();
+            let request = crate::state::edits::SwitchCameraModelRequest {
+                camera: 0,
+                camera_model: Some("SFMTOOL_PINHOLE".to_string()),
+                ..Default::default()
+            };
+            let job = state
+                .switch_camera_model_job(id, &request)
+                .expect("the fixture is well posed");
+            RealTask {
+                state,
+                id,
+                job: Some(job),
+                _workspace: None,
+            }
+        }
         // The prune, over the retriangulation's fixture with a patch frame per
         // point: an observation's footprint is that frame projected into the
         // image that saw it.

@@ -115,6 +115,35 @@ fn show_camera_rows(ui: &mut egui::Ui, node: &SceneNode, ctx: &NodeContext, out:
                 if row.double_clicked() {
                     out.response.zoom_to_camera = Some(reference);
                 }
+                // The row's menu, with its one entry: a camera model proposal
+                // on this camera. `close_behavior` as on the image rows, so a
+                // greyed entry clicked to read its reason keeps the menu up.
+                crate::context_menu::on_secondary_click(&row)
+                    .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                    .show(|ui| {
+                        let refusal = crate::camera_model_proposal::open_refusal(
+                            node,
+                            index,
+                            out.busy_refusal(node.id),
+                            out.proposal,
+                        );
+                        let entry = ui
+                            .add_enabled(
+                                refusal.is_none(),
+                                egui::Button::new(super::menus::SWITCH_CAMERA_MODEL),
+                            )
+                            .on_disabled_hover_text(refusal.unwrap_or_default())
+                            .on_hover_text(
+                                "Fit this camera to another camera model, or refit its spline, \
+                                 in the Camera Intrinsics panel, and compare the two before \
+                                 applying.",
+                            );
+                        let key = format!("switch_camera_model_{index}");
+                        if out.hit(row_id(node.id, &key), entry).clicked() {
+                            out.response.switch_camera_model = Some(reference);
+                            ui.close();
+                        }
+                    });
                 // No hover channel, deliberately: cross-panel hover is a
                 // two-field protocol with an ownership rule per panel, and a
                 // third field threaded through every panel would buy a preview

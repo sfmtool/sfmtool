@@ -377,6 +377,27 @@ pub(crate) fn parse(
             cameras: args.camera_releases("cameras")?,
             free_points_cross: args.optional_bool("free_points_cross")?.unwrap_or(true),
         },
+        // The proposal form applies the open proposal, whose fit is already
+        // stated, so it takes none of the fit's arguments.
+        "switch_camera_model" if args.optional_bool("proposal")?.unwrap_or(false) => {
+            for key in [
+                "camera_model",
+                "coeff_count",
+                "spline_domain_deg",
+                "theta_fit_deg",
+            ] {
+                if args.map.get(key).is_some_and(|value| !value.is_null()) {
+                    return Err(ToolError::new(format!(
+                        "switch_camera_model with proposal: true applies the open proposal \
+                         and takes no {key}; change the proposal with propose_camera_model."
+                    )));
+                }
+            }
+            Command::ApplyCameraModelProposal {
+                reconstruction_label: args.required_string("reconstruction_label")?,
+                camera: args.optional_usize("camera_intrinsics_index")?,
+            }
+        }
         "switch_camera_model" => Command::SwitchCameraModel {
             reconstruction_label: args.required_string("reconstruction_label")?,
             request: crate::state::edits::SwitchCameraModelRequest {
@@ -386,6 +407,19 @@ pub(crate) fn parse(
                 spline_domain_deg: args.optional_f64("spline_domain_deg")?,
                 theta_fit_deg: args.optional_f64("theta_fit_deg")?,
             },
+        },
+        "propose_camera_model" => Command::ProposeCameraModel {
+            reconstruction_label: args.required_string("reconstruction_label")?,
+            request: crate::state::edits::SwitchCameraModelRequest {
+                camera: args.required_usize("camera_intrinsics_index")?,
+                camera_model: args.optional_string("camera_model")?,
+                coeff_count: args.optional_usize("coeff_count")?,
+                spline_domain_deg: args.optional_f64("spline_domain_deg")?,
+                theta_fit_deg: args.optional_f64("theta_fit_deg")?,
+            },
+        },
+        "cancel_camera_model_proposal" => Command::CancelCameraModelProposal {
+            reconstruction_label: args.required_string("reconstruction_label")?,
         },
         "convert_to_embedded_patches" => Command::ConvertToEmbeddedPatches {
             reconstruction_label: args.required_string("reconstruction_label")?,

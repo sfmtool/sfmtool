@@ -18,9 +18,12 @@ use super::derived::Derived;
 use super::format;
 
 /// Table 1: the model's parameters, in declaration order.
-pub(super) fn show_parameters(ui: &mut egui::Ui, camera: &CameraIntrinsics) {
+///
+/// `id_salt` tells two tables in one frame apart: the current camera's and,
+/// while a proposal is open, the proposed one's beside it.
+pub(super) fn show_parameters(ui: &mut egui::Ui, camera: &CameraIntrinsics, id_salt: &str) {
     ui.label(egui::RichText::new("Parameters").strong());
-    egui::Grid::new("intrinsics_parameters")
+    egui::Grid::new(("intrinsics_parameters", id_salt))
         .num_columns(2)
         .spacing([12.0, 2.0])
         .striped(true)
@@ -34,9 +37,19 @@ pub(super) fn show_parameters(ui: &mut egui::Ui, camera: &CameraIntrinsics) {
 }
 
 /// Table 2: what the parameters *mean*.
-pub(super) fn show_derived(ui: &mut egui::Ui, camera: &CameraIntrinsics, derived: &Derived) {
+///
+/// `id_salt` as for [`show_parameters`]. `aspect_row` shows the aspect row
+/// whatever the model, so two tables side by side keep their rows in line: a
+/// single-focal model reads `single focal` there.
+pub(super) fn show_derived(
+    ui: &mut egui::Ui,
+    camera: &CameraIntrinsics,
+    derived: &Derived,
+    id_salt: &str,
+    aspect_row: bool,
+) {
     ui.label(egui::RichText::new("Derived").strong());
-    egui::Grid::new("intrinsics_derived")
+    egui::Grid::new(("intrinsics_derived", id_salt))
         .num_columns(2)
         .spacing([12.0, 2.0])
         .striped(true)
@@ -55,6 +68,10 @@ pub(super) fn show_derived(ui: &mut egui::Ui, camera: &CameraIntrinsics, derived
             if has_two_focal_lengths(camera) && fx != 0.0 {
                 ui.label("aspect fy/fx");
                 ui.monospace(format!("{:.4}", fy / fx));
+                ui.end_row();
+            } else if aspect_row {
+                ui.label("aspect fy/fx");
+                ui.monospace("single focal");
                 ui.end_row();
             }
 
@@ -198,7 +215,7 @@ fn focal_unit_note(camera: &CameraIntrinsics) -> &'static str {
 /// Read off `parameter_names()` rather than compared numerically: a two-focal
 /// model whose two values happen to be equal still has an aspect ratio the file
 /// can express, and a single-focal model never does.
-fn has_two_focal_lengths(camera: &CameraIntrinsics) -> bool {
+pub(super) fn has_two_focal_lengths(camera: &CameraIntrinsics) -> bool {
     camera
         .model
         .parameter_names()

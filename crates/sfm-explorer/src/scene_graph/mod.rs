@@ -69,6 +69,7 @@ mod menus;
 mod widgets;
 
 use cameras::{show_camera_images_group, show_camera_intrinsics_group};
+pub(crate) use menus::SWITCH_CAMERA_MODEL;
 use menus::{cluster_patches_menu, index_files_menu, node_context_menu, sift_index_menu};
 use widgets::{counts_text, eye_toggle, glyph_toggle, with_thousands};
 
@@ -213,6 +214,12 @@ pub struct SceneGraphResponse {
     pub edit_bench_item: Option<(ReconId, usize)>,
     /// `Discard` chosen on a Bench row, the item named the same way.
     pub discard_bench_item: Option<(ReconId, usize)>,
+    /// `Switch Camera Model…` chosen on a Camera Intrinsics row: open a camera
+    /// model proposal on that camera. It raises the Camera Intrinsics panel,
+    /// a layout operation, so the panel keeps the request for
+    /// [`SceneGraphPanel::take_switch_camera_model`], which `app.rs` drains
+    /// once the dock is back in the state; the dock applies nothing of it.
+    pub(crate) switch_camera_model: Option<CameraRef>,
     /// `Clear the Bench` chosen on either bench group's header row.
     pub clear_bench: Option<ReconId>,
     /// An entry of the image menu chosen on an image row: the image and the
@@ -243,6 +250,10 @@ pub struct SceneGraphPanel {
     /// A Bench row's double-click, kept for `app.rs` to apply after the dock
     /// is back in the state. See [`SceneGraphPanel::take_bench_edit`].
     bench_edit: Option<(ReconId, usize)>,
+    /// A Camera Intrinsics row's `Switch Camera Model…`, kept for `app.rs` to
+    /// apply after the dock is back in the state. See
+    /// [`SceneGraphPanel::take_switch_camera_model`].
+    switch_camera_model: Option<CameraRef>,
 }
 
 impl SceneGraphPanel {
@@ -258,6 +269,15 @@ impl SceneGraphPanel {
     /// would land on the placeholder dock and be thrown away with it.
     pub(crate) fn take_bench_edit(&mut self) -> Option<(ReconId, usize)> {
         self.bench_edit.take()
+    }
+
+    /// Take the `Switch Camera Model…` the last frame reported, if any.
+    ///
+    /// Drained by `app.rs` once the dock is back in the state, for the reason
+    /// [`Self::take_bench_edit`] is: opening the proposal raises the Camera
+    /// Intrinsics panel.
+    pub(crate) fn take_switch_camera_model(&mut self) -> Option<CameraRef> {
+        self.switch_camera_model.take()
     }
 
     /// Where a row or toggle was drawn on the last frame, if it was drawn.
@@ -283,6 +303,12 @@ impl SceneGraphPanel {
             .background_task()
             .and_then(|task| task.node)
             .and_then(|node| state.busy_refusal(node).map(|why| (node, why)));
+        // The camera an open proposal is on, which greys the node's other
+        // edits and the other cameras' `Switch Camera Model…`.
+        let proposal = state
+            .camera_model_proposal
+            .as_ref()
+            .map(|proposal| proposal.camera_ref());
         // The Index Files rows are truthful on a node whose bench is empty, so
         // the look that Track View and the bench do happens here too -- once
         // per node per frame, and remembered, so a reconstruction with no files
@@ -361,6 +387,7 @@ impl SceneGraphPanel {
             align_options: &mut self.align_options,
             targets: &targets,
             busy,
+            proposal,
             index_files: &index_files,
             image_menus: &image_menus,
             focused_item,
@@ -390,6 +417,9 @@ impl SceneGraphPanel {
 
         if let Some(edit) = out.response.edit_bench_item {
             self.bench_edit = Some(edit);
+        }
+        if let Some(camera) = out.response.switch_camera_model {
+            self.switch_camera_model = Some(camera);
         }
         out.response
     }
@@ -446,6 +476,9 @@ struct TreeOutput<'a> {
     /// before the walk, because the walk holds the scene and `AppState` is one
     /// borrow.
     busy: Option<(ReconId, String)>,
+    /// The camera an open camera model proposal is on, read out before the
+    /// walk for the same reason.
+    proposal: Option<CameraRef>,
     /// What each node's Index Files rows say, read out before the walk for
     /// the same reason.
     index_files: &'a std::collections::HashMap<ReconId, IndexFilesRows>,
@@ -467,6 +500,17 @@ impl TreeOutput<'_> {
             .as_ref()
             .filter(|(busy, _)| *busy == id)
             .map(|(_, why)| why.as_str())
+    }
+
+    /// Why an edit of `id` from a menu is greyed right now, or `None`: the
+    /// busy refusal, then an open camera model proposal's --
+    /// `AppState::edit_refusal`'s answer, carried in.
+    fn edit_refusal(&self, id: ReconId) -> Option<&str> {
+        self.busy_refusal(id).or_else(|| {
+            self.proposal
+                .filter(|camera| camera.recon == id)
+                .map(|_| crate::camera_model_proposal::PROPOSAL_OPEN_HINT)
+        })
     }
 
     /// Record where a row or toggle landed, and hand the response back through.

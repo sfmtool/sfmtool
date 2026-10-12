@@ -595,7 +595,11 @@ impl DecodedViews {
 
 mod switch_camera_model;
 
-pub(crate) use switch_camera_model::SwitchCameraModelRequest;
+#[cfg(test)]
+pub(crate) use switch_camera_model::tracks_of_camera;
+pub(crate) use switch_camera_model::{
+    monotone_clause, switch_refusal_in_version_numbering, ProposalApplied, SwitchCameraModelRequest,
+};
 
 #[cfg(test)]
 pub(crate) mod tests;
@@ -1813,13 +1817,16 @@ impl AppState {
     }
 
     /// Where `id` sits in the scene, for an operation about to change it: the
-    /// node's busy refusal first, then [`NOT_LOADED`].
+    /// node's busy refusal first, then an open camera model proposal's
+    /// ([`AppState::edit_refusal`]), then [`NOT_LOADED`].
     ///
     /// Busy comes first because it is the reason that will still be true a
     /// moment later, and it is the order [`convert_refusal`] and
-    /// [`retriangulate_refusal`] ask in.
+    /// [`retriangulate_refusal`] ask in. An MCP edit has applied an open
+    /// proposal by the time it gets here, so only a gesture in the window,
+    /// whose menu entry was greyed, meets the proposal's refusal.
     fn editable_node_index(&self, id: ReconId) -> Result<usize, String> {
-        if let Some(why) = self.busy_refusal(id) {
+        if let Some(why) = self.edit_refusal(id) {
             return Err(why);
         }
         self.node_index(id)
@@ -1849,8 +1856,15 @@ impl AppState {
     ) -> Result<(), String> {
         let started = Instant::now();
         let collector = Collector::new(self.action_log.detailed_timing());
-        let index = self.editable_node_index(id)?;
+        // Busy, but not the proposal's refusal: a move of the cursor drops an
+        // open proposal rather than waiting on it, once the move is known to
+        // be one it can make.
+        if let Some(why) = self.busy_refusal(id) {
+            return Err(why);
+        }
+        let index = self.node_index(id)?;
         let target = target(&self.scene[index])?;
+        self.drop_camera_model_proposal(id, crate::camera_model_proposal::Dropped::HistoryMoved);
         let left = self.scene[index].history.current_version();
         let (from, left_label) = (left.serial, left.label.clone());
         // Read before the walk: it names the photograph in the version the
