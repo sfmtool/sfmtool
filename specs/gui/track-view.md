@@ -853,13 +853,16 @@ cannot say which of two tracks it belongs to.
 
 **Surface Tiling Mode is for covering a surface with patches**, one beside the
 next, by pressing *Duplicate* (or Ctrl+D) and moving the copy with the handles
-of the 3D viewer or Image Detail, over and over. *Tiling* here means covering the surface, not a row's tile.
-Without the mode, each patch takes the same run of steps by hand: *Duplicate*,
-the *Keep* heading's pin to hand every verdict of the copy back to the
-thresholds, *Discard* and *Edit* to take the `out` rows off it, the move,
-*Fit*, the row
-menu's *Find matches by geometry*, *Fit*, *Grid Plane Normal*, *Fit* and
-*Commit*. The mode takes all of them but the duplicate and the move. It is the
+of the 3D viewer or Image Detail, over and over. *Tiling* here means covering
+the surface, not a row's tile. Without the mode, each patch takes much the same
+run of steps by hand, starting from the track just committed: *Discard* and
+*Edit* to take the `out` rows off it (*Discard* abandons the bench item, and
+*Edit* puts the committed point back on the bench, and the point holds only the
+`in` observations the commit wrote), the *Keep* heading's pin to hand every
+verdict back to the thresholds, *Duplicate*, the move, *Fit*, the row menu's
+*Find matches by geometry*, *Fit*, *Grid Plane Normal*, *Fit* and *Commit*. The
+mode takes all of them but the duplicate and the move, and it drops the copy's
+`out` rows after handing its verdicts back rather than before. It is the
 *Surface Tiling Mode* box on the toolbar's second row, after *Lock*, and the
 steps it takes are
 [bench/surface_tiling.rs](../../crates/sfm-explorer/src/bench/surface_tiling.rs).

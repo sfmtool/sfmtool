@@ -164,6 +164,7 @@ pub(crate) fn put_with_rows_the_bars_refuse(
     assert!(expected.contains(&images.len()), "{images:?}");
     (label, images)
 }
+
 /// The Action Log's entries, oldest first, as `(kind, text)`.
 fn rows(state: &AppState) -> Vec<(Kind, String)> {
     state
