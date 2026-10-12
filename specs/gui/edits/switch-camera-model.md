@@ -25,8 +25,7 @@ retriangulation edits, whose options and counts Apply shares),
 coefficients), [../background-tasks.md](../background-tasks.md) (the `Switch
 camera model` task), [../mcp-server.md](../mcp-server.md) (the tools), and
 [../../drafts/switch-camera-model.md](../../drafts/switch-camera-model.md) (the
-proposal's comparison plots, Image Detail change field, and the preview of the
-retriangulation in the 3D view, which are not built yet).
+preview of the retriangulation in the 3D view, which is not built yet).
 
 ---
 
@@ -100,10 +99,14 @@ It is viewer state, as the Move Camera lock's pending pose is, and is in no
 version until it is applied. One proposal is open at a time. It holds the
 camera as it was when it opened, the value the fits read (the version's base,
 or its materialisation, made once, when the version carries point edits), the
-outermost keypoint of the camera's images, read once on the GUI thread when it
-opens, and the inputs of the current fit with the fit itself. It carries a
-**generation**, a counter every change of the fit inputs advances; a change
-that leaves them as they were keeps it.
+outermost keypoint of the camera's images and the keypoints of the camera's
+observations (the inline column, or each image's `.sift` file read once), both
+read once on the GUI thread when it opens, and the inputs of the current fit
+with the fit itself. It carries a **generation**, a counter every change of the
+fit inputs advances; a change that leaves them as they were keeps it. The
+generation is drawn from one counter for the whole viewer, so no two proposals
+share one and a cache keyed by it never serves one proposal's camera for
+another's.
 
 ### The strip
 
@@ -159,7 +162,24 @@ adjustment of a spline camera frees it either.
 The rest of the panel compares the two cameras: the **Parameters** and
 **Derived** tables show the current camera and the proposed one side by side,
 and the proposed column's derived report is cached by the camera and the
-proposal's generation, apart from the current camera's.
+proposal's generation, apart from the current camera's. The projection plot
+draws both cameras against each other, with a third plot of the change and an
+observation rug under the shared axis
+([../camera-intrinsics.md](../camera-intrinsics.md) § "4. Projection plot").
+
+### The Image Detail panel
+
+While the proposal is open, the Image Detail intrinsics layer shows what it
+does to the photographs of the camera: opening it selects the layer's **Change
+to proposed** field mode, and its ending restores the mode before it. In that
+mode the layer draws arrows from the current camera's pixel for a ray to the
+proposed camera's, inside the current camera's trusted bound, the proposed
+camera's rings every 5° past the fit's largest angle, and, for each observation
+of the image, its keypoint with a line to its reprojection under each camera.
+The axes and rings follow the proposed camera unless the layer's popup puts
+them back on the current one
+([../camera-intrinsics.md](../camera-intrinsics.md) § "The Change to proposed
+field").
 
 ### A same-model target
 
@@ -367,7 +387,13 @@ Explorer (`sfm-explorer` lib tests, headless):
   hiding the node leaving it; the node's other edits, its image
   menu, a background task and Move Camera refused while it is open; Switch
   Model… greyed on a busy node, on another camera, and on a node with no posed
-  image; and opening a proposal ending a held Move Camera lock.
+  image; and opening a proposal ending a held Move Camera lock. On a fisheye
+  fixture: the rug holding one angle per observation, ascending, with the wide
+  observations past the trusted bound; an image's observations reprojected
+  under both cameras, the current one onto its keypoint, and a point at infinity
+  reprojected as its direction; the Change to proposed field mode selected on
+  opening and restored after Cancel and after Apply, a mode chosen while open
+  standing until the end; and a reopened proposal taking a new generation.
 - `intrinsics_detail/tests.rs`: the header's `Switch Model…` and no `Refit
   spline…`; a refit proposal's strip and the two cameras side by side; a change
   of model's Fit to θ with its default; Apply, Cancel and `Escape` reported;
@@ -401,7 +427,9 @@ Explorer (`sfm-explorer` lib tests, headless):
   tracks with the direct form's `fit` object in the reply, undone over the wire;
   on a `sift_files` node the switch alone answered at once with `fit`; a direct
   switch applying an open proposal first and then refused while busy, and
-  moving no point on its own; an undo over the wire dropping the proposal.
+  moving no point on its own; an undo over the wire dropping the proposal; and
+  `get_image_detail_display` reporting the `change_to_proposed` field while a
+  proposal is open and `distortion` after it is cancelled.
 
 ---
 

@@ -1065,7 +1065,9 @@ whichever mode the human last picked; these two tools let the agent pick.
       "rings": false,                 // iso-angle rings
       "distortion": true,             // the displacement field, where the model has any
       "distortion_scale": null,       // 1 | 2 | 3 | 5 | 10 | 20 | 50, or null for auto
-      "grid_cols": 16                 // 8 | 12 | 16 | 24 | 32
+      "grid_cols": 16,                // 8 | 12 | 16 | 24 | 32
+      "field": "distortion",          // distortion | change_to_proposed
+      "axes_on_current_model": false  // while a proposal is open, axes through the current camera
     }
   }
 }
@@ -1102,6 +1104,21 @@ human cannot see they are looking at. `max_features` is refused below `1` —
 spelling of it that the `Max:` dropdown cannot display. A `feature_size_px` is
 refused when either bound is negative or not finite, or when `min` exceeds
 `max`.
+
+**`field` is the intrinsics layer's field mode** (`FieldMode::wire_name`),
+`distortion` or `change_to_proposed`; any other name is refused listing the
+two. Opening a camera model proposal (`propose_camera_model`, or the panel's
+`Switch Model…`) sets it to `change_to_proposed` and the proposal's ending puts
+back the mode it replaced, so a `get_image_detail_display` while a proposal is
+open reads `change_to_proposed` and one after it ends reads what the agent or
+the human had before. Those two changes write no `Display` entry; the
+proposal's own entries say it opened and ended. The change field is drawn only
+while a proposal with a fitted camera is open on the shown image's camera;
+elsewhere the distortion field is drawn whatever `field` says.
+`axes_on_current_model` puts the axes and rings back on the current camera
+while such a proposal is open
+([camera-intrinsics.md](camera-intrinsics.md) § "The Change to proposed
+field").
 
 **`feature_size_px` is one thing on the wire because it is one checkbox in the
 toolbar.** `FeatureDisplaySettings` keeps two `Option<f32>` — `min_feature_size`
@@ -1145,6 +1162,8 @@ dragging the size filter — folds into one line. The texts:
 | `intrinsics.axes` / `rings` / `distortion` | `Intrinsics axes {on|off}` / `Intrinsics rings {on|off}` / `Intrinsics distortion {on|off}` |
 | `intrinsics.distortion_scale` | `Distortion scale ×{n}` / `Distortion scale auto` |
 | `intrinsics.grid_cols` | `Grid density {n}` |
+| `intrinsics.field` | `Intrinsics field {label}` — `Distortion` or `Change to proposed` |
+| `intrinsics.axes_on_current_model` | `Axes on current model {on|off}` |
 
 **The human's changes to the same controls record the same texts**, as `User`:
 the Image Detail toolbar, its gear popup and the `I` key all record what they

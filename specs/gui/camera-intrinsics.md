@@ -548,6 +548,12 @@ pub struct IntrinsicsDisplaySettings {
     pub distortion_scale: Option<f32>,
     /// Grid density of the arrow field, arrows across the image width.
     pub grid_cols: usize,         // default 16
+    /// Which field the arrows draw: the lens's distortion, or the change to
+    /// an open camera model proposal (§ "The Change to proposed field").
+    pub field: FieldMode,         // default FieldMode::Distortion
+    /// While a proposal is open on the image's camera, draw the axes and
+    /// rings through the current camera rather than the proposed one.
+    pub axes_on_current_model: bool, // default false
 }
 ```
 
@@ -581,6 +587,13 @@ checkbox is ticked:
 When `camera.has_distortion()` is false, the `Distortion field` row is replaced
 by a disabled `No distortion` line, so the control never sits there inviting a
 click that does nothing.
+
+While a camera model proposal with a fitted camera is open on the image's
+camera, the popup also offers `Axes on current model` and a `Field` list,
+`Distortion` or `Change to proposed`. With the change field shown, the field
+row reads `Change field`, its scale list applies to the change arrows, and the
+footer reads `max change 0.69 px` with the count of nodes past the current
+camera's trusted bound.
 
 `I` toggles the layer while the pointer is over the Image Detail panel. It is a
 control users flip often, because it composes with the feature modes — that is
@@ -846,6 +859,69 @@ way round the axis" has no answer.
 This is the cheapest high-value part of the whole overlay: it turns the image
 into a calibrated protractor.
 
+The legend in the panel's corner wraps at the panel's width, so a long line in
+a narrow panel takes a second line rather than running off it.
+
+### The Change to proposed field
+
+While a camera model proposal
+([edits/switch-camera-model.md](edits/switch-camera-model.md)) with a fitted
+camera is open on the image's camera, the layer shows what the proposal does to
+this photograph. It is
+[`image_detail/intrinsics/change_field.rs`](../../crates/sfm-explorer/src/image_detail/intrinsics/change_field.rs).
+
+**The field mode.** `IntrinsicsDisplaySettings::field` is
+`FieldMode::Distortion` or `FieldMode::ChangeToProposed`. Opening a proposal
+selects `ChangeToProposed` and keeps the mode it replaced in
+`AppState::field_before_proposal`; once no proposal is open the kept mode is
+put back (`AppState::sync_proposal_field`, called where a proposal opens or is
+dropped, after an Apply, and once a frame). A mode chosen in the popup while
+the proposal is open stands until it ends. The change mode draws only while a
+proposal with a fitted camera is open on the image's camera; on any other
+image, and with no proposal, the distortion field is drawn whatever the mode
+says. In the change mode the three parts below replace the distortion field.
+
+**Arrows over the image grid.** The grid is the distortion field's, cell
+centres at `grid_cols` across with the rows keeping the cells square. For each
+node inside the current camera's trusted bound, the arrow's tail is the node,
+the pixel the current camera gives a ray, and its head is the pixel the
+proposed camera gives that same ray, `proposed.ray_to_pixel(current.pixel_to_ray(u))`.
+Past the bound the current camera has no reliable pixel, so the node gets no
+arrow. The arrows are drawn as the distortion field's are, exaggerated by the
+same auto scale (`distortion_field::auto_scale`, fitted to the largest change)
+or the popup's scale, and the legend says both:
+`change to proposed max 0.69 px · shown ×20`, with `108 of 256 nodes past 84.1°
+· proposed rings every 5°` when the bound excluded any. The `Change field`
+checkbox (`IntrinsicsDisplaySettings::distortion`) turns the arrows and the
+rings off.
+
+**Past the trusted bound**, the proposed camera's iso-angle rings, in the
+proposed camera's colour (a light blue, the accent the Camera Intrinsics panel
+draws the proposed camera in), at every multiple of 5° past the fit's largest
+angle, out to the frame's corner under the proposed camera and short of its own
+trusted bound where it has one. On a Kerry Park fisheye that shows the band
+from 85° to the image circle as the proposed camera divides it. A ring's label
+is left off where it would land within 16 panel pixels of the last one drawn.
+
+**The observation layer**, drawn in the change mode whether or not the arrows
+are: for each observation of the image, a white `+` at the keypoint, a white
+line to the observed point's reprojection under the current camera, and a blue
+line to its reprojection under the proposed one, both through the image's
+stored pose and at true scale. A point at infinity is reprojected as the
+direction it is. This is the fixed-set comparison shown where it happens: past
+the bound, the current camera's line is the error of the ray it gave the
+observation. The keypoints are the ones the proposal read when it opened
+([edits/switch-camera-model.md](edits/switch-camera-model.md) § "The proposed
+camera"), and the legend adds `140 observations · reprojection: white current,
+blue proposed`.
+
+**The axes and rings follow the proposed camera** while the proposal is open
+on the image's camera: the axis polylines, ticks, rings, the trusted-bound
+contour and the spline domain contour are sampled through the proposed camera.
+`Axes on current model` in the popup puts them back on the current camera. The
+principal point, the centre offset and the hover readout stay the current
+camera's.
+
 ### Interaction with the selected point
 
 Unchanged from
@@ -948,9 +1024,13 @@ stay in line side by side. The derived table's long values (the principal
 point offset and the distortion) wrap at the panel's right edge, so in a narrow
 panel they take a second line rather than running past it. A proposal whose fit
 was refused has no proposed camera, and the panel shows the current camera's
-tables alone, with no `Current` and `Proposed` headings. `K`, the projection
-plot and the extrinsics stay the current camera's. The proposal's comparison plots are
-[../drafts/switch-camera-model.md](../drafts/switch-camera-model.md)'s.
+tables alone, with no `Current` and `Proposed` headings. `K` and the
+extrinsics stay the current camera's. The projection plot compares the two
+cameras (§ "4. Projection plot", "While a proposal is open"), and the Image
+Detail intrinsics layer shows the change on the photograph (§ "The Change to
+proposed field"). The errors of the camera's observations under the two
+cameras, and a preview of the retriangulation in the 3D view, are not shown;
+they are [../drafts/switch-camera-model.md](../drafts/switch-camera-model.md)'s.
 
 ### 2. Parameters
 
@@ -1024,7 +1104,9 @@ a corner anyway — a mustache polynomial or a thin-prism term can put it
 elsewhere.
 
 Then `K`, rendered as a 3×3 grid, with the note that it is the optical-frame
-matrix and that `P = K · S · [R|t]`.
+matrix and that `P = K · S · [R|t]`. Each column of a matrix grid is as wide as
+its widest number, so `K` fits the panel at its stock 341 px; the copied text
+keeps the fixed column width.
 
 ### 4. Projection plot
 
@@ -1096,7 +1178,64 @@ is its own reference and is neither of the other two.
 **The key is words, not glyphs.** `solid: model · dashed: ideal r = f·θ` rather
 than a `──`/`╌╌`/`▨` sample key: egui's default font has no box-drawing or
 geometric-shape coverage, so a glyph such as `▸` renders as a missing-glyph
-box.
+box. The key is one label that wraps, so in a narrow panel it takes a second
+line rather than running a wrapped part into the one before it.
+
+**Labels stay apart.** A rule's label goes on the first of six rows under the
+extrapolated regions' labels where it overlaps no label placed before it, to
+the right of its rule unless that would run past the plot, then to its left; a
+label with no free row is left off and its rule still drawn. An x tick label
+that would run into the axis's `θ off-axis` title is left off. So nothing the
+plot paints overlaps another string or runs past the panel, from the stock
+window's 341 px up.
+
+**While a proposal is open.** With a camera model proposal open on the camera
+shown and its fit successful, the plot compares the current camera with the
+proposed one
+([`projection_plot.rs`](../../crates/sfm-explorer/src/intrinsics_detail/projection_plot.rs),
+`Comparison`):
+
+- **Both cameras on r(θ) and Δr(θ).** The current camera is drawn in a neutral
+  grey, wider, and the proposed one in the accent blue on top of it, so where
+  the two agree the grey shows either side of the blue. Each is solid inside its
+  own trusted bound and dotted past it, and each camera's extrapolated region
+  is shaded in its own colour, labelled `current extrapolated past 84.1°` and
+  `proposed extrapolated past …°`; a spline proposal has no bound, so the
+  current camera's shading at 84° and the proposed camera's reach to the image
+  circle are both visible. Each residual is against its own camera's ideal map;
+  the dashed ideal is the current camera's. Both y axes are scaled to the two
+  cameras' trusted samples. The x axis runs to the larger of the two cameras'
+  corner angles.
+- **Rules.** The current camera's rules, plus `fit` at the fit's largest angle
+  and `proposed spline domain` at the proposed camera's domain end where it has
+  one.
+- **A third plot, `Change (px)`**: the proposed radius minus the current one,
+  each measured from its own principal point, on one ladder of angles shared by
+  the two cameras ([`derived.rs`](../../crates/sfm-explorer/src/intrinsics_detail/derived.rs),
+  `ChangeProfile`). The line is the mean over 32 azimuths and the band their
+  spread, so a dropped `fx ≠ fy` shows as the band's width and a fitting error
+  as the line's departure from zero inside the fit's angle. Past the smaller of
+  the two cameras' trusted bounds the line is dotted, since there it shows how
+  far the proposed camera departs from where the current one was going, and the
+  y axis is scaled to the angles inside that bound. Where the monotonicity
+  constraint bound (`MonotoneConstraint::range_deg`), a purple bar along the
+  plot's θ axis marks the range, at least 4 px wide, labelled `monotone bound`,
+  so a departure there reads as the constraint rather than as a poor fit.
+- **The observation rug** under the shared axis's labels: one tick per
+  observation of the camera's images at its incidence angle under the current
+  camera, binned a screen column at a time with the column's opacity growing
+  with its count, and drawn in the extrapolated colour past the current camera's
+  trusted bound. The caption counts them: `Rug: 1943 observations of this
+  camera's images, at their angle under the current model; 278 past 84.2°.`
+  The angles are read once when the proposal opens. The rug is drawn while a
+  proposal is open on the camera whether or not its fit succeeded.
+- **The key and captions** read `grey: current · blue: proposed · dashed:
+  ideal r = f·θ (current)`, the current camera's shading caption, the proposed
+  camera's bound (or that it is trusted at every angle the frame reaches), and
+  a line saying what the change plot draws and the fit's largest angle.
+
+A refused fit has no proposed camera, and the plot draws the current camera
+alone, with the rug.
 
 ### 5. Extrinsics
 
@@ -1269,30 +1408,36 @@ family, and the arrow field is a few hundred round trips.
 
 | Product | Cost | Cached on | Invalidated by |
 |---------|------|-----------|----------------|
-| Distortion field | `cols × rows` ray round trips | `(CameraRef, cols, rows)` | camera change, grid density change, node close |
+| Distortion field | `cols × rows` ray round trips | `(CameraRef, LayerModel)` and the grid density | camera change, grid density change, node close; a proposed entry is replaced by the next proposed one of the camera |
 | Radial profile | `samples × 32 azimuths` | `CameraRef` — the sample count is a constant, so it is not part of the key | camera change, node close |
 | FOV / derived rows | 4 corners + 4 edges | `CameraRef` | camera change, node close |
-| Proposed derived rows | the same, for the proposed camera | `(CameraRef, generation)`, one entry | a change of the proposal's inputs, node close |
+| Proposed derived rows and change profile | the same, for the proposed camera, and `samples × 32 azimuths` for the change | `(CameraRef, generation)`, one entry | a change of the proposal's inputs, node close |
+| Change field (Image Detail) | `cols × rows` ray round trips | `(CameraRef, generation, cols)`, one entry | a change of the proposal's inputs or the grid density, node close |
+| Observation layer (Image Detail) | one reprojection per observation of the image, under each camera | `(ImageRef, generation)`, one entry | another image, a change of the proposal's inputs, node close |
+| Rug and the proposal's keypoints | one pass over the camera's observations, reading each `.sift` file once on a `sift_files` node | the open proposal | read when it opens |
 | Trustworthy bound | a ~360-step sweep × 8 azimuths, refined | `CameraRef` | camera change, node close |
 | Axis polylines | ~1 sample per 4 panel px | `(CameraRef, zoom bucket)` | camera change, zoom crossing a bucket |
 | Hover readout | 1 round trip | not cached | — |
 
-Axis polylines are the only product that depends on the *view*, and they are
-bucketed by zoom (powers of two) rather than recomputed continuously, so a pinch
-gesture does not rebuild them 60 times a second. Caches are dropped by
-`forget_recon` alongside the panels' textures.
+Axis polylines and the change mode's rings are the only products that depend
+on the *view*, and they are bucketed by zoom (powers of two) rather than
+recomputed continuously, so a pinch gesture does not rebuild them 60 times a
+second. Caches are dropped by `forget_recon` alongside the panels' textures.
 
 Because the layer is independent of `OverlayMode`, its cost is *additive* to
 a feature mode's rather than replacing it — the worst case is 5000 heatmap
 circles plus the intrinsics layer in one frame. That is fine, and it is fine for
 a structural reason worth stating: the layer's draw cost depends only on grid
 density and polyline sampling, both bounded by the panel's pixel count and
-neither by the feature count. There is no combination of settings in which
-enabling the layer scales with the data.
+neither by the feature count. The one exception is the change mode's
+observation layer, which draws one keypoint and two lines per observation of
+the image, as the feature overlay draws one mark per feature.
 
 The largest realistic camera count is a per-image-intrinsics solve, so caches
-are keyed by `CameraRef` and hold at most a handful of entries — a plain
-`HashMap` with no eviction, cleared on node close.
+are keyed by `CameraRef` (and the layer's by `LayerModel`, the current camera
+or an open proposal's proposed camera by its generation) and hold at most a
+handful of entries — a plain `HashMap` with no eviction beyond a proposed
+entry's replacement, cleared on node close.
 
 ---
 
@@ -1466,6 +1611,32 @@ Two caveats remain, both named in the tests rather than left implicit:
   `scene_graph/tests.rs`). The proposal's own behaviour is tested in
   `camera_model_proposal/tests.rs`
   ([edits/switch-camera-model.md](edits/switch-camera-model.md) § "Testing").
+- The comparison, on a fixture that is the demo scene seen through the Kerry
+  Park `OPENCV_FISHEYE` with one point per image 95° off its axis
+  (`camera_model_proposal::tests::fisheye_node`): with a proposal open the plot
+  draws the grey and blue key, the change plot, the `fit` and `proposed spline
+  domain` rules and the rug's caption with one tick per observation, and
+  without one none of them; the caption counts the observations past the
+  current camera's bound; and at 341, 482 and 1800 px no string the panel paints
+  overlaps another or runs past its right edge. In `projection_plot/tests.rs`:
+  a camera compared with itself changes nothing; an exact fit's change is zero
+  inside the fit's angle; on Kerry Park the change stays near zero inside the
+  fit and the dropped aspect is the band's width; the comparison's rules sit at
+  the fit's angle and the proposed domain end; the rug keeps every observation
+  and flags those past the bound; a rule label takes the first free row and
+  stays on the plot; and the change plot labels the monotone range only when
+  the constraint bound.
+- The Change to proposed field, in `image_detail/intrinsics/tests.rs`: with a
+  proposal open the frame paints the change legend, the nodes past the bound,
+  a ring of the proposed camera's and the observation layer's legend, and the
+  distortion field's legend once the mode is set back; with no proposal the
+  change mode draws the distortion field; the layer cache keeps the proposed
+  camera's entry apart from the current camera's, and `Axes on current model`
+  draws the current camera's trusted-bound contour; the change field has
+  arrows only inside the current camera's bound, under a pixel on Kerry Park,
+  and rings every 5° from 85° to the proposed camera's corner; the popup offers
+  `Field` and `Axes on current model` only with a proposal; and the legend stays
+  inside the panel at 341, 482 and 1800 px.
 
 **Fixtures.** `kerry_park` is the rig case (2 fisheyes, 24 frames) and
 `seoul_bull_sculpture` the ordinary single-camera one; the model-family coverage

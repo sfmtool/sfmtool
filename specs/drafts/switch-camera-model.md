@@ -1,4 +1,4 @@
-# Comparing and previewing a camera model proposal
+# Previewing a camera model proposal
 
 **Status:** Draft
 
@@ -10,23 +10,26 @@ the camera's tracks as one version, through the `Switch camera model`
 background task
 ([`../gui/edits/switch-camera-model.md`](../gui/edits/switch-camera-model.md),
 [`../gui/camera-intrinsics.md`](../gui/camera-intrinsics.md) § "The proposal
-strip"). On the wire, `propose_camera_model`, `cancel_camera_model_proposal`,
-the `proposal: true` form of `switch_camera_model` and the `proposed` block of
-`get_camera_intrinsics` are built
+strip"). The comparison is built too: the projection plot draws both cameras
+with a plot of the change and an observation rug
+([`../gui/camera-intrinsics.md`](../gui/camera-intrinsics.md) § "4. Projection
+plot"), and the Image Detail intrinsics layer's **Change to proposed** field
+draws the change on the photograph with its observation layer
+([`../gui/camera-intrinsics.md`](../gui/camera-intrinsics.md) § "The Change to
+proposed field"). On the wire, `propose_camera_model`,
+`cancel_camera_model_proposal`, the `proposal: true` form of
+`switch_camera_model`, the `proposed` block of `get_camera_intrinsics` and the
+`field` of `get/set_image_detail_display` are built
 ([`../gui/mcp-server.md`](../gui/mcp-server.md) § "`propose_camera_model` /
 `cancel_camera_model_proposal`").
 
-This draft is what remains, in two steps (§ "Order of work"):
-
-- **The comparison**: the projection plot drawing both models, a third plot of
-  the change, an observation rug under the shared θ axis, and the Image Detail
-  overlay's **Change to proposed** field with its observation layer.
-- **The preview**: a job that runs the switch and the retriangulation of the
-  proposal's tracks off the GUI thread while the proposal is open, its
-  observation comparison sent to the panel, a **Preview retriangulation**
-  checkbox that moves the points and surfels of those tracks smoothly in the
-  3D view to where Apply will put them, a banner with the preview's counts, and
-  Apply installing the job's answer instead of solving again.
+This draft is what remains, **the preview**: a job that runs the switch and the
+retriangulation of the proposal's tracks off the GUI thread while the proposal
+is open, its observation comparison sent to the panel, a **Preview
+retriangulation** checkbox that moves the points and surfels of those tracks
+smoothly in the 3D view to where Apply will put them, a banner with the
+preview's counts, and Apply installing the job's answer instead of solving
+again.
 
 Decided in outline:
 
@@ -55,18 +58,15 @@ the retriangulation's outcomes and adds no verdict logic of its own.
 
 Amends:
 
-- [`../gui/camera-intrinsics.md`](../gui/camera-intrinsics.md) § "4.
-  Projection plot", which gains the proposed model's curves, the change plot
-  and the rug while a proposal is open, and § "Performance and caching", whose
-  Image Detail layer cache gains the proposal's generation as a key.
+- [`../gui/camera-intrinsics.md`](../gui/camera-intrinsics.md) § "The
+  proposal strip", which gains the observation comparison the job sends.
 - [`../gui/edits/switch-camera-model.md`](../gui/edits/switch-camera-model.md),
   whose Apply gains the installation of the job's answer, and whose endings end
   the preview in the same frame.
 - [`../gui/mcp-server.md`](../gui/mcp-server.md), whose `propose_camera_model`
-  gains `preview_retriangulation` and `animate`, whose `proposed` block gains
-  the observation comparison, `preview_retriangulation`, `s` and the
-  `triangulation` block, and whose `get/set_image_detail_display` gains the
-  field mode.
+  gains `preview_retriangulation` and `animate`, and whose `proposed` block
+  gains the observation comparison, `preview_retriangulation`, `s` and the
+  `triangulation` block.
 - [`../core/reconstruction/switch-camera-model.md`](../core/reconstruction/switch-camera-model.md)
   § "The outermost keypoint", which names the proposal's job as a caller that
   leaves the keypoint out.
@@ -133,55 +133,20 @@ produces describes the lens or those observations is judged in the viewer.
 
 ## The viewer
 
-### The comparison
+### The observation comparison
 
-While the proposal is open, the rest of the panel compares the two models
-beyond the side-by-side tables that are built:
-
-- **Projection plot, r(θ) and Δr(θ)**: both models drawn, current in the
-  neutral stroke and proposed in the accent. Each model's own untrusted region
-  is shaded, so the current model's shading at 86° and the proposed model's
-  reach to the image circle are both visible.
-- **A third plot, "Change (px)"**: the proposed radius minus the current one,
-  against θ, with the azimuth band. The fx ≠ fy loss shows as the band's width.
-  A fitting error shows as the centre line's departure from zero inside θ_fit.
-  Past θ_fit it shows how far the new model departs from where the old one was
-  going. The range where the monotonicity constraint bound is marked on the θ
-  axis, so a departure there reads as the constraint rather than as a poor
-  fit.
-- **An observation rug** under the shared θ axis: one tick per observation of
-  the camera's images, at its incidence angle under the current model. It shows
-  where the data is: the Kerry rug thins out at 86°. Beside the rug is the count
-  of observations past the current model's trusted bound.
-
-The observation comparison (the median, 90th percentile and maximum error of
-the camera's observations under each model over one fixed set, and the count
-past the trusted bound) needs the reconstruction's pixels, and is computed by
-the proposal's job (§ "The job"), which sends it to the panel when the switch
+The panel's comparison of the two cameras is built
+([`../gui/camera-intrinsics.md`](../gui/camera-intrinsics.md) § "4. Projection
+plot", "The Change to proposed field"). What it does not yet show is the
+observation comparison: the median, 90th percentile and maximum error of the
+camera's observations under each model over one fixed set, and the count past
+the trusted bound. It needs the reconstruction's pixels, and is computed by the
+proposal's job (§ "The job"), which sends it to the panel when the switch
 returns.
 
-### What else shows the proposal
+### The proposal banner
 
-**The Image Detail intrinsics overlay** gains a second field mode, **Change to
-proposed**. It is selected automatically while a proposal is open for the
-image's camera, and restored afterwards.
-
-- **Arrows over the image grid.** Each arrow's tail is the pixel the current
-  model gives a ray, and its head is the pixel the proposed model gives the same
-  ray, with the overlay's usual exaggeration and legend. The arrows are drawn
-  only where the current model is trusted.
-- **Past the trusted bound**, the current model has no reliable pixel, so the
-  overlay instead draws the proposed model's iso-angle rings in that zone (every
-  5° from θ_fit to the edge). For Kerry that shows the band from 86° to the
-  image circle and how it is now divided.
-- **An observation layer.** For each observation of the image, a tick at the
-  keypoint and a line to its reprojection under the current model and under the
-  proposed one. This is the fixed-set comparison, shown where it happens.
-
-The axes and rings follow the proposed model while the proposal is open, and a
-checkbox in the ⚙ popup puts them back on the current model.
-
-**The proposal banner.** While a proposal is open, the 3D view draws a banner
+While a proposal is open, the 3D view draws a banner
 top-centre in the style of the Move Camera lock banner
 ([`../gui/viewport-hud.md`](../gui/viewport-hud.md) § "The lock banner borrows
 the style"), and like it outside the HUD panel. Its first line names the
@@ -466,14 +431,6 @@ nothing but `s`. The base's point and surfel buffers are never written, so
 ending the preview restores nothing; it drops the preview buffers and sets `s`
 to 0.
 
-### Caches
-
-The panel's derived report of the proposed camera is cached apart from the
-current camera's, by the camera and the proposal's generation (built). The
-Image Detail layer cache (`image_detail/mod.rs`) keys on `CameraRef` alone, and
-gains the same second key for the model it was computed from, current or the
-proposal's generation, before its change field reads the proposed model.
-
 ### Apply with the job's answer
 
 Where the proposal's job already holds the proposed run's answer for the
@@ -510,7 +467,6 @@ The tools are built, and gain:
 - The **`proposed` block** gains the observation comparison once the job has
   sent it (or the switch's `Observations` refusal sentence in its place),
   `preview_retriangulation`, the current `s`, and a `triangulation` block.
-- **`get/set_image_detail_display`** gains the field mode.
 
 The `triangulation` block's `state` is `off` while the preview is not asked
 for, `pending` while the job has no answer for the current generation, `ready`
@@ -539,14 +495,7 @@ without waiting out the motion.
 
 - **Viewer lib tests:** Apply with the job's answer in hand installs that
   answer without solving again, and pushes the same version the task would;
-  the Image Detail layer cache does not serve the proposed model as the current
-  one; hiding the node leaves the preview's state unchanged.
-- **Comparison tests:** the projection plot draws both models while a proposal
-  is open and one otherwise; the change plot's centre line is zero inside θ_fit
-  for an exact fit, and marks the range where the monotone constraint bound;
-  the rug has one tick per observation and counts those past the trusted bound;
-  the Image Detail field mode is selected while the proposal is open for the
-  image's camera and restored afterwards.
+  hiding the node leaves the preview's state unchanged.
 - **Preview computation tests**, on a synthetic two-camera scene:
   - every target is the position the version Apply pushes holds for that
     point, and the answer value the job keeps is that version, equal to
@@ -595,14 +544,6 @@ without waiting out the motion.
      spline against the image circle at 245 px.
 
   The result is judged in the viewer.
-
-## Order of work
-
-1. The panel's two-model plots, the change plot and the rug, and the Image
-   Detail change field and observation layer.
-2. Preview retriangulation: the job, its observation comparison, Apply
-   installing its answer, the generalised step, the preview buffers, the
-   banner, and the MCP fields that read them.
 
 ## Open questions
 
