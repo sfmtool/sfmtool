@@ -1945,3 +1945,30 @@ fn display_only_marks_are_checked_against_the_points_and_the_references() {
     let error = recon.validate_point_columns().unwrap_err();
     assert!(error.contains("display_only_references length"), "{error}");
 }
+
+#[test]
+fn a_placement_distance_from_a_centroid_taken_once_is_the_per_call_one() {
+    let recon = SfmrReconstruction::demo(4);
+    let table = &recon.image_table;
+    assert!(table.images.len() > 1, "the fixture has a camera cloud");
+    let centroid = table.camera_centroid();
+    for point in &recon.point_set.points {
+        assert_eq!(
+            ImageTable::placement_scale_from(&centroid, &point.position),
+            table.placement_scale(&point.position),
+        );
+    }
+    // The centroid is the mean of every camera centre.
+    let mean = table
+        .images
+        .iter()
+        .map(|image| image.camera_center().coords)
+        .sum::<nalgebra::Vector3<f64>>()
+        / table.images.len() as f64;
+    assert!((centroid.coords - mean).norm() < 1e-12);
+
+    // A table with no image measures from the origin.
+    let mut empty = table.clone();
+    empty.images.clear();
+    assert_eq!(empty.camera_centroid(), nalgebra::Point3::origin());
+}

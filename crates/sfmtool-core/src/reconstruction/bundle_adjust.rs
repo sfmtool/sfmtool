@@ -13,7 +13,7 @@
 
 use nalgebra::{Point3, UnitQuaternion, Vector3};
 
-use super::data::SfmrReconstruction;
+use super::data::{ImageTable, SfmrReconstruction};
 
 use super::outermost_keypoint::{outermost_keypoints, KeypointReach};
 use crate::camera::distortion::bspline::MIN_BSPLINE_COEFFS;
@@ -688,6 +688,10 @@ pub fn bundle_adjust(
 
     let mut keep = vec![true; n_pt];
     let mut points_deleted = 0usize;
+    // The frame rescale measures "before" against the input's poses and
+    // "after" against the output's; each centroid is taken once, not per point.
+    let centroid_before = recon.image_table.camera_centroid();
+    let centroid_after = out.image_table.camera_centroid();
     for p in 0..n_pt {
         if !in_solve[p] {
             continue;
@@ -705,7 +709,9 @@ pub fn bundle_adjust(
         rescale_patch_frame(
             &mut out,
             p,
-            (!was_at_infinity).then(|| recon.image_table.placement_scale(&before_position)),
+            &centroid_after,
+            (!was_at_infinity)
+                .then(|| ImageTable::placement_scale_from(&centroid_before, &before_position)),
             (!now_at_infinity).then_some(&after_position),
         );
         let point = &mut out.point_set.points[p];
@@ -787,8 +793,12 @@ pub fn distortion_is_releasable(camera: &CameraIntrinsics) -> bool {
 /// ([`ImageTable::placement_scale`](super::data::ImageTable::placement_scale)).
 /// `before` is that distance where the point had one and `None` where it was a
 /// bearing; `after` is the point's new position where it has one and `None`
-/// where it is now a bearing. So one call covers a point that merely moved, a
-/// point that changed representation, and a point that did neither.
+/// where it is now a bearing, measured from `centroid`, the camera centroid of
+/// the table the point now stands in
+/// ([`ImageTable::camera_centroid`]),
+/// which the caller takes once for every point it writes. So one call covers a
+/// point that merely moved, a point that changed representation, and a point
+/// that did neither.
 ///
 /// A degenerate distance leaves the frame alone: a patch at the camera-cloud
 /// centroid has no angular size to preserve, and scaling by zero would destroy
@@ -804,10 +814,11 @@ pub fn distortion_is_releasable(camera: &CameraIntrinsics) -> bool {
 pub(crate) fn rescale_patch_frame(
     out: &mut SfmrReconstruction,
     p: usize,
+    centroid: &Point3<f64>,
     before: Option<f64>,
     after: Option<&Point3<f64>>,
 ) {
-    let Some(factor) = patch_frame_factor(&out.image_table, before, after) else {
+    let Some(factor) = patch_frame_factor(centroid, before, after) else {
         return;
     };
     for column in [
@@ -825,14 +836,42 @@ pub(crate) fn rescale_patch_frame(
 /// How much a patch frame has to grow for its point to keep the angular size it
 /// had, or `None` when the frame is to be left exactly as it is.
 ///
-/// The arithmetic [`rescale_patch_frame`] applies, held apart from the rows it
-/// applies it to, because an overlay edit carries the frame in a
-/// [`PointRecord`](super::PointRecord) rather than in a column of a value, and
-/// two spellings of one ratio could only disagree. `None` covers the two cases
-/// that leave a frame alone: a degenerate placement distance on either side, and
-/// a ratio of exactly one.
-pub(crate) fn patch_frame_factor(
-    table: &super::data::ImageTable,
+/// `before` is the point's placement distance where it had one and `None`
+/// where it was a bearing; `after` is its new position where it has one and
+/// `None` where it is now a bearing, measured from `centroid`, the camera
+/// centroid of the table the point now stands in
+/// ([`ImageTable::camera_centroid`]).
+/// A caller writing many points takes the centroid once and measures each
+/// `before` with
+/// [`ImageTable::placement_scale_from`],
+/// so the whole write costs one pass over the images.
+///
+/// The arithmetic every edit that moves a point applies to its frame (the
+/// adjustment's and the camera move's write-back, and the retriangulation's),
+/// held apart from the rows it applies it to, because an overlay edit carries
+/// the frame in a [`PointRecord`](super::PointRecord) rather than in a column of
+/// a value, and a caller drawing a point between two positions reads the size
+/// the edit will write from it as well. Two spellings of one ratio could only
+/// disagree. `None` covers the two cases that leave a frame alone: a degenerate
+/// placement distance on either side, and a ratio of exactly one.
+///
+/// # Example
+///
+/// ```
+/// use nalgebra::Point3;
+/// use sfmtool_core::reconstruction::bundle_adjust::patch_frame_factor;
+/// use sfmtool_core::reconstruction::ImageTable;
+///
+/// let centroid = Point3::origin();
+/// let before = ImageTable::placement_scale_from(&centroid, &Point3::new(0.0, 0.0, 4.0));
+/// // A point that halves its distance from the centroid halves its frame.
+/// let factor = patch_frame_factor(&centroid, Some(before), Some(&Point3::new(0.0, 2.0, 0.0)));
+/// assert_eq!(factor, Some(0.5));
+/// // A point that becomes a bearing keeps the angular size it had.
+/// assert_eq!(patch_frame_factor(&centroid, Some(before), None), Some(0.25));
+/// ```
+pub fn patch_frame_factor(
+    centroid: &Point3<f64>,
     before: Option<f64>,
     after: Option<&Point3<f64>>,
 ) -> Option<f32> {
@@ -842,7 +881,7 @@ pub(crate) fn patch_frame_factor(
         None => 1.0,
     };
     let after = match after {
-        Some(position) => usable(table.placement_scale(position))?,
+        Some(position) => usable(ImageTable::placement_scale_from(centroid, position))?,
         None => 1.0,
     };
     let factor = (after / before) as f32;

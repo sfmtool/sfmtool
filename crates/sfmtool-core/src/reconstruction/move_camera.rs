@@ -10,7 +10,7 @@
 use nalgebra::{Point3, Vector3};
 
 use super::bundle_adjust::{is_posed, rescale_patch_frame};
-use super::data::{observation_reprojection_error, SfmrReconstruction};
+use super::data::{observation_reprojection_error, ImageTable, SfmrReconstruction};
 use super::triangulation::triangulate_track;
 use crate::camera::CameraIntrinsics;
 use crate::geometry::resect_images::scene_scale;
@@ -197,6 +197,10 @@ pub fn move_camera(
         seen.dedup();
         seen
     };
+    // Each frame rescale measures "before" against the stored poses and "after"
+    // against the moved ones; each centroid is taken once, not per track.
+    let centroid_before = recon.image_table.camera_centroid();
+    let centroid_after = out.image_table.camera_centroid();
 
     let scale = scene_scale(recon);
     let translation = (Point3::from(centre) - stored_centre).norm();
@@ -266,7 +270,8 @@ pub fn move_camera(
         rescale_patch_frame(
             &mut out,
             p,
-            Some(recon.image_table.placement_scale(&before)),
+            &centroid_after,
+            Some(ImageTable::placement_scale_from(&centroid_before, &before)),
             Some(&tri.point),
         );
         out.point_set.points[p].position = tri.point;

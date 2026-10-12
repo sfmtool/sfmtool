@@ -413,6 +413,26 @@ from the centroid halves its frame; a degenerate distance (a point at the
 centroid itself, which subtends no angle) leaves the frame alone rather than
 destroying it.
 
+The centroid is taken once per table, not once per point:
+`ImageTable::camera_centroid` gives it and `ImageTable::placement_scale_from`
+measures a position from it, so a write-back over every point costs one pass
+over the images. `placement_scale` is the same two steps for a caller with one
+point to measure. The ratio itself is one public function,
+[`patch_frame_factor`](../../../crates/sfmtool-core/src/reconstruction/bundle_adjust.rs),
+shared by every edit that moves a point (this write-back, the camera move's and
+the retriangulation's) and by a caller that draws a point between two positions
+and wants the size the edit will write:
+
+```rust
+pub fn patch_frame_factor(
+    centroid: &Point3<f64>,      // of the table the point now stands in
+    before: Option<f64>,         // its placement distance, None for a bearing
+    after: Option<&Point3<f64>>, // its new position, None for a bearing
+) -> Option<f32>;                // None: leave the frame as it is
+```
+
+`None` is a degenerate distance on either side or a ratio of exactly one.
+
 ## Implementation notes
 
 **The "before" residuals come from the kernel, not from a second projection.**

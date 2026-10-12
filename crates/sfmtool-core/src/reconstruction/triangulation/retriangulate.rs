@@ -821,6 +821,9 @@ fn write_whole_value(
     estimates: &TriangulatedPoints,
 ) -> (EditedReconstruction, PointMap, Vec<RetriangulatedPoint>) {
     let mut out = work.base.clone_for_edit();
+    // The poses do not move, so one centroid measures both sides of every
+    // frame rescale.
+    let centroid = out.image_table.camera_centroid();
     let pruned = pruned_per_slot(gathered, estimates);
     let mut points = Vec::with_capacity(gathered.targets.len() + gathered.held.len());
     for (slot, &index) in gathered.targets.iter().enumerate() {
@@ -837,13 +840,10 @@ fn write_whole_value(
             continue;
         };
         let before = &out.point_set.points[p];
-        let before_scale = (!before.is_at_infinity()).then(|| {
-            work.base
-                .image_table
-                .placement_scale(&before.position.clone())
-        });
+        let before_scale = (!before.is_at_infinity())
+            .then(|| ImageTable::placement_scale_from(&centroid, &before.position));
         let after = (w != 0.0).then_some(&position);
-        rescale_patch_frame(&mut out, p, before_scale, after);
+        rescale_patch_frame(&mut out, p, &centroid, before_scale, after);
         let point = &mut out.point_set.points[p];
         point.position = position;
         point.w = w;
@@ -867,6 +867,7 @@ fn write_overlay(
     estimates: &TriangulatedPoints,
 ) -> Result<(EditedReconstruction, PointMap, Vec<RetriangulatedPoint>), RetriangulateError> {
     let mut next = edited.clone();
+    let centroid = edited.base.image_table.camera_centroid();
     let pruned = pruned_per_slot(gathered, estimates);
     let mut points = Vec::with_capacity(gathered.targets.len() + gathered.held.len());
     let mut moves = Vec::new();
@@ -882,14 +883,10 @@ fn write_overlay(
             });
             continue;
         };
-        let before_scale = (!record.point.is_at_infinity()).then(|| {
-            edited
-                .base
-                .image_table
-                .placement_scale(&record.point.position)
-        });
+        let before_scale = (!record.point.is_at_infinity())
+            .then(|| ImageTable::placement_scale_from(&centroid, &record.point.position));
         let after = (w != 0.0).then_some(&position);
-        if let Some(factor) = patch_frame_factor(&edited.base.image_table, before_scale, after) {
+        if let Some(factor) = patch_frame_factor(&centroid, before_scale, after) {
             for half in [&mut record.patch_u_halfvec, &mut record.patch_v_halfvec] {
                 if let Some(v) = half.as_mut() {
                     for c in v.iter_mut() {

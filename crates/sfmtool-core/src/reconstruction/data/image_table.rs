@@ -93,7 +93,18 @@ impl ImageTable {
     /// places a bearing at. Every edit that resizes a patch frame measures from
     /// here, so their conversions cancel exactly rather than to within which
     /// images happen to be in a track.
+    ///
+    /// Each call sums the camera centres again. A caller measuring many points
+    /// against one table takes [`Self::camera_centroid`] once and measures each
+    /// point with [`Self::placement_scale_from`], which gives the same number.
     pub fn placement_scale(&self, position: &nalgebra::Point3<f64>) -> f64 {
+        Self::placement_scale_from(&self.camera_centroid(), position)
+    }
+
+    /// The mean of every camera centre in the table, the reference
+    /// [`Self::placement_scale`] measures from; the origin for a table with no
+    /// image.
+    pub fn camera_centroid(&self) -> nalgebra::Point3<f64> {
         let mut centroid = nalgebra::Vector3::zeros();
         for image in &self.images {
             centroid += image.camera_center().coords;
@@ -101,6 +112,17 @@ impl ImageTable {
         if !self.images.is_empty() {
             centroid /= self.images.len() as f64;
         }
-        (position.coords - centroid).norm()
+        nalgebra::Point3::from(centroid)
+    }
+
+    /// The placement distance of `position` from a `centroid` that
+    /// [`Self::camera_centroid`] gave: [`Self::placement_scale`] with the
+    /// centroid computed once by the caller, so measuring every point of a
+    /// value costs one pass over the images rather than one per point.
+    pub fn placement_scale_from(
+        centroid: &nalgebra::Point3<f64>,
+        position: &nalgebra::Point3<f64>,
+    ) -> f64 {
+        (position.coords - centroid.coords).norm()
     }
 }
