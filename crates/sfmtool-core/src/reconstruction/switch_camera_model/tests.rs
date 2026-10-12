@@ -522,3 +522,60 @@ fn the_outermost_keypoint_can_be_left_out_of_the_report() {
     let (_, again) = switch_camera_model(&recon, &[0], &t, &options).unwrap();
     assert_eq!(again, without_report);
 }
+
+/// The fit alone is the camera the switch installs, for a change of model, a
+/// refit of a spline and a source without a trusted bound, and it refuses what
+/// the switch refuses.
+#[test]
+fn the_fit_alone_is_the_camera_the_switch_installs() {
+    let cases: Vec<(SfmrReconstruction, usize, RefitTarget, RefitOptions)> = vec![
+        (
+            scene(vec![kerry_cam0(), kerry_cam0()], |i| (i % 2) as u32),
+            1,
+            target("SFMTOOL_FISHEYE"),
+            RefitOptions::default(),
+        ),
+        (
+            scene(vec![equidistant()], |_| 0),
+            0,
+            target("SFMTOOL_FISHEYE"),
+            RefitOptions::default(),
+        ),
+        (
+            scene(vec![kerry_spline()], |_| 0),
+            0,
+            RefitTarget::from_name("SFMTOOL_FISHEYE", Some(10)).unwrap(),
+            RefitOptions {
+                theta_fit_deg: None,
+                spline_domain_deg: Some(120.0),
+            },
+        ),
+    ];
+    for (recon, camera, target, refit) in cases {
+        let alone = fit_camera_switch(&recon, camera, &target, &refit).expect("a fit");
+        let (_, report) = switch_camera_model(&recon, &[camera], &target, &fit(refit)).unwrap();
+        assert_eq!(alone, report.cameras[0].refit);
+    }
+
+    let recon = scene(vec![equidistant()], |_| 0);
+    let options = RefitOptions {
+        theta_fit_deg: Some(60.0),
+        spline_domain_deg: None,
+    };
+    let pinhole = target("SFMTOOL_PINHOLE");
+    assert_eq!(
+        fit_camera_switch(&recon, 0, &pinhole, &options),
+        Err(
+            switch_camera_model(&recon, &[0], &pinhole, &fit(options.clone()))
+                .err()
+                .expect("refused")
+        ),
+    );
+    assert_eq!(
+        fit_camera_switch(&recon, 2, &pinhole, &options),
+        Err(SwitchCameraModelError::UnknownCamera {
+            camera: 2,
+            count: 1
+        })
+    );
+}

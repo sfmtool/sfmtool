@@ -27,9 +27,10 @@ The function lives in
 as `sfmtool_core::reconstruction::switch_camera_model`, and is bound as
 `EditedReconstruction.switch_camera_model` and
 `SfmrReconstruction.switch_camera_model`. `sfm xform --camera-model`, the
-viewer's "Refit spline…" action
+viewer's Switch Camera Model edit
 ([`../../gui/edits/switch-camera-model.md`](../../gui/edits/switch-camera-model.md)) and the MCP
-tool `switch_camera_model` reach it.
+tool `switch_camera_model` reach it; the viewer reaches it from the **Switch
+Model…** proposal's Apply.
 
 ```rust
 pub fn switch_camera_model(
@@ -38,6 +39,13 @@ pub fn switch_camera_model(
     target: &RefitTarget,
     options: &SwitchCameraModelOptions,
 ) -> Result<(SfmrReconstruction, SwitchCameraModelReport), SwitchCameraModelError>;
+
+pub fn fit_camera_switch(
+    recon: &SfmrReconstruction,
+    camera: usize,
+    target: &RefitTarget,
+    options: &RefitOptions,
+) -> Result<CameraIntrinsicsRefit, SwitchCameraModelError>;
 
 pub struct SwitchCameraModelOptions {
     pub refit: RefitOptions,       // the lens fit's: theta_fit_deg, spline_domain_deg
@@ -93,9 +101,19 @@ takes only the lens, so a caller comparing targets or coefficient counts can fit
 many times without touching the reconstruction. This function adds only what
 needs the observations.
 
+**The fit a switch makes is callable on its own.** `fit_camera_switch` is the
+fit `switch_camera_model` makes for one camera, with the same defaults and
+refusals, and returns the fit's report without building the switched value or
+reading any pixel. It reads the poses and the point positions, one pass over
+the observations, because the fit angle of a source without a trusted bound
+and the refusal of a perspective target both come from them. The viewer's
+camera model proposal calls it on every change of a control, so the camera it
+shows is the one Apply installs for the same request.
+
 **A refusal names the camera.** Every camera is fitted before anything is
-written, and the first refusal refuses the whole switch with the camera's index
-and the fit's own reason.
+written, and before any `.sift` file is read for the observations' pixels, and
+the first refusal refuses the whole switch with the camera's index and the
+fit's own reason.
 
 **A spline camera switched to its own model is a refit, in the same call.** A
 new coefficient count or domain end is a change of how the lens curve is
@@ -226,8 +244,8 @@ refuse the switch.
 `SwitchCameraModelOptions::outermost_keypoint` is on by default. Off, each
 entry's `outermost` is `None` and no `.sift` file is read for it, so a caller
 that already holds the keypoint, or does not show it, does not pay for a read
-of every image's features. The viewer's direct switch turns it off, since its
-dialog reads the keypoint when it opens. The observations' pixels are still
+of every image's features. The viewer's switch turns it off, since its
+proposal reads the keypoint when it opens. The observations' pixels are still
 read from the `.sift` files of a value without the inline keypoint column,
 since the comparison and the points' stored errors are measured against them.
 
@@ -272,6 +290,9 @@ exact projection, plus one point 95° off the first image's axis:
 - the outermost observation being the wide one, at its angle under the switched
   camera, with nothing detected beside no `.sift` file;
 - only the named cameras changing;
+- `fit_camera_switch` giving the camera and report the switch installs, for a
+  change of model, a source with no trusted bound and a refit of a spline, and
+  the switch's refusals;
 - a source with no trusted bound fitted out to its observations' extent;
 - a perspective target refused for a camera observed past 90°, and every
   refusal naming its camera;
@@ -297,6 +318,7 @@ without them.
 - Adding observations. Add Image to Tracks
   ([`add-image-to-tracks.md`](add-image-to-tracks.md)) adds those the old
   model's inverse kept out.
-- A proposal the viewer shows before the switch is applied, and the MCP tool
-  that opens one. Both are proposed in
-  [`../../drafts/switch-camera-model.md`](../../drafts/switch-camera-model.md).
+- Showing the change before it is applied. That is the viewer's camera model
+  proposal ([`../../gui/edits/switch-camera-model.md`](../../gui/edits/switch-camera-model.md)),
+  which calls `fit_camera_switch` while it is open and this function when it is
+  applied.
