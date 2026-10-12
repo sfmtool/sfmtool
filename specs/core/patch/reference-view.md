@@ -398,10 +398,12 @@ kept for what the reading means, not for a measured gain. The ground truths
 lean the other way, on three tracks: from 1.1 to 2 the step changes the pick
 on kerry_park points 41 and 125 and seoul_bull point 26, each from a capped
 view to an uncapped one (radius 2.46, 2.91 and 2.80 grid px), and the other
-views align to the new pick worse on all three, by 0.003, 0.083 and 0.382 px;
-the last is one view that aligns 1.3 px off. Three tracks do not establish a
-direction, and over all 639 ground-truth tracks the mean error moves from
-0.431 to 0.432 px.
+views align to the new pick worse on all three, by 0.003, 0.083 and 0.382 px
+in the mean over every view but the pick, the measure of the mean over all
+tracks below (0.012, 0.077 and 0.584 px over the views that are neither pick,
+the table's measure); the last is one view that aligns 1.3 px off. Three
+tracks do not establish a direction, and over all 639 ground-truth tracks the
+mean error moves from 0.431 to 0.432 px.
 
 ### The angle factor
 
@@ -640,12 +642,20 @@ on 2026-10-11:
 - **Before the step.** Every table and count below, and those of § "Each
   parameter and its reason" but `capped_radius_factor`'s, was made with no
   step on a radius at the cap (`capped_radius_factor = 1`, `analyze.py
-  --capped-radius-factor 1`). The step moves them by a few tracks: the hand
-  picks at the defaults not at all (29 / 68 / 62), the pool picks changed
+  --capped-radius-factor 1`). The step moves them by a few tracks. At the
+  defaults: the hand picks not at all (29 / 68 / 62); the pool picks changed
   from `angle_weight = 0` from 68 to 66, from the quadrature from 63 to 60
-  and from the previous rule from 139 to 137, and the ground-truth picks
-  changed from the previous rule from 117 to 116, with a mean error of 0.440
-  px against 0.385. Its own sweep is in [§ "The step on a radius at the
+  and from the previous rule from 139 to 137; the ground-truth picks changed
+  from `angle_weight = 0` from 84 to 81 (0.368 px against 0.482), from the
+  quadrature from 93 to 90, on which the angle factor no longer aligns
+  better than the quadrature (0.276 px against 0.275, better on 45, worse on
+  45), and from the previous rule from 117 to 116 (0.440 px against 0.385);
+  the quadrature's picks above 65° from 76 to 77; and the mean error over
+  every ground-truth track from 0.431 to 0.432 px. In the sweeps,
+  `agreement_band` `0` and `0.025` match one more hand pick leniently (73),
+  and `cell_deficit_scale` keeps the same exact and lenient counts only from
+  `0.03` to `0.45`: `0.6` matches 67 leniently, `0.9` and `1.5` 66, and `3`
+  64. Its own sweep is in [§ "The step on a radius at the
   cap"](#the-step-on-a-radius-at-the-cap).
 - **The forms of the angle factor**: four forms, each swept with the other
   parameters at their defaults
