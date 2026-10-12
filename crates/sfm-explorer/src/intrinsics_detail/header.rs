@@ -60,7 +60,10 @@ pub(super) fn show_header(
                 .add_enabled(refusal.is_none(), egui::Button::new(SWITCH_MODEL))
                 .on_disabled_hover_text(refusal.unwrap_or_default())
                 .on_hover_text(
-                    "Fit this camera to another camera model, or refit its spline to another                      coefficient count or domain end, and compare the two before applying.                      Apply switches the camera and retriangulates the tracks its images                      observe, as one version.",
+                    "Fit this camera to another camera model, or refit its spline to another \
+                     coefficient count or domain end, and compare the two before applying. \
+                     Apply switches the camera and retriangulates the tracks its images \
+                     observe, as one version.",
                 )
                 .clicked();
             ui.with_layout(
