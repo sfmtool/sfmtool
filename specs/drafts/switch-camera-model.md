@@ -761,10 +761,10 @@ takes the name `switch_camera_model` already gives it, and none is a bare
   refit ([`../gui/mcp-server.md`](../gui/mcp-server.md)). It gains a
   `proposal: true` form that applies the open proposal instead of fitting one,
   as Apply does: the switch and the retriangulation of the proposal's tracks
-  in one version (the switch alone on a node that cannot be retriangulated),
-  installed at once from the job's answer or run as the
-  `Switch camera model` background task (§ "Ending a proposal"). The direct
-  form stays the lens-only switch it is today, the operation `sfm xform
+  in one version, installed at once from the job's answer or run as the
+  `Switch camera model` background task, and the switch alone, on the GUI
+  thread, on a node that cannot be retriangulated (§ "Ending a proposal"). The
+  direct form stays the lens-only switch it is today, the operation `sfm xform
   --camera-model` also makes; an agent that wants the tracks moved as well
   opens a proposal, or follows the direct switch with
   `retriangulate_all_points`. The direct form is an edit tool naming the node,
@@ -776,8 +776,9 @@ takes the name `switch_camera_model` already gives it, and none is a bare
 
 `get_camera_intrinsics` gains a `proposed` block while a proposal is open: the
 proposed camera, its fit report, the `generation`, the observation comparison
-once the job has sent it, `preview_retriangulation`, the current `s`, and a
-`triangulation` block. `get/set_image_detail_display` gains the field mode.
+once the job has sent it (or the switch's `Observations` refusal sentence in
+its place), `preview_retriangulation`, the current `s`, and a `triangulation`
+block. `get/set_image_detail_display` gains the field mode.
 
 The `triangulation` block's `state` is `off` while the preview is not asked
 for, `pending` while the job has no answer for the current generation, `ready`
