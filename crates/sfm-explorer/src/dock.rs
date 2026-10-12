@@ -303,27 +303,34 @@ impl TabContext<'_> {
             return;
         };
         match gesture {
-            BenchGesture::Edit(edit) => {
-                // In Surface Tiling Mode a move that changed the patch is
-                // followed by the fit, search, normal and commit steps, once
-                // per released gesture.
-                let tiling = self
-                    .track_view
-                    .surface_tiling()
-                    .then(|| self.track_view.split_settings());
-                if let Err(why) = self
-                    .state
-                    .edit_bench_patch_from_viewer(id, label, &edit, tiling)
-                {
-                    self.state
-                        .action_log
-                        .fail(crate::action_log::Kind::Bench, why);
-                }
-            }
+            BenchGesture::Edit(edit) => self.apply_patch_gesture(id, label, &edit),
             BenchGesture::SelectRow(observation) => {
                 self.state
                     .pick_bench_observation(id, label, observation, false);
             }
+        }
+    }
+
+    /// Apply one released handle gesture of the 3D viewer or of Image Detail
+    /// to the track called `label`, logging a refusal as a failed row.
+    ///
+    /// In Surface Tiling Mode a gesture that moved the patch is followed by
+    /// the fit, search, normal and commit steps, once per released gesture
+    /// (`AppState::edit_bench_patch_by_gesture`). Both panels come here, so a
+    /// drag over a photograph and one out in the world start the same
+    /// sequence.
+    fn apply_patch_gesture(&mut self, id: ReconId, label: &str, edit: &crate::bench::PatchEdit) {
+        let tiling = self
+            .track_view
+            .surface_tiling()
+            .then(|| self.track_view.split_settings());
+        if let Err(why) = self
+            .state
+            .edit_bench_patch_by_gesture(id, label, edit, tiling)
+        {
+            self.state
+                .action_log
+                .fail(crate::action_log::Kind::Bench, why);
         }
     }
 
@@ -881,14 +888,11 @@ impl TabContext<'_> {
             // A drag of one of the bench layer's handles: the sighting placed,
             // the patch resized or turned. One version per gesture, through the
             // call the wire's patch tools make, so a drag and a tool call are
-            // the same step with the same sentence.
+            // the same step with the same sentence; and, in Surface Tiling
+            // Mode, the sequence after a move, as the 3D viewer's handles start.
             if let Some(edit) = detail_response.bench_edit {
                 if let Some(label) = &bench_label {
-                    if let Err(why) = self.state.edit_bench_patch(id, label, &edit) {
-                        self.state
-                            .action_log
-                            .fail(crate::action_log::Kind::Bench, why);
-                    }
+                    self.apply_patch_gesture(id, label, &edit);
                 }
             }
             // A click on one of the bench layer's marks selects that row in

@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Track View's Surface Tiling Mode: covering a surface with patches by
-//! alternating *Duplicate* with a move of the copy in the 3D viewer.
+//! alternating *Duplicate* with a move of the copy by the handles of the 3D
+//! viewer or Image Detail.
 //!
 //! See `specs/gui/track-view.md` § "Surface Tiling Mode". The mode changes two
 //! things, and both are made of the bench's existing steps:
@@ -15,7 +16,8 @@
 //!   Log rows, as the same three steps taken by hand would be. The drop is a
 //!   one-step [`TilingSequence`] ([`DUPLICATE_STEPS`]), because the verdicts
 //!   it reads are final only once the copy's live evaluation has settled.
-//! - **A move of the patch in the 3D viewer in the mode** starts a
+//! - **A move of the patch in the mode**, by a handle in the 3D viewer or in
+//!   Image Detail ([`AppState::edit_bench_patch_by_gesture`]), starts a
 //!   [`TilingSequence`] ([`AppState::start_surface_tiling`]): Fit, Find
 //!   matches by geometry, Fit, Grid Plane Normal, Fit and Commit, each through
 //!   the starter its button calls, so each pushes its own version and writes
@@ -35,11 +37,11 @@
 #[cfg(test)]
 mod tests;
 
-use sfmtool_core::bench::{EditableTrack, ItemId, Verdict};
+use sfmtool_core::bench::{EditableTrack, ItemId, StageKind, Verdict};
 
 use crate::action_log::Kind;
 use crate::bench::live::Evaluation;
-use crate::bench::{FocusedItem, NormalStep, SplitSettings};
+use crate::bench::{FocusedItem, NormalStep, PatchEdit, SplitSettings};
 use crate::document::VersionSerial;
 use crate::scene::ReconId;
 use crate::state::AppState;
@@ -289,30 +291,40 @@ impl AppState {
         });
     }
 
-    /// One released gesture over the 3D viewer's bench figure that edits the
-    /// patch of the item called `label` ([`Self::edit_bench_patch`]), and, in
-    /// Surface Tiling Mode, the sequence after it.
+    /// One released handle gesture, over the 3D viewer's bench figure or over
+    /// Image Detail's bench layer, that edits the item called `label`
+    /// ([`Self::edit_bench_patch`]), and, in Surface Tiling Mode, the sequence
+    /// after it.
     ///
     /// `tiling` is `None` with the mode off, and otherwise how the sequence's
     /// *Grid Plane Normal* cuts the patch. The sequence starts only when the
-    /// edit changed the patch: a release that put it back where it was is a
-    /// no-effect row and nothing more, as it is with the mode off.
-    pub(crate) fn edit_bench_patch_from_viewer(
+    /// edit changed the track-stage patch ([`PatchEdit::moves_patch`]): a
+    /// release that put it back where it was is a no-effect row and nothing
+    /// more, as it is with the mode off, and so is an edit of one sighting
+    /// alone or of a cluster's sighting, which leaves the patch where it was.
+    pub(crate) fn edit_bench_patch_by_gesture(
         &mut self,
         id: ReconId,
         label: &str,
-        edit: &crate::bench::PatchEdit,
+        edit: &PatchEdit,
         tiling: Option<SplitSettings>,
     ) -> Result<(), String> {
         let edited = self.edit_bench_patch(id, label, edit)?;
-        if let (true, Some(split)) = (edited.changed, tiling) {
+        let Some(split) = tiling else {
+            return Ok(());
+        };
+        let at_track_stage = self
+            .bench_track(id, label)
+            .is_some_and(|track| track.stage_kind() == StageKind::Track);
+        if edited.changed && edit.moves_patch() && at_track_stage {
             self.start_surface_tiling(id, label, split);
         }
         Ok(())
     }
 
     /// Start a Surface Tiling Mode sequence on the item called `label`, the
-    /// patch of which a gesture in the 3D viewer has just moved.
+    /// patch of which a handle gesture in the 3D viewer or Image Detail has just
+    /// moved.
     ///
     /// The sequence's first step starts on the next
     /// [`Self::drive_surface_tiling`]. A sequence already under way is

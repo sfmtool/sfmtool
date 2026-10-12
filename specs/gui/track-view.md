@@ -850,8 +850,8 @@ cannot say which of two tracks it belongs to.
 #### Surface Tiling Mode
 
 **Surface Tiling Mode is for covering a surface with patches**, one beside the
-next, by pressing *Duplicate* (or Ctrl+D) and moving the copy in the 3D viewer,
-over and over. *Tiling* here means covering the surface, not a row's tile.
+next, by pressing *Duplicate* (or Ctrl+D) and moving the copy with the handles
+of the 3D viewer or Image Detail, over and over. *Tiling* here means covering the surface, not a row's tile.
 Without the mode, each patch takes the same run of steps by hand: *Duplicate*,
 the *Keep* heading's pin to hand every verdict of the copy back to the
 thresholds, *Discard* and *Edit* to take the `out` rows off it, the move,
@@ -877,9 +877,9 @@ impl AppState {
     /// settled; the copy's label.
     pub(crate) fn duplicate_for_surface_tiling(&mut self, id: ReconId, label: &str)
         -> Result<String, String>;
-    /// A released 3D viewer gesture on the patch, and, with `tiling` set and
-    /// the patch changed, the sequence after it.
-    pub(crate) fn edit_bench_patch_from_viewer(&mut self, id: ReconId, label: &str,
+    /// A released handle gesture of the 3D viewer or Image Detail, and, with
+    /// `tiling` set and the patch moved, the sequence after it.
+    pub(crate) fn edit_bench_patch_by_gesture(&mut self, id: ReconId, label: &str,
         edit: &PatchEdit, tiling: Option<SplitSettings>) -> Result<(), String>;
     /// Once per frame, after the background task is polled and the live
     /// evaluation driven: start the sequence's next step when it is due.
@@ -925,7 +925,7 @@ Drop the out observations` stands after the box. An evaluation that is refused
 or fails does not hold it back; it then drops what the unpin's own repaint
 left `out`. It stops, as a sequence does, on a version it did not push, on a
 change of focused item and on the box cleared, leaving the `out` rows on the
-copy. A move of the copy in the 3D viewer while it waits ends it with the row
+copy. A move of the copy by a handle while it waits ends it with the row
 `... stopped at Drop the out observations (step 1 of 1): the patch was moved
 before its evaluation settled, so its out observations were left on it`, and
 then starts the move's sequence: the verdicts after the move are about the new
@@ -935,16 +935,25 @@ refusal (`Cannot drop the out observations of bull-nose copy: every one of its
 3 observations is out, ...`) and the sequence's stop row are each a failed row,
 and the copy is left on the bench with its rows, unpinned and `out`.
 
-**With the mode on, a move of the patch in the 3D viewer runs the rest.** Each
-released gesture over the 3D viewer's bench figure that changes the patch (a
-slide, a move along the normal, a resize, a spin or a tilt) is applied as it
-always is, one version through `edit_bench_patch`, and then starts a **tiling
-sequence** on the focused item: *Fit*, *Find matches by geometry*, *Fit*,
-*Grid Plane Normal*, *Fit*, *Commit*. A row `Surface tiling bull-nose after the
-move: Fit, Find matches by geometry, Fit, Grid Plane Normal, Fit, Commit` says
-it started. A release that changed nothing starts none. The handles in Image
-Detail and the wire's patch tools do not start one: the mode is for moving a
-patch across the surface in the 3D viewer, where the surface is seen whole.
+**With the mode on, a move of the patch runs the rest.** Each released gesture
+of a handle over the 3D viewer's bench figure or over Image Detail's bench
+layer that changes the patch (a slide, a move along the normal, a resize, a
+spin or a tilt) is applied as it always is, one version through
+`edit_bench_patch`, and then starts a **tiling sequence** on the focused item:
+*Fit*, *Find matches by geometry*, *Fit*, *Grid Plane Normal*, *Fit*,
+*Commit*. Both panels' handles reach the dock's one call,
+`edit_bench_patch_by_gesture`, so a drag over a photograph and a drag out in
+the world start the same sequence, once per released gesture. A row `Surface
+tiling bull-nose after the move: Fit, Find matches by geometry, Fit, Grid
+Plane Normal, Fit, Commit` says it started. A release that changed nothing
+starts none, and neither does an edit that leaves the patch where it is: a
+sighting placed on its own or a cluster sighting's shape set or turned
+(`PatchEdit::moves_patch`). The wire's patch tools do not start one. The mode
+is a tool setting that says what a person's gesture means, as *Lock* is, and
+the wire reads neither: each patch tool is one named step, one version and one
+reply ([`bench.md`](bench.md) § "The wire"), so an agent that wants Fit, the
+search, the normal and the commit after a move calls them, and a tool call
+never writes the reconstruction it did not name.
 
 Each step is the call its button makes (`start_bench_fit`,
 `start_bench_geometry_search`, `start_bench_normal` with the *per axis* and
@@ -2370,7 +2379,9 @@ texels, so their geometry is checked without reading pixels off the screen.
   at start, no step when ticked and reporting the clear, is in
   [body/tests.rs](../../crates/sfm-explorer/src/track_view/body/tests.rs); the
   dock applying the *Duplicate* button in the mode, a row the thresholds turn
-  `out` dropped, and the cleared box, in
+  `out` dropped, an Image Detail patch edit starting the sequence in the mode
+  and not with it off, an Image Detail edit of one sighting starting none,
+  and the cleared box, in
   [dock/tests.rs](../../crates/sfm-explorer/src/dock/tests.rs); and Ctrl+D in
   the mode, with the same drop, in
   [app/tests.rs](../../crates/sfm-explorer/src/app/tests.rs).

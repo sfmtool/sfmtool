@@ -787,9 +787,9 @@ pub struct AppState {
     pub(crate) recent_items: Vec<crate::bench::FocusedItem>,
 
     /// The steps Track View's Surface Tiling Mode runs after a move of the
-    /// patch in the 3D viewer, while they are under way: Fit, Find matches by
-    /// geometry, Fit, Grid Plane Normal, Fit and Commit, each started once the
-    /// one before it has finished. After a duplicate in the mode, the drop of
+    /// patch by a handle of the 3D viewer or Image Detail, while they are
+    /// under way: Fit, Find matches by geometry, Fit, Grid Plane Normal, Fit
+    /// and Commit, each started once the one before it has finished. After a duplicate in the mode, the drop of
     /// the copy's `out` observations, waiting for its evaluation to settle.
     /// `None` when no such sequence is running.
     ///

@@ -147,6 +147,29 @@ pub(crate) enum PatchEdit {
     },
 }
 
+impl PatchEdit {
+    /// Whether the edit moves, sizes or turns the track-stage patch, every
+    /// sighting following, as against placing or shaping one sighting alone.
+    ///
+    /// What Surface Tiling Mode starts its sequence on
+    /// ([`crate::bench::surface_tiling`]). [`PatchEdit::ResizeToPixel`] is one
+    /// at the track stage only: at the cluster stage it sizes one sighting's
+    /// outline, and the caller asks the stage.
+    pub(crate) fn moves_patch(&self) -> bool {
+        match self {
+            PatchEdit::TranslateToPixel { .. }
+            | PatchEdit::Translate { .. }
+            | PatchEdit::Resize { .. }
+            | PatchEdit::ResizeToPixel { .. }
+            | PatchEdit::Spin { .. }
+            | PatchEdit::Tilt { .. } => true,
+            PatchEdit::Sight { .. } | PatchEdit::Shape { .. } | PatchEdit::SpinShape { .. } => {
+                false
+            }
+        }
+    }
+}
+
 /// What one [`PatchEdit`] did, as the core step's own report.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum EditReport {

@@ -270,7 +270,7 @@ fn a_move_while_the_drop_waits_ends_it() {
         .expect("the copy is made");
 
     state
-        .edit_bench_patch_from_viewer(
+        .edit_bench_patch_by_gesture(
             id,
             &copy,
             &PatchEdit::Translate {
@@ -526,18 +526,18 @@ fn only_a_move_that_changed_the_patch_in_the_mode_starts_the_sequence() {
         by: [0.01, 0.0, 0.0],
     };
     state
-        .edit_bench_patch_from_viewer(id, &label, &moved, None)
+        .edit_bench_patch_by_gesture(id, &label, &moved, None)
         .expect("a move with the mode off");
     assert!(state.surface_tiling.is_none(), "the mode is off");
 
     let still = PatchEdit::Translate { by: [0.0; 3] };
     state
-        .edit_bench_patch_from_viewer(id, &label, &still, split)
+        .edit_bench_patch_by_gesture(id, &label, &still, split)
         .expect("a move that changed nothing");
     assert!(state.surface_tiling.is_none(), "nothing moved");
 
     state
-        .edit_bench_patch_from_viewer(id, &label, &moved, split)
+        .edit_bench_patch_by_gesture(id, &label, &moved, split)
         .expect("a move in the mode");
     assert_eq!(
         state.surface_tiling.as_ref().map(|s| s.step()),
@@ -658,7 +658,7 @@ fn a_step_waits_until_the_evaluation_has_caught_up() {
     state.settle_bench_evaluation();
     // The move gives the track new inputs, which nothing has evaluated yet.
     state
-        .edit_bench_patch_from_viewer(
+        .edit_bench_patch_by_gesture(
             id,
             &label,
             &PatchEdit::Translate {

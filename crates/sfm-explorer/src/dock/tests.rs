@@ -99,6 +99,18 @@ fn apply_track_edit(
     id: ReconId,
     response: TrackBodyResponse,
 ) {
+    with_tabs(state, track_view, |tabs, ui| {
+        tabs.apply_track_edit_response(ui, id, response)
+    });
+}
+
+/// Run `apply` once over a dock built on `state` and `track_view`, inside a
+/// headless frame, as a frame applies what its panels asked for.
+fn with_tabs(
+    state: &mut AppState,
+    track_view: &mut TrackView,
+    apply: impl FnOnce(&mut TabContext<'_>, &egui::Ui),
+) {
     let mut viewer_3d = Viewer3D::new();
     let mut scene_graph = SceneGraphPanel::new();
     let mut image_browser = ImageBrowser::new();
@@ -106,9 +118,9 @@ fn apply_track_edit(
     let mut intrinsics_detail = IntrinsicsDetail::new();
     let scroll_input = platform::ScrollInput::default();
     let ctx = egui::Context::default();
-    let mut response = Some(response);
+    let mut apply = Some(apply);
     crate::test_support::run_frame_headless(&ctx, egui::RawInput::default(), |ui| {
-        let Some(response) = response.take() else {
+        let Some(apply) = apply.take() else {
             return;
         };
         let mut tabs = TabContext {
@@ -128,7 +140,7 @@ fn apply_track_edit(
             diagnostics: None,
             handler_ok: true,
         };
-        tabs.apply_track_edit_response(ui, id, response);
+        apply(&mut tabs, ui);
     });
 }
 
@@ -185,7 +197,7 @@ fn clearing_surface_tiling_mode_stops_the_sequence() {
     let (mut state, id) = crate::bench::tests::state();
     let label = crate::bench::tests::put_on_bench(&mut state, id);
     state
-        .edit_bench_patch_from_viewer(
+        .edit_bench_patch_by_gesture(
             id,
             &label,
             &crate::bench::PatchEdit::Translate {
@@ -217,4 +229,92 @@ fn clearing_surface_tiling_mode_stops_the_sequence() {
              was turned off"
         )
     );
+}
+
+/// An Image Detail drag of the patch: the dot of `row` slid one pixel along
+/// its photograph's `x`, which with *Lock* ticked moves the patch and every
+/// sighting with it.
+fn detail_slide(state: &AppState, id: ReconId, label: &str, row: usize) -> crate::bench::PatchEdit {
+    let track = state.bench_track(id, label).expect("on the bench");
+    let [x, y] = track.observations[row].site().expect("a placed row");
+    crate::bench::PatchEdit::TranslateToPixel {
+        viewpoint: sfmtool_core::bench::Viewpoint::Observation(row),
+        pixel: [x + 1.0, y],
+    }
+}
+
+/// In Surface Tiling Mode a patch edit made with Image Detail's handles
+/// starts the tiling sequence, as a 3D viewer gesture does, through the same
+/// dock call; with the mode off the same edit starts none.
+#[test]
+fn an_image_detail_patch_edit_starts_the_sequence_only_in_surface_tiling_mode() {
+    let (mut state, id) = crate::bench::tests::state();
+    let label = crate::bench::tests::put_on_bench(&mut state, id);
+    state.settle_bench_evaluation();
+    let mut track_view = TrackView::new();
+
+    let edit = detail_slide(&state, id, &label, 0);
+    with_tabs(&mut state, &mut track_view, |tabs, _| {
+        tabs.apply_patch_gesture(id, &label, &edit)
+    });
+    let last = state.action_log.entries().last().expect("a row");
+    assert!(
+        last.text.starts_with(&format!("Moved {label} ")),
+        "{}",
+        last.text
+    );
+    assert!(state.surface_tiling.is_none(), "the mode is off");
+
+    track_view.set_surface_tiling(true);
+    let edit = detail_slide(&state, id, &label, 0);
+    with_tabs(&mut state, &mut track_view, |tabs, _| {
+        tabs.apply_patch_gesture(id, &label, &edit)
+    });
+    let texts: Vec<String> = state
+        .action_log
+        .entries()
+        .map(|entry| entry.text.clone())
+        .collect();
+    let n = texts.len();
+    assert!(
+        texts[n - 2].starts_with(&format!("Moved {label} ")),
+        "{texts:?}"
+    );
+    assert!(
+        texts[n - 1].starts_with(&format!("Surface tiling {label} after the move")),
+        "{texts:?}"
+    );
+    assert_eq!(
+        state.surface_tiling_status(id, &label).as_deref(),
+        Some("Step 1 of 6: Fit")
+    );
+}
+
+/// In Surface Tiling Mode an Image Detail edit of one sighting alone moves no
+/// patch, so it starts no sequence.
+#[test]
+fn an_image_detail_sighting_edit_starts_no_sequence() {
+    let (mut state, id) = crate::bench::tests::state();
+    let label = crate::bench::tests::put_on_bench(&mut state, id);
+    state.settle_bench_evaluation();
+    let mut track_view = TrackView::new();
+    track_view.set_surface_tiling(true);
+    let [x, y] = state
+        .bench_track(id, &label)
+        .expect("on the bench")
+        .observations[0]
+        .site()
+        .expect("a placed row");
+    let edit = crate::bench::PatchEdit::Sight {
+        observation: 0,
+        pixel: [x + 1.0, y],
+    };
+
+    with_tabs(&mut state, &mut track_view, |tabs, _| {
+        tabs.apply_patch_gesture(id, &label, &edit)
+    });
+
+    let last = state.action_log.entries().last().expect("a row");
+    assert!(!last.failed, "{}", last.text);
+    assert!(state.surface_tiling.is_none(), "{}", last.text);
 }

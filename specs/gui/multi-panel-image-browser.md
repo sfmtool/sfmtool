@@ -786,7 +786,14 @@ same lock. The release applies it through
 `AppState::edit_bench_patch`, which is the call the wire's eight patch tools
 make, so one gesture is one version, one Action Log row of kind `Bench`, and one
 Undo. A drag that ends where it started pushes nothing, the way a verdict an
-observation already holds does. **Escape abandons the drag**: the preview goes
+observation already holds does. With Track View's **Surface Tiling Mode** on,
+a released drag that moved the patch is followed by Fit, Find matches by
+geometry, Fit, Grid Plane Normal, Fit and Commit, once per drag, as a drag of
+the 3D viewer's handles is: the dock applies the drags of both panels through
+`AppState::edit_bench_patch_by_gesture`, which makes the edit and starts that
+sequence ([`track-view.md`](track-view.md) § "Surface Tiling Mode"). A drag of
+one sighting alone moves no patch and starts none. **Escape abandons the
+drag**: the preview goes
 and nothing is pushed. The photograph does not pan for the whole of a handle
 drag, cancelled or not, until the button comes up: the pointer means one thing
 at a time, and what it means was decided where the button went down.

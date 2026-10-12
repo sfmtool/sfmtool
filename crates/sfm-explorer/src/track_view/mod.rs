@@ -116,7 +116,7 @@ impl TrackView {
     }
 
     /// Whether Edited mode's *Surface Tiling Mode* box is ticked, which the
-    /// dock and the Ctrl+D shortcut read a duplicate and a 3D viewer move of
+    /// dock and the Ctrl+D shortcut read a duplicate and a handle move of
     /// the patch by ([`crate::bench::surface_tiling`]).
     pub(crate) fn surface_tiling(&self) -> bool {
         self.body.surface_tiling()
