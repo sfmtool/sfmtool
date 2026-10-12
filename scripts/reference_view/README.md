@@ -28,6 +28,20 @@ parameters over a copy of the rule written in Python.
     shown for a tie. A case the second review did not show keeps `[pick]`, as
     the rule already picked it. A `"none"` case and a bad track have no
     `accept` and are left out of the scoring, so 74 cases are scored.
+- `cell_survey.json`: the maintainer's survey of the cell check
+  (2026-10-11), read on the build of that day, before the check stopped
+  judging the cells a view holds no texture in or has off the photograph.
+  `tracks` holds the 15 tracks surveyed: `dataset`, `point` (the rebuilt
+  file's index for `xmas`), `case` where the track is a review case (its
+  views then the case's), `group` (`pole`, kerry480 point 166; `clear`, a
+  cell deficit of 0.5 or more; `near`, one near the band of 0.3), `views`
+  (the images in the order shown), and the first survey's `verdict`,
+  `note` and `marks` (per image, the cells marked as occluded, 0 to 8
+  row-major from the top-left). `cells` holds the 46 view-cells of those
+  tracks with a deficit of 0.25 or more: `track`, `image`, `cell`, the
+  `deficit`, `own` and `typical` agreement of that day, and the `causes` the
+  maintainer named (keys of `causes`), with any `note`. It is data the
+  maintainer wrote; `analyze.py` section 11 reads it.
 - `datasets.py`: the ten reconstructions and their paths, the eight of
   `scripts/bench_bars/datasets.py` under this harness's keys plus
   `omni_temple` and `omni_coast` (the `clean-3-ba-embedded` solves of
@@ -44,8 +58,11 @@ parameters over a copy of the rule written in Python.
   viewing angle, cell deficit, pair ZNCC, the self-similarity semi-axes and
   `max_radius`, the cap of that reading, read off the size of its surface), its
   `ray` (the unit direction from the patch's centre to the camera centre,
-  which only the comparison of the angle factor's forms reads) and the rule's
-  standing at this build's defaults. `--blur-matched` adds each
+  which only the comparison of the angle factor's forms reads), its readings
+  per cell (`pair_zncc_grid`; `cell_axes`, each cell's self-similarity
+  semi-axes; and `cell_off_photo`, how many of each cell's samples are off the
+  photograph, from the row's tile rendered again, absent for a patch at
+  infinity) and the rule's standing at this build's defaults. `--blur-matched` adds each
   row's pair ZNCC read from the rows' tiles, plain and blur-matched;
   `--localize` (the ground truths) aligns every view to each eligible row's
   tile in turn and records each view's distance from the point's projection;
@@ -71,7 +88,13 @@ parameters over a copy of the rule written in Python.
   the cap, `capped_radius_factor`: the rows and tracks at the cap, each track
   that picks a capped view over an uncapped one with no step and the factor
   at which it flips, and per factor the hand-pick counts and the pool and
-  ground-truth picks it changes. `--capped-radius-factor` replaces that
+  ground-truth picks it changes. Its section 11 reads the cell check from
+  the cell readings: how many view-cells each exclusion (no texture, off the
+  photograph) leaves unjudged, the cell deficits recomputed with each, with
+  none and with the cells of no texture also left out of the typical
+  agreement, the hand-pick, pool and ground-truth picks of each, and the
+  cells of `cell_survey.json` by the cause named. `--capped-radius-factor`
+  replaces that
   parameter's starting value for sections 2 to 10 (section 1 always checks
   the Rust rule's defaults).
 
@@ -113,6 +136,13 @@ review accepted or was shown (neither `pick`, nor in `accept` or
 rule of that day picked, so a setting whose pick differs from it on a case
 the rule already got right is never credited, and that count says how many
 such picks a setting has.
+The tables of reference-view.md § "What the cell check reads" are section
+11 of a run with the defaults and no flag, on readings taken on a build whose
+cell check leaves those cells out; the counts against the first review are
+section 5 of a run with `--first-review`. The thresholds of the test for no
+texture other than the cap, compared there, were run with the same
+computation and another cut-off on `cell_axes`.
+
 The readings do not depend on the rule, but section 1's check reads the
 rule's costs and terms, so it needs a build whose rule is the one `analyze.py`
 copies. All 79 cases were found:

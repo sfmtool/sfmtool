@@ -43,6 +43,15 @@ Reads ``measure.py``'s output in ``<dir>`` and prints:
     per factor the hand-pick counts, the pool picks that change against no
     step, and the ground-truth picks that change, with the other views'
     error aligned to each.
+11. The cells the cell check judges: the view-cells it does not judge
+    because the view's own tile holds no texture there (both semi-axes of the
+    cell's self-similarity ellipse at the cap) or has a sample off the
+    photograph, read from each row's ``pair_zncc_grid``, ``cell_axes`` and
+    ``cell_off_photo``; the cell deficits recomputed with each exclusion, with
+    none (the check before it left any cell out) and with the cells of no
+    texture also left out of the typical agreement; the pool and hand-pick
+    picks and the ground-truth alignment each gives; and the cells of the
+    maintainer's survey (``cell_survey.json``) by the cause named.
 
 The starting values are ``ReferenceViewOptions``' defaults, with
 ``--capped-radius-factor`` in place of the default ``capped_radius_factor``
@@ -80,6 +89,7 @@ from pathlib import Path
 import numpy as np
 
 CASES = Path(__file__).resolve().parent / "cases.json"
+SURVEY = Path(__file__).resolve().parent / "cell_survey.json"
 TERMS = (
     "sharpness",
     "capped_radius",
@@ -1174,6 +1184,10 @@ def main() -> None:
     out("10. The step on a radius at the cap, capped_radius_factor")
     capped_radius_step(tracks, gt, cases, tune, held, bound, out)
 
+    out()
+    out("11. The cells the cell check judges")
+    cell_exclusions(tracks, gt, cases, tune, held, bound, out)
+
     if args.out:
         Path(args.out).write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -1268,6 +1282,318 @@ def capped_radius_step(tracks, gt, cases, tune, held, bound, out):
             f" {sorted(case_ids.get(id(t)) or f'{t.ds}:{t.point}' for t in pool_changed)}"
             f" | gt {gt_cell}{mark}"
         )
+
+
+# The floor on the typical agreement, ``REFERENCE_MIN_JUDGED_CELL_ZNCC``, and
+# the cap of the cells' self-similarity reading.
+MIN_JUDGED_CELL_ZNCC = 0.5
+CELL_CAP = 3.0
+# The forms of the cell check compared (``cell_exclusions``): for each, which
+# of a view's own cells count in the typical agreement and which are judged,
+# from the cell's semi-axes ``[major, minor]`` and the count of its samples off
+# the photograph. "both (this build)" is ``cell_agreement``'s.
+
+
+def _every(axes, off):
+    return True
+
+
+def _on_photo(axes, off):
+    return off == 0
+
+
+def _textured(axes, off):
+    return not axes[1] >= CELL_CAP
+
+
+def _both(axes, off):
+    return off == 0 and not axes[1] >= CELL_CAP
+
+
+CELL_RULES = {
+    "every cell (before)": (_every, _every),
+    "texture only": (_every, _textured),
+    "on the photograph only": (_on_photo, _on_photo),
+    "both (this build)": (_on_photo, _both),
+    "both, no texture also out of the typical": (_both, _both),
+}
+
+
+def _cell_readings(t):
+    """A track's per-cell readings: ``(k, 3, 3)`` pair ZNCC grid, ``(k, 3, 3,
+    2)`` semi-axes and ``(k, 3, 3)`` off-photograph counts, ``None`` where a
+    row lacks one (a reading taken before ``measure.py`` recorded them)."""
+    if any(x.get("pair_zncc_grid") is None for x in t.rows):
+        return None
+    nan = float("nan")
+    grid = np.array(
+        [
+            [[nan if v is None else v for v in r] for r in x["pair_zncc_grid"]]
+            for x in t.rows
+        ],
+        float,
+    )
+    axes = np.array(
+        [
+            [[[nan if v is None else v for v in c] for c in r] for r in x["cell_axes"]]
+            if x.get("cell_axes")
+            else np.full((3, 3, 2), nan)
+            for x in t.rows
+        ],
+        float,
+    )
+    off = np.array([x.get("cell_off_photo") or [[0] * 3] * 3 for x in t.rows], float)
+    return grid, axes, off
+
+
+def _own_cells(readings, test):
+    """Per view and cell, ``test`` of the cell's semi-axes and off-photograph
+    count, as a ``(k, 3, 3)`` bool array."""
+    _, axes, off = readings
+    return np.array(
+        [
+            [
+                [bool(test(axes[v, i, j], off[v, i, j])) for j in range(3)]
+                for i in range(3)
+            ]
+            for v in range(len(axes))
+        ]
+    )
+
+
+def cell_deficits(readings, rule):
+    """The cell check over one track's readings with ``rule``, a pair of tests
+    saying which of each view's own cells count in the typical agreement and
+    which may be judged: ``(deficits, typical, judged)``, as
+    ``cell_agreement_from_pairs`` computes them. The typical agreement is the
+    median over the views counted in the cell; a view's deficit is the
+    largest shortfall over the cells it is judged in, ``0`` with none and
+    ``None`` with no reading in any."""
+    grid = readings[0]
+    k = len(grid)
+    counted = _own_cells(readings, rule[0])
+    readable = _own_cells(readings, rule[1])
+    typical = np.full((3, 3), np.nan)
+    for i in range(3):
+        for j in range(3):
+            z = grid[counted[:, i, j], i, j]
+            z = z[np.isfinite(z)]
+            if len(z):
+                typical[i, j] = np.median(z)
+    with np.errstate(invalid="ignore"):
+        judged = readable & (typical >= MIN_JUDGED_CELL_ZNCC)[None]
+    deficits = []
+    for v in range(k):
+        if not judged[v].any():
+            deficits.append(0.0)
+            continue
+        d = (typical - grid[v])[judged[v]]
+        d = d[np.isfinite(d)]
+        deficits.append(float(d.max()) if len(d) else None)
+    return deficits, typical, judged
+
+
+def _with_deficits(t, deficits):
+    """``t`` with each row's ``cell_deficit`` replaced."""
+    rows = [dict(x, cell_deficit=d) for x, d in zip(t.rows, deficits)]
+    return dataclasses.replace(t, rows=rows)
+
+
+def cell_exclusions(tracks, gt, cases, tune, held, bound, out):
+    """Section 11: the view-cells the cell check leaves out, and what that
+    changes, from the per-cell readings ``measure.py`` records."""
+    every = [t for t in tracks + gt if _cell_readings(t) is not None]
+    if not every:
+        out("  no track carries per-cell readings")
+        return
+    readings = {id(t): _cell_readings(t) for t in every}
+    computed = {
+        name: {id(t): cell_deficits(readings[id(t)], rule) for t in every}
+        for name, rule in CELL_RULES.items()
+    }
+    this = computed["both (this build)"]
+    mismatch = sum(
+        1
+        for t in every
+        for x, d in zip(t.rows, this[id(t)][0])
+        if (x["cell_deficit"] is None) != (d is None)
+        or (d is not None and abs(x["cell_deficit"] - d) > 1e-9)
+    )
+    uncounted = sum(1 for t in every for x in t.rows if x.get("cell_off_photo") is None)
+    out(
+        f"  {len(every)} tracks; the recomputed cell deficits with both exclusions"
+        f" differ from the bench's on {mismatch} rows; {uncounted} rows carry no"
+        " off-photograph counts (a patch at infinity, whose tiles measure.py does"
+        " not render) and count as on the photograph"
+    )
+    # This build's picks read the bench's own cell deficits, which also see
+    # the samples off the photograph of a tile measure.py did not render.
+    for t in every:
+        _, typical, judged = this[id(t)]
+        this[id(t)] = ([x["cell_deficit"] for x in t.rows], typical, judged)
+    before = computed["every cell (before)"]
+    pool_ids = {id(t) for t in tracks}
+    out(
+        "  View-cells: all; judged before (typical agreement at the floor);"
+        " not judged by the rule's own-cell test, of them judged before and over"
+        " the band before; cell deficits changed; changed across the band"
+    )
+    for name in list(CELL_RULES)[1:]:
+        for label, sel in (("pool", pool_ids), ("ground truths", None)):
+            ts = [t for t in every if (id(t) in pool_ids) == (sel is not None)]
+            n = judged_before = left = left_judged = left_over = changed = crossed = 0
+            for t in ts:
+                grid = readings[id(t)][0]
+                d0, typ0, judged0 = before[id(t)]
+                d1, _, judged1 = computed[name][id(t)]
+                readable = _own_cells(readings[id(t)], CELL_RULES[name][1])
+                with np.errstate(invalid="ignore"):
+                    over = judged0 & ((typ0[None] - grid) > START.cell_deficit_band)
+                n += grid.size
+                judged_before += int(judged0.sum())
+                left += int((~readable).sum())
+                left_judged += int((~readable & judged0).sum())
+                left_over += int((~readable & over).sum())
+                for a, b in zip(d0, d1):
+                    a = 0.0 if a is None else a
+                    b = 0.0 if b is None else b
+                    if abs(a - b) > 1e-9:
+                        changed += 1
+                        if (a > START.cell_deficit_band) != (
+                            b > START.cell_deficit_band
+                        ):
+                            crossed += 1
+            out(
+                f"    {name:42s} {label:13s} {n:6d} {judged_before:6d} {left:5d}"
+                f" ({left_judged} judged, {left_over} over the band)"
+                f" deficits changed {changed}, across the band {crossed}"
+            )
+
+    def picker(name):
+        return lambda t: choose(
+            _with_deficits(t, computed[name][id(t)][0]).rows, t.resolution, START
+        )[0]
+
+    def score_cases(name, cs):
+        pick = picker(name)
+        return score_picks(cs, [pick(c.track) for c in cs], bound)
+
+    out(
+        "  Per rule: hand picks exact / lenient / lenient within the bound,"
+        " tuning | held out | all; pool picks changed from before; ground-truth"
+        " picks changed, the other views' mean error aligned to the pick before"
+        " and to this one, better / worse"
+    )
+    pool = [t for t in tracks if id(t) in readings]
+    gts = [t for t in gt if id(t) in readings]
+    base = picker("every cell (before)")
+    for name in CELL_RULES:
+        pick = picker(name)
+        hand = [score_cases(name, cs) for cs in (tune, held, cases)]
+        changed = [t for t in pool if pick(t) != base(t)]
+        ch, _ = changes_between(gts, base, pick)
+        ea, eb = compare_localization(ch)
+        gt_cell = f"{len(ch)}"
+        if len(ea):
+            d = eb - ea
+            gt_cell += (
+                f": {ea.mean():.3f} -> {eb.mean():.3f}, {(d < 0).sum()} / {(d > 0).sum()},"
+                f" median {np.median(d):+.3f}"
+            )
+        case_ids = {id(c.track): c.id for c in cases}
+        out(
+            f"    {name:42s} {fmt(hand[0])} | {fmt(hand[1])} | {fmt(hand[2])}"
+            f" | pool {len(changed):2d}"
+            f" {sorted(case_ids.get(id(t)) or f'{t.ds}:{t.point}' for t in changed)}"
+            f" | gt {gt_cell}"
+        )
+    pick = picker("both (this build)")
+    for t in pool + gts:
+        if pick(t) == base(t):
+            continue
+        a, b = t.rows[base(t)], t.rows[pick(t)]
+        label = next(
+            (c.id for c in cases if c.track is t), f"{t.ds} {t.kind} {t.point}"
+        )
+        out(
+            f"      {label}: {a['image_name']} (cell deficit before"
+            f" {before[id(t)][0][base(t)] or 0:.3f}, now {this[id(t)][0][base(t)] or 0:.3f})"
+            f" -> {b['image_name']} (before {before[id(t)][0][pick(t)] or 0:.3f},"
+            f" now {this[id(t)][0][pick(t)] or 0:.3f})"
+        )
+
+    survey_cells(tracks, readings, before, this, out)
+
+
+def survey_cells(tracks, readings, before, this, out):
+    """The cells of the maintainer's survey (``cell_survey.json``), found by
+    their track and image, by the cause named: how many the check still
+    judges, how many each exclusion leaves out, and the cell's deficit
+    (typical minus own) before and now."""
+    if not SURVEY.exists():
+        return
+    survey = json.loads(SURVEY.read_text(encoding="utf-8"))
+    by_track = {}
+    for s in survey["tracks"]:
+        t = next(
+            (
+                t
+                for t in tracks
+                if id(t) in readings
+                and (
+                    t.case == s["case"]
+                    if s["case"]
+                    else (t.ds, t.point, t.case) == (s["dataset"], s["point"], None)
+                )
+            ),
+            None,
+        )
+        by_track[s["id"]] = t
+    out(
+        f"  The survey's {len(survey['cells'])} cells (deficit 0.25 or more when"
+        " surveyed), by the cause named: cells; found; judged now; left out for"
+        " no texture; for samples off the photograph; over the band before -> now"
+    )
+    groups = {}
+    for c in survey["cells"]:
+        groups.setdefault(c["causes"][0], []).append(c)
+    detail = []
+    for cause, cells in sorted(groups.items(), key=lambda g: -len(g[1])):
+        found = judged = no_tex = off_photo = over0 = over1 = 0
+        for c in cells:
+            t = by_track.get(c["track"])
+            if t is None:
+                continue
+            names = [x["image_name"] for x in t.rows]
+            if c["image"] not in names:
+                continue
+            v = names.index(c["image"])
+            i, j = divmod(c["cell"], 3)
+            grid, axes, off = readings[id(t)]
+            found += 1
+            d0 = before[id(t)][1][i, j] - grid[v, i, j]
+            judged0 = before[id(t)][2][v, i, j]
+            d1 = this[id(t)][1][i, j] - grid[v, i, j]
+            judged1 = this[id(t)][2][v, i, j]
+            judged += bool(judged1)
+            no_tex += bool(axes[v, i, j, 1] >= CELL_CAP)
+            off_photo += bool(off[v, i, j] > 0)
+            band = START.cell_deficit_band
+            over0 += bool(judged0 and d0 > band)
+            over1 += bool(judged1 and d1 > band)
+            detail.append(
+                f"    {cause:9s} {c['track']} {c['image']} cell {c['cell']}:"
+                f" surveyed {c['deficit']:.3f}, before {d0:.3f}, now "
+                + (f"{d1:.3f}" if judged1 else "not judged")
+                + f" (axes {axes[v, i, j, 0]:.2f}, {axes[v, i, j, 1]:.2f};"
+                f" {int(off[v, i, j])} off the photograph)"
+            )
+        out(
+            f"    {cause:9s} {len(cells):2d} {found:2d} {judged:2d} {no_tex:2d}"
+            f" {off_photo:2d}  {over0:2d} -> {over1:2d}"
+        )
+    for line in detail:
+        out(line)
 
 
 def fill_blur_matched(tracks):

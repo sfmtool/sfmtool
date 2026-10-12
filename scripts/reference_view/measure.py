@@ -25,8 +25,12 @@ semi-major axis is a lower bound, read off the size of its surface), its
 ``ray``, the unit direction from the patch's centre to the camera centre
 (minus the patch's bearing, the same for every row, for a patch at infinity),
 which the rule does not read but ``analyze.py`` compares a form of the angle
-factor on, and what the rule decided at this build's defaults (cost, terms,
-exclusion, pick). ``analyze.py`` reads the files.
+factor on, its readings per cell of the ZNCC grid's split (``pair_zncc_grid``,
+``cell_axes``, the semi-axes of each cell's self-similarity ellipse, and
+``cell_off_photo``, how many of each cell's samples are off the photograph),
+which ``analyze.py`` reads the cell check from, and what the rule decided at
+this build's defaults (cost, terms, exclusion, pick). ``analyze.py`` reads the
+files.
 
 - ``--blur-matched`` also reads each row's pair ZNCC from the rows' tiles
   rendered with ``OrientedPatch.render_view_tile``, plain and blur-matched
@@ -181,6 +185,7 @@ def run(args, sfmr: Path, tolerance: float, out_dir: Path) -> None:
                 placement=_placement(track.placement),
                 rows=_rows(track, names, centres),
             )
+            _cell_readings(record, track, recon, pyramids, resolution)
             if args.blur_matched:
                 _blur_matched_pairs(record, recon, pyramids, resolution)
             tracks.append(record)
@@ -298,6 +303,49 @@ def _rows(track, names, centres):
             )
         )
     return rows
+
+
+def _cell_readings(record, track, recon, pyramids, resolution):
+    """Each rule row's readings per cell of the ZNCC grid's split, which the
+    cell check reads: ``pair_zncc_grid``, ``cell_axes`` (the semi-axes of each
+    cell's self-similarity ellipse, grid px, ``[row][col][major, minor]``) and
+    ``cell_off_photo`` (how many of each cell's samples the warp places off
+    the photograph, read from the row's tile rendered again with
+    ``OrientedPatch.render_view_tile``)."""
+    patch = _oriented_patch(record["placement"]) if record["placement"] else None
+    cut = [0, resolution // 3, resolution - resolution // 3, resolution]
+    for r in record["rows"]:
+        m = track.observations[r["row"]].get("track") or {}
+        grid = m.get("pair_zncc_grid")
+        if grid is not None:
+            r["pair_zncc_grid"] = _nan_to_none(np.asarray(grid, float))
+        ellipses = m.get("zncc_self_similarity_ellipse_grid")
+        if ellipses is not None:
+            r["cell_axes"] = _nan_to_none(np.asarray(ellipses["axes"], float))
+        if patch is None or r["rule"] is None or r["keypoint"] is None:
+            continue
+        camera, pose = _camera_pose(recon, r["image"])
+        tile = patch.render_view_tile(
+            camera,
+            pose,
+            pyramids,
+            image_index=r["image"],
+            keypoint=tuple(r["keypoint"]),
+            resolution=resolution,
+            sampler="per_view",
+        )
+        off = ~np.asarray(tile["valid"])
+        r["cell_off_photo"] = [
+            [int(off[cut[i] : cut[i + 1], cut[j] : cut[j + 1]].sum()) for j in range(3)]
+            for i in range(3)
+        ]
+
+
+def _nan_to_none(a):
+    """A float array as nested lists, ``None`` where it is not finite."""
+    if a.ndim == 0:
+        return float(a) if np.isfinite(a) else None
+    return [_nan_to_none(x) for x in a]
 
 
 def _oriented_patch(placement):

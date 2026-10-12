@@ -1,0 +1,821 @@
+{
+ "date": "2026-10-11",
+ "about": "The maintainer's survey of the cell check on 15 tracks, read on the build of that day, before the cell check left out the cells a view cannot be read in. `tracks`: each track's dataset, point (the rebuilt file's index for xmas), the hand-pick case where it is one, group (pole: kerry480_p166; clear: a cell deficit of 0.5 or more; near: a cell deficit near the band of 0.3), its views' images in the order shown, and the first survey's verdict, note and marks (cells marked as occluded, 0 to 8 row-major from the top-left). `cells`: every view-cell of those tracks with a deficit of 0.25 or more, its image, cell, deficit, own and typical agreement at the time, and the causes the maintainer named, with any note.",
+ "causes": {
+  "parallax": "parallax within the tile",
+  "blur": "blur",
+  "shift": "the tile shifted or misaligned",
+  "lowtex": "little texture",
+  "exposure": "exposure or colour",
+  "shadow": "shadow",
+  "offphoto": "off the photograph",
+  "occluder": "an occluder"
+ },
+ "tracks": [
+  {
+   "id": "kerry480_p166",
+   "dataset": "kerry480",
+   "point": 166,
+   "case": "kerry480_p166",
+   "group": "pole",
+   "views": [
+    "fisheye_left/frame_01.jpg",
+    "fisheye_left/frame_02.jpg",
+    "fisheye_left/frame_03.jpg",
+    "fisheye_left/frame_04.jpg",
+    "fisheye_left/frame_05.jpg",
+    "fisheye_left/frame_06.jpg",
+    "fisheye_left/frame_10.jpg",
+    "fisheye_left/frame_19.jpg",
+    "fisheye_right/frame_09.jpg",
+    "fisheye_right/frame_11.jpg",
+    "fisheye_right/frame_12.jpg",
+    "fisheye_right/frame_14.jpg",
+    "fisheye_right/frame_15.jpg",
+    "fisheye_right/frame_16.jpg",
+    "fisheye_right/frame_17.jpg"
+   ],
+   "verdict": "unsure",
+   "note": "The top third is behind the first third, so the differences are parallax, not occlusion."
+  },
+  {
+   "id": "badland_p135",
+   "dataset": "badland",
+   "point": 135,
+   "case": null,
+   "group": "clear",
+   "views": [
+    "frames/20240617_235804987_0065.jpg",
+    "frames/20240617_235804987_0069.jpg",
+    "frames/20240617_235804987_0073.jpg",
+    "frames/20240617_235804987_0077.jpg",
+    "frames/20240617_235804987_0081.jpg",
+    "frames/20240617_235804987_0085.jpg",
+    "frames/20240617_235804987_0089.jpg",
+    "frames/20240617_235804987_0097.jpg",
+    "frames/20240617_235804987_0221.jpg",
+    "frames/20240617_235804987_0505.jpg",
+    "frames/20240617_235804987_0509.jpg"
+   ],
+   "verdict": "none",
+   "note": "There are patches partly off the photo though"
+  },
+  {
+   "id": "dino_p7799",
+   "dataset": "dino",
+   "point": 7799,
+   "case": null,
+   "group": "clear",
+   "views": [
+    "images/dino_dog_toy_02.jpg",
+    "images/dino_dog_toy_03.jpg",
+    "images/dino_dog_toy_14.jpg",
+    "images/dino_dog_toy_16.jpg",
+    "images/dino_dog_toy_17.jpg",
+    "images/dino_dog_toy_38.jpg",
+    "images/dino_dog_toy_45.jpg",
+    "images/dino_dog_toy_46.jpg"
+   ],
+   "verdict": "none"
+  },
+  {
+   "id": "kerry_park_p98",
+   "dataset": "kerry_park",
+   "point": 98,
+   "case": null,
+   "group": "clear",
+   "views": [
+    "fisheye_left/frame_01.jpg",
+    "fisheye_left/frame_02.jpg",
+    "fisheye_left/frame_03.jpg",
+    "fisheye_left/frame_08.jpg",
+    "fisheye_left/frame_09.jpg",
+    "fisheye_left/frame_10.jpg",
+    "fisheye_left/frame_21.jpg",
+    "fisheye_right/frame_04.jpg",
+    "fisheye_right/frame_05.jpg",
+    "fisheye_right/frame_06.jpg",
+    "fisheye_right/frame_07.jpg",
+    "fisheye_right/frame_10.jpg",
+    "fisheye_right/frame_11.jpg",
+    "fisheye_right/frame_12.jpg",
+    "fisheye_right/frame_21.jpg"
+   ],
+   "verdict": "none"
+  },
+  {
+   "id": "omni_temple_p2451",
+   "dataset": "omni_temple",
+   "point": 2451,
+   "case": null,
+   "group": "clear",
+   "views": [
+    "images/seq/fisheye_left/frame_000241.jpg",
+    "images/seq/fisheye_left/frame_000349.jpg",
+    "images/seq/fisheye_left/frame_000409.jpg",
+    "images/seq/fisheye_right/frame_000001.jpg",
+    "images/seq/fisheye_right/frame_000193.jpg",
+    "images/seq/fisheye_right/frame_000205.jpg",
+    "images/seq/fisheye_right/frame_000277.jpg",
+    "images/seq/fisheye_right/frame_000457.jpg"
+   ],
+   "verdict": "none"
+  },
+  {
+   "id": "xmas_p4855",
+   "dataset": "xmas",
+   "point": 4855,
+   "case": null,
+   "group": "clear",
+   "views": [
+    "frames/20241225_christmas_tree_with_presents_1609.jpg",
+    "frames/20241225_christmas_tree_with_presents_1615.jpg",
+    "frames/20241225_christmas_tree_with_presents_1621.jpg",
+    "frames/20241225_christmas_tree_with_presents_1627.jpg",
+    "frames/20241225_christmas_tree_with_presents_1633.jpg",
+    "frames/20241225_christmas_tree_with_presents_1639.jpg",
+    "frames/20241225_christmas_tree_with_presents_1645.jpg",
+    "frames/20241225_christmas_tree_with_presents_1651.jpg",
+    "frames/20241225_christmas_tree_with_presents_1657.jpg",
+    "frames/20241225_christmas_tree_with_presents_1663.jpg"
+   ],
+   "verdict": "none"
+  },
+  {
+   "id": "altona_p2007",
+   "dataset": "altona",
+   "point": 2007,
+   "case": null,
+   "group": "near",
+   "views": [
+    "frames/20240621_altona_gallery_in_the_park_boy_reading_0001.jpg",
+    "frames/20240621_altona_gallery_in_the_park_boy_reading_0023.jpg",
+    "frames/20240621_altona_gallery_in_the_park_boy_reading_0045.jpg",
+    "frames/20240621_altona_gallery_in_the_park_boy_reading_1409.jpg"
+   ],
+   "verdict": "none"
+  },
+  {
+   "id": "dino_p7676",
+   "dataset": "dino",
+   "point": 7676,
+   "case": null,
+   "group": "near",
+   "views": [
+    "images/dino_dog_toy_03.jpg",
+    "images/dino_dog_toy_14.jpg",
+    "images/dino_dog_toy_40.jpg",
+    "images/dino_dog_toy_48.jpg"
+   ],
+   "verdict": "none"
+  },
+  {
+   "id": "kerry480_p514",
+   "dataset": "kerry480",
+   "point": 514,
+   "case": null,
+   "group": "near",
+   "views": [
+    "fisheye_left/frame_06.jpg",
+    "fisheye_right/frame_07.jpg",
+    "fisheye_right/frame_08.jpg",
+    "fisheye_right/frame_09.jpg",
+    "fisheye_right/frame_21.jpg"
+   ],
+   "verdict": "none"
+  },
+  {
+   "id": "kerry_park_p82",
+   "dataset": "kerry_park",
+   "point": 82,
+   "case": "kerry_park_p82",
+   "group": "near",
+   "views": [
+    "fisheye_left/frame_01.jpg",
+    "fisheye_left/frame_02.jpg",
+    "fisheye_left/frame_08.jpg",
+    "fisheye_left/frame_09.jpg",
+    "fisheye_left/frame_10.jpg",
+    "fisheye_right/frame_04.jpg",
+    "fisheye_right/frame_05.jpg",
+    "fisheye_right/frame_07.jpg",
+    "fisheye_right/frame_08.jpg",
+    "fisheye_right/frame_21.jpg"
+   ],
+   "verdict": "none"
+  },
+  {
+   "id": "mossy_p1019",
+   "dataset": "mossy",
+   "point": 1019,
+   "case": null,
+   "group": "near",
+   "views": [
+    "frames/MossyRailing_0633.jpg",
+    "frames/MossyRailing_0641.jpg",
+    "frames/MossyRailing_0669.jpg",
+    "frames/MossyRailing_0709.jpg",
+    "frames/MossyRailing_0717.jpg"
+   ],
+   "verdict": "none"
+  },
+  {
+   "id": "omni_coast_p131",
+   "dataset": "omni_coast",
+   "point": 131,
+   "case": null,
+   "group": "near",
+   "views": [
+    "images/seq/fisheye_left/frame_000001.jpg",
+    "images/seq/fisheye_left/frame_000013.jpg",
+    "images/seq/fisheye_left/frame_000025.jpg",
+    "images/seq/fisheye_left/frame_000037.jpg",
+    "images/seq/fisheye_left/frame_000049.jpg",
+    "images/seq/fisheye_left/frame_000061.jpg",
+    "images/seq/fisheye_left/frame_000073.jpg",
+    "images/seq/fisheye_left/frame_000373.jpg",
+    "images/seq/fisheye_left/frame_000385.jpg"
+   ],
+   "verdict": "none"
+  },
+  {
+   "id": "omni_coast_p190",
+   "dataset": "omni_coast",
+   "point": 190,
+   "case": null,
+   "group": "near",
+   "views": [
+    "images/seq/fisheye_left/frame_000133.jpg",
+    "images/seq/fisheye_left/frame_000145.jpg",
+    "images/seq/fisheye_left/frame_000157.jpg",
+    "images/seq/fisheye_left/frame_000229.jpg",
+    "images/seq/fisheye_left/frame_000241.jpg",
+    "images/seq/fisheye_left/frame_000313.jpg",
+    "images/seq/fisheye_left/frame_000325.jpg",
+    "images/seq/fisheye_right/frame_000121.jpg",
+    "images/seq/fisheye_right/frame_000169.jpg",
+    "images/seq/fisheye_right/frame_000217.jpg",
+    "images/seq/fisheye_right/frame_000253.jpg",
+    "images/seq/fisheye_right/frame_000301.jpg",
+    "images/seq/fisheye_right/frame_000337.jpg",
+    "images/seq/fisheye_right/frame_000349.jpg"
+   ],
+   "verdict": "marked",
+   "marks": {
+    "images/seq/fisheye_right/frame_000349.jpg": [
+     6
+    ]
+   }
+  },
+  {
+   "id": "omni_temple_p1226",
+   "dataset": "omni_temple",
+   "point": 1226,
+   "case": null,
+   "group": "near",
+   "views": [
+    "images/seq/fisheye_left/frame_000037.jpg",
+    "images/seq/fisheye_left/frame_000049.jpg",
+    "images/seq/fisheye_left/frame_000061.jpg",
+    "images/seq/fisheye_left/frame_000073.jpg",
+    "images/seq/fisheye_left/frame_000085.jpg",
+    "images/seq/fisheye_left/frame_000097.jpg",
+    "images/seq/fisheye_left/frame_000181.jpg",
+    "images/seq/fisheye_left/frame_000193.jpg",
+    "images/seq/fisheye_left/frame_000253.jpg",
+    "images/seq/fisheye_left/frame_000265.jpg",
+    "images/seq/fisheye_left/frame_000325.jpg",
+    "images/seq/fisheye_right/frame_000157.jpg",
+    "images/seq/fisheye_right/frame_000241.jpg",
+    "images/seq/fisheye_right/frame_000301.jpg"
+   ],
+   "verdict": "none"
+  },
+  {
+   "id": "seoul_bull_p182",
+   "dataset": "seoul_bull",
+   "point": 182,
+   "case": null,
+   "group": "near",
+   "views": [
+    "seoul_bull_sculpture_01.jpg",
+    "seoul_bull_sculpture_02.jpg",
+    "seoul_bull_sculpture_03.jpg",
+    "seoul_bull_sculpture_04.jpg"
+   ],
+   "verdict": "unsure"
+  }
+ ],
+ "cells": [
+  {
+   "track": "altona_p2007",
+   "image": "frames/20240621_altona_gallery_in_the_park_boy_reading_1409.jpg",
+   "cell": 8,
+   "deficit": 0.354,
+   "own": 0.3666,
+   "typical": 0.7206,
+   "causes": [
+    "parallax"
+   ],
+   "note": "Very slight though"
+  },
+  {
+   "track": "badland_p135",
+   "image": "frames/20240617_235804987_0505.jpg",
+   "cell": 1,
+   "deficit": 0.543,
+   "own": 0.4319,
+   "typical": 0.9751,
+   "causes": [
+    "offphoto"
+   ]
+  },
+  {
+   "track": "badland_p135",
+   "image": "frames/20240617_235804987_0509.jpg",
+   "cell": 1,
+   "deficit": 0.565,
+   "own": 0.4099,
+   "typical": 0.9751,
+   "causes": [
+    "offphoto"
+   ]
+  },
+  {
+   "track": "dino_p7676",
+   "image": "images/dino_dog_toy_14.jpg",
+   "cell": 3,
+   "deficit": 0.26,
+   "own": 0.2598,
+   "typical": 0.5196,
+   "causes": [
+    "lowtex"
+   ],
+   "note": "We're measuring the self-similarity radius of each ninth as well, that would judge that this ninth has no texture anyway"
+  },
+  {
+   "track": "dino_p7799",
+   "image": "images/dino_dog_toy_03.jpg",
+   "cell": 6,
+   "deficit": 0.51,
+   "own": 0.18,
+   "typical": 0.6899,
+   "causes": [
+    "shift"
+   ]
+  },
+  {
+   "track": "dino_p7799",
+   "image": "images/dino_dog_toy_14.jpg",
+   "cell": 5,
+   "deficit": 0.422,
+   "own": 0.3929,
+   "typical": 0.8148,
+   "causes": [
+    "shift"
+   ]
+  },
+  {
+   "track": "dino_p7799",
+   "image": "images/dino_dog_toy_14.jpg",
+   "cell": 6,
+   "deficit": 0.607,
+   "own": 0.0832,
+   "typical": 0.6899,
+   "causes": [
+    "shift"
+   ]
+  },
+  {
+   "track": "kerry480_p166",
+   "image": "fisheye_left/frame_06.jpg",
+   "cell": 1,
+   "deficit": 0.27,
+   "own": 0.4119,
+   "typical": 0.6822,
+   "causes": [
+    "parallax"
+   ]
+  },
+  {
+   "track": "kerry480_p166",
+   "image": "fisheye_left/frame_06.jpg",
+   "cell": 2,
+   "deficit": 0.34,
+   "own": 0.1689,
+   "typical": 0.5086,
+   "causes": [
+    "parallax"
+   ]
+  },
+  {
+   "track": "kerry480_p166",
+   "image": "fisheye_left/frame_06.jpg",
+   "cell": 6,
+   "deficit": 0.466,
+   "own": 0.0813,
+   "typical": 0.5471,
+   "causes": [
+    "exposure"
+   ]
+  },
+  {
+   "track": "kerry480_p166",
+   "image": "fisheye_left/frame_10.jpg",
+   "cell": 6,
+   "deficit": 0.312,
+   "own": 0.2348,
+   "typical": 0.5471,
+   "causes": [
+    "parallax"
+   ]
+  },
+  {
+   "track": "kerry480_p166",
+   "image": "fisheye_right/frame_09.jpg",
+   "cell": 2,
+   "deficit": 0.266,
+   "own": 0.2427,
+   "typical": 0.5086,
+   "causes": [
+    "parallax"
+   ]
+  },
+  {
+   "track": "kerry480_p166",
+   "image": "fisheye_right/frame_09.jpg",
+   "cell": 6,
+   "deficit": 0.391,
+   "own": 0.1557,
+   "typical": 0.5471,
+   "causes": [
+    "lowtex"
+   ],
+   "note": "Same as above"
+  },
+  {
+   "track": "kerry480_p166",
+   "image": "fisheye_right/frame_16.jpg",
+   "cell": 3,
+   "deficit": 0.309,
+   "own": 0.4128,
+   "typical": 0.7218,
+   "causes": [
+    "occluder"
+   ]
+  },
+  {
+   "track": "kerry480_p514",
+   "image": "fisheye_right/frame_07.jpg",
+   "cell": 8,
+   "deficit": 0.355,
+   "own": 0.3975,
+   "typical": 0.7521,
+   "causes": [
+    "parallax"
+   ]
+  },
+  {
+   "track": "kerry480_p514",
+   "image": "fisheye_right/frame_09.jpg",
+   "cell": 4,
+   "deficit": 0.313,
+   "own": 0.3032,
+   "typical": 0.6165,
+   "causes": [
+    "parallax"
+   ]
+  },
+  {
+   "track": "kerry_park_p82",
+   "image": "fisheye_right/frame_07.jpg",
+   "cell": 4,
+   "deficit": 0.25,
+   "own": 0.36,
+   "typical": 0.6103,
+   "causes": [
+    "blur"
+   ]
+  },
+  {
+   "track": "kerry_park_p98",
+   "image": "fisheye_left/frame_01.jpg",
+   "cell": 8,
+   "deficit": 0.43,
+   "own": 0.2145,
+   "typical": 0.645,
+   "causes": [
+    "blur"
+   ]
+  },
+  {
+   "track": "kerry_park_p98",
+   "image": "fisheye_left/frame_02.jpg",
+   "cell": 8,
+   "deficit": 0.424,
+   "own": 0.2211,
+   "typical": 0.645,
+   "causes": [
+    "blur"
+   ]
+  },
+  {
+   "track": "kerry_park_p98",
+   "image": "fisheye_left/frame_10.jpg",
+   "cell": 2,
+   "deficit": 0.688,
+   "own": 0.0034,
+   "typical": 0.6913,
+   "causes": [
+    "exposure"
+   ]
+  },
+  {
+   "track": "kerry_park_p98",
+   "image": "fisheye_left/frame_10.jpg",
+   "cell": 5,
+   "deficit": 0.39,
+   "own": 0.2437,
+   "typical": 0.6337,
+   "causes": [
+    "exposure"
+   ]
+  },
+  {
+   "track": "kerry_park_p98",
+   "image": "fisheye_right/frame_12.jpg",
+   "cell": 0,
+   "deficit": 0.272,
+   "own": 0.3124,
+   "typical": 0.5846,
+   "causes": [
+    "blur"
+   ]
+  },
+  {
+   "track": "kerry_park_p98",
+   "image": "fisheye_right/frame_12.jpg",
+   "cell": 2,
+   "deficit": 0.517,
+   "own": 0.1743,
+   "typical": 0.6913,
+   "causes": [
+    "blur"
+   ]
+  },
+  {
+   "track": "kerry_park_p98",
+   "image": "fisheye_right/frame_12.jpg",
+   "cell": 4,
+   "deficit": 0.291,
+   "own": 0.357,
+   "typical": 0.6485,
+   "causes": [
+    "blur"
+   ]
+  },
+  {
+   "track": "mossy_p1019",
+   "image": "frames/MossyRailing_0709.jpg",
+   "cell": 1,
+   "deficit": 0.313,
+   "own": 0.5038,
+   "typical": 0.8164,
+   "causes": [
+    "shift"
+   ]
+  },
+  {
+   "track": "omni_coast_p131",
+   "image": "images/seq/fisheye_left/frame_000073.jpg",
+   "cell": 1,
+   "deficit": 0.366,
+   "own": 0.4589,
+   "typical": 0.8245,
+   "causes": [
+    "parallax"
+   ]
+  },
+  {
+   "track": "omni_coast_p131",
+   "image": "images/seq/fisheye_left/frame_000385.jpg",
+   "cell": 3,
+   "deficit": 0.257,
+   "own": 0.6195,
+   "typical": 0.8768,
+   "causes": [
+    "parallax"
+   ]
+  },
+  {
+   "track": "omni_coast_p190",
+   "image": "images/seq/fisheye_right/frame_000121.jpg",
+   "cell": 3,
+   "deficit": 0.415,
+   "own": 0.3178,
+   "typical": 0.7332,
+   "causes": [
+    "parallax"
+   ]
+  },
+  {
+   "track": "omni_coast_p190",
+   "image": "images/seq/fisheye_right/frame_000217.jpg",
+   "cell": 2,
+   "deficit": 0.292,
+   "own": 0.2801,
+   "typical": 0.5721,
+   "causes": [
+    "parallax"
+   ]
+  },
+  {
+   "track": "omni_coast_p190",
+   "image": "images/seq/fisheye_right/frame_000217.jpg",
+   "cell": 3,
+   "deficit": 0.485,
+   "own": 0.2479,
+   "typical": 0.7332,
+   "causes": [
+    "parallax"
+   ]
+  },
+  {
+   "track": "omni_coast_p190",
+   "image": "images/seq/fisheye_right/frame_000217.jpg",
+   "cell": 8,
+   "deficit": 0.279,
+   "own": 0.3117,
+   "typical": 0.5909,
+   "causes": [
+    "parallax"
+   ]
+  },
+  {
+   "track": "omni_coast_p190",
+   "image": "images/seq/fisheye_right/frame_000301.jpg",
+   "cell": 2,
+   "deficit": 0.373,
+   "own": 0.1995,
+   "typical": 0.5721,
+   "causes": [
+    "parallax"
+   ],
+   "note": "Vegetation, leaves at many depths"
+  },
+  {
+   "track": "omni_coast_p190",
+   "image": "images/seq/fisheye_right/frame_000301.jpg",
+   "cell": 3,
+   "deficit": 0.382,
+   "own": 0.3513,
+   "typical": 0.7332,
+   "causes": [
+    "parallax"
+   ]
+  },
+  {
+   "track": "omni_temple_p1226",
+   "image": "images/seq/fisheye_left/frame_000061.jpg",
+   "cell": 3,
+   "deficit": 0.294,
+   "own": 0.5865,
+   "typical": 0.8803,
+   "causes": [
+    "parallax"
+   ]
+  },
+  {
+   "track": "omni_temple_p1226",
+   "image": "images/seq/fisheye_left/frame_000193.jpg",
+   "cell": 6,
+   "deficit": 0.3,
+   "own": 0.5799,
+   "typical": 0.8796,
+   "causes": [
+    "parallax"
+   ]
+  },
+  {
+   "track": "omni_temple_p2451",
+   "image": "images/seq/fisheye_right/frame_000001.jpg",
+   "cell": 5,
+   "deficit": 0.995,
+   "own": -0.2055,
+   "typical": 0.7893,
+   "causes": [
+    "shadow"
+   ]
+  },
+  {
+   "track": "omni_temple_p2451",
+   "image": "images/seq/fisheye_right/frame_000001.jpg",
+   "cell": 7,
+   "deficit": 0.299,
+   "own": 0.6544,
+   "typical": 0.9532,
+   "causes": [
+    "parallax"
+   ]
+  },
+  {
+   "track": "omni_temple_p2451",
+   "image": "images/seq/fisheye_right/frame_000001.jpg",
+   "cell": 8,
+   "deficit": 1.272,
+   "own": -0.5908,
+   "typical": 0.6817,
+   "causes": [
+    "parallax"
+   ]
+  },
+  {
+   "track": "omni_temple_p2451",
+   "image": "images/seq/fisheye_right/frame_000457.jpg",
+   "cell": 5,
+   "deficit": 0.717,
+   "own": 0.0725,
+   "typical": 0.7893,
+   "causes": [
+    "shadow"
+   ]
+  },
+  {
+   "track": "omni_temple_p2451",
+   "image": "images/seq/fisheye_right/frame_000457.jpg",
+   "cell": 7,
+   "deficit": 0.26,
+   "own": 0.6931,
+   "typical": 0.9532,
+   "causes": [
+    "parallax"
+   ]
+  },
+  {
+   "track": "omni_temple_p2451",
+   "image": "images/seq/fisheye_right/frame_000457.jpg",
+   "cell": 8,
+   "deficit": 1.164,
+   "own": -0.4827,
+   "typical": 0.6817,
+   "causes": [
+    "parallax"
+   ]
+  },
+  {
+   "track": "seoul_bull_p182",
+   "image": "seoul_bull_sculpture_01.jpg",
+   "cell": 8,
+   "deficit": 0.291,
+   "own": 0.3788,
+   "typical": 0.6701,
+   "causes": [
+    "lowtex"
+   ]
+  },
+  {
+   "track": "xmas_p4855",
+   "image": "frames/20241225_christmas_tree_with_presents_1609.jpg",
+   "cell": 6,
+   "deficit": 0.593,
+   "own": -0.079,
+   "typical": 0.5136,
+   "causes": [
+    "parallax"
+   ]
+  },
+  {
+   "track": "xmas_p4855",
+   "image": "frames/20241225_christmas_tree_with_presents_1615.jpg",
+   "cell": 6,
+   "deficit": 0.264,
+   "own": 0.2495,
+   "typical": 0.5136,
+   "causes": [
+    "parallax"
+   ]
+  },
+  {
+   "track": "xmas_p4855",
+   "image": "frames/20241225_christmas_tree_with_presents_1663.jpg",
+   "cell": 5,
+   "deficit": 0.272,
+   "own": 0.5583,
+   "typical": 0.8303,
+   "causes": [
+    "blur"
+   ]
+  },
+  {
+   "track": "xmas_p4855",
+   "image": "frames/20241225_christmas_tree_with_presents_1663.jpg",
+   "cell": 6,
+   "deficit": 1.032,
+   "own": -0.5184,
+   "typical": 0.5136,
+   "causes": [
+    "parallax"
+   ]
+  }
+ ]
+}
