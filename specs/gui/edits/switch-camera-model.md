@@ -97,10 +97,11 @@ monotone. The viewer adds the invocation, the version and the history entry, in
 | `theta_fit_deg` | the core default; given, even a refit is an ordinary fit over that angle |
 
 It runs **on the GUI thread**: a fit is a few milliseconds, and the only files
-read are `.sift` positions: for the report's outermost keypoint, and, on a
-`sift_files` node without the inline keypoint column, for the observations'
-pixels the report's comparison and the points' stored errors are measured
-against.
+read are `.sift` positions, on a `sift_files` node without the inline keypoint
+column, for the observations' pixels the report's comparison and the points'
+stored errors are measured against. The edit shows no outermost keypoint (the
+dialog reads its own when it opens), so it asks the core switch to leave that
+out of the report and reads no file for it.
 
 ### The version
 

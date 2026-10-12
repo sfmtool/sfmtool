@@ -148,6 +148,14 @@ fn target(name: &str) -> RefitTarget {
     RefitTarget::from_name(name, None).unwrap()
 }
 
+/// The switch's options with the fit's set to `refit`.
+fn fit(refit: RefitOptions) -> SwitchCameraModelOptions {
+    SwitchCameraModelOptions {
+        refit,
+        ..SwitchCameraModelOptions::default()
+    }
+}
+
 #[test]
 fn poses_points_and_keypoints_are_unchanged() {
     let recon = scene(vec![kerry_cam0()], |_| 0);
@@ -155,7 +163,7 @@ fn poses_points_and_keypoints_are_unchanged() {
         &recon,
         &[0],
         &target("SFMTOOL_FISHEYE"),
-        &RefitOptions::default(),
+        &SwitchCameraModelOptions::default(),
     )
     .unwrap();
 
@@ -194,7 +202,7 @@ fn poses_points_and_keypoints_are_unchanged() {
 
     // The outermost observation is the wide one, measured under the switched
     // camera; the fixture sits beside no .sift file, so nothing is detected.
-    let outermost = &entry.outermost;
+    let outermost = entry.outermost.as_ref().expect("asked for by default");
     assert_eq!((outermost.camera, outermost.images), (0, IMAGES));
     let observed = outermost.observed.expect("inline keypoints");
     assert_eq!(observed.image, 0);
@@ -211,7 +219,7 @@ fn only_the_named_cameras_change() {
         &recon,
         &[1],
         &target("SFMTOOL_FISHEYE"),
-        &RefitOptions::default(),
+        &SwitchCameraModelOptions::default(),
     )
     .unwrap();
     assert_eq!(out.image_table.cameras[0], kerry_cam0());
@@ -228,7 +236,7 @@ fn without_a_trusted_bound_the_fit_reaches_the_observations() {
         &recon,
         &[0],
         &target("SFMTOOL_FISHEYE"),
-        &RefitOptions::default(),
+        &SwitchCameraModelOptions::default(),
     )
     .unwrap();
     let refit = &report.cameras[0].refit;
@@ -245,7 +253,7 @@ fn a_perspective_target_for_a_camera_observed_past_90_is_refused() {
         theta_fit_deg: Some(60.0),
         spline_domain_deg: None,
     };
-    let err = switch_camera_model(&recon, &[0], &target("SFMTOOL_PINHOLE"), &options)
+    let err = switch_camera_model(&recon, &[0], &target("SFMTOOL_PINHOLE"), &fit(options))
         .err()
         .expect("refused");
     // The refusal names the point whose ray is wide, the one the fixture put
@@ -281,7 +289,7 @@ fn a_refusal_names_the_camera() {
         theta_fit_deg: Some(100.0),
         spline_domain_deg: None,
     };
-    let err = switch_camera_model(&recon, &[0], &target("SFMTOOL_FISHEYE"), &options)
+    let err = switch_camera_model(&recon, &[0], &target("SFMTOOL_FISHEYE"), &fit(options))
         .err()
         .expect("refused");
     assert!(matches!(
@@ -298,7 +306,7 @@ fn a_refusal_names_the_camera() {
 fn camera_lists_are_checked() {
     let recon = scene(vec![kerry_cam0()], |_| 0);
     let t = target("SFMTOOL_FISHEYE");
-    let options = RefitOptions::default();
+    let options = SwitchCameraModelOptions::default();
     assert_eq!(
         switch_camera_model(&recon, &[], &t, &options)
             .err()
@@ -338,7 +346,7 @@ fn a_spline_switched_to_its_own_model_is_refitted_over_its_whole_domain() {
         spline_domain_deg: Some(108.0),
     };
 
-    let (out, report) = switch_camera_model(&recon, &[0], &ten, &options).unwrap();
+    let (out, report) = switch_camera_model(&recon, &[0], &ten, &fit(options)).unwrap();
 
     // Exactly the lens-only refit of the spline, which samples the whole new
     // domain rather than the observations' extent.
@@ -364,7 +372,8 @@ fn a_spline_switched_to_its_own_model_is_refitted_over_its_whole_domain() {
     assert!(entry.observations.observations > 0);
 
     // With no domain given the domain end is kept bit for bit.
-    let (out, report) = switch_camera_model(&recon, &[0], &ten, &RefitOptions::default()).unwrap();
+    let (out, report) =
+        switch_camera_model(&recon, &[0], &ten, &SwitchCameraModelOptions::default()).unwrap();
     assert_eq!(
         report.cameras[0].refit,
         refit_spline(&source, 10, None).unwrap()
@@ -382,7 +391,7 @@ fn a_spline_switched_to_its_own_model_is_refitted_over_its_whole_domain() {
         theta_fit_deg: Some(80.0),
         spline_domain_deg: None,
     };
-    let (_, report) = switch_camera_model(&recon, &[0], &ten, &given).unwrap();
+    let (_, report) = switch_camera_model(&recon, &[0], &ten, &fit(given)).unwrap();
     assert_eq!(
         report.cameras[0].refit.theta_fit_source,
         ThetaFitSource::Given
@@ -391,9 +400,14 @@ fn a_spline_switched_to_its_own_model_is_refitted_over_its_whole_domain() {
     // The other spline model is a switch between models, not a refit.
     let pinhole = RefitTarget::from_name("SFMTOOL_PINHOLE", Some(8)).unwrap();
     let scene_narrow = scene(vec![source.clone()], |_| 0);
-    let error = switch_camera_model(&scene_narrow, &[0], &pinhole, &RefitOptions::default())
-        .err()
-        .expect("observed past 90°");
+    let error = switch_camera_model(
+        &scene_narrow,
+        &[0],
+        &pinhole,
+        &SwitchCameraModelOptions::default(),
+    )
+    .err()
+    .expect("observed past 90°");
     assert!(matches!(
         error,
         SwitchCameraModelError::Refit {
@@ -414,7 +428,7 @@ fn a_spline_refit_the_model_cannot_have_is_refused_naming_the_camera() {
         &recon,
         &[1],
         &RefitTarget::from_name("SFMTOOL_FISHEYE", Some(8)).unwrap(),
-        &options,
+        &fit(options),
     )
     .err();
     assert_eq!(
@@ -427,4 +441,84 @@ fn a_spline_refit_the_model_cannot_have_is_refused_naming_the_camera() {
         })
     );
     assert!(error.unwrap().to_string().starts_with("camera 1:"));
+}
+
+/// Write a `.sift` file for every image of `recon`, under a workspace in
+/// `dir`, holding one feature at the principal point.
+fn write_sift_files(recon: &mut SfmrReconstruction, dir: &tempfile::TempDir) {
+    recon.workspace_dir = dir.path().to_path_buf();
+    recon.metadata.workspace.contents.feature_prefix_dir = "features".into();
+    for image in 0..recon.image_table.images.len() {
+        let camera =
+            &recon.image_table.cameras[recon.image_table.images[image].camera_index as usize];
+        let (cx, cy) = camera.principal_point();
+        let positions = Array2::from_shape_vec((1, 2), vec![cx as f32, cy as f32]).unwrap();
+        let data = sfmtool_sift_format::SiftData {
+            feature_tool_metadata: sfmtool_sift_format::FeatureToolMetadata {
+                feature_tool: "test".into(),
+                feature_type: "sift".into(),
+                feature_options: serde_json::json!({}),
+            },
+            metadata: sfmtool_sift_format::SiftMetadata {
+                version: sfmtool_sift_format::SIFT_FORMAT_VERSION,
+                image_name: recon.image_table.images[image].name.clone(),
+                image_file_xxh128: "0".repeat(32),
+                image_file_size: 1,
+                image_width: camera.width,
+                image_height: camera.height,
+                feature_count: 1,
+            },
+            content_hash: sfmtool_sift_format::SiftContentHash::default(),
+            positions_xy: positions,
+            affine_shapes: ndarray::Array3::<f32>::zeros((1, 2, 2)),
+            descriptors: Array2::<u8>::zeros((1, 128)),
+            thumbnail_y_x_rgb: ndarray::Array3::<u8>::zeros((128, 128, 3)),
+        };
+        let path = recon.sift_path_for_image(image);
+        std::fs::create_dir_all(path.parent().expect("a feature directory")).unwrap();
+        sfmtool_sift_format::write_sift(&path, &data, 3).unwrap();
+    }
+}
+
+#[test]
+fn the_outermost_keypoint_can_be_left_out_of_the_report() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut recon = scene(vec![kerry_cam0()], |_| 0);
+    write_sift_files(&mut recon, &dir);
+    let t = target("SFMTOOL_FISHEYE");
+
+    // Asked for, the keypoint is detected from every image's `.sift` file.
+    let (with, with_report) =
+        switch_camera_model(&recon, &[0], &t, &SwitchCameraModelOptions::default()).unwrap();
+    let outermost = with_report.cameras[0]
+        .outermost
+        .as_ref()
+        .expect("asked for");
+    assert_eq!(outermost.detected_images, IMAGES);
+    assert!(outermost.detected.is_some());
+
+    // Left out, the entry carries none, and everything else is the same.
+    let options = SwitchCameraModelOptions {
+        outermost_keypoint: false,
+        ..SwitchCameraModelOptions::default()
+    };
+    let (without, without_report) = switch_camera_model(&recon, &[0], &t, &options).unwrap();
+    let entry = &without_report.cameras[0];
+    assert_eq!(entry.outermost, None);
+    let asked = &with_report.cameras[0];
+    assert_eq!(
+        (entry.camera, &entry.source, &entry.refit, entry.images),
+        (asked.camera, &asked.source, &asked.refit, asked.images)
+    );
+    assert_eq!(entry.observations, asked.observations);
+    assert_eq!(without.image_table.cameras, with.image_table.cameras);
+    for (a, b) in without.point_set.points.iter().zip(&with.point_set.points) {
+        assert_eq!(a.error, b.error);
+    }
+
+    // And it reads no `.sift` file for it: with every file gone, the switch
+    // that leaves it out answers exactly as before.
+    std::fs::remove_dir_all(dir.path().join("features")).unwrap();
+    let (_, again) = switch_camera_model(&recon, &[0], &t, &options).unwrap();
+    assert_eq!(again, without_report);
 }

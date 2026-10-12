@@ -131,6 +131,32 @@ pub struct ObservationComparison {
     pub past_trusted_after: ErrorSummary,
 }
 
+/// How a switch runs: the lens fit's options, and what the report carries
+/// beside the fit.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SwitchCameraModelOptions {
+    /// The fit's largest angle and the spline domain end, as the lens fit
+    /// takes them.
+    pub refit: RefitOptions,
+    /// Whether each camera's entry carries its outermost keypoint
+    /// ([`CameraSwitch::outermost`]). On by default. Off, the entry's
+    /// `outermost` is `None` and no `.sift` file is read for it, for a caller
+    /// that already holds the keypoint or does not show it. The observations'
+    /// pixels are still read from the `.sift` files of a value without the
+    /// inline keypoint column, since the comparison and the points' stored
+    /// errors are measured against them.
+    pub outermost_keypoint: bool,
+}
+
+impl Default for SwitchCameraModelOptions {
+    fn default() -> Self {
+        Self {
+            refit: RefitOptions::default(),
+            outermost_keypoint: true,
+        }
+    }
+}
+
 /// What the switch did to one camera.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CameraSwitch {
@@ -146,8 +172,9 @@ pub struct CameraSwitch {
     pub observations: ObservationComparison,
     /// The outermost keypoint of the camera's images, observed and detected,
     /// measured under the camera after the switch: how far out the
-    /// photographs reach, beside the spline domain the fit placed.
-    pub outermost: OutermostKeypoints,
+    /// photographs reach, beside the spline domain the fit placed. `None`
+    /// where [`SwitchCameraModelOptions::outermost_keypoint`] was off.
+    pub outermost: Option<OutermostKeypoints>,
 }
 
 /// What one switch did, one entry per switched camera in table order.
@@ -161,7 +188,8 @@ pub struct SwitchCameraModelReport {
 /// report.
 ///
 /// Each camera is fitted independently by
-/// [`refit_camera_intrinsics`](crate::camera::refit_intrinsics::refit_camera_intrinsics). When
+/// [`refit_camera_intrinsics`](crate::camera::refit_intrinsics::refit_camera_intrinsics),
+/// with the fit's options in [`SwitchCameraModelOptions::refit`]. When
 /// [`RefitOptions::theta_fit_deg`] is `None` the fit's largest angle is the
 /// source's trusted bound, or, for a source without one, the largest incidence
 /// angle among the observations of the camera's images (the far image corner
@@ -192,17 +220,22 @@ pub struct SwitchCameraModelReport {
 /// Each camera's entry also carries its outermost keypoint
 /// ([`outermost_keypoints`]), observed and, where the images' `.sift` files can
 /// be read, detected, measured under the switched camera. A file that cannot
-/// be read leaves `detected` empty rather than refusing the switch.
+/// be read leaves `detected` empty rather than refusing the switch. With
+/// [`SwitchCameraModelOptions::outermost_keypoint`] off the entry carries none
+/// and no file is read for it.
 ///
 /// # Example
 ///
 /// ```no_run
-/// use sfmtool_core::camera::refit_intrinsics::{RefitOptions, RefitTarget};
-/// use sfmtool_core::reconstruction::switch_camera_model::switch_camera_model;
+/// use sfmtool_core::camera::refit_intrinsics::RefitTarget;
+/// use sfmtool_core::reconstruction::switch_camera_model::{
+///     switch_camera_model, SwitchCameraModelOptions,
+/// };
 /// # fn run(recon: &sfmtool_core::SfmrReconstruction)
 /// # -> Result<(), Box<dyn std::error::Error>> {
 /// let target = RefitTarget::from_name("SFMTOOL_FISHEYE", Some(8))?;
-/// let (switched, report) = switch_camera_model(recon, &[0], &target, &RefitOptions::default())?;
+/// let options = SwitchCameraModelOptions::default();
+/// let (switched, report) = switch_camera_model(recon, &[0], &target, &options)?;
 /// let camera = &report.cameras[0];
 /// println!(
 ///     "rms {:.3} px over θ ≤ {:.1}°; median error {:.3} -> {:.3} px",
@@ -219,8 +252,9 @@ pub fn switch_camera_model(
     recon: &SfmrReconstruction,
     cameras: &[usize],
     target: &RefitTarget,
-    options: &RefitOptions,
+    options: &SwitchCameraModelOptions,
 ) -> Result<(SfmrReconstruction, SwitchCameraModelReport), SwitchCameraModelError> {
+    let refit_options = &options.refit;
     let count = recon.image_table.cameras.len();
     let mut chosen: Vec<usize> = cameras.to_vec();
     chosen.sort_unstable();
@@ -292,7 +326,7 @@ pub fn switch_camera_model(
                 });
             }
         }
-        let (theta_fit_deg, theta_fit_source) = match options.theta_fit_deg {
+        let (theta_fit_deg, theta_fit_source) = match refit_options.theta_fit_deg {
             Some(theta) => (theta, ThetaFitSource::Given),
             None => match trustworthy_max_theta_deg(source) {
                 Some(bound) => (bound, ThetaFitSource::TrustedBound),
@@ -306,14 +340,17 @@ pub fn switch_camera_model(
                 ),
             },
         };
-        let refit = match (spline_refit_count(source, target), options.theta_fit_deg) {
-            (Some(count), None) => refit_spline(source, count, options.spline_domain_deg),
+        let refit = match (
+            spline_refit_count(source, target),
+            refit_options.theta_fit_deg,
+        ) {
+            (Some(count), None) => refit_spline(source, count, refit_options.spline_domain_deg),
             _ => refit_camera_intrinsics_over(
                 source,
                 target,
                 theta_fit_deg,
                 theta_fit_source,
-                options.spline_domain_deg,
+                refit_options.spline_domain_deg,
             ),
         }
         .map_err(|error| SwitchCameraModelError::Refit { camera: c, error })?;
@@ -357,7 +394,16 @@ pub fn switch_camera_model(
             after: row_error(&out, row, pixels[row]),
         });
     }
-    let outermost = outermost_keypoints(&out, &chosen, true);
+    // One entry per chosen camera, in the same ascending order, or none at all
+    // where the caller left the keypoint out, so no `.sift` file is read for it.
+    let outermost: Vec<Option<OutermostKeypoints>> = if options.outermost_keypoint {
+        outermost_keypoints(&out, &chosen, true)
+            .into_iter()
+            .map(Some)
+            .collect()
+    } else {
+        vec![None; chosen.len()]
+    };
     let mut entries = Vec::with_capacity(chosen.len());
     for (((&c, refit), rows), outermost) in chosen.iter().zip(refits).zip(rows_of).zip(outermost) {
         let images = table

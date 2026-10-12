@@ -21,7 +21,8 @@ use sfmtool_core::reconstruction::outermost_keypoint::{
     outermost_keypoints as core_outermost, KeypointReach, OutermostKeypoints,
 };
 use sfmtool_core::reconstruction::switch_camera_model::{
-    switch_camera_model as core_switch, ErrorSummary, SwitchCameraModelReport,
+    switch_camera_model as core_switch, ErrorSummary, SwitchCameraModelOptions,
+    SwitchCameraModelReport,
 };
 use sfmtool_core::SfmrReconstruction;
 
@@ -103,7 +104,10 @@ fn report_to_py<'py>(py: Python<'py>, r: &SwitchCameraModelReport) -> PyResult<B
             summary_to_py(py, &o.past_trusted_after)?,
         )?;
         c.set_item("observations", obs)?;
-        c.set_item("outermost", outermost_to_py(py, &entry.outermost)?)?;
+        match &entry.outermost {
+            Some(outermost) => c.set_item("outermost", outermost_to_py(py, outermost)?)?,
+            None => c.set_item("outermost", py.None())?,
+        }
         cameras.append(c)?;
     }
     let d = PyDict::new(py);
@@ -123,9 +127,12 @@ fn run(
 ) -> PyResult<(SfmrReconstruction, Py<PyDict>)> {
     let target = RefitTarget::from_name(camera_model, coeff_count)
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    let options = RefitOptions {
-        theta_fit_deg,
-        spline_domain_deg,
+    let options = SwitchCameraModelOptions {
+        refit: RefitOptions {
+            theta_fit_deg,
+            spline_domain_deg,
+        },
+        ..SwitchCameraModelOptions::default()
     };
     let cameras = cameras.unwrap_or_else(|| (0..value.image_table.cameras.len()).collect());
     let (next, report) = py

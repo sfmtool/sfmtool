@@ -36,8 +36,13 @@ pub fn switch_camera_model(
     recon: &SfmrReconstruction,
     cameras: &[usize],
     target: &RefitTarget,
-    options: &RefitOptions,
+    options: &SwitchCameraModelOptions,
 ) -> Result<(SfmrReconstruction, SwitchCameraModelReport), SwitchCameraModelError>;
+
+pub struct SwitchCameraModelOptions {
+    pub refit: RefitOptions,       // the lens fit's: theta_fit_deg, spline_domain_deg
+    pub outermost_keypoint: bool,  // default true
+}
 
 pub struct SwitchCameraModelReport {
     pub cameras: Vec<CameraSwitch>, // one per switched camera, in table order
@@ -49,7 +54,7 @@ pub struct CameraSwitch {
     pub refit: CameraIntrinsicsRefit,          // carries the new camera
     pub images: usize,
     pub observations: ObservationComparison,
-    pub outermost: OutermostKeypoints,         // under the switched camera
+    pub outermost: Option<OutermostKeypoints>, // under the switched camera; None when left out
 }
 
 pub struct ObservationComparison {
@@ -101,11 +106,14 @@ spline, and the report is the same shape either way.
 ### Example
 
 ```rust
-use sfmtool_core::camera::refit_intrinsics::{RefitOptions, RefitTarget};
-use sfmtool_core::reconstruction::switch_camera_model::switch_camera_model;
+use sfmtool_core::camera::refit_intrinsics::RefitTarget;
+use sfmtool_core::reconstruction::switch_camera_model::{
+    switch_camera_model, SwitchCameraModelOptions,
+};
 
 let target = RefitTarget::from_name("SFMTOOL_FISHEYE", Some(8))?;
-let (switched, report) = switch_camera_model(&recon, &[0, 1], &target, &RefitOptions::default())?;
+let options = SwitchCameraModelOptions::default();
+let (switched, report) = switch_camera_model(&recon, &[0, 1], &target, &options)?;
 for camera in &report.cameras {
     let o = &camera.observations;
     println!(
@@ -215,6 +223,14 @@ photographs reach; the domain itself still defaults to the far image corner. A
 `.sift` file that cannot be read leaves the detected keypoint empty and does not
 refuse the switch.
 
+`SwitchCameraModelOptions::outermost_keypoint` is on by default. Off, each
+entry's `outermost` is `None` and no `.sift` file is read for it, so a caller
+that already holds the keypoint, or does not show it, does not pay for a read
+of every image's features. The viewer's direct switch turns it off, since its
+dialog reads the keypoint when it opens. The observations' pixels are still
+read from the `.sift` files of a value without the inline keypoint column,
+since the comparison and the points' stored errors are measured against them.
+
 Comparing on a fixed set is deliberate. A following bundle adjustment or Add
 Image to Tracks changes the set, and a metric over a moving set cannot separate
 the lens from the population.
@@ -233,8 +249,8 @@ The report's `cameras` is a list with one dict per switched camera: `camera`,
 `images`, `source` and `target` (the two `CameraIntrinsics`), `fit` (the dict
 `CameraIntrinsics.refit` reports), `observations` (the comparison's fields,
 each summary a dict of `median_px`, `p90_px` and `max_px`) and `outermost` (as
-`SfmrReconstruction.outermost_keypoints` reports it). A refusal is a
-`ValueError` carrying the error's sentence.
+`SfmrReconstruction.outermost_keypoints` reports it; the bindings always ask
+for it). A refusal is a `ValueError` carrying the error's sentence.
 
 ```python
 switched, report = edited.switch_camera_model("SFMTOOL_FISHEYE", coeff_count=8)
@@ -263,7 +279,10 @@ exact projection, plus one point 95° off the first image's axis:
   exactly `refit_spline`'s camera and report, over the whole domain; the domain
   end kept bit for bit when none is given; a given fit angle taking the general
   fit instead; and a domain end past 180° refused, naming the camera;
-- an empty or out-of-range camera list refused.
+- an empty or out-of-range camera list refused;
+- beside a `.sift` file per image, the outermost keypoint detected from every
+  file when asked for, and, left out, no entry, the same camera, fit,
+  comparison and point errors, and the same report once every file is gone.
 
 Bindings: `tests/rust_bindings/reconstruction/test_edited_reconstruction_rust_bindings.py`
 (`TestSwitchCameraModel`) and `tests/xform/test_switch_camera_model.py`, which

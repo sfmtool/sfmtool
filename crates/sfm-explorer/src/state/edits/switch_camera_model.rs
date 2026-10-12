@@ -18,7 +18,7 @@ use sfmtool_core::camera::refit_intrinsics::{
     spline_domain_deg, MonotoneConstraint, RefitError, RefitOptions, RefitTarget,
 };
 use sfmtool_core::reconstruction::switch_camera_model::{
-    switch_camera_model, CameraSwitch, SwitchCameraModelError,
+    switch_camera_model, CameraSwitch, SwitchCameraModelError, SwitchCameraModelOptions,
 };
 use sfmtool_core::{EditedReconstruction, RowMap, SfmrReconstruction};
 
@@ -235,9 +235,14 @@ impl AppState {
         };
         let target = RefitTarget::from_name(&camera_model, coeff_count)
             .map_err(|e| refuse(format!("camera {c}: {e}")))?;
-        let options = RefitOptions {
-            theta_fit_deg: request.theta_fit_deg,
-            spline_domain_deg: request.spline_domain_deg,
+        let options = SwitchCameraModelOptions {
+            refit: RefitOptions {
+                theta_fit_deg: request.theta_fit_deg,
+                spline_domain_deg: request.spline_domain_deg,
+            },
+            // The edit shows no outermost keypoint, so it reads no `.sift`
+            // file for one.
+            outermost_keypoint: false,
         };
 
         // Materialise only when there is an overlay to fold in; an empty one
