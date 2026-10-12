@@ -842,9 +842,11 @@ defaults have no pick outside the reviewed views by construction, and most
 other settings have some (the last column). The scores therefore favour the
 defaults, and the agreement of 72 of 74 is not a measure of how often the
 rule picks the best view on new tracks. The bias is bounded: counting every
-unreviewed pick as correct, no swept value of any parameter reaches more than
-73 exact, one more than the defaults, so the second review cannot show any
-swept value better than the defaults by more than one case. It does show
+unreviewed pick as correct, no swept value of any of the rule's parameters
+reaches more than 73 exact, one more than the defaults, so the second review
+cannot show any of them better than the defaults by more than one case; of the
+other forms of the angle factor, only the `φ` factor at `k = 1` reaches 74
+(60 exact and 14 unreviewed). It does show
 losses where a setting goes back to a view the second review turned down:
 `agreement_band = 0.075` returns seoul_bull point 174 to the hand pick the
 maintainer replaced with the rule's pick, and `angle_weight = 0.35` does the
@@ -862,8 +864,8 @@ rule's readings do not see:
   read colour saturation. The rule reads no colour.
 - **An occluder the cell check missed.** On kerry480 point 166 the rule's
   pick has a pole occluding the left side of the tile, and the maintainer
-  chose a third view. Its cell deficit, 0.308, is just past the band of
-  `0.3`, so that penalty adds 3%, and its pair ZNCC, 0.156 below the best,
+  chose a third view. Its cell deficit, 0.309, is just past the band of
+  `0.3`, so that penalty adds 3%, and its pair ZNCC, 0.155 below the best,
   adds 4%; its radius is 0.39 grid px against the chosen view's 0.51.
 - **A track over two surfaces.** On badland point 362 the patch spans a
   ridge and the darker background behind it, which are different surfaces.

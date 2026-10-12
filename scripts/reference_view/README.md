@@ -105,7 +105,7 @@ the cap" is section 10 of a run with `--first-review` and the defaults.
 The tables of § "The second review" are a run with the defaults and no flag,
 on the same readings: section 5 gives the counts of each rule, its last table
 the split between the cases the second review showed and those it did not,
-and sections 3 and 10 the sweeps. The seeded split of the 74 cases it scores
+and sections 3, 4 and 10 the sweeps. The seeded split of the 74 cases it scores
 is not the split of the 77: dealing a different list gives different halves.
 Each count is printed with, in brackets, the cases whose pick is a view no
 review accepted or was shown (neither `pick`, nor in `accept` or
