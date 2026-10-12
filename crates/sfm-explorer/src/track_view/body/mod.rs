@@ -359,6 +359,11 @@ pub struct TrackBody {
     /// session and is not saved with the layout, because a lock left off by
     /// the last session would turn the next one's first drag into an edit of
     /// one sighting nobody asked for.
+    ///
+    /// Surface Tiling Mode holds it on: ticking the mode ticks it, and while
+    /// the mode is on the box is greyed, so every drag of Image Detail's
+    /// handles at the track stage is a move of the patch that the mode's
+    /// sequence follows. Clearing the mode leaves it ticked.
     lock: bool,
     /// How *Finite Diff Normal* and *Grid Plane Normal* cut the patch: the
     /// *per axis* and *overlap* boxes beside them. A tool setting for the reason [`TrackBody::lock`] is,
@@ -474,10 +479,14 @@ impl TrackBody {
     }
 
     /// Tick or clear the *Surface Tiling Mode* box, for the tests that drive
-    /// the mode without drawing a frame.
+    /// the mode without drawing a frame. Ticking it ticks *Lock*, as a click
+    /// on the box does.
     #[cfg(test)]
     pub(crate) fn set_surface_tiling(&mut self, on: bool) {
         self.surface_tiling = on;
+        if on {
+            self.lock = true;
+        }
     }
 
     /// Drop everything cached for a reconstruction that has left the scene.
@@ -865,8 +874,17 @@ impl TrackBody {
     /// what the next drag will mean, and a drag on a busy node is refused on
     /// its own. Greyed at the cluster stage instead, where there is nothing
     /// for it to decide: a cluster has no shared geometry, so every handle is
-    /// already one sighting's own.
+    /// already one sighting's own. Greyed and ticked while Surface Tiling Mode
+    /// is on, which holds it on ([`TrackBody::lock`]).
     fn show_lock(&mut self, ui: &mut egui::Ui, track: &EditableTrack) {
+        if self.surface_tiling {
+            // Ticked when the mode was, and greyed since: the box cannot be
+            // cleared while the mode holds it.
+            self.lock = true;
+            ui.add_enabled(false, egui::Checkbox::new(&mut self.lock, LOCK_LABEL))
+                .on_disabled_hover_text(LOCK_HELD_BY_SURFACE_TILING);
+            return;
+        }
         let at_cluster = track.stage_kind() == StageKind::Cluster;
         let checkbox = ui.add_enabled(!at_cluster, egui::Checkbox::new(&mut self.lock, LOCK_LABEL));
         if at_cluster {
@@ -892,8 +910,9 @@ impl TrackBody {
     /// way on this item is at.
     ///
     /// Never greyed, for the reason *Lock* is not: toggling it is no step,
-    /// and each step the mode takes is refused on its own. Clearing it ends a
-    /// sequence under way.
+    /// and each step the mode takes is refused on its own. Ticking it ticks
+    /// *Lock*, which it then holds on; clearing it leaves *Lock* ticked and
+    /// ends a sequence under way.
     fn show_surface_tiling(
         &mut self,
         ui: &mut egui::Ui,
@@ -912,8 +931,12 @@ impl TrackBody {
                  viewer or Image Detail then runs Fit, Find matches by geometry, Fit, \
                  Grid Plane Normal, Fit and Commit",
             );
-        if checkbox.changed() && !self.surface_tiling {
-            response.surface_tiling_off = true;
+        if checkbox.changed() {
+            if self.surface_tiling {
+                self.lock = true;
+            } else {
+                response.surface_tiling_off = true;
+            }
         }
         if let Some(status) = state.surface_tiling_status(id, label) {
             ui.spinner();
@@ -2058,6 +2081,12 @@ const LOCK_LABEL: &str = "Lock";
 /// Why *Lock* is greyed at the cluster stage.
 const LOCK_AT_CLUSTER: &str = "A cluster has no shared patch: every sighting is \
     already moved on its own, locked or not.";
+
+/// What the greyed *Lock* box says while Surface Tiling Mode holds it on.
+const LOCK_HELD_BY_SURFACE_TILING: &str = "Surface Tiling Mode holds Lock on: dragging a \
+    sighting's dot in Image Detail slides the patch, every sighting following it, so each \
+    drag is a move the mode's sequence follows. Clear Surface Tiling Mode first to be \
+    able to clear Lock";
 
 /// The observation row's context-menu entry, in one constant, as the Image
 /// Detail menu's entries are: the label is quoted in a refusal and read back by

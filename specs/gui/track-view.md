@@ -825,7 +825,9 @@ own and the ghost no keypoint to move
 handles"). At the cluster stage the box is drawn and greyed, its hover
 text saying that every sighting there already moves on its own. It keeps its
 state across the greyed stretch, so a track taken to the cluster stage and back
-is edited with the lock it had.
+is edited with the lock it had. **Surface Tiling Mode holds it on**: ticking
+the mode ticks *Lock*, and while the mode is on the box is drawn ticked and
+greyed, its hover text saying the mode holds it (§ "Surface Tiling Mode").
 
 **The lock is a tool setting, not bench state.** It says what the next drag will
 mean and nothing about the track, so toggling it is no step: no version, no
@@ -996,7 +998,22 @@ nothing to write is the usual no-effect row. The point written is selected and
 the item stays focused, so the next Ctrl+D copies the patch just committed.
 
 **The mode is a tool setting, like *Lock*.** The box starts clear, is never
-greyed, and toggling it is no step: no version, no row. It is panel state for
+greyed, and toggling it is no step: no version, no row.
+
+**The mode holds *Lock* on.** Ticking the box ticks *Lock*, and while the mode
+is on *Lock* is drawn ticked and greyed, with the hover text `Surface Tiling
+Mode holds Lock on: ...`. With *Lock* ticked, every drag of Image Detail's
+handles at the track stage moves the patch, and so starts the sequence, where a
+cleared *Lock* would make the dot's drag a sighting placed on its own, which
+starts none, and would leave the patch-wide handles taking no drag at all. A
+person tiling a surface means each drag as a move of the patch. *Lock* reaches
+nothing else: it is read only by Image Detail's handles, so the 3D viewer's
+gestures, *Duplicate*, the sequence's steps, the focus and the commit's
+selection are as they were. Clearing the mode leaves *Lock* ticked, and the
+person can clear it again. The viewer does not restore the value *Lock* had
+before the mode: that value would have to be kept beside the box for as long
+as the mode is on, and a box that changes when another box is cleared is
+harder to read than one that stays as it is shown. It is panel state for
 the session, one for the viewer, and is not saved with the layout. A sequence
 is session state on `AppState` (`surface_tiling`), not part of any version. The
 wire has no copy of the box, as it has none of *Lock*: an agent calls
@@ -2237,7 +2254,10 @@ texels, so their geometry is checked without reading pixels off the screen.
     with core's refusal sentence for a bearing that has no placement; no item
     tabs, other items on the bench appearing nowhere in what the panel drew;
     *Lock* starting ticked and toggling with no version and no gesture
-    reported, greyed at the cluster stage, where a click leaves it as it was.
+    reported, greyed at the cluster stage, where a click leaves it as it was;
+    and held on by Surface Tiling Mode: ticked when the mode is ticked, left
+    ticked by a click while the mode is on with a hover saying so, and left
+    ticked, and clearable again, when the mode is cleared.
     With no item focused, Edited mode draws nothing.
   - § "The header": the counts of kept, `out` and pinned rows, the Point ID
     printed once beside a renamed label, the index of a point that is gone,
@@ -2376,7 +2396,8 @@ texels, so their geometry is checked without reading pixels off the screen.
   unsettled and starts once it lands; and a failed task, a refused starter, a
   refused commit, an unfocus, a version the sequence did not push and a second
   move each stop or restart it with the row saying so. The box itself, clear
-  at start, no step when ticked and reporting the clear, is in
+  at start, no step when ticked and reporting the clear, and holding *Lock*
+  on (ticking it, keeping it ticked, leaving it ticked when cleared), is in
   [body/tests.rs](../../crates/sfm-explorer/src/track_view/body/tests.rs); the
   dock applying the *Duplicate* button in the mode, a row the thresholds turn
   `out` dropped, an Image Detail patch edit starting the sequence in the mode

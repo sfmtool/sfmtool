@@ -13,7 +13,7 @@
 use sfmtool_core::bench::{StageKind, Thresholds, Verdict};
 use sfmtool_core::camera::image::ImageU8;
 
-use super::{TrackBody, TrackBodyResponse, LOCK_LABEL};
+use super::{TrackBody, TrackBodyResponse, LOCK_HELD_BY_SURFACE_TILING, LOCK_LABEL};
 use crate::scene::{ImageRef, PointRef, ReconId, SceneNode};
 use crate::state::edits::tests::projected_embedded_demo;
 use crate::state::AppState;
@@ -6281,5 +6281,55 @@ fn surface_tiling_mode_starts_clear_and_clearing_it_is_reported() {
         state.node(id).expect("loaded").history.versions().len(),
         versions,
         "toggling the mode pushed a version",
+    );
+}
+
+/// Surface Tiling Mode holds *Lock* on: ticking the mode ticks a cleared
+/// Lock, a click on Lock while the mode is on leaves it ticked and its hover
+/// says why, and clearing the mode leaves Lock ticked, a box the person can
+/// then clear again.
+#[test]
+fn surface_tiling_mode_holds_the_lock_on_and_leaves_it_ticked_when_cleared() {
+    use crate::bench::surface_tiling::SURFACE_TILING_LABEL;
+    let (state, _, _, mut panel, ctx) = on_the_bench();
+    let lock = menu_entry_pos(&mut panel, &ctx, &state, LOCK_LABEL);
+    at_pointer(&mut panel, &ctx, &state, lock, true);
+    assert!(!panel.lock(), "a click on the box clears it");
+
+    let mode = menu_entry_pos(&mut panel, &ctx, &state, SURFACE_TILING_LABEL);
+    at_pointer(&mut panel, &ctx, &state, mode, true);
+    assert!(panel.surface_tiling());
+    assert!(panel.lock(), "ticking the mode did not tick the lock");
+
+    at_pointer(&mut panel, &ctx, &state, lock, true);
+    assert!(panel.lock(), "the lock was cleared while the mode holds it");
+    // The greyed box says why it cannot be cleared.
+    ctx.all_styles_mut(|style| {
+        style.interaction.tooltip_delay = 0.0;
+        style.interaction.tooltip_grace_time = 0.0;
+    });
+    let mut texts = Vec::new();
+    for _ in 0..12 {
+        texts = painted(
+            &mut panel,
+            &ctx,
+            &state,
+            vec![egui::Event::PointerMoved(lock)],
+        );
+    }
+    assert!(
+        texts.iter().any(|t| t == LOCK_HELD_BY_SURFACE_TILING),
+        "no hover saying the mode holds the lock: {texts:?}"
+    );
+
+    let response = at_pointer(&mut panel, &ctx, &state, mode, true);
+    assert!(response.surface_tiling_off);
+    assert!(!panel.surface_tiling());
+    assert!(panel.lock(), "clearing the mode cleared the lock");
+    run_frame(&mut panel, &ctx, &state);
+    at_pointer(&mut panel, &ctx, &state, lock, true);
+    assert!(
+        !panel.lock(),
+        "the lock cannot be cleared after the mode is"
     );
 }
