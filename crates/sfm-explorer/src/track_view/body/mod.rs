@@ -365,8 +365,8 @@ pub struct TrackBody {
     /// kept for the session.
     split_settings: SplitSettings,
     /// Whether Surface Tiling Mode is on: the *Surface Tiling Mode* box.
-    /// *Duplicate* then also drops the copy's `out` observations and unpins
-    /// its verdicts, and a move of the patch in the 3D viewer runs Fit, Find
+    /// *Duplicate* then also hands the copy's verdicts back to the thresholds
+    /// and drops the observations they leave `out`, and a move of the patch in the 3D viewer runs Fit, Find
     /// matches by geometry, Fit, Grid Plane Normal, Fit and Commit
     /// ([`crate::bench::surface_tiling`]). A tool setting for the reason
     /// [`TrackBody::lock`] is: off when the viewer starts, kept for the
@@ -905,8 +905,9 @@ impl TrackBody {
         let checkbox = ui
             .checkbox(&mut self.surface_tiling, SURFACE_TILING_LABEL)
             .on_hover_text(
-                "Tile a surface with patches. Duplicate (Ctrl+D) also drops the copy's out \
-                 observations and hands its verdicts back to the thresholds; each move, \
+                "Tile a surface with patches. Duplicate (Ctrl+D) also hands the copy's \
+                 verdicts back to the thresholds and drops the observations they leave \
+                 out; each move, \
                  turn or resize of the patch in the 3D viewer then runs Fit, Find matches \
                  by geometry, Fit, Grid Plane Normal, Fit and Commit",
             );

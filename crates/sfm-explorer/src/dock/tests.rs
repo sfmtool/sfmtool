@@ -133,11 +133,14 @@ fn apply_track_edit(
 }
 
 /// The toolbar's *Duplicate* in Surface Tiling Mode is the mode's duplicate:
-/// the copy comes with no row pinned, as Ctrl+D's does.
+/// the copy's verdicts are handed back to the thresholds, and once its
+/// evaluation has settled the rows they turned `out` are dropped, as with
+/// Ctrl+D.
 #[test]
-fn the_duplicate_button_in_surface_tiling_mode_unpins_the_copy() {
+fn the_duplicate_button_in_surface_tiling_mode_unpins_the_copy_and_drops_its_out_rows() {
+    use crate::bench::tests::{put_with_rows_the_bars_refuse, Refused};
     let (mut state, id) = crate::bench::tests::state();
-    let label = crate::bench::tests::put_on_bench(&mut state, id);
+    let (label, refused) = put_with_rows_the_bars_refuse(&mut state, id, Refused::Some);
     let mut track_view = TrackView::new();
     track_view.set_surface_tiling(true);
 
@@ -147,11 +150,23 @@ fn the_duplicate_button_in_surface_tiling_mode_unpins_the_copy() {
         ..TrackBodyResponse::default()
     };
     apply_track_edit(&mut state, &mut track_view, id, response);
+    // The frames after it: the copy's evaluation settles, and the drop runs.
+    state.settle_bench_evaluation();
+    state.drive_surface_tiling();
 
     let copy = state.focused_item_label(id).expect("the copy").to_string();
     assert_ne!(copy, label);
+    assert!(state.surface_tiling.is_none(), "the drop is still waiting");
     let track = state.bench_track(id, &copy).expect("on the bench");
     assert!(track.observations.iter().all(|o| !o.pinned));
+    assert_eq!(track.observations.len(), 3 - refused.len());
+    assert!(
+        track
+            .observations
+            .iter()
+            .all(|o| !refused.contains(&o.image)),
+        "a row the thresholds turned out was kept"
+    );
     assert!(
         state
             .bench_track(id, &label)

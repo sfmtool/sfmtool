@@ -97,6 +97,73 @@ pub(crate) fn put_on_bench(state: &mut AppState, id: ReconId) -> String {
         .expect("a live point")
 }
 
+/// Which rows [`put_with_rows_the_bars_refuse`] leaves the bars to turn `out`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Refused {
+    /// The rows the default bars fail, with at least one left to pass them.
+    Some,
+    /// Every row.
+    Every,
+}
+
+/// Put [`POINT`] on the bench with rows the thresholds would turn `out` were
+/// they not pinned `in`, and give back the label and those rows' images.
+///
+/// The fixture's photographs are one pattern in every image rather than views
+/// of one surface, so the default bars already fail some rows: their tiles
+/// do not match the bitmap rendered from the reference row
+/// ([`Refused::Some`]). For [`Refused::Every`] the reprojection error bar is
+/// set below every row's error as well. The put pins every row `in`, so the
+/// rows stay `in` until their pins are handed back to the thresholds.
+pub(crate) fn put_with_rows_the_bars_refuse(
+    state: &mut AppState,
+    id: ReconId,
+    refused: Refused,
+) -> (String, Vec<u32>) {
+    use sfmtool_core::bench::bar_checks;
+    let label = put_on_bench(state, id);
+    state.settle_bench_evaluation();
+    if refused == Refused::Every {
+        let track = state.bench_track(id, &label).expect("on the bench");
+        let least = track
+            .observations
+            .iter()
+            .filter_map(|o| o.track.as_ref()?.reprojection_error)
+            .fold(f64::INFINITY, f64::min);
+        assert!(least > 0.0 && least.is_finite(), "{least}");
+        let mut thresholds = track.thresholds.clone();
+        thresholds.max_projection_error_px = least / 2.0;
+        state
+            .apply_bench_thresholds(id, &label, &thresholds)
+            .expect("a thresholds step");
+        state.settle_bench_evaluation();
+    }
+    let track = state.bench_track(id, &label).expect("on the bench");
+    assert!(
+        track
+            .observations
+            .iter()
+            .all(|o| o.verdict == Verdict::In && o.pinned),
+        "the put's pins did not hold"
+    );
+    let fails = |o: &sfmtool_core::bench::Observation| {
+        !bar_checks(o, track.stage_kind(), &track.thresholds)
+            .expect("a reading")
+            .clears_every_bar()
+    };
+    let images: Vec<u32> = track
+        .observations
+        .iter()
+        .filter(|o| fails(o))
+        .map(|o| o.image)
+        .collect();
+    let expected = match refused {
+        Refused::Some => 1..track.observations.len(),
+        Refused::Every => track.observations.len()..track.observations.len() + 1,
+    };
+    assert!(expected.contains(&images.len()), "{images:?}");
+    (label, images)
+}
 /// The Action Log's entries, oldest first, as `(kind, text)`.
 fn rows(state: &AppState) -> Vec<(Kind, String)> {
     state

@@ -2049,7 +2049,8 @@ what the first wrote.
 `EditableTrack::drop_out_observations()` is the track with its `out`
 observations dropped and its `in` ones kept, each with its place, verdict, pin
 and measurements. It is what Track View's Surface Tiling Mode makes of a
-duplicate before the copy is moved
+duplicate, once the copy's verdicts are handed back to the thresholds and
+judged, before it is moved
 ([`../../gui/track-view.md`](../../gui/track-view.md) § "Surface Tiling
 Mode"): the rows refused for the patch the copy came from are refusals about
 that ground, not about the ground the copy is moved to.

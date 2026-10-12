@@ -432,29 +432,43 @@ fn ctrl_d_does_nothing_without_a_focused_item() {
 }
 
 /// In Surface Tiling Mode, Ctrl+D is the mode's duplicate: the copy's verdicts
-/// are handed back to the thresholds, as the toolbar's button does.
+/// are handed back to the thresholds, and once its evaluation has settled the
+/// rows they turned `out` are dropped, as with the toolbar's button.
 #[test]
-fn ctrl_d_in_surface_tiling_mode_unpins_the_copy() {
-    let (mut state, id) = edits::adjustable_state();
-    let point = PointRef::new(id, 11);
-    super::apply_point_click(&mut state, point, false);
-    super::apply_point_click(&mut state, point, true);
+fn ctrl_d_in_surface_tiling_mode_unpins_the_copy_and_drops_its_out_rows() {
+    use crate::bench::tests::{put_with_rows_the_bars_refuse, Refused};
+    let (mut state, id) = crate::bench::tests::state();
+    let (label, refused) = put_with_rows_the_bars_refuse(&mut state, id, Refused::Some);
+    assert_eq!(state.focused_item_label(id), Some(label.as_str()));
     let mut parts = Parts::with_state(state);
     parts.track_view.set_surface_tiling(true);
 
     parts.press_with(egui::Key::D, egui::Modifiers::COMMAND, false);
+    // The frames after it: the copy's evaluation settles, and the drop runs.
+    parts.state.settle_bench_evaluation();
+    parts.state.drive_surface_tiling();
 
     let copy = parts.state.focused_item_label(id).unwrap().to_string();
-    let track = parts.state.bench_track(id, &copy).expect("the copy");
-    assert!(
-        track.observations.iter().all(|o| !o.pinned),
-        "{:?}",
-        texts(&parts.state)
-    );
+    assert_ne!(copy, label);
     let rows = texts(&parts.state);
+    let track = parts.state.bench_track(id, &copy).expect("the copy");
+    assert!(track.observations.iter().all(|o| !o.pinned), "{rows:?}");
+    assert_eq!(track.observations.len(), 3 - refused.len(), "{rows:?}");
     assert!(
-        rows.iter()
-            .any(|t| t.starts_with("Handed ") && t.contains(&copy)),
-        "{rows:?}"
+        track
+            .observations
+            .iter()
+            .all(|o| !refused.contains(&o.image)),
+        "a row the thresholds turned out was kept: {rows:?}"
+    );
+    let handed = rows
+        .iter()
+        .position(|t| t.starts_with("Handed ") && t.contains(&copy))
+        .unwrap_or_else(|| panic!("no unpin row: {rows:?}"));
+    assert!(
+        rows[handed + 1..]
+            .iter()
+            .any(|t| t.starts_with(&format!("Dropped {} out ", refused.len()))),
+        "no drop after the unpin: {rows:?}"
     );
 }

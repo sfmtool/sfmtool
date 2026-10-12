@@ -1,8 +1,8 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Surface Tiling Mode: the duplicate that drops the copy's `out` rows and
-//! unpins it, and the sequence a move starts, run step by step as the frame
+//! Surface Tiling Mode: the duplicate that unpins the copy and then drops its
+//! `out` rows, and the sequence a move starts, run step by step as the frame
 //! runs it, with the background task and the live evaluation driven to their
 //! ends in between.
 
@@ -60,15 +60,31 @@ fn run_sequence(state: &mut AppState) -> Vec<TilingStep> {
     panic!("the sequence did not end: {:?}", rows(state));
 }
 
+/// Run frames until a duplicate's drop has ended, settling the copy's
+/// evaluation before each as the frames between would.
+fn finish_drop(state: &mut AppState) {
+    for _ in 0..8 {
+        if state.surface_tiling.is_none() {
+            return;
+        }
+        state.settle_bench_evaluation();
+        state.drive_surface_tiling();
+    }
+    panic!("the drop did not end: {:?}", rows(state));
+}
+
+/// The mode's duplicate hands the copy's pins back to the thresholds first,
+/// and drops what is `out` only once the copy's evaluation has settled, so a
+/// row the thresholds turn `out` is dropped with the rest.
 #[test]
-fn a_tiling_duplicate_drops_the_out_rows_and_unpins_the_rest() {
+fn a_tiling_duplicate_unpins_the_copy_and_then_drops_what_the_bars_turn_out() {
+    use crate::bench::live::Evaluation;
     let (mut state, id) = state();
-    let label = put_on_bench(&mut state, id);
-    // The put pins every row `in`; turn one out by hand, which pins it `out`.
-    state
-        .set_bench_verdict(id, &label, 1, Verdict::Out)
-        .expect("a verdict step");
-    state.settle_bench_evaluation();
+    let (label, refused) = crate::bench::tests::put_with_rows_the_bars_refuse(
+        &mut state,
+        id,
+        crate::bench::tests::Refused::Some,
+    );
     state.action_log.clear();
     let before = versions(&state, id);
 
@@ -76,13 +92,45 @@ fn a_tiling_duplicate_drops_the_out_rows_and_unpins_the_rest() {
         .duplicate_for_surface_tiling(id, &label)
         .expect("the copy is made");
 
+    // The duplicate and the unpin are taken at once; the drop waits.
     assert_eq!(state.focused_item_label(id), Some(copy.as_str()));
-    assert_eq!(versions(&state, id), before + 3, "{:?}", rows(&state));
+    assert_eq!(versions(&state, id), before + 2, "{:?}", rows(&state));
+    assert_eq!(
+        state.surface_tiling_status(id, &copy).as_deref(),
+        Some("Step 1 of 1: Drop the out observations")
+    );
+    assert_eq!(
+        state.bench_evaluation(id, &copy),
+        Some(Evaluation::Evaluating)
+    );
+    state.drive_surface_tiling();
+    assert_eq!(
+        versions(&state, id),
+        before + 2,
+        "the drop ran before the evaluation settled"
+    );
+
+    finish_drop(&mut state);
+
+    let logged = rows(&state);
+    assert_eq!(versions(&state, id), before + 3, "{logged:?}");
+    assert!(state.surface_tiling.is_none());
+    let kept = 3 - refused.len();
     let track = state.bench_track(id, &copy).expect("on the bench");
-    assert_eq!(track.observations.len(), 2, "the out row was kept");
+    assert_eq!(track.observations.len(), kept, "{logged:?}");
     assert!(
-        track.observations.iter().all(|o| !o.pinned),
-        "a verdict is still pinned"
+        track
+            .observations
+            .iter()
+            .all(|o| !refused.contains(&o.image)),
+        "a row the bars turned out was kept: {logged:?}"
+    );
+    assert!(
+        track
+            .observations
+            .iter()
+            .all(|o| !o.pinned && o.verdict == Verdict::In),
+        "{logged:?}"
     );
     assert_eq!(
         track.origin, None,
@@ -91,22 +139,41 @@ fn a_tiling_duplicate_drops_the_out_rows_and_unpins_the_rest() {
     // The original is left as it was.
     let original = state.bench_track(id, &label).expect("still on the bench");
     assert_eq!(original.observations.len(), 3);
-    assert_eq!(original.observations[1].verdict, Verdict::Out);
-    assert!(original.observations.iter().all(|o| o.pinned));
+    assert!(original
+        .observations
+        .iter()
+        .all(|o| o.pinned && o.verdict == Verdict::In));
 
-    let texts: Vec<String> = rows(&state).into_iter().map(|(_, _, t)| t).collect();
+    assert!(logged.iter().all(|(_, failed, _)| !failed), "{logged:?}");
+    let texts: Vec<String> = logged
+        .iter()
+        .filter(|(kind, _, _)| *kind == Kind::Bench)
+        .map(|(_, _, t)| t.clone())
+        .collect();
     assert!(
         texts[0].starts_with(&format!("Duplicated {label} as {copy}")),
         "{texts:?}"
     );
+    let n = refused.len();
+    let observations = |n: usize| {
+        if n == 1 {
+            "observation"
+        } else {
+            "observations"
+        }
+    };
     assert!(
         texts[1].starts_with(&format!(
-            "Dropped 1 out observation of {copy}, leaving 2 in"
+            "Handed 3 verdicts back to the thresholds in {copy}: {n} turned out"
         )),
         "{texts:?}"
     );
+    let dropped = format!(
+        "Dropped {n} out {} of {copy}, leaving {kept} in",
+        observations(n)
+    );
     assert!(
-        texts[2].starts_with("Handed 2 verdicts back to the thresholds in"),
+        texts.iter().skip(2).any(|t| t.starts_with(&dropped)),
         "{texts:?}"
     );
 }
@@ -132,6 +199,7 @@ fn a_tiling_duplicate_skips_the_steps_with_nothing_to_do() {
     state
         .duplicate_for_surface_tiling(id, &label)
         .expect("the copy is made");
+    finish_drop(&mut state);
 
     // No row is pinned, so only the duplicate and, when the bars turned a
     // row out, the drop are steps.
@@ -146,6 +214,91 @@ fn a_tiling_duplicate_skips_the_steps_with_nothing_to_do() {
         rows(&state).iter().all(|(_, failed, _)| !failed),
         "{:?}",
         rows(&state)
+    );
+}
+
+/// Where the thresholds turn every row of the copy `out`, the drop is
+/// refused, the copy is left with its rows, and the refusal and the stop are
+/// each a failed row.
+#[test]
+fn a_tiling_duplicate_whose_bars_turn_every_row_out_keeps_them() {
+    let (mut state, id) = state();
+    let (label, _) = crate::bench::tests::put_with_rows_the_bars_refuse(
+        &mut state,
+        id,
+        crate::bench::tests::Refused::Every,
+    );
+    state.action_log.clear();
+    let before = versions(&state, id);
+
+    let copy = state
+        .duplicate_for_surface_tiling(id, &label)
+        .expect("the copy is made");
+    finish_drop(&mut state);
+
+    let logged = rows(&state);
+    assert_eq!(versions(&state, id), before + 2, "{logged:?}");
+    let track = state.bench_track(id, &copy).expect("on the bench");
+    assert_eq!(track.observations.len(), 3, "{logged:?}");
+    assert!(track.observations.iter().all(|o| o.verdict == Verdict::Out));
+    let stop = stop_row(&state);
+    assert!(
+        stop.starts_with(&format!(
+            "Surface tiling of {copy} stopped at Drop the out observations (step 1 of 1): \
+             Cannot drop the out observations of {copy}: every one of its 3 observations \
+             is out"
+        )),
+        "{stop}"
+    );
+    let (_, failed, refusal) = &logged[logged.len() - 2];
+    assert!(*failed && refusal.starts_with("Cannot drop"), "{logged:?}");
+}
+
+/// A move of the copy while its drop waits for the evaluation ends the drop
+/// with a row, and the move's own sequence starts.
+#[test]
+fn a_move_while_the_drop_waits_ends_it() {
+    use crate::bench::PatchEdit;
+    let (mut state, id) = state();
+    let (label, _) = crate::bench::tests::put_with_rows_the_bars_refuse(
+        &mut state,
+        id,
+        crate::bench::tests::Refused::Some,
+    );
+    let copy = state
+        .duplicate_for_surface_tiling(id, &label)
+        .expect("the copy is made");
+
+    state
+        .edit_bench_patch_from_viewer(
+            id,
+            &copy,
+            &PatchEdit::Translate {
+                by: [0.01, 0.0, 0.0],
+            },
+            Some(SplitSettings::default()),
+        )
+        .expect("a move in the mode");
+
+    let logged = rows(&state);
+    let (_, failed, stop) = &logged[logged.len() - 2];
+    assert!(*failed, "{logged:?}");
+    assert_eq!(
+        stop,
+        &format!(
+            "Surface tiling of {copy} stopped at Drop the out observations (step 1 of 1): \
+             the patch was moved before its evaluation settled, so its out observations \
+             were left on it"
+        )
+    );
+    let (_, _, started) = logged.last().expect("a row");
+    assert!(
+        started.starts_with(&format!("Surface tiling {copy} after the move")),
+        "{logged:?}"
+    );
+    assert_eq!(
+        state.surface_tiling.as_ref().map(|s| s.step()),
+        Some(TilingStep::Fit)
     );
 }
 
