@@ -42,6 +42,7 @@ mod layout;
 #[cfg(feature = "mcp")]
 mod mcp;
 mod metrics;
+mod motion;
 mod platform;
 mod point_ids;
 mod progress;

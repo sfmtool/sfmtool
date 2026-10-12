@@ -4,9 +4,11 @@
 //! Turning the viewport's `world_up` back to +Z while **Maintain Z-up** is on.
 //!
 //! [`step`] picks each frame's turning speed from the angle left and the last
-//! frame's speed, so the speed is the only state carried between frames. The
-//! speed profile, the timings [`MAX_SPEED`] and [`ACCELERATION`] give, and the
-//! two cases that need a choice of how to turn are in
+//! frame's speed, through the one-dimensional controller
+//! [`crate::motion::step`] that the camera model proposal's preview also runs
+//! on, so the speed is the only state carried between frames. The speed
+//! profile, the timings [`MAX_SPEED`] and [`ACCELERATION`] give, and the two
+//! cases that need a choice of how to turn are in
 //! `specs/gui/viewport-navigation.md` § "Maintain Z-up".
 
 use nalgebra::{Unit, UnitQuaternion, Vector3};
@@ -18,25 +20,8 @@ pub(super) const MAX_SPEED: f64 = 4.0;
 /// speeding up and slowing down.
 pub(super) const ACCELERATION: f64 = 20.0;
 
-/// The longest frame time one step integrates over, in seconds. A stalled
-/// frame then moves the view by no more than a normal frame at this rate.
-const MAX_DT: f64 = 0.05;
-
 /// An angle this small between `world_up` and +Z counts as level.
 const LEVEL: f64 = 1e-6;
-
-/// The speed that, slowing down at [`ACCELERATION`] one frame of `dt` at a
-/// time, stops after turning exactly `angle`.
-///
-/// The continuous answer is `sqrt(2·a·angle)`. Stepping it frame by frame
-/// arrives with a speed of about `sqrt(2·a²·dt²)` left over, which is then
-/// dropped to zero in one frame; this form accounts for the steps, so the
-/// last step before level is taken at about `a·dt`, the same speed the first
-/// step of a turn is taken at.
-fn stopping_speed(angle: f64, dt: f64) -> f64 {
-    let a_dt = ACCELERATION * dt;
-    (2.0 * ACCELERATION * angle + 0.25 * a_dt * a_dt).sqrt() - 0.5 * a_dt
-}
 
 /// One frame of turning `up` toward +Z: the new `world_up` and the speed to
 /// carry into the next frame.
@@ -46,6 +31,10 @@ fn stopping_speed(angle: f64, dt: f64) -> f64 {
 /// undefined, and the turn is taken about `forward`, the view direction, so
 /// that the view rolls over rather than pitching. `speed` is the speed the
 /// last frame turned at, zero on the first frame of a turn.
+///
+/// How far each frame turns is the shared one-dimensional controller's answer
+/// ([`crate::motion::step`]) with the angle to +Z as the value, a goal of 0 and
+/// this module's two constants; this function turns `world_up` by the change.
 ///
 /// Returns +Z and a speed of zero once `up` is level.
 pub(super) fn step(
@@ -59,19 +48,18 @@ pub(super) fn step(
     if angle <= LEVEL {
         return (z, 0.0);
     }
-    let dt = dt.clamp(0.0, MAX_DT);
-    let next_speed = (speed.max(0.0) + ACCELERATION * dt)
-        .min(stopping_speed(angle, dt))
-        .min(MAX_SPEED);
-    let turn = next_speed * dt;
-    if turn >= angle {
+    // The angle shrinks toward its goal, so a turn toward level is a negative
+    // velocity of the angle.
+    let (left, velocity) =
+        crate::motion::step(angle, -speed.max(0.0), 0.0, dt, MAX_SPEED, ACCELERATION);
+    if left <= 0.0 {
         return (z, 0.0);
     }
     let axis = Unit::try_new(up.cross(&z), 1e-9)
         .or_else(|| Unit::try_new(forward - up * forward.dot(&up), 1e-9))
         .unwrap_or_else(|| Unit::new_normalize(up.cross(&Vector3::x())));
-    let turned = UnitQuaternion::from_axis_angle(&axis, turn) * up;
-    (turned.normalize(), next_speed)
+    let turned = UnitQuaternion::from_axis_angle(&axis, angle - left) * up;
+    (turned.normalize(), -velocity)
 }
 
 #[cfg(test)]
