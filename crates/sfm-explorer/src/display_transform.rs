@@ -426,7 +426,7 @@ impl AppState {
         id: ReconId,
         mode: PatchReframe,
     ) -> Result<(Se3Transform, String), String> {
-        if let Some(why) = self.busy_refusal(id) {
+        if let Some(why) = self.edit_refusal(id) {
             return Err(why);
         }
         let node = self
@@ -477,7 +477,7 @@ impl AppState {
         transform: Se3Transform,
         text: String,
     ) -> Result<(), String> {
-        if let Some(why) = self.busy_refusal(id) {
+        if let Some(why) = self.edit_refusal(id) {
             return Err(why);
         }
         let node = self
@@ -500,7 +500,7 @@ impl AppState {
     /// The same two gates the menu entry greys on, busy first and then a node
     /// at the identity, in the words a caller that asked anyway is answered in.
     fn bake_refusal(&self, id: ReconId) -> Option<String> {
-        if let Some(why) = self.busy_refusal(id) {
+        if let Some(why) = self.edit_refusal(id) {
             return Some(why);
         }
         let Some(node) = self.node(id) else {

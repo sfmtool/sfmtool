@@ -41,7 +41,11 @@ looking through the camera, its photograph is the background — press `M`, or
 choose `Edit > Move Camera`, or choose `Move Camera` on the image row's context
 menu in the Scene Graph, which enters camera view first and then locks. The Edit
 menu entry is greyed with a hover text when the viewport is not in camera view,
-when the image carries no pose, or when a lock is already held.
+when the image carries no pose, when a lock is already held, or while a camera
+model proposal is open on the node
+([switch-camera-model.md](switch-camera-model.md) § "Ending a proposal"),
+which the image menu's entry is greyed for too. Opening a proposal on the
+node ends a held lock first, by the implicit rule below.
 
 On entry the viewport is **snapped to the camera's exact pose**, the same
 placement entering camera view performs, so a free-look offset the reviewer

@@ -1214,7 +1214,7 @@ impl AppState {
         // The level the Action Log toolbar's checkbox last left, read as the
         // operation starts so that a change to it takes effect on the next one.
         let collector = Collector::new(self.action_log.detailed_timing());
-        if let Some(why) = self.busy_refusal(source) {
+        if let Some(why) = self.edit_refusal(source) {
             return Err(why);
         }
         match self.resect_image_inner(source, image, &collector) {

@@ -11,13 +11,18 @@ that line.
 
 An **operation** is the kind of work, `Bundle adjust`; a **task** is one run of
 one, on one node (or, for an open, on none), with an id of its own. One task
-runs at a time. The thirteen operations are `Open`, which reads files and makes
-them nodes (§ "Opening a file"); the four whole-value edits, `Bundle adjust`,
-`Convert to embedded patches`, `Retriangulate all points` and `Prune covered
-observations`; `Add image to tracks`; and the seven the bench runs, `Fit track`,
-`Set track stage`, `Search descriptors`, `Geometry search`, `Build index files`,
-`Create track at pixel` and `Find nearby tracks`
-([bench.md](bench.md)). Every one of them is **cancellable**. The bench's live
+runs at a time. The seventeen operations are `Open`, which reads files and
+makes them nodes (§ "Opening a file"); the five whole-value edits, `Bundle
+adjust`, `Convert to embedded patches`, `Retriangulate all points`, `Switch
+camera model` and `Prune covered observations`; `Add image to tracks`; and the
+ten the bench runs, `Fit track`, `Set track stage`, `Fit normal`, `Finite
+difference normal`, `Grid plane normal`, `Search descriptors`, `Geometry
+search`, `Build index files`, `Create track at pixel` and `Find nearby tracks`
+([bench.md](bench.md)). `Switch camera model` is a camera model proposal's
+Apply: the switch of one camera followed by the retriangulation of the tracks
+its images observe, as one version
+([edits/switch-camera-model.md](edits/switch-camera-model.md)); it polls the
+flag on either side of the switch and inside the retriangulation. Every one of them is **cancellable**. The bench's live
 evaluation is not one of them: it locks no node, writes no row and is not what
 the Background panel shows ([bench.md](bench.md) § "Live evaluation"). The open polls the
 flag between files, between each file's stages, before every thumbnail it builds

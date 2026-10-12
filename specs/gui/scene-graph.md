@@ -308,6 +308,13 @@ fixed-height for virtualization.
   `Bake Transform`, `Tint ▸` (Original / palette of distinguishable colors),
   `Bundle Adjust...`, `Retriangulate All Points`, `Prune Covered Observations`,
   `Build Index Files`, `Convert to Embedded Patches`, `Close`.
+  While a camera model proposal is open on the node
+  ([edits/switch-camera-model.md](edits/switch-camera-model.md)), the entries
+  that edit it (`Reset Transform`, `Bake Transform`, `Bundle Adjust...`,
+  `Retriangulate All Points`, `Prune Covered Observations`, `Convert to
+  Embedded Patches`) are greyed with *"Apply or cancel the camera model
+  proposal first."*, after a busy node's sentence; `Close` applies the proposal
+  first.
   **`Solo` is not in the menu** — it is the row's `S` (see "Comparison
   Affordances").
 - **`Bundle Adjust...`** refines every pose and point of the node against its
@@ -415,6 +422,18 @@ fixed-height for virtualization.
   measurement is against the width actually left after the label, so widening
   the panel brings the counts back.
 
+**Camera Intrinsics row** — `#0  OPENCV_FISHEYE  480×480  f 129.1/129.3  24 images`
+- Click, double-click and tooltip as
+  [camera-intrinsics.md](camera-intrinsics.md) § "Scene Graph: the Camera
+  Intrinsics group" says.
+- Context menu: one entry, `Switch Camera Model…`, which opens a camera model
+  proposal on the row's camera and brings the Camera Intrinsics panel to the
+  front ([edits/switch-camera-model.md](edits/switch-camera-model.md)). Greyed,
+  with the reason as its hover text, on a busy node, on another camera of a
+  node with a proposal open, and on a node with no posed image. The tree keeps
+  the request for `app.rs` (`SceneGraphPanel::take_switch_camera_model`),
+  since the raise is a layout operation.
+
 **Camera Images group row** — `[▸] [👁] Camera Images (243)`
 - Eye drives `show_camera_images` for the node.
 - Named for what it counts: `recon.images.len()`, one row per *posed view*. In
@@ -474,6 +493,9 @@ order:
    [edits/move-camera.md](edits/move-camera.md), which owns it.
 4. `Delete Image` removes this image from the reconstruction as one version of
    it -- see [edit-history.md](edit-history.md), which owns it.
+
+While a camera model proposal is open on the node, all four are greyed with
+*"Apply or cancel the camera model proposal first."*
 
 `Add Image to Tracks` sits directly below `Resect Image` because it is what a
 re-posed image wants next: the pose is new, and the tracks it now sees are not

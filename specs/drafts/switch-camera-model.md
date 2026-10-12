@@ -1,123 +1,75 @@
-# Switching a camera to another camera model in the viewer
+# Comparing and previewing a camera model proposal
 
 **Status:** Draft
 
+The viewer's camera model proposal is built: **Switch Model…** in the Camera
+Intrinsics panel opens it, its strip of controls refits the camera on the GUI
+thread, the Parameters and Derived tables show the current and the proposed
+camera side by side, and **Apply** pushes the switch and the retriangulation of
+the camera's tracks as one version, through the `Switch camera model`
+background task
+([`../gui/edits/switch-camera-model.md`](../gui/edits/switch-camera-model.md),
+[`../gui/camera-intrinsics.md`](../gui/camera-intrinsics.md) § "The proposal
+strip"). On the wire, `propose_camera_model`, `cancel_camera_model_proposal`,
+the `proposal: true` form of `switch_camera_model` and the `proposed` block of
+`get_camera_intrinsics` are built
+([`../gui/mcp-server.md`](../gui/mcp-server.md) § "`propose_camera_model` /
+`cancel_camera_model_proposal`").
+
+This draft is what remains, in two steps (§ "Order of work"):
+
+- **The comparison**: the projection plot drawing both models, a third plot of
+  the change, an observation rug under the shared θ axis, and the Image Detail
+  overlay's **Change to proposed** field with its observation layer.
+- **The preview**: a job that runs the switch and the retriangulation of the
+  proposal's tracks off the GUI thread while the proposal is open, its
+  observation comparison sent to the panel, a **Preview retriangulation**
+  checkbox that moves the points and surfels of those tracks smoothly in the
+  3D view to where Apply will put them, a banner with the preview's counts, and
+  Apply installing the job's answer instead of solving again.
+
 Decided in outline:
 
-- The switch is a fit, one core operation, reached from the Camera Intrinsics
-  panel, from MCP and from `sfm xform --camera-model`. The core operation, the
-  CLI and the direct switch are built: the lens fit is
-  [`../core/camera/refit-camera-intrinsics.md`](../core/camera/refit-camera-intrinsics.md),
-  the reconstruction-level switch is
-  [`../core/reconstruction/switch-camera-model.md`](../core/reconstruction/switch-camera-model.md),
-  the CLI is
-  [`../cli/reconstruction/xform/xform-command.md`](../cli/reconstruction/xform/xform-command.md)
-  § "Camera Model", and the viewer's direct switch is
-  [`../gui/edits/switch-camera-model.md`](../gui/edits/switch-camera-model.md):
-  the "Refit spline…" action in the Camera Intrinsics panel header, which
-  gives a spline camera a new coefficient count or domain, and the MCP tool
-  `switch_camera_model`, which applies a switch or a refit at once.
-- A spline camera switched to its own model, with another coefficient count or
-  domain end, is the refit, so the proposal covers it. **Switch Model…**
-  replaces "Refit spline…" in the panel header, and the Refit Spline dialog's
-  controls and its outermost-keypoint row move into the proposal (§ "The
-  proposal"). Once the proposal ships, the panel has one entry for a change of
-  model and a refit, as the wire and the core function already do.
-- In the viewer, a change of model is shown as a proposal for one camera, drawn
-  against the current model, before it is applied. **Apply** pushes one
-  version that holds the shipped direct switch and the retriangulation of the
-  proposal's tracks through the switched camera. That is what remains, with
-  the MCP tools `propose_camera_model` and `cancel_camera_model_proposal` and
-  the proposal form of `switch_camera_model`.
 - While a proposal is open, a **Preview retriangulation** checkbox moves the
   points and surfels of the proposal's tracks smoothly, in the 3D view, to
   where Apply will put them, and back when it is cleared.
-- The core `switch_camera_model` stays a lens-only operation, and so does the
-  direct form of the MCP tool `switch_camera_model`. The retriangulation is
-  the viewer edit's, composed from `switch_camera_model` and
-  `retriangulate_points` (§ "Ending a proposal").
+- The job is not a background task: it locks nothing, pushes nothing and is not
+  shown in the Background Task panel (§ "The job").
 
 Not decided: see [Open questions](#open-questions).
 
-Builds on: `retriangulate_points`
+Builds on the core pieces made for it, which are built and specified:
+`retriangulate_points`
 ([`../core/reconstruction/triangulation-rules.md`](../core/reconstruction/triangulation-rules.md)
 § "The report"), whose report carries a `RetriangulatedPoint` for every point
-the call was asked about: its `index` in the value passed in, its `new_index`
-in the value returned, consistent with the call's `PointMap`, and a
-`RetriangulateOutcome`. The outcome is `Held`, `Kept` (fewer than two usable
-rays, so the stored geometry stays), or `Solved` with the `PointVerdict` that
-decided it. This draft reads losses of a position off those outcomes
-and adds no verdict logic of its own. It also builds on three core pieces made
-for it:
-
-- `RetriangulateWhich::TheseInBulk`, the bulk path for a long list of points
-  ([`../core/reconstruction/triangulation-rules.md`](../core/reconstruction/triangulation-rules.md)
-  § "Retriangulating a reconstruction"): the overlay folded in first, as `All`
-  does, and the named points solved in one pass and written into the new base
-  at their own rows, with the statuses, geometry and patch frames `These`
-  gives them. The switch's retriangulation names every track of one camera,
-  which on a rig is a large share of the value.
-- `SwitchCameraModelOptions::outermost_keypoint`
-  ([`../core/reconstruction/switch-camera-model.md`](../core/reconstruction/switch-camera-model.md)
-  § "The outermost keypoint"), which, off, leaves the outermost keypoint out of
-  the switch's report and reads no `.sift` file for it.
-- `ImageTable::camera_centroid`, `ImageTable::placement_scale_from` and the
-  public `patch_frame_factor`
-  ([`../core/reconstruction/bundle-adjust.md`](../core/reconstruction/bundle-adjust.md)
-  § "The frame follows the depth"), so a whole-value write-back measures every
-  placement distance from a centroid taken once, and the preview reads its
-  surfel size factor from the rule the write-back applies.
+the call was asked about, with its `index`, its `new_index` and a
+`RetriangulateOutcome` (`Held`, `Kept`, or `Solved` with the `PointVerdict`
+that decided it); `RetriangulateWhich::TheseInBulk`, the bulk path Apply
+already uses; `SwitchCameraModelOptions::outermost_keypoint`
+([`../core/reconstruction/switch-camera-model.md`](../core/reconstruction/switch-camera-model.md)
+§ "The outermost keypoint"); and `ImageTable::camera_centroid`,
+`ImageTable::placement_scale_from` and the public `patch_frame_factor`
+([`../core/reconstruction/bundle-adjust.md`](../core/reconstruction/bundle-adjust.md)
+§ "The frame follows the depth"). This draft reads losses of a position off
+the retriangulation's outcomes and adds no verdict logic of its own.
 
 Amends:
 
-- [`../gui/camera-intrinsics.md`](../gui/camera-intrinsics.md), whose § "1.
-  Header" loses "Refit spline…" in favour of the Switch Model… button beside
-  `Copy ▾` (and `IntrinsicsDetailResponse::refit_spline` with it), whose
-  non-goal "Typing intrinsics" names Switch Model… as the fit the panel makes,
-  and whose § "Scene Graph: the Camera Intrinsics group" gains the rows'
-  context menu.
-- [`../gui/scene-graph.md`](../gui/scene-graph.md), whose Scene tree gains a
-  context menu on the rows of the Camera Intrinsics group, which have none
-  today.
-- [`../gui/mcp-server.md`](../gui/mcp-server.md), which gains
-  `propose_camera_model` and `cancel_camera_model_proposal`, whose
-  `switch_camera_model` gains the proposal form, and whose
-  `get_camera_intrinsics` gains the `proposed` block.
+- [`../gui/camera-intrinsics.md`](../gui/camera-intrinsics.md) § "4.
+  Projection plot", which gains the proposed model's curves, the change plot
+  and the rug while a proposal is open, and § "Performance and caching", whose
+  Image Detail layer cache gains the proposal's generation as a key.
 - [`../gui/edits/switch-camera-model.md`](../gui/edits/switch-camera-model.md),
-  the direct switch the proposal's Apply builds on. It gains a second form,
-  the switch followed by a retriangulation of the switched camera's tracks in
-  one version, which the proposal's Apply pushes (§ "Ending a proposal"); its
-  version label and Action Log row gain the retriangulation's part, and its
-  § "Purpose" says the window's switch moves the camera's points with it while
-  the wire's direct form does not. Its § "Invocation" replaces
-  "Refit spline…" with the proposal's three entries, and its § "The dialog"
-  goes: the Refit Spline dialog
-  ([`refit_spline_prompt.rs`](../../crates/sfm-explorer/src/refit_spline_prompt.rs))
-  is removed, its count and domain controls and its outermost-keypoint row being
-  the proposal's for a same-model target, and its tests move to the proposal's.
-  Its opening paragraph and § "Mechanism", which name the dialog, name the
-  proposal instead. Its non-goal "A dialog for a change of model family" is
-  replaced by the proposal. Its non-goal "Refitting several cameras at once"
-  stands: a proposal is for one camera and Apply pushes one version with the
-  label the edit already writes.
-- The other standing specs that name "Refit spline…" as the viewer's entry for
-  a refit, which then name Switch Model…:
-  [`../GLOSSARY.md`](../GLOSSARY.md) § "Camera intrinsics" (the entry **switch
-  camera model**, whose last sentence names the spline case's button),
-  [`../gui/edits/README.md`](../gui/edits/README.md),
-  [`../gui/edits/bundle-adjust.md`](../gui/edits/bundle-adjust.md),
-  [`../gui/mcp-server.md`](../gui/mcp-server.md) (§ "`switch_camera_model`",
-  and `get_widgets`' list of dialogs, which loses `Refit Spline`),
-  [`../core/reconstruction/switch-camera-model.md`](../core/reconstruction/switch-camera-model.md)
-  and
-  [`../core/camera/refit-camera-intrinsics.md`](../core/camera/refit-camera-intrinsics.md).
-- [`../gui/background-tasks.md`](../gui/background-tasks.md), whose
-  whole-value edits gain `Switch camera model`, the form Apply takes when the
-  proposal's job holds no answer for it.
-- [`../core/reconstruction/switch-camera-model.md`](../core/reconstruction/switch-camera-model.md),
-  whose non-goal naming the proposal and this draft becomes a pointer to the
-  viewer's proposal, and whose § "The outermost keypoint" names the proposal's
-  job as a caller that leaves the keypoint out.
+  whose Apply gains the installation of the job's answer, and whose endings end
+  the preview in the same frame.
+- [`../gui/mcp-server.md`](../gui/mcp-server.md), whose `propose_camera_model`
+  gains `preview_retriangulation` and `animate`, whose `proposed` block gains
+  the observation comparison, `preview_retriangulation`, `s` and the
+  `triangulation` block, and whose `get/set_image_detail_display` gains the
+  field mode.
+- [`../core/reconstruction/switch-camera-model.md`](../core/reconstruction/switch-camera-model.md)
+  § "The outermost keypoint", which names the proposal's job as a caller that
+  leaves the keypoint out.
 - [`../gui/point-cloud-rendering.md`](../gui/point-cloud-rendering.md), whose
   base and additions point buffers gain a preview buffer, with a target per
   row blended in the shader.
@@ -128,14 +80,6 @@ Amends:
 - [`../gui/viewport-navigation.md`](../gui/viewport-navigation.md) § "Maintain
   Z-up", whose `righting::step` is generalised to a one-dimensional controller
   that the preview's blend also calls.
-
-A camera model is the function that maps a ray leaving the camera to a pixel.
-Switching a camera to another model replaces that function with one fitted to it
-over the angles where the old one is trusted, and leaves poses, points and
-keypoints alone. The viewer's proposal follows it with a retriangulation of the
-camera's tracks in the same version. The main use is moving a fisheye camera
-from a COLMAP polynomial model, which fails a little past 90° off the axis, to
-`SFMTOOL_FISHEYE`, whose spline and linear tail are defined out to 180°.
 
 ## Why: the Kerry Park lenses
 
@@ -189,96 +133,11 @@ produces describes the lens or those observations is judged in the viewer.
 
 ## The viewer
 
-### Invocation
+### The comparison
 
-- A **Switch Model…** button in the Camera Intrinsics panel header, to the
-  left of `Copy ▾`, where "Refit spline…" is today. It replaces that button:
-  refitting a spline camera is a switch of the camera to its own model, so it
-  is made from this proposal (§ "A same-model target"), and the header has no
-  separate refit entry.
-- A **Switch Camera Model…** entry on a new context menu on the rows of the
-  Scene tree's Camera Intrinsics group. The rows have no context menu today.
-- `Edit > Switch Camera Model…`, greyed when no camera is selected.
+While the proposal is open, the rest of the panel compares the two models
+beyond the side-by-side tables that are built:
 
-Each opens the proposal for that one camera. A rig's cameras are proposed and
-applied one at a time, each its own version, as the direct switch already does.
-
-Each is greyed, with the reason as its hover text, in three cases:
-
-- the node is busy with a background task, with the sentence the busy node's
-  other edits carry ([`../gui/background-tasks.md`](../gui/background-tasks.md)
-  § "What the rest of the viewer does meanwhile");
-- a proposal is already open on another camera of the node;
-- the node has no posed image.
-
-Opening a proposal on a node where the Move Camera lock is held ends the lock
-first, by the lock's own implicit rule: a commit when the pose has moved, and
-a silent drop otherwise
-([`../gui/edits/move-camera.md`](../gui/edits/move-camera.md)).
-The MCP apply path already does this for every editing command
-(`apply_as_agent` in `mcp/mod.rs`), and the panel's entries do the same.
-
-### The proposal
-
-While a proposal is open, the node has a **proposed camera**: a fitted
-`CameraIntrinsics` and its report, held as viewer state the way the Move Camera
-lock holds a pending pose. It is not in the version history until it is
-applied. It carries a **generation**, a counter that every change of its fit
-inputs advances; a change that leaves the inputs as they were keeps the
-generation.
-
-The panel shows a strip of controls at the top:
-
-- **Model**: the targets the source can be fitted to, with `SFMTOOL_FISHEYE`
-  first for a fisheye source. A spline camera's own model is in the list,
-  labelled as the refit (`SFMTOOL_FISHEYE (refit spline)`), and is where the
-  proposal opens on such a camera; any other camera opens on its first target.
-- **Coefficients** (2–32, `SPLINE_COEFF_COUNT_RANGE`), for a spline target,
-  starting at the count `RefitTarget::coeff_count_for` gives: the camera's own
-  for a same-model target, and 8 otherwise. Beside it, for a same-model
-  target, the camera's count, as in `now 8`.
-- **Fit to θ**: shows the default and where it came from; can be lowered. Not
-  shown for a same-model target (§ "A same-model target").
-- **Spline domain**: shows the default, the far image corner, or the camera's
-  own domain end for a same-model target; can be edited, up to 180°, and below
-  90° for `SFMTOOL_PINHOLE`. Beside it, the outermost keypoint of the camera's
-  images
-  ([`../core/reconstruction/outermost-keypoint.md`](../core/reconstruction/outermost-keypoint.md)),
-  detected where the `.sift` files can be read and observed otherwise, labelled
-  by its source, with the same button the Bundle Adjust dialog's domain row has,
-  which sets the domain to its angle. The default stays as it is. The
-  keypoints are read once, when the proposal opens, on the GUI thread, as the
-  Refit Spline dialog reads them today. Their angle is re-read from the
-  keypoint's pixel under each new fit, which reads no file.
-- **Preview retriangulation**, below.
-- **Apply** and **Cancel**.
-
-Every change refits at once, on the GUI thread: the lens fit and the panel's
-`Derived::compute` for the proposed column take milliseconds, as a fit does for
-the Refit Spline dialog today. The fit report is one line under the strip, for
-example: "rms 0.13 px, radial 0.013 px, max 0.29 px over θ ≤ 84.5°; aspect fy/fx
-0.9978 dropped". A spline fit is constrained to stay monotone, so it has an
-inverse; where that constraint bound, the line adds its range, for example
-"monotone constraint bound at 1 angle, 113.2°", because there the proposed curve
-is the closest invertible one rather than the current one.
-
-The fit releases the focal length and the distortion parameters, and keeps the
-principal point fixed: the lens fit copies it from the source
-([`../core/camera/refit-camera-intrinsics.md`](../core/camera/refit-camera-intrinsics.md)),
-and the proposal offers no control that frees it. The reason is that nothing
-would follow it up. The bundle adjustment that refines a switched camera,
-sfmtool's own solve behind the viewer's Bundle Adjust edit and `sfm xform
---bundle-adjust` on a spline camera, never frees the principal point; only the
-pycolmap adjustment can, and it does not take a spline camera. A principal
-point moved by the switch would therefore be fitted to the old model's curve
-alone and then held there by every later adjustment.
-
-The observation comparison and the preview's triangulation need the
-reconstruction, and are computed by the proposal's job (§ "The job" below).
-
-While the proposal is open, the rest of the panel compares the two models:
-
-- **Parameters and Derived**: two columns, current and proposed.
 - **Projection plot, r(θ) and Δr(θ)**: both models drawn, current in the
   neutral stroke and proposed in the accent. Each model's own untrusted region
   is shaded, so the current model's shading at 86° and the proposed model's
@@ -295,136 +154,11 @@ While the proposal is open, the rest of the panel compares the two models:
   where the data is: the Kerry rug thins out at 86°. Beside the rug is the count
   of observations past the current model's trusted bound.
 
-### A same-model target
-
-`switch_camera_model`
-([`switch_camera_model.rs`](../../crates/sfmtool-core/src/reconstruction/switch_camera_model.rs))
-takes any target, the camera's own model included. What it does with its own
-model depends on whether the model has a spline:
-
-- **A spline camera** (`SFMTOOL_FISHEYE`, `SFMTOOL_PINHOLE`) switched to its own
-  model is the refit. With no fit angle given, the core fits it with
-  `refit_spline`: over the whole new domain, with the domain end kept exactly
-  where none is given, constrained to stay monotone, and reporting
-  `ThetaFitSource::SplineDomain`. The proposal sends the request the Refit
-  Spline dialog sends today: no fit angle, the count, and a domain only when
-  the field has moved from the camera's own, so an untouched field keeps the
-  domain bit for bit. Fit to θ is not shown for this target, because a given
-  angle makes the core fit the camera like any other source over that angle,
-  which is not a refit. The strip is then the dialog's controls: Coefficients
-  and Spline domain, each with `now`, and the outermost-keypoint row with its
-  button. A proposal at the camera's own count and domain can be applied, as
-  the dialog allows today: it is the closest monotone curve to the current
-  one, which differs from the camera where the constraint binds.
-- **Any other camera's own model** is not in the Model list. The core fits the
-  model to itself over the fit angle, which changes the camera by no more than
-  the fit's error and leaves the person nothing to choose: a polynomial model
-  has no count or domain, and a count is refused for it
-  (`RefitError::CoeffCountNotApplicable`). Switch Model… is not greyed for such
-  a camera, since its other targets are offered; it is "Refit spline…" that
-  is greyed for it today, with `refit_spline_refusal`'s sentence.
-
-On the wire, `propose_camera_model` takes the camera's own model for any
-camera, as `switch_camera_model` does, and passes a `theta_fit_deg` to the core
-when one is given, so the proposal it opens is the core's answer to that
-request. The panel shows a proposal the wire opened as it was opened: its
-Model list shows the target named, and Fit to θ shows a fit angle the call
-gave.
-
-### Ending a proposal
-
-**Apply** pushes one version: the shipped direct switch
-([`../gui/edits/switch-camera-model.md`](../gui/edits/switch-camera-model.md))
-with the proposal's request, followed by `retriangulate_points` over the
-proposal's tracks (§ "The 3D view") on the switched value, through
-`RetriangulateWhich::TheseInBulk` and with the default
-options the viewer's Retriangulate edits use
-([`../gui/edits/retriangulate-point.md`](../gui/edits/retriangulate-point.md)).
-The edit composes the two core calls, and neither computes anything new for it.
-The label is the one the direct switch writes with the retriangulation added,
-`Switched camera 0 of kerry_park from OPENCV_FISHEYE to SFMTOOL_FISHEYE and
-retriangulated its tracks` for a change of model and `Refit spline of camera 0
-of kerry_park: 8 → 12 coefficients, domain 150.1° → 108.8°, and retriangulated
-its tracks` for a refit. The Action Log row is the direct switch's, followed by
-the counts the Retriangulate edits write for a whole-value run, read off the
-retriangulation's report. **Cancel** and `Escape` discard the proposal.
-
-Where the proposal's job already holds the proposed run's answer for the
-current generation (§ "The job"), that answer is the version, and Apply
-installs it on the GUI thread without solving again. Otherwise Apply starts
-the same two calls as a background task, `Switch camera model`
-([`../gui/background-tasks.md`](../gui/background-tasks.md)), which locks the
-node, reports the retriangulation's stages, is cancellable, and pushes the
-same version when it finishes; the proposal ends when the task starts. The
-implicit endings below apply by the same rule.
-
-On a `sift_files` node without the inline keypoint column,
-`retriangulate_points` refuses, since its observations carry no pixel
-(§ "The 3D view"). Apply there pushes the switch alone: the version, label
-and Action Log row of the direct switch, run on the GUI thread as that edit
-runs, with `retriangulate_points`' refusal sentence added to the row to say
-why the tracks were not moved. Where the switch itself refuses because a
-`.sift` file cannot be read (`SwitchCameraModelError::Observations`), Apply is
-refused with that sentence and the proposal stays open; an implicit ending
-below drops it, as it drops a proposal whose fit was refused.
-
-**Why Apply retriangulates.** The points were triangulated through the old
-model's rays. After a lens-only switch they stand where those rays put them,
-so the value holds a camera and points that disagree, and on Kerry the
-peripheral tracks stay where the polynomial's wrong rays placed them. Moving
-the camera's tracks in the same version makes the value agree with the lens it
-now holds, makes the next bundle adjustment start from the points the new
-model gives, and makes the preview a preview of the edit rather than of a step
-the person would have to take afterwards.
-
-The implicit endings follow the Move Camera lock: selecting another node,
-closing it, or an MCP edit tool naming it applies the proposal when the fit
-succeeded, since an edit has a history and undo can reverse it. The proposal is
-dropped when the fit was refused. Closing is the one ending that cannot apply
-afterwards, so it applies before the close is asked about, as the lock commits
-before it. Where that apply starts the background task, the node is then busy
-and the close is refused with the busy sentence, as any close of a busy node
-is; it can be closed once the version has landed.
-
-Three other states end or block a proposal:
-
-- **Undo, redo or a history jump on the node**, from the menus or the wire,
-  drops the proposal, as Cancel does, and writes a `Kind::View` row saying so.
-  The proposal was fitted to the camera of the version it opened on, and once
-  the cursor moves it describes a change to a camera the node no longer shows.
-  Applying it first instead would put a version on the history that the undo
-  then steps back out of, which is not what the person asked for.
-- **Other edits on the node from the menus** are greyed while a proposal is
-  open, with "Apply or cancel the camera model proposal first" as the hover
-  text. That includes entering the Move Camera lock on the node and every
-  operation that would start a background task on it, so the only background
-  task that can start on a node with a proposal open is Apply's own. An MCP
-  edit tool naming the node applies the proposal first, by the implicit rule,
-  and then runs; where that apply started the background task, the tool is
-  refused with the busy sentence instead, and the agent waits for the task as
-  it waits for any other.
-- **Hiding the node** leaves the proposal and its preview as they are. A hidden
-  node keeps its GPU buffers (`scene_renderer/mod.rs`), so showing it again
-  shows the preview where it stands.
-
-Every ending of the proposal ends its preview in the same frame: the preview
-buffers are dropped and the node's points are drawn at the positions the
-node's value holds. Unticking the checkbox is the way to see the motion back.
-Apply does not wait for the motion: the version it pushes holds the
-retriangulated positions, and the new base it installs recreates the node's
-point buffer from them (`upload/points.rs`, through the base-identity check in
-`app.rs`). A preview that had run to its end hands over to the new base with no
-visible change for the points that move, since their targets are the positions
-Apply writes (§ "The 3D view", "What each point does"). A point that loses its
-position goes from its stored position, in the failure colour, to where the 3D
-view draws a point at infinity. Without the preview, the camera's tracks move in
-one frame when the version lands. Where Apply runs as a background task, the
-preview ends when the task starts, and the points stand at their stored
-positions until it lands. The MCP reply of
-`switch_camera_model { proposal: true }` is an edit's reply: at once when the
-job's answer is installed, and otherwise the reply of a background edit, the
-version when the task finishes within 200 ms and a task handle when it does not,
-as `add_camera_image_to_tracks` replies.
+The observation comparison (the median, 90th percentile and maximum error of
+the camera's observations under each model over one fixed set, and the count
+past the trusted bound) needs the reconstruction's pixels, and is computed by
+the proposal's job (§ "The job"), which sends it to the panel when the switch
+returns.
 
 ### What else shows the proposal
 
@@ -485,7 +219,8 @@ hover text, where the node cannot be retriangulated: a `sift_files` node
 without the inline keypoint column, whose observations carry no pixel. On such
 a node the job still runs its first step, the switch, which reads the
 observations' pixels from the `.sift` files (§ "The job"), and Apply pushes the
-switch alone (§ "Ending a proposal").
+switch alone ([`../gui/edits/switch-camera-model.md`](../gui/edits/switch-camera-model.md)
+§ "Ending a proposal").
 
 **The proposal's tracks.** Every track with at least one observation in an
 image taken through the proposal's camera. These are the points Apply
@@ -615,7 +350,7 @@ Step 2 runs only while Preview retriangulation is ticked, or an MCP call has
 asked for the preview. An answer is kept by generation, so unticking and
 ticking again without a change of control reuses it rather than solving again.
 The answer for the current generation keeps its value as well as its report,
-since it is the version Apply installs (§ "Ending a proposal").
+since it is the version Apply installs (§ "Apply with the job's answer").
 
 **Cost.** The materialisation is made once per proposal, and is the base
 itself, shared by `Arc`, when the version's overlay is empty. Each job then
@@ -733,58 +468,49 @@ to 0.
 
 ### Caches
 
-Two caches key on `CameraRef` alone and must not serve the proposed camera as
-the current one:
+The panel's derived report of the proposed camera is cached apart from the
+current camera's, by the camera and the proposal's generation (built). The
+Image Detail layer cache (`image_detail/mod.rs`) keys on `CameraRef` alone, and
+gains the same second key for the model it was computed from, current or the
+proposal's generation, before its change field reads the proposed model.
 
-- the panel's `derived` map (`intrinsics_detail/mod.rs`);
-- the Image Detail layer cache (`image_detail/mod.rs`).
+### Apply with the job's answer
 
-Both gain a second key for the model they were computed from: current, or the
-proposal's generation. Apply goes through `forget_recon` the way every bulk
-edit does.
+Where the proposal's job already holds the proposed run's answer for the
+current generation (§ "The job"), that answer is the version, and Apply
+installs it on the GUI thread without solving again: the same version the
+`Switch camera model` task would push, with the same label and Action Log
+row. Otherwise Apply starts the task, as it does now. The implicit endings
+apply by the same rule.
+
+Every ending of the proposal ends its preview in the same frame: the preview
+buffers are dropped and the node's points are drawn at the positions the
+node's value holds. Unticking the checkbox is the way to see the motion back.
+Apply does not wait for the motion: the version it pushes holds the
+retriangulated positions, and the new base it installs recreates the node's
+point buffer from them (`upload/points.rs`, through the base-identity check in
+`app.rs`). A preview that had run to its end hands over to the new base with no
+visible change for the points that move, since their targets are the positions
+Apply writes (§ "The 3D view", "What each point does"). A point that loses its
+position goes from its stored position, in the failure colour, to where the 3D
+view draws a point at infinity. Without the preview, the camera's tracks move in
+one frame when the version lands. Where Apply runs as a background task, the
+preview ends when the task starts, and the points stand at their stored
+positions until it lands. The MCP reply of
+`switch_camera_model { proposal: true }` is then an edit's reply at once when
+the job's answer is installed, and the reply of a background edit otherwise.
 
 ## MCP
 
-The switch differs from Move Camera in one way that matters for the wire: its
-inputs are a few discrete choices an agent can state. So the proposal is on the
-wire too, and an agent can open it, screenshot the panel and the overlay, and
-then apply or cancel. This is the check a reviewer would make. Every argument
-takes the name `switch_camera_model` already gives it, and none is a bare
-`model` ([`../GLOSSARY.md`](../GLOSSARY.md) § "Camera intrinsics").
+The tools are built, and gain:
 
-- **`propose_camera_model { reconstruction_label, camera_intrinsics_index,
-  camera_model?, coeff_count?, theta_fit_deg?, spline_domain_deg?,
-  preview_retriangulation?, animate? }`** opens or replaces the proposal
-  exactly as the panel does, with the defaults `switch_camera_model` gives each
-  argument, and answers with the fit report and the `proposed` block below. It
-  pushes nothing. A call whose fit inputs equal the open proposal's keeps the
-  proposal and its generation, so a call that only changes
-  `preview_retriangulation` or `animate` neither refits nor solves again. It is
-  refused on a busy node, with the busy sentence, and it ends a held Move
-  Camera lock on the node first, as an edit tool does.
-- **`cancel_camera_model_proposal { reconstruction_label }`** is Cancel.
-- **`switch_camera_model`** exists and applies a direct switch or a spline
-  refit ([`../gui/mcp-server.md`](../gui/mcp-server.md)). It gains a
-  `proposal: true` form that applies the open proposal instead of fitting one,
-  as Apply does: the switch and the retriangulation of the proposal's tracks
-  in one version, installed at once from the job's answer or run as the
-  `Switch camera model` background task, and the switch alone, on the GUI
-  thread, on a node that cannot be retriangulated (§ "Ending a proposal"). The
-  direct form stays the lens-only switch it is today, the operation `sfm xform
-  --camera-model` also makes; an agent that wants the tracks moved as well
-  opens a proposal, or follows the direct switch with
-  `retriangulate_all_points`. The direct form is an edit tool naming the node,
-  so it applies an open proposal first by the implicit rule; an agent that
-  wants the direct switch alone cancels first. Either answers like every edit
-  tool: the version, its label, the sentence recorded, and the `fit` object,
-  including the observation comparison, and the proposal form adds the
-  retriangulation's counts.
-
-`get_camera_intrinsics` gains a `proposed` block while a proposal is open: the
-proposed camera, its fit report, the `generation`, the observation comparison
-once the job has sent it (or the switch's `Observations` refusal sentence in
-its place), `preview_retriangulation`, the current `s`, and a `triangulation`
-block. `get/set_image_detail_display` gains the field mode.
+- **`propose_camera_model`** takes `preview_retriangulation?` and `animate?`. A
+  call that only changes either keeps the proposal's generation, so it neither
+  refits nor solves again.
+- The **`proposed` block** gains the observation comparison once the job has
+  sent it (or the switch's `Observations` refusal sentence in its place),
+  `preview_retriangulation`, the current `s`, and a `triangulation` block.
+- **`get/set_image_detail_display`** gains the field mode.
 
 The `triangulation` block's `state` is `off` while the preview is not asked
 for, `pending` while the job has no answer for the current generation, `ready`
@@ -811,31 +537,21 @@ without waiting out the motion.
 
 ## Testing
 
-- **Viewer lib tests:** a proposal leaves the history unchanged; Apply pushes
-  one version, labelled as the shipped edit with the retriangulation added,
-  holding the switched camera and the retriangulated tracks, and an undo
-  restores both the camera and the points; Apply with the job's answer in hand
-  installs that answer without solving again, and Apply without one starts the
-  `Switch camera model` background task, which pushes the same version;
-  Cancel restores; the two caches do
-  not cross; undo, redo and a history jump on the node drop an open proposal
-  and write one `Kind::View` row; the node's other menu edits and Move Camera
-  are greyed while a proposal is open; Switch Model… is greyed on a busy node;
-  the header has no "Refit spline…"; a spline camera's proposal opens on its
-  own model with the count and domain at the camera's and no Fit to θ, and its
-  request is the one the Refit Spline dialog sends (no fit angle, an untouched
-  domain kept exactly); the Model list leaves out a non-spline camera's own
-  model; the outermost-keypoint button takes the detected angle, the observed
-  one without a detected and nothing without either;
-  opening a proposal ends a held Move Camera lock by its implicit rule; hiding
-  the node leaves the preview's state unchanged.
+- **Viewer lib tests:** Apply with the job's answer in hand installs that
+  answer without solving again, and pushes the same version the task would;
+  the Image Detail layer cache does not serve the proposed model as the current
+  one; hiding the node leaves the preview's state unchanged.
+- **Comparison tests:** the projection plot draws both models while a proposal
+  is open and one otherwise; the change plot's centre line is zero inside θ_fit
+  for an exact fit, and marks the range where the monotone constraint bound;
+  the rug has one tick per observation and counts those past the trusted bound;
+  the Image Detail field mode is selected while the proposal is open for the
+  image's camera and restored afterwards.
 - **Preview computation tests**, on a synthetic two-camera scene:
   - every target is the position the version Apply pushes holds for that
     point, and the answer value the job keeps is that version, equal to
     `switch_camera_model` followed by `retriangulate_points` over the same
     tracks;
-  - a proposal for one camera moves only the tracks that camera's images
-    observe, and Apply changes no other point;
   - a node with an overlay holding additions and deletions: the run reads one
     materialisation, a moving added point's target lands in the additions
     buffer's row, and a deleted point gets no row;
@@ -850,10 +566,9 @@ without waiting out the motion.
     its geometry under Apply;
   - a job on a node with the inline keypoint column reads no `.sift` file; on
     a `sift_files` node without it, the job's switch reads each observing
-    image's `.sift` file once, the checkbox is greyed with
-    `retriangulate_points`' sentence, Apply pushes the switch alone with that
-    sentence in its row, and a missing `.sift` file refuses both the job's
-    switch and Apply with the `Observations` sentence.
+    image's `.sift` file once and the checkbox is greyed with
+    `retriangulate_points`' sentence, and a missing `.sift` file refuses the
+    job's switch with the `Observations` sentence.
 - **Preview motion tests:** the generalised step reaches the goal and stops
   there without overshoot, reverses without a jump in `s` when the goal flips
   mid-motion, and reproduces Maintain Z-up's existing timings when called with
@@ -868,15 +583,11 @@ without waiting out the motion.
   surfel preview buffer is written by slot through `slot_of_point`, `s`
   reaches both bundles' `ReconUniforms`, and the buffers are dropped when the
   preview ends.
-- **MCP tests:** `propose_camera_model` pushes nothing and answers with the fit
-  report and a `pending` triangulation block; a second call with the same fit
-  inputs keeps the generation; `get_camera_intrinsics` reports `ready` once the
-  job lands; `animate: false` given before the answer leaves `s` at 0 until the
-  answer lands and then sets it to 1 in one frame; `switch_camera_model {
-  proposal: true }` applies the open proposal, moving its tracks; a direct
-  switch applies an open proposal first, and on a node with no proposal moves
-  no point; `cancel_camera_model_proposal` drops one; no tool takes an
-  argument named `model`.
+- **MCP tests:** `propose_camera_model` answers with a `pending` triangulation
+  block; `get_camera_intrinsics` reports `ready` once the job lands;
+  `animate: false` given before the answer leaves `s` at 0 until the answer
+  lands and then sets it to 1 in one frame; `switch_camera_model { proposal:
+  true }` with the answer in hand replies with the version at once.
 - **A Kerry evaluation run**, kept as a script rather than a test:
   1. switch tk107 → Add Image to Tracks over all images;
   2. bundle adjust with the spline released;
@@ -887,28 +598,11 @@ without waiting out the motion.
 
 ## Order of work
 
-1. The core additions the proposal builds on, listed under "Builds on" above:
-   `RetriangulateWhich::TheseInBulk`,
-   `SwitchCameraModelOptions::outermost_keypoint`, and the placement distance
-   from a camera centroid taken once, with the public `patch_frame_factor`.
-   These are built, and their standing specs describe them.
-2. The proposal in the Camera Intrinsics panel: Switch Model… takes the place
-   of "Refit spline…" in the header, with the same-model target carrying the
-   Refit Spline dialog's controls, so the dialog and its `refit_spline`
-   response are removed with it and the panel never has both entries. Its
-   controls, the endings, undo and the greyed entries. Apply as the switch
-   followed by the retriangulation of the camera's tracks through
-   `TheseInBulk`, run as the `Switch camera model` background task until the
-   job of step 4 can hand it an answer. In the same step, the MCP tools
-   `propose_camera_model` and `cancel_camera_model_proposal`, the proposal form
-   of `switch_camera_model`, and the `proposed` block of
-   `get_camera_intrinsics`, so that each later step can be checked over MCP on
-   a live viewer. What the block reads off the job (the observation
-   comparison, the `triangulation` block and `s`) comes with step 4.
-3. The panel's two-model plots, the change plot and the rug, and the Image
+1. The panel's two-model plots, the change plot and the rug, and the Image
    Detail change field and observation layer.
-4. Preview retriangulation: the job, Apply installing its answer, the
-   generalised step, the preview buffers and the banner.
+2. Preview retriangulation: the job, its observation comparison, Apply
+   installing its answer, the generalised step, the preview buffers, the
+   banner, and the MCP fields that read them.
 
 ## Open questions
 

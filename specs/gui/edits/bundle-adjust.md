@@ -93,10 +93,10 @@ and in what form. One more is about the points.
 
   A spline camera's coefficient count and domain end are not in this dialog:
   they choose how the lens curve is parameterized, which the adjustment only
-  refines, and changing them is a refit of that one camera, the Camera
-  Intrinsics panel's `Refit spline…` ([`switch-camera-model.md`](switch-camera-model.md)),
-  taken before the adjustment that fits the new coefficients to the
-  observations.
+  refines, and changing them is a refit of that one camera, made from the
+  Camera Intrinsics panel's `Switch Model…`
+  ([`switch-camera-model.md`](switch-camera-model.md)), before the adjustment
+  that fits the new coefficients to the observations.
 - **Store each point as a position or a direction by its rays**, one checkbox
   under the camera rows, **ticked** by default: the core function's default
   `free_points`, under which every free point is solved in inverse depth and

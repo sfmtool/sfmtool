@@ -425,11 +425,11 @@ pub(super) fn bundle_adjust(
     }))
 }
 
-/// `switch_camera_model`: one camera switched to a model fitted to it, landed
-/// as the node's next version.
+/// `switch_camera_model` in its direct form: one camera switched to a model
+/// fitted to it, landed as the node's next version, with no point moved.
 ///
-/// The step the Camera Intrinsics panel's `Refit spline…` takes, with any
-/// target model: an omitted `camera_model` is the camera's own, which for a spline
+/// The lens-only switch, with any target model: an omitted `camera_model` is
+/// the camera's own, which for a spline
 /// camera makes the switch a refit of its spline, keeping its count and its
 /// domain end unless they are named. Beside the version the reply carries
 /// `fit`, the numbers the Action Log sentence is written from: the fit's

@@ -152,8 +152,10 @@ bound the source does not have. `refit_spline` states both, and takes only what
 can change. The reconstruction-level switch
 ([`../reconstruction/switch-camera-model.md`](../reconstruction/switch-camera-model.md))
 is its caller, for a spline camera switched to its own spline model: that is how
-`sfm xform --camera-model`, the viewer's "Refit spline…" action and the MCP tool
-`switch_camera_model` change a spline's count or domain. Bundle adjustment then
+`sfm xform --camera-model`, the viewer's camera model proposal (the Camera
+Intrinsics panel's `Switch Model…`, with the camera's own spline model as the
+target) and the MCP tool `switch_camera_model` change a spline's count or
+domain. Bundle adjustment then
 refines the coefficients the refit gave it.
 
 **A spline fit is constrained to be monotone, not refused when it is not.** A

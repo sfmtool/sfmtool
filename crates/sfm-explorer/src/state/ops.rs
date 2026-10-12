@@ -52,7 +52,7 @@ impl AppState {
         if source == target {
             return;
         }
-        if let Some(why) = self.busy_refusal(source) {
+        if let Some(why) = self.edit_refusal(source) {
             self.action_log.fail(Kind::Scene, why);
             return;
         }

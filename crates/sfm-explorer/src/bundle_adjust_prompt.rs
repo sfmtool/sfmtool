@@ -12,8 +12,8 @@
 //! two checkboxes per camera, the crossing checkbox, `Run` and `Cancel`.
 //! Everything else about the solve is the core function's defaults. A spline
 //! camera's coefficient count and domain are not the adjustment's to change:
-//! they are a refit of that camera, the Camera Intrinsics panel's
-//! `Refit spline…` (`crate::refit_spline_prompt`).
+//! they are a refit of that camera, made from the Camera Intrinsics panel's
+//! `Switch Model…` proposal (`crate::camera_model_proposal`).
 //!
 //! The gate is here rather than in the menu because the edit reads it too, so
 //! the entry and the edit cannot disagree about when the adjustment can run.

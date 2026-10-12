@@ -476,6 +476,15 @@ The node body has a group above the images group, so its two rows read:
   of distinct intrinsics, which is small even in the pathological case, and the
   list is capped at `LIST_MAX_HEIGHT` — the same cap the images list uses, and
   named for neither list because it is the height of both.
+- **Context menu**: one entry, **Switch Camera Model…**, which opens a camera
+  model proposal on the row's camera and brings this panel to the front
+  ([edits/switch-camera-model.md](edits/switch-camera-model.md) § "Invocation").
+  It is greyed, with the reason as hover text, on a busy node, on another camera
+  of a node with a proposal open, and on a node with no posed image. The tree
+  reports it as `SceneGraphResponse::switch_camera_model`, and the panel keeps
+  it for `app.rs` (`SceneGraphPanel::take_switch_camera_model`), which opens
+  the proposal once the dock is back in the state, since the raise is a layout
+  operation.
 - **No hover channel.** Cross-panel hover is a two-field protocol
   (`hovered_image` / `hovered_point`) with an ownership rule per panel
   ([cross-panel-hover.md](cross-panel-hover.md)); a third field would
@@ -854,8 +863,8 @@ field and at some readable off-axis angle, which is the point of composing them.
 The panel is
 [`intrinsics_detail/`](../../crates/sfm-explorer/src/intrinsics_detail/mod.rs),
 split the way `track_view/body/` is: `mod.rs` owns the state and the one
-frame, with `derived`, `header`, `parameters`, `extrinsics`, `format` and
-`projection_plot` under it.
+frame, with `derived`, `header`, `parameters`, `extrinsics`, `format`,
+`projection_plot` and `proposal` under it.
 
 A sixth dock tab, `Tab::IntrinsicsDetail`, title **"Camera Intrinsics"**,
 defaulting into the same top-right tab group as Track View, as the non-active
@@ -875,7 +884,7 @@ it.
 ### 1. Header
 
 ```
-kerry_park · Camera #0 · SFMTOOL_FISHEYE · 480×480 · 24 images  [Refit spline…] [Copy ▾]
+kerry_park · Camera #0 · SFMTOOL_FISHEYE · 480×480 · 24 images  [Switch Model…] [Copy ▾]
 ```
 
 The reconstruction name is included because several nodes can be loaded at once
@@ -891,14 +900,37 @@ widget in its own right.
 when the extrinsics section is showing — `Pose matrix`. A viewer whose numbers
 cannot leave it makes users retype them.
 
-`Refit spline…`, beside it, is the panel's one edit: it opens a small dialog
-that refits the camera's spline to another coefficient count or domain end, with
-the outermost keypoint of its images shown beside the domain, and applies the
-refit as one version of the node
+`Switch Model…`, beside it, is the panel's one edit: it opens a **camera
+model proposal** on the camera, the camera fitted to another model or a spline
+camera refitted to another coefficient count or domain end, shown in this panel
+before it is applied
 ([edits/switch-camera-model.md](edits/switch-camera-model.md)). It is greyed,
-with the reason as hover text, for a camera whose model has no spline. The
-panel reports the click as `IntrinsicsDetailResponse::refit_spline`, and the
-dock opens the dialog.
+with the reason as hover text, on a busy node, on a node with a proposal open
+on another camera, on a node with no posed image, and while this camera's
+proposal is already open below it. The panel reports the click as
+`IntrinsicsDetailResponse::switch_model`, and the dock opens the proposal,
+ending a Move Camera lock held on the node first.
+
+### The proposal strip
+
+While a proposal is open on the camera shown, a strip under the header carries
+its controls, the fit's one-line report, and **Apply** and **Cancel**
+([intrinsics_detail/proposal.rs](../../crates/sfm-explorer/src/intrinsics_detail/proposal.rs);
+the controls, the same-model target and the endings are
+[edits/switch-camera-model.md](edits/switch-camera-model.md) § "The proposal").
+A change of a control is made on the proposal in place and refits it on the
+GUI thread. The panel reports Apply and Cancel, and `Escape` while the pointer
+is over it, as `IntrinsicsDetailResponse::proposal`, and the dock applies or
+drops the proposal. The panel showing another camera of the node shows no
+strip.
+
+While the strip is shown, the **Parameters** and **Derived** tables are drawn
+twice, side by side under `Current` and `Proposed`: the current camera's and
+the proposed one's. The two derived tables both carry the aspect row when either
+camera has two focal lengths, reading `single focal` for the one that has one,
+so their rows stay in line. `K`, the projection plot and the extrinsics stay
+the current camera's. The proposal's comparison plots are
+[../drafts/switch-camera-model.md](../drafts/switch-camera-model.md)'s.
 
 ### 2. Parameters
 
@@ -1119,17 +1151,23 @@ nothing else in the viewer surfaces.
 ### Response type
 
 The panel is nearly read-only; it reports navigation and the one edit it
-offers, which the dock turns into a dialog:
+offers, which the dock turns into a proposal, and the proposal's two endings:
 
 ```rust
 pub struct IntrinsicsDetailResponse {
     /// The user clicked the image name in the extrinsics header.
     pub select_image: Option<ImageRef>,
-    /// The user clicked `Refit spline…` for this camera.
-    pub refit_spline: Option<CameraRef>,
+    /// The user clicked `Switch Model…` for this camera.
+    pub(crate) switch_model: Option<CameraRef>,
+    /// The user ended the proposal shown: Apply, or Cancel or `Escape`.
+    pub(crate) proposal: Option<(CameraRef, ProposalAction)>,
     pub has_pointer: bool,
 }
 ```
+
+`show` takes the open proposal, `Option<&mut CameraModelProposal>`, and the
+sentence `Switch Model…` is greyed with, both read by the dock before it
+borrows the node.
 
 ---
 
@@ -1214,6 +1252,7 @@ family, and the arrow field is a few hundred round trips.
 | Distortion field | `cols × rows` ray round trips | `(CameraRef, cols, rows)` | camera change, grid density change, node close |
 | Radial profile | `samples × 32 azimuths` | `CameraRef` — the sample count is a constant, so it is not part of the key | camera change, node close |
 | FOV / derived rows | 4 corners + 4 edges | `CameraRef` | camera change, node close |
+| Proposed derived rows | the same, for the proposed camera | `(CameraRef, generation)`, one entry | a change of the proposal's inputs, node close |
 | Trustworthy bound | a ~360-step sweep × 8 azimuths, refined | `CameraRef` | camera change, node close |
 | Axis polylines | ~1 sample per 4 panel px | `(CameraRef, zoom bucket)` | camera change, zoom crossing a bucket |
 | Hover readout | 1 round trip | not cached | — |
@@ -1396,6 +1435,17 @@ Two caveats remain, both named in the tests rather than left implicit:
   glyph test, for the same reason.
 - The node-transform toggle appears only when the node transform is
   non-identity.
+- The header offers `Switch Model…` and no `Refit spline…`; a spline camera's
+  proposal shows the refit's controls (the model as the refit, Coefficients and
+  Spline domain each with `now`, no Fit to θ), the fit's line and the two
+  cameras under `Current` and `Proposed`; a change of model shows Fit to θ with
+  its default; Apply, Cancel and `Escape` are reported for the camera shown;
+  and the proposed camera's derived report is cached apart from the current
+  one's and dropped with the node. A camera row's context menu offers `Switch
+  Camera Model…`, greyed on another camera while a proposal is open (in
+  `scene_graph/tests.rs`). The proposal's own behaviour is tested in
+  `camera_model_proposal/tests.rs`
+  ([edits/switch-camera-model.md](edits/switch-camera-model.md) § "Testing").
 
 **Fixtures.** `kerry_park` is the rig case (2 fisheyes, 24 frames) and
 `seoul_bull_sculpture` the ordinary single-camera one; the model-family coverage
@@ -1415,11 +1465,10 @@ name.
 
 - **Typing intrinsics.** A panel that let you type a focal length would
   immediately raise the question of what it means for the loaded file.
-  Intrinsics change here only as a fit: `Refit spline…` refits a spline
-  camera's spline as a version of the node, and refining a camera against the
-  observations is the Bundle Adjust edit's. Switching a camera to another model
-  as a fit, shown here as a proposal before it is applied, is proposed in
-  [../drafts/switch-camera-model.md](../drafts/switch-camera-model.md).
+  Intrinsics change here only as a fit: `Switch Model…` fits the camera to
+  another model, or refits a spline camera's spline, as a proposal applied as a
+  version of the node, and refining a camera against the observations is the
+  Bundle Adjust edit's.
 - **Comparing two cameras side by side.** Real for rig work (how do the two
   kerry_park fisheyes differ?), but it needs a second selection and a diff
   presentation, and it is a poor reason to complicate the first version.
