@@ -1893,6 +1893,12 @@ impl AppState {
         if let Some(why) = self.bench_edit_refusal(id) {
             return Err(why);
         }
+        // The one bench step that writes the reconstruction, so a camera
+        // model proposal open on the node refuses it, as it refuses the node's
+        // other edits; an MCP commit has applied the proposal by now.
+        if let Some(why) = self.proposal_refusal(id) {
+            return Err(why);
+        }
         let index = self.node_index(id)?;
         let node = &self.scene[index];
         let bench = Arc::clone(node.history.current_bench());

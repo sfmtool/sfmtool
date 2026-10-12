@@ -533,6 +533,28 @@ fn a_version_changed_under_the_proposal_drops_it() {
         .ends_with("the reconstruction changed under it"));
 }
 
+/// A bench step shares the version's document half, so it leaves the proposal
+/// open; the commit, the one bench step that writes the reconstruction, is
+/// refused.
+#[test]
+fn a_bench_step_leaves_the_proposal_and_a_commit_is_refused() {
+    let (mut state, id) = spline_state();
+    state
+        .open_camera_model_proposal(CameraRef::new(id, 1), None)
+        .expect("opens");
+    let label = state
+        .put_point_on_bench(crate::scene::PointRef::new(id, 0), None)
+        .expect("a live point");
+    assert!(versions(&state) > 1, "the bench step pushed no version");
+    state.tend_camera_model_proposal();
+    assert!(
+        state.camera_model_proposal_on(id).is_some(),
+        "a bench step dropped the proposal"
+    );
+    let why = state.commit_bench_track(id, &label).expect_err("refused");
+    assert_eq!(why, PROPOSAL_OPEN_HINT);
+}
+
 /// Hiding the node leaves the proposal open.
 #[test]
 fn hiding_the_node_leaves_the_proposal() {

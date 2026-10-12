@@ -138,8 +138,10 @@ pub(crate) struct CameraModelProposal {
     pub(crate) camera: usize,
     /// The node's label, for the sentences that name it.
     pub(crate) label: String,
-    /// The version the proposal was fitted to. Once the node's cursor is
-    /// elsewhere, the proposal describes a camera the node no longer shows.
+    /// The document half of the version the proposal was fitted to. Once the
+    /// node's value is another, the proposal describes a camera the node no
+    /// longer shows. A bench step or a reframe shares the document half, so
+    /// it leaves the proposal open.
     pub(crate) opened_on: VersionSerial,
     /// The camera as it was when the proposal opened.
     pub(crate) source: CameraIntrinsics,
@@ -499,7 +501,7 @@ impl AppState {
             recon: camera.recon,
             camera: camera.index(),
             label: node.label.clone(),
-            opened_on: node.history.current_version().serial,
+            opened_on: node.history.current_version().document_serial,
             source,
             value,
             rows,
@@ -611,8 +613,8 @@ impl AppState {
         self.end_camera_model_proposal_implicitly()
     }
 
-    /// Once per frame: drop a proposal whose node has gone or whose version
-    /// is no longer at the cursor, and end one by the implicit rule when the
+    /// Once per frame: drop a proposal whose node has gone or whose value is
+    /// no longer the one at the cursor, and end one by the implicit rule when the
     /// selection has moved to another node.
     ///
     /// Returns the node a switch pushed a version on, as
@@ -628,7 +630,7 @@ impl AppState {
             self.camera_model_proposal = None;
             return None;
         };
-        if node.history.current_version().serial != proposal.opened_on {
+        if node.history.current_version().document_serial != proposal.opened_on {
             self.drop_camera_model_proposal(id, Dropped::VersionChanged);
             return None;
         }

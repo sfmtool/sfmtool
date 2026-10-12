@@ -233,15 +233,18 @@ Three other states end or block a proposal:
   kerry_park: the history moved off the version it was fitted to` as a `View`
   row before the move's own. The proposal was fitted to the camera of the
   version it opened on; applying it first would put a version on the history
-  that the undo then steps back out of. A version that changes under the
-  proposal any other way drops it too, at the next frame.
+  that the undo then steps back out of. A value that changes under the
+  proposal any other way (a save that folds in the overlay, say) drops it too,
+  at the next frame. A bench step, which shares the version's document half,
+  leaves it open.
 - **The node's other edits** are greyed while a proposal is open, with *"Apply
   or cancel the camera model proposal first."* as the hover text
   (`AppState::edit_refusal`): the Scene tree's whole-node edits, the image
   menu's four entries, the 3D viewport's point and patch menus, the Edit menu's
   Delete Point and Delete Image, and Move Camera. An edit reached another way
-  in the window is refused with the same sentence, and a background task other
-  than Apply's cannot start on the node.
+  in the window, such as Track View's commit of a bench track, is refused with
+  the same sentence, and a background task other than Apply's cannot start on
+  the node.
 - **Hiding the node** leaves the proposal as it is.
 
 ---
@@ -345,8 +348,9 @@ Explorer (`sfm-explorer` lib tests, headless):
   `.sift` files are gone; Cancel; a refused fit shown and not applied;
   selecting another node applying the proposal and dropping a refused one;
   closing applying first and the close then refused while busy; undo, redo and
-  a jump each dropping it with one `View` row; a version changed under it
-  dropping it; hiding the node leaving it; the node's other edits, its image
+  a jump each dropping it with one `View` row; a value changed under it
+  dropping it, and a bench step leaving it while the bench's commit is refused;
+  hiding the node leaving it; the node's other edits, its image
   menu, a background task and Move Camera refused while it is open; Switch
   Model… greyed on a busy node, on another camera, and on a node with no posed
   image; and opening a proposal ending a held Move Camera lock.
