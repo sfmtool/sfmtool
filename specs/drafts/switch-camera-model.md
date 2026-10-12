@@ -17,6 +17,12 @@ Decided in outline:
   the "Refit spline…" action in the Camera Intrinsics panel header, which
   gives a spline camera a new coefficient count or domain, and the MCP tool
   `switch_camera_model`, which applies a switch or a refit at once.
+- A spline camera switched to its own model, with another coefficient count or
+  domain end, is the refit, so the proposal covers it. **Switch Model…**
+  replaces "Refit spline…" in the panel header, and the Refit Spline dialog's
+  controls and its outermost-keypoint row move into the proposal (§ "The
+  proposal"). Once the proposal ships, the panel has one entry for a change of
+  model and a refit, as the wire and the core function already do.
 - In the viewer, a change of model is shown as a proposal for one camera, drawn
   against the current model, before it is applied. Apply is the shipped direct
   switch, and pushes one version. That is what remains, with the MCP tools
@@ -41,9 +47,12 @@ and adds no verdict logic of its own.
 
 Amends:
 
-- [`../gui/camera-intrinsics.md`](../gui/camera-intrinsics.md), whose header
-  gains the Switch Model… button beside "Refit spline…", and whose § "Scene
-  Graph: the Camera Intrinsics group" gains the rows' context menu.
+- [`../gui/camera-intrinsics.md`](../gui/camera-intrinsics.md), whose § "1.
+  Header" loses "Refit spline…" in favour of the Switch Model… button beside
+  `Copy ▾` (and `IntrinsicsDetailResponse::refit_spline` with it), whose
+  non-goal "Typing intrinsics" names Switch Model… as the fit the panel makes,
+  and whose § "Scene Graph: the Camera Intrinsics group" gains the rows'
+  context menu.
 - [`../gui/scene-graph.md`](../gui/scene-graph.md), whose Scene tree gains a
   context menu on the rows of the Camera Intrinsics group, which have none
   today.
@@ -52,11 +61,27 @@ Amends:
   `switch_camera_model` gains the proposal form, and whose
   `get_camera_intrinsics` gains the `proposed` block.
 - [`../gui/edits/switch-camera-model.md`](../gui/edits/switch-camera-model.md),
-  the direct switch the proposal's Apply pushes. Its § "Invocation" gains the
-  proposal's three entries, and its non-goal "A dialog for a change of model
-  family" is replaced by the proposal. Its non-goal "Refitting several cameras
-  at once" stands: a proposal is for one camera and Apply pushes one version
-  with the label the edit already writes.
+  the direct switch the proposal's Apply pushes. Its § "Invocation" replaces
+  "Refit spline…" with the proposal's three entries, and its § "The dialog"
+  goes: the Refit Spline dialog
+  ([`refit_spline_prompt.rs`](../../crates/sfm-explorer/src/refit_spline_prompt.rs))
+  is removed, its count and domain controls and its outermost-keypoint row
+  being the proposal's for a same-model target, and its tests move to the
+  proposal's. Its non-goal "A dialog for a change of model family" is replaced
+  by the proposal. Its non-goal "Refitting several cameras at once" stands: a
+  proposal is for one camera and Apply pushes one version with the label the
+  edit already writes.
+- The other standing specs that name "Refit spline…" as the viewer's entry for
+  a refit, which then name Switch Model…:
+  [`../GLOSSARY.md`](../GLOSSARY.md) § "Camera intrinsics" (the entry **switch
+  camera model**, whose last sentence names the spline case's button),
+  [`../gui/edits/README.md`](../gui/edits/README.md),
+  [`../gui/edits/bundle-adjust.md`](../gui/edits/bundle-adjust.md),
+  [`../gui/mcp-server.md`](../gui/mcp-server.md) (§ "`switch_camera_model`",
+  and `get_widgets`' list of dialogs, which loses `Refit Spline`),
+  [`../core/reconstruction/switch-camera-model.md`](../core/reconstruction/switch-camera-model.md)
+  and
+  [`../core/camera/refit-camera-intrinsics.md`](../core/camera/refit-camera-intrinsics.md).
 - [`../core/reconstruction/switch-camera-model.md`](../core/reconstruction/switch-camera-model.md),
   whose non-goals name the proposal this draft describes, and which gains an
   option that leaves the outermost keypoint out of the report, so a caller that
@@ -138,8 +163,11 @@ produces describes the lens or those observations is judged in the viewer.
 
 ### Invocation
 
-- A **Switch Model…** button in the Camera Intrinsics panel header, beside
-  "Refit spline…" and `Copy ▾`.
+- A **Switch Model…** button in the Camera Intrinsics panel header, to the
+  left of `Copy ▾`, where "Refit spline…" is today. It replaces that button:
+  refitting a spline camera is a switch of the camera to its own model, so it
+  is made from this proposal (§ "A same-model target"), and the header has no
+  separate refit entry.
 - A **Switch Camera Model…** entry on a new context menu on the rows of the
   Scene tree's Camera Intrinsics group. The rows have no context menu today.
 - `Edit > Switch Camera Model…`, greyed when no camera is selected.
@@ -174,24 +202,32 @@ generation.
 The panel shows a strip of controls at the top:
 
 - **Model**: the targets the source can be fitted to, with `SFMTOOL_FISHEYE`
-  first for a fisheye source.
-- **Coefficients** (2–16, default 8), for a spline target.
-- **Fit to θ**: shows the default and where it came from; can be lowered.
-- **Spline domain**: shows the default corner angle; can be edited. Beside it,
-  the outermost keypoint of the camera's images
+  first for a fisheye source. A spline camera's own model is in the list,
+  labelled as the refit (`SFMTOOL_FISHEYE (refit spline)`), and is where the
+  proposal opens on such a camera; any other camera opens on its first target.
+- **Coefficients** (2–32, `SPLINE_COEFF_COUNT_RANGE`), for a spline target,
+  starting at the count `RefitTarget::coeff_count_for` gives: the camera's own
+  for a same-model target, and 8 otherwise. Beside it, `now 8` for a
+  same-model target.
+- **Fit to θ**: shows the default and where it came from; can be lowered. Not
+  shown for a same-model target (§ "A same-model target").
+- **Spline domain**: shows the default, the far image corner, or the camera's
+  own domain end for a same-model target; can be edited, up to 180°, and below
+  90° for `SFMTOOL_PINHOLE`. Beside it, the outermost keypoint of the camera's
+  images
   ([`../core/reconstruction/outermost-keypoint.md`](../core/reconstruction/outermost-keypoint.md)),
   detected where the `.sift` files can be read and observed otherwise, labelled
   by its source, with the same button the Bundle Adjust dialog's domain row has,
-  which sets the domain to its angle. The default stays the corner. The
+  which sets the domain to its angle. The default stays as it is. The
   keypoints are read once, when the proposal opens, on the GUI thread, as the
-  Refit Spline dialog reads them. Their angle is re-read from the keypoint's
-  pixel under each new fit, which reads no file.
+  Refit Spline dialog reads them today. Their angle is re-read from the
+  keypoint's pixel under each new fit, which reads no file.
 - **Preview retriangulation**, below.
 - **Apply** and **Cancel**.
 
 Every change refits at once, on the GUI thread: the lens fit and the panel's
-`Derived::compute` for the proposed column take milliseconds, as they do for
-the Refit Spline dialog. The fit report is one line under the strip, for
+`Derived::compute` for the proposed column take milliseconds, as a fit does
+for the Refit Spline dialog today. The fit report is one line under the strip, for
 example: "rms 0.13 px, radial 0.013 px, max 0.29 px over θ ≤ 84.5°; aspect
 fy/fx 0.9978 dropped". A spline fit is constrained to stay monotone, so it has
 an inverse; where that constraint bound, the line adds its range, for example
@@ -218,6 +254,42 @@ While the proposal is open, the rest of the panel compares the two models:
   the camera's images, at its incidence angle under the current model. It shows
   where the data is: the Kerry rug thins out at 86°. Beside the rug is the count
   of observations past the current model's trusted bound.
+
+### A same-model target
+
+`switch_camera_model`
+([`switch_camera_model.rs`](../../crates/sfmtool-core/src/reconstruction/switch_camera_model.rs))
+takes any target, the camera's own model included. What it does with its own
+model depends on whether the model has a spline:
+
+- **A spline camera** (`SFMTOOL_FISHEYE`, `SFMTOOL_PINHOLE`) switched to its own
+  model is the refit. With no fit angle given, the core fits it with
+  `refit_spline`: over the whole new domain, with the domain end kept exactly
+  where none is given, constrained to stay monotone, and reporting
+  `ThetaFitSource::SplineDomain`. The proposal sends the request the Refit
+  Spline dialog sends today: no fit angle, the count, and a domain only when
+  the field has moved from the camera's own, so an untouched field keeps the
+  domain bit for bit. Fit to θ is not shown for this target, because a given
+  angle makes the core fit the camera like any other source over that angle,
+  which is not a refit. The strip is then the dialog's controls: Coefficients
+  and Spline domain, each with `now`, and the outermost-keypoint row with its
+  button. A proposal at the camera's own count and domain can be applied, as
+  the dialog allows today: it is the closest monotone curve to the current
+  one, which differs from the camera where the constraint binds.
+- **Any other camera's own model** is not in the Model list. The core fits the
+  model to itself over the fit angle, which changes the camera by no more than
+  the fit's error and leaves the person nothing to choose: a polynomial model
+  has no count or domain, and a count is refused for it
+  (`RefitError::CoeffCountNotApplicable`). Switch Model… is not greyed for such
+  a camera, since its other targets are offered; it is "Refit spline…" that
+  is greyed for it today, with `refit_spline_refusal`'s sentence.
+
+On the wire, `propose_camera_model` takes the camera's own model for any
+camera, as `switch_camera_model` does, and passes a `theta_fit_deg` to the core
+when one is given, so the proposal it opens is the core's answer to that
+request. The panel shows a proposal the wire opened as it was opened: its
+Model list shows the target named, and Fit to θ shows a fit angle the call
+gave.
 
 ### Ending a proposal
 
@@ -291,7 +363,8 @@ top-centre in the style of the Move Camera lock banner
 ([`../gui/viewport-hud.md`](../gui/viewport-hud.md) § "The lock banner borrows
 the style"), and like it outside the HUD panel. Its first line names the
 proposal: the camera, the node, the source and target models and the
-coefficient count. While Preview retriangulation is ticked, a second line
+coefficient count, and for a same-model target the count and domain end before
+and after, as the refit's version label names them. While Preview retriangulation is ticked, a second line
 carries the preview's counts: the proposal's tracks, how many moved by the
 difference rule, how many gained a position, how many lost one, and the median
 and 90th-percentile displacement of the moving finite points, in the
@@ -642,6 +715,12 @@ without waiting out the motion.
   not cross; undo, redo and a history jump on the node drop an open proposal
   and write one `Kind::View` row; the node's other menu edits and Move Camera
   are greyed while a proposal is open; Switch Model… is greyed on a busy node;
+  the header has no "Refit spline…"; a spline camera's proposal opens on its
+  own model with the count and domain at the camera's and no Fit to θ, and its
+  request is the one the Refit Spline dialog sends (no fit angle, an untouched
+  domain kept exactly); the Model list leaves out a non-spline camera's own
+  model; the outermost-keypoint button takes the detected angle, the observed
+  one without a detected and nothing without either;
   opening a proposal ends a held Move Camera lock by its implicit rule; hiding
   the node leaves the preview's state unchanged.
 - **Preview computation tests**, on a synthetic two-camera scene:
@@ -699,7 +778,11 @@ without waiting out the motion.
 
 1. The proposal in the Camera Intrinsics panel: the controls, the two-model
    plots, the change plot and the rug. Apply as the shipped edit. The endings,
-   including undo and the greyed entries.
+   including undo and the greyed entries. Switch Model… takes the place of
+   "Refit spline…" in the header in the same step, with the same-model target
+   carrying the Refit Spline dialog's controls, so the dialog and its
+   `refit_spline` response are removed with it and the panel never has both
+   entries.
 2. The Image Detail change field and observation layer.
 3. Preview retriangulation. It needs the two core additions in Amends: the
    outermost-keypoint option on `switch_camera_model` and the placement
@@ -742,11 +825,11 @@ without waiting out the motion.
   through a camera table the caller states and return its statuses and
   positions without building a value. That would be a mode of the existing
   function, with the same rules, not a second triangulation.
-- **Whether other previews share the motion.** The Refit Spline dialog changes
-  a camera too, and
+- **Whether other previews share the motion.** A refit is a same-model
+  proposal and has this preview already.
   [`move-camera-preview-amendment.md`](move-camera-preview-amendment.md)
   previews a re-triangulation under Move Camera by writing over the base's
-  rows. Both could use the same preview buffers and blend.
+  rows, and could use the same preview buffers and blend.
 - **Whether the switch should release the principal point** for a model whose
   source never fitted it. Today nothing releases it anywhere, and the switch
   keeps that.
