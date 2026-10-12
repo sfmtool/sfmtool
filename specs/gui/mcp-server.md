@@ -3538,15 +3538,15 @@ added. It takes none of the fit's arguments, which the proposal already states,
 and refuses them; a `camera_intrinsics_index`, when given, has to be the
 proposal's camera. It runs as the `Switch camera model` background task and
 replies as a background edit does (§ "`retriangulate_point` /
-`retriangulate_all_points`"): the version, its sentence, which carries the
-fit's numbers and the retriangulation's counts, and the same `fit` object the
-direct form answers with, read off the switch the task made, when it finishes
-within 200 ms, and a handle otherwise. On a node whose observations carry no inline
+`retriangulate_all_points`"): the version, its sentence, which carries the fit's
+numbers and the retriangulation's counts, and the same `fit` object the direct
+form answers with, read off the switch the task made, when it finishes within
+200 ms, and a handle otherwise. On a node whose observations carry no inline
 keypoints it is the switch alone, on the GUI thread, and the sentence says why
 the tracks were not retriangulated; that reply is the version at once, with the
-`fit` object. Refused, leaving the proposal open: no proposal open on the node, a fit
-the core refused, a busy node or viewer, and a switch refused because a `.sift`
-file cannot be read.
+`fit` object. Refused, leaving the proposal open: no proposal open on the node,
+a fit the core refused, a busy node or viewer, and a switch refused because a
+`.sift` file cannot be read.
 
 ### `propose_camera_model` / `cancel_camera_model_proposal`
 

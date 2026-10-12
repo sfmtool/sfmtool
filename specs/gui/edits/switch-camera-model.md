@@ -347,13 +347,13 @@ Explorer (`sfm-explorer` lib tests, headless):
   the keypoint text labelled by its source; Apply starting the `Switch camera
   model` task, which pushes one version labelled with the retriangulation,
   holding the switched camera and moving only the camera's tracks, undone back
-  to both; Apply on a `sift_files` node being the switch alone with the
-  refusal sentence in its row, and refused with the proposal left open once the
-  `.sift` files are gone; Cancel; an implicit ending whose Apply is refused
-  dropping the proposal with its own `View` row; a refused fit shown and not applied;
+  to both; Apply on a `sift_files` node being the switch alone with the refusal
+  sentence in its row, and refused with the proposal left open once the `.sift`
+  files are gone; Cancel; an implicit ending whose Apply is refused dropping the
+  proposal with its own `View` row; a refused fit shown and not applied;
   selecting another node applying the proposal and dropping a refused one;
-  closing applying first and the close then refused while busy; undo, redo and
-  a jump each dropping it with one `View` row; a value changed under it
+  closing applying first and the close then refused while busy; undo, redo and a
+  jump each dropping it with one `View` row; a value changed under it
   dropping it, and a bench step leaving it while the bench's commit is refused;
   hiding the node leaving it; the node's other edits, its image
   menu, a background task and Move Camera refused while it is open; Switch
@@ -380,10 +380,10 @@ Explorer (`sfm-explorer` lib tests, headless):
   inputs and advancing it for new ones, reported by `get_camera_intrinsics`,
   and dropped by `cancel_camera_model_proposal`; an unknown model refused and a
   refused fit carried; the proposal form deferring to the task and moving the
-  tracks with the direct form's `fit` object in the reply, undone over the
-  wire; on a `sift_files` node the switch alone answered at once with `fit`; a direct switch applying an open proposal first
-  and then refused while busy, and moving no point on its own; an undo over the
-  wire dropping the proposal.
+  tracks with the direct form's `fit` object in the reply, undone over the wire;
+  on a `sift_files` node the switch alone answered at once with `fit`; a direct
+  switch applying an open proposal first and then refused while busy, and
+  moving no point on its own; an undo over the wire dropping the proposal.
 
 ---
 

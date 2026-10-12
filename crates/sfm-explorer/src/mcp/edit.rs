@@ -455,7 +455,7 @@ pub(super) fn switch_camera_model(
 /// Put the `fit` object beside a version reply: the numbers a switch's Action
 /// Log sentence is written from, for one camera. The direct form and the
 /// proposal form of `switch_camera_model` both answer with it.
-pub(super) fn insert_fit(
+fn insert_fit(
     reply: &mut Value,
     entry: &sfmtool_core::reconstruction::switch_camera_model::CameraSwitch,
 ) {
