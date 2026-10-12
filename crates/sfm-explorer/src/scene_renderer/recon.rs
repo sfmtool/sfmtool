@@ -108,6 +108,36 @@ pub(super) struct AdditionResources {
     pub patch: Option<PatchResources>,
 }
 
+/// The camera model proposal's preview on one node: a target per row of each
+/// point buffer and per slot of each surfel buffer, and the blend.
+///
+/// Separate buffers stepping beside the instance buffers, as the deleted mask
+/// is, because the instance buffers are `VERTEX` only and are never written;
+/// so ending the preview restores nothing and only drops these. Present only
+/// on the node a proposal's preview is on, which is drawn with the preview
+/// variants of the point and patch pipelines.
+pub(super) struct PreviewResources {
+    /// The proposal generation the rows were written for. A new one is one
+    /// upload of each buffer.
+    pub generation: u64,
+    /// The blend, mirrored into the node's `ReconUniforms::preview_s`.
+    pub s: f32,
+    /// One `vec4` per row of the base's point buffer.
+    pub points: wgpu::Buffer,
+    /// One `vec4` per row of the additions' point buffer, when there are
+    /// additions.
+    pub additions: Option<wgpu::Buffer>,
+    /// One `SurfelPreview` per slot of the base's surfel buffer, when the node
+    /// has surfels.
+    pub patches: Option<wgpu::Buffer>,
+    /// One per slot of the additions' surfel buffer.
+    pub addition_patches: Option<wgpu::Buffer>,
+    /// The surfel rows as they were written, slot by slot: the half a headless
+    /// test cannot read back from a `VERTEX | COPY_DST` buffer.
+    #[cfg(test)]
+    pub built_patches: Vec<super::gpu_types::SurfelPreview>,
+}
+
 /// One node's display state as the renderer needs it: which layers to draw,
 /// and whether the node captures picks.
 ///
@@ -255,6 +285,10 @@ pub(super) struct ReconResources {
     /// that moved is the only way the set can differ.
     pub uploaded_additions: (usize, usize),
 
+    // ── the camera model proposal's preview (optional) ──
+    /// The preview buffers and blend, on the node a proposal's preview is on.
+    pub preview: Option<PreviewResources>,
+
     // ── per-recon derived scalars (formerly singletons on SceneRenderer) ──
     /// Auto-computed splat size (world space, before the global user scaling).
     pub auto_point_size: f32,
@@ -335,6 +369,7 @@ impl ReconResources {
             patch: None,
             additions: None,
             uploaded_additions: (0, 0),
+            preview: None,
             auto_point_size: FALLBACK_POINT_SIZE,
             camera_nn_scale: None,
             bounds: None,

@@ -2830,3 +2830,118 @@ fn a_built_column_fills_the_atlas_and_keeps_it() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// ── The camera model proposal's preview ─────────────────────────────────
+//
+// A target per row of each point buffer and per slot of each surfel buffer,
+// written once per answer, and the blend in the node's uniforms. See
+// `upload/preview.rs`.
+
+/// Preview targets for a node of `base` base rows and `added` addition rows,
+/// moving base row 5 and addition row 0 and colouring base row 7.
+fn preview_targets(
+    generation: u64,
+    base: usize,
+    added: usize,
+) -> Arc<crate::camera_model_proposal::preview::PreviewTargets> {
+    use crate::camera_model_proposal::preview::{FLAG_LOSES, FLAG_MOVES, FLAG_STILL};
+    let still = [0.0, 0.0, 0.0, FLAG_STILL];
+    let mut targets = crate::camera_model_proposal::preview::PreviewTargets {
+        generation,
+        base: vec![still; base],
+        base_size: vec![1.0; base],
+        additions: vec![still; added],
+        additions_size: vec![1.0; added],
+        touched: Vec::new(),
+    };
+    targets.base[5] = [1.0, 2.0, 3.0, FLAG_MOVES];
+    targets.base_size[5] = 0.5;
+    targets.base[7] = [0.0, 0.0, 0.0, FLAG_LOSES];
+    if added > 0 {
+        targets.additions[0] = [4.0, 5.0, 6.0, FLAG_MOVES];
+        targets.additions_size[0] = 2.0;
+    }
+    Arc::new(targets)
+}
+
+fn draw(
+    targets: &Arc<crate::camera_model_proposal::preview::PreviewTargets>,
+    s: f32,
+) -> crate::camera_model_proposal::PreviewDraw {
+    crate::camera_model_proposal::PreviewDraw {
+        recon: RECON,
+        targets: Arc::clone(targets),
+        s,
+    }
+}
+
+/// The preview buffers are created at the point buffers' row counts, with
+/// `COPY_DST`, the surfel rows written by slot through `slot_of_point`, a row
+/// that does not move carrying flag 0; the blend reaches the base's and the
+/// additions' `ReconUniforms`; and they are dropped when the preview ends.
+#[test]
+fn the_preview_buffers_follow_the_point_buffers_and_carry_the_blend() {
+    let (device, queue) = device();
+    let mut renderer = SceneRenderer::new();
+    let base = Arc::new(with_patches(demo(40), 8, &[true; 40], None, None));
+    let loaded = sfmtool_core::EditedReconstruction::new(Arc::clone(&base));
+    let mut edited = loaded.clone();
+    let record = moved_record(&edited, 3);
+    edited.replace_point(3, record).expect("a live point");
+    sync(&mut renderer, &device, &queue, RECON, &edited);
+
+    let targets = preview_targets(1, 40, 1);
+    renderer.set_preview(&device, Some(&draw(&targets, 0.25)));
+    let preview = bundle(&renderer).preview.as_ref().expect("a preview");
+    assert_eq!(preview.generation, 1);
+    assert_eq!(preview.points.size(), 40 * 16);
+    assert!(preview
+        .points
+        .usage()
+        .contains(wgpu::BufferUsages::COPY_DST));
+    assert_eq!(preview.additions.as_ref().map(|b| b.size()), Some(16));
+    let patch = bundle(&renderer).patch.as_ref().expect("surfels");
+    let slot = |point: u32| patch.slot_of_point[&point] as usize;
+    assert_eq!(preview.built_patches.len(), patch.count as usize);
+    assert_eq!(preview.built_patches[slot(5)].target, [1.0, 2.0, 3.0, 1.0]);
+    assert_eq!(preview.built_patches[slot(5)].size_factor, 0.5);
+    assert_eq!(preview.built_patches[slot(7)].target[3], 2.0);
+    assert_eq!(preview.built_patches[slot(0)].target[3], 0.0);
+    assert_eq!(preview.built_patches[slot(0)].size_factor, 1.0);
+    assert!(preview.patches.is_some() && preview.addition_patches.is_some());
+
+    // The blend, in both bundles' uniforms; a frame of motion keeps the
+    // buffers it has.
+    let uniforms = recon_uniforms(bundle(&renderer), 1.0, true);
+    assert_eq!(uniforms.preview_s, 0.25);
+    renderer.set_preview(&device, Some(&draw(&targets, 0.75)));
+    assert_eq!(recon_uniforms(bundle(&renderer), 1.0, true).preview_s, 0.75);
+    assert_eq!(bundle(&renderer).preview.as_ref().unwrap().generation, 1);
+    // A preview on another node, or none, drops this one's; another node's
+    // bundle never had one.
+    renderer.set_preview(&device, None);
+    assert!(bundle(&renderer).preview.is_none());
+    assert_eq!(recon_uniforms(bundle(&renderer), 1.0, true).preview_s, 0.0);
+
+    // Rows laid out for another buffer are not drawn.
+    renderer.set_preview(&device, Some(&draw(&preview_targets(2, 39, 1), 1.0)));
+    assert!(bundle(&renderer).preview.is_none(), "rows that do not fit");
+
+    // A new base drops the preview, as it drops the additions.
+    renderer.set_preview(&device, Some(&draw(&targets, 1.0)));
+    assert!(bundle(&renderer).preview.is_some());
+    renderer.upload_points(&device, RECON, &demo(40), &SILENT);
+    assert!(bundle(&renderer).preview.is_none());
+}
+
+/// An addition's surfel row is found through the additions' slot map, keyed
+/// by the version's index past the base's rows.
+#[test]
+fn an_additions_surfel_row_is_found_past_the_base_rows() {
+    let targets = preview_targets(1, 40, 1);
+    let slots: std::collections::HashMap<u32, u32> = [(40, 0)].into_iter().collect();
+    let rows = super::preview::surfel_preview_rows(&slots, 1, &targets);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].target, [4.0, 5.0, 6.0, 1.0]);
+    assert_eq!(rows[0].size_factor, 2.0);
+}

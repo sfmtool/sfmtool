@@ -375,6 +375,9 @@ pub struct Viewer3D {
     /// eye is this panel's. `app.rs` uploads it and the pass draws it, on the
     /// frame-behind cadence every other camera-derived value already runs on.
     pub(crate) bench_figure: Option<bench_track::Figure>,
+    /// The camera model proposal banner's lines, set by the dock each frame
+    /// from the proposal open on the selected node; empty with none open.
+    pub(crate) proposal_banner: Vec<crate::camera_model_proposal::banner::BannerLine>,
     /// The bench figure's handle the pointer has hold of, while it has one.
     ///
     /// Held here rather than derived each frame for the reason the Image Detail
@@ -507,6 +510,7 @@ impl Viewer3D {
             point_menu: None,
             patch_menu: None,
             bench_figure: None,
+            proposal_banner: Vec::new(),
             bench_drag: None,
             bench_gesture: None,
             menu_entry_rects: Vec::new(),
@@ -911,6 +915,9 @@ impl Viewer3D {
         // The lock banner, over the scene and under nothing: it is what the
         // viewport is in the middle of.
         self.draw_lock_banner(&painter, rect, node);
+        // The camera model proposal's banner, in the same place: a proposal
+        // refuses Move Camera on its node, so the two are never shown together.
+        overlay::draw_proposal_banner(&painter, rect, &self.proposal_banner);
 
         // The brush's circle, over the scene where the pointer is.
         self.draw_brush(ui, &painter, &response);

@@ -827,6 +827,9 @@ pub struct AppState {
     /// running, and the inputs each track was last evaluated for. See
     /// [`crate::bench::live`].
     pub(crate) bench_evaluations: crate::bench::live::Evaluations,
+    /// The camera model proposal's job that is running, if any. What it found
+    /// is kept on the proposal. See [`crate::camera_model_proposal::job`].
+    pub(crate) proposal_jobs: crate::camera_model_proposal::job::ProposalJobs,
 
     /// Which observations of the focused bench track are selected: Track
     /// View's highlighted rows, which *Split off N rows* reads and the 3D
@@ -1003,6 +1006,7 @@ impl AppState {
             next_operation_id: 1,
             wake: None,
             bench_evaluations: Default::default(),
+            proposal_jobs: Default::default(),
             bench_rows: None,
             focused_item: None,
             recent_items: Vec::new(),

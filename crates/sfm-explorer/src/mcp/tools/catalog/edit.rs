@@ -478,9 +478,12 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           proposal: true and none of the fit's arguments, applies the open \
                           proposal as the panel's Apply does: the switch and the \
                           retriangulation of every track the camera's images observe, in one \
-                          version. It runs on a worker thread, so one still going after 200 ms \
-                          replies with running: true and an operation_id instead of the \
-                          version; on a reconstruction whose observations carry no inline \
+                          version. Where the proposal's job already holds that version for the \
+                          current generation (its triangulation state is ready) it is \
+                          installed at once and the reply is the version; otherwise it runs \
+                          on a worker thread, so one still going after 200 ms replies with \
+                          running: true and an operation_id instead of the version; on a \
+                          reconstruction whose observations carry no inline \
                           keypoints it is the switch alone, and the sentence says why. A \
                           refusal names the camera and the rule.",
             kind: Write,
@@ -579,7 +582,13 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           open on another camera of the same reconstruction. A proposal open \
                           on another reconstruction is applied first, as selecting another \
                           reconstruction applies it. The reply is the proposed block \
-                          get_camera_intrinsics also reports. Apply with switch_camera_model \
+                          get_camera_intrinsics also reports, which carries the observation \
+                          comparison once the proposal's job has switched the camera, and a \
+                          triangulation block whose state is off, pending, ready (with the \
+                          preview's counts and lost_points, the points that lose their \
+                          position) or refused. The job runs after the reply, so poll \
+                          get_camera_intrinsics until triangulation.state is ready for the \
+                          generation this call returned. Apply with switch_camera_model \
                           { proposal: true }, drop with cancel_camera_model_proposal; an undo, \
                           a redo or a history jump on the reconstruction drops it, and any \
                           other edit tool naming the reconstruction, a close, or selecting \
@@ -630,6 +639,29 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                                 "The largest incidence angle the fit samples. Omit for the \
                                  default; given, even a refit of a spline is fitted over this \
                                  angle alone.",
+                        }),
+                    ),
+                    (
+                        "preview_retriangulation",
+                        json!({
+                            "type": "boolean",
+                            "description":
+                                "Tick (true) or clear (false) the panel's Preview \
+                                 retriangulation: the points and surfels of the camera's \
+                                 tracks move in the 3D view to where Apply will put them, and \
+                                 back when cleared. Omit to leave it as it is; off when a \
+                                 proposal opens. Changing it alone keeps the generation.",
+                        }),
+                    ),
+                    (
+                        "animate",
+                        json!({
+                            "type": "boolean",
+                            "description":
+                                "Whether the preview's blend s moves over about 0.7 s (true, \
+                                 the default) or is set to its goal at once (false), so the \
+                                 next screenshot after triangulation.state reads ready shows \
+                                 the end state. Omit to leave it as it is.",
                         }),
                     ),
                 ],

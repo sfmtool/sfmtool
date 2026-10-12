@@ -417,6 +417,8 @@ pub(crate) fn parse(
                 spline_domain_deg: args.optional_f64("spline_domain_deg")?,
                 theta_fit_deg: args.optional_f64("theta_fit_deg")?,
             },
+            preview_retriangulation: args.optional_bool("preview_retriangulation")?,
+            animate: args.optional_bool("animate")?,
         },
         "cancel_camera_model_proposal" => Command::CancelCameraModelProposal {
             reconstruction_label: args.required_string("reconstruction_label")?,

@@ -22,6 +22,10 @@ struct ReconUniforms {
     // Effective "points at infinity" visibility for this node: the global HUD
     // toggle AND the node's own ∞ mini-toggle. Only points.wgsl reads it.
     show_infinity: f32,
+    // The camera model proposal's preview blend on this node: 0 draws the
+    // stored positions, 1 the targets. Read only by the `vs_preview` entry
+    // points of points.wgsl and patch.wgsl.
+    preview_s: f32,
 }
 
 // Pick ID tags (bits 31..30), matching `PICK_TAG_*` in
@@ -55,3 +59,16 @@ const MASK_UNDER_BRUSH: u32 = 0x00000004u;
 // and lighter, so it reads as not done yet.
 const BRUSH_PAINTED_COLOR: vec3<f32> = vec3<f32>(1.0, 0.1, 0.1);
 const BRUSH_UNDER_COLOR: vec3<f32> = vec3<f32>(1.0, 0.6, 0.6);
+
+// The camera model proposal's preview flags, matching `FLAG_*` in
+// `camera_model_proposal/preview.rs`: the `w` of a preview buffer row. A row
+// the preview does not move, one it moves to its target, and one that stays
+// where it stands and takes the failure colour.
+const PREVIEW_STILL: f32 = 0.0;
+const PREVIEW_MOVES: f32 = 1.0;
+const PREVIEW_LOSES: f32 = 2.0;
+
+// The failure colour, `FAILURE_RGB` in `scene.rs`: a finite point the
+// proposed camera's retriangulation turns into a direction is drawn in
+// `mix(colour, FAILURE_COLOR, preview_s)`, over its tint.
+const FAILURE_COLOR: vec3<f32> = vec3<f32>(235.0 / 255.0, 30.0 / 255.0, 30.0 / 255.0);

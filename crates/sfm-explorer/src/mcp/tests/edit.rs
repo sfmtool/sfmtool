@@ -2446,7 +2446,8 @@ fn the_proposal_tools_parse() {
                 "reconstruction_label": "a",
                 "camera_intrinsics_index": 1,
                 "camera_model": "SFMTOOL_FISHEYE",
-                "theta_fit_deg": 80.0
+                "theta_fit_deg": 80.0,
+                "preview_retriangulation": true
             })
         )
         .expect("a well-formed call"),
@@ -2458,6 +2459,8 @@ fn the_proposal_tools_parse() {
                 theta_fit_deg: Some(80.0),
                 ..Default::default()
             },
+            preview_retriangulation: Some(true),
+            animate: None,
         }
     );
     assert_eq!(
@@ -2806,4 +2809,94 @@ fn switch_camera_model_with_proposal_on_a_sift_node_answers_with_fit() {
     assert_eq!(fit["camera_model_after"], "SFMTOOL_PINHOLE");
     assert!(fit["rms_px"].as_f64().is_some(), "{fit}");
     assert!(fit.get("median_error_before_px").is_some(), "{fit}");
+}
+
+/// The preview on the wire: `propose_camera_model` with
+/// `preview_retriangulation` answers with a `pending` triangulation block,
+/// `get_camera_intrinsics` reports it `ready` once the job lands, with the
+/// counts and the observation comparison; under `animate: false` the blend
+/// stays at 0 until the answer lands and then takes 1 in one frame; a call
+/// that only changes the preview keeps the generation; and the proposal form
+/// of `switch_camera_model` with the answer in hand replies with the version
+/// at once.
+#[test]
+fn the_preview_is_reported_and_its_answer_applied_at_once() {
+    let (mut state, mut viewer) = editable();
+    for point in state.scene[0].recon_mut().point_set.points.iter_mut() {
+        point.position.y += 0.01;
+    }
+    let arguments = json!({
+        "reconstruction_label": "run_a",
+        "camera_intrinsics_index": 0,
+        "camera_model": "SFMTOOL_PINHOLE"
+    });
+    let opened = call(
+        &mut state,
+        &mut viewer,
+        "propose_camera_model",
+        arguments.clone(),
+    );
+    let generation = opened["proposed"]["generation"]
+        .as_u64()
+        .expect("a generation");
+    assert_eq!(opened["proposed"]["triangulation"]["state"], "off");
+    assert_eq!(opened["proposed"]["observation_comparison"], Value::Null);
+
+    let mut ticked = arguments.clone();
+    ticked["preview_retriangulation"] = json!(true);
+    ticked["animate"] = json!(false);
+    let reply = call(&mut state, &mut viewer, "propose_camera_model", ticked);
+    let proposed = &reply["proposed"];
+    assert_eq!(proposed["generation"].as_u64(), Some(generation));
+    assert_eq!(proposed["preview_retriangulation"], true);
+    assert_eq!(proposed["animate"], false);
+    assert_eq!(proposed["triangulation"]["state"], "pending");
+    assert_eq!(proposed["s"], 0.0);
+
+    // Before the answer there is nothing to move toward.
+    state.step_camera_model_preview(1.0 / 60.0);
+    state.settle_camera_model_proposal_job();
+    let read = |state: &mut AppState, viewer: &mut Viewer3D| {
+        call(
+            state,
+            viewer,
+            "get_camera_intrinsics",
+            json!({ "reconstruction_label": "run_a", "camera_intrinsics_index": 0 }),
+        )["proposed"]
+            .clone()
+    };
+    let proposed = read(&mut state, &mut viewer);
+    let triangulation = &proposed["triangulation"];
+    assert_eq!(triangulation["state"], "ready", "{triangulation}");
+    assert_eq!(triangulation["generation"].as_u64(), Some(generation));
+    assert!(triangulation["tracks"].as_u64().is_some_and(|n| n > 0));
+    assert!(triangulation["move"].as_u64().is_some_and(|n| n > 0));
+    assert_eq!(triangulation["lose_position"], 0);
+    assert!(triangulation["lost_points"].as_array().is_some());
+    assert!(triangulation["median_shift"].as_f64().is_some());
+    let comparison = &proposed["observation_comparison"];
+    assert!(comparison["observations"].as_u64().is_some_and(|n| n > 0));
+    assert!(comparison["before"]["median_px"].as_f64().is_some());
+    assert_eq!(proposed["s"], 0.0, "the blend moved before a frame");
+
+    // The frame the answer lands in sets the blend to 1.
+    state.step_camera_model_preview(1.0 / 60.0);
+    assert_eq!(read(&mut state, &mut viewer)["s"], 1.0);
+
+    let applied = call(
+        &mut state,
+        &mut viewer,
+        "switch_camera_model",
+        json!({ "reconstruction_label": "run_a", "proposal": true }),
+    );
+    assert!(applied.get("running").is_none(), "{applied}");
+    assert!(state.background_task().is_none(), "it solved again");
+    assert!(
+        applied["label"]
+            .as_str()
+            .is_some_and(|label| label.ends_with("and retriangulated its tracks")),
+        "{applied}"
+    );
+    assert_eq!(applied["fit"]["camera_model_after"], "SFMTOOL_PINHOLE");
+    assert_eq!(version_count(&state), 2);
 }

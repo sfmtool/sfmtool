@@ -27,7 +27,9 @@ use sfmtool_core::camera::refit_intrinsics::{
 };
 use sfmtool_core::camera::CameraIntrinsics;
 use sfmtool_core::reconstruction::outermost_keypoint::KeypointReach;
-use sfmtool_core::reconstruction::switch_camera_model::{default_fit_angle, fit_camera_switch};
+use sfmtool_core::reconstruction::switch_camera_model::{
+    default_fit_angle, fit_camera_switch, CameraSwitch,
+};
 use sfmtool_core::{RowMap, SfmrReconstruction};
 
 use crate::action_log::Kind;
@@ -36,7 +38,10 @@ use crate::scene::{CameraRef, ReconId};
 use crate::state::edits::SwitchCameraModelRequest;
 use crate::state::{AppState, FieldMode};
 
+pub(crate) mod banner;
+pub(crate) mod job;
 mod observations;
+pub(crate) mod preview;
 #[cfg(test)]
 pub(crate) mod tests;
 
@@ -120,6 +125,46 @@ pub(crate) struct ProposalInputs {
     pub(crate) spline_domain_deg: Option<f64>,
 }
 
+/// Where the preview's triangulation stands for a proposal's current
+/// generation: the wire's `triangulation.state`.
+pub(crate) enum TriangulationState<'a> {
+    /// The preview is not asked for.
+    Off,
+    /// Asked for, and the job has no answer for this generation yet.
+    Pending,
+    /// The job's answer.
+    Ready(&'a job::ProposalAnswer),
+    /// The node cannot be retriangulated, or the switch or the
+    /// retriangulation refused, in its own sentence.
+    Refused(&'a str),
+}
+
+impl TriangulationState<'_> {
+    /// The word the wire uses for the state.
+    #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
+    pub(crate) fn name(&self) -> &'static str {
+        match self {
+            TriangulationState::Off => "off",
+            TriangulationState::Pending => "pending",
+            TriangulationState::Ready(_) => "ready",
+            TriangulationState::Refused(_) => "refused",
+        }
+    }
+}
+
+/// What the 3D view draws of a proposal's preview this frame: the node, the
+/// targets its preview buffers hold, and the blend.
+#[derive(Debug, Clone)]
+pub(crate) struct PreviewDraw {
+    /// The proposal's node.
+    pub(crate) recon: ReconId,
+    /// The rows the preview buffers are written from; a new generation is a
+    /// new upload.
+    pub(crate) targets: Arc<preview::PreviewTargets>,
+    /// The blend, 0 at the stored positions and 1 at the targets.
+    pub(crate) s: f32,
+}
+
 /// One open proposal: which camera, what it is fitted from, and the fit.
 pub(crate) struct CameraModelProposal {
     /// The node the camera belongs to.
@@ -170,6 +215,29 @@ pub(crate) struct CameraModelProposal {
     /// last such fit reported it: what Spline domain shows for an untouched
     /// field.
     pub(crate) spline_domain_default: Option<f64>,
+    /// The base's point count and the additions' of the version the proposal
+    /// opened on: the row counts of the node's two point buffers, which the
+    /// preview's targets are laid out by.
+    base_count: usize,
+    addition_count: usize,
+    /// Why the node cannot be retriangulated, `retriangulate_points`' refusal
+    /// sentence, read when the proposal opened; `None` where it can. The
+    /// Preview retriangulation checkbox is greyed with it as hover text.
+    pub(crate) retriangulate_refusal: Option<String>,
+    /// Whether **Preview retriangulation** is ticked, or the wire asked for
+    /// the preview. Off when a proposal opens.
+    pub(crate) preview_retriangulation: bool,
+    /// Whether the preview's blend is stepped (`true`, the default) or set to
+    /// its goal at once (the wire's `animate: false`).
+    pub(crate) animate: bool,
+    /// The job's switch report for a generation: the observation comparison,
+    /// or the switch's refusal sentence.
+    pub(crate) comparison: Option<(u64, Result<Box<CameraSwitch>, String>)>,
+    /// The job's answer for a generation, or the retriangulation's refusal.
+    /// The answer for the current generation is the version Apply installs.
+    pub(crate) triangulation: Option<(u64, Result<Box<job::ProposalAnswer>, String>)>,
+    /// The preview's blend and the targets the 3D view draws it toward.
+    pub(crate) motion: preview::PreviewMotion,
 }
 
 impl CameraModelProposal {
@@ -178,6 +246,76 @@ impl CameraModelProposal {
     pub(crate) fn is_spline_refit(&self, camera_model: &str) -> bool {
         self.source.model.radial_spline().is_some()
             && self.source.model_name().eq_ignore_ascii_case(camera_model)
+    }
+
+    /// Whether the job is to run the retriangulation: the preview is asked
+    /// for, the fit succeeded and the node can be retriangulated.
+    pub(crate) fn wants_triangulation(&self) -> bool {
+        self.preview_retriangulation && self.retriangulate_refusal.is_none() && self.fit.is_ok()
+    }
+
+    /// The job's switch report for the current generation, or its refusal;
+    /// `None` until the job has sent it.
+    pub(crate) fn current_comparison(&self) -> Option<Result<&CameraSwitch, &str>> {
+        let (generation, found) = self.comparison.as_ref()?;
+        (*generation == self.generation).then(|| match found {
+            Ok(entry) => Ok(entry.as_ref()),
+            Err(why) => Err(why.as_str()),
+        })
+    }
+
+    /// Where the preview's triangulation stands for the current generation.
+    pub(crate) fn triangulation_state(&self) -> TriangulationState<'_> {
+        if !self.preview_retriangulation {
+            return TriangulationState::Off;
+        }
+        if let Some(why) = &self.retriangulate_refusal {
+            return TriangulationState::Refused(why);
+        }
+        if let Err(why) = &self.fit {
+            return TriangulationState::Refused(why);
+        }
+        if let Some(Err(why)) = self.current_comparison() {
+            return TriangulationState::Refused(why);
+        }
+        match &self.triangulation {
+            Some((generation, found)) if *generation == self.generation => match found {
+                Ok(answer) => TriangulationState::Ready(answer),
+                Err(why) => TriangulationState::Refused(why),
+            },
+            _ => TriangulationState::Pending,
+        }
+    }
+
+    /// The job's answer for the current generation, which Apply installs.
+    pub(crate) fn current_answer(&self) -> Option<&job::ProposalAnswer> {
+        match &self.triangulation {
+            Some((generation, Ok(answer))) if *generation == self.generation => Some(answer),
+            _ => None,
+        }
+    }
+
+    /// One frame of the preview's blend, `dt` seconds long. Returns whether it
+    /// is still moving.
+    pub(crate) fn step_preview(&mut self, dt: f64) -> bool {
+        let answer = match self.triangulation_state() {
+            TriangulationState::Ready(answer) => Some(Arc::clone(&answer.targets)),
+            _ => None,
+        };
+        let ticked = self.preview_retriangulation;
+        let animate = self.animate;
+        self.motion.step(ticked, answer.as_ref(), animate, dt)
+    }
+
+    /// What the 3D view draws for the preview: the targets its buffers hold
+    /// and the blend, or `None` before any answer was shown.
+    pub(crate) fn preview_draw(&self) -> Option<PreviewDraw> {
+        let targets = self.motion.drawn.as_ref()?;
+        Some(PreviewDraw {
+            recon: self.recon,
+            targets: Arc::clone(targets),
+            s: self.motion.s as f32,
+        })
     }
 
     /// Whether `camera_model` takes a spline coefficient count.
@@ -413,6 +551,32 @@ pub(crate) enum Dropped {
 }
 
 impl AppState {
+    /// One frame of the open proposal's preview blend, `dt` seconds long.
+    /// Returns whether it is still moving, so the frame asks for another.
+    pub(crate) fn step_camera_model_preview(&mut self, dt: f64) -> bool {
+        self.camera_model_proposal
+            .as_mut()
+            .is_some_and(|proposal| proposal.step_preview(dt))
+    }
+
+    /// What the 3D view draws of the open proposal's preview this frame, or
+    /// `None` when there is none to draw.
+    pub(crate) fn camera_model_preview_draw(&self) -> Option<PreviewDraw> {
+        self.camera_model_proposal.as_ref()?.preview_draw()
+    }
+
+    /// Whether the 3D view leaves out the selected point's track rays: while
+    /// the preview's blend is above 0 and the preview moves or colours that
+    /// point, the rays, which end at its stored position, would disagree with
+    /// where it is drawn.
+    pub(crate) fn preview_hides_track_rays(&self) -> bool {
+        let (Some(draw), Some(point)) = (self.camera_model_preview_draw(), self.selected_point)
+        else {
+            return false;
+        };
+        draw.s > 0.0 && point.recon == draw.recon && draw.targets.touches(point.point)
+    }
+
     /// The proposal open on `id`, if any.
     pub(crate) fn camera_model_proposal_on(&self, id: ReconId) -> Option<&CameraModelProposal> {
         self.camera_model_proposal
@@ -524,6 +688,14 @@ impl AppState {
             fit: Err(String::new()),
             theta_fit_default: default_fit_angle(&value_for_default, camera.index()).ok(),
             spline_domain_default: None,
+            base_count: edited.base_point_count(),
+            addition_count: edited.added.points.len(),
+            retriangulate_refusal: crate::state::edits::retriangulate_refusal(node, None),
+            preview_retriangulation: false,
+            animate: true,
+            comparison: None,
+            triangulation: None,
+            motion: preview::PreviewMotion::default(),
         };
         let inputs = inputs.unwrap_or_else(|| {
             let start = if proposal.source.model.radial_spline().is_some() {

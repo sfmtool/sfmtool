@@ -343,6 +343,11 @@ pub(crate) enum Command {
     ProposeCameraModel {
         reconstruction_label: String,
         request: crate::state::edits::SwitchCameraModelRequest,
+        /// Tick or clear Preview retriangulation; `None` leaves it.
+        preview_retriangulation: Option<bool>,
+        /// Step the preview's blend (`true`) or set it to its goal at once;
+        /// `None` leaves it.
+        animate: Option<bool>,
     },
     /// Drop the proposal open on the node, as its Cancel does.
     CancelCameraModelProposal {
@@ -1546,10 +1551,14 @@ pub(crate) fn apply_with_window(
         Command::ProposeCameraModel {
             reconstruction_label,
             request,
+            preview_retriangulation,
+            animate,
         } => done(edit::propose_camera_model(
             state,
             &reconstruction_label,
             &request,
+            preview_retriangulation,
+            animate,
         )),
         Command::CancelCameraModelProposal {
             reconstruction_label,

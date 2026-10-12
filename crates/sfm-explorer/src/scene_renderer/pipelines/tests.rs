@@ -103,7 +103,8 @@ fn the_recon_uniforms_struct_matches_its_wgsl_layout() {
             pickable: 1,
             tint_color: [0.0; 4],
             show_infinity: 1.0,
-            _pad: [0.0; 3],
+            preview_s: 0.0,
+            _pad: [0.0; 2],
         }),
     );
     assert_eq!(std::mem::size_of::<ReconUniforms>() % 16, 0);
@@ -184,9 +185,11 @@ fn the_gbuffer_pipelines_match_the_textures_sizing_allocates() {
             ..Default::default()
         });
         pass.set_pipeline(&points.pipeline);
+        pass.set_pipeline(&points.preview_pipeline);
         pass.set_pipeline(&frustum.pipeline);
         pass.set_pipeline(&image_quad.pipeline);
         pass.set_pipeline(&patch.pipeline);
+        pass.set_pipeline(&patch.preview_pipeline);
         pass.set_pipeline(&distorted_quad);
     }
     queue.submit([encoder.finish()]);
@@ -257,4 +260,34 @@ fn the_wgsl_mask_words_match_the_rust_ones() {
             "{name} differs between common.wgsl and upload/overlay.rs"
         );
     }
+}
+
+#[test]
+fn the_wgsl_preview_flags_and_failure_colour_match_the_rust_ones() {
+    // The proposal job writes the flags into the preview buffers and the
+    // failure colour is named once beside the tint palette; the point and
+    // patch shaders branch on the one and draw the other, so both sides must
+    // agree. Written once on each side, in `common.wgsl` and in
+    // `camera_model_proposal/preview.rs` and `scene.rs`.
+    use crate::camera_model_proposal::preview::{FLAG_LOSES, FLAG_MOVES, FLAG_STILL};
+    let common = include_str!("../../shaders/common.wgsl");
+    for (name, rust_value) in [
+        ("PREVIEW_STILL", FLAG_STILL),
+        ("PREVIEW_MOVES", FLAG_MOVES),
+        ("PREVIEW_LOSES", FLAG_LOSES),
+    ] {
+        let line = format!("const {name}: f32 = {rust_value:.1};");
+        assert!(
+            common.lines().any(|l| l.trim() == line),
+            "common.wgsl does not declare `{line}`"
+        );
+    }
+    let [r, g, b] = crate::scene::FAILURE_RGB;
+    let colour = format!(
+        "const FAILURE_COLOR: vec3<f32> = vec3<f32>({r}.0 / 255.0, {g}.0 / 255.0, {b}.0 / 255.0);"
+    );
+    assert!(
+        common.lines().any(|l| l.trim() == colour),
+        "common.wgsl does not declare `{colour}`"
+    );
 }

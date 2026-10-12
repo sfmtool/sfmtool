@@ -51,7 +51,11 @@ pub(super) struct ReconUniforms {
     /// A uniform rather than a filtered upload because `instance_index` has to
     /// stay equal to the local `recon.points` index for picking to work.
     pub show_infinity: f32,
-    pub _pad: [f32; 3],
+    /// The camera model proposal's preview blend on this node: 0 draws the
+    /// stored positions, 1 the targets. Read only by the preview variants of
+    /// the point and patch pipelines, so 0 on every other node.
+    pub preview_s: f32,
+    pub _pad: [f32; 2],
 }
 
 #[repr(C)]
@@ -180,6 +184,17 @@ pub(super) struct PatchInstance {
     pub atlas_layer: u32,
     /// Global `recon.points` index, for the pick buffer.
     pub point_index: u32,
+}
+
+/// One surfel slot's row of the camera model proposal's preview: the target
+/// centre in `xyz` (a unit direction for a point at infinity) with the preview
+/// flag in `w`, and the factor the surfel's half-vectors reach at the target.
+/// See `upload::preview`.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub(crate) struct SurfelPreview {
+    pub target: [f32; 4],
+    pub size_factor: f32,
 }
 
 /// Uniforms for patch surfel rendering: view-projection plus the atlas grid

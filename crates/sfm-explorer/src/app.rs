@@ -230,6 +230,12 @@ impl App {
         if self.state.drive_bench_evaluation() {
             self.egui_ctx.request_repaint();
         }
+        // The camera model proposal's job lands here too, for the same reason:
+        // an agent's read in this frame sees the comparison and the answer the
+        // worker just brought back (`crate::camera_model_proposal::job`).
+        if self.state.drive_camera_model_proposal_job() {
+            self.egui_ctx.request_repaint();
+        }
         // After both, so a Surface Tiling Mode sequence sees the step it waits
         // on end, and the evaluation after it land, in the frame they do
         // (`crate::bench::surface_tiling`).
@@ -264,6 +270,14 @@ impl App {
                 &mut self.track_view,
                 &mut self.intrinsics_detail,
             );
+        }
+
+        // One frame of the proposal's preview blend, after the drain and the
+        // proposal's endings, so a preview an agent asked for, or a proposal
+        // that just ended, is drawn as it now stands.
+        let dt = self.egui_ctx.input(|i| i.stable_dt as f64);
+        if self.state.step_camera_model_preview(dt) {
+            self.egui_ctx.request_repaint();
         }
 
         // Keep the window title in step with the loaded file. Compared against
@@ -344,6 +358,13 @@ impl App {
         // evaluation of the new inputs in the same frame. The tool calls
         // drained above are covered by this call as well.
         if self.state.drive_bench_evaluation() {
+            self.egui_ctx.request_repaint();
+        }
+
+        // A change of a control in this frame's panels starts the proposal's
+        // job on the new inputs in the same frame, as a bench step starts its
+        // evaluation above.
+        if self.state.drive_camera_model_proposal_job() {
             self.egui_ctx.request_repaint();
         }
 
@@ -602,6 +623,15 @@ impl App {
             } else {
                 note_upload(&mut phase, Uploaded::Built(written), "entry", "entries");
             }
+        }
+
+        // The camera model proposal's preview: its buffers on its node, after
+        // the uploads above so a base that changed this frame is the one the
+        // rows are checked against, and its blend into the node's uniforms
+        // below.
+        {
+            let draw = self.state.camera_model_preview_draw();
+            self.scene_renderer.set_preview(device, draw.as_ref());
         }
 
         // Mirror each node's Scene-panel display state onto its bundle. After
@@ -895,10 +925,14 @@ impl App {
             self.scene_renderer.render_target_indicator(encoder);
         }
 
-        // Render track rays (after target indicator, also post-EDL)
+        // Render track rays (after target indicator, also post-EDL). While the
+        // proposal's preview has moved the selected point off its stored
+        // position the rays, which end there, are left out.
         self.scene_renderer
             .update_track_ray_uniforms(queue, &self.viewer_3d.camera);
-        self.scene_renderer.render_track_rays(encoder);
+        if !self.state.preview_hides_track_rays() {
+            self.scene_renderer.render_track_rays(encoder);
+        }
 
         // The focused item, last of the post-EDL passes: it is the
         // thing being worked on, so nothing the frame drew is over it.

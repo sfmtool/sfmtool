@@ -46,12 +46,16 @@ struct VertexOutput {
     // circle, draws its surfel in the brush's red as its splat does. The
     // highlight (2) is drawn on splats only.
     @location(3) @interpolate(flat) mark: u32,
+    // How far toward the failure colour the camera model proposal's preview
+    // has taken this surfel: its blend `s` where its point loses its
+    // position, 0 otherwise.
+    @location(4) @interpolate(flat) failure: f32,
 }
 
-@vertex
-fn vs_main(in: VertexInput) -> VertexOutput {
+fn place(in: VertexInput) -> VertexOutput {
     var out: VertexOutput;
     out.mark = in.alive;
+    out.failure = 0.0;
     // A deleted point's surfel collapses to a clipped vertex, the same way a
     // back-facing one does below.
     if in.alive == MASK_DELETED {
@@ -113,6 +117,41 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     return out;
 }
 
+@vertex
+fn vs_main(in: VertexInput) -> VertexOutput {
+    return place(in);
+}
+
+// The node a camera model proposal's preview is on: each surfel moves with its
+// point, keeping its orientation, and its half-vectors are scaled by
+// `mix(1, size_factor, s)`, so it keeps its angular size and ends at the size
+// Apply writes. A surfel whose point loses its position stands where it is and
+// takes the failure colour with it.
+@vertex
+fn vs_preview(
+    in: VertexInput,
+    @location(8) preview: vec4<f32>,
+    @location(9) size_factor: f32,
+) -> VertexOutput {
+    var moved = in;
+    if preview.w == PREVIEW_MOVES {
+        let blended = mix(in.center, preview.xyz, recon.preview_s);
+        if in.w == 0.0 {
+            moved.center = select(preview.xyz, normalize(blended), length(blended) > 1e-6);
+        } else {
+            moved.center = blended;
+        }
+        let scale = mix(1.0, size_factor, recon.preview_s);
+        moved.u_halfvec = in.u_halfvec * scale;
+        moved.v_halfvec = in.v_halfvec * scale;
+    }
+    var out = place(moved);
+    if preview.w == PREVIEW_LOSES {
+        out.failure = recon.preview_s;
+    }
+    return out;
+}
+
 struct FragOutput {
     @location(0) color: vec4<f32>,
     @location(1) linear_depth: f32,
@@ -142,6 +181,7 @@ fn fs_main(in: VertexOutput) -> FragOutput {
     // color, `patch_opacity` a translucency, and mixing in the wrong order
     // would make a tinted patch's strength depend on how transparent it is.
     var rgb = mix(texel.rgb, recon.tint_color.rgb, recon.tint_color.a);
+    rgb = mix(rgb, FAILURE_COLOR, in.failure);
     // The eraser brush's reds replace the texel outright, as on a splat.
     if in.mark == MASK_PAINTED {
         rgb = BRUSH_PAINTED_COLOR;

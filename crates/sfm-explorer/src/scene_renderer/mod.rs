@@ -86,6 +86,9 @@ pub struct SceneRenderer {
 
     // ── Pass 1 pipeline resources (created once) ──
     point_pipeline: Option<wgpu::RenderPipeline>,
+    /// The point pipeline's variant for the node a camera model proposal's
+    /// preview is on, which reads its preview buffer.
+    point_preview_pipeline: Option<wgpu::RenderPipeline>,
     quad_vertex_buffer: Option<wgpu::Buffer>,
     point_uniform_buffer: Option<wgpu::Buffer>,
     point_bind_group_layout: Option<wgpu::BindGroupLayout>,
@@ -143,6 +146,9 @@ pub struct SceneRenderer {
 
     // ── Patch (surfel) rendering ──
     patch_pipeline: Option<wgpu::RenderPipeline>,
+    /// The patch pipeline's variant for the node a camera model proposal's
+    /// preview is on.
+    patch_preview_pipeline: Option<wgpu::RenderPipeline>,
     patch_bind_group_layout: Option<wgpu::BindGroupLayout>,
     patch_sampler: Option<wgpu::Sampler>,
 
@@ -209,6 +215,7 @@ impl SceneRenderer {
             egui_texture_id: None,
             current_size: (0, 0),
             point_pipeline: None,
+            point_preview_pipeline: None,
             quad_vertex_buffer: None,
             point_uniform_buffer: None,
             point_bind_group_layout: None,
@@ -250,6 +257,7 @@ impl SceneRenderer {
             distorted_quad_pipeline: None,
             image_quad_sampler: None,
             patch_pipeline: None,
+            patch_preview_pipeline: None,
             patch_bind_group_layout: None,
             patch_sampler: None,
             bg_image_distorted_pipeline: None,
@@ -517,6 +525,7 @@ impl SceneRenderer {
         // ── Pass 1: Point splat pipeline ──
         let pt = pipelines::points::create(device);
         self.point_pipeline = Some(pt.pipeline);
+        self.point_preview_pipeline = Some(pt.preview_pipeline);
         self.quad_vertex_buffer = Some(pt.quad_vertex_buffer);
         self.point_uniform_buffer = Some(pt.uniform_buffer);
         self.point_bind_group_layout = Some(pt.bind_group_layout);
@@ -566,6 +575,7 @@ impl SceneRenderer {
         // ── Patch surfel pipeline ──
         let pa = pipelines::patch::create(device);
         self.patch_pipeline = Some(pa.pipeline);
+        self.patch_preview_pipeline = Some(pa.preview_pipeline);
         self.patch_bind_group_layout = Some(pa.bind_group_layout);
 
         // Atlas samplers are shared: every node's thumbnail / patch atlas is

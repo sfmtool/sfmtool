@@ -14,6 +14,7 @@
 //! because a given angle makes the core fit the camera like any other source.
 
 use sfmtool_core::camera::refit_intrinsics::SPLINE_COEFF_COUNT_RANGE;
+use sfmtool_core::reconstruction::switch_camera_model::{ErrorSummary, ObservationComparison};
 
 use crate::camera_model_proposal::{CameraModelProposal, ProposalInputs};
 
@@ -186,6 +187,49 @@ pub(super) fn show_proposal(
         Err(_) => ui.colored_label(ui.visuals().error_fg_color, proposal.fit_line()),
     };
 
+    // The observation comparison the job sends once its switch returns.
+    if proposal.fit.is_ok() {
+        match proposal.current_comparison() {
+            Some(Ok(entry)) => {
+                for line in comparison_lines(&entry.observations) {
+                    ui.add(egui::Label::new(egui::RichText::new(line).monospace()).wrap());
+                }
+            }
+            Some(Err(why)) => {
+                ui.add(
+                    egui::Label::new(egui::RichText::new(why).color(ui.visuals().error_fg_color))
+                        .wrap(),
+                );
+            }
+            None => {
+                ui.weak(COMPARING);
+            }
+        }
+    }
+
+    // The preview of the retriangulation in the 3D view. Greyed, with the
+    // reason, where there is nothing to preview.
+    let greyed = proposal.retriangulate_refusal.clone().or_else(|| {
+        proposal
+            .fit
+            .is_err()
+            .then(|| "The fit was refused, so there is nothing to preview.".to_string())
+    });
+    let mut preview = proposal.preview_retriangulation;
+    let checkbox = ui
+        .add_enabled(
+            greyed.is_none(),
+            egui::Checkbox::new(&mut preview, PREVIEW_RETRIANGULATION),
+        )
+        .on_hover_text(
+            "Move the points and surfels of the camera's tracks in the 3D view to where Apply \
+             will put them, and back when cleared.",
+        );
+    if let Some(why) = &greyed {
+        checkbox.on_disabled_hover_text(why);
+    }
+    proposal.preview_retriangulation = preview;
+
     let mut action = None;
     ui.horizontal(|ui| {
         let apply = ui
@@ -234,4 +278,57 @@ pub(crate) fn use_outermost_keypoint(proposal: &CameraModelProposal, inputs: &mu
     if let Some(deg) = proposal.keypoint_extent.suggested_domain_deg() {
         inputs.spline_domain_deg = Some(deg);
     }
+}
+
+/// What the Preview retriangulation checkbox is called.
+pub(crate) const PREVIEW_RETRIANGULATION: &str = "Preview retriangulation";
+
+/// What the strip shows while the job's switch has not returned.
+pub(crate) const COMPARING: &str = "Comparing the observations…";
+
+/// The observation comparison in the strip's words: the errors of the
+/// camera's observations under each model over one fixed set, and the same
+/// for those past the current camera's trusted bound.
+///
+/// `observations 4210: median 0.298 → 0.301 px, p90 0.61 → 0.62 px, max 3.10 →
+/// 2.95 px`, then `past 84.5°: 58: median …` where the camera has a trusted
+/// bound.
+pub(crate) fn comparison_lines(o: &ObservationComparison) -> Vec<String> {
+    let summary = |before: &ErrorSummary, after: &ErrorSummary| {
+        format!(
+            "median {} px, p90 {} px, max {} px",
+            change(before.median_px, after.median_px),
+            change(before.p90_px, after.p90_px),
+            change(before.max_px, after.max_px),
+        )
+    };
+    let mut lines = vec![format!(
+        "observations {}: {}",
+        o.observations,
+        summary(&o.before, &o.after)
+    )];
+    if let Some(trusted) = o.trusted_deg {
+        lines.push(if o.past_trusted == 0 {
+            format!("none past {trusted:.1}°")
+        } else {
+            format!(
+                "past {trusted:.1}°: {}: {}",
+                o.past_trusted,
+                summary(&o.past_trusted_before, &o.past_trusted_after)
+            )
+        });
+    }
+    lines
+}
+
+/// `0.298 → 0.301`, or `n/a` for a side with no number.
+fn change(before: f64, after: f64) -> String {
+    let side = |v: f64| {
+        if v.is_finite() {
+            format!("{v:.3}")
+        } else {
+            "n/a".to_string()
+        }
+    };
+    format!("{} → {}", side(before), side(after))
 }

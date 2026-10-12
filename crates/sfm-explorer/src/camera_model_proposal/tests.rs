@@ -18,7 +18,7 @@ use super::*;
 /// The resectable node with its images split over two cameras, camera 1 a
 /// four-coefficient `SFMTOOL_PINHOLE` on a 45° domain whose spline is flat, so
 /// it is still the pinhole the observations were made through.
-fn spline_state() -> (AppState, ReconId) {
+pub(crate) fn spline_state() -> (AppState, ReconId) {
     let (mut state, id) = crate::state::edits::tests::adjustable_state();
     {
         let recon = state.scene[0].recon_mut();
@@ -47,16 +47,16 @@ fn spline_state() -> (AppState, ReconId) {
 }
 
 /// The newest Action Log row.
-fn newest(state: &AppState) -> &crate::action_log::Entry {
+pub(crate) fn newest(state: &AppState) -> &crate::action_log::Entry {
     state.action_log.entries().next_back().expect("an entry")
 }
 
-fn versions(state: &AppState) -> usize {
+pub(crate) fn versions(state: &AppState) -> usize {
     state.scene[0].history.versions().len()
 }
 
 /// Every point position the node holds, for a before-and-after comparison.
-fn positions(state: &AppState) -> Vec<[f64; 3]> {
+pub(crate) fn positions(state: &AppState) -> Vec<[f64; 3]> {
     state.scene[0]
         .recon()
         .point_set

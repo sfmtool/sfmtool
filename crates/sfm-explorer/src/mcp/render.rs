@@ -408,7 +408,106 @@ pub(super) fn camera_model_proposal(
         "fit": fit,
         "fit_report": proposal.fit_line(),
         "refusal": refusal,
+        "observation_comparison": observation_comparison(proposal),
+        "preview_retriangulation": proposal.preview_retriangulation,
+        "animate": proposal.animate,
+        "s": proposal.motion.s,
+        "triangulation": triangulation(proposal),
     })
+}
+
+/// The `proposed` block's `observation_comparison`: the errors of the
+/// camera's observations under each model over one fixed set, and over those
+/// past the current camera's trusted bound, as the job's switch measured them;
+/// `{ "refusal": … }` where the switch refused, and `null` until it has
+/// returned or for a refused fit.
+fn observation_comparison(proposal: &crate::camera_model_proposal::CameraModelProposal) -> Value {
+    use super::edit::finite;
+    let summary = |s: &sfmtool_core::reconstruction::switch_camera_model::ErrorSummary| {
+        json!({
+            "median_px": finite(s.median_px),
+            "p90_px": finite(s.p90_px),
+            "max_px": finite(s.max_px),
+        })
+    };
+    match proposal.current_comparison() {
+        None => Value::Null,
+        Some(Err(why)) => json!({ "refusal": why }),
+        Some(Ok(entry)) => {
+            let o = &entry.observations;
+            json!({
+                "observations": o.observations,
+                "unmeasured": o.unmeasured,
+                "max_theta_deg": finite(o.max_theta_deg),
+                "before": summary(&o.before),
+                "after": summary(&o.after),
+                "changed_over_1px": o.changed_over_1px,
+                "trusted_deg": o.trusted_deg,
+                "past_trusted": o.past_trusted,
+                "past_trusted_before": summary(&o.past_trusted_before),
+                "past_trusted_after": summary(&o.past_trusted_after),
+            })
+        }
+    }
+}
+
+/// The `proposed` block's `triangulation`: where the preview's
+/// retriangulation stands for the proposal's current `generation`, with the
+/// banner's counts and every point that loses its position once it is
+/// `ready`.
+fn triangulation(proposal: &crate::camera_model_proposal::CameraModelProposal) -> Value {
+    use crate::camera_model_proposal::TriangulationState;
+    let state = proposal.triangulation_state();
+    let mut block = json!({
+        "state": state.name(),
+        "generation": proposal.generation,
+    });
+    let fields = block.as_object_mut().expect("an object");
+    match state {
+        TriangulationState::Off | TriangulationState::Pending => {}
+        TriangulationState::Refused(why) => {
+            fields.insert("refusal".into(), json!(why));
+        }
+        TriangulationState::Ready(answer) => {
+            let c = &answer.counts;
+            let lost: Vec<Value> = c
+                .lost_points
+                .iter()
+                .map(|p| {
+                    json!({
+                        "index": p.index,
+                        "verdict": p.verdict.code(),
+                        "reason": p.verdict.label(),
+                    })
+                })
+                .collect();
+            let by_verdict: Vec<Value> = c
+                .lost_by_verdict
+                .iter()
+                .map(|(verdict, n)| {
+                    json!({
+                        "verdict": verdict.code(),
+                        "reason": crate::camera_model_proposal::preview::lost_reason(*verdict),
+                        "count": n,
+                    })
+                })
+                .collect();
+            for (key, value) in [
+                ("tracks", json!(c.tracks)),
+                ("move", json!(c.moves)),
+                ("lose_position", json!(c.lost())),
+                ("lose_position_by_verdict", json!(by_verdict)),
+                ("kept", json!(c.kept)),
+                ("held", json!(c.held)),
+                ("median_shift", json!(c.median_shift)),
+                ("p90_shift", json!(c.p90_shift)),
+                ("lost_points", json!(lost)),
+            ] {
+                fields.insert(key.into(), value);
+            }
+        }
+    }
+    block
 }
 
 /// How many track observations each image carries, by image index.

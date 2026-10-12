@@ -52,6 +52,7 @@ impl SceneRenderer {
             let bundle = self.recons.get_mut(&id).expect("just ensured");
             bundle.additions = None;
             bundle.uploaded_additions = signature;
+            bundle.preview = None;
         }
         let added = &edited.added;
         if added.points.is_empty() {

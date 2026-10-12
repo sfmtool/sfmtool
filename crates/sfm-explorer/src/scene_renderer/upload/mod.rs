@@ -22,6 +22,7 @@ pub(super) use overlay::{
 };
 mod patches;
 mod points;
+mod preview;
 mod thumbnails;
 pub(crate) use thumbnails::UploadedThumbnails;
 mod track_rays;

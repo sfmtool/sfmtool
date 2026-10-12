@@ -1370,3 +1370,81 @@ fn the_comparison_stays_inside_the_panel_at_any_width() {
         );
     }
 }
+
+/// Once the proposal's job has switched the camera the strip shows the
+/// observation comparison, under each model and past the trusted bound, and
+/// the Preview retriangulation checkbox; all of it, with the preview ticked,
+/// stays inside the panel and apart from the rest from the stock window's
+/// width to a wide one.
+#[test]
+fn the_observation_comparison_and_the_preview_box_stay_inside_the_panel() {
+    let (mut state, _) = crate::camera_model_proposal::tests::fisheye_proposal_state();
+    let before = texts_of(&fisheye_frames(&mut state, VIEWPORT.x));
+    assert!(says(&before, super::proposal::COMPARING), "{before:?}");
+    state
+        .camera_model_proposal
+        .as_mut()
+        .unwrap()
+        .preview_retriangulation = true;
+    state.settle_camera_model_proposal_job();
+    for width in [341.0, 482.0, 1800.0] {
+        let painted = fisheye_frames(&mut state, width);
+        let texts = texts_of(&painted);
+        for needle in [
+            super::proposal::PREVIEW_RETRIANGULATION,
+            "observations ",
+            "median ",
+            "past 8",
+        ] {
+            assert!(
+                says(&texts, needle),
+                "{needle} missing at {width} px: {texts:?}"
+            );
+        }
+        assert!(!says(&texts, super::proposal::COMPARING), "at {width} px");
+        assert_eq!(
+            overlapping(&painted, f32::INFINITY),
+            Vec::new(),
+            "at {width} px"
+        );
+        assert_eq!(
+            past_the_edge(&painted, f32::INFINITY, width),
+            Vec::<String>::new(),
+            "at {width} px"
+        );
+    }
+}
+
+/// The comparison in the strip's words.
+#[test]
+fn the_comparison_lines_name_both_models_and_the_trusted_bound() {
+    use sfmtool_core::reconstruction::switch_camera_model::{ErrorSummary, ObservationComparison};
+    let summary = |median_px, p90_px, max_px| ErrorSummary {
+        median_px,
+        p90_px,
+        max_px,
+    };
+    let comparison = ObservationComparison {
+        observations: 4210,
+        unmeasured: 0,
+        max_theta_deg: 101.2,
+        before: summary(0.298, 0.61, 3.1),
+        after: summary(0.301, 0.62, 2.95),
+        changed_over_1px: 12,
+        trusted_deg: Some(84.5),
+        past_trusted: 58,
+        past_trusted_before: summary(12.3, 40.0, 210.0),
+        past_trusted_after: summary(0.4, 1.0, f64::NAN),
+    };
+    assert_eq!(
+        super::proposal::comparison_lines(&comparison),
+        vec![
+            "observations 4210: median 0.298 → 0.301 px, p90 0.610 → 0.620 px, max 3.100 → \
+             2.950 px"
+                .to_string(),
+            "past 84.5°: 58: median 12.300 → 0.400 px, p90 40.000 → 1.000 px, max 210.000 → \
+             n/a px"
+                .to_string(),
+        ]
+    );
+}

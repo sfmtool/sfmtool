@@ -194,6 +194,17 @@ pub static TINT_PALETTE: [TintColor; 7] = [
     },
 ];
 
+/// The **failure colour**: a saturated red in which the camera model
+/// proposal's preview draws a finite point that the proposed camera's
+/// retriangulation turns into a direction, mixed in by the preview's blend.
+///
+/// Not in [`TINT_PALETTE`], whose nearest entry is Vermillion, and it replaces
+/// a node's tint for these points, so a node tinted Vermillion still shows its
+/// failures. Mirrored as `FAILURE_COLOR` in `shaders/common.wgsl`, which a
+/// pipeline test checks against this. See
+/// `specs/gui/edits/switch-camera-model.md` § "What each point does".
+pub const FAILURE_RGB: [u8; 3] = [235, 30, 30];
+
 /// The color a **selected camera's sibling images** are marked in: every
 /// frustum whose image uses the selected intrinsics, and the same images'
 /// thumbnails in the Image Browser.

@@ -217,6 +217,21 @@ impl TabContext<'_> {
             .selected_recon
             .and_then(|id| self.state.bench_edit_refusal(id))
             .is_some();
+        // The camera model proposal's banner, for the proposal open on the
+        // node the viewport shows.
+        self.viewer_3d.proposal_banner = self
+            .state
+            .selected_recon
+            .and_then(|id| self.state.camera_model_proposal_on(id))
+            .map(|proposal| {
+                let selected = self
+                    .state
+                    .selected_point
+                    .filter(|point| point.recon == proposal.recon)
+                    .map(|point| point.point);
+                proposal.banner_lines(selected)
+            })
+            .unwrap_or_default();
         // Fetched only after `show_hud` has handed back its `&mut
         // AppState`: the node borrows `state.scene`, and the two cannot
         // overlap.

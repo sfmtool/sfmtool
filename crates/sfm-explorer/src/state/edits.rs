@@ -336,7 +336,7 @@ const DIRECTION_RULES: usize = 4;
 ///
 /// The match names every verdict, so a new one does not compile until it is
 /// placed here and the sentence cannot leave a rule out without saying so.
-fn direction_rule(verdict: PointVerdict) -> Option<(usize, &'static str)> {
+pub(crate) fn direction_rule(verdict: PointVerdict) -> Option<(usize, &'static str)> {
     match verdict {
         PointVerdict::Thin => Some((0, "too thin to place")),
         PointVerdict::NoDepth => Some((1, "with no depth in their rays at the noise level")),
@@ -598,7 +598,8 @@ mod switch_camera_model;
 #[cfg(test)]
 pub(crate) use switch_camera_model::tracks_of_camera;
 pub(crate) use switch_camera_model::{
-    monotone_clause, switch_refusal_in_version_numbering, ProposalApplied, SwitchCameraModelRequest,
+    monotone_clause, refit_change, switch_and_retriangulate, switch_refusal_in_version_numbering,
+    ProposalApplied, ResolvedSwitch, SwitchCameraModelRequest, SwitchEnd,
 };
 
 #[cfg(test)]

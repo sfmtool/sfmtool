@@ -362,3 +362,60 @@ pub(crate) fn hover_overlay_text(
         },
     }
 }
+
+/// The colour the banners draw their words and frame in.
+const BANNER_COLOUR: Color32 = Color32::from_rgb(235, 215, 150);
+
+/// Draw the camera model proposal's banner, top-centre in the 3D view, in the
+/// Move Camera lock banner's style: 12 pt words on a dark ground in a framed
+/// panel.
+///
+/// Each line wraps at the narrower of the view less a margin and 640 px, so
+/// at any width the words stay inside the view and no line runs into the
+/// next. A line about points that lose their position is drawn in the
+/// failure colour. Returns the panel's rectangle, `None` with no lines.
+pub(crate) fn draw_proposal_banner(
+    painter: &egui::Painter,
+    rect: Rect,
+    lines: &[crate::camera_model_proposal::banner::BannerLine],
+) -> Option<Rect> {
+    if lines.is_empty() {
+        return None;
+    }
+    const PAD: f32 = 6.0;
+    const GAP: f32 = 2.0;
+    let font = egui::FontId::proportional(12.0);
+    let wrap = ((rect.width() - 16.0).min(640.0) - 2.0 * PAD).max(40.0);
+    let failure = Color32::from_rgb(
+        crate::scene::FAILURE_RGB[0],
+        crate::scene::FAILURE_RGB[1],
+        crate::scene::FAILURE_RGB[2],
+    );
+    let galleys: Vec<std::sync::Arc<egui::Galley>> = lines
+        .iter()
+        .map(|line| {
+            let colour = if line.failure { failure } else { BANNER_COLOUR };
+            painter.layout(line.text.clone(), font.clone(), colour, wrap)
+        })
+        .collect();
+    let width = galleys.iter().map(|g| g.size().x).fold(0.0_f32, f32::max) + 2.0 * PAD;
+    let height = galleys.iter().map(|g| g.size().y).sum::<f32>()
+        + GAP * (galleys.len() - 1) as f32
+        + 2.0 * PAD;
+    let top_left = Pos2::new(rect.center().x - width / 2.0, rect.top() + 32.0);
+    let panel = Rect::from_min_size(top_left, egui::Vec2::new(width, height));
+    painter.rect_filled(panel, 4.0, Color32::from_rgba_unmultiplied(20, 20, 24, 210));
+    painter.rect_stroke(
+        panel,
+        4.0,
+        Stroke::new(1.0, BANNER_COLOUR),
+        egui::StrokeKind::Inside,
+    );
+    let mut y = panel.top() + PAD;
+    for galley in galleys {
+        let height = galley.size().y;
+        painter.galley(Pos2::new(panel.left() + PAD, y), galley, BANNER_COLOUR);
+        y += height + GAP;
+    }
+    Some(panel)
+}

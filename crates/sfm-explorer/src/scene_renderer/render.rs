@@ -244,12 +244,22 @@ impl SceneRenderer {
             let bundles = |layer: fn(&ReconResources) -> bool| self.drawn(layer);
 
             if show_points {
-                if let (Some(pipeline), Some(quad_vb)) =
-                    (&self.point_pipeline, &self.quad_vertex_buffer)
-                {
-                    pass.set_pipeline(pipeline);
+                if let (Some(pipeline), Some(preview_pipeline), Some(quad_vb)) = (
+                    &self.point_pipeline,
+                    &self.point_preview_pipeline,
+                    &self.quad_vertex_buffer,
+                ) {
                     pass.set_vertex_buffer(0, quad_vb.slice(..));
                     for bundle in bundles(|b| b.display.show_points) {
+                        // The node a camera model proposal's preview is on is
+                        // drawn through the variant that reads its preview
+                        // buffer in slot 3; every other node as before.
+                        let preview = bundle.preview.as_ref();
+                        pass.set_pipeline(if preview.is_some() {
+                            preview_pipeline
+                        } else {
+                            pipeline
+                        });
                         if let (Some(instance_buf), Some(alive_buf)) =
                             (&bundle.point_instance_buffer, &bundle.point_alive_buffer)
                         {
@@ -257,6 +267,9 @@ impl SceneRenderer {
                                 pass.set_bind_group(0, &bundle.point_bind_group, &[]);
                                 pass.set_vertex_buffer(1, instance_buf.slice(..));
                                 pass.set_vertex_buffer(2, alive_buf.slice(..));
+                                if let Some(preview) = preview {
+                                    pass.set_vertex_buffer(3, preview.points.slice(..));
+                                }
                                 pass.draw(0..4, 0..bundle.point_count);
                             }
                         }
@@ -271,6 +284,12 @@ impl SceneRenderer {
                                     additions.point_instance_buffer.slice(..),
                                 );
                                 pass.set_vertex_buffer(2, additions.point_alive_buffer.slice(..));
+                                if let Some(preview) = preview {
+                                    let Some(rows) = preview.additions.as_ref() else {
+                                        continue;
+                                    };
+                                    pass.set_vertex_buffer(3, rows.slice(..));
+                                }
                                 pass.draw(0..4, 0..additions.point_count);
                             }
                         }
@@ -348,23 +367,46 @@ impl SceneRenderer {
             // PICK_TAG_POINT | point pick index so clicks select the patch's
             // point.
             if show_patches {
-                if let (Some(pipeline), Some(quad_vb)) =
-                    (&self.patch_pipeline, &self.quad_vertex_buffer)
-                {
-                    pass.set_pipeline(pipeline);
+                if let (Some(pipeline), Some(preview_pipeline), Some(quad_vb)) = (
+                    &self.patch_pipeline,
+                    &self.patch_preview_pipeline,
+                    &self.quad_vertex_buffer,
+                ) {
                     pass.set_vertex_buffer(0, quad_vb.slice(..));
                     for bundle in bundles(|b| b.display.show_patches) {
                         // The base's atlas, then the additions' own: two draws
                         // in one pass, and nothing in the shader tells them
-                        // apart. The same list the frame's uniform write covers,
-                        // because each atlas draws from its own uniform block.
-                        for patch in bundle.patch_atlases() {
-                            if patch.count > 0 {
-                                pass.set_bind_group(0, &patch.bind_group, &[]);
-                                pass.set_vertex_buffer(1, patch.instance_buffer.slice(..));
-                                pass.set_vertex_buffer(2, patch.alive_buffer.slice(..));
-                                pass.draw(0..4, 0..patch.count);
+                        // apart. Each atlas draws from its own uniform block,
+                        // and under a camera model proposal's preview reads its
+                        // own surfel preview buffer through the variant
+                        // pipeline.
+                        let preview = bundle.preview.as_ref();
+                        let atlases = [
+                            (bundle.patch.as_ref(), preview.map(|p| p.patches.as_ref())),
+                            (
+                                bundle.additions.as_ref().and_then(|a| a.patch.as_ref()),
+                                preview.map(|p| p.addition_patches.as_ref()),
+                            ),
+                        ];
+                        for (patch, rows) in atlases {
+                            let Some(patch) = patch.filter(|patch| patch.count > 0) else {
+                                continue;
+                            };
+                            match rows {
+                                None => pass.set_pipeline(pipeline),
+                                Some(Some(rows)) => {
+                                    pass.set_pipeline(preview_pipeline);
+                                    pass.set_vertex_buffer(3, rows.slice(..));
+                                }
+                                // Unreachable while the rows are built from
+                                // the same bundle; drawn as nothing rather
+                                // than read past a buffer.
+                                Some(None) => continue,
                             }
+                            pass.set_bind_group(0, &patch.bind_group, &[]);
+                            pass.set_vertex_buffer(1, patch.instance_buffer.slice(..));
+                            pass.set_vertex_buffer(2, patch.alive_buffer.slice(..));
+                            pass.draw(0..4, 0..patch.count);
                         }
                     }
                 }

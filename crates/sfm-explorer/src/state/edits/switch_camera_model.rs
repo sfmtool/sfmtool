@@ -38,6 +38,8 @@ use crate::document::PointMap;
 use crate::progress::Collector;
 use crate::scene::ReconId;
 use crate::state::AppState;
+use sfmtool_core::progress::Progress;
+use sfmtool_core::reconstruction::RetriangulateReport;
 
 use super::{retriangulate_refusal, retriangulate_summary, version_before};
 
@@ -122,15 +124,26 @@ pub(crate) fn switch_refusal_in_version_numbering(
 /// "kept" where it did not move; a change of model reads `Switched camera 0 of
 /// kerry from OPENCV_FISHEYE to SFMTOOL_FISHEYE`.
 pub(crate) fn switch_label(label: &str, entry: &CameraSwitch) -> String {
-    let source = &entry.source;
-    let target = &entry.refit.camera;
-    let c = entry.camera;
-    if source.model_name() != target.model_name() || source.model.radial_spline().is_none() {
-        return format!(
+    let (source, target, c) = (&entry.source, &entry.refit.camera, entry.camera);
+    match refit_change(source, target) {
+        Some(change) => format!("Refit spline of camera {c} of {label}: {change}"),
+        None => format!(
             "Switched camera {c} of {label} from {} to {}",
             source.model_name(),
             target.model_name()
-        );
+        ),
+    }
+}
+
+/// What a refit of a spline changes, `8 → 10 coefficients, domain 150.0° →
+/// 108.0°`, naming each of the two only as "kept" where it did not move; `None`
+/// where `target` is not a refit of `source`'s spline but a change of model.
+pub(crate) fn refit_change(
+    source: &sfmtool_core::CameraIntrinsics,
+    target: &sfmtool_core::CameraIntrinsics,
+) -> Option<String> {
+    if source.model_name() != target.model_name() || source.model.radial_spline().is_none() {
+        return None;
     }
     let count = |camera: &sfmtool_core::CameraIntrinsics| {
         camera.model.radial_spline().map_or(0, |(b, _, _)| b.len())
@@ -150,7 +163,7 @@ pub(crate) fn switch_label(label: &str, entry: &CameraSwitch) -> String {
     } else {
         format!("domain {d0:.1}° → {d1:.1}°")
     };
-    format!("Refit spline of camera {c} of {label}: {coeffs}, {domain}")
+    Some(format!("{coeffs}, {domain}"))
 }
 
 /// The report half of the Action Log row: how far the new camera is from the
@@ -223,7 +236,7 @@ impl AppState {
     /// What a switch of `id` asks the core for, resolved against the camera as
     /// it is now: the target with its count, and the fit's options. `Err` is
     /// the refusal's whole sentence.
-    fn resolve_switch(
+    pub(crate) fn resolve_switch(
         &self,
         id: ReconId,
         request: &SwitchCameraModelRequest,
@@ -376,14 +389,27 @@ impl AppState {
             return Err(format!("No camera model proposal is open on {label}."));
         };
         let request = proposal.request();
+        // The job's answer for this generation is the version the task would
+        // push, so it is installed here and nothing runs in the background.
+        let installs_answer = proposal.current_answer().is_some();
         let refused = match &proposal.fit {
             Err(why) => Some(format!("Switch camera model of {label} refused: {why}")),
+            Ok(_) if installs_answer => self.busy_refusal(id),
             Ok(_) => self.busy_refusal(id).or_else(|| self.running_refusal()),
         };
         if let Some(why) = refused {
             self.camera_model_proposal = Some(proposal);
             self.action_log.fail(Kind::Edit, why.clone());
             return Err(why);
+        }
+        if installs_answer {
+            let mut proposal = proposal;
+            let Some((_, Ok(answer))) = proposal.triangulation.take() else {
+                unreachable!("the answer was found above");
+            };
+            let entry = self.install_switched_camera(id, *answer);
+            self.sync_proposal_field();
+            return Ok(ProposalApplied::Pushed(id, Box::new(entry)));
         }
         let node = self.node(id).expect("resolved above");
         match retriangulate_refusal(node, None) {
@@ -419,26 +445,57 @@ impl AppState {
         }
     }
 
+    /// Push the proposal job's answer as `id`'s next version, on the GUI
+    /// thread: the version, label and Action Log row the `Switch camera model`
+    /// task would push, since the job ran the task's computation
+    /// ([`switch_and_retriangulate`]) over the same value. Returns the switch's
+    /// report for the reply.
+    fn install_switched_camera(
+        &mut self,
+        id: ReconId,
+        answer: crate::camera_model_proposal::job::ProposalAnswer,
+    ) -> CameraSwitch {
+        let started = Instant::now();
+        let collector = Collector::new(self.action_log.detailed_timing());
+        let SwitchedCamera {
+            value,
+            map,
+            version_label,
+            text,
+            switch,
+        } = answer.run;
+        let index = self.node_index(id).expect("the proposal's node is loaded");
+        let serial = {
+            let _phase = collector.phase("push version");
+            self.scene[index]
+                .history
+                .push(EditedReconstruction::new(value), map, version_label)
+        };
+        let parent = version_before(&self.scene[index], serial);
+        self.follow_selection_forward(id);
+        self.action_log.record_done(
+            Kind::Edit,
+            started,
+            version_step_text(&text, parent, serial),
+            collector.take(),
+        );
+        switch
+    }
+
     /// The switch and the retriangulation of the switched camera's tracks, as
     /// a function of the [`Progress`](sfmtool_core::progress::Progress) it
     /// reports through.
     ///
     /// The closure owns what it reads: a clone of the version's
     /// [`EditedReconstruction`], whose base is the very `Arc` the node goes on
-    /// drawing, and the resolved request. The switch takes no `Progress`, so a
-    /// cancel is read on either side of it; the retriangulation polls the flag
-    /// between its stages.
+    /// drawing, and the resolved request. The work itself is
+    /// [`switch_and_retriangulate`], which the proposal's own job runs too.
     pub(crate) fn switch_camera_model_job(
         &self,
         id: ReconId,
         request: &SwitchCameraModelRequest,
     ) -> Result<Job, String> {
-        let ResolvedSwitch {
-            label,
-            camera: c,
-            target,
-            options,
-        } = self.resolve_switch(id, request)?;
+        let resolved = self.resolve_switch(id, request)?;
         let edited = self
             .node(id)
             .expect("resolved above")
@@ -446,87 +503,133 @@ impl AppState {
             .current()
             .clone();
         Ok(Box::new(move |progress| {
-            let refuse = |why: String| format!("Switch camera model of {label} refused: {why}");
-            if progress.check_cancel().is_err() {
-                return Finished::Cancelled;
-            }
-            let [p_switch, p_retriangulate] = progress.split([0.1, 0.9]);
-            let (switched, entry, mat_map) = {
-                let _phase = p_switch.phase("switch camera model");
-                let (source, mat_map) =
-                    if edited.deleted_points.is_empty() && edited.added.points.is_empty() {
-                        (Arc::clone(&edited.base), None)
-                    } else {
-                        let (value, map) = edited.materialize();
-                        (Arc::new(value), Some(map))
-                    };
-                let (switched, report) = match switch_camera_model(&source, &[c], &target, &options)
-                {
-                    Ok(switched) => switched,
-                    Err(e) => {
-                        return Finished::Failed(refuse(
-                            switch_refusal_in_version_numbering(e, mat_map.as_ref()).to_string(),
-                        ))
-                    }
+            let (source, mat_map) =
+                if edited.deleted_points.is_empty() && edited.added.points.is_empty() {
+                    (Arc::clone(&edited.base), None)
+                } else {
+                    let (value, map) = edited.materialize();
+                    (Arc::new(value), Some(map))
                 };
-                let entry = report
-                    .cameras
-                    .into_iter()
-                    .next()
-                    .expect("one camera was named");
-                (switched, entry, mat_map)
-            };
-            if progress.check_cancel().is_err() {
-                return Finished::Cancelled;
+            match switch_and_retriangulate(&source, mat_map, &resolved, progress, |_| {}) {
+                Ok((run, _report)) => Finished::SwitchedCamera(Box::new(run)),
+                Err(SwitchEnd::Cancelled) => Finished::Cancelled,
+                Err(SwitchEnd::Failed(why)) => Finished::Failed(why),
             }
-            // The switch renumbers nothing, so the tracks are named in the
-            // switched value's own rows.
-            let tracks = tracks_of_camera(&switched, c);
-            let switched = EditedReconstruction::new(Arc::new(switched));
-            let (next, map, report) = match retriangulate_points(
-                &switched,
-                RetriangulateWhich::TheseInBulk(&tracks),
-                &RetriangulateOptions::default(),
-                &p_retriangulate,
-            ) {
-                Ok(solved) => solved,
-                Err(RetriangulateError::Cancelled) => return Finished::Cancelled,
-                Err(e) => return Finished::Failed(refuse(e.to_string())),
-            };
-            let version_label = format!(
-                "{} and retriangulated its tracks",
-                switch_label(&label, &entry)
-            );
-            let text = format!(
-                "{version_label}: {}; {}",
-                switch_report_text(&entry),
-                retriangulate_summary(&report)
-            );
-            let mut steps: Vec<PointMap> = mat_map.map(PointMap::Rows).into_iter().collect();
-            steps.push(map);
-            Finished::SwitchedCamera(Box::new(SwitchedCamera {
-                // `TheseInBulk` writes into a new base with nothing over it, so
-                // taking it out of the version is a move.
-                value: Arc::unwrap_or_clone(next.base),
-                map: PointMap::Chain(steps),
-                version_label,
-                text,
-                switch: entry,
-            }))
         }))
     }
 }
 
+/// How [`switch_and_retriangulate`] ended without an answer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SwitchEnd {
+    /// Asked to stop, and did.
+    Cancelled,
+    /// The switch or the retriangulation refused, in the edit's sentence.
+    Failed(String),
+}
+
+/// The proposal's Apply as one computation: the switch of `resolved`'s camera
+/// over `source`, then the retriangulation of the camera's tracks over the
+/// switched value through `RetriangulateWhich::TheseInBulk`, with the default
+/// options the Retriangulate edits use.
+///
+/// `source` is the version's base, or its materialisation with `mat_map` its
+/// row map. `switched` is called with the switch's report as soon as the
+/// switch returns, before the retriangulation starts. The answer is the
+/// version Apply pushes, its label, its Action Log sentence, the switch's
+/// report and the retriangulation's report, which says what happened to each
+/// point in `source`'s rows.
+///
+/// Run by the `Switch camera model` background task and by the proposal's own
+/// job (`crate::camera_model_proposal::job`), so the version the job holds is
+/// the version the task would push. The switch takes no `Progress`, so a
+/// cancel is read on either side of it; the retriangulation polls the flag
+/// between its stages.
+pub(crate) fn switch_and_retriangulate(
+    source: &SfmrReconstruction,
+    mat_map: Option<RowMap>,
+    resolved: &ResolvedSwitch,
+    progress: &Progress<'_>,
+    switched: impl FnOnce(&CameraSwitch),
+) -> Result<(SwitchedCamera, RetriangulateReport), SwitchEnd> {
+    let ResolvedSwitch {
+        label,
+        camera: c,
+        target,
+        options,
+    } = resolved;
+    let c = *c;
+    let refuse =
+        |why: String| SwitchEnd::Failed(format!("Switch camera model of {label} refused: {why}"));
+    if progress.check_cancel().is_err() {
+        return Err(SwitchEnd::Cancelled);
+    }
+    let [p_switch, p_retriangulate] = progress.split([0.1, 0.9]);
+    let (switched_value, entry) = {
+        let _phase = p_switch.phase("switch camera model");
+        let (value, report) = switch_camera_model(source, &[c], target, options).map_err(|e| {
+            refuse(switch_refusal_in_version_numbering(e, mat_map.as_ref()).to_string())
+        })?;
+        let entry = report
+            .cameras
+            .into_iter()
+            .next()
+            .expect("one camera was named");
+        (value, entry)
+    };
+    switched(&entry);
+    if progress.check_cancel().is_err() {
+        return Err(SwitchEnd::Cancelled);
+    }
+    // The switch renumbers nothing, so the tracks are named in the switched
+    // value's own rows.
+    let tracks = tracks_of_camera(&switched_value, c);
+    let switched_value = EditedReconstruction::new(Arc::new(switched_value));
+    let (next, map, report) = match retriangulate_points(
+        &switched_value,
+        RetriangulateWhich::TheseInBulk(&tracks),
+        &RetriangulateOptions::default(),
+        &p_retriangulate,
+    ) {
+        Ok(solved) => solved,
+        Err(RetriangulateError::Cancelled) => return Err(SwitchEnd::Cancelled),
+        Err(e) => return Err(refuse(e.to_string())),
+    };
+    let version_label = format!(
+        "{} and retriangulated its tracks",
+        switch_label(label, &entry)
+    );
+    let text = format!(
+        "{version_label}: {}; {}",
+        switch_report_text(&entry),
+        retriangulate_summary(&report)
+    );
+    let mut steps: Vec<PointMap> = mat_map.map(PointMap::Rows).into_iter().collect();
+    steps.push(map);
+    Ok((
+        SwitchedCamera {
+            // `TheseInBulk` writes into a new base with nothing over it, so
+            // taking it out of the version is a move.
+            value: next.base,
+            map: PointMap::Chain(steps),
+            version_label,
+            text,
+            switch: entry,
+        },
+        report,
+    ))
+}
+
 /// A switch's request resolved against the camera it names.
-struct ResolvedSwitch {
+pub(crate) struct ResolvedSwitch {
     /// The node's label, for the sentences.
-    label: String,
+    pub(crate) label: String,
     /// The camera's index in the node's camera table.
-    camera: usize,
+    pub(crate) camera: usize,
     /// The model, with its count.
-    target: RefitTarget,
+    pub(crate) target: RefitTarget,
     /// The fit's options.
-    options: SwitchCameraModelOptions,
+    pub(crate) options: SwitchCameraModelOptions,
 }
 
 /// How the proposal's Apply went, when it went.

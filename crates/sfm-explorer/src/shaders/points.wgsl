@@ -60,8 +60,7 @@ struct VertexOutput {
     @location(4) @interpolate(flat) mark: u32,
 }
 
-@vertex
-fn vs_main(in: VertexInput) -> VertexOutput {
+fn place(in: VertexInput) -> VertexOutput {
     var out: VertexOutput;
     out.uv = in.quad_pos;
     out.mark = in.alive;
@@ -129,6 +128,38 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     let view_pos = uniforms.view * vec4<f32>(centre, 1.0);
     out.view_depth = -view_pos.z;
 
+    return out;
+}
+
+@vertex
+fn vs_main(in: VertexInput) -> VertexOutput {
+    return place(in);
+}
+
+// The node a camera model proposal's preview is on: each point is drawn at
+// `stored + s * (target - stored)`, normalised for a direction so a point at
+// infinity turns along the shorter arc, where its preview row's flag says it
+// moves; a point whose row says it loses its position stands where it is and
+// takes the failure colour as `s` grows. The pick ID is the same, so a click
+// picks a moving point where it is drawn.
+@vertex
+fn vs_preview(in: VertexInput, @location(5) preview: vec4<f32>) -> VertexOutput {
+    var moved = in;
+    if preview.w == PREVIEW_MOVES {
+        let blended = mix(in.world_pos, preview.xyz, recon.preview_s);
+        let is_infinity = ((in.color_packed >> 24u) & 0xFFu) == 0u;
+        if is_infinity {
+            // Two opposite directions blend through the origin; keep the
+            // target there rather than draw a direction of zero length.
+            moved.world_pos = select(preview.xyz, normalize(blended), length(blended) > 1e-6);
+        } else {
+            moved.world_pos = blended;
+        }
+    }
+    var out = place(moved);
+    if preview.w == PREVIEW_LOSES {
+        out.color = mix(out.color, FAILURE_COLOR, recon.preview_s);
+    }
     return out;
 }
 

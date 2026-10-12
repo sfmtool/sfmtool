@@ -526,7 +526,7 @@ pub(crate) enum Finished {
 /// [`Finished::Produced`] installs one, and the switch's report.
 pub(crate) struct SwitchedCamera {
     /// What the switch and the retriangulation returned.
-    pub(crate) value: SfmrReconstruction,
+    pub(crate) value: Arc<SfmrReconstruction>,
     /// The map from the input's rows to that value's.
     pub(crate) map: PointMap,
     /// The version's label.
@@ -941,7 +941,8 @@ impl AppState {
                 } = *run;
                 switched_camera = Some(Box::new(switch));
                 Finished::Produced {
-                    value,
+                    // The task's answer is shared with nothing, so this is a move.
+                    value: Arc::unwrap_or_clone(value),
                     map,
                     version_label,
                     text,

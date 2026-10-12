@@ -107,7 +107,9 @@ pub(super) fn recon_uniforms(
         // Effective ∞ visibility: the global HUD toggle AND this node's own ∞
         // mini-toggle.
         show_infinity: f32::from(show_infinity && bundle.display.show_points_at_infinity),
-        _pad: [0.0; 3],
+        // The camera model proposal's preview blend, 0 on a node with no preview.
+        preview_s: bundle.preview.as_ref().map_or(0.0, |preview| preview.s),
+        _pad: [0.0; 2],
     }
 }
 

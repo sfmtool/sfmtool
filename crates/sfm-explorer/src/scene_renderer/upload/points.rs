@@ -118,6 +118,10 @@ impl SceneRenderer {
         // that does not re-uploads through `upload_additions`.
         bundle.additions = None;
         bundle.uploaded_additions = (0, 0);
+        // A preview's rows are laid out by the buffers they step beside, so a
+        // new base drops it; the next frame's `set_preview` writes it again
+        // where the rows still fit.
+        bundle.preview = None;
 
         let (count, size) = (bundle.point_count, bundle.auto_point_size);
         // The point count moved, so the global pick index space has to be
