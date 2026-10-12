@@ -45,7 +45,7 @@ def _run_cluster_patches(
     patch_size: float,
     resolution: int,
     min_zncc: float,
-    max_shift: float,
+    max_shift_scales: float,
     max_member_zncc_self_similarity_radius: float,
     piecewise: bool = False,
     regate_at_refined_shape: bool | None = None,
@@ -155,7 +155,7 @@ def _run_cluster_patches(
             radius=patch_size / 2.0,
             resolution=resolution,
             min_zncc=min_zncc,
-            max_shift_px=max_shift,
+            max_shift_scales=max_shift_scales,
             max_member_zncc_self_similarity_radius=max_member_zncc_self_similarity_radius,
             regate_at_refined_shape=regate_at_refined_shape,
             max_capped_cells=max_capped_cells,
@@ -224,7 +224,7 @@ def _run_cluster_patches(
             "patch_size": patch_size,
             "resolution": resolution,
             "min_zncc": min_zncc,
-            "max_shift_px": max_shift,
+            "max_shift_scales": max_shift_scales,
             "max_member_zncc_self_similarity_radius": max_member_zncc_self_similarity_radius,
             # The settings the kernel ran with (its defaults where the caller
             # passed None).

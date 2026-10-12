@@ -289,7 +289,7 @@ fn make_cluster_patch_test_data() -> MatchesData {
         member_consistency_residual: Array1::from_vec(vec![0.02, 0.05, 0.31, f32::NAN, f32::NAN]),
         member_cells: None,
         refine_options: serde_json::json!({
-            "patch_size": 12.0, "resolution": 15, "min_zncc": 0.85, "max_shift_px": 3.0
+            "patch_size": 12.0, "resolution": 15, "min_zncc": 0.85, "max_shift_scales": 2.0
         }),
     });
     data

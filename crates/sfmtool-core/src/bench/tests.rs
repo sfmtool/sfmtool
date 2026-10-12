@@ -6819,8 +6819,9 @@ fn the_bench_s_shift_bar_defaults_to_the_localizer_s_search_radius() {
         BENCH_MAX_SHIFT_PX,
         "the evaluation looks as far as the batch localizer does"
     );
-    // The kernel keeps its own bar: the batch pass is not moved by the bench.
-    assert_eq!(ClusterRefineParams::default().max_shift_px, 3.0);
+    // The kernel keeps its own bar, in units of the member's scale: the
+    // batch pass is not moved by the bench.
+    assert_eq!(ClusterRefineParams::default().max_shift_scales, 2.0);
 }
 
 #[test]

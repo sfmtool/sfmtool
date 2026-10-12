@@ -28,8 +28,9 @@ pub enum MemberStatus {
     Kept = 1,
     /// Rejected: achieved ZNCC below [`ClusterRefineParams::min_zncc`].
     RejectedLowZncc = 2,
-    /// Rejected: translation drifted more than
-    /// [`ClusterRefineParams::max_shift_px`] from the SIFT seed.
+    /// Rejected: the refined translation from the SIFT seed is more than
+    /// [`ClusterRefineParams::max_shift_scales`] times the member's refined
+    /// scale ([`ClusterRefineParams::admits_shift`]).
     RejectedShift = 3,
     /// Outscored by another kept member in the same image, or shares the
     /// reference's image.
@@ -94,6 +95,9 @@ pub const DEFAULT_REGATE_AT_REFINED_SHAPE: bool = true;
 /// The default of [`ClusterRefineParams::max_capped_cells`].
 pub const DEFAULT_MAX_CAPPED_CELLS: u8 = 8;
 
+/// The default of [`ClusterRefineParams::max_shift_scales`].
+pub const DEFAULT_MAX_SHIFT_SCALES: f64 = 2.0;
+
 /// The default of [`ClusterRefineParams::rotation_starts`].
 pub const DEFAULT_ROTATION_STARTS: u32 = 12;
 
@@ -116,8 +120,17 @@ pub struct ClusterRefineParams {
     pub window: PatchWindow,
     /// Member acceptance threshold on the achieved windowed ZNCC.
     pub min_zncc: f64,
-    /// Max translation drift from the SIFT seed, source-image pixels.
-    pub max_shift_px: f64,
+    /// Max translation of the refined position from the SIFT seed, in units
+    /// of the member's refined scale: a member passes when
+    /// `|t| / √|det S|` is at or below this bar, `|t|` the shift in source
+    /// pixels and `S` the refined absolute affine shape, so `√|det S|` is the
+    /// member's scale in source pixels per keypoint-frame unit, the reading
+    /// the reference is chosen by, taken at the refined shape rather than the
+    /// detection. The bar is in scale units because the share of wrong
+    /// members follows the shift over the member's scale, while across a bar
+    /// in pixels it barely changes. See [`Self::admits_shift`]. Default
+    /// [`DEFAULT_MAX_SHIFT_SCALES`], `2.0`.
+    pub max_shift_scales: f64,
     /// Exclude a member up front (before reference selection and refinement)
     /// when its own patch does not pin a 2D position: its
     /// [ZNCC self-similarity radius](crate::patch::self_similarity), how far
@@ -231,7 +244,7 @@ impl Default for ClusterRefineParams {
             // confined to the inscribed disk per the house default.
             window: PatchWindow::GaussianDisk { sigma: 0.5 },
             min_zncc: 0.85,
-            max_shift_px: 3.0,
+            max_shift_scales: DEFAULT_MAX_SHIFT_SCALES,
             max_member_zncc_self_similarity_radius: DEFAULT_MAX_MEMBER_ZNCC_SELF_SIMILARITY_RADIUS,
             regate_at_refined_shape: DEFAULT_REGATE_AT_REFINED_SHAPE,
             max_capped_cells: DEFAULT_MAX_CAPPED_CELLS,
@@ -253,6 +266,18 @@ impl Default for ClusterRefineParams {
 }
 
 impl ClusterRefineParams {
+    /// Whether a member refined to the absolute affine shape `shape`, at a
+    /// translation of `shift_px` source pixels from its SIFT seed, passes the
+    /// shift gate: `shift_px / √|det shape|` at or below
+    /// [`Self::max_shift_scales`]. A `NaN` shift, and a shape whose
+    /// determinant is zero or not finite, fail.
+    pub fn admits_shift(&self, shift_px: f64, shape: &[[f64; 2]; 2]) -> bool {
+        let scale = (shape[0][0] * shape[1][1] - shape[0][1] * shape[1][0])
+            .abs()
+            .sqrt();
+        scale > 0.0 && scale.is_finite() && shift_px / scale <= self.max_shift_scales
+    }
+
     /// Whether [`Self::max_member_zncc_self_similarity_radius`] is on: finite
     /// and above `0`.
     pub fn member_self_similarity_gate_is_on(&self) -> bool {

@@ -42,7 +42,6 @@ use crate::reconstruction::edited::EditedReconstruction;
 
 use super::classify::ClassificationReason;
 use super::track::{EditableTrack, Thresholds};
-use crate::patch::cluster_refine::ClusterRefineParams;
 
 pub use neighbourhood::{
     ClusterMember, MatchesClusters, MatchesClustersError, NearbyCluster, NearbyObservation,
@@ -398,7 +397,7 @@ pub struct TrackAtPixelOptions {
     /// paint the verdicts by and, at the track stage, how far a fit may move a
     /// sighting. The bench defaults, except two bars the cascade's other
     /// parameters were chosen by the harness without: `max_shift_px`, which
-    /// stays at the cluster refinement's 3 px rather than the bench's
+    /// stays at 3 px rather than the bench's
     /// [`BENCH_MAX_SHIFT_PX`](super::track::BENCH_MAX_SHIFT_PX), and
     /// `max_projection_error_px`, which is off at `0`.
     pub thresholds: Thresholds,
@@ -419,7 +418,7 @@ impl Default for TrackAtPixelOptions {
             sweep: SweepOptions::default(),
             constellation: ConstellationOptions::default(),
             thresholds: Thresholds {
-                max_shift_px: ClusterRefineParams::default().max_shift_px,
+                max_shift_px: 3.0,
                 // TODO: evaluate the cascade with the bench's projection error
                 // bar (`BENCH_MAX_PROJECTION_ERROR_PX`) on. It is off here
                 // because the harness tuned the cascade before the bar

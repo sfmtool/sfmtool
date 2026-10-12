@@ -671,11 +671,11 @@ fn the_member_gate_passes_at_or_under_the_bar_and_fails_nan() {
 
 #[test]
 fn gate_shift_rejects_drifted_seed() {
-    // Identical images, but the member's detection sits 1.5 px off the truth
-    // while the gate allows 0.5 px: the optimizer recovers the offset and the
-    // drift gate rejects it.
+    // Identical images, but the member's detection sits 1.5 px off the truth,
+    // 0.6 of its scale of 2.5 px, while the gate allows 0.2 scales (0.5 px):
+    // the optimizer recovers the offset and the drift gate rejects it.
     let params = ClusterRefineParams {
-        max_shift_px: 0.5,
+        max_shift_scales: 0.2,
         ..Default::default()
     };
     let img = make_image(128, 128, texture);
@@ -697,13 +697,83 @@ fn gate_shift_rejects_drifted_seed() {
     assert_eq!(result.member_status[1], MemberStatus::RejectedShift);
     assert!(
         result.member_shift_px[1] > 0.5,
-        "recovered drift {} should exceed the gate",
+        "recovered drift {} should exceed the gate's 0.5 px",
         result.member_shift_px[1]
     );
     assert!(
         result.member_zncc[1] > 0.9,
         "the warp itself should be good"
     );
+}
+
+#[test]
+fn shift_gate_reads_the_member_s_refined_scale() {
+    // The same 1.5 px drift of the detection from the truth, against a bar of
+    // 0.4 scales: at a scale of 2.5 px it is 0.6 scales and refused, at a
+    // scale of 5 px it is 0.3 scales and kept. The member gates, which read
+    // the texture on the template grid at each scale, are off so that only
+    // the shift gate decides.
+    let params = ClusterRefineParams {
+        max_shift_scales: 0.4,
+        max_member_zncc_self_similarity_radius: 0.0,
+        max_capped_cells: CELL_COUNT,
+        ..Default::default()
+    };
+    let img = make_image(128, 128, texture);
+    for (scale, want) in [
+        (2.5, MemberStatus::RejectedShift),
+        (5.0, MemberStatus::Kept),
+    ] {
+        let a = [[scale, 0.0], [0.0, scale]];
+        let feats = [
+            ImageFeatures::new(&[([64.0, 64.0], a)]),
+            ImageFeatures::new(&[([65.5, 64.0], a)]),
+        ];
+        let pyramids = [pyramid(&img), pyramid(&img)];
+        let result = refine_cluster_patches(
+            &pyramids,
+            &geometry(&feats),
+            &[0, 2],
+            &[0, 1],
+            &[0, 0],
+            &params,
+            None,
+        );
+        assert_eq!(result.member_status[1], want, "scale {scale}");
+        let shift = result.member_shift_px[1] as f64;
+        assert!((shift - 1.5).abs() < 0.2, "scale {scale}: shift {shift}");
+        assert!(result.member_zncc[1] > 0.9, "scale {scale}");
+    }
+}
+
+#[test]
+fn shift_gate_bar_is_in_units_of_the_shape_s_scale() {
+    let params = ClusterRefineParams::default();
+    assert_eq!(params.max_shift_scales, DEFAULT_MAX_SHIFT_SCALES);
+    assert_eq!(DEFAULT_MAX_SHIFT_SCALES, 2.0);
+    // A shape of scale 2 (det 4): the bar is 4 px, inclusive.
+    let shape = [[2.0, 0.0], [0.0, 2.0]];
+    assert!(params.admits_shift(4.0, &shape));
+    assert!(!params.admits_shift(4.0 + 1e-9, &shape));
+    // The scale is sqrt|det S|: an anisotropic, rotated, reflected or skewed
+    // shape with |det S| = 4 has the same bar.
+    for skewed in [
+        [[4.0, 0.0], [0.0, 1.0]],
+        [[0.0, -2.0], [2.0, 0.0]],
+        [[-2.0, 0.0], [0.0, 2.0]],
+        [[2.0, 1.0], [0.0, 2.0]],
+    ] {
+        assert!(params.admits_shift(4.0, &skewed), "{skewed:?}");
+        assert!(!params.admits_shift(4.01, &skewed), "{skewed:?}");
+    }
+    // The same pixel shift passes at a large scale and fails at a small one.
+    assert!(params.admits_shift(3.0, &[[10.0, 0.0], [0.0, 10.0]]));
+    assert!(!params.admits_shift(3.0, &[[1.0, 0.0], [0.0, 1.0]]));
+    // A NaN shift and a degenerate or non-finite shape fail.
+    assert!(!params.admits_shift(f64::NAN, &shape));
+    assert!(!params.admits_shift(0.0, &[[1.0, 1.0], [1.0, 1.0]]));
+    assert!(!params.admits_shift(0.0, &[[f64::NAN, 0.0], [0.0, 1.0]]));
+    assert!(!params.admits_shift(0.0, &[[f64::INFINITY, 0.0], [0.0, 1.0]]));
 }
 
 #[test]

@@ -395,8 +395,10 @@ pub fn clusters_to_pair_matches(
 ///         keypoint-frame units.
 ///     min_zncc: Member acceptance threshold on the achieved windowed ZNCC
 ///         (default 0.85).
-///     max_shift_px: Max translation drift from the SIFT seed, px
-///         (default 3.0).
+///     max_shift_scales: Max translation of the refined position from the
+///         SIFT seed, in units of the member's refined scale sqrt|det S|, S
+///         its refined absolute affine shape: a member over it is marked
+///         rejected_shift (default 2.0).
 ///     max_member_zncc_self_similarity_radius: Exclude a member before
 ///         reference selection and refinement when its own patch does not
 ///         pin a position: its ZNCC self-similarity radius, how far the
@@ -516,7 +518,7 @@ pub fn clusters_to_pair_matches(
                     cluster_starts, member_images, member_features, *,
                     radius = 6.0, resolution = 25,
                     window = "gaussian_disk", window_sigma = None,
-                    min_zncc = 0.85, max_shift_px = 3.0,
+                    min_zncc = 0.85, max_shift_scales = 2.0,
                     max_member_zncc_self_similarity_radius = 2.5,
                     regate_at_refined_shape = None, max_capped_cells = None,
                     rotation_starts = None,
@@ -538,7 +540,7 @@ pub fn refine_cluster_patches<'py>(
     window: &str,
     window_sigma: Option<f64>,
     min_zncc: f64,
-    max_shift_px: f64,
+    max_shift_scales: f64,
     max_member_zncc_self_similarity_radius: f64,
     regate_at_refined_shape: Option<bool>,
     max_capped_cells: Option<u8>,
@@ -617,7 +619,7 @@ pub fn refine_cluster_patches<'py>(
         resolution,
         window: parse_patch_window(window, window_sigma.unwrap_or(0.5))?,
         min_zncc,
-        max_shift_px,
+        max_shift_scales,
         max_member_zncc_self_similarity_radius,
         regate_at_refined_shape: regate_at_refined_shape
             .unwrap_or(defaults.regate_at_refined_shape),

@@ -622,7 +622,7 @@ refinement measured and which members stand.
     "patch_size": 8.0,
     "resolution": 15,
     "min_zncc": 0.85,
-    "max_shift_px": 3.0
+    "max_shift_scales": 2.0
   }
 }
 ```
@@ -651,7 +651,9 @@ refinement measured and which members stand.
   patch edge in pixels, current) or the legacy `radius` (a half-width).
   A consumer that needs the half-width uses `patch_size / 2`, or `radius`
   as-is. The other keys record the settings for a reader to see and are not
-  read back: current files also carry `resolution`, `min_zncc`, `max_shift_px`,
+  read back: current files also carry `resolution`, `min_zncc`,
+  `max_shift_scales` (the shift bar in units of the member's refined scale;
+  older files carry `max_shift_px`, a bar in source pixels, in its place),
   `max_member_zncc_self_similarity_radius` (older files carry
   `max_keypoint_uncertainty`, the bar of an earlier member gate, in its place),
   `regate_at_refined_shape` and `max_capped_cells`, the settings of the two
@@ -711,7 +713,10 @@ refinement measured and which members stand.
     its `member_zncc` is 1.0 and its `member_shift_px` is 0
   - `kept` — refined and vetted successfully
   - `rejected_low_zncc` — achieved ZNCC below the acceptance threshold
-  - `rejected_shift` — translation drifted too far from the SIFT seed
+  - `rejected_shift` — translation drifted too far from the SIFT seed (in a
+    file whose `refine_options` carry `max_shift_scales`, further than that
+    many times the member's refined scale; in an older file carrying
+    `max_shift_px`, further than that many source pixels)
   - `duplicate_image` — outscored by another kept member in the same image, or
     shares the reference's image
   - `not_evaluated` — degenerate shape, template/seed support out of frame, or the

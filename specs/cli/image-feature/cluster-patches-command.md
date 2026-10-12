@@ -42,7 +42,7 @@ sfm cluster-patches -i clusters.matches [-o out.matches] [OPTIONS...]
 | `--patch-size` | float > 0 | 12.0 | Template size — the full patch edge length, keypoint-frame units; halved to the kernel's template half-width. The default sits at SIFT's ~12× descriptor window |
 | `--resolution` | int ≥ 3 | 25 | Template samples per axis |
 | `--min-zncc` | float in [−1, 1] | 0.85 | Member acceptance threshold on the achieved windowed ZNCC |
-| `--max-shift` | float ≥ 0 | 3.0 | Max translation drift from the SIFT seed, px |
+| `--max-shift-scales` | float ≥ 0 | 2.0 | Refuse a member as `rejected_shift` when its refined position lies further from its SIFT detection than this many times its refined scale, `√\|det S\|` of its refined affine shape `S` in source px. The bar is in scale units because the share of wrong members follows the shift over the scale, not the shift in pixels ([the shift gate](../../core/patch/cluster-patch-refinement.md#acceptance)) |
 | `--max-member-zncc-self-similarity-radius` | float ≥ 0 | 2.5 | Member gate: exclude members whose own patch's ZNCC self-similarity radius (template-grid px) is above this, before reference selection and refinement; `0` disables, `3` or more turns nothing out |
 | `--regate-at-refined-shape/--no-regate-at-refined-shape` | flag | on | Read the member gate again, with the same bar, on each member's own patch at its refined shape and position, for every member that passes the ZNCC and shift gates; a member over the bar there is `rejected_unlocalizable_refined`. Off when the bar is `0` |
 | `--max-capped-cells` | int in [0, 9] | 8 | The most of the nine cells of a member's own patch at its refined shape that may read the largest ZNCC self-similarity radius, `3`; a member with more is `rejected_unlocalizable_cells`. `9` turns nothing out |
@@ -149,14 +149,16 @@ consumer reads the cells.
    ([`cluster-warp-consistency.md`](../../core/patch/cluster-warp-consistency.md), a
    stored signal computed in the same kernel call, no CLI knobs) —
    `refine_options` = the CLI parameters (`patch_size`, `resolution`,
-   `min_zncc`, `max_shift_px`, `max_member_zncc_self_similarity_radius`,
+   `min_zncc`, `max_shift_scales`, `max_member_zncc_self_similarity_radius`,
    `regate_at_refined_shape`, `max_capped_cells`, `rotation_starts`,
    `piecewise`, with
    `regate_at_refined_shape` false when the bar is `0` and the gate does not
    run; a
    file written before the gate read the radius carries
-   `max_keypoint_uncertainty` in place of the radius bar, and nothing reads
-   either back). With `--piecewise`, `refine_options` also records the
+   `max_keypoint_uncertainty` in place of the radius bar, and one written
+   before the shift gate read the member's scale carries `max_shift_px`, a
+   bar in source px, in place of `max_shift_scales`; nothing reads either
+   back). With `--piecewise`, `refine_options` also records the
    piecewise refinement's settings as flat keys beside `piecewise`:
    `move_shape`, `cell_shift_bound_px`, `min_cell_zncc`, `min_cell_curvature`,
    `update_tolerance_px` and `max_iterations`, the values the binding reports
@@ -207,7 +209,7 @@ sfm cluster-patches -i matches/clusters.matches --piecewise
 
 # Stricter vetting, explicit output
 sfm cluster-patches -i matches/clusters.matches -o matches/strict.matches \
-    --min-zncc 0.9 --max-shift 2.0
+    --min-zncc 0.9 --max-shift-scales 1.0
 ```
 
 ## Notes

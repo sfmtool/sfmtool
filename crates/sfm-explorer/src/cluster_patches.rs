@@ -1026,7 +1026,7 @@ fn matches_data(
                 "patch_size": PATCH_SIZE,
                 "resolution": refine_defaults.resolution,
                 "min_zncc": refine_defaults.min_zncc,
-                "max_shift_px": refine_defaults.max_shift_px,
+                "max_shift_scales": refine_defaults.max_shift_scales,
                 "max_member_zncc_self_similarity_radius": refine_defaults.max_member_zncc_self_similarity_radius,
                 "regate_at_refined_shape": refine_defaults.regate_at_refined_shape,
                 "max_capped_cells": refine_defaults.max_capped_cells,

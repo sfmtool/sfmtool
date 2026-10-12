@@ -191,7 +191,7 @@ CLUSTER_PATCH_DEFAULTS = {
     "patch_size": 12.0,
     "resolution": 25,
     "min_zncc": 0.85,
-    "max_shift": 3.0,
+    "max_shift_scales": 2.0,
     "max_member_zncc_self_similarity_radius": 2.5,
 }
 

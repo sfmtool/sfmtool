@@ -136,9 +136,11 @@ pub fn capped_cell_count(cells: &[[f64; 3]; 3]) -> usize;
 pub const CELL_COUNT: u8 = 9;
 pub const DEFAULT_REGATE_AT_REFINED_SHAPE: bool = true;
 pub const DEFAULT_MAX_CAPPED_CELLS: u8 = 8;
+pub const DEFAULT_MAX_SHIFT_SCALES: f64 = 2.0;
 pub const DEFAULT_ROTATION_STARTS: u32 = 12;
 
 impl ClusterRefineParams {
+    pub fn admits_shift(&self, shift_px: f64, shape: &[[f64; 2]; 2]) -> bool; // |t| / √|det S| ≤ bar
     pub fn member_self_similarity_gate_is_on(&self) -> bool;
     pub fn admits_member_zncc_self_similarity_radius(&self, radius: f64) -> bool;
     pub fn refined_shape_gate_is_on(&self) -> bool;   // regate and the bar both on
@@ -492,15 +494,44 @@ feature index or a degenerate shape (`|det A| < 1e-9`).
 ### Acceptance
 
 A refined member is vetted in a fixed order: ZNCC below `min_zncc` →
-`RejectedLowZncc`; otherwise `|t|` above `max_shift_px` → `RejectedShift`;
-otherwise the two gates of [the member gate at the refined
-shape](#the-member-gate-at-the-refined-shape), the whole grid's →
+`RejectedLowZncc`; otherwise `|t| / √|det S|` above `max_shift_scales` →
+`RejectedShift` (the shift gate, below); otherwise the two gates of
+[the member gate at the refined shape](#the-member-gate-at-the-refined-shape),
+the whole grid's →
 `RejectedUnlocalizableRefined` and then the cells' →
 `RejectedUnlocalizableCells`; otherwise kept. The ZNCC gate is deliberately permissive, because the measured
 failure mode is over-culling rather than contamination and because the achieved
 ZNCC routinely exceeds the *ground-truth* warp's own — the score gates match
 validity, never warp correctness. Consumers re-gate on the stored signals, which
 is why rejected members keep their measured ZNCC and shift.
+
+**The shift gate.** `|t|` is the distance in source pixels from the member's
+SIFT detection to its refined position, and `√|det S|` is the member's refined
+scale: `S` is its refined absolute affine shape, so `√|det S|` is the source
+pixels per keypoint-frame unit, the reading the reference is chosen by, taken
+at the refined shape rather than the detection. A member passes when
+`|t| / √|det S|` is at or below `max_shift_scales` (default `2`,
+`DEFAULT_MAX_SHIFT_SCALES`; `ClusterRefineParams::admits_shift`); a `NaN`
+shift or a degenerate shape fails.
+
+The bar is in units of the member's own scale because the share of wrong
+members follows the shift over the scale and not the shift in pixels. Against
+ground-truth poses on three captures, kept members 2 to 3 px from their
+detection are wrong 13% to 27% of the time and members 3 to 4 px from it 15% to
+34%, a small step across a 3 px bar, while the wrong share climbs with the shift
+over the member's scale: with the gates at the refined shape on, 4% to 16% of
+the members under 1 scale are wrong, 16% to 41% at 1 to 2 scales and 35% to 67%
+at 2 to 4. A few pixels is a large move for a small feature and a small one for
+a large feature, so a bar in pixels keeps wrong members among small features
+and refuses mostly right ones among large features. On `SeoulBull` and
+`KerryPark480`, where the median member scale is about 1.3 px, two scales keeps
+more members than a 3 px bar and a lower share of wrong ones (4.09% against
+4.25%, 16.10% against 16.24%). On `DnDTabletop`, where the members over 3 px
+have a median scale of 10.4 px, it keeps 8.1% more members, 16.4% of them wrong,
+and the kept wrong share rises from 9.09% to 9.63%
+([Shift in scale units](cluster-patch-refinement-measurements.md#shift-in-scale-units-2026-10-10),
+[with the gates at the refined shape](cluster-patch-refinement-measurements.md#shift-in-scale-units-with-the-gates-at-the-refined-shape-2026-10-12)).
+`member_shift_px` stores `|t|` in pixels, so a consumer can read either unit.
 
 **The middle ZNCC.** Beside each member's ZNCC the result carries
 `member_zncc_middle`: the member's support samples at the final map, the one the
@@ -867,7 +898,8 @@ shift is stored as measured.
 
 **Revert.** After the loop moves a member, its whole-patch ZNCC, its parts and
 its shift from the seed are read again at the new shape, and the cascade's
-gates, `min_zncc` and `max_shift_px`, are applied to them. A member that fails
+gates, `min_zncc` and the shift gate (read at the new shape's scale), are
+applied to them. A member that fails
 either, whose new support leaves the frame, or whose re-read ZNCC is below the
 cascade's stored ZNCC (the loop's floor is its own reading of the starting
 shape, which can differ from the stored value in the last bits) keeps its
@@ -1108,7 +1140,7 @@ template edge length while the kernel's `radius` is a half-width;
 | `resolution` | `25` | Support samples per axis; the kernel clamps up to 2, the CLI to ≥ 3 |
 | `window` | `GaussianDisk { sigma: 0.5 }` | Scoring window; sigma in normalized patch coordinates, where the grid spans `[−1, 1]²` |
 | `min_zncc` | `0.85` | Acceptance threshold on the achieved windowed ZNCC |
-| `max_shift_px` | `3.0` | Max translation drift from the SIFT seed, source px |
+| `max_shift_scales` | `2.0` | Max translation of the refined position from the SIFT detection, in units of the member's refined scale `√\|det S\|` ([The shift gate](#acceptance); `DEFAULT_MAX_SHIFT_SCALES`; CLI `--max-shift-scales`) |
 | `max_member_zncc_self_similarity_radius` | `2.5` | Member gate on the ZNCC self-similarity radius of the member's own patch, template-grid px; `0` disables it (CLI `--max-member-zncc-self-similarity-radius`) |
 | `regate_at_refined_shape` | `true` | Read that gate again, with the same bar, on the member's grid at its refined shape (`DEFAULT_REGATE_AT_REFINED_SHAPE`; CLI `--regate-at-refined-shape/--no-regate-at-refined-shape`) |
 | `max_capped_cells` | `8` | The most capped cells the member's grid at its refined shape may have; `9` turns the gate off (`DEFAULT_MAX_CAPPED_CELLS`; CLI `--max-capped-cells`) |
@@ -1158,7 +1190,7 @@ refine_cluster_patches(
     cluster_starts, member_images, member_features, *,
     radius=6.0, resolution=25,
     window="gaussian_disk", window_sigma=None,
-    min_zncc=0.85, max_shift_px=3.0,
+    min_zncc=0.85, max_shift_scales=2.0,
     max_member_zncc_self_similarity_radius=2.5,
     regate_at_refined_shape=None, max_capped_cells=None,
     rotation_starts=None, max_iters=120, piecewise=False, move_shape=None,
@@ -1228,8 +1260,9 @@ calibrated warp range (scale 0.8–1.5×, rotation ≤ 20°, shear ≤ 0.15) wit
 seed perturbed by the experiment-observed noise (`|Δlog s|` 0.07, `|Δrot|` 4°,
 1 px shift), recovering `W = S·S_ref⁻¹` through the reference member exactly as a
 consumer would and asserting a support-grid RMSE around 0.3 px; **one test per
-gate** (flat member image → `RejectedLowZncc`; seed drifted past `max_shift_px`
-→ `RejectedShift`; support out of frame → `NotEvaluated`; an unlocalizable
+gate** (flat member image → `RejectedLowZncc`; seed drifted past
+`max_shift_scales` → `RejectedShift`, and the same pixel drift refused at a
+small scale and kept at a large one; support out of frame → `NotEvaluated`; an unlocalizable
 member excluded, and unable to become the reference; a border member still
 read through the clamped sampling; every reference candidate out of frame →
 unrefinable; a degenerate cluster → not evaluated; two members in one image →

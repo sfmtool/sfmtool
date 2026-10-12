@@ -57,12 +57,16 @@ from .._cli_utils import timed_command
     help="Member acceptance threshold on the achieved windowed ZNCC.",
 )
 @click.option(
-    "--max-shift",
-    "max_shift",
+    "--max-shift-scales",
+    "max_shift_scales",
     type=click.FloatRange(min=0.0),
-    default=3.0,
+    default=2.0,
     show_default=True,
-    help="Max translation drift from the SIFT seed, px.",
+    help=(
+        "Refuse a member (rejected_shift) whose refined position moved further "
+        "from its SIFT detection than this many times its refined scale, the "
+        "square root of the refined affine shape's determinant (source px)."
+    ),
 )
 @click.option(
     "--max-member-zncc-self-similarity-radius",
@@ -145,7 +149,7 @@ def cluster_patches(
     patch_size,
     resolution,
     min_zncc,
-    max_shift,
+    max_shift_scales,
     max_member_zncc_self_similarity_radius,
     regate_at_refined_shape,
     max_capped_cells,
@@ -187,7 +191,7 @@ def cluster_patches(
             patch_size,
             resolution,
             min_zncc,
-            max_shift,
+            max_shift_scales,
             max_member_zncc_self_similarity_radius,
             piecewise,
             regate_at_refined_shape,

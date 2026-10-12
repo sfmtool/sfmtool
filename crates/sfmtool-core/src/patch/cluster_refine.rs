@@ -68,8 +68,8 @@ use kernels::{
 pub use consistency::warp_consistency_residuals;
 pub use params::{
     capped_cell_count, ClusterRefineParams, ClusterRefineResult, FeatureGeometry, MemberStatus,
-    CELL_COUNT, DEFAULT_MAX_CAPPED_CELLS, DEFAULT_REGATE_AT_REFINED_SHAPE, DEFAULT_ROTATION_STARTS,
-    REFERENCE_UNREFINABLE,
+    CELL_COUNT, DEFAULT_MAX_CAPPED_CELLS, DEFAULT_MAX_SHIFT_SCALES,
+    DEFAULT_REGATE_AT_REFINED_SHAPE, DEFAULT_ROTATION_STARTS, REFERENCE_UNREFINABLE,
 };
 pub use piecewise::{
     member_cell_data, CellRefinement, CellStatus, LoopStop, PiecewiseParams, ACCEPT_ZNCC_TOLERANCE,
@@ -1081,7 +1081,10 @@ fn refine_cluster(
         }) {
             let status = if zncc < params.min_zncc {
                 MemberStatus::RejectedLowZncc
-            } else if shift > params.max_shift_px {
+            } else if !params.admits_shift(
+                shift,
+                &[[affine[0][0], affine[0][1]], [affine[1][0], affine[1][1]]],
+            ) {
                 MemberStatus::RejectedShift
             } else {
                 MemberStatus::Kept
@@ -1181,8 +1184,8 @@ fn refine_cluster(
 /// The member was kept on the cascade's readings, so the stage's shape must
 /// pass the same gates to replace it: the ZNCC read again at the new map must
 /// be at least [`ClusterRefineParams::min_zncc`] and at least the cascade's own
-/// stored ZNCC, the new position's shift from the seed at most
-/// [`ClusterRefineParams::max_shift_px`], and, when either gate at the refined
+/// stored ZNCC, the new position's shift from the seed must pass the shift
+/// gate at the new shape ([`ClusterRefineParams::admits_shift`]), and, when either gate at the refined
 /// shape is on ([`ClusterRefineParams::reads_refined_shape`]), the member's
 /// own grid read at the new shape must pass both. When any fails, or when the
 /// new map's support leaves the frame so nothing can be read, the member
@@ -1244,7 +1247,9 @@ fn refine_kept_member_cells(
     let cascade_zncc = member.zncc;
     let reread = read_member_at(pyramid, ps, &sh, tmpl, tables, resolution, step, off).filter(
         |&(zncc, _)| {
-            zncc >= params.min_zncc && zncc as f32 >= cascade_zncc && shift <= params.max_shift_px
+            zncc >= params.min_zncc
+                && zncc as f32 >= cascade_zncc
+                && params.admits_shift(shift, &sh)
         },
     );
     let Some((zncc, parts)) = reread else {

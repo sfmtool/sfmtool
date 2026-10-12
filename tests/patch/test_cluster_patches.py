@@ -21,6 +21,7 @@ from sfmtool.cli import main
 # sfmtool_matches_format::ClusterMemberStatus discriminants.
 STATUS_REFERENCE = 0
 STATUS_KEPT = 1
+STATUS_REJECTED_SHIFT = 3
 STATUS_REJECTED_UNLOCALIZABLE = 6
 VALID_STATUSES = {0, 1, 2, 3, 4, 5, 6, 7, 8}
 
@@ -125,8 +126,19 @@ def test_cluster_patches_end_to_end(cluster_matches_file: Path):
     zncc = data["member_zncc"]
     kept_mask = statuses == STATUS_KEPT
     assert (zncc[kept_mask] >= 0.85 - 1e-6).all()
-    shift = data["member_shift_px"]
-    assert (shift[kept_mask] <= 3.0 + 1e-6).all()
+    # The shift gate reads the shift in units of the member's refined scale,
+    # sqrt|det S| of its stored absolute shape.
+    shift = data["member_shift_px"].astype(np.float64)
+    shapes = data["member_affine_shapes"].astype(np.float64)
+    scale = np.sqrt(
+        np.abs(shapes[:, 0, 0] * shapes[:, 1, 1] - shapes[:, 0, 1] * shapes[:, 1, 0])
+    )
+    assert (shift[kept_mask] <= 2.0 * scale[kept_mask] * (1 + 1e-5)).all()
+    assert data["refine_options"]["max_shift_scales"] == 2.0
+    assert "max_shift_px" not in data["refine_options"]
+    # Members refused for shift are past the bar.
+    refused = statuses == STATUS_REJECTED_SHIFT
+    assert (shift[refused] > 2.0 * scale[refused] * (1 - 1e-5)).all()
 
     # Warp-consistency residuals: finite exactly for the fitted population
     # (kept members and references of clusters with >= 2 fitted members),

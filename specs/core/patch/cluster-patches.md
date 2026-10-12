@@ -229,7 +229,7 @@ Per cluster:
    congealing pass (see
    findings above).
 4. **Vet.** Reject members below `min_zncc` or drifting more than
-   `max_shift_px` from the seed; keep at most one member per image (best
+   `max_shift_scales` times their refined scale from the seed; keep at most one member per image (best
    ZNCC); record statuses and signals for the rest.
 
 Defaults (from the experiment calibration):
@@ -239,7 +239,7 @@ Defaults (from the experiment calibration):
 | `patch_size` | 12.0 | full template edge length, keypoint-frame units (halved to the kernel's `radius` half-width) — SIFT's ~12× descriptor window. 4 is too small for the affine DOF; larger templates vet members more selectively (the members a 12-unit template rejects that an 8-unit one accepts are disproportionately epipolar outliers against reference poses), while sizes past ~12 grow the unjudged drops from template support leaving the frame |
 | `resolution` | 25 | template samples per axis |
 | `min_zncc` | 0.85 | permissive by design — over-culling, not contamination, is the failure mode; downstream stages re-gate |
-| `max_shift_px` | 3.0 | matches the `embed-patches` keypoint-localization gate |
+| `max_shift_scales` | 2.0 | in units of the member's refined scale `√\|det S\|`, because the share of wrong members follows the shift over the scale ([the shift gate](cluster-patch-refinement.md#acceptance)) |
 | warp family | affine | fixed; similarity is a degenerate case the optimizer passes through |
 
 The kernel belongs in `sfmtool-core` (a `patch::cluster_refine` sibling of

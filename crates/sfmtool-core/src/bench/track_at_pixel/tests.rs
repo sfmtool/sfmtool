@@ -505,13 +505,10 @@ fn the_sweep_builds_the_track_from_the_neighbours_plane() {
     .expect("the sweep builds a track");
     assert_eq!(report.member, CascadeMember::Sweep);
     assert_rebuilt(&scene, &track, &report);
-    // The cascade's track carries the cascade's bars, whose shift bar is the
-    // cluster refinement's and not the bench's wider default.
+    // The cascade's track carries the cascade's bars, whose shift bar is 3 px
+    // and not the bench's wider default.
     assert_eq!(track.thresholds, options.thresholds);
-    assert_eq!(
-        track.thresholds.max_shift_px,
-        crate::patch::cluster_refine::ClusterRefineParams::default().max_shift_px
-    );
+    assert_eq!(track.thresholds.max_shift_px, 3.0);
     assert_eq!(
         track.thresholds.max_projection_error_px, 0.0,
         "the cascade judges no projection error"

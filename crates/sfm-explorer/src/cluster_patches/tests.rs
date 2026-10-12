@@ -275,7 +275,7 @@ fn the_file_holds_what_the_two_cli_steps_make_from_the_same_index() {
         resolution: 25,
         window: PatchWindow::GaussianDisk { sigma: 0.5 },
         min_zncc: 0.85,
-        max_shift_px: 3.0,
+        max_shift_scales: 2.0,
         max_member_zncc_self_similarity_radius: 2.5,
         max_iters: 120,
         ..ClusterRefineParams::default()
@@ -350,7 +350,7 @@ fn the_file_holds_what_the_two_cli_steps_make_from_the_same_index() {
             "patch_size": 12.0,
             "resolution": 25,
             "min_zncc": 0.85,
-            "max_shift_px": 3.0,
+            "max_shift_scales": 2.0,
             "max_member_zncc_self_similarity_radius": 2.5,
             "regate_at_refined_shape": DEFAULT_REGATE_AT_REFINED_SHAPE,
             "max_capped_cells": DEFAULT_MAX_CAPPED_CELLS,
