@@ -347,6 +347,16 @@ fn apply_without_pixels_is_the_switch_alone() {
         "the switch alone named a retriangulation"
     );
 
+    // An implicit ending that pushes on the GUI thread tells the frame, once,
+    // so the panels drop what they cached about the node.
+    state
+        .open_camera_model_proposal(CameraRef::new(id, 0), None)
+        .expect("opens");
+    assert_eq!(state.end_camera_model_proposal_implicitly(), Some(id));
+    assert_eq!(state.tend_camera_model_proposal(), Some(id));
+    assert_eq!(state.tend_camera_model_proposal(), None);
+    assert_eq!(versions(&state), 3);
+
     // Without the `.sift` files the switch cannot read the pixels.
     std::fs::remove_dir_all(workspace.path().join("features")).expect("the features");
     state
@@ -360,7 +370,7 @@ fn apply_without_pixels_is_the_switch_alone() {
         state.camera_model_proposal_on(id).is_some(),
         "the proposal was dropped"
     );
-    assert_eq!(versions(&state), 2);
+    assert_eq!(versions(&state), 3);
 }
 
 /// Cancel drops the proposal, writes one `View` row, and changes nothing.

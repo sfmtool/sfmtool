@@ -664,6 +664,13 @@ pub struct AppState {
     /// until it is applied. See [`crate::camera_model_proposal`].
     pub(crate) camera_model_proposal: Option<crate::camera_model_proposal::CameraModelProposal>,
 
+    /// A node an implicit ending of a camera model proposal pushed a version
+    /// on, on the GUI thread, from a call that has no panels in reach (opening
+    /// a proposal on another node, a close over the wire). The frame's
+    /// `tend_camera_model_proposal` hands it back so the panels drop what they
+    /// cached about the node.
+    pub(crate) camera_model_switched: Option<ReconId>,
+
     /// The workspace path `Save As Minimal...` asks about once its file dialog
     /// has named a file. See [`crate::save_minimal_prompt`].
     pub save_minimal_prompt: crate::save_minimal_prompt::SaveMinimalPrompt,
@@ -912,6 +919,7 @@ impl AppState {
             close_prompt: crate::close_prompt::ClosePrompt::default(),
             bundle_adjust_prompt: crate::bundle_adjust_prompt::BundleAdjustPrompt::default(),
             camera_model_proposal: None,
+            camera_model_switched: None,
             save_minimal_prompt: crate::save_minimal_prompt::SaveMinimalPrompt::default(),
             #[cfg(feature = "mcp")]
             mcp: None,

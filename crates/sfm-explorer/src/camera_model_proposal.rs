@@ -589,7 +589,12 @@ impl AppState {
             return None;
         }
         match self.apply_camera_model_proposal(id) {
-            Ok(applied) => applied.pushed(),
+            Ok(applied) => {
+                // Kept for the frame as well as returned, for the callers that
+                // have no panels in reach.
+                self.camera_model_switched = applied.pushed();
+                applied.pushed()
+            }
             // A refused Apply leaves the proposal open and its refusal in the
             // log; an implicit ending drops it then, as it drops a proposal
             // whose fit was refused.
@@ -611,8 +616,12 @@ impl AppState {
     /// selection has moved to another node.
     ///
     /// Returns the node a switch pushed a version on, as
-    /// [`Self::end_camera_model_proposal_implicitly`] does.
+    /// [`Self::end_camera_model_proposal_implicitly`] does, or the one an
+    /// implicit ending since the last frame pushed a version on.
     pub(crate) fn tend_camera_model_proposal(&mut self) -> Option<ReconId> {
+        if let Some(id) = self.camera_model_switched.take() {
+            return Some(id);
+        }
         let proposal = self.camera_model_proposal.as_ref()?;
         let id = proposal.recon;
         let Some(node) = self.node(id) else {
