@@ -8,13 +8,26 @@ puts the tracks of the maintainer's hand picks, and a pool of sampled tracks,
 on the bench, reads what the rule reads for each view, and sweeps the
 parameters over a copy of the rule written in Python.
 
-- `cases.json`: the 79 review cases of the hand picks (2026-10-06), one per
-  line: `id`, `dataset`, `point` (the point's index in the file
-  `datasets.py` names, as matched on 2026-10-11), `views` (each view's image
-  name and stored keypoint, px, rounded to 0.01) and `pick`, the image of the
-  hand-picked view, or `null` with a `verdict` (`"bad track"` for the two the
-  maintainer marked so); `note` holds the maintainer's note where there is
-  one. The review's tiles and the readings of that time are not kept.
+- `cases.json`: the 79 review cases of the hand picks, one per line: `id`,
+  `dataset`, `point` (the point's index in the file `datasets.py` names, as
+  matched on 2026-10-11), `views` (each view's image name and stored
+  keypoint, px, rounded to 0.01) and the two reviews' verdicts. The reviews'
+  tiles and the readings of their time are not kept.
+  - The first review (2026-10-06): `pick`, the image of the hand-picked view,
+    or `null` with a `verdict` (`"bad track"` for the two the maintainer
+    marked so); `note` holds the maintainer's note where there is one.
+  - The second review (2026-10-11) showed the 48 cases where the rule at the
+    defaults of that day (angle factor `1 + 0.25·tan θ`, `capped_radius_factor`
+    1.5) picked another view than `pick`, with every view's tile, and the
+    maintainer chose again. Those cases carry `second_review`: `"pick"` (one
+    view is best, the one in `accept`), `"tie"` (the hand pick and the rule's
+    pick are equally good) or `"none"` (no single view is best);
+    `second_shown`, the two views compared, the hand pick and then the rule's
+    pick; and `second_note`, the maintainer's note where there is one.
+  - `accept`: the views counted as correct, the one chosen for a pick and both
+    shown for a tie. A case the second review did not show keeps `[pick]`, as
+    the rule already picked it. A `"none"` case and a bad track have no
+    `accept` and are left out of the scoring, so 74 cases are scored.
 - `datasets.py`: the ten reconstructions and their paths, the eight of
   `scripts/bench_bars/datasets.py` under this harness's keys plus
   `omni_temple` and `omni_coast` (the `clean-3-ba-embedded` solves of
@@ -41,8 +54,10 @@ parameters over a copy of the rule written in Python.
   eligible view.
 - `analyze.py`: the tables. It checks first that its Python copy of the rule
   gives the Rust rule's pick and costs on every track at the defaults, then
-  splits the hand-picked cases in half by dataset with a seeded split, sweeps
-  each parameter alone, picks a candidate per parameter on the tuning half
+  scores each case against its `accept` (with `--first-review`, against `pick`
+  alone, the 77 cases of the first review), splits the scored cases in half
+  by dataset with a seeded split, sweeps each parameter alone, picks a
+  candidate per parameter on the tuning half
   (the middle of the best tied run by lenient then exact count), keeps it
   only where the held-out half confirms it, and prints the counts, the
   blur-matched agreement, the pool's changed picks, the ground truths'
@@ -82,9 +97,22 @@ The tables and figures in reference-view.md § "How the values were measured"
 and § "The form of the angle factor" (2026-10-11) are this harness's output,
 run as above with the default seeds (`--seed 20261011` for the pool and for
 the split), on a build whose rule has the angle factor `1 + k·tan θ`, before
-the step on a radius at the cap: `analyze.py --capped-radius-factor 1`
-reproduces them from readings taken on the current build. The table of
-§ "The step on a radius at the cap" is section 10 of a run with the defaults.
+the step on a radius at the cap, and scored against the first review:
+`analyze.py --first-review --capped-radius-factor 1` reproduces them from
+readings taken on the current build. The table of § "The step on a radius at
+the cap" is section 10 of a run with `--first-review` and the defaults.
+
+The tables of § "The second review" are a run with the defaults and no flag,
+on the same readings: section 5 gives the counts of each rule, its last table
+the split between the cases the second review showed and those it did not,
+and sections 3 and 10 the sweeps. The seeded split of the 74 cases it scores
+is not the split of the 77: dealing a different list gives different halves.
+Each count is printed with, in brackets, the cases whose pick is a view no
+review accepted or was shown (neither `pick`, nor in `accept` or
+`second_shown`): the second review gave a second look only to the views the
+rule of that day picked, so a setting whose pick differs from it on a case
+the rule already got right is never credited, and that count says how many
+such picks a setting has.
 The readings do not depend on the rule, but section 1's check reads the
 rule's costs and terms, so it needs a build whose rule is the one `analyze.py`
 copies. All 79 cases were found:
@@ -95,11 +123,14 @@ keypoints sit up to 1.4 px from the case's and four tracks hold one or two of
 the case's views fewer, so `measure.py` added those views and sighted every
 row at the case's keypoint, and the patch frame is the rebuild's; their
 `point` in `cases.json` is the rebuild's index. Two cases, the
-ones marked as bad tracks, are left out, so 77 are scored.
+ones marked as bad tracks, are left out, so 77 are scored against the first
+review; the second review leaves out three more, so 74 are scored against it.
 
 **Lenient** is one-sided, as the previous rule's tuning read it: the rule's
 pick is at most 0.1 grid px blurrier (semi-major axis) and at most 0.05 less
-typical (pair ZNCC) than the hand pick, a view as sharp and as typical as it.
+typical (pair ZNCC) than the hand pick, a view as sharp and as typical as it;
+against the second review, than some view of `accept`. **Exact** is a pick
+in `accept`.
 On the same readings the previous rule of gates scores 70 of 77 lenient by
 this reading, the figure reference-view.md gives for it, and 49 by a
 two-sided reading; `analyze.py` prints the two-sided count beside it. The

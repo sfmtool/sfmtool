@@ -4,7 +4,7 @@
 """Tune the reference-view rule's parameters against the hand picks.
 
     pixi run python scripts/reference_view/analyze.py <dir> [--out <file>]
-        [--capped-radius-factor <f>]
+        [--capped-radius-factor <f>] [--first-review]
 
 Reads ``measure.py``'s output in ``<dir>`` and prints:
 
@@ -24,9 +24,12 @@ Reads ``measure.py``'s output in ``<dir>`` and prints:
    picks that change against the quadrature and the previous rule, and the
    value each form's procedure chooses.
 5. The counts for the starting values, ``angle_weight = 0``, the quadrature,
-   the chosen values where they differ and the previous rule of gates, on
-   each half and on all: exact, lenient, and lenient within ``--angle-bound``
-   degrees of the hand pick's viewing angle, and the two-sided lenient count.
+   no step (``capped_radius_factor = 1``), ``agreement_band = 0.075``, the
+   chosen values where they differ and the previous rule of gates, on each
+   half and on all: exact, lenient, and lenient within ``--angle-bound``
+   degrees of an accepted view's viewing angle, and the two-sided lenient
+   count; then the same counts on the cases the second review showed and on
+   those it did not.
 6. The agreement penalty read on blur-matched pair ZNCC beside the plain one.
 7. The pool: picks that change between two rules, and the term of the second
    rule's costs the first rule's pick loses on.
@@ -46,9 +49,21 @@ The starting values are ``ReferenceViewOptions``' defaults, with
 where it is given (``1`` reproduces the tables measured before the step on a
 radius at the cap); section 1 always checks against the defaults.
 
-A hand pick is matched **exactly** when the rule picks the hand-picked row,
-and **leniently** when it picks a row at most 0.1 grid px blurrier (semi-major
-axis) and at most 0.05 less typical (pair ZNCC) than it.
+Each scored case has a set of **accepted** views (``cases.json``'s
+``accept``): by default those of the second review (2026-10-11), one view
+for a pick and two for a tie, with a case the second review found no single
+best view for left out; with ``--first-review``, the first review's hand pick
+alone on every case it picked, which reproduces the tables made before the
+second review. A case is matched **exactly** when the rule picks an accepted
+row, and **leniently** when it picks a row at most 0.1 grid px blurrier
+(semi-major axis) and at most 0.05 less typical (pair ZNCC) than some
+accepted row.
+
+The second review showed only the cases where the rule at its defaults of
+that day picked another view than the hand pick, so a setting that picks a
+view neither review accepted or was shown, on a case the rule then got
+right, is never credited. Each count is printed with the number of cases
+whose pick is such an **unreviewed** view (``score_picks``).
 """
 
 from __future__ import annotations
@@ -499,16 +514,26 @@ class Case:
     id: str
     ds: str
     track: Track
-    hand: int  # index into track.rows
+    hand: int  # index into track.rows of the first review's pick
+    accept: frozenset  # the accepted rows
+    reviewed: frozenset  # every row a review accepted or was shown
+    shown: bool  # whether the second review showed the case
 
 
-def hand_cases(tracks, cases_path):
-    cases = json.loads(Path(cases_path).read_text())
+def hand_cases(tracks, cases_path, first_review=False):
+    """The scored cases. ``first_review`` scores against the first review's
+    hand pick alone and leaves out only its bad tracks; otherwise each case's
+    ``accept`` is scored, and a case without one (a bad track, or no single
+    best view on the second review) is left out."""
+    cases = json.loads(Path(cases_path).read_text(encoding="utf-8"))
     by_case = {t.case: t for t in tracks if t.case}
     out, skipped = [], []
     for c in cases:
         if c.get("pick") is None:
             skipped.append((c["id"], c.get("verdict")))
+            continue
+        if not first_review and not c.get("accept"):
+            skipped.append((c["id"], f"second review: {c.get('second_review')}"))
             continue
         t = by_case.get(c["id"])
         if t is None:
@@ -520,7 +545,23 @@ def hand_cases(tracks, cases_path):
         if hand is None:
             skipped.append((c["id"], "hand pick not among the rule's rows"))
             continue
-        out.append(Case(c["id"], c["dataset"], t, hand))
+        names = [x["image_name"] for x in t.rows]
+        accept = [c["pick"]] if first_review else c["accept"]
+        if any(n not in names for n in accept):
+            skipped.append((c["id"], "an accepted view not among the rule's rows"))
+            continue
+        reviewed = {c["pick"], *c.get("accept", []), *c.get("second_shown", [])}
+        out.append(
+            Case(
+                c["id"],
+                c["dataset"],
+                t,
+                hand,
+                frozenset(names.index(n) for n in accept),
+                frozenset(names.index(n) for n in reviewed if n in names),
+                "second_review" in c,
+            )
+        )
     return out, skipped
 
 
@@ -539,39 +580,56 @@ def split(cases, seed):
 
 
 def score_picks(cases, picks, angle_bound):
-    """(exact, lenient, lenient within ``angle_bound``, two-sided lenient)
-    counts of ``picks``, one row index (or ``None``) per case.
+    """(exact, lenient, lenient within ``angle_bound``, two-sided lenient,
+    unreviewed) counts of ``picks``, one row index (or ``None``) per case.
 
-    Lenient is one-sided, as the previous rule's tuning read it: the pick is
-    at most 0.1 grid px blurrier (semi-major axis) and at most 0.05 less
-    typical (pair ZNCC) than the hand pick, so a view as sharp and as typical
-    as it. Two-sided bounds both differences by those amounts."""
-    exact = lenient = bounded = two_sided = 0
+    Exact is a pick among the case's accepted rows. Lenient is one-sided, as
+    the previous rule's tuning read it: the pick is at most 0.1 grid px
+    blurrier (semi-major axis) and at most 0.05 less typical (pair ZNCC) than
+    some accepted row, so a view as sharp and as typical as it; within
+    ``angle_bound`` also asks that the two views' viewing angles differ by at
+    most that many degrees. Two-sided bounds both differences by those
+    amounts. Unreviewed counts the picks that are none of the rows a review
+    accepted or was shown (``Case.reviewed``)."""
+    exact = lenient = bounded = two_sided = unreviewed = 0
     for c, pick in zip(cases, picks):
         if pick is None:
             continue
-        if pick == c.hand:
+        if pick not in c.reviewed:
+            unreviewed += 1
+        if pick in c.accept:
             exact += 1
             lenient += 1
             bounded += 1
             two_sided += 1
             continue
-        a, b = c.track.rows[pick], c.track.rows[c.hand]
-        if None in (a["semi_major"], b["semi_major"], a["pair_zncc"], b["pair_zncc"]):
-            continue
-        dr = a["semi_major"] - b["semi_major"]
-        dz = a["pair_zncc"] - b["pair_zncc"]
-        if abs(dr) <= 0.1 and abs(dz) <= 0.05:
-            two_sided += 1
-        if dr <= 0.1 and dz >= -0.05:
-            lenient += 1
-            if (
-                _angle(a) is not None
-                and _angle(b) is not None
-                and abs(_angle(a) - _angle(b)) <= angle_bound
+        a = c.track.rows[pick]
+        lenient_any = bounded_any = two_sided_any = False
+        for h in c.accept:
+            b = c.track.rows[h]
+            if None in (
+                a["semi_major"],
+                b["semi_major"],
+                a["pair_zncc"],
+                b["pair_zncc"],
             ):
-                bounded += 1
-    return exact, lenient, bounded, two_sided
+                continue
+            dr = a["semi_major"] - b["semi_major"]
+            dz = a["pair_zncc"] - b["pair_zncc"]
+            if abs(dr) <= 0.1 and abs(dz) <= 0.05:
+                two_sided_any = True
+            if dr <= 0.1 and dz >= -0.05:
+                lenient_any = True
+                if (
+                    _angle(a) is not None
+                    and _angle(b) is not None
+                    and abs(_angle(a) - _angle(b)) <= angle_bound
+                ):
+                    bounded_any = True
+        lenient += lenient_any
+        bounded += bounded_any
+        two_sided += two_sided_any
+    return exact, lenient, bounded, two_sided, unreviewed
 
 
 def score(cases, o: Options, angle_bound, pair_key="pair_zncc", form=None):
@@ -696,7 +754,9 @@ def tune_options(tune, held, angle_bound, out):
 
 
 def fmt(s):
-    return f"{s[0]:2d} / {s[1]:2d} / {s[2]:2d}"
+    """Exact / lenient / lenient within the angle bound, and the unreviewed
+    count in brackets."""
+    return f"{s[0]:2d} / {s[1]:2d} / {s[2]:2d} [{s[4]}]"
 
 
 def changes_between(tracks, pick_a, pick_b, costs_b=None):
@@ -852,6 +912,11 @@ def main() -> None:
         default=None,
         help="the starting capped_radius_factor (default: the rule's)",
     )
+    ap.add_argument(
+        "--first-review",
+        action="store_true",
+        help="score against the first review's hand picks alone",
+    )
     args = ap.parse_args()
     global START
     if args.capped_radius_factor is not None:
@@ -877,10 +942,11 @@ def main() -> None:
         f" largest relative cost difference {worst:.1e}"
     )
 
-    cases, skipped = hand_cases(tracks, args.cases)
+    cases, skipped = hand_cases(tracks, args.cases, args.first_review)
     tune, held = split(cases, args.seed)
     out()
-    out("2. Hand-picked cases")
+    review = "first review" if args.first_review else "second review"
+    out(f"2. Hand-picked cases, scored against the {review}")
     out(f"  {len(cases)} cases scored; left out: {skipped}")
     out(f"  tuning {len(tune)}, held out {len(held)}")
     for ds in sorted({c.ds for c in cases}):
@@ -890,7 +956,7 @@ def main() -> None:
     out()
     out(
         "3. Each parameter swept alone from the starting values"
-        f" (exact / lenient / lenient within {bound:g}°)"
+        f" (exact / lenient / lenient within {bound:g}° [unreviewed])"
     )
     for field in SWEEP:
         out(f"  {field}")
@@ -917,6 +983,8 @@ def main() -> None:
         ("starting values", START, None),
         ("angle_weight = 0", weight0, None),
         ("quadrature σ_n = 3", START, QUADRATURE),
+        ("no step", replace(START, capped_radius_factor=1.0), None),
+        ("agreement_band .075", replace(START, agreement_band=0.075), None),
     ]
     if tuned != START:
         settings.append(("chosen values", tuned, None))
@@ -938,9 +1006,9 @@ def main() -> None:
     pickers = [(label, rule(o, form=f)) for label, o, f in settings]
     pickers.append(("previous rule", previous))
     out()
-    out(f"5. Counts, exact / lenient / lenient within {bound:g}°")
+    out(f"5. Counts, exact / lenient / lenient within {bound:g}° [unreviewed]")
     out(
-        f"  {'':18s} tuning ({len(tune)})     held out ({len(held)})   all ({len(cases)})"
+        f"  {'':20s} tuning ({len(tune)})     held out ({len(held)})   all ({len(cases)})"
     )
     table = {}
     for label, pick in pickers:
@@ -949,13 +1017,25 @@ def main() -> None:
             for cs in (tune, held, cases)
         ]
         t, h, a = table[label]
-        out(f"  {label:18s} {fmt(t)}    {fmt(h)}    {fmt(a)}")
+        out(f"  {label:20s} {fmt(t)}    {fmt(h)}    {fmt(a)}")
     out(
         "  Two-sided lenient (both differences within the bounds), tuning / held out / all:"
     )
     for label, _ in pickers:
         t, h, a = table[label]
-        out(f"  {label:18s} {t[3]:2d} / {h[3]:2d} / {a[3]:2d}")
+        out(f"  {label:20s} {t[3]:2d} / {h[3]:2d} / {a[3]:2d}")
+    shown = [c for c in cases if c.shown]
+    unshown = [c for c in cases if not c.shown]
+    out(
+        f"  The cases the second review showed ({len(shown)}) | did not show"
+        f" ({len(unshown)}):"
+    )
+    for label, pick in pickers:
+        s, u = (
+            score_picks(cs, [pick(c.track) for c in cs], bound)
+            for cs in (shown, unshown)
+        )
+        out(f"  {label:20s} {fmt(s)}    {fmt(u)}")
 
     out()
     out("6. The agreement penalty on blur-matched pair ZNCC")
@@ -984,7 +1064,7 @@ def main() -> None:
             for c in cases
         )
         out(
-            f"  {label:18s} plain {fmt(plain)}   blur-matched {fmt(bm)}   picks that differ {n}"
+            f"  {label:20s} plain {fmt(plain)}   blur-matched {fmt(bm)}   picks that differ {n}"
         )
     pool_bm = [
         t for t in tracks if any(x.get("bm_pair_zncc") is not None for x in t.rows)
