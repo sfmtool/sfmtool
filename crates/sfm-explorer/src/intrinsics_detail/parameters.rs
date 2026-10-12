@@ -49,8 +49,13 @@ pub(super) fn show_derived(
     aspect_row: bool,
 ) {
     ui.label(egui::RichText::new("Derived").strong());
+    // The value column is held to what the labels leave of the panel, so its
+    // long values (the principal point offset, the distortion) wrap in a
+    // narrow panel rather than running past its edge.
+    let value_width = (ui.available_width() - LABEL_COLUMN_PX - 12.0).max(80.0);
     egui::Grid::new(("intrinsics_derived", id_salt))
         .num_columns(2)
+        .max_col_width(value_width)
         .spacing([12.0, 2.0])
         .striped(true)
         .show(ui, |ui| {
@@ -90,10 +95,9 @@ pub(super) fn show_derived(
             } else {
                 String::new()
             };
-            ui.monospace(format!("({dx:+.3}, {dy:+.3}) px{percent}"))
-                .on_hover_text(
-                    "From the image centre (w/2, h/2), which is generally not the principal point",
-                );
+            wrapped(ui, format!("({dx:+.3}, {dy:+.3}) px{percent}")).on_hover_text(
+                "From the image centre (w/2, h/2), which is generally not the principal point",
+            );
             ui.end_row();
 
             if let Some(fov) = &derived.fov {
@@ -134,10 +138,10 @@ pub(super) fn show_derived(
                 Some(extent) => match extent.limit_deg.filter(|_| extent.excluded > 0) {
                     Some(limit) => {
                         let (dropped, total) = (extent.excluded, extent.total());
-                        ui.monospace(format!(
-                            "yes — max {:.1} px inside {limit:.1}°",
-                            extent.max_px
-                        ))
+                        wrapped(
+                            ui,
+                            format!("yes — max {:.1} px inside {limit:.1}°", extent.max_px),
+                        )
                         .on_hover_text(format!(
                             "The largest |model − ideal| displacement over a grid of the image, \
                              taken inside {limit:.1}° off-axis. Past that angle this model's own \
@@ -149,12 +153,15 @@ pub(super) fn show_derived(
                         ));
                     }
                     None => {
-                        ui.monospace(format!("yes — max {:.1} px over the image", extent.max_px))
-                            .on_hover_text(
-                                "The largest |model − ideal| displacement over a grid of the \
+                        wrapped(
+                            ui,
+                            format!("yes — max {:.1} px over the image", extent.max_px),
+                        )
+                        .on_hover_text(
+                            "The largest |model − ideal| displacement over a grid of the \
                                  image. This model is trustworthy at every angle its frame \
                                  reaches, so the whole rectangle counts.",
-                            );
+                        );
                     }
                 },
                 None => {
@@ -166,6 +173,15 @@ pub(super) fn show_derived(
             }
             ui.end_row();
         });
+}
+
+/// The width the derived table's widest label, `principal point offset`,
+/// takes, which the value column is laid out beside.
+const LABEL_COLUMN_PX: f32 = 150.0;
+
+/// A monospace value that wraps at the width its grid column is held to.
+fn wrapped(ui: &mut egui::Ui, text: String) -> egui::Response {
+    ui.add(egui::Label::new(egui::RichText::new(text).monospace()).wrap())
 }
 
 /// Table 3: `K`, and the two sentences that keep it from being pasted into the

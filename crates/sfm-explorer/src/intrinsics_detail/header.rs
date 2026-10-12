@@ -69,11 +69,13 @@ pub(super) fn show_header(
             ui.with_layout(
                 egui::Layout::left_to_right(egui::Align::Min).with_main_wrap(true),
                 |ui| {
-                    part(ui, egui::RichText::new(&node.label).strong());
-                    part(ui, "·");
-                    part(ui, egui::RichText::new(format!("Camera #{index}")).strong());
-                    part(ui, "·");
-                    part(ui, camera.model.model_name());
+                    part(ui, egui::RichText::new(&node.label).strong(), false);
+                    part(
+                        ui,
+                        egui::RichText::new(format!("Camera #{index}")).strong(),
+                        true,
+                    );
+                    part(ui, camera.model.model_name(), true);
                     // The beta note gets its own label rather than riding the
                     // model name, because egui hangs a tooltip off a whole
                     // *widget*: a sub-span of one label has nowhere to put one
@@ -82,12 +84,10 @@ pub(super) fn show_header(
                     // the header is a run of separate labels, so `(beta)` can be
                     // a widget in its own right and carry the note directly.
                     if let Some(note) = camera.model.beta_note() {
-                        part(ui, egui::RichText::new("(beta)").weak()).on_hover_text(note);
+                        part(ui, egui::RichText::new("(beta)").weak(), false).on_hover_text(note);
                     }
-                    part(ui, "·");
-                    part(ui, format!("{}×{}", camera.width, camera.height));
-                    part(ui, "·");
-                    part(ui, images);
+                    part(ui, format!("{}×{}", camera.width, camera.height), true);
+                    part(ui, images, true);
                 },
             );
         });
@@ -97,8 +97,34 @@ pub(super) fn show_header(
 
 /// One part of the identity line, kept on one line of its own: the line wraps
 /// between its parts, never inside one.
-fn part(ui: &mut egui::Ui, text: impl Into<egui::WidgetText>) -> egui::Response {
-    ui.add(egui::Label::new(text).wrap_mode(egui::TextWrapMode::Extend))
+///
+/// `separated` puts a `·` before the part when it stays on the same line. Where
+/// the separator and the part do not both fit in what is left of the line, the
+/// part starts the next line and the separator is left out, so no line starts
+/// with one.
+fn part(ui: &mut egui::Ui, text: impl Into<egui::WidgetText>, separated: bool) -> egui::Response {
+    let layout = |ui: &egui::Ui, text: egui::WidgetText| {
+        text.into_galley(
+            ui,
+            Some(egui::TextWrapMode::Extend),
+            f32::INFINITY,
+            egui::TextStyle::Body,
+        )
+    };
+    let galley = layout(ui, text.into());
+    let gap = ui.spacing().item_spacing.x;
+    let left = ui.available_size_before_wrap().x;
+    if separated {
+        let dot = layout(ui, "·".into());
+        if dot.size().x + gap + galley.size().x <= left {
+            ui.add(egui::Label::new(dot));
+        } else if galley.size().x <= left {
+            // The part alone would still fit; fill the rest of the line so it
+            // goes to the next one rather than following no separator here.
+            ui.allocate_space(egui::vec2(left, 0.0));
+        }
+    }
+    ui.add(egui::Label::new(galley))
 }
 
 /// What the header's button that opens a camera model proposal is called.

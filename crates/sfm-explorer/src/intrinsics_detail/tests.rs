@@ -1009,12 +1009,27 @@ fn the_header_does_not_overlap_its_buttons_at_a_narrow_width() {
     state.append_node(fisheye_node());
     let mut panel = IntrinsicsDetail::new();
     let ctx = egui::Context::default();
-    for width in [482.0, 360.0] {
-        proposal_frame_at(&mut panel, &ctx, &mut state, 0, width, Vec::new());
+    for width in [482.0, 360.0, 341.0] {
+        for _ in 0..4 {
+            proposal_frame_at(&mut panel, &ctx, &mut state, 0, width, Vec::new());
+        }
         let (painted, _) = proposal_frame_at(&mut panel, &ctx, &mut state, 0, width, Vec::new());
         let until = top_of(&painted, "Parameters");
         assert_eq!(overlapping(&painted, until), Vec::new(), "at {width} px");
+        assert_eq!(
+            past_the_edge(&painted, until, width),
+            Vec::<String>::new(),
+            "at {width} px"
+        );
         assert!(says(&texts_of(&painted), "480×480"), "at {width} px");
+        for dot in painted.iter().filter(|p| p.text == "·") {
+            assert!(
+                painted.iter().any(|p| p.text != "·"
+                    && (p.rect.center().y - dot.rect.center().y).abs() < 2.0
+                    && p.rect.max.x <= dot.rect.min.x + 1.0),
+                "a line starts with a separator at {width} px"
+            );
+        }
         assert!(says(&texts_of(&painted), "Switch Model…"), "at {width} px");
     }
 }
@@ -1029,11 +1044,18 @@ fn the_compared_tables_do_not_overlap_at_any_width() {
         .expect("opens");
     let mut panel = IntrinsicsDetail::new();
     let ctx = egui::Context::default();
-    for width in [482.0, 877.0, 1800.0] {
-        proposal_frame_at(&mut panel, &ctx, &mut state, 0, width, Vec::new());
+    for width in [341.0, 455.0, 482.0, 877.0, 1800.0] {
+        for _ in 0..4 {
+            proposal_frame_at(&mut panel, &ctx, &mut state, 0, width, Vec::new());
+        }
         let (painted, _) = proposal_frame_at(&mut panel, &ctx, &mut state, 0, width, Vec::new());
         let until = top_of(&painted, "K");
         assert_eq!(overlapping(&painted, until), Vec::new(), "at {width} px");
+        assert_eq!(
+            past_the_edge(&painted, until, width),
+            Vec::<String>::new(),
+            "at {width} px"
+        );
         let current = top_of(&painted, "Current");
         let proposed = top_of(&painted, "Proposed");
         if width < 600.0 {
@@ -1136,4 +1158,119 @@ fn a_refused_proposal_shows_its_default_fit_angle_and_the_current_tables() {
     let proposal = state.camera_model_proposal.as_ref().expect("open");
     assert_eq!(proposal.inputs.spline_domain_deg, Some(95.0));
     assert!(proposal.fit.is_err());
+}
+
+/// The painted strings above `until` that run past the panel's right edge.
+fn past_the_edge(
+    painted: &[crate::test_support::PaintedText],
+    until: f32,
+    width: f32,
+) -> Vec<String> {
+    painted
+        .iter()
+        .filter(|p| p.rect.min.y < until && p.rect.max.x > width + 0.5)
+        .map(|p| p.text.clone())
+        .collect()
+}
+
+/// At the stock window's panel width the fit angle's default and its
+/// `Default` button stay inside the panel, where they can be reached.
+#[test]
+fn the_default_button_stays_inside_a_narrow_panel() {
+    let (mut state, id) = spline_proposal_state();
+    let inputs = crate::camera_model_proposal::ProposalInputs {
+        camera_model: "SFMTOOL_PINHOLE",
+        coeff_count: Some(8),
+        theta_fit_deg: Some(10.0),
+        spline_domain_deg: None,
+    };
+    state
+        .open_camera_model_proposal(crate::scene::CameraRef::new(id, 0), Some(inputs))
+        .expect("opens");
+    let mut panel = IntrinsicsDetail::new();
+    let ctx = egui::Context::default();
+    let width = 341.0;
+    // A wrapped value grows its grid row on the frames after it is laid out.
+    for _ in 0..4 {
+        proposal_frame_at(&mut panel, &ctx, &mut state, 0, width, Vec::new());
+    }
+    let (painted, _) = proposal_frame_at(&mut panel, &ctx, &mut state, 0, width, Vec::new());
+    let button = painted
+        .iter()
+        .find(|p| p.text == crate::intrinsics_detail::proposal::DEFAULT)
+        .expect("the Default button");
+    assert!(button.rect.max.x <= width, "{:?}", button.rect);
+    let label = painted
+        .iter()
+        .find(|p| p.text.starts_with("default ") && p.text.ends_with("(observations)"))
+        .expect("the default's label");
+    assert!(label.rect.max.x <= width, "{:?}", label.rect);
+    let until = top_of(&painted, "K");
+    assert_eq!(past_the_edge(&painted, until, width), Vec::<String>::new());
+    assert_eq!(overlapping(&painted, until), Vec::new());
+}
+
+/// An `Escape` that ends the editing of a field ends only that, though egui
+/// drops the field's focus before the frame draws; the next one cancels.
+#[test]
+fn escape_ending_a_fields_editing_does_not_cancel() {
+    let (mut state, id) = spline_proposal_state();
+    let camera = crate::scene::CameraRef::new(id, 0);
+    state
+        .open_camera_model_proposal(camera, None)
+        .expect("opens");
+    let (deg, _) = state
+        .camera_model_proposal
+        .as_ref()
+        .and_then(|p| p.theta_fit_default)
+        .expect("a default");
+    let mut panel = IntrinsicsDetail::new();
+    let ctx = egui::Context::default();
+    proposal_frame(&mut panel, &ctx, &mut state, 0, Vec::new());
+    let (painted, _) = proposal_frame(&mut panel, &ctx, &mut state, 0, Vec::new());
+    let pos = painted
+        .iter()
+        .find(|p| p.text == format!("{deg:.1}"))
+        .expect("the Fit to θ field")
+        .rect
+        .center();
+    let press = |pressed| egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::default(),
+    };
+    proposal_frame(
+        &mut panel,
+        &ctx,
+        &mut state,
+        0,
+        vec![egui::Event::PointerMoved(pos)],
+    );
+    proposal_frame(&mut panel, &ctx, &mut state, 0, vec![press(true)]);
+    proposal_frame(&mut panel, &ctx, &mut state, 0, vec![press(false)]);
+    proposal_frame(&mut panel, &ctx, &mut state, 0, Vec::new());
+    assert!(
+        ctx.egui_wants_keyboard_input(),
+        "the field is not being edited"
+    );
+
+    let escape = || egui::Event::Key {
+        key: egui::Key::Escape,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    };
+    let (_, action) = proposal_frame(&mut panel, &ctx, &mut state, 0, vec![escape()]);
+    assert_eq!(
+        action, None,
+        "ending the field's editing cancelled the proposal"
+    );
+    assert!(
+        !ctx.egui_wants_keyboard_input(),
+        "the field is still being edited"
+    );
+    let (_, action) = proposal_frame(&mut panel, &ctx, &mut state, 0, vec![escape()]);
+    assert_eq!(action, Some((camera, super::ProposalAction::Cancel)));
 }

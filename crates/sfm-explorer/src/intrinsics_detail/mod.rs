@@ -78,6 +78,11 @@ pub struct IntrinsicsDetail {
     /// camera and the proposal's generation, so the current camera's entry
     /// above is never served for the proposed one, nor the other way round.
     proposed_derived: Option<(CameraRef, u64, Derived)>,
+    /// Whether a field was being edited when the last frame ended. egui drops
+    /// the keyboard focus on an unmodified `Escape` as the next frame begins,
+    /// before any widget draws, so that frame can no longer see the field the
+    /// key was for; this is how it still knows.
+    editing_last_frame: bool,
     /// Which frame the extrinsics block is showing. Sticky across selections:
     /// a user who asked for the transformed pose is comparing nodes, and
     /// resetting it under them on every click would undo the comparison.
@@ -106,6 +111,7 @@ impl IntrinsicsDetail {
         Self {
             derived: HashMap::new(),
             proposed_derived: None,
+            editing_last_frame: false,
             pose_frame: PoseFrame::default(),
         }
     }
@@ -135,11 +141,14 @@ impl IntrinsicsDetail {
         };
 
         // Read before anything is drawn: an `Escape` that closes the Model
-        // dropdown, or ends the editing of a field, closes them during this
-        // frame, and by the end of it neither would show that the key was
-        // theirs.
-        let escape_is_ours =
-            !egui::Popup::is_any_open(ui.ctx()) && !ui.ctx().egui_wants_keyboard_input();
+        // dropdown closes it during this frame, and by the end of it nothing
+        // would show that the key was the dropdown's. A field's editing has
+        // already been ended by egui as this frame began, so it is read off
+        // the last frame instead.
+        let escape_is_ours = !egui::Popup::is_any_open(ui.ctx())
+            && !ui.ctx().egui_wants_keyboard_input()
+            && !self.editing_last_frame;
+        self.editing_last_frame = false;
         let panel_rect = ui.available_rect_before_wrap();
         if let Some(pos) = ui.input(|i| i.pointer.hover_pos()) {
             if panel_rect.contains(pos) {
@@ -255,6 +264,7 @@ impl IntrinsicsDetail {
         {
             response.proposal = Some((reference, ProposalAction::Cancel));
         }
+        self.editing_last_frame = ui.ctx().egui_wants_keyboard_input();
 
         response
     }

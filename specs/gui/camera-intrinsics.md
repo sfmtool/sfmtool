@@ -915,7 +915,7 @@ The two buttons are laid out first, from the right edge, and the identity line
 takes the width they leave, wrapping between its parts (never inside one) onto
 a second line when the panel is narrow, so at the default width the size and
 the image count sit below the node and camera rather than under `Switch
-Model…`.
+Model…`. A part that starts a line is not preceded by a `·`.
 
 ### The proposal strip
 
@@ -927,9 +927,14 @@ the controls, the same-model target and the endings are
 A change of a control is made on the proposal in place and refits it on the
 GUI thread. The panel reports Apply and Cancel, and `Escape` while the pointer
 is over it, as `IntrinsicsDetailResponse::proposal`, and the dock applies or
-drops the proposal. `Escape` cancels only when no popup was open and no field
-was being edited as the frame began: an `Escape` that closes the Model dropdown,
-or ends the editing of a field, does only that. The panel showing another
+drops the proposal. `Escape` cancels only when no popup was open as the frame
+began and no field was being edited as the last frame ended: an `Escape` that
+closes the Model dropdown, or ends the editing of a field, does only that. The
+field is read off the last frame because egui drops the keyboard focus on an
+`Escape` as the next frame begins, before the panel draws. Each control is a
+row of its own that wraps, so at a narrow panel what follows a control (the
+camera's own value, the default and its `Default` button) moves to the next
+line and stays on screen. The panel showing another
 camera of the node shows no strip.
 
 While the strip is shown and the fit succeeded, the **Parameters** and
@@ -939,7 +944,9 @@ enough for both at their natural width, which an invisible sizing pass
 measures, and one above the other otherwise, so neither runs into the other.
 The two derived tables both carry the aspect row when either camera has two
 focal lengths, reading `single focal` for the one that has one, so their rows
-stay in line side by side. A proposal whose fit was refused has no proposed
+stay in line side by side. The derived table's value column is held to what the
+labels leave of the panel, so its long values (the principal point offset and
+the distortion) wrap in a narrow panel rather than running past its edge. A proposal whose fit was refused has no proposed
 camera, and the panel shows the current camera's tables alone, with no
 `Current` and `Proposed` headings. `K`, the projection plot and the extrinsics stay
 the current camera's. The proposal's comparison plots are

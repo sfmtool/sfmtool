@@ -218,8 +218,9 @@ and the proposal stays open.
 
 **Cancel**, and `Escape` while the pointer is over the panel showing the
 proposal, drop it with a `View` row. `Escape` cancels only when no popup was
-open and no field was being edited as the frame began, so the `Escape` that
-closes the Model dropdown or ends the editing of a field does only that. The
+open and no field was being edited, so the `Escape` that closes the Model
+dropdown or ends the editing of a field does only that
+([../camera-intrinsics.md](../camera-intrinsics.md) § "The proposal strip"). The
 row reads `Cancelled the camera model proposal for
 camera 0 of kerry_park`.
 
@@ -373,7 +374,10 @@ Explorer (`sfm-explorer` lib tests, headless):
   the proposed report cached apart from the current one; the header and the
   two tables painting no string over another at narrow and wide widths, the
   tables stacked when narrow and side by side when wide; an `Escape` that
-  closes the Model dropdown not cancelling and the next one cancelling; and a
+  closes the Model dropdown, or ends the editing of Fit to θ, not cancelling
+  and the next one cancelling; the `Default` button and the default's label
+  inside the panel at the stock window's 341 px, with nothing past its edge and
+  no header line starting with a `·`; and a
   refused proposal showing its default fit angle and source, keeping a
   wire-given value the field's range does not hold, and the current tables
   alone.
