@@ -88,3 +88,118 @@ fn the_overlay_toolbar_leaves_the_rest_of_the_cell_below_it() {
         "the rest of the cell is not left to the image: {available:?}",
     );
 }
+
+// ── Track View's Surface Tiling Mode, as the dock applies it ────────────
+
+/// Apply one Edited-mode Track View response through the dock, as a frame
+/// does after drawing the panel.
+fn apply_track_edit(
+    state: &mut AppState,
+    track_view: &mut TrackView,
+    id: ReconId,
+    response: TrackBodyResponse,
+) {
+    let mut viewer_3d = Viewer3D::new();
+    let mut scene_graph = SceneGraphPanel::new();
+    let mut image_browser = ImageBrowser::new();
+    let mut image_detail = ImageDetail::new();
+    let mut intrinsics_detail = IntrinsicsDetail::new();
+    let scroll_input = platform::ScrollInput::default();
+    let ctx = egui::Context::default();
+    let mut response = Some(response);
+    crate::test_support::run_frame_headless(&ctx, egui::RawInput::default(), |ui| {
+        let Some(response) = response.take() else {
+            return;
+        };
+        let mut tabs = TabContext {
+            state: &mut *state,
+            viewer_3d: &mut viewer_3d,
+            scene_graph: &mut scene_graph,
+            image_browser: &mut image_browser,
+            image_detail: &mut image_detail,
+            track_view: &mut *track_view,
+            intrinsics_detail: &mut intrinsics_detail,
+            frame: Progress::none(),
+            scene_texture_id: None,
+            hover_depth: None,
+            hover_pick: None,
+            gesture_events: &[],
+            scroll_input: &scroll_input,
+            diagnostics: None,
+            handler_ok: true,
+        };
+        tabs.apply_track_edit_response(ui, id, response);
+    });
+}
+
+/// The toolbar's *Duplicate* in Surface Tiling Mode is the mode's duplicate:
+/// the copy comes with no row pinned, as Ctrl+D's does.
+#[test]
+fn the_duplicate_button_in_surface_tiling_mode_unpins_the_copy() {
+    let (mut state, id) = crate::bench::tests::state();
+    let label = crate::bench::tests::put_on_bench(&mut state, id);
+    let mut track_view = TrackView::new();
+    track_view.set_surface_tiling(true);
+
+    let response = TrackBodyResponse {
+        mode: Some(crate::track_view::BodyMode::Edited),
+        duplicate: true,
+        ..TrackBodyResponse::default()
+    };
+    apply_track_edit(&mut state, &mut track_view, id, response);
+
+    let copy = state.focused_item_label(id).expect("the copy").to_string();
+    assert_ne!(copy, label);
+    let track = state.bench_track(id, &copy).expect("on the bench");
+    assert!(track.observations.iter().all(|o| !o.pinned));
+    assert!(
+        state
+            .bench_track(id, &label)
+            .expect("the original")
+            .observations
+            .iter()
+            .all(|o| o.pinned),
+        "the original was unpinned"
+    );
+}
+
+/// Clearing the *Surface Tiling Mode* box ends the sequence under way, with
+/// the stop row saying why.
+#[test]
+fn clearing_surface_tiling_mode_stops_the_sequence() {
+    let (mut state, id) = crate::bench::tests::state();
+    let label = crate::bench::tests::put_on_bench(&mut state, id);
+    state
+        .edit_bench_patch_from_viewer(
+            id,
+            &label,
+            &crate::bench::PatchEdit::Translate {
+                by: [0.01, 0.0, 0.0],
+            },
+            Some(crate::bench::SplitSettings::default()),
+        )
+        .expect("a move in the mode");
+    assert!(
+        state.surface_tiling.is_some(),
+        "the move started no sequence"
+    );
+    let mut track_view = TrackView::new();
+
+    let response = TrackBodyResponse {
+        mode: Some(crate::track_view::BodyMode::Edited),
+        surface_tiling_off: true,
+        ..TrackBodyResponse::default()
+    };
+    apply_track_edit(&mut state, &mut track_view, id, response);
+
+    assert!(state.surface_tiling.is_none());
+    let last = state.action_log.entries().last().expect("a row");
+    assert!(last.failed);
+    assert_eq!(
+        last.text,
+        format!(
+            "Surface tiling of {label} stopped at Fit (step 1 of 6): Surface Tiling Mode \
+             was turned off"
+        )
+    );
+}

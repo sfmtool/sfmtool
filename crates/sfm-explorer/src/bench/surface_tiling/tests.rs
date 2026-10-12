@@ -391,3 +391,146 @@ fn only_a_move_that_changed_the_patch_in_the_mode_starts_the_sequence() {
         Some(TilingStep::Fit)
     );
 }
+
+// ── The ways a sequence stops ──────────────────────────────────────────
+
+/// The last Action Log row, which must be the sequence's failed stop row.
+fn stop_row(state: &AppState) -> String {
+    let (kind, failed, text) = rows(state).pop().expect("a row");
+    assert_eq!(kind, Kind::Bench, "{text}");
+    assert!(failed, "the stop is a failed row: {text}");
+    text
+}
+
+/// A step whose task fails stops the sequence, after the step's own row.
+#[test]
+fn a_step_whose_task_fails_stops_the_sequence() {
+    let (mut state, id) = state();
+    let label = put_on_bench(&mut state, id);
+    state.settle_bench_evaluation();
+    state.start_surface_tiling(id, &label, SplitSettings::default());
+    // With no photograph to read, the fit's worker fails.
+    state.photographs.clear();
+    state.drive_surface_tiling();
+    assert!(state.background_task().is_some(), "the first fit started");
+    state.finish_background_task();
+
+    state.drive_surface_tiling();
+
+    assert!(state.surface_tiling.is_none());
+    let text = stop_row(&state);
+    assert!(
+        text.starts_with(&format!(
+            "Surface tiling of {label} stopped at Fit (step 1 of 6): it did not finish: "
+        )),
+        "{text}"
+    );
+    assert!(text.contains("Cannot read"), "{text}");
+}
+
+/// A step its starter refuses stops the sequence, and starts no task.
+#[test]
+fn a_step_its_starter_refuses_stops_the_sequence() {
+    let (mut state, id) = state();
+    let label = put_on_bench(&mut state, id);
+    // One row left in: the fit needs two.
+    for row in [1, 2] {
+        state
+            .set_bench_verdict(id, &label, row, Verdict::Out)
+            .expect("a verdict step");
+    }
+    state.settle_bench_evaluation();
+    state.start_surface_tiling(id, &label, SplitSettings::default());
+
+    state.drive_surface_tiling();
+
+    assert!(state.surface_tiling.is_none());
+    assert!(state.background_task().is_none(), "a task started");
+    let text = stop_row(&state);
+    assert!(
+        text.starts_with(&format!(
+            "Surface tiling of {label} stopped at Fit (step 1 of 6): Cannot fit {label}: "
+        )),
+        "{text}"
+    );
+}
+
+/// A refused commit writes the Commit button's own failed Edit row, then the
+/// sequence's stop row, and pushes no version.
+#[test]
+fn a_refused_commit_stops_the_sequence_at_its_last_step() {
+    let (mut state, id) = state();
+    let label = put_on_bench(&mut state, id);
+    // One row left in: a commit needs two.
+    for row in [1, 2] {
+        state
+            .set_bench_verdict(id, &label, row, Verdict::Out)
+            .expect("a verdict step");
+    }
+    state.settle_bench_evaluation();
+    state.start_surface_tiling(id, &label, SplitSettings::default());
+    // As if the five steps before it had run.
+    state.surface_tiling.as_mut().expect("started").next = TILING_STEPS.len() - 1;
+    let before = versions(&state, id);
+
+    state.drive_surface_tiling();
+
+    assert!(state.surface_tiling.is_none());
+    assert_eq!(
+        versions(&state, id),
+        before,
+        "the refused commit pushed one"
+    );
+    let logged = rows(&state);
+    let (kind, failed, refusal) = &logged[logged.len() - 2];
+    assert_eq!((*kind, *failed), (Kind::Edit, true), "{logged:?}");
+    assert!(
+        refusal.starts_with(&format!("Cannot commit {label}: ")),
+        "{refusal}"
+    );
+    assert_eq!(
+        stop_row(&state),
+        format!("Surface tiling of {label} stopped at Commit (step 6 of 6): {refusal}")
+    );
+}
+
+/// A step waits for the item's live evaluation: with it unsettled a frame
+/// starts nothing, and once it has landed the next frame starts the step.
+#[test]
+fn a_step_waits_until_the_evaluation_has_caught_up() {
+    use crate::bench::live::Evaluation;
+    use crate::bench::PatchEdit;
+    let (mut state, id) = state();
+    let label = put_on_bench(&mut state, id);
+    state.settle_bench_evaluation();
+    // The move gives the track new inputs, which nothing has evaluated yet.
+    state
+        .edit_bench_patch_from_viewer(
+            id,
+            &label,
+            &PatchEdit::Translate {
+                by: [0.01, 0.0, 0.0],
+            },
+            Some(SplitSettings::default()),
+        )
+        .expect("a move in the mode");
+    assert_eq!(
+        state.bench_evaluation(id, &label),
+        Some(Evaluation::Evaluating)
+    );
+
+    state.drive_surface_tiling();
+    assert!(state.background_task().is_none(), "the fit did not wait");
+    let sequence = state.surface_tiling.as_ref().expect("still under way");
+    assert_eq!(
+        (sequence.step(), sequence.waiting_on),
+        (TilingStep::Fit, None)
+    );
+
+    state.settle_bench_evaluation();
+    state.drive_surface_tiling();
+    assert!(state.background_task().is_some(), "the fit did not start");
+    let sequence = state.surface_tiling.as_ref().expect("still under way");
+    assert!(sequence.waiting_on.is_some());
+    state.finish_background_task();
+}

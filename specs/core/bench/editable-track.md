@@ -3824,7 +3824,10 @@ unit-tested in `normal.rs` itself.
 - `EditableTrack::drop_out_observations` keeps the `in` observations in their
   images with their pins, follows the reference, re-seats an `out` reference
   with its template dropped, and returns `None` for a track with no `out`
-  observation.
+  observation. At the track stage, on the ground truth in
+  `reference_view.rs`, the reference follows its row and keeps the bitmap
+  while that row stays, and goes with the bitmap and every score when it was
+  `out`.
 
 ### [bench/tests/reference_view.rs](../../../crates/sfmtool-core/src/bench/tests/reference_view.rs)
 

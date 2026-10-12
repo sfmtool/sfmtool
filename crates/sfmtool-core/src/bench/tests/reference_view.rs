@@ -2148,3 +2148,51 @@ fn splitting_the_held_reference_off_renders_from_the_pick_of_the_rows_left() {
     let pick = rule_pick(&read).expect("the rule picks one");
     assert_rendered_from(&read, &views, &edited, pick, "after the split");
 }
+
+/// Dropping the `out` rows (`EditableTrack::drop_out_observations`) carries
+/// the reference with its row, keeping the bitmap, while the reference row
+/// stays; and drops the reference, the bitmap and every score read against it
+/// when the reference row was itself `out`.
+#[test]
+fn dropping_the_out_rows_follows_the_reference_or_drops_it_with_the_bitmap() {
+    let truth = GroundTruth::load();
+    let views = truth.views();
+    let (track, edited, picked, other) = track_with_another_reference(&truth);
+    let (first, _) = evaluate_rendering_bitmap(
+        &track,
+        &edited,
+        &views,
+        &EvaluateOptions::default(),
+        &FitOptions::default(),
+        &Progress::none(),
+    )
+    .expect("the track reads");
+    assert_eq!(first.track().unwrap().reference, Some(other));
+    let count = first.observations.len();
+
+    // Another row out: the reference follows its row and the bitmap stays.
+    let mut one_out = first.clone();
+    one_out.observations[picked].verdict = Verdict::Out;
+    let (kept, map) = one_out.drop_out_observations().expect("one row is out");
+    assert_eq!(kept.observations.len(), count - 1);
+    assert_eq!(map[picked], None);
+    let moved = if picked < other { other - 1 } else { other };
+    assert_eq!(map[other], Some(moved));
+    assert_eq!(kept.track().unwrap().reference, Some(moved));
+    assert!(kept.track().unwrap().bitmap.is_some(), "the bitmap went");
+    assert!(!unscored(&kept), "the scores went with no bitmap gone");
+
+    // The reference row out: the bitmap goes with it, and every score.
+    let mut reference_out = first.clone();
+    reference_out.observations[other].verdict = Verdict::Out;
+    let (dropped, _) = reference_out
+        .drop_out_observations()
+        .expect("the reference row is out");
+    assert_eq!(dropped.observations.len(), count - 1);
+    assert_eq!(dropped.track().unwrap().reference, None);
+    assert!(
+        dropped.track().unwrap().bitmap.is_none(),
+        "the bitmap stayed"
+    );
+    assert!(unscored(&dropped), "no score outlives the bitmap");
+}

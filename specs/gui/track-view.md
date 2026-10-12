@@ -2325,12 +2325,15 @@ texels, so their geometry is checked without reading pixels off the screen.
   Commit in that order with each step's own row and no failed row, the item
   still focused and seated on the point written; a second sequence on a
   duplicate replaces the point its first created; the search starts from the
-  row the Fit rendered the bitmap from; and an unfocus, a version the sequence
-  did not push and a second move each stop or restart it with the row saying
-  so. The box itself, clear at start, no step when ticked and reporting the
-  clear, is in
-  [body/tests.rs](../../crates/sfm-explorer/src/track_view/body/tests.rs), and
-  Ctrl+D in the mode in
+  row the Fit rendered the bitmap from; a step waits while the evaluation is
+  unsettled and starts once it lands; and a failed task, a refused starter, a
+  refused commit, an unfocus, a version the sequence did not push and a second
+  move each stop or restart it with the row saying so. The box itself, clear
+  at start, no step when ticked and reporting the clear, is in
+  [body/tests.rs](../../crates/sfm-explorer/src/track_view/body/tests.rs); the
+  dock applying the *Duplicate* button in the mode and the cleared box, in
+  [dock/tests.rs](../../crates/sfm-explorer/src/dock/tests.rs); and Ctrl+D in
+  the mode in
   [app/tests.rs](../../crates/sfm-explorer/src/app/tests.rs).
 - **The Scene tree**:
   [scene_graph/tests.rs](../../crates/sfm-explorer/src/scene_graph/tests.rs).
