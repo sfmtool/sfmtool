@@ -230,7 +230,9 @@ fn the_targets_and_counts_are_read_off_the_report() {
         Some(&answer.point_set.points[0].position),
     );
     assert_eq!(Some(targets.base_size[0]), expected);
-    assert!(targets.touches(5) && !targets.touches(3) && !targets.touches(8));
+    assert!(targets.touches(0), "a moving point's rays are not hidden");
+    // A point that loses its position stands where its rays end.
+    assert!(!targets.touches(5) && !targets.touches(3) && !targets.touches(8));
 
     assert_eq!(counts.tracks, 8);
     assert_eq!(counts.moves, 3);

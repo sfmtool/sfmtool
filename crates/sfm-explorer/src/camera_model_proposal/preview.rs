@@ -174,8 +174,8 @@ pub(crate) struct PreviewTargets {
     pub(crate) additions: Vec<[f32; 4]>,
     /// Per addition row, as [`Self::base_size`].
     pub(crate) additions_size: Vec<f32>,
-    /// Each point the preview moves or colours, by version index, for the
-    /// track rays the 3D view hides while `s` is above 0.
+    /// Each point the preview moves, by version index, for the track rays the
+    /// 3D view hides while `s` is above 0.
     pub(crate) touched: Vec<u32>,
 }
 
@@ -280,7 +280,10 @@ impl PreviewTargets {
             if let Some((target, factor)) = slot {
                 *target = row;
                 *factor = size;
-                targets.touched.push(index);
+                // A point that loses its position stands where its rays end.
+                if preview.flag() == FLAG_MOVES {
+                    targets.touched.push(index);
+                }
             }
         }
         targets.touched.sort_unstable();
@@ -294,8 +297,7 @@ impl PreviewTargets {
         (targets, counts)
     }
 
-    /// Whether the preview moves or colours the point at `index` of the
-    /// version.
+    /// Whether the preview moves the point at `index` of the version.
     pub(crate) fn touches(&self, index: u32) -> bool {
         self.touched.binary_search(&index).is_ok()
     }

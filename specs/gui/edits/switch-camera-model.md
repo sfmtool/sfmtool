@@ -430,8 +430,9 @@ the 3D view: Go to Point frames a point at its stored position, and the
 bench's figures read stored positions. The one CPU-drawn part of the 3D view
 that would visibly disagree with a moving point is its track rays, which end at
 the point, so while `s` is above 0 the selected point's track rays are not
-drawn when the preview moves or colours that point, and they return when `s` is
-back at 0.
+drawn when the preview moves that point, and they return when `s` is back at 0.
+A point that loses its position stands where its rays end, so its rays stay
+drawn.
 
 The GPU side follows the drawn position. The pick pass is the same vertex
 shader, so a click on a moving point picks it where it is drawn and selects the

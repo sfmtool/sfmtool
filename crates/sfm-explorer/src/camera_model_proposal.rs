@@ -566,9 +566,9 @@ impl AppState {
     }
 
     /// Whether the 3D view leaves out the selected point's track rays: while
-    /// the preview's blend is above 0 and the preview moves or colours that
-    /// point, the rays, which end at its stored position, would disagree with
-    /// where it is drawn.
+    /// the preview's blend is above 0 and the preview moves that point, the
+    /// rays, which end at its stored position, would disagree with where it is
+    /// drawn.
     pub(crate) fn preview_hides_track_rays(&self) -> bool {
         let (Some(draw), Some(point)) = (self.camera_model_preview_draw(), self.selected_point)
         else {
