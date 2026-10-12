@@ -98,7 +98,10 @@ Amends:
 - [`../core/reconstruction/switch-camera-model.md`](../core/reconstruction/switch-camera-model.md),
   whose non-goals name the proposal this draft describes, and which gains an
   option that leaves the outermost keypoint out of the report, so a caller that
-  does not need it reads no `.sift` file.
+  does not need it reads no `.sift` file for it. The switch still reads the
+  observations' pixels from the `.sift` files of a value without the inline
+  keypoint column, since its observation comparison and the points' stored
+  errors are measured against them.
 - [`../core/reconstruction/triangulation-rules.md`](../core/reconstruction/triangulation-rules.md)
   § "Retriangulating a reconstruction", whose `RetriangulateWhich::These`
   gains a bulk path for a long list of points: the overlay folded in first, as
@@ -350,6 +353,16 @@ node, reports the retriangulation's stages, is cancellable, and pushes the
 same version when it finishes; the proposal ends when the task starts. The
 implicit endings below apply by the same rule.
 
+On a `sift_files` node without the inline keypoint column,
+`retriangulate_points` refuses, since its observations carry no pixel
+(§ "The 3D view"). Apply there pushes the switch alone: the version, label
+and Action Log row of the direct switch, run on the GUI thread as that edit
+runs, with `retriangulate_points`' refusal sentence added to the row to say
+why the tracks were not moved. Where the switch itself refuses because a
+`.sift` file cannot be read (`SwitchCameraModelError::Observations`), Apply is
+refused with that sentence and the proposal stays open; an implicit ending
+below drops it, as it drops a proposal whose fit was refused.
+
 **Why Apply retriangulates.** The points were triangulated through the old
 model's rays. After a lens-only switch they stand where those rays put them,
 so the value holds a camera and points that disagree, and on Kerry the
@@ -464,7 +477,10 @@ in a way two static clouds side by side do not show.
 
 The checkbox is greyed, with `retriangulate_points`' refusal sentence as its
 hover text, where the node cannot be retriangulated: a `sift_files` node
-without the inline keypoint column, whose observations carry no pixel.
+without the inline keypoint column, whose observations carry no pixel. On such
+a node the job still runs its first step, the switch, which reads the
+observations' pixels from the `.sift` files (§ "The job"), and Apply pushes the
+switch alone (§ "Ending a proposal").
 
 **The proposal's tracks.** Every track with at least one observation in an
 image taken through the proposal's camera. These are the points Apply
@@ -571,11 +587,19 @@ One job does, in order:
 
 1. **The switch.** `switch_camera_model` over the materialisation, for the
    proposal's camera and request, with the outermost keypoint left out of the
-   report, so no `.sift` file is read. Its report carries the observation
-   comparison, which the job sends to the panel as soon as the switch returns,
-   and its value is the switched value the second step reads. It takes no
-   `Progress`, so a cancel is read when it returns; it is a fit and a pass over
-   the camera's observations, which is milliseconds.
+   report, so it reads no `.sift` file for that. Its report carries the
+   observation comparison, which the job sends to the panel as soon as the
+   switch returns, and its value is the switched value the second step reads.
+   It takes no `Progress`, so a cancel is read when it returns. On a value
+   with the inline keypoint column it is a fit and a pass over the camera's
+   observations, which is milliseconds. On a `sift_files` value without that
+   column it also reads the observations' pixels from the `.sift` files, on
+   the job's thread, each file once, for every image that observes a point the
+   camera's images observe, because the comparison and the points' stored
+   errors are measured against those pixels. This step runs whether or not the
+   Preview retriangulation checkbox is ticked or greyed. Where a file cannot be
+   read the switch refuses (`SwitchCameraModelError::Observations`), and the
+   job sends that sentence to the panel in place of the comparison.
 2. **The retriangulation** of the proposal's tracks over the switched value,
    through the bulk path of `These` in Amends, since the proposal's tracks are
    far more than the handful `These` is built for today.
@@ -737,7 +761,8 @@ takes the name `switch_camera_model` already gives it, and none is a bare
   refit ([`../gui/mcp-server.md`](../gui/mcp-server.md)). It gains a
   `proposal: true` form that applies the open proposal instead of fitting one,
   as Apply does: the switch and the retriangulation of the proposal's tracks
-  in one version, installed at once from the job's answer or run as the
+  in one version (the switch alone on a node that cannot be retriangulated),
+  installed at once from the job's answer or run as the
   `Switch camera model` background task (§ "Ending a proposal"). The direct
   form stays the lens-only switch it is today, the operation `sfm xform
   --camera-model` also makes; an agent that wants the tracks moved as well
@@ -816,7 +841,12 @@ without waiting out the motion.
     reason, and Apply writes it as that direction; a point the run keeps is
     counted as left where it was, not drawn in the failure colour, and keeps
     its geometry under Apply;
-  - no `.sift` file is read by a job.
+  - a job on a node with the inline keypoint column reads no `.sift` file; on
+    a `sift_files` node without it, the job's switch reads each observing
+    image's `.sift` file once, the checkbox is greyed with
+    `retriangulate_points`' sentence, Apply pushes the switch alone with that
+    sentence in its row, and a missing `.sift` file refuses both the job's
+    switch and Apply with the `Observations` sentence.
 - **Preview motion tests:** the generalised step reaches the goal and stops
   there without overshoot, reverses without a jump in `s` when the goal flips
   mid-motion, and reproduces Maintain Z-up's existing timings when called with

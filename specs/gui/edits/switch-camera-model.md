@@ -96,8 +96,11 @@ monotone. The viewer adds the invocation, the version and the history entry, in
 | `spline_domain_deg` | the camera's own domain end in a refit, else the far image corner |
 | `theta_fit_deg` | the core default; given, even a refit is an ordinary fit over that angle |
 
-It runs **on the GUI thread**: a fit is a few milliseconds, and the only file
-read is the `.sift` positions for the report's outermost keypoint.
+It runs **on the GUI thread**: a fit is a few milliseconds, and the only files
+read are `.sift` positions: for the report's outermost keypoint, and, on a
+`sift_files` node without the inline keypoint column, for the observations'
+pixels the report's comparison and the points' stored errors are measured
+against.
 
 ### The version
 
