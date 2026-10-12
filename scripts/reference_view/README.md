@@ -28,7 +28,8 @@ parameters over a copy of the rule written in Python.
   the case's views at the case's keypoints, evaluates it, and samples
   `--pool` (60) more points of three or more observations with a fixed seed.
   Each row carries the readings the rule reads (coverage, clipped share,
-  viewing angle, cell deficit, pair ZNCC, the self-similarity semi-axes), its
+  viewing angle, cell deficit, pair ZNCC, the self-similarity semi-axes and
+  `max_radius`, the cap of that reading, read off the size of its surface), its
   `ray` (the unit direction from the patch's centre to the camera centre,
   which only the comparison of the angle factor's forms reads) and the rule's
   standing at this build's defaults. `--blur-matched` adds each
@@ -51,7 +52,13 @@ parameters over a copy of the rule written in Python.
   median angle between a row's `ray` and the other eligible rows', and the
   angle in quadrature the rule replaced, `√(r² + (c·tan θ)²) / r`; a form's
   starting value is the one whose picks differ least from the quadrature's
-  at `σ_n = 3°` over the pool.
+  at `σ_n = 3°` over the pool. Its section 10 reads the step on a radius at
+  the cap, `capped_radius_factor`: the rows and tracks at the cap, each track
+  that picks a capped view over an uncapped one with no step and the factor
+  at which it flips, and per factor the hand-pick counts and the pool and
+  ground-truth picks it changes. `--capped-radius-factor` replaces that
+  parameter's starting value for sections 2 to 10 (section 1 always checks
+  the Rust rule's defaults).
 
 ```bash
 OUT=<a directory outside the repository>
@@ -74,9 +81,12 @@ develop --release`). The output directory must not be under `test-data` or
 The tables and figures in reference-view.md § "How the values were measured"
 and § "The form of the angle factor" (2026-10-11) are this harness's output,
 run as above with the default seeds (`--seed 20261011` for the pool and for
-the split), on a build whose rule has the angle factor `1 + k·tan θ`. The
-readings do not depend on the rule, but section 1's check reads the rule's
-costs and terms, so it needs a build whose rule is the one `analyze.py`
+the split), on a build whose rule has the angle factor `1 + k·tan θ`, before
+the step on a radius at the cap: `analyze.py --capped-radius-factor 1`
+reproduces them from readings taken on the current build. The table of
+§ "The step on a radius at the cap" is section 10 of a run with the defaults.
+The readings do not depend on the rule, but section 1's check reads the
+rule's costs and terms, so it needs a build whose rule is the one `analyze.py`
 copies. All 79 cases were found:
 72 exactly, every view at its keypoint and the point at its index of
 2026-10-06; the 7 `xmas` cases in a subset rebuilt on 2026-10-11 under that

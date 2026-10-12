@@ -19,8 +19,10 @@ instead of a sample.
 
 Each track is one JSON line in ``<out>/<dataset>.jsonl`` (``-all.jsonl`` with
 ``--all``) with each row's readings as the rule reads them (coverage, clipped
-share, viewing angle, cell deficit, pair ZNCC, the self-similarity semi-axes),
-its ``ray``, the unit direction from the patch's centre to the camera centre
+share, viewing angle, cell deficit, pair ZNCC, the self-similarity semi-axes
+and ``max_radius``, the largest radius that reading searched, at which the
+semi-major axis is a lower bound, read off the size of its surface), its
+``ray``, the unit direction from the patch's centre to the camera centre
 (minus the patch's bearing, the same for every row, for a patch at infinity),
 which the rule does not read but ``analyze.py`` compares a form of the angle
 factor on, and what the rule decided at this build's defaults (cost, terms,
@@ -266,6 +268,7 @@ def _rows(track, names, centres):
         m = obs.get("track") or {}
         ellipse = (m.get("zncc_self_similarity_ellipse") or {}).get("grid_px")
         axes = None if ellipse is None else [float(a) for a in ellipse["axes"]]
+        surface = m.get("zncc_self_similarity_surface")
         standing = m.get("reference_view")
         keypoint = m.get("keypoint")
         rows.append(
@@ -278,6 +281,10 @@ def _rows(track, names, centres):
                 ray=_ray(placement, centres[int(obs["image"])]),
                 semi_major=None if axes is None else axes[0],
                 semi_minor=None if axes is None else axes[1],
+                # The surface spans the (2r + 1)² square of shifts searched.
+                max_radius=None
+                if axes is None or surface is None
+                else (np.asarray(surface).shape[0] - 1) / 2,
                 **{k: (None if m.get(k) is None else float(m[k])) for k in READINGS},
                 rule=None
                 if standing is None

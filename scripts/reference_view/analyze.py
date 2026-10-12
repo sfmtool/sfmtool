@@ -4,11 +4,12 @@
 """Tune the reference-view rule's parameters against the hand picks.
 
     pixi run python scripts/reference_view/analyze.py <dir> [--out <file>]
+        [--capped-radius-factor <f>]
 
 Reads ``measure.py``'s output in ``<dir>`` and prints:
 
 1. The check that ``choose``, the rule written again in Python below, gives
-   the Rust rule's pick and costs at the starting values on every track.
+   the Rust rule's pick and costs at its defaults on every track.
 2. The seeded split of the hand-picked cases into a tuning and a held-out
    half, stratified by dataset.
 3. A sweep of each parameter alone from the starting values, and per
@@ -33,6 +34,17 @@ Reads ``measure.py``'s output in ``<dir>`` and prints:
    other views aligned to each pick's tile, against the projection of the
    point, and the mean error over every track as some parameters are swept.
 9. What the pool's readings exercise, and the points with no eligible view.
+10. The step on a radius read at the cap (``capped_radius_factor``): the
+    rows and tracks it can act on, each pool track whose pick is a capped
+    view over an uncapped one and the factor at which that pick flips, and
+    per factor the hand-pick counts, the pool picks that change against no
+    step, and the ground-truth picks that change, with the other views'
+    error aligned to each.
+
+The starting values are ``ReferenceViewOptions``' defaults, with
+``--capped-radius-factor`` in place of the default ``capped_radius_factor``
+where it is given (``1`` reproduces the tables measured before the step on a
+radius at the cap); section 1 always checks against the defaults.
 
 A hand pick is matched **exactly** when the rule picks the hand-picked row,
 and **leniently** when it picks a row at most 0.1 grid px blurrier (semi-major
@@ -53,7 +65,15 @@ from pathlib import Path
 import numpy as np
 
 CASES = Path(__file__).resolve().parent / "cases.json"
-TERMS = ("sharpness", "angle", "agreement", "cells", "coverage", "clipped")
+TERMS = (
+    "sharpness",
+    "capped_radius",
+    "angle",
+    "agreement",
+    "cells",
+    "coverage",
+    "clipped",
+)
 
 
 @dataclass(frozen=True)
@@ -61,6 +81,7 @@ class Options:
     """``ReferenceViewOptions``, field for field."""
 
     angle_weight: float = 0.25
+    capped_radius_factor: float = 1.5
     agreement_band: float = 0.15
     agreement_scale: float = 0.15
     cell_deficit_band: float = 0.3
@@ -73,7 +94,14 @@ class Options:
     unread_radius: float = 1.0
 
 
+# The starting values; ``main`` replaces ``capped_radius_factor`` where
+# ``--capped-radius-factor`` is given.
 START = Options()
+
+# The cap a row's radius was read with where its row does not carry one
+# (``measure.py`` before it recorded ``max_radius``): the bench reads with
+# ``SelfSimilarityParams::default()``, whose ``max_radius`` is 3.
+DEFAULT_MAX_RADIUS = 3.0
 
 # The values each parameter is swept over, the others held.
 SWEEP = {
@@ -94,6 +122,19 @@ SWEEP = {
         1.25,
         1.5,
         2.0,
+    ],
+    "capped_radius_factor": [
+        1.0,
+        1.01,
+        1.05,
+        1.1,
+        1.25,
+        1.5,
+        1.75,
+        2.0,
+        2.05,
+        2.25,
+        2.5,
     ],
     "agreement_band": [
         0.0,
@@ -173,6 +214,15 @@ def _angle(v):
     return None if a is None or math.isnan(a) else a
 
 
+def _capped(v):
+    """Whether a row's own radius reads at the cap it was read with, a lower
+    bound ("this far or further")."""
+    r = _finite(v["semi_major"])
+    cap = v.get("max_radius")
+    cap = DEFAULT_MAX_RADIUS if cap is None else cap
+    return r is not None and r >= cap
+
+
 def _hinge(x, band, scale):
     return 1.0 + max(x - band, 0.0) / scale
 
@@ -249,6 +299,14 @@ def choose(rows, resolution, o: Options, pair_key="pair_zncc", form=None):
     unread_radius = largest(_finite(rows[i]["semi_major"]) for i in pick_from)
     if unread_radius is None:
         unread_radius = o.unread_radius
+        unread_capped = False
+    else:
+        # A row with no radius takes the largest one read, and with it the
+        # step where that radius is a lower bound.
+        unread_capped = any(
+            _finite(rows[i]["semi_major"]) == unread_radius and _capped(rows[i])
+            for i in pick_from
+        )
     best_pair = largest(_finite(rows[i].get(pair_key)) for i in pick_from)
 
     def shortfall(v):
@@ -276,6 +334,8 @@ def choose(rows, resolution, o: Options, pair_key="pair_zncc", form=None):
             continue
         own = _finite(v["semi_major"])
         radius = own if own is not None else unread_radius
+        capped = _capped(v) if own is not None else unread_capped
+        capped_radius = o.capped_radius_factor if capped else 1.0
         if quadrature:
             term = terms[i] if terms[i] is not None else unread_term
             angle = math.hypot(radius, term) / radius
@@ -299,12 +359,19 @@ def choose(rows, resolution, o: Options, pair_key="pair_zncc", form=None):
         costs.append(
             dict(
                 radius=radius,
+                capped_radius=capped_radius,
                 angle=angle,
                 agreement=agreement,
                 cells=cells,
                 coverage=coverage,
                 clipped=clipped,
-                cost=radius * angle * agreement * cells * coverage * clipped,
+                cost=radius
+                * capped_radius
+                * angle
+                * agreement
+                * cells
+                * coverage
+                * clipped,
             )
         )
 
@@ -326,6 +393,7 @@ def choose(rows, resolution, o: Options, pair_key="pair_zncc", form=None):
 def ln_parts(cost):
     return [
         math.log(cost["radius"]),
+        math.log(cost["capped_radius"]),
         math.log(cost["angle"]),
         math.log(cost["agreement"]),
         math.log(cost["cells"]),
@@ -385,10 +453,11 @@ def load(directory: Path):
 
 
 def check_against_rust(tracks):
-    """Section 1: the Python rule against the Rust rule's output."""
+    """Section 1: the Python rule against the Rust rule's output, at the Rust
+    rule's defaults."""
     picks_differ, costs_differ, worst = [], 0, 0.0
     for t in tracks:
-        pick, costs = choose(t.rows, t.resolution, START)
+        pick, costs = choose(t.rows, t.resolution, Options())
         rust_pick = next(
             (i for i, x in enumerate(t.rows) if x["rule"]["is_reference"]), None
         )
@@ -414,7 +483,11 @@ def check_against_rust(tracks):
                 "clipped",
                 "angle",
                 "radius",
+                "capped_radius",
             ):
+                if term not in rust["terms"]:
+                    costs_differ += 1
+                    continue
                 if abs(c[term] - rust["terms"][term]) > 1e-12 * max(1.0, abs(c[term])):
                     costs_differ += 1
     n_rows = sum(len(t.rows) for t in tracks)
@@ -773,7 +846,16 @@ def main() -> None:
     ap.add_argument("--seed", type=int, default=20261011)
     ap.add_argument("--angle-bound", type=float, default=10.0)
     ap.add_argument("--out", help="also write the report here")
+    ap.add_argument(
+        "--capped-radius-factor",
+        type=float,
+        default=None,
+        help="the starting capped_radius_factor (default: the rule's)",
+    )
     args = ap.parse_args()
+    global START
+    if args.capped_radius_factor is not None:
+        START = replace(START, capped_radius_factor=args.capped_radius_factor)
     bound = args.angle_bound
     lines: list[str] = []
     # The report holds σ and °, which a Windows pipe's default code page
@@ -786,7 +868,7 @@ def main() -> None:
 
     tracks, all_tracks, eligible = load(Path(args.directory))
     fill_blur_matched(tracks)
-    out("1. The Python rule against the Rust rule at the starting values")
+    out("1. The Python rule against the Rust rule at its defaults")
     every = tracks + all_tracks
     differ, costs_differ, worst, n_rows = check_against_rust(every)
     out(
@@ -1008,8 +1090,104 @@ def main() -> None:
     for e in eligible:
         out(f"    {e['ds']:12s} {e['no_eligible_view']:5d} of {e['with_two_views']:6d}")
 
+    out()
+    out("10. The step on a radius at the cap, capped_radius_factor")
+    capped_radius_step(tracks, gt, cases, tune, held, bound, out)
+
     if args.out:
         Path(args.out).write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+STEP_VALUES = [1.0, 1.01, 1.05, 1.1, 1.25, 1.5, 1.75, 2.0, 2.05, 2.25, 2.5]
+
+
+def capped_radius_step(tracks, gt, cases, tune, held, bound, out):
+    """Section 10: what the step on a radius at the cap changes.
+
+    Every other parameter is at its starting value. ``no step`` is the rule
+    with ``capped_radius_factor = 1``. A pick flips from a capped view when
+    the factor passes the lowest cost of an uncapped eligible view over the
+    capped pick's cost without the step, since the step multiplies only the
+    capped views' costs."""
+    no_step = replace(START, capped_radius_factor=1.0)
+    case_ids = {id(c.track): c.id for c in cases}
+    facts = Counter()
+    flips = []
+    for t in tracks + gt:
+        pick, costs = choose(t.rows, t.resolution, no_step)
+        eligible = [i for i, c in enumerate(costs) if not isinstance(c, str)]
+        if not eligible:
+            continue
+        pool = t in tracks
+        capped = [i for i in eligible if _capped(t.rows[i])]
+        key = "pool" if pool else "ground truths"
+        facts[f"{key}: eligible rows"] += len(eligible)
+        facts[f"{key}: eligible rows at the cap"] += len(capped)
+        if capped and len(capped) == len(eligible):
+            facts[f"{key}: tracks with every eligible row at the cap"] += 1
+        uncapped = [i for i in eligible if i not in capped]
+        if pick in capped and uncapped:
+            facts[f"{key}: tracks picking a capped row over an uncapped one"] += 1
+            best = min(uncapped, key=lambda i: costs[i]["cost"])
+            flips.append(
+                (
+                    costs[best]["cost"] / costs[pick]["cost"],
+                    t,
+                    pick,
+                    best,
+                )
+            )
+    out(f"  {dict(facts)}")
+    out("  Tracks picking a capped row over an uncapped one with no step:")
+    for factor, t, pick, best in sorted(flips, key=lambda f: f[0]):
+        a, b = t.rows[pick], t.rows[best]
+        hand = next((c for c in cases if c.track is t), None)
+        label = case_ids.get(id(t)) or f"{t.ds} {t.kind} {t.point}"
+        hand_name = (
+            "" if hand is None else f", hand pick {t.rows[hand.hand]['image_name']}"
+        )
+        out(
+            f"    {label}: flips above {factor:.3f}; capped {a['image_name']}"
+            f" -> {b['image_name']} (r {b['semi_major']:.3f},"
+            f" pair ZNCC {a['pair_zncc'] or float('nan'):.3f} -> {b['pair_zncc'] or float('nan'):.3f},"
+            f" cell deficit {a['cell_deficit'] or 0:.3f} -> {b['cell_deficit'] or 0:.3f},"
+            f" angle {_angle(a) or 0:.0f}° -> {_angle(b) or 0:.0f}°){hand_name}"
+        )
+
+    def picker(o):
+        return lambda t: choose(t.rows, t.resolution, o)[0]
+
+    base = picker(no_step)
+    out(
+        "  Per factor: hand picks exact / lenient / lenient within the bound,"
+        " tuning | held out | all; pool picks changed from no step; ground-truth"
+        " picks changed, the other views' mean error aligned to the no-step pick"
+        " and to this one, better / worse"
+    )
+    for f in STEP_VALUES:
+        o = replace(START, capped_radius_factor=f)
+        pick = picker(o)
+        hand = [
+            score_picks(cs, [pick(c.track) for c in cs], bound)
+            for cs in (tune, held, cases)
+        ]
+        pool_changed = [t for t in tracks if pick(t) != base(t)]
+        ch, _ = changes_between(gt, base, pick)
+        ea, eb = compare_localization(ch)
+        gt_cell = f"{len(ch)}"
+        if len(ea):
+            d = eb - ea
+            gt_cell += (
+                f": {ea.mean():.3f} -> {eb.mean():.3f},"
+                f" {(d < 0).sum()} / {(d > 0).sum()}"
+            )
+        mark = " *" if f == START.capped_radius_factor else ""
+        out(
+            f"    {f:<5g} {fmt(hand[0])} | {fmt(hand[1])} | {fmt(hand[2])}"
+            f" | pool {len(pool_changed):2d}"
+            f" {sorted(case_ids.get(id(t)) or f'{t.ds}:{t.point}' for t in pool_changed)}"
+            f" | gt {gt_cell}{mark}"
+        )
 
 
 def fill_blur_matched(tracks):
