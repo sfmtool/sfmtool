@@ -386,10 +386,12 @@ keeps the hand picks; `1.5` is near the middle of that range on a log scale
 | 2.25 | 14 / 33 / 32 | 15 / 34 / 30 | 29 / 67 / 62 | 3 | 3: 0.183 → 0.407, 0 / 3 |
 | 2.5 | 14 / 32 / 31 | 15 / 34 / 30 | 29 / 66 / 61 | 4 | 4: 0.309 → 0.497, 0 / 4 |
 
-(Hand picks exact / lenient / lenient within 10°, the other parameters at
-their defaults. A changed ground-truth pick reads the other views' mean error,
-px, aligned to the pick with no step and to the pick with it, over the views
-that are neither pick.)
+(Hand picks against the first review, exact / lenient / lenient within 10°,
+the other parameters at their defaults; against the second review every
+factor from 1 to 2 matches 72 / 74 / 73 of 74, [§ "The second
+review"](#the-second-review). A changed ground-truth pick reads the other
+views' mean error, px, aligned to the pick with no step and to the pick with
+it, over the views that are neither pick.)
 
 The data does not choose a value between 1.1 and 2. The hand picks are the
 same from 1 to 2, so the harness's procedure keeps the starting value, `1.5`,
@@ -557,13 +559,17 @@ only some of the values, and for the rest the table says what they rule out.
 `min_coverage` is set by decision and was not swept. The measurements in the
 table, except `capped_radius_factor`'s, were made before the step on a radius
 at the cap, with `capped_radius_factor = 1`
-([§ "How the values were measured"](#how-the-values-were-measured)).
+([§ "How the values were measured"](#how-the-values-were-measured)). The
+table's counts are against the first review of the hand picks. The maintainer
+then reviewed again the cases where the rule and that review disagree, and the
+procedure run again against the second review proposes no change to any value
+([§ "The second review"](#the-second-review)).
 
 | Field | Default | Reason |
 |---|---|---|
-| `angle_weight`, `k` | `0.25` | The angle factor's weight: a view at 45° counts as 1.25 times as blurry as its radius says ([§ "The angle factor"](#the-angle-factor)). Measured: the factor is worth having. Against `k = 0` it changes 68 of 679 pool picks, the `k = 0` pick losing on its angle factor in 65 of them, matches the hand pick within 10° of its viewing angle on 62 of 77 hand picks against 60, picks above 65° on 83 of 1,318 tracks against 93 (the previous rule with its 65° gate: 75), and on the 84 ground-truth tracks whose pick it changes the other views align with a mean error of 0.359 px against 0.478. `0.25` is the value whose picks differ least from the quadrature's at `σ_n = 3°` (63 of 679 pool tracks). The hand picks do not tell `0.05` to `1` apart (lenient 67 or 68 of 77, exact 28 to 30); the tuning half's best, `0.75`, matched one fewer held-out pick leniently. The ground truths' mean error over every track is lowest from `0.25` to `0.4` (0.431 px) and rises past `1` (`1.5`: 0.440). |
-| `capped_radius_factor` | `1.5` | A view whose radius reads at the cap counts as 1.5 times as blurry as the cap, since the reading is a lower bound ([§ "The step on a radius at the cap"](#the-step-on-a-radius-at-the-cap)). Measured: from `1.08` to `2.04` it changes the same two pool picks, to an uncapped view at 2.90 or 2.96 grid px, and no hand pick; from `2.05` the lenient count falls (`2.5`: 66 of 77). `1.5` is near the middle of that range on a log scale. The ground truths do not favour it: the three picks it changes there align the other views worse. |
-| `agreement_band` | `0.15` | Sharp views correlate worse with blurrier ones, so a narrow band penalises exactly the sharp views. The previous rule's margin, `0.15`, was set against hand picks. Measured: the hand picks do not tell `0.1` to `0.4` apart (exact 29, lenient 68 or 69 of 77); below `0.1` the lenient count is 72 and the exact count 26 to 31. The tuning half's best, `0`, matched 4 fewer held-out picks exactly. `0.075` matches 2 more picks exactly and 4 more leniently, better on both halves (tuning 14 / 35 against 14 / 34, held out 17 / 37 against 15 / 34), but it is not the tuning half's best, so the procedure does not test it. The ground truths favour a narrower band: the mean error over the 639 tracks is 0.426 px at `0.075`, 0.411 at `0.05` and 0.399 at `0`, against 0.431 at `0.15`. |
+| `angle_weight`, `k` | `0.25` | The angle factor's weight: a view at 45° counts as 1.25 times as blurry as its radius says ([§ "The angle factor"](#the-angle-factor)). Measured: the factor is worth having. Against `k = 0` it changes 68 of 679 pool picks, the `k = 0` pick losing on its angle factor in 65 of them, matches the hand pick within 10° of its viewing angle on 62 of 77 hand picks against 60, picks above 65° on 83 of 1,318 tracks against 93 (the previous rule with its 65° gate: 75), and on the 84 ground-truth tracks whose pick it changes the other views align with a mean error of 0.359 px against 0.478. `0.25` is the value whose picks differ least from the quadrature's at `σ_n = 3°` (63 of 679 pool tracks). The hand picks do not tell `0.05` to `1` apart (lenient 67 or 68 of 77, exact 28 to 30); the tuning half's best, `0.75`, matched one fewer held-out pick leniently. The ground truths' mean error over every track is lowest from `0.25` to `0.4` (0.431 px) and rises past `1` (`1.5`: 0.440). Against the second review `0.25` and `0.3` are best (72 of 74 exact), `0.2` and `0.35` match 71 and 69, and `0` 66. |
+| `capped_radius_factor` | `1.5` | A view whose radius reads at the cap counts as 1.5 times as blurry as the cap, since the reading is a lower bound ([§ "The step on a radius at the cap"](#the-step-on-a-radius-at-the-cap)). Measured: from `1.08` to `2.04` it changes the same two pool picks, to an uncapped view at 2.90 or 2.96 grid px, and no hand pick; from `2.05` the lenient count falls (`2.5`: 66 of 77). `1.5` is near the middle of that range on a log scale. The ground truths do not favour it: the three picks it changes there align the other views worse. Against the second review, too, every factor from `1` to `2` matches the same picks (72 of 74 exact, 74 lenient). |
+| `agreement_band` | `0.15` | Sharp views correlate worse with blurrier ones, so a narrow band penalises exactly the sharp views. The previous rule's margin, `0.15`, was set against hand picks. Measured: the hand picks do not tell `0.1` to `0.4` apart (exact 29, lenient 68 or 69 of 77); below `0.1` the lenient count is 72 and the exact count 26 to 31. The tuning half's best, `0`, matched 4 fewer held-out picks exactly. `0.075` matches 2 more picks exactly and 4 more leniently, better on both halves (tuning 14 / 35 against 14 / 34, held out 17 / 37 against 15 / 34), but it is not the tuning half's best, so the procedure does not test it. The ground truths favour a narrower band: the mean error over the 639 tracks is 0.426 px at `0.075`, 0.411 at `0.05` and 0.399 at `0`, against 0.431 at `0.15`. The second review decides the hand picks' side against `0.075`: it matches 69 of 74 exactly and 72 leniently, against 72 and 74 at `0.15`, and on one case it goes back to the hand pick the second review replaced ([§ "The second review"](#the-second-review)). `0.15` is kept. |
 | `agreement_scale` | `0.15` | A view `0.30` below the best counts as twice as blurry. Measured: from `0.015` to `1.5` it changes no more than one hand pick. |
 | `cell_deficit_band` | `0.3` | A view that agrees overall but not in one part of the tile: an occluder, a shadow edge, parallax within the tile. The previous rule's bar, `0.3`, was set against hand picks. Measured: `0.25` to `0.35` match 29 hand picks of 77 exactly and 68 or 69 leniently; `0.1`, the tuning half's best, matches 3 more leniently but 5 fewer exactly, 4 of them on the held-out half; from `0.4` up the lenient count falls (`0.4`: 66). |
 | `cell_deficit_scale` | `0.3` | A cell deficit of `0.6` counts as twice as blurry. Measured: `0.03` to `0.9` give the same exact and lenient counts over the 77 hand picks; from `1.5` up the lenient count falls (`3`: 65). |
@@ -627,7 +633,9 @@ on 2026-10-11:
   grid px blurrier and at most 0.05 less typical (pair ZNCC) than the hand
   pick, so a view as sharp and as typical as it; chance is about one in nine
   for the first. The lenient count reads no angle, so it is also counted with
-  the two views' viewing angles within 10° of each other.
+  the two views' viewing angles within 10° of each other. Every count in this
+  section but those of [§ "The second review"](#the-second-review) is
+  against this first review (`analyze.py --first-review`).
 - **The sweep.** Each parameter was swept alone from the starting values:
   `angle_weight` from `0` to `2`, each band around the previous rule's threshold and
   each scale from a tenth of its band to several times it. The candidate for
@@ -726,10 +734,11 @@ whose tuning half is best with no factor at all.
 | | 0.05 | 13 / 33 / 30 | 15 / 34 / 31 | 28 / 67 / 61 | 0.452 | 105: 0.424 → 0.591 | 155: 0.385 → 0.460 | 100 | 96 | 105 |
 | | 0.25 | 13 / 33 / 31 | 16 / 35 / 33 | 29 / 68 / 64 | 0.460 | 147: 0.382 → 0.547 | 175: 0.383 → 0.488 | 127 | 113 | 119 |
 
-(Hand picks exact / lenient / lenient within 10°. A changed ground-truth pick
-reads the count of tracks and the other views' mean error aligned to the old
-pick and to the new, over the views that are neither pick. Picks above 65° are
-over the pool and the ground truths, 1,318 tracks.)
+(Hand picks against the first review, exact / lenient / lenient within 10°.
+A changed ground-truth pick reads the count of tracks and the other views'
+mean error aligned to the old pick and to the new, over the views that are
+neither pick. Picks above 65° are over the pool and the ground truths, 1,318
+tracks.)
 
 The hand picks do not tell the forms apart: at each form's value the exact
 counts are 27 to 29 and the lenient 68 or 69 of 77, and every form's tuning-half
@@ -766,6 +775,101 @@ picks it changed localize the other views 0.12 px worse on average (15
 tracks). Two signals were tried and left out: a brightness and colour gate,
 which turned away views the hand picks chose, and a contrast floor, which the
 agreement margin already covered.
+
+#### The second review
+
+On 2026-10-11 the maintainer reviewed again the 48 cases where the rule at the
+defaults (with the step on a radius at the cap) picked another view than the
+first review's hand pick, with every view's tile shown, and chose again: the
+rule's pick on 27, a tie between the hand pick and the rule's pick on 16, no
+single best view on 3 (kerry_park points 202 and 346 and badland point 362),
+the hand pick on 1 (altona point 1153) and a third view on 1 (kerry480 point
+166). The harness's `cases.json` keeps both reviews
+([README](../../../scripts/reference_view/README.md)). Against the second
+review each case has a set of **accepted** views: the view chosen, both views
+of a tie, and the hand pick on the 29 cases the review did not show, where
+the rule already picked it. A pick matches **exactly** when it is an accepted
+view and **leniently** when it is within the lenient bounds of one. The three
+cases with no single best view are left out, like the two bad tracks, so 74
+are scored, split by the same seeded procedure into 37 for tuning and 37
+held out (other halves than those of the 77).
+
+| Exact / lenient / lenient within 10° | Tuning (37) | Held out (37) | All (74) | Shown (45) | Not shown (29) | Picks no review accepted or was shown |
+|---|---|---|---|---|---|---|
+| **The defaults** | **35 / 37 / 36** | **37 / 37 / 37** | **72 / 74 / 73** | **43 / 45 / 44** | **29 / 29 / 29** | **0** |
+| No step, `capped_radius_factor = 1` | 35 / 37 / 36 | 37 / 37 / 37 | 72 / 74 / 73 | 43 / 45 / 44 | 29 / 29 / 29 | 0 |
+| `agreement_band = 0.075` | 34 / 36 / 34 | 35 / 36 / 36 | 69 / 72 / 70 | 41 / 43 / 41 | 28 / 29 / 29 | 3 |
+| `angle_weight = 0` | 33 / 37 / 36 | 33 / 37 / 33 | 66 / 74 / 69 | 40 / 45 / 42 | 26 / 29 / 27 | 7 |
+| The angle in quadrature, `σ_n = 3°` | 33 / 37 / 36 | 33 / 37 / 35 | 66 / 74 / 71 | 39 / 45 / 43 | 27 / 29 / 28 | 6 |
+| The previous rule of gates | 29 / 36 / 34 | 30 / 36 / 32 | 59 / 72 / 66 | 34 / 43 / 39 | 25 / 29 / 27 | 14 |
+
+(Shown and not shown split the 74 by whether the second review showed the
+case. The last column counts, over the 74, the picks that are none of the
+first hand pick, the two views the second review compared and the accepted
+views.)
+
+The two cases the defaults miss are the two scored cases where the maintainer
+did not take the rule's pick. On altona point 1153 nine of the eleven views
+read at the cap, so the step multiplies their costs alike and the angle
+factor picks the view at 30° over the hand pick at 44°; the first review's
+note says the track holds surfaces at different depths, with parallax and
+changing shadows, which no reading separates. Kerry480 point 166 is the occluder below.
+
+**Re-tuning.** Every parameter was swept again by the procedure of [§ "How the
+values were measured"](#how-the-values-were-measured), on the same readings.
+Every starting value is in its tuning half's best run, so the procedure
+proposes no candidate and the defaults are kept. The best runs on the tuning
+half: `angle_weight` `0.25` to `0.35` (on all 74, `0.25` and `0.3` match 72
+exactly and `0.35` 69); `capped_radius_factor` `1` to `2` (from `2.05`
+altona point 1153 moves to an uncapped view at 63° and the lenient count
+falls); `agreement_band` `0.15` to `0.4`; `agreement_scale` `0.075` to
+`1.5`; `cell_deficit_band` `0.3` to `0.35`; `cell_deficit_scale` `0.3` to
+`0.45`; `clipped_band` `0.03` to `0.05`; `clipped_scale` `0.02` to `0.1`;
+and the two coverage parameters and `unread_radius` over their whole sweeps.
+Each form of the angle factor keeps its starting value too: on all 74,
+`1 + k · tan θ` matches 72 exactly at `k = 0.25`, `1 / cos^p θ` 71 at
+`p = 0.75`, the quadrature 66 at `σ_n = 3°`, and the `φ` factor no more
+than 68 at any weight. The ground truths do not depend on the hand picks
+and are as in [§ "Each parameter and its
+reason"](#each-parameter-and-its-reason).
+
+**What the second review can show.** It showed only the cases where the rule
+at the defaults picked another view than the hand pick, so the views it gave a
+second look are the defaults' picks. A setting that picks a third view on a
+case the defaults already got right is scored against the first review alone,
+and a tie on a view other than the defaults' pick was never offered. The
+defaults have no pick outside the reviewed views by construction, and most
+other settings have some (the last column). The scores therefore favour the
+defaults, and the agreement of 72 of 74 is not a measure of how often the
+rule picks the best view on new tracks. The bias is bounded: counting every
+unreviewed pick as correct, no swept value of any parameter reaches more than
+73 exact, one more than the defaults, so the second review cannot show any
+swept value better than the defaults by more than one case. It does show
+losses where a setting goes back to a view the second review turned down:
+`agreement_band = 0.075` returns seoul_bull point 174 to the hand pick the
+maintainer replaced with the rule's pick, and `angle_weight = 0.35` does the
+same on kerry_park point 64.
+
+**Known limitations.** The maintainer's notes on four cases name what the
+rule's readings do not see:
+
+- **Exposure.** On kerry_park point 202 the rule's pick is the sharpest view
+  (radius 0.43 grid px, against 0.47 for the next and 0.67 or more for the
+  rest), but it is darker, and so shows less texture across the whole patch.
+  The rule reads no exposure. The maintainer found no single best view.
+- **Saturation.** On dino point 7423, a tie, the rule's pick is less
+  saturated than the hand pick, and the note asks whether the cost should
+  read colour saturation. The rule reads no colour.
+- **An occluder the cell check missed.** On kerry480 point 166 the rule's
+  pick has a pole occluding the left side of the tile, and the maintainer
+  chose a third view. Its cell deficit, 0.308, is just past the band of
+  `0.3`, so that penalty adds 3%, and its pair ZNCC, 0.156 below the best,
+  adds 4%; its radius is 0.39 grid px against the chosen view's 0.51.
+- **A track over two surfaces.** On badland point 362 the patch spans a
+  ridge and the darker background behind it, which are different surfaces.
+  Every view reads at the cap with the same cost, and the maintainer found no
+  single best view. The fault is in the track, which no choice of view
+  mends.
 
 ### Why the agreement is read plain
 
