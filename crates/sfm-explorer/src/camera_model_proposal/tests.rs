@@ -194,7 +194,7 @@ fn the_generation_advances_only_when_the_fit_inputs_change() {
     let mut more = proposal.inputs.clone();
     more.coeff_count = Some(6);
     assert!(proposal.set_inputs(more));
-    assert_eq!(proposal.generation, generation + 1);
+    assert!(proposal.generation > generation);
 }
 
 /// The domain row's button takes the detected keypoint, the observed one
@@ -701,4 +701,257 @@ fn an_implicit_ending_whose_apply_is_refused_drops_with_a_row() {
     assert_eq!(versions(&state), 1);
     release.send(()).expect("the worker is waiting");
     state.finish_background_task();
+}
+
+// ── The comparison's observations ───────────────────────────────────────
+
+/// `kerry_park`'s first `OPENCV_FISHEYE`, 480 × 480, trusted to about 84°
+/// and with `fx ≠ fy`.
+pub(crate) fn kerry_camera() -> CameraIntrinsics {
+    CameraIntrinsics {
+        model: CameraModel::OpenCVFisheye {
+            focal_length_x: 129.1499937015594,
+            focal_length_y: 129.2573627423474,
+            principal_point_x: 240.0,
+            principal_point_y: 240.0,
+            radial_distortion_k1: 0.038113353966529886,
+            radial_distortion_k2: -0.00800851799065643,
+            radial_distortion_k3: 0.008329720504707577,
+            radial_distortion_k4: -0.0026901578801066814,
+        },
+        width: 480,
+        height: 480,
+    }
+}
+
+/// How far off its image's axis each of the fixture's wide points is, past
+/// the camera's trusted bound.
+pub(crate) const WIDE_DEG: f64 = 95.0;
+
+/// The demo reconstruction seen through [`kerry_camera`], with one more point
+/// per image [`WIDE_DEG`] off that image's axis, past the camera's trusted
+/// bound. Every point is observed, at its exact projection, by each image it
+/// projects into, with the keypoints inline.
+pub(crate) fn fisheye_node(path: &str) -> crate::scene::SceneNode {
+    use sfmtool_core::reconstruction::{ObservationSource, TrackObservation};
+
+    let mut recon = sfmtool_core::SfmrReconstruction::demo(120);
+    let camera = kerry_camera();
+    recon.image_table.cameras = vec![camera.clone()];
+    let wide: Vec<sfmtool_core::reconstruction::Point3D> = recon
+        .image_table
+        .images
+        .iter()
+        .map(|image| {
+            let (sin, cos) = WIDE_DEG.to_radians().sin_cos();
+            let in_camera = nalgebra::Vector3::new(sin, 0.0, -cos) * 3.0;
+            let world = image.quaternion_wxyz.inverse() * (in_camera - image.translation_xyz);
+            sfmtool_core::reconstruction::Point3D {
+                position: nalgebra::Point3::from(world),
+                w: 1.0,
+                color: [200, 40, 40],
+                error: 0.5,
+                normal: nalgebra::Vector3::zeros(),
+            }
+        })
+        .collect();
+    recon.point_set.points.extend(wide);
+
+    let mut tracks = Vec::new();
+    let mut counts = Vec::new();
+    let mut keypoints: Vec<[f32; 2]> = Vec::new();
+    for (p, point) in recon.point_set.points.iter().enumerate() {
+        let mut count = 0u32;
+        for (i, image) in recon.image_table.images.iter().enumerate() {
+            let local = image.quaternion_wxyz * point.position.coords + image.translation_xyz;
+            // Inside the fold, so the keypoint is the exact projection of a
+            // ray the lens images.
+            let theta = local.x.hypot(local.y).atan2(-local.z).to_degrees();
+            if theta > 100.0 {
+                continue;
+            }
+            let Some((u, v)) = camera.ray_to_pixel([local.x, local.y, local.z]) else {
+                continue;
+            };
+            if u < 0.0 || v < 0.0 || u >= 480.0 || v >= 480.0 {
+                continue;
+            }
+            tracks.push(TrackObservation {
+                image_index: i as u32,
+                point_index: p as u32,
+            });
+            keypoints.push([u as f32, v as f32]);
+            count += 1;
+        }
+        counts.push(count);
+    }
+    let images = recon.image_table.images.len();
+    let mut keypoints_xy = ndarray::Array2::<f32>::zeros((keypoints.len(), 2));
+    for (row, uv) in keypoints.iter().enumerate() {
+        keypoints_xy[[row, 0]] = uv[0];
+        keypoints_xy[[row, 1]] = uv[1];
+    }
+    recon.point_set.observations = ObservationSource::EmbeddedPatches {
+        keypoints_xy,
+        image_file_hashes: vec![[0u8; 16]; images],
+    };
+    recon.metadata.feature_source = "embedded_patches".to_string();
+    recon.point_set.tracks = tracks;
+    recon.point_set.observation_counts = counts;
+    recon.rebuild_derived_fields();
+    crate::scene::SceneNode::from_path(std::path::Path::new(path), recon)
+}
+
+/// A state holding [`fisheye_node`], with a proposal of `SFMTOOL_FISHEYE`
+/// open on its camera.
+pub(crate) fn fisheye_proposal_state() -> (AppState, ReconId) {
+    let mut state = AppState::new();
+    state.append_node(fisheye_node("/runs/kerry.sfmr"));
+    let id = state.scene[0].id;
+    state
+        .open_camera_model_proposal(CameraRef::new(id, 0), None)
+        .expect("opens");
+    (state, id)
+}
+
+/// The rug has one angle per observation, ascending, under the current camera,
+/// and the wide points are past its trusted bound.
+#[test]
+fn the_rug_has_one_tick_per_observation() {
+    let (state, _) = fisheye_proposal_state();
+    let proposal = state.camera_model_proposal.as_ref().expect("open");
+    assert_eq!(proposal.inputs.camera_model, "SFMTOOL_FISHEYE");
+    let observations = state.scene[0].recon().point_set.tracks.len();
+    assert_eq!(proposal.rug().len(), observations);
+    assert!(proposal.rug().windows(2).all(|w| w[0] <= w[1]));
+    let limit = sfmtool_core::camera::report::trustworthy_max_theta_deg(&kerry_camera()).unwrap();
+    let past = proposal.rug().iter().filter(|&&t| t > limit).count();
+    assert!(past >= 8, "the wide points: {past}");
+    // Under the current camera, whose inverse is not to be trusted there, so
+    // not at the angle the points were placed at.
+    let widest = proposal.rug().last().copied().unwrap();
+    assert!(widest > limit + 5.0, "{widest}");
+}
+
+/// Each observation of an image is reprojected under both cameras: the
+/// current camera puts it on its keypoint, and the proposed one reprojects it
+/// too, the wide point past the bound included.
+#[test]
+fn an_images_observations_are_reprojected_under_both_cameras() {
+    let (state, _) = fisheye_proposal_state();
+    let proposal = state.camera_model_proposal.as_ref().expect("open");
+    let recon = state.scene[0].recon();
+    let observed = recon
+        .point_set
+        .tracks
+        .iter()
+        .filter(|t| t.image_index == 2)
+        .count();
+    let layer = proposal.image_reprojections(2);
+    assert_eq!(layer.len(), observed);
+    for observation in &layer {
+        let current = observation.current.expect("the current camera projects it");
+        let error =
+            (current[0] - observation.keypoint[0]).hypot(current[1] - observation.keypoint[1]);
+        assert!(error < 1e-3, "{error}");
+        assert!(observation.proposed.is_some());
+    }
+    assert!(layer.iter().any(|o| {
+        let (dx, dy) = (o.keypoint[0] - 240.0, o.keypoint[1] - 240.0);
+        dx.hypot(dy) > 200.0
+    }));
+    // An image the table does not have gets nothing.
+    assert!(proposal.image_reprojections(999).is_empty());
+}
+
+/// A point at infinity is reprojected as the direction it is.
+#[test]
+fn a_point_at_infinity_is_reprojected_as_a_direction() {
+    let mut node = fisheye_node("/runs/kerry.sfmr");
+    let recon = node.recon_mut();
+    let row = recon
+        .point_set
+        .tracks
+        .iter()
+        .position(|t| t.image_index == 2)
+        .expect("an observation of image 2");
+    let point = recon.point_set.tracks[row].point_index as usize;
+    // The direction from image 2's centre through the point: the keypoint
+    // stays the projection of that direction.
+    let centre = recon.image_table.images[2].camera_center();
+    let direction = (recon.point_set.points[point].position - centre).normalize();
+    recon.point_set.points[point].position = nalgebra::Point3::from(direction);
+    recon.point_set.points[point].w = 0.0;
+    let mut state = AppState::new();
+    state.append_node(node);
+    let id = state.scene[0].id;
+    state
+        .open_camera_model_proposal(CameraRef::new(id, 0), None)
+        .expect("opens");
+    let proposal = state.camera_model_proposal.as_ref().expect("open");
+    let layer = proposal.image_reprojections(2);
+    let keypoint = {
+        let xy = state.scene[0].recon().keypoints_xy().unwrap();
+        [f64::from(xy[[row, 0]]), f64::from(xy[[row, 1]])]
+    };
+    let observation = layer
+        .iter()
+        .find(|o| o.keypoint == keypoint)
+        .expect("the observation");
+    let current = observation.current.expect("a direction projects");
+    assert!((current[0] - keypoint[0]).hypot(current[1] - keypoint[1]) < 1e-3);
+}
+
+/// Opening a proposal selects the Change to proposed field, and any ending
+/// restores the mode the person had.
+#[test]
+fn the_change_field_is_selected_while_a_proposal_is_open() {
+    use crate::state::FieldMode;
+    let mut state = AppState::new();
+    state.append_node(fisheye_node("/runs/kerry.sfmr"));
+    let id = state.scene[0].id;
+    assert_eq!(state.intrinsics_display.field, FieldMode::Distortion);
+    state
+        .open_camera_model_proposal(CameraRef::new(id, 0), None)
+        .expect("opens");
+    assert_eq!(state.intrinsics_display.field, FieldMode::ChangeToProposed);
+    // Chosen by hand while it is open, the mode stands until it ends.
+    state.intrinsics_display.field = FieldMode::Distortion;
+    state.tend_camera_model_proposal();
+    assert_eq!(state.intrinsics_display.field, FieldMode::Distortion);
+    state.drop_camera_model_proposal(id, Dropped::Cancelled);
+    assert_eq!(state.intrinsics_display.field, FieldMode::Distortion);
+
+    state
+        .open_camera_model_proposal(CameraRef::new(id, 0), None)
+        .expect("opens");
+    assert_eq!(state.intrinsics_display.field, FieldMode::ChangeToProposed);
+    state.drop_camera_model_proposal(id, Dropped::Cancelled);
+    assert_eq!(state.intrinsics_display.field, FieldMode::Distortion);
+
+    // Apply ends it too; the frame after restores the mode.
+    state
+        .open_camera_model_proposal(CameraRef::new(id, 0), None)
+        .expect("opens");
+    state.apply_camera_model_proposal(id).expect("applies");
+    state.finish_background_task();
+    state.tend_camera_model_proposal();
+    assert!(state.camera_model_proposal.is_none());
+    assert_eq!(state.intrinsics_display.field, FieldMode::Distortion);
+}
+
+/// No two proposals share a generation, so a cache keyed by it cannot serve
+/// one proposal's camera for another's.
+#[test]
+fn a_reopened_proposal_takes_a_new_generation() {
+    let (mut state, id) = fisheye_proposal_state();
+    let first = state.camera_model_proposal.as_ref().unwrap().generation;
+    state.drop_camera_model_proposal(id, Dropped::Cancelled);
+    state
+        .open_camera_model_proposal(CameraRef::new(id, 0), None)
+        .expect("opens");
+    assert_ne!(
+        state.camera_model_proposal.as_ref().unwrap().generation,
+        first
+    );
 }

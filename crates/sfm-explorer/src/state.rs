@@ -161,6 +161,13 @@ pub struct IntrinsicsDisplaySettings {
     pub distortion_scale: Option<f32>,
     /// Grid density of the arrow field, arrows across the image width.
     pub grid_cols: usize,
+    /// Which field the arrows draw. Selected automatically while a camera
+    /// model proposal is open and restored afterwards
+    /// ([`AppState::sync_proposal_field`]).
+    pub field: FieldMode,
+    /// Draw the axes and rings through the current camera while a proposal
+    /// is open on the image's camera, rather than through the proposed one.
+    pub axes_on_current_model: bool,
 }
 
 impl Default for IntrinsicsDisplaySettings {
@@ -172,7 +179,50 @@ impl Default for IntrinsicsDisplaySettings {
             distortion: true,
             distortion_scale: None,
             grid_cols: 16,
+            field: FieldMode::Distortion,
+            axes_on_current_model: false,
         }
+    }
+}
+
+/// The field the intrinsics layer's arrows draw.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FieldMode {
+    /// The lens's displacement from its family's ideal map.
+    #[default]
+    Distortion,
+    /// How far the open camera model proposal moves each ray's pixel, with
+    /// the proposed camera's rings past the current camera's trusted bound and
+    /// the observation layer. Drawn only while a proposal with a fitted camera
+    /// is open on the image's camera; the distortion field otherwise.
+    ChangeToProposed,
+}
+
+impl FieldMode {
+    /// Both modes, in the order the gear popup offers them.
+    pub const ALL: [FieldMode; 2] = [FieldMode::Distortion, FieldMode::ChangeToProposed];
+
+    /// The popup's label, and the Action Log's word for the mode.
+    pub fn label(self) -> &'static str {
+        match self {
+            FieldMode::Distortion => "Distortion",
+            FieldMode::ChangeToProposed => "Change to proposed",
+        }
+    }
+
+    /// The name the wire uses.
+    #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
+    pub fn wire_name(self) -> &'static str {
+        match self {
+            FieldMode::Distortion => "distortion",
+            FieldMode::ChangeToProposed => "change_to_proposed",
+        }
+    }
+
+    /// The mode a wire name names, or `None`.
+    #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
+    pub fn from_wire_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|mode| mode.wire_name() == name)
     }
 }
 
@@ -342,6 +392,20 @@ pub fn record_image_detail_changes(
             Kind::Display,
             "Grid density",
             format!("Grid density {}", now.grid_cols),
+        );
+    }
+    if was.field != now.field {
+        log.record_run(
+            Kind::Display,
+            "Intrinsics field",
+            format!("Intrinsics field {}", now.field.label()),
+        );
+    }
+    if was.axes_on_current_model != now.axes_on_current_model {
+        log.record_run(
+            Kind::Display,
+            "Axes on current model",
+            on_off("Axes on current model", now.axes_on_current_model),
         );
     }
 }
@@ -671,6 +735,12 @@ pub struct AppState {
     /// cached about the node.
     pub(crate) camera_model_switched: Option<ReconId>,
 
+    /// The Image Detail field mode a camera model proposal's opening replaced
+    /// with [`FieldMode::ChangeToProposed`], put back when no proposal is open
+    /// ([`AppState::sync_proposal_field`]); `None` while no proposal has
+    /// replaced it.
+    pub(crate) field_before_proposal: Option<FieldMode>,
+
     /// The workspace path `Save As Minimal...` asks about once its file dialog
     /// has named a file. See [`crate::save_minimal_prompt`].
     pub save_minimal_prompt: crate::save_minimal_prompt::SaveMinimalPrompt,
@@ -920,6 +990,7 @@ impl AppState {
             bundle_adjust_prompt: crate::bundle_adjust_prompt::BundleAdjustPrompt::default(),
             camera_model_proposal: None,
             camera_model_switched: None,
+            field_before_proposal: None,
             save_minimal_prompt: crate::save_minimal_prompt::SaveMinimalPrompt::default(),
             #[cfg(feature = "mcp")]
             mcp: None,

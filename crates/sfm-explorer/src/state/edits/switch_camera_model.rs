@@ -392,7 +392,10 @@ impl AppState {
                     self.start_background_task(Operation::SWITCH_CAMERA_MODEL, id, job)
                 });
                 match started {
-                    Ok(()) => Ok(ProposalApplied::Started),
+                    Ok(()) => {
+                        self.sync_proposal_field();
+                        Ok(ProposalApplied::Started)
+                    }
                     Err(why) => {
                         self.camera_model_proposal = Some(proposal);
                         self.action_log.fail(Kind::Edit, why.clone());
@@ -403,7 +406,10 @@ impl AppState {
             Some(why) => {
                 let note = format!("its tracks were not retriangulated: {why}");
                 match self.switch_camera_model_noting(id, &request, Some(&note)) {
-                    Ok(entry) => Ok(ProposalApplied::Pushed(id, Box::new(entry))),
+                    Ok(entry) => {
+                        self.sync_proposal_field();
+                        Ok(ProposalApplied::Pushed(id, Box::new(entry)))
+                    }
                     Err(why) => {
                         self.camera_model_proposal = Some(proposal);
                         Err(why)
