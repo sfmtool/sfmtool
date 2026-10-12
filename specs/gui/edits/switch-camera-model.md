@@ -105,11 +105,11 @@ the current fit with the fit itself. The outermost keypoint and the keypoints
 come from one pass over the camera's images on the GUI thread when the proposal
 opens, which reads each image's `.sift` file once for both
 (`observations::read_camera_keypoints`); the outermost keypoint is the one
-`outermost_keypoints` gives over the version's base. It carries a **generation**, a counter every change of the
-fit inputs advances; a change that leaves them as they were keeps it. The
-generation is drawn from one counter for the whole viewer, so no two proposals
-share one and a cache keyed by it never serves one proposal's camera for
-another's.
+`outermost_keypoints` gives over the version's base. It carries a
+**generation**, a counter every change of the fit inputs advances; a change
+that leaves them as they were keeps it. The generation is drawn from one
+counter for the whole viewer, so no two proposals share one and a cache keyed
+by it never serves one proposal's camera for another's.
 
 ### The strip
 
