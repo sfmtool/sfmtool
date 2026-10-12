@@ -49,13 +49,8 @@ pub(super) fn show_derived(
     aspect_row: bool,
 ) {
     ui.label(egui::RichText::new("Derived").strong());
-    // The value column is held to what the labels leave of the panel, so its
-    // long values (the principal point offset, the distortion) wrap in a
-    // narrow panel rather than running past its edge.
-    let value_width = (ui.available_width() - LABEL_COLUMN_PX - 12.0).max(80.0);
     egui::Grid::new(("intrinsics_derived", id_salt))
         .num_columns(2)
-        .max_col_width(value_width)
         .spacing([12.0, 2.0])
         .striped(true)
         .show(ui, |ui| {
@@ -175,11 +170,9 @@ pub(super) fn show_derived(
         });
 }
 
-/// The width the derived table's widest label, `principal point offset`,
-/// takes, which the value column is laid out beside.
-const LABEL_COLUMN_PX: f32 = 150.0;
-
-/// A monospace value that wraps at the width its grid column is held to.
+/// A monospace value that wraps at the panel's right edge, so a long one (the
+/// principal point offset, the distortion) takes a second line in a narrow
+/// panel rather than running past the edge.
 fn wrapped(ui: &mut egui::Ui, text: String) -> egui::Response {
     ui.add(egui::Label::new(egui::RichText::new(text).monospace()).wrap())
 }

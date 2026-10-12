@@ -1009,7 +1009,8 @@ fn the_header_does_not_overlap_its_buttons_at_a_narrow_width() {
     state.append_node(fisheye_node());
     let mut panel = IntrinsicsDetail::new();
     let ctx = egui::Context::default();
-    for width in [482.0, 360.0, 341.0] {
+    // At 328 px the fixture's line breaks before a part that follows a `·`.
+    for width in [482.0, 360.0, 341.0, 328.0] {
         for _ in 0..4 {
             proposal_frame_at(&mut panel, &ctx, &mut state, 0, width, Vec::new());
         }

@@ -944,12 +944,12 @@ enough for both at their natural width, which an invisible sizing pass
 measures, and one above the other otherwise, so neither runs into the other.
 The two derived tables both carry the aspect row when either camera has two
 focal lengths, reading `single focal` for the one that has one, so their rows
-stay in line side by side. The derived table's value column is held to what the
-labels leave of the panel, so its long values (the principal point offset and
-the distortion) wrap in a narrow panel rather than running past its edge. A proposal whose fit was refused has no proposed
-camera, and the panel shows the current camera's tables alone, with no
-`Current` and `Proposed` headings. `K`, the projection plot and the extrinsics stay
-the current camera's. The proposal's comparison plots are
+stay in line side by side. The derived table's long values (the principal
+point offset and the distortion) wrap at the panel's right edge, so in a narrow
+panel they take a second line rather than running past it. A proposal whose fit
+was refused has no proposed camera, and the panel shows the current camera's
+tables alone, with no `Current` and `Proposed` headings. `K`, the projection
+plot and the extrinsics stay the current camera's. The proposal's comparison plots are
 [../drafts/switch-camera-model.md](../drafts/switch-camera-model.md)'s.
 
 ### 2. Parameters
