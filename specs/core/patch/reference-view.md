@@ -295,7 +295,8 @@ reads the photograph's own pixels under the tile.
     view reads noise or shading. A cell along a straight edge reads at the cap
     along the edge only and is judged, since a view that disagrees across the
     edge is told apart there. The view's reading still counts in the typical
-    agreement;
+    agreement. A view with no self-similarity reading, and a cell with none,
+    counts as holding texture;
   - **has a sample off the photograph**: its ZNCCs are read over part of the
     cell, and the coverage penalty already charges the view for the samples
     it lacks. Its reading is also left out of the typical agreement.
@@ -994,7 +995,7 @@ as sharp as the old (1.23 against 1.31 grid px, 1.05 against 1.10, 1.74
 against 1.79). The off-photograph exclusion changes no pick. No hand-picked
 case changes its pick (72 of 74 exact, 74 lenient against the second review;
 29 / 68 / 62 of 77 against the first), and no ground-truth pick changes, so
-the mean error over the ground truths stays 0.431 px.
+the mean error over the ground truths stays 0.432 px.
 
 Of the survey's 46 cells, the two off the photograph (badland point 135, 42
 and 45 of 64 samples off) and one of the three of little texture (dino point
