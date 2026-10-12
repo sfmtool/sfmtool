@@ -29,7 +29,7 @@
 //! switch.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{Receiver, Sender, TryRecvError};
+use std::sync::mpsc::{Receiver, TryRecvError};
 use std::sync::Arc;
 
 use sfmtool_core::progress::Progress;
@@ -67,7 +67,7 @@ enum Message {
 
 /// The work one job does, as a function of the `Progress` it polls its
 /// cancellation through and the channel it sends what it found on.
-type Work = Box<dyn FnOnce(&Progress<'_>, &Sender<Message>) + Send>;
+type Work = Box<dyn FnOnce(&Progress<'_>, &dyn Fn(Message)) + Send>;
 
 /// What one job was started on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -198,9 +198,17 @@ impl AppState {
             .name("sfm-explorer camera model proposal".to_string())
             .spawn(move || {
                 let progress = Progress::none().cancelled_by(&flag);
+                // Each message wakes the window, so the comparison is shown as
+                // soon as the switch returns rather than when the job ends.
+                let send = |message: Message| {
+                    let _ = sender.send(message);
+                    if let Some(wake) = wake.as_ref() {
+                        wake();
+                    }
+                };
                 // A job that panics still ends, so the next one can start.
                 let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    job(&progress, &sender)
+                    job(&progress, &send)
                 }));
                 drop(sender);
                 if let Some(wake) = wake.as_ref() {
@@ -292,7 +300,7 @@ fn run_job(
     inputs: Inputs,
     (base_count, addition_count): (usize, usize),
     progress: &Progress<'_>,
-    send: &Sender<Message>,
+    send: &dyn Fn(Message),
 ) {
     if !inputs.triangulate {
         // The comparison alone: the switch, and nothing after it.
@@ -318,12 +326,12 @@ fn run_job(
                 switch_refusal_in_version_numbering(e, rows.as_ref())
             )
         });
-        let _ = send.send(Message::Switched(found));
+        send(Message::Switched(found));
         return;
     }
     let switched_sent = std::cell::Cell::new(false);
     let ran = switch_and_retriangulate(value, rows.clone(), resolved, progress, |entry| {
-        let _ = send.send(Message::Switched(Ok(Box::new(entry.clone()))));
+        send(Message::Switched(Ok(Box::new(entry.clone()))));
         switched_sent.set(true);
     });
     let (run, report) = match ran {
@@ -337,7 +345,7 @@ fn run_job(
             } else {
                 Message::Switched(Err(why))
             };
-            let _ = send.send(message);
+            send(message);
             return;
         }
     };
@@ -353,7 +361,7 @@ fn run_job(
         &report,
         &run.value,
     );
-    let _ = send.send(Message::Answered(Ok(Box::new(ProposalAnswer {
+    send(Message::Answered(Ok(Box::new(ProposalAnswer {
         run,
         targets: Arc::new(targets),
         counts,

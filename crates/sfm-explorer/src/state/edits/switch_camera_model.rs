@@ -483,8 +483,7 @@ impl AppState {
     }
 
     /// The switch and the retriangulation of the switched camera's tracks, as
-    /// a function of the [`Progress`](sfmtool_core::progress::Progress) it
-    /// reports through.
+    /// a function of the [`Progress`] it reports through.
     ///
     /// The closure owns what it reads: a clone of the version's
     /// [`EditedReconstruction`], whose base is the very `Arc` the node goes on

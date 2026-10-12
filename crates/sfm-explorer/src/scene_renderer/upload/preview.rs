@@ -9,7 +9,7 @@
 //! See `specs/gui/point-cloud-rendering.md` § "The camera model proposal's
 //! preview" and `specs/gui/patch-rendering.md`. The rows are built on the
 //! proposal job's thread, one per point buffer row
-//! ([`PreviewTargets`](crate::camera_model_proposal::preview::PreviewTargets)),
+//! ([`crate::camera_model_proposal::preview::PreviewTargets`]),
 //! so a new answer is one upload of each buffer here, and a frame of motion
 //! writes nothing but the blend into the node's uniforms. The base's point and
 //! surfel buffers are never written, so ending the preview drops these and
