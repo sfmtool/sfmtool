@@ -541,6 +541,11 @@ pub(super) fn propose_camera_model(
         if let Some(animate) = animate {
             open.animate = animate;
         }
+        // Without animation `s` is set to its goal at once, so the reply says
+        // where it now stands rather than where the last frame left it.
+        if !open.animate {
+            open.step_preview(0.0);
+        }
     }
     let proposal = state
         .camera_model_proposal_on(id)

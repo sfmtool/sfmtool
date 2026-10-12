@@ -3695,7 +3695,8 @@ refits nor solves again. The call replies before the job has run, so its
 background edits is not used, since that handle names a background task and
 this job is not one. `animate` defaults to true. With `animate: false`, `s` is
 set to its goal at once instead of being stepped: to 1 when the preview is
-ticked and to 0 when it is cleared. Before the job has an answer there is
+ticked and to 0 when it is cleared, already in the reply of the call that
+ticks or clears it. Before the job has an answer there is
 nothing to set it toward, so `s` takes 1 in the frame the answer lands, and a
 new answer replaces the targets at once rather than running back first, so the
 next screenshot after the state reads `ready` shows the end state.

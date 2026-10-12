@@ -68,7 +68,10 @@ const PREVIEW_STILL: f32 = 0.0;
 const PREVIEW_MOVES: f32 = 1.0;
 const PREVIEW_LOSES: f32 = 2.0;
 
-// The failure colour, `FAILURE_RGB` in `scene.rs`: a finite point the
-// proposed camera's retriangulation turns into a direction is drawn in
-// `mix(colour, FAILURE_COLOR, preview_s)`, over its tint.
-const FAILURE_COLOR: vec3<f32> = vec3<f32>(235.0 / 255.0, 30.0 / 255.0, 30.0 / 255.0);
+// The failure colour, `FAILURE_RGB` in `scene.rs` ([235, 30, 30]): a finite
+// point the proposed camera's retriangulation turns into a direction is drawn
+// in `mix(colour, FAILURE_COLOR, preview_s)`, over its tint. Written as the
+// linear value of that sRGB colour, because the colour target is
+// `Rgba8UnormSrgb` and encodes what the shader writes, so the screen shows
+// (235, 30, 30), the red the proposal banner draws its lines in.
+const FAILURE_COLOR: vec3<f32> = vec3<f32>(0.830770, 0.012983, 0.012983);

@@ -488,9 +488,16 @@ Clearing the checkbox is the way to see the motion back. Apply does not wait
 for the motion: the version it pushes holds the retriangulated positions, and
 the new base it installs recreates the node's point buffer from them. A preview
 that had run to its end hands over to the new base with no visible change for
-the points that move, since their targets are the positions Apply writes; a
-point that loses its position goes from its stored position, in the failure
-colour, to where the 3D view draws a point at infinity. Without the preview the
+the points that move, since their targets are the positions Apply writes, to
+the last bit of the `f32` the 3D view draws, and each surfel's half-vectors at
+the end are the ones Apply writes; a point that loses its position goes from
+its stored position, in the failure colour, to where the 3D view draws a point
+at infinity. What can still change on screen is what the 3D view derives from a
+new base: the node's splat size is measured again from the new positions
+(`upload_points`, [../point-cloud-rendering.md](../point-cloud-rendering.md)
+§ "Point Sizing"), and the eye-dome lighting with it, so in a dense part of
+the cloud splats grow or shrink by the change in point spacing (about 2 % on
+Kerry Park's camera 0) while every point stays where it was. Without the preview the
 camera's tracks move in one frame when the version lands. Where Apply runs as
 the task, the preview ends when the task starts and the points stand at their
 stored positions until it lands.
@@ -705,7 +712,8 @@ Explorer (`sfm-explorer` lib tests, headless):
   with a `pending` triangulation block and keeping the generation,
   `get_camera_intrinsics` reporting `ready` with the counts and the
   observation comparison once the job lands, `animate: false` leaving `s` at 0
-  until the answer lands and setting it to 1 in that frame, and the proposal
+  until the answer lands and setting it to 1 in that frame, a clear and a
+  tick under it replying with `s` already at 0 and 1, and the proposal
   form with the answer in hand replying with the version at once.
 - `camera_model_proposal/job/tests.rs`: without the preview the job sending
   the comparison alone, pushing nothing and writing no row; Apply with the
@@ -720,7 +728,10 @@ Explorer (`sfm-explorer` lib tests, headless):
   with a deleted point and an addition, the targets laid out by the base and
   additions buffers, the deleted row not moving, the added point moving, and
   each moving base row's target where the version Apply pushes holds that
-  point.
+  point; and for every point of a node with patch frames, a moving row's target
+  equal to the installed position as an `f32`, its half-vectors times its size
+  factor equal to the installed ones, a still row's point and frame unchanged,
+  and a lost point installed as a direction.
 - `camera_model_proposal/preview/tests.rs`: every outcome against each kind of
   stored point (held, kept, a finite move with its surfel factor, a ranged and
   a pruned one, a finite point lost to `Behind`, a point at infinity turning to
@@ -746,7 +757,9 @@ Explorer (`sfm-explorer` lib tests, headless):
 - `camera_model_proposal/banner.rs`: the counts in the banner's words and the
   lost points in the failure colour; and at 341, 482 and 1800 px the banner's
   frame and every line inside the view with no line over another (the test
-  fails with the wrapping removed).
+  fails with the wrapping removed); every character the banner can show laid
+  out in a font that has it, the arrow in the monospace font; and the banners
+  starting below the status line.
 
 ---
 

@@ -146,12 +146,23 @@ fn vs_main(in: VertexInput) -> VertexOutput {
 fn vs_preview(in: VertexInput, @location(5) preview: vec4<f32>) -> VertexOutput {
     var moved = in;
     if preview.w == PREVIEW_MOVES {
-        let blended = mix(in.world_pos, preview.xyz, recon.preview_s);
+        // At s = 1 the target itself, not `mix`'s `a + s·(b − a)`, which can be an
+        // ulp off it: the end of the motion is drawn from the very coordinates
+        // the version Apply pushes is drawn from.
+        let blended = select(
+            mix(in.world_pos, preview.xyz, recon.preview_s),
+            preview.xyz,
+            recon.preview_s >= 1.0,
+        );
         let is_infinity = ((in.color_packed >> 24u) & 0xFFu) == 0u;
         if is_infinity {
             // Two opposite directions blend through the origin; keep the
             // target there rather than draw a direction of zero length.
-            moved.world_pos = select(preview.xyz, normalize(blended), length(blended) > 1e-6);
+            moved.world_pos = select(
+                preview.xyz,
+                normalize(blended),
+                length(blended) > 1e-6 && recon.preview_s < 1.0,
+            );
         } else {
             moved.world_pos = blended;
         }

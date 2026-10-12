@@ -134,9 +134,14 @@ additions' copy of the block carries it too. `vs_preview` draws a moving row at
 `stored + s · (target − stored)`, normalised for a point at infinity so it
 turns along the shorter arc, and a row flagged `2` at its stored position in
 `mix(colour, FAILURE_COLOR, s)`, after the tint, so a node tinted Vermillion
-still shows its failures. `FAILURE_COLOR` is `FAILURE_RGB` (`[235, 30, 30]`,
-beside `TINT_PALETTE` in `scene.rs`), which a pipeline test checks against
-`common.wgsl` with the three flags.
+still shows its failures. `FAILURE_COLOR` is the linear value of `FAILURE_RGB`
+(`[235, 30, 30]`, beside `TINT_PALETTE` in `scene.rs`), since the colour target
+is `Rgba8UnormSrgb` and encodes what the shader writes, so the screen shows
+(235, 30, 30), the red the proposal banner draws in; a pipeline test checks it
+against `common.wgsl` with the three flags. At `s = 1` a moving row is drawn at
+its target itself rather than at `mix`'s `stored + 1 · (target − stored)`,
+which can be an ulp off it, so the end of the motion is drawn from the
+coordinates the version Apply pushes is drawn from.
 
 The rows are built on the proposal's job thread, laid out by the node's two
 point buffers, so a new answer is one upload of each preview buffer and a

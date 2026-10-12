@@ -200,8 +200,8 @@ pub static TINT_PALETTE: [TintColor; 7] = [
 ///
 /// Not in [`TINT_PALETTE`], whose nearest entry is Vermillion, and it replaces
 /// a node's tint for these points, so a node tinted Vermillion still shows its
-/// failures. Mirrored as `FAILURE_COLOR` in `shaders/common.wgsl`, which a
-/// pipeline test checks against this. See
+/// failures. Mirrored, as its linear value, by `FAILURE_COLOR` in
+/// `shaders/common.wgsl`, which a pipeline test checks against this. See
 /// `specs/gui/edits/switch-camera-model.md` § "The preview".
 pub const FAILURE_RGB: [u8; 3] = [235, 30, 30];
 

@@ -282,12 +282,37 @@ fn the_wgsl_preview_flags_and_failure_colour_match_the_rust_ones() {
             "common.wgsl does not declare `{line}`"
         );
     }
-    let [r, g, b] = crate::scene::FAILURE_RGB;
-    let colour = format!(
-        "const FAILURE_COLOR: vec3<f32> = vec3<f32>({r}.0 / 255.0, {g}.0 / 255.0, {b}.0 / 255.0);"
-    );
-    assert!(
-        common.lines().any(|l| l.trim() == colour),
-        "common.wgsl does not declare `{colour}`"
-    );
+    // The constant is the linear value of the sRGB colour, since the colour
+    // target encodes what the shader writes.
+    let line = common
+        .lines()
+        .find_map(|l| {
+            l.trim()
+                .strip_prefix("const FAILURE_COLOR: vec3<f32> = vec3<f32>(")
+        })
+        .expect("common.wgsl declares FAILURE_COLOR");
+    let written: Vec<f64> = line
+        .trim_end_matches(");")
+        .split(',')
+        .map(|v| v.trim().parse().expect("a number"))
+        .collect();
+    let linear = |c: u8| {
+        let c = c as f64 / 255.0;
+        if c <= 0.04045 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    let expected: Vec<f64> = crate::scene::FAILURE_RGB
+        .iter()
+        .map(|&c| linear(c))
+        .collect();
+    assert_eq!(written.len(), 3);
+    for (w, e) in written.iter().zip(&expected) {
+        assert!(
+            (w - e).abs() < 1e-5,
+            "FAILURE_COLOR is {written:?}, not {expected:?}"
+        );
+    }
 }

@@ -244,4 +244,68 @@ mod tests {
             }
         }
     }
+
+    /// Every character the banner can show is drawn from a font that has a
+    /// glyph for it: the `→` of a model change, which the proportional font
+    /// lacks, from the monospace one, and the rest, refusal sentences' `θ`,
+    /// `≤`, `°`, `…` and `—` included, from the proportional font.
+    #[test]
+    fn every_banner_character_has_a_glyph() {
+        let ctx = egui::Context::default();
+        let mut text: String = long_lines().iter().map(|l| l.text.clone()).collect();
+        text.push_str(&format!(
+            "{TRIANGULATING} No preview: θ ≤ 84.5°; domain 150.1° → 108.8° — n/a"
+        ));
+        let mut checked = false;
+        crate::test_support::painted_text_rects(&ctx, egui::RawInput::default(), |ui| {
+            let job =
+                crate::viewer_3d::overlay::banner_job(ui.ctx(), &text, egui::Color32::WHITE, 400.0);
+            ui.ctx().fonts_mut(|fonts| {
+                for section in &job.sections {
+                    let font = &section.format.font_id;
+                    let range = section.byte_range.start.0..section.byte_range.end.0;
+                    for c in job.text[range].chars() {
+                        if font.family == egui::FontFamily::Proportional {
+                            assert!(
+                                c.is_whitespace() || fonts.has_glyph(font, c),
+                                "{c:?} has no glyph in {font:?}"
+                            );
+                        } else {
+                            // egui's `has_glyph` answers no for every
+                            // character of the monospace font, whose first
+                            // face also holds the replacement glyph, so the
+                            // characters sent to it are checked by name:
+                            // only the arrow, which Hack draws, as the
+                            // Action Log shows.
+                            assert_eq!(c, '→', "{c:?} was sent to the monospace font");
+                        }
+                    }
+                }
+            });
+            checked = true;
+        });
+        assert!(checked);
+    }
+
+    /// The banners start below the 3D view's status line, so neither covers
+    /// the status message.
+    #[test]
+    fn the_banners_start_below_the_status_line() {
+        use crate::viewer_3d::overlay::{BANNER_TOP, STATUS_TOP};
+        let ctx = egui::Context::default();
+        let mut height = 0.0;
+        crate::test_support::painted_text_rects(&ctx, egui::RawInput::default(), |ui| {
+            let galley = ui.painter().layout_no_wrap(
+                "MCP: Proposed SFMTOOL_FISHEYE".to_string(),
+                egui::FontId::proportional(12.0),
+                egui::Color32::WHITE,
+            );
+            height = galley.size().y;
+        });
+        assert!(height > 0.0);
+        assert!(
+            STATUS_TOP + height <= BANNER_TOP,
+            "{STATUS_TOP} + {height} > {BANNER_TOP}"
+        );
+    }
 }

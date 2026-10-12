@@ -2883,6 +2883,20 @@ fn the_preview_is_reported_and_its_answer_applied_at_once() {
     state.step_camera_model_preview(1.0 / 60.0);
     assert_eq!(read(&mut state, &mut viewer)["s"], 1.0);
 
+    // Under `animate: false` the reply already holds the blend at its new
+    // goal: 0 when the preview is cleared, 1 when it is ticked again on the
+    // answer it holds.
+    let mut cleared = arguments.clone();
+    cleared["preview_retriangulation"] = json!(false);
+    let reply = call(&mut state, &mut viewer, "propose_camera_model", cleared);
+    assert_eq!(reply["proposed"]["s"], 0.0, "{reply}");
+    assert_eq!(read(&mut state, &mut viewer)["s"], 0.0);
+    let mut again = arguments.clone();
+    again["preview_retriangulation"] = json!(true);
+    let reply = call(&mut state, &mut viewer, "propose_camera_model", again);
+    assert_eq!(reply["proposed"]["s"], 1.0, "{reply}");
+    assert_eq!(reply["proposed"]["triangulation"]["state"], "ready");
+
     let applied = call(
         &mut state,
         &mut viewer,

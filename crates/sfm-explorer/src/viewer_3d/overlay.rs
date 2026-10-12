@@ -174,7 +174,7 @@ impl Viewer3D {
         // happens with two files open.
         if let Some(status) = status_message {
             painter.text(
-                Pos2::new(rect.left() + 10.0, rect.top() + 28.0),
+                Pos2::new(rect.left() + 10.0, rect.top() + STATUS_TOP),
                 egui::Align2::LEFT_TOP,
                 status,
                 font.clone(),
@@ -243,7 +243,8 @@ impl Viewer3D {
     /// In the HUD's own vocabulary -- a small panel of 12 pt text on a dark
     /// ground -- and in the viewport rather than in the HUD panel, because it
     /// describes the gesture the viewport is in the middle of and disappears
-    /// with it. Drawn top-centre, under the camera-position line.
+    /// with it. Drawn top-centre at [`BANNER_TOP`], under the camera-position
+    /// line and the status line.
     pub(super) fn draw_lock_banner(&self, painter: &egui::Painter, rect: Rect, node: &SceneNode) {
         let Some(lock) = self.camera_lock.as_ref() else {
             return;
@@ -266,7 +267,7 @@ impl Viewer3D {
         let line_height = 16.0;
         let width = 320.0_f32;
         let height = line_height * lines.len() as f32 + 10.0;
-        let top_left = Pos2::new(rect.center().x - width / 2.0, rect.top() + 32.0);
+        let top_left = Pos2::new(rect.center().x - width / 2.0, rect.top() + BANNER_TOP);
         let panel = Rect::from_min_size(top_left, egui::Vec2::new(width, height));
         painter.rect_filled(panel, 4.0, Color32::from_rgba_unmultiplied(20, 20, 24, 210));
         painter.rect_stroke(
@@ -366,6 +367,60 @@ pub(crate) fn hover_overlay_text(
 /// The colour the banners draw their words and frame in.
 const BANNER_COLOUR: Color32 = Color32::from_rgb(235, 215, 150);
 
+/// How far below the 3D view's top edge its status line is drawn, under the
+/// stats line.
+pub(crate) const STATUS_TOP: f32 = 28.0;
+
+/// How far below the 3D view's top edge the banners start: under the
+/// stats line at 10 px and the status line at [`STATUS_TOP`], each a 12 pt
+/// line, so a banner never covers the status message.
+pub(crate) const BANNER_TOP: f32 = 50.0;
+
+/// `text` laid out for a banner in 12 pt words of `colour`, wrapping at
+/// `wrap`: in the proportional font, with each run of characters it has no
+/// glyph for (the `→` of a model change, a `≤` in a refusal) in the monospace
+/// font, which has them, so no character is drawn as an empty box.
+pub(crate) fn banner_job(
+    ctx: &egui::Context,
+    text: &str,
+    colour: Color32,
+    wrap: f32,
+) -> egui::text::LayoutJob {
+    let proportional = egui::FontId::proportional(12.0);
+    let monospace = egui::FontId::monospace(12.0);
+    let mut job = egui::text::LayoutJob::default();
+    job.wrap.max_width = wrap;
+    ctx.fonts_mut(|fonts| {
+        let mut run = String::new();
+        let mut run_font: Option<egui::FontId> = None;
+        for c in text.chars() {
+            let font = if c.is_whitespace() || fonts.has_glyph(&proportional, c) {
+                proportional.clone()
+            } else {
+                monospace.clone()
+            };
+            if run_font.as_ref().is_some_and(|f| *f != font) {
+                let f = run_font.take().expect("just checked");
+                job.append(&std::mem::take(&mut run), 0.0, text_format(f, colour));
+            }
+            run_font = Some(font);
+            run.push(c);
+        }
+        if let Some(f) = run_font {
+            job.append(&run, 0.0, text_format(f, colour));
+        }
+    });
+    job
+}
+
+fn text_format(font_id: egui::FontId, color: Color32) -> egui::TextFormat {
+    egui::TextFormat {
+        font_id,
+        color,
+        ..Default::default()
+    }
+}
+
 /// Draw the camera model proposal's banner, top-centre in the 3D view, in the
 /// Move Camera lock banner's style: 12 pt words on a dark ground in a framed
 /// panel.
@@ -384,7 +439,6 @@ pub(crate) fn draw_proposal_banner(
     }
     const PAD: f32 = 6.0;
     const GAP: f32 = 2.0;
-    let font = egui::FontId::proportional(12.0);
     let wrap = ((rect.width() - 16.0).min(640.0) - 2.0 * PAD).max(40.0);
     let failure = Color32::from_rgb(
         crate::scene::FAILURE_RGB[0],
@@ -395,14 +449,14 @@ pub(crate) fn draw_proposal_banner(
         .iter()
         .map(|line| {
             let colour = if line.failure { failure } else { BANNER_COLOUR };
-            painter.layout(line.text.clone(), font.clone(), colour, wrap)
+            painter.layout_job(banner_job(painter.ctx(), &line.text, colour, wrap))
         })
         .collect();
     let width = galleys.iter().map(|g| g.size().x).fold(0.0_f32, f32::max) + 2.0 * PAD;
     let height = galleys.iter().map(|g| g.size().y).sum::<f32>()
         + GAP * (galleys.len() - 1) as f32
         + 2.0 * PAD;
-    let top_left = Pos2::new(rect.center().x - width / 2.0, rect.top() + 32.0);
+    let top_left = Pos2::new(rect.center().x - width / 2.0, rect.top() + BANNER_TOP);
     let panel = Rect::from_min_size(top_left, egui::Vec2::new(width, height));
     painter.rect_filled(panel, 4.0, Color32::from_rgba_unmultiplied(20, 20, 24, 210));
     painter.rect_stroke(

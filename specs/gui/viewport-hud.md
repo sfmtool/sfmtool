@@ -155,8 +155,8 @@ as `hud_rect` (below).
 ### The lock banner borrows the style and is not part of the panel
 
 While a camera is being moved by hand ([`edits/move-camera.md`](edits/move-camera.md))
-the viewport draws a three-line banner top-centre, under the camera-position
-line: what is in hand, the residual it costs, and the two keys that end it. It
+the viewport draws a three-line banner top-centre, under the camera-position and status
+lines: what is in hand, the residual it costs, and the two keys that end it. It
 is in the HUD's vocabulary, 12 pt text on a translucent dark ground, and it is
 drawn by the viewport's own overlay painter rather than by `show_hud`, for two
 reasons. It describes a gesture the viewport is in the middle of and disappears
@@ -203,7 +203,14 @@ together.
 
 Each line wraps at the narrower of the view less a 16 px margin and 640 px,
 and the panel is as wide as its widest line, so at any width of the 3D view
-the words stay inside it and no line runs into the next.
+the words stay inside it and no line runs into the next. The words are in the
+12 pt proportional font, and each run of characters it has no glyph for (the
+`→` of a model change) is laid out in the monospace font, which has them
+(`banner_job`), so no character is drawn as an empty box.
+
+Both banners start at `BANNER_TOP`, 50 px below the view's top edge, under the
+stats line and the status line (`STATUS_TOP`, 28 px), so neither covers the
+status message an edit or a tool call leaves there.
 
 ---
 

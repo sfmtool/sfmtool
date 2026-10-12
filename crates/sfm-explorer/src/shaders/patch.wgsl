@@ -135,13 +135,26 @@ fn vs_preview(
 ) -> VertexOutput {
     var moved = in;
     if preview.w == PREVIEW_MOVES {
-        let blended = mix(in.center, preview.xyz, recon.preview_s);
+        // At s = 1 exactly the target, as in points.wgsl.
+        let blended = select(
+            mix(in.center, preview.xyz, recon.preview_s),
+            preview.xyz,
+            recon.preview_s >= 1.0,
+        );
         if in.w == 0.0 {
-            moved.center = select(preview.xyz, normalize(blended), length(blended) > 1e-6);
+            moved.center = select(
+                preview.xyz,
+                normalize(blended),
+                length(blended) > 1e-6 && recon.preview_s < 1.0,
+            );
         } else {
             moved.center = blended;
         }
-        let scale = mix(1.0, size_factor, recon.preview_s);
+        let scale = select(
+            mix(1.0, size_factor, recon.preview_s),
+            size_factor,
+            recon.preview_s >= 1.0,
+        );
         moved.u_halfvec = in.u_halfvec * scale;
         moved.v_halfvec = in.v_halfvec * scale;
     }

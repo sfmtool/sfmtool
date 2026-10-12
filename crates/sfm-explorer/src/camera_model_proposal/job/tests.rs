@@ -321,3 +321,83 @@ fn the_targets_follow_the_overlay_into_the_base_and_additions_buffers() {
         }
     }
 }
+
+/// The preview's end state is the version Apply installs, for every point:
+/// each moving row's target is the installed position to the last bit of the
+/// `f32` the 3D view draws, each surfel's half-vectors times its size factor
+/// are the installed ones to the bit, a still row's point and frame are
+/// unchanged, and a lost point is installed as a direction.
+#[test]
+fn the_preview_ends_exactly_where_apply_puts_every_point_and_surfel() {
+    let (mut state, id) = spline_state();
+    {
+        let points = &mut state.scene[0].recon_mut().point_set;
+        let n = points.points.len();
+        for (k, point) in points.points.iter_mut().enumerate() {
+            point.position.x += 0.01 * (k % 7) as f64;
+        }
+        points.patch_u_halfvec_xyz = Some(ndarray::Array2::from_elem((n, 3), 0.05));
+        points.patch_v_halfvec_xyz = Some(ndarray::Array2::from_shape_fn((n, 3), |(_, c)| {
+            if c == 1 {
+                0.05
+            } else {
+                -0.02
+            }
+        }));
+    }
+    let stored = state.scene[0].recon().clone();
+    state
+        .open_camera_model_proposal(CameraRef::new(id, 1), None)
+        .expect("opens");
+    let proposal = state.camera_model_proposal.as_mut().unwrap();
+    let mut inputs = proposal.inputs.clone();
+    inputs.coeff_count = Some(6);
+    proposal.set_inputs(inputs);
+    proposal.preview_retriangulation = true;
+    state.settle_camera_model_proposal_job();
+    let targets = std::sync::Arc::clone(
+        &state
+            .camera_model_proposal_on(id)
+            .unwrap()
+            .current_answer()
+            .expect("the job answered")
+            .targets,
+    );
+    state.apply_camera_model_proposal(id).expect("applies");
+    let applied = state.scene[0].recon();
+
+    let f32s = |p: &nalgebra::Point3<f64>| [p.x as f32, p.y as f32, p.z as f32];
+    let half = |recon: &sfmtool_core::SfmrReconstruction, i: usize| {
+        let (u, v) = (
+            recon.point_set.patch_u_halfvec_xyz.as_ref().unwrap(),
+            recon.point_set.patch_v_halfvec_xyz.as_ref().unwrap(),
+        );
+        [
+            u[[i, 0]],
+            u[[i, 1]],
+            u[[i, 2]],
+            v[[i, 0]],
+            v[[i, 1]],
+            v[[i, 2]],
+        ]
+    };
+    let mut moving = 0;
+    for (i, row) in targets.base.iter().enumerate() {
+        let (before, after) = (&stored.point_set.points[i], &applied.point_set.points[i]);
+        let size = targets.base_size[i];
+        match row[3] {
+            flag if flag == FLAG_MOVES => {
+                moving += 1;
+                assert_eq!(f32s(&after.position), [row[0], row[1], row[2]], "point {i}");
+                let scaled = half(&stored, i).map(|h| h * size);
+                assert_eq!(scaled, half(applied, i), "surfel {i}");
+            }
+            flag if flag == FLAG_STILL => {
+                assert_eq!(before.position, after.position, "point {i} moved");
+                assert_eq!(half(&stored, i), half(applied, i), "surfel {i} resized");
+            }
+            _ => assert!(after.is_at_infinity(), "lost point {i} kept a position"),
+        }
+    }
+    assert!(moving > 0);
+}
