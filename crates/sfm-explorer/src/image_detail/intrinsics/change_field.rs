@@ -24,7 +24,7 @@
 //!
 //! See `specs/gui/camera-intrinsics.md` § "The Change to proposed field".
 
-use egui::{Align2, Color32, Pos2, Rect};
+use egui::{Align2, Color32, Pos2, Rect, Vec2};
 use sfmtool_core::camera::report;
 use sfmtool_core::camera::CameraIntrinsics;
 
@@ -42,9 +42,9 @@ const PROPOSED_RGB: [u8; 3] = [108, 182, 255];
 /// Spacing of the proposed camera's rings past the trusted bound, in degrees.
 const RING_STEP_DEG: f64 = 5.0;
 
-/// Below this distance from the last labelled ring's label, in panel pixels,
-/// a ring is drawn without its label, so close rings do not stack theirs.
-const RING_LABEL_SPACING: f32 = 16.0;
+/// How far a ring label keeps from the panel's edge and from any other label,
+/// in panel pixels: the halo reaches a pixel past the glyphs.
+const LABEL_MARGIN: f32 = 2.0;
 
 /// Half the length of the tick at an observation's keypoint, in panel pixels.
 const TICK: f32 = 2.5;
@@ -136,7 +136,9 @@ impl ChangeLayer {
         f64::from(camera.width) / self.grid.0 as f64
     }
 
-    /// Draw the arrows and the rings at `scale`, and return the legend lines.
+    /// Draw the arrows and the rings at `scale`, and return the legend lines
+    /// and the rings' labels, which [`place_ring_labels`] paints once the
+    /// legend's box is known.
     pub(super) fn draw(
         &mut self,
         painter: &egui::Painter,
@@ -145,7 +147,7 @@ impl ChangeLayer {
         view: &View,
         panel: Rect,
         scale: Option<f32>,
-    ) -> Vec<String> {
+    ) -> (Vec<String>, Vec<RingLabel>) {
         self.auto_scale =
             super::distortion_field::auto_scale(self.max_px, self.cell_px(current), view.fit);
         let scale = scale.unwrap_or(self.auto_scale);
@@ -165,9 +167,10 @@ impl ChangeLayer {
                 .collect();
             self.rings = Some((bucket, rings));
         }
-        if let Some((_, rings)) = &self.rings {
-            draw_rings(painter, rings, view, panel);
-        }
+        let ring_labels = match &self.rings {
+            Some((_, rings)) => draw_rings(painter, rings, view, panel),
+            None => Vec::new(),
+        };
 
         let mut lines = vec![format!(
             "change to proposed max {:.2} px {MIDDOT} shown {}{}",
@@ -183,7 +186,7 @@ impl ChangeLayer {
                 ));
             }
         }
-        lines
+        (lines, ring_labels)
     }
 }
 
@@ -206,31 +209,83 @@ pub(crate) fn ring_angles(proposed: &CameraIntrinsics, theta_fit_deg: f64) -> Ve
     angles
 }
 
-/// Paint the rings in the proposed camera's colour, labelling one only where
-/// its label clears the last one drawn.
-fn draw_rings(painter: &egui::Painter, rings: &[Contour], view: &View, panel: Rect) {
+/// A ring label waiting to be placed: its text and the point it names, in
+/// panel coordinates.
+pub(super) struct RingLabel {
+    pub(super) text: String,
+    pub(super) at: Pos2,
+}
+
+/// Paint the rings in the proposed camera's colour, and return their labels
+/// for [`place_ring_labels`] to put down once every other label of the layer,
+/// the legend's box included, is known.
+fn draw_rings(
+    painter: &egui::Painter,
+    rings: &[Contour],
+    view: &View,
+    panel: Rect,
+) -> Vec<RingLabel> {
     let color = proposed_ink(REFERENCE_ALPHA);
-    let mut last_label: Option<Pos2> = None;
+    let mut labels = Vec::new();
     for ring in rings {
         for run in &ring.runs {
             haloed_line(painter, panel_points(run, view), 1.0, color);
         }
         let at = view.at(ring.label_at);
-        if !panel.contains(at) {
-            continue;
+        if panel.contains(at) {
+            labels.push(RingLabel {
+                text: ring.label.clone(),
+                at,
+            });
         }
-        if last_label.is_some_and(|last| last.distance(at) < RING_LABEL_SPACING) {
-            continue;
-        }
-        haloed_text(
-            painter,
-            at - egui::vec2(0.0, 3.0),
-            Align2::CENTER_BOTTOM,
-            ring.label.clone(),
-            proposed_ink(255),
-        );
-        last_label = Some(at);
     }
+    labels
+}
+
+/// Paint each ring label where [`label_rect`] puts it, keeping clear of
+/// `avoid` (the layer's other labels and the legend's box) and of the ring
+/// labels already painted; a label with no such place is left off.
+pub(super) fn place_ring_labels(
+    painter: &egui::Painter,
+    labels: &[RingLabel],
+    panel: Rect,
+    avoid: &mut Vec<Rect>,
+) {
+    let font = egui::FontId::proportional(super::LABEL_SIZE);
+    for label in labels {
+        let size = painter
+            .layout_no_wrap(label.text.clone(), font.clone(), proposed_ink(255))
+            .size();
+        if let Some(rect) = label_rect(size, label.at, panel, avoid) {
+            haloed_text(
+                painter,
+                rect.min,
+                Align2::LEFT_TOP,
+                label.text.clone(),
+                proposed_ink(255),
+            );
+            avoid.push(rect);
+        }
+    }
+}
+
+/// Where a label of `size` naming the point `at` goes: centred above it, moved
+/// inward so the whole label is inside `panel`, or `None` when it cannot fit
+/// there or would touch one of `avoid`.
+pub(super) fn label_rect(size: Vec2, at: Pos2, panel: Rect, avoid: &[Rect]) -> Option<Rect> {
+    // The halo reaches a pixel past the glyphs; keep it inside as well.
+    let inner = panel.shrink(LABEL_MARGIN);
+    if size.x > inner.width() || size.y > inner.height() {
+        return None;
+    }
+    let rect = Rect::from_min_size(Pos2::new(at.x - size.x / 2.0, at.y - 3.0 - size.y), size);
+    let dx = (inner.left() - rect.left()).max(0.0) + (inner.right() - rect.right()).min(0.0);
+    let dy = (inner.top() - rect.top()).max(0.0) + (inner.bottom() - rect.bottom()).min(0.0);
+    let rect = rect.translate(egui::vec2(dx, dy));
+    let clear = avoid
+        .iter()
+        .all(|other| !other.intersects(rect.expand(LABEL_MARGIN)));
+    clear.then_some(rect)
 }
 
 /// Draw the observation layer, and return its legend line, or nothing when

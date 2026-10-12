@@ -1280,3 +1280,84 @@ fn the_change_legend_stays_inside_the_panel() {
         }
     }
 }
+
+/// A ring label near the panel's edge is moved inward so the whole of it is
+/// inside, and one that would touch another label, or cannot fit, is left off.
+#[test]
+fn a_ring_label_stays_inside_the_panel_and_clear_of_other_labels() {
+    use super::change_field::label_rect;
+    let panel = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(300.0, 200.0));
+    let size = egui::vec2(30.0, 12.0);
+
+    let at_left = label_rect(size, egui::pos2(3.0, 100.0), panel, &[]).expect("fits");
+    assert!(at_left.left() >= panel.left() + 2.0);
+    let at_right = label_rect(size, egui::pos2(299.0, 100.0), panel, &[]).expect("fits");
+    assert!(at_right.right() <= panel.right() - 2.0);
+    let at_top = label_rect(size, egui::pos2(150.0, 2.0), panel, &[]).expect("fits");
+    assert!(at_top.top() >= panel.top() + 2.0);
+
+    let free = label_rect(size, egui::pos2(150.0, 100.0), panel, &[]).expect("fits");
+    assert_eq!(
+        label_rect(size, egui::pos2(150.0, 100.0), panel, &[free]),
+        None
+    );
+    let legend = egui::Rect::from_min_size(egui::pos2(100.0, 60.0), egui::vec2(120.0, 40.0));
+    assert_eq!(
+        label_rect(size, egui::pos2(150.0, 100.0), panel, &[legend]),
+        None
+    );
+    assert_eq!(
+        label_rect(
+            egui::vec2(400.0, 12.0),
+            egui::pos2(150.0, 100.0),
+            panel,
+            &[]
+        ),
+        None
+    );
+}
+
+/// On a frame, every ring label is wholly inside the panel and overlaps no
+/// other label of the layer: the legend's, the contours' and the ticks'.
+#[test]
+fn ring_labels_stay_inside_the_panel_and_off_the_other_labels() {
+    let (mut state, _) = crate::camera_model_proposal::tests::fisheye_proposal_state();
+    let mut drawn = 0;
+    for axes_on_current_model in [false, true] {
+        state.intrinsics_display.axes_on_current_model = axes_on_current_model;
+        for width in [341.0, 482.0, 900.0] {
+            let mut detail = super::super::ImageDetail::new();
+            let painted = proposal_detail_frames(&mut state, &mut detail, width);
+            let is_ring = |text: &str| {
+                text.ends_with('°')
+                    && text
+                        .trim_end_matches('°')
+                        .parse::<u32>()
+                        .is_ok_and(|a| a >= 85)
+            };
+            for ring in painted.iter().filter(|p| is_ring(&p.text)) {
+                drawn += 1;
+                assert!(
+                    ring.rect.left() >= 0.0
+                        && ring.rect.right() <= width
+                        && ring.rect.top() >= 0.0
+                        && ring.rect.bottom() <= 700.0,
+                    "{} at {:?} leaves the {width} px panel",
+                    ring.text,
+                    ring.rect
+                );
+                for other in painted.iter().filter(|p| p.text != ring.text) {
+                    assert!(
+                        !ring.rect.shrink(1.0).intersects(other.rect.shrink(1.0)),
+                        "{} at {:?} overlaps {} at {:?} ({width} px)",
+                        ring.text,
+                        ring.rect,
+                        other.text,
+                        other.rect
+                    );
+                }
+            }
+        }
+    }
+    assert!(drawn > 0, "no ring label was drawn");
+}

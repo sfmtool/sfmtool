@@ -901,7 +901,10 @@ draws the proposed camera in), at every multiple of 5° past the fit's largest
 angle, out to the frame's corner under the proposed camera and short of its own
 trusted bound where it has one. On a Kerry Park fisheye that shows the band
 from 85° to the image circle as the proposed camera divides it. A ring's label
-is left off where it would land within 16 panel pixels of the last one drawn.
+is centred above the point it names and moved inward until the whole of it is
+inside the panel. It is placed after the grid's labels and the legend, and is
+left off where it would touch one of those, the legend's box, or a ring label
+already placed (`change_field::label_rect`).
 
 **The observation layer**, drawn in the change mode whether or not the arrows
 are: for each observation of the image, a white `+` at the keypoint, a white
@@ -1187,7 +1190,10 @@ the right of its rule unless that would run past the plot, then to its left; a
 label with no free row is left off and its rule still drawn. An x tick label
 that would run into the axis's `θ off-axis` title is left off. So nothing the
 plot paints overlaps another string or runs past the panel, from the stock
-window's 341 px up.
+window's 341 px up. The rules' labels, the extrapolated regions' labels and
+`monotone bound` are painted last, after every curve, band and the rug, each
+on a plate of the panel's own colour, so a curve that passes under a label does
+not cut through it.
 
 **While a proposal is open.** With a camera model proposal open on the camera
 shown and its fit successful, the plot compares the current camera with the
@@ -1624,8 +1630,9 @@ Two caveats remain, both named in the tests rather than left implicit:
   fit and the dropped aspect is the band's width; the comparison's rules sit at
   the fit's angle and the proposed domain end; the rug keeps every observation
   and flags those past the bound; a rule label takes the first free row and
-  stays on the plot; and the change plot labels the monotone range only when
-  the constraint bound.
+  stays on the plot; the change plot labels the monotone range only when
+  the constraint bound; and the rules' and regions' labels and `monotone
+  bound` are painted after every curve, each over a plate.
 - The Change to proposed field, in `image_detail/intrinsics/tests.rs`: with a
   proposal open the frame paints the change legend, the nodes past the bound,
   a ring of the proposed camera's and the observation layer's legend, and the
@@ -1636,7 +1643,10 @@ Two caveats remain, both named in the tests rather than left implicit:
   arrows only inside the current camera's bound, under a pixel on Kerry Park,
   and rings every 5° from 85° to the proposed camera's corner; the popup offers
   `Field` and `Axes on current model` only with a proposal; and the legend stays
-  inside the panel at 341, 482 and 1800 px.
+  inside the panel at 341, 482 and 1800 px. A ring label is moved inward to
+  fit the panel and left off where it would touch another label; on a frame at
+  341, 482 and 900 px, with the axes on either camera, every ring label is
+  inside the panel and overlaps no other label.
 
 **Fixtures.** `kerry_park` is the rig case (2 fisheyes, 24 frames) and
 `seoul_bull_sculpture` the ordinary single-camera one; the model-family coverage

@@ -132,6 +132,8 @@ struct Palette {
     proposed_wash: Color32,
     /// Where the monotonicity constraint bound.
     monotone: Color32,
+    /// The plate under each label: the panel's own colour, nearly opaque.
+    plate: Color32,
 }
 
 impl Palette {
@@ -151,6 +153,7 @@ impl Palette {
                 current_wash: Color32::from_rgba_unmultiplied(205, 205, 205, 30),
                 proposed_wash: Color32::from_rgba_unmultiplied(0x6c, 0xb6, 0xff, 22),
                 monotone: Color32::from_rgb(0xd0, 0x8c, 0xff),
+                plate: plate(visuals),
             }
         } else {
             Self {
@@ -167,9 +170,16 @@ impl Palette {
                 current_wash: Color32::from_rgba_unmultiplied(70, 70, 70, 26),
                 proposed_wash: Color32::from_rgba_unmultiplied(0x14, 0x5c, 0xb0, 20),
                 monotone: Color32::from_rgb(0x7a, 0x2c, 0xb0),
+                plate: plate(visuals),
             }
         }
     }
+}
+
+/// The plate under the plots' labels: the panel's fill, nearly opaque.
+fn plate(visuals: &egui::Visuals) -> Color32 {
+    let fill = visuals.panel_fill;
+    Color32::from_rgba_unmultiplied(fill.r(), fill.g(), fill.b(), 215)
 }
 
 /// What the plot draws beside the current camera while a proposal with a
@@ -226,6 +236,26 @@ struct Curve<'a> {
     /// as a grey edge either side of the blue rather than vanishing under it.
     width: f32,
     band: Color32,
+}
+
+/// A label of the plots, laid out and placed, waiting to be painted after the
+/// curves so none of them runs over it.
+struct PlotLabel {
+    /// Its top-left corner.
+    at: Pos2,
+    galley: std::sync::Arc<egui::Galley>,
+    color: Color32,
+}
+
+/// Paint the plots' labels over everything else in them, each on a plate of
+/// the panel's own colour, so a curve that passes under a label does not cut
+/// through its glyphs.
+fn paint_labels(painter: &egui::Painter, labels: Vec<PlotLabel>, plate: Color32) {
+    for label in labels {
+        let rect = Rect::from_min_size(label.at, label.galley.size()).expand(1.5);
+        painter.rect_filled(rect, 2.0, plate);
+        painter.galley(label.at, label.galley, label.color);
+    }
 }
 
 /// An extrapolated region: where it starts and how it is coloured and named.
@@ -408,6 +438,8 @@ pub(super) fn show_projection_plot(
             label: format!("proposed extrapolated past {limit:.1}°"),
         });
     }
+    // Every label of the plots, painted last so no curve runs over one.
+    let mut labels: Vec<PlotLabel> = Vec::new();
     let mut label_top = upper.top() + 3.0;
     for wash in &washes {
         for plot in &plots {
@@ -433,17 +465,20 @@ pub(super) fn show_projection_plot(
         // Right-aligned at the plot's edge rather than beside the rule: the
         // rule can land anywhere, and beside it the label collides with
         // whichever marker the frame's own geometry happens to put nearby.
-        painter.text(
-            Pos2::new(upper.right() - 4.0, label_top),
-            Align2::RIGHT_TOP,
-            &wash.label,
+        let galley = painter.layout_no_wrap(
+            wash.label.clone(),
             FontId::proportional(LABEL_FONT),
             wash.rule,
         );
+        labels.push(PlotLabel {
+            at: Pos2::new(upper.right() - 4.0 - galley.size().x, label_top),
+            galley,
+            color: wash.rule,
+        });
         label_top += LABEL_ROW;
     }
 
-    draw_markers(
+    labels.extend(draw_markers(
         &painter,
         &markers,
         &plots,
@@ -451,7 +486,7 @@ pub(super) fn show_projection_plot(
         &x,
         &palette,
         label_top + 3.0,
-    );
+    ));
     let current_curve = Curve {
         samples,
         trusted,
@@ -474,7 +509,7 @@ pub(super) fn show_projection_plot(
         draw_curve(&painter, curve, &upper, &lower, &x, &radial_y, &residual_y);
     }
     if let (Some(c), Some(change_rect)) = (compare, change_rect) {
-        draw_change(
+        labels.extend(draw_change(
             &painter,
             c,
             change_bound,
@@ -482,7 +517,7 @@ pub(super) fn show_projection_plot(
             &x,
             &scales[2],
             &palette,
-        );
+        ));
     }
 
     let undistorted =
@@ -493,6 +528,7 @@ pub(super) fn show_projection_plot(
     if let (Some(rug), Some(rug_rect)) = (rug, rug_rect) {
         draw_rug(&painter, rug, limit, &rug_rect, &x, &palette);
     }
+    paint_labels(&painter, labels, palette.plate);
 
     legend(ui, camera, derived, compare, rug);
 }
@@ -759,8 +795,8 @@ fn place_label(
     None
 }
 
-/// Draw the rules across every plot, labelling them in the upper one from
-/// `label_top` down.
+/// Draw the rules across every plot, and return their labels, placed in the
+/// upper plot from `label_top` down, for [`paint_labels`] to paint last.
 fn draw_markers(
     painter: &egui::Painter,
     markers: &[Marker],
@@ -769,8 +805,9 @@ fn draw_markers(
     x: &Scale,
     palette: &Palette,
     label_top: f32,
-) {
+) -> Vec<PlotLabel> {
     let mut placed = Vec::new();
+    let mut labels = Vec::new();
     for marker in markers {
         let px = x.at(marker.theta_deg);
         if px < upper.left() || px > upper.right() {
@@ -796,9 +833,14 @@ fn draw_markers(
             label_top,
             (upper.left(), upper.right()),
         ) {
-            painter.galley(at, galley, palette.text);
+            labels.push(PlotLabel {
+                at,
+                galley,
+                color: palette.text,
+            });
         }
     }
+    labels
 }
 
 /// The family's ideal map, dashed, on the upper plot.
@@ -942,7 +984,8 @@ fn solid_then_dotted(
 }
 
 /// The change plot's band, its centre line, and the mark on its θ axis where
-/// the monotonicity constraint bound.
+/// the monotonicity constraint bound, returning that mark's label for
+/// [`paint_labels`] to paint last.
 ///
 /// The centre line is solid up to `bound`, the smaller of the two cameras'
 /// trusted bounds, and dotted past it: there the current camera is
@@ -956,7 +999,7 @@ fn draw_change(
     x: &Scale,
     y: &Scale,
     palette: &Palette,
-) {
+) -> Option<PlotLabel> {
     let clipped = painter.with_clip_rect(*plot);
     let samples = &compare.change.samples;
     if compare.change.band_visible(bound) {
@@ -1011,13 +1054,14 @@ fn draw_change(
                 x0 = a - 3.0 - size.x;
             }
             let x0 = x0.max(plot.left() + 2.0);
-            painter.galley(
-                Pos2::new(x0, plot.bottom() - 4.0 - size.y),
+            return Some(PlotLabel {
+                at: Pos2::new(x0, plot.bottom() - 4.0 - size.y),
                 galley,
-                palette.monotone,
-            );
+                color: palette.monotone,
+            });
         }
     }
+    None
 }
 
 /// The observation rug: one tick per observation at its incidence angle, a

@@ -337,9 +337,12 @@ impl super::ImageDetail {
                 limit_deg,
             ));
         }
-        if let Some(grid) = &layer.geometry {
-            grid.draw(painter, view, panel, settings.axes);
-        }
+        // Where the grid's labels went, so the rings' labels keep clear of them.
+        let mut labels = match &layer.geometry {
+            Some(grid) => grid.draw(painter, view, panel, settings.axes),
+            None => Vec::new(),
+        };
+        let mut ring_labels = Vec::new();
 
         // The field on top of the grid: the grid is the frame, the field is the
         // measurement sitting in it. Both are still beneath the features.
@@ -349,14 +352,16 @@ impl super::ImageDetail {
             Some((proposal, proposed)) => {
                 if settings.distortion {
                     if let Some(change) = self.change_layer(proposal, settings.grid_cols) {
-                        lines.extend(change.draw(
+                        let (change_lines, rings) = change.draw(
                             painter,
                             camera,
                             proposed,
                             view,
                             panel,
                             settings.distortion_scale,
-                        ));
+                        );
+                        lines.extend(change_lines);
+                        ring_labels = rings;
                     }
                 }
                 let image = crate::scene::ImageRef::new(camera_ref.recon, image);
@@ -385,7 +390,8 @@ impl super::ImageDetail {
         }
 
         draw_centre_offset(painter, camera, view, panel);
-        draw_legend(painter, panel, &lines);
+        labels.extend(draw_legend(painter, panel, &lines));
+        change_field::place_ring_labels(painter, &ring_labels, panel, &mut labels);
 
         // Not painted here: the panel has one tooltip, and this is the text the
         // feature layer appends its own to. See [`mod@hover`].
@@ -401,10 +407,11 @@ impl super::ImageDetail {
 /// What the layer says about itself, in the panel's top-left corner.
 ///
 /// Top-left because the heatmap modes' colorbar occupies the bottom-right, and
-/// two things explaining themselves in one corner is worse than either.
-fn draw_legend(painter: &egui::Painter, panel: Rect, lines: &[String]) {
+/// two things explaining themselves in one corner is worse than either. Returns
+/// the box it drew, which the rings' labels keep clear of.
+fn draw_legend(painter: &egui::Painter, panel: Rect, lines: &[String]) -> Option<Rect> {
     if lines.is_empty() {
-        return;
+        return None;
     }
     let font = FontId::proportional(LABEL_SIZE + 1.0);
     // Wrapped at the panel's width less the legend's margins, so a long line
@@ -417,17 +424,15 @@ fn draw_legend(painter: &egui::Painter, panel: Rect, lines: &[String]) {
     let width = galleys.iter().map(|g| g.size().x).fold(0.0_f32, f32::max);
     let height: f32 = galleys.iter().map(|g| g.size().y).sum();
     let origin = panel.min + egui::vec2(8.0, 8.0);
-    painter.rect_filled(
-        Rect::from_min_size(origin, egui::vec2(width, height)).expand(4.0),
-        3.0,
-        Color32::from_black_alpha(150),
-    );
+    let plate = Rect::from_min_size(origin, egui::vec2(width, height)).expand(4.0);
+    painter.rect_filled(plate, 3.0, Color32::from_black_alpha(150));
     let mut y = origin.y;
     for galley in galleys {
         let step = galley.size().y;
         painter.galley(Pos2::new(origin.x, y), galley, ink(255));
         y += step;
     }
+    Some(plate)
 }
 
 /// The legend's lines for the current settings.

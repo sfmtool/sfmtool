@@ -225,19 +225,29 @@ impl AxisGeometry {
         }
     }
 
-    /// Paint the grid, beneath the features.
-    pub(super) fn draw(&self, painter: &egui::Painter, view: &View, panel: Rect, axes: bool) {
+    /// Paint the grid, beneath the features, and return the rectangles its
+    /// labels took, for the labels drawn after it to keep clear of.
+    pub(super) fn draw(
+        &self,
+        painter: &egui::Painter,
+        view: &View,
+        panel: Rect,
+        axes: bool,
+    ) -> Vec<Rect> {
         let reference = ink(REFERENCE_ALPHA);
+        let mut labels = Vec::new();
         // The two domain contours are drawn whether or not the axes are, since
         // they qualify the arrow field as much as the grid.
         for contour in [&self.trustworthy_edge, &self.spline_domain]
             .into_iter()
             .flatten()
         {
-            draw_dashed_contour(painter, contour, view, panel, reference);
+            labels.extend(draw_dashed_contour(
+                painter, contour, view, panel, reference,
+            ));
         }
         if !axes {
-            return;
+            return labels;
         }
         for polyline in [&self.horizontal, &self.vertical] {
             for (run, trusted) in flagged_runs(polyline) {
@@ -250,11 +260,12 @@ impl AxisGeometry {
             }
         }
         for ring in &self.rings {
-            draw_contour(painter, ring, view, panel, reference);
+            labels.extend(draw_contour(painter, ring, view, panel, reference));
         }
         for tick in &self.ticks {
-            draw_tick(painter, tick, view, panel, reference);
+            labels.extend(draw_tick(painter, tick, view, panel, reference));
         }
+        labels
     }
 }
 
@@ -552,19 +563,18 @@ fn draw_contour(
     view: &View,
     panel: Rect,
     color: Color32,
-) {
+) -> Option<Rect> {
     for run in &contour.runs {
         haloed_line(painter, panel_points(run, view), 1.0, color);
     }
-    if let Some(top) = contour_top(contour, view, panel) {
-        haloed_text(
-            painter,
-            top - egui::vec2(0.0, 3.0),
-            Align2::CENTER_BOTTOM,
-            contour.label.clone(),
-            ink(255),
-        );
-    }
+    let top = contour_top(contour, view, panel)?;
+    Some(haloed_text(
+        painter,
+        top - egui::vec2(0.0, 3.0),
+        Align2::CENTER_BOTTOM,
+        contour.label.clone(),
+        ink(255),
+    ))
 }
 
 /// Paint one contour dashed — the treatment the two domain edges get, so a
@@ -575,7 +585,7 @@ fn draw_dashed_contour(
     view: &View,
     panel: Rect,
     color: Color32,
-) {
+) -> Option<Rect> {
     for run in &contour.runs {
         let points = panel_points(run, view);
         if points.len() < 2 {
@@ -594,15 +604,14 @@ fn draw_dashed_contour(
             DASH.1,
         ));
     }
-    if let Some(top) = contour_top(contour, view, panel) {
-        haloed_text(
-            painter,
-            top - egui::vec2(0.0, 3.0),
-            Align2::CENTER_BOTTOM,
-            contour.label.clone(),
-            ink(255),
-        );
-    }
+    let top = contour_top(contour, view, panel)?;
+    Some(haloed_text(
+        painter,
+        top - egui::vec2(0.0, 3.0),
+        Align2::CENTER_BOTTOM,
+        contour.label.clone(),
+        ink(255),
+    ))
 }
 
 /// Where a contour's one label goes in panel coordinates, or `None` when that
@@ -613,10 +622,16 @@ fn contour_top(contour: &Contour, view: &View, panel: Rect) -> Option<Pos2> {
 }
 
 /// Paint one tick: a short stroke across its axis, and its label clear of it.
-fn draw_tick(painter: &egui::Painter, tick: &Tick, view: &View, panel: Rect, color: Color32) {
+fn draw_tick(
+    painter: &egui::Painter,
+    tick: &Tick,
+    view: &View,
+    panel: Rect,
+    color: Color32,
+) -> Option<Rect> {
     let at = view.at(tick.at);
     if !panel.contains(at) {
-        return;
+        return None;
     }
     let (across, label_offset, anchor) = match tick.axis {
         Axis::Horizontal => (
@@ -631,13 +646,13 @@ fn draw_tick(painter: &egui::Painter, tick: &Tick, view: &View, panel: Rect, col
         ),
     };
     super::haloed_segment(painter, at - across, at + across, 1.0, color);
-    haloed_text(
+    Some(haloed_text(
         painter,
         at + label_offset,
         anchor,
         tick.label.clone(),
         ink(255),
-    );
+    ))
 }
 
 /// The incidence angle at which a spline model's basis ends, in degrees.

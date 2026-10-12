@@ -421,3 +421,67 @@ fn the_change_plot_marks_where_the_monotone_constraint_bound() {
         assert!(texts.iter().any(|t| t == "Change (px)"));
     }
 }
+
+/// Every shape of one headless frame of `run_ui`, in paint order, flattened.
+fn painted_shapes(run_ui: impl FnMut(&mut egui::Ui)) -> Vec<egui::Shape> {
+    fn flatten(shape: egui::Shape, out: &mut Vec<egui::Shape>) {
+        match shape {
+            egui::Shape::Vec(shapes) => shapes.into_iter().for_each(|s| flatten(s, out)),
+            other => out.push(other),
+        }
+    }
+    let ctx = egui::Context::default();
+    let input = egui::RawInput {
+        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(500.0, 900.0))),
+        ..Default::default()
+    };
+    let mut output = ctx.run_ui(input, run_ui);
+    output.textures_delta.clear();
+    let mut shapes = Vec::new();
+    for clipped in output.shapes {
+        flatten(clipped.shape, &mut shapes);
+    }
+    shapes
+}
+
+/// The rules' and the extrapolated regions' labels are painted after every
+/// curve, each over a plate, so a curve passing under one does not cut it.
+#[test]
+fn the_plots_labels_are_painted_over_the_curves() {
+    let camera = fisheye();
+    let refit = spline_refit(&camera);
+    let report = ProposedReport::compute(&camera, &refit.camera);
+    let derived = Derived::compute(&camera);
+    let compare = Comparison {
+        proposed: &refit.camera,
+        derived: &report.derived,
+        change: &report.change,
+        theta_fit_deg: refit.theta_fit_deg,
+        monotone_deg: Some([110.0, 112.0]),
+    };
+    let rug = [10.0, 50.0, 90.0];
+    let shapes = painted_shapes(|ui| {
+        show_projection_plot(ui, &camera, &derived, Some(&compare), Some(&rug));
+    });
+    let last_curve = shapes
+        .iter()
+        .rposition(|s| matches!(s, egui::Shape::Path(_)))
+        .expect("the curves");
+    for prefix in [
+        "corner ",
+        "edge ",
+        "fit ",
+        "current extrapolated past",
+        "monotone bound",
+    ] {
+        let at = shapes
+            .iter()
+            .position(|s| matches!(s, egui::Shape::Text(t) if t.galley.text().starts_with(prefix)))
+            .unwrap_or_else(|| panic!("{prefix} was not painted"));
+        assert!(at > last_curve, "{prefix} is under a curve");
+        assert!(
+            matches!(&shapes[at - 1], egui::Shape::Rect(_)),
+            "{prefix} has no plate"
+        );
+    }
+}
