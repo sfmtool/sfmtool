@@ -47,8 +47,8 @@ use crate::patch::keypoint_localize::{
 use crate::patch::member_coherence::MemberCoherenceParams;
 use crate::patch::normal_refine::ProjectedImage;
 use crate::patch::reference_view::{
-    choose_reference_view, read_track, render_view_tile, ReferenceReadings, ReferenceViewOptions,
-    ViewTile,
+    choose_reference_view, read_track, render_view_tile, tile_max_radius, ReferenceReadings,
+    ReferenceViewOptions, ViewTile,
 };
 use crate::patch::self_similarity::{
     zncc_self_similarity_parts, PatchTile, SelfSimilarityEllipse, SelfSimilarityEllipseUnits,
@@ -2442,6 +2442,7 @@ pub(super) fn restate_reference_view(track: &mut EditableTrack) {
                 pair_zncc: m.and_then(|m| m.pair_zncc),
                 semi_major: axes.map(|a| a[0]),
                 semi_minor: axes.map(|a| a[1]),
+                max_radius: axes.map(|_| tile_max_radius()),
             }
         })
         .collect();

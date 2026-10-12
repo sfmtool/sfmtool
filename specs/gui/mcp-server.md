@@ -4088,13 +4088,15 @@ rule"). The rule gives each row a cost in grid px and picks the lowest:
 `cost` is the row's, null for a row left out and where it is not finite, and
 `cost_ratio` its cost over the pick's, `1` on the pick and null where the cost
 or the ratio is not finite or there is none;
-`terms` is `{"radius", "radius_read", "angle", "agreement", "cells",
-"coverage", "clipped"}`, the self-similarity radius in grid px and whether it
-is the row's own, the angle factor `1 + 0.25 tan θ` (null where it is not
+`terms` is `{"radius", "radius_read", "capped_radius", "angle", "agreement",
+"cells", "coverage", "clipped"}`, the self-similarity radius in grid px and
+whether it is the row's own, the step on a radius read at the cap (`1.5`
+where the radius is at the largest radius searched, a lower bound, else `1`),
+the angle factor `1 + 0.25 tan θ` (null where it is not
 finite) and the four penalties, each `1` inside its band, or null for a row left out;
 `costliest_term` is the term that adds most to the row's cost over the pick's
-(`sharpness`, `angle`, `agreement`, `cells`, `coverage`, `clipped`), null for
-the pick and a row left out; `excluded_by` is why the rule left the row out
+(`sharpness`, `capped_radius`, `angle`, `agreement`, `cells`, `coverage`,
+`clipped`), null for the pick and a row left out; `excluded_by` is why the rule left the row out
 (`no_tile`, `coverage` for less than 90% of its tile on the photograph, or
 `back_facing` for a row that sees the patch at 90° or more, edge on or from
 behind, where no patch is drawn), or null. These are null on an `out` row,

@@ -39,7 +39,7 @@ pub use rule::{
     ReferenceStanding, ReferenceTerm, ReferenceViewOptions,
 };
 pub use tile::{clipped_share, render_view_tile, ViewTile};
-pub use track::{read_track, readings_of, tile_semi_axes, TrackReading};
+pub use track::{read_track, readings_of, tile_max_radius, tile_semi_axes, TrackReading};
 
 /// The typical agreement a cell needs before the cell check judges it.
 ///

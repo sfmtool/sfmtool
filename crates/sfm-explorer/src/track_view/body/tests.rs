@@ -288,6 +288,7 @@ fn picked_standing() -> sfmtool_core::patch::reference_view::ReferenceStanding {
         cost: Ok(ReferenceCost {
             radius: 0.5,
             radius_read: true,
+            capped_radius: 1.0,
             angle: 1.0,
             agreement: 1.0,
             cells: 1.0,
@@ -382,6 +383,11 @@ fn the_reference_cell_names_the_cost_and_the_term_that_adds_most_to_it() {
             "less sharp",
             "its self-similarity radius adding the most",
         ),
+        (
+            ReferenceTerm::CappedRadius,
+            "capped radius",
+            "its self-similarity radius reading at the cap",
+        ),
         (ReferenceTerm::Angle, "oblique", "its viewing angle"),
         (
             ReferenceTerm::Agreement,
@@ -419,6 +425,10 @@ fn the_reference_cell_names_the_cost_and_the_term_that_adds_most_to_it() {
             "{hover}"
         );
         assert!(hover.contains("Coverage \u{d7}1.00: 1 from 99%"), "{hover}");
+        assert!(
+            hover.contains("Capped radius \u{d7}1.00: 1.50 where the radius reads at"),
+            "{hover}"
+        );
     }
 
     // An infinite cost over the pick's.

@@ -524,7 +524,7 @@ fn cells_the_track_does_not_agree_on_are_not_judged() {
 // ---- The rule -------------------------------------------------------------------
 
 /// A view inside every band, at 20°, with median pairwise ZNCC `pair` and
-/// self-similarity semi-major axis `radius`.
+/// self-similarity semi-major axis `radius`, read with a cap of 3 grid px.
 fn good(pair: f64, radius: f64) -> ReferenceReadings {
     ReferenceReadings {
         coverage: Some(1.0),
@@ -534,8 +534,12 @@ fn good(pair: f64, radius: f64) -> ReferenceReadings {
         pair_zncc: Some(pair),
         semi_major: Some(radius),
         semi_minor: Some(radius * 0.5),
+        max_radius: Some(CAP),
     }
 }
+
+/// The cap of the readings `good` makes.
+const CAP: f64 = 3.0;
 
 /// The rule at the default options.
 fn choose(views: &[ReferenceReadings]) -> ReferenceChoice {
@@ -602,7 +606,7 @@ fn the_angle_factor_is_one_facing_the_patch_and_grows_with_tan_theta() {
     }
     // The factor multiplies the radius: the same pair of angles trades the
     // same share of radius on a sharp track as on a blurry one.
-    for scale in [0.5, 1.0, 3.0] {
+    for scale in [0.5, 1.0, 2.5] {
         let mut oblique = good(0.9, 0.97 * scale);
         oblique.viewing_angle_deg = Some(40.0);
         let mut facing = good(0.9, scale);
@@ -824,6 +828,116 @@ fn a_missing_pair_angle_clipped_share_or_cell_deficit_is_filled_in() {
 }
 
 #[test]
+fn a_radius_at_the_cap_loses_to_one_just_under_it() {
+    let options = ReferenceViewOptions::default();
+    assert_eq!(options.capped_radius_factor, 1.5);
+    // Every other factor equal: the reading at the cap is a lower bound, and
+    // costs 1.5 times its radius.
+    let capped = good(0.9, CAP);
+    let under = good(0.9, 2.95);
+    let choice = choose(&[capped, under]);
+    assert_eq!(choice.reference, Some(1));
+    assert!(close(cost_of(&choice, 0).capped_radius, 1.5));
+    assert!(close(cost_of(&choice, 1).capped_radius, 1.0));
+    let standing = choice.standing(0).unwrap();
+    assert_eq!(standing.costliest_term, Some(ReferenceTerm::CappedRadius));
+    assert!(close(standing.cost_ratio().unwrap(), 1.5 * CAP / 2.95));
+    // A capped view facing the patch more squarely beat the uncapped one
+    // with no step; the step decides it, and is the costliest term.
+    let mut oblique = good(0.9, 2.95);
+    oblique.viewing_angle_deg = Some(25.0);
+    let no_step = ReferenceViewOptions {
+        capped_radius_factor: 1.0,
+        ..options
+    };
+    assert_eq!(
+        choose_reference_view(&[capped, oblique], &no_step).reference,
+        Some(0)
+    );
+    let choice = choose(&[capped, oblique]);
+    assert_eq!(choice.reference, Some(1));
+    assert_eq!(
+        choice.standing(0).unwrap().costliest_term,
+        Some(ReferenceTerm::CappedRadius)
+    );
+    // A radius under the cap, and one read with no cap, take no step.
+    let mut uncapped = good(0.9, CAP);
+    uncapped.max_radius = None;
+    let choice = choose(&[uncapped, good(0.9, 2.999)]);
+    assert!(close(cost_of(&choice, 0).capped_radius, 1.0));
+    assert!(close(cost_of(&choice, 1).capped_radius, 1.0));
+}
+
+#[test]
+fn a_capped_view_still_beats_an_outlier_whose_penalties_exceed_the_step() {
+    // The uncapped view is sharper but differs from the others in a ninth:
+    // its cell penalty, 3, outweighs the capped view's step, 1.5.
+    let capped = good(0.9, CAP);
+    let mut outlier = good(0.9, 2.0);
+    outlier.cell_deficit = Some(0.9);
+    let choice = choose(&[capped, outlier]);
+    assert_eq!(choice.reference, Some(0));
+    assert!(close(cost_of(&choice, 1).cells, 3.0));
+    assert!(close(
+        cost_of(&choice, 0).cost,
+        1.5 * CAP * cost_of(&choice, 0).angle
+    ));
+    assert_eq!(
+        choice.standing(1).unwrap().costliest_term,
+        Some(ReferenceTerm::Cells)
+    );
+}
+
+#[test]
+fn a_track_whose_every_view_is_capped_picks_as_with_no_step() {
+    let no_step = ReferenceViewOptions {
+        capped_radius_factor: 1.0,
+        ..ReferenceViewOptions::default()
+    };
+    let mut views = vec![good(0.9, CAP); 4];
+    views[0].viewing_angle_deg = Some(50.0);
+    views[1].viewing_angle_deg = Some(10.0);
+    views[2].pair_zncc = Some(0.6);
+    views[3].clipped_share = Some(0.2);
+    let stepped = choose(&views);
+    let plain = choose_reference_view(&views, &no_step);
+    assert_eq!(stepped.reference, Some(1));
+    assert_eq!(stepped.reference, plain.reference);
+    for i in 0..views.len() {
+        let (a, b) = (stepped.standing(i).unwrap(), plain.standing(i).unwrap());
+        assert!(
+            close(a.cost_ratio().unwrap(), b.cost_ratio().unwrap()),
+            "{i}"
+        );
+        assert_eq!(a.costliest_term, b.costliest_term, "{i}");
+        assert!(close(cost_of(&stepped, i).capped_radius, 1.5));
+    }
+}
+
+#[test]
+fn a_missing_radius_takes_the_step_with_the_largest_radius_where_it_is_capped() {
+    let mut unread = good(0.9, 0.1);
+    unread.semi_major = None;
+    // The largest radius read is at the cap, a lower bound: the view with no
+    // radius takes it with the step, so it ranks no better than that view.
+    let choice = choose(&[unread, good(0.9, 1.0), good(0.9, CAP)]);
+    let cost = cost_of(&choice, 0);
+    assert!(!cost.radius_read);
+    assert!(close(cost.radius, CAP));
+    assert!(close(cost.capped_radius, 1.5));
+    assert!(close(cost.cost, cost_of(&choice, 2).cost));
+    // Under the cap it takes none.
+    let choice = choose(&[unread, good(0.9, 1.0), good(0.9, 2.5)]);
+    assert!(close(cost_of(&choice, 0).capped_radius, 1.0));
+    // Where no view has a radius, the unread radius takes no step.
+    let mut other = unread;
+    other.viewing_angle_deg = Some(40.0);
+    let choice = choose(&[unread, other]);
+    assert!(close(cost_of(&choice, 0).capped_radius, 1.0));
+    assert!(close(cost_of(&choice, 1).capped_radius, 1.0));
+}
+
+#[test]
 fn a_tie_on_the_cost_goes_to_the_smaller_semi_minor_then_the_earlier_view() {
     let mut a = good(0.9, 0.4);
     a.semi_minor = Some(0.3);
@@ -839,7 +953,7 @@ fn a_tie_on_the_cost_goes_to_the_smaller_semi_minor_then_the_earlier_view() {
 #[test]
 fn the_costliest_terms_parts_sum_to_the_cost_over_the_picks() {
     let pick = good(0.9, 0.4);
-    let mut other = good(0.6, 0.5);
+    let mut other = good(0.6, CAP);
     other.viewing_angle_deg = Some(50.0);
     other.cell_deficit = Some(0.45);
     other.coverage = Some(0.97);
@@ -862,10 +976,13 @@ fn the_costliest_terms_parts_sum_to_the_cost_over_the_picks() {
         .map(|&(term, _)| term);
     assert_eq!(standing.costliest_term, largest);
     // Each part is the log of the view's factor over the pick's: the pick's
-    // penalties are 1, and its angle factor is that of 20°.
+    // penalties and step are 1, and its angle factor is that of 20°.
+    assert!(close(own.capped_radius, 1.5));
+    assert!(close(picked.capped_radius, 1.0));
     for (term, part) in &parts {
         let ratio = match term {
             ReferenceTerm::Sharpness => own.radius / picked.radius,
+            ReferenceTerm::CappedRadius => own.capped_radius / picked.capped_radius,
             ReferenceTerm::Angle => own.angle / picked.angle,
             ReferenceTerm::Agreement => own.agreement,
             ReferenceTerm::Cells => own.cells,

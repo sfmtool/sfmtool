@@ -10,7 +10,8 @@ front of one corner disagrees with the others there. This spec describes the
 measurements that say what each view's tile can contribute, and the
 **reference-view rule**, which picks the one view whose tile is stored as the
 point's patch bitmap. It gives each view a cost in grid px: the tile's
-sharpness, multiplied by a factor for how oblique the view is and by penalties
+sharpness, multiplied by a step where that reading is at its cap and so only
+a lower bound, by a factor for how oblique the view is and by penalties
 for a view that agrees less with the others, differs from them in part of the
 tile, falls partly off its photograph or is clipped. The view with
 the lowest cost is picked; a view that renders no tile, has less than 90% of it on
@@ -74,9 +75,11 @@ pub struct ReferenceReadings {
     pub coverage: Option<f64>, pub clipped_share: Option<f64>,
     pub viewing_angle_deg: Option<f64>, pub cell_deficit: Option<f64>,
     pub pair_zncc: Option<f64>, pub semi_major: Option<f64>, pub semi_minor: Option<f64>,
+    pub max_radius: Option<f64>,        // the cap semi_major was read with
 }
 pub struct ReferenceViewOptions {      // impl Default: the values below
     pub angle_weight: f64,              // k
+    pub capped_radius_factor: f64,      // the step on a radius at the cap
     pub agreement_band: f64, pub agreement_scale: f64,
     pub cell_deficit_band: f64, pub cell_deficit_scale: f64,
     pub coverage_band: f64, pub coverage_scale: f64,
@@ -85,15 +88,16 @@ pub struct ReferenceViewOptions {      // impl Default: the values below
     pub unread_radius: f64,             // r where no view has a radius
 }
 impl ReferenceViewOptions { pub fn angle_factor(&self, viewing_angle_deg: f64) -> f64; } // 1 + k·tan θ
-pub enum ReferenceTerm { Sharpness, Angle, Agreement, Cells, Coverage, Clipped }
+pub enum ReferenceTerm { Sharpness, CappedRadius, Angle, Agreement, Cells, Coverage, Clipped }
 pub enum ReferenceExclusion { NoTile, Coverage, BackFacing }
 pub struct ReferenceCost {
     pub radius: f64, pub radius_read: bool, // r, and whether it is the view's own
+    pub capped_radius: f64,                 // the step, capped_radius_factor or 1
     pub angle: f64,                         // the angle factor, 1 + k·tan θ
     pub agreement: f64, pub cells: f64, pub coverage: f64, pub clipped: f64,
     pub cost: f64,
 }
-impl ReferenceCost { pub fn ln_parts(&self) -> [(ReferenceTerm, f64); 6]; } // ln cost, split by term
+impl ReferenceCost { pub fn ln_parts(&self) -> [(ReferenceTerm, f64); 7]; } // ln cost, split by term
 pub struct ReferenceChoice {
     pub reference: Option<usize>,
     pub costs: Vec<Result<ReferenceCost, ReferenceExclusion>>,
@@ -118,6 +122,7 @@ pub struct TrackReading {
     pub choice: ReferenceChoice,
 }
 pub fn tile_semi_axes(tile: &ViewTile) -> Option<[f64; 2]>;
+pub fn tile_max_radius() -> f64; // the cap of tile_semi_axes' reading and the bench's, 3
 pub fn readings_of(tile: &ViewTile, pair_zncc: Option<f64>, cell_deficit: Option<f64>,
     semi_axes: Option<[f64; 2]>) -> ReferenceReadings;
 pub fn read_track(patch: &OrientedPatch, views: &[ProjectedImage<'_>], members: &[u32],
@@ -167,6 +172,17 @@ over the pick's, so a row can be read on its own. The parameters are a
 without rebuilding; every caller passes the `Default`, the bench
 through `EvaluateOptions::reference_view` and the stored bitmap's render
 through `KeypointSubpixelParams::reference_view`.
+
+Each view's readings carry the cap its radius was read with,
+`ReferenceReadings::max_radius`, rather than the rule's options holding one.
+The cap is a property of the self-similarity reading
+(`SelfSimilarityParams::max_radius`), not a choice of how the rule weighs its
+readings, so it travels with the radius it qualifies: a sweep of the options
+cannot set it out of step with the reading, and a caller that read with
+another cap says so on each view. The rule compares the radius with the cap
+itself, so the callers do not each write the test. Every caller today reads
+with the default parameters: `readings_of` and the bench's restatement of the
+rule after a verdict moves fill it with `tile_max_radius()`.
 
 `read_track` takes the readings across one track's tiles and runs the rule, and
 both the bench's evaluation and the stored bitmap call it, so the view a bench
@@ -275,12 +291,16 @@ Each view the pick is made from gets a cost in grid px, and the view with the
 lowest cost is the reference (`choose_reference_view`):
 
 ```
-cost = r · T · A · K · C · P
+cost = r · S · T · A · K · C · P
+S = capped_radius_factor where r reads at the cap, else 1
 T = 1 + k · tan θ
 ```
 
 - `r` is the self-similarity semi-major axis of the view's `R×R` tile, in grid
   px.
+- `S` is the step on a radius read at the cap, `capped_radius_factor` where
+  `r` is at the cap of its reading (`r ≥ max_radius`, 3 grid px), else `1`
+  ([§ "The step on a radius at the cap"](#the-step-on-a-radius-at-the-cap)).
 - `T` is the angle factor, `θ` the viewing angle, under `90°` for every view
   the pick is made from ([§ "Hard limits"](#hard-limits)), and `k` its weight,
   `angle_weight` ([§ "The angle factor"](#the-angle-factor)).
@@ -297,6 +317,91 @@ factor that multiplies makes the same relative trade-off on a track of fine
 texture as on one of coarse texture, where a term added in grid px would weigh
 more on the first. A factor of `2` reads as "this view counts as twice as
 blurry".
+
+### The step on a radius at the cap
+
+The self-similarity reading searches shifts up to `max_radius` (3 grid px),
+and a radius that reaches it is capped there and reads "3 or further"
+([zncc-self-similarity-radius.md](zncc-self-similarity-radius.md) § "Lower
+bounds"): a straight edge, a flat patch and a texture that repeats beyond the
+square all read 3. Taken as exactly 3, such a view would beat a view measured
+at 2.95 with the same other factors, though the second is the one known to be
+sharper. So a view whose radius reads at the cap has its cost multiplied by
+`capped_radius_factor`, `1.5`:
+
+```
+S = 1.5   where r ≥ max_radius
+S = 1     otherwise
+```
+
+**Why a step and not a term that grows towards the cap.** A radius below the
+cap is a measurement, and 2.95 grid px is as good a reading as 0.5. Only the
+reading at the cap is different in kind: it is a bound, and nothing in it says
+by how much the true radius is larger. A term that grew as the radius neared
+the cap would penalise measured radii for a doubt they do not carry. The step
+says only "this view's radius is at least the cap, and counts as blurrier than
+that".
+
+**Why the cap and not the lower-bound flag.** The ellipse's
+`radius_is_at_least` flag is also set below the cap, where the region of the
+surface runs off the square of shifts searched or a gap with no reading could
+hide part of it. Such a radius may be larger too, but it is still read from
+the region's own extent, so two such readings still order by their length.
+At the cap the reading saturates: every true radius from 3 up reads 3, and the
+rule cannot order the views among themselves or against an uncapped one. The
+step is for that case alone.
+
+**A view with no radius.** It takes the largest radius among the eligible
+views ([§ "Missing readings"](#missing-readings)), and with it the step where
+that radius reads at the cap: the stand-in is a lower bound exactly when the
+reading it is copied from is, so a view with no reading still ranks no better
+than the bluntest view that has one. Where no view has a radius every view
+takes `unread_radius` with no step; nothing was read, and a step on every view
+would change no pick.
+
+**Where it decides.** On the 679 pool tracks, 454 of the 5,845 eligible views
+read at the cap; on 19 tracks every eligible view does, and there the step
+multiplies every cost alike and changes nothing. With no step, 4 pool tracks
+pick a capped view over an uncapped one ([§ "How the values were
+measured"](#how-the-values-were-measured)). Each flips to the uncapped view
+when the factor passes the uncapped view's cost over the capped pick's:
+ChristmasTreeWithPresents pool point 7858 above 1.01 (a view at 2.955 grid px)
+and Altona pool point 353 above 1.08 (2.899), and two hand-picked tracks,
+altona_p1153 above 2.05 and seoul_bull_p135 above 2.46. On those two the
+maintainer picked a capped view as well, and the uncapped views are outliers:
+pair ZNCC 0.86 and 0.85 against the pick's 0.98 and 0.95, and cell deficits of
+1.13 and 0.83. Any factor from 1.08 to 2.04 changes the first two picks and
+keeps the hand picks; `1.5` is near the middle of that range on a log scale
+(`√(1.08 · 2.04) = 1.48`).
+
+| `capped_radius_factor` | Hand picks, tuning (39) | Held out (38) | All (77) | Pool picks changed from no step | Ground-truth picks changed: error no step → step, better / worse |
+|---|---|---|---|---|---|
+| 1 (no step) | 14 / 34 / 32 | 15 / 34 / 30 | 29 / 68 / 62 | 0 | 0 |
+| 1.01 | 14 / 34 / 32 | 15 / 34 / 30 | 29 / 68 / 62 | 1 | 0 |
+| 1.05 | 14 / 34 / 32 | 15 / 34 / 30 | 29 / 68 / 62 | 1 | 2: 0.231 → 0.275, 0 / 2 |
+| 1.1 | 14 / 34 / 32 | 15 / 34 / 30 | 29 / 68 / 62 | 2 | 3: 0.183 → 0.407, 0 / 3 |
+| 1.25 | 14 / 34 / 32 | 15 / 34 / 30 | 29 / 68 / 62 | 2 | 3: 0.183 → 0.407, 0 / 3 |
+| **1.5** | **14 / 34 / 32** | **15 / 34 / 30** | **29 / 68 / 62** | **2** | **3: 0.183 → 0.407, 0 / 3** |
+| 2 | 14 / 34 / 32 | 15 / 34 / 30 | 29 / 68 / 62 | 2 | 3: 0.183 → 0.407, 0 / 3 |
+| 2.25 | 14 / 33 / 32 | 15 / 34 / 30 | 29 / 67 / 62 | 3 | 3: 0.183 → 0.407, 0 / 3 |
+| 2.5 | 14 / 32 / 31 | 15 / 34 / 30 | 29 / 66 / 61 | 4 | 4: 0.309 → 0.497, 0 / 4 |
+
+(Hand picks exact / lenient / lenient within 10°, the other parameters at
+their defaults. A changed ground-truth pick reads the other views' mean error,
+px, aligned to the pick with no step and to the pick with it, over the views
+that are neither pick.)
+
+The data does not choose a value between 1.1 and 2. The hand picks are the
+same from 1 to 2, so the harness's procedure keeps the starting value, `1.5`,
+the maintainer's; they do not tell the step from no step either. The step is
+kept for what the reading means, not for a measured gain. The ground truths
+lean the other way, on three tracks: from 1.1 to 2 the step changes the pick
+on kerry_park points 41 and 125 and seoul_bull point 26, each from a capped
+view to an uncapped one (radius 2.46, 2.91 and 2.80 grid px), and the other
+views align to the new pick worse on all three, by 0.003, 0.083 and 0.382 px;
+the last is one view that aligns 1.3 px off. Three tracks do not establish a
+direction, and over all 639 ground-truth tracks the mean error moves from
+0.431 to 0.432 px.
 
 ### The angle factor
 
@@ -411,9 +516,10 @@ A reading the view does not have never makes it look better than a view that
 has it:
 
 - **No radius**: `r` is the largest radius among the views the pick is made
-  from, so the view ranks as no sharper than the bluntest view that was read
+  from, with the step where that radius reads at the cap, so the view ranks as
+  no sharper than the bluntest view that was read
   (`ReferenceCost::radius_read` is `false`). Where no view has one, every view
-  takes `unread_radius`, and the angle and the penalties pick.
+  takes `unread_radius` with no step, and the angle and the penalties pick.
 - **No pair ZNCC**: the shortfall is the largest among the views that have
   one. Where none has one, `A = 1` for every view.
 - **No viewing angle**: the angle factor is the largest among the views
@@ -426,9 +532,9 @@ Where no view is eligible the rule picks nothing.
 ### The costliest term
 
 `ln cost` splits exactly into one part per term,
-`ln r + ln T + ln A + ln K + ln C + ln P` (`ReferenceCost::ln_parts`,
-the terms `sharpness`, `angle`, `agreement`, `cells`, `coverage` and
-`clipped`), so a view's `ln(cost / pick cost)` splits into the differences of
+`ln r + ln S + ln T + ln A + ln K + ln C + ln P` (`ReferenceCost::ln_parts`,
+the terms `sharpness`, `capped_radius`, `angle`, `agreement`, `cells`,
+`coverage` and `clipped`), so a view's `ln(cost / pick cost)` splits into the differences of
 those parts. The **costliest term** is the term with the largest difference:
 the one that adds most to the view's cost over the pick's. Track View and the
 wire name it beside each row. A difference that is not a number, which only a
@@ -440,15 +546,21 @@ The values of `ReferenceViewOptions` were measured against the maintainer's
 hand picks of the reference view, on the two ground truths and on a pool of
 tracks from ten datasets ([§ "How the values were measured"](#how-the-values-were-measured)).
 The held-out half confirmed none of the values the tuning half of the hand
-picks preferred, so every default but `angle_weight` is the value the cost
-was first built with, and `angle_weight` is the value whose picks differ least
-from those of the angle term it replaced. The hand picks decide only some of
-the values, and for the rest the table says what they rule out.
-`min_coverage` is set by decision and was not swept.
+picks preferred, so every default but `angle_weight` and
+`capped_radius_factor` is the value the cost was first built with,
+`angle_weight` is the value whose picks differ least from those of the angle
+term it replaced, and `capped_radius_factor` is the maintainer's value, which
+the measurements do not separate from its neighbours. The hand picks decide
+only some of the values, and for the rest the table says what they rule out.
+`min_coverage` is set by decision and was not swept. The measurements in the
+table, except `capped_radius_factor`'s, were made before the step on a radius
+at the cap, with `capped_radius_factor = 1`
+([§ "How the values were measured"](#how-the-values-were-measured)).
 
 | Field | Default | Reason |
 |---|---|---|
 | `angle_weight`, `k` | `0.25` | The angle factor's weight: a view at 45° counts as 1.25 times as blurry as its radius says ([§ "The angle factor"](#the-angle-factor)). Measured: the factor is worth having. Against `k = 0` it changes 68 of 679 pool picks, the `k = 0` pick losing on its angle factor in 65 of them, matches the hand pick within 10° of its viewing angle on 62 of 77 hand picks against 60, picks above 65° on 83 of 1,318 tracks against 93 (the previous rule with its 65° gate: 75), and on the 84 ground-truth tracks whose pick it changes the other views align with a mean error of 0.359 px against 0.478. `0.25` is the value whose picks differ least from the quadrature's at `σ_n = 3°` (63 of 679 pool tracks). The hand picks do not tell `0.05` to `1` apart (lenient 67 or 68 of 77, exact 28 to 30); the tuning half's best, `0.75`, matched one fewer held-out pick leniently. The ground truths' mean error over every track is lowest from `0.25` to `0.4` (0.431 px) and rises past `1` (`1.5`: 0.440). |
+| `capped_radius_factor` | `1.5` | A view whose radius reads at the cap counts as 1.5 times as blurry as the cap, since the reading is a lower bound ([§ "The step on a radius at the cap"](#the-step-on-a-radius-at-the-cap)). Measured: from `1.08` to `2.04` it changes the same two pool picks, to an uncapped view at 2.90 or 2.96 grid px, and no hand pick; from `2.05` the lenient count falls (`2.5`: 66 of 77). `1.5` is near the middle of that range on a log scale. The ground truths do not favour it: the three picks it changes there align the other views worse. |
 | `agreement_band` | `0.15` | Sharp views correlate worse with blurrier ones, so a narrow band penalises exactly the sharp views. The previous rule's margin, `0.15`, was set against hand picks. Measured: the hand picks do not tell `0.1` to `0.4` apart (exact 29, lenient 68 or 69 of 77); below `0.1` the lenient count is 72 and the exact count 26 to 31. The tuning half's best, `0`, matched 4 fewer held-out picks exactly. `0.075` matches 2 more picks exactly and 4 more leniently, better on both halves (tuning 14 / 35 against 14 / 34, held out 17 / 37 against 15 / 34), but it is not the tuning half's best, so the procedure does not test it. The ground truths favour a narrower band: the mean error over the 639 tracks is 0.426 px at `0.075`, 0.411 at `0.05` and 0.399 at `0`, against 0.431 at `0.15`. |
 | `agreement_scale` | `0.15` | A view `0.30` below the best counts as twice as blurry. Measured: from `0.015` to `1.5` it changes no more than one hand pick. |
 | `cell_deficit_band` | `0.3` | A view that agrees overall but not in one part of the tile: an occluder, a shadow edge, parallax within the tile. The previous rule's bar, `0.3`, was set against hand picks. Measured: `0.25` to `0.35` match 29 hand picks of 77 exactly and 68 or 69 leniently; `0.1`, the tuning half's best, matches 3 more leniently but 5 fewer exactly, 4 of them on the held-out half; from `0.4` up the lenient count falls (`0.4`: 66). |
@@ -525,6 +637,16 @@ on 2026-10-11:
   `cell_deficit_band` `0.1`, `cell_deficit_scale` `0.03`), each one to three
   picks better there, and the held-out half confirmed none of them; for the
   other six the starting value is in the tuning half's best run.
+- **Before the step.** Every table and count below, and those of § "Each
+  parameter and its reason" but `capped_radius_factor`'s, was made with no
+  step on a radius at the cap (`capped_radius_factor = 1`, `analyze.py
+  --capped-radius-factor 1`). The step moves them by a few tracks: the hand
+  picks at the defaults not at all (29 / 68 / 62), the pool picks changed
+  from `angle_weight = 0` from 68 to 66, from the quadrature from 63 to 60
+  and from the previous rule from 139 to 137, and the ground-truth picks
+  changed from the previous rule from 117 to 116, with a mean error of 0.440
+  px against 0.385. Its own sweep is in [§ "The step on a radius at the
+  cap"](#the-step-on-a-radius-at-the-cap).
 - **The forms of the angle factor**: four forms, each swept with the other
   parameters at their defaults
   ([§ "The form of the angle factor"](#the-form-of-the-angle-factor)).
@@ -960,10 +1082,11 @@ float64 array, and `reference_view` as a dict `{"is_reference", "cost",
 "cost_ratio", "terms", "costliest_term", "excluded_by"}`: `cost` the
 row's cost in grid px and `cost_ratio` its cost over the pick's, floats or
 `None` for a row left out; `terms` a dict `{"radius", "radius_read",
-"angle", "agreement", "cells", "coverage", "clipped"}` of the radius
-(`radius_read` whether it is the row's own), the angle factor and the four
-penalties, or `None` for a row left out; `costliest_term` one of
-`"sharpness"`, `"angle"`, `"agreement"`, `"cells"`, `"coverage"`, `"clipped"`,
+"capped_radius", "angle", "agreement", "cells", "coverage", "clipped"}` of the
+radius (`radius_read` whether it is the row's own), the step on a radius at
+the cap (`1.5` or `1`), the angle factor and the four penalties, or `None` for
+a row left out; `costliest_term` one of `"sharpness"`, `"capped_radius"`,
+`"angle"`, `"agreement"`, `"cells"`, `"coverage"`, `"clipped"`,
 or `None` for the pick and a row left out; `excluded_by` one of `"no_tile"`,
 `"coverage"`, `"back_facing"` or `None`. Each reading is absent where the row
 has no such reading.
@@ -1014,7 +1137,15 @@ with an angle weight of `0`; the readings of seoul_bull point 10, the view at
 19° with a radius of 1.584 grid px picked over the one at 29° with 1.572; the
 angle factor `1` facing the patch and at a negative angle, growing with
 `tan θ`, and making the same trade-off on a sharp track as on a blurry one;
-each penalty `1` inside its band and growing at its scale past it; a view at the coverage floor eligible and one just under it and
+each penalty `1` inside its band and growing at its scale past it; the step
+on a radius at the cap: a capped view losing to an uncapped one at 2.95 grid
+px with the other factors equal, and to one at 25° that it beats with no
+step, the step its costliest term; a capped view still picked over an
+uncapped one whose cell penalty exceeds the step; a track whose every view is
+capped picking and ranking as with no step; a radius under the cap or read
+with no cap taking no step; a view with no radius taking the step with the
+largest radius where that one is capped, and none where it is not or where no
+view has a radius; a view at the coverage floor eligible and one just under it and
 one with no tile left out; a track whose every view is behind the patch with
 no eligible view, and one with views on both sides picked among the
 front-facing ones; a view at exactly 90° left out and one at 89.9° eligible;

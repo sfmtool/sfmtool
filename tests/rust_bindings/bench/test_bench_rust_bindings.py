@@ -547,13 +547,21 @@ class TestEvaluating:
             assert set(standing["terms"]) == {
                 "radius",
                 "radius_read",
+                "capped_radius",
                 "angle",
                 "agreement",
                 "cells",
                 "coverage",
                 "clipped",
             }
-            for factor in ("angle", "agreement", "cells", "coverage", "clipped"):
+            for factor in (
+                "capped_radius",
+                "angle",
+                "agreement",
+                "cells",
+                "coverage",
+                "clipped",
+            ):
                 assert standing["terms"][factor] >= 1.0
             if standing["is_reference"]:
                 assert standing["costliest_term"] is None
@@ -562,6 +570,7 @@ class TestEvaluating:
             else:
                 assert standing["costliest_term"] in {
                     "sharpness",
+                    "capped_radius",
                     "angle",
                     "agreement",
                     "cells",

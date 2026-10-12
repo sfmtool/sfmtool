@@ -86,7 +86,8 @@ def test_removed_observations_are_found_again(without_image, pyramids):
     }
     # Every point here is at -1, so the reference-view rule picks each
     # template. With its default parameters 67 of the 85 removed observations
-    # are found (66 when the angle was added to the radius in quadrature);
+    # are found, with or without the step on a radius read at the cap (66
+    # when the angle was added to the radius in quadrature);
     # with no angle factor (angle_weight 0) the rule picks other templates on
     # a few points and 68 are. The measurement that set those parameters
     # (specs/core/patch/reference-view.md, "How the values were measured")

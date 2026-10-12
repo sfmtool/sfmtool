@@ -431,19 +431,21 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           observations) in a ninth where that typical agreement is at least \
                           0.5; and reference_view, the reference-view \
                           rule's decision. The rule gives each row a cost in grid px, its \
-                          self-similarity radius r times the angle factor 1 + 0.25 tan(theta), \
-                          theta its viewing angle, times four penalties that are 1 \
-                          inside their band (agreement, for a pair ZNCC more than 0.15 below \
+                          self-similarity radius r, times 1.5 where r reads at the largest \
+                          radius searched (3 grid px, a lower bound), times the angle factor \
+                          1 + 0.25 tan(theta), theta its viewing angle, times four \
+                          penalties that are 1 inside their band (agreement, for a pair ZNCC more than 0.15 below \
                           the best; cells, for a cell deficit over 0.3; coverage, under 0.99; \
                           clipped, over 0.05), and picks the lowest cost. A row with no tile, \
                           under 0.9 coverage, or a viewing angle of 90 degrees or more (edge \
                           on or from behind) is never picked. The fields: \
                           is_reference; cost, in grid px; cost_ratio, its cost over the \
                           pick's; terms, {radius, radius_read (whether r is the row's own \
-                          radius), angle, agreement, cells, coverage, clipped}; \
+                          radius), capped_radius (1.5 where r reads at the cap, else 1), \
+                          angle, agreement, cells, coverage, clipped}; \
                           costliest_term, the term that adds most to its cost over the pick's \
-                          (sharpness, angle, agreement, cells, coverage or clipped; null for \
-                          the pick and a row left out); excluded_by, why the rule left the row \
+                          (sharpness, capped_radius, angle, agreement, cells, coverage or \
+                          clipped; null for the pick and a row left out); excluded_by, why the rule left the row \
                           out (no_tile, coverage, back_facing) or null. These are null on an \
                           out observation, which the rule does not \
                           consider. stage_data.reference_observation is the index of the \

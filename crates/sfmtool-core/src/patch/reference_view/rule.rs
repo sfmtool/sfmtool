@@ -28,24 +28,37 @@ pub struct ReferenceReadings {
     pub semi_major: Option<f64>,
     /// Its semi-minor axis, in grid px, which breaks a tie on the cost.
     pub semi_minor: Option<f64>,
+    /// The largest radius the self-similarity reading searched, in grid px
+    /// (`SelfSimilarityParams::max_radius` of the reading `semi_major` comes
+    /// from). A `semi_major` at it reads "this far or further", a lower
+    /// bound, and the rule multiplies the view's cost by
+    /// [`ReferenceViewOptions::capped_radius_factor`]. `None` gives no step.
+    pub max_radius: Option<f64>,
 }
 
-/// The rule's parameters: the weight of its angle factor, the band and scale
-/// of each soft penalty, the coverage floor and the radius it uses where no
-/// view has one.
+/// The rule's parameters: the weight of its angle factor, the step on a
+/// radius read at the cap, the band and scale of each soft penalty, the
+/// coverage floor and the radius it uses where no view has one.
 ///
 /// Each soft penalty is a hinge `1 + max(0, x − band) / scale`, `1` inside
 /// its band and `2` at one scale past it, so a scale is the excess at which a
 /// view counts as twice as blurry. The defaults were measured against hand
 /// picks of the reference view and on two ground truths
 /// (`specs/core/patch/reference-view.md` § "How the values were measured"),
-/// except [`Self::min_coverage`], which is set by decision.
+/// except [`Self::min_coverage`], which is set by decision, and
+/// [`Self::capped_radius_factor`], whose value the measurements do not
+/// separate from its neighbours.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ReferenceViewOptions {
     /// `k`, the angle factor's weight: a view at viewing angle `θ` counts as
     /// `1 + k · tan θ` times as blurry as its radius says. `0` removes the
     /// angle factor. Default `0.25`.
     pub angle_weight: f64,
+    /// The factor on the cost of a view whose radius reads at the cap of its
+    /// reading ([`ReferenceReadings::max_radius`]): the radius is then a
+    /// lower bound, so the view counts as blurrier than the cap says. `1`
+    /// removes the step. Default `1.5`.
+    pub capped_radius_factor: f64,
     /// How far below the best pair ZNCC a view's may fall before the
     /// agreement penalty starts. Default `0.15`.
     pub agreement_band: f64,
@@ -76,6 +89,7 @@ impl Default for ReferenceViewOptions {
     fn default() -> Self {
         Self {
             angle_weight: 0.25,
+            capped_radius_factor: 1.5,
             agreement_band: 0.15,
             agreement_scale: 0.15,
             cell_deficit_band: 0.3,
@@ -105,6 +119,8 @@ impl ReferenceViewOptions {
 pub enum ReferenceTerm {
     /// The self-similarity radius `r`.
     Sharpness,
+    /// The step on a radius read at the cap.
+    CappedRadius,
     /// The angle factor.
     Angle,
     /// The agreement penalty.
@@ -122,6 +138,7 @@ impl ReferenceTerm {
     pub fn name(self) -> &'static str {
         match self {
             ReferenceTerm::Sharpness => "sharpness",
+            ReferenceTerm::CappedRadius => "capped_radius",
             ReferenceTerm::Angle => "angle",
             ReferenceTerm::Agreement => "agreement",
             ReferenceTerm::Cells => "cells",
@@ -167,7 +184,8 @@ impl std::fmt::Display for ReferenceExclusion {
 }
 
 /// One view's cost and the terms it is the product of:
-/// `cost = radius · angle · agreement · cells · coverage · clipped`.
+/// `cost = radius · capped_radius · angle · agreement · cells · coverage ·
+/// clipped`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ReferenceCost {
     /// `r`, in grid px: the view's self-similarity radius, or the stand-in
@@ -175,6 +193,10 @@ pub struct ReferenceCost {
     pub radius: f64,
     /// Whether [`Self::radius`] is the view's own reading.
     pub radius_read: bool,
+    /// The step on a radius read at the cap:
+    /// [`ReferenceViewOptions::capped_radius_factor`] where [`Self::radius`]
+    /// is a lower bound, else `1`.
+    pub capped_radius: f64,
     /// The angle factor, `1 + k · tan θ`, `1` or more.
     pub angle: f64,
     /// The agreement penalty, `1` or more.
@@ -191,10 +213,11 @@ pub struct ReferenceCost {
 
 impl ReferenceCost {
     /// `ln cost` split into one part per term:
-    /// `ln r + ln T + ln A + ln K + ln C + ln P`.
-    pub fn ln_parts(&self) -> [(ReferenceTerm, f64); 6] {
+    /// `ln r + ln S + ln T + ln A + ln K + ln C + ln P`.
+    pub fn ln_parts(&self) -> [(ReferenceTerm, f64); 7] {
         [
             (ReferenceTerm::Sharpness, self.radius.ln()),
+            (ReferenceTerm::CappedRadius, self.capped_radius.ln()),
             (ReferenceTerm::Angle, self.angle.ln()),
             (ReferenceTerm::Agreement, self.agreement.ln()),
             (ReferenceTerm::Cells, self.cells.ln()),
@@ -296,11 +319,13 @@ fn largest(values: impl Iterator<Item = f64>) -> Option<f64> {
 /// Pick the reference view of a track from its views' readings.
 ///
 /// Each view the pick is made from gets a cost in grid px,
-/// `r · T · A · K · C · P`, and the lowest cost is picked; a tie goes to the
-/// smaller semi-minor axis, a missing one counting as infinite, and then to
-/// the earlier view. `r` is the self-similarity radius; `T = 1 + k · tan θ`
-/// is the angle factor ([`ReferenceViewOptions::angle_factor`]); `A`, `K`,
-/// `C` and `P` are hinges on the shortfall of the pair ZNCC below the best
+/// `r · S · T · A · K · C · P`, and the lowest cost is picked; a tie goes to
+/// the smaller semi-minor axis, a missing one counting as infinite, and then
+/// to the earlier view. `r` is the self-similarity radius; `S` is
+/// [`ReferenceViewOptions::capped_radius_factor`] where `r` reads at the cap
+/// of its reading ([`ReferenceReadings::max_radius`]), a lower bound, and `1`
+/// otherwise; `T = 1 + k · tan θ` is the angle factor
+/// ([`ReferenceViewOptions::angle_factor`]); `A`, `K`, `C` and `P` are hinges on the shortfall of the pair ZNCC below the best
 /// one, the cell deficit, the shortfall of the coverage below its band, and
 /// the clipped share.
 ///
@@ -309,11 +334,12 @@ fn largest(values: impl Iterator<Item = f64>) -> Option<f64> {
 ///   or more (edge on or from behind) is never picked. The others are
 ///   **eligible**, and the pick is made from them.
 /// - **Missing readings.** A view with no radius takes the largest radius
-///   among the views the pick is made from, or
-///   [`ReferenceViewOptions::unread_radius`] where none has one; a view with
-///   no pair ZNCC the largest shortfall, or `A = 1` where none has one; a view
-///   with no angle the largest angle factor, or `T = 1` where none has one; a
-///   missing clipped share or cell deficit gives a factor of `1`.
+///   among the views the pick is made from, with the step where that radius
+///   reads at the cap, or [`ReferenceViewOptions::unread_radius`] with no
+///   step where none has one; a view with no pair ZNCC the largest
+///   shortfall, or `A = 1` where none has one; a view with no angle the
+///   largest angle factor, or `T = 1` where none has one; a missing clipped
+///   share or cell deficit gives a factor of `1`.
 ///
 /// ```
 /// use sfmtool_core::patch::reference_view::{
@@ -328,6 +354,7 @@ fn largest(values: impl Iterator<Item = f64>) -> Option<f64> {
 ///     pair_zncc: Some(0.9),
 ///     semi_major: Some(radius),
 ///     semi_minor: Some(radius / 2.0),
+///     max_radius: Some(3.0),
 /// };
 /// // A view at 20° with a radius of 0.62 grid px beats one at 55° with 0.60.
 /// let choice = choose_reference_view(
@@ -360,8 +387,18 @@ pub fn choose_reference_view(
         .collect();
 
     // The readings the costs read, with the missing ones filled in.
-    let unread_radius = largest(from.iter().filter_map(|&i| finite(views[i].semi_major)))
-        .unwrap_or(options.unread_radius);
+    // A radius at the cap of its reading is a lower bound.
+    let capped = |v: &ReferenceReadings| {
+        finite(v.semi_major).is_some_and(|r| v.max_radius.is_some_and(|cap| r >= cap))
+    };
+    let largest_read = largest(from.iter().filter_map(|&i| finite(views[i].semi_major)));
+    let unread_radius = largest_read.unwrap_or(options.unread_radius);
+    // A view with no radius takes the largest one read, and the step with it
+    // where that radius is a lower bound.
+    let unread_capped = largest_read.is_some_and(|r| {
+        from.iter()
+            .any(|&i| finite(views[i].semi_major) == Some(r) && capped(&views[i]))
+    });
     let best_pair = largest(from.iter().filter_map(|&i| finite(views[i].pair_zncc)));
     let shortfall = |v: &ReferenceReadings| Some(best_pair? - finite(v.pair_zncc)?);
     let unread_shortfall = largest(from.iter().filter_map(|&i| shortfall(&views[i])));
@@ -374,6 +411,16 @@ pub fn choose_reference_view(
     let cost_of = |v: &ReferenceReadings| {
         let own_radius = finite(v.semi_major);
         let radius = own_radius.unwrap_or(unread_radius);
+        let at_cap = if own_radius.is_some() {
+            capped(v)
+        } else {
+            unread_capped
+        };
+        let capped_radius = if at_cap {
+            options.capped_radius_factor
+        } else {
+            1.0
+        };
         let angle_factor = angle(v).map_or(unread_angle, |a| options.angle_factor(a));
         let agreement = shortfall(v).or(unread_shortfall).map_or(1.0, |s| {
             hinge(s, options.agreement_band, options.agreement_scale)
@@ -390,12 +437,13 @@ pub fn choose_reference_view(
         ReferenceCost {
             radius,
             radius_read: own_radius.is_some(),
+            capped_radius,
             angle: angle_factor,
             agreement,
             cells,
             coverage,
             clipped,
-            cost: radius * angle_factor * agreement * cells * coverage * clipped,
+            cost: radius * capped_radius * angle_factor * agreement * cells * coverage * clipped,
         }
     };
     let costs: Vec<Result<ReferenceCost, ReferenceExclusion>> = views

@@ -18,7 +18,7 @@
 
 use sfmtool_core::bench::{EditableTrack, Observation, StageKind, TrackMeasurement};
 use sfmtool_core::patch::reference_view::{
-    ReferenceExclusion, ReferenceStanding, ReferenceTerm, ReferenceViewOptions,
+    tile_max_radius, ReferenceExclusion, ReferenceStanding, ReferenceTerm, ReferenceViewOptions,
 };
 
 use crate::bench::live::Evaluation;
@@ -311,6 +311,7 @@ pub(super) fn grid_lines(grid: [[f64; 3]; 3]) -> Vec<String> {
 fn term_word(term: ReferenceTerm) -> &'static str {
     match term {
         ReferenceTerm::Sharpness => "less sharp",
+        ReferenceTerm::CappedRadius => "capped radius",
         ReferenceTerm::Angle => "oblique",
         ReferenceTerm::Agreement => "agrees less",
         ReferenceTerm::Cells => "ninth differs",
@@ -393,6 +394,9 @@ fn standing_rank(standing: ReferenceStanding) -> f64 {
 fn term_phrase(term: ReferenceTerm) -> &'static str {
     match term {
         ReferenceTerm::Sharpness => "its self-similarity radius",
+        ReferenceTerm::CappedRadius => {
+            "its self-similarity radius reading at the cap, a lower bound"
+        }
         ReferenceTerm::Angle => "its viewing angle",
         ReferenceTerm::Agreement => "its agreement with the other rows",
         ReferenceTerm::Cells => "a ninth of its tile that differs from the other rows",
@@ -457,6 +461,13 @@ fn decision_lines(standing: ReferenceStanding, m: &TrackMeasurement) -> Vec<Stri
                     " (not the row's own: the largest any row has, or the default where none \
                      has one)"
                 },
+            ));
+            lines.push(format!(
+                "Capped radius \u{d7}{:.2}: {:.2} where the radius reads at the largest radius \
+                 searched, {:.0} grid px, and so may be larger; 1 below it.",
+                cost.capped_radius,
+                options.capped_radius_factor,
+                tile_max_radius()
             ));
             lines.push(format!(
                 "Angle \u{d7}{}: 1 + {:.2} \u{d7} the tangent of the viewing angle.",

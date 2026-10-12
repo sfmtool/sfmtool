@@ -1097,7 +1097,7 @@ that is not there prints a bare `-`, with no unit.
 | Proj. err | absent | the reprojection error: how far the keypoint sits from the point's projection, or, before the track is triangulated, from its patch's centre's, over the same residual as the ray angle, comparable across lenses and depths: `0.65 px` over `0.08°` |
 | Shift | how far the refinement moved the member off its seed, in patch-grid px: `1.20 px` | how far the correlation peak against the render of the track's reference, looked for within the shift bar, sits from the observation's own keypoint, in patch-grid px on the patch's plane; `0` on the reference's own row |
 | Zoom | `-` | patch-grid px, at the reconstruction's patch resolution `R`, per photograph pixel at the patch's centre, the reciprocals of the two singular values of the Jacobian there of the warp from the patch grid to the photograph, least over most, each to two significant digits: `0.71/1.3×`, and both numbers even where the two print the same, `0.19/0.19×`; `-` for a track with no patch yet, an observation with nothing saying where it sits, a patch whose centre is behind the camera or outside the camera model's domain, and a patch seen edge on |
-| Reference | `-` | `reference` over the viewing angle and pair ZNCC (`24°, 87%`) on the reference in use, on a green cell where the reference-view rule picks it too, a red one where the rule picks another row, and a cell with no fill where the rule picks no row; `pick` on a grey cell for the rule's pick where it is not the reference; on any other row its cost over the pick's and the word for its costliest term, `×1.25 oblique`, the word one of `less sharp`, `oblique`, `agrees less`, `ninth differs`, `partial` or `clipped`, or for a row the rule left out `partial`, `no tile` or `back facing`; an `out` row, which the rule does not consider, prints `-` over its angle; hovering the cell says what the mark means and how to accept the pick, then the decision, the cost's terms beside their bands and scales, and every reading |
+| Reference | `-` | `reference` over the viewing angle and pair ZNCC (`24°, 87%`) on the reference in use, on a green cell where the reference-view rule picks it too, a red one where the rule picks another row, and a cell with no fill where the rule picks no row; `pick` on a grey cell for the rule's pick where it is not the reference; on any other row its cost over the pick's and the word for its costliest term, `×1.25 oblique`, the word one of `less sharp`, `capped radius`, `oblique`, `agrees less`, `ninth differs`, `partial` or `clipped`, or for a row the rule left out `partial`, `no tile` or `back facing`; an `out` row, which the rule does not consider, prints `-` over its angle; hovering the cell says what the mark means and how to accept the pick, then the decision, the cost's terms beside their bands and scales, and every reading |
 | Status | the kernel's `member_status` | `walked 19 grid px (ZNCC 87% / 41% there), kept at seed` where the last fit refused to move it, the ZNCC being the blur-matched score against the stored bitmap of the tile at the walked peak (left out where there is none); the reason's own sentence where the localizer could not read the row or the row has no score against the bitmap (`there is no bitmap to score it against`, or `the bitmap is to be rendered again before the row is scored` while an unpin leaves it pending its render); `localized` where the evaluation read it; `not evaluated` where nothing has been read |
 | From (Edited) | the provenance | the provenance |
 | Name | the image's file name elided in its middle to fit, the start of the path and the end of the file name both kept; hovering the name shows it whole | the same |
@@ -1404,7 +1404,9 @@ pick alternated between rows. The marks (`reference::ReferenceRows`,
 
 A track-stage evaluation runs the reference-view rule over the `in`
 rows ([`../core/patch/reference-view.md`](../core/patch/reference-view.md)): it
-gives each row a cost in grid px, the row's self-similarity radius times an
+gives each row a cost in grid px, the row's self-similarity radius, times
+`1.5` where that radius reads at the largest radius searched (`3+`, a lower
+bound), times an
 angle factor that grows with the tangent of the viewing angle (`1` facing the
 patch, `1.25` at 45°), times four penalties,
 each 1 inside its band: agreement, for a pair ZNCC (the median of the row's
@@ -1417,8 +1419,8 @@ cost. A row with no tile, less than 90% of it on the photograph, or a viewing
 angle of 90° or more (edge on or from behind, where no patch is drawn) is never
 picked. The agreements are read plain. Every other row's first line is its
 cost over the pick's and the word for its **costliest term**, the term that adds most to its cost over the
-pick's: `less sharp`, `oblique`, `agrees less`, `ninth differs`, `partial` or
-`clipped`, as in `×1.25 oblique` (`×∞` for an infinite ratio). A row
+pick's: `less sharp`, `capped radius`, `oblique`, `agrees less`, `ninth
+differs`, `partial` or `clipped`, as in `×1.25 oblique` (`×∞` for an infinite ratio). A row
 the rule left out reads `partial` for the coverage floor, `no tile` or `back
 facing`. The column says *ninth* for a cell of the ZNCC grid, since a *cell* in
 the table is one row's entry in one column. Its second line is the viewing
@@ -1428,8 +1430,9 @@ Hovering the cell gives, on a marked row, what the mark means and how to
 change it, and then (`reference::reference_hover`) the decision in a sentence,
 naming the costliest term or why the row was left out; the cost, the radius
 (and, where it is not the row's own, that it is the largest any row has or the
-default), the angle factor beside its weight, and each penalty beside its
-band and scale; for a
+default), the step on a radius at the cap beside its factor and the cap, the
+angle factor beside its weight, and each penalty beside its band and scale;
+for a
 back-facing row, its viewing angle and that no patch is drawn on it; and every
 reading: the viewing angle
 and the tilt direction (the direction in the patch's plane the ray from the

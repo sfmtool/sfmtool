@@ -1517,8 +1517,9 @@ Across the `in` rows that have a tile it then writes:
   **typical agreement**, the median of the rows' `pair_zncc_grid` in that
   ninth, over the ninths whose typical agreement is at least `0.5`;
 - `reference_view`: a `ReferenceStanding`, the rule's decision about the row:
-  `cost`, its `ReferenceCost` (the cost in grid px and the radius, angle
-  factor and four penalties it is the product of) or the `ReferenceExclusion` that
+  `cost`, its `ReferenceCost` (the cost in grid px and the radius, the step
+  on a radius at the cap, the angle factor and the four penalties it is the
+  product of) or the `ReferenceExclusion` that
   left it out (`NoTile`, `Coverage` or `BackFacing`); `reference`, whether it
   is the pick; `pick_cost`, the pick's cost, with `cost_ratio()` the row's
   cost over it; and `costliest_term`, the `ReferenceTerm` that adds most to
@@ -3345,8 +3346,9 @@ carries the reference view's readings where the row has them:
 `pair_zncc_grid` as a `(3, 3)` float64 array, and `reference_view` as a dict
 `{"is_reference", "cost", "cost_ratio", "terms", "costliest_term",
 "excluded_by"}`: the row's cost and its cost over the pick's,
-`terms` a dict of the radius (with `radius_read`), the angle factor and the
-four penalties, the costliest term by name (`"sharpness"`, `"angle"`,
+`terms` a dict of the radius (with `radius_read`), the step on a radius at
+the cap (`capped_radius`), the angle factor and the four penalties, the
+costliest term by name (`"sharpness"`, `"capped_radius"`, `"angle"`,
 `"agreement"`, `"cells"`, `"coverage"`, `"clipped"` or `None`), the exclusion
 by name (`"no_tile"`, `"coverage"`, `"back_facing"` or `None`)
 ([../patch/reference-view.md](../patch/reference-view.md) § "Python bindings").
