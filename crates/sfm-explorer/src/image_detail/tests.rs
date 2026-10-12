@@ -100,6 +100,7 @@ fn look_frame(
             crate::image_detail::DetailPhotograph::Decoded(image),
             &feature_display,
             &mut intrinsics_display,
+            None,
         );
     });
 }
@@ -533,6 +534,7 @@ fn overlay_frame(
             crate::image_detail::DetailPhotograph::Decoded(image),
             feature_display,
             &mut intrinsics_display,
+            None,
         );
     });
 }
@@ -716,6 +718,7 @@ fn context_menu_texts(bench: BenchMenu<'_>) -> Vec<String> {
                 crate::image_detail::DetailPhotograph::Decoded(&image),
                 &display,
                 &mut intrinsics_display,
+                None,
             );
         });
     }
@@ -878,6 +881,7 @@ fn chord_click(
                 crate::image_detail::DetailPhotograph::Decoded(&image),
                 &display,
                 &mut intrinsics_display,
+                None,
             );
             if frame == 1 {
                 asked = (response.create_track_here, response.select_point);
@@ -1113,6 +1117,7 @@ fn click_frames(
                 crate::image_detail::DetailPhotograph::Decoded(image),
                 &display,
                 &mut intrinsics_display,
+                None,
             );
         });
     }
@@ -1312,6 +1317,7 @@ fn bench_frame(
                 crate::image_detail::DetailPhotograph::Decoded(&image),
                 &display,
                 &mut intrinsics_display,
+                None,
             );
         });
         output.textures_delta.clear();
@@ -1966,6 +1972,7 @@ fn published_frame(
             crate::image_detail::DetailPhotograph::Decoded(image),
             &feature_display,
             &mut intrinsics_display,
+            None,
         );
         published = response.view;
     });
@@ -2237,6 +2244,7 @@ fn gesture(
                 crate::image_detail::DetailPhotograph::Decoded(&image),
                 &display,
                 &mut intrinsics_display,
+                None,
             ));
         });
         output.textures_delta.clear();

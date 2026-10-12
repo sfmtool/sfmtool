@@ -46,6 +46,7 @@ fn available_after_toolbar(cell_width: f32, overlay_mode: OverlayMode) -> egui::
             &mut intrinsics,
             &mut detail,
             Some((camera_ref, camera)),
+            None,
         );
         available = cell_ui.available_rect_before_wrap();
     });

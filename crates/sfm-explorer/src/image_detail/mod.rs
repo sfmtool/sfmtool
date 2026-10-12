@@ -9,7 +9,9 @@
 //! - [`input`] — drag/scroll/pinch/keyboard/gesture view manipulation.
 //! - [`overlay`] — the feature-overlay draw modes, hit-testing, and tooltip.
 //! - [`mod@intrinsics`] — the intrinsics overlay layer, drawn independently of
-//!   the feature mode and composing with whichever one is active.
+//!   the feature mode and composing with whichever one is active; while a
+//!   camera model proposal is open on the image's camera, its change field
+//!   and observation layer.
 //! - [`mod@bench_track`]: the bench layer, the focused editable track drawn
 //!   over everything else in the bench's own colours.
 //! - [`mod@view`] -- what the pan and the zoom mean, as a pure function over the
@@ -24,12 +26,13 @@ mod overlay;
 mod tests;
 mod view;
 
-pub(crate) use intrinsics::{show_intrinsics_controls, CameraLayer};
+pub(crate) use intrinsics::{show_intrinsics_controls, CameraLayer, ChangeLayer, LayerModel};
 pub(crate) use overlay::{BenchMenu, START_CLUSTER_LABEL};
 #[cfg(feature = "mcp")]
 pub(crate) use view::look_at;
 pub(crate) use view::{Look, ViewGeometry};
 
+use crate::camera_model_proposal::{CameraModelProposal, ObservationReprojection};
 use crate::document::VersionSerial;
 use crate::platform::{GestureEvent, ScrollInput};
 use crate::scene::{CameraRef, ImageRef, PointRef, ReconId};
@@ -102,12 +105,22 @@ pub struct ImageDetail {
     loaded_image: Option<(ImageRef, egui::TextureHandle)>,
     /// Prepared feature overlay for the current image.
     feature_overlay: Option<FeatureOverlayState>,
-    /// The intrinsics layer's per-camera products, keyed by [`CameraRef`].
+    /// The intrinsics layer's per-camera products, keyed by [`CameraRef`] and
+    /// the model they were computed from: the current camera, or an open
+    /// camera model proposal's proposed camera by its generation, so the one is
+    /// never served for the other.
     ///
     /// Bounded by the number of *distinct* intrinsics across the loaded nodes,
-    /// which is small even for a per-image-intrinsics solve, so there is no
-    /// eviction beyond [`ImageDetail::forget_recon`].
-    intrinsics: HashMap<CameraRef, CameraLayer>,
+    /// which is small even for a per-image-intrinsics solve, plus at most one
+    /// proposed entry, so there is no eviction beyond
+    /// [`ImageDetail::forget_recon`] and a proposed entry's replacement.
+    intrinsics: HashMap<(CameraRef, LayerModel), CameraLayer>,
+    /// The **Change to proposed** field of the proposal last drawn, by its
+    /// camera, its generation and the grid density.
+    change_layer: Option<(CameraRef, u64, usize, ChangeLayer)>,
+    /// The observation layer of the image last drawn under a proposal, by the
+    /// image and the proposal's generation.
+    observation_layer: Option<(ImageRef, u64, Vec<ObservationReprojection>)>,
     /// The pixel the context menu was last opened at, in source-image
     /// coordinates, for the entries that act at it.
     ///
@@ -254,6 +267,8 @@ impl ImageDetail {
             loaded_image: None,
             feature_overlay: None,
             intrinsics: HashMap::new(),
+            change_layer: None,
+            observation_layer: None,
             menu_pixel: None,
             pan: egui::Vec2::ZERO,
             zoom: 1.0,
@@ -309,32 +324,131 @@ impl ImageDetail {
         {
             self.feature_overlay = None;
         }
-        self.intrinsics.retain(|camera, _| camera.recon != id);
+        self.intrinsics.retain(|(camera, _), _| camera.recon != id);
+        if self
+            .change_layer
+            .as_ref()
+            .is_some_and(|(camera, ..)| camera.recon == id)
+        {
+            self.change_layer = None;
+        }
+        if self
+            .observation_layer
+            .as_ref()
+            .is_some_and(|(image, ..)| image.recon == id)
+        {
+            self.observation_layer = None;
+        }
     }
 
-    /// The cached intrinsics-layer report for `camera`, rebuilt when the camera
-    /// or the grid density changes.
+    /// The cached intrinsics-layer report for `camera`, the camera `model`
+    /// names, rebuilt when the grid density changes.
     ///
     /// Called from the toolbar as well as from the draw pass, so the popup's
     /// footer and the on-image legend are reading one computation rather than
-    /// two that could disagree.
+    /// two that could disagree. A proposed entry replaces any other proposed
+    /// entry of the camera, since only the open proposal's is ever drawn.
     pub(crate) fn intrinsics_layer(
         &mut self,
         camera_ref: CameraRef,
+        model: LayerModel,
         camera: &CameraIntrinsics,
         grid_cols: usize,
     ) -> &mut CameraLayer {
+        let key = (camera_ref, model);
         let stale = self
             .intrinsics
-            .get(&camera_ref)
+            .get(&key)
             .is_none_or(|layer| layer.grid.0 != grid_cols.max(1));
         if stale {
+            if let LayerModel::Proposed(_) = model {
+                self.intrinsics
+                    .retain(|(c, m), _| *c != camera_ref || !matches!(m, LayerModel::Proposed(_)));
+            }
             self.intrinsics
-                .insert(camera_ref, CameraLayer::compute(camera, grid_cols));
+                .insert(key, CameraLayer::compute(camera, grid_cols));
         }
         self.intrinsics
-            .get_mut(&camera_ref)
+            .get_mut(&key)
             .expect("just inserted when stale")
+    }
+
+    /// The two reports the gear popup's footer reads, computed if they are not
+    /// cached: the current camera's layer, and the change field of
+    /// `proposal` when it is open on the camera with a fitted camera.
+    pub(crate) fn popup_layers(
+        &mut self,
+        camera: Option<(CameraRef, &CameraIntrinsics)>,
+        proposal: Option<&CameraModelProposal>,
+        grid_cols: usize,
+    ) -> (Option<&CameraLayer>, Option<&ChangeLayer>) {
+        let Some((camera_ref, camera)) = camera else {
+            return (None, None);
+        };
+        self.intrinsics_layer(camera_ref, LayerModel::Current, camera, grid_cols);
+        let proposal = proposal.filter(|p| p.camera_ref() == camera_ref);
+        let has_change = match proposal {
+            Some(proposal) => self.change_layer(proposal, grid_cols).is_some(),
+            None => false,
+        };
+        (
+            self.intrinsics.get(&(camera_ref, LayerModel::Current)),
+            self.change_layer
+                .as_ref()
+                .filter(|_| has_change)
+                .map(|(.., layer)| layer),
+        )
+    }
+
+    /// The **Change to proposed** field of `proposal` over its camera's image,
+    /// cached by the camera, the proposal's generation and the grid density.
+    ///
+    /// `None` when the proposal's fit was refused, which leaves no proposed
+    /// camera to compare with.
+    pub(crate) fn change_layer(
+        &mut self,
+        proposal: &CameraModelProposal,
+        grid_cols: usize,
+    ) -> Option<&mut ChangeLayer> {
+        let refit = proposal.fit.as_ref().ok()?;
+        let camera_ref = proposal.camera_ref();
+        let cols = grid_cols.max(1);
+        let stale = !matches!(
+            &self.change_layer,
+            Some((c, g, n, _)) if *c == camera_ref && *g == proposal.generation && *n == cols
+        );
+        if stale {
+            self.change_layer = Some((
+                camera_ref,
+                proposal.generation,
+                cols,
+                ChangeLayer::compute(&proposal.source, &refit.camera, cols, refit.theta_fit_deg),
+            ));
+        }
+        self.change_layer.as_mut().map(|(.., layer)| layer)
+    }
+
+    /// The observation layer of `image` under `proposal`, cached by the image
+    /// and the proposal's generation.
+    fn observation_layer(
+        &mut self,
+        image: ImageRef,
+        proposal: &CameraModelProposal,
+    ) -> &[ObservationReprojection] {
+        let stale = !matches!(
+            &self.observation_layer,
+            Some((i, g, _)) if *i == image && *g == proposal.generation
+        );
+        if stale {
+            self.observation_layer = Some((
+                image,
+                proposal.generation,
+                proposal.image_reprojections(image.index()),
+            ));
+        }
+        self.observation_layer
+            .as_ref()
+            .map_or(&[], |(_, _, layer)| layer.as_slice())
     }
 
     /// Reset pan and zoom to fit the image in the panel.
@@ -561,6 +675,9 @@ impl ImageDetail {
         photograph: DetailPhotograph<'_>,
         feature_display: &FeatureDisplaySettings,
         intrinsics_display: &mut IntrinsicsDisplaySettings,
+        // The open camera model proposal, drawn by the intrinsics layer when it
+        // is on the image's camera.
+        proposal: Option<&CameraModelProposal>,
     ) -> ImageDetailResponse {
         let mut response = ImageDetailResponse {
             select_point: None,
@@ -809,6 +926,8 @@ impl ImageDetail {
                 &painter,
                 camera_ref,
                 camera,
+                img_idx,
+                proposal,
                 &view,
                 panel_rect,
                 intrinsics_display,
@@ -1165,6 +1284,8 @@ impl ImageDetail {
         self.loaded_image = None;
         self.feature_overlay = None;
         self.intrinsics.clear();
+        self.change_layer = None;
+        self.observation_layer = None;
         self.reset_view();
     }
 }

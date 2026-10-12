@@ -561,6 +561,7 @@ fn panel_frame_with_input(
             crate::image_detail::DetailPhotograph::Decoded(image),
             feature_display,
             intrinsics,
+            None,
         );
     });
     warm.textures_delta.clear();
@@ -582,6 +583,7 @@ fn panel_frame_with_input(
             crate::image_detail::DetailPhotograph::Decoded(image),
             feature_display,
             intrinsics,
+            None,
         );
     });
     output.textures_delta.clear();
@@ -966,7 +968,7 @@ fn the_toolbar_offers_the_checkbox_and_the_gear_whatever_the_feature_mode() {
     let mut settings = IntrinsicsDisplaySettings::default();
     let texts = painted(|ui| {
         ui.horizontal(|ui| {
-            super::show_intrinsics_controls(ui, &mut settings, None, None);
+            super::show_intrinsics_controls(ui, &mut settings, None, None, None);
         });
     });
     assert!(texts.iter().any(|t| t == "Intrinsics"), "{texts:?}");
@@ -979,7 +981,7 @@ fn the_popup_offers_a_distortion_row_only_when_there_is_distortion() {
     let layer = CameraLayer::compute(&camera, 16);
     let mut settings = IntrinsicsDisplaySettings::default();
     let texts = painted(|ui| {
-        controls::settings_popup(ui, &mut settings, Some(&camera), Some(&layer));
+        controls::settings_popup(ui, &mut settings, Some(&camera), Some(&layer), None);
     });
     assert!(texts.iter().any(|t| t == "Axes"), "{texts:?}");
     assert!(texts.iter().any(|t| t == "Iso-angle rings"), "{texts:?}");
@@ -996,7 +998,7 @@ fn the_popup_offers_a_distortion_row_only_when_there_is_distortion() {
     let pinhole = pinhole_camera();
     let layer = CameraLayer::compute(&pinhole, 16);
     let texts = painted(|ui| {
-        controls::settings_popup(ui, &mut settings, Some(&pinhole), Some(&layer));
+        controls::settings_popup(ui, &mut settings, Some(&pinhole), Some(&layer), None);
     });
     assert!(texts.iter().any(|t| t == "No distortion"), "{texts:?}");
     assert!(!texts.iter().any(|t| t == "Distortion field"), "{texts:?}");
@@ -1008,7 +1010,7 @@ fn the_popups_footer_says_which_domain_its_number_is_about() {
     let layer = CameraLayer::compute(&camera, 16);
     let mut settings = IntrinsicsDisplaySettings::default();
     let texts = painted(|ui| {
-        controls::settings_popup(ui, &mut settings, Some(&camera), Some(&layer));
+        controls::settings_popup(ui, &mut settings, Some(&camera), Some(&layer), None);
     });
     assert!(
         texts
@@ -1021,7 +1023,7 @@ fn the_popups_footer_says_which_domain_its_number_is_about() {
     let camera = simple_radial_camera();
     let layer = CameraLayer::compute(&camera, 16);
     let texts = painted(|ui| {
-        controls::settings_popup(ui, &mut settings, Some(&camera), Some(&layer));
+        controls::settings_popup(ui, &mut settings, Some(&camera), Some(&layer), None);
     });
     assert!(!texts.iter().any(|t| t.starts_with("inside ")), "{texts:?}");
 }
@@ -1030,4 +1032,251 @@ fn the_popups_footer_says_which_domain_its_number_is_about() {
 fn an_exaggeration_is_spelled_without_its_decimal_point() {
     assert_eq!(controls::scale_text(3.0), "3");
     assert_eq!(controls::scale_text(1.5), "1.5");
+}
+
+// ── The Change to proposed field ────────────────────────────────────────
+
+/// A few frames of the panel on the fisheye fixture's image 2, `width` pixels
+/// wide, with the state's proposal and display settings: what the last one
+/// painted.
+fn proposal_detail_frames(
+    state: &mut crate::state::AppState,
+    detail: &mut super::super::ImageDetail,
+    width: f32,
+) -> Vec<crate::test_support::PaintedText> {
+    use sfmtool_core::camera::image::ImageU8;
+    let ctx = egui::Context::default();
+    // The camera's own size, so the view maps its pixels onto the panel.
+    let image = ImageU8::new(480, 480, 3, vec![90u8; 480 * 480 * 3]);
+    let feature_display = crate::state::FeatureDisplaySettings {
+        overlay_mode: crate::state::OverlayMode::None,
+        ..Default::default()
+    };
+    let node = &state.scene[0];
+    let proposal = state.camera_model_proposal.as_ref();
+    let intrinsics = &mut state.intrinsics_display;
+    let mut painted = Vec::new();
+    for _ in 0..3 {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(width, 700.0),
+            )),
+            ..Default::default()
+        };
+        painted = crate::test_support::painted_text_rects(&ctx, input, |ui| {
+            detail.show(
+                ui,
+                node.edited(),
+                node.id,
+                node.history.current_version().serial,
+                Some(2),
+                None,
+                None,
+                None,
+                crate::image_detail::BenchMenu::default(),
+                &[],
+                &crate::platform::ScrollInput::default(),
+                None,
+                crate::image_detail::DetailPhotograph::Decoded(&image),
+                &feature_display,
+                intrinsics,
+                proposal,
+            );
+        });
+    }
+    painted
+}
+
+fn painted_strings(painted: &[crate::test_support::PaintedText]) -> Vec<String> {
+    painted.iter().map(|p| p.text.clone()).collect()
+}
+
+/// While a proposal is open on the image's camera the field mode it selected
+/// draws the change, the proposed camera's rings past the bound and the
+/// observation layer; the distortion field is back when the mode is.
+#[test]
+fn the_change_field_is_drawn_while_a_proposal_is_open() {
+    let (mut state, _) = crate::camera_model_proposal::tests::fisheye_proposal_state();
+    let mut detail = super::super::ImageDetail::new();
+    let texts = painted_strings(&proposal_detail_frames(&mut state, &mut detail, 900.0));
+    for needle in [
+        "change to proposed max ",
+        "proposed rings every 5°",
+        "reprojection: white current, blue proposed",
+    ] {
+        assert!(
+            texts.iter().any(|t| t.contains(needle)),
+            "{needle} missing from {texts:?}"
+        );
+    }
+    assert!(!texts.iter().any(|t| t.starts_with("distortion max")));
+    // A ring of the proposed camera's, past the bound.
+    assert!(texts.iter().any(|t| t == "90°"), "{texts:?}");
+
+    state.intrinsics_display.field = crate::state::FieldMode::Distortion;
+    let texts = painted_strings(&proposal_detail_frames(&mut state, &mut detail, 900.0));
+    assert!(
+        texts.iter().any(|t| t.starts_with("distortion max")),
+        "{texts:?}"
+    );
+    assert!(!texts.iter().any(|t| t.contains("change to proposed")));
+}
+
+/// With no proposal open the change mode has nothing to compare, and the
+/// distortion field is drawn.
+#[test]
+fn the_change_mode_without_a_proposal_draws_the_distortion_field() {
+    let mut state = crate::state::AppState::new();
+    state.append_node(crate::camera_model_proposal::tests::fisheye_node(
+        "/runs/kerry.sfmr",
+    ));
+    state.intrinsics_display.field = crate::state::FieldMode::ChangeToProposed;
+    let mut detail = super::super::ImageDetail::new();
+    let texts = painted_strings(&proposal_detail_frames(&mut state, &mut detail, 900.0));
+    assert!(
+        texts.iter().any(|t| t.starts_with("distortion max")),
+        "{texts:?}"
+    );
+    assert!(!texts.iter().any(|t| t.contains("change to proposed")));
+    assert!(!texts.iter().any(|t| t.contains("reprojection")));
+}
+
+/// The layer cache keys on the model as well as the camera: the axes drawn
+/// through the proposed camera are its own entry, and the current camera's
+/// entry is never the proposed one's.
+#[test]
+fn the_layer_cache_does_not_serve_the_proposed_camera_as_the_current_one() {
+    let (mut state, _) = crate::camera_model_proposal::tests::fisheye_proposal_state();
+    let mut detail = super::super::ImageDetail::new();
+    proposal_detail_frames(&mut state, &mut detail, 900.0);
+    let proposal = state.camera_model_proposal.as_ref().unwrap();
+    let camera_ref = proposal.camera_ref();
+    let generation = proposal.generation;
+    let current = &state.scene[0].recon().image_table.cameras[0];
+    let proposed = detail
+        .intrinsics
+        .get(&(camera_ref, super::LayerModel::Proposed(generation)))
+        .expect("the axes were drawn through the proposed camera");
+    assert_eq!(proposed.limit_deg, None, "a spline is trusted everywhere");
+    let layer = detail.intrinsics_layer(camera_ref, super::LayerModel::Current, current, 16);
+    assert!(layer.limit_deg.is_some_and(|limit| limit < 90.0));
+
+    // Asking for the current camera's axes leaves the proposed entry where it
+    // is and draws through the current one.
+    state.intrinsics_display.axes_on_current_model = true;
+    let texts = painted_strings(&proposal_detail_frames(&mut state, &mut detail, 900.0));
+    assert!(
+        texts.iter().any(|t| t.starts_with("extrapolated past 84.")),
+        "{texts:?}"
+    );
+}
+
+/// The change field's arrows are only where the current camera is trusted,
+/// and the rings are every 5° from the fit's largest angle to the frame's
+/// corner.
+#[test]
+fn the_change_field_stops_at_the_current_cameras_bound() {
+    use sfmtool_core::camera::refit_intrinsics::{
+        refit_camera_intrinsics, RefitOptions, RefitTarget,
+    };
+    let camera = kerry_park_camera();
+    let target = RefitTarget::from_name("SFMTOOL_FISHEYE", Some(8)).unwrap();
+    let refit = refit_camera_intrinsics(&camera, &target, &RefitOptions::default()).unwrap();
+    let change = super::ChangeLayer::compute(&camera, &refit.camera, 16, refit.theta_fit_deg);
+    let limit = change.limit_deg.expect("the polynomial is bounded");
+    let (past, total) = change.past_bound;
+    assert_eq!(total, 16 * 16);
+    assert!(past > 0 && past < total);
+    assert_eq!(change.arrows.len() + past, total);
+    for arrow in &change.arrows {
+        let theta = sfmtool_core::camera::report::off_axis_angle_deg(
+            &camera,
+            arrow.pixel[0],
+            arrow.pixel[1],
+        );
+        assert!(theta <= limit);
+    }
+    // The radial profile fits to a hundredth of a pixel; what is left is the
+    // dropped aspect, under a pixel.
+    assert!(
+        change.max_px > 0.0 && change.max_px < 1.0,
+        "{}",
+        change.max_px
+    );
+
+    let rings = &change.ring_angles_deg;
+    assert_eq!(rings.first().copied(), Some(85.0));
+    assert!(rings.windows(2).all(|w| (w[1] - w[0] - 5.0).abs() < 1e-9));
+    let corner = sfmtool_core::camera::report::field_of_view(&refit.camera)
+        .unwrap()
+        .max_off_axis;
+    assert!(*rings.last().unwrap() <= corner && *rings.last().unwrap() > corner - 5.0);
+}
+
+/// The popup offers the field mode and the axes' camera only while a proposal
+/// is open on the camera, and names the field it is showing.
+#[test]
+fn the_popup_offers_the_field_mode_while_a_proposal_is_open() {
+    use sfmtool_core::camera::refit_intrinsics::{
+        refit_camera_intrinsics, RefitOptions, RefitTarget,
+    };
+    let camera = kerry_park_camera();
+    let layer = CameraLayer::compute(&camera, 16);
+    let target = RefitTarget::from_name("SFMTOOL_FISHEYE", Some(8)).unwrap();
+    let refit = refit_camera_intrinsics(&camera, &target, &RefitOptions::default()).unwrap();
+    let change = super::ChangeLayer::compute(&camera, &refit.camera, 16, refit.theta_fit_deg);
+    let mut settings = IntrinsicsDisplaySettings {
+        field: crate::state::FieldMode::ChangeToProposed,
+        ..Default::default()
+    };
+    let texts = painted(|ui| {
+        controls::settings_popup(
+            ui,
+            &mut settings,
+            Some(&camera),
+            Some(&layer),
+            Some(&change),
+        );
+    });
+    for needle in [controls::AXES_ON_CURRENT, "Field", "Change field"] {
+        assert!(texts.iter().any(|t| t == needle), "{needle}: {texts:?}");
+    }
+    assert!(
+        texts.iter().any(|t| t.starts_with("max change ")),
+        "{texts:?}"
+    );
+
+    let texts = painted(|ui| {
+        controls::settings_popup(ui, &mut settings, Some(&camera), Some(&layer), None);
+    });
+    assert!(!texts.iter().any(|t| t == controls::AXES_ON_CURRENT));
+    assert!(texts.iter().any(|t| t == "Distortion field"), "{texts:?}");
+}
+
+/// The layer's legend stays inside the panel from the stock window's width up.
+#[test]
+fn the_change_legend_stays_inside_the_panel() {
+    let (mut state, _) = crate::camera_model_proposal::tests::fisheye_proposal_state();
+    for width in [341.0, 482.0, 1800.0] {
+        let mut detail = super::super::ImageDetail::new();
+        let painted = proposal_detail_frames(&mut state, &mut detail, width);
+        let legend: Vec<_> = painted
+            .iter()
+            .filter(|p| {
+                p.text.starts_with("change to proposed")
+                    || p.text.contains("reprojection")
+                    || p.text.contains("nodes past")
+                    || p.text.starts_with("angles:")
+            })
+            .collect();
+        assert!(legend.len() >= 4, "at {width} px: {legend:?}");
+        for line in legend {
+            assert!(
+                line.rect.max.x <= width,
+                "{:?} runs past {width} px",
+                line.text
+            );
+        }
+    }
 }

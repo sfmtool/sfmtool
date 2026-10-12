@@ -149,6 +149,7 @@ impl TabViewer for Tabs<'_> {
                     crate::image_detail::DetailPhotograph::Decoded(&self.photograph.image),
                     &state.feature_display,
                     &mut state.intrinsics_display,
+                    None,
                 );
                 let after = crate::state::ImageDetailDisplay::snapshot(
                     &state.feature_display,

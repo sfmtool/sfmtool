@@ -35,12 +35,16 @@
 //! # Caching
 //!
 //! Nothing here is per-frame work. [`CameraLayer`] is computed once per
-//! [`crate::scene::CameraRef`] and held by [`super::ImageDetail`], because the
-//! displacement field is a few hundred ray round trips and `undistort` is
-//! iterative for the OpenCV family. It is rebuilt only when the camera, the
-//! grid density or the node changes.
+//! [`crate::scene::CameraRef`] and [`LayerModel`] and held by
+//! [`super::ImageDetail`], because the displacement field is a few hundred ray
+//! round trips and `undistort` is iterative for the OpenCV family. It is
+//! rebuilt only when the camera, the grid density or the node changes. The
+//! model is part of the key so the layer of an open proposal's proposed
+//! camera is never served for the current camera. The change field and the
+//! observation layer are cached by the proposal's generation.
 
 mod axes;
+mod change_field;
 mod controls;
 mod distortion_field;
 mod hover;
@@ -48,6 +52,7 @@ mod hover;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use change_field::ChangeLayer;
 pub(crate) use controls::show_intrinsics_controls;
 
 use axes::AxisGeometry;
@@ -55,7 +60,18 @@ use egui::{Align2, Color32, FontId, Pos2, Rect, Stroke};
 use sfmtool_core::camera::report;
 use sfmtool_core::camera::CameraIntrinsics;
 
-use crate::state::IntrinsicsDisplaySettings;
+use crate::camera_model_proposal::CameraModelProposal;
+use crate::state::{FieldMode, IntrinsicsDisplaySettings};
+
+/// Which camera a cached [`CameraLayer`] was computed from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum LayerModel {
+    /// The camera the node holds.
+    Current,
+    /// An open camera model proposal's proposed camera, by the proposal's
+    /// generation.
+    Proposed(u64),
+}
 
 /// Near-white, the one colour that survives an arbitrary colormap underneath.
 const INK_RGB: [u8; 3] = [246, 247, 250];
@@ -269,6 +285,14 @@ impl super::ImageDetail {
     /// Draw everything in the layer that sits *beneath* the feature overlays,
     /// and return the text the layer contributes to the panel's one tooltip.
     ///
+    /// While a camera model proposal with a fitted camera is open on the
+    /// image's camera, the axes and rings are the proposed camera's unless
+    /// [`IntrinsicsDisplaySettings::axes_on_current_model`] asks for the
+    /// current one, and the field mode [`FieldMode::ChangeToProposed`] draws
+    /// the change field ([`mod@change_field`]) and the observation layer in
+    /// place of the distortion field. The principal point, its offset and the
+    /// hover readout stay the current camera's.
+    ///
     /// The principal-point marker is deliberately not here: it draws last, over
     /// the features, from [`draw_principal_point`].
     #[allow(clippy::too_many_arguments)]
@@ -277,17 +301,28 @@ impl super::ImageDetail {
         painter: &egui::Painter,
         camera_ref: crate::scene::CameraRef,
         camera: &CameraIntrinsics,
+        image: usize,
+        proposal: Option<&CameraModelProposal>,
         view: &View,
         panel: Rect,
         settings: &IntrinsicsDisplaySettings,
         pointer: Option<Pos2>,
     ) -> Option<String> {
-        let layer = self.intrinsics_layer(camera_ref, camera, settings.grid_cols);
+        let proposed = proposal
+            .filter(|p| p.camera_ref() == camera_ref)
+            .and_then(|p| p.fit.as_ref().ok().map(|refit| (p, &refit.camera)));
+        let (axes_model, axes_camera) = match proposed {
+            Some((p, proposed)) if !settings.axes_on_current_model => {
+                (LayerModel::Proposed(p.generation), proposed)
+            }
+            _ => (LayerModel::Current, camera),
+        };
 
         // Resample the grid only when the zoom has crossed a bucket or the
         // rings have been switched on: the ladder is a function of the scale,
         // and a pinch gesture would otherwise rebuild two polylines and a
         // handful of contours sixty times a second.
+        let layer = self.intrinsics_layer(camera_ref, axes_model, axes_camera, settings.grid_cols);
         let bucket = axes::scale_bucket(view.scale);
         let stale = layer
             .geometry
@@ -296,7 +331,7 @@ impl super::ImageDetail {
         if stale {
             let limit_deg = layer.limit_deg;
             layer.geometry = Some(AxisGeometry::compute(
-                camera,
+                axes_camera,
                 view.scale,
                 settings.rings,
                 limit_deg,
@@ -309,11 +344,44 @@ impl super::ImageDetail {
         // The field on top of the grid: the grid is the frame, the field is the
         // measurement sitting in it. Both are still beneath the features.
         let mut lines = legend_lines(settings);
-        if settings.distortion && !layer.arrows.is_empty() {
-            layer.auto_scale =
-                distortion_field::auto_scale(layer.max_px, layer.cell_px(camera), view.fit);
-            let scale = settings.distortion_scale.unwrap_or(layer.auto_scale);
-            lines.extend(distortion_field::draw(painter, layer, view, panel, scale));
+        let change = proposed.filter(|_| settings.field == FieldMode::ChangeToProposed);
+        match change {
+            Some((proposal, proposed)) => {
+                if settings.distortion {
+                    if let Some(change) = self.change_layer(proposal, settings.grid_cols) {
+                        lines.extend(change.draw(
+                            painter,
+                            camera,
+                            proposed,
+                            view,
+                            panel,
+                            settings.distortion_scale,
+                        ));
+                    }
+                }
+                let image = crate::scene::ImageRef::new(camera_ref.recon, image);
+                let observations = self.observation_layer(image, proposal);
+                lines.extend(change_field::draw_observations(
+                    painter,
+                    observations,
+                    view,
+                    panel,
+                ));
+            }
+            None => {
+                let layer = self.intrinsics_layer(
+                    camera_ref,
+                    LayerModel::Current,
+                    camera,
+                    settings.grid_cols,
+                );
+                if settings.distortion && !layer.arrows.is_empty() {
+                    layer.auto_scale =
+                        distortion_field::auto_scale(layer.max_px, layer.cell_px(camera), view.fit);
+                    let scale = settings.distortion_scale.unwrap_or(layer.auto_scale);
+                    lines.extend(distortion_field::draw(painter, layer, view, panel, scale));
+                }
+            }
         }
 
         draw_centre_offset(painter, camera, view, panel);
@@ -321,7 +389,9 @@ impl super::ImageDetail {
 
         // Not painted here: the panel has one tooltip, and this is the text the
         // feature layer appends its own to. See [`mod@hover`].
-        let limit_deg = layer.limit_deg;
+        let limit_deg = self
+            .intrinsics_layer(camera_ref, LayerModel::Current, camera, settings.grid_cols)
+            .limit_deg;
         pointer
             .filter(|pos| panel.contains(*pos))
             .and_then(|pos| hover::readout(camera, limit_deg, view.image_pixel(pos)))
@@ -337,9 +407,12 @@ fn draw_legend(painter: &egui::Painter, panel: Rect, lines: &[String]) {
         return;
     }
     let font = FontId::proportional(LABEL_SIZE + 1.0);
+    // Wrapped at the panel's width less the legend's margins, so a long line
+    // in a narrow panel takes a second line rather than running off it.
+    let wrap = (panel.width() - 24.0).max(40.0);
     let galleys: Vec<_> = lines
         .iter()
-        .map(|line| painter.layout_no_wrap(line.clone(), font.clone(), ink(255)))
+        .map(|line| painter.layout(line.clone(), font.clone(), ink(255), wrap))
         .collect();
     let width = galleys.iter().map(|g| g.size().x).fold(0.0_f32, f32::max);
     let height: f32 = galleys.iter().map(|g| g.size().y).sum();

@@ -749,6 +749,7 @@ impl TabContext<'_> {
                 &mut self.state.intrinsics_display,
                 self.image_detail,
                 camera,
+                self.state.camera_model_proposal.as_ref(),
             );
 
             // Determine how many SIFT features to load based on overlay mode
@@ -829,6 +830,7 @@ impl TabContext<'_> {
                 detail_photograph,
                 &self.state.feature_display,
                 &mut self.state.intrinsics_display,
+                self.state.camera_model_proposal.as_ref(),
             );
             let after = crate::state::ImageDetailDisplay::snapshot(
                 &self.state.feature_display,
@@ -1450,6 +1452,7 @@ fn show_overlay_toolbar(
     intrinsics: &mut IntrinsicsDisplaySettings,
     detail: &mut ImageDetail,
     camera: Option<(CameraRef, &sfmtool_core::camera::CameraIntrinsics)>,
+    proposal: Option<&crate::camera_model_proposal::CameraModelProposal>,
 ) {
     // One unwrapped row of controls, so in a narrow dock cell it is wider than
     // the panel — and egui grows a `Ui`'s `max_rect` to include any widget that
@@ -1465,7 +1468,7 @@ fn show_overlay_toolbar(
     // body in, exactly as it is today.
     let offered = ui.available_rect_before_wrap();
     let mut row = ui.new_child(egui::UiBuilder::new().max_rect(offered));
-    show_overlay_toolbar_row(&mut row, settings, intrinsics, detail, camera);
+    show_overlay_toolbar_row(&mut row, settings, intrinsics, detail, camera, proposal);
     let height = row.min_rect().height();
     ui.advance_cursor_after_rect(egui::Rect::from_min_size(
         offered.min,
@@ -1481,6 +1484,7 @@ fn show_overlay_toolbar_row(
     intrinsics: &mut IntrinsicsDisplaySettings,
     detail: &mut ImageDetail,
     camera: Option<(CameraRef, &sfmtool_core::camera::CameraIntrinsics)>,
+    proposal: Option<&crate::camera_model_proposal::CameraModelProposal>,
 ) {
     ui.horizontal(|ui| {
         ui.label("Overlay:");
@@ -1546,13 +1550,13 @@ fn show_overlay_toolbar_row(
         // The layer's own report, built here so that the popup's footer and the
         // on-image legend read one computation rather than two.
         let grid_cols = intrinsics.grid_cols;
-        let layer = camera
-            .map(|(camera_ref, camera)| &*detail.intrinsics_layer(camera_ref, camera, grid_cols));
+        let (layer, change) = detail.popup_layers(camera, proposal, grid_cols);
         crate::image_detail::show_intrinsics_controls(
             ui,
             intrinsics,
             camera.map(|(_, camera)| camera),
             layer,
+            change,
         );
     });
     ui.separator();

@@ -101,7 +101,7 @@ pub(super) fn draw(
 
 /// One displacement arrow, from the model's pixel toward the ideal map's — the
 /// correction, drawn on the pixel it corrects.
-fn draw_arrow(
+pub(super) fn draw_arrow(
     painter: &egui::Painter,
     arrow: &Arrow,
     view: &View,

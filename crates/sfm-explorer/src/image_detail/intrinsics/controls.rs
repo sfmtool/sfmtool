@@ -9,8 +9,8 @@
 //! and the sub-toggles live in a popup the gear opens, enabled only while the
 //! checkbox is ticked.
 
-use super::CameraLayer;
-use crate::state::IntrinsicsDisplaySettings;
+use super::{CameraLayer, ChangeLayer};
+use crate::state::{FieldMode, IntrinsicsDisplaySettings};
 use sfmtool_core::camera::CameraIntrinsics;
 
 /// The gear that opens the settings popup. Spelled once so the glyph test can
@@ -21,7 +21,9 @@ pub(crate) const GEAR: &str = "⚙";
 /// Draw the layer's contribution to the Image Detail toolbar.
 ///
 /// `layer` is the cached report for the camera currently on screen, or `None`
-/// when no image is selected; it is what the popup's footer reads. Because the
+/// when no image is selected; it is what the popup's footer reads. `change`
+/// is the open camera model proposal's change field for that camera, or
+/// `None` when no proposal with a fitted camera is open on it. Because the
 /// toolbar is drawn above the image, the arrow scale it quotes is the one the
 /// *previous* frame resolved — invisible at any frame rate, and the only
 /// alternative would be laying the panel out twice.
@@ -30,39 +32,70 @@ pub(crate) fn show_intrinsics_controls(
     settings: &mut IntrinsicsDisplaySettings,
     camera: Option<&CameraIntrinsics>,
     layer: Option<&CameraLayer>,
+    change: Option<&ChangeLayer>,
 ) {
     ui.separator();
     ui.checkbox(&mut settings.enabled, "Intrinsics");
     ui.add_enabled_ui(settings.enabled, |ui| {
-        ui.menu_button(GEAR, |ui| settings_popup(ui, settings, camera, layer));
+        ui.menu_button(GEAR, |ui| {
+            settings_popup(ui, settings, camera, layer, change)
+        });
     });
 }
 
-/// The popup's body: the three sub-toggles, the two ladders, and a footer
-/// stating what the arrows are measuring.
+/// The popup's body: the sub-toggles, the two ladders, and a footer stating
+/// what the arrows are measuring. While a proposal is open on the camera it
+/// also offers the field mode and the axes' camera.
 pub(super) fn settings_popup(
     ui: &mut egui::Ui,
     settings: &mut IntrinsicsDisplaySettings,
     camera: Option<&CameraIntrinsics>,
     layer: Option<&CameraLayer>,
+    change: Option<&ChangeLayer>,
 ) {
     ui.set_min_width(230.0);
     ui.checkbox(&mut settings.axes, "Axes");
     ui.checkbox(&mut settings.rings, "Iso-angle rings");
 
+    if change.is_some() {
+        ui.checkbox(&mut settings.axes_on_current_model, AXES_ON_CURRENT);
+        ui.horizontal(|ui| {
+            ui.label("Field");
+            egui::ComboBox::from_id_salt("intrinsics_field")
+                .selected_text(settings.field.label())
+                .width(140.0)
+                .show_ui(ui, |ui| {
+                    for mode in FieldMode::ALL {
+                        ui.selectable_value(&mut settings.field, mode, mode.label());
+                    }
+                });
+        });
+    }
+    // The change field draws only while a proposal is open on the camera; the
+    // mode left selected otherwise draws the distortion field.
+    let change = change.filter(|_| settings.field == FieldMode::ChangeToProposed);
+
     // A model that is its own ideal map has an identically-zero field, so the
     // control never sits there inviting a click that would do nothing.
     let has_distortion = camera.is_some_and(|camera| camera.has_distortion());
-    if !has_distortion {
+    if !has_distortion && change.is_none() {
         ui.add_enabled(false, egui::Label::new("No distortion"));
         return;
     }
 
+    let auto = change
+        .map(|change| change.auto_scale)
+        .or(layer.map(|layer| layer.auto_scale));
     ui.horizontal(|ui| {
-        ui.checkbox(&mut settings.distortion, "Distortion field");
-        let auto_label = layer.map_or_else(
+        let label = if change.is_some() {
+            "Change field"
+        } else {
+            "Distortion field"
+        };
+        ui.checkbox(&mut settings.distortion, label);
+        let auto_label = auto.map_or_else(
             || "Auto".to_owned(),
-            |layer| format!("Auto ({TIMES}{})", scale_text(layer.auto_scale)),
+            |scale| format!("Auto ({TIMES}{})", scale_text(scale)),
         );
         egui::ComboBox::from_id_salt("intrinsics_distortion_scale")
             .selected_text(match settings.distortion_scale {
@@ -94,6 +127,23 @@ pub(super) fn settings_popup(
             });
     });
 
+    if let Some(change) = change {
+        ui.separator();
+        ui.label(format!("max change {:.2} px", change.max_px));
+        if let Some(limit) = change.limit_deg {
+            let (past, total) = change.past_bound;
+            if past > 0 {
+                ui.label(
+                    egui::RichText::new(format!(
+                        "inside {limit:.1}°; {past} of {total} nodes past it, where the proposed \
+                         camera's rings are drawn"
+                    ))
+                    .weak(),
+                );
+            }
+        }
+        return;
+    }
     let Some(layer) = layer else {
         return;
     };
@@ -114,6 +164,10 @@ pub(super) fn settings_popup(
         }
     }
 }
+
+/// The checkbox that puts the axes and rings back on the current camera
+/// while a proposal is open.
+pub(crate) const AXES_ON_CURRENT: &str = "Axes on current model";
 
 /// U+00D7 MULTIPLICATION SIGN, the `×` of `×3`. Spelled once for the glyph test.
 pub(crate) const TIMES: &str = "×";

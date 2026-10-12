@@ -259,7 +259,7 @@ impl AxisGeometry {
 }
 
 /// Map an image-pixel polyline into panel coordinates.
-fn panel_points(points: &[[f64; 2]], view: &View) -> Vec<Pos2> {
+pub(super) fn panel_points(points: &[[f64; 2]], view: &View) -> Vec<Pos2> {
     points.iter().map(|p| view.at(*p)).collect()
 }
 
@@ -481,7 +481,7 @@ fn signed_angle(angle_deg: f64) -> String {
 
 /// The iso-angle contour at `theta_deg`, as the runs of it that stay on frame,
 /// or `None` when none of it does.
-fn contour(
+pub(super) fn contour(
     camera: &CameraIntrinsics,
     theta_deg: f64,
     scale: f32,

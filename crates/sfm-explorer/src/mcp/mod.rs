@@ -791,6 +791,8 @@ pub(crate) struct IntrinsicsChange {
     /// the automatic scale".
     pub(crate) distortion_scale: Option<Option<f32>>,
     pub(crate) grid_cols: Option<usize>,
+    pub(crate) field: Option<crate::state::FieldMode>,
+    pub(crate) axes_on_current_model: Option<bool>,
 }
 
 /// An `apply_bench_track_thresholds` request: the bars the painting judges an

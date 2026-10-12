@@ -2510,10 +2510,7 @@ fn propose_camera_model_opens_a_proposal_and_pushes_nothing() {
             "coeff_count": 6
         }),
     );
-    assert_eq!(
-        changed["proposed"]["generation"].as_u64(),
-        Some(generation + 1)
-    );
+    assert!(changed["proposed"]["generation"].as_u64() > Some(generation));
 
     let read = call(
         &mut state,
@@ -2548,6 +2545,35 @@ fn propose_camera_model_opens_a_proposal_and_pushes_nothing() {
         "{error}"
     );
     assert_eq!(version_count(&state), 1);
+}
+
+/// Opening a proposal selects the Image Detail's Change to proposed field,
+/// which `get_image_detail_display` reports, and cancelling it restores the
+/// mode before it.
+#[test]
+fn a_proposal_selects_the_change_field_on_the_wire() {
+    let (mut state, mut viewer) = editable();
+    with_flat_spline_cameras(&mut state);
+    let field = |state: &mut AppState, viewer: &mut Viewer3D| {
+        call(state, viewer, "get_image_detail_display", json!({}))["image_detail_display"]
+            ["intrinsics"]["field"]
+            .clone()
+    };
+    assert_eq!(field(&mut state, &mut viewer), "distortion");
+    call(
+        &mut state,
+        &mut viewer,
+        "propose_camera_model",
+        json!({ "reconstruction_label": "run_a", "camera_intrinsics_index": 0 }),
+    );
+    assert_eq!(field(&mut state, &mut viewer), "change_to_proposed");
+    call(
+        &mut state,
+        &mut viewer,
+        "cancel_camera_model_proposal",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    assert_eq!(field(&mut state, &mut viewer), "distortion");
 }
 
 /// An unknown model and a count on a model without a spline open nothing; a

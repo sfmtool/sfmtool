@@ -141,6 +141,8 @@ fn get_image_detail_display_returns_the_defaults() {
                 "distortion": true,
                 "distortion_scale": Value::Null,
                 "grid_cols": 16,
+                "field": "distortion",
+                "axes_on_current_model": false,
             },
         })
     );
@@ -333,6 +335,8 @@ fn set_image_detail_display_refuses_a_value_it_cannot_show() {
                 "distortion": true,
                 "distortion_scale": Value::Null,
                 "grid_cols": 16,
+                "field": "distortion",
+                "axes_on_current_model": false,
             },
         })
     );
@@ -417,6 +421,47 @@ fn set_image_detail_display_records_one_display_entry_per_changed_field() {
         0,
         "{:?}",
         state.action_log.entries().collect::<Vec<_>>()
+    );
+}
+
+/// The field mode and the axes' camera are set by their wire names, recorded
+/// in the Action Log, and an unknown field is refused with the two the panel
+/// offers.
+#[test]
+fn set_image_detail_display_sets_the_field_mode() {
+    let (mut state, mut viewer) = quiet_scene();
+    let reply = set_display(
+        &mut state,
+        &mut viewer,
+        json!({ "intrinsics": { "field": "change_to_proposed", "axes_on_current_model": true } }),
+    );
+    assert_eq!(reply["intrinsics"]["field"], "change_to_proposed");
+    assert_eq!(reply["intrinsics"]["axes_on_current_model"], true);
+    assert_eq!(
+        state.intrinsics_display.field,
+        crate::state::FieldMode::ChangeToProposed
+    );
+    assert_eq!(
+        state
+            .action_log
+            .entries()
+            .map(|entry| entry.text.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "Intrinsics field Change to proposed",
+            "Axes on current model on"
+        ]
+    );
+
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "set_image_detail_display",
+        json!({ "intrinsics": { "field": "residual" } }),
+    );
+    assert!(
+        error.0.contains("distortion, change_to_proposed"),
+        "{error}"
     );
 }
 

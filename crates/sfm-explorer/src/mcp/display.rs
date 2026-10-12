@@ -50,7 +50,7 @@ use crate::dock::Tab;
 use crate::image_detail::{Look, ViewGeometry};
 use crate::scene::{ImageRef, ReconId};
 use crate::state::{
-    record_image_detail_changes, AppState, FeatureDisplaySettings, ImageDetailDisplay,
+    record_image_detail_changes, AppState, FeatureDisplaySettings, FieldMode, ImageDetailDisplay,
     IntrinsicsDisplaySettings, OverlayMode,
 };
 
@@ -137,6 +137,12 @@ fn apply_intrinsics(intrinsics: &mut IntrinsicsDisplaySettings, change: &Intrins
     if let Some(grid_cols) = change.grid_cols {
         intrinsics.grid_cols = grid_cols;
     }
+    if let Some(field) = change.field {
+        intrinsics.field = field;
+    }
+    if let Some(axes) = change.axes_on_current_model {
+        intrinsics.axes_on_current_model = axes;
+    }
 }
 
 /// The document both tools answer with.
@@ -160,6 +166,8 @@ fn document(state: &AppState) -> Value {
                 "distortion": intrinsics.distortion,
                 "distortion_scale": intrinsics.distortion_scale.map(f64::from),
                 "grid_cols": intrinsics.grid_cols,
+                "field": intrinsics.field.wire_name(),
+                "axes_on_current_model": intrinsics.axes_on_current_model,
             },
         }
     })
@@ -306,6 +314,16 @@ fn parse_intrinsics(args: &Args) -> Result<IntrinsicsChange, ToolError> {
                 Some(cols)
             }
         },
+        field: match inner.optional_string("field")? {
+            None => None,
+            Some(name) => Some(FieldMode::from_wire_name(&name).ok_or_else(|| {
+                inner.error(format!(
+                    "does not know the field {name:?} — the fields are {}.",
+                    FieldMode::ALL.map(FieldMode::wire_name).join(", ")
+                ))
+            })?),
+        },
+        axes_on_current_model: inner.optional_bool("axes_on_current_model")?,
     })
 }
 
@@ -801,6 +819,24 @@ pub(super) fn intrinsics_schema() -> Value {
                 "type": "integer",
                 "enum": IntrinsicsDisplaySettings::GRID_LADDER,
                 "description": "Arrows across the image width, from the popup's own ladder.",
+            },
+            "field": {
+                "type": "string",
+                "enum": FieldMode::ALL.map(FieldMode::wire_name),
+                "description":
+                    "Which field the arrows draw: \"distortion\", the lens against its family's \
+                     ideal map, or \"change_to_proposed\", how far the open camera model \
+                     proposal moves each pixel, with the proposed camera's rings past the \
+                     current camera's trusted bound and each observation's reprojection under \
+                     both cameras. Opening a proposal selects \"change_to_proposed\" and its \
+                     ending restores the mode before it; with no proposal open on the image's \
+                     camera the distortion field is drawn whatever this says.",
+            },
+            "axes_on_current_model": {
+                "type": "boolean",
+                "description":
+                    "While a camera model proposal is open on the image's camera, draw the axes \
+                     and rings through the current camera rather than the proposed one.",
             },
         },
     })
