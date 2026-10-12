@@ -114,9 +114,12 @@ impl AppState {
         let landed = self.poll_camera_model_proposal_job();
         let wanted = self.proposal_job_inputs();
         if let Some(running) = self.proposal_jobs.running.as_ref() {
-            let current = wanted.is_some_and(|wanted| {
-                wanted.generation == running.inputs.generation
-                    && wanted.document == running.inputs.document
+            // Still the open proposal's inputs: let it finish, even where the
+            // preview was cleared meanwhile, so ticking it again finds the
+            // answer rather than starting over.
+            let current = self.camera_model_proposal.as_ref().is_some_and(|proposal| {
+                proposal.generation == running.inputs.generation
+                    && proposal.opened_on == running.inputs.document
             });
             if !current {
                 running.cancel.store(true, Ordering::Relaxed);
