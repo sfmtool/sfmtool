@@ -1395,6 +1395,7 @@ fn edit_menu_items() {
             ("Delete Image", false),
             ("Move Camera", false),
             ("Cancel Camera Move", false),
+            ("Switch Camera Model…", false),
         ],
     );
 }
