@@ -69,16 +69,39 @@ pub(super) fn matrix_text(rows: &[Vec<f64>]) -> String {
 
 /// Draw a matrix as a grid of right-aligned monospaced cells.
 ///
+/// Each column is as wide as its widest number rather than [`VALUE_WIDTH`],
+/// so a matrix of small numbers fits a narrow panel; the copied text keeps
+/// the fixed width ([`matrix_text`]).
+///
 /// `id_salt` scopes the grid's own id: two matrices in one panel are two grids,
 /// and egui needs to tell them apart across frames.
 pub(super) fn matrix_grid(ui: &mut egui::Ui, id_salt: &str, rows: &[Vec<f64>]) {
+    let cells: Vec<Vec<String>> = rows
+        .iter()
+        .map(|r| {
+            r.iter()
+                .map(|v| value(*v).trim_start().to_string())
+                .collect()
+        })
+        .collect();
+    let columns = rows.first().map_or(1, Vec::len);
+    let widths: Vec<usize> = (0..columns)
+        .map(|c| {
+            cells
+                .iter()
+                .filter_map(|r| r.get(c))
+                .map(|cell| cell.chars().count())
+                .max()
+                .unwrap_or(0)
+        })
+        .collect();
     egui::Grid::new(id_salt)
-        .num_columns(rows.first().map_or(1, Vec::len))
+        .num_columns(columns)
         .spacing([12.0, 2.0])
         .show(ui, |ui| {
-            for r in rows {
-                for v in r {
-                    ui.monospace(value(*v));
+            for r in &cells {
+                for (c, cell) in r.iter().enumerate() {
+                    ui.monospace(format!("{cell:>width$}", width = widths[c]));
                 }
                 ui.end_row();
             }

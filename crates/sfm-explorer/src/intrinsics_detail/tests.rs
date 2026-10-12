@@ -1275,3 +1275,98 @@ fn escape_ending_a_fields_editing_does_not_cancel() {
     let (_, action) = proposal_frame(&mut panel, &ctx, &mut state, 0, vec![escape()]);
     assert_eq!(action, Some((camera, super::ProposalAction::Cancel)));
 }
+
+// ── The comparison plots ────────────────────────────────────────────────
+
+/// A frame of the panel on the fisheye fixture's camera, with or without its
+/// proposal, after a few settling frames, at `width`.
+fn fisheye_frames(
+    state: &mut crate::state::AppState,
+    width: f32,
+) -> Vec<crate::test_support::PaintedText> {
+    let mut panel = IntrinsicsDetail::new();
+    let ctx = egui::Context::default();
+    // A wrapped value grows its grid row on the frames after it is laid out.
+    for _ in 0..4 {
+        proposal_frame_at(&mut panel, &ctx, state, 0, width, Vec::new());
+    }
+    proposal_frame_at(&mut panel, &ctx, state, 0, width, Vec::new()).0
+}
+
+/// While a proposal is open the plot draws the current and the proposed
+/// camera, the change plot and the rug; without one it draws the camera alone.
+#[test]
+fn the_plot_compares_the_two_cameras_while_a_proposal_is_open() {
+    let (mut state, _) = crate::camera_model_proposal::tests::fisheye_proposal_state();
+    let observations = state.scene[0].recon().point_set.tracks.len();
+    let painted = texts_of(&fisheye_frames(&mut state, VIEWPORT.x));
+    for needle in [
+        "grey: current · blue: proposed",
+        "Change (px)",
+        "current extrapolated past 84.",
+        "fit 84.",
+        "proposed spline domain",
+        "The proposed model is trusted at every angle the frame reaches.",
+        &format!("Rug: {observations} observations"),
+    ] {
+        assert!(says(&painted, needle), "{needle} missing from {painted:?}");
+    }
+
+    let mut state = crate::state::AppState::new();
+    state.append_node(crate::camera_model_proposal::tests::fisheye_node(
+        "/runs/kerry.sfmr",
+    ));
+    let painted = texts_of(&fisheye_frames(&mut state, VIEWPORT.x));
+    assert!(says(&painted, "solid: model"), "{painted:?}");
+    for needle in ["Change (px)", "Rug:", "grey: current", "fit 84."] {
+        assert!(!says(&painted, needle), "{needle} drawn without a proposal");
+    }
+}
+
+/// The rug's caption counts the observations past the current camera's
+/// trusted bound: the fixture's wide points.
+#[test]
+fn the_rug_counts_the_observations_past_the_trusted_bound() {
+    let (mut state, _) = crate::camera_model_proposal::tests::fisheye_proposal_state();
+    let limit = sfmtool_core::camera::report::trustworthy_max_theta_deg(
+        &crate::camera_model_proposal::tests::kerry_camera(),
+    )
+    .unwrap();
+    let past = state
+        .camera_model_proposal
+        .as_ref()
+        .unwrap()
+        .rug()
+        .iter()
+        .filter(|&&t| t > limit)
+        .count();
+    assert!(past > 0);
+    let painted = texts_of(&fisheye_frames(&mut state, VIEWPORT.x));
+    let caption = format!("; {past} past {limit:.1}°.");
+    assert!(
+        says(&painted, &caption),
+        "{caption} missing from {painted:?}"
+    );
+}
+
+/// Nothing the panel paints with a proposal open overlaps anything else or
+/// runs past the panel's right edge, from the stock window's width to a wide
+/// one.
+#[test]
+fn the_comparison_stays_inside_the_panel_at_any_width() {
+    let (mut state, _) = crate::camera_model_proposal::tests::fisheye_proposal_state();
+    for width in [341.0, 482.0, 1800.0] {
+        let painted = fisheye_frames(&mut state, width);
+        assert!(says(&texts_of(&painted), "Change (px)"), "at {width} px");
+        assert_eq!(
+            overlapping(&painted, f32::INFINITY),
+            Vec::new(),
+            "at {width} px"
+        );
+        assert_eq!(
+            past_the_edge(&painted, f32::INFINITY, width),
+            Vec::<String>::new(),
+            "at {width} px"
+        );
+    }
+}

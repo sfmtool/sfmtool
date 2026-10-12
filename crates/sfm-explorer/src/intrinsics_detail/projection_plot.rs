@@ -39,12 +39,24 @@
 //! the lens's modelled domain is exactly the thing a reader of this panel wants
 //! to know about a circular fisheye, and it is only visible if the axis still
 //! reaches the corner.
+//!
+//! # While a proposal is open
+//!
+//! The plot compares the current camera with the proposed one
+//! ([`Comparison`]): both radial maps and both residuals are drawn, the
+//! current camera in a neutral stroke and the proposed one in the accent, each
+//! with its own extrapolated region shaded in its own colour. A third plot,
+//! `Change (px)`, draws the proposed radius minus the current one with its
+//! azimuth band, a rule at the fit's largest angle and a mark on the θ axis
+//! where the monotonicity constraint bound. Under the shared axis an
+//! observation rug puts one tick at the incidence angle of each observation of
+//! the camera's images, under the current camera.
 
-use egui::{Align2, Color32, FontId, Pos2, Rect, Shape, Stroke, StrokeKind};
+use egui::{Align2, Color32, FontId, Pos2, Rect, Shape, Stroke, StrokeKind, Vec2};
 use sfmtool_core::camera::report;
 use sfmtool_core::camera::{CameraIntrinsics, CameraModel};
 
-use super::derived::{Derived, ProfileSample};
+use super::derived::{ChangeProfile, Derived, ProfileSample};
 
 /// Width reserved left of the plots for their y-axis labels.
 const LEFT_GUTTER: f32 = 52.0;
@@ -58,9 +70,13 @@ const RADIAL_HEIGHT: f32 = 150.0;
 /// Height of the residual, which needs less: it is read for its shape and its
 /// extremes, not for absolute values.
 const RESIDUAL_HEIGHT: f32 = 96.0;
-/// Height of the shared x axis's tick labels, under the lower plot.
+/// Height of the change plot, read the way the residual is.
+const CHANGE_HEIGHT: f32 = 96.0;
+/// Height of the shared x axis's tick labels, under the lowest plot.
 const AXIS_HEIGHT: f32 = 16.0;
-/// Vertical gap between the two plots, over and above the lower one's title.
+/// Height of the observation rug, under the axis's labels.
+const RUG_HEIGHT: f32 = 14.0;
+/// Vertical gap between two plots, over and above the lower one's title.
 const PLOT_GAP: f32 = 8.0;
 
 /// Roughly how many ticks each axis aims for before the 1/2/5 ladder rounds
@@ -84,16 +100,38 @@ const EDGE_MERGE_DEG: f64 = 0.1;
 /// Dash and gap of the ideal map's stroke.
 const DASH: (f32, f32) = (5.0, 4.0);
 
+/// Font size of the rules' labels and the axes' tick labels.
+const SMALL_FONT: f32 = 9.0;
+
+/// Font size of the plots' titles and the extrapolated regions' labels.
+const LABEL_FONT: f32 = 10.0;
+
+/// Line height of a row of rule labels.
+const LABEL_ROW: f32 = 13.0;
+
+/// Rows of rule labels the upper plot holds before a label that fits on none
+/// of them is left off, its rule still drawn.
+const LABEL_ROWS: usize = 6;
+
 /// The palette, resolved per frame against the viewer's theme.
 struct Palette {
     axis: Color32,
     grid: Color32,
     text: Color32,
+    /// The camera's curve, and while a proposal is open the proposed camera's.
     model: Color32,
     ideal: Color32,
     band: Color32,
     extrapolated_wash: Color32,
     extrapolated_rule: Color32,
+    /// The current camera's curve while a proposal is open.
+    current: Color32,
+    current_band: Color32,
+    current_wash: Color32,
+    /// The proposed camera's extrapolated region.
+    proposed_wash: Color32,
+    /// Where the monotonicity constraint bound.
+    monotone: Color32,
 }
 
 impl Palette {
@@ -108,6 +146,11 @@ impl Palette {
                 band: Color32::from_rgba_unmultiplied(0x6c, 0xb6, 0xff, 44),
                 extrapolated_wash: Color32::from_rgba_unmultiplied(0xff, 0x8a, 0x5c, 26),
                 extrapolated_rule: Color32::from_rgb(0xff, 0x9d, 0x76),
+                current: Color32::from_gray(205),
+                current_band: Color32::from_rgba_unmultiplied(205, 205, 205, 40),
+                current_wash: Color32::from_rgba_unmultiplied(205, 205, 205, 30),
+                proposed_wash: Color32::from_rgba_unmultiplied(0x6c, 0xb6, 0xff, 22),
+                monotone: Color32::from_rgb(0xd0, 0x8c, 0xff),
             }
         } else {
             Self {
@@ -119,12 +162,33 @@ impl Palette {
                 band: Color32::from_rgba_unmultiplied(0x14, 0x5c, 0xb0, 40),
                 extrapolated_wash: Color32::from_rgba_unmultiplied(0xc0, 0x4a, 0x10, 26),
                 extrapolated_rule: Color32::from_rgb(0xa8, 0x40, 0x0c),
+                current: Color32::from_gray(70),
+                current_band: Color32::from_rgba_unmultiplied(70, 70, 70, 36),
+                current_wash: Color32::from_rgba_unmultiplied(70, 70, 70, 26),
+                proposed_wash: Color32::from_rgba_unmultiplied(0x14, 0x5c, 0xb0, 20),
+                monotone: Color32::from_rgb(0x7a, 0x2c, 0xb0),
             }
         }
     }
 }
 
-/// A labelled vertical rule shared by both plots.
+/// What the plot draws beside the current camera while a proposal with a
+/// fitted camera is open on it.
+pub(super) struct Comparison<'a> {
+    /// The proposed camera.
+    pub proposed: &'a CameraIntrinsics,
+    /// Its derived report, cached by the proposal's generation.
+    pub derived: &'a Derived,
+    /// The change from the current camera to it, cached with the report.
+    pub change: &'a ChangeProfile,
+    /// The largest angle the fit sampled, in degrees.
+    pub theta_fit_deg: f64,
+    /// The smallest and largest angle at which the monotonicity constraint
+    /// held the fit's slope at its floor, or `None` when it did not bind.
+    pub monotone_deg: Option<[f64; 2]>,
+}
+
+/// A labelled vertical rule shared by every plot.
 struct Marker {
     theta_deg: f64,
     label: String,
@@ -150,22 +214,71 @@ impl Scale {
     }
 }
 
+/// How one camera's curves are drawn: its samples, how many of them it
+/// vouches for, and its colours.
+struct Curve<'a> {
+    samples: &'a [ProfileSample],
+    trusted: usize,
+    band_visible: bool,
+    stroke: Color32,
+    /// The solid stroke's width. While a proposal is open the current camera
+    /// is drawn wider, under the proposed one, so where the two agree it shows
+    /// as a grey edge either side of the blue rather than vanishing under it.
+    width: f32,
+    band: Color32,
+}
+
+/// An extrapolated region: where it starts and how it is coloured and named.
+struct Wash {
+    limit_deg: f64,
+    fill: Color32,
+    rule: Color32,
+    label: String,
+}
+
+/// How many leading samples a model still vouches for: those at or inside
+/// `limit`, or all of them with no limit.
+fn trusted_count(samples: &[ProfileSample], limit: Option<f64>) -> usize {
+    match limit {
+        Some(limit) => samples.iter().take_while(|s| s.theta_deg <= limit).count(),
+        None => samples.len(),
+    }
+}
+
 /// The projection plot, or a one-line statement of why there is none.
+///
+/// `compare` is the open proposal's camera, drawn against this one; `rug` is
+/// the incidence angles of the camera's observations under this camera,
+/// ascending, drawn while a proposal is open whether or not its fit
+/// succeeded.
 pub(super) fn show_projection_plot(
     ui: &mut egui::Ui,
     camera: &CameraIntrinsics,
     derived: &Derived,
+    compare: Option<&Comparison<'_>>,
+    rug: Option<&[f64]>,
 ) {
     ui.label(egui::RichText::new("Projection").strong());
 
     let samples = &derived.profile.samples;
-    let x_max = samples
+    let mut x_max = samples
         .last()
         .map(|s| s.theta_deg)
         .into_iter()
         .chain(derived.fov.map(|fov| fov.max_off_axis))
-        .fold(0.0_f64, f64::max)
-        * X_MARGIN;
+        .fold(0.0_f64, f64::max);
+    if let Some(c) = compare {
+        x_max = c
+            .derived
+            .profile
+            .samples
+            .last()
+            .map(|s| s.theta_deg)
+            .into_iter()
+            .chain(c.derived.fov.map(|fov| fov.max_off_axis))
+            .fold(x_max, f64::max);
+    }
+    let x_max = x_max * X_MARGIN;
     if samples.len() < 2 || x_max <= 0.0 || x_max.is_nan() {
         ui.label(
             egui::RichText::new(
@@ -177,16 +290,24 @@ pub(super) fn show_projection_plot(
     }
 
     let limit = derived.trustworthy_max_theta;
-    // How many leading samples the model still vouches for. The extrapolated
-    // polyline restarts on the last of them, so the two halves join.
-    let trusted = match limit {
-        Some(limit) => samples.iter().take_while(|s| s.theta_deg <= limit).count(),
-        None => samples.len(),
-    };
+    let trusted = trusted_count(samples, limit);
+    let proposed_limit = compare.and_then(|c| c.derived.trustworthy_max_theta);
 
     let width = ui.available_width().max(LEFT_GUTTER + RIGHT_PAD + 80.0);
-    let height =
-        TITLE_HEIGHT + RADIAL_HEIGHT + PLOT_GAP + TITLE_HEIGHT + RESIDUAL_HEIGHT + AXIS_HEIGHT;
+    let change_height = if compare.is_some() {
+        PLOT_GAP + TITLE_HEIGHT + CHANGE_HEIGHT
+    } else {
+        0.0
+    };
+    let rug_height = if rug.is_some() { RUG_HEIGHT } else { 0.0 };
+    let height = TITLE_HEIGHT
+        + RADIAL_HEIGHT
+        + PLOT_GAP
+        + TITLE_HEIGHT
+        + RESIDUAL_HEIGHT
+        + change_height
+        + AXIS_HEIGHT
+        + rug_height;
     let (rect, _response) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
 
     let left = rect.left() + LEFT_GUTTER;
@@ -201,6 +322,18 @@ pub(super) fn show_projection_plot(
         Pos2::new(left, lower_top),
         Pos2::new(right, lower_top + RESIDUAL_HEIGHT),
     );
+    let change_rect = compare.map(|_| {
+        let top = lower.bottom() + PLOT_GAP + TITLE_HEIGHT;
+        Rect::from_min_max(Pos2::new(left, top), Pos2::new(right, top + CHANGE_HEIGHT))
+    });
+    let bottom = change_rect.unwrap_or(lower);
+    let rug_rect = rug.map(|_| {
+        let top = bottom.bottom() + AXIS_HEIGHT;
+        Rect::from_min_max(
+            Pos2::new(left, top),
+            Pos2::new(right, top + RUG_HEIGHT - 2.0),
+        )
+    });
 
     let palette = Palette::resolve(ui.visuals());
     let x = Scale {
@@ -210,23 +343,75 @@ pub(super) fn show_projection_plot(
         screen_hi: right,
     };
     let trusted_samples = &samples[..trusted.max(1).min(samples.len())];
-    let radial_y = radial_scale(trusted_samples, &upper);
-    let residual_y = residual_scale(trusted_samples, &lower);
+    let proposed_curve = compare.map(|c| {
+        let samples = &c.derived.profile.samples;
+        Curve {
+            samples,
+            trusted: trusted_count(samples, proposed_limit),
+            band_visible: c.derived.profile.band_visible,
+            stroke: palette.model,
+            width: 1.8,
+            band: palette.band,
+        }
+    });
+    let proposed_trusted: &[ProfileSample] = proposed_curve
+        .as_ref()
+        .map_or(&[], |c| &c.samples[..c.trusted.min(c.samples.len())]);
+    let radial_y = radial_scale(trusted_samples.iter().chain(proposed_trusted), &upper);
+    let residual_y = residual_scale(trusted_samples.iter().chain(proposed_trusted), &lower);
 
     let painter = ui.painter().clone();
-    let markers = markers(camera, derived, x_max);
+    let mut markers = markers(camera, derived, x_max);
+    if let Some(c) = compare {
+        markers.extend(comparison_markers(c, x_max));
+        markers.sort_by(|a, b| a.theta_deg.total_cmp(&b.theta_deg));
+    }
 
-    for (plot, y, title) in [
-        (&upper, &radial_y, "r (px)"),
-        (&lower, &residual_y, "Δr (px)"),
-    ] {
+    let mut plots = vec![upper, lower];
+    let mut titles = vec!["r (px)", "Δr (px)"];
+    let mut scales = vec![radial_y, residual_y];
+    let change_bound = [limit, proposed_limit]
+        .into_iter()
+        .flatten()
+        .reduce(f64::min);
+    if let (Some(c), Some(change_rect)) = (compare, change_rect) {
+        plots.push(change_rect);
+        titles.push("Change (px)");
+        scales.push(change_scale(c.change, change_bound, &change_rect));
+    }
+    for ((plot, y), title) in plots.iter().zip(&scales).zip(&titles) {
         draw_frame(&painter, plot, y, &palette, title);
     }
-    draw_x_axis(&painter, &upper, &lower, &x, &palette);
+    draw_x_axis(&painter, &plots, &bottom, &x, &palette);
 
-    if let Some(limit) = limit {
-        for plot in [&upper, &lower] {
-            let start = x.at(limit).max(plot.left());
+    let mut washes = Vec::new();
+    match (compare.is_some(), limit) {
+        (false, Some(limit)) => washes.push(Wash {
+            limit_deg: limit,
+            fill: palette.extrapolated_wash,
+            rule: palette.extrapolated_rule,
+            label: format!("extrapolated past {limit:.1}°"),
+        }),
+        (true, Some(limit)) => washes.push(Wash {
+            limit_deg: limit,
+            fill: palette.current_wash,
+            rule: palette.current,
+            label: format!("current extrapolated past {limit:.1}°"),
+        }),
+        (_, None) => {}
+    }
+    if let Some(limit) = proposed_limit {
+        washes.push(Wash {
+            limit_deg: limit,
+            fill: palette.proposed_wash,
+            rule: palette.model,
+            label: format!("proposed extrapolated past {limit:.1}°"),
+        });
+    }
+    let mut label_top = upper.top() + 3.0;
+    for wash in &washes {
+        for plot in &plots {
+            let start = x.at(wash.limit_deg).max(plot.left());
             if start < plot.right() {
                 painter.rect_filled(
                     Rect::from_min_max(
@@ -234,14 +419,14 @@ pub(super) fn show_projection_plot(
                         Pos2::new(plot.right(), plot.bottom()),
                     ),
                     0.0,
-                    palette.extrapolated_wash,
+                    wash.fill,
                 );
                 painter.line_segment(
                     [
                         Pos2::new(start, plot.top()),
                         Pos2::new(start, plot.bottom()),
                     ],
-                    Stroke::new(1.5, palette.extrapolated_rule),
+                    Stroke::new(1.5, wash.rule),
                 );
             }
         }
@@ -249,40 +434,74 @@ pub(super) fn show_projection_plot(
         // rule can land anywhere, and beside it the label collides with
         // whichever marker the frame's own geometry happens to put nearby.
         painter.text(
-            Pos2::new(upper.right() - 4.0, upper.top() + 3.0),
+            Pos2::new(upper.right() - 4.0, label_top),
             Align2::RIGHT_TOP,
-            format!("extrapolated past {limit:.1}°"),
-            FontId::proportional(10.0),
-            palette.extrapolated_rule,
+            &wash.label,
+            FontId::proportional(LABEL_FONT),
+            wash.rule,
+        );
+        label_top += LABEL_ROW;
+    }
+
+    draw_markers(
+        &painter,
+        &markers,
+        &plots,
+        &upper,
+        &x,
+        &palette,
+        label_top + 3.0,
+    );
+    let current_curve = Curve {
+        samples,
+        trusted,
+        band_visible: derived.profile.band_visible,
+        stroke: if compare.is_some() {
+            palette.current
+        } else {
+            palette.model
+        },
+        width: if compare.is_some() { 4.0 } else { 1.8 },
+        band: if compare.is_some() {
+            palette.current_band
+        } else {
+            palette.band
+        },
+    };
+    draw_ideal(&painter, samples, &upper, &x, &radial_y, &palette);
+    draw_zero_line(&painter, &lower, &residual_y, &palette);
+    for curve in std::iter::once(&current_curve).chain(proposed_curve.as_ref()) {
+        draw_curve(&painter, curve, &upper, &lower, &x, &radial_y, &residual_y);
+    }
+    if let (Some(c), Some(change_rect)) = (compare, change_rect) {
+        draw_change(
+            &painter,
+            c,
+            change_bound,
+            &change_rect,
+            &x,
+            &scales[2],
+            &palette,
         );
     }
 
-    draw_markers(&painter, &markers, &upper, &lower, &x, &palette);
-    draw_curves(
-        &painter,
-        samples,
-        trusted,
-        derived.profile.band_visible,
-        &upper,
-        &lower,
-        &x,
-        &radial_y,
-        &residual_y,
-        &palette,
-    );
-
-    if !camera.has_distortion() {
+    let undistorted =
+        !camera.has_distortion() && compare.is_none_or(|c| !c.proposed.has_distortion());
+    if undistorted {
         draw_no_distortion_banner(&painter, camera, &lower, &palette);
     }
+    if let (Some(rug), Some(rug_rect)) = (rug, rug_rect) {
+        draw_rug(&painter, rug, limit, &rug_rect, &x, &palette);
+    }
 
-    legend(ui, camera, derived);
+    legend(ui, camera, derived, compare, rug);
 }
 
-/// The upper plot's y range: zero to the largest radius any trustworthy sample
+/// The upper plot's y range: zero to the largest radius any of `samples`
 /// reaches, on either curve or at either edge of the band.
-fn radial_scale(samples: &[ProfileSample], plot: &Rect) -> Scale {
+fn radial_scale<'a>(samples: impl IntoIterator<Item = &'a ProfileSample>, plot: &Rect) -> Scale {
     let hi = samples
-        .iter()
+        .into_iter()
         .flat_map(|s| [s.radius_px, s.reference_px, s.band_px.1])
         .fold(0.0_f64, f64::max)
         * Y_MARGIN;
@@ -294,17 +513,36 @@ fn radial_scale(samples: &[ProfileSample], plot: &Rect) -> Scale {
     }
 }
 
-/// The lower plot's y range: the trustworthy residuals, always including zero
+/// The lower plot's y range: the residuals of `samples`, always including zero
 /// so the zero line is on the plot even for a lens that only ever magnifies.
-fn residual_scale(samples: &[ProfileSample], plot: &Rect) -> Scale {
-    let mut lo = 0.0_f64;
-    let mut hi = 0.0_f64;
-    for s in samples {
-        for value in [
+fn residual_scale<'a>(samples: impl IntoIterator<Item = &'a ProfileSample>, plot: &Rect) -> Scale {
+    let values = samples.into_iter().flat_map(|s| {
+        [
             s.radius_px - s.reference_px,
             s.band_px.0 - s.reference_px,
             s.band_px.1 - s.reference_px,
-        ] {
+        ]
+    });
+    zero_including_scale(values, plot)
+}
+
+/// The change plot's y range: the change and its band at the angles inside
+/// `bound`, always including zero, which is the line a fit is read against.
+fn change_scale(change: &ChangeProfile, bound: Option<f64>, plot: &Rect) -> Scale {
+    let values = change
+        .samples
+        .iter()
+        .filter(|s| bound.is_none_or(|bound| s.theta_deg <= bound))
+        .flat_map(|s| [s.centre_px, s.band_px.0, s.band_px.1]);
+    zero_including_scale(values, plot)
+}
+
+/// A y range over `values` that always includes zero, padded by the margin.
+fn zero_including_scale(values: impl IntoIterator<Item = f64>, plot: &Rect) -> Scale {
+    let mut lo = 0.0_f64;
+    let mut hi = 0.0_f64;
+    for value in values {
+        if value.is_finite() {
             lo = lo.min(value);
             hi = hi.max(value);
         }
@@ -336,7 +574,7 @@ fn draw_frame(painter: &egui::Painter, plot: &Rect, y: &Scale, palette: &Palette
         Pos2::new(plot.left(), plot.top() - 2.0),
         Align2::LEFT_BOTTOM,
         title,
-        FontId::proportional(10.0),
+        FontId::proportional(LABEL_FONT),
         palette.text,
     );
 
@@ -353,41 +591,49 @@ fn draw_frame(painter: &egui::Painter, plot: &Rect, y: &Scale, palette: &Palette
             Pos2::new(plot.left() - 4.0, py),
             Align2::RIGHT_CENTER,
             format_tick(value),
-            FontId::proportional(9.0),
+            FontId::proportional(SMALL_FONT),
             palette.text,
         );
     }
 }
 
-/// The shared x axis: one ladder of degree ticks, gridded on both plots and
-/// labelled once, under the lower one.
-fn draw_x_axis(painter: &egui::Painter, upper: &Rect, lower: &Rect, x: &Scale, palette: &Palette) {
+/// The shared x axis: one ladder of degree ticks, gridded on every plot and
+/// labelled once, under the lowest one.
+///
+/// A tick label that would run into the axis's own title, at the right end,
+/// is left off; its gridline is still drawn.
+fn draw_x_axis(
+    painter: &egui::Painter,
+    plots: &[Rect],
+    bottom: &Rect,
+    x: &Scale,
+    palette: &Palette,
+) {
+    let font = FontId::proportional(SMALL_FONT);
+    let title = painter.layout_no_wrap("θ off-axis".to_string(), font.clone(), palette.text);
+    let title_rect = Rect::from_min_size(
+        Pos2::new(bottom.right() - title.size().x, bottom.bottom() + 2.0),
+        title.size(),
+    );
     for value in ticks(x.lo, x.hi, X_TICKS) {
         let px = x.at(value);
-        if px < upper.left() || px > upper.right() {
+        if px < bottom.left() || px > bottom.right() {
             continue;
         }
-        for plot in [upper, lower] {
+        for plot in plots {
             painter.line_segment(
                 [Pos2::new(px, plot.top()), Pos2::new(px, plot.bottom())],
                 Stroke::new(1.0, palette.grid),
             );
         }
-        painter.text(
-            Pos2::new(px, lower.bottom() + 2.0),
-            Align2::CENTER_TOP,
-            format!("{value:.0}°"),
-            FontId::proportional(9.0),
-            palette.text,
-        );
+        let label = painter.layout_no_wrap(format!("{value:.0}°"), font.clone(), palette.text);
+        let at = Pos2::new(px - label.size().x / 2.0, bottom.bottom() + 2.0);
+        if Rect::from_min_size(at, label.size()).intersects(title_rect.expand(3.0)) {
+            continue;
+        }
+        painter.galley(at, label, palette.text);
     }
-    painter.text(
-        Pos2::new(upper.right(), lower.bottom() + 2.0),
-        Align2::RIGHT_TOP,
-        "θ off-axis",
-        FontId::proportional(9.0),
-        palette.text,
-    );
+    painter.galley(title_rect.min, title, palette.text);
 }
 
 /// The labelled rules: the frame's own edges and corner, a spline model's
@@ -431,16 +677,7 @@ fn markers(camera: &CameraIntrinsics, derived: &Derived, x_max: f64) -> Vec<Mark
     // radial map continues linearly rather than following the fitted curve — a
     // lens whose frame reaches past this rule is being extrapolated, benignly
     // but visibly.
-    let spline_end = match &camera.model {
-        CameraModel::SfmtoolFisheye {
-            bspline_theta_max, ..
-        } => Some(bspline_theta_max.to_degrees()),
-        CameraModel::SfmtoolPinhole {
-            bspline_rho_max, ..
-        } => Some(bspline_rho_max.atan().to_degrees()),
-        _ => None,
-    };
-    if let Some(theta_deg) = spline_end {
+    if let Some(theta_deg) = spline_domain_deg(camera) {
         markers.push(Marker {
             theta_deg,
             label: "spline domain".to_string(),
@@ -462,21 +699,84 @@ fn markers(camera: &CameraIntrinsics, derived: &Derived, x_max: f64) -> Vec<Mark
     markers
 }
 
-/// Draw the rules across both plots, labelling them in the upper one.
+/// The rules a comparison adds: the fit's largest angle, and the proposed
+/// camera's spline domain end where it has one.
+fn comparison_markers(compare: &Comparison<'_>, x_max: f64) -> Vec<Marker> {
+    let mut markers = vec![Marker {
+        theta_deg: compare.theta_fit_deg,
+        label: "fit".to_string(),
+    }];
+    if let Some(theta_deg) = spline_domain_deg(compare.proposed) {
+        markers.push(Marker {
+            theta_deg,
+            label: "proposed spline domain".to_string(),
+        });
+    }
+    markers.retain(|m| m.theta_deg > 0.0 && m.theta_deg <= x_max);
+    markers
+}
+
+/// A spline model's domain end as an incidence angle in degrees, or `None`.
+fn spline_domain_deg(camera: &CameraIntrinsics) -> Option<f64> {
+    match &camera.model {
+        CameraModel::SfmtoolFisheye {
+            bspline_theta_max, ..
+        } => Some(bspline_theta_max.to_degrees()),
+        CameraModel::SfmtoolPinhole {
+            bspline_rho_max, ..
+        } => Some(bspline_rho_max.atan().to_degrees()),
+        _ => None,
+    }
+}
+
+/// Where a label of `size` goes beside the rule at `px`: on the first of
+/// [`LABEL_ROWS`] rows from `top` where it overlaps no label placed before it,
+/// right of the rule unless that runs past `bounds`, then left of it. `None`
+/// when no row has room.
+fn place_label(
+    placed: &mut Vec<Rect>,
+    size: Vec2,
+    px: f32,
+    top: f32,
+    bounds: (f32, f32),
+) -> Option<Pos2> {
+    let mut x0 = px + 3.0;
+    if x0 + size.x > bounds.1 - 2.0 {
+        x0 = px - 3.0 - size.x;
+    }
+    let x0 = x0.max(bounds.0 + 2.0);
+    for row in 0..LABEL_ROWS {
+        let at = Pos2::new(x0, top + row as f32 * LABEL_ROW);
+        let rect = Rect::from_min_size(at, size);
+        if placed
+            .iter()
+            .all(|other| !other.expand(2.0).intersects(rect))
+        {
+            placed.push(rect);
+            return Some(at);
+        }
+    }
+    None
+}
+
+/// Draw the rules across every plot, labelling them in the upper one from
+/// `label_top` down.
 fn draw_markers(
     painter: &egui::Painter,
     markers: &[Marker],
+    plots: &[Rect],
     upper: &Rect,
-    lower: &Rect,
     x: &Scale,
     palette: &Palette,
+    label_top: f32,
 ) {
-    for (i, marker) in markers.iter().enumerate() {
+    let mut placed = Vec::new();
+    for marker in markers {
         let px = x.at(marker.theta_deg);
         if px < upper.left() || px > upper.right() {
             continue;
         }
-        for plot in [upper, lower] {
+        for plot in plots {
             painter.extend(Shape::dashed_line(
                 &[Pos2::new(px, plot.top()), Pos2::new(px, plot.bottom())],
                 Stroke::new(1.0, palette.axis),
@@ -484,96 +784,95 @@ fn draw_markers(
                 3.0,
             ));
         }
-        // Two rows, alternating, because the corner and the edge rules of a
-        // fisheye can land within a few pixels of each other.
-        let row = (i % 2) as f32 * 13.0;
-        let near_right = px > upper.right() - 70.0;
-        let (align, dx) = if near_right {
-            (Align2::RIGHT_TOP, -3.0)
-        } else {
-            (Align2::LEFT_TOP, 3.0)
-        };
-        painter.text(
-            Pos2::new(px + dx, upper.top() + 19.0 + row),
-            align,
+        let galley = painter.layout_no_wrap(
             format!("{} {:.1}°", marker.label, marker.theta_deg),
-            FontId::proportional(9.0),
+            FontId::proportional(SMALL_FONT),
             palette.text,
         );
+        if let Some(at) = place_label(
+            &mut placed,
+            galley.size(),
+            px,
+            label_top,
+            (upper.left(), upper.right()),
+        ) {
+            painter.galley(at, galley, palette.text);
+        }
     }
 }
 
-/// The band, the ideal map, and the model's own curve, on both plots.
-#[allow(clippy::too_many_arguments)]
-fn draw_curves(
+/// The family's ideal map, dashed, on the upper plot.
+fn draw_ideal(
     painter: &egui::Painter,
     samples: &[ProfileSample],
-    trusted: usize,
-    band_visible: bool,
+    upper: &Rect,
+    x: &Scale,
+    radial_y: &Scale,
+    palette: &Palette,
+) {
+    let ideal: Vec<Pos2> = samples
+        .iter()
+        .map(|s| Pos2::new(x.at(s.theta_deg), radial_y.at(s.reference_px)))
+        .collect();
+    painter.with_clip_rect(*upper).extend(Shape::dashed_line(
+        &ideal,
+        Stroke::new(1.5, palette.ideal),
+        DASH.0,
+        DASH.1,
+    ));
+}
+
+/// A plot's zero line: the thing it is read against.
+fn draw_zero_line(painter: &egui::Painter, plot: &Rect, y: &Scale, palette: &Palette) {
+    painter.with_clip_rect(*plot).line_segment(
+        [
+            Pos2::new(plot.left(), y.at(0.0)),
+            Pos2::new(plot.right(), y.at(0.0)),
+        ],
+        Stroke::new(1.0, palette.axis),
+    );
+}
+
+/// One camera's band and curve, on the radial plot and the residual.
+fn draw_curve(
+    painter: &egui::Painter,
+    curve: &Curve<'_>,
     upper: &Rect,
     lower: &Rect,
     x: &Scale,
     radial_y: &Scale,
     residual_y: &Scale,
-    palette: &Palette,
 ) {
     // Clipped, because past the trustworthy bound the dotted curve dives out
     // of a frame scaled to the part that means something — which is the
     // picture, not a defect to design around.
     let upper_painter = painter.with_clip_rect(*upper);
     let lower_painter = painter.with_clip_rect(*lower);
+    let samples = curve.samples;
 
-    if band_visible {
+    if curve.band_visible {
         for (plot, y, offset) in [
             (&upper_painter, radial_y, false),
             (&lower_painter, residual_y, true),
         ] {
-            // One quad per column rather than a single closed path: each quad
-            // is convex, which `convex_polygon` needs and a min/max envelope
-            // in general is not.
-            for pair in samples.windows(2) {
-                let (a, b) = (&pair[0], &pair[1]);
-                let base = |s: &ProfileSample, value: f64| {
-                    if offset {
-                        value - s.reference_px
-                    } else {
-                        value
-                    }
-                };
-                let (ax, bx) = (x.at(a.theta_deg), x.at(b.theta_deg));
-                plot.add(Shape::convex_polygon(
-                    vec![
-                        Pos2::new(ax, y.at(base(a, a.band_px.0))),
-                        Pos2::new(ax, y.at(base(a, a.band_px.1))),
-                        Pos2::new(bx, y.at(base(b, b.band_px.1))),
-                        Pos2::new(bx, y.at(base(b, b.band_px.0))),
-                    ],
-                    palette.band,
-                    Stroke::NONE,
-                ));
-            }
+            let base = |s: &ProfileSample, value: f64| {
+                if offset {
+                    value - s.reference_px
+                } else {
+                    value
+                }
+            };
+            draw_band(
+                plot,
+                samples
+                    .iter()
+                    .map(|s| (s.theta_deg, base(s, s.band_px.0), base(s, s.band_px.1))),
+                x,
+                y,
+                curve.band,
+            );
         }
     }
-
-    // The residual's zero line: the thing the lower plot is read against.
-    lower_painter.line_segment(
-        [
-            Pos2::new(lower.left(), residual_y.at(0.0)),
-            Pos2::new(lower.right(), residual_y.at(0.0)),
-        ],
-        Stroke::new(1.0, palette.axis),
-    );
-
-    let ideal: Vec<Pos2> = samples
-        .iter()
-        .map(|s| Pos2::new(x.at(s.theta_deg), radial_y.at(s.reference_px)))
-        .collect();
-    upper_painter.extend(Shape::dashed_line(
-        &ideal,
-        Stroke::new(1.5, palette.ideal),
-        DASH.0,
-        DASH.1,
-    ));
 
     let radial: Vec<Pos2> = samples
         .iter()
@@ -588,21 +887,190 @@ fn draw_curves(
             )
         })
         .collect();
-
     for (plot, points) in [(&upper_painter, &radial), (&lower_painter, &residual)] {
-        let split = trusted.min(points.len());
-        if split >= 2 {
-            plot.add(Shape::line(
-                points[..split].to_vec(),
-                Stroke::new(1.8, palette.model),
-            ));
-        }
-        // Restart on the last trustworthy point so the two halves join.
-        let tail = &points[split.saturating_sub(1)..];
-        if tail.len() >= 2 {
-            plot.extend(Shape::dotted_line(tail, palette.model, 3.0, 1.0));
+        solid_then_dotted(plot, points, curve.trusted, curve.stroke, curve.width);
+    }
+}
+
+/// A band between two edges, one quad per column rather than a single closed
+/// path: each quad is convex, which `convex_polygon` needs and a min/max
+/// envelope in general is not.
+fn draw_band(
+    painter: &egui::Painter,
+    columns: impl Iterator<Item = (f64, f64, f64)>,
+    x: &Scale,
+    y: &Scale,
+    fill: Color32,
+) {
+    let columns: Vec<(f64, f64, f64)> = columns.collect();
+    for pair in columns.windows(2) {
+        let (a, b) = (pair[0], pair[1]);
+        let (ax, bx) = (x.at(a.0), x.at(b.0));
+        painter.add(Shape::convex_polygon(
+            vec![
+                Pos2::new(ax, y.at(a.1)),
+                Pos2::new(ax, y.at(a.2)),
+                Pos2::new(bx, y.at(b.2)),
+                Pos2::new(bx, y.at(b.1)),
+            ],
+            fill,
+            Stroke::NONE,
+        ));
+    }
+}
+
+/// A polyline solid over its first `trusted` points and dotted after them,
+/// the dotted half restarting on the last solid point so the two join.
+fn solid_then_dotted(
+    painter: &egui::Painter,
+    points: &[Pos2],
+    trusted: usize,
+    color: Color32,
+    width: f32,
+) {
+    let split = trusted.min(points.len());
+    if split >= 2 {
+        painter.add(Shape::line(
+            points[..split].to_vec(),
+            Stroke::new(width, color),
+        ));
+    }
+    let tail = &points[split.saturating_sub(1)..];
+    if tail.len() >= 2 {
+        painter.extend(Shape::dotted_line(tail, color, 3.0, 1.0));
+    }
+}
+
+/// The change plot's band, its centre line, and the mark on its θ axis where
+/// the monotonicity constraint bound.
+///
+/// The centre line is solid up to `bound`, the smaller of the two cameras'
+/// trusted bounds, and dotted past it: there the current camera is
+/// extrapolating, and the line shows how far the proposed one departs from
+/// where the current one was going rather than a fitting error.
+fn draw_change(
+    painter: &egui::Painter,
+    compare: &Comparison<'_>,
+    bound: Option<f64>,
+    plot: &Rect,
+    x: &Scale,
+    y: &Scale,
+    palette: &Palette,
+) {
+    let clipped = painter.with_clip_rect(*plot);
+    let samples = &compare.change.samples;
+    if compare.change.band_visible(bound) {
+        draw_band(
+            &clipped,
+            samples
+                .iter()
+                .map(|s| (s.theta_deg, s.band_px.0, s.band_px.1)),
+            x,
+            y,
+            palette.band,
+        );
+    }
+    draw_zero_line(painter, plot, y, palette);
+    let points: Vec<Pos2> = samples
+        .iter()
+        .map(|s| Pos2::new(x.at(s.theta_deg), y.at(s.centre_px)))
+        .collect();
+    let trusted = samples
+        .iter()
+        .take_while(|s| bound.is_none_or(|bound| s.theta_deg <= bound))
+        .count();
+    solid_then_dotted(&clipped, &points, trusted, palette.model, 1.8);
+
+    if let Some([from, to]) = compare.monotone_deg {
+        let (a, b) = (x.at(from), x.at(to));
+        // At least a few pixels wide, so a constraint that bound at one angle
+        // is still a mark rather than a hairline under the frame.
+        let centre = 0.5 * (a + b);
+        let half = (0.5 * (b - a)).max(2.0);
+        let (a, b) = (
+            (centre - half).max(plot.left()),
+            (centre + half).min(plot.right()),
+        );
+        if a < b {
+            clipped.rect_filled(
+                Rect::from_min_max(
+                    Pos2::new(a, plot.bottom() - 5.0),
+                    Pos2::new(b, plot.bottom()),
+                ),
+                0.0,
+                palette.monotone,
+            );
+            let galley = painter.layout_no_wrap(
+                "monotone bound".to_string(),
+                FontId::proportional(SMALL_FONT),
+                palette.monotone,
+            );
+            let size = galley.size();
+            let mut x0 = b + 3.0;
+            if x0 + size.x > plot.right() - 2.0 {
+                x0 = a - 3.0 - size.x;
+            }
+            let x0 = x0.max(plot.left() + 2.0);
+            painter.galley(
+                Pos2::new(x0, plot.bottom() - 4.0 - size.y),
+                galley,
+                palette.monotone,
+            );
         }
     }
+}
+
+/// The observation rug: one tick per observation at its incidence angle, a
+/// screen column at a time so a dense camera is not ten thousand strokes. A
+/// column's opacity grows with its count, and a column past the current
+/// camera's trusted bound is drawn in that bound's colour.
+fn draw_rug(
+    painter: &egui::Painter,
+    angles_deg: &[f64],
+    limit: Option<f64>,
+    rect: &Rect,
+    x: &Scale,
+    palette: &Palette,
+) {
+    for (column, count, past) in rug_columns(angles_deg, limit, x) {
+        let color = if past {
+            palette.extrapolated_rule
+        } else {
+            palette.text
+        };
+        let alpha = (90.0 + 50.0 * (count as f32).ln_1p()).min(255.0) as u8;
+        let px = column as f32 + 0.5;
+        if px < rect.left() || px > rect.right() {
+            continue;
+        }
+        painter.line_segment(
+            [Pos2::new(px, rect.top()), Pos2::new(px, rect.bottom())],
+            Stroke::new(1.0, color.gamma_multiply(f32::from(alpha) / 255.0)),
+        );
+    }
+}
+
+/// The rug's screen columns: each column's x, how many observations fall in
+/// it, and whether they are past `limit`. In ascending x.
+fn rug_columns(angles_deg: &[f64], limit: Option<f64>, x: &Scale) -> Vec<(i32, usize, bool)> {
+    let mut columns: Vec<(i32, usize, bool)> = Vec::new();
+    for &theta in angles_deg {
+        if !theta.is_finite() {
+            continue;
+        }
+        let column = x.at(theta).floor() as i32;
+        let past = limit.is_some_and(|limit| theta > limit);
+        match columns.last_mut() {
+            Some((c, n, p)) if *c == column && *p == past => *n += 1,
+            _ => columns.push((column, 1, past)),
+        }
+    }
+    columns
+}
+
+/// How many of `angles_deg` lie past `limit`.
+pub(super) fn past_bound(angles_deg: &[f64], limit: Option<f64>) -> usize {
+    limit.map_or(0, |limit| angles_deg.iter().filter(|&&t| t > limit).count())
 }
 
 /// The banner across the residual plot for a model that is exactly its own
@@ -629,8 +1097,15 @@ fn draw_no_distortion_banner(
     );
 }
 
-/// The key, and the sentence that says what the shaded region is.
-fn legend(ui: &mut egui::Ui, camera: &CameraIntrinsics, derived: &Derived) {
+/// The key, and the sentences that say what the shaded regions and the rug
+/// are.
+fn legend(
+    ui: &mut egui::Ui,
+    camera: &CameraIntrinsics,
+    derived: &Derived,
+    compare: Option<&Comparison<'_>>,
+    rug: Option<&[f64]>,
+) {
     let ideal = if camera.model.is_equirectangular() {
         "ideal (itself)"
     } else if camera.model.is_fisheye() {
@@ -640,32 +1115,83 @@ fn legend(ui: &mut egui::Ui, camera: &CameraIntrinsics, derived: &Derived) {
     };
     // Words rather than sample glyphs: egui's default font has no box-drawing
     // or geometric-shape coverage, so a `──`/`▨` key renders as tofu.
-    ui.horizontal_wrapped(|ui| {
-        ui.label(egui::RichText::new(format!("solid: model · dashed: {ideal}")).small());
-        if derived.profile.band_visible {
+    // One label rather than a row of them, so a narrow panel wraps it as one
+    // sentence rather than running a wrapped part into the one before it.
+    let mut key = match compare {
+        Some(_) => format!("grey: current · blue: proposed · dashed: {ideal} (current)"),
+        None => format!("solid: model · dashed: {ideal}"),
+    };
+    let band =
+        derived.profile.band_visible || compare.is_some_and(|c| c.derived.profile.band_visible);
+    if band {
+        key.push_str(" · band: spread over 32 azimuths");
+    }
+    let key = ui.label(egui::RichText::new(key).small());
+    if band {
+        key.on_hover_text(
+            "The model's radius is not the same at every azimuth — `fx ≠ fy`, or live \
+             tangential or thin-prism terms. A single-azimuth curve hides decentring \
+             distortion completely, which is what the band is for.",
+        );
+    }
+    let corner = derived.fov.map(|fov| fov.max_off_axis);
+    match (compare, derived.trustworthy_max_theta) {
+        (None, Some(limit)) => {
             ui.label(
-                egui::RichText::new("· band: spread over 32 azimuths")
-                    .small()
-                    .weak(),
-            )
-            .on_hover_text(
-                "The model's radius is not the same at every azimuth — `fx ≠ fy`, or live \
-                 tangential or thin-prism terms. A single-azimuth curve hides decentring \
-                 distortion completely, which is what the band is for.",
+                egui::RichText::new(format!(
+                    "Shaded past {limit:.1}°: this model's own inverse stops inverting its \
+                     distortion polynomial there, so neither curve describes the lens beyond it. \
+                     The frame reaches {:.1}°.",
+                    corner.unwrap_or(limit)
+                ))
+                .small()
+                .weak(),
             );
         }
-    });
-    if let Some(limit) = derived.trustworthy_max_theta {
-        let corner = derived.fov.map_or(limit, |fov| fov.max_off_axis);
+        (Some(_), Some(limit)) => {
+            ui.label(
+                egui::RichText::new(format!(
+                    "Grey shading past {limit:.1}°: the current model's own inverse stops \
+                     inverting its distortion polynomial there. The frame reaches {:.1}°.",
+                    corner.unwrap_or(limit)
+                ))
+                .small()
+                .weak(),
+            );
+        }
+        _ => {}
+    }
+    if let Some(c) = compare {
+        let proposed = match c.derived.trustworthy_max_theta {
+            Some(limit) => format!("Blue shading past {limit:.1}°: the proposed model's bound."),
+            None => "The proposed model is trusted at every angle the frame reaches.".to_string(),
+        };
+        ui.label(egui::RichText::new(proposed).small().weak());
         ui.label(
             egui::RichText::new(format!(
-                "Shaded past {limit:.1}°: this model's own inverse stops inverting its \
-                 distortion polynomial there, so neither curve describes the lens beyond it. \
-                 The frame reaches {corner:.1}°.",
+                "Change: the proposed radius minus the current one, averaged over 32 azimuths, \
+                 with their spread as the band. The fit sampled angles up to {:.1}°.",
+                c.theta_fit_deg
             ))
             .small()
             .weak(),
         );
+    }
+    if let Some(rug) = rug {
+        let sentence = match derived.trustworthy_max_theta {
+            Some(limit) => format!(
+                "Rug: {} observations of this camera's images, at their angle under the current \
+                 model; {} past {limit:.1}°.",
+                rug.len(),
+                past_bound(rug, Some(limit))
+            ),
+            None => format!(
+                "Rug: {} observations of this camera's images, at their angle under the current \
+                 model.",
+                rug.len()
+            ),
+        };
+        ui.label(egui::RichText::new(sentence).small().weak());
     }
 }
 

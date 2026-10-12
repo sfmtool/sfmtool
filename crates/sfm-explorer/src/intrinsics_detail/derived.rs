@@ -154,3 +154,102 @@ fn profile(camera: &CameraIntrinsics) -> Profile {
         band_visible,
     }
 }
+
+/// The change plot's curve: how far the proposed camera puts each angle from
+/// where the current camera puts it, sampled once per proposal generation.
+pub(super) struct ChangeProfile {
+    /// One entry per angle, ascending from 0°, over the wider of the two
+    /// cameras' frames. An angle neither camera projects at any azimuth is
+    /// dropped.
+    pub samples: Vec<ChangeSample>,
+}
+
+/// One angle on the change plot.
+pub(super) struct ChangeSample {
+    /// Incidence angle in degrees.
+    pub theta_deg: f64,
+    /// The proposed radius minus the current one, averaged over the azimuths
+    /// both cameras project: the change of the radial profile alone. A fitting
+    /// error shows here, and a dropped `fx ≠ fy` does not, since the two
+    /// focal lengths average out.
+    pub centre_px: f64,
+    /// The smallest and largest change over those azimuths: what varies with
+    /// azimuth, such as a dropped aspect.
+    pub band_px: (f64, f64),
+}
+
+impl ChangeProfile {
+    /// The change from `current` to `proposed`.
+    ///
+    /// Both cameras are sampled on one shared ladder of angles, from 0° to the
+    /// larger of their corner angles, at [`PROFILE_AZIMUTHS`] azimuths. Each
+    /// radius is measured from its own camera's principal point, as
+    /// [`report::radial_profile`] measures it.
+    pub(super) fn compute(current: &CameraIntrinsics, proposed: &CameraIntrinsics) -> Self {
+        let max_deg = [current, proposed]
+            .into_iter()
+            .filter_map(|camera| report::field_of_view(camera).map(|fov| fov.max_off_axis))
+            .fold(0.0_f64, f64::max);
+        let radius = |camera: &CameraIntrinsics, ray: [f64; 3]| {
+            let (cx, cy) = camera.principal_point();
+            camera
+                .ray_to_pixel(ray)
+                .map(|(u, v)| (u - cx).hypot(v - cy))
+        };
+        let samples = (0..PROFILE_SAMPLES)
+            .filter_map(|i| {
+                let theta_deg = max_deg * i as f64 / (PROFILE_SAMPLES - 1) as f64;
+                let (sin_theta, cos_theta) = theta_deg.to_radians().sin_cos();
+                let mut sum = 0.0;
+                let mut count = 0usize;
+                let mut lo = f64::INFINITY;
+                let mut hi = f64::NEG_INFINITY;
+                for k in 0..PROFILE_AZIMUTHS {
+                    let phi = (360.0 * k as f64 / PROFILE_AZIMUTHS as f64).to_radians();
+                    let ray = [sin_theta * phi.cos(), sin_theta * phi.sin(), -cos_theta];
+                    if let (Some(now), Some(then)) = (radius(current, ray), radius(proposed, ray)) {
+                        let change = then - now;
+                        sum += change;
+                        count += 1;
+                        lo = lo.min(change);
+                        hi = hi.max(change);
+                    }
+                }
+                (count > 0).then(|| ChangeSample {
+                    theta_deg,
+                    centre_px: sum / count as f64,
+                    band_px: (lo, hi),
+                })
+            })
+            .collect();
+        Self { samples }
+    }
+
+    /// Whether the band is wide enough anywhere inside `limit_deg` to be worth
+    /// drawing, by the rule the projection plot's band uses.
+    pub(super) fn band_visible(&self, limit_deg: Option<f64>) -> bool {
+        self.samples
+            .iter()
+            .filter(|s| limit_deg.is_none_or(|limit| s.theta_deg <= limit))
+            .any(|s| s.band_px.1 - s.band_px.0 > BAND_VISIBLE_PX)
+    }
+}
+
+/// The proposed camera's derived report and its change from the current one,
+/// computed together once per proposal generation.
+pub(super) struct ProposedReport {
+    /// The proposed camera's own report.
+    pub derived: Derived,
+    /// How far it moves each angle from where the current camera puts it.
+    pub change: ChangeProfile,
+}
+
+impl ProposedReport {
+    /// The report of `proposed` against `current`.
+    pub(super) fn compute(current: &CameraIntrinsics, proposed: &CameraIntrinsics) -> Self {
+        Self {
+            derived: Derived::compute(proposed),
+            change: ChangeProfile::compute(current, proposed),
+        }
+    }
+}

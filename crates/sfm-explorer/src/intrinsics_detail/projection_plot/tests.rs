@@ -254,3 +254,170 @@ fn a_tick_at_zero_never_reads_minus_zero() {
     assert_eq!(format_tick(2.5), "2.5");
     assert_eq!(format_tick(-0.25), "-0.25");
 }
+
+// ── The comparison ──────────────────────────────────────────────────────
+
+use super::super::derived::{ChangeProfile, ProposedReport};
+use sfmtool_core::camera::refit_intrinsics::{refit_camera_intrinsics, RefitOptions, RefitTarget};
+
+/// `camera` refitted to an eight-coefficient `SFMTOOL_FISHEYE`.
+fn spline_refit(
+    camera: &CameraIntrinsics,
+) -> sfmtool_core::camera::refit_intrinsics::CameraIntrinsicsRefit {
+    let target = RefitTarget::from_name("SFMTOOL_FISHEYE", Some(8)).unwrap();
+    refit_camera_intrinsics(camera, &target, &RefitOptions::default()).unwrap()
+}
+
+/// A camera compared with itself changes nothing, at any angle or azimuth.
+#[test]
+fn a_camera_compared_with_itself_changes_nothing() {
+    let camera = fisheye();
+    let change = ChangeProfile::compute(&camera, &camera);
+    assert!(change.samples.len() > 100);
+    for s in &change.samples {
+        assert_eq!(s.centre_px, 0.0);
+        assert_eq!(s.band_px, (0.0, 0.0));
+    }
+    assert!(!change.band_visible(None));
+}
+
+/// An exact fit's change is zero inside the fit's largest angle: an
+/// equidistant fisheye is a flat spline.
+#[test]
+fn an_exact_fits_change_is_zero_inside_the_fit() {
+    let camera = CameraIntrinsics {
+        model: CameraModel::EquidistantFisheye {
+            focal_length: 130.0,
+            principal_point_x: 240.0,
+            principal_point_y: 240.0,
+        },
+        width: 480,
+        height: 480,
+    };
+    let refit = spline_refit(&camera);
+    let change = ChangeProfile::compute(&camera, &refit.camera);
+    let inside: Vec<_> = change
+        .samples
+        .iter()
+        .filter(|s| s.theta_deg <= refit.theta_fit_deg)
+        .collect();
+    assert!(inside.len() > 50);
+    for s in inside {
+        assert!(
+            s.centre_px.abs() < 1e-3,
+            "{} at {}°",
+            s.centre_px,
+            s.theta_deg
+        );
+    }
+}
+
+/// On `kerry_park` the radial profile fits to a hundredth of a pixel, so the
+/// centre line stays near zero inside the fit, and the dropped `fx ≠ fy` is
+/// the band's width.
+#[test]
+fn a_dropped_aspect_is_the_bands_width() {
+    let camera = fisheye();
+    let refit = spline_refit(&camera);
+    let change = ChangeProfile::compute(&camera, &refit.camera);
+    let limit = Derived::compute(&camera).trustworthy_max_theta.unwrap();
+    assert!(change.band_visible(Some(limit)));
+    let near_fit = change
+        .samples
+        .iter()
+        .rfind(|s| s.theta_deg <= refit.theta_fit_deg)
+        .unwrap();
+    assert!(near_fit.centre_px.abs() < 0.1, "{}", near_fit.centre_px);
+    let width = near_fit.band_px.1 - near_fit.band_px.0;
+    // `|fy − fx|` times the distorted angle, about 0.11 × 1.6 rad.
+    assert!(width > 0.1 && width < 0.4, "{width}");
+}
+
+/// The comparison adds a rule at the fit's largest angle and one at the
+/// proposed spline's domain end.
+#[test]
+fn the_comparison_marks_the_fit_and_the_proposed_domain() {
+    let camera = fisheye();
+    let refit = spline_refit(&camera);
+    let report = ProposedReport::compute(&camera, &refit.camera);
+    let compare = Comparison {
+        proposed: &refit.camera,
+        derived: &report.derived,
+        change: &report.change,
+        theta_fit_deg: refit.theta_fit_deg,
+        monotone_deg: None,
+    };
+    let drawn = comparison_markers(&compare, 180.0);
+    assert_eq!(labels(&drawn), ["fit", "proposed spline domain"]);
+    assert!((drawn[0].theta_deg - refit.theta_fit_deg).abs() < 1e-9);
+    assert!((drawn[1].theta_deg - refit.spline_domain_deg.unwrap()).abs() < 1e-6);
+}
+
+/// The rug bins its ticks a screen column at a time, keeps every
+/// observation, and flags the ones past the bound.
+#[test]
+fn the_rug_keeps_every_observation_and_flags_those_past_the_bound() {
+    let x = Scale {
+        lo: 0.0,
+        hi: 100.0,
+        screen_lo: 0.0,
+        screen_hi: 100.0,
+    };
+    let angles = [1.0, 1.2, 1.4, 50.0, 84.5, 90.0, 90.3];
+    let columns = rug_columns(&angles, Some(84.0), &x);
+    assert_eq!(columns.iter().map(|c| c.1).sum::<usize>(), angles.len());
+    assert_eq!(columns[0], (1, 3, false));
+    assert_eq!(
+        columns.iter().filter(|c| c.2).map(|c| c.1).sum::<usize>(),
+        3
+    );
+    assert_eq!(past_bound(&angles, Some(84.0)), 3);
+    assert_eq!(past_bound(&angles, None), 0);
+}
+
+/// Two rule labels at the same angle go on two rows, and one near the right
+/// edge is put left of its rule so it stays on the plot.
+#[test]
+fn rule_labels_take_the_first_row_with_room_and_stay_on_the_plot() {
+    let mut placed = Vec::new();
+    let size = egui::vec2(60.0, 10.0);
+    let a = place_label(&mut placed, size, 100.0, 20.0, (50.0, 300.0)).unwrap();
+    let b = place_label(&mut placed, size, 100.0, 20.0, (50.0, 300.0)).unwrap();
+    assert_eq!(a.x, b.x);
+    assert!(b.y > a.y);
+    let c = place_label(&mut placed, size, 290.0, 20.0, (50.0, 300.0)).unwrap();
+    assert!(c.x + size.x <= 300.0);
+    assert!(c.x + size.x <= 290.0);
+}
+
+/// Where the monotonicity constraint bound, the change plot says so.
+#[test]
+fn the_change_plot_marks_where_the_monotone_constraint_bound() {
+    let camera = fisheye();
+    let refit = spline_refit(&camera);
+    let report = ProposedReport::compute(&camera, &refit.camera);
+    let derived = Derived::compute(&camera);
+    for (monotone_deg, drawn) in [(Some([110.0, 112.0]), true), (None, false)] {
+        let compare = Comparison {
+            proposed: &refit.camera,
+            derived: &report.derived,
+            change: &report.change,
+            theta_fit_deg: refit.theta_fit_deg,
+            monotone_deg,
+        };
+        let ctx = egui::Context::default();
+        let input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(500.0, 900.0))),
+            ..Default::default()
+        };
+        let texts = crate::test_support::painted_texts(&ctx, input, |ui| {
+            show_projection_plot(ui, &camera, &derived, Some(&compare), None);
+        });
+        assert_eq!(
+            texts.iter().any(|t| t == "monotone bound"),
+            drawn,
+            "{texts:?}"
+        );
+        assert!(texts.iter().any(|t| t == "Change (px)"));
+    }
+}

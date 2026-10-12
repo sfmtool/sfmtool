@@ -24,7 +24,8 @@
 //!   proposed one side by side.
 //! - [`parameters`] — the parameter table, the derived table and `K`.
 //! - [`mod@projection_plot`] — the radial map, the residual and the domain
-//!   the model can be held to.
+//!   the model can be held to; while a proposal is open, both cameras drawn
+//!   against each other, the change plot and the observation rug.
 //! - [`extrinsics`] — the selected image's pose, the node-transform toggle and
 //!   the rig block.
 //! - [`mod@format`] — the number, matrix and vector spellings the tables share.
@@ -47,7 +48,7 @@ pub(crate) use proposal::ProposalAction;
 #[cfg(test)]
 mod tests;
 
-use derived::Derived;
+use derived::{Derived, ProposedReport};
 
 /// Which frame the extrinsics block reads the pose in.
 ///
@@ -77,7 +78,7 @@ pub struct IntrinsicsDetail {
     /// The derived report of the open proposal's camera, keyed by the
     /// camera and the proposal's generation, so the current camera's entry
     /// above is never served for the proposed one, nor the other way round.
-    proposed_derived: Option<(CameraRef, u64, Derived)>,
+    proposed_derived: Option<(CameraRef, u64, ProposedReport)>,
     /// Whether a field was being edited when the last frame ended. egui drops
     /// the keyboard focus on an unmodified `Escape` as the next frame begins,
     /// before any widget draws, so that frame can no longer see the field the
@@ -204,6 +205,9 @@ impl IntrinsicsDetail {
                 }
                 ui.separator();
                 let mut proposed_camera = None;
+                // The fit's largest angle and where its monotonicity
+                // constraint bound, for the change plot.
+                let mut fit_angles = None;
                 if let Some(proposal) = proposal.as_deref_mut() {
                     if let Some(action) = proposal::show_proposal(ui, proposal) {
                         response.proposal = Some((reference, action));
@@ -216,10 +220,18 @@ impl IntrinsicsDetail {
                             Some((r, g, _)) if *r == reference && *g == generation
                         );
                         if stale {
-                            *proposed_derived =
-                                Some((reference, generation, Derived::compute(&refit.camera)));
+                            *proposed_derived = Some((
+                                reference,
+                                generation,
+                                ProposedReport::compute(camera, &refit.camera),
+                            ));
                         }
                         proposed_camera = Some(refit.camera.clone());
+                        let monotone = refit.monotone_constraint;
+                        fit_angles = Some((
+                            refit.theta_fit_deg,
+                            monotone.range_deg.filter(|_| monotone.active),
+                        ));
                     }
                 }
                 match (proposed_camera.as_ref(), proposed_derived.as_ref()) {
@@ -228,7 +240,7 @@ impl IntrinsicsDetail {
                             || parameters::has_two_focal_lengths(proposed);
                         compare_tables(
                             ui,
-                            [(camera, derived), (proposed, proposed_report)],
+                            [(camera, derived), (proposed, &proposed_report.derived)],
                             aspect_row,
                         );
                     }
@@ -241,7 +253,29 @@ impl IntrinsicsDetail {
                 ui.separator();
                 parameters::show_k(ui, camera);
                 ui.separator();
-                projection_plot::show_projection_plot(ui, camera, derived);
+                let comparison = match (
+                    proposed_camera.as_ref(),
+                    proposed_derived.as_ref(),
+                    fit_angles,
+                ) {
+                    (Some(proposed), Some((_, _, report)), Some((theta_fit_deg, monotone_deg))) => {
+                        Some(projection_plot::Comparison {
+                            proposed,
+                            derived: &report.derived,
+                            change: &report.change,
+                            theta_fit_deg,
+                            monotone_deg,
+                        })
+                    }
+                    _ => None,
+                };
+                projection_plot::show_projection_plot(
+                    ui,
+                    camera,
+                    derived,
+                    comparison.as_ref(),
+                    proposal.as_deref().map(|p| p.rug()),
+                );
                 if let (Some(image), Some(pose)) = (image, pose) {
                     ui.separator();
                     let picked =
