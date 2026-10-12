@@ -109,6 +109,43 @@ contiguous pick range, so a point's global pick id is
 `point_pick_base + edited index` whichever buffer holds it. See
 [document-model.md](document-model.md), "Change detection by identity".
 
+### The camera model proposal's preview
+
+While a camera model proposal's **Preview retriangulation** has shown an answer
+([edits/switch-camera-model.md](edits/switch-camera-model.md) § "The
+preview"), its node has a **preview buffer** beside each point buffer
+([`upload/preview.rs`](../../crates/sfm-explorer/src/scene_renderer/upload/preview.rs)):
+one `vec4<f32>` per row, `VERTEX | COPY_DST`, stepping per instance beside
+`PointInstance` and the liveness buffer. Its `xyz` is the row's target (a unit
+direction for a point at infinity) and its `w` a flag: `0` for a row that does
+not move, `1` for one that moves to its target, and `2` for one that stays
+where it stands and takes the failure colour. A row that does not move is
+marked by its flag, not by a zeroed position. The additions get a preview
+buffer of their own by the same rule. `PointInstance` stays 16 bytes and
+`VERTEX` only: the target is not written into it, so ending the preview
+restores nothing, and drops the preview buffers.
+
+The node is drawn with a variant of the point pipeline, `vs_preview`, which
+reads the preview buffer in a fourth vertex slot; every other node is drawn
+with the pipeline it always is. The blend `s` goes in the node's
+`ReconUniforms::preview_s`, in the padding that follows `show_infinity`, so the
+struct's size does not change; it is declared once, in `common.wgsl`, and the
+additions' copy of the block carries it too. `vs_preview` draws a moving row at
+`stored + s · (target − stored)`, normalised for a point at infinity so it
+turns along the shorter arc, and a row flagged `2` at its stored position in
+`mix(colour, FAILURE_COLOR, s)`, after the tint, so a node tinted Vermillion
+still shows its failures. `FAILURE_COLOR` is `FAILURE_RGB` (`[235, 30, 30]`,
+beside `TINT_PALETTE` in `scene.rs`), which a pipeline test checks against
+`common.wgsl` with the three flags.
+
+The rows are built on the proposal's job thread, laid out by the node's two
+point buffers, so a new answer is one upload of each preview buffer and a
+frame of motion writes nothing but `s`. A buffer whose row count no longer
+matches the point buffer it steps beside (a new base, a changed addition set)
+gets no preview rather than one that moves the wrong points. The pick target
+is written by the same vertex shader, so a click on a moving point picks it
+where it is drawn, and the depth readback reads the drawn position.
+
 ### Point Sizing
 
 Point size is determined by two factors:

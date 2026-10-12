@@ -24,7 +24,12 @@ its images observe, as one version
 ([edits/switch-camera-model.md](edits/switch-camera-model.md)); it polls the
 flag on either side of the switch and inside the retriangulation. Every one of them is **cancellable**. The bench's live
 evaluation is not one of them: it locks no node, writes no row and is not what
-the Background panel shows ([bench.md](bench.md) § "Live evaluation"). The open polls the
+the Background panel shows ([bench.md](bench.md) § "Live evaluation"). Nor is a camera model
+proposal's job, which switches the camera and, for its preview, retriangulates
+the tracks while the proposal is open, and whose answer Apply installs instead
+of starting `Switch camera model` when it holds one for the proposal's
+current generation ([edits/switch-camera-model.md](edits/switch-camera-model.md)
+§ "The proposal's job"). The open polls the
 flag between files, between each file's stages, before every thumbnail it builds
 and every photograph it decodes, and before every patch it renders, and a
 cancelled open appends no node. The bench steps

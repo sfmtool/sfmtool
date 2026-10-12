@@ -252,8 +252,11 @@ refuse the switch.
 `SwitchCameraModelOptions::outermost_keypoint` is on by default. Off, each
 entry's `outermost` is `None` and no `.sift` file is read for it, so a caller
 that already holds the keypoint, or does not show it, does not pay for a read
-of every image's features. The viewer's switch turns it off, since its
-proposal reads the keypoint when it opens. The observations' pixels are still
+of every image's features. The viewer's switch turns it off, and so does the
+switch its camera model proposal's job runs for the observation comparison and
+the preview
+([`../../gui/edits/switch-camera-model.md`](../../gui/edits/switch-camera-model.md)
+§ "The proposal's job"), since the proposal reads the keypoint when it opens. The observations' pixels are still
 read from the `.sift` files of a value without the inline keypoint column,
 since the comparison and the points' stored errors are measured against them.
 

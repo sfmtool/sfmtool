@@ -271,6 +271,29 @@ carries its **edited** index as `point_index`, so one deleted-mask write finds
 either atlas's slot with the same lookup. A materialisation replaces both with
 one. See [document-model.md](document-model.md), "Change detection by identity".
 
+### The camera model proposal's preview
+
+While a camera model proposal's preview is drawn on the node
+([edits/switch-camera-model.md](edits/switch-camera-model.md) § "The
+preview"), each surfel buffer has a **surfel preview buffer** beside it
+([`upload/preview.rs`](../../crates/sfm-explorer/src/scene_renderer/upload/preview.rs)),
+written by slot rather than by point, through `slot_of_point`, the way the
+liveness buffer is: one `SurfelPreview` per slot, the target centre with the
+flag in a `vec4<f32>` (the flags are the point preview buffer's) and the size
+factor in an `f32`. The additions' atlas gets its own, through its own slot
+map, keyed by the version's index past the base's rows.
+
+The node's surfels are drawn with the patch pipeline's `vs_preview` variant,
+which reads it in a fourth vertex slot. A moving surfel's centre is blended as
+its point is, keeping its orientation, and its half-vectors are scaled by
+`mix(1, size_factor, s)`; the factor is `patch_frame_factor` for the move,
+measured from the switched value's camera centroid taken once, which is the
+factor the retriangulation rescales the frame by, so the surfel keeps its
+angular size and ends at the size Apply writes. A point at infinity keeps its
+size. A surfel whose point loses its position stands where it is and takes
+`mix(texel, FAILURE_COLOR, s)`, after the tint and before the eraser brush's
+reds. The instance buffer is never written.
+
 ### Memory
 
 The atlas is `P × R × R × 4` bytes. At `R = 32`, 100k patches ≈ 400 MB — real,

@@ -202,7 +202,7 @@ pub static TINT_PALETTE: [TintColor; 7] = [
 /// a node's tint for these points, so a node tinted Vermillion still shows its
 /// failures. Mirrored as `FAILURE_COLOR` in `shaders/common.wgsl`, which a
 /// pipeline test checks against this. See
-/// `specs/gui/edits/switch-camera-model.md` § "What each point does".
+/// `specs/gui/edits/switch-camera-model.md` § "The preview".
 pub const FAILURE_RGB: [u8; 3] = [235, 30, 30];
 
 /// The color a **selected camera's sibling images** are marked in: every

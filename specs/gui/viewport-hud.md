@@ -165,6 +165,46 @@ be reachable by the pointer at all, since every pixel of the viewport under it
 is navigating the camera the banner is about. The HUD's rect is excluded from
 every pointer path (below); the banner's deliberately is not.
 
+### The proposal banner
+
+While a camera model proposal is open on the node the viewport shows
+([`edits/switch-camera-model.md`](edits/switch-camera-model.md)), the viewport
+draws a banner in the same place and style, outside the HUD panel and not
+reachable by the pointer, for the same reasons
+([`viewer_3d/overlay.rs`](../../crates/sfm-explorer/src/viewer_3d/overlay.rs)
+`draw_proposal_banner`, its words in
+[`camera_model_proposal/banner.rs`](../../crates/sfm-explorer/src/camera_model_proposal/banner.rs)).
+A proposal refuses Move Camera on its node, so the two banners are never shown
+together.
+
+- **The first line** names the proposal: the camera and the node, the source
+  and target models and the target's coefficient count (`Proposal for camera 0
+  of kerry_park: OPENCV_FISHEYE → SFMTOOL_FISHEYE, 8 coefficients`), or for a
+  refit of a spline the count and domain end before and after, as the refit's
+  version label names them (`Proposal for camera 0 of kerry_park: refit
+  spline, 8 → 12 coefficients, domain 150.1° kept`). A refused fit reads `…,
+  fit refused`.
+- **While Preview retriangulation is ticked**, the next line reads
+  `Triangulating…` while the proposal's job has no answer for the current
+  generation, `No preview: ` and the refusal where the node cannot be
+  retriangulated or the job's run refused, and once the answer is in, the
+  preview's counts: the proposal's tracks, how many move, with the median and
+  90th-percentile distance a finite point that moves travels, in the
+  reconstruction's units, and how many are left where they were for too few
+  usable rays (`3020 tracks: 2950 move, median 0.0123, p90 0.0450; 3 left
+  where they were for too few usable rays`).
+- **Where any point loses its position**, a line in the failure colour gives
+  their count broken down by the proposed run's `PointVerdict`, largest first,
+  worded as the Retriangulate edits' Action Log row words them (`37 lose their
+  position: 37 behind a camera that sees them`).
+- **Where the selected point is one of them**, a last line in the failure
+  colour gives its reason in `PointVerdict::label`'s words (`Point 5121: behind
+  a camera that sees it, so at infinity`).
+
+Each line wraps at the narrower of the view less a 16 px margin and 640 px,
+and the panel is as wide as its widest line, so at any width of the 3D view
+the words stay inside it and no line runs into the next.
+
 ---
 
 ## Sections

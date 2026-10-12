@@ -434,6 +434,23 @@ new speed to the smallest of three values:
 - the speed that, slowing down at `ACCELERATION`, stops after exactly the angle
   left.
 
+That rule is a one-dimensional controller of its own,
+[`motion::step`](../../crates/sfm-explorer/src/motion.rs):
+
+    step(value, velocity, goal, dt, max_speed, acceleration) -> (value, velocity)
+
+It accelerates toward the goal at `acceleration`, caps the speed at
+`max_speed`, slows so that the value stops exactly at the goal, and, since the
+velocity carries a sign, a velocity that points away from the goal first slows
+through zero at `acceleration` before turning, so a goal that flips while the
+value moves turns it round without a jump. `dt` is clamped to 0.05 s, so a
+stalled frame moves the value no further than a normal frame would. Maintain
+Z-up calls it with the angle to +Z as the value, the last speed as a velocity
+toward 0, a goal of 0 and the two constants below; its pause rule stays its
+own. The camera model proposal's preview drives its blend with the same
+function ([edits/switch-camera-model.md](edits/switch-camera-model.md) § "The
+motion").
+
 `world_up` then turns by `speed · dt` along the great circle to +Z. The speed
 profile is a trapezoid with continuous speed, so the view starts and stops
 turning without a jump. There is no planned trajectory, so a view that some

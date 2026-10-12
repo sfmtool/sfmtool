@@ -3557,7 +3557,10 @@ followed by the retriangulation of every track the camera's images observe, in
 one version labelled as the direct switch with `and retriangulated its tracks`
 added. It takes none of the fit's arguments, which the proposal already states,
 and refuses them; a `camera_intrinsics_index`, when given, has to be the
-proposal's camera. It runs as the `Switch camera model` background task and
+proposal's camera. Where the proposal's job already holds that version for the
+current generation (its `triangulation.state` is `ready`), it is installed at
+once on the GUI thread and the reply is an edit's, with the `fit` object.
+Otherwise it runs as the `Switch camera model` background task and
 replies as a background edit does (§ "`retriangulate_point` /
 `retriangulate_all_points`"): the version, its sentence, which carries the fit's
 numbers and the retriangulation's counts, and the same `fit` object the direct
@@ -3593,7 +3596,30 @@ a fit the core refused, a busy node or viewer, and a switch refused because a
              "monotone_constraint": { "active": false, "active_angles": 0,
                                       "range_deg": null } },
     "fit_report": "rms 0.130 px, radial 0.013 px, max 0.292 px over θ ≤ 84.5°; aspect fy/fx 0.9978 dropped (single focal)",
-    "refusal": null } }
+    "refusal": null,
+    "observation_comparison": null,
+    "preview_retriangulation": false, "animate": true, "s": 0.0,
+    "triangulation": { "state": "off", "generation": 1 } } }
+
+// get_camera_intrinsics { … } after
+// propose_camera_model { …, "preview_retriangulation": true } and the job:
+"proposed": { …,
+  "observation_comparison": {
+    "observations": 4210, "unmeasured": 0, "max_theta_deg": 101.2,
+    "before": { "median_px": 0.298, "p90_px": 0.61, "max_px": 3.1 },
+    "after": { "median_px": 0.301, "p90_px": 0.62, "max_px": 2.95 },
+    "changed_over_1px": 12, "trusted_deg": 84.5, "past_trusted": 58,
+    "past_trusted_before": { … }, "past_trusted_after": { … } },
+  "preview_retriangulation": true, "animate": true, "s": 1.0,
+  "triangulation": {
+    "state": "ready", "generation": 1, "tracks": 3020, "move": 2950,
+    "lose_position": 37,
+    "lose_position_by_verdict": [
+      { "verdict": 3, "reason": "behind a camera that sees them", "count": 37 } ],
+    "kept": 3, "held": 0, "median_shift": 0.0123, "p90_shift": 0.045,
+    "lost_points": [
+      { "index": 5121, "verdict": 3,
+        "reason": "behind a camera that sees it, so at infinity" }, … ] } }
 
 // cancel_camera_model_proposal { "reconstruction_label": "kerry_park" }
 { "reconstruction_label": "kerry_park", "cancelled": true }
@@ -3629,9 +3655,50 @@ default holds), `refit_spline` for a spline camera's own model, its
 `fit` report (`camera_model_before`, `camera_model_after`, `theta_fit_deg` and
 `theta_fit_source`, `spline_domain_deg`, `rms_px`, `radial_rms_px`, `max_px`,
 `dropped` as sentences, and `monotone_constraint`), and `fit_report`, the one
-line the panel shows under its controls. The observation comparison and the
-preview's triangulation are not in it; they are
-[../drafts/switch-camera-model.md](../drafts/switch-camera-model.md)'s.
+line the panel shows under its controls. It also carries what the proposal's
+job has found ([edits/switch-camera-model.md](edits/switch-camera-model.md)
+§ "The proposal's job"):
+
+- `observation_comparison`: once the job's switch has returned, the
+  reprojection errors of the camera's observations under the current camera
+  (`before`) and the proposed one (`after`), each a `median_px`, `p90_px` and
+  `max_px`, over one fixed set of `observations` (with `unmeasured`, those one
+  model gave no pixel), with `max_theta_deg`, `changed_over_1px`, the current
+  camera's `trusted_deg` and the same summaries for the `past_trusted`
+  observations beyond it; `{ "refusal": … }` with the switch's sentence where
+  it refused (a `.sift` file that cannot be read); `null` before the switch
+  returns and for a refused fit.
+- `preview_retriangulation` and `animate`, as the call below sets them, and
+  `s`, the preview's blend at this frame, 0 at the stored positions and 1 at
+  the targets.
+- `triangulation`, with the `generation` it describes and a `state`: `off`
+  while the preview is not asked for; `pending` while the job has no answer for
+  the current generation; `refused` with `refusal`, `retriangulate_points`'
+  sentence on a node whose observations carry no pixel, or the switch's or the
+  retriangulation's; and `ready` with the counts the 3D view's banner shows:
+  the proposal's `tracks`, how many `move`, how many `lose_position` and
+  `lose_position_by_verdict` (the verdict's wire code, its reason in the
+  banner's words and the count, largest first), how many are `kept` for too few
+  usable rays and `held`, `median_shift` and `p90_shift` (the distance a finite
+  point that moves travels, in the reconstruction's units, `null` where none
+  moves), and `lost_points`, each point that loses its position by `index`
+  with its `verdict` code and `reason`, `PointVerdict::label`, so an agent can
+  select one and screenshot it.
+
+`propose_camera_model` also takes `preview_retriangulation` (tick or clear the
+panel's Preview retriangulation) and `animate`; either omitted is left as it
+is, and a call that changes only these keeps the generation, so it neither
+refits nor solves again. The call replies before the job has run, so its
+`triangulation` is usually `pending`: an agent waits by polling
+`get_camera_intrinsics` until the state is `ready` and the block's
+`generation` is the one the call returned. The 200 ms-or-handle reply of the
+background edits is not used, since that handle names a background task and
+this job is not one. `animate` defaults to true. With `animate: false`, `s` is
+set to its goal at once instead of being stepped: to 1 when the preview is
+ticked and to 0 when it is cleared. Before the job has an answer there is
+nothing to set it toward, so `s` takes 1 in the frame the answer lands, and a
+new answer replaces the targets at once rather than running back first, so the
+next screenshot after the state reads `ready` shows the end state.
 
 `cancel_camera_model_proposal` drops the proposal open on the node, as the
 panel's Cancel does, and is refused when none is open. Apply is

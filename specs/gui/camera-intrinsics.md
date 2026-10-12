@@ -1031,9 +1031,33 @@ tables alone, with no `Current` and `Proposed` headings. `K` and the
 extrinsics stay the current camera's. The projection plot compares the two
 cameras (§ "4. Projection plot", "While a proposal is open"), and the Image
 Detail intrinsics layer shows the change on the photograph (§ "The Change to
-proposed field"). The errors of the camera's observations under the two
-cameras, and a preview of the retriangulation in the 3D view, are not shown;
-they are [../drafts/switch-camera-model.md](../drafts/switch-camera-model.md)'s.
+proposed field").
+
+Under the fit's line the strip shows the **observation comparison**, which the
+proposal's job sends when its switch returns
+([edits/switch-camera-model.md](edits/switch-camera-model.md) § "The
+proposal's job"): the median, 90th percentile and largest reprojection error of
+the camera's observations under the current camera and the proposed one, over
+one fixed set, and the same for those past the current camera's trusted bound,
+with their count (`observations 4210: median 0.298 → 0.301 px, p90 0.610 →
+0.620 px, max 3.100 → 2.950 px`, then `past 84.5°: 58: median …`, or `none past
+84.5°`). It needs the reconstruction's pixels, which on a `sift_files` node
+without the inline keypoint column are read from the `.sift` files on the job's
+thread rather than in the frame. Until the job has sent it the strip reads
+`Comparing the observations…`, and where the switch refused (a `.sift` file
+that cannot be read) its sentence stands in its place in the error colour. Each
+line wraps at the panel's edge. A refused fit shows none.
+
+Under the comparison is the **Preview retriangulation** checkbox, off when a
+proposal opens, which moves the points and surfels of the proposal's tracks in
+the 3D view to where Apply will put them, and back when it is cleared
+([edits/switch-camera-model.md](edits/switch-camera-model.md) § "The
+preview"); the 3D view's banner gives its counts
+([viewport-hud.md](viewport-hud.md) § "The proposal banner"). It is greyed,
+with `retriangulate_points`' refusal sentence as hover text, on a node whose
+observations carry no pixel, and with `The fit was refused, so there is nothing
+to preview.` while the fit is refused. The checkbox takes no keyboard focus, so
+it leaves the `Escape` rule above as it is.
 
 ### 2. Parameters
 
@@ -1633,6 +1657,13 @@ Two caveats remain, both named in the tests rather than left implicit:
   stays on the plot; the change plot labels the monotone range only when
   the constraint bound; and the rules' and regions' labels and `monotone
   bound` are painted after every curve, each over a plate.
+- The observation comparison and the Preview retriangulation checkbox, on the
+  same fixture: `Comparing the observations…` until the proposal's job has
+  switched the camera, then the comparison under each model and past the
+  trusted bound beside the checkbox, all of it inside the panel and apart from
+  the rest at 341, 482 and 1800 px (the test fails with the comparison's lines
+  left unwrapped); and the comparison's lines in their words, `n/a` for a side
+  with no number.
 - The Change to proposed field, in `image_detail/intrinsics/tests.rs`: with a
   proposal open the frame paints the change legend, the nodes past the bound,
   a ring of the proposed camera's and the observation layer's legend, and the
