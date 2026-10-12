@@ -378,8 +378,10 @@ pub(crate) const BANNER_TOP: f32 = 50.0;
 
 /// `text` laid out for a banner in 12 pt words of `colour`, wrapping at
 /// `wrap`: in the proportional font, with each run of characters it has no
-/// glyph for (the `→` of a model change, a `≤` in a refusal) in the monospace
-/// font, which has them, so no character is drawn as an empty box.
+/// glyph for (the `→` of a model change) in the monospace font, which has the
+/// arrow, so it is not drawn as an empty box. A character neither font has is
+/// still drawn as one, and the banner's glyph test fails on one its sample
+/// text holds.
 pub(crate) fn banner_job(
     ctx: &egui::Context,
     text: &str,
