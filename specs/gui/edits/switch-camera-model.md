@@ -265,9 +265,10 @@ Task panel. It follows the bench's live evaluation
   Nobody asks for a job: once per frame (`drive_camera_model_proposal_job`)
   the viewer finds a proposal whose inputs have no answer, and starts one. It
   waits while the node is busy.
-- **One job runs at a time.** When the inputs change while one runs, it is
-  cancelled through its `Progress`, and the next starts once the cancelled one
-  has reported back. What a job sends is kept only when it is for the
+- **One job runs at a time.** When the proposal's generation or version moves
+  on while one runs, it is cancelled through its `Progress`, and the next
+  starts once the cancelled one has reported back. Clearing the preview lets a
+  running job finish, so ticking it again finds the answer. What a job sends is kept only when it is for the
   proposal's current generation, so an answer for an older generation is
   discarded rather than moved to.
 

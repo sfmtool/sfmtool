@@ -16,9 +16,10 @@
 //!   Nobody asks for a job: once per frame
 //!   [`AppState::drive_camera_model_proposal_job`] finds a proposal whose
 //!   inputs have no answer, and starts one.
-//! - **One job runs at a time.** When the inputs change while one runs, it is
-//!   cancelled through its `Progress`, and the next starts once the cancelled
-//!   one has reported back. An answer is kept only when it is for the
+//! - **One job runs at a time.** When the proposal's generation or version
+//!   moves on while one runs, it is cancelled through its `Progress`, and the
+//!   next starts once the cancelled one has reported back. Clearing the
+//!   preview lets a running job finish. An answer is kept only when it is for the
 //!   proposal's current generation.
 //!
 //! One job runs [`switch_and_retriangulate`], the computation Apply's
