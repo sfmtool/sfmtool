@@ -219,7 +219,11 @@ camera 0 of kerry_park`.
 closing the proposal's node (by its context menu, Close All, or the wire), and
 an MCP edit tool naming the node apply the proposal when its fit succeeded,
 since an edit has a history and undo reverses it, and drop it, with a `View`
-row, when the fit was refused. A close applies first, before the close is
+row, when the fit was refused (`…: its fit was refused`). Where the Apply itself
+is refused, for instance because a task is running on another node, its
+refusal is the failed row and the proposal is dropped with a `View` row after
+it, `Dropped the camera model proposal for camera 0 of kerry_park: its Apply
+was refused`. A close applies first, before the close is
 asked about; where that starts the background task the node is busy, and the
 close is refused with the busy sentence, as any close of a busy node is. An MCP
 edit tool that set off the task is refused the same way. The frame checks the
@@ -345,7 +349,8 @@ Explorer (`sfm-explorer` lib tests, headless):
   holding the switched camera and moving only the camera's tracks, undone back
   to both; Apply on a `sift_files` node being the switch alone with the
   refusal sentence in its row, and refused with the proposal left open once the
-  `.sift` files are gone; Cancel; a refused fit shown and not applied;
+  `.sift` files are gone; Cancel; an implicit ending whose Apply is refused
+  dropping the proposal with its own `View` row; a refused fit shown and not applied;
   selecting another node applying the proposal and dropping a refused one;
   closing applying first and the close then refused while busy; undo, redo and
   a jump each dropping it with one `View` row; a value changed under it
@@ -375,7 +380,8 @@ Explorer (`sfm-explorer` lib tests, headless):
   inputs and advancing it for new ones, reported by `get_camera_intrinsics`,
   and dropped by `cancel_camera_model_proposal`; an unknown model refused and a
   refused fit carried; the proposal form deferring to the task and moving the
-  tracks, undone over the wire; a direct switch applying an open proposal first
+  tracks with the direct form's `fit` object in the reply, undone over the
+  wire; on a `sift_files` node the switch alone answered at once with `fit`; a direct switch applying an open proposal first
   and then refused while busy, and moving no point on its own; an undo over the
   wire dropping the proposal.
 

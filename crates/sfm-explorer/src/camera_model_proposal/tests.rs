@@ -329,7 +329,7 @@ fn apply_without_pixels_is_the_switch_alone() {
         .open_camera_model_proposal(CameraRef::new(id, 0), None)
         .expect("opens");
     let applied = state.apply_camera_model_proposal(id).expect("applies");
-    assert_eq!(applied, ProposalApplied::Pushed(id));
+    assert_eq!(applied.pushed(), Some(id));
     assert_eq!(versions(&state), 2);
     let row = newest(&state);
     assert!(
@@ -648,4 +648,57 @@ fn opening_a_proposal_ends_a_held_lock() {
     );
     assert!(state.camera_model_proposal_on(id).is_some());
     assert_eq!(versions(&state), 1);
+}
+
+/// An implicit ending whose Apply is refused, here because a task is running
+/// on another node, drops the proposal with a `View` row of its own after the
+/// refusal's failed row.
+#[test]
+fn an_implicit_ending_whose_apply_is_refused_drops_with_a_row() {
+    let (mut state, id) = spline_state();
+    state.append_node(crate::scene_graph::tests::resectable_node(
+        "/runs/run_b.sfmr",
+    ));
+    let other = state.scene[1].id;
+    state
+        .open_camera_model_proposal(CameraRef::new(id, 1), None)
+        .expect("opens");
+    let (release, held) = std::sync::mpsc::channel::<()>();
+    state
+        .start_background_task(
+            crate::background::Operation::RETRIANGULATE_ALL_POINTS,
+            other,
+            Box::new(move |_progress| {
+                let _ = held.recv();
+                crate::background::Finished::Failed("nothing".to_string())
+            }),
+        )
+        .expect("nothing else is running");
+    let before = state.action_log.revision();
+    state.select_recon(other);
+    state.tend_camera_model_proposal();
+    assert!(state.camera_model_proposal.is_none());
+    let rows: Vec<(bool, Kind, String)> = state
+        .action_log
+        .since(before)
+        .map(|entry| (entry.failed, entry.kind, entry.text.clone()))
+        .collect();
+    let refused = rows
+        .iter()
+        .position(|(failed, kind, _)| *failed && *kind == Kind::Edit)
+        .expect("the refusal's row");
+    let dropped = rows
+        .iter()
+        .position(|(failed, kind, text)| {
+            !failed
+                && *kind == Kind::View
+                && text
+                    == "Dropped the camera model proposal for camera 1 of run_a: its \
+                            Apply was refused"
+        })
+        .expect("the drop's row");
+    assert!(refused < dropped, "{rows:?}");
+    assert_eq!(versions(&state), 1);
+    release.send(()).expect("the worker is waiting");
+    state.finish_background_task();
 }

@@ -448,6 +448,17 @@ pub(super) fn switch_camera_model(
         Ok(())
     })?;
     let entry = entry.expect("the edit succeeded");
+    insert_fit(&mut reply, &entry);
+    Ok(reply)
+}
+
+/// Put the `fit` object beside a version reply: the numbers a switch's Action
+/// Log sentence is written from, for one camera. The direct form and the
+/// proposal form of `switch_camera_model` both answer with it.
+pub(super) fn insert_fit(
+    reply: &mut Value,
+    entry: &sfmtool_core::reconstruction::switch_camera_model::CameraSwitch,
+) {
     let refit = &entry.refit;
     let constraint = &refit.monotone_constraint;
     let o = &entry.observations;
@@ -473,7 +484,6 @@ pub(super) fn switch_camera_model(
         .as_object_mut()
         .expect("a version reply is an object")
         .insert("fit".into(), fit);
-    Ok(reply)
 }
 
 /// `propose_camera_model`: open or refit the camera model proposal on one
@@ -568,20 +578,27 @@ pub(super) fn apply_camera_model_proposal(
             ))));
         }
     }
-    let mut started = false;
+    let mut applied = None;
     let reply = edited(state, id, |state| {
-        let applied = state.apply_camera_model_proposal(id)?;
-        started = applied == crate::state::edits::ProposalApplied::Started;
+        applied = Some(state.apply_camera_model_proposal(id)?);
         Ok(())
     });
-    if !started {
+    // The switch alone, pushed on the GUI thread: the version at once, with
+    // the switch's report as `fit`.
+    if let Some(crate::state::edits::ProposalApplied::Pushed(_, entry)) = &applied {
+        return super::Outcome::Done(reply.map(|mut reply| {
+            insert_fit(&mut reply, entry);
+            super::ToolOutput::Json(reply)
+        }));
+    }
+    if applied.is_none() {
         return super::Outcome::Done(reply.map(super::ToolOutput::Json));
     }
     let task = state.background_task().expect("the operation just started");
     super::Outcome::Deferred(Deferred::Background(BackgroundReply {
         operation_id: task.id,
         operation_name: task.operation.name,
-        answer: super::Answer::Version(id),
+        answer: super::Answer::SwitchedCamera(id),
         label: task.label.clone(),
         started: task.started,
     }))
@@ -700,6 +717,20 @@ pub(super) fn background_reply(
             // was cancelled or refused is the `Err` arm. So the field is here
             // for the reason it is on every other edit reply -- one question,
             // one answer, whichever family the caller is in.
+            // A proposal's Apply answers as a version, with the switch's
+            // report beside it as `fit`, as the direct switch answers.
+            (super::Answer::SwitchedCamera(node), Ok(report)) => {
+                version_reply(state, node, Some(report.clone())).map(|mut reply| {
+                    reply
+                        .as_object_mut()
+                        .expect("a version reply is an object")
+                        .insert("changed".into(), json!(outcome.changed));
+                    if let Some(entry) = outcome.switched_camera.as_deref() {
+                        insert_fit(&mut reply, entry);
+                    }
+                    super::ToolOutput::Json(reply)
+                })
+            }
             (super::Answer::Version(node), Ok(report)) => {
                 version_reply(state, node, Some(report.clone())).map(|mut reply| {
                     reply

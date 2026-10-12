@@ -33,7 +33,7 @@ use sfmtool_core::reconstruction::{
 use sfmtool_core::{EditedReconstruction, RowMap, SfmrReconstruction};
 
 use crate::action_log::{version_step_text, Kind};
-use crate::background::{Finished, Job, Operation};
+use crate::background::{Finished, Job, Operation, SwitchedCamera};
 use crate::document::PointMap;
 use crate::progress::Collector;
 use crate::scene::ReconId;
@@ -403,7 +403,7 @@ impl AppState {
             Some(why) => {
                 let note = format!("its tracks were not retriangulated: {why}");
                 match self.switch_camera_model_noting(id, &request, Some(&note)) {
-                    Ok(_) => Ok(ProposalApplied::Pushed(id)),
+                    Ok(entry) => Ok(ProposalApplied::Pushed(id, Box::new(entry))),
                     Err(why) => {
                         self.camera_model_proposal = Some(proposal);
                         Err(why)
@@ -498,14 +498,15 @@ impl AppState {
             );
             let mut steps: Vec<PointMap> = mat_map.map(PointMap::Rows).into_iter().collect();
             steps.push(map);
-            Finished::Produced {
+            Finished::SwitchedCamera(Box::new(SwitchedCamera {
                 // `TheseInBulk` writes into a new base with nothing over it, so
                 // taking it out of the version is a move.
                 value: Arc::unwrap_or_clone(next.base),
                 map: PointMap::Chain(steps),
                 version_label,
                 text,
-            }
+                switch: entry,
+            }))
         }))
     }
 }
@@ -523,22 +524,23 @@ struct ResolvedSwitch {
 }
 
 /// How the proposal's Apply went, when it went.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) enum ProposalApplied {
     /// The `Switch camera model` background task started; its version lands
     /// when it finishes.
     Started,
-    /// The switch alone pushed a version of this node on the GUI thread.
-    Pushed(ReconId),
+    /// The switch alone pushed a version of this node on the GUI thread, with
+    /// the switch's report for the camera.
+    Pushed(ReconId, Box<CameraSwitch>),
 }
 
 impl ProposalApplied {
     /// The node a version was pushed on in the call, for the caller to drop
     /// the panel caches describing its geometry.
-    pub(crate) fn pushed(self) -> Option<ReconId> {
+    pub(crate) fn pushed(&self) -> Option<ReconId> {
         match self {
             ProposalApplied::Started => None,
-            ProposalApplied::Pushed(id) => Some(id),
+            ProposalApplied::Pushed(id, _) => Some(*id),
         }
     }
 }

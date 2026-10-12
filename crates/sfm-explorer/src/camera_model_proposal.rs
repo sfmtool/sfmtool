@@ -410,6 +410,8 @@ pub(crate) enum Dropped {
     HistoryMoved,
     /// An implicit ending found the fit refused, so there was nothing to apply.
     FitRefused,
+    /// An implicit ending's Apply was refused, its refusal recorded beside.
+    ApplyRefused,
     /// The node's version changed under the proposal some other way.
     VersionChanged,
 }
@@ -563,6 +565,7 @@ impl AppState {
                 format!("Dropped the {what}: the history moved off the version it was fitted to")
             }
             Dropped::FitRefused => format!("Dropped the {what}: its fit was refused"),
+            Dropped::ApplyRefused => format!("Dropped the {what}: its Apply was refused"),
             Dropped::VersionChanged => {
                 format!("Dropped the {what}: the reconstruction changed under it")
             }
@@ -598,10 +601,10 @@ impl AppState {
                 applied.pushed()
             }
             // A refused Apply leaves the proposal open and its refusal in the
-            // log; an implicit ending drops it then, as it drops a proposal
-            // whose fit was refused.
+            // log; an implicit ending drops it then, with its own row, as it
+            // drops a proposal whose fit was refused.
             Err(_) => {
-                self.camera_model_proposal = None;
+                self.drop_camera_model_proposal(id, Dropped::ApplyRefused);
                 None
             }
         }

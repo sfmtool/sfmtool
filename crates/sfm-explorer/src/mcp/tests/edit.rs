@@ -2646,6 +2646,14 @@ fn switch_camera_model_with_proposal_applies_it_and_moves_the_tracks() {
     );
     let report = reply["report"].as_str().expect("a report");
     assert!(report.contains("points moved"), "{report}");
+    // The same `fit` object the direct form answers with.
+    let fit = &reply["fit"];
+    assert_eq!(fit["camera_intrinsics_index"], 0);
+    assert_eq!(fit["camera_model_before"], model_before.as_str());
+    assert_eq!(fit["camera_model_after"], "SFMTOOL_PINHOLE");
+    assert!(fit["rms_px"].as_f64().is_some(), "{fit}");
+    assert!(fit["observations"].as_u64().is_some_and(|n| n > 0), "{fit}");
+    assert!(fit["monotone_constraint"]["active"].is_boolean(), "{fit}");
     assert_eq!(version_count(&state), 2);
     assert_ne!(point_positions(&state), before, "no track moved");
 
@@ -2735,4 +2743,41 @@ fn an_undo_over_the_wire_drops_the_proposal() {
     );
     assert!(state.camera_model_proposal.is_none());
     assert_eq!(state.scene[0].history.cursor(), 0);
+}
+
+/// On a node whose observations carry no pixel the proposal form is the
+/// switch alone, answered at once with the version and the `fit` object.
+#[test]
+fn switch_camera_model_with_proposal_on_a_sift_node_answers_with_fit() {
+    let workspace = tempfile::tempdir().expect("a temporary directory");
+    let (mut state, id) = crate::state::edits::tests::convertible_state(workspace.path());
+    state.select_recon(id);
+    let mut viewer = Viewer3D::new();
+    call(
+        &mut state,
+        &mut viewer,
+        "propose_camera_model",
+        json!({
+            "reconstruction_label": "run_a",
+            "camera_intrinsics_index": 0,
+            "camera_model": "SFMTOOL_PINHOLE"
+        }),
+    );
+    let reply = call(
+        &mut state,
+        &mut viewer,
+        "switch_camera_model",
+        json!({ "reconstruction_label": "run_a", "proposal": true }),
+    );
+    assert_eq!(reply["changed"], true);
+    let report = reply["report"].as_str().expect("a report");
+    assert!(
+        report.contains("its tracks were not retriangulated"),
+        "{report}"
+    );
+    let fit = &reply["fit"];
+    assert_eq!(fit["camera_intrinsics_index"], 0);
+    assert_eq!(fit["camera_model_after"], "SFMTOOL_PINHOLE");
+    assert!(fit["rms_px"].as_f64().is_some(), "{fit}");
+    assert!(fit.get("median_error_before_px").is_some(), "{fit}");
 }

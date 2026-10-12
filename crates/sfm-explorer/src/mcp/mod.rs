@@ -1215,6 +1215,9 @@ pub(crate) struct BackgroundReply {
 pub(crate) enum Answer {
     /// The version the operation left on this node, as every edit answers.
     Version(ReconId),
+    /// The version a camera model proposal's Apply left on this node, with
+    /// the switch's report as `fit`, as `switch_camera_model` answers.
+    SwitchedCamera(ReconId),
     /// The point a *Create Track Here* committed on this node, with the
     /// version the commit left, or the cascade's refusal with every member's
     /// stage.
