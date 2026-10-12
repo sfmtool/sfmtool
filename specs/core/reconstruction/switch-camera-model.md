@@ -47,6 +47,11 @@ pub fn fit_camera_switch(
     options: &RefitOptions,
 ) -> Result<CameraIntrinsicsRefit, SwitchCameraModelError>;
 
+pub fn default_fit_angle(
+    recon: &SfmrReconstruction,
+    camera: usize,
+) -> Result<(f64, ThetaFitSource), SwitchCameraModelError>;
+
 pub struct SwitchCameraModelOptions {
     pub refit: RefitOptions,       // the lens fit's: theta_fit_deg, spline_domain_deg
     pub outermost_keypoint: bool,  // default true
@@ -108,7 +113,10 @@ reading any pixel. It reads the poses and the point positions, one pass over
 the observations, because the fit angle of a source without a trusted bound
 and the refusal of a perspective target both come from them. The viewer's
 camera model proposal calls it on every change of a control, so the camera it
-shows is the one Apply installs for the same request.
+shows is the one Apply installs for the same request. `default_fit_angle` is
+the angle such a fit takes when none is given, and where it comes from
+(§ "The fit's largest angle"), reported whatever the target and whether or not
+the fit at that angle succeeds, so the proposal shows it beside a refused fit.
 
 **A refusal names the camera.** Every camera is fitted before anything is
 written, and before any `.sift` file is read for the observations' pixels, and
@@ -292,7 +300,8 @@ exact projection, plus one point 95° off the first image's axis:
 - only the named cameras changing;
 - `fit_camera_switch` giving the camera and report the switch installs, for a
   change of model, a source with no trusted bound and a refit of a spline, and
-  the switch's refusals;
+  the switch's refusals; `default_fit_angle` giving the angle and source such a
+  fit uses, and giving it for a target whose fit is refused;
 - a source with no trusted bound fitted out to its observations' extent;
 - a perspective target refused for a camera observed past 90°, and every
   refusal naming its camera;

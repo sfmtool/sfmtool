@@ -399,20 +399,7 @@ pub fn fit_camera_switch(
         return Err(SwitchCameraModelError::UnknownCamera { camera, count });
     };
     let tracks = &recon.point_set.tracks;
-    // The widest ray, and the row it belongs to, so a refusal can name the
-    // point: the angle is measured to the point's triangulated position, not
-    // through the lens to its keypoint, and a badly placed point can reach far
-    // past any keypoint the camera detected.
-    let mut widest: Option<(usize, f64)> = None;
-    for (row, observation) in tracks.iter().enumerate() {
-        if table.images[observation.image_index as usize].camera_index as usize != camera {
-            continue;
-        }
-        let t = incidence_deg(recon, row);
-        if t.is_finite() && widest.is_none_or(|(_, best)| t > best) {
-            widest = Some((row, t));
-        }
-    }
+    let widest = widest_ray(recon, camera);
     let max_theta_deg = widest.map_or(f64::NAN, |(_, t)| t);
     if let Some((row, max_theta_deg)) = widest.filter(|_| target.is_perspective()) {
         if max_theta_deg >= 90.0 {
@@ -427,15 +414,7 @@ pub fn fit_camera_switch(
     }
     let (theta_fit_deg, theta_fit_source) = match options.theta_fit_deg {
         Some(theta) => (theta, ThetaFitSource::Given),
-        None => match trustworthy_max_theta_deg(source) {
-            Some(bound) => (bound, ThetaFitSource::TrustedBound),
-            None if max_theta_deg > 0.0 => (max_theta_deg.min(180.0), ThetaFitSource::Observations),
-            None => (
-                image_corner_deg(source)
-                    .map_err(|error| SwitchCameraModelError::Refit { camera, error })?,
-                ThetaFitSource::ImageCorner,
-            ),
-        },
+        None => fit_angle_default(source, max_theta_deg, camera)?,
     };
     match (spline_refit_count(source, target), options.theta_fit_deg) {
         (Some(count), None) => refit_spline(source, count, options.spline_domain_deg),
@@ -448,6 +427,72 @@ pub fn fit_camera_switch(
         ),
     }
     .map_err(|error| SwitchCameraModelError::Refit { camera, error })
+}
+
+/// The fit angle a switch of camera `camera` of `recon` takes when none is
+/// given, and where it comes from: the camera's trusted bound, or for a camera
+/// without one the widest incidence angle among the observations of its
+/// images, or the far image corner when it has none.
+///
+/// The angle [`fit_camera_switch`] and [`switch_camera_model`] fit over with
+/// [`RefitOptions::theta_fit_deg`] `None`, whatever the target, except a spline
+/// camera refitted as its own model, which is fitted over its whole domain. It
+/// is reported whether or not the fit at that angle succeeds, so a caller can
+/// show the default beside a refused fit.
+///
+/// # Errors
+///
+/// [`SwitchCameraModelError::UnknownCamera`] for an index past the camera
+/// table, and [`SwitchCameraModelError::Refit`] for a camera with no image to
+/// take a corner from.
+pub fn default_fit_angle(
+    recon: &SfmrReconstruction,
+    camera: usize,
+) -> Result<(f64, ThetaFitSource), SwitchCameraModelError> {
+    let count = recon.image_table.cameras.len();
+    let Some(source) = recon.image_table.cameras.get(camera) else {
+        return Err(SwitchCameraModelError::UnknownCamera { camera, count });
+    };
+    let max_theta_deg = widest_ray(recon, camera).map_or(f64::NAN, |(_, t)| t);
+    fit_angle_default(source, max_theta_deg, camera)
+}
+
+/// The widest ray among the observations of camera `camera`'s images, and the
+/// row it belongs to, so a refusal can name the point: the angle is measured
+/// to the point's triangulated position, not through the lens to its keypoint,
+/// and a badly placed point can reach far past any keypoint the camera
+/// detected.
+fn widest_ray(recon: &SfmrReconstruction, camera: usize) -> Option<(usize, f64)> {
+    let table = &recon.image_table;
+    let mut widest: Option<(usize, f64)> = None;
+    for (row, observation) in recon.point_set.tracks.iter().enumerate() {
+        if table.images[observation.image_index as usize].camera_index as usize != camera {
+            continue;
+        }
+        let t = incidence_deg(recon, row);
+        if t.is_finite() && widest.is_none_or(|(_, best)| t > best) {
+            widest = Some((row, t));
+        }
+    }
+    widest
+}
+
+/// [`default_fit_angle`] for a source whose widest observed ray is
+/// `max_theta_deg` (`NaN` with none).
+fn fit_angle_default(
+    source: &CameraIntrinsics,
+    max_theta_deg: f64,
+    camera: usize,
+) -> Result<(f64, ThetaFitSource), SwitchCameraModelError> {
+    Ok(match trustworthy_max_theta_deg(source) {
+        Some(bound) => (bound, ThetaFitSource::TrustedBound),
+        None if max_theta_deg > 0.0 => (max_theta_deg.min(180.0), ThetaFitSource::Observations),
+        None => (
+            image_corner_deg(source)
+                .map_err(|error| SwitchCameraModelError::Refit { camera, error })?,
+            ThetaFitSource::ImageCorner,
+        ),
+    })
 }
 
 /// The coefficient count `target` asks of `source` when `source` is a spline

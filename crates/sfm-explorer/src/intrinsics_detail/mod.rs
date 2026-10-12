@@ -134,6 +134,12 @@ impl IntrinsicsDetail {
             has_pointer: false,
         };
 
+        // Read before anything is drawn: an `Escape` that closes the Model
+        // dropdown, or ends the editing of a field, closes them during this
+        // frame, and by the end of it neither would show that the key was
+        // theirs.
+        let escape_is_ours =
+            !egui::Popup::is_any_open(ui.ctx()) && !ui.ctx().egui_wants_keyboard_input();
         let panel_rect = ui.available_rect_before_wrap();
         if let Some(pos) = ui.input(|i| i.pointer.hover_pos()) {
             if panel_rect.contains(pos) {
@@ -211,29 +217,11 @@ impl IntrinsicsDetail {
                     (Some(proposed), Some((_, _, proposed_report))) => {
                         let aspect_row = parameters::has_two_focal_lengths(camera)
                             || parameters::has_two_focal_lengths(proposed);
-                        ui.columns(2, |columns| {
-                            columns[0].label(egui::RichText::new("Current").weak());
-                            parameters::show_parameters(&mut columns[0], camera, "current");
-                            columns[1].label(egui::RichText::new("Proposed").weak());
-                            parameters::show_parameters(&mut columns[1], proposed, "proposed");
-                        });
-                        ui.separator();
-                        ui.columns(2, |columns| {
-                            parameters::show_derived(
-                                &mut columns[0],
-                                camera,
-                                derived,
-                                "current",
-                                aspect_row,
-                            );
-                            parameters::show_derived(
-                                &mut columns[1],
-                                proposed,
-                                proposed_report,
-                                "proposed",
-                                aspect_row,
-                            );
-                        });
+                        compare_tables(
+                            ui,
+                            [(camera, derived), (proposed, proposed_report)],
+                            aspect_row,
+                        );
                     }
                     _ => {
                         parameters::show_parameters(ui, camera, "current");
@@ -256,11 +244,13 @@ impl IntrinsicsDetail {
             });
 
         // `Escape` cancels the proposal while the pointer is over the panel
-        // showing it, so the key keeps its meaning everywhere else.
+        // showing it, so the key keeps its meaning everywhere else, and only
+        // when no popup was open and no field was being edited as the frame
+        // began: then the key closes those and nothing else.
         if response.has_pointer
             && response.proposal.is_none()
             && proposal.is_some()
-            && !ui.ctx().egui_wants_keyboard_input()
+            && escape_is_ours
             && ui.input(|i| i.key_pressed(egui::Key::Escape))
         {
             response.proposal = Some((reference, ProposalAction::Cancel));
@@ -278,6 +268,62 @@ impl IntrinsicsDetail {
             .is_some_and(|(camera, _, _)| camera.recon == id)
         {
             self.proposed_derived = None;
+        }
+    }
+}
+
+/// The current camera's tables and the proposed camera's, under `Current` and
+/// `Proposed`: side by side when the panel is wide enough for both at their
+/// natural width, and one above the other otherwise, so neither runs into the
+/// other.
+///
+/// The width each needs is measured in an invisible sizing pass, since a
+/// table's widest row depends on the model and its numbers.
+fn compare_tables(
+    ui: &mut egui::Ui,
+    cameras: [(&sfmtool_core::camera::CameraIntrinsics, &Derived); 2],
+    aspect_row: bool,
+) {
+    const SALTS: [&str; 2] = ["current", "proposed"];
+    const HEADINGS: [&str; 2] = ["Current", "Proposed"];
+    let needed = cameras
+        .iter()
+        .zip(SALTS)
+        .map(|((camera, derived), salt)| {
+            let mut sizing = ui.new_child(
+                egui::UiBuilder::new()
+                    .id_salt(("intrinsics_measure", salt))
+                    .sizing_pass()
+                    .invisible(),
+            );
+            parameters::show_parameters(&mut sizing, camera, salt);
+            parameters::show_derived(&mut sizing, camera, derived, salt, aspect_row);
+            sizing.min_rect().width()
+        })
+        .fold(0.0f32, f32::max);
+    let gap = ui.spacing().item_spacing.x;
+    if 2.0 * needed + gap <= ui.available_width() {
+        ui.columns(2, |columns| {
+            for (k, (camera, _)) in cameras.iter().enumerate() {
+                columns[k].label(egui::RichText::new(HEADINGS[k]).weak());
+                parameters::show_parameters(&mut columns[k], camera, SALTS[k]);
+            }
+        });
+        ui.separator();
+        ui.columns(2, |columns| {
+            for (k, (camera, derived)) in cameras.iter().enumerate() {
+                parameters::show_derived(&mut columns[k], camera, derived, SALTS[k], aspect_row);
+            }
+        });
+    } else {
+        for (k, (camera, derived)) in cameras.iter().enumerate() {
+            if k > 0 {
+                ui.separator();
+            }
+            ui.label(egui::RichText::new(HEADINGS[k]).weak());
+            parameters::show_parameters(ui, camera, SALTS[k]);
+            ui.separator();
+            parameters::show_derived(ui, camera, derived, SALTS[k], aspect_row);
         }
     }
 }

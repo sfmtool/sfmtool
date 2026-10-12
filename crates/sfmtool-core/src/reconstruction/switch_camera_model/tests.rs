@@ -579,3 +579,41 @@ fn the_fit_alone_is_the_camera_the_switch_installs() {
         })
     );
 }
+
+/// The default fit angle is the one a fit given none uses, and is reported for
+/// a target whose fit at that angle is refused.
+#[test]
+fn the_default_fit_angle_is_the_fits_and_survives_a_refusal() {
+    let recon = scene(vec![equidistant()], |_| 0);
+    let (deg, source) = default_fit_angle(&recon, 0).expect("a default");
+    assert_eq!(source, ThetaFitSource::Observations);
+    let refit = fit_camera_switch(
+        &recon,
+        0,
+        &target("SFMTOOL_FISHEYE"),
+        &RefitOptions::default(),
+    )
+    .expect("a fit");
+    assert_eq!((refit.theta_fit_deg, refit.theta_fit_source), (deg, source));
+    // A perspective target is refused for the point 95° off the axis; the
+    // default is still there.
+    assert!(fit_camera_switch(
+        &recon,
+        0,
+        &target("SFMTOOL_PINHOLE"),
+        &RefitOptions::default()
+    )
+    .is_err());
+    assert!((deg - WIDE_DEG).abs() < 1e-6);
+
+    let kerry = scene(vec![kerry_cam0()], |_| 0);
+    let (_, source) = default_fit_angle(&kerry, 0).expect("a default");
+    assert_eq!(source, ThetaFitSource::TrustedBound);
+    assert_eq!(
+        default_fit_angle(&kerry, 3),
+        Err(SwitchCameraModelError::UnknownCamera {
+            camera: 3,
+            count: 1
+        })
+    );
+}

@@ -911,6 +911,12 @@ proposal is already open below it. The panel reports the click as
 `IntrinsicsDetailResponse::switch_model`, and the dock opens the proposal,
 ending a Move Camera lock held on the node first.
 
+The two buttons are laid out first, from the right edge, and the identity line
+takes the width they leave, wrapping between its parts (never inside one) onto
+a second line when the panel is narrow, so at the default width the size and
+the image count sit below the node and camera rather than under `Switch
+Model…`.
+
 ### The proposal strip
 
 While a proposal is open on the camera shown, a strip under the header carries
@@ -921,14 +927,21 @@ the controls, the same-model target and the endings are
 A change of a control is made on the proposal in place and refits it on the
 GUI thread. The panel reports Apply and Cancel, and `Escape` while the pointer
 is over it, as `IntrinsicsDetailResponse::proposal`, and the dock applies or
-drops the proposal. The panel showing another camera of the node shows no
-strip.
+drops the proposal. `Escape` cancels only when no popup was open and no field
+was being edited as the frame began: an `Escape` that closes the Model dropdown,
+or ends the editing of a field, does only that. The panel showing another
+camera of the node shows no strip.
 
-While the strip is shown, the **Parameters** and **Derived** tables are drawn
-twice, side by side under `Current` and `Proposed`: the current camera's and
-the proposed one's. The two derived tables both carry the aspect row when either
-camera has two focal lengths, reading `single focal` for the one that has one,
-so their rows stay in line. `K`, the projection plot and the extrinsics stay
+While the strip is shown and the fit succeeded, the **Parameters** and
+**Derived** tables are drawn twice, under `Current` and `Proposed`: the current
+camera's and the proposed one's. They are side by side when the panel is wide
+enough for both at their natural width, which an invisible sizing pass
+measures, and one above the other otherwise, so neither runs into the other.
+The two derived tables both carry the aspect row when either camera has two
+focal lengths, reading `single focal` for the one that has one, so their rows
+stay in line side by side. A proposal whose fit was refused has no proposed
+camera, and the panel shows the current camera's tables alone, with no
+`Current` and `Proposed` headings. `K`, the projection plot and the extrinsics stay
 the current camera's. The proposal's comparison plots are
 [../drafts/switch-camera-model.md](../drafts/switch-camera-model.md)'s.
 

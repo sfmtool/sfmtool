@@ -27,7 +27,7 @@ use sfmtool_core::camera::refit_intrinsics::{
 };
 use sfmtool_core::camera::CameraIntrinsics;
 use sfmtool_core::reconstruction::outermost_keypoint::{outermost_keypoints, KeypointReach};
-use sfmtool_core::reconstruction::switch_camera_model::fit_camera_switch;
+use sfmtool_core::reconstruction::switch_camera_model::{default_fit_angle, fit_camera_switch};
 use sfmtool_core::{EditedReconstruction, RowMap, SfmrReconstruction};
 
 use crate::action_log::Kind;
@@ -161,9 +161,11 @@ pub(crate) struct CameraModelProposal {
     pub(crate) generation: u64,
     /// The fit, or the core's refusal sentence.
     pub(crate) fit: Result<CameraIntrinsicsRefit, String>,
-    /// The fit angle the core takes with none given, and where it came from,
-    /// as the last fit that was given none reported it: what Fit to θ shows
-    /// and how far it can be raised.
+    /// The fit angle the core takes with none given, and where it came from
+    /// (`default_fit_angle`), read once when the proposal opens: what Fit to θ
+    /// shows and how far it can be raised, whether or not the fit at that
+    /// angle succeeds. `None` only for a camera the core finds no default for,
+    /// one with no image.
     pub(crate) theta_fit_default: Option<(f64, ThetaFitSource)>,
     /// Where a change of model's spline domain ends with none given, as the
     /// last such fit reported it: what Spline domain shows for an untouched
@@ -239,11 +241,6 @@ impl CameraModelProposal {
         self.generation += 1;
         self.fit = self.compute_fit();
         if let Ok(refit) = &self.fit {
-            if self.inputs.theta_fit_deg.is_none()
-                && refit.theta_fit_source != ThetaFitSource::SplineDomain
-            {
-                self.theta_fit_default = Some((refit.theta_fit_deg, refit.theta_fit_source));
-            }
             if self.inputs.spline_domain_deg.is_none()
                 && !self.is_spline_refit(self.inputs.camera_model)
             {
@@ -499,6 +496,7 @@ impl AppState {
         };
         let source = node.recon().image_table.cameras[camera.index()].clone();
         let targets = targets_for(&source);
+        let value_for_default = Arc::clone(&value);
         let mut proposal = CameraModelProposal {
             recon: camera.recon,
             camera: camera.index(),
@@ -517,7 +515,7 @@ impl AppState {
             },
             generation: 0,
             fit: Err(String::new()),
-            theta_fit_default: None,
+            theta_fit_default: default_fit_angle(&value_for_default, camera.index()).ok(),
             spline_domain_default: None,
         };
         let inputs = inputs.unwrap_or_else(|| {

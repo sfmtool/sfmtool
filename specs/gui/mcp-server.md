@@ -3521,8 +3521,10 @@ The reply is an edit's (`cursor`, `serial`, `label`, `report`, `changed`) with a
 `camera_model_after`, `theta_fit_deg`, `theta_fit_source` (`spline_domain` for a
 refit), `spline_domain_deg`, `rms_px` and `max_px` (the fitted camera's
 distance from the old over the fit), `monotone_constraint` (`active`,
-`active_angles`, `range_deg`), and `observations` with
-`median_error_before_px` and `median_error_after_px` over them. The label reads
+`active_angles`, `range_deg`), `observations`, the number of the camera's
+observations with an error under both models, and beside it
+`median_error_before_px` and `median_error_after_px`, the median of those
+observations' errors under the old camera and the new. The label reads
 `Refit spline of camera 0 of kerry_park: 8 → 12 coefficients, domain 150.2° →
 108.8°` for a refit, naming a part it kept as kept, and `Switched camera 0 of
 kerry_park from OPENCV_FISHEYE to SFMTOOL_FISHEYE` for a change of model. A

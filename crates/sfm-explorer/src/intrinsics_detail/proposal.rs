@@ -66,12 +66,18 @@ pub(super) fn show_proposal(
             if CameraModelProposal::has_spline(inputs.camera_model) {
                 ui.label("Coefficients");
                 let mut count = inputs.coeff_count.unwrap_or(8);
-                ui.add(egui::DragValue::new(&mut count).range(SPLINE_COEFF_COUNT_RANGE))
-                    .on_hover_text(
-                        "The spline's coefficient count. The fit is the closest monotone curve \
+                // A value the wire gave outside the range is shown as it is,
+                // not clamped: drawing the field must not change the request.
+                ui.add(
+                    egui::DragValue::new(&mut count)
+                        .range(SPLINE_COEFF_COUNT_RANGE)
+                        .clamp_existing_to_range(false),
+                )
+                .on_hover_text(
+                    "The spline's coefficient count. The fit is the closest monotone curve \
                          to the current one; bundle adjustment with the lens distortion \
                          released then fits the coefficients to the observations.",
-                    );
+                );
                 inputs.coeff_count = Some(count);
                 match proposal.source_coeff_count().filter(|_| refit) {
                     Some(now) => ui.label(format!("now {now}")),
@@ -82,17 +88,29 @@ pub(super) fn show_proposal(
 
             // A refit of a spline fits over its whole domain; a fit angle the
             // wire gave is shown so the proposal reads as it was opened.
-            if !refit || inputs.theta_fit_deg.is_some() {
+            // With no default and none given there is no angle to show, and
+            // the field is left out rather than showing a made-up one.
+            let shown_theta = proposal.shown_theta_fit_deg();
+            if (!refit || inputs.theta_fit_deg.is_some()) && shown_theta.is_none() {
+                ui.label("Fit to θ (°)");
+                ui.weak("no default angle");
+                ui.label("");
+                ui.end_row();
+            }
+            if let Some(shown_theta) =
+                shown_theta.filter(|_| !refit || inputs.theta_fit_deg.is_some())
+            {
                 ui.label("Fit to θ (°)");
                 let upper = proposal
                     .theta_fit_default
-                    .map_or(180.0, |(deg, _)| deg)
+                    .map_or(shown_theta, |(deg, _)| deg)
                     .max(inputs.theta_fit_deg.unwrap_or(0.0));
-                let mut theta = proposal.shown_theta_fit_deg().unwrap_or(upper);
+                let mut theta = shown_theta;
                 let before = theta;
                 ui.add(
                     egui::DragValue::new(&mut theta)
                         .range(0.1..=upper)
+                        .clamp_existing_to_range(false)
                         .speed(0.1)
                         .fixed_decimals(1),
                 )
@@ -128,6 +146,7 @@ pub(super) fn show_proposal(
                 ui.add(
                     egui::DragValue::new(&mut domain)
                         .range(0.1..=max)
+                        .clamp_existing_to_range(false)
                         .speed(0.1)
                         .fixed_decimals(1),
                 )

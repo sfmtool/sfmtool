@@ -122,8 +122,13 @@ The panel shows a strip of controls under the header
   for a refit, and 8 otherwise. For a refit, `now 8` beside it.
 - **Fit to θ (°)**, the largest incidence angle the fit samples. It shows the
   default and where it came from (`default 84.5° (trusted_bound)`), can be
-  lowered, and a `Default` button puts it back. Not shown for a refit, since a
-  given angle makes the core fit the camera like any other source.
+  lowered, and a `Default` button puts it back. The default is
+  `default_fit_angle`'s, read when the proposal opens, so it is shown beside a
+  refused fit as well, which the refusal often names as the fit's largest
+  angle; lowering it is how such a fit is made to succeed. For a camera the
+  core finds no default for (one with no image) the row reads `no default
+  angle` instead of a number. Not shown for a refit, since a given angle makes
+  the core fit the camera like any other source.
 - **Spline domain (°)**, for a spline target: the camera's own domain end for a
   refit, with `now 150.1°` beside it, and the far image corner the fit places
   otherwise; it can be edited up to 180°, and below 90° for `SFMTOOL_PINHOLE`.
@@ -212,7 +217,10 @@ itself refuses because a `.sift` file cannot be read
 and the proposal stays open.
 
 **Cancel**, and `Escape` while the pointer is over the panel showing the
-proposal, drop it with a `View` row, `Cancelled the camera model proposal for
+proposal, drop it with a `View` row. `Escape` cancels only when no popup was
+open and no field was being edited as the frame began, so the `Escape` that
+closes the Model dropdown or ends the editing of a field does only that. The
+row reads `Cancelled the camera model proposal for
 camera 0 of kerry_park`.
 
 **The implicit endings** follow the Move Camera lock's. Selecting another node,
@@ -362,7 +370,13 @@ Explorer (`sfm-explorer` lib tests, headless):
 - `intrinsics_detail/tests.rs`: the header's `Switch Model…` and no `Refit
   spline…`; a refit proposal's strip and the two cameras side by side; a change
   of model's Fit to θ with its default; Apply, Cancel and `Escape` reported;
-  the proposed report cached apart from the current one.
+  the proposed report cached apart from the current one; the header and the
+  two tables painting no string over another at narrow and wide widths, the
+  tables stacked when narrow and side by side when wide; an `Escape` that
+  closes the Model dropdown not cancelling and the next one cancelling; and a
+  refused proposal showing its default fit angle and source, keeping a
+  wire-given value the field's range does not hold, and the current tables
+  alone.
 - `scene_graph/tests.rs`: a camera row's menu offering `Switch Camera Model…`,
   greyed on another camera while a proposal is open, with the node's
   retriangulation greyed too.
