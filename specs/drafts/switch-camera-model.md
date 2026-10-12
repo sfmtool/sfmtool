@@ -47,7 +47,26 @@ in the value returned, consistent with the call's `PointMap`, and a
 `RetriangulateOutcome`. The outcome is `Held`, `Kept` (fewer than two usable
 rays, so the stored geometry stays), or `Solved` with the `PointVerdict` that
 decided it. This draft reads losses of a position off those outcomes
-and adds no verdict logic of its own.
+and adds no verdict logic of its own. It also builds on three core pieces made
+for it:
+
+- `RetriangulateWhich::TheseInBulk`, the bulk path for a long list of points
+  ([`../core/reconstruction/triangulation-rules.md`](../core/reconstruction/triangulation-rules.md)
+  § "Retriangulating a reconstruction"): the overlay folded in first, as `All`
+  does, and the named points solved in one pass and written into the new base
+  at their own rows, with the statuses, geometry and patch frames `These`
+  gives them. The switch's retriangulation names every track of one camera,
+  which on a rig is a large share of the value.
+- `SwitchCameraModelOptions::outermost_keypoint`
+  ([`../core/reconstruction/switch-camera-model.md`](../core/reconstruction/switch-camera-model.md)
+  § "The outermost keypoint"), which, off, leaves the outermost keypoint out of
+  the switch's report and reads no `.sift` file for it.
+- `ImageTable::camera_centroid`, `ImageTable::placement_scale_from` and the
+  public `patch_frame_factor`
+  ([`../core/reconstruction/bundle-adjust.md`](../core/reconstruction/bundle-adjust.md)
+  § "The frame follows the depth"), so a whole-value write-back measures every
+  placement distance from a centroid taken once, and the preview reads its
+  surfel size factor from the rule the write-back applies.
 
 Amends:
 
@@ -96,24 +115,9 @@ Amends:
   whole-value edits gain `Switch camera model`, the form Apply takes when the
   proposal's job holds no answer for it.
 - [`../core/reconstruction/switch-camera-model.md`](../core/reconstruction/switch-camera-model.md),
-  whose non-goals name the proposal this draft describes, and which gains an
-  option that leaves the outermost keypoint out of the report, so a caller that
-  does not need it reads no `.sift` file for it. The switch still reads the
-  observations' pixels from the `.sift` files of a value without the inline
-  keypoint column, since its observation comparison and the points' stored
-  errors are measured against them.
-- [`../core/reconstruction/triangulation-rules.md`](../core/reconstruction/triangulation-rules.md)
-  § "Retriangulating a reconstruction", whose `RetriangulateWhich::These`
-  gains a bulk path for a long list of points: the overlay folded in first, as
-  `All` does, and the named points solved in one pass and written into the new
-  base at their own indexes, instead of one rebuild of the addition set's
-  derived indexes per point. The switch's retriangulation names every track
-  of one camera, which on a rig is a large share of the value.
-- [`../core/reconstruction/bundle-adjust.md`](../core/reconstruction/bundle-adjust.md)
-  § "The frame follows the depth", whose placement distance gains a form that
-  takes a camera-cloud centroid computed once, so a whole-value write-back
-  costs one pass over the images rather than one per point, and the preview
-  reads its surfel size factor from the same rule.
+  whose non-goal naming the proposal and this draft becomes a pointer to the
+  viewer's proposal, and whose § "The outermost keypoint" names the proposal's
+  job as a caller that leaves the keypoint out.
 - [`../gui/point-cloud-rendering.md`](../gui/point-cloud-rendering.md), whose
   base and additions point buffers gain a preview buffer, with a target per
   row blended in the shader.
@@ -332,7 +336,8 @@ gave.
 **Apply** pushes one version: the shipped direct switch
 ([`../gui/edits/switch-camera-model.md`](../gui/edits/switch-camera-model.md))
 with the proposal's request, followed by `retriangulate_points` over the
-proposal's tracks (§ "The 3D view") on the switched value, with the default
+proposal's tracks (§ "The 3D view") on the switched value, through
+`RetriangulateWhich::TheseInBulk` and with the default
 options the viewer's Retriangulate edits use
 ([`../gui/edits/retriangulate-point.md`](../gui/edits/retriangulate-point.md)).
 The edit composes the two core calls, and neither computes anything new for it.
@@ -488,7 +493,7 @@ retriangulates. A track only other cameras observe reads the same rays under
 both models, is not retriangulated, and does not move.
 
 **One triangulation.** The job runs `retriangulate_points` over
-`These(the proposal's tracks)`, with the default options the viewer's
+`TheseInBulk(the proposal's tracks)`, with the default options the viewer's
 Retriangulate edits use, on the switched value: the materialisation of the
 version with the proposed camera in place. That is the run Apply pushes, so its
 answer is the version Apply would install. The switch renumbers nothing, so the
@@ -553,9 +558,10 @@ no more Kerry points `Kept` than the current one would.
 
 **Surfels.** Each surfel moves with its point and keeps its orientation. Its
 size changes by the patch-frame factor for a move from the stored position to
-the target, the ratio of placement distances
+the target, the ratio of placement distances that `patch_frame_factor` gives
 ([`../core/reconstruction/bundle-adjust.md`](../core/reconstruction/bundle-adjust.md)
-§ "The frame follows the depth"), which is the factor the retriangulation
+§ "The frame follows the depth"), measured from the switched value's camera
+centroid taken once, which is the factor the retriangulation
 rescales the patch frame by, so the surfel keeps its angular size as it moves
 and ends at the size Apply writes. A point at infinity keeps its size. A
 surfel whose point loses its position takes the failure colour with it.
@@ -586,8 +592,9 @@ off by one. It follows the bench's live evaluation
 One job does, in order:
 
 1. **The switch.** `switch_camera_model` over the materialisation, for the
-   proposal's camera and request, with the outermost keypoint left out of the
-   report, so it reads no `.sift` file for that. Its report carries the
+   proposal's camera and request, with
+   `SwitchCameraModelOptions::outermost_keypoint` off, so it reads no `.sift`
+   file for the outermost keypoint. Its report carries the
    observation comparison, which the job sends to the panel as soon as the
    switch returns, and its value is the switched value the second step reads.
    It takes no `Progress`, so a cancel is read when it returns. On a value
@@ -601,8 +608,8 @@ One job does, in order:
    read the switch refuses (`SwitchCameraModelError::Observations`), and the
    job sends that sentence to the panel in place of the comparison.
 2. **The retriangulation** of the proposal's tracks over the switched value,
-   through the bulk path of `These` in Amends, since the proposal's tracks are
-   far more than the handful `These` is built for today.
+   through `RetriangulateWhich::TheseInBulk`, since the proposal's tracks are
+   far more than the handful `These` is built for.
 
 Step 2 runs only while Preview retriangulation is ticked, or an MCP call has
 asked for the preview. An answer is kept by generation, so unticking and
@@ -617,11 +624,10 @@ makes two whole-value copies: the switched value `switch_camera_model` builds
 answer for the current generation is held while the proposal is open, so a
 proposal with the preview on holds one extra copy of the value. Whether two
 copies per job is too slow on a large node is an open question below. The
-write-back's placement distance is the other cost:
-`ImageTable::placement_scale` sums the camera centres on every call
-(`image_table.rs`), which makes a whole-value write-back cost points × images.
-The core addition in Amends computes that centroid once per call, and the
-preview's size factors use the same form.
+write-back's placement distances cost one pass over the images per call, not
+one per point: the retriangulation takes the camera centroid once
+(`ImageTable::camera_centroid`), and the preview's size factors are measured
+from one centroid the same way.
 
 ### The motion
 
@@ -881,23 +887,28 @@ without waiting out the motion.
 
 ## Order of work
 
-1. The proposal in the Camera Intrinsics panel: the controls, the two-model
-   plots, the change plot and the rug. Apply as the switch followed by the
-   retriangulation of the camera's tracks, run as the `Switch camera model`
-   background task until the job of step 3 can hand it an answer; it needs the
-   bulk path of `These` in Amends. The endings, including undo and the greyed
-   entries. Switch Model… takes the place of
-   "Refit spline…" in the header in the same step, with the same-model target
-   carrying the Refit Spline dialog's controls, so the dialog and its
-   `refit_spline` response are removed with it and the panel never has both
-   entries.
-2. The Image Detail change field and observation layer.
-3. Preview retriangulation. It needs the two core additions in Amends: the
-   outermost-keypoint option on `switch_camera_model` and the placement
-   distance from a centroid computed once. Then the job, Apply installing its
-   answer, the generalised step, the preview buffers and the banner.
-4. `propose_camera_model`, `cancel_camera_model_proposal`, the proposal form of
-   `switch_camera_model` and the `proposed` block.
+1. The core additions the proposal builds on, listed under "Builds on" above:
+   `RetriangulateWhich::TheseInBulk`,
+   `SwitchCameraModelOptions::outermost_keypoint`, and the placement distance
+   from a camera centroid taken once, with the public `patch_frame_factor`.
+   These are built, and their standing specs describe them.
+2. The proposal in the Camera Intrinsics panel: Switch Model… takes the place
+   of "Refit spline…" in the header, with the same-model target carrying the
+   Refit Spline dialog's controls, so the dialog and its `refit_spline`
+   response are removed with it and the panel never has both entries. Its
+   controls, the endings, undo and the greyed entries. Apply as the switch
+   followed by the retriangulation of the camera's tracks through
+   `TheseInBulk`, run as the `Switch camera model` background task until the
+   job of step 4 can hand it an answer. In the same step, the MCP tools
+   `propose_camera_model` and `cancel_camera_model_proposal`, the proposal form
+   of `switch_camera_model`, and the `proposed` block of
+   `get_camera_intrinsics`, so that each later step can be checked over MCP on
+   a live viewer. What the block reads off the job (the observation
+   comparison, the `triangulation` block and `s`) comes with step 4.
+3. The panel's two-model plots, the change plot and the rug, and the Image
+   Detail change field and observation layer.
+4. Preview retriangulation: the job, Apply installing its answer, the
+   generalised step, the preview buffers and the banner.
 
 ## Open questions
 
