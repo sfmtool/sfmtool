@@ -74,12 +74,13 @@ Amends:
   "Refit spline…" with the proposal's three entries, and its § "The dialog"
   goes: the Refit Spline dialog
   ([`refit_spline_prompt.rs`](../../crates/sfm-explorer/src/refit_spline_prompt.rs))
-  is removed, its count and domain controls and its outermost-keypoint row
-  being the proposal's for a same-model target, and its tests move to the
-  proposal's. Its non-goal "A dialog for a change of model family" is replaced
-  by the proposal. Its non-goal "Refitting several cameras at once" stands: a
-  proposal is for one camera and Apply pushes one version with the label the
-  edit already writes.
+  is removed, its count and domain controls and its outermost-keypoint row being
+  the proposal's for a same-model target, and its tests move to the proposal's.
+  Its opening paragraph and § "Mechanism", which name the dialog, name the
+  proposal instead. Its non-goal "A dialog for a change of model family" is
+  replaced by the proposal. Its non-goal "Refitting several cameras at once"
+  stands: a proposal is for one camera and Apply pushes one version with the
+  label the edit already writes.
 - The other standing specs that name "Refit spline…" as the viewer's entry for
   a refit, which then name Switch Model…:
   [`../GLOSSARY.md`](../GLOSSARY.md) § "Camera intrinsics" (the entry **switch
@@ -122,11 +123,11 @@ Amends:
   that the preview's blend also calls.
 
 A camera model is the function that maps a ray leaving the camera to a pixel.
-Switching a camera to another model replaces that function with one fitted to
-it over the angles where the old one is trusted, and leaves poses, points and
+Switching a camera to another model replaces that function with one fitted to it
+over the angles where the old one is trusted, and leaves poses, points and
 keypoints alone. The viewer's proposal follows it with a retriangulation of the
-camera's tracks in the same version. The main use is moving a fisheye camera from a COLMAP
-polynomial model, which fails a little past 90° off the axis, to
+camera's tracks in the same version. The main use is moving a fisheye camera
+from a COLMAP polynomial model, which fails a little past 90° off the axis, to
 `SFMTOOL_FISHEYE`, whose spline and linear tail are defined out to 180°.
 
 ## Why: the Kerry Park lenses
@@ -227,8 +228,8 @@ The panel shows a strip of controls at the top:
   proposal opens on such a camera; any other camera opens on its first target.
 - **Coefficients** (2–32, `SPLINE_COEFF_COUNT_RANGE`), for a spline target,
   starting at the count `RefitTarget::coeff_count_for` gives: the camera's own
-  for a same-model target, and 8 otherwise. Beside it, `now 8` for a
-  same-model target.
+  for a same-model target, and 8 otherwise. Beside it, for a same-model
+  target, the camera's count, as in `now 8`.
 - **Fit to θ**: shows the default and where it came from; can be lowered. Not
   shown for a same-model target (§ "A same-model target").
 - **Spline domain**: shows the default, the far image corner, or the camera's
@@ -246,13 +247,13 @@ The panel shows a strip of controls at the top:
 - **Apply** and **Cancel**.
 
 Every change refits at once, on the GUI thread: the lens fit and the panel's
-`Derived::compute` for the proposed column take milliseconds, as a fit does
-for the Refit Spline dialog today. The fit report is one line under the strip, for
-example: "rms 0.13 px, radial 0.013 px, max 0.29 px over θ ≤ 84.5°; aspect
-fy/fx 0.9978 dropped". A spline fit is constrained to stay monotone, so it has
-an inverse; where that constraint bound, the line adds its range, for example
-"monotone constraint bound at 1 angle, 113.2°", because there the proposed
-curve is the closest invertible one rather than the current one.
+`Derived::compute` for the proposed column take milliseconds, as a fit does for
+the Refit Spline dialog today. The fit report is one line under the strip, for
+example: "rms 0.13 px, radial 0.013 px, max 0.29 px over θ ≤ 84.5°; aspect fy/fx
+0.9978 dropped". A spline fit is constrained to stay monotone, so it has an
+inverse; where that constraint bound, the line adds its range, for example
+"monotone constraint bound at 1 angle, 113.2°", because there the proposed curve
+is the closest invertible one rather than the current one.
 
 The fit releases the focal length and the distortion parameters, and keeps the
 principal point fixed: the lens fit copies it from the source
@@ -265,8 +266,8 @@ pycolmap adjustment can, and it does not take a spline camera. A principal
 point moved by the switch would therefore be fitted to the old model's curve
 alone and then held there by every later adjustment.
 
-The observation comparison and the preview's triangulation need the reconstruction,
-and are computed by the proposal's job (§ "The job" below).
+The observation comparison and the preview's triangulation need the
+reconstruction, and are computed by the proposal's job (§ "The job" below).
 
 While the proposal is open, the rest of the panel compares the two models:
 
@@ -331,13 +332,13 @@ with the proposal's request, followed by `retriangulate_points` over the
 proposal's tracks (§ "The 3D view") on the switched value, with the default
 options the viewer's Retriangulate edits use
 ([`../gui/edits/retriangulate-point.md`](../gui/edits/retriangulate-point.md)).
-The edit composes the two core calls, and neither computes anything new for
-it. The label is the one the direct switch writes with the retriangulation added, `Switched camera 0 of
-kerry_park from OPENCV_FISHEYE to SFMTOOL_FISHEYE and retriangulated its
-tracks` for a change of model and `Refit spline of camera 0 of kerry_park: 8 →
-12 coefficients, domain 150.1° → 108.8°, and retriangulated its tracks` for a
-refit. The Action Log row is the direct switch's, followed by the counts the
-Retriangulate edits write for a whole-value run, read off the
+The edit composes the two core calls, and neither computes anything new for it.
+The label is the one the direct switch writes with the retriangulation added,
+`Switched camera 0 of kerry_park from OPENCV_FISHEYE to SFMTOOL_FISHEYE and
+retriangulated its tracks` for a change of model and `Refit spline of camera 0
+of kerry_park: 8 → 12 coefficients, domain 150.1° → 108.8°, and retriangulated
+its tracks` for a refit. The Action Log row is the direct switch's, followed by
+the counts the Retriangulate edits write for a whole-value run, read off the
 retriangulation's report. **Cancel** and `Escape` discard the proposal.
 
 Where the proposal's job already holds the proposed run's answer for the
@@ -394,15 +395,18 @@ node's value holds. Unticking the checkbox is the way to see the motion back.
 Apply does not wait for the motion: the version it pushes holds the
 retriangulated positions, and the new base it installs recreates the node's
 point buffer from them (`upload/points.rs`, through the base-identity check in
-`app.rs`). A preview that had run to its end hands over to the new base with
-no visible change, since its targets are the positions Apply writes (§ "What
-each point does"). Without the preview, the camera's tracks move in one frame
-when the version lands. Where Apply runs as a background task, the preview ends
-when the task starts, and the points stand at their stored positions until it
-lands. The MCP reply of `switch_camera_model { proposal: true }` is an edit's
-reply: at once when the job's answer is installed, and otherwise the reply of
-a background edit, the version when the task finishes within 200 ms and a task
-handle when it does not, as `add_camera_image_to_tracks` replies.
+`app.rs`). A preview that had run to its end hands over to the new base with no
+visible change for the points that move, since their targets are the positions
+Apply writes (§ "The 3D view", "What each point does"). A point that loses its
+position goes from its stored position, in the failure colour, to where the 3D
+view draws a point at infinity. Without the preview, the camera's tracks move in
+one frame when the version lands. Where Apply runs as a background task, the
+preview ends when the task starts, and the points stand at their stored
+positions until it lands. The MCP reply of
+`switch_camera_model { proposal: true }` is an edit's reply: at once when the
+job's answer is installed, and otherwise the reply of a background edit, the
+version when the task finishes within 200 ms and a task handle when it does not,
+as `add_camera_image_to_tracks` replies.
 
 ### What else shows the proposal
 
@@ -486,9 +490,9 @@ An outcome is a finite position when it is `Solved` with `PointVerdict::Finite`,
 an infinite distance. Under the default options the floor, the likelihood rule
 and the reprojection bar are off, so a stored finite point becomes a direction
 only by `Behind`, and a point stored as a direction carries its own `w` as the
-incoming mark and is answered as a direction. In every case the target is
-what Apply writes for the point, and the motion starts at the stored position,
-so ticking the box causes no jump.
+incoming mark and is answered as a direction. For a point that moves the target
+is what Apply writes for it, and the motion starts at the stored position, so
+ticking the box causes no jump.
 
 - **Moves**: the outcome is a finite position, or a direction for a point
   stored as one. The target is the proposed answer. A finite point is drawn on
@@ -658,9 +662,10 @@ position. The camera frustums and the background mesh stay on the current
 model, because they would change by fractions of a pixel, which are not visible
 at viewport scale.
 
-The motion is not exaggerated. Each point ends at the position Apply writes
-for it, however small the move, so what the preview shows at its end is the
-version Apply pushes.
+The motion is not exaggerated. Each point that moves ends at the position Apply
+writes for it, however small the move, so what the preview shows at its end is
+the version Apply pushes, except that a point that loses its position stands
+where it was, in the failure colour, rather than at infinity.
 
 ### Rendering
 
