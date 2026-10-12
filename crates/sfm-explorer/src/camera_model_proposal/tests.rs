@@ -911,16 +911,23 @@ fn the_change_field_is_selected_while_a_proposal_is_open() {
     state.append_node(fisheye_node("/runs/kerry.sfmr"));
     let id = state.scene[0].id;
     assert_eq!(state.intrinsics_display.field, FieldMode::Distortion);
+    // Opened over a mode of its own, so the mode the proposal restores
+    // (`ChangeToProposed`) is not the one picked by hand while it is open
+    // (`Distortion`), and the two can be told apart.
+    state.intrinsics_display.field = FieldMode::ChangeToProposed;
     state
         .open_camera_model_proposal(CameraRef::new(id, 0), None)
         .expect("opens");
     assert_eq!(state.intrinsics_display.field, FieldMode::ChangeToProposed);
-    // Chosen by hand while it is open, the mode stands until it ends.
+    // Chosen by hand while it is open, the mode stands across frames until it
+    // ends, and the ending restores the mode from before the proposal.
     state.intrinsics_display.field = FieldMode::Distortion;
+    state.tend_camera_model_proposal();
     state.tend_camera_model_proposal();
     assert_eq!(state.intrinsics_display.field, FieldMode::Distortion);
     state.drop_camera_model_proposal(id, Dropped::Cancelled);
-    assert_eq!(state.intrinsics_display.field, FieldMode::Distortion);
+    assert_eq!(state.intrinsics_display.field, FieldMode::ChangeToProposed);
+    state.intrinsics_display.field = FieldMode::Distortion;
 
     state
         .open_camera_model_proposal(CameraRef::new(id, 0), None)
@@ -954,4 +961,57 @@ fn a_reopened_proposal_takes_a_new_generation() {
         state.camera_model_proposal.as_ref().unwrap().generation,
         first
     );
+}
+
+/// The one pass over the `.sift` files gives the outermost extent the core's
+/// `outermost_keypoints` gives over the base, on a node whose keypoints are in
+/// its `.sift` files and on one with them inline, and reads each image's file
+/// once.
+#[test]
+fn one_pass_gives_the_outermost_extent_and_reads_each_sift_file_once() {
+    use sfmtool_core::reconstruction::outermost_keypoint::outermost_keypoints;
+
+    let workspace = tempfile::tempdir().expect("a temporary directory");
+    let (sift_state, _) = crate::state::edits::tests::convertible_state(workspace.path());
+    let mut inline_state = AppState::new();
+    inline_state.append_node(fisheye_node("/runs/kerry.sfmr"));
+    for (state, has_sift) in [(&sift_state, true), (&inline_state, false)] {
+        let base = &state.scene[0].history.current().base;
+        let core = outermost_keypoints(base, &[0], true).remove(0);
+        let mut reads: Vec<std::path::PathBuf> = Vec::new();
+        let (extent, observed) = observations::read_camera_keypoints_with(base, base, 0, |path| {
+            reads.push(path.to_path_buf());
+            sfmtool_sift_format::read_sift_positions(path, usize::MAX).ok()
+        });
+        assert_eq!(extent.observed, core.observed);
+        assert_eq!(extent.detected, core.detected);
+        assert_eq!(extent.detected.is_some(), has_sift);
+        assert!(extent.observed.is_some());
+
+        // One read per image of the camera, each its own file.
+        let images = base
+            .image_table
+            .images
+            .iter()
+            .filter(|image| image.camera_index == 0)
+            .count();
+        assert_eq!(reads.len(), images);
+        let mut distinct = reads.clone();
+        distinct.sort();
+        distinct.dedup();
+        assert_eq!(distinct.len(), reads.len());
+
+        // Every observation of the camera's images has its keypoint.
+        let observations = base
+            .point_set
+            .tracks
+            .iter()
+            .filter(|t| base.image_table.images[t.image_index as usize].camera_index == 0)
+            .count();
+        assert_eq!(observed.len(), observations);
+        assert_eq!(
+            (extent, observed),
+            observations::read_camera_keypoints(base, base, 0)
+        );
+    }
 }

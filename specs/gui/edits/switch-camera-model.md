@@ -100,9 +100,12 @@ version until it is applied. One proposal is open at a time. It holds the
 camera as it was when it opened, the value the fits read (the version's base,
 or its materialisation, made once, when the version carries point edits), the
 outermost keypoint of the camera's images and the keypoints of the camera's
-observations (the inline column, or each image's `.sift` file read once), both
-read once on the GUI thread when it opens, and the inputs of the current fit
-with the fit itself. It carries a **generation**, a counter every change of the
+observations (the inline column, or the image's `.sift` file), and the inputs of
+the current fit with the fit itself. The outermost keypoint and the keypoints
+come from one pass over the camera's images on the GUI thread when the proposal
+opens, which reads each image's `.sift` file once for both
+(`observations::read_camera_keypoints`); the outermost keypoint is the one
+`outermost_keypoints` gives over the version's base. It carries a **generation**, a counter every change of the
 fit inputs advances; a change that leaves them as they were keeps it. The
 generation is drawn from one counter for the whole viewer, so no two proposals
 share one and a cache keyed by it never serves one proposal's camera for
@@ -393,7 +396,10 @@ Explorer (`sfm-explorer` lib tests, headless):
   under both cameras, the current one onto its keypoint, and a point at infinity
   reprojected as its direction; the Change to proposed field mode selected on
   opening and restored after Cancel and after Apply, a mode chosen while open
-  standing until the end; and a reopened proposal taking a new generation.
+  standing until the end; a reopened proposal taking a new generation; and the
+  one pass over the images giving the outermost keypoint `outermost_keypoints`
+  gives, on a `sift_files` node and an inline one, while reading each `.sift`
+  file once.
 - `intrinsics_detail/tests.rs`: the header's `Switch Model…` and no `Refit
   spline…`; a refit proposal's strip and the two cameras side by side; a change
   of model's Fit to θ with its default; Apply, Cancel and `Escape` reported;

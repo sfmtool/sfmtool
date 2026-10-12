@@ -1414,7 +1414,7 @@ family, and the arrow field is a few hundred round trips.
 | Proposed derived rows and change profile | the same, for the proposed camera, and `samples × 32 azimuths` for the change | `(CameraRef, generation)`, one entry | a change of the proposal's inputs, node close |
 | Change field (Image Detail) | `cols × rows` ray round trips | `(CameraRef, generation, cols)`, one entry | a change of the proposal's inputs or the grid density, node close |
 | Observation layer (Image Detail) | one reprojection per observation of the image, under each camera | `(ImageRef, generation)`, one entry | another image, a change of the proposal's inputs, node close |
-| Rug and the proposal's keypoints | one pass over the camera's observations, reading each `.sift` file once on a `sift_files` node | the open proposal | read when it opens |
+| Rug, the proposal's keypoints and its outermost keypoint | one pass over the camera's images, reading each image's `.sift` file once for all three | the open proposal | read when it opens |
 | Trustworthy bound | a ~360-step sweep × 8 azimuths, refined | `CameraRef` | camera change, node close |
 | Axis polylines | ~1 sample per 4 panel px | `(CameraRef, zoom bucket)` | camera change, zoom crossing a bucket |
 | Hover readout | 1 round trip | not cached | — |

@@ -26,9 +26,9 @@ use sfmtool_core::camera::refit_intrinsics::{
     spline_domain_deg, CameraIntrinsicsRefit, RefitOptions, RefitTarget, ThetaFitSource,
 };
 use sfmtool_core::camera::CameraIntrinsics;
-use sfmtool_core::reconstruction::outermost_keypoint::{outermost_keypoints, KeypointReach};
+use sfmtool_core::reconstruction::outermost_keypoint::KeypointReach;
 use sfmtool_core::reconstruction::switch_camera_model::{default_fit_angle, fit_camera_switch};
-use sfmtool_core::{EditedReconstruction, RowMap, SfmrReconstruction};
+use sfmtool_core::{RowMap, SfmrReconstruction};
 
 use crate::action_log::Kind;
 use crate::document::VersionSerial;
@@ -78,19 +78,6 @@ pub(crate) struct KeypointExtent {
 }
 
 impl KeypointExtent {
-    /// The camera `camera` of `edited`'s base value, over its observations and,
-    /// when `read_sift_files`, its images' `.sift` files.
-    pub(crate) fn of(edited: &EditedReconstruction, camera: usize, read_sift_files: bool) -> Self {
-        outermost_keypoints(&edited.base, &[camera], read_sift_files)
-            .into_iter()
-            .next()
-            .map(|o| KeypointExtent {
-                observed: o.observed,
-                detected: o.detected,
-            })
-            .unwrap_or_default()
-    }
-
     /// The angle the domain row's button sets: the detected keypoint's, or the
     /// observed one's when nothing was detected.
     pub(crate) fn suggested_domain_deg(&self) -> Option<f64> {
@@ -507,7 +494,11 @@ impl AppState {
             (Arc::new(value), Some(map))
         };
         let source = node.recon().image_table.cameras[camera.index()].clone();
-        let observations = observations::observed_keypoints(&value, camera.index());
+        // One read of each image's `.sift` file feeds both the outermost
+        // extent, over the version's base as the switch reports it, and the
+        // keypoints of the value the fits read.
+        let (keypoint_extent, observations) =
+            observations::read_camera_keypoints(&edited.base, &value, camera.index());
         let rug = observations::rug_angles(&source, &observations);
         let targets = targets_for(&source);
         let value_for_default = Arc::clone(&value);
@@ -519,7 +510,7 @@ impl AppState {
             source,
             value,
             rows,
-            keypoint_extent: KeypointExtent::of(edited, camera.index(), true),
+            keypoint_extent,
             observations,
             rug,
             targets,

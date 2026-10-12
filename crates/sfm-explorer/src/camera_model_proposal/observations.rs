@@ -8,12 +8,17 @@
 //! incidence angle under the current camera, and the Image Detail
 //! observation layer draws, for each observation of the image shown, the
 //! keypoint and its reprojection under the current and the proposed camera.
-//! Both read the keypoints from here, so they describe one set.
+//! Both read the keypoints from here, so they describe one set. The same pass
+//! over the images' `.sift` files gives the outermost keypoint extent the
+//! proposal strip shows beside the spline domain, so each file is read once.
+
+use std::path::Path;
 
 use sfmtool_core::camera::report::off_axis_angle_deg;
+use sfmtool_core::reconstruction::outermost_keypoint::KeypointReach;
 use sfmtool_core::SfmrReconstruction;
 
-use super::CameraModelProposal;
+use super::{CameraModelProposal, KeypointExtent};
 
 /// One observation of the proposal's camera whose keypoint could be read.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -39,20 +44,98 @@ pub(crate) struct ObservationReprojection {
     pub(crate) proposed: Option<[f64; 2]>,
 }
 
-/// The observations of `camera`'s images in `value` whose keypoint can be read,
-/// in ascending image order.
+/// The outermost keypoint extent of `camera` over `base`, and the observations
+/// of `camera`'s images in `value` whose keypoint can be read, in ascending
+/// image order, from **one** read of each image's `.sift` file.
 ///
-/// The keypoint is the value's inline one where it carries the column, and
-/// otherwise the feature the image's `.sift` file holds, each file read once.
-/// An observation whose file cannot be read, or whose keypoint is not finite,
-/// is left out.
-pub(crate) fn observed_keypoints(
+/// `base` is the version's base, which the extent is measured over as the
+/// switch reports it (`outermost_keypoints` with its `.sift` files read), and
+/// `value` the value the fits read: the base itself, or its materialisation.
+/// The extent is the one `outermost_keypoints` gives: the outermost observation
+/// and the outermost detected feature, by radius from the principal point. An
+/// observation's keypoint is the value's inline one where it carries the
+/// column, and otherwise the feature the image's `.sift` file holds. An
+/// observation whose file cannot be read, or whose keypoint is not finite, is
+/// left out.
+pub(crate) fn read_camera_keypoints(
+    base: &SfmrReconstruction,
     value: &SfmrReconstruction,
     camera: usize,
-) -> Vec<ObservedKeypoint> {
-    let table = &value.image_table;
+) -> (KeypointExtent, Vec<ObservedKeypoint>) {
+    read_camera_keypoints_with(base, value, camera, |path| {
+        sfmtool_sift_format::read_sift_positions(path, usize::MAX).ok()
+    })
+}
+
+/// [`read_camera_keypoints`] with the `.sift` read given, so a test can count
+/// the reads.
+pub(super) fn read_camera_keypoints_with(
+    base: &SfmrReconstruction,
+    value: &SfmrReconstruction,
+    camera: usize,
+    mut read: impl FnMut(&Path) -> Option<Vec<[f32; 2]>>,
+) -> (KeypointExtent, Vec<ObservedKeypoint>) {
+    let mut extent = KeypointExtent::default();
+    let mut out = Vec::new();
+    let table = &base.image_table;
+    let Some(lens) = table.cameras.get(camera) else {
+        return (extent, out);
+    };
+    let base_rows = rows_by_image(base, camera);
+    let value_rows = rows_by_image(value, camera);
+    for (image, row) in table.images.iter().enumerate() {
+        if row.camera_index as usize != camera {
+            continue;
+        }
+        let positions = read(&base.sift_path_for_image(image));
+        let feature = |positions: &Option<Vec<[f32; 2]>>, index: u32| {
+            positions
+                .as_ref()
+                .and_then(|p| p.get(index as usize))
+                .map(|p| [f64::from(p[0]), f64::from(p[1])])
+        };
+        if let Some(positions) = &positions {
+            for p in positions {
+                keep_outer(
+                    &mut extent.detected,
+                    lens,
+                    image,
+                    [f64::from(p[0]), f64::from(p[1])],
+                );
+            }
+        }
+        let keypoint = |recon: &SfmrReconstruction, row: usize| match (
+            recon.keypoints_xy(),
+            recon.feature_indexes(),
+        ) {
+            (Some(xy), _) => Some([f64::from(xy[[row, 0]]), f64::from(xy[[row, 1]])]),
+            (None, Some(features)) => feature(&positions, features[row]),
+            _ => None,
+        };
+        for &r in base_rows.get(image).into_iter().flatten() {
+            if let Some(xy) = keypoint(base, r) {
+                keep_outer(&mut extent.observed, lens, image, xy);
+            }
+        }
+        for &r in value_rows.get(image).into_iter().flatten() {
+            if let Some(xy) = keypoint(value, r).filter(|xy| xy[0].is_finite() && xy[1].is_finite())
+            {
+                out.push(ObservedKeypoint {
+                    image,
+                    point: value.point_set.tracks[r].point_index as usize,
+                    xy,
+                });
+            }
+        }
+    }
+    (extent, out)
+}
+
+/// The observation rows of each image of `camera` in `recon`, by image.
+fn rows_by_image(recon: &SfmrReconstruction, camera: usize) -> Vec<Vec<usize>> {
+    let table = &recon.image_table;
     let mut rows_of: Vec<Vec<usize>> = vec![Vec::new(); table.images.len()];
-    for (row, observation) in value.point_set.tracks.iter().enumerate() {
+    for (row, observation) in recon.point_set.tracks.iter().enumerate() {
         let image = observation.image_index as usize;
         if table
             .images
@@ -62,40 +145,31 @@ pub(crate) fn observed_keypoints(
             rows_of[image].push(row);
         }
     }
-    let inline = value.keypoints_xy();
-    let features = value.feature_indexes();
-    let tracks = &value.point_set.tracks;
-    let mut out = Vec::new();
-    for (image, rows) in rows_of.iter().enumerate() {
-        if rows.is_empty() {
-            continue;
-        }
-        let positions = match (inline, features) {
-            (None, Some(_)) => sfmtool_sift_format::read_sift_positions(
-                &value.sift_path_for_image(image),
-                usize::MAX,
-            )
-            .ok(),
-            _ => None,
-        };
-        for &row in rows {
-            let xy = match (inline, features, &positions) {
-                (Some(xy), _, _) => Some([f64::from(xy[[row, 0]]), f64::from(xy[[row, 1]])]),
-                (None, Some(features), Some(positions)) => positions
-                    .get(features[row] as usize)
-                    .map(|p| [f64::from(p[0]), f64::from(p[1])]),
-                _ => None,
-            };
-            if let Some(xy) = xy.filter(|xy| xy[0].is_finite() && xy[1].is_finite()) {
-                out.push(ObservedKeypoint {
-                    image,
-                    point: tracks[row].point_index as usize,
-                    xy,
-                });
-            }
-        }
+    rows_of
+}
+
+/// Replace `best` with the keypoint at `xy` when it lies further out, by the
+/// rule `outermost_keypoints` keeps: finite keypoints only, and a strictly
+/// larger radius from the principal point.
+fn keep_outer(
+    best: &mut Option<KeypointReach>,
+    camera: &sfmtool_core::CameraIntrinsics,
+    image: usize,
+    xy: [f64; 2],
+) {
+    if !(xy[0].is_finite() && xy[1].is_finite()) {
+        return;
     }
-    out
+    let (cx, cy) = camera.principal_point();
+    let radius = (xy[0] - cx).hypot(xy[1] - cy);
+    if best.is_none_or(|b| radius > b.radius_px) {
+        *best = Some(KeypointReach {
+            radius_px: radius,
+            theta_deg: off_axis_angle_deg(camera, xy[0], xy[1]),
+            image,
+            xy,
+        });
+    }
 }
 
 impl CameraModelProposal {
