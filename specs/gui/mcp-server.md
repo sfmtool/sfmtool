@@ -4080,7 +4080,9 @@ channel. An `in` row also carries `pair_zncc`, the median of its pairwise ZNCCs
 with the other `in` rows; `pair_zncc_grid`, the same per ninth, three rows of
 three, null in a ninth with no reading; `cell_deficit`, the most its
 `pair_zncc_grid` falls below the track's typical agreement, the median over
-the `in` rows, in a ninth whose typical agreement is at least `0.5`; and
+the `in` rows whose tile covers the ninth, in a ninth whose typical agreement
+is at least `0.5` and where its own tile holds texture and lies wholly on the
+photograph; and
 `reference_view`, `{"is_reference", "cost", "cost_ratio", "terms",
 "costliest_term", "excluded_by"}`, the reference-view rule's decision
 ([`../core/patch/reference-view.md`](../core/patch/reference-view.md) § "The

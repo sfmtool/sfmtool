@@ -5,8 +5,14 @@
 //! pair of views over each cell of the ZNCC grid's three-by-three split, each
 //! view's median over the others, and how far that falls below the track's
 //! typical agreement, the median over the views, in its worst cell.
+//!
+//! A view's cell is judged only where every one of its samples is on the
+//! photograph and it holds texture by its self-similarity reading; a cell with
+//! a sample off the photograph is also left out of the typical agreement
+//! ([`cell_agreement`]).
 
 use super::tile::ViewTile;
+use super::track::{tile_max_radius, TileSemiAxes};
 use super::{REFERENCE_MIN_CELL_SAMPLES, REFERENCE_MIN_JUDGED_CELL_ZNCC};
 use crate::numeric::median_in_place;
 use crate::patch::normal_refine::grid_bounds;
@@ -19,14 +25,18 @@ pub struct CellAgreement {
     /// other view could be correlated with it there.
     pub pair_zncc_grid: Vec<[[f64; 3]; 3]>,
     /// Per cell: the track's typical agreement there, the median of
-    /// [`Self::pair_zncc_grid`] over the views, `NaN` where no view has a
-    /// reading.
+    /// [`Self::pair_zncc_grid`] over the views whose tile has every sample of
+    /// the cell on the photograph, `NaN` where no such view has a reading.
     pub typical: [[f64; 3]; 3],
+    /// Per view, per cell: whether the cell check judges the view there: the
+    /// typical agreement is at least [`REFERENCE_MIN_JUDGED_CELL_ZNCC`], and
+    /// the view's own tile has every sample of the cell on the photograph and
+    /// holds texture there.
+    pub judged: Vec<[[bool; 3]; 3]>,
     /// Per view: the cell deficit, the largest amount by which the view's
-    /// agreement falls below the typical agreement, over the cells whose
-    /// typical agreement is at least [`REFERENCE_MIN_JUDGED_CELL_ZNCC`]. `0`
-    /// where no cell is judged, and `NaN` where the view has no reading in any
-    /// judged cell.
+    /// agreement falls below the typical agreement, over the cells it is
+    /// judged in ([`Self::judged`]). `0` where no cell is judged, and `NaN`
+    /// where the view has no reading in any judged cell.
     pub deficit: Vec<f64>,
 }
 
@@ -94,12 +104,37 @@ pub fn pair_zncc_grid(a: &ViewTile, b: &ViewTile) -> [[f64; 3]; 3] {
 }
 
 /// Each view's agreement with the other views over the ZNCC grid's cells
-/// ([`CellAgreement`]), from `tiles`, one per view.
+/// ([`CellAgreement`]), from `tiles`, one per view, and `semi_axes`, each
+/// tile's self-similarity semi-axes ([`tile_semi_axes`](super::tile_semi_axes)).
 ///
 /// Every pair is correlated once ([`pair_zncc_grid`]), `k(k − 1)/2` pairs of
 /// nine cells, on tiles already rendered.
-pub fn cell_agreement(tiles: &[&ViewTile]) -> CellAgreement {
+///
+/// Two kinds of view-cell are not judged:
+///
+/// - **No texture** (`cells_with_texture`): the cell's self-similarity
+///   ellipse reads the cap of its reading ([`tile_max_radius`]) along both
+///   axes, so the cell matches itself shifted anywhere in the search, and a
+///   ZNCC against another view there reads noise or shading. The view's
+///   reading still counts in the typical agreement.
+/// - **Off the photograph** (`cells_on_photograph`): some of the cell's
+///   samples are off the photograph, so its ZNCCs are read over part of the
+///   cell. The coverage penalty already charges the view for the samples it
+///   lacks. Its reading is also left out of the typical agreement.
+///
+/// A view with no self-similarity reading counts as holding texture in every
+/// cell.
+///
+/// # Panics
+///
+/// Panics if `semi_axes` is not parallel to `tiles`.
+pub fn cell_agreement(tiles: &[&ViewTile], semi_axes: &[Option<TileSemiAxes>]) -> CellAgreement {
     let k = tiles.len();
+    assert_eq!(
+        semi_axes.len(),
+        k,
+        "cell_agreement: tiles and semi_axes must be parallel"
+    );
     let mut pairs = vec![[[f64::NAN; 3]; 3]; k * k];
     for a in 0..k {
         for b in (a + 1)..k {
@@ -108,14 +143,58 @@ pub fn cell_agreement(tiles: &[&ViewTile]) -> CellAgreement {
             pairs[b * k + a] = grid;
         }
     }
-    cell_agreement_from_pairs(&pairs, k)
+    let on_photograph: Vec<[[bool; 3]; 3]> =
+        tiles.iter().map(|tile| cells_on_photograph(tile)).collect();
+    let textured: Vec<[[bool; 3]; 3]> = semi_axes
+        .iter()
+        .map(|axes| cells_with_texture(axes.as_ref()))
+        .collect();
+    cell_agreement_from_pairs(&pairs, k, &on_photograph, &textured)
+}
+
+/// Per cell of `tile`'s split, whether every sample of the cell is on the
+/// photograph.
+pub(crate) fn cells_on_photograph(tile: &ViewTile) -> [[bool; 3]; 3] {
+    let r = tile.resolution();
+    let bounds = grid_bounds(r as u32);
+    std::array::from_fn(|i| {
+        std::array::from_fn(|j| {
+            (bounds[i]..bounds[i + 1])
+                .all(|row| (bounds[j]..bounds[j + 1]).all(|col| tile.valid[row * r + col]))
+        })
+    })
+}
+
+/// Per cell, whether it holds texture by the cell's self-similarity ellipse
+/// in `semi_axes`: its semi-minor axis is shorter than the cap of the reading
+/// ([`tile_max_radius`]). A cell along a straight edge reads at the cap along
+/// the edge only and holds texture, since a view that disagrees across the
+/// edge is told apart there. A cell with no reading, and every cell where
+/// `semi_axes` is `None`, counts as holding texture.
+pub(crate) fn cells_with_texture(semi_axes: Option<&TileSemiAxes>) -> [[bool; 3]; 3] {
+    let cap = tile_max_radius();
+    std::array::from_fn(|i| {
+        std::array::from_fn(|j| {
+            semi_axes.is_none_or(|axes| axes.grid[i][j][1].is_nan() || axes.grid[i][j][1] < cap)
+        })
+    })
 }
 
 /// [`cell_agreement`] from the pairs' grids already computed: `pairs` is the
 /// row-major `k×k` table of [`pair_zncc_grid`] readings, whose diagonal is
-/// not read.
-pub(crate) fn cell_agreement_from_pairs(pairs: &[[[f64; 3]; 3]], k: usize) -> CellAgreement {
+/// not read, and `on_photograph` and `textured` each view's
+/// [`cells_on_photograph`] and [`cells_with_texture`].
+pub(crate) fn cell_agreement_from_pairs(
+    pairs: &[[[f64; 3]; 3]],
+    k: usize,
+    on_photograph: &[[[bool; 3]; 3]],
+    textured: &[[[bool; 3]; 3]],
+) -> CellAgreement {
     debug_assert_eq!(pairs.len(), k * k, "pairs must be a k*k row-major table");
+    debug_assert!(
+        on_photograph.len() == k && textured.len() == k,
+        "on_photograph and textured must hold one grid per view"
+    );
     let pair_zncc_grid: Vec<[[f64; 3]; 3]> = (0..k)
         .map(|v| {
             let mut grid = [[f64::NAN; 3]; 3];
@@ -134,21 +213,36 @@ pub(crate) fn cell_agreement_from_pairs(pairs: &[[[f64; 3]; 3]], k: usize) -> Ce
     let mut typical = [[f64::NAN; 3]; 3];
     for (i, row) in typical.iter_mut().enumerate() {
         for (j, cell) in row.iter_mut().enumerate() {
-            let views: Vec<f64> = pair_zncc_grid.iter().map(|g| g[i][j]).collect();
+            let views: Vec<f64> = (0..k)
+                .filter(|&v| on_photograph[v][i][j])
+                .map(|v| pair_zncc_grid[v][i][j])
+                .collect();
             *cell = finite_middle(&views);
         }
     }
-    let judged: Vec<(usize, usize)> = (0..3)
-        .flat_map(|i| (0..3).map(move |j| (i, j)))
-        .filter(|&(i, j)| typical[i][j] >= REFERENCE_MIN_JUDGED_CELL_ZNCC)
+    let judged: Vec<[[bool; 3]; 3]> = (0..k)
+        .map(|v| {
+            std::array::from_fn(|i| {
+                std::array::from_fn(|j| {
+                    on_photograph[v][i][j]
+                        && textured[v][i][j]
+                        && typical[i][j] >= REFERENCE_MIN_JUDGED_CELL_ZNCC
+                })
+            })
+        })
         .collect();
     let deficit = pair_zncc_grid
         .iter()
-        .map(|grid| {
-            if judged.is_empty() {
+        .zip(&judged)
+        .map(|(grid, judged)| {
+            let cells: Vec<(usize, usize)> = (0..3)
+                .flat_map(|i| (0..3).map(move |j| (i, j)))
+                .filter(|&(i, j)| judged[i][j])
+                .collect();
+            if cells.is_empty() {
                 return 0.0;
             }
-            judged
+            cells
                 .iter()
                 .map(|&(i, j)| typical[i][j] - grid[i][j])
                 .filter(|d| d.is_finite())
@@ -158,6 +252,7 @@ pub(crate) fn cell_agreement_from_pairs(pairs: &[[[f64; 3]; 3]], k: usize) -> Ce
     CellAgreement {
         pair_zncc_grid,
         typical,
+        judged,
         deficit,
     }
 }

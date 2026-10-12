@@ -29,11 +29,26 @@ pub struct TrackReading {
     pub choice: ReferenceChoice,
 }
 
+/// The self-similarity semi-axes `[major, minor]`, in grid px, of a view's
+/// `R×R` tile and of each cell of its split, read with the default
+/// [`SelfSimilarityParams`], so their cap is [`tile_max_radius`]
+/// ([`tile_semi_axes`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TileSemiAxes {
+    /// The whole tile's: the rule's radius is its semi-major axis.
+    pub whole: [f64; 2],
+    /// Each cell's of the ZNCC grid's split, `grid[row][col]` from the
+    /// top-left cell, `NaN` for a cell with no sample on the photograph: the
+    /// cell check reads a cell at the cap along both axes as holding no
+    /// texture ([`cell_agreement`]).
+    pub grid: [[[f64; 2]; 3]; 3],
+}
+
 /// What the rule reads of one view: the coverage, clipped share and viewing
 /// angle `tile` was read with, its pair ZNCC and cell deficit, and its
 /// self-similarity ellipse's semi-axes `[major, minor]` in grid px, read with
-/// the default [`SelfSimilarityParams`] as [`tile_semi_axes`] reads them, so
-/// their cap is [`tile_max_radius`].
+/// the default [`SelfSimilarityParams`] as [`tile_semi_axes`] reads them
+/// ([`TileSemiAxes::whole`]), so their cap is [`tile_max_radius`].
 pub fn readings_of(
     tile: &ViewTile,
     pair_zncc: Option<f64>,
@@ -61,11 +76,12 @@ pub fn tile_max_radius() -> f64 {
 }
 
 /// The semi-axes `[major, minor]`, in grid px, of the self-similarity ellipse
-/// of the whole of `tile`, read the overlap way over its samples on the
-/// photograph with the default parameters: the reading the bench takes of
-/// each view's tile and the rule reads as its radius. `None` for a tile
-/// under 3 a side.
-pub fn tile_semi_axes(tile: &ViewTile) -> Option<[f64; 2]> {
+/// of the whole of `tile` and of each cell of its split, read the overlap way
+/// over its samples on the photograph with the default parameters in one
+/// call ([`zncc_self_similarity_parts`]): the readings the bench takes of each
+/// view's tile, whose whole one the rule reads as its radius and whose cells
+/// the cell check reads for texture. `None` for a tile under 3 a side.
+pub fn tile_semi_axes(tile: &ViewTile) -> Option<TileSemiAxes> {
     let resolution = tile.resolution();
     let channels = tile.channels();
     if channels == 0 || resolution < 3 {
@@ -84,7 +100,13 @@ pub fn tile_semi_axes(tile: &ViewTile) -> Option<[f64; 2]> {
         Some(&tile.valid),
         &SelfSimilarityParams::default(),
     );
-    Some(parts.whole.ellipse.axes)
+    Some(TileSemiAxes {
+        whole: parts.whole.ellipse.axes,
+        grid: parts
+            .grid
+            .each_ref()
+            .map(|row| row.each_ref().map(|cell| cell.ellipse.axes)),
+    })
 }
 
 /// Take the readings the reference-view rule needs across a track's views and
@@ -99,7 +121,8 @@ pub fn tile_semi_axes(tile: &ViewTile) -> Option<[f64; 2]> {
 /// ([`member_zncc_matrix_reporting`]), rendered over the views' common support
 /// with member coherence's window at the tiles' resolution `R` and with
 /// `sampler`, anchored at each view's keypoint. The cell readings are taken on
-/// the tiles themselves ([`cell_agreement`]): member coherence renders only
+/// the tiles themselves and their cells' semi-axes ([`cell_agreement`]):
+/// member coherence renders only
 /// the samples inside its window's disk and common to every member, so its
 /// corner cells would hold part of their square, and the cell check was
 /// measured on whole cells with each pair's own support. Nothing coarser than
@@ -121,7 +144,7 @@ pub fn read_track(
     members: &[u32],
     keypoints: &[Option<[f64; 2]>],
     tiles: &[&ViewTile],
-    semi_axes: &[Option<[f64; 2]>],
+    semi_axes: &[Option<TileSemiAxes>],
     sampler: SamplerChoice,
     options: &ReferenceViewOptions,
     progress: &Progress<'_>,
@@ -151,7 +174,7 @@ pub fn read_track(
             middle.is_finite().then_some(middle)
         })
         .collect();
-    let cells = cell_agreement(tiles);
+    let cells = cell_agreement(tiles, semi_axes);
     let readings: Vec<ReferenceReadings> = (0..k)
         .map(|v| {
             let deficit = cells.deficit[v];
@@ -159,7 +182,7 @@ pub fn read_track(
                 tiles[v],
                 pair_zncc[v],
                 deficit.is_finite().then_some(deficit),
-                semi_axes[v],
+                semi_axes[v].map(|a| a.whole),
             )
         })
         .collect();

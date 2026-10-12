@@ -33,18 +33,24 @@ mod tests;
 
 pub use agreement::{cell_agreement, pair_zncc_grid, CellAgreement};
 #[cfg(test)]
-pub(crate) use agreement::{cell_agreement_from_pairs, finite_middle};
+pub(crate) use agreement::{
+    cell_agreement_from_pairs, cells_on_photograph, cells_with_texture, finite_middle,
+};
 pub use rule::{
     choose_reference_view, ReferenceChoice, ReferenceCost, ReferenceExclusion, ReferenceReadings,
     ReferenceStanding, ReferenceTerm, ReferenceViewOptions,
 };
 pub use tile::{clipped_share, render_view_tile, ViewTile};
-pub use track::{read_track, readings_of, tile_max_radius, tile_semi_axes, TrackReading};
+pub use track::{
+    read_track, readings_of, tile_max_radius, tile_semi_axes, TileSemiAxes, TrackReading,
+};
 
 /// The typical agreement a cell needs before the cell check judges it.
 ///
 /// A cell where the track's views do not agree, because it holds no texture
-/// they share, says nothing about any one view.
+/// they share, says nothing about any one view. A view's own cell is also not
+/// judged where its tile holds no texture there or has a sample off the
+/// photograph ([`cell_agreement`]).
 pub const REFERENCE_MIN_JUDGED_CELL_ZNCC: f64 = 0.5;
 
 /// The fewest samples with data in both tiles a cell of [`pair_zncc_grid`] is

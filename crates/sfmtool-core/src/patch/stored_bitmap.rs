@@ -51,7 +51,8 @@ use crate::patch::normal_refine::{
 };
 use crate::patch::pair_sharpness::{bitmap_blur, DEFAULT_MIN_ELLIPSE_RATIO};
 use crate::patch::reference_view::{
-    read_track, render_view_tile, tile_semi_axes, ReferenceViewOptions, TrackReading, ViewTile,
+    read_track, render_view_tile, tile_semi_axes, ReferenceViewOptions, TileSemiAxes, TrackReading,
+    ViewTile,
 };
 use crate::progress::{Cancelled, Progress};
 
@@ -99,9 +100,9 @@ pub fn bitmap_from_tile(tile: &ViewTile) -> Vec<u8> {
 pub struct ReferenceRender {
     /// Per view: its `R×R` tile at its keypoint.
     pub tiles: Vec<ViewTile>,
-    /// Per view: its tile's self-similarity semi-axes `[major, minor]`, in
-    /// grid px.
-    pub semi_axes: Vec<Option<[f64; 2]>>,
+    /// Per view: its tile's self-similarity semi-axes, whole and per cell,
+    /// in grid px.
+    pub semi_axes: Vec<Option<TileSemiAxes>>,
     /// What the rule read and picked.
     pub reading: TrackReading,
 }
@@ -147,7 +148,7 @@ pub fn render_reference(
             render_view_tile(patch, &views[v as usize], kp, resolution, sampler, progress)
         })
         .collect();
-    let semi_axes: Vec<Option<[f64; 2]>> = tiles.iter().map(tile_semi_axes).collect();
+    let semi_axes: Vec<Option<TileSemiAxes>> = tiles.iter().map(tile_semi_axes).collect();
     let refs: Vec<&ViewTile> = tiles.iter().collect();
     let reading = read_track(
         patch, views, view_set, keypoints, &refs, &semi_axes, sampler, options, progress,

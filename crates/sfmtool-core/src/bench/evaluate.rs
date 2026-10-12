@@ -48,7 +48,7 @@ use crate::patch::member_coherence::MemberCoherenceParams;
 use crate::patch::normal_refine::ProjectedImage;
 use crate::patch::reference_view::{
     choose_reference_view, read_track, render_view_tile, tile_max_radius, ReferenceReadings,
-    ReferenceViewOptions, ViewTile,
+    ReferenceViewOptions, TileSemiAxes, ViewTile,
 };
 use crate::patch::self_similarity::{
     zncc_self_similarity_parts, PatchTile, SelfSimilarityEllipse, SelfSimilarityEllipseUnits,
@@ -2050,11 +2050,18 @@ fn view_tile_self_similarity(tile: &ViewTile) -> TileSelfSimilarity {
 }
 
 /// The self-similarity semi-axes, in grid px, an observation's track-stage
-/// slot carries for its tile.
-fn slot_semi_axes(measurement: Option<&super::track::TrackMeasurement>) -> Option<[f64; 2]> {
-    measurement
-        .and_then(|m| m.zncc_self_similarity_ellipse)
-        .map(|e| e.grid_px.axes)
+/// slot carries for its tile, whole and per cell; a cell is `NaN` where the
+/// slot has no cell readings.
+fn slot_semi_axes(measurement: Option<&super::track::TrackMeasurement>) -> Option<TileSemiAxes> {
+    let m = measurement?;
+    Some(TileSemiAxes {
+        whole: m.zncc_self_similarity_ellipse?.grid_px.axes,
+        grid: m
+            .zncc_self_similarity_ellipse_grid
+            .map_or([[[f64::NAN; 2]; 3]; 3], |grid| {
+                grid.map(|row| row.map(|cell| cell.axes))
+            }),
+    })
 }
 
 /// Read what the reference-view rule needs across the `in` observations whose
@@ -2089,7 +2096,7 @@ fn read_reference_view(
         .iter()
         .map(|(i, _)| seed_of(&next.observations[*i]))
         .collect();
-    let semi_axes: Vec<Option<[f64; 2]>> = tiles
+    let semi_axes: Vec<Option<TileSemiAxes>> = tiles
         .iter()
         .map(|(i, _)| slot_semi_axes(next.observations[*i].track.as_ref()))
         .collect();
@@ -2433,7 +2440,7 @@ pub(super) fn restate_reference_view(track: &mut EditableTrack) {
         .iter()
         .map(|&i| {
             let m = track.observations[i].track.as_ref();
-            let axes = slot_semi_axes(m);
+            let axes = slot_semi_axes(m).map(|a| a.whole);
             ReferenceReadings {
                 coverage: m.and_then(|m| m.coverage),
                 clipped_share: m.and_then(|m| m.clipped_share),

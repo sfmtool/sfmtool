@@ -5,8 +5,9 @@ surface around it, and every photograph that sees the point can be resampled
 into that square: one tile per view. The views are not equally good. A far view
 holds less detail, an oblique one depends most on the patch's normal being
 right, a tile that crosses the photograph's border holds only part of the
-patch, a blown-out highlight holds no texture, and a view with an occluder in
-front of one corner disagrees with the others there. This spec describes the
+patch, a blown-out highlight holds no texture, and a view that sees part of
+the tile at another depth, through parallax, disagrees with the others there.
+This spec describes the
 measurements that say what each view's tile can contribute, and the
 **reference-view rule**, which picks the one view whose tile is stored as the
 point's patch bitmap. It gives each view a cost in grid px: the tile's
@@ -66,10 +67,11 @@ impl ViewTile { pub fn planes(&self) -> TilePlanes; } // what blur matching read
 pub fn pair_zncc_grid(a: &ViewTile, b: &ViewTile) -> [[f64; 3]; 3];
 pub struct CellAgreement {
     pub pair_zncc_grid: Vec<[[f64; 3]; 3]>, // per view, median over the others
-    pub typical: [[f64; 3]; 3],             // per cell, median over the views
+    pub typical: [[f64; 3]; 3],             // per cell, median over the views on the photograph
+    pub judged: Vec<[[bool; 3]; 3]>,        // per view, the cells the check judges
     pub deficit: Vec<f64>,                  // per view, the cell deficit
 }
-pub fn cell_agreement(tiles: &[&ViewTile]) -> CellAgreement;
+pub fn cell_agreement(tiles: &[&ViewTile], semi_axes: &[Option<TileSemiAxes>]) -> CellAgreement;
 
 pub struct ReferenceReadings {
     pub coverage: Option<f64>, pub clipped_share: Option<f64>,
@@ -121,19 +123,23 @@ pub struct TrackReading {
     pub readings: Vec<ReferenceReadings>,
     pub choice: ReferenceChoice,
 }
-pub fn tile_semi_axes(tile: &ViewTile) -> Option<[f64; 2]>;
+pub struct TileSemiAxes {
+    pub whole: [f64; 2],              // [major, minor] of the whole tile, grid px
+    pub grid: [[[f64; 2]; 3]; 3],     // each cell's, NaN for a cell with no data
+}
+pub fn tile_semi_axes(tile: &ViewTile) -> Option<TileSemiAxes>;
 pub fn tile_max_radius() -> f64; // the cap of tile_semi_axes' reading and the bench's, 3
 pub fn readings_of(tile: &ViewTile, pair_zncc: Option<f64>, cell_deficit: Option<f64>,
     semi_axes: Option<[f64; 2]>) -> ReferenceReadings;
 pub fn read_track(patch: &OrientedPatch, views: &[ProjectedImage<'_>], members: &[u32],
-    keypoints: &[Option<[f64; 2]>], tiles: &[&ViewTile], semi_axes: &[Option<[f64; 2]>],
+    keypoints: &[Option<[f64; 2]>], tiles: &[&ViewTile], semi_axes: &[Option<TileSemiAxes>],
     sampler: SamplerChoice, options: &ReferenceViewOptions,
     progress: &Progress<'_>) -> TrackReading;
 
 // patch::stored_bitmap
 pub struct PatchBitmap { pub rgba: Vec<u8>, pub reference: usize } // the pick
 pub fn bitmap_from_tile(tile: &ViewTile) -> Vec<u8>; // alpha 255 on the photograph
-pub struct ReferenceRender { pub tiles: Vec<ViewTile>, pub semi_axes: Vec<Option<[f64; 2]>>,
+pub struct ReferenceRender { pub tiles: Vec<ViewTile>, pub semi_axes: Vec<Option<TileSemiAxes>>,
     pub reading: TrackReading }
 pub fn render_reference(patch: &OrientedPatch, views: &[ProjectedImage<'_>], view_set: &[u32],
     keypoints: &[Option<[f64; 2]>], resolution: u32, sampler: SamplerChoice,
@@ -189,7 +195,11 @@ both the bench's evaluation and the stored bitmap call it, so the view a bench
 row is marked as the reference and the view whose tile a fit stores are picked
 from the same readings. It takes the tiles and their self-similarity semi-axes
 rather than rendering them because the bench has already rendered every row's
-tile and read its self-similarity for its own columns.
+tile and read its self-similarity for its own columns. The semi-axes come
+whole and per cell (`TileSemiAxes`) because one reading of the tile
+(`zncc_self_similarity_parts`) gives both: the rule ranks by the whole tile's,
+and the cell check reads each cell's to tell whether the view holds texture
+there.
 
 `render_view_tile` returns the tile and its readings together because they
 share the render's placement and warp map: the outline the clipped share reads
@@ -273,17 +283,33 @@ reads the photograph's own pixels under the tile.
   and a cell with fewer than `REFERENCE_MIN_CELL_SAMPLES` shared samples or no
   channel left has no reading.
 - **Cell deficit**: per cell, the track's **typical agreement** is the median
-  of the views' pair ZNCC grid in that cell. A view's cell deficit is the
+  of the views' pair ZNCC grid in that cell, over the views whose tile has
+  every sample of the cell on the photograph. A view's cell deficit is the
   largest amount by which its own cell falls below the typical agreement, over
-  the cells whose typical agreement is at least
-  `REFERENCE_MIN_JUDGED_CELL_ZNCC`; `0` when no cell is judged.
+  the cells it is **judged** in; `0` when it is judged in none. A view is
+  judged in a cell whose typical agreement is at least
+  `REFERENCE_MIN_JUDGED_CELL_ZNCC`, unless its own tile, in that cell:
+  - **holds no texture**: the cell's self-similarity ellipse reads the cap of
+    its reading, `max_radius` (3 grid px), along both axes, so the cell
+    matches itself shifted anywhere in the search, and its ZNCC with another
+    view reads noise or shading. A cell along a straight edge reads at the cap
+    along the edge only and is judged, since a view that disagrees across the
+    edge is told apart there. The view's reading still counts in the typical
+    agreement;
+  - **has a sample off the photograph**: its ZNCCs are read over part of the
+    cell, and the coverage penalty already charges the view for the samples
+    it lacks. Its reading is also left out of the typical agreement.
+
+  What the deficit reads, and why these cells are not judged, is in
+  [§ "What the cell check reads"](#what-the-cell-check-reads).
 
 The rule also reads each tile's self-similarity ellipse, whose semi-major axis
 is the ZNCC self-similarity radius
 ([zncc-self-similarity-radius.md](zncc-self-similarity-radius.md)): how far the
 tile can slide over itself and still match itself, short on a sharp tile. It
 is the whole tile's reading over its samples on the photograph
-(`tile_semi_axes`).
+(`tile_semi_axes`), which reads each cell's ellipse in the same call, for the
+cell check.
 
 ## The rule
 
@@ -571,8 +597,8 @@ procedure run again against the second review proposes no change to any value
 | `capped_radius_factor` | `1.5` | A view whose radius reads at the cap counts as 1.5 times as blurry as the cap, since the reading is a lower bound ([§ "The step on a radius at the cap"](#the-step-on-a-radius-at-the-cap)). Measured: from `1.08` to `2.04` it changes the same two pool picks, to an uncapped view at 2.90 or 2.96 grid px, and no hand pick; from `2.05` the lenient count falls (`2.5`: 66 of 77). `1.5` is near the middle of that range on a log scale. The ground truths do not favour it: the three picks it changes there align the other views worse. Against the second review, too, every factor from `1` to `2` matches the same picks (72 of 74 exact, 74 lenient). |
 | `agreement_band` | `0.15` | Sharp views correlate worse with blurrier ones, so a narrow band penalises exactly the sharp views. The previous rule's margin, `0.15`, was set against hand picks. Measured: the hand picks do not tell `0.1` to `0.4` apart (exact 29, lenient 68 or 69 of 77); below `0.1` the lenient count is 72 and the exact count 26 to 31. The tuning half's best, `0`, matched 4 fewer held-out picks exactly. `0.075` matches 2 more picks exactly and 4 more leniently, better on both halves (tuning 14 / 35 against 14 / 34, held out 17 / 37 against 15 / 34), but it is not the tuning half's best, so the procedure does not test it. The ground truths favour a narrower band: the mean error over the 639 tracks is 0.426 px at `0.075`, 0.411 at `0.05` and 0.399 at `0`, against 0.431 at `0.15`. The second review decides the hand picks' side against `0.075`: it matches 69 of 74 exactly and 72 leniently, against 72 and 74 at `0.15`, and on one case it goes back to the hand pick the second review replaced ([§ "The second review"](#the-second-review)). `0.15` is kept. |
 | `agreement_scale` | `0.15` | A view `0.30` below the best counts as twice as blurry. Measured: from `0.015` to `1.5` it changes no more than one hand pick. |
-| `cell_deficit_band` | `0.3` | A view that agrees overall but not in one part of the tile: an occluder, a shadow edge, parallax within the tile. The previous rule's bar, `0.3`, was set against hand picks. Measured: `0.25` to `0.35` match 29 hand picks of 77 exactly and 68 or 69 leniently; `0.1`, the tuning half's best, matches 3 more leniently but 5 fewer exactly, 4 of them on the held-out half; from `0.4` up the lenient count falls (`0.4`: 66). |
-| `cell_deficit_scale` | `0.3` | A cell deficit of `0.6` counts as twice as blurry. Measured: `0.03` to `0.9` give the same exact and lenient counts over the 77 hand picks; from `1.5` up the lenient count falls (`3`: 65). |
+| `cell_deficit_band` | `0.3` | A view that agrees overall but not in one part of the tile: mostly parallax within the tile, then blur, a misaligned tile and lighting, rarely an occluder ([§ "What the cell check reads"](#what-the-cell-check-reads)). The previous rule's bar, `0.3`, was set against hand picks. Measured: `0.25` to `0.35` match 29 hand picks of 77 exactly and 68 or 69 leniently; `0.1`, the tuning half's best, matches 3 more leniently but 5 fewer exactly, 4 of them on the held-out half; from `0.4` up the lenient count falls (`0.4`: 66). |
+| `cell_deficit_scale` | `0.3` | A cell deficit of `0.6` counts as twice as blurry. Measured: `0.03` to `0.9` give the same exact and lenient counts over the 77 hand picks; from `1.5` up the lenient count falls (`3`: 65). Both cell parameters were swept again after the cell check stopped judging cells with no texture or off the photograph, and the procedure proposes no change ([§ "What the cell check reads"](#what-the-cell-check-reads)). |
 | `coverage_band` | `0.99` | A partial tile holds only part of the patch; `0.99` lets a sample or two at a corner fall off the photograph. Measured: no hand pick turns on it, from `0.95` to `1`; 15 of the 679 pool tracks have an eligible view covering between `0.9` and `0.99`. |
 | `coverage_scale` | `0.03` | A view covering `0.96` of its tile counts as twice as blurry, and one at the floor of `0.9` four times. Measured: no hand pick turns on it, from `0.003` to `0.3`. |
 | `clipped_band` | `0.05` | A clipped region holds neither texture nor its true colour. Measured: below `0.05` the hand picks lose (`0`: 25 exact and 66 lenient of 77, against 29 and 68); above it they hardly change. 95 of the 679 pool tracks have an eligible view clipped past `0.05`. |
@@ -587,6 +613,10 @@ rule:
 |---|---|---|
 | `REFERENCE_MIN_JUDGED_CELL_ZNCC` | `0.5` | A cell whose views do not agree, because it holds no texture they share, says nothing about any one view. |
 | `REFERENCE_MIN_CELL_SAMPLES` | `16` | Below it a cell's ZNCC is read off a handful of samples. |
+
+The test for a cell with no texture adds no constant: it reads the cap of the
+cells' self-similarity reading (`tile_max_radius`, the default
+`SelfSimilarityParams::max_radius`), the same cap the step on a radius reads.
 
 **Why one cost rather than a series of tests.** The rule the cost replaced
 passed the views through all-or-nothing tests (coverage at least `0.99`,
@@ -813,7 +843,8 @@ did not take the rule's pick. On altona point 1153 nine of the eleven views
 read at the cap, so the step multiplies their costs alike and the angle
 factor picks the view at 30° over the hand pick at 44°; the first review's
 note says the track holds surfaces at different depths, with parallax and
-changing shadows, which no reading separates. Kerry480 point 166 is the occluder below.
+changing shadows, which no reading separates. Kerry480 point 166 is the parallax
+below.
 
 **Re-tuning.** Every parameter was swept again by the procedure of [§ "How the
 values were measured"](#how-the-values-were-measured), on the same readings.
@@ -862,16 +893,142 @@ rule's readings do not see:
 - **Saturation.** On dino point 7423, a tie, the rule's pick is less
   saturated than the hand pick, and the note asks whether the cost should
   read colour saturation. The rule reads no colour.
-- **An occluder the cell check missed.** On kerry480 point 166 the rule's
-  pick has a pole occluding the left side of the tile, and the maintainer
-  chose a third view. Its cell deficit, 0.309, is just past the band of
-  `0.3`, so that penalty adds 3%, and its pair ZNCC, 0.155 below the best,
-  adds 4%; its radius is 0.39 grid px against the chosen view's 0.51.
+- **Parallax the cell check reads weakly.** On kerry480 point 166 the
+  rule's pick has a pole down the left side of the tile, and the maintainer
+  chose a third view. A later look found the top third of the tile lies
+  behind the rest, so the views differ there by parallax rather than an
+  occluder ([§ "What the cell check reads"](#what-the-cell-check-reads)). The
+  pick's cell deficit, 0.309, is just past the band of `0.3`, so that
+  penalty adds 3%, and its pair ZNCC, 0.155 below the best, adds 4%; its
+  radius is 0.39 grid px against the chosen view's 0.51.
 - **A track over two surfaces.** On badland point 362 the patch spans a
   ridge and the darker background behind it, which are different surfaces.
   Every view reads at the cap with the same cost, and the maintainer found no
   single best view. The fault is in the track, which no choice of view
   mends.
+
+#### What the cell check reads
+
+The cell check reads where in the tile a view disagrees with the others. It
+was built to catch an occluder in one part of the tile, but on 2026-10-11 the
+maintainer surveyed what the cells it flags show, and found that it reads
+mostly **parallax within the tile**, the part of the surface at another depth
+shifting against the rest from view to view, and then blur, a misaligned tile
+and lighting; an occluder is rare. Parallax relative to the other views is
+worth reading for the reference: the maintainer prefers the view that shows
+least parallax against the others, since the other views are aligned to it.
+The survey's record is the harness's `cell_survey.json`
+([README](../../../scripts/reference_view/README.md)).
+
+- **Occluders.** On 15 tracks, kerry480 point 166, 5 tracks with a cell
+  deficit of `0.5` or more and 9 with one near the band of `0.3`, each view's
+  tile was shown with its nine cells, 1,121 judged view-cells in all, and the
+  maintainer marked the cells with an occluder. None of the 30 cells over the
+  band was marked; the one mark was on a cell whose deficit was `0.01`. On
+  kerry480 point 166 the top third of the tile lies behind the rest, so the
+  views differ there by parallax, not by the pole in front.
+- **Causes.** The maintainer then named the cause of each of the 46 cells
+  with a deficit of `0.25` or more on those tracks:
+
+  | Cause | Cells | Over the band |
+  |---|---|---|
+  | Parallax within the tile | 24 | 14 |
+  | Blur | 7 | 3 |
+  | The tile shifted or misaligned | 4 | 4 |
+  | Little texture | 3 | 1 |
+  | Exposure or colour | 3 | 3 |
+  | Shadow | 2 | 2 |
+  | Off the photograph | 2 | 2 |
+  | An occluder | 1 | 1 |
+
+  Of the little-texture cells, the notes on two say that the self-similarity
+  radius of each cell would judge that the cell holds no texture. One
+  parallax cell is marked as slight, and one is vegetation, leaves at many
+  depths.
+
+Two of those causes say nothing about the view's agreement with the others,
+so the check does not judge them:
+
+- **A cell with no texture in the view.** A cell whose self-similarity ellipse
+  reads the cap along both axes matches itself shifted anywhere in the
+  search, so its ZNCC with another view reads noise or shading. The test
+  reads the minor axis because a straight edge reads the cap along the edge
+  only, and a disagreement across an edge is parallax or a misaligned tile,
+  which the check is for; it reads the cap because that adds no constant. The
+  view's reading stays in the typical agreement: a view whose cell shows
+  smooth shading still says how far the views agree there.
+- **A cell with a sample off the photograph.** Its ZNCCs are read over part
+  of the cell, near the photograph's border. The coverage penalty already
+  charges the view once for the samples it lacks, so the check does not
+  charge it again. Any sample off the photograph counts, which adds no
+  constant; leaving out only cells with more than a quarter of their samples
+  off gives the same counts. Its reading is left out of the typical
+  agreement too, so a reading over part of the cell does not set the others'
+  baseline.
+
+**Measured.** With the harness on the same pool, cases and ground truths as
+[§ "How the values were measured"](#how-the-values-were-measured), read on a
+build with both exclusions, and the cell deficit computed again from each
+row's cell readings with each exclusion and with none (`analyze.py` section
+11):
+
+| View-cells | Pool (679 tracks) | Ground truths (639) |
+|---|---|---|
+| All | 53,100 | 44,820 |
+| Judged before (typical agreement at the floor) | 45,900 | 36,450 |
+| Not judged: no texture | 1,895 (726 judged before, 73 over the band) | 1,114 (461, 39) |
+| Not judged: off the photograph | 316 (293, 5) | 18 (16, 1) |
+| Not judged: either | 2,173 (982, 78) | 1,132 (477, 40) |
+| Cell deficits changed | 263 rows, 37 across the band | 111 rows, 17 across the band |
+
+(The off-photograph counts leave out the 335 rows of patches at infinity,
+whose tiles the harness does not render again; the cell deficits changed are
+the bench's own, which read every tile.)
+
+The exclusions change the pick on 3 of the 679 pool tracks (kerry480 point
+480, omni_temple points 157 and 1811), all through the cells with no
+texture: each new pick's deficit had come from a cell that holds no texture
+in that view (sky over a roof, a flat wall) where most other views see an
+edge, and the new picks are about
+as sharp as the old (1.23 against 1.31 grid px, 1.05 against 1.10, 1.74
+against 1.79). The off-photograph exclusion changes no pick. No hand-picked
+case changes its pick (72 of 74 exact, 74 lenient against the second review;
+29 / 68 / 62 of 77 against the first), and no ground-truth pick changes, so
+the mean error over the ground truths stays 0.431 px.
+
+Of the survey's 46 cells, the two off the photograph (badland point 135, 42
+and 45 of 64 samples off) and one of the three of little texture (dino point
+7676, both axes at the cap) are no longer judged. The other two
+little-texture cells read texture along one direction at least (kerry480
+point 166, `[3, 1.37]` grid px; seoul_bull point 182, `[0.43, 0.36]`) and
+are judged. Every parallax, blur, misaligned, exposure, shadow and occluder
+cell is still judged, and the 14 parallax cells over the band stay over it.
+
+Two other forms were measured and not taken:
+
+- **No texture left out of the typical agreement as well.** It changes 4
+  pool picks, and moves seoul_bull point 135 from a view the second review
+  accepted to one it did not show (71 of 74 exact): there four views see
+  only smooth shading in the top middle cell and agree on it, and leaving
+  them out drops the cell under the floor. Of the ground truths it changes 2
+  picks, both worse, the other views' mean error from 0.415 px to 0.458.
+- **Other tests for no texture.** A semi-minor axis of at least 2, 1.5 or 1
+  grid px instead of the cap changes 3 to 5 pool picks, no hand pick, and 1
+  or 2 ground-truth picks, by under 0.02 px either way, but adds a constant.
+  A semi-major axis at the cap, which also leaves out every cell along an
+  edge, loses a hand pick (71 of 74) and changes 3 ground-truth picks, 2 of
+  them worse (0.328 px to 0.382).
+
+The band and scale were swept again on these readings by the procedure of
+[§ "The second review"](#the-second-review): the tuning half's best runs are
+`cell_deficit_band` `0.3` to `0.35` and `cell_deficit_scale` `0.3` to `0.45`,
+as before, so both stay. Add Image to Tracks finds the same 67 of the 85
+removed observations of its test.
+
+**Cost.** The check reads nothing new: the bench and `tile_semi_axes` already read each
+cell's ellipse in the same call as the whole tile's
+(`zncc_self_similarity_parts`), so the check only reads the cells' minor
+axes and each tile's `R²` flags of samples on the photograph.
 
 ### Why the agreement is read plain
 
@@ -939,8 +1096,8 @@ into the point's own track, in `tracks/reference_observations`.
   differently exposed photographs mixes colours that never appeared together on
   the surface, and its detail is blurred by every view that does not line up
   exactly. A single view has neither problem.
-- **What a single view costs.** It keeps that view's noise, and any highlight or
-  occluder the measurements missed. The bitmap also changes all at once when
+- **What a single view costs.** It keeps that view's noise, and any highlight,
+  parallax or occluder the measurements missed. The bitmap also changes all at once when
   another view comes to rank higher.
 - **Every pick is stored.** The rule's pick is always the view whose tile is
   stored, so the row Track View marks as the rule's pick is the stored
@@ -1084,7 +1241,10 @@ to every view, so its corner cells would hold only the part of their square
 inside the disk, and the cell readings were measured on whole cells. The cost is
 one extra member-coherence render per view and `k(k − 1)/2` pairs of nine
 cells; on the review tracks (6 to 26 views) the bench's `reference view` phase
-takes 0.4 to 2.4 ms, about 9% of an evaluation.
+takes 0.4 to 2.4 ms, about 9% of an evaluation. Which cells are judged reads
+each cell's self-similarity ellipse, which the reading of the whole tile
+already gives (`TileSemiAxes::grid`), and each tile's flags of samples on the
+photograph.
 
 **What the stored bitmap costs.** Rendering a point's bitmap renders each
 view's tile once, reads its self-similarity, builds member coherence's matrix
@@ -1243,8 +1403,14 @@ known angles, a view facing the patch, one of its back and a patch at infinity;
 the clipped share on photographs with known clipped columns and colour pixels,
 and that the row spans count what a test of every pixel centre counts; coverage
 on a tile inside and one over the photograph's edge; the cell readings on
-identical tiles, flat and short cells, an occluder in one cell and cells the
-track does not agree on; the clipped share of a tile rendered through a
+identical tiles, flat and short cells and cells the track does not agree on;
+that a view that disagrees in one cell holding texture and on the photograph
+carries the deficit, while one whose cell there holds no texture (both axes of
+the cell's ellipse at the cap) or has samples off the photograph is not judged
+there; that a cell with no texture stays in the typical agreement and one off
+the photograph leaves it; that a cell along an edge, with its ellipse at the
+cap along one axis only, holds texture; and that a cell is on the photograph
+only with every sample on it; the clipped share of a tile rendered through a
 fisheye camera, against a count of every pixel centre inside the polygon of its
 border samples projected one at a time, and of a tile cut by the photograph's
 edge. On constructed readings it checks the rule: a view at 20° with a radius

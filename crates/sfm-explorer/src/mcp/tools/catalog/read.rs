@@ -428,8 +428,10 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           pair_zncc_grid, per ninth of the tile, the median over the others of \
                           the pair's ZNCC there; cell_deficit, the most its pair_zncc_grid falls \
                           below the track's typical agreement (the median over the in \
-                          observations) in a ninth where that typical agreement is at least \
-                          0.5; and reference_view, the reference-view \
+                          observations whose tile covers the ninth) in a ninth where that \
+                          typical agreement is at least 0.5 and its own tile holds texture \
+                          and lies wholly on the photograph; and reference_view, the \
+                          reference-view \
                           rule's decision. The rule gives each row a cost in grid px, its \
                           self-similarity radius r, times 1.5 where r reads at the largest \
                           radius searched (3 grid px, a lower bound), times the angle factor \

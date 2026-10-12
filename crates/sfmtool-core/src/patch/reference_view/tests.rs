@@ -464,24 +464,43 @@ fn a_cell_flat_in_either_tile_or_short_of_samples_has_no_reading() {
     assert!(grid[2][1].is_finite());
 }
 
-#[test]
-fn a_view_with_an_occluder_in_one_cell_carries_the_deficit() {
-    // Five views of one texture; the fourth has something else in front of the
-    // middle-right cell.
-    let tiles: Vec<ViewTile> = (0..5)
+/// Five views of one texture, view 3 showing `odd(row, col)` over the
+/// middle-right cell instead.
+fn five_views(odd: impl Fn(usize, usize) -> u8 + Copy) -> Vec<ViewTile> {
+    (0..5)
         .map(|v| {
             tile_of(move |r, c| {
                 if v == 3 && (8..16).contains(&r) && c >= 16 {
-                    ((r * 11 + c * 5) % 50 + 100) as u8
+                    odd(r, c)
                 } else {
                     texture(r, c, v)
                 }
             })
         })
-        .collect();
+        .collect()
+}
+
+/// The cell agreement of `tiles`, each with its own self-similarity reading.
+fn agreement_of(tiles: &[ViewTile]) -> CellAgreement {
     let refs: Vec<&ViewTile> = tiles.iter().collect();
-    let agreement = cell_agreement(&refs);
+    let semi_axes: Vec<Option<TileSemiAxes>> = tiles.iter().map(tile_semi_axes).collect();
+    cell_agreement(&refs, &semi_axes)
+}
+
+#[test]
+fn a_view_that_disagrees_in_one_textured_cell_carries_the_deficit() {
+    // View 3 shows other texture over the middle-right cell, every sample of
+    // it on the photograph: something in front of the surface there, or the
+    // surface seen with parallax.
+    let tiles = five_views(|r, c| ((r * 11 + c * 5) % 50 + 100) as u8);
+    let cell = tile_semi_axes(&tiles[3]).unwrap().grid[1][2];
+    assert!(
+        cell[1] < tile_max_radius(),
+        "the cell holds texture: {cell:?}"
+    );
+    let agreement = agreement_of(&tiles);
     assert!(agreement.typical[1][2] > 0.9);
+    assert!(agreement.judged.iter().all(|v| v[1][2]));
     for (v, deficit) in agreement.deficit.iter().enumerate() {
         if v == 3 {
             assert!(
@@ -493,8 +512,94 @@ fn a_view_with_an_occluder_in_one_cell_carries_the_deficit() {
         }
     }
     // The other views' agreement in that cell is the median over four
-    // partners, one of them the occluded view, so it barely moves.
+    // partners, one of them view 3, so it barely moves.
     assert!(agreement.pair_zncc_grid[0][1][2] > 0.9);
+}
+
+#[test]
+fn a_cell_with_no_texture_in_the_view_is_not_judged() {
+    // View 3 holds almost nothing over the middle-right cell: a pattern a grey
+    // level deep, which the noise of a view hides, so that the cell matches
+    // itself shifted anywhere in the search.
+    let tiles = five_views(|r, c| (100 + (r * 7 + c * 3) % 3) as u8);
+    let cell = tile_semi_axes(&tiles[3]).unwrap().grid[1][2];
+    assert_eq!(cell, [tile_max_radius(); 2], "both axes at the cap");
+    let agreement = agreement_of(&tiles);
+    assert!(
+        agreement.pair_zncc_grid[3][1][2] < 0.3,
+        "it disagrees there"
+    );
+    assert!(!agreement.judged[3][1][2]);
+    assert!(agreement.judged[3][1][1] && agreement.judged[0][1][2]);
+    assert!(agreement.deficit[3] < 0.1, "{}", agreement.deficit[3]);
+    // Read with no self-similarity reading, the same cell is judged.
+    let refs: Vec<&ViewTile> = tiles.iter().collect();
+    let unread = cell_agreement(&refs, &[None; 5]);
+    assert!(unread.judged[3][1][2]);
+    assert!(
+        unread.deficit[3] > ReferenceViewOptions::default().cell_deficit_band,
+        "{}",
+        unread.deficit[3]
+    );
+}
+
+#[test]
+fn a_cell_with_samples_off_the_photograph_is_not_judged() {
+    // View 3 shows other texture over the middle-right cell, as in the test of
+    // a textured cell, but its tile runs off the photograph over the cell's
+    // last column, 8 of its 64 samples.
+    let mut tiles = five_views(|r, c| ((r * 11 + c * 5) % 50 + 100) as u8);
+    for row in 8..16 {
+        tiles[3].valid[row * 24 + 23] = false;
+        tiles[3].samples[[row, 23, 0]] = 0;
+    }
+    tiles[3].coverage = (24.0 * 24.0 - 8.0) / (24.0 * 24.0);
+    let agreement = agreement_of(&tiles);
+    assert!(
+        agreement.pair_zncc_grid[3][1][2].is_finite(),
+        "the cell still has a reading"
+    );
+    assert!(!agreement.judged[3][1][2]);
+    assert!(agreement.judged[3][1][1] && agreement.judged[0][1][2]);
+    assert!(agreement.deficit[3] < 0.1, "{}", agreement.deficit[3]);
+}
+
+#[test]
+fn a_cell_off_the_photograph_leaves_the_typical_agreement_and_one_with_no_texture_stays() {
+    // Three views agree at 0.9 in the top-left cell and a fourth reads 0.1
+    // with each of them there. Views 0 to 2 read the median of 0.9, 0.9 and
+    // 0.1; view 3 reads 0.1.
+    let k = 4;
+    let mut pairs = vec![[[0.9; 3]; 3]; k * k];
+    for w in 0..3 {
+        pairs[3 * k + w][0][0] = 0.1;
+        pairs[w * k + 3][0][0] = 0.1;
+    }
+    let every = [[[true; 3]; 3]; 4];
+    let read = cell_agreement_from_pairs(&pairs, k, &every, &every);
+    assert!((read.typical[0][0] - 0.9).abs() < 1e-12);
+    assert!((read.deficit[3] - 0.8).abs() < 1e-12);
+    // View 3 with no texture there: not judged, but still in the typical.
+    let mut flat = every;
+    flat[3][0][0] = false;
+    let no_texture = cell_agreement_from_pairs(&pairs, k, &every, &flat);
+    assert_eq!(no_texture.typical, read.typical);
+    assert!(!no_texture.judged[3][0][0] && no_texture.judged[0][0][0]);
+    assert!(
+        no_texture.deficit[3].abs() < 1e-12,
+        "{}",
+        no_texture.deficit[3]
+    );
+    // Views 0 to 2 off the photograph there: neither judged nor in the
+    // typical, which view 3 alone then sets, under the floor.
+    let mut off = every;
+    for own in off.iter_mut().take(3) {
+        own[0][0] = false;
+    }
+    let off_photo = cell_agreement_from_pairs(&pairs, k, &off, &every);
+    assert!((off_photo.typical[0][0] - 0.1).abs() < 1e-12);
+    assert!(off_photo.judged.iter().all(|v| !v[0][0]));
+    assert!(off_photo.deficit.iter().all(|d| d.abs() < 1e-12));
 }
 
 #[test]
@@ -503,22 +608,55 @@ fn cells_the_track_does_not_agree_on_are_not_judged() {
     // and every deficit is 0.
     let low = [[0.2; 3]; 3];
     let k = 3;
+    let every = [[[true; 3]; 3]; 3];
     let mut pairs = vec![low; k * k];
     pairs[1] = [[-0.5; 3]; 3];
     pairs[k] = [[-0.5; 3]; 3];
-    let agreement = cell_agreement_from_pairs(&pairs, k);
+    let agreement = cell_agreement_from_pairs(&pairs, k, &every, &every);
     assert_eq!(agreement.deficit, vec![0.0; 3]);
+    assert!(agreement.judged.iter().flatten().flatten().all(|j| !j));
     // With one judged cell, the deficit is read there alone.
     let mut pairs = vec![low; k * k];
     for (a, b, z) in [(0, 1, 0.9), (0, 2, 0.9), (1, 2, 0.3)] {
         pairs[a * k + b][0][0] = z;
         pairs[b * k + a][0][0] = z;
     }
-    let agreement = cell_agreement_from_pairs(&pairs, k);
+    let agreement = cell_agreement_from_pairs(&pairs, k, &every, &every);
     // Views 0, 1, 2 read 0.9, 0.6, 0.6 in the top-left cell; typical 0.6.
     assert!((agreement.typical[0][0] - 0.6).abs() < 1e-12);
     assert!((agreement.deficit[0] - -0.3).abs() < 1e-12);
     assert!(agreement.deficit[1].abs() < 1e-12);
+}
+
+#[test]
+fn a_cell_holds_texture_unless_it_reads_the_cap_along_both_axes() {
+    let mut axes = TileSemiAxes {
+        whole: [0.5, 0.4],
+        grid: [[[0.5, 0.4]; 3]; 3],
+    };
+    // An edge: at the cap along it, short across it.
+    axes.grid[0][1] = [tile_max_radius(), 0.3];
+    // No texture: at the cap along both axes.
+    axes.grid[0][2] = [tile_max_radius(); 2];
+    // No reading.
+    axes.grid[1][0] = [f64::NAN; 2];
+    assert_eq!(
+        cells_with_texture(Some(&axes)),
+        [[true, true, false], [true, true, true], [true, true, true]]
+    );
+    assert_eq!(cells_with_texture(None), [[true; 3]; 3]);
+}
+
+#[test]
+fn a_cell_is_on_the_photograph_only_with_every_sample_on_it() {
+    let mut tile = tile_of(|r, c| texture(r, c, 0));
+    assert_eq!(cells_on_photograph(&tile), [[true; 3]; 3]);
+    // One sample of the bottom-right cell off the photograph.
+    tile.valid[23 * 24 + 23] = false;
+    assert_eq!(
+        cells_on_photograph(&tile),
+        [[true, true, true], [true, true, true], [true, true, false]]
+    );
 }
 
 // ---- The rule -------------------------------------------------------------------

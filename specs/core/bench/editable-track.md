@@ -1518,7 +1518,10 @@ Across the `in` rows that have a tile it then writes:
   rendered;
 - `cell_deficit`: the most the row's `pair_zncc_grid` falls below the track's
   **typical agreement**, the median of the rows' `pair_zncc_grid` in that
-  ninth, over the ninths whose typical agreement is at least `0.5`;
+  ninth over the rows whose tile has every sample of it on the photograph,
+  over the ninths whose typical agreement is at least `0.5` and where the
+  row's own tile holds texture (its ninth's self-similarity ellipse under the
+  cap along its minor axis) and has every sample on the photograph;
 - `reference_view`: a `ReferenceStanding`, the rule's decision about the row:
   `cost`, its `ReferenceCost` (the cost in grid px and the radius, the step
   on a radius at the cap, the angle factor and the four penalties it is the
