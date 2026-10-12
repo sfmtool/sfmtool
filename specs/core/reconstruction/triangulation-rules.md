@@ -334,14 +334,22 @@ pub fn retriangulate_points(
 ) -> Result<(EditedReconstruction, PointMap, RetriangulateReport), RetriangulateError>;
 ```
 
-`RetriangulateWhich` has two cases, and they are also the two shapes a point
-edit takes, which is not a coincidence. `All` rewrites the whole point list,
-which is a new base: the overlay is folded in first and the map is the
-materialisation's. `These(&[index])` is a delete-and-re-add of each named
-point's whole record, which is an overlay edit over the same base: each point
-whose geometry changes takes a new index and the map is a `PointMap::Replaced`. So a caller states
-which points it means and gets the edit that fits. `These` costs a rebuild of
-the addition set's derived indexes per point, so it is for a handful.
+`RetriangulateWhich` names the points and the shape of the edit, and the shapes
+are the two a point edit takes, which is not a coincidence. `All` rewrites the
+whole point list, which is a new base: the overlay is folded in first and the
+map is the materialisation's. `These(&[index])` is a delete-and-re-add of each
+named point's whole record, which is an overlay edit over the same base: each
+point whose geometry changes takes a new index and the map is a
+`PointMap::Replaced`. `These` costs a rebuild of the addition set's derived
+indexes per point, so it is for a handful. `TheseInBulk(&[index])` is the bulk
+path for a long list, such as every track one camera observes: it writes as
+`All` does, with the overlay folded in first, the named points solved in one
+pass and written into the new base at their own rows, every other point carried
+over as it stands, and the derived indexes rebuilt once. A caller states which
+points it means and the shape it wants, and every case judges a point by the
+same rules and writes it the same answer: a point's status, geometry and patch
+frame under `TheseInBulk` are bit for bit what `These` and `All` give it, since
+each track is solved from its own observations alone.
 
 `RetriangulateOptions` is the per-track rules minus the two a reconstruction
 answers for itself: the incoming direction mark is the point's own `w`, and the
@@ -374,7 +382,8 @@ by.
 
 The report holds one status per point the call was asked about, held points
 included, in ascending order of the point's index in the value given. Under
-`All` that is every live point; under `These` it is each index named, once.
+`All` that is every live point; under `These` and `TheseInBulk` it is each index
+named, once.
 
 ```rust
 pub struct RetriangulateReport {
@@ -423,8 +432,9 @@ out of a solve is not deleting them.
 `index` and `new_index` name the point in the two values, and the returned map
 forwards the one to the other. A point `These` rewrites takes a new index, as
 every delete-and-re-add does; a point it does not rewrite -- held, kept or
-unchanged -- keeps its index. Under `All` the statuses are written in the
-materialisation's indexing and read back through the fold, so `index` is the
+unchanged -- keeps its index. Under `All` and `TheseInBulk` the statuses are
+written in the materialisation's indexing and read back through the fold, so
+`index` is the
 caller's and `new_index` the point's row in the new base, and the two differ
 wherever the overlay deleted a point before it or put a rewritten point back in
 its base row.
@@ -451,6 +461,10 @@ posed. How many cameras the posed images are taken through is not a
 precondition, as it is not for the reconstruction-level bundle adjustment
 ([bundle-adjust.md](bundle-adjust.md)), which also projects each observation
 through its own image's camera.
+
+The refusals are read off the value the caller holds, before an overlay is
+folded, so an index naming no live point is refused in the caller's own
+indexing under every case.
 
 `progress` names the three stages -- gathering the arrays, the solve, writing the
 answer back -- and is how the call is asked to stop. The cancel is read between
@@ -594,6 +608,15 @@ The in-front flag comes back beside the verdicts, which is what makes
   points it rewrites new indexes and leaves the settled one at its own; `All`
   over an overlay that also deletes a point and holds another reports each
   status in the caller's indexing and names the row the fold put it in.
+- **The bulk path.** `TheseInBulk` over a held point and two others, one named
+  twice, writes a new base with nothing over it, gives one status per index
+  named with each point at its own row, and reaches for each point the outcome,
+  the geometry and the patch frame that `These` and `All` reach, bit for bit,
+  with the same census; a point not named is carried over as it stands. Over
+  an overlay that rewrote one point and deleted another, it refuses the deleted
+  index in the caller's own indexing, and otherwise reports each status in the
+  caller's indexing at the row the fold put it in, as `All` over the same
+  overlay does.
 - **Several cameras.** Over the same arc with images alternating between a
   pinhole and an equidistant fisheye of a different focal and principal point,
   tracks seen through one camera only, and a track seen through both, land on

@@ -31,11 +31,12 @@ use crate::reconstruction::edited::{EditError, EditedReconstruction, PointMap};
 
 /// Which points one retriangulation re-solves.
 ///
-/// The two cases are also the two shapes a point edit takes, and that is not a
-/// coincidence: re-solving every point rewrites the whole point list, which is a
-/// new base, and re-solving a handful is a delete-and-re-add of their records,
-/// which is an overlay edit. So the caller states which points it means and
-/// [`retriangulate_points`] produces the edit that fits.
+/// The cases are also the two shapes a point edit takes, and that is not a
+/// coincidence: rewriting points in place is a new base, and re-solving a
+/// handful is a delete-and-re-add of their records, which is an overlay edit.
+/// So the caller states which points it means and the shape it wants, and
+/// [`retriangulate_points`] produces that edit. Every case judges a point by
+/// the same rules and writes it the same answer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RetriangulateWhich<'a> {
     /// Every point the value holds. The overlay is folded in first and the
@@ -45,6 +46,13 @@ pub enum RetriangulateWhich<'a> {
     /// edit, and so for a handful: each point costs a rebuild of the addition
     /// set's derived indexes.
     These(&'a [u32]),
+    /// The points these indexes name, in the value's own indexing, written as
+    /// [`Self::All`] writes: the overlay is folded in first, the named points
+    /// are solved in one pass and written into the new base at their own rows,
+    /// and every other point is carried over as it stands. For a long list,
+    /// such as every track one camera observes, where [`Self::These`] would
+    /// rebuild the addition set's derived indexes once per point.
+    TheseInBulk(&'a [u32]),
 }
 
 /// The rules a retriangulation judges each point by.
@@ -190,7 +198,8 @@ pub struct RetriangulateReport {
     /// One status per point the call was asked about, held points included, in
     /// ascending order of [`RetriangulatedPoint::index`]. Under
     /// [`RetriangulateWhich::All`] that is every live point of the value; under
-    /// [`RetriangulateWhich::These`] it is each index named, once.
+    /// [`RetriangulateWhich::These`] and [`RetriangulateWhich::TheseInBulk`] it
+    /// is each index named, once.
     pub points: Vec<RetriangulatedPoint>,
     /// Observations behind the points that were read.
     pub observations: usize,
@@ -206,8 +215,9 @@ pub struct RetriangulatedPoint {
     /// The point's index in the value the call returned, which is where the
     /// returned [`PointMap`] forwards [`Self::index`] to. A point
     /// [`RetriangulateWhich::These`] rewrote takes a new index; a point it did
-    /// not rewrite keeps the one it had, and under [`RetriangulateWhich::All`]
-    /// this is the point's row in the new base.
+    /// not rewrite keeps the one it had. Under [`RetriangulateWhich::All`] and
+    /// [`RetriangulateWhich::TheseInBulk`] this is the point's row in the new
+    /// base.
     pub new_index: u32,
     /// What happened to it.
     pub outcome: RetriangulateOutcome,
@@ -486,26 +496,56 @@ pub fn retriangulate_points(
     // what was asked for. An estimate, as every set of weights is.
     let [p_gather, p_solve, p_write] = progress.split([0.20, 0.65, 0.15]);
 
-    // `All` rewrites the whole point list, so the overlay is folded in first and
-    // the answer becomes the next version's base; `These` writes the overlay and
-    // leaves the base alone, which is what keeps every other index meaning what
-    // it meant.
-    let fold = matches!(which, RetriangulateWhich::All)
-        && !(edited.deleted_points.is_empty() && edited.added.points.is_empty());
+    // The refusals are read off the value the caller holds, before anything is
+    // folded, so an index is named in the caller's own indexing.
+    check_preconditions(edited)?;
+    let named: Option<Vec<u32>> = match which {
+        RetriangulateWhich::All => None,
+        RetriangulateWhich::These(indexes) | RetriangulateWhich::TheseInBulk(indexes) => {
+            if let Some(&index) = indexes.iter().find(|&&i| edited.point(i).is_none()) {
+                return Err(RetriangulateError::NoSuchPoint(index));
+            }
+            let mut these = indexes.to_vec();
+            these.sort_unstable();
+            these.dedup();
+            Some(these)
+        }
+    };
+
+    // `All` and `TheseInBulk` write in place, so the overlay is folded in first
+    // and the answer becomes the next version's base; `These` writes the
+    // overlay and leaves the base alone, which is what keeps every other index
+    // meaning what it meant.
+    let in_place = !matches!(which, RetriangulateWhich::These(_));
+    let fold = in_place && !(edited.deleted_points.is_empty() && edited.added.points.is_empty());
     let (work, folded) = if fold {
         let _phase = p_gather.phase("materialise");
         let (value, map) = edited.materialize();
-        (
-            EditedReconstruction::new(Arc::new(value)),
-            Some(PointMap::Rows(map)),
-        )
+        (EditedReconstruction::new(Arc::new(value)), Some(map))
     } else {
         (edited.clone(), None)
     };
+    // The named points in `work`'s indexing: through the fold where there was
+    // one, which need not keep their order.
+    let named = match (named, &folded) {
+        (Some(these), Some(rows)) => {
+            let mut rows: Vec<u32> = these
+                .iter()
+                .map(|&index| {
+                    rows.forward(index)
+                        .expect("a live index has a materialised row")
+                })
+                .collect();
+            rows.sort_unstable();
+            Some(rows)
+        }
+        (named, _) => named,
+    };
+    let folded = folded.map(PointMap::Rows);
 
     let gathered = {
         let mut phase = p_gather.phase("gather observations");
-        let gathered = gather(&work, which)?;
+        let gathered = gather(&work, named)?;
         crate::progress_note!(
             phase,
             "{} points, {} observations",
@@ -538,14 +578,15 @@ pub fn retriangulate_points(
 
     let (next, map, mut points) = {
         let _phase = p_write.phase("write back");
-        match which {
-            RetriangulateWhich::All => write_whole_value(&work, &gathered, &estimates),
-            RetriangulateWhich::These(_) => write_overlay(edited, &gathered, &estimates)?,
+        if in_place {
+            write_in_place(&work, &gathered, &estimates)
+        } else {
+            write_overlay(edited, &gathered, &estimates)?
         }
     };
     // A held point is not rewritten by either write, so it keeps the index it
-    // has in `work`: the same row of the new base under `All`, the same index
-    // of the overlay under `These`.
+    // has in `work`: the same row of the new base under `All` and
+    // `TheseInBulk`, the same index of the overlay under `These`.
     points.extend(gathered.held.iter().map(|&index| RetriangulatedPoint {
         index,
         new_index: index,
@@ -606,15 +647,32 @@ struct Gathered {
     distance: Option<Vec<PointDistance>>,
 }
 
-/// Read `work`'s poses, pixels and constraints into the arrays the array form
-/// takes.
-fn gather(
-    work: &EditedReconstruction,
-    which: RetriangulateWhich<'_>,
-) -> Result<Gathered, RetriangulateError> {
-    if !work.has_keypoints() {
+/// The refusals that depend on the value alone: its observations have to carry
+/// a pixel, and some image has to be posed.
+fn check_preconditions(edited: &EditedReconstruction) -> Result<(), RetriangulateError> {
+    if !edited.has_keypoints() {
         return Err(RetriangulateError::NoKeypoints);
     }
+    let table = &edited.base.image_table;
+    if !table
+        .images
+        .iter()
+        .any(|image| is_posed(&image.quaternion_wxyz, &image.translation_xyz))
+    {
+        return Err(RetriangulateError::NoPosedImages);
+    }
+    Ok(())
+}
+
+/// Read `work`'s poses, pixels and constraints into the arrays the array form
+/// takes, over the live points `named` lists in `work`'s indexing, ascending,
+/// or over every live point where it is `None`.
+///
+/// [`check_preconditions`] has passed on the value `work` was made from.
+fn gather(
+    work: &EditedReconstruction,
+    named: Option<Vec<u32>>,
+) -> Result<Gathered, RetriangulateError> {
     let table = &work.base.image_table;
 
     let posed: Vec<usize> = (0..table.images.len())
@@ -625,9 +683,6 @@ fn gather(
             )
         })
         .collect();
-    if posed.is_empty() {
-        return Err(RetriangulateError::NoPosedImages);
-    }
     // Each image names the camera that took it, and the solve casts an
     // observation's ray, and reads its reprojection, through that camera.
     let image_camera: Vec<u32> = table.images.iter().map(|i| i.camera_index).collect();
@@ -651,20 +706,7 @@ fn gather(
 
     // The candidates, then the held ones taken out of them: a held point is not
     // a point the solve declines to move, it is a point the solve never sees.
-    let candidates: Vec<u32> = match which {
-        RetriangulateWhich::All => work.live_indexes().collect(),
-        RetriangulateWhich::These(indexes) => {
-            for &index in indexes {
-                if work.point(index).is_none() {
-                    return Err(RetriangulateError::NoSuchPoint(index));
-                }
-            }
-            let mut these = indexes.to_vec();
-            these.sort_unstable();
-            these.dedup();
-            these
-        }
-    };
+    let candidates: Vec<u32> = named.unwrap_or_else(|| work.live_indexes().collect());
     let mut held = Vec::new();
     let mut targets = Vec::with_capacity(candidates.len());
     for index in candidates {
@@ -809,13 +851,14 @@ fn pruned_per_slot(gathered: &Gathered, estimates: &TriangulatedPoints) -> Vec<u
     counts
 }
 
-/// The answers written into a fresh base, for a retriangulation of every point,
-/// with one status per target in `work`'s indexing.
+/// The answers written into a fresh base, for a retriangulation of every point
+/// or of a long list of them, with one status per target in `work`'s indexing.
 ///
 /// `work` holds no overlay here -- it is either the caller's value with an empty
 /// one or the materialisation of the value that had one -- so the targets are
-/// the base's own rows and the write is in place.
-fn write_whole_value(
+/// the base's own rows and the write is in place. A row that is not a target
+/// is carried over as it stands, and the derived indexes are rebuilt once.
+fn write_in_place(
     work: &EditedReconstruction,
     gathered: &Gathered,
     estimates: &TriangulatedPoints,

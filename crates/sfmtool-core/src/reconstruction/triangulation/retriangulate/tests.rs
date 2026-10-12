@@ -1572,3 +1572,164 @@ fn a_display_pick_stays_display_only_whether_one_point_or_all_are_retriangulated
     assert_eq!(results[0], (-1, Some(0)));
     assert_eq!(results[0], results[1]);
 }
+
+/// The geometry and patch frame point `index` of `value` holds: what two
+/// retriangulations that agree about it write bit for bit.
+fn written(value: &EditedReconstruction, index: u32) -> (Point3<f64>, f64, Vec<f32>, Vec<f32>) {
+    let view = value.point(index).expect("a live index");
+    let record = view.to_record();
+    (
+        record.point.position,
+        record.point.w,
+        record
+            .patch_u_halfvec
+            .expect("the fixture carries frames")
+            .to_vec(),
+        record
+            .patch_v_halfvec
+            .expect("the fixture carries frames")
+            .to_vec(),
+    )
+}
+
+#[test]
+fn the_bulk_path_writes_the_answers_the_per_point_path_and_all_write() {
+    let mut recon = nudged();
+    constrain(&mut recon, 2, POINT_CONSTRAINT_HELD, f64::NAN, u32::MAX);
+    let start = edited(recon);
+    let named = [4, 2, 1, 4];
+    let options = RetriangulateOptions::default();
+
+    let (bulk, bulk_map, bulk_report) = retriangulate_points(
+        &start,
+        RetriangulateWhich::TheseInBulk(&named),
+        &options,
+        &Progress::none(),
+    )
+    .expect("the fixture retriangulates");
+    let (each, _, each_report) = retriangulate_points(
+        &start,
+        RetriangulateWhich::These(&named),
+        &options,
+        &Progress::none(),
+    )
+    .expect("the fixture retriangulates");
+    let (all, _, all_report) =
+        retriangulate_points(&start, RetriangulateWhich::All, &options, &Progress::none())
+            .expect("the fixture retriangulates");
+
+    // A new base with nothing over it, every point at its own row.
+    assert!(!Arc::ptr_eq(&bulk.base, &start.base));
+    assert!(bulk.deleted_points.is_empty() && bulk.added.points.is_empty());
+    assert_eq!(bulk.point_count(), POINTS);
+
+    // One status per index named, once, the held one included.
+    let indexes: Vec<u32> = bulk_report.points.iter().map(|p| p.index).collect();
+    assert_eq!(indexes, [1, 2, 4]);
+    assert_eq!(bulk_report.held(), 1);
+    assert_eq!(bulk_report.read(), 2);
+    for status in &bulk_report.points {
+        assert_eq!(status.new_index, status.index, "{status:?}");
+        // The same outcome the per-point path and `All` reach for the point.
+        assert_eq!(
+            Some(status.outcome),
+            each_report.point(status.index).map(|p| p.outcome)
+        );
+        assert_eq!(
+            Some(status.outcome),
+            all_report.point(status.index).map(|p| p.outcome)
+        );
+        // And the same geometry and frame, bit for bit.
+        let each_index = each_report.point(status.index).expect("named").new_index;
+        assert_eq!(written(&bulk, status.index), written(&each, each_index));
+        assert_eq!(written(&bulk, status.index), written(&all, status.index));
+    }
+    // A point not named is carried over as it stands.
+    for index in [0, 3] {
+        assert_eq!(written(&bulk, index), written(&start, index));
+        assert_eq!(bulk_report.point(index), None);
+    }
+    // The census is over the points read, as the per-point path's is.
+    assert_eq!(bulk_report.census, each_report.census);
+    assert_eq!(bulk_report.observations, each_report.observations);
+    assert_statuses_agree(&bulk_report);
+    assert_statuses_follow_the_map(&bulk_report, &bulk_map, &start, &bulk);
+}
+
+#[test]
+fn the_bulk_path_folds_the_overlay_in_and_reads_statuses_back_through_it() {
+    let truth = truth();
+    let mut recon = nudged();
+    constrain(&mut recon, 3, POINT_CONSTRAINT_HELD, f64::NAN, u32::MAX);
+    let start = edited(recon);
+    // Point 1 rewritten into the overlay, and point 2 deleted from it, as in
+    // the fold test of `All`.
+    let (mut layered, first, _) = retriangulate_points(
+        &start,
+        RetriangulateWhich::These(&[1]),
+        &RetriangulateOptions::default(),
+        &Progress::none(),
+    )
+    .expect("the fixture retriangulates");
+    let one = first.forward(1).expect("the point survived");
+    layered.delete_point(2).expect("point 2 is live");
+
+    // The deleted index is refused in the caller's own indexing.
+    assert_eq!(
+        retriangulate_points(
+            &layered,
+            RetriangulateWhich::TheseInBulk(&[0, 2]),
+            &RetriangulateOptions::default(),
+            &Progress::none(),
+        )
+        .expect_err("point 2 is deleted"),
+        RetriangulateError::NoSuchPoint(2)
+    );
+
+    let (next, map, report) = retriangulate_points(
+        &layered,
+        RetriangulateWhich::TheseInBulk(&[one, 4, 3]),
+        &RetriangulateOptions::default(),
+        &Progress::none(),
+    )
+    .expect("the fixture retriangulates");
+    let (all, _, all_report) = retriangulate_points(
+        &layered,
+        RetriangulateWhich::All,
+        &RetriangulateOptions::default(),
+        &Progress::none(),
+    )
+    .expect("the fixture retriangulates");
+
+    assert!(next.deleted_points.is_empty() && next.added.points.is_empty());
+    assert_eq!(next.point_count(), POINTS - 1);
+    // In the caller's indexing, each naming the row the fold put it in.
+    let pairs: Vec<(u32, u32)> = report
+        .points
+        .iter()
+        .map(|p| (p.index, p.new_index))
+        .collect();
+    assert_eq!(pairs, [(3, 2), (4, 3), (one, 1)]);
+    assert_eq!(outcome_of(&report, 3), RetriangulateOutcome::Held);
+    for status in &report.points {
+        let in_all = all_report.point(status.index).expect("every point");
+        assert_eq!(status.new_index, in_all.new_index);
+        assert_eq!(status.outcome, in_all.outcome);
+        assert_eq!(
+            written(&next, status.new_index),
+            written(&all, in_all.new_index)
+        );
+    }
+    // Point 4 was still nudged and lands on its truth; point 0 was not named
+    // and stays where it was, nudged.
+    let four = report.point(4).expect("named").new_index;
+    assert!(
+        (next.point(four).expect("live").point().position - truth.point_set.points[4].position)
+            .norm()
+            < TRUTH_TOLERANCE
+    );
+    assert_eq!(map.forward(0), Some(0));
+    assert_eq!(written(&next, 0), written(&layered, 0));
+    assert_statuses_agree(&report);
+    assert_statuses_follow_the_map(&report, &map, &layered, &next);
+}
