@@ -81,6 +81,9 @@ impl EditableTrack {
     /// with where each observation went. `None` when it observes no image at
     /// or past `image`.
     pub fn delete_image(&self, image: u32) -> Option<(EditableTrack, Vec<Option<usize>>)>;
+    /// The track with its `out` observations dropped, with where each
+    /// observation went. `None` when none is `out`.
+    pub fn drop_out_observations(&self) -> Option<(EditableTrack, Vec<Option<usize>>)>;
 }
 
 pub struct RepaintMark { /* the verdicts and pins the repaint left */ }
@@ -2040,6 +2043,27 @@ two items. An origin is what makes a commit *replace* a point; a copy is a new
 patch over new ground and has to create one, or the second commit would delete
 what the first wrote.
 
+### Dropping the out observations
+
+`EditableTrack::drop_out_observations()` is the track with its `out`
+observations dropped and its `in` ones kept, each with its place, verdict, pin
+and measurements. It is what Track View's Surface Tiling Mode makes of a
+duplicate before the copy is moved
+([`../../gui/track-view.md`](../../gui/track-view.md) § "Surface Tiling
+Mode"): the rows refused for the patch the copy came from are refusals about
+that ground, not about the ground the copy is moved to.
+
+It shares its bookkeeping with `delete_image` (§ "When an image is deleted"),
+asking by verdict where that asks by image and renumbering no image: a
+cluster's reference follows its observation, and one that was `out` is
+pointed at the first observation left with its template dropped; a
+track-stage `TrackPayload::reference` follows its observation, and a bitmap
+whose reference row was `out`, or a bitmap for judging, which names no row, is
+dropped with every score read against it; the origin is left alone. It returns
+where each observation went, as `delete_image` does, and `None` for a track
+with no `out` observation. A track whose every observation was `out` comes
+back with none, and refusing to keep it is the caller's choice.
+
 ### Placing, sizing and turning by hand
 
 Eight steps put a person's own hand on the track's geometry, and they are the
@@ -3797,6 +3821,10 @@ unit-tested in `normal.rs` itself.
 - A reference follows its observation and keeps its template; a dropped
   reference is re-seated on observation 0 with its template dropped.
 - A track that observes nothing at or past the image comes back as `None`.
+- `EditableTrack::drop_out_observations` keeps the `in` observations in their
+  images with their pins, follows the reference, re-seats an `out` reference
+  with its template dropped, and returns `None` for a track with no `out`
+  observation.
 
 ### [bench/tests/reference_view.rs](../../../crates/sfmtool-core/src/bench/tests/reference_view.rs)
 

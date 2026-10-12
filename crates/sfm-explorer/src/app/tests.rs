@@ -430,3 +430,31 @@ fn ctrl_d_does_nothing_without_a_focused_item() {
 
     assert_eq!(texts(&parts.state), before);
 }
+
+/// In Surface Tiling Mode, Ctrl+D is the mode's duplicate: the copy's verdicts
+/// are handed back to the thresholds, as the toolbar's button does.
+#[test]
+fn ctrl_d_in_surface_tiling_mode_unpins_the_copy() {
+    let (mut state, id) = edits::adjustable_state();
+    let point = PointRef::new(id, 11);
+    super::apply_point_click(&mut state, point, false);
+    super::apply_point_click(&mut state, point, true);
+    let mut parts = Parts::with_state(state);
+    parts.track_view.set_surface_tiling(true);
+
+    parts.press_with(egui::Key::D, egui::Modifiers::COMMAND, false);
+
+    let copy = parts.state.focused_item_label(id).unwrap().to_string();
+    let track = parts.state.bench_track(id, &copy).expect("the copy");
+    assert!(
+        track.observations.iter().all(|o| !o.pinned),
+        "{:?}",
+        texts(&parts.state)
+    );
+    let rows = texts(&parts.state);
+    assert!(
+        rows.iter()
+            .any(|t| t.starts_with("Handed ") && t.contains(&copy)),
+        "{rows:?}"
+    );
+}

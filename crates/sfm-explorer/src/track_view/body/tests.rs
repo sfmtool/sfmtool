@@ -6234,3 +6234,42 @@ fn the_held_reference_s_verdict_hover_says_the_bars_wait_for_the_render() {
     let unmeasured = super::table::proposal_reason(None, 3, false);
     assert!(unmeasured.contains("Nothing at this stage has measured it"));
 }
+
+/// *Surface Tiling Mode* starts clear and is a tool setting like *Lock*:
+/// ticking it reports no step and pushes no version, and clearing it again
+/// reports only that the mode was turned off, which ends a sequence under way.
+#[test]
+fn surface_tiling_mode_starts_clear_and_clearing_it_is_reported() {
+    use crate::bench::surface_tiling::SURFACE_TILING_LABEL;
+    let (state, id, _, mut panel, ctx) = on_the_bench();
+    assert!(
+        !panel.surface_tiling(),
+        "a new panel starts with the mode off"
+    );
+    let versions = state.node(id).expect("loaded").history.versions().len();
+
+    let at = menu_entry_pos(&mut panel, &ctx, &state, SURFACE_TILING_LABEL);
+    let response = at_pointer(&mut panel, &ctx, &state, at, true);
+    assert!(panel.surface_tiling(), "a click on the box ticks it");
+    assert_eq!(
+        TrackBodyResponse {
+            mode: Some(super::BodyMode::Edited),
+            has_pointer: response.has_pointer,
+            hovered_image: response.hovered_image,
+            ..TrackBodyResponse::default()
+        },
+        response,
+        "ticking the box asked the dock for a step",
+    );
+    run_frame(&mut panel, &ctx, &state);
+    assert!(panel.surface_tiling(), "the box keeps what it was set to");
+
+    let response = at_pointer(&mut panel, &ctx, &state, at, true);
+    assert!(!panel.surface_tiling(), "a second click clears it");
+    assert!(response.surface_tiling_off, "the clear was not reported");
+    assert_eq!(
+        state.node(id).expect("loaded").history.versions().len(),
+        versions,
+        "toggling the mode pushed a version",
+    );
+}

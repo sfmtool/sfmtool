@@ -786,6 +786,15 @@ pub struct AppState {
     /// node's bench at the cursor.
     pub(crate) recent_items: Vec<crate::bench::FocusedItem>,
 
+    /// The steps Track View's Surface Tiling Mode runs after a move of the
+    /// patch in the 3D viewer, while they are under way: Fit, Find matches by
+    /// geometry, Fit, Grid Plane Normal, Fit and Commit, each started once the
+    /// one before it has finished. `None` when no such sequence is running.
+    ///
+    /// Session state, not part of any version: each step it starts pushes its
+    /// own. See [`crate::bench::surface_tiling`].
+    pub(crate) surface_tiling: Option<crate::bench::surface_tiling::TilingSequence>,
+
     /// The viewed tracks: the selected point read as an editable track off
     /// every bench, for the last few points Track View showed, and which of
     /// them is current. Session state, not part of any version. See
@@ -914,6 +923,7 @@ impl AppState {
             bench_rows: None,
             focused_item: None,
             recent_items: Vec::new(),
+            surface_tiling: None,
             viewed_tracks: Default::default(),
             viewed_thresholds: Default::default(),
         }

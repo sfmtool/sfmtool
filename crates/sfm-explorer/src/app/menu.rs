@@ -369,7 +369,14 @@ pub(super) fn shortcuts(root_ui: &mut egui::Ui, parts: &mut UiParts<'_>) {
             .and_then(|id| Some((id, app_state.focused_item_label(id)?.to_string())));
         if let Some((id, label)) = focused {
             if root_ui.input_mut(|i| i.consume_shortcut(&DUPLICATE_TRACK_SHORTCUT)) {
-                if let Err(why) = app_state.duplicate_bench_item(id, &label) {
+                // In Surface Tiling Mode the shortcut is the mode's duplicate,
+                // as the button is.
+                let outcome = if track_view.surface_tiling() {
+                    app_state.duplicate_for_surface_tiling(id, &label)
+                } else {
+                    app_state.duplicate_bench_item(id, &label)
+                };
+                if let Err(why) = outcome {
                     app_state
                         .action_log
                         .fail(crate::action_log::Kind::Bench, why);

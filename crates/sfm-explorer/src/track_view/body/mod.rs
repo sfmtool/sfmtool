@@ -177,6 +177,9 @@ pub(crate) struct TrackBodyResponse {
     pub(crate) duplicate: bool,
     /// *Commit*.
     pub(crate) commit: bool,
+    /// The *Surface Tiling Mode* box was cleared: end the sequence under way,
+    /// if there is one (`AppState::stop_surface_tiling`).
+    pub(crate) surface_tiling_off: bool,
     /// A row's *Build Index Files* / *Rebuild Index Files*: the entry a row
     /// offers where the search would be when the node's index is absent or out
     /// of date.
@@ -361,6 +364,14 @@ pub struct TrackBody {
     /// *per axis* and *overlap* boxes beside them. A tool setting for the reason [`TrackBody::lock`] is,
     /// kept for the session.
     split_settings: SplitSettings,
+    /// Whether Surface Tiling Mode is on: the *Surface Tiling Mode* box.
+    /// *Duplicate* then also drops the copy's `out` observations and unpins
+    /// its verdicts, and a move of the patch in the 3D viewer runs Fit, Find
+    /// matches by geometry, Fit, Grid Plane Normal, Fit and Commit
+    /// ([`crate::bench::surface_tiling`]). A tool setting for the reason
+    /// [`TrackBody::lock`] is: off when the viewer starts, kept for the
+    /// session.
+    surface_tiling: bool,
     /// Where the table's rows are scrolled to, both ways; the headings and the
     /// threshold row follow its sideways part. Kept to add a drag of the
     /// headings to.
@@ -405,6 +416,7 @@ impl TrackBody {
             evaluation: Evaluation::Evaluating,
             lock: true,
             split_settings: SplitSettings::default(),
+            surface_tiling: false,
             scroll_offset: egui::Vec2::ZERO,
             sort: table::TableSort::default(),
         }
@@ -446,6 +458,25 @@ impl TrackBody {
     /// will be edited with.
     pub(crate) fn lock(&self) -> bool {
         self.lock
+    }
+
+    /// Whether the *Surface Tiling Mode* box is ticked.
+    pub(crate) fn surface_tiling(&self) -> bool {
+        self.surface_tiling
+    }
+
+    /// How *Finite Diff Normal* and *Grid Plane Normal* cut the patch, as the
+    /// *per axis* and *overlap* boxes stand: what a Surface Tiling Mode
+    /// sequence's *Grid Plane Normal* is cut with.
+    pub(crate) fn split_settings(&self) -> SplitSettings {
+        self.split_settings
+    }
+
+    /// Tick or clear the *Surface Tiling Mode* box, for the tests that drive
+    /// the mode without drawing a frame.
+    #[cfg(test)]
+    pub(crate) fn set_surface_tiling(&mut self, on: bool) {
+        self.surface_tiling = on;
     }
 
     /// Drop everything cached for a reconstruction that has left the scene.
@@ -794,6 +825,7 @@ impl TrackBody {
         });
         ui.horizontal_wrapped(|ui| {
             self.show_lock(ui, track);
+            self.show_surface_tiling(ui, state, id, label, response);
             self.show_rename(ui, label, housekeeping, response);
         });
     }
@@ -852,6 +884,38 @@ impl TrackBody {
                 while unlocked, a sighting having no size, turn, depth or facing of its \
                 own and the ghost no keypoint to move",
             );
+        }
+    }
+
+    /// The *Surface Tiling Mode* box, and after it the step a sequence under
+    /// way on this item is at.
+    ///
+    /// Never greyed, for the reason *Lock* is not: toggling it is no step,
+    /// and each step the mode takes is refused on its own. Clearing it ends a
+    /// sequence under way.
+    fn show_surface_tiling(
+        &mut self,
+        ui: &mut egui::Ui,
+        state: &AppState,
+        id: ReconId,
+        label: &str,
+        response: &mut TrackBodyResponse,
+    ) {
+        use crate::bench::surface_tiling::SURFACE_TILING_LABEL;
+        let checkbox = ui
+            .checkbox(&mut self.surface_tiling, SURFACE_TILING_LABEL)
+            .on_hover_text(
+                "Tile a surface with patches. Duplicate (Ctrl+D) also drops the copy's out \
+                 observations and hands its verdicts back to the thresholds; each move, \
+                 turn or resize of the patch in the 3D viewer then runs Fit, Find matches \
+                 by geometry, Fit, Grid Plane Normal, Fit and Commit",
+            );
+        if checkbox.changed() && !self.surface_tiling {
+            response.surface_tiling_off = true;
+        }
+        if let Some(status) = state.surface_tiling_status(id, label) {
+            ui.spinner();
+            ui.label(status);
         }
     }
 

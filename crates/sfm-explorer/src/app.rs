@@ -230,6 +230,24 @@ impl App {
         if self.state.drive_bench_evaluation() {
             self.egui_ctx.request_repaint();
         }
+        // After both, so a Surface Tiling Mode sequence sees the step it waits
+        // on end, and the evaluation after it land, in the frame they do
+        // (`crate::bench::surface_tiling`).
+        let tiling = self.state.drive_surface_tiling();
+        if let Some(id) = tiling.committed {
+            // The commit gave the node a new version, as the Commit button's
+            // does, so the panels' caches of its points are dropped.
+            forget_selected(
+                Some(id),
+                &mut self.image_browser,
+                &mut self.image_detail,
+                &mut self.track_view,
+                &mut self.intrinsics_detail,
+            );
+        }
+        if tiling.changed {
+            self.egui_ctx.request_repaint();
+        }
         #[cfg(feature = "mcp")]
         self.drain_mcp(&window);
 

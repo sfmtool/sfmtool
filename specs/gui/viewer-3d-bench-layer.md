@@ -233,6 +233,12 @@ item"). A gesture that
 outlives the node it was editing, or that is caught by a background task, is
 dropped.
 
+With Track View's **Surface Tiling Mode** on, a released drag that changed the
+patch is followed by Fit, Find matches by geometry, Fit, Grid Plane Normal, Fit
+and Commit, each its own version, once per drag rather than per frame; the dock
+applies the drag through `AppState::edit_bench_patch_from_viewer`, which starts
+that sequence ([`track-view.md`](track-view.md) § "Surface Tiling Mode").
+
 **Reach** is nine panel pixels for the dot, a corner, the arrowhead or a circle,
 and eight from an edge of the square or from the normal's segment. Both are
 generous against the marks they draw, because the two misses do not cost the

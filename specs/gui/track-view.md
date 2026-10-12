@@ -110,6 +110,7 @@ pub struct TrackBodyResponse {
     pub pick_row: Option<(usize, bool)>,      // Edited: a row click, and whether it extends
     pub duplicate: bool,
     pub commit: bool,
+    pub surface_tiling_off: bool,          // the Surface Tiling Mode box cleared
     pub build_index_files: bool,           // a row's Build/Rebuild Index Files
     pub search_descriptors: Option<usize>,  // Find matches by SIFT query
     pub search_geometry: Option<usize>,     // Find matches by geometry; track stage only
@@ -717,8 +718,8 @@ In Edited mode, two rows. The first opens with where the focused item's evaluati
 then acts on the track: *Fit*, *Fit Normal*, *Finite Diff Normal*, *Grid Plane
 Normal* with their *per axis* and *overlap* boxes, the *Stage* toggle (which
 names the stage it would move to), *Split off N rows*, *Duplicate*, *Commit* and *Discard*. The
-second is the *Lock* box and *Rename*, which opens a field in place and commits
-on Enter. Each entry is enabled, or greyed with a hover text naming what is
+second is the *Lock* box, the *Surface Tiling Mode* box (§ "Surface Tiling
+Mode") and *Rename*, which opens a field in place and commits on Enter. Each entry is enabled, or greyed with a hover text naming what is
 missing, and the refusal is the core step's own sentence asked of the very
 track the button would act on, so the button and the step cannot disagree.
 *Commit* asks the core commit; *Fit*, the two normal entries and the *Stage*
@@ -732,8 +733,8 @@ a point record.
 
 In **Viewed mode** the toolbar is the evaluation state alone. The viewed track
 is on no bench, so there is nothing for *Fit*, *Stage*, *Split*, *Duplicate*,
-*Commit*, *Discard*, *Lock* or *Rename* to act on, and ticking *Edit* is the way
-to them.
+*Commit*, *Discard*, *Lock*, *Surface Tiling Mode* or *Rename* to act on, and
+ticking *Edit* is the way to them.
 
 **There is no *Evaluate* button, because evaluation is live.** Every change to
 an input of the evaluation evaluates the track again on a worker; the viewed
@@ -768,7 +769,8 @@ built again from a pixel
 "Duplicating"). The copy drops only the origin, which makes its commit create a
 point, so its header reads *new*. Ctrl+D (Cmd+D on macOS) does the same from
 anywhere in the window while an item on the selected node's bench is focused;
-with none focused the key is left alone.
+with none focused the key is left alone. With Surface Tiling Mode on, both also
+drop the copy's `out` rows and unpin its verdicts (§ "Surface Tiling Mode").
 
 **Evaluating and fitting are two things because they are two questions.** The
 evaluation measures every observation where it sits and **moves nothing**, so a
@@ -843,6 +845,128 @@ as `TrackBodyResponse::pick_row` and the dock applies it through
 a change of focused item clear it; a rename keeps it. *Split off N rows* takes it; a split names its
 observations explicitly, because `out` says a sighting does not belong here and
 cannot say which of two tracks it belongs to.
+
+#### Surface Tiling Mode
+
+**Surface Tiling Mode is for covering a surface with patches**, one beside the
+next, by pressing *Duplicate* (or Ctrl+D) and moving the copy in the 3D viewer,
+over and over. *Tiling* here means covering the surface, not a row's tile.
+Without the mode, each patch takes the same run of steps by hand: *Discard* and
+*Edit* to take the `out` rows off the track, the *Keep* heading's pin to hand
+every verdict back to the thresholds, *Duplicate*, the move, *Fit*, the row
+menu's *Find matches by geometry*, *Fit*, *Grid Plane Normal*, *Fit* and
+*Commit*. The mode takes all of them but the duplicate and the move. It is the
+*Surface Tiling Mode* box on the toolbar's second row, after *Lock*, and the
+steps it takes are
+[bench/surface_tiling.rs](../../crates/sfm-explorer/src/bench/surface_tiling.rs).
+
+```rust
+impl TrackView {
+    /// Whether the box is ticked: what the dock and Ctrl+D read.
+    pub(crate) fn surface_tiling(&self) -> bool;
+    /// The *per axis* and *overlap* boxes, which the sequence's Grid Plane
+    /// Normal is cut with.
+    pub(crate) fn split_settings(&self) -> SplitSettings;
+}
+
+impl AppState {
+    /// *Duplicate* in the mode: duplicate, drop the copy's `out` rows, unpin
+    /// its pinned rows; the copy's label.
+    pub(crate) fn duplicate_for_surface_tiling(&mut self, id: ReconId, label: &str)
+        -> Result<String, String>;
+    /// A released 3D viewer gesture on the patch, and, with `tiling` set and
+    /// the patch changed, the sequence after it.
+    pub(crate) fn edit_bench_patch_from_viewer(&mut self, id: ReconId, label: &str,
+        edit: &PatchEdit, tiling: Option<SplitSettings>) -> Result<(), String>;
+    /// Once per frame, after the background task is polled and the live
+    /// evaluation driven: start the sequence's next step when it is due.
+    pub(crate) fn drive_surface_tiling(&mut self) -> TilingDriven;
+    /// End the sequence under way with a failed row saying `why`.
+    pub(crate) fn stop_surface_tiling(&mut self, why: &str);
+    /// "Step 2 of 6: Find matches by geometry", for the item the sequence is on.
+    pub(crate) fn surface_tiling_status(&self, id: ReconId, label: &str) -> Option<String>;
+}
+```
+
+**With the mode on, *Duplicate* also clears the copy's judgements.** The button
+and Ctrl+D duplicate the focused item, then drop the copy's `out` observations
+(`EditableTrack::drop_out_observations`,
+[`../core/bench/editable-track.md`](../core/bench/editable-track.md) §
+"Dropping the out observations"), then hand every verdict still pinned on the
+copy back to the thresholds through the same `unpin_bench_verdicts` the *Keep*
+heading's pin calls. Each is its own version and Action Log row, as by hand:
+`Duplicated bull-nose as bull-nose copy`, `Dropped 2 out observations of
+bull-nose copy, leaving 5 in`, `Handed 5 verdicts back to the thresholds in
+bull-nose copy: ...`. A step with nothing to do (no row `out`, no row pinned) is
+skipped. The `out` rows are dropped rather than kept because they were refusals
+about the ground the original covers; the copy is about to cover other ground,
+and the geometry search after the move proposes the images that see it. The
+rows are dropped before the verdicts are unpinned, in the order the manual
+steps take them, so the bars judge only the rows the original kept. The
+original is left as it was. Dropping every row is refused, since a track needs
+one, and the copy is then left on the bench as far as it got.
+
+**With the mode on, a move of the patch in the 3D viewer runs the rest.** Each
+released gesture over the 3D viewer's bench figure that changes the patch (a
+slide, a move along the normal, a resize, a spin or a tilt) is applied as it
+always is, one version through `edit_bench_patch`, and then starts a **tiling
+sequence** on the focused item: *Fit*, *Find matches by geometry*, *Fit*,
+*Grid Plane Normal*, *Fit*, *Commit*. A row `Surface tiling bull-nose after the
+move: Fit, Find matches by geometry, Fit, Grid Plane Normal, Fit, Commit` says
+it started. A release that changed nothing starts none. The handles in Image
+Detail and the wire's patch tools do not start one: the mode is for moving a
+patch across the surface in the 3D viewer, where the surface is seen whole.
+
+Each step is the call its button makes (`start_bench_fit`,
+`start_bench_geometry_search`, `start_bench_normal` with the *per axis* and
+*overlap* boxes as they stood when the sequence started, `commit_bench_track`),
+so each is refused, runs on a worker, pushes its version and writes its row
+exactly as a press would. `AppState::drive_surface_tiling` runs once per frame,
+after the background task is polled and the live evaluation driven. It starts
+the next step once the step before it has finished **and** the focused item's
+evaluation is no longer *Evaluating*, which is the moment a person pressing the
+buttons in turn would see *Evaluated* and press the next. The wait matters most
+after the search: its candidates join `out` and unmeasured, and the evaluation
+is what lets the bars take them in before the Fit after it.
+
+**The geometry search starts from the reference row**: the row the track's
+stored bitmap is the render of (the *Reference* column's mark), else the row
+the reference-view rule picked at the last evaluation, else the first `in` row
+with a place in its photograph. The search builds its reference appearance from
+the named row first and then from every `in` row, so the named row is the one
+whose appearance leads. The reference is the sighting the Fit just before
+rendered the patch from, which the rule chose as the best view of the patch, so
+it is the row a person would right-click.
+
+**A sequence stops rather than guesses.** It ends with a failed Bench row,
+`Surface tiling of bull-nose stopped at Find matches by geometry (step 2 of 6):
+<why>`, when a step is refused or its task fails or is cancelled (the step's own
+row says why first), when the item is no longer the focused item or no longer on
+the bench, when a version the sequence did not push lands on the node between
+its steps (an undo, a verdict, a threshold), and when the box is cleared. A
+second move while a sequence waits between steps starts it again from the first
+Fit, the row saying `again, from the start`. A move while one of its tasks runs
+is refused as busy, as any edit then is, and the sequence goes on. While a
+sequence is on the focused item, a spinner and `Step 2 of 6: Find matches by
+geometry` stand after the box.
+
+**The commit is the Commit button's.** A duplicate has no origin, so its first
+sequence's commit creates a point and seats the track on it. Every later
+sequence on the same item, after the next move, replaces that point, as a
+second press of *Commit* does (*"... replacing point 4211"*), and a commit with
+nothing to write is the usual no-effect row. The point written is selected and
+the item stays focused, so the next Ctrl+D copies the patch just committed.
+
+**The mode is a tool setting, like *Lock*.** The box starts clear, is never
+greyed, and toggling it is no step: no version, no row. It is panel state for
+the session, one for the viewer, and is not saved with the layout. A sequence
+is session state on `AppState` (`surface_tiling`), not part of any version. The
+wire has no copy of the box, as it has none of *Lock*: an agent calls
+`duplicate_bench_item`, `set_bench_track_verdict`, the patch tools,
+`fit_bench_track`, `search_bench_track_geometry`, `fit_bench_track_normal` and
+`commit_bench_track` in the order it chooses, and can tick the box with `click`
+like any other widget. Dropping a copy's `out` rows is the one step of the mode
+with no tool of its own.
 
 #### The thresholds
 
@@ -2188,6 +2312,26 @@ texels, so their geometry is checked without reading pixels off the screen.
     the point and the line units egui reports, moving the rows, the headings
     and the threshold row together; a middle and a left drag over the rows and
     over the headings; and a drag begun on a switch moving nothing.
+- **Surface Tiling Mode**:
+  [bench/surface_tiling/tests.rs](../../crates/sfm-explorer/src/bench/surface_tiling/tests.rs).
+  These tests establish § "Surface Tiling Mode" over the real steps on the
+  bench fixture, ending each step's task and settling the evaluation after it
+  as the frames between would: the mode's duplicate is three versions and
+  three rows, the copy keeping only its `in` rows with none pinned and the
+  original left as it was, and a step with nothing to do skipped; dropping no
+  row is a no-effect row and dropping every row is refused; a 3D viewer move
+  starts a sequence only with the mode on and only when it changed the patch;
+  a sequence runs Fit, the geometry search, Fit, Grid Plane Normal, Fit and
+  Commit in that order with each step's own row and no failed row, the item
+  still focused and seated on the point written; a second sequence on a
+  duplicate replaces the point its first created; the search starts from the
+  row the Fit rendered the bitmap from; and an unfocus, a version the sequence
+  did not push and a second move each stop or restart it with the row saying
+  so. The box itself, clear at start, no step when ticked and reporting the
+  clear, is in
+  [body/tests.rs](../../crates/sfm-explorer/src/track_view/body/tests.rs), and
+  Ctrl+D in the mode in
+  [app/tests.rs](../../crates/sfm-explorer/src/app/tests.rs).
 - **The Scene tree**:
   [scene_graph/tests.rs](../../crates/sfm-explorer/src/scene_graph/tests.rs).
   These tests establish § "The Scene tree's Bench rows": a single click selects
@@ -2222,7 +2366,9 @@ texels, so their geometry is checked without reading pixels off the screen.
   verdict of every unpinned row (§ "The Keep switch is the verdict"), and a
   pinned verdict stands against them; every other step on the track, a fit, a
   normal, a stage change, a split, a search or a commit, is made only when the
-  person asks for it.
+  person asks for it, by its own control or by turning Surface Tiling Mode on,
+  whose sequence is those steps taken in a fixed order after a move the person
+  made (§ "Surface Tiling Mode").
 - **A second tile beside the first**, the cluster template and each member warped
   onto it side by side, and **the remaining searches**, both proposed in
   [`../drafts/sfm-explorer-track-editing.md`](../drafts/sfm-explorer-track-editing.md).

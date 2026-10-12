@@ -115,6 +115,25 @@ impl TrackView {
         self.body.lock()
     }
 
+    /// Whether Edited mode's *Surface Tiling Mode* box is ticked, which the
+    /// dock and the Ctrl+D shortcut read a duplicate and a 3D viewer move of
+    /// the patch by ([`crate::bench::surface_tiling`]).
+    pub(crate) fn surface_tiling(&self) -> bool {
+        self.body.surface_tiling()
+    }
+
+    /// How the *per axis* and *overlap* boxes cut the patch, which a Surface
+    /// Tiling Mode sequence's *Grid Plane Normal* takes.
+    pub(crate) fn split_settings(&self) -> crate::bench::SplitSettings {
+        self.body.split_settings()
+    }
+
+    /// Tick or clear the *Surface Tiling Mode* box without drawing a frame.
+    #[cfg(test)]
+    pub(crate) fn set_surface_tiling(&mut self, on: bool) {
+        self.body.set_surface_tiling(on);
+    }
+
     /// Drop everything the body cached for a reconstruction that has left the
     /// scene, or whose value an edit has replaced.
     pub(crate) fn forget_recon(&mut self, id: crate::scene::ReconId) {

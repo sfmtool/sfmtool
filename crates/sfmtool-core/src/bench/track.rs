@@ -1381,20 +1381,61 @@ impl EditableTrack {
         if self.observations.iter().all(|o| o.image < image) {
             return None;
         }
+        let (mut next, map) = self.keeping(|observation| observation.image != image);
+        for observation in &mut next.observations {
+            if observation.image > image {
+                observation.image -= 1;
+            }
+        }
+        Some((next, map))
+    }
+
+    /// This track with its `out` observations dropped, so that only its `in`
+    /// ones are left.
+    ///
+    /// What Track View's Surface Tiling Mode makes of a duplicate before it is
+    /// moved: the rows refused for the patch it was copied from are refusals
+    /// about that ground, not about the ground beside it, and the geometry
+    /// search the mode runs after a move proposes the images that see the new
+    /// ground. Each `in` observation keeps its place, verdict, pin and
+    /// measurements.
+    ///
+    /// The references follow their observations as they do through
+    /// [`Self::delete_image`]: a cluster's reference that was `out` is pointed
+    /// at the first observation left and its template is dropped, and a
+    /// track-stage bitmap whose reference row was `out`, or a bitmap for
+    /// judging, which names no row, is dropped with every score read against
+    /// it. The origin is left alone.
+    ///
+    /// Returns `None` when no observation is `out`, since then nothing
+    /// changes. Otherwise returns the new track and where each observation
+    /// went: entry `i` is the new index of observation `i`, or `None` for one
+    /// that was dropped. The new track has no observations when every one was
+    /// `out`; whether to keep such a track is the caller's choice.
+    pub fn drop_out_observations(&self) -> Option<(EditableTrack, Vec<Option<usize>>)> {
+        if self.observations.iter().all(|o| o.verdict == Verdict::In) {
+            return None;
+        }
+        Some(self.keeping(|observation| observation.verdict == Verdict::In))
+    }
+
+    /// This track with only the observations `keep` accepts, the stage's
+    /// references following theirs, and where each observation went.
+    ///
+    /// The half of [`Self::delete_image`] and [`Self::drop_out_observations`]
+    /// that they share: which rows go is each caller's to say, and what a
+    /// row's leaving does to the references is said once here.
+    fn keeping(&self, keep: impl Fn(&Observation) -> bool) -> (EditableTrack, Vec<Option<usize>>) {
         let mut next = self.clone();
         let mut map = Vec::with_capacity(self.observations.len());
         next.observations.clear();
         for observation in &self.observations {
-            if observation.image == image {
+            if !keep(observation) {
                 map.push(None);
                 continue;
             }
-            let mut kept = observation.clone();
-            if kept.image > image {
-                kept.image -= 1;
-            }
             map.push(Some(next.observations.len()));
-            next.observations.push(kept);
+            next.observations.push(observation.clone());
         }
         let mut dropped = false;
         match &mut next.stage {
@@ -1431,7 +1472,7 @@ impl EditableTrack {
         if dropped {
             super::evaluate::clear_bitmap_scores(&mut next, Unmeasured::NoBitmap);
         }
-        Some((next, map))
+        (next, map)
     }
 
     /// The cluster payload, or `None` at the track stage.

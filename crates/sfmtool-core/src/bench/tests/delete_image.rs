@@ -113,3 +113,44 @@ fn deleting_an_image_no_track_reaches_changes_nothing() {
     assert_eq!(report.dropped, 0);
     assert_eq!(next, bench);
 }
+
+// ── Dropping the out observations ───────────────────────────────────────
+//
+// The same reference bookkeeping as a delete, asked by verdict instead of by
+// image, and with no image renumbered.
+
+#[test]
+fn dropping_the_out_observations_keeps_the_in_ones_and_their_images() {
+    let mut track = cluster(&[0, 2, 3, 5], 2);
+    track.observations[1].verdict = Verdict::Out;
+    track.observations[3].verdict = Verdict::Out;
+    track.observations[0].pinned = true;
+
+    let (next, map) = track
+        .drop_out_observations()
+        .expect("two observations are out");
+
+    assert_eq!(images(&next), vec![0, 3]);
+    assert_eq!(map, vec![Some(0), None, Some(1), None]);
+    assert!(next.observations.iter().all(|o| o.verdict == Verdict::In));
+    // A kept row keeps its pin: unpinning is a step of its own.
+    assert!(next.observations[0].pinned);
+    let payload = next.cluster().expect("a cluster");
+    assert_eq!(payload.reference, 1);
+    assert!(payload.template.is_some());
+}
+
+#[test]
+fn a_track_with_no_out_observation_has_nothing_to_drop() {
+    assert!(cluster(&[0, 1, 2], 0).drop_out_observations().is_none());
+}
+
+#[test]
+fn an_out_reference_is_reseated_and_its_template_dropped() {
+    let mut track = cluster(&[1, 3, 4], 1);
+    track.observations[1].verdict = Verdict::Out;
+    let (next, _) = track.drop_out_observations().expect("one is out");
+    let payload = next.cluster().expect("a cluster");
+    assert_eq!(payload.reference, 0);
+    assert!(payload.template.is_none());
+}

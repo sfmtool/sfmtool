@@ -304,7 +304,17 @@ impl TabContext<'_> {
         };
         match gesture {
             BenchGesture::Edit(edit) => {
-                if let Err(why) = self.state.edit_bench_patch(id, label, &edit) {
+                // In Surface Tiling Mode a move that changed the patch is
+                // followed by the fit, search, normal and commit steps, once
+                // per released gesture.
+                let tiling = self
+                    .track_view
+                    .surface_tiling()
+                    .then(|| self.track_view.split_settings());
+                if let Err(why) = self
+                    .state
+                    .edit_bench_patch_from_viewer(id, label, &edit, tiling)
+                {
                     self.state
                         .action_log
                         .fail(crate::action_log::Kind::Bench, why);
@@ -392,8 +402,16 @@ impl TabContext<'_> {
             refuse(self.state, outcome);
         }
         if response.duplicate {
-            let outcome = self.state.duplicate_bench_item(id, &label).map(|_| ());
-            refuse(self.state, outcome);
+            let outcome = if self.track_view.surface_tiling() {
+                self.state.duplicate_for_surface_tiling(id, &label)
+            } else {
+                self.state.duplicate_bench_item(id, &label)
+            };
+            refuse(self.state, outcome.map(|_| ()));
+        }
+        if response.surface_tiling_off {
+            self.state
+                .stop_surface_tiling("Surface Tiling Mode was turned off");
         }
         if response.fit {
             // At the radius the live evaluation reads at. A refusal to begin
