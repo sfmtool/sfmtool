@@ -1294,4 +1294,57 @@ The wrong share by shift over scale, among the fitted members that pass every ot
 | 2 – 4 | 34.5% (29) | 67.1% (76) | 61.7% (519) |
 | over 4 | 62.5% (8) | 80.0% (10) | 79.6% (49) |
 
-**What this decides.** The gate reads the shift in units of the member's refined scale, with a bar of two scales. With the gates at the refined shape on, the share of wrong members climbs with the shift over the scale on all three entries, as it did with them off, and two scales keeps more members and a lower wrong share than 3 px on `SeoulBull` and `KerryPark480`. On `DnDTabletop` those gates do not remove the members the 3 px bar refused: two scales keeps 8.1% more members, 16.4% of them wrong, and the kept wrong share rises from 9.09% to 9.63%. A tighter bar in scale units does not avoid that cost there, since one scale admits nearly as many.
+**What this decides.** The gate reads the shift in units of the member's refined scale. The bar of two scales is set by the [review below](#review-of-members-at-08-to-2-scales-2026-10-12), which also accepts the cost on `DnDTabletop`. With the gates at the refined shape on, the share of wrong members climbs with the shift over the scale on all three entries, as it did with them off, and two scales keeps more members and a lower wrong share than 3 px on `SeoulBull` and `KerryPark480`. On `DnDTabletop` those gates do not remove the members the 3 px bar refused: two scales keeps 8.1% more members, 16.4% of them wrong, and the kept wrong share rises from 9.09% to 9.63%. A tighter bar in scale units does not avoid that cost there, since one scale admits nearly as many.
+
+## Review of members at 0.8 to 2 scales (2026-10-12)
+
+**Question.** The previous section shows the wrong share climbing with the shift over the member's scale, but it does not say where the bar belongs. Does the shift mark the wrong members between 0.8 and 2 scales, the range a bar of one or two scales decides, and what do the kept count, the wrong share and the seed pick do at a bar of two scales and of one?
+
+**Method.**
+
+- **Code.** Branch `cluster-shift-gate-scale` as in the previous section.
+- **Fleet files.** Cluster-patches files built for the 8 captures with an approved ground truth (`MurdoSmallAntiqueCat`, `DnDTabletop`, `OmniHilltop`, `fleetws`, `KerryPark360`, `OmniTemple1`, `KerryPark480`, `SeoulBull`), three times: at `main`'s defaults (the 3 px gate), at this branch's defaults (two scales), and with `--max-shift-scales 1`.
+- **Ground truth.** The epipolar test of the previous sections, with each capture's bar `max(3, 5·m)` taken from its 3 px file, `m` the median over that file's kept members. On `fleetws` the bar is 27.97 px, so its labels are coarse.
+- **Seed pick.** The seed pick run on each set of files and scored against the eight ground truths.
+- **Review.** The maintainer looked at 89 members kept at two scales with a shift between 0.8 and 2 scales, sampled with equal numbers of right and wrong members by the ground truth for each capture and band. Each member was shown as tiles of the reference, the refined member and the member at its SIFT detection, crops of the photographs around them, and the rest of its cluster, and was judged right or wrong by eye.
+
+**Result: on the fleet, the bar moves the kept wrong share by about a point or less.**
+
+Kept members and their wrong share:
+
+| capture | 3 px | 2 × scale | 1 × scale |
+|---|---|---|---|
+| MurdoSmallAntiqueCat | 581,262, 11.16% | 649,997, 12.06% | 642,223, 11.67% |
+| DnDTabletop | 1,370,918, 9.51% | 1,481,502, 10.06% | 1,474,624, 9.96% |
+| OmniHilltop | 506,396, 12.36% | 515,932, 12.67% | 510,085, 12.52% |
+| fleetws | 65,982, 37.61% | 76,394, 36.49% | 71,902, 35.53% |
+| KerryPark360 | 52,649, 25.09% | 53,729, 25.11% | 52,788, 24.81% |
+| OmniTemple1 | 155,815, 17.85% | 162,932, 17.74% | 158,536, 17.25% |
+| KerryPark480 | 15,579, 15.97% | 15,661, 15.82% | 15,300, 15.24% |
+| SeoulBull | 2,822, 4.18% | 2,838, 4.02% | 2,717, 3.50% |
+
+The seed pick passes on 6 of the 8 captures with the 3 px files and on 5 of 8 with two scales: `OmniHilltop` fails, because its pick changes and 3 hypotheses qualify where 8 did. With one scale it passes on 6 of 8: `DnDTabletop` passes, and `SeoulBull` fails at a median rotation error of 1.01° against a bar of 1°.
+
+Among the members kept at two scales with a shift between 0.8 and 2 scales, the share the ground truth calls wrong rises with the shift on most captures:
+
+| shift / member scale | MurdoSmallAntiqueCat | DnDTabletop | SeoulBull |
+|---|---|---|---|
+| 0.8 – 1 | 30.0% | 23.0% | 11.5% |
+| 1 – 1.25 | 38.3% | 27.2% | 9.2% |
+| 1.25 – 1.5 | 47.3% | 34.3% | 20.8% |
+| 1.5 – 2 | 58.7% | 44.0% | 25.0% |
+
+**Result: by eye, the shift does not mark the wrong members.**
+
+Members judged wrong by eye, by band:
+
+| shift / member scale | wrong by eye |
+|---|---|
+| 0.8 – 1 | 4 of 31 (13%) |
+| 1 – 1.25 | 11 of 30 (37%) |
+| 1.25 – 1.5 | 6 of 19 (32%) |
+| 1.5 – 2 | 1 of 9 (11%) |
+
+The share judged wrong does not rise with the shift. The reviewer's notes describe the wrong members as different subjects that the refinement matches as well as it can, and name what tells them apart: a difference in colour, the width-to-height ratio of the refined shape, and other members of the cluster lying on a different subject. Among the first 61 members scored, a bar of one scale would refuse 19 judged right to remove 11 judged wrong.
+
+**What this decides.** The bar stays at two scales, as a judgement from this review rather than from the counts. The shift does not mark the wrong members in this range; the refinement finds the best photometric fit it can reach from its starting point, and a wrong member it keeps is mostly a wrong association. Those members are left to later measurements, of colour, the refined shape, agreement within the cluster and geometry. The cost of two scales on the seed pick, `OmniHilltop`'s failure, is accepted, as is the higher kept wrong share on `DnDTabletop` from the previous section.

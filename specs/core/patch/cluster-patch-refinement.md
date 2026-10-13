@@ -533,6 +533,15 @@ and the kept wrong share rises from 9.09% to 9.63%
 [with the gates at the refined shape](cluster-patch-refinement-measurements.md#shift-in-scale-units-with-the-gates-at-the-refined-shape-2026-10-12)).
 `member_shift_px` stores `|t|` in pixels, so a consumer can read either unit.
 
+The default of two scales is a judgement made by reviewing kept members by eye,
+not a value derived from these counts. Between 1 and 2 scales the shift does not
+separate right members from wrong ones: the refinement finds the best
+photometric fit it can reach from its starting point, and the wrong members it
+keeps there are mostly wrong associations, a different subject that matches
+well. Later measurements are to judge those members (colour, the refined shape,
+agreement within the cluster, geometry), not the shift
+([review of members at 0.8 to 2 scales](cluster-patch-refinement-measurements.md#review-of-members-at-08-to-2-scales-2026-10-12)).
+
 **The middle ZNCC.** Beside each member's ZNCC the result carries
 `member_zncc_middle`: the member's support samples at the final map, the one the
 winning evaluation used, correlated against the reference template's own raw
