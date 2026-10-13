@@ -707,8 +707,8 @@ jobs:
           # Registry index + downloads and git checkouts are fully determined by
           # Cargo.lock, so key on it alone. Restore-only: the one job per OS that
           # fetches every crate saves it -- test-os-rust on this OS, not this
-          # job, which fetches only what the extension needs. The prefix fallback
-          # is for pull requests only. See "Rust caches" above prune-caches.
+          # job, which compiles only the extension. The prefix fallback is for
+          # pull requests only. See "Rust caches" above prune-caches.
           key: ${{ runner.os }}-cargo-home-${{ hashFiles('Cargo.lock') }}
           restore-keys: ${{ github.event_name == 'pull_request' && format('{0}-cargo-home-', runner.os) || '' }}
       - name: Restore Rust target
