@@ -294,8 +294,8 @@ impl PreviewTargets {
         counts.lost_by_verdict = lost;
         // The median is taken as `RetriangulateReport::median_shift` takes the
         // one the Retriangulate edits' Action Log row prints, so the two agree
-        // to the last bit over the same shifts. The p90 comes first because the
-        // median leaves the list only partitioned.
+        // to the last bit over the same shifts. Neither call depends on the order
+        // the other leaves the list in, since the quantile sorts it first.
         let any = !shifts.is_empty();
         let present = |value: f64| any.then_some(value);
         counts.p90_shift = present(numeric::quantile_in_place(&mut shifts, 0.9));
