@@ -144,8 +144,18 @@ jobs:
             !target/**/incremental/**
           key: ${{ steps.target-cache.outputs.cache-primary-key }}
 
+      - name: Fetch crates for every platform
+        # clippy and doc download only the crates this OS builds, but
+        # `maturin develop` in test-linux-python runs `cargo metadata`, which
+        # needs every crate in Cargo.lock, for every platform. Without this the
+        # saved cargo home lacks the non-Linux ones (141 of them) and that job
+        # downloads them on every run. `cargo fetch` with no `--target` fetches
+        # all of them. Only when the save below runs.
+        if: ${{ github.ref == 'refs/heads/main' && steps.home-cache.outputs.cache-hit != 'true' }}
+        run: pixi run -e lint cargo fetch --locked
+
       - name: Save cargo home
-        # This job fetches every crate the workspace needs on this OS, so it
+        # This job fetches every crate in Cargo.lock (the step above), so it
         # is the one that saves the shared cargo home. Success only, as the
         # old combined actions/cache did: a half-fetched registry saved under
         # the exact key would be restored as-is for the whole generation.
@@ -618,10 +628,20 @@ jobs:
             !target/**/incremental/**
           key: ${{ steps.target-cache.outputs.cache-primary-key }}
 
+      - name: Fetch crates for every platform
+        # `cargo test --workspace` downloads only the crates this OS builds,
+        # but `maturin develop` in test-os-python runs `cargo metadata`, which
+        # needs every crate in Cargo.lock, for every platform. Without this the
+        # saved cargo home lacks the other platforms' crates (210 of them on
+        # each OS) and that job downloads them on every run. `cargo fetch` with
+        # no `--target` fetches all of them. Only when the save below runs.
+        if: ${{ github.ref == 'refs/heads/main' && steps.home-cache.outputs.cache-hit != 'true' }}
+        run: pixi run -e test-ci cargo fetch --locked
+
       - name: Save cargo home
-        # `cargo test --workspace` fetches every crate the workspace needs on
-        # this OS, so this half of the split is the one that saves the shared
-        # cargo home -- test-os-python builds only what the extension needs.
+        # This half of the split saves the shared cargo home, since `cargo
+        # test --workspace` and the fetch step above leave it holding every
+        # crate in Cargo.lock; test-os-python builds only the extension.
         # Success only, as the old combined actions/cache did: a half-fetched
         # registry saved under the exact key would be restored as-is for the
         # whole generation.
@@ -729,7 +749,11 @@ jobs:
         # `pixi run maturin …` stays unambiguous locally (see pixi.toml). Without
         # -x, Pixi finds the name defined in another environment and refuses
         # rather than falling back to the binary that is right there on PATH.
-        run: pixi run -x -e test-ci maturin develop --release
+        # --group test: with no --group, maturin also pip-installs
+        # pyproject.toml's `dev` group, which adds ipython and its dependencies
+        # on every run. The `test` group's pytest and ruff are already in
+        # `test-ci`, so pip installs nothing but sfmtool itself.
+        run: pixi run -x -e test-ci maturin develop --release --group test
 
       - name: Python tests
         shell: bash
@@ -752,10 +776,10 @@ jobs:
             !target/**/incremental/**
           key: ${{ steps.target-cache.outputs.cache-primary-key }}
 
-      # No "Save cargo home" step here on purpose: this job compiles only the
-      # extension's dependency subtree, so the registry it ends up with is a
-      # subset of the workspace's. test-os-rust saves the shared cargo home for
-      # this OS. See "Rust caches" above prune-caches.
+      # No "Save cargo home" step here on purpose: test-os-rust saves the
+      # shared cargo home for this OS, and fetches every platform's crates
+      # before it does, so this job finds all it needs there. See "Rust caches"
+      # above prune-caches.
 
       - name: Prune superseded Rust caches
         # Delete the previous generation of what this job just saved, now,
@@ -1029,7 +1053,10 @@ jobs:
   # so a generation is written once and PRs restore main's copy (a PR's own
   # entry would be scoped to its merge ref, where nothing else can read it). The
   # cargo home is saved by the one job per OS that fetches every crate: lint on
-  # Linux, test-os-rust elsewhere.
+  # Linux, test-os-rust elsewhere. Their builds download only the crates for
+  # their own OS, so each runs `cargo fetch` (no `--target`, so every platform)
+  # before saving: `maturin develop` runs `cargo metadata`, which needs every
+  # crate in Cargo.lock, and would otherwise download the rest on every run.
   #
   # The two kinds of cache are keyed on deliberately *different* things.
   #

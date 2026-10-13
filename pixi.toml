@@ -33,6 +33,17 @@ rust = ">=1.98.0,<1.99"
 python = ">=3.14.7,<3.15"
 pycolmap = ">=4.1.1,<5"
 
+# The rest of sfmtool's `[project] dependencies` in pyproject.toml, kept in step
+# with it by hand (numpy and pycolmap come from conda-forge above). The editable
+# install would pull these in anyway; they are declared here for `test-ci`,
+# which has no editable install, so they are solved into pixi.lock rather than
+# pip-installed at whatever version is newest when `maturin develop` runs.
+[feature.runtime.pypi-dependencies]
+click = ">=8"
+deadline = ">=0.60.7"
+opencv-python-headless = "*"
+xxhash = ">=3.4"
+
 # The editable sfmtool self-install compiles the PyO3 extension via maturin at
 # `pixi install` time. It lives in its own feature so CI can build a runtime
 # environment *without* it (`test-ci`) and compile the extension exactly once,

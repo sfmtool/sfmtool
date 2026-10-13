@@ -43,8 +43,11 @@ cargo llvm-cov clean --workspace --profraw-only
 # --release so the Rust kernels run at shipping speed (a debug build is ~10-15x
 # slower); instrument-coverage still emits valid region mapping under release,
 # though optimization/inlining can make Rust-side line coverage slightly coarser.
+# --group test: with no --group, maturin also pip-installs pyproject.toml's `dev`
+# group (ipython and its dependencies), which the tests do not use. The `test`
+# group's pytest and ruff are already in the pixi environment.
 if [ "$mode" != rust ]; then
-  maturin develop --release
+  maturin develop --release --group test
 fi
 
 # Rayon is a *loss* under coverage instrumentation, so both test phases below run
