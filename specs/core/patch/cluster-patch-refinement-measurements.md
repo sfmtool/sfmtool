@@ -1308,7 +1308,7 @@ The wrong share by shift over scale, among the fitted members that pass every ot
 - **Seed pick.** The seed pick run on each set of files and scored against the eight ground truths.
 - **Review.** The maintainer looked at 89 members kept at two scales with a shift between 0.8 and 2 scales, sampled with equal numbers of right and wrong members by the ground truth for each capture and band. Each member was shown as tiles of the reference, the refined member and the member at its SIFT detection, crops of the photographs around them, and the rest of its cluster, and was judged right or wrong by eye.
 
-**Result: on the fleet, the bar moves the kept wrong share by about a point or less.**
+**Result: on the fleet, the bar moves the kept wrong share by about a point or less, except on `fleetws`, whose labels are coarse.**
 
 Kept members and their wrong share:
 
