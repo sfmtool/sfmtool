@@ -17,6 +17,7 @@
 use std::sync::Arc;
 
 use nalgebra::Point3;
+use sfmtool_core::numeric;
 use sfmtool_core::reconstruction::bundle_adjust::patch_frame_factor;
 use sfmtool_core::reconstruction::triangulation::PointVerdict;
 use sfmtool_core::reconstruction::{
@@ -291,9 +292,14 @@ impl PreviewTargets {
         let mut lost: Vec<(PointVerdict, usize)> = lost.into_values().collect();
         lost.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.code().cmp(&b.0.code())));
         counts.lost_by_verdict = lost;
-        shifts.sort_unstable_by(f64::total_cmp);
-        counts.median_shift = quantile(&shifts, 0.5);
-        counts.p90_shift = quantile(&shifts, 0.9);
+        // The median is taken as `RetriangulateReport::median_shift` takes the
+        // one the Retriangulate edits' Action Log row prints, so the two agree
+        // to the last bit over the same shifts. The p90 comes first because the
+        // median leaves the list only partitioned.
+        let any = !shifts.is_empty();
+        let present = |value: f64| any.then_some(value);
+        counts.p90_shift = present(numeric::quantile_in_place(&mut shifts, 0.9));
+        counts.median_shift = present(numeric::median_in_place(&mut shifts));
         (targets, counts)
     }
 
@@ -301,15 +307,6 @@ impl PreviewTargets {
     pub(crate) fn touches(&self, index: u32) -> bool {
         self.touched.binary_search(&index).is_ok()
     }
-}
-
-/// The `q` quantile of ascending `sorted`, linearly interpolated; `None` for
-/// an empty list.
-fn quantile(sorted: &[f64], q: f64) -> Option<f64> {
-    let last = sorted.len().checked_sub(1)?;
-    let at = q * last as f64;
-    let (low, high) = (at.floor() as usize, at.ceil() as usize);
-    Some(sorted[low] + (sorted[high] - sorted[low]) * (at - low as f64))
 }
 
 /// The words a verdict that turns a finite point into a direction is given in

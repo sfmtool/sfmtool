@@ -486,8 +486,9 @@ fn the_workspace_has_one_quantile() {
     assert!(
         unlisted.is_empty(),
         "new quantile implementations outside `crate::numeric`:\n  {}\n\
-         Call `crate::numeric::quantile` (or `quantile_in_place` / \
-         `quantile_of_sorted`) instead. If this really is a different \
+         Call `sfmtool_core::numeric::quantile` (or `quantile_in_place` / \
+         `quantile_of_sorted`), `crate::numeric::…` inside sfmtool-core, \
+         instead. If this really is a different \
          operation, add it to QUANTILE_ALLOWLIST in numeric/tests.rs with the \
          reason.",
         unlisted.join("\n  ")

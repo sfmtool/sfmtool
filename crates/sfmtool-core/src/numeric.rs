@@ -9,9 +9,10 @@
 //! related: the growth and pose-verification kernels ([`crate::geometry`]),
 //! the adjacency and census passes ([`crate::analysis`]), the two patch IRLS
 //! loops ([`crate::patch`]) and the covisibility sampler
-//! ([`crate::features`]) all want the same number. The two median entry
-//! points are `pub` so that the bindings in `sfmtool-py` reach this
-//! implementation rather than spelling their own beside it.
+//! ([`crate::features`]) all want the same number. The median and quantile
+//! entry points are `pub` so that the bindings in `sfmtool-py` and the viewer
+//! in `sfm-explorer` reach this implementation rather than spelling their own
+//! beside it.
 //!
 //! ## Why the median is centralized
 //!
@@ -64,8 +65,8 @@
 //!
 //! ## The quantile
 //!
-//! The same holds for quantiles. `quantile_of_sorted`, `quantile_in_place`
-//! and `quantile` follow the median's rules — [`f64::total_cmp`] ordering
+//! The same holds for quantiles. [`quantile_of_sorted`], [`quantile_in_place`]
+//! and [`quantile`] follow the median's rules — [`f64::total_cmp`] ordering
 //! and `NaN` for empty input — and interpolate linearly between order
 //! statistics with numpy's own arithmetic, so a trim threshold computed here
 //! matches the numpy prototype it was ported from bit for bit. They replaced
@@ -169,7 +170,7 @@ pub fn median(values: &[f64]) -> f64 {
 /// Whenever `b − a` is finite the result is numpy's, bit for bit. Two finite
 /// values whose difference overflows are interpolated as `a·(1 − t) + b·t`,
 /// which stays finite, where numpy's arithmetic would give an infinity.
-pub(crate) fn quantile_of_sorted(sorted: &[f64], q: f64) -> f64 {
+pub fn quantile_of_sorted(sorted: &[f64], q: f64) -> f64 {
     let n = sorted.len();
     if n == 0 {
         return f64::NAN;
@@ -206,7 +207,7 @@ pub(crate) fn quantile_of_sorted(sorted: &[f64], q: f64) -> f64 {
 /// [`f64::total_cmp`]; `NaN` when empty.
 ///
 /// `values` is left sorted.
-pub(crate) fn quantile_in_place(values: &mut [f64], q: f64) -> f64 {
+pub fn quantile_in_place(values: &mut [f64], q: f64) -> f64 {
     values.sort_unstable_by(f64::total_cmp);
     quantile_of_sorted(values, q)
 }
@@ -215,7 +216,7 @@ pub(crate) fn quantile_in_place(values: &mut [f64], q: f64) -> f64 {
 ///
 /// The borrowing counterpart to [`quantile_in_place`], for callers holding a
 /// shared slice they cannot disturb.
-pub(crate) fn quantile(values: &[f64], q: f64) -> f64 {
+pub fn quantile(values: &[f64], q: f64) -> f64 {
     let mut scratch = values.to_vec();
     quantile_in_place(&mut scratch, q)
 }
