@@ -370,10 +370,10 @@ point has been fitted. The fits read the copy before anything is written to it.
   agree and is rewritten, as the commit's own comparison decides.
 - **The columns written are the ones the value has, and the readings**, under
   the commit's rules:
-  `observation_confidence`, the observation readings, the normals, the normal
-  confidences and the reference observations only where the value has the
-  column, and the patch bitmap only where it stores bitmaps. A readings row is
-  written only under the column's own options, and is "not measured" otherwise.
+  `observation_confidence`, the normals, the normal confidences and the
+  reference observations only where the value has the column, and the patch
+  bitmap only where it stores bitmaps. A readings row is written only under
+  the column's own options, and is "not measured" otherwise.
   **A value with no readings column gains one**, as a run of bench commits in
   point order adds it (`EditedReconstruction::push_record`): where a written
   record brings a measured reading, the column is created under the options of
