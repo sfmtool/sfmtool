@@ -88,8 +88,8 @@ impl ImageTable {
     /// what a world extent is divided by to become an angular one.
     ///
     /// The reference is the mean of **every** posed camera centre in the table
-    /// rather than of the ones that see any particular point, because on a
-    /// table whose images are all posed that is the reference
+    /// rather than of the ones that see any particular point, because that is
+    /// the reference
     /// [`SfmrReconstruction::materialize_points_at_infinity`](super::SfmrReconstruction::materialize_points_at_infinity)
     /// places a bearing at. Every edit that resizes a patch frame measures from
     /// here, so their conversions cancel exactly rather than to within which

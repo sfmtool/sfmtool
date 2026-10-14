@@ -47,10 +47,9 @@ use crate::geometry::focal_vote::column_scan::kabsch;
 use crate::geometry::reconstruction_growth::per_image_seed;
 use crate::geometry::rotation::orthonormalized;
 use crate::numeric::median_in_place;
+use crate::reconstruction::bundle_adjust::is_posed;
 use crate::reconstruction::triangulation::triangulate_batch;
-use crate::reconstruction::{
-    ObservationSource, ReconstructionError, SfmrImage, SfmrReconstruction,
-};
+use crate::reconstruction::{ObservationSource, ReconstructionError, SfmrReconstruction};
 
 use finite::{Pair, Source, World};
 
@@ -428,7 +427,12 @@ pub fn resect_images(
     if image_indexes.is_empty() {
         return Err(ResectImageError::NoTargets);
     }
-    let posed: Vec<bool> = recon.image_table.images.iter().map(is_posed).collect();
+    let posed: Vec<bool> = recon
+        .image_table
+        .images
+        .iter()
+        .map(|image| is_posed(&image.quaternion_wxyz, &image.translation_xyz))
+        .collect();
     let mut is_target = vec![false; count];
     for &t in image_indexes {
         if t >= count {
@@ -835,13 +839,6 @@ fn distinct(points: &[usize], predicate: impl Fn(usize) -> bool) -> usize {
 
 /// A world-to-camera pose: rotation and translation.
 type Pose = (UnitQuaternion<f64>, Vector3<f64>);
-
-/// Whether an image row carries a pose at all. Every `.sfmr` image has the
-/// fields; a non-finite one is a placeholder rather than a registration.
-fn is_posed(image: &SfmrImage) -> bool {
-    image.quaternion_wxyz.coords.iter().all(|c| c.is_finite())
-        && image.translation_xyz.iter().all(|c| c.is_finite())
-}
 
 /// The camera centre of a world-to-camera pose: `C = -Rᵀ t`.
 fn world_centre(rotation: &UnitQuaternion<f64>, translation: &Vector3<f64>) -> Point3<f64> {

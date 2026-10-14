@@ -747,8 +747,10 @@ pub fn bundle_adjust(
 /// a non-finite one is a placeholder rather than a registration.
 ///
 /// Crate-visible because the same question decides which images enter this
-/// solve and whether
-/// [`move_camera`](super::move_camera::move_camera) has a pose to replace.
+/// solve, whether
+/// [`move_camera`](super::move_camera::move_camera) has a pose to replace,
+/// which images a resection treats as already registered, and which centres
+/// [`ImageTable::camera_centroid`] averages.
 pub(crate) fn is_posed(rotation: &UnitQuaternion<f64>, translation: &Vector3<f64>) -> bool {
     rotation.coords.iter().all(|c| c.is_finite()) && translation.iter().all(|c| c.is_finite())
 }

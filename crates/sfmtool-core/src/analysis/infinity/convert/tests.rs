@@ -108,7 +108,7 @@ fn classify_demotes_a_far_point_to_its_scored_bearing() {
     let bearing = scores.scores[0].unwrap().bearing;
     assert!((pt.position.coords - bearing.normalize()).norm() < 1e-12);
     assert!((pt.position.coords.norm() - 1.0).abs() < 1e-12);
-    let truth = (far.coords - camera_cloud_centroid(&centers_of(&recon)).coords).normalize();
+    let truth = (far.coords - recon.image_table.camera_centroid().coords).normalize();
     assert!(pt.position.coords.angle(&truth) < 1e-3);
     // The normal is zeroed, and the error is the bearing's own residual,
     // which is of the order of the noise.
@@ -167,7 +167,7 @@ fn classify_promotes_a_bearing_whose_rays_ask_for_a_depth() {
     // point it is: the verdict is finite, and the fit places it there.
     let mut recon = observed_demo(50, 5);
     let truth = recon.point_set.points[0].position;
-    let origin = camera_cloud_centroid(&centers_of(&recon));
+    let origin = recon.image_table.camera_centroid();
     store_as_bearing(&mut recon, 0, truth - origin);
 
     let (classified, summary) = recon.classify_points_at_infinity(None).unwrap();
@@ -192,7 +192,7 @@ fn classify_without_finite_points_changes_nothing() {
     // Every point at infinity: there is no finite point to measure the noise
     // from, so nothing is decided.
     let mut recon = observed_demo(20, 6);
-    let origin = camera_cloud_centroid(&centers_of(&recon));
+    let origin = recon.image_table.camera_centroid();
     for p in 0..20 {
         let d = recon.point_set.points[p].position - origin;
         store_as_bearing(&mut recon, p, d);
@@ -264,7 +264,7 @@ fn classify_does_not_promote_without_a_usable_point() {
     let near = c0 + 1.0e-3 * (forward + 0.5 * right);
     recon.point_set.points[0].position = near;
     observe(&mut recon, [NOISE_PX, NOISE_PX], 8);
-    let origin = camera_cloud_centroid(&centers_of(&recon));
+    let origin = recon.image_table.camera_centroid();
     store_as_bearing(&mut recon, 0, near - origin);
 
     let scores = recon
@@ -336,7 +336,7 @@ fn classify_releases_the_constraints_of_the_points_it_changes() {
     let mut recon = SfmrReconstruction::demo(50);
     recon.point_set.points[0].position = far_point(&recon, 0, 1.0e6);
     observe(&mut recon, [NOISE_PX, NOISE_PX], 9);
-    let origin = camera_cloud_centroid(&centers_of(&recon));
+    let origin = recon.image_table.camera_centroid();
     let d1 = recon.point_set.points[1].position - origin;
     store_as_bearing(&mut recon, 1, d1);
     let mut constraints = PointConstraintColumns::all_free(50);
@@ -393,7 +393,7 @@ fn materialize_places_point_along_its_direction() {
     let pt = &materialised.point_set.points[0];
     assert_eq!(pt.w, 1.0);
     // The point lies on the ray origin + t·d, so (pt - origin) ∥ d.
-    let origin = camera_cloud_centroid(&centers_of(&recon)).coords;
+    let origin = recon.image_table.camera_centroid().coords;
     let offset = pt.position.coords - origin;
     let perp = offset - offset.dot(&dir) * dir;
     assert!(perp.norm() < 1e-6, "materialised point must lie along d");
@@ -443,7 +443,7 @@ fn materialize_is_inverse_free_but_round_trips_classification() {
     // infinity: its keypoints still show no parallax.
     let mut recon = SfmrReconstruction::demo(50);
     let far = far_point(&recon, 0, 1.0e6);
-    let origin = camera_cloud_centroid(&centers_of(&recon));
+    let origin = recon.image_table.camera_centroid();
     store_as_bearing(&mut recon, 0, far - origin);
     observe(&mut recon, [NOISE_PX, NOISE_PX], 11);
 
@@ -489,7 +489,7 @@ fn facing_patch(
     half_u: f64,
     half_v: f64,
 ) -> (Vector3<f64>, Vector3<f64>) {
-    let origin = camera_cloud_centroid(&centers_of(recon));
+    let origin = recon.image_table.camera_centroid();
     let d = (recon.point_set.points[0].position - origin).normalize();
     let a = d.cross(&Vector3::z()).normalize();
     let b = d.cross(&a).normalize();
@@ -516,7 +516,7 @@ fn classify_rescales_patch_frame_to_angular_extents() {
         Vector3::new(50.0, 0.0, 0.0),
         Vector3::new(0.0, 25.0, 0.0),
     );
-    let origin = camera_cloud_centroid(&centers_of(&recon));
+    let origin = recon.image_table.camera_centroid();
     let dist = (recon.point_set.points[0].position.coords - origin.coords).norm();
 
     let (classified, _) = recon.classify_points_at_infinity(None).unwrap();
@@ -586,7 +586,7 @@ fn materialize_rescales_patch_frame_to_world_extents() {
     let materialised = recon.materialize_points_at_infinity();
     let pt = &materialised.point_set.points[0];
     assert_eq!(pt.w, 1.0);
-    let origin = camera_cloud_centroid(&centers_of(&recon));
+    let origin = recon.image_table.camera_centroid();
     let t = (pt.position.coords - origin.coords).norm();
     let u = materialised.point_set.patch_u_halfvec_xyz.as_ref().unwrap();
     assert!((f64::from(u[[0, 0]]) - 0.01 * t).abs() / (0.01 * t) < 1e-6);
@@ -601,7 +601,7 @@ fn classify_then_materialize_preserves_apparent_patch_size() {
     observe(&mut recon, [NOISE_PX, NOISE_PX], 14);
     let (u0, v0) = facing_patch(&recon, 50.0, 25.0);
     with_patch(&mut recon, u0, v0);
-    let origin = camera_cloud_centroid(&centers_of(&recon));
+    let origin = recon.image_table.camera_centroid();
     let dist0 = (recon.point_set.points[0].position.coords - origin.coords).norm();
     let apparent0 = 50.0 / dist0;
 
@@ -633,7 +633,7 @@ fn demotion_then_promotion_restores_the_patch_frame() {
     let (u0, v0) = facing_patch(&recon, 2.0, 1.0);
     with_patch(&mut recon, u0, v0);
     let original = recon.point_set.points[0].position;
-    let dist = (original - camera_cloud_centroid(&centers_of(&recon))).norm();
+    let dist = (original - recon.image_table.camera_centroid()).norm();
 
     let (demoted, summary) = recon.classify_points_at_infinity(Some(1.0e4)).unwrap();
     assert!(summary.demoted >= 1);
@@ -746,4 +746,57 @@ fn classify_refits_a_finite_point_stored_behind_its_cameras() {
     let pt = &classified.point_set.points[0];
     assert_eq!(pt.w, 1.0);
     assert!((pt.position - truth).norm() < 0.05, "{:?}", pt.position);
+}
+
+/// `recon` with one more image, which observes nothing and has no pose: its
+/// row is a placeholder with a non-finite translation.
+fn with_an_unposed_image(mut recon: SfmrReconstruction) -> SfmrReconstruction {
+    let mut image = recon.image_table.images[0].clone();
+    image.name = "unposed.jpg".to_string();
+    image.translation_xyz = Vector3::new(f64::NAN, f64::NAN, f64::NAN);
+    recon.image_table.images.push(image);
+    recon
+}
+
+#[test]
+fn materialize_places_a_bearing_from_the_posed_cameras_alone() {
+    let mut recon = SfmrReconstruction::demo(1);
+    recon.point_set.points[0].position = Point3::from(Vector3::new(0.0, 0.0, 1.0));
+    recon.point_set.points[0].w = 0.0;
+    recon.point_set.points[0].normal = Vector3::zeros();
+    with_patch(
+        &mut recon,
+        Vector3::new(0.01, 0.0, 0.0),
+        Vector3::new(0.0, 0.005, 0.0),
+    );
+    let expected = recon.materialize_points_at_infinity();
+
+    let materialised = with_an_unposed_image(recon).materialize_points_at_infinity();
+    let pt = &materialised.point_set.points[0];
+    assert_eq!(pt.w, 1.0);
+    assert!(pt.position.iter().all(|c| c.is_finite()), "{}", pt.position);
+    assert_eq!(pt.position, expected.point_set.points[0].position);
+    assert_eq!(
+        patch_row(&materialised.point_set.patch_u_halfvec_xyz),
+        patch_row(&expected.point_set.patch_u_halfvec_xyz)
+    );
+}
+
+#[test]
+fn a_demotion_measures_from_the_posed_cameras_alone() {
+    let mut recon = SfmrReconstruction::demo(50);
+    recon.point_set.points[0].position = far_point(&recon, 0, 50.0);
+    observe(&mut recon, [NOISE_PX, NOISE_PX], 15);
+    let (u0, v0) = facing_patch(&recon, 2.0, 1.0);
+    with_patch(&mut recon, u0, v0);
+    let (expected, _) = recon.classify_points_at_infinity(Some(1.0e4)).unwrap();
+    assert!(expected.point_set.points[0].is_at_infinity());
+
+    let (demoted, _) = with_an_unposed_image(recon)
+        .classify_points_at_infinity(Some(1.0e4))
+        .unwrap();
+    assert!(demoted.point_set.points[0].is_at_infinity());
+    let ud = patch_row(&demoted.point_set.patch_u_halfvec_xyz);
+    assert!(ud.iter().all(|c| c.is_finite()), "{ud}");
+    assert_eq!(ud, patch_row(&expected.point_set.patch_u_halfvec_xyz));
 }

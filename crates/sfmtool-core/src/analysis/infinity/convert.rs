@@ -219,19 +219,6 @@ fn apply_patch_fix(
     }
 }
 
-/// The camera-cloud centroid — the reference origin both conversions measure
-/// point distances from (matching the materialisation placement geometry).
-fn camera_cloud_centroid(centers: &[Point3<f64>]) -> Point3<f64> {
-    if centers.is_empty() {
-        return Point3::origin();
-    }
-    let mut sum = Vector3::zeros();
-    for c in centers {
-        sum += c.coords;
-    }
-    Point3::from(sum / centers.len() as f64)
-}
-
 /// Spatial extent (bounding-box diagonal) of a set of camera centers — the
 /// scale of the region a capture explored, which the `resolvable_distance`
 /// diagnostic is read against (`finite_horizon`).
@@ -372,13 +359,10 @@ impl SfmrReconstruction {
         let rays = track_rays(&self.image_table, &observations, &offsets, sigma);
         let scores = bearing_score_batch(&rays.dirs, &rays.centers, &rays.offsets, &rays.weights);
 
-        let centers: Vec<Point3<f64>> = self
-            .image_table
-            .images
-            .iter()
-            .map(|im| im.camera_center())
-            .collect();
-        let origin = camera_cloud_centroid(&centers);
+        // The reference both conversions measure point distances from: the
+        // posed cameras' centroid, which every edit that resizes a patch frame
+        // also measures from.
+        let origin = self.image_table.camera_centroid();
         let min_depth = self.min_point_depth();
 
         let mut recon = self.clone_for_edit();
@@ -592,7 +576,8 @@ impl SfmrReconstruction {
     ///
     /// A `w = 0` point has no depth to recover, so this does not triangulate.
     /// It places the point along its stored direction, at the camera-cloud
-    /// centroid plus a distance `t · d`. `t` is the largest per-camera
+    /// centroid ([`ImageTable::camera_centroid`](crate::reconstruction::ImageTable::camera_centroid),
+    /// the mean of the posed images' centres) plus a distance `t · d`. `t` is the largest per-camera
     /// distance beyond which the materialised point's parallax falls below one
     /// pixel (`fᵢ · r⊥ᵢ`, the focal length times the camera-to-origin offset
     /// perpendicular to the direction) — far enough to be faithful in every
@@ -614,8 +599,9 @@ impl SfmrReconstruction {
             .collect();
         let focal_max = self.per_image_focal_max();
 
-        // Reference origin: the camera-cloud centroid.
-        let origin = camera_cloud_centroid(&centers);
+        // Reference origin: the centroid of the posed cameras, the one
+        // `ImageTable::placement_scale` measures from.
+        let origin = self.image_table.camera_centroid();
 
         // Fallback placement distance when the pixel-differential geometry is
         // degenerate (every camera lies on the line origin + t·d).

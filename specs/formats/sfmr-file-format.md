@@ -1335,7 +1335,8 @@ and infinity points alike:
 
 A producer that converts a point between finite and infinity carries its
 patch frame across preserving apparent size: demotion divides the half-vectors
-by the demotion-time distance from the camera-cloud centroid and projects them
+by the demotion-time distance from the camera-cloud centroid (the mean of the
+posed images' camera centres; an unposed image has none) and projects them
 onto the tangent plane of `d` (enforcing `u × v` along `-d`; a degenerate
 projection, or a demotion whose finite position was meaningless, clears the
 patch and its bitmap row); promotion and materialisation multiply the angular
