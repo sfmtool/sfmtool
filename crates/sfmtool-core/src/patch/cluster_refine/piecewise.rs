@@ -341,7 +341,8 @@ fn compose(s: &Mat2, p: [f64; 2], update: &Update, step: f64) -> (Mat2, [f64; 2]
 /// update to the cells that survive (see
 /// [`fit_update_robust`](crate::patch::cell_registration::fit_update_robust)).
 /// `score` reads the whole-member windowed ZNCC the cascade maximised at a
-/// shape and position, `None` when the support leaves the frame. The loop stops at the first of:
+/// shape and position, `None` when the support leaves the frame. The loop
+/// stops at the first of:
 ///
 /// - the update lowers that ZNCC by more than [`ACCEPT_ZNCC_TOLERANCE`], or
 ///   below its value at the starting shape ([`LoopStop::Rejected`]): the

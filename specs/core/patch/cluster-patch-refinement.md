@@ -51,7 +51,7 @@ with its parameters and result in
 [params.rs](../../../crates/sfmtool-core/src/patch/cluster_refine/params.rs) and
 the piecewise stage in
 [piecewise.rs](../../../crates/sfmtool-core/src/patch/cluster_refine/piecewise.rs),
-which renders each kept member's working patch and runs the shape-moving loop
+which renders each kept member's working patch, runs the shape-moving loop,
 and calls the crate-visible cell registration kernel in
 [cell_registration.rs](../../../crates/sfmtool-core/src/patch/cell_registration.rs)
 for everything after the render: the working patch's summed-area tables
@@ -61,7 +61,8 @@ affine fit (`fit_update_robust`, `fit_pass`). `PiecewiseParams` supplies the
 search bound, through `CellLayout::new`, and the two bars, as
 `CellGateOptions`. `CellStatus` is defined there and re-exported from
 `cluster_refine`. The kernel uses no cluster type, so another caller can
-register the cells of a render it makes itself. The stage is bound as `sfmtool._sfmtool.matching.refine_cluster_patches` in
+register the cells of a render it makes itself. The stage is bound as
+`sfmtool._sfmtool.matching.refine_cluster_patches` in
 [cluster.rs](../../../crates/sfmtool-py/src/matching/cluster.rs). The stored
 per-cell columns are `MemberCellData` and `ClusterCellStatus` in
 [cells.rs](../../../crates/sfmtool-matches-format/src/cells.rs).
@@ -1324,7 +1325,8 @@ bit; and with one start the recovery cases and the 60° member reproduce
 fingerprints of every output recorded from the single-start build (checked on
 x86-64 with AVX2, where they were recorded).
 
-`cluster_refine/piecewise/tests.rs` covers the piecewise stage, including the cell registration kernel as the stage runs it. **The
+`cluster_refine/piecewise/tests.rs` covers the piecewise stage, including the
+cell registration kernel as the stage runs it. **The
 measurement**, on a synthetic planar cluster seen from a tilted view with the
 starting shape perturbed by a known affine and `move_shape` off: one render,
 no whole-member ZNCC read, the shape and position left at the start, all nine cells fitted, and the
