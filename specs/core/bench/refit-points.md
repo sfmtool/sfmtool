@@ -172,8 +172,10 @@ predicate accepts) and `median_shift` (`NaN` where no point stayed finite).
 `RefitPointsError` refuses the run as a whole, before anything is copied:
 `NoKeypoints` (a `sift_files` value, which a commit refuses too), `NoPatchFrames`
 (a fit registers the frame into every view), `NoPosedImage`, `ViewsMissing`,
-`ImageOutOfRange` (a track names an image the value does not hold, which only a
-value whose tracks were replaced by hand can carry; refused up front, since the
+`ImageOutOfRange` (a track names an image the value does not hold; a load,
+`from_sfmr_data` and `clone_with_changes` refuse such a value
+(`PointSet::validate_track_image_indexes`), so only Rust code that writes the
+public `point_set.tracks` field can hand one in; refused up front, since the
 fit reads every observation's camera centre), `NoNoiseLevel` (no `sigma_px` was
 given and the value's reprojection noise cannot be measured, or the `sigma_px`
 given is not a finite positive number) and `Cancelled`.
@@ -529,6 +531,8 @@ and `reason`, its sentence. There is no point map, since no index moves.
 checks the binding on the seoul_bull ground truth: no index moves and the input
 is unchanged, the report's statuses and counts, a held point, the refusals, a
 refused point's `error` and `reason`, and a track stored out of image order.
+From Python a track naming an image past the table cannot reach the run:
+`clone_with_changes` refuses to build the value.
 
 ## Non-goals
 

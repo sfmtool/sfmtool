@@ -90,6 +90,7 @@ impl PointSet {
     pub fn feature_indexes(&self) -> Option<&[u32]>;
     pub fn keypoints_xy(&self) -> Option<&Array2<f32>>;
     pub fn rebuild_derived_fields(&mut self, image_count: usize);
+    pub fn validate_track_image_indexes(&self, image_count: usize) -> Result<(), String>;
     pub fn validate_observation_columns(&self, image_count: usize) -> Result<(), String>;
 }
 
@@ -732,9 +733,11 @@ identical reconstructions as different for no reason other than that neither
 constrains anything. `EditedReconstruction`'s `PartialEq` reads two `NaN`
 distances as agreeing, since both say the point is at no distance from anything.
 
-**Validation is split the same way.** `validate_observation_columns` checks the
-per-observation columns against the track count and the per-image hashes against
-the image count; `validate_point_columns` checks the constraint triple against
+**Validation is split the same way.** `validate_observation_columns` checks that
+every track row names an image of the table (`validate_track_image_indexes`,
+which it runs first: `track row {j}: image index {i} out of range for {n}
+images`), the per-observation columns against the track count and the per-image
+hashes against the image count; `validate_point_columns` checks the constraint triple against
 the point count and its reference images against the image count, and each
 reference observation against its point's track. A record's
 `reference_observation` is refused unless it is `-1` or an index into its own
@@ -742,7 +745,12 @@ observations (`EditError::ReferenceObservationOutOfRange`), and like every
 column it is present exactly when the base carries the column. Both are
 reachable from `SfmrReconstruction`, which supplies the count the point set
 cannot see, and both are what the `.sfmr` conversion and the kwargs-driven
-Python editor run before handing back a value.
+Python editor run before handing back a value. Both run the track image check
+before `rebuild_derived_fields`, because the rebuild indexes the per-image maps
+by each row's image and would panic on a row past the table. A record added
+through `EditedReconstruction` is checked against the base's image count when it
+is pushed (`EditError::ImageOutOfRange`), and the whole-value edits remap tracks
+of a value that already passed, so neither runs the check again.
 
 ## Testing
 

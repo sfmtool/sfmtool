@@ -663,7 +663,8 @@ fn apply_observation_field(
 /// 5. The tracks, which also recompute `observation_counts` and so override an
 ///    `observation_counts` value passed in the same call.
 /// 6. The constraint triple, checked against the settled point count.
-/// 7. `rebuild_derived_fields`.
+/// 7. The check that every track row names an image of the settled table,
+///    then `rebuild_derived_fields`, which indexes the table by those images.
 /// 8. The inline keypoint column of a `sift_files` value whose tracks were
 ///    replaced, which reads image names and the rebuilt tracks.
 /// 9. The patch frames' and bitmaps' row counts, checked against the settled
@@ -733,6 +734,17 @@ fn finalize(
         constraint_distances,
         constraint_reference_images,
     )?;
+
+    // Every track row must name an image of the settled table before the
+    // per-image maps are rebuilt from the rows, since the rebuild and
+    // `carry_sift_keypoints` index the table by each row's image. This covers
+    // replaced tracks and kept tracks under a shortened `image_names` alike.
+    recon
+        .point_set
+        .validate_track_image_indexes(recon.image_count())
+        .map_err(|e| {
+            pyo3::exceptions::PyValueError::new_err(format!("clone_with_changes(): {e}"))
+        })?;
 
     // Recompute derived fields
     recon.rebuild_derived_fields();

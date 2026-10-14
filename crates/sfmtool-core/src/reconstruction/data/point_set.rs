@@ -539,8 +539,30 @@ impl PointSet {
         (r >= 0).then(|| self.observation_offsets[point] + r as usize)
     }
 
-    /// Check that the observation-source columns are parallel to the structures
-    /// they annotate: per-observation columns (`feature_indexes` / `keypoints_xy`)
+    /// Check that every track row names one of `image_count` images. Returns a
+    /// message naming the first row that does not.
+    ///
+    /// [`Self::validate_observation_columns`] runs this first. It is separate
+    /// so that a builder can run it before
+    /// [`Self::rebuild_derived_fields`], which indexes the per-image maps by
+    /// each row's image and so panics on a row past the table.
+    pub fn validate_track_image_indexes(&self, image_count: usize) -> Result<(), String> {
+        match self
+            .tracks
+            .iter()
+            .position(|t| t.image_index as usize >= image_count)
+        {
+            Some(j) => Err(format!(
+                "track row {j}: image index {} out of range for {image_count} images",
+                self.tracks[j].image_index
+            )),
+            None => Ok(()),
+        }
+    }
+
+    /// Check that every track row names an image of the table and that the
+    /// observation-source columns are parallel to the structures they
+    /// annotate: per-observation columns (`feature_indexes` / `keypoints_xy`)
     /// must match the track count, and per-image columns (the hashes) must match
     /// `image_count`. Returns an error message describing the first mismatch.
     ///
@@ -549,6 +571,7 @@ impl PointSet {
     /// independently) can leave them out of step; this is the guard those paths
     /// run before handing back a reconstruction.
     pub fn validate_observation_columns(&self, image_count: usize) -> Result<(), String> {
+        self.validate_track_image_indexes(image_count)?;
         let n_obs = self.tracks.len();
         let n_img = image_count;
         // Mode-independent: an observation's confidence rates the observation,

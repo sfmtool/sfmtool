@@ -957,6 +957,38 @@ class TestEvaluating:
         assert entry["reason"] == "it sits off the photograph"
         assert report["unmeasured"] >= 1
 
+    def test_a_value_whose_track_names_an_image_past_the_table_never_reaches_a_fit(
+        self, embedded, images, long_track_point
+    ):
+        """A fit reads every observation's camera centre by its image, so a row
+        past the table used to panic there. Such a value is now refused where
+        it is built, and the same edit with the rows in range fits.
+        """
+
+        def with_images(image_indexes):
+            return embedded.clone_with_changes(
+                track_image_indexes=np.asarray(image_indexes, np.uint32),
+                track_feature_indexes=np.zeros(embedded.observation_count, np.uint32),
+                track_point_indexes=np.ascontiguousarray(embedded.track_point_indexes),
+                keypoints_xy=np.ascontiguousarray(embedded.keypoints_xy),
+            )
+
+        n_img = len(embedded.image_names)
+        image_indexes = np.asarray(embedded.track_image_indexes).copy()
+        # A row of a point other than the one fitted, as the panic needed.
+        other = 1 if long_track_point == 0 else 0
+        row = int(np.flatnonzero(np.asarray(embedded.track_point_indexes) == other)[0])
+        image_indexes[row] = n_img
+        with pytest.raises(
+            ValueError, match=f"image index {n_img} out of range for {n_img} images"
+        ):
+            with_images(image_indexes)
+
+        edited = EditedReconstruction(with_images(embedded.track_image_indexes))
+        _, track = create_track(Bench(), edited, long_track_point)
+        _, report = fit(track, edited, images)
+        assert report["placed"] >= 2
+
     def test_a_fit_moves_the_track_and_an_evaluation_of_it_agrees(
         self, edited, images, long_track_point
     ):

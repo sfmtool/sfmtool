@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use sfmtool_sfmr_format::{
-    RigFrameData, SfmrData, FEATURE_SOURCE_EMBEDDED_PATCHES, FEATURE_SOURCE_SIFT_FILES,
+    RigFrameData, SfmrData, SfmrError, FEATURE_SOURCE_EMBEDDED_PATCHES, FEATURE_SOURCE_SIFT_FILES,
 };
 
 use crate::progress::{Event, Progress};
@@ -539,6 +539,69 @@ fn test_validate_observation_columns_detects_desync() {
         .validate_observation_columns()
         .expect_err("desynced keypoints must be rejected");
     assert!(err.contains("keypoints_xy"), "unexpected message: {err}");
+}
+
+#[test]
+fn test_validate_observation_columns_refuses_a_track_row_past_the_image_table() {
+    for mut recon in [SfmrReconstruction::demo(4), demo_embedded(4)] {
+        let n_img = recon.image_count();
+        recon.point_set.validate_track_image_indexes(n_img).unwrap();
+        // The last image is a valid index; one past it is not.
+        recon.point_set.tracks[3].image_index = (n_img - 1) as u32;
+        recon.validate_observation_columns().unwrap();
+        recon.point_set.tracks[3].image_index = n_img as u32;
+        let err = recon
+            .validate_observation_columns()
+            .expect_err("a row past the image table must be rejected");
+        assert_eq!(
+            err,
+            format!("track row 3: image index {n_img} out of range for {n_img} images")
+        );
+        assert_eq!(
+            recon.point_set.validate_track_image_indexes(n_img),
+            Err(err)
+        );
+    }
+}
+
+#[test]
+fn test_from_sfmr_data_refuses_a_track_row_past_the_image_table() {
+    // A `sift_files` value without an inline keypoint column: the format
+    // reader checks a row's image only where it reads that column, and the
+    // per-image feature maps are built from the rows, so this used to panic.
+    for recon in [SfmrReconstruction::demo(4), demo_embedded(4)] {
+        let n_img = recon.image_count();
+        let mut data = recon.to_sfmr_data();
+        data.image_indexes[1] = n_img as u32 + 5;
+        let Err(SfmrError::InvalidFormat(msg)) = SfmrReconstruction::from_sfmr_data(data) else {
+            panic!("a row past the image table must be refused");
+        };
+        assert_eq!(
+            msg,
+            format!(
+                "track row 1: image index {} out of range for {n_img} images",
+                n_img + 5
+            )
+        );
+    }
+}
+
+#[test]
+fn test_from_sfmr_data_builds_the_feature_maps_after_validating() {
+    let recon = SfmrReconstruction::demo(4);
+    let back = SfmrReconstruction::from_sfmr_data(recon.to_sfmr_data()).unwrap();
+    assert_eq!(
+        back.point_set.image_feature_to_point,
+        recon.point_set.image_feature_to_point
+    );
+    assert_eq!(
+        back.point_set.max_track_feature_index,
+        recon.point_set.max_track_feature_index
+    );
+    assert_eq!(
+        back.point_set.image_feature_to_point.len(),
+        back.image_count()
+    );
 }
 
 /// The `sift_files` `demo`, given the optional inline keypoint column. Row `i`

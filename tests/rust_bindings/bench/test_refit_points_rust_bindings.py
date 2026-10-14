@@ -149,13 +149,15 @@ def test_a_point_the_fit_refuses_names_the_refusal_and_keeps_its_columns(
     )
 
 
-def test_a_track_naming_an_image_past_the_table_is_refused(ground_truth, images):
+def test_a_track_naming_an_image_past_the_table_cannot_reach_the_run(ground_truth):
+    # The value is refused where it is built, so the run's own
+    # `ImageOutOfRange` precondition is left for Rust callers that write the
+    # tracks field directly.
     images_of = np.asarray(ground_truth.track_image_indexes).copy()
     images_of[0] = len(ground_truth.image_names)
     everything = np.ones(len(images_of), dtype=bool)
-    corrupt = _with_tracks(ground_truth, images_of, everything)
-    with pytest.raises(ValueError, match="names image 17"):
-        refit_points(corrupt, images, sigma_px=0.5)
+    with pytest.raises(ValueError, match="image index 17 out of range for 17 images"):
+        _with_tracks(ground_truth, images_of, everything)
 
 
 def test_a_track_stored_out_of_image_order_is_written_back_at_its_own_rows(

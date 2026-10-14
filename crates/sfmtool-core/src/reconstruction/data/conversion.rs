@@ -10,7 +10,6 @@
 //! [`super`] so the data model and its serialization stay separable; the type
 //! definitions and accessors live there.
 
-use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -351,22 +350,6 @@ impl SfmrReconstruction {
         let observation_counts = data.observation_counts.to_vec();
         let observation_offsets = compute_observation_offsets(&observation_counts);
 
-        // Build per-image feature→point mapping and max feature index. These index
-        // `.sift` features, so they are meaningful only for `sift_files`; an
-        // `embedded_patches` reconstruction leaves them empty.
-        let mut image_feature_to_point = vec![HashMap::new(); image_count];
-        let mut max_track_feature_index = vec![0u32; image_count];
-        if let ObservationSource::SiftFiles {
-            feature_indexes, ..
-        } = &observations
-        {
-            for (obs, &feat) in tracks.iter().zip(feature_indexes) {
-                let img = obs.image_index as usize;
-                image_feature_to_point[img].insert(feat, obs.point_index);
-                max_track_feature_index[img] = max_track_feature_index[img].max(feat);
-            }
-        }
-
         // Convert depth histogram counts: (N, num_buckets) array → Vec<Vec<u32>>
         let mut depth_histogram_counts = Vec::with_capacity(image_count);
         for i in 0..image_count {
@@ -390,7 +373,7 @@ impl SfmrReconstruction {
         let infinity_point_count = count_points_at_infinity(&points);
         let has_patch_frame = data.patch_u_halfvec_xyz.is_some();
 
-        let recon = SfmrReconstruction {
+        let mut recon = SfmrReconstruction {
             workspace_dir: data.workspace_dir.unwrap_or_default(),
             metadata: data.metadata,
             content_hash: data.content_hash,
@@ -449,22 +432,26 @@ impl SfmrReconstruction {
                 ),
                 display_only_references: None,
                 observations,
-                image_feature_to_point,
-                max_track_feature_index,
+                // Filled by `rebuild_derived_fields` below, once every track
+                // row is known to name an image of the table.
+                image_feature_to_point: Vec::new(),
+                max_track_feature_index: Vec::new(),
                 infinity_point_count,
             },
         };
 
-        // The `load()` path is already protected by the format reader's
-        // validation, but `from_sfmr_data` is also reached from the raw PyO3
-        // `from_data` builder, so confirm the observation columns are parallel
-        // before handing back a reconstruction.
+        // The format reader checks a track row's image only where it reads a
+        // keypoint column, and `from_sfmr_data` is also reached from the raw
+        // PyO3 `from_data` builder, so confirm that every row names an image
+        // of the table and that the observation columns are parallel before
+        // the per-image maps are built from the rows.
         recon
             .validate_observation_columns()
             .map_err(SfmrError::InvalidFormat)?;
         recon
             .validate_point_columns()
             .map_err(SfmrError::InvalidFormat)?;
+        recon.rebuild_derived_fields();
         Ok(recon)
     }
 

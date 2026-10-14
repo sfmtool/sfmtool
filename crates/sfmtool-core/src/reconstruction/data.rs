@@ -369,8 +369,9 @@ impl SfmrReconstruction {
         self.point_set.image_file_hashes()
     }
 
-    /// Validates the point set's observation-source columns against this
-    /// reconstruction's image count. See [`PointSet::validate_observation_columns`].
+    /// Validates the point set's track image indexes and observation-source
+    /// columns against this reconstruction's image count. See
+    /// [`PointSet::validate_observation_columns`].
     pub fn validate_observation_columns(&self) -> Result<(), String> {
         self.point_set
             .validate_observation_columns(self.image_table.image_count())

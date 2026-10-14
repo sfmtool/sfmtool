@@ -282,8 +282,11 @@ pub enum RefitPointsError {
         /// How many the value holds.
         expected: usize,
     },
-    /// An observation names an image the value does not hold, which only a
-    /// value whose tracks were replaced by hand can carry.
+    /// An observation names an image the value does not hold. A load,
+    /// `from_sfmr_data` and the Python `clone_with_changes` refuse such a value
+    /// ([`PointSet::validate_track_image_indexes`](crate::PointSet::validate_track_image_indexes)),
+    /// and the editors build their tracks from a value that passed, so only
+    /// Rust code that writes `point_set.tracks` directly can hand one in.
     ImageOutOfRange {
         /// The point whose track names it.
         point: u32,
@@ -546,7 +549,9 @@ fn check_preconditions(
     }
     // Every image a track names is in the table, so no step indexes past it:
     // the fit's minimum point depth reads each observation's camera centre
-    // and the record checks each `in` row's image.
+    // and the record checks each `in` row's image. The value's builders
+    // already refuse such a row; this holds for a caller that wrote the
+    // public `point_set.tracks` field itself.
     if let Some(observation) = recon
         .point_set
         .tracks

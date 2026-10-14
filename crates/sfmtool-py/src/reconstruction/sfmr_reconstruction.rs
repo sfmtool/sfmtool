@@ -1543,6 +1543,9 @@ impl PySfmrReconstruction {
     /// When the track arrays are replaced, ``observation_counts`` is recomputed
     /// from the new tracks (which must stay grouped by point), so an
     /// ``observation_counts`` value passed in the same call is ignored.
+    /// Every track row must name an image of the result: a
+    /// ``track_image_indexes`` entry past the image table, or kept tracks that
+    /// name an image a shorter ``image_names`` drops, raise ``ValueError``.
     ///
     /// On a ``sift_files`` reconstruction, ``keypoints_xy=None`` drops the
     /// inline keypoint column. When the track arrays are replaced and

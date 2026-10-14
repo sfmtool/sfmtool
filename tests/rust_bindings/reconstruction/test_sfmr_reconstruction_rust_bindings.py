@@ -675,6 +675,40 @@ class TestEmbeddedPatches:
                 track_point_indexes=pt_ids,
             )
 
+    def test_clone_track_replacement_rejects_out_of_range_image(
+        self, seoul_bull_sfmr_only
+    ):
+        # A row naming an image past the table is refused with a ValueError,
+        # in both observation modes, rather than panicking where the per-image
+        # maps are rebuilt from the rows.
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        n_img = len(recon.image_names)
+        for value in (recon, self._make_embedded(recon)):
+            img_idx = np.ascontiguousarray(value.track_image_indexes).copy()
+            img_idx[2] = n_img
+            changes = dict(
+                track_image_indexes=img_idx,
+                track_feature_indexes=np.zeros(len(img_idx), dtype=np.uint32),
+                track_point_indexes=np.ascontiguousarray(value.track_point_indexes),
+            )
+            if value.feature_source == "embedded_patches":
+                changes["keypoints_xy"] = np.ascontiguousarray(value.keypoints_xy)
+            with pytest.raises(
+                ValueError,
+                match=rf"track row 2: image index {n_img} out of range for "
+                rf"{n_img} images",
+            ):
+                value.clone_with_changes(**changes)
+
+    def test_clone_shorter_image_names_rejects_tracks_on_a_dropped_image(
+        self, seoul_bull_sfmr_only
+    ):
+        # Kept tracks that observe the last image cannot outlive dropping it.
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        names = list(recon.image_names)
+        with pytest.raises(ValueError, match="out of range for"):
+            recon.clone_with_changes(image_names=names[:-1])
+
     def test_clone_multipoint_track_replacement_survives_round_trip(
         self, seoul_bull_sfmr_only, tmp_path
     ):
