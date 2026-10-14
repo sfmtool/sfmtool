@@ -44,7 +44,7 @@ pub(crate) const MIN_BSPLINE_COEFFS: usize = 2;
 /// represents exactly the refit's penalty moves the fit by well under a
 /// thousandth of a pixel; any positive weight is enough to determine a
 /// coefficient no data row reaches.
-pub(crate) const SMOOTHING: f64 = 1e-6;
+const SMOOTHING: f64 = 1e-6;
 
 /// The squared weight of one second-difference row of a fit with `data_rows`
 /// data rows and `n_coeffs` coefficients: `SMOOTHING · data_rows / n_coeffs`.
