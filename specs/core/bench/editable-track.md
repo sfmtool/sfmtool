@@ -3955,10 +3955,13 @@ unit-tested in `normal.rs` itself.
   only that column is in the plane, the verdict is one axis with the free axis
   along the column, the normal has no part along the column to within 1
   degree, and its turn about the column is where the patch had it. The
-  default grid is not tested here (0.2 to 1.8 degrees measured). From two of
-  five starts on the one-sample-per-pixel grid the first turn is rejected and
-  the patch is not turned, because the acceptance score's window weights the
-  tile's middle, which is the far plane; those starts are not tested.
+  default grid is not tested here (0.2 to 1.8 degrees measured). The test
+  starts 15 degrees about `x` and -8 about `y`, one of the three of five
+  measured starts the step turns from. From the other two, 12 degrees about
+  `x` with 6 about `y` (the start this test used under the unwindowed score)
+  and 8 about `x` with 10 about `y`, the first turn is rejected and the patch
+  is not turned, because the acceptance score's window weights the tile's
+  middle, which is the far plane; those starts are not tested.
 - Flat texture throughout: every cell is refused for curvature, none has a
   ray, the verdict is none, and the patch is not turned.
 - Every view of the textured plane reports all nine cells fitted, each cell a
