@@ -1,30 +1,55 @@
 # Piece-Gated Grid Normal
 
 **Status:** Draft. Decided:
-- the normal of a patch is estimated from the fitted centres of its pieces, where the pieces are the nine cells of the ZNCC grid the self-similarity reading already splits the bitmap into, so that each piece carries a self-similarity radius computed once and read by both;
-- a piece whose own radius fails the gate the whole-patch rule applies is not fitted at all, and a piece that passes is weighted by how sharply its centre is pinned along its sighting ray;
-- the estimator reports which axes of the normal the surviving pieces fix, in the form the adjacency-surfel estimator reports its determinacy verdict, and leaves an unfixed axis at its prior;
+- the bench's *Grid Plane Normal* is the baseline this draft improves on, because the photometric normal search is known to be the weaker estimator, which is why Surface Tiling Mode runs the Grid Plane Normal and not *Fit Normal*;
+- each part of the patch is measured by registering one cell of the three-by-three ZNCC grid split, by a shift search on one render per view, the measurement the piecewise refinement of cluster patches makes, instead of by a full bench fit per piece;
+- each cell is gated in each view before any geometry, by the piecewise refinement's rules (peak curvature, cell ZNCC, search bound, and a robust affine fit per view), and those rules are shared code with the piecewise refinement, not a copy;
+- the surviving cells are triangulated and a plane fitted through them with the weighting, residual floors, Tukey loop and three-way determinacy verdict of the [cell plane normal kernel](../core/patch/cell-plane-normals.md), with that math factored out so it takes per-view pixels from a track as well as a cluster file's columns;
+- the patch is turned to the fitted normal and the measurement repeated, under the acceptance and stopping rules of the piecewise refinement's shape-moving loop;
+- the split is the nine cells of the ZNCC grid, without overlap;
 - once this estimator covers the callers of the photometric normal search, that search is retired together with the fronto-parallel cache and the D-optimal view subset that exist only to serve it.
 
-Not decided: the weight's functional form; whether the gated pieces are fitted independently along their rays or jointly with a shared plane constraint; the overlap between pieces; what the estimator does on a patch where fewer than three pieces pass. See [Open questions](#open-questions).
+Not decided: the density of the per-view render; which score the loop's acceptance rule reads; whether the step moves the patch's centre onto the fitted plane; whether a cell registration cannot settle falls back to a full piece fit; whether the first iteration can read the localizer's tiles. See [Open questions](#open-questions).
 
 Amends:
-- [core/bench/editable-track.md](../core/bench/editable-track.md) § "Estimating the normal": the Grid Plane step
-- [core/analysis/adjacency-surfel-normals.md](../core/analysis/adjacency-surfel-normals.md): the determinacy verdict is shared
+- [core/bench/editable-track.md](../core/bench/editable-track.md) § "Estimating the normal": `PieceLayout::Grid` of `finite_difference_normal`, the *Grid Plane Normal* step
+- [gui/track-view.md](../gui/track-view.md) § "Surface Tiling Mode": the Grid Plane Normal step of the tiling sequence runs this estimator
+- [core/patch/cell-plane-normals.md](../core/patch/cell-plane-normals.md): its triangulation, plane fit and `NormalDeterminacy` are factored out and shared
+- [core/patch/cluster-patch-refinement.md](../core/patch/cluster-patch-refinement.md#piecewise-refinement): the cell registration, the cell gates and the robust affine fit are factored out and shared
 - [core/patch/patch-normal-refinement.md](../core/patch/patch-normal-refinement.md), [core/patch/fronto-parallel-patch-cache.md](../core/patch/fronto-parallel-patch-cache.md), [core/patch/patch-normal-refine-view-subset.md](../core/patch/patch-normal-refine-view-subset.md): retired when their callers move
 - [cli/reconstruction/embed-patches-command.md](../cli/reconstruction/embed-patches-command.md) and [cli/reconstruction/xform/refine-normals-command.md](../cli/reconstruction/xform/refine-normals-command.md): the normal step they run
 
-Related drafts: [surface-co-solve.md](surface-co-solve.md) § "Normal estimators" lists the family this estimator belongs to and should defer to this draft for the grid estimator. [sharper-patch-bitmap.md](sharper-patch-bitmap.md) supplies the per-view readings the weights use. [patch-footprint-selection.md](patch-footprint-selection.md) reads the same per-piece radii to set a floor on the patch size. [cell-plane-normals.md](../core/patch/cell-plane-normals.md) fits the same plane and emits the same verdict from the cluster-patches file's stored cell displacements, with no rendering, and defines the `NormalDeterminacy` type this estimator would share.
+Related drafts: [surface-co-solve.md](surface-co-solve.md) § "Normal estimators" lists the family this estimator belongs to and should defer to this draft for the grid estimator. [cell-plane-normal-precision-gate.md](cell-plane-normal-precision-gate.md) decides when a cell plane normal may be read, which applies to this estimator's output too. [two-tier-patch-density.md](two-tier-patch-density.md) chooses the density the patch is stored at, which bears on the density this estimator renders at. [sharper-patch-bitmap.md](sharper-patch-bitmap.md) decides how views are scored against a bitmap, which bears on the loop's acceptance score.
 
 ## Purpose
 
 A patch in a patch-based reconstruction is a small oriented square standing in the world, and its normal says which way the square faces. The normal decides how every photograph is resampled into the patch's bitmap, so a wrong normal blurs the bitmap, shifts the keypoints that are localised on it, and misleads every photometric reading taken from it afterwards.
 
-The project has two production ways of estimating a normal. The photometric search turns the normal through two degrees of freedom and keeps the orientation at which the views agree best. The grid estimator, available in the Track View as *Grid Plane Normal*, cuts the patch into a grid of smaller pieces, fits each piece's depth along its sighting rays, and takes the plane through the fitted centres. The photometric search is weak where the texture is weak, has a median error of 16 to 23 degrees at the true position in the surface co-solve harness, and never recovers a normal far from the mean viewing direction. The grid estimator does not have that limit, because a piece's depth comes from parallax, not from the shape of a correlation peak over orientation.
+The project has two production ways of estimating a normal. The photometric search turns the normal through two degrees of freedom and keeps the orientation at which the views agree best; [surface-co-solve.md](surface-co-solve.md) records a median error of 16 to 23 degrees for it at the true position in the surface co-solve harness, and it is weak where the texture is weak. The other is the bench's *Grid Plane Normal*, which reads depth by parallax instead of reading the shape of a correlation peak over orientation. Because the photometric search is the weaker of the two, Track View's Surface Tiling Mode runs the Grid Plane Normal in its sequence: Fit, Find matches by geometry, Fit, Grid Plane Normal, Fit, Commit ([gui/track-view.md](../gui/track-view.md) § "Surface Tiling Mode"). This draft improves the Grid Plane Normal.
 
-The grid estimator has a different fault. It treats every piece as equally trustworthy. A piece over a flat or repeating part of the patch has a correlation that is nearly constant along its ray, so its fitted depth is arbitrary, and one arbitrary depth among nine tilts the fitted plane with no sign in the plane's residual that anything went wrong. The whole patch can score well on self-similarity while one corner or one half scores badly, which is the usual case on a depth edge, an object boundary or a patch that straddles texture and sky.
+### The Grid Plane Normal today
 
-This draft proposes gating and weighting the pieces by their own self-similarity before any geometry is fitted. The self-similarity reading already splits the bitmap into the nine cells of the ZNCC grid and reports a radius for each, so the per-piece trust is a number the code already computes.
+`finite_difference_normal` with `PieceLayout::Grid` in [bench/normal.rs](../../crates/sfmtool-core/src/bench/normal.rs), specified in [editable-track.md](../core/bench/editable-track.md) § "Estimating the normal":
+
+1. It cuts the patch into `pieces × pieces` square pieces that together span its side. Track View's default is 2×2 with no overlap (`SplitSettings::default` in [bench.rs](../../crates/sfm-explorer/src/bench.rs) takes `MIN_PIECES`, which is 2, and an overlap of 0), and Surface Tiling Mode cuts the patch with the split settings Track View holds.
+2. Each piece is a copy of the track resized about its centre and slid along the plane (`resize_patch`, `translate_patch`), and is given a full bench `fit`: localize and sub-pixel refine every sighting against the reference render, re-triangulate, render the bitmap, and evaluate. The fit runs with `FitOptions::default()`, whose localizer is `open_localizer()`, so the member self-similarity gate and the ZNCC bars are off.
+3. A piece whose fit fails, or which the fit puts at infinity, is left out.
+4. The normal is that of the unweighted least-squares plane through the fitted centres: the direction they spread in least. When the centres lie along a line, the line fixes only the turn about its perpendicular, and the normal is the patch's own with its component along the line removed.
+5. The patch is turned to that normal by `tilt_patch`, and the track is read back as a fit ends. Nothing tests whether the turn made the track better.
+
+It has five faults this draft addresses:
+
+- **No per-piece trust gate.** A piece over a flat or repeating part of the patch fits to an arbitrary depth, and with the localizer's gates off nothing refuses it.
+- **Equal weights.** A piece pinned by a wide baseline and one pinned by a narrow one pull on the plane equally.
+- **No outlier rejection.** One wrong centre among four tilts the plane, and the plane's residual gives no sign of it, because a tilted plane through three good centres and one bad one and a flat plane through four noisy ones both fit four numbers.
+- **No acceptance rule.** The patch is turned whether or not the turn improves it.
+- **Cost.** It runs `pieces²` full fits, and every fit goes back to the photographs several times: to render each view's search tile, to refine, to render the bitmap, and to evaluate.
+
+The whole patch can read as well textured while one corner or one half is flat or lies on another surface, which is the usual case on a depth edge, an occluding contour, or a patch that straddles texture and sky. These are the patches whose normals the faults above get wrong.
+
+### The proposal
+
+Measure each part of the patch by a shift registration of one cell on one render per view, the measurement the piecewise refinement of cluster patches makes ([cluster-patch-refinement.md](../core/patch/cluster-patch-refinement.md#piecewise-refinement)). After the one render per view, the registration reads only a small tile held in cache, so the step never goes back to the photograph to resample, which is what makes it faster than a fit per piece. Gate every cell in every view by the piecewise refinement's rules before any geometry, triangulate the surviving cells and fit a weighted, robust plane through them as the [cell plane normal kernel](../core/patch/cell-plane-normals.md) does, then turn the patch and measure again until the cells stop moving.
 
 ### Why this matters for the seed
 
@@ -32,107 +57,161 @@ The seed stage produces up to eight candidate reconstructions per capture and th
 
 ## Rust API
 
-The estimator will live beside the current grid estimator in [bench/normal.rs](../../crates/sfmtool-core/src/bench/normal.rs), with the pose-free part of the piece fit shared with the piecewise refinement in [cluster_refine](../../crates/sfmtool-core/src/patch/cluster_refine/piecewise.rs), specified in [cluster-patch-refinement.md](../core/patch/cluster-patch-refinement.md#piecewise-refinement).
+The bench step replaces `PieceLayout::Grid` in [bench/normal.rs](../../crates/sfmtool-core/src/bench/normal.rs), beside `fit_normal` and `finite_difference_normal`, which keeps `PieceLayout::Cross`. It builds on two crate-visible kernels in `patch/`, each factored out of an existing module rather than written again:
+
+- **Cell registration**, from [cluster_refine/piecewise.rs](../../crates/sfmtool-core/src/patch/cluster_refine/piecewise.rs): the `WorkingPatch` with its summed-area tables, the per-cell shift search with its sub-pixel peak and curvature (`read_cell`), the three cell gates, and the robust affine fit (`fit_update_robust`, `fit_pass`). The piecewise refinement calls the same functions, with its `PiecewiseParams` supplying the bound and the two bars.
+- **Cell triangulation and plane fit**, from [cell_plane_normals.rs](../../crates/sfmtool-core/src/patch/cell_plane_normals.rs): a cell's rays in, its position, covariance and residual out (`triangulate`), and the covariance- and Tukey-weighted plane with its `NormalDeterminacy` (`weighted_plane`, `combined_weights` and the determinacy rule now inside `fit_cluster`). `cell_plane_normals` keeps its public signature and builds its rays from the cluster file's columns; the bench step builds them from a track.
 
 ```rust
-/// How the pieces of a patch are gated and weighted before the plane fit.
-pub struct PieceGateParams {
-    /// A piece whose self-similarity radius exceeds this, in grid px of the
-    /// piece's own render, is not fitted. Defaults to the whole-patch gate.
-    pub max_piece_radius_px: f32,
-    /// A piece whose along-ray fit has less than this curvature at its
-    /// optimum is not fitted, because its depth is not pinned.
-    pub min_ray_curvature: f32,
-    /// Fewer surviving pieces than this leaves the normal at its prior.
-    pub min_pieces: usize,
+/// How [`grid_plane_normal`] measures the cells and when its loop stops.
+pub struct GridPlaneNormalOptions {
+    /// Search bound for a cell's shift, grid px of the working grid; also the
+    /// margin the context tile is rendered with. As the piecewise refinement's
+    /// `cell_shift_bound_px`, 2.0.
+    pub cell_shift_bound_px: f32,
+    /// A cell whose ZNCC at its optimum is below this is refused in that view.
+    /// `DEFAULT_MIN_CELL_ZNCC`, 0.8.
+    pub min_cell_zncc: f32,
+    /// A cell whose ZNCC peak is flatter than this is refused in that view.
+    /// `DEFAULT_MIN_CELL_CURVATURE`, 0.02 ZNCC per grid px².
+    pub min_cell_curvature: f32,
+    /// Side of the working grid the views are rendered on. `None` renders at
+    /// the track's own patch resolution. See "The density of the render".
+    pub working_resolution: Option<u32>,
+    /// Triangulation, floors, Tukey loop and determinacy, as the cell plane
+    /// normal kernel reads them.
+    pub plane: CellPlaneParams,
+    /// The loop stops when a turn moves no cell centre by more than this, grid px.
+    pub update_tolerance_px: f32,
+    /// The most renders the loop makes.
+    pub max_iterations: u8,
+    /// The reading the step ends with.
+    pub fit: FitOptions,
 }
 
-/// The normal, which of its axes the pieces fixed, and why each piece was kept or dropped.
-pub struct GatedNormalReport {
-    pub normal: [f64; 3],
-    pub determinacy: Determinacy,          // shared with adjacency-surfel-normals
-    pub pieces: [[PieceVerdict; 3]; 3],
+/// What the cells said, carried by `NormalEstimate::GridPlane`.
+pub struct GridPlaneCells {
+    pub determinacy: NormalDeterminacy,      // shared with cell_plane_normals
+    pub cell_status: [CellPlaneStatus; 9],   // in the plane, plane outlier, too few rays, …
+    pub cell_rays: [u32; 9],                 // rays each cell was triangulated from
+    pub cell_weight: [f64; 9],
+    /// Per observation of the track, each cell's registration status in that
+    /// view at the last render: fitted, refused for curvature, ZNCC, bound,
+    /// as an outlier of the view's affine fit, or not attempted.
+    pub view_cells: Vec<[CellStatus; 9]>,
     pub plane_rms: f64,
+    /// Distance of the fitted plane from the patch centre along the normal.
+    pub plane_offset: f64,
+    pub iterations: u8,
+    pub stop: LoopStop,                      // the piecewise loop's stop reasons
 }
 
-pub enum PieceVerdict {
-    Fitted { weight: f32, radius_px: f32, ray_curvature: f32 },
-    RadiusGate { radius_px: f32 },
-    CurvatureGate { ray_curvature: f32 },
-    NoViews,
-}
-
-pub fn piece_gated_grid_normal(
+pub fn grid_plane_normal(
     track: &EditableTrack,
-    recon: &EditedReconstruction,
-    views: &[ProjectedImage],
-    gate: &PieceGateParams,
-) -> Result<(EditableTrack, GatedNormalReport), NormalError>;
+    edited: &EditedReconstruction,
+    images: &[ProjectedImage<'_>],
+    options: &GridPlaneNormalOptions,
+    progress: &Progress<'_>,
+) -> Result<(EditableTrack, NormalReport), NormalError>;
 ```
 
-**Why this shape.** The pieces are fixed at the ZNCC grid's 3×3 split rather than a free `pieces` count, because the per-piece radius is only available at that split, and computing a second split would cost a second sweep over every view for no gain in the cases this draft is about. The report keeps every piece's verdict, because a patch whose normal is wrong is diagnosed by asking which pieces were trusted, and the Track View should show that the way it shows the reference view's per-view verdicts. The determinacy type is shared with the adjacency-surfel estimator so that a caller choosing between the two reads one vocabulary.
+**Why this shape.** The signature is the other two normal steps', so Track View's button, the wire's `fit_bench_track_normal` with `method` `grid_plane`, and Surface Tiling Mode's step call it the way they call `finite_difference_normal` today, and it ends with the same `NormalReport`. The split is fixed at the ZNCC grid's nine cells, so there is no `pieces` or `overlap`: the cells are the ones `grid_cell_centres` defines for every other per-cell reading, and the cell gates and the plane fit are only defined on that split. Track View's *per axis* and *overlap* boxes stay for *Finite Diff Normal*. The report keeps every cell's verdict and every view's per-cell status, because a wrong normal is diagnosed by asking which cells were trusted and why each view refused the others, and the statuses reuse `CellStatus`, `CellPlaneStatus` and `LoopStop`, so the bench, the cluster file and the cell plane kernel use one set of words. `NormalDeterminacy` is the cell plane kernel's type, so a caller choosing between the two estimators reads one verdict. The settings are `*Options` because a caller chooses them; `CellPlaneParams` keeps its existing name.
 
-**Example.** The bench's *Grid Plane Normal* button calls this in place of `grid_normal`, shows the nine verdicts as a 3×3 overlay on the patch bitmap, and tilts the patch only along the fixed axes.
+**Example.** Surface Tiling Mode's Grid Plane Normal step calls `grid_plane_normal(&track, &edited, &images, &GridPlaneNormalOptions::default(), &progress)`, and Track View shows the nine cell verdicts as a three-by-three overlay on the patch bitmap and turns the patch only about the axes the cells fixed.
 
 ## Theory
 
-### The piece gate
+### The measurement
 
-The self-similarity radius of a bitmap says how far the bitmap can slide over itself and still match. The reading reports it for the whole bitmap, for its middle square, and for each of the nine cells of the ZNCC grid. The whole-patch rule already refuses a member whose radius exceeds a gate, because such a member cannot be localised. A piece is a cell, and the same rule applies to it for the same reason: a cell that matches itself over a wide shift has no single depth along its ray that the views agree on.
+**Render.** Each `in` view is rendered once at the track's current frame, centred on the view's keypoint, through the patch's plane: the patch re-anchored in its plane on the keypoint's ray, and every grid sample projected into the photograph by the camera model, the render `WarpMap::from_patch` makes for every bench tile. It is not an affine approximation. The render covers the working grid plus a margin of `cell_shift_bound_px` on every side, as the piecewise refinement's working patch does, and it is the only read of the photographs. The reference view is rendered the same way, without the margin, and its nine cells are the templates.
 
-Gating before the fit is the point. A robust plane fit over nine centres cannot tell one wrong piece from a real tilt, because a tilted plane through eight points and an outlier and a flat plane through nine noisy points are both consistent with nine numbers. The piece's own radius decides without any geometry, and a gated piece contributes nothing rather than a down-weighted error.
+**Register.** Each of the nine cells of each view is compared with the same cell of the reference render by windowed ZNCC at every whole shift within the bound. At the best whole shift a quadratic fitted to the three-by-three neighbourhood gives the sub-pixel shift, and the smaller eigenvalue of its negated Hessian is the peak's curvature: how sharply the cell is pinned.
 
-### The along-ray fit and its curvature
+**Gate.** A cell is refused in a view before any geometry, by the piecewise refinement's rules: for curvature when the reference is flat over it or its peak is flatter than `min_cell_curvature`, which catches flat and repeating texture; for ZNCC when its score at the optimum is below `min_cell_zncc`, which catches a cell over a different surface; and for the bound when its best whole shift lies on the search bound. The surviving cells of the view are then fitted with the robust affine map of the piecewise refinement, curvature-weighted IRLS with a Tukey biweight, and a cell the map gives no weight is refused as an outlier in that view. A repeated texture can give a cell a sharp, high-scoring peak at the wrong shift, and only its disagreement with the other cells exposes it.
 
-Each surviving piece is fitted along its sighting rays the way the bench's fit moves a whole patch: the piece's centre slides along the ray from the reference view and the summed ZNCC against the other views is maximised. The curvature of that score at its optimum is the second trust signal. A piece with good texture but seen only over a narrow baseline has a sharp self-similarity but a flat score along the ray, and its depth is still not pinned. The curvature catches what the radius cannot.
+A cell is refused per view, not per patch: a cell occluded in one view keeps its rays from the others.
 
-The weight is a function of both. The draft does not fix the form; the candidates are the inverse radius, the ray curvature, or their product normalised across the surviving pieces. The functional form is an open question to be settled by measurement on the ground-truth captures.
+### Why a displacement here is an error
+
+In the cluster file a cell's displacement is measured against an affine shape, so it carries the shape's first-order disagreement with the cells and the homography's second-order term as well as any parallax. Here the render is induced by the patch's plane, so if the normal and the depth are right, every cell of every view lands where the reference's does and its displacement is zero up to noise. A displacement measures what remains wrong with the current normal and depth, and a view's common shift says its keypoint is off. That is what lets the step loop: it is the inverse-compositional pattern of the piecewise refinement's `move_shape` loop, with the plane in place of the affine shape.
+
+### Triangulating the cells
+
+A surviving cell's content in view `i` lies at its centre plus its displacement on the working grid, and the render's map takes that grid position to a pixel of the photograph, and so to a ray. The reference contributes its cell centre undisplaced. The rays of one cell across the views are triangulated as [cell-plane-normals.md](../core/patch/cell-plane-normals.md) § "Triangulating a cell" does: the depth-weighted nearest point of the rays in pixels, refused for too few rays, too narrow a baseline, or a point behind a camera; its residual floored at the precision of a measured shift mapped into each view, with the render map's local Jacobian taking the place of the cluster file's `(patch_size / R) · ‖S‖`; and its covariance `σ² Λ⁻¹`.
 
 ### The plane and its determinacy
 
-The plane is the weighted least-variance direction through the fitted centres. With nine well-spread pieces it is fully determined. After gating, the survivors can be collinear (one row of a patch across a depth edge) or too few. The adjacency-surfel estimator already defines a determinacy verdict for exactly this situation: both axes fixed, one axis fixed with the free axis named, or none. The gated estimator emits the same verdict. A caller tilts the patch only about the fixed axes and leaves the other at the prior, which is the mean viewing direction unless the caller has a better one.
+The plane through the triangulated cells is the cell plane kernel's: weighted by the inverse of each cell's variance along the normal times its Tukey weight, over `irls_iters` passes on standardised residuals. Its verdict is `NormalDeterminacy`: both axes when the live cells spread in two directions within the plane, one axis with the line named as the free axis when they lie along a line, and none with fewer than `min_cells` live cells or no spread. Under one axis the step turns the patch only about the fixed axis and keeps its rotation about the free axis where the patch had it, as today's line rule does; under none it does not turn the patch.
 
-### Why the whole-patch-good, parts-bad case is the common one
+### Turning and looping
 
-A patch on a planar textured surface passes everywhere and the gate changes nothing. The patches the gate exists for sit where a surface ends: a depth edge, an occluding contour, a sign against the sky. There the pieces over the surface are good and the pieces over the background are bad or belong to a different plane. The right normal is the one the good pieces define, which is the physical surface the patch mostly covers. Averaging good and bad pieces gives a plane that belongs to neither surface. So the estimator prefers the plane of the survivors, even when that is only one half of the patch, and reports the one-axis verdict when the survivors are collinear rather than filling the missing axis from bad data.
+The step turns the patch to the fitted normal with `tilt_patch`, which keeps the centre, rebuilds each sighting at the in-plane offset it had, and stops `MAX_TILT_DEG` (80°) from any observation. It then renders and registers again. A turn is kept only when the score does not fall, the piecewise loop's acceptance rule, with the same tolerance and the same floor at the starting score; which score is an open question. The loop stops when a turn moves no cell centre by more than `update_tolerance_px`, at `max_iterations` renders, when a turn's largest cell movement does not shrink from the one before (oscillation, keeping whichever of the two frames scores higher), or when a turn is rejected. With a normal far from the truth, cells near the patch's edge register at or past the bound; they are refused for the bound on the first render and return as the turns bring them inside it.
+
+The step ends as today's does, by reading the track back with the fit's evaluation over the turned square.
+
+### The patch that is good in parts
+
+A patch on one textured plane passes everywhere, and the gates change nothing. The patches the gates exist for sit where a surface ends. There the cells over the surface register and the cells over the background are refused for curvature, for ZNCC, or as outliers of the view's affine fit; a cell that passes in every view but lies off the plane the others agree on is refused by the robust plane fit. The normal is the plane of the survivors, even when they are one half of the patch, and when they lie along one row or column the verdict says one axis is free rather than filling it from refused cells.
 
 ### Retiring the photometric search
 
-The photometric normal search has three production callers: the embed-patches rounds, the `xform --refine-normals` command, and the bench's *Fit Normal*. When each has moved to the gated grid estimator, the search and its two support modules, the fronto-parallel cache and the D-optimal view subset, have no caller and are deleted. The fronto-parallel prior goes with them; the gated estimator's prior is the mean viewing direction, and the sweep over the fronto prior in the project's records showed the prior degrading normals everywhere it was applied.
+The photometric normal search has three production callers: the embed-patches rounds, `sfm xform --refine-normals`, and the bench's *Fit Normal*. When each has moved to this estimator, the search and its two support modules, the fronto-parallel cache and the D-optimal view subset, have no caller and are deleted. The fronto-parallel prior goes with them.
 
-The order is: build the estimator and measure it against the two harness ground truths; move the bench button and measure by hand; move embed-patches; move `xform --refine-normals`; delete.
+The order is: build the shared kernels and the bench step and measure the step against today's Grid Plane Normal; move Surface Tiling Mode and the Track View button; move embed-patches; move `xform --refine-normals`; delete.
 
 ## Implementation notes
 
-- The nine per-piece radii are already computed by the self-similarity parts reading, as `zncc_self_similarity_radius_grid`. The estimator reads them from the same measurement and never recomputes them.
-- The along-ray fit of a piece is the bench fit restricted to a cell; it should share the fit's code rather than copy it, so that the piece fit and the whole-patch fit cannot drift apart in their sampler or their pyramid rule.
-- The piece's render for its self-similarity reading is the piece's own `R/3 × R/3` tile. At `R = 12` that is 4×4 px, which is too small to carry a meaningful radius. The estimator therefore needs `R ≥ 24` to read piece radii, which ties it to the fine tier in [two-tier-patch-density.md](two-tier-patch-density.md). At the coarse tier the gate falls back to the whole-patch and middle radii alone, and the estimator reports that it did.
+- **The localizer's context tile is the same kind of render, and is not reusable as it stands.** The keypoint localizer renders, per view, a context tile through `render_context` ([keypoint_localize.rs:342](../../crates/sfmtool-core/src/patch/keypoint_localize.rs)): the patch re-anchored on the view's starting keypoint by `shifted_center`, scaled to `R + 2·margin` samples, and projected by `WarpMap::from_patch`, one sample per grid pixel. That is a plane-induced render on the patch grid with a margin, as step one needs, and its margin, `⌈search⌉` (6 at the default `search`), covers the cell bound of 2. But the tile cannot be read by this step for three reasons. It is private and lives only inside the per-view loop of the alignment ([keypoint_localize/align.rs:321](../../crates/sfmtool-core/src/patch/keypoint_localize/align.rs)), dropped once that view is searched. It is rendered at the frame and keypoints the track had before the fit, while the step runs after a fit has re-triangulated and moved the centre. And it is centred per-channel `f32` planes with a separate validity map, where the cell search reads an interleaved working patch with `NaN` for missing samples. What is shared is the render path, `render_context`'s use of `shifted_center` and `WarpMap::from_patch`, not the tiles. Whether a first iteration run inside a fit could read them is an open question.
+- `grid_cell_centres` and `grid_bounds` live in `patch/normal_refine/support.rs` with `pub(in crate::patch)` visibility. They outlive the photometric search, so retiring the search keeps them, and the shared kernels belong in `patch/` where they are visible; the bench step in `bench/` calls those kernels, not the helpers.
+- The piecewise refinement renders its working patch through `sample_grid_window` from an affine shape. The plane-induced render produces the same interleaved samples, so the shared code starts at `WorkingPatch::new` and the two stages differ only in how they render.
+- Factoring out of `cell_plane_normals` must leave its output unchanged, and factoring out of the piecewise refinement must leave a `.matches` file bit for bit what it was; both kernels' existing determinism tests check it.
+- The glossary's **working patch** is the affine render of the piecewise refinement. This draft calls its plane-induced render a **context tile**, the localizer's word for the same kind of render, and the glossary entry should name both when this is built. The glossary's **grid-plane normal** entry changes too: it no longer has pieces, `pieces` or `overlap`.
+- A track at infinity is refused as today, by `normal_preconditions`.
 
 ## Determinism and precision
 
-Per-piece fits are `f32` on tile intensities, as the bench fit is. The plane fit is `f64` because the fitted centres are world coordinates and the least-variance direction is a near-cancelling eigenproblem on nine points. Output is equal within tolerance for any thread count, with the same discrete piece verdicts; no content hash depends on it.
+Renders and cell scores are `f32` on tile intensities, as the piecewise refinement's are; the sub-pixel peak, the affine fits, the triangulation and the plane are `f64`, as in the two kernels they come from. Each view's render and registration is independent and can run in parallel, with no randomness and a fixed pass count; the output is equal for any thread count. No content hash depends on it.
 
 ## Parameters
 
 | Parameter | Default | Meaning |
 |-----------|---------|---------|
-| `max_piece_radius_px` | the whole-patch gate | A piece with a larger self-similarity radius is not fitted. |
-| `min_ray_curvature` | to be measured | A piece with a flatter along-ray score is not fitted. |
-| `min_pieces` | 3 | Fewer survivors leaves the normal at its prior. |
+| `cell_shift_bound_px` | `2.0` | Shift search bound and render margin, working grid px; the piecewise refinement's default |
+| `min_cell_zncc` | `0.8` | A cell below this ZNCC in a view is refused in that view (`DEFAULT_MIN_CELL_ZNCC`) |
+| `min_cell_curvature` | `0.02` | A cell whose peak is flatter in a view is refused in that view (`DEFAULT_MIN_CELL_CURVATURE`) |
+| `working_resolution` | `None` (the track's patch resolution) | Side of the working grid; see the open question on density |
+| `plane` | `CellPlaneParams::default()` | `min_rays` 2, `min_triangulation_angle_deg` 2.0, `cell_shift_precision_grid_px` 0.1, `ray_noise_floor_px` 0.05, `irls_iters` 3, `tukey_c` 4.685, `min_cells` 3, `det_aniso` 0.10 |
+| `update_tolerance_px` | `0.05` | The loop stops when no cell centre moves by more; the piecewise loop's default |
+| `max_iterations` | `5` | Render cap; the piecewise loop's default |
+
+The two cell bars are the piecewise refinement's provisional defaults, set on synthetic tests; they are not measured for this use.
 
 ## Testing
 
-A synthetic planar patch with uniform texture: all nine pieces fitted, normal within 0.5° of truth, both axes fixed. The same patch with one third replaced by a flat region: three pieces gated by radius, both axes still fixed, normal within 1°. The same patch with one half replaced by a second plane at a different depth: the survivors are one row or one column, the verdict names the free axis, and the fixed axis agrees with the surviving half's plane. A patch with all pieces over flat texture: fewer than `min_pieces`, normal unchanged, verdict none. Against the surface co-solve harness's two ground truths, the median normal error must beat the photometric search's 16 to 23 degrees.
+Kernel tests on synthetic planes rendered through known poses:
+
+- A textured planar patch started 10° to 20° off its normal: the loop converges, all nine cells are in the plane, both axes are fixed, and the normal is within 0.5° of truth.
+- The same patch with one third replaced by a flat region: those three cells are refused for curvature in every view, both axes are still fixed, and the normal is within 1° of truth.
+- A patch whose halves lie on two planes at different depths: the cells of one half are refused, by ZNCC, as affine outliers or by the plane fit, the verdict is one axis, the free axis lies along the surviving half's row or column, and the fixed axis agrees with that half's plane.
+- A patch over flat texture throughout: no cell survives, the verdict is none, and the patch is not turned.
+- A turn that lowers the acceptance score is not kept.
+- The piecewise refinement's and the cell plane kernel's tests pass unchanged after the factoring, and a `.matches` file written before and after is identical.
+
+Measurement against today's Grid Plane Normal, at its Track View default of 2×2 pieces, on the `seoul_bull_sculpture` and `kerry_park` ground truths: the normal error of each against the ground-truth normals, the share of tracks given each verdict, and the time each takes per track. Then a hand review in SfM Explorer: Surface Tiling Mode run with each estimator over the same patches, the turned patches compared by a person without knowing which estimator turned which. The estimator replaces today's only if the review prefers it; a lower error on the ground truths is not enough on its own.
 
 ## Non-goals
 
-Joint estimation of depth and normal. The estimator takes the depth as fitted and turns the patch about its centre; the joint solve is the subject of [surface-co-solve.md](surface-co-solve.md).
+**Joint estimation of depth and normal.** The step turns the patch about its centre and reports the plane's offset; placing the centre is the following Fit's work in the tiling sequence, unless the open question below decides otherwise. The joint solve is the subject of [surface-co-solve.md](surface-co-solve.md).
 
-Normals before poses exist. A normal is a 3D quantity and needs sighting rays. The pose-free precursor, per-cell 2D displacements, is the piecewise refinement of [cluster-patch-refinement.md](../core/patch/cluster-patch-refinement.md#piecewise-refinement).
+**Normals before poses exist.** A normal needs sighting rays. Without poses, the per-cell displacements of the piecewise refinement are what is measured, and [cell-plane-normals.md](../core/patch/cell-plane-normals.md) turns them into a normal once poses exist.
+
+**Moving the sightings.** The loop's renders follow each view's keypoint as `tilt_patch` rebuilds it; the step does not write a view's common cell shift back to its keypoint. Placing keypoints is the fit's work.
 
 ## Open questions
 
-- **Weight form.** Inverse radius, ray curvature, or their product. Decide by measuring normal error on the two harness ground truths with each.
-- **Independent or joint piece fits.** Fitting each piece's depth alone is simple and parallel. Fitting all survivors with a shared plane constraint uses the plane to regularise weak pieces but reintroduces the coupling the gate was meant to remove. Start independent.
-- **Piece overlap.** The ZNCC grid's cells do not overlap. Overlapping pieces give more centres but correlated ones. Start without overlap, since the radii are only available for the non-overlapping cells.
-- **Fewer than three survivors.** Leave at the prior, or fall back to the adjacency-surfel estimate where neighbours exist. The latter is the better answer in a dense reconstruction and the only answer on the bench is the former.
+- **The density of the render.** At `R = 12` a cell is 4×4 samples, enough for a shift registration against a textured template and not enough for a self-similarity reading, which is why the cluster stage gates cells on peak curvature rather than on a self-similarity radius. More samples per cell make the peak and its curvature steadier, and the render is the only read of the photograph, so a denser working grid costs little after it. The proposal is to render at least 24 samples across the patch, so a cell holds at least 8×8, whatever resolution the patch is stored at. A grid much denser than the photograph's own sampling interpolates, and [two-tier-patch-density.md](two-tier-patch-density.md) refuses that for the stored bitmap; whether the working grid should follow the reference view's footprint in photograph pixels instead is to be decided by measuring the cell gates' pass rate and the normal error at both. Today's 2×2 pieces each render the full `R` samples over half the patch's side, twice the density of the patch itself.
+- **The acceptance score.** The windowed ZNCC of each view's whole tile against the reference render at the zero shift, read from the renders the loop already made, is cheap and is the cluster loop's choice in kind. The bench's evaluation, the blur-matched score the bars judge, is what a person reads, but costs another pass over the photographs per iteration. Start with the reference ZNCC, and compare the turns each accepts.
+- **Moving the centre.** The fitted plane may lie off the patch's centre. Keeping the centre, as `tilt_patch` does, leaves depth to the following Fit; moving it to where the reference ray meets the plane would let the loop correct depth and normal together, and the displacements would then tend to zero.
+- **A fallback to a full piece fit.** A cell registration cannot settle, for example one at the search bound when the normal is far off, could be given today's full piece fit as a fallback. A second loop iteration, after the first turn has brought the cell inside the bound, may make it unnecessary. Decide by counting, on the ground truths, the cells that end the loop refused for the bound.
+- **Reading the localizer's tiles.** The first iteration of the loop could read the context tiles a fit's localizer renders, if the localizer kept them and the step ran inside the fit, at the frame the fit started from. Every later iteration renders again anyway. Whether saving one render per view is worth the coupling is to be measured.
+- **Fewer than three live cells.** The step leaves the patch unturned. Where the reconstruction is dense, the [adjacency surfel](../core/analysis/adjacency-surfel-normals.md) estimate from the point's neighbours could stand in; on the bench, leaving the patch is the only answer.
