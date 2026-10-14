@@ -128,9 +128,10 @@ pub fn subset_by_image_indices(
 exposed to Python as `PySfmrReconstruction.subset_by_image_indices`. It
 handles image/thumbnail/depth-stat filtering, track filtering with image
 index remapping (each point's kept observations sorted by their new image
-index, so the tracks stay sorted by point then image), optional orphaned-point removal with contiguous point ID
-remapping, and rig/frame filtering (dropping frames with no remaining
-images and remapping frame indices).
+index, so the tracks stay sorted by point then image), optional
+orphaned-point removal with contiguous point ID remapping, and rig/frame
+filtering (dropping frames with no remaining images and remapping frame
+indices).
 
 The CLI shim, [`to_colmap_bin.py`](../../../src/sfmtool/_commands/to_colmap_bin.py),
 loads the input and, when `--range` is given, calls `apply_range_filter` from
