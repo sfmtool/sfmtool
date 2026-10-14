@@ -433,6 +433,9 @@ pub(crate) fn parse(
         "retriangulate_all_points" => Command::RetriangulateAllPoints {
             reconstruction_label: args.required_string("reconstruction_label")?,
         },
+        "refit_all_points" => Command::RefitAllPoints {
+            reconstruction_label: args.required_string("reconstruction_label")?,
+        },
         "prune_covered_observations" => {
             let defaults = PruneCoveredOptions::default();
             Command::PruneCoveredObservations {

@@ -183,6 +183,12 @@ pub struct SceneGraphResponse {
     /// and a long one, so `AppState::start_retriangulate_all_points` sends it to
     /// a worker after the frame.
     pub retriangulate_all_points: Option<ReconId>,
+    /// `Refit All Points` chosen from a reconstruction's context menu: fit
+    /// every point to the render of its reference observation and commit it,
+    /// as the node's next version. A bulk edit that reads every photograph the
+    /// points observe, so `AppState::start_refit_all_points` sends it to a
+    /// worker after the frame.
+    pub refit_all_points: Option<ReconId>,
     /// `Prune Covered Observations` chosen from a reconstruction's context
     /// menu: retire every observation a finer tracked one covers, as the node's
     /// next version. A bulk edit, and a long one, so

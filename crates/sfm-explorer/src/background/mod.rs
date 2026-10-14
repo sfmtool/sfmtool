@@ -120,6 +120,21 @@ impl Operation {
         kind: Kind::Edit,
     };
 
+    /// Every point of one node fitted to the render of its reference
+    /// observation, as Track View's *Fit* and *Commit* do for one track
+    /// (`specs/gui/edits/refit-all-points.md`).
+    ///
+    /// Cancellable because the photographs are decoded with the flag polled
+    /// between them, and `sfmtool_core::bench::refit_points` polls it in front
+    /// of each stage and of each point's fit and hands back
+    /// `RefitPointsError::Cancelled` rather than a value some of whose points
+    /// were refit.
+    pub(crate) const REFIT_ALL_POINTS: Operation = Operation {
+        name: "Refit all points",
+        cancellable: true,
+        kind: Kind::Edit,
+    };
+
     /// One camera of one node switched to the camera model its proposal was
     /// fitted to, and the tracks its images observe retriangulated through the
     /// new model, as one version: the camera model proposal's Apply
@@ -329,11 +344,12 @@ impl Operation {
     /// a declaration nothing checks is a declaration that rots.
     // Read by that test alone, which is what it is for.
     #[cfg(test)]
-    pub(crate) const ALL: [Operation; 17] = [
+    pub(crate) const ALL: [Operation; 18] = [
         Operation::OPEN,
         Operation::BUNDLE_ADJUST,
         Operation::TO_EMBEDDED_PATCHES,
         Operation::RETRIANGULATE_ALL_POINTS,
+        Operation::REFIT_ALL_POINTS,
         Operation::SWITCH_CAMERA_MODEL,
         Operation::PRUNE_COVERED_OBSERVATIONS,
         Operation::ADD_IMAGE_TO_TRACKS,

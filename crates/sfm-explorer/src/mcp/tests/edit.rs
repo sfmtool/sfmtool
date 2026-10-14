@@ -255,6 +255,59 @@ fn retriangulate_all_points_accepts_two_cameras() {
     assert_eq!(version_count(&state), 2);
 }
 
+/// The refit of every point goes to a worker, and the version it comes back
+/// with is the node's next one. Over the bench's fixture, an embedded_patches
+/// node with a patch frame per point and a photograph cached for every image.
+#[test]
+fn refit_all_points_defers_and_comes_back_with_a_version() {
+    let (mut state, _) = crate::bench::tests::state();
+    let mut viewer = Viewer3D::new();
+    viewer.panel_size = [1280, 720];
+    state.window = Some(FakeWindow::default().info());
+    let map = json!({ "reconstruction_label": "demo" })
+        .as_object()
+        .cloned()
+        .expect("an object");
+    let command = tools::parse("refit_all_points", Some(&map)).expect("a well-formed call");
+    let pending = match agent(&mut state, &mut viewer, command) {
+        Outcome::Deferred(super::super::Deferred::Background(pending)) => pending,
+        Outcome::Done(Err(e)) => panic!("expected a deferral, got refusal: {e}"),
+        _ => panic!("the refit must defer"),
+    };
+    assert_eq!(pending.operation_name, "Refit all points");
+    state.finish_background_task();
+
+    let reply = match super::super::edit::background_reply(&state, &pending).expect("it finished") {
+        Ok(ToolOutput::Json(value)) => value,
+        Ok(ToolOutput::Png { .. }) => panic!("expected JSON, got an image"),
+        Err(e) => panic!("expected success, got refusal: {e}"),
+    };
+    assert_eq!(version_count(&state), 2);
+    assert_eq!(reply["label"], json!("Refit demo"), "{reply}");
+    let report = reply["report"].as_str().expect("a report");
+    assert!(report.contains("points refit"), "{report}");
+}
+
+/// A node whose points carry no patch frame is refused at once, in the greyed
+/// menu entry's words, and nothing starts.
+#[test]
+fn refit_all_points_is_refused_without_patch_frames() {
+    let (mut state, mut viewer) = editable();
+    let map = json!({ "reconstruction_label": "run_a" })
+        .as_object()
+        .cloned()
+        .expect("an object");
+    let command = tools::parse("refit_all_points", Some(&map)).expect("a well-formed call");
+    match agent(&mut state, &mut viewer, command) {
+        Outcome::Done(Err(e)) => {
+            assert!(e.to_string().contains("no patch frame"), "{e}")
+        }
+        _ => panic!("a node with no patch frames must be refused"),
+    }
+    assert!(state.background_task().is_none());
+    assert_eq!(version_count(&state), 1);
+}
+
 /// The prune goes to a worker, and the version it comes back with is the
 /// node's next one.
 #[test]

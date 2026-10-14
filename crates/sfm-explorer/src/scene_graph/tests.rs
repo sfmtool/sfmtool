@@ -3470,9 +3470,112 @@ fn the_retriangulate_entry_is_greyed_while_the_node_is_busy() {
     state.finish_background_task();
 }
 
+/// `Refit All Points` is live on an embedded_patches node with a patch frame
+/// per point, is drawn directly under `Retriangulate All Points` and above
+/// `Prune Covered Observations`, and reports the node it was opened on rather
+/// than the selection.
+#[test]
+fn the_refit_entry_is_live_on_an_embedded_patches_node() {
+    let mut state = AppState::new();
+    state.append_node(prunable_node("/runs/run_a.sfmr"));
+    state.append_node(prunable_node("/runs/run_b.sfmr"));
+    let selected = state.scene[0].id;
+    let id = state.scene[1].id;
+    state.selected_recon = Some(selected);
+    let (mut panel, ctx) = settled(&mut state);
+
+    open_context_menu(&mut panel, &ctx, &mut state, row_id(id, "node_label"));
+    let above = panel
+        .hit_rect(row_id(id, "retriangulate_all_points"))
+        .expect("the retriangulation entry");
+    let entry = panel
+        .hit_rect(row_id(id, "refit_all_points"))
+        .unwrap_or_else(|| {
+            panic!(
+                "the reconstruction row's menu offered no {}",
+                super::menus::REFIT_ALL_POINTS
+            )
+        });
+    let below = panel
+        .hit_rect(row_id(id, "prune_covered_observations"))
+        .expect("the prune entry");
+    assert!(
+        entry.top() >= above.bottom() - 1.0 && entry.top() - above.bottom() < entry.height(),
+        "the refit entry is not directly under the retriangulation"
+    );
+    assert!(
+        below.top() >= entry.bottom() - 1.0 && below.top() - entry.bottom() < entry.height(),
+        "the refit entry is not directly above the prune"
+    );
+    let response = click(&mut panel, &ctx, &mut state, row_id(id, "refit_all_points"));
+    assert_eq!(
+        response.refit_all_points,
+        Some(id),
+        "the entry reported the selection rather than the row it was opened on"
+    );
+}
+
+/// The refit entry's dead state and its hover sentence on a node it cannot
+/// run on, and that clicking it reports nothing.
+fn assert_refit_entry_dead(state: &mut AppState, id: crate::scene::ReconId, why: &str) {
+    let node = state.node(id).expect("loaded");
+    let refusal = crate::state::edits::refit_refusal(node, state.busy_refusal(id).as_deref())
+        .expect("the entry is refused");
+    assert!(refusal.contains(why), "{refusal}");
+    let (mut panel, ctx) = settled(state);
+    open_context_menu(&mut panel, &ctx, state, row_id(id, "node_label"));
+    assert!(
+        panel.hit_rect(row_id(id, "refit_all_points")).is_some(),
+        "the entry was hidden rather than greyed"
+    );
+    let response = click(&mut panel, &ctx, state, row_id(id, "refit_all_points"));
+    assert_eq!(response.refit_all_points, None, "the entry was live");
+}
+
+/// On a node whose observations are `.sift` feature indexes it is drawn and
+/// dead, and its sentence names the conversion.
+#[test]
+fn the_refit_entry_is_greyed_without_inline_keypoints() {
+    let mut state = shared_shoot(1);
+    let id = state.scene[0].id;
+    assert_refit_entry_dead(&mut state, id, "Convert to Embedded Patches");
+}
+
+/// On a node whose points carry no patch frame it is drawn and dead: a fit
+/// registers the frame into every view.
+#[test]
+fn the_refit_entry_is_greyed_without_patch_frames() {
+    let mut state = resectable_scene();
+    let id = state.scene[0].id;
+    assert_refit_entry_dead(&mut state, id, "no patch frame");
+}
+
+/// And dead while an operation is running on that node, in the busy sentence.
+#[test]
+fn the_refit_entry_is_greyed_while_the_node_is_busy() {
+    let mut state = AppState::new();
+    state.append_node(prunable_node("/runs/run_a.sfmr"));
+    let id = state.scene[0].id;
+    let (open, held) = std::sync::mpsc::channel::<()>();
+    state
+        .start_background_task(
+            crate::background::Operation::REFIT_ALL_POINTS,
+            id,
+            Box::new(move |_progress| {
+                let _ = held.recv();
+                crate::background::Finished::Failed("nothing".to_string())
+            }),
+        )
+        .expect("nothing else is running");
+    assert_refit_entry_dead(&mut state, id, "is busy");
+
+    open.send(()).expect("the worker is waiting");
+    state.finish_background_task();
+}
+
 /// `Prune Covered Observations` is live on a node that carries a patch frame
-/// per point, sits directly under `Retriangulate All Points`, and reports the
-/// node it was opened on.
+/// per point, sits directly under `Refit All Points`, after the two entries
+/// that re-read the points, and reports the node it was opened on.
 #[test]
 fn the_prune_entry_is_live_on_a_node_with_patch_frames() {
     let mut state = AppState::new();
@@ -3482,8 +3585,8 @@ fn the_prune_entry_is_live_on_a_node_with_patch_frames() {
 
     open_context_menu(&mut panel, &ctx, &mut state, row_id(id, "node_label"));
     let above = panel
-        .hit_rect(row_id(id, "retriangulate_all_points"))
-        .expect("the retriangulation entry");
+        .hit_rect(row_id(id, "refit_all_points"))
+        .expect("the refit entry");
     let entry = panel
         .hit_rect(row_id(id, "prune_covered_observations"))
         .unwrap_or_else(|| {
@@ -3494,7 +3597,7 @@ fn the_prune_entry_is_live_on_a_node_with_patch_frames() {
         });
     assert!(
         entry.top() >= above.bottom() - 1.0,
-        "the prune entry is not directly under the retriangulation"
+        "the prune entry is not directly under the refit"
     );
     let response = click(
         &mut panel,

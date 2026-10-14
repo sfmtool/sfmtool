@@ -1595,6 +1595,7 @@ fn the_reconstruction_rows_context_menu_lists_every_entry() {
             ("Tint", true),
             ("Bundle Adjust...", false),
             ("Retriangulate All Points", false),
+            ("Refit All Points", false),
             ("Prune Covered Observations", false),
             ("Build Index Files", false),
             ("Convert to Embedded Patches", true),

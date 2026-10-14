@@ -113,8 +113,8 @@ place.
 
 ## The tool surface
 
-Ninety-three tools. Seventeen read -- sixteen that answer with JSON, and
-`screenshot`, which closes the loop by handing back a picture -- seventy
+Ninety-four tools. Seventeen read -- sixteen that answer with JSON, and
+`screenshot`, which closes the loop by handing back a picture -- seventy-one
 write, five send input, and one writes a file. `get_widgets` and the five
 input tools, `click`, `hover`, `drag`, `press_key` and `type_text`, read and
 press the viewer's widgets the way a person's eyes, mouse and keyboard do
@@ -162,6 +162,7 @@ press the viewer's widgets the way a person's eyes, mouse and keyboard do
 | `delete_points` | write | Delete many 3D points of one reconstruction and their tracks, as one version |
 | `retriangulate_point` | write | Re-solve one 3D point from its own observations at the poses and lenses the reconstruction holds |
 | `retriangulate_all_points` | write | Re-solve every 3D point the same way, on a worker thread |
+| `refit_all_points` | write | Fit every 3D point to the render of its reference observation and commit it, as Track View's Fit and Commit do for one track, on a worker thread |
 | `prune_covered_observations` | write | Retire every observation a finer tracked one covers, and drop the points left with fewer than two, on a worker thread |
 | `delete_camera_image` | write | Delete one camera image, its observations, and any track left with none |
 | `move_camera_image` | write | Put one camera image at a pose, as one version of its reconstruction |
@@ -217,7 +218,7 @@ press the viewer's widgets the way a person's eyes, mouse and keyboard do
 | `type_text` | input | Type a string into the focused text input, or into one named by its widget id |
 
 Every tool is annotated: the sixteen reads and `screenshot` carry
-`readOnlyHint: true`, the seventy writes `destructiveHint: false` (none of
+`readOnlyHint: true`, the seventy-one writes `destructiveHint: false` (none of
 them touches a file on disk: `close_reconstruction` unloads, it does not
 delete; `set_window_layout` changes the window and the dock, not the layout file
 the menu saves; an **edit** makes a new version of a loaded value, which the
@@ -3092,7 +3093,7 @@ slot closes up and every point after it moves down, a replaced point goes back
 to the base slot it replaced, and a point new to the base follows the last
 surviving base point ([document-model.md](document-model.md) § "Two kinds of
 edit"). The fold moves no image index. So `move_camera_image`, `switch_camera_model`,
-`add_camera_image_to_tracks`, `retriangulate_all_points`,
+`add_camera_image_to_tracks`, `retriangulate_all_points`, `refit_all_points`,
 `convert_to_embedded_patches` and `bake_reconstruction_transform`, which move no
 index of their own, renumber points whenever a point edit is pending, and
 renumber nothing otherwise. `move_camera_image` and `switch_camera_model` are
@@ -3480,7 +3481,7 @@ got.
 **The tools that run on a worker** are the rows of § "The tool surface"'s
 table that say so: this one, `open_reconstruction`,
 `add_camera_image_to_tracks`, `prune_covered_observations`,
-`retriangulate_all_points`, `convert_to_embedded_patches`,
+`retriangulate_all_points`, `refit_all_points`, `convert_to_embedded_patches`,
 `create_track_at_pixel`, `find_nearby_tracks`, `build_index_files`, and the
 bench's `fit_bench_track`, `fit_bench_track_normal`, `set_bench_track_stage`,
 `search_bench_track_descriptors` and `search_bench_track_geometry`. Each starts
@@ -3851,6 +3852,43 @@ Both refuse in `AppState`'s own words, which are the words the greyed
 whose observations are `.sift` feature indexes with no inline keypoint has no
 pixel to cast a ray through, and one with no posed image has no pose to cast it
 from. A point the value holds at a fixed coordinate is refused by name.
+
+### `refit_all_points`
+
+Track View's *Fit* followed by *Commit*, for every point at once: each point's
+observations are aligned to the render of its reference observation, the point
+is re-triangulated (or, at infinity, its direction is re-read), its patch is
+placed at the answer and its stored bitmap is rendered again, and each
+observation's readings are taken again. No camera and no lens moves
+([refit-all-points.md](../drafts/refit-all-points.md)).
+
+```jsonc
+// refit_all_points { "reconstruction_label": "seoul_bull" }
+```
+
+It is a **bulk edit** that runs on a worker thread and answers the two ways
+`bundle_adjust` does, with `"operation": "Refit all points"`. It deletes no
+point and creates none, so every index still means what it meant, unless a
+point edit was pending, whose deleted slots close up first (§ "The editing
+family"). It reads every photograph some point observes through the photograph
+cache, and a photograph that cannot be read fails the run with *"Cannot read
+<image>."* and pushes no version. It polls the cancel flag between the
+photographs, in front of each stage and in front of each point's fit, so
+`cancel_background_task` stops it and a cancelled refit pushes no version.
+
+Its `report` is the Action Log sentence, which counts the per-point statuses:
+the points refit out of those read, how many of them agree with what was stored,
+how many ranged points were read at their distance and how many ranged points
+were released, the points that crossed to or from infinity, the observations
+that kept their keypoint past the shift bound, the points left as they were
+with the reason for each, the held points, and the median shift.
+
+It refuses in `AppState`'s own words, which are the words the greyed `Refit All
+Points` entry in the Scene tree carries: a reconstruction whose observations are
+`.sift` feature indexes with no inline keypoint (the sentence names `Convert to
+Embedded Patches`), one whose points carry no patch frame, and one with no posed
+image. A reconstruction whose reprojection noise cannot be measured is refused
+on the worker, as a failed entry.
 
 ### `prune_covered_observations`
 
@@ -5592,7 +5630,7 @@ where a test hands no host over.
   and the panel list in the prose above are asserted against `catalog()` and
   `Tab::ALL`, because a number written out in words is the first thing to go
   stale.
-- **The catalog is ninety-three tools**, seventeen of them reads, five of the
+- **The catalog is ninety-four tools**, seventeen of them reads, five of the
   `Input` kind and one of the `Save` kind, those six carrying
   `destructiveHint: true`;
   `set_window_layout`'s schema advertises `sfm_explorer_layout`, `window` and

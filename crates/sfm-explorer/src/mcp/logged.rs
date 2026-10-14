@@ -68,6 +68,7 @@ impl Command {
             Command::DeletePoints { .. } => "delete_points",
             Command::RetriangulatePoint { .. } => "retriangulate_point",
             Command::RetriangulateAllPoints { .. } => "retriangulate_all_points",
+            Command::RefitAllPoints { .. } => "refit_all_points",
             Command::PruneCoveredObservations { .. } => "prune_covered_observations",
             Command::DeleteCameraImage { .. } => "delete_camera_image",
             Command::MoveCameraImage { .. } => "move_camera_image",
@@ -145,6 +146,9 @@ impl Command {
                 ..
             }
             | Command::RetriangulateAllPoints {
+                reconstruction_label,
+            }
+            | Command::RefitAllPoints {
                 reconstruction_label,
             }
             | Command::DeleteCameraImage {
@@ -367,6 +371,7 @@ impl Command {
             | Command::DeletePoints { .. }
             | Command::RetriangulatePoint { .. }
             | Command::RetriangulateAllPoints { .. }
+            | Command::RefitAllPoints { .. }
             | Command::PruneCoveredObservations { .. }
             | Command::DeleteCameraImage { .. }
             | Command::MoveCameraImage { .. }

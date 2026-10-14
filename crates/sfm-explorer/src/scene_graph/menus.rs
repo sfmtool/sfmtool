@@ -6,8 +6,9 @@
 //!
 //! One menu per row kind. The reconstruction row's ([`node_context_menu`])
 //! carries the whole-node actions (select, zoom to fit, align, reset and bake
-//! transform, tint, bundle adjust, retriangulate, prune covered observations,
-//! build the index files, convert to embedded patches, close), the three
+//! transform, tint, bundle adjust, retriangulate, refit, prune covered
+//! observations, build the index files, convert to embedded patches, close),
+//! the three
 //! Index Files rows' ([`index_files_menu`], [`sift_index_menu`],
 //! [`cluster_patches_menu`]) carry the ways to give a node its index files or
 //! let go of them. The image row's menu is not here: it is the image menu of
@@ -51,6 +52,7 @@ pub(super) fn node_context_menu(ui: &mut egui::Ui, node: &mut SceneNode, out: &m
     ui.separator();
     show_bundle_adjust_entry(ui, node, out);
     show_retriangulate_entry(ui, node, out);
+    show_refit_entry(ui, node, out);
     show_prune_covered_entry(ui, node, out);
     // Above the conversion because it is where a person looks first: the
     // reconstruction row is the row they have in hand when they find a search
@@ -179,6 +181,40 @@ fn show_retriangulate_entry(ui: &mut egui::Ui, node: &SceneNode, out: &mut TreeO
     }
 }
 
+/// What the entry that refits every point of a node is called, in the menu and
+/// in the tests that aim at it.
+pub(crate) const REFIT_ALL_POINTS: &str = "Refit All Points";
+
+/// `Refit All Points`: every point of the node fitted to the render of its
+/// reference observation, as Track View's *Fit* does with every observation
+/// kept, and committed.
+///
+/// Directly under [`show_retriangulate_entry`], since both re-read the points
+/// at the poses and the lenses the value holds, and this one reads the
+/// keypoints again from the photographs first. Greyed rather than hidden when
+/// it cannot run, on the gate the job and the wire ask
+/// (`state::edits::refit_refusal`).
+fn show_refit_entry(ui: &mut egui::Ui, node: &SceneNode, out: &mut TreeOutput) {
+    let refusal = crate::state::edits::refit_refusal(node, out.edit_refusal(node.id));
+    let entry = ui
+        .add_enabled(refusal.is_none(), egui::Button::new(REFIT_ALL_POINTS))
+        .on_disabled_hover_text(refusal.unwrap_or_default())
+        .on_hover_text(
+            "Fit every point to the render of its reference observation, as Track View's Fit \
+             does with every observation kept: rewrite each observation's keypoint, \
+             re-triangulate the point and render its patch bitmap again, as one version. Moves \
+             no camera. Reads every photograph the points observe. Runs on a worker thread and \
+             can be cancelled; Undo (Ctrl+Z) puts the points back.",
+        );
+    if out
+        .hit(row_id(node.id, "refit_all_points"), entry)
+        .clicked()
+    {
+        out.response.refit_all_points = Some(node.id);
+        ui.close();
+    }
+}
+
 /// What the entry that retires a node's covered observations is called, in the
 /// menu and in the tests that aim at it.
 pub(crate) const PRUNE_COVERED_OBSERVATIONS: &str = "Prune Covered Observations";
@@ -186,10 +222,11 @@ pub(crate) const PRUNE_COVERED_OBSERVATIONS: &str = "Prune Covered Observations"
 /// `Prune Covered Observations`: every observation of the node a finer tracked
 /// one covers, handed over to the feature that supersedes it.
 ///
-/// Sits directly under [`show_retriangulate_entry`] because the two are the
-/// pair a reviewer reaches for together: one re-reads what each track says, the
-/// other decides which tracks should still be saying it. Greyed rather than
-/// hidden when it cannot run, on `AppState`'s own sentence.
+/// Sits directly under [`show_refit_entry`], after the two entries that re-read
+/// the points, because it is what a reviewer reaches for with them: they
+/// re-read what each track says, and this decides which tracks should still be
+/// saying it. Greyed rather than hidden when it cannot run, on `AppState`'s own
+/// sentence.
 fn show_prune_covered_entry(ui: &mut egui::Ui, node: &SceneNode, out: &mut TreeOutput) {
     let refusal = crate::state::edits::prune_covered_refusal(node, out.edit_refusal(node.id));
     let entry = ui

@@ -283,6 +283,11 @@ pub(crate) enum Command {
     RetriangulateAllPoints {
         reconstruction_label: String,
     },
+    /// Fit every point of one node to the render of its reference
+    /// observation, as Track View's Fit and Commit do for one track.
+    RefitAllPoints {
+        reconstruction_label: String,
+    },
     /// Retire every observation of one node a finer tracked one covers.
     PruneCoveredObservations {
         reconstruction_label: String,
@@ -1479,6 +1484,9 @@ pub(crate) fn apply_with_window(
         Command::RetriangulateAllPoints {
             reconstruction_label,
         } => edit::retriangulate_all_points(state, &reconstruction_label),
+        Command::RefitAllPoints {
+            reconstruction_label,
+        } => edit::refit_all_points(state, &reconstruction_label),
         Command::PruneCoveredObservations {
             reconstruction_label,
             options,

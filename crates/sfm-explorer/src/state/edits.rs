@@ -600,7 +600,10 @@ impl DecodedViews {
     }
 }
 
+mod refit_all_points;
 mod switch_camera_model;
+
+pub(crate) use refit_all_points::refit_refusal;
 
 #[cfg(test)]
 pub(crate) use switch_camera_model::tracks_of_camera;

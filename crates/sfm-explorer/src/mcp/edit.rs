@@ -26,8 +26,9 @@
 //! - [`moved`] wraps the three cursor moves, whose answer is the version now
 //!   current rather than one that was made.
 //!
-//! [`bundle_adjust`], [`convert_to_embedded_patches`] and
-//! [`retriangulate_all_points`] are the exceptions to the first sentence, and it
+//! [`bundle_adjust`], [`convert_to_embedded_patches`],
+//! [`retriangulate_all_points`] and [`refit_all_points`] are the exceptions to
+//! the first sentence, and it
 //! is the operations' doing rather than the surface's: each runs on a worker, so
 //! the call starts it and the frame answers it, with the version it pushed or
 //! with a handle to an operation that is still going
@@ -226,6 +227,31 @@ pub(super) fn retriangulate_all_points(state: &mut AppState, label: &str) -> sup
         Err(error) => return super::Outcome::Done(Err(error)),
     };
     if let Err(message) = state.start_retriangulate_all_points(id) {
+        return super::Outcome::Done(Err(ToolError::new(message)));
+    }
+    let task = state.background_task().expect("the operation just started");
+    super::Outcome::Deferred(Deferred::Background(BackgroundReply {
+        operation_id: task.id,
+        operation_name: task.operation.name,
+        answer: super::Answer::Version(id),
+        label: task.label.clone(),
+        started: task.started,
+    }))
+}
+
+/// `refit_all_points`: start the refit of every point, and answer with its
+/// version or with a handle, whichever the clock reaches first.
+///
+/// It replies the way [`retriangulate_all_points`] does: every point is a bench
+/// fit, so any node of real size outlives [`REPLY_DIRECTLY_WITHIN`] and answers
+/// with a [`BackgroundReply`] the frame resolves. A refusal to begin is
+/// immediate and in `AppState`'s own words, which are the greyed menu entry's.
+pub(super) fn refit_all_points(state: &mut AppState, label: &str) -> super::Outcome {
+    let id = match resolve_reconstruction(state, Some(label)) {
+        Ok(id) => id,
+        Err(error) => return super::Outcome::Done(Err(error)),
+    };
+    if let Err(message) = state.start_refit_all_points(id) {
         return super::Outcome::Done(Err(ToolError::new(message)));
     }
     let task = state.background_task().expect("the operation just started");

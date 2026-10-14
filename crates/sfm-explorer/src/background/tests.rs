@@ -487,6 +487,21 @@ fn real_task(operation: Operation) -> RealTask {
                 _workspace: None,
             }
         }
+        // Every point refit, over the bench's fixture: an embedded_patches
+        // node with a patch frame per point and a textured photograph cached
+        // for every image.
+        "Refit all points" => {
+            let (state, id) = crate::bench::tests::state();
+            let job = state
+                .refit_all_points_job(id)
+                .expect("the fixture carries keypoints, frames and poses");
+            RealTask {
+                state,
+                id,
+                job: Some(job),
+                _workspace: None,
+            }
+        }
         // The proposal's Apply, over the retriangulation's fixture: its pinhole
         // camera switched to SFMTOOL_PINHOLE and its tracks retriangulated.
         "Switch camera model" => {

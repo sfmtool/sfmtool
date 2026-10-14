@@ -192,6 +192,32 @@ pub(super) fn specs() -> Vec<ToolSpec> {
             schema: object(&[], &[("reconstruction_label", edited_label_schema())]),
         },
         ToolSpec {
+            name: "refit_all_points",
+            description: "Fit every 3D point of one reconstruction to the render of its \
+                          reference observation, as Track View's Fit followed by Commit does \
+                          for one track with every observation kept: each observation's \
+                          keypoint is aligned to that render again, the point is \
+                          re-triangulated (or, at infinity, its direction re-read), its patch \
+                          is placed at the answer and its stored bitmap rendered again, and \
+                          each observation's readings are taken again. Moves no camera and no \
+                          lens, and reads every photograph the points observe; one that cannot \
+                          be read refuses the run. A bulk edit giving the node a whole new \
+                          base, but it deletes no point and creates none, so every index still \
+                          means what it meant unless a point edit is pending, in which case the \
+                          deleted slots close up first, as delete_point describes. Points the \
+                          reconstruction holds at a fixed coordinate are left out, a ranged \
+                          point keeps its distance and only its direction is refit, and a \
+                          point the fit refuses keeps every column it had. The report counts \
+                          the points refit, unchanged, ranged, released, crossed to or from \
+                          infinity, left as they were and why, and held. One version, and it \
+                          runs on a worker thread, so a refit still going after 200 ms replies \
+                          with running: true and an operation_id instead of the version; \
+                          cancel_background_task stops it. Needs inline keypoints, a patch \
+                          frame per point and at least one posed image.",
+            kind: Write,
+            schema: object(&[], &[("reconstruction_label", edited_label_schema())]),
+        },
+        ToolSpec {
             name: "prune_covered_observations",
             description: "Retire every observation of one reconstruction that a finer tracked \
                           observation covers in the same image, and drop the points left with \
