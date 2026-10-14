@@ -2951,9 +2951,9 @@ centre does not move, whatever the plane's offset.
 
 The working grid's density decides how close the step comes. On the
 synthetic plane of the tests, whose patch spans 32 photograph px at `R = 24`,
-the default grid comes out 32 or 33 samples (33 for a patch tilted 10 to 20
-degrees, whose footprint is a fraction over 32 px) and ends 0.37 to 0.53
-degrees from the plane's normal; a grid of exactly 32 ends 0.1 to 0.3
+the default grid comes out 33 samples (the footprint reads a fraction over
+32 px, facing the cameras or tilted 10 to 20 degrees, and is rounded up) and
+ends 0.37 to 0.53 degrees from the plane's normal; a grid of exactly 32 ends 0.1 to 0.3
 degrees from it, and the 24-sample patch grid 0.7 to 0.9. With a third of the
 patch flat, a grid of 32 ends 0.1 to 0.25 degrees off from four starts; the
 default grid turns from two of the four, 1.27 and 1.86 degrees off, and
@@ -3973,7 +3973,7 @@ unit-tested in `normal.rs` itself.
 - A textured plane with the patch started 10 to 20 degrees off from four
   starts: the loop converges, the outcome is `Turned`, all nine cells are in
   the plane, both axes are fixed, the score does not fall, and the default
-  grid comes out 32 or 33 samples. The normal ends within 0.6 degrees on the
+  grid comes out 32 or 33 samples (33 measured from every start). The normal ends within 0.6 degrees on the
   default grid (0.37 to 0.53 measured, so the draft's 0.5 holds from three of
   the four starts) and within 0.5 degrees on a grid of exactly 32 (0.10 to
   0.27). The centre does not move and the track is read back with its bitmap.

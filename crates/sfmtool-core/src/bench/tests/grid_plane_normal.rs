@@ -100,9 +100,10 @@ fn cells_of(report: &NormalReport) -> &GridPlaneCells {
 const PIXEL_GRID: u32 = 32;
 
 /// The sides the default working grid takes on this scene: the reference
-/// view's footprint of the patch, 32 px for a patch facing the cameras and a
-/// fraction more for one tilted 10 to 20 degrees, rounded up. Both lie
-/// within the clamp `24 ..= 48` of the fit's 24-sample grid.
+/// view's footprint of the patch, rounded up. The patch spans 32 px, and the
+/// footprint reads a fraction over that whether the patch faces the cameras
+/// or is tilted 10 to 20 degrees, so 33 is measured from every start. Both
+/// lie within the clamp `24 ..= 48` of the fit's 24-sample grid.
 const DEFAULT_SIDES: std::ops::RangeInclusive<u32> = 32..=33;
 
 fn run(
@@ -145,7 +146,7 @@ fn frame_unchanged(track: &EditableTrack, turned: &EditableTrack) -> bool {
 /// The patch is turned onto the plane from 10 to 20 degrees off, with every
 /// cell in the plane and both axes fixed, and the loop converges.
 ///
-/// On the default grid, the reference view's footprint (32 or 33 samples
+/// On the default grid, the reference view's footprint (33 samples
 /// here), the normal ends 0.37 to 0.53 degrees off over four starts, so it is
 /// held to 0.6 degrees: the draft's 0.5 is met from three of the four. On a
 /// grid of exactly 32 it ends 0.10 to 0.27 degrees off, held to 0.5.
