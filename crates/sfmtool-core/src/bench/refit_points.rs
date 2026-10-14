@@ -5,7 +5,7 @@
 //! *Fit* and *Commit* do to a track put on the bench from it, with every
 //! verdict `in` and pinned, written back as one new value.
 //!
-//! `specs/drafts/refit-all-points.md` is the design. A point's refit is three
+//! `specs/core/bench/refit-points.md` is the design. A point's refit is three
 //! bench steps: [`track_of_point`] builds its track, `fit_track` aligns the
 //! other observations to the render of its reference observation,
 //! re-triangulates it and renders its bitmap again, and `point_record` builds

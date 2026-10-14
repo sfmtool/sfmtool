@@ -729,7 +729,9 @@ photograph. A track with no patch therefore greys both
 with *"this track has no patch yet; fit it first"* rather than offering buttons
 whose only act would be to decode a dozen images and fail. The commit refusal is
 cached against the track's `Arc` and the node's version, since asking it builds
-a point record.
+a point record. *Fit* followed by *Commit*, with every observation kept, has a
+whole-reconstruction form: `Refit All Points` on the Scene Graph's
+reconstruction menu ([edits/refit-all-points.md](edits/refit-all-points.md)).
 
 In **Viewed mode** the toolbar is the evaluation state alone. The viewed track
 is on no bench, so there is nothing for *Fit*, *Stage*, *Split*, *Duplicate*,

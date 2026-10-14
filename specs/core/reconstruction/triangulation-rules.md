@@ -130,6 +130,17 @@ centre resolves that centre from its own poses first, so this operation reads
 one geometry and nothing about how the origin was arrived at; an adjustment that
 moves its cameras re-resolves the origin each time it re-estimates.
 
+Two callers apply this rule to a reconstruction's ranged points: the
+retriangulation (§ "Retriangulating a reconstruction") and the refit of every
+point ([../bench/refit-points.md](../bench/refit-points.md) § "Constraints"),
+which runs it over a point's fitted keypoints in place of the point-or-bearing
+classification. Both resolve a finite distance's origin by one rule,
+`reference_camera_center` in
+[`retriangulate.rs`](../../../crates/sfmtool-core/src/reconstruction/triangulation/retriangulate.rs):
+the reference image's camera centre at the value's poses, or no origin where the
+image is out of range or carries no pose, in which case the point is solved
+free.
+
 The rule reads pixels, so it needs the observation form. Asking for it on a ray
 set is refused rather than accepted and ignored, the way `prune_behind` with
 `cheirality` off is.

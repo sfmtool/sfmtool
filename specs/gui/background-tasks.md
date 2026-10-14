@@ -11,10 +11,10 @@ that line.
 
 An **operation** is the kind of work, `Bundle adjust`; a **task** is one run of
 one, on one node (or, for an open, on none), with an id of its own. One task
-runs at a time. The seventeen operations are `Open`, which reads files and
-makes them nodes (§ "Opening a file"); the five whole-value edits, `Bundle
-adjust`, `Convert to embedded patches`, `Retriangulate all points`, `Switch
-camera model` and `Prune covered observations`; `Add image to tracks`; and the
+runs at a time. The eighteen operations are `Open`, which reads files and
+makes them nodes (§ "Opening a file"); the six whole-value edits, `Bundle
+adjust`, `Convert to embedded patches`, `Retriangulate all points`, `Refit all
+points`, `Switch camera model` and `Prune covered observations`; `Add image to tracks`; and the
 ten the bench runs, `Fit track`, `Set track stage`, `Fit normal`, `Finite
 difference normal`, `Grid plane normal`, `Search descriptors`, `Geometry
 search`, `Build index files`, `Create track at pixel` and `Find nearby tracks`
@@ -463,6 +463,15 @@ or wrong-sized photographs are left out; if none can be read, the conversion
 still succeeds without bitmaps. The conversion and bitmap stages share the
 bar equally. Both poll for cancellation, which the job turns into
 `Finished::Cancelled`.
+
+`Refit all points` reports `decode images`, then `materialise` where the node
+has pending point edits, then the core refit's `measure noise`, `fit points`
+(which counts the points and sets its fraction) and `write back`
+([edits/refit-all-points.md](edits/refit-all-points.md)). It polls the flag
+on either side of the decode, between the photographs, and, inside
+`sfmtool_core::bench::refit_points`, in front of each stage and of each point's
+fit, and turns `RefitPointsError::Cancelled` into `Finished::Cancelled`. A
+photograph that cannot be read fails it in its `decode images` phase.
 
 The bench's photometric steps fill in the phases and poll the same flag. A
 cancelled one ends as a cancellation rather than a failure of the kernel --

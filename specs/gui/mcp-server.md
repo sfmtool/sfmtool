@@ -3860,7 +3860,7 @@ observations are aligned to the render of its reference observation, the point
 is re-triangulated (or, at infinity, its direction is re-read), its patch is
 placed at the answer and its stored bitmap is rendered again, and each
 observation's readings are taken again. No camera and no lens moves
-([refit-all-points.md](../drafts/refit-all-points.md)).
+([edits/refit-all-points.md](edits/refit-all-points.md)).
 
 ```jsonc
 // refit_all_points { "reconstruction_label": "seoul_bull" }

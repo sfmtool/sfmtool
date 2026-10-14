@@ -219,6 +219,14 @@ pub fn create_track(
     options: &CreateTrackOptions,
 ) -> Result<(Bench, CreateReport), CreateTrackError>;
 
+// The track create_track puts on the bench, with no bench and no label. A
+// caller that builds the track's record itself (refit_points) passes no origin.
+pub fn track_of_point(
+    edited: &EditedReconstruction,
+    point: u32,
+    origin: Option<Origin>,
+) -> Result<EditableTrack, CreateTrackError>;
+
 pub fn create_cluster(
     bench: &Bench,
     seed: &ClusterSeed,
@@ -1835,7 +1843,10 @@ its reference in agreement.
 ### Putting a point on the bench
 
 `create_track` reads the point through the reconstruction's overlay and builds a
-track-stage track from it: the point's own frame, bitmap with its reference
+track-stage track from it with `track_of_point`, then puts it on the bench under
+a minted label. `track_of_point` is the track alone, with no bench and no label,
+which [`refit_points`](refit-points.md) builds for every point. The track is
+the point's own frame, bitmap with its reference
 observation (read with or without a bitmap), colour and keypoints, its
 origin set to that point, and every observation `in` and **pinned**. The
 point's observations are ones a reconstruction already decided on, so they stand
@@ -2755,6 +2766,18 @@ stage** a fit *is* the refinement, which is what a reading is too -- a cluster
 has no geometry behind it to move -- so the two steps run the one kernel and
 report the same thing.
 
+**A fit can be given a range.** The track-stage body `fit` and the cluster
+upgrade share (`fit_track`) takes a `range: Option<PointDistance>`. Both of
+them pass `None`, and the fit runs as above. With an entry, which only
+[`refit_points`](refit-points.md) passes, for a point the value ranges, the
+step that turns the fitted keypoints into a coordinate runs the triangulation's
+distance rule
+([../reconstruction/triangulation-rules.md](../reconstruction/triangulation-rules.md)
+§ "A direction read at a held distance") in place of the classification, and
+`FitReport::classification` is `None`. The keypoints are still triangulated
+free first, so a ranged track is refused for too few rays exactly as a free one
+is, and the report keeps that solve's condition number.
+
 A fit writes the placement it finds whether or not the observations can be
 measured against it, so observations that disagree with the camera poses come
 back unmeasured at a moved point. A fit that refuses and reports instead is
@@ -2928,6 +2951,15 @@ observations (it does wherever it carries patch frames), the record's
 `reference_observation` is the place in that order of the sighting
 `TrackPayload::reference` names, with or without a bitmap, `-1` where it
 names none or names a sighting that is not `in`.
+
+The validation and the record are `point_record` in
+[`commit.rs`](../../../crates/sfmtool-core/src/bench/commit.rs), crate-visible,
+which `commit` calls before its edit and [`refit_points`](refit-points.md) calls
+for every point it fits, so the two write one record for one track. Its record
+is always free; the refit replaces the constraint with the point's own. The
+refit writes the record into the base's columns as they are rather than through
+the overlay, so it does not bring a readings column into a reconstruction that
+has none ([refit-points.md](refit-points.md) § "Writing the answers").
 
 - **With no origin that resolves**, `EditedReconstruction::add_point`.
   `replaced` is `None` and the map is a `Created` naming the index it took.
@@ -3328,6 +3360,11 @@ a script can differ from the pipeline's default in one number without restating
 the others. `commit` takes the reconstruction's name as `node`, which is what
 the report's `label` reads; its report carries `changed`, and `replaced` is
 absent for the commit that wrote nothing, as it is for one that created.
+
+`refit_points` runs `fit` and the commit's record for every point of an
+`SfmrReconstruction` at once and returns the new reconstruction with a report;
+it takes `images` and the fit's keywords as `fit` does, and is specified in
+[refit-points.md](refit-points.md) § "Python binding".
 
 `evaluate`, `fit` and `set_stage` take `images` the way every patch kernel does
 -- a list of `HxW[xC]` `uint8` arrays, one per image of the reconstruction, or a

@@ -306,13 +306,14 @@ fixed-height for virtualization.
 - Context menu: `Select`, `Zoom to Fit`, `Align to ▸` (one entry per other
   loaded node — see "Node Transforms and Alignment"), `Reset Transform`,
   `Bake Transform`, `Tint ▸` (Original / palette of distinguishable colors),
-  `Bundle Adjust...`, `Retriangulate All Points`, `Prune Covered Observations`,
-  `Build Index Files`, `Convert to Embedded Patches`, `Close`.
+  `Bundle Adjust...`, `Retriangulate All Points`, `Refit All Points`,
+  `Prune Covered Observations`, `Build Index Files`, `Convert to Embedded
+  Patches`, `Close`.
   While a camera model proposal is open on the node
   ([edits/switch-camera-model.md](edits/switch-camera-model.md)), the entries
   that edit it (`Reset Transform`, `Bake Transform`, `Bundle Adjust...`,
-  `Retriangulate All Points`, `Prune Covered Observations`, `Convert to
-  Embedded Patches`) are greyed with *"Apply or cancel the camera model
+  `Retriangulate All Points`, `Refit All Points`, `Prune Covered Observations`,
+  `Convert to Embedded Patches`) are greyed with *"Apply or cancel the camera model
   proposal first."*, after a busy node's sentence; `Close` applies the proposal
   first.
   **`Solo` is not in the menu** — it is the row's `S` (see "Comparison
@@ -347,10 +348,25 @@ fixed-height for virtualization.
   are not a reason, since each observation is solved through its own image's
   camera. The gate is `state::edits::retriangulate_refusal`, which the wire's
   `retriangulate_all_points` and the operation itself also ask, so the greyed
-  entry and a call that asks anyway give one answer. A `Refit All Points` entry
-  directly under it, which reads every point's keypoints again from the
-  photographs as Track View's *Fit* does before re-triangulating, is proposed in
-  [`../drafts/refit-all-points.md`](../drafts/refit-all-points.md).
+  entry and a call that asks anyway give one answer.
+- **`Refit All Points`** fits every point of the node to the render of its
+  reference observation, as Track View's *Fit* does for one track with every
+  observation kept, and commits it, as the node's next version and on a worker
+  thread ([background-tasks.md](background-tasks.md),
+  [edits/refit-all-points.md](edits/refit-all-points.md)). Where
+  `Retriangulate All Points` re-solves each point from the keypoints it has,
+  this reads the keypoints again from the photographs first, so it sits
+  directly under it. It acts on the node the menu was opened on, moves no
+  camera and no lens, deletes no point and creates none, and reads every
+  photograph the points observe. It is **live only on a node whose
+  observations carry inline keypoints, whose points carry a patch frame, some
+  of whose images carry a pose, and that nothing is running on**, and greyed
+  with the reason otherwise; the sentence for a `sift_files` node names
+  `Convert to Embedded Patches`. The gate is `state::edits::refit_refusal`,
+  which the wire's `refit_all_points` and the operation itself also ask.
+  Whether every photograph can be read and whether the noise level can be
+  measured are not asked by the gate, which runs every frame the menu is open;
+  the operation refuses both on the worker.
 - **`Prune Covered Observations`** retires every observation of the node a
   finer tracked one covers in the same photograph, and drops the points left
   with fewer than two, as the node's next version and on a worker thread
@@ -358,8 +374,8 @@ fixed-height for virtualization.
   [edits/prune-covered-observations.md](edits/prune-covered-observations.md)).
   It re-solves nothing and moves nothing; the surviving points are renumbered,
   so the panel caches for the node are dropped when the version lands. It sits
-  directly under `Retriangulate All Points`, because the two are the pair a
-  reviewer reaches for together. It is **live only on a node whose points carry
+  directly under `Refit All Points`, after the two entries that re-read the
+  points, because it is what a reviewer reaches for with them. It is **live only on a node whose points carry
   a patch frame, whose observations carry a pixel, that has a posed image, and
   that nothing is running on**, and greyed with the reason otherwise. The gate
   is `state::edits::prune_covered_refusal`, which the wire's
@@ -1374,6 +1390,12 @@ bundle from `retain_nodes` on the next frame.
   `Retriangulate All Points`, and reporting the node the menu was opened on
   while another node is selected; drawn and dead on a node with no inline keypoints and
   on a busy one.
+- **The reconstruction row's `Refit All Points`**, through the same whole
+  frames: live on an embedded_patches node with patch frames, drawn directly
+  **under** `Retriangulate All Points` and **above** `Prune Covered
+  Observations`, and reporting the node the menu was opened on while another
+  node is selected; drawn and dead, with the gate's sentence, on a `sift_files`
+  node, on a node with no patch frames and on a busy one.
 - **The reconstruction row's hover** names the node's file, and says the node
   came from none where it has no path; both hover the **name**, the part of the
   row the tooltip has to reach.
