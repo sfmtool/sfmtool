@@ -142,11 +142,13 @@ This is the camera refit's penalty
 ([`../core/camera/refit-camera-intrinsics.md`](../core/camera/refit-camera-intrinsics.md)
 § "The span past θ_fit is regularized" and its Parameters table): the same
 second-difference stencil, the same `SMOOTHING = 1e-6`, the same squared weight
-per row `SMOOTHING · rows / N`, with the data rows counted the same way, two per
-observation. In
+per row `SMOOTHING · rows / N`. The refit counts two data rows per sampled ray
+(`2·96·64` of them); the adjustment counts two per kept observation, which are
+its data rows. In
 [`refit_intrinsics.rs`](../../crates/sfmtool-core/src/camera/refit_intrinsics.rs)
-the refit's unknowns are `a = (f, f·c₀, …, f·c_{N−1})`, and `fit_spline` writes
-the rows `√w·(a_{i−1} − 2aᵢ + a_{i+1})` for `i` in `1..n − 1`, so its row is
+the refit's unknowns are `(f, f·c₀, …, f·c_{N−1})`, and `fit_spline` writes,
+for `i` in `1..n − 1`, a row with `√w`, `−2√w` and `√w` in the columns of
+`f·c_{i−1}`, `f·cᵢ` and `f·c_{i+1}`, so its row is
 `f·(c_{i−1} − 2cᵢ + c_{i+1})` weighted as above. The adjustment's row is the
 same at `f = f_ref`.
 
@@ -246,9 +248,11 @@ constant is renamed, the refit spec's Parameters table follows.
 
 ### Tests that come with step 1
 
-- The spline block of `g_c` and `h_cc` with the penalty matches a central
-  difference of `cost_at` in each released coefficient, on a scene with a
-  nonzero planted spline.
+- On a scene with a nonzero planted spline, the penalty's contribution to the
+  spline block of `g_c` is half the central difference of `Σ_j E_pen,j` in each
+  released coefficient, and its contribution to `h_cc` is half the second
+  difference (`g_c` is `Jᵀr` for a cost of `Σ r²`, and the penalty is exactly
+  quadratic); `cost_at` exceeds `robust_cost` by exactly `Σ_j E_pen,j`.
 - `unsupported_bspline_slots_hold_their_input_exactly` and its pinhole twin
   still pass unchanged: the sentinels come back bit for bit, and the inner
   coefficients stay within the existing tolerance.
@@ -287,9 +291,11 @@ inadmissible, the same iteration retries the step with that distortion held:
    the Schur elimination is the same as removing that variable from the
    damped system, so the back-substitution `δp = −V⁻¹(g_p + Wᵀδc)` with
    `δc = 0` in the pinned slots is the exact solution with the distortion held.
-4. Check the rebuilt candidate. The held distortion is the current one, which
-   was admissible, so only the focal can fail now; a failure there fails the
-   whole step. If any other camera's distortion is now inadmissible, it is
+4. Check the rebuilt candidate. A held spline is the current one, which was
+   admissible, and its check does not read the focal. A held `k1` is checked
+   again, because `k1_step_admissible` reads the candidate focal, and a smaller
+   focal can fold the imaged field at the same `k1`. A failure of a focal or of
+   a held `k1` fails the whole step. If any other camera's distortion is now inadmissible, it is
    added to the marked set and step 2 repeats; the set only grows, so this ends
    within `n_cam` repeats.
 5. Compare the cost as today. An accepted held step updates the state and halves
