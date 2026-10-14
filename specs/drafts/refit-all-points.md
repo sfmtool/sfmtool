@@ -98,31 +98,52 @@ pub struct RefitPointsOptions {
 
 impl Default for RefitPointsOptions { /* FitOptions::default(), BENCH_MAX_SHIFT_PX */ }
 
-/// Refit every point of `edited` to the render of its reference observation
-/// and hand back the value that holds the answers.
+/// Refit every point of `recon` to the render of its reference observation
+/// and hand back a copy of `recon` that holds the answers.
 pub fn refit_points(
-    edited: &EditedReconstruction,
+    recon: &SfmrReconstruction,
     images: &[ProjectedImage<'_>],
     options: &RefitPointsOptions,
     progress: &Progress<'_>,
-) -> Result<(EditedReconstruction, PointMap, RefitPointsReport), RefitPointsError>;
+) -> Result<(SfmrReconstruction, RefitPointsReport), RefitPointsError>;
 ```
 
 **Why it is shaped this way.**
 
 - **It takes the photographs decoded, as [`fit`](../../crates/sfmtool-core/src/bench/fit.rs)
-  does.** `images` is one `ProjectedImage` per image of `edited`, indexed by
+  does.** `images` is one `ProjectedImage` per image of `recon`, indexed by
   image index, which is what every photometric step of the bench takes. Reading
   the files stays with the caller: the viewer reads through its photograph cache
   on the worker
   ([`ViewSources`](../../crates/sfm-explorer/src/state/edits.rs)), and Python
   resolves its `images` argument as `sfmtool.bench.fit` does. So core reads no
   file and holds no cache.
-- **It returns the same triple as
-  [`retriangulate_points`](../../crates/sfmtool-core/src/reconstruction/triangulation/retriangulate.rs)**:
-  the next value, the `PointMap` from the caller's indexes to it, and a report
-  with one status per point. The viewer then installs it the way it installs a
-  retriangulation, and an agent reads it the same way.
+- **It takes a plain `SfmrReconstruction`, not an `EditedReconstruction`.**
+  Given an `EditedReconstruction`, the run's first step would be to fold the
+  overlay in (`EditedReconstruction::materialize`) and work on a plain base
+  from then on, so the fold belongs to the caller that has an overlay. The
+  refit moves no index, so with the fold at the caller there is no `PointMap`
+  to return: the answer is the next value and a report with one status per
+  point, each addressed by the one index the input and the output share. That
+  makes it a whole-reconstruction transform like
+  `materialize_points_at_infinity` and the `sfm xform` operations, which a
+  command or Python can call with no knowledge of edit overlays.
+  [`retriangulate_points`](../../crates/sfmtool-core/src/reconstruction/triangulation/retriangulate.rs)
+  takes an `EditedReconstruction` and returns a `PointMap` because it has
+  selection forms: `RetriangulateWhich::These` writes the named points into
+  the overlay, which gives each one a new index, and `TheseInBulk` folds the
+  overlay in and writes the named points at their rows. A refit has no
+  selection form (§ "Non-goals").
+- **It borrows the value and returns a copy.** The per-point bench steps take
+  an `EditedReconstruction` (§ "What moves into core"), so the run makes one
+  copy of `recon` (`clone_for_edit`), wraps it once with
+  `EditedReconstruction::new(Arc::new(copy))`, and hands that one wrapper to
+  every point's steps. After the loop it drops the wrapper, takes the copy
+  back out of the `Arc` (`Arc::unwrap_or_clone`, a move, since nothing else
+  holds it) and writes the answers into it. The copy is the one the write
+  needs in any case, so the wrapper costs no second copy of the
+  reconstruction, and a signature taking `Arc<SfmrReconstruction>` would save
+  nothing.
 - **There is no `which` argument.** The request is for every point, and a fit
   of one point already exists: put it on the bench, press *Fit*, press
   *Commit*. There is no list form (§ "Non-goals").
@@ -139,8 +160,8 @@ Example:
 use sfmtool_core::bench::{refit_points, RefitPointsOptions};
 use sfmtool_core::progress::Progress;
 
-let (next, map, report) =
-    refit_points(&edited, &views, &RefitPointsOptions::default(), &Progress::none())?;
+let (next, report) =
+    refit_points(&recon, &views, &RefitPointsOptions::default(), &Progress::none())?;
 println!(
     "{} of {} points refit, {} left as they were",
     report.refit(),
@@ -150,10 +171,8 @@ println!(
 ```
 
 **The report.** `RefitPointsReport::points` holds one `RefitPoint { index,
-new_index, outcome }` per point of the value: `index` in the caller's indexing and
-`new_index` in the returned value's. The two differ only where the caller's
-value had pending point edits, whose deleted slots close up when the overlay is
-folded in (§ "Writing the answers"); the refit itself moves no index.
+outcome }` per point of the value, in index order. The refit moves no index, so
+`index` names the point in the input and in the returned value alike.
 `RefitOutcome` is:
 
 - `Refit { placed, kept_at_seed, crossed, shift, classification, range,
@@ -402,21 +421,21 @@ rather than `-1`, as it does after a commit of the same point.
 
 ## Writing the answers
 
-The run is a **bulk edit**, the shape `RetriangulateWhich::All` writes:
+The run is a **bulk write** into a copy of the value it was handed, the shape
+`RetriangulateWhich::All` writes into its folded base:
 
-1. The overlay is folded in first (`EditedReconstruction::materialize`), in a
-   `materialise` phase, where the value has pending point edits, so every point
-   is a row of one base. The `PointMap` the call returns is the one
-   `retriangulate_points` returns for `All`: the fold's rows chained with the
-   write, which moves nothing, or an empty removal where there was nothing to
-   fold.
-2. Every record is written into a copy of that base (`clone_for_edit`) at its
-   own row. The observations a record carries are the point's own, all `in`,
-   in image order, which is the order the stored track is in, so each
-   observation is written over its own row: the point's track keeps its length
-   and its offsets, and no point and no observation row is added, removed or
-   renumbered. The writer asserts that each record's image list equals the
-   stored track's.
+1. The copy is the one the run took at its start (`clone_for_edit`, § "Why it
+   is shaped this way"), taken back out of the wrapper the per-point steps
+   read once every point has been fitted. The fits read it before anything is
+   written to it.
+2. Every record is written into that copy at its own row. The observations a
+   record carries are the point's own, all `in`, in image order, which is the
+   order the stored track is in, so each observation is written over its own
+   row: the point's track keeps its length and its offsets, and no point and
+   no observation row is added, removed or renumbered. The writer asserts that
+   each record's image list equals the stored track's. So the returned value
+   has the input's points at the input's indexes, and there is no `PointMap`
+   to return.
 3. A point whose status is not `Refit`, or whose record agrees with the stored
    one while its reference is not a display-only pick, is not touched.
 
@@ -449,17 +468,26 @@ refit node write bitmaps, which the person did not ask for.
 ### Stages and progress
 
 ```text
-materialise          (only where the overlay is not empty)
 measure noise        the run's sigma_px, once, where none was given
 fit points           counts "k of n points" and sets its fraction
 write back
 ```
 
-The viewer's job adds a `decode images` phase in front, reading every
+Where no `sigma_px` was given, the noise level is measured on `recon` itself
+(`SfmrReconstruction::reprojection_noise_px`, the measure
+`EditedReconstruction::base_reprojection_noise_px` keeps), before the copy is
+taken, and passed to every point's fit as its `sigma_px`. A plain value keeps
+no measure, so the run measures it once even where the caller's own
+`EditedReconstruction` had measured it already: one walk over the
+observations per run, and none per point. The copy and its wrapper are made
+after this stage, in front of the loop.
+
+The viewer's job adds two phases in front: `decode images`, reading every
 photograph an observation names through the photograph cache, with the note
 every `decode images` phase carries
 ([`../gui/background-tasks.md`](../gui/background-tasks.md) § "Reporting
-progress").
+progress"), and then `materialise`, folding the overlay in, only where the
+overlay is not empty (§ "In the viewer").
 
 Each point's fit is called with `&Progress::none()`. A fit opens a phase for
 `localize`, `refine`, `bitmap` and each stage of its evaluation, and per-point
@@ -473,9 +501,9 @@ an atomic counter, as `render_patch_cloud_bitmaps` does.
 The run is cancellable. The flag is read in front of every stage, and in front
 of every point's fit inside the loop (`progress.is_cancelled()`); a point whose
 fit has begun runs to its end, so a cancel lands within one point's fit per
-worker thread. A cancelled run returns `RefitPointsError::Cancelled` and writes
-nothing: the value the caller holds is unchanged, and no partially refit value
-is returned, because a reconstruction in which some points were refit and others
+worker thread. A cancelled run returns `RefitPointsError::Cancelled` and drops its
+copy before writing to it: the value the caller lent is unchanged, as it is
+after any run, and no partially refit value is returned, because a reconstruction in which some points were refit and others
 were not, chosen by thread scheduling, is not an answer anybody asked for. This
 is `retriangulate_points`'s rule.
 
@@ -507,7 +535,7 @@ stored point ([`../core/bench/editable-track.md`](../core/bench/editable-track.m
 
 ### What a run can refuse
 
-Before any point is fitted, the run is refused as a whole, writing nothing,
+Before the copy is taken, the run is refused as a whole, writing nothing,
 when the value is `sift_files`, carries no patch frame, has no posed image, is
 handed fewer views than images, or has no noise level.
 
@@ -537,8 +565,15 @@ The viewer wraps the core function as `Retriangulate All Points` is wrapped
   shaped as `start_retriangulate_all_points` and its job: the gate is
   `refit_refusal`; what crosses to the worker is a clone of the value at the
   cursor and a `ViewSources` from `view_sources_for` naming every image some
-  point observes; the worker decodes, builds the views and calls
-  `refit_points`; the answer is a `Finished::Produced` with the folded base.
+  point observes. The worker decodes and builds the views, then folds the
+  overlay in itself, as `Add Image to Tracks` and `Bundle Adjust...` do: where
+  the overlay is not empty, `edited.materialize()` in a `materialise` phase
+  gives the plain value and a `RowMap`; where it is empty, the job reads
+  `edited.base` and folds nothing. It calls `refit_points` on that value. The
+  answer is a `Finished::Produced` whose `value` is the refit value and whose
+  `map` is `PointMap::Chain` of the fold's `PointMap::Rows` (where there was a
+  fold) and `PointMap::Removed(Vec::new())`, the identity, since the refit
+  moves no index.
 - **The menu.** `show_refit_entry` in
   [`menus.rs`](../../crates/sfm-explorer/src/scene_graph/menus.rs), with a
   `REFIT_ALL_POINTS` label constant and a `SceneGraphResponse` field, drawn
@@ -552,10 +587,14 @@ The viewer wraps the core function as `Retriangulate All Points` is wrapped
 | Entry | that label, then the counts, then the serials |
 
 One version, a bulk edit with a new base and an empty overlay, pushed by the
-frame that polls the finished task. The refit moves no index (pending point
-edits close up when the overlay is folded in, and the map carries the selection
-across that), so the selection stays on its point, and what the panels cached about each point's geometry, keypoints
-and bitmap is dropped off `Polled::installed`, as after a retriangulation. The
+frame that polls the finished task: the poll installs a `Finished::Produced`
+as it installs every one, by `history.push(EditedReconstruction::new(Arc::new(value)),
+map, version_label)`, and reports the node in `Polled::installed`. The refit
+moves no index (pending point edits close up when the job folds the overlay
+in, and the fold's row map in `map` carries the selection across that), so the
+selection stays on its point, and what the panels cached about each point's
+geometry, keypoints and bitmap is dropped off `Polled::installed`, as after a
+retriangulation. The
 bench is not touched: a bench track whose origin is a refit point still
 resolves, and committing it replaces the refit point.
 
@@ -612,6 +651,36 @@ core functions have to be callable on their own:
   `replace_point` / `add_point`. So the batch and the commit write one record
   for one track.
 
+**How the batch feeds them.** Every per-point step takes an
+`EditedReconstruction`, and the batch hands each one the wrapper of its copy
+(§ "Why it is shaped this way"). None of them reads an overlay, so a wrapper
+with an empty overlay gives them all they read:
+
+- `track_of_point` reads the point through `EditedReconstruction::point`,
+  whose `PointView` is a row of the base when the overlay is empty: frame,
+  bitmap, colour, keypoints, readings, confidences, reference observation,
+  `display_only_reference` and the point's `w`. The `PointView` has no
+  constructor outside `edited.rs`, so a version taking `&SfmrReconstruction`
+  would need a new accessor for no gain.
+- `point_record` reads only the base: which columns it carries
+  (`has_feature_indexes`, `has_patch_frames`, `has_patch_bitmaps` and the
+  rest, each a test of `edited.base`), `image_count` and
+  `observation_reading_options`. The batch's `unchanged` test reads the stored
+  record through `point(index).to_record()`, as `commit` does.
+- `fit_track` and what it calls read only the base and its two cached
+  measures: `check_views` (`image_count`), `FitOptions::at_patch_resolution`
+  and `bitmap_layout` (`edited.base`'s bitmap column), `noise_level`
+  (`base_reprojection_noise_px`, not reached, since the batch passes
+  `sigma_px`), `classify` (`base_min_point_depth`, measured on the first
+  point's fit and kept by the wrapper for the rest) and `evaluate`
+  (`image_count`, the base's patch resolution).
+- Nothing in the three steps reads `base_content_hash`; only `create_track`'s
+  label does, and `track_of_point` leaves the label out.
+
+So the two split-out functions keep the `&EditedReconstruction` argument the
+bench's other functions take, and no per-point step needs overlay state that a
+plain base cannot give.
+
 The ranged rule needs two more changes to existing code, neither of which
 changes what any current caller gets:
 
@@ -639,8 +708,11 @@ changes what any current caller gets:
 
 The new code is the loop, the constraint rule, the report and the in-place
 writer, all in `bench/refit_points.rs`. Python gets `sfmtool.bench.refit_points`,
-taking `images` as `sfmtool.bench.fit` does, because every edit family's
-mechanism is bound ([`../gui/edits/README.md`](../gui/edits/README.md)).
+taking an `sfmtool.reconstruction.SfmrReconstruction` and `images` as
+`sfmtool.bench.fit` does, and returning the refit `SfmrReconstruction` and a
+report dict with no point map, because every edit family's mechanism is bound
+([`../gui/edits/README.md`](../gui/edits/README.md)). A caller holding an
+`EditedReconstruction` folds it first with its `materialize`.
 
 ---
 
@@ -726,6 +798,8 @@ Viewer, beside the retriangulation's tests:
 - the job pushes one version labelled `Refit <node>` with a new base, the same
   point count and the counts in the entry; Undo restores the value byte for
   byte;
+- on a node with pending point edits, the job folds the overlay in before the
+  refit and the selection follows its point through the fold's row map;
 - a cancelled run pushes no version and writes the failed entry;
 - a run with a photograph that cannot be read pushes no version and writes the
   failed entry naming the image;
