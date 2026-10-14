@@ -2776,7 +2776,9 @@ fn solve_lm<const CAM_COLS: usize>(
                         let mut pc = bsplines[j].clone();
                         for (i, c) in pc.iter_mut().enumerate() {
                             let dv = delta[o + BSPLINE_SLOT0 + i];
-                            // Pinned slots (an unanchored spline) solve to exactly zero;
+                            // Pinned slots (an unanchored spline, or a
+                            // coefficient that lost its support within the
+                            // round) solve to exactly zero;
                             // skip the add so a `−0.0` coefficient keeps its
                             // sign (the frozen-translation precedent).
                             if dv != 0.0 {

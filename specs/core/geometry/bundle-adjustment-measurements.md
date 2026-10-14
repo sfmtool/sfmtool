@@ -447,7 +447,7 @@ spans over `[0, ρ_max]`. Of the 17,575 kept observations, the last coefficient,
 observations, so the last span is nearly empty at any knot count, and the end
 of the curve has behaved poorly across several knot counts. A's last three
 coefficients are 0.0163, −0.0075 and 0.0601,
-and its end slope `1 + δ'(d_max)` is about 5.4.
+and its end slope `1 + δ'(d_max)` is 5.47.
 
 **Without either change.**
 
@@ -485,7 +485,7 @@ weight):
 | A | focal + distortion | `[(12, 2)]` only | 0.674 → 0.7497 | 0.0123, 0.0225, 0.0073 | 0.013 |
 | A | focal + distortion | `[(4, 1)]` only | 0.674 → 0.6664 | 0.0137, 0.0160, 0.0168 | 1.05 |
 | B | focal + distortion | default | 0.7928 → 0.6782 | 0.0130, 0.0159, 0.0155 | 0.97 |
-| B | held | default | 0.7928 → 0.6776 | unchanged | 0.013 |
+| B | held | default | 0.7928 → 0.6776 | unchanged | 0.000 |
 
 The single-stage medians are the schedule's, not the release's: with nothing
 released, A goes to 0.7991 under `[(50, 5)]` alone and to 0.7500 under
@@ -497,13 +497,13 @@ those rows measure the stall by their end slopes, not their medians.
 
 | Start | Release | Schedule | Median residual (px), before → after | Last three coefficients | End slope | Final round |
 |-------|---------|----------|--------------------------------------|-------------------------|-----------|-------------|
-| A | held | default | 0.674 → 0.674 | unchanged | 5.42 | converged |
+| A | held | default | 0.674 → 0.674 | unchanged | 5.47 | converged |
 | A | focal + distortion | default | 0.674 → 0.6761 | 0.0130, 0.0164, 0.0159 | 0.97 | converged |
-| A | focal + distortion | `[(50, 5)]` only | 0.674 → 0.7990 | unchanged | 5.42 | settled at the guard |
+| A | focal + distortion | `[(50, 5)]` only | 0.674 → 0.7990 | unchanged | 5.47 | settled at the guard |
 | A | focal + distortion | `[(12, 2)]` only | 0.674 → 0.7496 | 0.0123, 0.0224, 0.0074 | 0.019 | settled at the guard |
 | A | focal + distortion | `[(4, 1)]` only | 0.674 → 0.6664 | 0.0137, 0.0160, 0.0168 | 1.05 | converged |
 | B | focal + distortion | default | 0.7928 → 0.6760 | 0.0131, 0.0163, 0.0158 | 0.97 | converged |
-| B | held | default | 0.7928 → 0.6776 | unchanged | 0.013 | converged |
+| B | held | default | 0.7928 → 0.6776 | unchanged | 0.000 | converged |
 
 Under the default schedule the release from A ends 0.002 px above A's median,
 and B released again ends at 0.6760, below B held; neither reaches A's own
@@ -511,7 +511,7 @@ median, so a release is not guaranteed to end at or below the held
 adjustment's median. Under `[(12, 2)]` alone the round still ends at the
 monotonicity limit, and now says so. Under `[(50, 5)]` alone the spline does
 not move: the round takes 8 held steps and no full step, because from an end
-slope of 5.4 the full step at each iteration's `λ` overshoots past the limit,
+slope of 5.47 the full step at each iteration's `λ` overshoots past the limit,
 the held step at that `λ` is accepted and halves `λ`, and the next full step
 overshoots further. The default schedule's first round does the same; its
 second takes 5 full and 13 held steps and settles at the guard, and its third

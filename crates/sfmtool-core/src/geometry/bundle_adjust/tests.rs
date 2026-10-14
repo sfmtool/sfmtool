@@ -3841,8 +3841,9 @@ fn unsupported_pinhole_bspline_tail_continues_the_supported_coefficients() {
 }
 
 /// A pinhole scene through `truth` with every observation whose pixel radius
-/// is outside `keep(ρ)` dropped, the radius read as `f·ρ` (the truths below
-/// are close enough to the identity that this only moves the band edges).
+/// is outside `keep(ρ)` dropped, the radius read as `f·ρ`. The truth's
+/// distortion moves the band edges in `ρ`, so an edge that must clear a basis
+/// span needs a margin for it.
 fn pinhole_scene_within(truth: &CameraIntrinsics, keep: impl Fn(f64) -> bool) -> Scene {
     let f = truth.focal_lengths().0;
     let (full, _) = make_pinhole_scene_for(truth.clone(), 10, 500);
@@ -3876,7 +3877,10 @@ fn an_unsupported_interior_coefficient_interpolates_its_neighbours() {
     let f = 250.0;
     // 10 coefficients on `[0, 0.85]`, knots every h = 0.85/9. Coefficient
     // `i`'s basis span is `[(i − 1)h, (i + 3)h)`, so a gap over
-    // `[3h, 7h)` leaves `c4` alone without support.
+    // `[3h, 7h)` leaves `c4` alone without support. The band's outer edge has
+    // a wider margin because the truth expands the pixel radius by about 2%
+    // there, so an observation just inside `c4`'s span images past `7h`; with
+    // a margin of 0.01 those observations stayed and gave `c4` support.
     let h = RHO_MAX / 9.0;
     let mut start = [0.0; 10];
     start[4] = 0.03;
@@ -3884,7 +3888,7 @@ fn an_unsupported_interior_coefficient_interpolates_its_neighbours() {
     // A gently expanding truth, so the interpolation is not just zero.
     let truth: Vec<f64> = (0..10).map(|i| 0.0005 * (i * i) as f64).collect();
     let mut s = pinhole_scene_within(&sfmtool_pinhole(f, &truth), |rho| {
-        !(3.0 * h - 0.01..7.0 * h + 0.01).contains(&rho)
+        !(3.0 * h - 0.01..7.0 * h + 0.04).contains(&rho)
     });
     s.cam = sfmtool_pinhole(f, &start);
     let out = run_bspline(&mut s, false, true, &DEFAULT_SCHEDULE);
