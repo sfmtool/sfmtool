@@ -7,7 +7,10 @@ entry on the reconstruction row's context menu) and
 [`../gui/edits/retriangulate-point.md`](../gui/edits/retriangulate-point.md)
 (the edit family it sits beside), and builds on
 [`../core/bench/editable-track.md`](../core/bench/editable-track.md) § "Fitting"
-(the per-point step it runs in batch). Both standing specs point back here.
+(the per-point step it runs in batch) and
+[`../core/reconstruction/triangulation-rules.md`](../core/reconstruction/triangulation-rules.md)
+§ "A direction read at a held distance" (the rule it applies to a ranged point).
+The first two standing specs point back here.
 
 `Refit All Points` is a proposed entry on a reconstruction row's context menu in
 the Scene Graph, directly under `Retriangulate All Points`. For every point of
@@ -122,7 +125,7 @@ pub fn refit_points(
   retriangulation, and an agent reads it the same way.
 - **There is no `which` argument.** The request is for every point, and a fit
   of one point already exists: put it on the bench, press *Fit*, press
-  *Commit*. A list form is an open question (§ "Open questions").
+  *Commit*. There is no list form (§ "Non-goals").
 - **The settings struct is `*Options`**, holding the per-point `FitOptions`
   rather than repeating its fields, so the two cannot drift: a refit of a point
   is the fit of that point.
@@ -153,25 +156,29 @@ value had pending point edits, whose deleted slots close up when the overlay is
 folded in (§ "Writing the answers"); the refit itself moves no index.
 `RefitOutcome` is:
 
-- `Refit { placed, kept_at_seed, crossed, shift, classification, unchanged }`:
-  the point was fitted and written. `placed` and `kept_at_seed` are the
-  `FitReport`'s counts; `crossed` says it went from finite to a direction or
-  back; `shift` is the distance a point that stayed finite moved, `None`
-  otherwise; `classification` is the fit's `TrackClassification`;
+- `Refit { placed, kept_at_seed, crossed, shift, classification, range,
+  unchanged }`: the point was fitted and written. `placed` and `kept_at_seed`
+  are the `FitReport`'s counts; `crossed` says it went from finite to a
+  direction or back; `shift` is the distance a point that stayed finite moved,
+  `None` otherwise; `classification` is the fit's `TrackClassification`, `None`
+  for a point whose coordinate the distance rule decided; `range` is a
+  `RefitRange` saying how the point's constraint was applied (§ "Constraints");
   `unchanged` says the record it would write agrees with the stored one
   (`PointRecord::agrees_with`) and the stored reference is not one only the
   display render picked, so the point was not rewritten, the rule `commit`
   uses.
-- `Held` and `Ranged`: the point's constraint kept it out of the run
-  (§ "Constraints").
+- `Held`: the value holds the point's coordinate, so it was left out of the
+  run (§ "Constraints").
 - `NotFitted(FitError)`: the fit refused this point, and the point keeps every
   column it had (§ "Points the fit cannot place").
 - `NoBitmap`: the fit placed the point but rendered no bitmap, in a value that
   stores one per point, and the point keeps every column it had.
 
 The counts (`read`, `refit`, `unchanged`, `crossed`, `kept`, `held`, `ranged`,
-`kept_at_seed`, `with_error(kind)`, `median_shift`) are read off the statuses,
-as `RetriangulateReport`'s are.
+`released`, `kept_at_seed`, `with_error(kind)`, `median_shift`) are read off the
+statuses, as `RetriangulateReport`'s are. `ranged` counts the refit points whose
+direction was read at their distance, and `released` the ranged points whose
+constraint was released (§ "Constraints").
 
 `RefitPointsError` is what refuses the run as a whole: `NoKeypoints` (a
 `sift_files` value), `NoPatchFrames`, `NoPosedImage`, `ViewsMissing { got, expected }`,
@@ -208,7 +215,9 @@ point on the bench, presses *Fit* and presses *Commit*, and nothing else:
      keypoint, and one they did not place (out of frame) keeps its pixel;
    - the keypoints are classified and triangulated by `classify_track_rays`,
      the point-or-bearing test, at the run's noise level, and the frame is
-     placed at the answer at the apparent size it had;
+     placed at the answer at the apparent size it had. For a ranged point the
+     coordinate comes from the distance rule instead (§ "Constraints"), and the
+     frame is placed at that coordinate in the same way;
    - the stored bitmap is rendered from the reference observation through that
      placed frame (`render_bitmap`, the same render
      [`render_bitmap_in_place`](../../crates/sfmtool-core/src/bench/fit.rs)
@@ -235,8 +244,11 @@ point on the bench, presses *Fit* and presses *Commit*, and nothing else:
    evaluated reprojection errors in `error`, the normal the frame states (zero
    for a direction), and per observation, in image order, the new keypoint, its
    blur-matched score as `observation_confidence` and its readings
-   (`measurement_reading`). Built, compared with the stored record, and not
-   applied: the batch writes every record at once (§ "Writing the answers").
+   (`measurement_reading`). The commit writes every record free; the batch
+   replaces the record's constraint with the point's own (§ "Constraints"),
+   so a ranged point is written ranged. Built, compared with the stored record,
+   and not applied: the batch writes every record at once (§ "Writing the
+   answers").
 
 What the batch adds to the three steps is the loop, the constraint rule, the
 per-point failure rule and the in-place write. It sets no verdict and paints
@@ -258,19 +270,93 @@ after, with `crossed` counting the rest.
 
 This is a difference from `Retriangulate All Points`, whose defaults turn the
 angular floor and the likelihood rule off, so that no free point crosses
-between the two representations on its rays' account alone. The fit's
-classification is on, as it is for the bench's *Fit*, so a refit can move points
-across; the report counts them (`crossed`).
+between the two representations on its rays' account alone. A refit uses the
+fit's classification, as the bench's *Fit* does, so a free point can cross in
+either direction; the report counts the points that do (`crossed`). A refit
+and *Fit* then agree on every free point, and a refit and a retriangulation can
+disagree on which points are bearings. A ranged point does not cross: its `w`
+follows its distance (§ "Constraints").
 
 ### Constraints
 
 A point the value **holds** or **ranges** is a statement a reviewer made by hand
-(`POINT_CONSTRAINT_HELD`, `POINT_CONSTRAINT_RANGED`). The commit writes every
-point free, because a track on the bench says nothing about a distance, so a
-refit that committed such a point would silently drop the constraint. The batch
-leaves both out: not fitted, not written, and reported as `Held` or `Ranged`.
-This is the rule `Prune Covered Observations` follows; whether a ranged point
-should instead be refit at its distance is an open question.
+(`POINT_CONSTRAINT_HELD`, `POINT_CONSTRAINT_RANGED`, in the columns
+`PointRecord::constraint` carries as a `(kind, distance, reference image)`
+triple). The batch treats the two differently.
+
+**A held point is left out**: not fitted, not written, and reported as `Held`.
+The value owns its coordinate, so the fit's answer for it could not be
+written, and `Retriangulate All Points` and `Prune Covered Observations` leave
+held points alone too.
+
+**A ranged point is refit, and its range is applied to the answer.** The
+caller owns the point's distance `r` from its reference image's camera centre
+`O`, and the refit owns its direction `d`, which is the split the adjustment and
+the retriangulation already make. Everything in § "What one point's refit is"
+runs as for a free point, the alignment, the bitmap and the evaluation
+included, except the step that turns the fitted keypoints into a coordinate:
+
+- **The coordinate is the distance rule's.** In place of
+  `classify_track_rays`, the fitted keypoints of the `in` rows go through the
+  triangulation's distance rule
+  ([`triangulation-rules.md`](../core/reconstruction/triangulation-rules.md)
+  § "A direction read at a held distance"), the rule `retriangulate_points`
+  applies to a ranged point: `triangulate_points_through_cameras` over the one
+  track, with `PointRules { distance: Some(&[range]), ..PointRules::default() }`
+  and the value's cameras and poses. At a finite `r` the answer is
+  `X = O + r · d`, with `d` the direction from `O` that minimizes the summed
+  squared reprojection error of the fitted keypoints, and `w = 1`. At `r = ∞`
+  the answer is the normalized mean of the keypoints' rays, written as a
+  direction with `w = 0`. So the record's `w` is `0` exactly when its distance
+  is infinite, which is the format's rule for a ranged row
+  ([`sfmr-file-format.md`](../formats/sfmr-file-format.md) § "Per-point
+  constraints"), and a ranged point
+  never crosses. The frame is placed at that coordinate, and the bitmap and
+  the evaluation read the patch there, so the record describes the point
+  that is written.
+- **The origin is resolved as the retriangulation resolves it.** At a finite
+  `r`, `O` is the reference image's camera centre at the value's poses, by the
+  rule of `ranged_entry` in
+  [`retriangulate.rs`](../../crates/sfmtool-core/src/reconstruction/triangulation/retriangulate.rs),
+  resolved for every ranged point before the loop. A ranged point at `r = ∞`
+  names no reference and needs no origin. `ranged_entry` gives such a point no entry,
+  and the retriangulation reaches the normalized mean of its rays through the
+  `marks` rule instead, since the stored `w` is `0`; the fit's classification
+  reads no mark, so the refit passes the infinite entry itself,
+  `PointDistance { distance: f64::INFINITY, origin: [f64::NAN; 3] }`, which the
+  distance rule answers without reading the origin.
+- **The constraint is kept.** The record carries the point's stored triple,
+  unchanged, so the point is written ranged, at the same distance, from the
+  same reference image. Its status is `Refit` with `range:
+  RefitRange::Applied`.
+- **A ranged point whose finite distance has no origin** (its reference image
+  has no pose) is fitted free, by the fit's classification, which is
+  `retriangulate_points`' rule for the same point ("the rule says nothing about
+  it and it is solved free"). Where the answer stays finite the stored triple
+  is kept, as the retriangulation keeps it, and the status is `Refit` with
+  `range: RefitRange::Unresolved { released: false }`. Where the fit's
+  classification makes it a direction, a finite distance would no longer
+  describe the coordinate, and the format allows no `w = 0` row at a finite
+  distance; the constraint is then released, written free, which is the
+  format's rule for an edit that rewrites a point's representation
+  ([`sfmr-file-format.md`](../formats/sfmr-file-format.md) § "Per-point
+  constraints", "What an edit does to them"; `release_touched_constraints` in
+  [`analysis/infinity/convert.rs`](../../crates/sfmtool-core/src/analysis/infinity/convert.rs)
+  applies it to a reclassification), and the status is `Refit` with `range:
+  RefitRange::Unresolved { released: true }`. § "Open questions" asks whether
+  such a point should be left as it was instead.
+
+A free point's status is `Refit` with `range: RefitRange::Free`.
+
+Because the record's constraint is the stored triple, a ranged point whose
+fitted record matches the stored one column for column is `unchanged` and not
+rewritten, by the same `agrees_with` comparison as a free point
+(`agrees_with` compares the constraint triples too).
+
+**A refit of a ranged point differs from the bench's.** The bench's *Fit* has
+no distance rule, and its commit writes every point free, so putting a ranged
+point on the bench and committing it releases the constraint. That is the
+bench's behaviour and stays so; the refit is the place that keeps the range.
 
 ### Points the fit cannot place
 
@@ -338,8 +424,17 @@ reason `RetriangulateWhich::TheseInBulk` exists.
 The columns written are the ones the commit's record carries, under the same
 rules: `observation_confidence`, the observation readings, the normals, the
 normal confidences and the reference observations only where the value has the
-column; the patch bitmap only where the value stores bitmaps. A column the value
-marks `patch_bitmaps_for_display` keeps that mark (§ "Open questions").
+column; the patch bitmap only where the value stores bitmaps. The constraint
+columns, where the value has them, take the record's triple, which is the
+stored one except for a released point (§ "Constraints"); a value with no
+constraint columns gains none.
+
+A bitmap column the value marks `patch_bitmaps_for_display` (rendered for the
+viewer, not read from the file) is rewritten row by row and keeps that mark. So
+a save writes the columns the file had and no bitmap column the file lacked;
+adding one to the file is `sfm xform --add-patch-bitmaps`. Clearing the mark
+because the column now holds the refit's answer would make every save of a
+refit node write bitmaps, which the person did not ask for.
 
 ---
 
@@ -408,10 +503,17 @@ stored point ([`../core/bench/editable-track.md`](../core/bench/editable-track.m
 
 Before any point is fitted, the run is refused as a whole, writing nothing,
 when the value is `sift_files`, carries no patch frame, has no posed image, is
-handed fewer views than images, or has no noise level. In the viewer, a
-photograph an observation names that cannot be read fails the job in its
-`decode images` phase with *"Cannot read <image>."*, as the bench's *Fit* does
-(open question on this below).
+handed fewer views than images, or has no noise level.
+
+**A photograph that cannot be read is an error for the whole run.** In the
+viewer, a photograph some point observes that cannot be read fails the job in
+its `decode images` phase with *"Cannot read <image>."*, through
+`ViewSources::decode`, as the bench's *Fit* does, and no version is pushed. The
+run does not go ahead without it: `ViewSources::decode_available` would let the
+points that do not observe the missing image be refit, but every point that does
+would then need a status of its own and a rule for which of its observations
+the missing photograph covers, and a refit of most points with a few silently
+skipped is harder to read than a refusal that names the file.
 
 ---
 
@@ -459,11 +561,15 @@ what the history already does for a bulk edit, and nothing here adds to it.
 of zero left out, in the shape `Retriangulate All Points` uses:
 
 ```text
-Refit seoul_bull: 812 of 840 points refit, 3 crossed to or from infinity,
-41 observations kept their keypoint past the shift bound, 9 left as they were
-(5 with too few rays, 4 with no bitmap to render), 16 held, 3 ranged,
-median shift 0.0021 (v3 → v4)
+Refit seoul_bull: 815 of 840 points refit, 3 of them ranged at their distance,
+3 crossed to or from infinity, 41 observations kept their keypoint past the
+shift bound, 9 left as they were (5 with too few rays, 4 with no bitmap to
+render), 16 held, median shift 0.0021 (v3 → v4)
 ```
+
+A run that released a constraint adds *"1 ranged point released: its
+reference image has no pose and it became a direction"* after the ranged
+count, so a reviewer sees which statement of theirs the run ended.
 
 The words for each `FitError` a point can be left for come from one exhaustive
 match in `edits.rs`, as the retriangulation's words for each `PointVerdict` do,
@@ -500,6 +606,30 @@ core functions have to be callable on their own:
   `replace_point` / `add_point`. So the batch and the commit write one record
   for one track.
 
+The ranged rule needs two more changes to existing code, neither of which
+changes what any current caller gets:
+
+- **The fit takes a range.** `fit_track` in
+  [`bench/fit.rs`](../../crates/sfmtool-core/src/bench/fit.rs), the
+  bench-private body that `fit` and the cluster upgrade (`set_stage`) share,
+  gains an argument `range: Option<PointDistance>`. With `None` it runs as it
+  does today, and both existing callers pass `None`. With an entry, the step
+  that turns the fitted keypoints into a coordinate runs the distance rule
+  (`triangulate_points_through_cameras` with `PointRules::distance` set) in
+  place of `classify`, and `FitReport::classification` is `None`. The
+  keypoints are still triangulated free first (`triangulate_keypoints`), so a
+  ranged point is refused for too few rays exactly as a free one is, and the
+  report keeps its condition number. `refit_points` calls `fit_track` the way
+  `fit` calls it at the track stage: after `check_views` and
+  `fit_preconditions`, with the payload's own frame and the options at the
+  value's patch resolution (`FitOptions::at_patch_resolution`).
+- **The origin rule is shared.** The part of `ranged_entry` in
+  [`retriangulate.rs`](../../crates/sfmtool-core/src/reconstruction/triangulation/retriangulate.rs)
+  that reads a reference image's camera centre, or nothing where the image is
+  out of range or has no pose, becomes a crate-visible function of its own,
+  which `ranged_entry` calls and the refit calls for a finite distance. The
+  retriangulation's answers do not change.
+
 The new code is the loop, the constraint rule, the report and the in-place
 writer, all in `bench/refit_points.rs`. Python gets `sfmtool.bench.refit_points`,
 taking `images` as `sfmtool.bench.fit` does, because every edit family's
@@ -524,8 +654,11 @@ mechanism is bound ([`../gui/edits/README.md`](../gui/edits/README.md)).
   [`../core/bench/README.md`](../core/bench/README.md), and in
   [`../core/bench/editable-track.md`](../core/bench/editable-track.md) the
   `track_of_point` and `point_record` functions in § "Rust API", § "Putting a
-  point on the bench" and § "The commit", and the binding in § "Python
-  bindings".
+  point on the bench" and § "The commit", the range a fit can be given in
+  § "Fitting", and the binding in § "Python bindings".
+- [`../core/reconstruction/triangulation-rules.md`](../core/reconstruction/triangulation-rules.md)
+  § "A direction read at a held distance": the refit as a second caller of the
+  distance rule, and the origin rule shared with it.
 - [`../gui/background-tasks.md`](../gui/background-tasks.md): the operation in
   the list of background operations and its phases.
 - [`../gui/mcp-server.md`](../gui/mcp-server.md): the `refit_all_points` tool.
@@ -540,9 +673,9 @@ mechanism is bound ([`../gui/edits/README.md`](../gui/edits/README.md)).
 
 Core, in `bench/tests/refit_points.rs`:
 
-- **A refit of one point equals the bench's.** For each point of a small value,
-  `refit_points`'s record equals the record from `create_track`, `fit` and
-  `commit` on that point alone, column for column.
+- **A refit of one point equals the bench's.** For each free point of a small
+  value, `refit_points`'s record equals the record from `create_track`, `fit`
+  and `commit` on that point alone, column for column.
 - **Keypoints nudged off the content come back.** On the seoul_bull ground truth
   with its photographs, keypoints displaced by a few pixels return to within
   the refine's tolerance of the stored ones, and the points move back toward
@@ -552,7 +685,21 @@ Core, in `bench/tests/refit_points.rs`:
 - **A point at infinity** is fitted as a bearing and written with `w = 0`, a
   zero normal and a zero normal confidence; a bearing given a baseline crosses
   to finite and is counted.
-- **Held and ranged points** are not fitted and come back byte for byte.
+- **Held points** are not fitted and come back byte for byte.
+- **A ranged point at a finite distance** has its keypoints moved as a free
+  point's are, comes back at exactly its distance from its reference image's
+  camera centre with `w = 1`, keeps its constraint triple, and agrees with
+  what `triangulate_points_through_cameras` under the distance rule gives for
+  its fitted keypoints. On a value where the same point's free fit would land
+  elsewhere, the two answers differ, so the test shows the range was applied.
+- **A ranged point at an infinite distance** comes back with `w = 0`, the
+  normalized mean of its fitted rays, and its triple, and is not counted as
+  crossed even where its rays now have a baseline.
+- **A ranged point whose reference image has no pose** is fitted free and keeps
+  its triple while it stays finite; one whose fit makes it a direction is
+  written free and counted as released.
+- **`fit_track` with no range** gives the same answer as before the argument
+  was added, for `fit` and for the cluster upgrade.
 - **A point the fit refuses** (two observations whose rays are parallel, one
   observation) and **a point with no eligible reference** in a value that stores
   bitmaps come back byte for byte, with the status naming why.
@@ -573,6 +720,8 @@ Viewer, beside the retriangulation's tests:
   point count and the counts in the entry; Undo restores the value byte for
   byte;
 - a cancelled run pushes no version and writes the failed entry;
+- a run with a photograph that cannot be read pushes no version and writes the
+  failed entry naming the image;
 - `the_prune_entry_is_live_on_a_node_with_patch_frames`, whose doc comment and
   failure message say Prune sits directly under `Retriangulate All Points`,
   measures Prune against the refit entry instead;
@@ -581,39 +730,32 @@ Viewer, beside the retriangulation's tests:
 
 ---
 
+## Before conversion
+
+**Measure the run time.** A bench fit of one track is localize, refine and a
+full evaluation, so a run over a reconstruction of tens of thousands of points
+may take minutes, and it holds every photograph decoded for its length. The
+implementation measures the run on the seoul_bull and dino_dog_toy ground
+truths, the wall time of each phase and the peak memory, before the edit spec
+is filed, and records the numbers there.
+
+---
+
 ## Open questions
 
-1. **Ranged points.** Recommended: leave held and ranged points out, as above.
-   The alternative for a ranged point is to fit its keypoints and bitmap and
-   then re-read only its direction at its distance with
-   `retriangulate_points`' ranged rule, which keeps the constraint but makes the
-   point's geometry the retriangulation's rather than the fit's. Worth doing
-   only if ranged points are common enough for a refit to need them.
-2. **An unreadable photograph.** Recommended: refuse the run, naming the image,
-   as the bench's *Fit* does (`ViewSources::decode`). The alternative is
-   `decode_available` with each point that observes an unreadable image left as
-   it was and counted, which lets a run go ahead with a photograph missing, at
-   the cost of a status kind and a rule for which points it covers.
-3. **The classification.** Recommended: keep the fit's classification on, so a
-   refit is the bench's *Fit* and points may cross to or from infinity. The
-   alternative is to pass the retriangulation's rule (no crossing on the rays'
-   account alone), which makes a refit and a retriangulation agree on which
-   points are bearings but makes a refit differ from *Fit* on one point.
-4. **A bitmap column rendered for display.** Recommended: the refit rewrites
-   the rows and keeps the `patch_bitmaps_for_display` mark, so a save writes the
-   columns the file had and no bitmap column the file lacked; adding one is
-   `sfm xform --add-patch-bitmaps`. The alternative is to clear the mark, since
-   the column is now the refit's answer, which makes every save of a refit node
-   write bitmaps.
-5. **A list form.** Recommended: none for now; the request is for every point,
-   and one point is *Fit* and *Commit* on the bench. A `RetriangulateWhich`-like
-   argument (`All`, `TheseInBulk`) can be added when a caller wants, for
-   instance, every point one camera observes.
-6. **Cost.** Unmeasured. A bench fit of one track is localize, refine and a full
-   evaluation, so a run over a reconstruction of tens of thousands of points may
-   take minutes, and holds every photograph decoded for its length. The
-   implementation should measure the run on the seoul_bull and dino_dog_toy
-   ground truths before the edit spec is filed, and record the numbers there.
+1. **A ranged point whose reference image has no pose.** Its finite distance is
+   measured from nothing the value can resolve. Recommended: fit it free and keep
+   the constraint while it stays finite, releasing it where the fit makes it a
+   direction, as § "Constraints" says. That follows the retriangulation, which
+   solves such a point free, and the format's rule that an edit which rewrites
+   a point's representation releases its constraint. The alternative is to
+   leave the point as it was, with a status of its own, so a refit never ends a
+   constraint; that keeps the reviewer's statement but leaves the point's
+   keypoints unaligned until the reference image is posed again. A related
+   point for the retriangulation, outside this draft: its in-place writer keeps
+   the stored triple whatever `w` it writes, so a free solve of such a point
+   that cheirality turns into a direction would leave a `w = 0` row at a finite
+   distance.
 
 ---
 
@@ -626,3 +768,11 @@ Viewer, beside the retriangulation's tests:
   sightings a track should have is the bench's work.
 - **Turning the patch.** The fit keeps the way the patch faces. *Fit Normal* and
   the finite-difference normals stay per-track bench steps.
+- **Refitting a list of points.** The run is over every point, and one point is
+  *Fit* and *Commit* on the bench. A `RetriangulateWhich`-like argument (`All`,
+  `TheseInBulk`) can be added when a caller wants, for instance, every point
+  one camera observes.
+- **Refitting a held point.** The value owns its coordinate, so the run leaves
+  it out (§ "Constraints"). Realigning a held point's keypoints and bitmap at the
+  coordinate it holds would be a different operation from a fit, which places
+  the point where its keypoints say.
