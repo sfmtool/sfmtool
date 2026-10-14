@@ -203,7 +203,8 @@ ranged points whose constraint was released (§ "Constraints").
 `RefitPointsError` is what refuses the run as a whole: `NoKeypoints` (a
 `sift_files` value), `NoPatchFrames`, `NoPosedImage`, `ViewsMissing { got, expected }`,
 `NoNoiseLevel(String)` (no `sigma_px` given and the value's reprojection noise
-cannot be measured, the fit's own refusal) and `Cancelled`. The error and the
+cannot be measured, or the `sigma_px` given is not a finite positive number,
+the fit's own refusals) and `Cancelled`. The error and the
 report carry the `RefitPoints` prefix of the options because `RefitError` and
 `RefitOptions` already name `camera::refit_intrinsics`'s types.
 
