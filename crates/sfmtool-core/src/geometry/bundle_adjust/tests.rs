@@ -7194,7 +7194,7 @@ fn a_coefficient_that_gains_support_within_a_round_stays_pinned() {
 /// default schedule from the settled scene, and compares the median with a
 /// held adjustment from the same scene. The code does not guarantee an end
 /// slope near 1 on this family, and the test does not assert one: the one
-/// observation in the last span pulls the end slope to between 0.14 and 0.40
+/// observation in the last span pulls the end slope to between 0.010 and 0.40
 /// on some draws, and a last coefficient that never gains support keeps its
 /// wild starting value and an end slope of up to 9.3 (see
 /// `specs/core/geometry/bundle-adjustment-measurements.md`).

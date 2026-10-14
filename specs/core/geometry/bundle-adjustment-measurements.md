@@ -547,8 +547,9 @@ and 8.5·10⁻⁴ at the second, falling from there, against 6.5·10⁴ for the
 coefficient two places before it. Released from the second linearization
 with that column and no row, it rose on every accepted step, to 26,913 by the
 round's last iteration and 32,152 at its end, and the next round, whose rows
-include it, started from a penalty cost of 7.2·10⁹. The kernel now keeps such a coefficient pinned until the next round,
-and no coefficient of the 60 runs is larger than 0.113 in magnitude.
+include it, started from a penalty cost of 7.2·10⁹. The kernel keeps such a
+coefficient pinned until the next round, and no coefficient of the 60 runs is
+larger than 0.112 in magnitude.
 
 *What the 60 runs show with the coefficient held until the next round.*
 Every spline comes back monotone, and the median rises by at most 0.0004 px
