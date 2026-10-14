@@ -718,7 +718,20 @@ taking an `sfmtool.reconstruction.SfmrReconstruction` and `images` as
 `sfmtool.bench.fit` does, and returning the refit `SfmrReconstruction` and a
 report dict with no point map, because every edit family's mechanism is bound
 ([`../gui/edits/README.md`](../gui/edits/README.md)). A caller holding an
-`EditedReconstruction` folds it first with its `materialize`.
+`EditedReconstruction` folds it first with its `materialize`. The binding
+([`bench/refit_points.rs`](../../crates/sfmtool-py/src/bench/refit_points.rs))
+takes `fit`'s keyword arguments (`max_seed_offset_px`, `max_cache_bytes`,
+`sigma_px`, `depth_likelihood_ratio_threshold`) and `max_shift_px` (6), runs
+with the GIL released and `Progress::none()`, as the other long bindings do,
+and raises `ValueError` with the refusal's sentence. The report carries the
+counts `read`, `refit`, `unchanged`, `crossed`, `kept`, `held`, `ranged`,
+`released`, `kept_at_seed` and `median_shift`, and `points`, one dict per point
+in index order with its `index` and `outcome` (`"refit"`, `"held"`,
+`"not_fitted"` or `"no_bitmap"`). A refit point's dict adds `placed`,
+`kept_at_seed`, `crossed`, `shift`, `classification` (as `fit` reports it, or
+`None`), `range` (`"free"`, `"applied"` or `"unresolved"`), `released` and
+`unchanged`; a refused one adds `error`, the `FitError`'s name in snake case,
+and `reason`, its sentence.
 
 ---
 

@@ -182,6 +182,7 @@ Paths in the *Source* column are relative to
 | [bench/nearby.rs](../crates/sfmtool-py/src/bench/nearby.rs) | `NearbyTrackSources`, `nearby_points`, `nearby_cluster_tracks`, `guided_matches`, `constellation_seeds` | [nearby-sources.md](core/bench/nearby-sources.md) |
 | [bench/nearby_tracks.rs](../crates/sfmtool-py/src/bench/nearby_tracks.rs) | `find_nearby_tracks` | [nearby-tracks.md](core/bench/nearby-tracks.md) |
 | [bench/range.rs](../crates/sfmtool-py/src/bench/range.rs) | `distance_range`, `camera_spread`, `classify_range` | [distance-range.md](core/bench/distance-range.md) |
+| [bench/refit_points.rs](../crates/sfmtool-py/src/bench/refit_points.rs) | `refit_points` | [refit-all-points.md](drafts/refit-all-points.md) (draft) |
 | [bench/layers.rs](../crates/sfmtool-py/src/bench/layers.rs) | `depth_layers` | [depth-layers.md](core/bench/depth-layers.md) |
 | [bench/far_field.rs](../crates/sfmtool-py/src/bench/far_field.rs), [patch_read.rs](../crates/sfmtool-py/src/bench/patch_read.rs) | `far_field_sweep`, `read_patch_along_ray` | [far-field-sweep.md](core/bench/far-field-sweep.md) |
 

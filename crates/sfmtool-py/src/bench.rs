@@ -60,6 +60,7 @@ mod nearby;
 mod nearby_tracks;
 mod patch_read;
 mod range;
+mod refit_points;
 mod track_at_pixel;
 
 /// Turn any core refusal into a Python `ValueError` carrying its sentence.
@@ -2454,6 +2455,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     nearby_tracks::register(m)?;
     patch_read::register(m)?;
     range::register(m)?;
+    refit_points::register(m)?;
     track_at_pixel::register(m)?;
     Ok(())
 }
