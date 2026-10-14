@@ -344,8 +344,13 @@ included, except the step that turns the fitted keypoints into a coordinate:
   constraints", "What an edit does to them"; `release_touched_constraints` in
   [`analysis/infinity/convert.rs`](../../crates/sfmtool-core/src/analysis/infinity/convert.rs)
   applies it to a reclassification), and the status is `Refit` with `range:
-  RefitRange::Unresolved { released: true }`. § "Open questions" asks whether
-  such a point should be left as it was instead.
+  RefitRange::Unresolved { released: true }`. The refit does not leave such a
+  point as it was: its keypoints are aligned like any free point's, and a
+  constraint ends only where the fit makes the point a direction. The
+  retriangulation's in-place writer differs here, outside this draft: it keeps
+  the stored triple whatever `w` it writes, so a free solve of such a point
+  that cheirality turns into a direction leaves a `w = 0` row at a finite
+  distance.
 
 A free point's status is `Refit` with `range: RefitRange::Free`.
 
@@ -740,24 +745,6 @@ may take minutes, and it holds every photograph decoded for its length. The
 implementation measures the run on the seoul_bull and dino_dog_toy ground
 truths, the wall time of each phase and the peak memory, before the edit spec
 is filed, and records the numbers there.
-
----
-
-## Open questions
-
-1. **A ranged point whose reference image has no pose.** Its finite distance is
-   measured from nothing the value can resolve. Recommended: fit it free and keep
-   the constraint while it stays finite, releasing it where the fit makes it a
-   direction, as § "Constraints" says. That follows the retriangulation, which
-   solves such a point free, and the format's rule that an edit which rewrites
-   a point's representation releases its constraint. The alternative is to
-   leave the point as it was, with a status of its own, so a refit never ends a
-   constraint; that keeps the reviewer's statement but leaves the point's
-   keypoints unaligned until the reference image is posed again. A related
-   point for the retriangulation, outside this draft: its in-place writer keeps
-   the stored triple whatever `w` it writes, so a free solve of such a point
-   that cheirality turns into a direction would leave a `w = 0` row at a finite
-   distance.
 
 ---
 
