@@ -854,6 +854,32 @@ implementation measures the run on the seoul_bull and dino_dog_toy ground
 truths, the wall time of each phase and the peak memory, before the edit spec
 is filed, and records the numbers there.
 
+**Measured** (2026-10-14), through `sfmtool.bench.refit_points` in a release
+build, with the default options, on an Intel Core i9-14900HX (32 logical
+processors). No dino_dog_toy ground truth is checked in, so the second file is
+the kerry_park ground truth, the larger of the two checked-in `.sfmr` files with
+embedded patches. Decode is `read_image_rgb` of every photograph, and the
+pyramids are an `ImagePyramidSet` built from them, both timed apart from the
+refit, which is then handed the set. Each refit is the median of three runs.
+
+| | seoul_bull ground truth | kerry_park ground truth |
+|---|---|---|
+| Images | 17 at 270 × 480 | 48 at 480 × 480 |
+| Points (at infinity) | 280 (0) | 391 (9) |
+| Observations | 1277 | 3767 |
+| Decode | 0.10 s | 0.17 s |
+| Pyramids | 0.004 s | 0.013 s |
+| Refit, 32 threads | 0.10 s | 0.40 s |
+| Refit, 1 thread | 1.23 s | 4.94 s |
+| Peak working set of the process | 99 MB | 169 MB |
+| Points refit, observations kept at their keypoint | 280 of 280, 22 | 391 of 391, 34 |
+
+A refit costs about 1 to 1.3 ms of one thread per observation, and runs about
+twelve times faster on the 32-thread pool. A capture of 50 000 points and
+250 000 observations would take on the order of 20 to 30 s on this machine, on
+top of decoding its photographs; that figure is an extrapolation, not a
+measurement.
+
 ---
 
 ## Non-goals
