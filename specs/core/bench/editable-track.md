@@ -3615,6 +3615,37 @@ carries `by`, `center`, `moved`, `placed` and `changed`; `tilt_patch`'s carries
 `degrees`, `asked`, `normal`, `stopped` (`None`, or a dict of the
 `observation` and `image` whose cap ended the turn), `placed` and `changed`.
 
+The three normal steps, in
+[bench/normal.rs](../../../crates/sfmtool-py/src/bench/normal.rs), take the
+track, the reconstruction and `images` the way `fit` does, with `fit`'s four
+keywords for the reading they end with (and, for `finite_difference_normal`,
+the pieces' fits). `fit_normal` takes nothing else.
+`finite_difference_normal` takes `layout` (`"cross"`, the default, or
+`"grid"`), `pieces` (default 2) and `overlap` as a fraction (default 0), and
+refuses bad settings before it reads a photograph; Track View's Grid Plane
+Normal is `layout="grid", pieces=2, overlap=0.0`. `grid_plane_normal` takes
+`working_resolution`, `cell_shift_bound_px`, `min_cell_zncc`,
+`min_cell_curvature`, `update_tolerance_px` and `max_iterations`, each
+defaulting to `GridPlaneNormalOptions::default()`'s when `None`; the plane
+fit's `CellPlaneParams` keep their defaults. Each returns `(EditableTrack,
+report)`, the report carrying `normal` (the one the patch now shows), `tilt`
+(as `tilt_patch` reports it), `evaluate` (the reading's report), `text` (the
+`NormalReport` sentence) and `estimate`, a dict whose `kind` names the
+`NormalEstimate`: `"photometric"` with `before`, `after` and `views`;
+`"finite_difference"` with `pieces`, `u`, `v` and `both_axes`; `"grid_plane"`
+(`PieceLayout::Grid`) with `pieces`, `fitted`, `both_axes` and `off_plane`;
+and `"grid_plane_cells"` (`grid_plane_normal`) with `outcome` (`"turned"`,
+`"undetermined"` or `"unstable"`), `stop` (`"not_run"`, `"converged"`,
+`"cap"`, `"rejected"`, `"oscillation"` or `"measured"`), `determinacy`
+(`"both_axes"`, `"one_axis"` or `"none"`) with `free_axis` (a unit 3-vector
+under one axis, else `None`), `cell_status` as `[row][col]` lists of
+`CellPlaneStatus::NAMES`, `cell_rays` (`(3, 3)` uint32), `cell_weight`
+(`(3, 3)` float64), `in_plane`, `view_cells` (per observation, `[row][col]`
+lists of the `.matches` cell-status words, `"fitted"`, `"refused_curvature"`,
+`"refused_zncc"`, `"not_attempted"`, `"refused_bound"`, `"refused_outlier"`),
+`plane_rms`, `plane_offset`, `working_resolution`, `iterations`,
+`score_before` and `score_after`.
+
 `spin_patch` and `shape_observation` take their numbers directly;
 `sight_observation`, `resize_patch`, `translate_patch_to_pixel` and
 `resize_patch_to_pixel` take the reconstruction too, because they read an

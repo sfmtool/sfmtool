@@ -38,8 +38,8 @@ use sfmtool_core::bench::{
     unpin_verdicts as core_unpin_verdicts, Bench, BenchItem, ClusterSeed, CreateTrackOptions, Edge,
     EditableTrack, EvaluateOptions, EvaluateReport, FitOptions, FitReport, Found,
     GeometrySearchOptions, GeometrySearchReport, Observation, ObservationSeed, Provenance,
-    ResizeReport, SearchOptions, SearchReport, StageKind, TrackClassification, Verdict, Viewpoint,
-    DEFAULT_RADIUS_PX,
+    ResizeReport, SearchOptions, SearchReport, StageKind, TiltReport, TrackClassification, Verdict,
+    Viewpoint, DEFAULT_RADIUS_PX,
 };
 use sfmtool_core::features::kdforest::{ConstellationParams, ImageKeypoints};
 use sfmtool_core::patch::normal_refine::ProjectedImage;
@@ -58,6 +58,7 @@ mod far_field;
 mod layers;
 mod nearby;
 mod nearby_tracks;
+mod normal;
 mod patch_read;
 mod range;
 mod refit_points;
@@ -1286,6 +1287,19 @@ fn tilt_patch(
         nalgebra::Vector3::new(normal[0], normal[1], normal[2]),
     )
     .map_err(refused)?;
+    let d = tilt_report_dict(py, &report)?;
+    Ok((
+        PyEditableTrack {
+            inner: Arc::new(next),
+        },
+        d.unbind(),
+    ))
+}
+
+/// The dict form of one turn's report: ``degrees``, ``asked``, ``normal``,
+/// ``stopped`` (``None``, or the ``observation`` and ``image`` whose cap ended
+/// the turn), ``placed`` and ``changed``.
+fn tilt_report_dict<'py>(py: Python<'py>, report: &TiltReport) -> PyResult<Bound<'py, PyDict>> {
     let d = PyDict::new(py);
     d.set_item("degrees", report.degrees)?;
     d.set_item(
@@ -1307,12 +1321,7 @@ fn tilt_patch(
     }
     d.set_item("placed", report.placed)?;
     d.set_item("changed", report.changed)?;
-    Ok((
-        PyEditableTrack {
-            inner: Arc::new(next),
-        },
-        d.unbind(),
-    ))
+    Ok(d)
 }
 
 /// Put **one** observation's own sighting at ``pixel``, by hand, leaving every
@@ -2453,6 +2462,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     layers::register(m)?;
     nearby::register(m)?;
     nearby_tracks::register(m)?;
+    normal::register(m)?;
     patch_read::register(m)?;
     range::register(m)?;
     refit_points::register(m)?;
