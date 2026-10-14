@@ -254,7 +254,7 @@ Rendering with a fixed bilinear sampler instead of the sampler rule's choice cha
 
 - **Script.** [scripts/track_at_pixel/normal_sources/grid_plane_eval.py](../../scripts/track_at_pixel/normal_sources/grid_plane_eval.py), through the `sfmtool.bench` bindings `create_track`, `tilt_patch`, `fit`, `finite_difference_normal` and `grid_plane_normal`. `prepare` copies each ground truth into the track-at-pixel cache workspace in the system temporary directory; nothing is written beside `test-data`.
 - **Points.** Every finite point seen in two or more images: all 266 of `seoul_bull_sculpture_ground_truth.sfmr` and all 382 of `kerry_park_ground_truth.sfmr`. No sample.
-- **Start.** Each point is put on the bench from the ground truth (its position, its sightings at their stored keypoints, its stored half-extent), its patch turned with `tilt_patch` to the mean viewing direction of its sightings (the `mean_view` of `normal_diag.py`), and then given one bench `fit`. Both steps run from that one fitted track. The fit is kept because it is what precedes the Grid Plane Normal in Surface Tiling Mode's sequence and it gives both steps keypoints localized at the start's frame. A fit does not change the normal, so the start's error is the mean view's. It moved the centre a median 0.11 (`seoul_bull`) and 0.10 (`kerry_park`) half-extents off the ground-truth position, and no fit made a point a direction. A control run without the fit (`--no-fit`) is below.
+- **Start.** Each point is put on the bench from the ground truth (its position, its sightings at their stored keypoints, its stored half-extent), its patch turned with `tilt_patch` to the mean viewing direction of its sightings (the `mean_view` of `normal_diag.py`), and then given one bench `fit`. Both steps run from that one fitted track. The fit is kept because it is what precedes the Grid Plane Normal in Surface Tiling Mode's sequence and it gives both steps keypoints localized at the start's frame. A fit does not change the normal, so the start's error is the mean view's. It moved the centre a median 0.11 (`seoul_bull`) and 0.09 (`kerry_park`) half-extents off the ground-truth position, and no fit made a point a direction. A control run without the fit (`--no-fit`) is below.
 - **Errors.** The angle between a step's normal and the ground-truth normal, both turned to face the first sighting's camera, folded to 0–90°, as in `normal_diag.py`. The ground-truth normal is `u × v` of the ground truth's stored patch frame. A step that leaves the normal keeps the start's error.
 - **Time.** Wall time of each binding call, single-threaded, the photographs held in one prebuilt `ImagePyramidSet`. Medians vary by about 20% between repeated runs.
 - **Commit and machine.** Commit `62d22282` (on `db9f99ff`); Intel Core i9-14900HX, 64 GB, Windows 11, release build of the extension.
@@ -291,7 +291,7 @@ Today's step turned every point and refused none; all four pieces fitted on ever
 | `seoul_bull` | 7 (2.6%) | 93 (35.0%) | 149 (56.0%) | 14 (5.3%) | 3 (1.1%) |
 | `kerry_park` | 27 (7.1%) | 163 (42.7%) | 171 (44.8%) | 17 (4.5%) | 4 (1.0%) |
 
-Every Undetermined point stopped `Measured` (no live cells at the last render); none stopped `NotRun`. The working grid was the floor `R` = 24 on 147 and 170 points and the cap 48 on 21 and 21.
+Every Undetermined point stopped `Measured` (the last render's cells fixed no axis); none stopped `NotRun`. The working grid was the floor `R` = 24 on 147 and 170 points and the cap 48 on 21 and 21.
 
 **The points `grid_plane_normal` turned, paired with today's step on the same points (degrees).**
 
@@ -316,7 +316,7 @@ On these points the new step's normal is closer to the truth than today's on 4 o
 **Controls.**
 
 - **From the ground-truth normal** (`--start ground_truth`). Today's step moves every point off the truth, by a median 10.8° (p75 31.3°) on `seoul_bull` and 3.6° (p75 8.4°) on `kerry_park`. `grid_plane_normal` turns 11 (4.1%) and 48 (12.6%) points, by a median 2.9° and 2.3°, and leaves the rest: 71 and 72 Undetermined, 184 and 262 Unstable, of which 171 and 245 stopped on a rejected turn.
-- **Without the fit** (`--no-fit`, both steps from the ground-truth position and keypoints at the mean-view normal). The outcome counts are within four points of the fitted run's (Turned 7 and 29, Undetermined 97 and 163). Today's step ends at a median 32.1° and 27.2°; on the 29 points it turned on `kerry_park`, `grid_plane_normal` ends at a median 5.4° against today's 18.1°. The fit neither helps nor harms either step much here.
+- **Without the fit** (`--no-fit`, both steps from the ground-truth position and keypoints at the mean-view normal). The Turned and Undetermined counts are within four points of the fitted run's (Turned 7 and 29, Undetermined 97 and 163); among the Unstable on `kerry_park`, 160 stopped on a rejected turn against 171, and 10 at the cap against 4. Today's step ends at a median 32.1° and 27.2°; on the 29 points `grid_plane_normal` turned on `kerry_park`, it ends at a median 5.4° against today's 18.1°. The fit neither helps nor harms either step much here.
 
 **Cell readings.** Over every observation row of every point at the last render of the mean-view run, the registration statuses are 44% fitted, 33% refused for the bound, 15% for ZNCC and 5% for curvature on `seoul_bull`, and 32%, 43%, 16% and 8% on `kerry_park`. The Undetermined points started furthest off (median 47.1° and 43.2°), against 39.6° and 22.4° for the Turned and 31.4° and 27.1° for the Unstable. From the ground-truth normal the bound still refuses 24% and 31% of cell readings.
 
@@ -340,10 +340,10 @@ Each row of the script's JSONL carries the point's ground-truth position and nor
 **What the numbers show.**
 
 - Over all points neither step moves the median far from the mean-view start: today's lowers it by 2 and 5°, the new one by under 2°. The new step changes few normals, so its whole-set figures are close to the start's.
-- `grid_plane_normal` rarely turns a patch: 2.6% and 7.1% of points from the mean view, 4.1% and 12.6% from the truth itself. Most endings are a turn the acceptance rule rejected (56% and 45% of points from the mean view, 64% of both from the truth) or no live cells (35% and 43% from the mean view).
+- `grid_plane_normal` rarely turns a patch: 2.6% and 7.1% of points from the mean view, 4.1% and 12.6% from the truth itself. Most endings are a turn the acceptance rule rejected (56% and 45% of points from the mean view, 64% of both from the truth) or cells that fixed no axis (35% and 43% from the mean view).
 - Where it turns, it is much closer to the truth than today's step on `kerry_park` (median 4.5° against 15.9°, 78% under 10°). On `seoul_bull` its median on the 7 turned points is lower (15.0° against 20.9°), with one turn 71° off (point 7).
 - From the truth, today's step moves every point off it, by a median 3.6° to 10.8°; `grid_plane_normal` leaves 87% to 96% of them where they were and turns the rest by a median of 2 to 3°.
-- The search bound refuses a third or more of the cell readings, and the points with no live cells started furthest off. A start 30° or more off puts the outer cells past the 2 px bound at the first render, the case the [open question](#open-questions) on a fallback to a full piece fit asks to count.
+- The search bound refuses a third or more of the cell readings, and the points whose cells fixed no axis started furthest off. That a start 30° or more off puts the outer cells past the 2 px bound at the first render is an inference from this, not measured here; it is the case the [open question](#open-questions) on a fallback to a full piece fit asks to count.
 - The new step costs a fifth to a quarter of today's per call.
 
 **What the numbers cannot show.**
