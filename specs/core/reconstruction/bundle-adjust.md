@@ -437,7 +437,10 @@ from the centroid halves its frame; a degenerate distance (a point at the
 centroid itself, which subtends no angle) leaves the frame alone rather than
 destroying it.
 
-The centroid is taken once per table, not once per point:
+The centroid is the mean of the posed images' camera centres. An unposed image
+(a non-finite rotation or translation) has no centre, so it is left out rather
+than turning every distance into `NaN`, and a table with no posed image measures
+from the origin. It is taken once per table, not once per point:
 `ImageTable::camera_centroid` gives it and `ImageTable::placement_scale_from`
 measures a position from it, so a write-back over every point costs one pass
 over the images. `placement_scale` is the same two steps for a caller with one

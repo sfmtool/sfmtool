@@ -10,6 +10,7 @@ use ndarray::Array4;
 use sfmtool_sfmr_format::{DepthStatistics, RigFrameData};
 
 use crate::camera::CameraIntrinsics;
+use crate::reconstruction::bundle_adjust::is_posed;
 
 use super::SfmrImage;
 
@@ -86,9 +87,9 @@ impl ImageTable {
     /// frame's angular extent is multiplied by to become a world one there, and
     /// what a world extent is divided by to become an angular one.
     ///
-    /// The reference is the mean of **every** camera centre in the table rather
-    /// than of the ones that see any particular point, because that is the
-    /// reference
+    /// The reference is the mean of **every** posed camera centre in the table
+    /// rather than of the ones that see any particular point, because on a
+    /// table whose images are all posed that is the reference
     /// [`SfmrReconstruction::materialize_points_at_infinity`](super::SfmrReconstruction::materialize_points_at_infinity)
     /// places a bearing at. Every edit that resizes a patch frame measures from
     /// here, so their conversions cancel exactly rather than to within which
@@ -101,16 +102,24 @@ impl ImageTable {
         Self::placement_scale_from(&self.camera_centroid(), position)
     }
 
-    /// The mean of every camera centre in the table, the reference
-    /// [`Self::placement_scale`] measures from; the origin for a table with no
-    /// image.
+    /// The mean of the camera centres of the table's posed images, the
+    /// reference [`Self::placement_scale`] measures from; the origin for a
+    /// table with no posed image.
+    ///
+    /// An unposed image, one whose stored rotation or translation is not
+    /// finite, has no centre. Counting its placeholder would make the centroid
+    /// `NaN`, and every distance measured from it with it.
     pub fn camera_centroid(&self) -> nalgebra::Point3<f64> {
         let mut centroid = nalgebra::Vector3::zeros();
+        let mut posed = 0usize;
         for image in &self.images {
-            centroid += image.camera_center().coords;
+            if is_posed(&image.quaternion_wxyz, &image.translation_xyz) {
+                centroid += image.camera_center().coords;
+                posed += 1;
+            }
         }
-        if !self.images.is_empty() {
-            centroid /= self.images.len() as f64;
+        if posed > 0 {
+            centroid /= posed as f64;
         }
         nalgebra::Point3::from(centroid)
     }

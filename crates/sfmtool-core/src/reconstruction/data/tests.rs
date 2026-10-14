@@ -1972,3 +1972,36 @@ fn a_placement_distance_from_a_centroid_taken_once_is_the_per_call_one() {
     empty.images.clear();
     assert_eq!(empty.camera_centroid(), nalgebra::Point3::origin());
 }
+
+#[test]
+fn the_camera_centroid_leaves_out_unposed_images() {
+    let recon = SfmrReconstruction::demo(4);
+    let table = &recon.image_table;
+    assert!(table.images.len() > 2, "the fixture has a camera cloud");
+    let posed_mean = table.images[1..]
+        .iter()
+        .map(|image| image.camera_center().coords)
+        .sum::<nalgebra::Vector3<f64>>()
+        / (table.images.len() - 1) as f64;
+
+    // An unposed image's row is a placeholder: a non-finite translation, or a
+    // non-finite rotation.
+    let mut no_translation = table.clone();
+    no_translation.images[0].translation_xyz = nalgebra::Vector3::new(f64::NAN, 0.0, 0.0);
+    let mut no_rotation = table.clone();
+    no_rotation.images[0].quaternion_wxyz =
+        nalgebra::UnitQuaternion::new_unchecked(nalgebra::Quaternion::new(f64::NAN, 0.0, 0.0, 0.0));
+    for unposed in [&no_translation, &no_rotation] {
+        let centroid = unposed.camera_centroid();
+        assert!((centroid.coords - posed_mean).norm() < 1e-12, "{centroid}");
+        let point = &recon.point_set.points[0].position;
+        assert!(unposed.placement_scale(point).is_finite());
+    }
+
+    // A table none of whose images is posed measures from the origin.
+    let mut none_posed = table.clone();
+    for image in &mut none_posed.images {
+        image.translation_xyz = nalgebra::Vector3::new(f64::NAN, f64::NAN, f64::NAN);
+    }
+    assert_eq!(none_posed.camera_centroid(), nalgebra::Point3::origin());
+}

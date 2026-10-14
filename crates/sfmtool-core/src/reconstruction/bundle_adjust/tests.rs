@@ -477,7 +477,21 @@ fn a_point_the_trim_wears_out_is_deleted_and_the_scan_says_so() {
 
 #[test]
 fn a_patch_frame_follows_its_point_in_depth() {
-    let source = perturbed();
+    assert_frame_follows_point_in_depth(perturbed());
+}
+
+#[test]
+fn a_patch_frame_follows_its_point_in_depth_beside_an_unposed_image() {
+    // The unposed image sits the solve out, and its placeholder centre is not
+    // part of the camera cloud the placement distance is measured from.
+    let mut source = perturbed();
+    source.image_table.images[5].translation_xyz = Vector3::new(f64::NAN, 0.0, 0.0);
+    assert_frame_follows_point_in_depth(source);
+}
+
+/// Push point 7 of `source` away from the camera cloud, adjust, and check its
+/// frame scaled by the ratio of its placement distances.
+fn assert_frame_follows_point_in_depth(source: SfmrReconstruction) {
     // A point pushed twice as far from the camera cloud as it stands, with its
     // observations left where they were: the adjustment pulls it back, and the
     // frame has to come back with it.

@@ -780,6 +780,55 @@ fn the_patch_frame_of_a_moved_point_keeps_its_angular_size() {
     );
 }
 
+#[test]
+fn an_unposed_image_does_not_stop_a_moved_points_frame_from_rescaling() {
+    // The truth with a fourth image that sees nothing and has no pose. Its
+    // placeholder centre is not a camera centre, so the placement distance is
+    // measured from the three posed ones.
+    let mut recon = nudge(scene(vec![pinhole()], &[0; 4], |_, i| i < 3));
+    recon.image_table.images[3].translation_xyz = Vector3::new(f64::NAN, f64::NAN, f64::NAN);
+    let centroid = Point3::from(
+        (0..3)
+            .map(|i| recon.image_table.images[i].camera_center().coords)
+            .sum::<Vector3<f64>>()
+            / 3.0,
+    );
+    let start = edited(recon);
+    let (_, _, u_before, v_before) = written(&start, 0);
+    let was = (start.base.point_set.points[0].position - centroid).norm();
+
+    for which in [RetriangulateWhich::All, RetriangulateWhich::These(&[0])] {
+        let (next, _, report) = retriangulate_points(
+            &start,
+            which,
+            &RetriangulateOptions::default(),
+            &Progress::none(),
+        )
+        .expect("the fixture retriangulates");
+        let status = report.point(0).expect("asked about");
+        assert_eq!(status.outcome.verdict(), Some(PointVerdict::Finite));
+        let (position, w, u_after, v_after) = written(&next, status.new_index);
+        assert_eq!(w, 1.0);
+        let expected = (position - centroid).norm() / was;
+        assert!(
+            (expected - 1.0).abs() > 1e-3,
+            "the move changes the placement distance"
+        );
+        for (after, before) in [(&u_after, &u_before), (&v_after, &v_before)] {
+            assert!(after.iter().all(|c| c.is_finite()), "{which:?}: {after:?}");
+            for (a, b) in after.iter().zip(before) {
+                if *b != 0.0 {
+                    let ratio = f64::from(a / b);
+                    assert!(
+                        (ratio - expected).abs() < 1e-5,
+                        "{which:?}: {ratio} is not {expected}"
+                    );
+                }
+            }
+        }
+    }
+}
+
 /// A fisheye camera whose focal and model both differ from [`pinhole`], so a
 /// pixel read through the wrong one of the two states a different ray.
 fn fisheye() -> CameraIntrinsics {
