@@ -424,8 +424,9 @@ to 315 points unscored, each in the representation it was handed in with. No inp
 
 ## A weakly supported spline tail
 
-These measurements are behind the tail regularization of a released spline
-and the held-distortion retry at the step guard
+These measurements are behind the tail regularization of a released spline,
+the rule that the penalty places a coefficient no observation supports, and
+the held-distortion retry at the step guard
 ([bundle-adjustment.md](bundle-adjustment.md) § "The solve"). They were taken
 on a reconstruction of the `dino_dog_toy` images through one `SFMTOOL_PINHOLE`
 camera: `f ≈ 1459.3`, 2040 × 1536 pixels, 20 spline coefficients,
@@ -547,11 +548,15 @@ and 8.5·10⁻⁴ at the second, falling from there, against 6.5·10⁴ for the
 coefficient two places before it. Released from the second linearization
 with that column and no row, it rose on every accepted step, to 26,913 by the
 round's last iteration and 32,152 at its end, and the next round, whose rows
-include it, started from a penalty cost of 7.2·10⁹. The kernel keeps such a
-coefficient pinned until the next round, and no coefficient of the 60 runs is
-larger than 0.112 in magnitude.
+include it, started from a penalty cost of 7.2·10⁹. With such a
+coefficient kept pinned until the next round, as the kernel then did, no
+coefficient of the 60 runs was larger than 0.112 in magnitude. The kernel now
+gives every coefficient its penalty rows from the round's start, which holds
+such a coefficient as it gains support.
 
-*What the 60 runs show with the coefficient held until the next round.*
+*What the 60 runs showed with the coefficient held until the next round.*
+These runs left out every penalty row that touched an unsupported
+coefficient and held that coefficient at its input.
 Every spline comes back monotone, and the median rises by at most 0.0004 px
 (1500 points, seed 31) against a held adjustment from the same start. No
 final round reports convergence with the end slope under 0.05: the two runs
@@ -559,16 +564,52 @@ that end under it, at 0.0001 (1000 points, seed 199) and 0.010 (2000 points,
 seed 41), report not converged. The end slope is not bounded away from 0 or
 from the start, for two reasons:
 
-- On 12 runs the last coefficient is pinned for the whole solve and keeps its
-  starting 0.0601 while its neighbours move, which leaves an end slope
+- On 12 runs the last coefficient was pinned for the whole solve and kept its
+  starting 0.0601 while its neighbours moved, which left an end slope
   between 0.0001 and 9.3 (9.31 at 2000 points and seed 307, 9.12 at 1000
-  points and seed 101). This is the kernel's rule that a coefficient no data
-  reaches holds its value.
-- On 9 runs the last coefficient has support from the one observation in the
-  last span, and its penalty row does not keep the end slope near 1: it ends
+  points and seed 101): a coefficient no data reached held its value.
+- On 9 runs the last coefficient had support from the one observation in the
+  last span, and its penalty row did not keep the end slope near 1: it ended
   between 0.010 and 0.40 (for example 0.14 at 1500 points and seed 11, 0.18
   at 1000 points and seed 41, both converged). This is the penalty weight.
 
-Both are open questions in
-[bundle-adjustment.md](bundle-adjustment.md#open-questions).
+*With every row kept and the penalty placing an unsupported coefficient.*
+This is the kernel's rule: every interior row enters, a coefficient with no
+support at the round's start is placed by the penalty, and one that loses its
+support within a round keeps its value until the next. Over the same 60 runs
+every spline comes back monotone, no coefficient is larger than 0.112 in magnitude (0.1121 at 1000
+points and seed 127), and the median rises by at most 0.0004 px against a held
+adjustment from the same start (1500 points, seed 31). No final round reports
+convergence with the end slope under 0.05: the three runs that end under it,
+at 0.0024 (2000 points, seed 151), 0.0053 (2000 points, seed 401) and 0.037
+(2000 points, seed 19), report not converged. The end slopes run from 0.0024
+to 3.16, and the wild start survives on none of the runs:
+
+- On 17 runs no observation reaches the last span at the end of the solve,
+  and the last coefficient continues the two before it in a straight line,
+  to a second difference below 10⁻⁸. The end slope is then the continuation's,
+  between 0.0053 and 3.16 (3.16 at 1500 points and seed 23, a tail of
+  0.0185, 0.0502 and 0.0819; 0.0053 at 2000 points and seed 401, where the
+  continuation ends near the monotonicity limit and the round is not
+  converged).
+- On the 43 runs in which an observation reaches the last span, the end
+  slope ends below 0.5 on 11, between 0.0024 and 0.42 (0.14 at 1500 points
+  and seed 11, 0.18 at 1000 points and seed 41, both converged, as before).
+  This is the penalty weight, kept as a decision for now
+  ([bundle-adjustment.md](bundle-adjustment.md) § "The solve", "The weight is
+  a decision for now").
+
+The end slope's upper value of 3.16 is larger than the coefficients' slope
+suggests because the clamped knots bunch at the domain end: the last two
+Greville abscissae are a third of a knot span apart, against a full span
+between interior ones, so a tail that is straight in the coefficients has
+three times the slope departure `δ'` at the domain end that it has inside
+the domain.
+
+On the `dino_dog_toy` case every coefficient has support (the last from its
+one observation), so the rule changes nothing there: under the default
+schedule A goes from 0.674 to 0.6761 px with a tail of 0.0130, 0.0164 and
+0.0159 and an end slope of 0.97, and B from 0.7928 to 0.6760 px with a tail
+of 0.0131, 0.0163 and 0.0158 and an end slope of 0.96, both converged: the
+medians and tails of the run with both changes above.
 

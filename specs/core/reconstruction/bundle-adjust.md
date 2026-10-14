@@ -217,7 +217,9 @@ kernel adds the refit's second-difference penalty
 ([`../camera/refit-camera-intrinsics.md`](../camera/refit-camera-intrinsics.md))
 to the coefficients it releases, with the same `SMOOTHING` weight per data row,
 so a coefficient near the domain end that few observations reach continues its
-neighbours instead of following those few pixels
+neighbours instead of following those few pixels, and one that no observation
+reaches is placed by the penalty alone, as the straight-line continuation of
+the supported coefficients before it
 ([`../geometry/bundle-adjustment.md`](../geometry/bundle-adjustment.md)
 § "The solve"). The residuals this function reports are the data's alone.
 

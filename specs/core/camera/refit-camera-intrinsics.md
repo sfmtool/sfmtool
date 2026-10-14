@@ -273,9 +273,10 @@ is about 150°. A caller may give it instead (`spline_domain_deg`).
 the last sample have no data, and the solve would be rank-deficient. So one row
 per interior coefficient penalizes the second difference `f·(c_{i−1} − 2cᵢ +
 c_{i+1})`, and `δ` continues past `θ_fit` as the smoothest curve that meets the
-data. The penalty's weight is small (see [Parameters](#parameters)): on a source
-the target represents exactly it moves the fit by well under a thousandth of a
-pixel.
+data. The bundle adjustment's spline release places a coefficient no
+observation reaches the same way. The penalty's weight is small (see
+[Parameters](#parameters)): on a source the target represents exactly it moves
+the fit by well under a thousandth of a pixel.
 
 ### Spline targets: the monotonicity constraint
 

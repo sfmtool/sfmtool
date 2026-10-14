@@ -3130,19 +3130,30 @@ fn released_bspline_stays_admissible() {
     );
 }
 
-/// A coefficient whose basis span no surviving observation reaches has
-/// exactly-zero curvature: its shared slot is pinned per linearization, the
-/// reduced system stays regular, and the coefficient comes back bit for bit
-/// at its input value.
+/// How far each coefficient `i ≥ first` of `c` is from the straight line
+/// through `c[first − 2]` and `c[first − 1]`: the largest second difference
+/// `|c_{i−2} − 2c_{i−1} + cᵢ|` from `first` on, which is zero when the
+/// coefficients from `first − 2` on are linear in their index.
+fn off_linear_continuation(c: &[f64], first: usize) -> f64 {
+    (first..c.len())
+        .map(|i| (c[i - 2] - 2.0 * c[i - 1] + c[i]).abs())
+        .fold(0.0, f64::max)
+}
+
+/// Coefficients whose basis spans no surviving observation reaches have
+/// exactly-zero data columns, and the spline penalty alone places them: past
+/// the outermost supported coefficient they continue the supported ones in a
+/// straight line, whatever they started at.
 #[test]
-fn unsupported_bspline_slots_hold_their_input_exactly() {
+fn unsupported_bspline_tail_continues_the_supported_coefficients() {
     let f = 130.0;
-    // Sentinels in the outermost two coefficients, whose basis support
-    // starts at θ = 10/7 ≈ 1.43 and 12/7 ≈ 1.71: invisible below θ ≈ 1.43.
+    // Sentinels in the outermost two coefficients. Coefficient `i`'s basis
+    // span starts at θ = 2(i − 1)/7, so `c5`, `c6` and `c7` are invisible
+    // below θ = 8/7 ≈ 1.14.
     let sentinels = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.017, -0.008];
-    // An equidistant capture imaged only out to θ = 1 rad (≈ 57°): well
-    // inside the sentinels' support, three knot spans short of the rim.
-    let (full, _) = make_fisheye_scene_for(sfmtool_fisheye(f, &[0.0; 8]), 8, 140);
+    // A capture through the planted spline imaged only out to θ ≈ 1 rad
+    // (≈ 57°): short of the support of the last three coefficients.
+    let (full, _) = make_fisheye_scene_for(sfmtool_fisheye(f, &PLANTED_BSPLINE), 8, 140);
     let mut s = Scene {
         cam: sfmtool_fisheye(f, &sentinels),
         quats: full.quats.clone(),
@@ -3168,26 +3179,18 @@ fn unsupported_bspline_slots_hold_their_input_exactly() {
         finite >= 100,
         "solve degenerated: {finite} finite residuals"
     );
-    // …the unsupported outer coefficients held their inputs exactly…
-    assert_eq!(ba_bspline(&out)[6].to_bits(), sentinels[6].to_bits());
-    assert_eq!(ba_bspline(&out)[7].to_bits(), sentinels[7].to_bits());
-    // …and the supported inner ones stayed near the (true) zero.
-    let inner_err = worst_map_err_px(
-        f,
-        &ba_bspline(&out)[..6]
-            .iter()
-            .chain(&[0.0, 0.0])
-            .copied()
-            .collect::<Vec<_>>(),
-        &[0.0; 8],
-        0.05,
-        1.0,
-    );
+    // …the supported coefficients recover the planted map over the field…
+    let c = ba_bspline(&out);
+    let inner_err = worst_map_err_px(f, &c, &PLANTED_BSPLINE, 0.05, 1.0);
     assert!(
         inner_err < 0.2,
-        "supported coefficients drifted by {inner_err} px: {:?}",
-        ba_bspline(&out)
+        "supported coefficients drifted by {inner_err} px: {c:?}"
     );
+    // …and the unsupported outer ones continue `c3` and `c4` in a straight
+    // line, leaving the sentinels.
+    let off = off_linear_continuation(&c, 5);
+    assert!(off < 1e-6, "tail off the continuation by {off}: {c:?}");
+    assert!((c[6] - sentinels[6]).abs() > 0.01, "{c:?}");
 }
 
 /// The released spline's second-difference penalty is exactly quadratic, so its
@@ -3200,9 +3203,9 @@ fn spline_penalty_matches_differences_of_its_cost() {
     let n = PLANTED_BSPLINE.len();
     let slot = 5;
     let d = slot + n + 3;
-    // The last coefficient is unsupported, so the last row is left out.
-    let p = SplinePenalty::for_round(0, slot, n, 130.0, 400, |i| i + 1 < n).unwrap();
-    assert_eq!(p.rows, (1..n - 2).collect::<Vec<_>>());
+    // Every interior coefficient has its row; none reaches the gauge pair.
+    let p = SplinePenalty::for_round(0, slot, n, 130.0, 400).unwrap();
+    assert_eq!(p.rows(), 1..n - 1);
     assert_eq!(p.scale, smoothing_weight(800, n) * 130.0 * 130.0);
     let c = PLANTED_BSPLINE;
     let mut h = DMatrix::<f64>::zeros(d, d);
@@ -3237,9 +3240,9 @@ fn spline_penalty_matches_differences_of_its_cost() {
             );
         }
     }
-    // The unsupported last coefficient takes no row, and so no entry.
-    assert_eq!(g[slot + n - 1], 0.0);
-    assert_eq!(h[(slot + n - 1, slot + n - 1)], 0.0);
+    // The end coefficients are each in one row.
+    assert_eq!(h[(slot, slot)], p.scale);
+    assert_eq!(h[(slot + n - 1, slot + n - 1)], p.scale);
     for k in (0..slot).chain(slot + n..d) {
         assert_eq!(g[k], 0.0);
         assert!(h.row(k).iter().all(|&v| v == 0.0));
@@ -3250,12 +3253,25 @@ fn spline_penalty_matches_differences_of_its_cost() {
     p.accumulate(&[0.0; 8], &mut h0, &mut g0);
     assert_eq!(p.cost(&[0.0; 8]), 0.0);
     assert!(g0.iter().all(|&v| v == 0.0));
-    // A row needs all three of its coefficients supported, and a spline with
-    // no such row takes no penalty.
-    let gap = SplinePenalty::for_round(0, slot, n, 130.0, 400, |i| i != 4).unwrap();
-    assert_eq!(gap.rows, vec![1, 2, 6]);
-    assert!(SplinePenalty::for_round(0, slot, n, 130.0, 400, |i| i % 2 == 0).is_none());
-    assert!(SplinePenalty::for_round(0, slot, 2, 130.0, 400, |_| true).is_none());
+    // A spline with no interior coefficient takes no penalty.
+    assert!(SplinePenalty::for_round(0, slot, 2, 130.0, 400).is_none());
+    assert_eq!(
+        SplinePenalty::for_round(0, slot, 3, 130.0, 400)
+            .unwrap()
+            .rows(),
+        1..2
+    );
+}
+
+/// A released spline moves in a linearization where at least two of its
+/// coefficients have data support, and is held where fewer do.
+#[test]
+fn a_spline_moves_only_with_two_supported_coefficients() {
+    assert!(!spline_anchored(&[]));
+    assert!(!spline_anchored(&[0.0; 6]));
+    assert!(!spline_anchored(&[0.0, 0.0, 0.0, 0.0, 0.0, 3.0]));
+    assert!(spline_anchored(&[0.0, 0.0, 0.0, 0.0, 1e-12, 3.0]));
+    assert!(spline_anchored(&[2.0, 5.0, 0.0, 0.0, 0.0, 0.0]));
 }
 
 /// Direction rows carry the rung. A point at infinity projects through the
@@ -3771,12 +3787,11 @@ fn pinhole_bspline_step_guard_rejects_a_folded_spline() {
     );
 }
 
-/// The pinhole's half of the unsupported-slot contract: a coefficient whose
-/// basis span no surviving observation reaches has exactly-zero curvature, its
-/// shared slot is pinned per linearization, and the coefficient comes back bit
-/// for bit at its input value.
+/// The pinhole's half of the unsupported-tail contract: coefficients whose
+/// basis spans no surviving observation reaches continue the supported ones
+/// in a straight line, whatever they started at.
 #[test]
-fn unsupported_pinhole_bspline_slots_hold_their_input_exactly() {
+fn unsupported_pinhole_bspline_tail_continues_the_supported_coefficients() {
     let f = 250.0;
     // Sentinels in the outermost two coefficients. With 6 coefficients on
     // `[0, 0.85]` the interior knots sit every 0.17, and those two slots'
@@ -3785,7 +3800,7 @@ fn unsupported_pinhole_bspline_slots_hold_their_input_exactly() {
     // A perspective capture cropped to ρ ≤ 0.45, a knot span short of the
     // nearer sentinel's support.
     const FIELD: f64 = 0.45;
-    let (full, _) = make_pinhole_scene_for(sfmtool_pinhole(f, &[0.0; 6]), 10, 500);
+    let (full, _) = make_pinhole_scene_for(sfmtool_pinhole(f, &PLANTED_PINHOLE_BSPLINE), 10, 500);
     let mut s = Scene {
         cam: sfmtool_pinhole(f, &sentinels),
         quats: full.quats.clone(),
@@ -3811,26 +3826,98 @@ fn unsupported_pinhole_bspline_slots_hold_their_input_exactly() {
         finite >= 100,
         "solve degenerated: {finite} finite residuals"
     );
-    // …the unsupported outer coefficients held their inputs exactly…
-    assert_eq!(ba_bspline(&out)[4].to_bits(), sentinels[4].to_bits());
-    assert_eq!(ba_bspline(&out)[5].to_bits(), sentinels[5].to_bits());
-    // …and the supported inner ones stayed near the (true) zero.
-    let inner_err = pinhole_map_err_px(
-        f,
-        &ba_bspline(&out)[..4]
-            .iter()
-            .chain(&[0.0, 0.0])
-            .copied()
-            .collect::<Vec<_>>(),
-        &[0.0; 6],
-        0.02,
-        FIELD,
-    );
+    // …the supported coefficients recover the planted map over the field…
+    let c = ba_bspline(&out);
+    let inner_err = pinhole_map_err_px(f, &c, &PLANTED_PINHOLE_BSPLINE, 0.02, FIELD);
     assert!(
         inner_err < 0.2,
-        "supported coefficients drifted by {inner_err} px: {:?}",
-        ba_bspline(&out)
+        "supported coefficients drifted by {inner_err} px: {c:?}"
     );
+    // …and the unsupported outer ones continue `c2` and `c3` in a straight
+    // line, leaving the sentinels.
+    let off = off_linear_continuation(&c, 4);
+    assert!(off < 1e-6, "tail off the continuation by {off}: {c:?}");
+    assert!((c[4] - sentinels[4]).abs() > 0.01, "{c:?}");
+}
+
+/// A pinhole scene through `truth` with every observation whose pixel radius
+/// is outside `keep(ρ)` dropped, the radius read as `f·ρ` (the truths below
+/// are close enough to the identity that this only moves the band edges).
+fn pinhole_scene_within(truth: &CameraIntrinsics, keep: impl Fn(f64) -> bool) -> Scene {
+    let f = truth.focal_lengths().0;
+    let (full, _) = make_pinhole_scene_for(truth.clone(), 10, 500);
+    let mut s = Scene {
+        cam: truth.clone(),
+        quats: full.quats.clone(),
+        trans: full.trans.clone(),
+        points: full.points.clone(),
+        uv: Vec::new(),
+        obs_img: Vec::new(),
+        obs_pt: Vec::new(),
+    };
+    for k in 0..full.uv.len() {
+        let rho = (full.uv[k][0] - 240.0).hypot(full.uv[k][1] - 240.0) / f;
+        if keep(rho) {
+            s.uv.push(full.uv[k]);
+            s.obs_img.push(full.obs_img[k]);
+            s.obs_pt.push(full.obs_pt[k]);
+        }
+    }
+    assert!(s.uv.len() >= 100, "scene too small: {}", s.uv.len());
+    s
+}
+
+/// An unsupported coefficient between supported ones is placed by the
+/// penalty as the smoothest curve through its neighbours: the fourth
+/// difference centred on it vanishes, so it is the cubic through the two
+/// coefficients on each side.
+#[test]
+fn an_unsupported_interior_coefficient_interpolates_its_neighbours() {
+    let f = 250.0;
+    // 10 coefficients on `[0, 0.85]`, knots every h = 0.85/9. Coefficient
+    // `i`'s basis span is `[(i − 1)h, (i + 3)h)`, so a gap over
+    // `[3h, 7h)` leaves `c4` alone without support.
+    let h = RHO_MAX / 9.0;
+    let mut start = [0.0; 10];
+    start[4] = 0.03;
+    assert!(bspline_is_monotone(&start, RHO_MAX, RHO_MAX));
+    // A gently expanding truth, so the interpolation is not just zero.
+    let truth: Vec<f64> = (0..10).map(|i| 0.0005 * (i * i) as f64).collect();
+    let mut s = pinhole_scene_within(&sfmtool_pinhole(f, &truth), |rho| {
+        !(3.0 * h - 0.01..7.0 * h + 0.01).contains(&rho)
+    });
+    s.cam = sfmtool_pinhole(f, &start);
+    let out = run_bspline(&mut s, false, true, &DEFAULT_SCHEDULE);
+    let c = ba_bspline(&out);
+    let cubic = (-c[2] + 4.0 * c[3] + 4.0 * c[5] - c[6]) / 6.0;
+    assert!(
+        (c[4] - cubic).abs() < 1e-6,
+        "c4 {} against {cubic}: {c:?}",
+        c[4]
+    );
+    assert!((c[4] - start[4]).abs() > 0.01, "{c:?}");
+}
+
+/// A continuation of the supported coefficients that would fold the spline
+/// is a step the guard holds: the solve returns a monotone spline short of
+/// the straight-line continuation the penalty asks for.
+#[test]
+fn an_unsupported_tail_that_would_fold_is_held() {
+    let f = 250.0;
+    // The data reach `c0`–`c3` (a field cropped at ρ = 0.45, as in the
+    // unsupported-tail test above), whose dip continues in a straight line
+    // to a folded spline; the truth bends back to zero past the data.
+    let truth = [0.0, 0.0, 0.0, -0.1, 0.0, 0.0];
+    assert!(bspline_is_monotone(&truth, RHO_MAX, RHO_MAX));
+    let mut continued = truth;
+    continued[4] = 2.0 * truth[3] - truth[2];
+    continued[5] = 3.0 * truth[3] - 2.0 * truth[2];
+    assert!(!bspline_is_monotone(&continued, RHO_MAX, RHO_MAX));
+    let mut s = pinhole_scene_within(&sfmtool_pinhole(f, &truth), |rho| rho <= 0.45);
+    let out = run_bspline(&mut s, false, true, &DEFAULT_SCHEDULE);
+    let c = ba_bspline(&out);
+    assert!(bspline_is_monotone(&c, RHO_MAX, RHO_MAX), "{c:?}");
+    assert!(off_linear_continuation(&c, 4) > 0.01, "{c:?}");
 }
 
 /// Direction rows carry the pinhole's spline rung. A point at infinity
@@ -7130,15 +7217,15 @@ fn outermost_rho(s: &Scene) -> f64 {
         .fold(0.0, f64::max)
 }
 
-/// A spline coefficient with no support at a round's first linearization has
-/// no penalty row in that round, so it stays pinned for the whole round even
-/// once an observation reaches its basis span. Here no observation reaches
-/// the last span at the start, and the round's first step carries one into
-/// it, whose column at the edge of the span is tiny against its neighbours'.
-/// Released there with nothing to hold it, the last coefficient went from
-/// 0.0601 to 14.08 in the second step, and to 32,152 by the end of the round.
+/// A spline coefficient that gains support within a round is held by its
+/// penalty row, which it has from the round's start. Here no observation
+/// reaches the last span at the start, and the round's first step carries one
+/// into it, whose column at the edge of the span is tiny against its
+/// neighbours'. Released with that column and no row to hold it, the last
+/// coefficient goes from 0.0601 to 14.08 in the second step, and to 32,152 by
+/// the end of the round.
 #[test]
-fn a_coefficient_that_gains_support_within_a_round_stays_pinned() {
+fn a_coefficient_that_gains_support_within_a_round_stays_bounded() {
     let mut s = tail_scene(1000, 101);
     let start = outermost_rho(&s);
     assert!(
@@ -7176,12 +7263,8 @@ fn a_coefficient_that_gains_support_within_a_round_stays_pinned() {
         "no observation reached the last span: ρ {end}"
     );
     let spline = ba_bspline(&out);
-    assert_eq!(
-        spline[TAIL_N - 1].to_bits(),
-        TAIL_WILD[2].to_bits(),
-        "{spline:?}"
-    );
-    assert_ne!(spline[TAIL_N - 2], TAIL_WILD[1], "the tail did not move");
+    assert_ne!(spline[TAIL_N - 1], TAIL_WILD[2], "the tail did not move");
+    assert!(spline[TAIL_N - 1].abs() <= 0.25, "{spline:?}");
 }
 
 /// A released spline whose last coefficients only a few observations reach,
@@ -7193,17 +7276,18 @@ fn a_coefficient_that_gains_support_within_a_round_stays_pinned() {
 /// ([`tail_scene`]). Each run releases the focal and the spline under the
 /// default schedule from the settled scene, and compares the median with a
 /// held adjustment from the same scene. The code does not guarantee an end
-/// slope near 1 on this family, and the test does not assert one: the one
-/// observation in the last span pulls the end slope to between 0.010 and 0.40
-/// on some draws, and a last coefficient that never gains support keeps its
-/// wild starting value and an end slope of up to 9.3 (see
+/// slope near 1 on this family, and the test asserts only that the wild start
+/// does not survive: the one observation in the last span pulls the end slope
+/// to between 0.0024 and 0.42 on some draws, and where no observation reaches
+/// the last span the tail continues its supported neighbours, at end slopes
+/// from 0.0053 to 3.16 (see
 /// `specs/core/geometry/bundle-adjustment-measurements.md`).
 #[test]
 fn a_released_spline_tail_with_little_support_stays_bounded() {
     // 1000 points, seeds 101 and 199: the last coefficient ran away, to
-    // 32,152 and 69,425, while a coefficient that gained support within a
-    // round was released at once. 1500 points,
-    // seeds 77 and 509: without the tail regularization and the
+    // 32,152 and 69,425, when a coefficient that gained support within a
+    // round was released at once with no penalty row. 1500 points, seeds 77
+    // and 509: without the tail regularization and the
     // held-distortion retry the release ended at an end slope of 0.000 and
     // reported converged.
     for (n_pt, salt) in [(1000, 101), (1000, 199), (1500, 77), (1500, 509)] {
@@ -7244,5 +7328,11 @@ fn a_released_spline_tail_with_little_support_stays_bounded() {
             !(converged && end_slope < 0.05),
             "{case}: converged with the end slope at {end_slope:.4}"
         );
+        // The wild start does not survive: a last coefficient no observation
+        // reaches continues its neighbours rather than keeping its start. Over
+        // the 60 runs the largest end slope is 3.16 (1500 points, seed 23, a
+        // continuation), against 5.61 at the start and up to 9.3 while such a
+        // coefficient kept its starting value.
+        assert!(end_slope < 4.0, "{case}: end slope {end_slope:.4}");
     }
 }

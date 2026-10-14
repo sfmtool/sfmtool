@@ -366,13 +366,10 @@ cost = Σ_i s² · ρ(r_i² / s²),   ρ(z) = 2·(√(1 + z) − 1),   s = loss_
     and the gauge already fixes the value and slope. The last coefficient is
     held only by the last row, so with little data there it continues `c_{N−3}`
     and `c_{N−2}` in a straight line.
-  - *The row set.* Row `i` enters the round only when `c_{i−1}`, `cᵢ` and
-    `c_{i+1}` are all supported (touched by a kept observation) at the round's
-    first linearization, and the set is then fixed for the round. So a
-    supported coefficient is never pulled toward an unsupported one, whose
-    value may be a wild one from an earlier model, and the cost the damping ladder compares
-    is one function for the whole round even though support can change between
-    linearizations.
+  - *The row set.* Every interior row, `i = 1, …, N − 2`, enters every round,
+    whether or not data reach its coefficients. The set does not change with
+    support, so the cost the damping ladder compares is one function for the
+    whole round.
   - *In the normal equations.* With `P_j = √w_j · f_ref,j · D` for the round's
     rows, the penalty adds `P_jᵀP_j` to the camera block and `P_jᵀP_j·c` to its
     gradient, after the data and before the damping, so the Marquardt
@@ -382,38 +379,82 @@ cost = Σ_i s² · ρ(r_i² / s²),   ρ(z) = 2·(√(1 + z) − 1),   s = loss_
     `Σ_j E_pen,j` at the candidate's coefficients, and the relative improvement
     the termination test reads includes the penalty. The per-observation
     residuals the adjustment reports, `residual_norms`, are the data's alone.
+  - *The weight is a decision for now.* `SMOOTHING` and the count of two rows
+    per kept observation are the refit's, so the two agree on what a smooth
+    tail is. The adjustment's data rows are soft-L1 with second-order scaling,
+    so an observation's curvature is `(1 + z)^(−3/2)` of a plain row's, with
+    `z = (r/s)²`, and at the last stage's loss scale of 1 px many inliers have
+    `z` near or above one. The weight still counts each kept observation as
+    two plain rows; counting each by its robust weight, or by `s²`, would
+    change the penalty's share of the solve. On the `dino_dog_toy` case the
+    weight keeps the default schedule's release off the monotonicity limit,
+    but not a `[(12, 2)]` round run alone, which settles at the guard. On the
+    synthetic tail fixture it lets the one observation in the last span pull
+    the end slope to between 0.0024 and 0.42, on 11 of the 43 runs in which an
+    observation reaches that span
+    ([`bundle-adjustment-measurements.md`](bundle-adjustment-measurements.md#a-weakly-supported-spline-tail)).
+    What a heavier weight would cost a well-supported tail is not measured,
+    and the weight may be changed once there is more experience with real
+    reconstructions.
 
-  **Unsupported coefficients are pinned.** A coefficient whose basis span no
-  surviving observation touches has an exactly-zero data column, hence an
-  exactly zero data diagonal (a sum of squares) and, without the penalty, a
-  singular reduced system; the same pinning that holds an unreleased `f` or
-  `k1` — and a frozen translation — holds it, so it comes back bit for bit as
-  it went in and the spline never moves past the data. The support test reads
-  the diagonal from the data accumulation, before the penalty is added, since a
-  penalty row through a supported neighbour gives an unsupported slot a positive
-  diagonal. Pinning zeroes the slot's row and column of the reduced system and
-  its gradient entry, which removes the penalty's coupling to it as well; where
-  a row of the round's set touches a slot that has lost support since the first
-  linearization, its supported neighbours' gradient reads the pinned value as a
-  constant. A coefficient released in a round is one supported both at the
-  round's first linearization and in the current one: a coefficient that gains
-  support later in the round stays pinned until the next round. It has no
-  penalty row in this round, since the rows are fixed at the first
-  linearization, and the column it gains is the edge of its basis span that an
-  observation has only begun to reach, many orders of magnitude below its
-  neighbours'. Released with that column and no row, the coefficient follows
-  the one observation without bound: on the tail fixture of the testing
-  requirements the last coefficient went from 0.0601 to 32,152 in one round
+  **The penalty places an unsupported coefficient.** A coefficient whose basis
+  span no surviving observation touches has an exactly-zero data column, hence
+  an exactly zero data diagonal (a sum of squares). It stays released, and its
+  penalty rows alone place it: between supported coefficients it takes the
+  smoothest curve through them (the fourth difference centred on it is zero, so
+  a lone gap coefficient is the cubic through the two coefficients on each
+  side), and past the last supported coefficient it continues the last two in
+  a straight line (zero second difference), as the camera refit's span past
+  `θ_fit` does. A coefficient that gains support within a round already has
+  its rows, so nothing changes for it. Two cases are pinned, with the
+  identity row and column and zero gradient entry that hold an unreleased
+  `f` or `k1` and a frozen translation:
+  - *A coefficient that loses its support within a round* keeps its value
+    until the next round, whose first linearization decides afresh. Its
+    value came from data in this round, and the loss comes from one of the
+    round's own steps moving its observations out of its span before the
+    poses have settled; placed by the penalty alone from there, it follows
+    its neighbours through the unsettled steps that come next. On the kernel test in which far-field
+    directions carry the spline, the rim observations leave the last
+    coefficient's span after the first step; released, it followed a weakly
+    supported neighbour to 0.12 (the truth is −0.07), every full step after
+    that folded the spline, and the solve ended with the map 11.9 px off. On
+    the folded-rim scene of the held-distortion retry the observations
+    collapse until only `c₀` and `c₁` are supported; with the other six
+    released, the candidate steps continued them from those two to values
+    near 16, and the round ran out its iteration budget instead of settling
+    at the guard.
+  - *A spline with fewer than two supported coefficients* in a
+    linearization is held there, every coefficient slot pinned: two are the
+    fewest that anchor the straight line the penalty continues, and with
+    one the rows would place the others relative to a single value the
+    data hold. A camera with kept observations off the principal point has
+    at least two supported coefficients, since every basis function active
+    inside a knot span is positive there.
+
+  The support test reads the diagonal from the data accumulation, before the
+  penalty is added, since every row gives each of its coefficients a
+  positive diagonal; support decides nothing else.
+
+  Why every row, and why released: a coefficient released with the tiny
+  column of an observation at the edge of its basis span and no row follows
+  that observation without bound (0.0601 to 32,152 in one round on the tail
+  fixture of the testing requirements), and one held at its input keeps
+  whatever value an earlier model left there, which on that fixture leaves a
+  wild starting end slope in place, between 0.0001 and 9.3, on 12 of 60 runs
   ([`bundle-adjustment-measurements.md`](bundle-adjustment-measurements.md#a-weakly-supported-spline-tail)).
-  The next round's rows include it. **Step guard.** A candidate spline is admissible when it is
+
+  **Step guard.** A candidate spline is admissible when it is
   finite and keeps the model's monotonicity invariant `1 + δ'(d) > 0`
   everywhere on `[0, d_max]` and on the linear tail past it, where the single
   `1 + δ'(d_max) > 0` decides the whole half-line. The whole domain rather
   than the imaged field: monotonicity is the model's construction invariant
   (the bracket behind its inverse) and the accepted spline is persisted into
-  the camera, while unsupported coefficients are pinned anyway, so the wider
-  check costs no legitimate steps. What the damping ladder does with a
-  candidate that fails it is the next item.
+  the camera. Past the data the coefficients move as the penalty continues
+  them, and a continuation of a falling slope can fold; the guard holds such
+  a step, so the spline stops short of the continuation rather than folding.
+  What the damping ladder does with a candidate that fails the guard is the
+  next item.
 - **Step guards and the held-distortion retry.** Inside the damping ladder
   each camera's candidate lens is checked. A focal that is not finite and
   above `1e-6`, or a `k1` or spline coefficient that is not finite, rejects the
@@ -518,10 +559,13 @@ cost = Σ_i s² · ρ(r_i² / s²),   ρ(z) = 2·(√(1 + z) − 1),   s = loss_
 - **Schur complement.** Points are eliminated: per-point 3×3 blocks are
   inverted directly and the reduced camera system (one lens block
   `[f_j?, k1_j?, c_j,0..c_j,N_j−1?]` per camera, then `6·n_im`, dense) is
-  solved by LU; point updates back-substitute. Unreleased lens slots (and
-  released coefficient slots with no observation support, and every slot of a
-  camera no kept observation reaches) are pinned to an identity row/column with
-  a zero gradient entry, which is what keeps that system regular.
+  solved by LU; point updates back-substitute. Unreleased lens slots (and a
+  released spline's coefficient slots that lost their support within the
+  round, every coefficient slot of a released spline with fewer than two
+  supported coefficients, and every slot of a camera no kept observation
+  reaches) are
+  pinned to an identity row/column with a zero gradient entry, which is what
+  keeps that system regular.
   Rejected steps re-damp and re-solve from the same linearization (no
   re-evaluation), with Marquardt scaling `λ·diag(JᵀJ)` for the
   `x_scale="jac"` parameter-scale invariance of the scipy original.
@@ -811,20 +855,26 @@ Python's point of view).
   — returns its parameters unmoved under `opt_bspline = true`, as do the
   spline models under `opt_k1 = true` (the core's degrades); the focal
   release is exercised on its own for each spline model, leaving the
-  unreleased coefficients bit for bit; coefficient slots with no observation
-  support hold nonzero input sentinels exactly through a field-limited
-  scene; and directions carry the release where a near-axis finite cloud
-  cannot.
+  unreleased coefficients bit for bit; through a field-limited scene on each
+  model, the coefficients past the field leave their nonzero starting
+  sentinels and continue the supported ones in a straight line, to `10⁻⁶`;
+  through a scene with an annulus of radii left out, the one coefficient it
+  leaves unsupported is the cubic through the two coefficients on each side,
+  to `10⁻⁶`; a spline moves only in a linearization where at least two of
+  its coefficients are supported; and directions carry the release where a
+  near-axis finite cloud cannot.
 - **The spline penalty**: on a nonzero planted spline, the penalty's
   contribution to the gradient is half the central difference of its cost in
   each coefficient and its contribution to the camera block half the second
-  difference; a row that touches an unsupported coefficient is left out, and
-  that coefficient takes no entry; a zero spline has zero penalty and zero
+  difference; every interior row is present, so each end coefficient takes
+  exactly one row's curvature; a zero spline has zero penalty and zero
   penalty gradient.
 - **The spline step guard**: the admissibility predicate rejects a folded
   spline and non-finite coefficients on either radial coordinate; end to
   end, a released solve never returns a spline violating `1 + δ'(d) > 0` on
-  `[0, d_max]`.
+  `[0, d_max]`, and where the straight-line continuation of the supported
+  coefficients past a field-limited scene would fold, the solve returns a
+  monotone spline short of that continuation.
 - **The held-distortion retry**: on a scene whose rim observations are folded
   back, so a distortion fitted to them folds, a single iteration with the
   focal and the distortion released returns the spline (and, on a
@@ -843,20 +893,19 @@ Python's point of view).
   - *Support gained within a round.* On a draw where no observation reaches
     the last span at the start and the first step of a round with the focal
     and the spline released carries one into it, two iterations of that
-    round return the last coefficient bit for bit while the rest of the tail
-    moves.
+    round move the last coefficient from its start and keep it within 0.25.
   - *The release.* Over four draws at two scene sizes, the focal and the
     spline released under the default schedule return a monotone spline with
     every coefficient within 0.25 (the spline's share of a focal up to 15%
     off is about 0.13), a median residual no more than 0.005 px above a held
     adjustment's from the same start, at a noise level near 0.16 px, and a
     final round that does not report convergence with the end slope under
-    0.05. The draws include two on which the last coefficient ran away when
-    it gained support within a round, and two on which, without the
-    regularization and the held retry, the release ended at an end slope of
-    0.000 and reported convergence there. The end slope itself is not
-    bounded away from 0 or from its start on this family; the measurements
-    say why
+    0.05, and an end slope under 4 (the start is 5.6). The draws include two
+    on which the last coefficient ran away when it was released on gaining
+    support within a round with no penalty row, and two on which, without
+    the regularization and the held retry, the release ended at an end slope
+    of 0.000 and reported convergence there. The end slope itself is not
+    bounded away from 0 on this family; the measurements say why
     ([`bundle-adjustment-measurements.md`](bundle-adjustment-measurements.md#a-weakly-supported-spline-tail)).
 - **Directions carry the `k1` release**: on a scene whose finite cloud sits near the
   optical axis (no `θ³` signal) and whose far field is marked at infinity,
@@ -1689,22 +1738,6 @@ validation, and outputs are unchanged.
 
 ## Open questions
 
-- **The spline penalty's weight under the robust loss.** The refit's data rows
-  are plain least squares. The adjustment's are soft-L1 with second-order
-  scaling, so an observation's curvature is `(1 + z)^(−3/2)` of a plain row's,
-  with `z = (r/s)²`, and at the last stage's loss scale of 1 px many inliers
-  have `z` near or above one. The penalty weight `w_j` counts each kept
-  observation as two plain rows, as the refit does; counting each by its
-  robust weight, or by `s²`, would make the penalty heavier. On the
-  `dino_dog_toy` case the present weight keeps the default schedule's release
-  off the monotonicity limit, but not a `[(12, 2)]` round run alone, which
-  settles at the guard
-  ([`bundle-adjustment-measurements.md`](bundle-adjustment-measurements.md#a-weakly-supported-spline-tail)).
-  On the synthetic tail fixture, where one observation reaches the last
-  coefficient, the present weight lets that observation pull the end slope to
-  between 0.010 and 0.40 on 9 of 60 draws. Whether a heavier weight keeps
-  those off the limit, and what it costs a well-supported tail, is not
-  measured.
 - **A damped distortion step beside the held one.** The held-distortion retry
   pins the distortion outright, so when the full step crosses the guard by
   overshooting rather than because the optimum lies past the limit, the
@@ -1717,15 +1750,3 @@ validation, and outputs are unchanged.
   It costs more LU solves per rung and a second damping factor to carry
   between iterations. Whether a real case needs it is open, since the
   default schedule's later rounds move the spline anyway.
-- **Penalty rows at a pinned coefficient.** Leaving out the penalty rows that
-  touch an unsupported coefficient lets the supported tail end freely next to
-  it. Keeping every interior row, with the pinned values as constants, would
-  tie the tail to the unsupported values instead. The kernel does the first,
-  and the pinned coefficient keeps its input value, however wild. On the
-  synthetic tail fixture the last coefficient is pinned for the whole solve
-  on 12 of 60 draws and stays at its starting 0.0601 while its
-  neighbours move, which leaves an end slope between 0.0001 and 9.3; past the
-  outermost observation the curve is then set by a value no data holds.
-  Whether such a coefficient should instead be pulled to continue its
-  neighbours, by a row that holds it without data, is a choice between
-  that and keeping the spline exactly where no data reaches.
