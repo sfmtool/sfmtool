@@ -432,15 +432,20 @@ camera: `f ≈ 1459.3`, 2040 × 1536 pixels, 20 spline coefficients,
 `bspline_rho_max = 0.8635`. The adjustment ran the default schedule
 `[(50, 5), (12, 2), (4, 1)]` (trim px, loss scale) through the Python binding,
 `EditedReconstruction(SfmrReconstruction.load(path)).bundle_adjust(...)`, which
-gives the viewer's Bundle Adjust result exactly. The reconstruction is not
-checked in. A is the reconstruction before the release, and B is what
+gives the viewer's Bundle Adjust result exactly. The reconstruction is kept
+locally and not checked in; rerunning these tables on it is the manual check
+of a change to the spline release. A is the reconstruction before the
+release, and B is what
 releasing A's focal and distortion under the default schedule gave before
 either change.
 
 **The tail has almost no support.** With 20 coefficients there are 19 knot
 spans over `[0, ρ_max]`. Of the 17,575 kept observations, the last coefficient,
 `c19`, is touched by 1 (at `ρ = 0.849`, the outermost); `c18` by 23; `c17` by
-134; `c16` by 412. A's last three coefficients are 0.0163, −0.0075 and 0.0601,
+134; `c16` by 412. The outermost twentieth of the radius holds 1 of the 17,575
+observations, so the last span is nearly empty at any knot count, and the end
+of the curve has behaved poorly across several knot counts. A's last three
+coefficients are 0.0163, −0.0075 and 0.0601,
 and its end slope `1 + δ'(d_max)` is about 5.4.
 
 **Without either change.**
@@ -511,16 +516,58 @@ overshoots further. The default schedule's first round does the same; its
 second takes 5 full and 13 held steps and settles at the guard, and its third
 converges on 23 full steps.
 
-**The synthetic regression test.** The test of
+**The synthetic tail fixture.** The tests of
 [bundle-adjustment.md](bundle-adjustment.md) § "Testing requirements" ("A
-weakly supported spline tail") is this case scaled down: `f = 250`, 10 images,
+weakly supported spline tail") use this case scaled down: `f = 250`, 10 images,
 a 20-coefficient spline over `[0, 0.835]`, at most 1, 3, 12 and 30
 observations in the last four knot spans, ±0.3 px of noise, and A's last three
-coefficients as the start. Without either change the release ends with an
-end slope of 0.000 (from 5.61) and reports the final round converged, while
-the median falls from 0.1568 to 0.1525 px, so on this scene the median does
-not show the stall. With the tail regularization alone, and with both
-changes, it ends at an end slope of 1.57, converged, at 0.1530 px. The two
-give the same result, so this scene exercises the regularization; the held
-retry has its own tests.
+coefficients as the start (end slope 5.61), with the poses and points settled
+with the lens held. The runs below release the focal and the spline under the
+default schedule, over 20 noise draws (seeds 3, 7, 11, 19, 23, 31, 41, 53, 61,
+77, 89, 101, 127, 151, 199, 211, 307, 401, 509 and 1009) at 1000, 1500 and
+2000 points, 60 runs in all.
+
+At 1500 points and seed 77, without either change the release ends with an
+end slope of 0.000 and reports the final round converged, while the median
+falls from 0.1568 to 0.1525 px, so on this scene the median does not show the
+stall. With the tail regularization alone, and with both changes, it ends at
+an end slope of 1.57, converged, at 0.1530 px.
+
+*A coefficient that gained support within a round ran away.* With both
+changes but with a coefficient released in every linearization where it had
+support, the tail ran away on 5 of the 60 runs: the last coefficient to
+32,152 (1000 points, seed 101), 69,425 (seed 199) and 5.3 million (2000
+points, seed 307), and the last two to 1.74 and 4.16 (1000 points, seed 509,
+end slope 166) and 0.596 and 1.342 (2000 points, seed 19, end slope 52). On
+1000 points and seed 101 the outermost observation sits at `ρ = 0.7943`,
+0.003 inside the last span, and the poses and points the round starts from
+put it just short of that span: the last coefficient's data diagonal is
+exactly 0 at the round's first linearization, so no penalty row includes it,
+and 8.5·10⁻⁴ at the second, falling from there, against 6.5·10⁴ for the
+coefficient two places before it. Released from the second linearization
+with that column and no row, it rose on every accepted step, to 26,913 by the
+round's last iteration and 32,152 at its end, and the next round, whose rows
+include it, started from a penalty cost of 7.2·10⁹. The kernel now keeps such a coefficient pinned until the next round,
+and no coefficient of the 60 runs is larger than 0.113 in magnitude.
+
+*What the 60 runs show with the coefficient held until the next round.*
+Every spline comes back monotone, and the median rises by at most 0.0004 px
+(1500 points, seed 31) against a held adjustment from the same start. No
+final round reports convergence with the end slope under 0.05: the two runs
+that end under it, at 0.0001 (1000 points, seed 199) and 0.010 (2000 points,
+seed 41), report not converged. The end slope is not bounded away from 0 or
+from the start, for two reasons:
+
+- On 12 runs the last coefficient is pinned for the whole solve and keeps its
+  starting 0.0601 while its neighbours move, which leaves an end slope
+  between 0.0001 and 9.3 (9.31 at 2000 points and seed 307, 9.12 at 1000
+  points and seed 101). This is the kernel's rule that a coefficient no data
+  reaches holds its value.
+- On 9 runs the last coefficient has support from the one observation in the
+  last span, and its penalty row does not keep the end slope near 1: it ends
+  between 0.010 and 0.40 (for example 0.14 at 1500 points and seed 11, 0.18
+  at 1000 points and seed 41, both converged). This is the penalty weight.
+
+Both are open questions in
+[bundle-adjustment.md](bundle-adjustment.md#open-questions).
 

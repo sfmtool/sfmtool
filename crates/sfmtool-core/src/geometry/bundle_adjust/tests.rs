@@ -7031,6 +7031,17 @@ fn a_round_settled_at_the_guard_is_not_converged() {
 /// the last knot span, as on the reconstruction this case was found on.
 const TAIL_RHO_MAX: f64 = 0.835;
 
+/// The tail fixture's coefficient count.
+const TAIL_N: usize = 20;
+
+/// Where the last knot span starts: the last coefficient's basis function is
+/// zero below it.
+const TAIL_LAST_SPAN: f64 = TAIL_RHO_MAX * (TAIL_N - 2) as f64 / (TAIL_N - 1) as f64;
+
+/// The starting tail: the last three coefficients of the reconstruction this
+/// case was found on, monotone, with an end slope of 5.61 here.
+const TAIL_WILD: [f64; 3] = [0.0163, -0.0075, 0.0601];
+
 /// A 20-coefficient `SFMTOOL_PINHOLE` on the pinhole scenes' 480 × 480 frame,
 /// its domain ending at [`TAIL_RHO_MAX`].
 fn tail_pinhole(f: f64, bspline: &[f64]) -> CameraIntrinsics {
@@ -7045,6 +7056,46 @@ fn tail_pinhole(f: f64, bspline: &[f64]) -> CameraIntrinsics {
         width: 480,
         height: 480,
     }
+}
+
+/// The tail fixture: a pinhole scene of 10 images and `n_pt` points through a
+/// lens with no distortion (`f = 250`), whose observations thin out toward the
+/// domain end, the last four knot spans holding at most 1, 3, 12 and 30 of
+/// them from the end, with ±0.3 px of noise drawn from `salt`. The scene's
+/// camera carries [`TAIL_WILD`] as its last three coefficients, and the poses
+/// and points are settled with that lens held under the default schedule.
+fn tail_scene(n_pt: usize, salt: u64) -> Scene {
+    let f = 250.0;
+    let (mut s, _) = make_pinhole_scene_for(tail_pinhole(f, &[0.0; TAIL_N]), 10, n_pt);
+    // The truth has no distortion, so a pixel radius is `f·ρ`.
+    const CAPS: [usize; 4] = [1, 3, 12, 30];
+    let span = TAIL_RHO_MAX / (TAIL_N - 1) as f64;
+    let mut count = [0usize; CAPS.len()];
+    let kept: Vec<usize> = (0..s.uv.len())
+        .filter(|&k| {
+            let rho = (s.uv[k][0] - 240.0).hypot(s.uv[k][1] - 240.0) / f;
+            let from_end = ((TAIL_RHO_MAX - rho) / span).floor() as usize;
+            if from_end >= CAPS.len() {
+                return true;
+            }
+            count[from_end] += 1;
+            count[from_end] <= CAPS[from_end]
+        })
+        .collect();
+    assert!(
+        count.iter().zip(CAPS).all(|(&c, cap)| c >= cap),
+        "{count:?}"
+    );
+    s.uv = kept.iter().map(|&k| s.uv[k]).collect();
+    s.obs_img = kept.iter().map(|&k| s.obs_img[k]).collect();
+    s.obs_pt = kept.iter().map(|&k| s.obs_pt[k]).collect();
+    add_noise(&mut s, 0.3, salt);
+    let mut wild = [0.0; TAIL_N];
+    wild[TAIL_N - 3..].copy_from_slice(&TAIL_WILD);
+    assert!(bspline_is_monotone(&wild, TAIL_RHO_MAX, TAIL_RHO_MAX));
+    s.cam = tail_pinhole(f, &wild);
+    run_bspline(&mut s, false, false, &DEFAULT_SCHEDULE);
+    s
 }
 
 /// The median of a solve's finite residual norms, in pixels.
@@ -7065,83 +7116,133 @@ fn tail_end_slope(bspline: &[f64]) -> f64 {
     1.0 + bspline_delta_deriv(bspline, TAIL_RHO_MAX, TAIL_RHO_MAX).1
 }
 
-/// A released spline whose last coefficients only a few observations reach,
-/// started from a monotone tail with an end slope above 5, does not end at its
-/// monotonicity limit under the default schedule.
-///
-/// The scene is the case found on a real reconstruction, scaled down: the
-/// observations thin out toward the domain end, the last four knot spans
-/// holding 1, 3, 12 and 30 of them from the end, so the last of the 20
-/// coefficients is reached by one observation; and the starting tail's last
-/// three coefficients are that
-/// reconstruction's (0.0163, −0.0075, 0.0601). The true lens has no
-/// distortion and every observation carries pixel noise. The test settles the
-/// poses and points with the lens held, then releases the focal and the
-/// spline. Before the tail regularization and the held-distortion retry, the
-/// release drove the end slope from 5.6 to 0.000 and reported the final round
-/// converged there.
-#[test]
-fn a_released_spline_tail_with_little_support_stays_off_its_limit() {
-    let f = 250.0;
-    let n = 20;
-    let (mut s, _) = make_pinhole_scene_for(tail_pinhole(f, &vec![0.0; n]), 10, 1500);
-    // At most `CAPS[k]` observations in the k-th knot span from the domain
-    // end. The truth has no distortion, so a pixel radius is `f·ρ`.
-    const CAPS: [usize; 4] = [1, 3, 12, 30];
-    let span = TAIL_RHO_MAX / (n - 1) as f64;
-    let mut count = [0usize; CAPS.len()];
-    let kept: Vec<usize> = (0..s.uv.len())
-        .filter(|&k| {
-            let rho = (s.uv[k][0] - 240.0).hypot(s.uv[k][1] - 240.0) / f;
-            let from_end = ((TAIL_RHO_MAX - rho) / span).floor() as usize;
-            if from_end >= CAPS.len() {
-                return true;
-            }
-            count[from_end] += 1;
-            count[from_end] <= CAPS[from_end]
+/// The largest normalized radius `ρ` at which the scene's current poses and
+/// points place an observation.
+fn outermost_rho(s: &Scene) -> f64 {
+    s.obs_img
+        .iter()
+        .zip(&s.obs_pt)
+        .map(|(&i, &p)| {
+            let x = s.points[p as usize];
+            let c = s.quats[i as usize] * Vector3::new(x[0], x[1], x[2]) + s.trans[i as usize];
+            c.x.hypot(c.y) / c.z.abs()
         })
-        .collect();
-    s.uv = kept.iter().map(|&k| s.uv[k]).collect();
-    s.obs_img = kept.iter().map(|&k| s.obs_img[k]).collect();
-    s.obs_pt = kept.iter().map(|&k| s.obs_pt[k]).collect();
-    assert!(
-        count.iter().zip(CAPS).all(|(&c, cap)| c >= cap),
-        "{count:?}"
-    );
-    add_noise(&mut s, 0.3, 77);
+        .fold(0.0, f64::max)
+}
 
-    let mut wild = vec![0.0; n];
-    wild[n - 3..].copy_from_slice(&[0.0163, -0.0075, 0.0601]);
-    let start_slope = tail_end_slope(&wild);
-    assert!(bspline_is_monotone(&wild, TAIL_RHO_MAX, TAIL_RHO_MAX));
-    assert!(start_slope > 5.0, "{start_slope}");
-    s.cam = tail_pinhole(f, &wild);
+/// A spline coefficient with no support at a round's first linearization has
+/// no penalty row in that round, so it stays pinned for the whole round even
+/// once an observation reaches its basis span. Here no observation reaches
+/// the last span at the start, and the round's first step carries one into
+/// it, whose column at the edge of the span is tiny against its neighbours'.
+/// Released there with nothing to hold it, the last coefficient went from
+/// 0.0601 to 14.08 in the second step, and to 32,152 by the end of the round.
+#[test]
+fn a_coefficient_that_gains_support_within_a_round_stays_pinned() {
+    let mut s = tail_scene(1000, 101);
+    let start = outermost_rho(&s);
+    assert!(
+        start < TAIL_LAST_SPAN,
+        "the last span has support: ρ {start}"
+    );
+    // Two iterations of the default schedule's first round: the first step
+    // carries the observation into the last span, and the second is where
+    // the last coefficient would move.
+    let out = bundle_adjust(
+        &BaCameras::shared(&s.cam, s.quats.len()),
+        &mut s.quats,
+        &mut s.trans,
+        &mut s.points,
+        &s.uv,
+        &s.obs_img,
+        &s.obs_pt,
+        None,
+        None,
+        FreePointPolicy::default(),
+        None,
+        DEFAULT_PROTECTED_LOSS_SCALE,
+        true,
+        false,
+        true,
+        &DEFAULT_SCHEDULE[..1],
+        2,
+        2,
+        12,
+        &Progress::none(),
+    );
+    let end = outermost_rho(&s);
+    assert!(
+        end > TAIL_LAST_SPAN,
+        "no observation reached the last span: ρ {end}"
+    );
+    let spline = ba_bspline(&out);
+    assert_eq!(
+        spline[TAIL_N - 1].to_bits(),
+        TAIL_WILD[2].to_bits(),
+        "{spline:?}"
+    );
+    assert_ne!(spline[TAIL_N - 2], TAIL_WILD[1], "the tail did not move");
+}
 
-    // Settle the poses and points with the lens held.
-    let held = run_bspline(&mut s, false, false, &DEFAULT_SCHEDULE);
-    let before = median_residual(&held);
-    let released = run_bspline(&mut s, true, true, &DEFAULT_SCHEDULE);
-    let after = median_residual(&released);
-    let spline = ba_bspline(&released);
-    let end_slope = tail_end_slope(&spline);
-    let converged = released.free_point_decision.expect("a decision").converged;
+/// A released spline whose last coefficients only a few observations reach,
+/// started from a monotone tail with an end slope of 5.61, comes back bounded,
+/// without a worse median, and not reported converged at its monotonicity
+/// limit, across several noise draws and two scene sizes.
+///
+/// The scene is the case found on a real reconstruction, scaled down
+/// ([`tail_scene`]). Each run releases the focal and the spline under the
+/// default schedule from the settled scene, and compares the median with a
+/// held adjustment from the same scene. The code does not guarantee an end
+/// slope near 1 on this family, and the test does not assert one: the one
+/// observation in the last span pulls the end slope to between 0.14 and 0.40
+/// on some draws, and a last coefficient that never gains support keeps its
+/// wild starting value and an end slope of up to 9.3 (see
+/// `specs/core/geometry/bundle-adjustment-measurements.md`).
+#[test]
+fn a_released_spline_tail_with_little_support_stays_bounded() {
+    // 1000 points, seeds 101 and 199: the last coefficient ran away, to
+    // 32,152 and 69,425, while a coefficient that gained support within a
+    // round was released at once. 1500 points,
+    // seeds 77 and 509: without the tail regularization and the
+    // held-distortion retry the release ended at an end slope of 0.000 and
+    // reported converged.
+    for (n_pt, salt) in [(1000, 101), (1000, 199), (1500, 77), (1500, 509)] {
+        let mut s = tail_scene(n_pt, salt);
+        let held = run_bspline(&mut s.clone(), false, false, &DEFAULT_SCHEDULE);
+        let before = median_residual(&held);
+        let released = run_bspline(&mut s, true, true, &DEFAULT_SCHEDULE);
+        let after = median_residual(&released);
+        let spline = ba_bspline(&released);
+        let end_slope = tail_end_slope(&spline);
+        let converged = released.free_point_decision.expect("a decision").converged;
+        let case = format!(
+            "{n_pt} points, seed {salt}: tail {:?}",
+            &spline[TAIL_N - 3..]
+        );
 
-    assert!(bspline_is_monotone(&spline, TAIL_RHO_MAX, TAIL_RHO_MAX));
-    // Off the limit at 0, and off the wild start.
-    assert!(
-        (0.5..3.0).contains(&end_slope),
-        "end slope {end_slope:.4} (from {start_slope:.2}), tail {:?}",
-        &spline[n - 3..]
-    );
-    // The release does not unsettle the poses and points: the median moves
-    // by no more than 0.01 px, against a noise level near 0.16 px.
-    assert!(
-        after <= before + 0.01,
-        "median {before:.4} px before the release, {after:.4} px after"
-    );
-    // A round that ends at the limit is not reported as converged.
-    assert!(
-        !(converged && end_slope < 0.05),
-        "converged with the end slope at {end_slope:.4}"
-    );
+        assert!(
+            bspline_is_monotone(&spline, TAIL_RHO_MAX, TAIL_RHO_MAX),
+            "{case}"
+        );
+        // Bounded. The true lens has no distortion, and the focal comes back
+        // up to 15% off, which the spline absorbs as `δ ≈ (f_true/f − 1)·ρ`,
+        // a coefficient of up to about 0.13; 0.25 is twice that. The largest
+        // over 60 runs (20 seeds at 1000, 1500 and 2000 points) is 0.112.
+        assert!(
+            spline.iter().all(|c| c.abs() <= 0.25),
+            "{case}: a coefficient past 0.25"
+        );
+        // The release does not unsettle the poses and points: over the same
+        // 60 runs the median rises by at most 0.0004 px, at a noise level near
+        // 0.16 px.
+        assert!(
+            after <= before + 0.005,
+            "{case}: median {before:.4} px held, {after:.4} px released"
+        );
+        // A round that ends at the limit is not reported as converged.
+        assert!(
+            !(converged && end_slope < 0.05),
+            "{case}: converged with the end slope at {end_slope:.4}"
+        );
+    }
 }

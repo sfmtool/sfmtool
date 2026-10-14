@@ -2026,7 +2026,9 @@ fn penalty_cost<'a>(penalties: &[SplinePenalty], spline_of: impl Fn(usize) -> &'
 /// round's first linearization from the coefficients the kept observations
 /// support there. Its rows are added to the camera block after the data and
 /// before the damping, and its value to the cost the damping ladder compares;
-/// the support test that pins a coefficient reads the data alone.
+/// the support test that pins a coefficient reads the data alone, and a
+/// coefficient moves only while it is supported both there and at the round's
+/// first linearization.
 ///
 /// A candidate step whose only fault is a camera's distortion (a `k1` that
 /// folds the imaged field, or a spline that breaks monotonicity) is solved
@@ -2364,6 +2366,7 @@ fn solve_lm<const CAM_COLS: usize>(
     // linearization, which fixes their rows for the round.
     let mut prev_cost = cost_at(&cams, &q, &t, &x, &inv_depth);
     let mut penalties: Vec<SplinePenalty> = Vec::new();
+    let mut round_support: Vec<bool> = Vec::new();
 
     let analytic: Vec<bool> = cams
         .iter()
@@ -2502,8 +2505,14 @@ fn solve_lm<const CAM_COLS: usize>(
         let data_diag: Vec<f64> = (0..n_shared).map(|slot| h_cc[(slot, slot)]).collect();
         // The spline penalties' rows are fixed at the round's first
         // linearization, over the coefficients supported there, and their
-        // value joins the cost the ladder compares from then on.
+        // value joins the cost the ladder compares from then on. So is the
+        // set of coefficients the round may move: one that gains support
+        // later in the round has no penalty row to hold it, and the column
+        // it gains is the tiny edge of its basis span that an observation has
+        // only begun to reach, which on its own would let it run away. It
+        // stays pinned until the next round, whose rows include it.
         if iter == 0 {
+            round_support = data_diag.iter().map(|&d| d > 0.0).collect();
             penalties = (0..n_cam)
                 .filter(|&j| live[j] && lenses[j].opt_bspline)
                 .filter_map(|j| {
@@ -2675,8 +2684,11 @@ fn solve_lm<const CAM_COLS: usize>(
             // diagonal exactly zero — every contribution is a square). The
             // test reads the diagonal before the spline penalty, which reaches
             // a neighbour of a supported slot, and pinning zeroes the penalty's
-            // coupling to the slot with the rest. A pinned slot holds its value
-            // exactly, like a frozen translation.
+            // coupling to the slot with the rest. A coefficient that had no
+            // support at the round's first linearization stays pinned for the
+            // round even where it has support now, as its penalty rows are
+            // missing. A pinned slot holds its value exactly, like a frozen
+            // translation.
             for (j, lens) in lenses.iter().enumerate() {
                 for local in 0..2 + shapes[j].0 {
                     let slot = slot0[j] + local;
@@ -2684,7 +2696,7 @@ fn solve_lm<const CAM_COLS: usize>(
                         && match local {
                             F_SLOT => lens.opt_f,
                             K1_SLOT => lens.opt_k1,
-                            _ => data_diag[slot] > 0.0,
+                            _ => data_diag[slot] > 0.0 && round_support[slot],
                         };
                     if !released {
                         pin_slot(&mut s, &mut g_red, slot);
