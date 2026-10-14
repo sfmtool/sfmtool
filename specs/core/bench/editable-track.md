@@ -735,7 +735,7 @@ pub struct GridPlaneCells {
     pub iterations: u8,                       // renders made
     pub stop: LoopStop,                       // the piecewise loop's stop reasons
     pub score_before: f64,                    // acceptance score at the start
-    pub score_after: f64,                     // and at the frame kept
+    pub score_after: f64,                     // and at the last render kept
 }
 
 /// The localizer with every per-view gate off, which is what both steps run.
@@ -3946,12 +3946,16 @@ unit-tested in `normal.rs` itself.
 - The same plane with its first column of cells flat: those cells are refused
   for curvature in every view and are not in the plane, the other six are,
   both axes are fixed, and the normal ends within 1 degree on the
-  one-sample-per-pixel grid.
+  one-sample-per-pixel grid. The default grid is not tested here; it leaves
+  the normal 1.4 to 3.3 degrees off.
 - A depth step, the near plane covering only the last column and a far plane
-  with a different texture behind the rest: only that column is in the plane,
-  the verdict is one axis with the free axis along the column, the normal has
-  no part along the column to within 1 degree, and its turn about the column
-  is where the patch had it.
+  with a different texture behind the rest, on the one-sample-per-pixel grid:
+  only that column is in the plane, the verdict is one axis with the free axis
+  along the column, the normal has no part along the column to within 1
+  degree, and its turn about the column is where the patch had it. The
+  default grid is not tested here (0.2 to 1.8 degrees measured). Started 20
+  degrees the other way about the axis the column fixes, the first turn is
+  rejected and the patch is not turned; that start is not tested.
 - Flat texture throughout: every cell is refused for curvature, none has a
   ray, the verdict is none, and the patch is not turned.
 - Every view of the textured plane reports all nine cells fitted, each cell a

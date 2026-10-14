@@ -156,7 +156,8 @@ pub struct GridPlaneCells {
     /// the non-reference views of the ZNCC of each view's whole tile against
     /// the reference's render. `NaN` when no view scored.
     pub score_before: f64,
-    /// The acceptance score at the frame the step kept.
+    /// The acceptance score at the last render the loop kept, the render the
+    /// other readings are of.
     pub score_after: f64,
 }
 

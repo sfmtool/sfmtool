@@ -64,7 +64,6 @@ fn hit(center: [f64; 3], dir: [f64; 3], depth: f64) -> (f64, f64) {
     (center[0] + lambda * dir[0], center[1] + lambda * dir[1])
 }
 
-/// A second texture, unlike the first at every scale, for a surface that must
 /// A second texture for a surface that must not be mistaken for the plane's:
 /// value noise, smoothly interpolated between pseudo-random levels on a
 /// lattice `SPACING` apart, so that no shift of it resembles another.
