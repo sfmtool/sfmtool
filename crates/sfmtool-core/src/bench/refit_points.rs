@@ -630,10 +630,12 @@ fn refit_one(
         PointRange::Applied(entry) => (Some(entry), RefitRange::Applied),
         PointRange::Unresolved => (None, RefitRange::Unresolved { released: false }),
     };
-    let stored = edited
-        .point(index)
-        .expect("every row of a value with no overlay is a live point")
-        .to_record();
+    let stored = stored_in_record_order(
+        edited
+            .point(index)
+            .expect("every row of a value with no overlay is a live point")
+            .to_record(),
+    );
     let mut track =
         track_of_point(edited, index, None).expect("every row of the value is a live point");
     track.thresholds.max_shift_px = max_shift_px;
@@ -846,4 +848,26 @@ fn record_rows(track: &[crate::reconstruction::data::TrackObservation]) -> Vec<u
     let mut rows: Vec<usize> = (0..track.len()).collect();
     rows.sort_by_key(|&k| (track[k].image_index, k));
     rows
+}
+
+/// A stored point's record with its observations in the order the commit's
+/// record lists them ([`record_rows`]) and its reference renumbered to match,
+/// so that [`PointRecord::agrees_with`], which compares observations position
+/// by position, compares each stored row with the record observation that
+/// came from it. A reference that names none of the point's rows is kept as
+/// it is.
+pub(super) fn stored_in_record_order(mut stored: PointRecord) -> PointRecord {
+    let mut rows: Vec<usize> = (0..stored.observations.len()).collect();
+    rows.sort_by_key(|&k| (stored.observations[k].image_index, k));
+    stored.observations = rows
+        .iter()
+        .map(|&k| stored.observations[k].clone())
+        .collect();
+    stored.reference_observation = stored.reference_observation.map(|r| {
+        usize::try_from(r)
+            .ok()
+            .and_then(|r| rows.iter().position(|&k| k == r))
+            .map_or(r, |k| k as i32)
+    });
+    stored
 }

@@ -675,6 +675,14 @@ fn a_track_stored_out_of_image_order_is_written_back_at_its_own_rows() {
         recon.point_set.tracks[r as usize].image_index
     };
     assert_eq!(reference(&got), reference(&want));
+    // The stored point the run compares its record with, to say whether it is
+    // unchanged, is the reversed rows put back in record order, reference
+    // and all: the sorted value's record.
+    assert!(!record_of(&reversed, 0).agrees_with(&record_of(&sorted, 0)));
+    assert!(
+        crate::bench::refit_points::stored_in_record_order(record_of(&reversed, 0))
+            .agrees_with(&record_of(&sorted, 0))
+    );
 }
 
 /// The patch the scene's fixture stands its point on.

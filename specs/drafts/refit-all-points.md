@@ -450,7 +450,9 @@ The run is a **bulk write** into a copy of the value it was handed, the shape
    has the input's points at the input's indexes, and there is no `PointMap`
    to return.
 3. A point whose status is not `Refit`, or whose record agrees with the stored
-   one while its reference is not a display-only pick, is not touched.
+   one while its reference is not a display-only pick, is not touched. The
+   stored record is put in the record's order first, its reference renumbered
+   with it, since `agrees_with` compares observations position by position.
 
 The writer is new. `retriangulate_points`'s own `write_in_place` writes
 positions and frames only, and the commit writes one record through
