@@ -257,6 +257,116 @@ pub fn commit(
     edited: &EditedReconstruction,
     track: &EditableTrack,
 ) -> Result<(EditedReconstruction, CommitReport), CommitError> {
+    let record = point_record(edited, track)?;
+    let kept = track.in_observations();
+    let observation_count = record.observations.len();
+
+    // ---- The edit ----
+    let origin = track
+        .origin
+        .map(|o| o.point)
+        .filter(|&p| edited.point(p).is_some());
+
+    // ---- The points the kept observations were pulled from ----
+    //
+    // Read before the write, because what is still live here is what the write
+    // would absorb -- and a commit with something left to absorb is a change
+    // whatever the origin's own record says.
+    let mut absorbed: Vec<u32> = kept
+        .iter()
+        .filter_map(|&i| match track.observations[i].provenance {
+            Provenance::Point { point } => Some(point),
+            _ => None,
+        })
+        .filter(|point| Some(*point) != origin)
+        .collect();
+    absorbed.sort_unstable();
+    absorbed.dedup();
+    // A point another version already deleted is nothing to absorb, and a
+    // commit is not the place to complain about it.
+    absorbed.retain(|&point| edited.point(point).is_some());
+
+    // ---- The commit that changes nothing ----
+    //
+    // The origin's own record, column for column, against the one above. A
+    // track with something to absorb has an edit to make whatever the two say.
+    // So has an origin whose reference only the display render picked: the
+    // commit saves the reference the bench holds, which the mark would save
+    // as `-1`.
+    if let Some(point) = origin.filter(|_| absorbed.is_empty()) {
+        let held = edited
+            .point(point)
+            .expect("the origin resolves")
+            .to_record();
+        if held.agrees_with(&record) && !held.display_only_reference {
+            return Ok((
+                edited.clone(),
+                CommitReport {
+                    point,
+                    changed: false,
+                    replaced: None,
+                    // No index moved, which is the chain of no steps.
+                    map: PointMap::Chain(Vec::new()),
+                    observation_count,
+                },
+            ));
+        }
+    }
+
+    let mut next = edited.clone();
+    let (point, written) = match origin {
+        Some(replaced) => {
+            let point = next.replace_point(replaced, record)?;
+            (point, PointMap::Replaced(vec![(replaced, point)]))
+        }
+        None => {
+            let point = next.add_point(record)?;
+            (point, PointMap::Created(vec![point]))
+        }
+    };
+
+    for &point in &absorbed {
+        next.delete_point(point)
+            .expect("live above, and a point edit leaves other indexes alone");
+    }
+
+    // The write first, then what it absorbed: the absorbed indexes are the ones
+    // this value held before the write, and a point edit leaves indexes where
+    // they were, so the two steps compose in the order they were applied.
+    let map = if absorbed.is_empty() {
+        written
+    } else {
+        PointMap::Chain(vec![written, PointMap::Removed(absorbed)])
+    };
+
+    Ok((
+        next,
+        CommitReport {
+            point,
+            changed: true,
+            replaced: origin,
+            map,
+            observation_count,
+        },
+    ))
+}
+
+/// The [`PointRecord`] [`commit`] writes for `track` into `edited`, built and
+/// not applied: the validation and the record, with no edit.
+///
+/// [`commit`] calls this before its `replace_point` or `add_point`, and
+/// [`refit_points`](super::refit_points::refit_points) calls it for every
+/// point it fits, so the two write one record for one track. The record's
+/// constraint is free, as a commit writes it; a caller that keeps a point's
+/// constraint replaces it.
+///
+/// It reads only which columns `edited`'s base carries, its image count and
+/// its readings' options, so a value with an empty overlay gives it all it
+/// reads.
+pub(crate) fn point_record(
+    edited: &EditedReconstruction,
+    track: &EditableTrack,
+) -> Result<PointRecord, CommitError> {
     // The cheap refusals first, so a caller greying a button gets the same
     // answers without building anything.
     let payload: &TrackPayload = match track.stage_kind() {
@@ -355,7 +465,7 @@ pub fn commit(
             let n = patch.normal();
             Vector3::new(n.x as f32, n.y as f32, n.z as f32)
         });
-    let record = PointRecord {
+    Ok(PointRecord {
         point: Point3D {
             position,
             w: if at_infinity { 0.0 } else { 1.0 },
@@ -409,96 +519,7 @@ pub fn commit(
         }),
         display_only_reference: false,
         reading_options: record_options,
-    };
-
-    // ---- The edit ----
-    let origin = track
-        .origin
-        .map(|o| o.point)
-        .filter(|&p| edited.point(p).is_some());
-
-    // ---- The points the kept observations were pulled from ----
-    //
-    // Read before the write, because what is still live here is what the write
-    // would absorb -- and a commit with something left to absorb is a change
-    // whatever the origin's own record says.
-    let mut absorbed: Vec<u32> = kept
-        .iter()
-        .filter_map(|&i| match track.observations[i].provenance {
-            Provenance::Point { point } => Some(point),
-            _ => None,
-        })
-        .filter(|point| Some(*point) != origin)
-        .collect();
-    absorbed.sort_unstable();
-    absorbed.dedup();
-    // A point another version already deleted is nothing to absorb, and a
-    // commit is not the place to complain about it.
-    absorbed.retain(|&point| edited.point(point).is_some());
-
-    // ---- The commit that changes nothing ----
-    //
-    // The origin's own record, column for column, against the one above. A
-    // track with something to absorb has an edit to make whatever the two say.
-    // So has an origin whose reference only the display render picked: the
-    // commit saves the reference the bench holds, which the mark would save
-    // as `-1`.
-    if let Some(point) = origin.filter(|_| absorbed.is_empty()) {
-        let held = edited
-            .point(point)
-            .expect("the origin resolves")
-            .to_record();
-        if held.agrees_with(&record) && !held.display_only_reference {
-            return Ok((
-                edited.clone(),
-                CommitReport {
-                    point,
-                    changed: false,
-                    replaced: None,
-                    // No index moved, which is the chain of no steps.
-                    map: PointMap::Chain(Vec::new()),
-                    observation_count: rows.len(),
-                },
-            ));
-        }
-    }
-
-    let mut next = edited.clone();
-    let (point, written) = match origin {
-        Some(replaced) => {
-            let point = next.replace_point(replaced, record)?;
-            (point, PointMap::Replaced(vec![(replaced, point)]))
-        }
-        None => {
-            let point = next.add_point(record)?;
-            (point, PointMap::Created(vec![point]))
-        }
-    };
-
-    for &point in &absorbed {
-        next.delete_point(point)
-            .expect("live above, and a point edit leaves other indexes alone");
-    }
-
-    // The write first, then what it absorbed: the absorbed indexes are the ones
-    // this value held before the write, and a point edit leaves indexes where
-    // they were, so the two steps compose in the order they were applied.
-    let map = if absorbed.is_empty() {
-        written
-    } else {
-        PointMap::Chain(vec![written, PointMap::Removed(absorbed)])
-    };
-
-    Ok((
-        next,
-        CommitReport {
-            point,
-            changed: true,
-            replaced: origin,
-            map,
-            observation_count: rows.len(),
-        },
-    ))
+    })
 }
 
 /// The colour the committed point carries: the centre of the patch bitmap

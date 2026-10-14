@@ -797,18 +797,28 @@ fn ranged_entry(
     if kind != POINT_CONSTRAINT_RANGED || reference == NO_REFERENCE_IMAGE {
         return PointDistance::NONE;
     }
-    let Some(image) = table.images.get(reference as usize) else {
+    let Some(origin) = reference_camera_center(table, reference) else {
         return PointDistance::NONE;
     };
-    if !is_posed(&image.quaternion_wxyz, &image.translation_xyz) {
-        return PointDistance::NONE;
-    }
     *any_ranged = true;
-    let origin = image.camera_center();
-    PointDistance {
-        distance,
-        origin: [origin.x, origin.y, origin.z],
+    PointDistance { distance, origin }
+}
+
+/// The camera centre of image `reference` at `table`'s poses, the origin a
+/// ranged point's distance is measured from, or `None` where `table` holds no
+/// such image or the image carries no pose.
+///
+/// The one rule for that origin: [`ranged_entry`] reads it for the
+/// retriangulation, and
+/// [`refit_points`](crate::bench::refit_points::refit_points) for a ranged
+/// point at a finite distance.
+pub(crate) fn reference_camera_center(table: &ImageTable, reference: u32) -> Option<[f64; 3]> {
+    let image = table.images.get(reference as usize)?;
+    if !is_posed(&image.quaternion_wxyz, &image.translation_xyz) {
+        return None;
     }
+    let origin = image.camera_center();
+    Some([origin.x, origin.y, origin.z])
 }
 
 /// One point's answer, read against the geometry it came in with: its outcome,

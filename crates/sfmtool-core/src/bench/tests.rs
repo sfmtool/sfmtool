@@ -15,6 +15,7 @@ mod delete_image;
 mod normal;
 mod observation_readings;
 mod reference_view;
+mod refit_points;
 pub(super) mod scene;
 
 use std::sync::Arc;

@@ -189,6 +189,60 @@ pub fn create_track(
     if let Some(label) = &options.label {
         check_label(label).map_err(CreateTrackError::Label)?;
     }
+    let track = track_of_point(
+        edited,
+        point,
+        Some(Origin {
+            version: options.version,
+            point,
+        }),
+    )?;
+
+    let base = match &options.label {
+        Some(id) => id.clone(),
+        None => default_point_label(edited, point),
+    };
+    let count = track.observations.len();
+    let (bench, label) = bench.put(&base, BenchItem::Track(Arc::new(track)));
+    Ok((
+        bench,
+        CreateReport {
+            label,
+            kind: ItemKind::Track,
+            observation_count: count,
+        },
+    ))
+}
+
+/// The point at `point` as a track-stage editable track, built as
+/// [`create_track`] builds the one it puts on the bench, with no bench and no
+/// label: its own frame, bitmap, colour, keypoints and stored readings, its
+/// stored reference observation as the track's reference (a pick only the
+/// display render made included), and every observation `in` and **pinned**.
+/// Nothing is recomputed.
+///
+/// `origin` is what the track records as the point it came from.
+/// [`create_track`] passes the point at the caller's version, so that a commit
+/// replaces that point. A caller that builds the track's record itself, as
+/// [`refit_points`](super::refit_points::refit_points) does, passes `None`,
+/// since nothing it calls reads the origin.
+///
+/// # Example
+///
+/// ```no_run
+/// # use sfmtool_core::bench::{track_of_point, Origin};
+/// # use sfmtool_core::EditedReconstruction;
+/// # fn run(edited: &EditedReconstruction) -> Result<(), Box<dyn std::error::Error>> {
+/// let track = track_of_point(edited, 1207, Some(Origin { version: 3, point: 1207 }))?;
+/// assert_eq!(track.verdict_counts().0, track.observations.len());
+/// # Ok(())
+/// # }
+/// ```
+pub fn track_of_point(
+    edited: &EditedReconstruction,
+    point: u32,
+    origin: Option<Origin>,
+) -> Result<EditableTrack, CreateTrackError> {
     let view = edited
         .point(point)
         .ok_or(CreateTrackError::NoSuchPoint(point))?;
@@ -237,31 +291,13 @@ pub fn create_track(
         condition_number: None,
     };
 
-    let track = EditableTrack {
+    Ok(EditableTrack {
         observations,
         stage: Stage::Track(payload),
-        origin: Some(Origin {
-            version: options.version,
-            point,
-        }),
+        origin,
         thresholds: Thresholds::default(),
         repaint: RepaintMark::default(),
-    };
-
-    let base = match &options.label {
-        Some(id) => id.clone(),
-        None => default_point_label(edited, point),
-    };
-    let count = track.observations.len();
-    let (bench, label) = bench.put(&base, BenchItem::Track(Arc::new(track)));
-    Ok((
-        bench,
-        CreateReport {
-            label,
-            kind: ItemKind::Track,
-            observation_count: count,
-        },
-    ))
+    })
 }
 
 /// A committed observation's row as [`create_track`] puts it on the bench:

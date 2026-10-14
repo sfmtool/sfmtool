@@ -396,7 +396,7 @@ fn upgrade(
 
     // 3-4. Localize, refine, re-triangulate, render the bitmap and read back: the track
     //      stage's own fit, over seeds that are the cluster's refined positions.
-    let (mut next, report) = fit_track(&seeded, edited, images, &frame, options, progress)?;
+    let (mut next, report) = fit_track(&seeded, edited, images, &frame, options, None, progress)?;
     // A cluster measurement is a registration against a reference and a
     // template the track no longer has, so it goes with the stage.
     for observation in &mut next.observations {

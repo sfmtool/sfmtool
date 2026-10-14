@@ -609,6 +609,25 @@ fn constraints_agree(
     }
 }
 
+/// `recon`'s reprojection noise level, in px, or a sentence saying why it has
+/// none: the measure [`EditedReconstruction::base_reprojection_noise_px`] keeps
+/// for a base, taken on a plain value by a caller that has no
+/// `EditedReconstruction` to keep it in.
+pub(crate) fn reprojection_noise_level(recon: &SfmrReconstruction) -> Result<f64, String> {
+    match recon.reprojection_noise_px() {
+        Ok(Some(s)) if s.is_finite() => Ok(s),
+        Ok(Some(s)) => Err(format!(
+            "the reconstruction's reprojection noise measures {s} px"
+        )),
+        Ok(None) => Err(
+            "the reconstruction has no observation of a finite point to \
+                         measure the reprojection noise from"
+                .to_string(),
+        ),
+        Err(e) => Err(format!("the reprojection noise could not be measured: {e}")),
+    }
+}
+
 impl EditedReconstruction {
     /// A version that is exactly its base: nothing deleted, nothing added.
     pub fn new(base: Arc<SfmrReconstruction>) -> Self {
@@ -648,18 +667,7 @@ impl EditedReconstruction {
     pub fn base_reprojection_noise_px(&self) -> Result<f64, String> {
         self.base_measures
             .noise_px
-            .get_or_init(|| match self.base.reprojection_noise_px() {
-                Ok(Some(s)) if s.is_finite() => Ok(s),
-                Ok(Some(s)) => Err(format!(
-                    "the reconstruction's reprojection noise measures {s} px"
-                )),
-                Ok(None) => Err(
-                    "the reconstruction has no observation of a finite point to \
-                                 measure the reprojection noise from"
-                        .to_string(),
-                ),
-                Err(e) => Err(format!("the reprojection noise could not be measured: {e}")),
-            })
+            .get_or_init(|| reprojection_noise_level(&self.base))
             .clone()
     }
 

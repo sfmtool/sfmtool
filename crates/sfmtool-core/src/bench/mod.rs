@@ -38,6 +38,11 @@
 //! would decode a dozen images first can refuse in front of that work instead
 //! of behind it. The step itself calls its own, so the two answers cannot
 //! drift.
+//!
+//! One function runs those steps over a whole reconstruction rather than one
+//! track: [`refit_points`](refit_points::refit_points()), which fits every
+//! point as a track put on the bench from it and writes each answer a commit
+//! would write into a copy of the value, at the point's own row.
 
 pub mod classify;
 pub mod commit;
@@ -46,6 +51,7 @@ pub mod fit;
 pub mod geometry_search;
 pub mod nearby;
 pub mod normal;
+pub mod refit_points;
 pub mod search;
 pub mod stage;
 pub mod steps;
@@ -88,6 +94,10 @@ pub use normal::{
     finite_difference_normal, fit_normal, normal_preconditions, FiniteDifferenceOptions,
     FitNormalOptions, NormalError, NormalEstimate, NormalReport, PieceLayout,
 };
+pub use refit_points::{
+    refit_points, RefitOutcome, RefitPoint, RefitPointsError, RefitPointsOptions,
+    RefitPointsReport, RefitRange,
+};
 pub use search::{
     search_descriptors, Found, SearchError, SearchMatch, SearchOptions, SearchReport,
     DEFAULT_RADIUS_PX,
@@ -97,12 +107,13 @@ pub use steps::{
     add_observation, apply_thresholds, bar_checks, clamp_to_photograph, create_cluster,
     create_track, duplicate, half_width_px, pin_verdicts, resize_patch, resize_patch_to_pixel,
     set_reference, set_verdict, shape_observation, sight_observation, spin_patch, split,
-    tilt_patch, translate_patch, translate_patch_to_pixel, unpin_verdicts, verdicts_if_unpinned,
-    AddObservationReport, Axis, BarCheck, BarChecks, ClusterSeed, CreateClusterError, CreateReport,
-    CreateTrackError, CreateTrackOptions, DuplicateError, DuplicateReport, Edge, ObservationSeed,
-    PinReport, ReferenceReport, ResizeReport, ShapeReport, SightReport, SpinReport, SplitError,
-    SplitReport, ThresholdReport, TiltReport, TiltStop, TrackEditError, TranslateReport,
-    TranslateToPixelReport, UnpinReport, VerdictReport, Viewpoint, MAX_TILT_DEG,
+    tilt_patch, track_of_point, translate_patch, translate_patch_to_pixel, unpin_verdicts,
+    verdicts_if_unpinned, AddObservationReport, Axis, BarCheck, BarChecks, ClusterSeed,
+    CreateClusterError, CreateReport, CreateTrackError, CreateTrackOptions, DuplicateError,
+    DuplicateReport, Edge, ObservationSeed, PinReport, ReferenceReport, ResizeReport, ShapeReport,
+    SightReport, SpinReport, SplitError, SplitReport, ThresholdReport, TiltReport, TiltStop,
+    TrackEditError, TranslateReport, TranslateToPixelReport, UnpinReport, VerdictReport, Viewpoint,
+    MAX_TILT_DEG,
 };
 pub use track::{
     ClusterMeasurement, ClusterPayload, ClusterTemplate, EditableTrack, Observation, Origin,

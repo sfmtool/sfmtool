@@ -194,10 +194,11 @@ outcome }` per point of the value, in index order. The refit moves no index, so
   stores one per point, and the point keeps every column it had.
 
 The counts (`read`, `refit`, `unchanged`, `crossed`, `kept`, `held`, `ranged`,
-`released`, `kept_at_seed`, `with_error(kind)`, `median_shift`) are read off the
-statuses, as `RetriangulateReport`'s are. `ranged` counts the refit points whose
-direction was read at their distance, and `released` the ranged points whose
-constraint was released (§ "Constraints").
+`released`, `kept_at_seed`, `with_error(is)`, `median_shift`) are read off the
+statuses, as `RetriangulateReport`'s are. `with_error` counts the points
+refused with a `FitError` the predicate `is` accepts. `ranged` counts the
+refit points whose direction was read at their distance, and `released` the
+ranged points whose constraint was released (§ "Constraints").
 
 `RefitPointsError` is what refuses the run as a whole: `NoKeypoints` (a
 `sift_files` value), `NoPatchFrames`, `NoPosedImage`, `ViewsMissing { got, expected }`,
@@ -641,7 +642,7 @@ core functions have to be callable on their own:
 
 - **The track of a point without a bench.** The body of `create_track` that
   builds the `EditableTrack` from a point becomes a function of its own,
-  `bench::track_of_point(edited, point, origin)`, which `create_track` calls and
+  `bench::track_of_point(edited, point, origin: Option<Origin>)`, which `create_track` calls and
   then puts on the bench. Public, because Python's batch callers have the same
   use for it.
 - **The commit's record without the edit.** The part of `commit` that validates
@@ -758,7 +759,10 @@ Core, in `bench/tests/refit_points.rs`:
 - **Keypoints nudged off the content come back.** On the seoul_bull ground truth
   with its photographs, keypoints displaced by a few pixels return to within
   the refine's tolerance of the stored ones, and the points move back toward
-  their stored positions.
+  their stored positions. The ground truth stores no reference observation
+  (every row is `-1`), and the reference-view rule would pick a nudged row, so
+  the test names each point's first observation as its reference and leaves
+  that row where it is.
 - **No index moves**, the point and observation counts are unchanged, and every
   track keeps its images.
 - **A point at infinity** is fitted as a bearing and written with `w = 0`, a
@@ -779,9 +783,10 @@ Core, in `bench/tests/refit_points.rs`:
   written free and counted as released.
 - **`fit_track` with no range** gives the same answer as before the argument
   was added, for `fit` and for the cluster upgrade.
-- **A point the fit refuses** (two observations whose rays are parallel, one
-  observation) and **a point with no eligible reference** in a value that stores
-  bitmaps come back byte for byte, with the status naming why.
+- **A point the fit refuses** (one observation; two whose rays are parallel are
+  not a refusal, since the classification makes them a bearing) and **a point
+  with no eligible reference** in a value that stores bitmaps come back byte
+  for byte, with the status naming why.
 - **Cancel** before the loop and part way through it returns `Cancelled` and
   leaves the input untouched.
 - **Determinism**: a one-thread pool and the default pool give identical

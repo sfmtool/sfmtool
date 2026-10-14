@@ -35,7 +35,11 @@ use crate::patch::reference_view::render_view_tile;
 use crate::patch::stored_bitmap::{bitmap_from_tile, render_patch_bitmap};
 use crate::progress::{Cancelled, Progress};
 use crate::progress_note;
+use crate::reconstruction::bundle_adjust::is_posed;
 use crate::reconstruction::edited::EditedReconstruction;
+use crate::reconstruction::triangulation::points::{
+    triangulate_points_through_cameras, ObservationSet, PointDistance, PointRules,
+};
 use crate::reconstruction::triangulation::{
     triangulate_batch, Triangulation, DEFAULT_DEPTH_LIKELIHOOD_RATIO_THRESHOLD,
 };
@@ -109,7 +113,7 @@ impl FitOptions {
     /// resolution where it stores patch bitmaps: the localizer, the sub-pixel
     /// kernel and the evaluation the fit ends with, so the fit and its reading
     /// are stated in one grid.
-    fn at_patch_resolution(&self, recon: &crate::SfmrReconstruction) -> Self {
+    pub(super) fn at_patch_resolution(&self, recon: &crate::SfmrReconstruction) -> Self {
         let mut options = self.clone();
         if let Some(resolution) = super::evaluate::stored_patch_resolution(recon) {
             let resolution = resolution.max(2);
@@ -424,7 +428,7 @@ pub fn fit(
             // re-triangulation's to say, not the frame it arrived on.
             let frame = payload.placement.clone().ok_or(FitError::NoFrame)?;
             let options = options.at_patch_resolution(&edited.base);
-            fit_track(track, edited, images, &frame, &options, progress)
+            fit_track(track, edited, images, &frame, &options, None, progress)
         }
     }
 }
@@ -849,13 +853,28 @@ pub(super) fn placed_frame(
 /// Shared by [`fit`] at the track stage and by the upgrade
 /// ([`set_stage`](super::stage::set_stage)), which differ only in where the
 /// frame came from: the payload's own, or one framed from the cluster's
-/// reference at the triangulated depth.
+/// reference at the triangulated depth. Both pass no `range`.
+///
+/// **`range` puts the coordinate under the distance rule.** With `None` the
+/// fitted keypoints are classified as a point or a bearing
+/// ([`classify_track_rays`]). With an entry, the keypoints of the `in` rows go
+/// through the triangulation's distance rule instead, at the value's own
+/// cameras and poses: the point is `range.origin + range.distance · d`, with
+/// `d` the direction from the origin that best explains the keypoints, or at
+/// an infinite distance the normalized mean of their rays as a bearing, whose
+/// origin is not read. [`FitReport::classification`] is then `None`. The
+/// keypoints are still triangulated free first, so a ranged track is refused
+/// for too few rays exactly as a free one is, and the report keeps that
+/// solve's condition number. [`refit_points`](super::refit_points::refit_points)
+/// passes the range of a point the value ranges.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn fit_track(
     track: &EditableTrack,
     edited: &EditedReconstruction,
     images: &[ProjectedImage<'_>],
     frame: &OrientedPatch,
     options: &FitOptions,
+    range: Option<PointDistance>,
     progress: &Progress<'_>,
 ) -> Result<(EditableTrack, FitReport), FitError> {
     check_observation_views(track, images)?;
@@ -950,24 +969,30 @@ pub(super) fn fit_track(
     // track whose sightings have just given it one.
     let sigma_px = noise_level(edited, options)?;
     let (triangulation, rays) = triangulate_keypoints(&next, images, &ins, sigma_px)?;
-    let held = track
-        .track()
-        .and_then(|p| p.position.map(|x| (x, p.at_infinity)));
-    let classification = classify(&rays, held, edited, options)?;
-    let position = classification.coordinate;
+    let (position, at_infinity, classification) = match range {
+        None => {
+            let held = track
+                .track()
+                .and_then(|p| p.position.map(|x| (x, p.at_infinity)));
+            let classification = classify(&rays, held, edited, options)?;
+            (
+                classification.coordinate,
+                classification.at_infinity,
+                Some(classification),
+            )
+        }
+        Some(range) => {
+            let (position, at_infinity) = ranged_coordinate(&next, edited, &ins, range)?;
+            (position, at_infinity, None)
+        }
+    };
 
     // ── The frame at the coordinate the fit found, and the bitmap it shows ──
     let in_images: Vec<usize> = ins
         .iter()
         .map(|&i| next.observations[i].image as usize)
         .collect();
-    let placed = placed_frame(
-        frame,
-        classification.coordinate,
-        classification.at_infinity,
-        images,
-        &in_images,
-    );
+    let placed = placed_frame(frame, position, at_infinity, images, &in_images);
     let (bitmap, reference, color) = {
         let mut phase = progress.phase("bitmap");
         let rendered = render_bitmap(
@@ -998,7 +1023,7 @@ pub(super) fn fit_track(
     };
     next.stage = Stage::Track(TrackPayload {
         position: Some(position),
-        at_infinity: classification.at_infinity,
+        at_infinity,
         placement: Some(placed),
         color: color
             .or_else(|| previous.map(|p| p.color))
@@ -1021,9 +1046,76 @@ pub(super) fn fit_track(
             kept_at_seed,
             position: Some(position),
             condition_number: finite(triangulation.condition_number),
-            classification: Some(classification),
+            classification,
         },
     ))
+}
+
+/// The coordinate the distance rule gives the `in` rows `ins` of `track` at
+/// `range`, from the keypoints they carry, and whether it is a bearing.
+///
+/// The rule [`retriangulate_points`](crate::reconstruction::triangulation::retriangulate_points)
+/// applies to a ranged point, over this one track: each keypoint's ray is cast
+/// through its own image's camera at the value's poses, and an image with no
+/// pose casts none. At a finite distance the answer is a place at exactly that
+/// distance from `range.origin`; at an infinite one it is the normalized mean
+/// of the rays, a bearing, and the origin is not read.
+fn ranged_coordinate(
+    track: &EditableTrack,
+    edited: &EditedReconstruction,
+    ins: &[usize],
+    range: PointDistance,
+) -> Result<(Point3<f64>, bool), FitError> {
+    let table = &edited.base.image_table;
+    let mut quats_wxyz = Vec::with_capacity(table.images.len() * 4);
+    let mut translations = Vec::with_capacity(table.images.len() * 3);
+    for image in &table.images {
+        if is_posed(&image.quaternion_wxyz, &image.translation_xyz) {
+            let q = image.quaternion_wxyz;
+            quats_wxyz.extend_from_slice(&[q.w, q.i, q.j, q.k]);
+            let t = image.translation_xyz;
+            translations.extend_from_slice(&[t.x, t.y, t.z]);
+        } else {
+            quats_wxyz.extend_from_slice(&[f64::NAN; 4]);
+            translations.extend_from_slice(&[f64::NAN; 3]);
+        }
+    }
+    let image_camera: Vec<u32> = table.images.iter().map(|i| i.camera_index).collect();
+    let mut uv = Vec::with_capacity(ins.len() * 2);
+    let mut obs_image = Vec::with_capacity(ins.len());
+    for &i in ins {
+        let observation = &track.observations[i];
+        if let Some(keypoint) = observation.track.as_ref().and_then(|m| m.keypoint) {
+            uv.extend_from_slice(&[f64::from(keypoint[0]), f64::from(keypoint[1])]);
+            obs_image.push(observation.image);
+        }
+    }
+    let obs_point = vec![0u32; obs_image.len()];
+    let answer = triangulate_points_through_cameras(
+        &table.cameras,
+        &image_camera,
+        ObservationSet {
+            uv: &uv,
+            obs_image: &obs_image,
+            obs_point: &obs_point,
+            quats_wxyz: &quats_wxyz,
+            translations: &translations,
+            n_tracks: 1,
+        },
+        None,
+        PointRules {
+            distance: Some(std::slice::from_ref(&range)),
+            ..PointRules::default()
+        },
+    );
+    let [x, y, z, w] = answer.xyzw[0];
+    // The free solve this follows has already found two usable rays, so the
+    // rule has a track to read; an answer that is not a number all the same is
+    // the solve's refusal.
+    if !(x.is_finite() && y.is_finite() && z.is_finite() && w.is_finite()) {
+        return Err(FitError::Triangulation);
+    }
+    Ok((Point3::new(x, y, z), w == 0.0))
 }
 
 /// What one round's two kernels said about one observation.
@@ -1125,15 +1217,26 @@ pub(super) fn noise_level(
     edited: &EditedReconstruction,
     options: &FitOptions,
 ) -> Result<f64, FitError> {
-    match options.sigma_px {
+    stated_or_measured_noise(options.sigma_px, || edited.base_reprojection_noise_px())
+        .map_err(FitError::NoNoiseLevel)
+}
+
+/// The noise level `sigma_px` states where it is a finite positive number, a
+/// refusal where it is another number, and `measure`'s answer where it states
+/// none. The rule [`noise_level`] reads a fit's options by, shared with
+/// [`refit_points`](super::refit_points::refit_points), which measures the
+/// level once for every point it fits.
+pub(super) fn stated_or_measured_noise(
+    sigma_px: Option<f64>,
+    measure: impl FnOnce() -> Result<f64, String>,
+) -> Result<f64, String> {
+    match sigma_px {
         Some(s) if s.is_finite() && s > 0.0 => Ok(s),
-        Some(s) => Err(FitError::NoNoiseLevel(format!(
+        Some(s) => Err(format!(
             "a noise level of {} px weights no ray",
             crate::readable::Readable(s)
-        ))),
-        None => edited
-            .base_reprojection_noise_px()
-            .map_err(FitError::NoNoiseLevel),
+        )),
+        None => measure(),
     }
 }
 

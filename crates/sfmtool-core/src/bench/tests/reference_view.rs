@@ -45,14 +45,14 @@ use crate::reconstruction::SfmrReconstruction;
 const MIN_TRACK: usize = 8;
 
 /// The seoul_bull ground truth with its decoded photographs and poses.
-struct GroundTruth {
-    recon: SfmrReconstruction,
+pub(super) struct GroundTruth {
+    pub(super) recon: SfmrReconstruction,
     pyramids: Vec<Arc<ImageU8Pyramid>>,
     poses: Vec<RigidTransform>,
 }
 
 impl GroundTruth {
-    fn load() -> Self {
+    pub(super) fn load() -> Self {
         let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../test-data/images/seoul_bull_sculpture");
         let recon = SfmrReconstruction::load(
@@ -85,7 +85,7 @@ impl GroundTruth {
         }
     }
 
-    fn views(&self) -> Vec<ProjectedImage<'_>> {
+    pub(super) fn views(&self) -> Vec<ProjectedImage<'_>> {
         self.recon
             .image_table
             .images
