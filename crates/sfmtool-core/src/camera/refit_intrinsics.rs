@@ -31,7 +31,7 @@ use nalgebra::{DMatrix, DVector};
 use sfmtool_sfmr_format::SfmrCamera;
 
 use super::distortion::bspline::{
-    basis_at, bspline_is_monotone, BSPLINE_SUPPORT, MIN_BSPLINE_COEFFS,
+    basis_at, bspline_is_monotone, smoothing_weight, BSPLINE_SUPPORT, MIN_BSPLINE_COEFFS,
 };
 use super::intrinsics::{fixed_arity_model_by_name, CameraIntrinsics, CameraModel, SplineRadial};
 use super::report::{forward_fold_deg, off_axis_angle_deg, trustworthy_max_theta_deg};
@@ -62,12 +62,6 @@ const THETA_SAMPLES: usize = 96;
 /// Azimuths the fit samples at each incidence angle. Enough to see a focal
 /// aspect or a tangential term, which a single azimuth hides completely.
 const AZIMUTHS: usize = 64;
-
-/// Weight of the spline fit's second-difference penalty, per data row and per
-/// coefficient. Small enough that on a source the target represents exactly
-/// the penalty moves the fit by well under a thousandth of a pixel; any
-/// positive weight is enough to determine a coefficient no sample reaches.
-const SMOOTHING: f64 = 1e-6;
 
 /// Iteration budget of the polynomial fit.
 const LM_MAX_ITERS: usize = 200;
@@ -1133,7 +1127,7 @@ fn fit_spline(
     // the weight scaled so the penalty's share of the solve does not change
     // with the number of samples or of coefficients.
     if penalty_rows > 0 {
-        let weight = (SMOOTHING * data_rows as f64 / n as f64).sqrt();
+        let weight = smoothing_weight(data_rows, n).sqrt();
         for i in 1..n - 1 {
             let row = data_rows + i - 1;
             design[(row, i)] = weight;

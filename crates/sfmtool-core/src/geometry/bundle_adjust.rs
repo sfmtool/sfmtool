@@ -29,7 +29,7 @@ use crate::analysis::reprojection_noise::{
     ReprojectionNoise, OUTLIER_GATE,
 };
 use crate::camera::distortion::bspline::{
-    basis_at, bspline_is_monotone, BSPLINE_SUPPORT, MIN_BSPLINE_COEFFS,
+    basis_at, bspline_is_monotone, smoothing_weight, BSPLINE_SUPPORT, MIN_BSPLINE_COEFFS,
 };
 use crate::camera::intrinsics::SplineRadial;
 use crate::camera::CameraModel;
@@ -1864,6 +1864,92 @@ impl<'a> Lens<'a> {
     }
 }
 
+/// The second-difference penalty on one camera's released spline for one
+/// round: `E = w · f_ref² · Σᵢ (c_{i−1} − 2cᵢ + c_{i+1})²` over the rows in
+/// `rows`, with `w = SMOOTHING · rows_data / N` read through
+/// [`smoothing_weight`], the camera refit's weight. Each row is a residual
+/// `√w · f_ref · (c_{i−1} − 2cᵢ + c_{i+1})` in pixels, so the penalty enters the
+/// normal equations as `PᵀP` and `PᵀP·c`, at the same scale as the data rows'
+/// `JᵀJ` and `Jᵀr` under a cost of `Σ r²`.
+///
+/// `f_ref` is the camera's focal at the start of the round, so the penalty is
+/// exactly quadratic in the coefficients and has no focal column. The rows are
+/// fixed for the round, so the cost the damping ladder compares is one function
+/// for the whole round.
+struct SplinePenalty {
+    /// The camera whose spline this is.
+    cam: usize,
+    /// The slot of the spline's first coefficient in the reduced system.
+    slot: usize,
+    /// `w · f_ref²`, the squared weight of each row.
+    scale: f64,
+    /// The interior coefficients `i` whose row `(i − 1, i, i + 1)` enters the
+    /// round.
+    rows: Vec<usize>,
+}
+
+impl SplinePenalty {
+    /// The penalty of camera `cam`'s released spline of `n_coeffs`
+    /// coefficients starting at reduced-system slot `slot`, for a round with
+    /// `n_obs` kept observations of that camera and focal `f_ref` at its start.
+    /// `supported(i)` says whether a kept observation touches coefficient `i`;
+    /// a row enters only when its three coefficients are all supported, so a
+    /// supported coefficient is never pulled toward a value no data holds.
+    /// `None` when no row enters.
+    fn for_round(
+        cam: usize,
+        slot: usize,
+        n_coeffs: usize,
+        f_ref: f64,
+        n_obs: usize,
+        supported: impl Fn(usize) -> bool,
+    ) -> Option<Self> {
+        let rows: Vec<usize> = (1..n_coeffs.saturating_sub(1))
+            .filter(|&i| supported(i - 1) && supported(i) && supported(i + 1))
+            .collect();
+        if rows.is_empty() {
+            return None;
+        }
+        Some(Self {
+            cam,
+            slot,
+            scale: smoothing_weight(2 * n_obs, n_coeffs) * f_ref * f_ref,
+            rows,
+        })
+    }
+
+    /// The penalty at coefficients `c`.
+    fn cost(&self, c: &[f64]) -> f64 {
+        self.scale
+            * self
+                .rows
+                .iter()
+                .map(|&i| (c[i - 1] - 2.0 * c[i] + c[i + 1]).powi(2))
+                .sum::<f64>()
+    }
+
+    /// Adds the penalty's `PᵀP` to `h` and `PᵀP·c` to `g`, at coefficients `c`.
+    fn accumulate(&self, c: &[f64], h: &mut DMatrix<f64>, g: &mut DVector<f64>) {
+        const STENCIL: [f64; 3] = [1.0, -2.0, 1.0];
+        for &i in &self.rows {
+            let r = c[i - 1] - 2.0 * c[i] + c[i + 1];
+            for (a, sa) in STENCIL.iter().enumerate() {
+                let ia = self.slot + i - 1 + a;
+                g[ia] += self.scale * sa * r;
+                for (b, sb) in STENCIL.iter().enumerate() {
+                    h[(ia, self.slot + i - 1 + b)] += self.scale * sa * sb;
+                }
+            }
+        }
+    }
+}
+
+/// The summed penalty of `penalties` with each camera's coefficients read
+/// through `spline_of`.
+fn penalty_cost<'a>(penalties: &[SplinePenalty], spline_of: impl Fn(usize) -> &'a [f64]) -> f64 {
+    penalties.iter().map(|p| p.cost(spline_of(p.cam))).sum()
+}
+
 /// One robust sparse LM solve over the kept observations with mixed finite
 /// and direction points. Direction points use 2-DOF tangent-plane parameters
 /// stored in the first two slots of the uniform 3-wide point block (the third
@@ -1891,6 +1977,12 @@ impl<'a> Lens<'a> {
 /// translation is pinned for an iteration in which none of its kept
 /// observations carries a translation column, which an inverse-depth point at
 /// `ρ = 0` does not.
+///
+/// A released spline is regularized by a [`SplinePenalty`] built at the
+/// round's first linearization from the coefficients the kept observations
+/// support there. Its rows are added to the camera block after the data and
+/// before the damping, and its value to the cost the damping ladder compares;
+/// the support test that pins a coefficient reads the data alone.
 ///
 /// Returns whether the solve met its convergence test (two tiny accepted steps
 /// in a row, or no damping finding a downhill step) rather than stopping on
@@ -2210,7 +2302,10 @@ fn solve_lm<const CAM_COLS: usize>(
     let mut tiny_steps = 0usize;
     let mut converged = false;
     let mut cams: Vec<CameraIntrinsics> = lenses.iter().map(Lens::camera).collect();
+    // The data part of the cost; the spline penalties are added at the first
+    // linearization, which fixes their rows for the round.
     let mut prev_cost = cost_at(&cams, &q, &t, &x, &inv_depth);
+    let mut penalties: Vec<SplinePenalty> = Vec::new();
 
     let analytic: Vec<bool> = cams
         .iter()
@@ -2342,6 +2437,29 @@ fn solve_lm<const CAM_COLS: usize>(
                         .collect(),
                 );
             }
+        }
+        // The lens slots' curvature from the data alone: a spline coefficient
+        // is supported in this linearization when it is positive, whatever the
+        // penalty adds below.
+        let data_diag: Vec<f64> = (0..n_shared).map(|slot| h_cc[(slot, slot)]).collect();
+        // The spline penalties' rows are fixed at the round's first
+        // linearization, over the coefficients supported there, and their
+        // value joins the cost the ladder compares from then on.
+        if iter == 0 {
+            penalties = (0..n_cam)
+                .filter(|&j| live[j] && lenses[j].opt_bspline)
+                .filter_map(|j| {
+                    let slot = slot0[j] + BSPLINE_SLOT0;
+                    let n_obs = obs_cam.iter().filter(|&&c| c == j).count();
+                    SplinePenalty::for_round(j, slot, shapes[j].0, fs[j], n_obs, |i| {
+                        data_diag[slot + i] > 0.0
+                    })
+                })
+                .collect();
+            prev_cost += penalty_cost(&penalties, |j| &bsplines[j]);
+        }
+        for p in &penalties {
+            p.accumulate(&bsplines[p.cam], &mut h_cc, &mut g_c);
         }
         // A point in inverse depth at the bound `ρ = 0` whose gradient asks for
         // a negative `ρ` keeps it at zero this iteration: its `ρ` column is
@@ -2488,10 +2606,12 @@ fn solve_lm<const CAM_COLS: usize>(
             // zero whatever it releases. Under a spline release the same
             // treatment covers each coefficient slot with no observation
             // support in this linearization: no kept observation touches its
-            // basis span, so its column carries zero curvature (`h_cc`
-            // diagonal exactly zero — every contribution is a square) and the
-            // LU would be singular. A pinned slot holds its value exactly, like
-            // a frozen translation.
+            // basis span, so its data column carries zero curvature (the data
+            // diagonal exactly zero — every contribution is a square). The
+            // test reads the diagonal before the spline penalty, which reaches
+            // a neighbour of a supported slot, and pinning zeroes the penalty's
+            // coupling to the slot with the rest. A pinned slot holds its value
+            // exactly, like a frozen translation.
             for (j, lens) in lenses.iter().enumerate() {
                 for local in 0..2 + shapes[j].0 {
                     let slot = slot0[j] + local;
@@ -2499,7 +2619,7 @@ fn solve_lm<const CAM_COLS: usize>(
                         && match local {
                             F_SLOT => lens.opt_f,
                             K1_SLOT => lens.opt_k1,
-                            _ => h_cc[(slot, slot)] > 0.0,
+                            _ => data_diag[slot] > 0.0,
                         };
                     if released {
                         continue;
@@ -2662,7 +2782,10 @@ fn solve_lm<const CAM_COLS: usize>(
                     lenses[j].at(f_cand[j], k1_cand[j], bs)
                 })
                 .collect();
-            let new_cost = cost_at(&cams_cand, &q_cand, &t_cand, &x_cand, &inv_depth_cand);
+            let new_cost = cost_at(&cams_cand, &q_cand, &t_cand, &x_cand, &inv_depth_cand)
+                + penalty_cost(&penalties, |j| {
+                    bspline_cand[j].as_deref().unwrap_or(&bsplines[j])
+                });
             if new_cost < prev_cost {
                 let rel = (prev_cost - new_cost) / prev_cost.max(1e-300);
                 fs = f_cand;

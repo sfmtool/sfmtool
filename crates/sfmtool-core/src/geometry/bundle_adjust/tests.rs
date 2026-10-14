@@ -3190,6 +3190,74 @@ fn unsupported_bspline_slots_hold_their_input_exactly() {
     );
 }
 
+/// The released spline's second-difference penalty is exactly quadratic, so its
+/// contribution to the gradient (`Jᵀr` for a cost of `Σ r²`) is half the
+/// central difference of its cost in each coefficient, and its contribution to
+/// the curvature is half the second difference, to rounding. Nothing outside
+/// the spline block is touched.
+#[test]
+fn spline_penalty_matches_differences_of_its_cost() {
+    let n = PLANTED_BSPLINE.len();
+    let slot = 5;
+    let d = slot + n + 3;
+    // The last coefficient is unsupported, so the last row is left out.
+    let p = SplinePenalty::for_round(0, slot, n, 130.0, 400, |i| i + 1 < n).unwrap();
+    assert_eq!(p.rows, (1..n - 2).collect::<Vec<_>>());
+    assert_eq!(p.scale, smoothing_weight(800, n) * 130.0 * 130.0);
+    let c = PLANTED_BSPLINE;
+    let mut h = DMatrix::<f64>::zeros(d, d);
+    let mut g = DVector::<f64>::zeros(d);
+    p.accumulate(&c, &mut h, &mut g);
+    let step = 1e-3;
+    let at = |di: Option<(usize, f64)>, dj: Option<(usize, f64)>| {
+        let mut cc = c;
+        for (i, v) in di.into_iter().chain(dj) {
+            cc[i] += v;
+        }
+        p.cost(&cc)
+    };
+    let tol = 1e-9 * p.scale;
+    for i in 0..n {
+        let fd_g = (at(Some((i, step)), None) - at(Some((i, -step)), None)) / (4.0 * step);
+        assert!(
+            (g[slot + i] - fd_g).abs() < tol,
+            "gradient of c{i}: {} vs {fd_g}",
+            g[slot + i]
+        );
+        for j in 0..n {
+            let fd_h = (at(Some((i, step)), Some((j, step)))
+                - at(Some((i, step)), Some((j, -step)))
+                - at(Some((i, -step)), Some((j, step)))
+                + at(Some((i, -step)), Some((j, -step))))
+                / (8.0 * step * step);
+            assert!(
+                (h[(slot + i, slot + j)] - fd_h).abs() < 1e-6 * p.scale,
+                "curvature of (c{i}, c{j}): {} vs {fd_h}",
+                h[(slot + i, slot + j)]
+            );
+        }
+    }
+    // The unsupported last coefficient takes no row, and so no entry.
+    assert_eq!(g[slot + n - 1], 0.0);
+    assert_eq!(h[(slot + n - 1, slot + n - 1)], 0.0);
+    for k in (0..slot).chain(slot + n..d) {
+        assert_eq!(g[k], 0.0);
+        assert!(h.row(k).iter().all(|&v| v == 0.0));
+    }
+    // A zero spline has zero penalty and zero penalty gradient.
+    let mut g0 = DVector::<f64>::zeros(d);
+    let mut h0 = DMatrix::<f64>::zeros(d, d);
+    p.accumulate(&[0.0; 8], &mut h0, &mut g0);
+    assert_eq!(p.cost(&[0.0; 8]), 0.0);
+    assert!(g0.iter().all(|&v| v == 0.0));
+    // A row needs all three of its coefficients supported, and a spline with
+    // no such row takes no penalty.
+    let gap = SplinePenalty::for_round(0, slot, n, 130.0, 400, |i| i != 4).unwrap();
+    assert_eq!(gap.rows, vec![1, 2, 6]);
+    assert!(SplinePenalty::for_round(0, slot, n, 130.0, 400, |i| i % 2 == 0).is_none());
+    assert!(SplinePenalty::for_round(0, slot, 2, 130.0, 400, |_| true).is_none());
+}
+
 /// Direction rows carry the rung. A point at infinity projects through the
 /// very same map, so `∂/∂cᵢ` applies to it unchanged — and where the finite
 /// cloud sits near the axis (no basis signal), the far field is the only

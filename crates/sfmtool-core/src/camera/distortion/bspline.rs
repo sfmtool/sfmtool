@@ -37,6 +37,23 @@ pub(crate) const BSPLINE_SUPPORT: usize = 4;
 /// at least 4. Coefficient vectors shorter than this evaluate as `δ ≡ 0`.
 pub(crate) const MIN_BSPLINE_COEFFS: usize = 2;
 
+/// Weight of the second-difference penalty on a spline's coefficients, per
+/// data row and per coefficient. The camera refit and the bundle adjustment's
+/// spline release both read it, through [`smoothing_weight`], so the two agree
+/// on what a smooth tail is. Small enough that on a source the target
+/// represents exactly the refit's penalty moves the fit by well under a
+/// thousandth of a pixel; any positive weight is enough to determine a
+/// coefficient no data row reaches.
+pub(crate) const SMOOTHING: f64 = 1e-6;
+
+/// The squared weight of one second-difference row of a fit with `data_rows`
+/// data rows and `n_coeffs` coefficients: `SMOOTHING · data_rows / n_coeffs`.
+/// The scaling keeps the penalty's share of the solve the same whatever the
+/// number of data rows or of coefficients.
+pub(crate) fn smoothing_weight(data_rows: usize, n_coeffs: usize) -> f64 {
+    SMOOTHING * data_rows as f64 / n_coeffs as f64
+}
+
 /// Whether `bspline` evaluates as the identity `δ ≡ 0` — empty (or below
 /// [`MIN_BSPLINE_COEFFS`]) or every coefficient exactly `0.0`.
 ///

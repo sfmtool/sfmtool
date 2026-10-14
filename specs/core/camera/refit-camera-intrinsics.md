@@ -400,7 +400,13 @@ with coefficients of 1e-11 instead of zero to rounding. The matrix is
 
 **The penalty weight scales with the data.** Each penalty row's squared weight
 is `SMOOTHING · rows / N`, so the penalty's share of the solve does not change
-with the sample or coefficient count.
+with the sample or coefficient count. `SMOOTHING` and the weight function
+`smoothing_weight` live beside the spline basis in
+[bspline.rs](../../../crates/sfmtool-core/src/camera/distortion/bspline.rs),
+because the bundle adjustment's spline release applies the same penalty with
+the same weight, counting two data rows per kept observation
+([`../geometry/bundle-adjustment.md`](../geometry/bundle-adjustment.md)
+§ "The solve").
 
 **The constrained solve reuses the SVD.** With the design matrix `A = U·S·Vᵀ`,
 the substitution `z = S·Vᵀ·x − Uᵀ·b` turns `min ‖A·x − b‖²` subject to
@@ -424,7 +430,7 @@ no dependency of the workspace carries a quadratic-programming or NNLS routine.
 | `spline_domain_deg` | far image corner, `r_corner / √(fx·fy)` | Where a spline target's domain ends. |
 | `THETA_SAMPLES` | `96` | Incidence angles sampled over `(0, θ_fit]`. |
 | `AZIMUTHS` | `64` | Azimuths sampled at each angle. |
-| `SMOOTHING` | `1e-6` | Weight of the second-difference penalty, per data row and per coefficient. |
+| `SMOOTHING` | `1e-6` | Weight of the second-difference penalty, per data row and per coefficient; shared with the bundle adjustment's spline release. |
 | `MIN_SLOPE` | `0.05` | The spline fit's slope floor, `r′(d) ≥ MIN_SLOPE·f`. |
 | `SLOPE_GRID_PER_SPAN` | `64` | Constraint grid points per knot span, the monotonicity check's density. |
 | `LM_MAX_ITERS` | `200` | Iteration budget of the polynomial fit. |

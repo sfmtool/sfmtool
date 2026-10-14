@@ -212,12 +212,16 @@ to its own spline model
 adjustment with its distortion released brings the new coefficients to the
 observations.
 
-**A released spline is constrained by the data alone.** The kernel adds no
-smoothing to the coefficients it releases, unlike the refit
-([`../camera/refit-camera-intrinsics.md`](../camera/refit-camera-intrinsics.md)),
-so a coefficient near the domain end that few observations reach follows those
-few pixels. Regularizing the released tail, and keeping the kernel's step guard
-from stalling the poses and points, are proposed in
+**A released spline is regularized the way the refit regularizes it.** The
+kernel adds the refit's second-difference penalty
+([`../camera/refit-camera-intrinsics.md`](../camera/refit-camera-intrinsics.md))
+to the coefficients it releases, with the same `SMOOTHING` weight per data row,
+so a coefficient near the domain end that few observations reach continues its
+neighbours instead of following those few pixels
+([`../geometry/bundle-adjustment.md`](../geometry/bundle-adjustment.md)
+§ "The solve"). The residuals this function reports are the data's alone.
+Keeping the kernel's step guard from stalling the poses and points is proposed
+in
 [`../../drafts/bundle-adjustment-spline-tail-amendment.md`](../../drafts/bundle-adjustment-spline-tail-amendment.md).
 
 **The report carries each camera's outermost observation.** Measured under the

@@ -335,12 +335,67 @@ cost = Σ_i s² · ρ(r_i² / s²),   ρ(z) = 2·(√(1 + z) − 1),   s = loss_
   the same reason the `k1` release needs its own (for the fisheye that means no
   wide-angle blend; for the pinhole, an explicit Newton arm rather than the
   generic fixed-point undistortion).
+  **The tail is regularized.** Observations thin out toward the image corners,
+  so the outermost coefficients are often touched by one or two observations
+  and would otherwise follow those few pixels' noise. A released spline
+  `c = (c₀, …, c_{N−1})` of camera `j` therefore adds a second-difference
+  penalty to the round's cost, the one the camera refit uses
+  ([`../camera/refit-camera-intrinsics.md`](../camera/refit-camera-intrinsics.md)
+  § "The span past θ_fit is regularized"):
+
+  ```
+  E_pen,j = w_j · Σ_{i ∈ rows_j} (f_ref,j · (c_{i−1} − 2cᵢ + c_{i+1}))²
+  w_j     = SMOOTHING · n_rows,j / N,   n_rows,j = 2 · (camera j's kept observations in the round)
+  ```
+
+  `SMOOTHING = 1e-6` and the weight function `smoothing_weight` live beside the
+  spline basis in
+  [`bspline.rs`](../../../crates/sfmtool-core/src/camera/distortion/bspline.rs)
+  and are shared with the refit, which counts two data rows per sampled ray
+  where the adjustment counts two per kept observation; the penalty itself is
+  `SplinePenalty` in
+  [`bundle_adjust.rs`](../../../crates/sfmtool-core/src/geometry/bundle_adjust.rs).
+  - *The focal in the row is fixed for the round.* `f_ref,j` is camera `j`'s
+    focal at the start of the round, so the penalty is exactly quadratic in `c`
+    and has no focal column. (The refit's unknowns are `f·cᵢ`, so its row is
+    linear; with `f` and `c` separate, `f·Δ²c` would couple the penalty into
+    the focal slot.)
+  - *The gauge.* No row reaches the two gauge-anchored coefficients, which are
+    implicitly zero: the first row is `c₀ − 2c₁ + c₂`. A row through them would
+    pull `c₀` and `c₁` toward zero near the centre, where the data are densest
+    and the gauge already fixes the value and slope. The last coefficient is
+    held only by the last row, so with little data there it continues `c_{N−3}`
+    and `c_{N−2}` in a straight line.
+  - *The row set.* Row `i` enters the round only when `c_{i−1}`, `cᵢ` and
+    `c_{i+1}` are all supported (touched by a kept observation) at the round's
+    first linearization, and the set is then fixed for the round. So a
+    supported coefficient is never pulled toward an unsupported one, whose
+    value may be a wild one from an earlier model, and the cost the damping ladder compares
+    is one function for the whole round even though support can change between
+    linearizations.
+  - *In the normal equations.* With `P_j = √w_j · f_ref,j · D` for the round's
+    rows, the penalty adds `P_jᵀP_j` to the camera block and `P_jᵀP_j·c` to its
+    gradient, after the data and before the damping, so the Marquardt
+    `λ·diag(h_cc)` reads the penalty too. The points do not enter it, so the
+    Schur elimination is unchanged.
+  - *In the cost.* Step acceptance compares the robust data cost plus
+    `Σ_j E_pen,j` at the candidate's coefficients, and the relative improvement
+    the termination test reads includes the penalty. The per-observation
+    residuals the adjustment reports, `residual_norms`, are the data's alone.
+
   **Unsupported coefficients are pinned.** A coefficient whose basis span no
-  surviving observation touches has an exactly-zero column, hence an exactly
-  zero `h_cc` diagonal (a sum of squares) and a singular reduced system; the
-  same pinning that holds an unreleased `f` or `k1` — and a frozen
-  translation — holds it, so it comes back bit for bit as it went in and the
-  spline never moves past the data. **Step guard.** Inside the damping
+  surviving observation touches has an exactly-zero data column, hence an
+  exactly zero data diagonal (a sum of squares) and, without the penalty, a
+  singular reduced system; the same pinning that holds an unreleased `f` or
+  `k1` — and a frozen translation — holds it, so it comes back bit for bit as
+  it went in and the spline never moves past the data. The support test reads
+  the diagonal from the data accumulation, before the penalty is added, since a
+  penalty row through a supported neighbour gives an unsupported slot a positive
+  diagonal. Pinning zeroes the slot's row and column of the reduced system and
+  its gradient entry, which removes the penalty's coupling to it as well; where
+  a row of the round's set touches a slot that has lost support since the first
+  linearization, its supported neighbours' gradient reads the pinned value as a
+  constant. **Step guard.** Inside the damping
   ladder, exactly where a non-positive focal or a folded `k1` is rejected, a
   candidate spline that is non-finite or violates the model's monotonicity
   invariant `1 + δ'(d) > 0` anywhere on `[0, d_max]` — or on the linear tail
@@ -350,12 +405,10 @@ cost = Σ_i s² · ρ(r_i² / s²),   ρ(z) = 2·(√(1 + z) − 1),   s = loss_
   the model's construction invariant (the bracket behind its inverse) and the
   accepted spline is persisted into the camera, while unsupported
   coefficients are pinned anyway, so the wider check costs no legitimate
-  steps. No penalty constrains the released coefficients beyond the data, so a
-  coefficient that one or two observations touch follows those pixels, and a
-  rejected spline step is rejected whole, its pose and point updates included.
-  A second-difference penalty on the released coefficients, a retry of an
-  inadmissible step with the distortion held, and a round ending that is not
-  reported as converged while the distortion is held are proposed in
+  steps. A rejected spline step is rejected whole, its pose and point updates
+  included. A retry of an inadmissible step with the distortion held, and a
+  round ending that is not reported as converged while the distortion is held,
+  are proposed in
   [`../../drafts/bundle-adjustment-spline-tail-amendment.md`](../../drafts/bundle-adjustment-spline-tail-amendment.md).
 - **Staged releases.** Callers open the shared parameters in stages:
   fixed → `opt_f` → `opt_f` plus a distortion release, so a distortion
@@ -699,6 +752,12 @@ Python's point of view).
   support hold nonzero input sentinels exactly through a field-limited
   scene; and directions carry the release where a near-axis finite cloud
   cannot.
+- **The spline penalty**: on a nonzero planted spline, the penalty's
+  contribution to the gradient is half the central difference of its cost in
+  each coefficient and its contribution to the camera block half the second
+  difference; a row that touches an unsupported coefficient is left out, and
+  that coefficient takes no entry; a zero spline has zero penalty and zero
+  penalty gradient.
 - **The spline step guard**: the admissibility predicate rejects a folded
   spline and non-finite coefficients on either radial coordinate; end to
   end, a released solve never returns a spline violating `1 + δ'(d) > 0` on
