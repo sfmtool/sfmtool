@@ -699,6 +699,45 @@ pub fn finite_difference_normal(
     progress: &Progress<'_>,
 ) -> Result<(EditableTrack, NormalReport), NormalError>;
 
+// Turn the patch toward the plane through its nine cells, each registered in
+// every view on one render at the current frame, gated, and triangulated;
+// render and register again until the cells stop moving, keeping a turn only
+// when the views' agreement with the reference does not fall. Keeps the
+// centre, then reads the track back and renders its bitmap.
+pub fn grid_plane_normal(
+    track: &EditableTrack,
+    edited: &EditedReconstruction,
+    images: &[ProjectedImage<'_>],
+    options: &GridPlaneNormalOptions,
+    progress: &Progress<'_>,
+) -> Result<(EditableTrack, NormalReport), NormalError>;
+
+pub struct GridPlaneNormalOptions {
+    pub cell_shift_bound_px: f32,       // search bound and render margin, grid px, 2.0
+    pub min_cell_zncc: f32,             // DEFAULT_MIN_CELL_ZNCC, 0.8
+    pub min_cell_curvature: f32,        // DEFAULT_MIN_CELL_CURVATURE, 0.02
+    pub working_resolution: Option<u32>, // None: the patch resolution, else the fit's sub-pixel one
+    pub plane: CellPlaneParams,         // the cell plane kernel's, default
+    pub update_tolerance_px: f32,       // largest cell-centre movement of a turn, 0.05
+    pub max_iterations: u8,             // renders, 5
+    pub fit: FitOptions,                // the reading it ends with; tile sampler; reference rule
+}
+
+// Carried by NormalEstimate::GridPlaneCells.
+pub struct GridPlaneCells {
+    pub determinacy: NormalDeterminacy,       // the cell plane kernel's verdict
+    pub cell_status: [CellPlaneStatus; 9],
+    pub cell_rays: [u32; 9],
+    pub cell_weight: [f64; 9],
+    pub view_cells: Vec<[CellStatus; 9]>,     // per observation, each cell's registration status
+    pub plane_rms: f64,                       // world units
+    pub plane_offset: f64,                    // plane from the centre along the normal, world units
+    pub iterations: u8,                       // renders made
+    pub stop: LoopStop,                       // the piecewise loop's stop reasons
+    pub score_before: f64,                    // acceptance score at the start
+    pub score_after: f64,                     // and at the frame kept
+}
+
 /// The localizer with every per-view gate off, which is what both steps run.
 /// The grazing pre-filter stays.
 pub fn open_localizer() -> KeypointLocalizeParams;
@@ -2764,13 +2803,13 @@ proposed in
 ### Estimating the normal
 
 A fit moves the patch along the sightings' rays and keeps the way it faces.
-Two steps do the opposite: each estimates which way the surface under the patch
+Three steps do the opposite: each estimates which way the surface under the patch
 faces, turns the patch to that normal with `tilt_patch` (§ "Placing, sizing and
 turning by hand"), and ends as a fit does, by reading the track back, rendering
 its stored bitmap over the turned square and scoring every row against it. The
 centre does not move, the turn is the
 least rotation, and it stops where `tilt_patch`'s cap stops it, which the
-`NormalReport`'s `tilt` says. Both take the track stage only, refuse a track at
+`NormalReport`'s `tilt` says. All three take the track stage only, refuse a track at
 infinity (whose patch faces along its own bearing) and need two `in`
 observations; `normal_preconditions` is that half of their validation.
 
@@ -2816,11 +2855,86 @@ fewer than two fitted centres the step is refused as `TooFewGridPieces`. The
 grid uses the whole patch and reads every centre together; the cross costs
 `2n` fits rather than `n²`.
 
-The two estimates differ in what they can be fooled by. The photometric one
+**`grid_plane_normal` reads the normal from the plane through the patch's
+nine cells.** It is the estimator
+[piece-gated-grid-normal.md](../../drafts/piece-gated-grid-normal.md) designs
+to replace `PieceLayout::Grid`, and it stands beside that layout until the two
+have been compared; Track View, Surface Tiling Mode and the wire still run
+`PieceLayout::Grid`. The cells are the three-by-three split of the ZNCC grid
+(§ "The ZNCC grid") on a working grid of `working_resolution` samples a side,
+by default the reconstruction's own patch resolution where it stores bitmaps
+and otherwise the fit's sub-pixel resolution. The reference is the fit's: the
+reference the track holds where its row is `in` with a keypoint, and
+otherwise the reference-view rule's pick among the `in` rows, chosen once
+when the step starts. One row per image takes part.
+
+Each pass renders every `in` view once at the track's current frame, as a
+*context tile*: the patch re-anchored in its plane on the view's keypoint
+(`OrientedPatch::anchored_at_keypoint`), widened by `cell_shift_bound_px`
+rounded up on every side, and drawn through its plane by
+`WarpMap::from_patch` with the sampler `fit.refine.sampler` picks from the
+view's Jacobian, the render path of the keypoint localizer's context tiles. A
+sample off the photograph is missing. The reference is rendered the same way
+without the widening, and its nine cells are the templates. Every cell of
+every other view is registered against its template by the cell registration
+kernel of the piecewise refinement
+([cluster-patch-refinement.md](../patch/cluster-patch-refinement.md#piecewise-refinement)):
+a ZNCC shift search within the bound, refused for curvature (the template is
+flat or the peak is flatter than `min_cell_curvature`), for ZNCC (below
+`min_cell_zncc` at its optimum) or for the bound, and then the view's robust
+affine fit, which refuses a cell it gives no weight as an outlier and every
+cell of a view whose fit fails. A cell that survives in a view lies at its
+centre plus its shift on that view's grid. That grid position is carried onto
+the plane by the render's own placement (`shifted_center`), projected into the
+photograph, and turned into a ray whose noise floor is
+`plane.cell_shift_precision_grid_px` grid px carried into the photograph by
+the largest singular value of the render map's local Jacobian there, floored
+at `plane.ray_noise_floor_px`. The reference gives a ray through each cell
+centre whose template is textured. The cell plane kernel
+([cell-plane-normals.md](../patch/cell-plane-normals.md)) triangulates the
+cells and fits the weighted, robust plane with its `NormalDeterminacy`.
+
+Under both axes the patch is turned to the plane's normal, signed to keep the
+face the patch shows; under one axis only about the axis the cells fix, the
+normal being the patch's with its component along the cells' line removed;
+under none, not at all. The turned frame is rendered and registered again. The
+loop is the piecewise refinement's: its acceptance score is the mean over the
+non-reference views of the ZNCC of each view's tile at zero shift, its working
+grid's middle, against the reference's render, over the samples both carry;
+a turn whose score falls by more than `ACCEPT_ZNCC_TOLERANCE` (1e-4), or below
+the start's, is rejected and not taken. A turn by `θ` moves a cell centre `ρ`
+grid px from the patch centre by `2ρ sin(θ/2)`; a turn that moves none by more
+than `update_tolerance_px` is taken without another render and ends the loop
+(`Converged`), a turn that moves the cells no less than the one before ends it
+on the better-scoring of the two frames (`Oscillation`), and at
+`max_iterations` renders the last render's turn is not taken, having no render
+to score it (`Cap`). A start that no view can be scored at ends the loop at
+once (`NotRun`), as do cells that fix no axis (`Measured`). The step then
+turns the original track to the kept frame's normal and reads it back as the
+other steps do. `NormalEstimate::GridPlaneCells` carries the last kept
+render's readings: the plane kernel's verdict, statuses, ray counts and
+weights per cell, each observation's per-cell registration status (the
+reference's row reads `Fitted` for a textured template, `RefusedCurvature`
+for a flat one, `NotAttempted` for one partly off its photograph), the plane's
+rms and its offset from the centre, the renders, the stop and the two scores.
+The centre does not move, whatever the plane's offset.
+
+The working grid's density decides how close the step comes. On the
+synthetic plane of the tests, whose patch spans 32 photograph px, a grid of
+32 samples ends 0.1 to 0.3 degrees from the plane's normal, and the default 24
+ends 0.7 to 0.9 degrees from it; with a third of the patch flat, 0.1 to 0.25
+and 1.4 to 3.3 degrees. The draft's open question on the density takes this
+up.
+
+The photometric estimate and the finite difference differ in what they can be
+fooled by. The photometric one
 weighs every texel of the patch at once, so a tilt that suits the texture it
 sees can win over the surface's; the finite difference depends only on where
 each piece is placed along its rays, and so on depth, but a piece small enough
-to hold little texture fits poorly.
+to hold little texture fits poorly. The grid plane normal reads depth by
+parallax as the finite difference does, but refuses each cell in each view
+by its own reading before any geometry, weights the cells by how well their
+rays pin them, and keeps a turn only when the views' agreement does not fall.
 
 ### Moving between the stages
 
@@ -3819,6 +3933,38 @@ Over the plane seen by three views:
 
 The piece layout, the line through the centres and the one-line fallback are
 unit-tested in `normal.rs` itself.
+
+### [bench/tests/grid_plane_normal.rs](../../../crates/sfmtool-core/src/bench/tests/grid_plane_normal.rs)
+
+`grid_plane_normal` over surfaces seen by the three views (`Scene::from_surface`):
+- A textured plane with the patch started 10, 15 and 20 degrees off: the loop
+  converges, all nine cells are in the plane, both axes are fixed, the score
+  does not fall, and the normal ends within 0.5 degrees of the plane's on a
+  working grid of one sample per photograph pixel and within 1 degree on the
+  default grid (0.7 to 0.9 degrees measured there). The centre does not move
+  and the track is read back with its bitmap.
+- The same plane with its first column of cells flat: those cells are refused
+  for curvature in every view and are not in the plane, the other six are,
+  both axes are fixed, and the normal ends within 1 degree on the
+  one-sample-per-pixel grid.
+- A depth step, the near plane covering only the last column and a far plane
+  with a different texture behind the rest: only that column is in the plane,
+  the verdict is one axis with the free axis along the column, the normal has
+  no part along the column to within 1 degree, and its turn about the column
+  is where the patch had it.
+- Flat texture throughout: every cell is refused for curvature, none has a
+  ray, the verdict is none, and the patch is not turned.
+- Every view of the textured plane reports all nine cells fitted, each cell a
+  ray in each of the three views.
+- A bearing is refused as `AtInfinity`, and a set cancel flag stops the step
+  as `Cancelled`.
+
+The loop's rules are unit-tested in `normal/grid_plane/tests.rs` on a state
+that is a number: a turn that lowers the score is not kept, the tolerance does
+not let the score fall below the start's, a turn under the movement tolerance
+is taken without a render, a turn that does not shrink ends on the better
+frame, the cap leaves its last turn untaken, and a start with no score or a
+measurement asking no turn stop where they are.
 
 ### [bench/tests/delete_image.rs](../../../crates/sfmtool-core/src/bench/tests/delete_image.rs)
 

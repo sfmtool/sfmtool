@@ -61,7 +61,10 @@ affine fit (`fit_update_robust`, `fit_pass`). `PiecewiseParams` supplies the
 search bound, through `CellLayout::new`, and the two bars, as
 `CellGateOptions`. `CellStatus` is defined there and re-exported from
 `cluster_refine`. The kernel uses no cluster type, so another caller can
-register the cells of a render it makes itself. The stage is bound as
+register the cells of a render it makes itself, as the bench's
+`grid_plane_normal` does with renders through a track's patch plane
+([editable-track.md](../bench/editable-track.md#estimating-the-normal)). The
+stage is bound as
 `sfmtool._sfmtool.matching.refine_cluster_patches` in
 [cluster.rs](../../../crates/sfmtool-py/src/matching/cluster.rs). The stored
 per-cell columns are `MemberCellData` and `ClusterCellStatus` in

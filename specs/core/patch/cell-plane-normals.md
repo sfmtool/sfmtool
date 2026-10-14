@@ -71,15 +71,15 @@ pub fn cell_plane_normals(
 
 **Why this shape.** The inputs are the cluster file's member-parallel arrays borrowed as they are, so a caller holding a `MatchesData` or the Python `MatchesFile` passes its columns without building per-cluster objects, and the cameras are the per-camera intrinsics, per-image camera index and per-image `cam_from_world` pose that the bundle adjustment and resection take. An image without a pose is `None`, so a partly posed seed passes the file's whole image list. The output keeps every cell's position, ray count and status, because a wrong normal is diagnosed by asking which cells were used and how each was seen.
 
-**The shared triangulation and plane fit.** `cell_plane_normals` builds each cell's rays from the cluster file's columns and each ray's noise floor from its member's shape, and hands the nine cells' rays to the crate-visible cell plane kernel in [cell_plane_fit.rs](../../../crates/sfmtool-core/src/patch/cell_plane_fit.rs), which does the rest: `PosedView` unpacks one image's camera and pose and turns a pixel into a `CellRay` with `ray_through(pixel, floor_px)`, the caller choosing the ray's floor, and `fit_cell_plane(&[Vec<CellRay>; 9], &CellPlaneParams) -> CellPlaneNormal` triangulates each cell, fits the plane and gives the verdict. The kernel reads none of the cluster file's types, so a caller can triangulate cells it places in each view some other way, with floors it computes some other way; the public types it fills, `CellPlaneNormal`, `CellPlaneStatus` and `NormalDeterminacy`, and the `CellPlaneParams` it reads, stay in `cell_plane_normals`.
+**The shared triangulation and plane fit.** `cell_plane_normals` builds each cell's rays from the cluster file's columns and each ray's noise floor from its member's shape, and hands the nine cells' rays to the crate-visible cell plane kernel in [cell_plane_fit.rs](../../../crates/sfmtool-core/src/patch/cell_plane_fit.rs), which does the rest: `PosedView` unpacks one image's camera and pose and turns a pixel into a `CellRay` with `ray_through(pixel, floor_px)`, the caller choosing the ray's floor, and `fit_cell_plane(&[Vec<CellRay>; 9], &CellPlaneParams) -> CellPlaneNormal` triangulates each cell, fits the plane and gives the verdict. The kernel reads none of the cluster file's types, so a caller can triangulate cells it places in each view some other way, with floors it computes some other way; the public types it fills, `CellPlaneNormal`, `CellPlaneStatus` and `NormalDeterminacy`, and the `CellPlaneParams` it reads, stay in `cell_plane_normals`. The bench's `grid_plane_normal` is the other caller: it places each cell by registering it on renders through a track's patch plane, and floors each ray by the render map's local Jacobian ([editable-track.md](../bench/editable-track.md#estimating-the-normal)).
 
 ```rust
-pub(in crate::patch) struct PosedView<'a> { /* camera, world_from_cam rotation, centre, focal px */ }
+pub(crate) struct PosedView<'a> { /* camera, world_from_cam rotation, centre, focal px */ }
 impl<'a> PosedView<'a> {
-    pub(in crate::patch) fn new(camera: &'a CameraIntrinsics, pose: &RigidTransform) -> Self;
-    pub(in crate::patch) fn ray_through(&self, pixel: [f64; 2], floor_px: f64) -> Option<CellRay>;
+    pub(crate) fn new(camera: &'a CameraIntrinsics, pose: &RigidTransform) -> Self;
+    pub(crate) fn ray_through(&self, pixel: [f64; 2], floor_px: f64) -> Option<CellRay>;
 }
-pub(in crate::patch) fn fit_cell_plane(
+pub(crate) fn fit_cell_plane(
     cell_rays: &[Vec<CellRay>; 9],   // [row * 3 + col], the top-left cell first
     params: &CellPlaneParams,
 ) -> CellPlaneNormal;
