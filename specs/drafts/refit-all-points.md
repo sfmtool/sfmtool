@@ -56,8 +56,8 @@ reasons, in the order they are checked:
 2. a camera model proposal is open on the node (*"Apply or cancel the camera
    model proposal first."*), as for every other entry that edits the node;
 3. the observations carry no inline keypoint (a `sift_files` reconstruction),
-   with the sentence naming `Convert to Embedded Patches`, since the fit and the
-   commit both refuse such a value;
+   with the sentence naming `Convert to Embedded Patches`, since the commit
+   refuses such a value (`CommitError::NotEmbeddedPatches`);
 4. the points carry no patch frame, since a fit registers the frame into every
    view and refuses a track without one (`FitError::NoFrame`);
 5. no image carries a pose.
@@ -81,8 +81,9 @@ The batch is one function in the bench module of `sfmtool-core`,
 /// How a whole-reconstruction refit runs.
 #[derive(Debug, Clone)]
 pub struct RefitPointsOptions {
-    /// The fit each point gets. `FitOptions::default()` is what Track View's
-    /// Fit passes. `sigma_px: None` is measured once for the whole run from
+    /// The fit each point gets. Track View's Fit passes
+    /// `FitOptions::default()` with the noise level its panel holds in
+    /// `sigma_px`. `sigma_px: None` is measured once for the whole run from
     /// the value it was handed, not once per point.
     pub fit: FitOptions,
     /// How far, in grid px, a fit may move a sighting before it keeps its
@@ -101,7 +102,7 @@ pub fn refit_points(
     images: &[ProjectedImage<'_>],
     options: &RefitPointsOptions,
     progress: &Progress<'_>,
-) -> Result<(EditedReconstruction, PointMap, RefitReport), RefitError>;
+) -> Result<(EditedReconstruction, PointMap, RefitPointsReport), RefitPointsError>;
 ```
 
 **Why it is shaped this way.**
@@ -145,8 +146,8 @@ println!(
 );
 ```
 
-**The report.** `RefitReport::points` holds one `RefitPoint { index, new_index,
-outcome }` per point of the value: `index` in the caller's indexing and
+**The report.** `RefitPointsReport::points` holds one `RefitPoint { index,
+new_index, outcome }` per point of the value: `index` in the caller's indexing and
 `new_index` in the returned value's. The two differ only where the caller's
 value had pending point edits, whose deleted slots close up when the overlay is
 folded in (§ "Writing the answers"); the refit itself moves no index.
@@ -158,7 +159,9 @@ folded in (§ "Writing the answers"); the refit itself moves no index.
   back; `shift` is the distance a point that stayed finite moved, `None`
   otherwise; `classification` is the fit's `TrackClassification`;
   `unchanged` says the record it would write agrees with the stored one
-  (`PointRecord::agrees_with`), so the point was not rewritten.
+  (`PointRecord::agrees_with`) and the stored reference is not one only the
+  display render picked, so the point was not rewritten, the rule `commit`
+  uses.
 - `Held` and `Ranged`: the point's constraint kept it out of the run
   (§ "Constraints").
 - `NotFitted(FitError)`: the fit refused this point, and the point keeps every
@@ -170,10 +173,12 @@ The counts (`read`, `refit`, `unchanged`, `crossed`, `kept`, `held`, `ranged`,
 `kept_at_seed`, `with_error(kind)`, `median_shift`) are read off the statuses,
 as `RetriangulateReport`'s are.
 
-`RefitError` is what refuses the run as a whole: `NoKeypoints` (a `sift_files`
-value), `NoPatchFrames`, `NoPosedImage`, `ViewsMissing { got, expected }`,
+`RefitPointsError` is what refuses the run as a whole: `NoKeypoints` (a
+`sift_files` value), `NoPatchFrames`, `NoPosedImage`, `ViewsMissing { got, expected }`,
 `NoNoiseLevel(String)` (no `sigma_px` given and the value's reprojection noise
-cannot be measured, the fit's own refusal) and `Cancelled`.
+cannot be measured, the fit's own refusal) and `Cancelled`. The error and the
+report carry the `RefitPoints` prefix of the options because `RefitError` and
+`RefitOptions` already name `camera::refit_intrinsics`'s types.
 
 ---
 
@@ -321,7 +326,7 @@ The run is a **bulk edit**, the shape `RetriangulateWhich::All` writes:
    renumbered. The writer asserts that each record's image list equals the
    stored track's.
 3. A point whose status is not `Refit`, or whose record agrees with the stored
-   one, is not touched.
+   one while its reference is not a display-only pick, is not touched.
 
 The writer is new. `retriangulate_points`'s own `write_in_place` writes
 positions and frames only, and the commit writes one record through
@@ -367,7 +372,7 @@ an atomic counter, as `render_patch_cloud_bitmaps` does.
 The run is cancellable. The flag is read in front of every stage, and in front
 of every point's fit inside the loop (`progress.is_cancelled()`); a point whose
 fit has begun runs to its end, so a cancel lands within one point's fit per
-worker thread. A cancelled run returns `RefitError::Cancelled` and writes
+worker thread. A cancelled run returns `RefitPointsError::Cancelled` and writes
 nothing: the value the caller holds is unchanged, and no partially refit value
 is returned, because a reconstruction in which some points were refit and others
 were not, chosen by thread scheduling, is not an answer anybody asked for. This
@@ -466,9 +471,9 @@ so a refusal added to the fit does not compile until the sentence has words for
 it.
 
 A **cancelled** run pushes no version and writes one failed entry,
-`Refit all points of seoul_bull cancelled`, with how many points had been
-fitted. A **refusal** pushes no version and writes one failed entry in the
-gate's own sentence. A run in which every point was left as it was, or agrees
+`Refit all points of seoul_bull cancelled`, the sentence the background task
+writes for every cancelled operation. A **refusal** pushes no version and writes
+one failed entry in the gate's own sentence. A run in which every point was left as it was, or agrees
 with what is stored, still pushes its version, whose entry says so, as a
 retriangulation that moved nothing does.
 
@@ -568,6 +573,9 @@ Viewer, beside the retriangulation's tests:
   point count and the counts in the entry; Undo restores the value byte for
   byte;
 - a cancelled run pushes no version and writes the failed entry;
+- `the_prune_entry_is_live_on_a_node_with_patch_frames`, whose doc comment and
+  failure message say Prune sits directly under `Retriangulate All Points`,
+  measures Prune against the refit entry instead;
 - the wire's `refit_all_points` defers to the worker and comes back with the
   version.
 
