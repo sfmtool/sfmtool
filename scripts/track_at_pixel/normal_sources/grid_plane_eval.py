@@ -23,7 +23,12 @@ mean-view start's, the baseline both steps start from.
 
 ``DATASET`` is a name ``dataset.py`` knows (``seoul_bull``) or the path of a
 ground-truth ``.sfmr``; ``prepare`` copies it into its cache workspace. Rows go
-to ``DIR/<dataset>.jsonl``, one per point, and the summary is printed. With
+to ``DIR/<dataset>.jsonl``, one per point, and the summary is printed. Each row
+carries what a later render of the point needs: the ground-truth position and
+normal, the start normal, the fitted frame, each step's resulting frame, and
+the reference and ``in`` sightings with their keypoints; ``DIR/cameras.json``
+holds each image's name, centre, world-from-camera rotation and lens summary,
+and the image directory. With
 ``--limit`` the first ``N`` points are run, or with ``--seed`` a random sample
 of ``N``. Two controls change the start, each adding a suffix to the file
 name: ``--start ground_truth`` (``_from_gt``) starts both steps from the
@@ -52,6 +57,61 @@ def patch_normal(track):
     return unit(np.cross(frame["u_halfvec"], frame["v_halfvec"]))
 
 
+def frame(track):
+    """The track's patch as plain lists, for a later render of the point."""
+    f = track.placement
+    return {
+        "center": np.asarray(f["center"], float).tolist(),
+        "u_halfvec": np.asarray(f["u_halfvec"], float).tolist(),
+        "v_halfvec": np.asarray(f["v_halfvec"], float).tolist(),
+        "normal": patch_normal(track).tolist(),
+    }
+
+
+def sightings(track):
+    """The reference observation and the ``in`` observations, image and keypoint."""
+
+    def entry(i):
+        o = track.observation(int(i))
+        kp = o.get("track", {}).get("keypoint")
+        return {
+            "observation": int(i),
+            "image": int(o["image"]),
+            "keypoint": None if kp is None else np.asarray(kp, float).tolist(),
+        }
+
+    ref = track.reference_observation
+    return {
+        "reference": None if ref is None else entry(ref),
+        "in": [entry(i) for i in track.in_observations],
+    }
+
+
+def write_cameras(ds, prepared, out):
+    """``cameras.json``: each image's name, pose and lens, and where they are."""
+    images = []
+    for name, cam in zip(ds.image_names, ds.cameras):
+        images.append(
+            {
+                "name": name,
+                "center": cam.center.tolist(),
+                "world_from_camera_rotation": cam.R.T.tolist(),
+                "width": int(cam.intrinsics.width),
+                "height": int(cam.intrinsics.height),
+                "focal": cam.focal,
+            }
+        )
+    doc = {
+        "dataset": prepared.name,
+        "ground_truth": str(prepared.ground_truth),
+        "image_dir": str(prepared.workspace),
+        "source_image_dir": str(prepared.ground_truth.parent),
+        "images": images,
+    }
+    with open(out / "cameras.json", "w") as sink:
+        json.dump(doc, sink, indent=1)
+
+
 def run_point(ds, edited, p, *, fit=True, start="mean_view"):
     """One row: the start, the fit, and each step from the fitted track."""
     from sfmtool import bench as B
@@ -68,6 +128,8 @@ def run_point(ds, edited, p, *, fit=True, start="mean_view"):
         "views": int(len(images)),
         "half_extent": float(ds.point_half[p]),
         "gt_vs_mean_view_deg": angle(face(mv, to_cam), gt),
+        "gt_position": xyz.tolist(),
+        "gt_normal": gt.tolist(),
     }
 
     _, track = B.create_track(B.Bench(), edited, int(p))
@@ -94,6 +156,9 @@ def run_point(ds, edited, p, *, fit=True, start="mean_view"):
     )
     row["status"] = "ok"
     row["start_deg"] = angle(face(patch_normal(track), to_cam), gt)
+    row["start_normal"] = patch_normal(track).tolist()
+    row["fitted_frame"] = frame(track)
+    row["sightings"] = sightings(track)
 
     t0 = time.perf_counter()
     try:
@@ -107,6 +172,7 @@ def run_point(ds, edited, p, *, fit=True, start="mean_view"):
         row["old_both_axes"] = est["both_axes"]
         row["old_turned_deg"] = report["tilt"]["degrees"]
         row["old_deg"] = angle(face(patch_normal(old), to_cam), gt)
+        row["old_frame"] = frame(old)
     except ValueError as e:
         row["old_ms"] = 1000 * (time.perf_counter() - t0)
         row["old_ok"] = False
@@ -141,6 +207,7 @@ def run_point(ds, edited, p, *, fit=True, start="mean_view"):
     row["new_view_cell_counts"] = counts
     row["new_turned_deg"] = report["tilt"]["degrees"]
     row["new_deg"] = angle(face(patch_normal(new), to_cam), gt)
+    row["new_frame"] = frame(new)
     return row
 
 
@@ -257,6 +324,7 @@ def main():
         points = points[: args.limit]
 
     args.out.mkdir(parents=True, exist_ok=True)
+    write_cameras(ds, prepared, args.out)
     suffix = ("_from_gt" if args.start == "ground_truth" else "") + (
         "_no_fit" if args.no_fit else ""
     )
