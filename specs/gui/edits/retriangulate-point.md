@@ -81,7 +81,7 @@ Over MCP the same two actions are `retriangulate_point` and
 
 Everything below lives in `sfmtool-core` as one function,
 `reconstruction::retriangulate_points` in
-[retriangulation.rs](../../../crates/sfmtool-core/src/reconstruction/triangulation).
+[retriangulate.rs](../../../crates/sfmtool-core/src/reconstruction/triangulation/retriangulate.rs).
 The viewer wraps it twice, in
 [edits.rs](../../../crates/sfm-explorer/src/state/edits.rs): once synchronously
 for the point, and once as a background job for the value. Both wrappers pass
@@ -121,7 +121,10 @@ the two layers meet:
   solve and not in the answer, and asking for that point alone is refused by
   name;
 - a point the value **ranges** keeps its distance, and only its direction is
-  re-read, from its reference image's camera centre at these poses;
+  re-read, from its reference image's camera centre at these poses; a ranged
+  point whose reference image has no pose is solved free, and where that makes
+  it a direction its constraint is **released**, written free, because the
+  format allows no direction at a finite distance;
 - a point fewer than two of whose observations state a usable ray keeps the
   geometry it had, because the operation has nothing to say about it and saying
   nothing is not the same as saying it is nowhere.
@@ -161,16 +164,18 @@ infinity`, `no depth in its rays at the noise level, so at infinity`, `behind a
 camera that sees it, so at infinity`, `past the reprojection bar, so at
 infinity`, `too few observations to place, so left where it was`. A point solved on the observations that agree then says how many it
 left out -- `(1 observation that sees it behind was left out)` -- and a point
-whose answer is the geometry it already had says `unchanged`. Last, where the
+whose answer is the geometry it already had says `unchanged`. Then, where the
 point was rewritten, the index it took: `now point 5310`. A point that was not
-rewritten keeps its index and the tail names none. That tail is the answer the
+rewritten keeps its index and the tail names none. Last, where the call
+released the point's constraint, `its constraint released`. That tail is the answer the
 gesture was asked for: a point that did not move because one photograph is all
 that sees it says so, rather than reporting silent success, and an agent reading
 the entry learns where to find the point next.
 
 The whole-value entry's tail is what the run did, in the same shape every other
 bulk edit reports, each count read off the per-point statuses: how many of how
-many points moved, how many crossed to or from infinity, how many each rule
+many points moved, how many crossed to or from infinity, how many of those
+were released from their constraint, how many each rule
 turned into a direction (`too thin to place`, `with no depth in their rays at
 the noise level`, `behind a camera that sees them`, `past the reprojection
 bar`), how many were placed on the observations that agree, how many were left
@@ -179,9 +184,10 @@ distance a point that stayed finite travelled. A count of zero is left out:
 
 ```text
 Retriangulated seoul_bull: 6 of 8 points moved, 4 crossed to or from infinity,
-1 too thin to place, 2 with no depth in their rays at the noise level, 1 behind
-a camera that sees them, 1 placed on the observations that agree, 1 left where
-they were for too few observations, 1 held, median shift 1.0000 (v3 → v4)
+1 released from their constraint, 1 too thin to place, 2 with no depth in their
+rays at the noise level, 1 behind a camera that sees them, 1 placed on the
+observations that agree, 1 left where they were for too few observations,
+1 held, median shift 1.0000 (v3 → v4)
 ```
 
 The words for each rule that makes a direction come from one exhaustive match

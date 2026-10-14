@@ -2156,6 +2156,9 @@ fn the_whole_value_entry_counts_what_happened_to_each_point() {
                 index: k as u32,
                 new_index: k as u32,
                 outcome,
+                // The point behind a camera was ranged, so its crossing
+                // released it.
+                released: k == 3,
             })
             .collect(),
         observations: 18,
@@ -2163,7 +2166,8 @@ fn the_whole_value_entry_counts_what_happened_to_each_point() {
     };
     assert_eq!(
         super::retriangulate_summary(&report),
-        "6 of 8 points moved, 4 crossed to or from infinity, 1 too thin to place, \
+        "6 of 8 points moved, 4 crossed to or from infinity, \
+         1 released from their constraint, 1 too thin to place, \
          2 with no depth in their rays at the noise level, \
          1 behind a camera that sees them, 1 placed on the observations that agree, \
          1 left where they were for too few observations, 1 held, median shift 1.0000"

@@ -362,6 +362,12 @@ fn retriangulate_summary(report: &RetriangulateReport) -> String {
     if crossed > 0 {
         text.push_str(&format!(", {crossed} crossed to or from infinity"));
     }
+    // A constrained point that crossed was written free, as the format
+    // releases any point whose representation an edit rewrites.
+    let released = report.released();
+    if released > 0 {
+        text.push_str(&format!(", {released} released from their constraint"));
+    }
     // The rules that turned a point into a direction, each named where it
     // took any, so a reader can tell a thin capture from a geometry the
     // cameras disagree with.
@@ -812,6 +818,9 @@ impl AppState {
                 let mut tail = format!(": {}", status.outcome);
                 if status.new_index != status.index {
                     tail.push_str(&format!(", now point {}", status.new_index));
+                }
+                if status.released {
+                    tail.push_str(", its constraint released");
                 }
                 tail
             });

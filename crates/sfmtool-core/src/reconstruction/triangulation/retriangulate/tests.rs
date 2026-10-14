@@ -448,6 +448,13 @@ fn a_ranged_point_keeps_the_distance_the_value_states() {
     .expect("the fixture retriangulates");
 
     assert_eq!(report.census.ranged, 1);
+    // A point solved at its distance keeps its representation, so it keeps
+    // its constraint.
+    assert_eq!(report.released(), 0);
+    assert_eq!(
+        next.point(3).expect("live").constraint(),
+        Some((POINT_CONSTRAINT_RANGED, range, 0))
+    );
     let got = (next.base.point_set.points[3].position - centre).norm();
     assert!((got - range).abs() < 1e-9 * range, "{got} is not {range}");
     // And the free points beside it are unaffected.
@@ -1732,4 +1739,149 @@ fn the_bulk_path_folds_the_overlay_in_and_reads_statuses_back_through_it() {
     assert_eq!(written(&next, 0), written(&layered, 0));
     assert_statuses_agree(&report);
     assert_statuses_follow_the_map(&report, &map, &layered, &next);
+}
+
+/// The truth with a fourth image that sees nothing and has no pose, and point 2
+/// ranged at a finite distance from it, nudged: a ranged point the operation
+/// has no origin to measure from, so it is solved free.
+fn ranged_from_an_unposed_image() -> SfmrReconstruction {
+    let mut recon = nudge(scene(vec![pinhole()], &[0; 4], |_, i| i < 3));
+    recon.image_table.images[3].translation_xyz = Vector3::new(f64::NAN, f64::NAN, f64::NAN);
+    constrain(&mut recon, 2, POINT_CONSTRAINT_RANGED, 5.0, 3);
+    recon
+}
+
+/// The options that turn every point solved free into a direction: a floor
+/// wider than the arc, as in `a_floor_wide_enough_turns_every_point_into_a_direction`.
+fn every_free_point_a_direction() -> RetriangulateOptions {
+    RetriangulateOptions {
+        floor_rad: Some(1.0),
+        ..RetriangulateOptions::default()
+    }
+}
+
+/// Check the format's rule on every live point of `value`: a ranged point is a
+/// direction exactly when its distance is infinite.
+fn assert_ranged_rows_agree_with_w(value: &EditedReconstruction) {
+    for index in value.live_indexes() {
+        let view = value.point(index).expect("a live index");
+        if let Some((kind, distance, _)) = view.constraint() {
+            if kind == POINT_CONSTRAINT_RANGED {
+                assert_eq!(
+                    view.point().is_at_infinity(),
+                    distance.is_infinite(),
+                    "point {index} has w = {} and distance {distance}",
+                    view.point().w
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn a_ranged_point_that_becomes_a_direction_in_place_is_released() {
+    let start = edited(ranged_from_an_unposed_image());
+    for which in [
+        RetriangulateWhich::All,
+        RetriangulateWhich::TheseInBulk(&[2, 4]),
+    ] {
+        let (next, map, report) = retriangulate_points(
+            &start,
+            which,
+            &every_free_point_a_direction(),
+            &Progress::none(),
+        )
+        .expect("the fixture retriangulates");
+
+        assert_eq!(
+            outcome_of(&report, 2),
+            RetriangulateOutcome::Solved {
+                verdict: PointVerdict::Thin,
+                pruned: 0,
+                change: GeometryChange::Crossed,
+            },
+            "{which:?}"
+        );
+        let point = next.point(2).expect("the point keeps its row");
+        assert!(point.point().is_at_infinity(), "{which:?}");
+        assert_eq!(
+            point.constraint().map(|(k, d, r)| (k, d.is_nan(), r)),
+            Some((
+                POINT_CONSTRAINT_FREE,
+                true,
+                sfmtool_sfmr_format::NO_REFERENCE_IMAGE
+            )),
+            "{which:?}"
+        );
+        assert_ranged_rows_agree_with_w(&next);
+        // Point 2 is the one released; point 4 crossed too, but was free.
+        assert!(report.point(2).expect("named").released, "{which:?}");
+        assert!(!report.point(4).expect("named").released, "{which:?}");
+        assert_eq!(report.released(), 1, "{which:?}");
+        assert_statuses_agree(&report);
+        assert_statuses_follow_the_map(&report, &map, &start, &next);
+    }
+}
+
+#[test]
+fn a_ranged_point_that_becomes_a_direction_in_the_overlay_is_released() {
+    let start = edited(ranged_from_an_unposed_image());
+    let (next, map, report) = retriangulate_points(
+        &start,
+        RetriangulateWhich::These(&[2]),
+        &every_free_point_a_direction(),
+        &Progress::none(),
+    )
+    .expect("the fixture retriangulates");
+
+    let status = report.point(2).expect("named");
+    assert_eq!(
+        status.outcome,
+        RetriangulateOutcome::Solved {
+            verdict: PointVerdict::Thin,
+            pruned: 0,
+            change: GeometryChange::Crossed,
+        }
+    );
+    let point = next.point(status.new_index).expect("a live index");
+    assert!(point.point().is_at_infinity());
+    assert_eq!(
+        point.constraint().map(|(k, d, r)| (k, d.is_nan(), r)),
+        Some((
+            POINT_CONSTRAINT_FREE,
+            true,
+            sfmtool_sfmr_format::NO_REFERENCE_IMAGE
+        ))
+    );
+    assert_ranged_rows_agree_with_w(&next);
+    assert!(status.released);
+    assert_eq!(report.released(), 1);
+    assert_statuses_agree(&report);
+    assert_statuses_follow_the_map(&report, &map, &start, &next);
+}
+
+#[test]
+fn a_ranged_point_that_stays_a_position_keeps_its_constraint() {
+    // Solved free, because its reference has no pose, but still a position:
+    // its representation did not change, so its constraint is not released.
+    let start = edited(ranged_from_an_unposed_image());
+    for which in [RetriangulateWhich::All, RetriangulateWhich::These(&[2])] {
+        let (next, _, report) = retriangulate_points(
+            &start,
+            which,
+            &RetriangulateOptions::default(),
+            &Progress::none(),
+        )
+        .expect("the fixture retriangulates");
+        let status = report.point(2).expect("asked about");
+        assert_eq!(status.outcome.verdict(), Some(PointVerdict::Finite));
+        assert!(!status.released);
+        assert_eq!(report.released(), 0);
+        let point = next.point(status.new_index).expect("a live index");
+        assert_eq!(
+            point.constraint(),
+            Some((POINT_CONSTRAINT_RANGED, 5.0, 3)),
+            "{which:?}"
+        );
+    }
 }

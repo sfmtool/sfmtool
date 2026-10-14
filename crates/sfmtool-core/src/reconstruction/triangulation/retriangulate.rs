@@ -16,7 +16,9 @@ use std::sync::Arc;
 
 use nalgebra::Point3;
 
-use sfmtool_sfmr_format::{NO_REFERENCE_IMAGE, POINT_CONSTRAINT_HELD, POINT_CONSTRAINT_RANGED};
+use sfmtool_sfmr_format::{
+    NO_REFERENCE_IMAGE, POINT_CONSTRAINT_FREE, POINT_CONSTRAINT_HELD, POINT_CONSTRAINT_RANGED,
+};
 
 use super::points::{
     triangulate_points_through_cameras, FewObservations, LikelihoodRule, ObservationSet,
@@ -221,6 +223,15 @@ pub struct RetriangulatedPoint {
     pub new_index: u32,
     /// What happened to it.
     pub outcome: RetriangulateOutcome,
+    /// Whether the call released the point's constraint, writing it free.
+    /// That happens exactly when the answer changed the point's representation
+    /// ([`GeometryChange::Crossed`]) and the point was constrained: the format
+    /// releases a point whose representation an edit rewrites, because the
+    /// distance it carried described the coordinate that was replaced. Only a
+    /// ranged point solved free can cross -- one whose reference image the
+    /// value does not pose -- since a held point is never read and a ranged
+    /// point solved at its distance keeps its representation.
+    pub released: bool,
 }
 
 /// What a retriangulation did to one point.
@@ -367,6 +378,12 @@ impl RetriangulateReport {
         })
     }
 
+    /// Points whose constraint the call released because their representation
+    /// changed: [`RetriangulatedPoint::released`].
+    pub fn released(&self) -> usize {
+        self.points.iter().filter(|p| p.released).count()
+    }
+
     /// Points the operation had nothing to say about, which keep the geometry
     /// they had: fewer than two of their observations state a usable ray.
     pub fn kept(&self) -> usize {
@@ -429,7 +446,11 @@ impl RetriangulateReport {
 /// ranged point keeps its distance and only its direction is re-read, measured
 /// from its reference image's camera centre at these poses; a ranged point
 /// whose reference the value does not name, or does not pose, is solved free,
-/// because a distance from nothing constrains nothing.
+/// because a distance from nothing constrains nothing. Where that free answer
+/// changes the point's representation, a position becoming a direction, the
+/// point's constraint is released and written free, as the format releases
+/// any point an edit rewrites that way; its status says so
+/// ([`RetriangulatedPoint::released`]).
 ///
 /// **A point the operation cannot speak for keeps the geometry it has.** That
 /// is a point fewer than two of whose observations state a usable ray, which
@@ -591,6 +612,7 @@ pub fn retriangulate_points(
         index,
         new_index: index,
         outcome: RetriangulateOutcome::Held,
+        released: false,
     }));
     let map = match folded {
         Some(materialised) => {
@@ -798,6 +820,20 @@ struct Decision {
     write: Option<(Point3<f64>, f64)>,
 }
 
+impl Decision {
+    /// Whether the answer changes the point's representation, which releases
+    /// the point's constraint.
+    fn crossed(&self) -> bool {
+        matches!(
+            self.outcome,
+            RetriangulateOutcome::Solved {
+                change: GeometryChange::Crossed,
+                ..
+            }
+        )
+    }
+}
+
 /// Read the estimate of track slot `slot` against `before`, the geometry the
 /// point came in with.
 fn decide_point(
@@ -872,12 +908,23 @@ fn write_in_place(
     for (slot, &index) in gathered.targets.iter().enumerate() {
         let p = index as usize;
         let decision = decide_point(&out.point_set.points[p], estimates, &pruned, slot);
+        let released = decision.crossed()
+            && out
+                .point_set
+                .point_constraints
+                .as_mut()
+                .is_some_and(|columns| {
+                    let constrained = columns.point_constraints[p] != POINT_CONSTRAINT_FREE;
+                    columns.free(p);
+                    constrained
+                });
         // Every point keeps the row it had: this edit deletes none and creates
         // none, it moves them.
         points.push(RetriangulatedPoint {
             index,
             new_index: index,
             outcome: decision.outcome,
+            released,
         });
         let Some((position, w)) = decision.write else {
             continue;
@@ -923,9 +970,17 @@ fn write_overlay(
                 index,
                 new_index: index,
                 outcome: decision.outcome,
+                released: false,
             });
             continue;
         };
+        let released = decision.crossed()
+            && record
+                .constraint
+                .is_some_and(|(kind, _, _)| kind != POINT_CONSTRAINT_FREE);
+        if released {
+            record.constraint = Some((POINT_CONSTRAINT_FREE, f64::NAN, NO_REFERENCE_IMAGE));
+        }
         let before_scale = (!record.point.is_at_infinity())
             .then(|| ImageTable::placement_scale_from(&centroid, &record.point.position));
         let after = (w != 0.0).then_some(&position);
@@ -946,6 +1001,7 @@ fn write_overlay(
             index,
             new_index: to,
             outcome: decision.outcome,
+            released,
         });
     }
     Ok((next, PointMap::Replaced(moves), points))

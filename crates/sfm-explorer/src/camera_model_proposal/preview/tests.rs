@@ -167,6 +167,7 @@ fn the_targets_and_counts_are_read_off_the_report() {
         index,
         new_index: index,
         outcome,
+        released: false,
     };
     let shifts = [1.0, 2.0, 3.0];
     for (k, row) in [0usize, 1, 2].into_iter().enumerate() {

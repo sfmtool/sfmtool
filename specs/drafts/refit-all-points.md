@@ -365,11 +365,10 @@ included, except the step that turns the fitted keypoints into a coordinate:
   applies it to a reclassification), and the status is `Refit` with `range:
   RefitRange::Unresolved { released: true }`. The refit does not leave such a
   point as it was: its keypoints are aligned like any free point's, and a
-  constraint ends only where the fit makes the point a direction. The
-  retriangulation's in-place writer differs here, outside this draft: it keeps
-  the stored triple whatever `w` it writes, so a free solve of such a point
-  that cheirality turns into a direction leaves a `w = 0` row at a finite
-  distance.
+  constraint ends only where the fit makes the point a direction.
+  `retriangulate_points` treats such a point the same way: it keeps the stored
+  triple where its free solve stays finite, and releases the constraint where
+  the solve makes the point a direction.
 
 A free point's status is `Refit` with `range: RefitRange::Free`.
 

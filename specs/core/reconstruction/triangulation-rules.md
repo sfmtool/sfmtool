@@ -365,7 +365,16 @@ held points alone is refused rather than answered with nothing. A ranged point
 keeps its distance and only its direction is re-read, measured from its
 reference image's camera centre at these poses; a ranged point whose reference
 the value does not name, or does not pose, carries no origin to measure from, so
-the rule says nothing about it and it is solved free.
+the rule says nothing about it and it is solved free. Where that free answer
+stays a position, the point keeps its constraint triple, so the distance applies
+again once its reference is posed. Where the answer makes it a direction, its
+constraint is **released**, written free: the format allows a ranged point to be
+a direction only at an infinite distance, and it releases the constraint of any
+point whose representation an edit rewrites
+([`sfmr-file-format.md`](../../formats/sfmr-file-format.md) § "Per-point
+constraints", "What an edit does to them"). The in-place and the overlay writes both apply this. Only such a
+point can be released, since a held point is never read and a ranged point
+solved at its distance keeps its representation.
 
 **A point the operation cannot speak for keeps the geometry it has.** That is a
 point fewer than two of whose observations state a usable ray, which comes back
@@ -396,6 +405,7 @@ pub struct RetriangulatedPoint {
     pub index: u32,      // in the value the call was given
     pub new_index: u32,  // in the value it returned
     pub outcome: RetriangulateOutcome,
+    pub released: bool,  // its constraint was written free
 }
 
 pub enum RetriangulateOutcome {
@@ -427,7 +437,9 @@ finite distance are positions, and `marked`, `thin`, `no_depth`, `behind`,
 direction is the bearing the likelihood rule's test fits. `pruned` is how many of the
 point's observations the cheirality prune left out of its solve, nonzero only
 under `finite_pruned`; the observations stay on the track, since leaving them
-out of a solve is not deleting them.
+out of a solve is not deleting them. `released` is set where the point crossed
+and was constrained, so the write released its constraint; `released()` counts
+those statuses.
 
 `index` and `new_index` name the point in the two values, and the returned map
 forwards the one to the other. A point `These` rewrites takes a new index, as
@@ -583,8 +595,11 @@ The in-front flag comes back beside the verdicts, which is what makes
   that truth land back on it to the precision an `f32` keypoint column carries,
   and the input is left exactly as it was. A held point is neither read nor
   moved and a call over one alone is refused; a ranged point comes back at
-  exactly its distance from its reference's camera centre, and one naming no
-  reference is solved free. A point one sighting is left of keeps the geometry
+  exactly its distance from its reference's camera centre, keeps its
+  constraint, and one naming no reference is solved free. A ranged point whose
+  reference has no pose is solved free: where it stays a position it keeps its
+  constraint, and where the floor makes it a direction its constraint is
+  released and its status says so, under `All`, `TheseInBulk` and `These`. A point one sighting is left of keeps the geometry
   it had and is counted as kept. A floor wider than the arc turns every point
   into a direction and reports the crossings, and no distance, since a crossing
   has none. A direction goes in marked and comes back one. One point is an
