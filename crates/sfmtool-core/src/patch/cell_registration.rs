@@ -101,31 +101,31 @@ pub enum CellStatus {
 /// The two bars a cell's reading is gated by. The third gate, the search
 /// bound, is the [`CellLayout`]'s.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(in crate::patch) struct CellGateOptions {
+pub(crate) struct CellGateOptions {
     /// A cell whose ZNCC at its optimum is below this is refused as
     /// [`CellStatus::RefusedZncc`].
-    pub(in crate::patch) min_cell_zncc: f32,
+    pub(crate) min_cell_zncc: f32,
     /// A cell whose ZNCC peak is flatter than this along its flattest
     /// direction is refused as [`CellStatus::RefusedCurvature`]: the smaller
     /// eigenvalue of the negated Hessian of the ZNCC over the shift, in ZNCC
     /// per grid px².
-    pub(in crate::patch) min_cell_curvature: f32,
+    pub(crate) min_cell_curvature: f32,
 }
 
 /// The fixed geometry of the cells and the search for one grid size and one
 /// bound.
-pub(in crate::patch) struct CellLayout {
+pub(crate) struct CellLayout {
     /// `R`, the template's samples per axis.
-    pub(in crate::patch) resolution: usize,
+    pub(crate) resolution: usize,
     /// Working-patch margin on each side, grid px: the bound rounded up.
-    pub(in crate::patch) margin: usize,
+    pub(crate) margin: usize,
     /// Half-width of the whole-shift search: the bound rounded down, at most
     /// `margin`.
     pub(in crate::patch) reach: usize,
     /// `[0, R/3, R - R/3, R]`.
     pub(in crate::patch) bounds: [usize; 4],
     /// Cell centres in grid coordinates centred on the grid, `[x, y]`.
-    pub(in crate::patch) centres: [[[f64; 2]; 3]; 3],
+    pub(crate) centres: [[[f64; 2]; 3]; 3],
     /// The side of a corner cell, grid px.
     pub(in crate::patch) cell_side: f64,
 }
@@ -136,7 +136,7 @@ impl CellLayout {
     /// of the bound rounded up, and the search covers the whole shifts within
     /// the bound rounded down, so no shift reads past the render. A
     /// non-finite or negative bound is `0`.
-    pub(in crate::patch) fn new(resolution: u32, bound: f32) -> CellLayout {
+    pub(crate) fn new(resolution: u32, bound: f32) -> CellLayout {
         let resolution = resolution as usize;
         let bound = if bound.is_finite() {
             f64::from(bound.max(0.0))
@@ -164,25 +164,25 @@ impl CellLayout {
 }
 
 /// The reference's samples over one cell, per template channel.
-pub(in crate::patch) struct CellTemplate {
+pub(crate) struct CellTemplate {
     /// Per template channel: the mean-removed samples, row-major over the
     /// cell, and their sum of squares; `None` where the channel is flat over
     /// the cell.
-    pub(in crate::patch) channels: Vec<Option<(Vec<f64>, f64)>>,
+    pub(crate) channels: Vec<Option<(Vec<f64>, f64)>>,
     /// Some pixel of the cell could not be sampled in the reference.
-    pub(in crate::patch) missing: bool,
+    pub(crate) missing: bool,
 }
 
 /// The reference's samples over each of the nine cells.
-pub(in crate::patch) struct CellTemplates {
-    pub(in crate::patch) cells: [[CellTemplate; 3]; 3],
+pub(crate) struct CellTemplates {
+    pub(crate) cells: [[CellTemplate; 3]; 3],
 }
 
 impl CellTemplates {
     /// Cut the nine cells out of the reference's samples over the whole
     /// square: `channels` planes of `R×R` samples one after the other, each
     /// row-major, non-finite where a sample could not be read.
-    pub(in crate::patch) fn from_planes(
+    pub(crate) fn from_planes(
         square_samples: &[f32],
         channels: usize,
         layout: &CellLayout,
@@ -234,7 +234,7 @@ fn centred(mut vals: Vec<f64>) -> Option<(Vec<f64>, f64)> {
 /// A view's photograph rendered on the template's grid plus the margin,
 /// interleaved `side × side × channels`, `NaN` where a sample left the image,
 /// with the summed-area tables the cell search reads its window sums from.
-pub(in crate::patch) struct WorkingPatch {
+pub(crate) struct WorkingPatch {
     pub(in crate::patch) side: usize,
     pub(in crate::patch) channels: usize,
     pub(in crate::patch) samples: Vec<f32>,
@@ -340,7 +340,7 @@ impl Window {
 impl WorkingPatch {
     /// A working patch of `side × side × channels` interleaved samples, with
     /// its summed-area tables.
-    pub(in crate::patch) fn new(side: usize, channels: usize, samples: Vec<f32>) -> WorkingPatch {
+    pub(crate) fn new(side: usize, channels: usize, samples: Vec<f32>) -> WorkingPatch {
         let sums = PatchSums::new(side, channels, &samples);
         WorkingPatch {
             side,
@@ -353,10 +353,10 @@ impl WorkingPatch {
 
 /// One cell's reading at one render.
 #[derive(Clone, Copy, Debug)]
-pub(in crate::patch) struct CellReading {
-    pub(in crate::patch) status: CellStatus,
+pub(crate) struct CellReading {
+    pub(crate) status: CellStatus,
     /// Sub-pixel shift, grid px; `NaN` where none was read.
-    pub(in crate::patch) shift: [f64; 2],
+    pub(crate) shift: [f64; 2],
     pub(in crate::patch) zncc: f64,
     /// The peak's curvature, the least-squares weight of a fitted cell.
     pub(in crate::patch) curvature: f64,
@@ -531,7 +531,7 @@ pub(in crate::patch) fn read_cell(
 }
 
 /// [`read_cell`] for each of the nine cells, `[row][col]` from the top-left.
-pub(in crate::patch) fn read_cells(
+pub(crate) fn read_cells(
     templates: &CellTemplates,
     src_channels: &[usize],
     patch: &WorkingPatch,
@@ -759,23 +759,20 @@ pub(in crate::patch) fn fit_update_robust(
 
 /// One render's readings with the update fitted to them.
 #[derive(Clone, Copy, Debug)]
-pub(in crate::patch) struct Pass {
+pub(crate) struct Pass {
     pub(in crate::patch) readings: [[CellReading; 3]; 3],
     pub(in crate::patch) update: Update,
     pub(in crate::patch) model: UpdateModel,
     /// Each cell's weight in the update's last fit: `0` for a cell that was
     /// not fitted, or that the robust fit refused.
-    pub(in crate::patch) weights: [[f64; 3]; 3],
+    pub(crate) weights: [[f64; 3]; 3],
 }
 
 /// Fit the update to one render's readings: the cells whose status is
 /// [`CellStatus::Fitted`] are the correspondences, each weighted by its
 /// peak's curvature, and [`fit_update_robust`] fits them. `None` when no cell
 /// survived or the fit failed.
-pub(in crate::patch) fn fit_pass(
-    readings: [[CellReading; 3]; 3],
-    layout: &CellLayout,
-) -> Option<Pass> {
+pub(crate) fn fit_pass(readings: [[CellReading; 3]; 3], layout: &CellLayout) -> Option<Pass> {
     let fitted: Vec<(usize, usize)> = (0..9)
         .map(|i| (i / 3, i % 3))
         .filter(|&(r, c)| readings[r][c].status == CellStatus::Fitted)

@@ -43,7 +43,7 @@ const EPS_STALL: f64 = 1e-300;
 const EPS_SPREAD: f64 = 1e-300;
 
 /// One posed image's camera and pose, unpacked.
-pub(in crate::patch) struct PosedView<'a> {
+pub(crate) struct PosedView<'a> {
     camera: &'a CameraIntrinsics,
     /// `world_from_cam` rotation.
     r_wc: Matrix3<f64>,
@@ -55,7 +55,7 @@ pub(in crate::patch) struct PosedView<'a> {
 impl<'a> PosedView<'a> {
     /// The view of an image taken with `camera` at the `cam_from_world` pose
     /// `pose`.
-    pub(in crate::patch) fn new(camera: &'a CameraIntrinsics, pose: &RigidTransform) -> Self {
+    pub(crate) fn new(camera: &'a CameraIntrinsics, pose: &RigidTransform) -> Self {
         let r_cw = pose.to_rotation_matrix();
         let r_wc = r_cw.transpose();
         let centre = -(r_wc * pose.translation);
@@ -70,7 +70,7 @@ impl<'a> PosedView<'a> {
 
     /// The world ray through `pixel` of this view, with pixel-noise floor
     /// `floor_px`; `None` when the camera model returns no finite direction.
-    pub(in crate::patch) fn ray_through(&self, pixel: [f64; 2], floor_px: f64) -> Option<CellRay> {
+    pub(crate) fn ray_through(&self, pixel: [f64; 2], floor_px: f64) -> Option<CellRay> {
         let d = self.camera.pixel_to_ray(pixel[0], pixel[1]);
         let d = self.r_wc * Vector3::new(d[0], d[1], d[2]);
         let len = d.norm();
@@ -87,7 +87,7 @@ impl<'a> PosedView<'a> {
 }
 
 /// One cell's sighting in one view.
-pub(in crate::patch) struct CellRay {
+pub(crate) struct CellRay {
     origin: Vector3<f64>,
     dir: Vector3<f64>,
     focal_px: f64,
@@ -114,7 +114,7 @@ struct CellPoint {
 /// fitted and they read `Positioned`; otherwise each reads `InPlane` or
 /// `PlaneOutlier` by its final weight, and the normal and its
 /// [`NormalDeterminacy`] are set as [`CellPlaneNormal`] describes.
-pub(in crate::patch) fn fit_cell_plane(
+pub(crate) fn fit_cell_plane(
     cell_rays: &[Vec<CellRay>; 9],
     params: &CellPlaneParams,
 ) -> CellPlaneNormal {

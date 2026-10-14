@@ -33,7 +33,8 @@ pub(in crate::bench) const PLANE_Z: f64 = 4.0;
 const HALF_EXTENT: f64 = 0.12;
 /// The camera centres, in world space. The first two observe the point; the
 /// third is the one an observation is added in.
-const CENTERS: [[f64; 3]; 3] = [[-0.5, -0.3, 0.0], [0.45, 0.25, 0.0], [0.1, -0.55, 0.0]];
+pub(in crate::bench) const CENTERS: [[f64; 3]; 3] =
+    [[-0.5, -0.3, 0.0], [0.45, 0.25, 0.0], [0.1, -0.55, 0.0]];
 
 fn pinhole() -> CameraIntrinsics {
     CameraIntrinsics {
@@ -55,7 +56,7 @@ fn pinhole() -> CameraIntrinsics {
 /// same number of *pixels*, whatever distance the plane is put at: a scene built
 /// two hundred units out shows a photograph of the same detail as one built four
 /// units out, rather than an aliased mess.
-fn texture(x: f64, y: f64, depth: f64) -> f64 {
+pub(in crate::bench) fn texture(x: f64, y: f64, depth: f64) -> f64 {
     let s = PLANE_Z / depth;
     127.5
         + 55.0 * (x * 17.0 * s).sin()
@@ -117,6 +118,41 @@ impl Scene {
             pyramids: centers
                 .iter()
                 .map(|&c| ImageU8Pyramid::build(&render_plane_view(c, depth), 4))
+                .collect(),
+        }
+    }
+
+    /// A capture from a pinhole at each of `centers`, all looking down world
+    /// `+z`, of whatever `surface` returns for the ray from a camera centre
+    /// along an unnormalized direction `(dx, dy, 1)`: the grey level that ray
+    /// sees.
+    ///
+    /// For a test whose scene is not one textured plane: a plane with a flat
+    /// part, a step between two depths.
+    pub(in crate::bench) fn from_surface(
+        centers: &[[f64; 3]],
+        surface: impl Fn([f64; 3], [f64; 3]) -> f64,
+    ) -> Self {
+        let (cx, cy) = (IMG_W as f64 / 2.0, IMG_H as f64 / 2.0);
+        let render = |center: [f64; 3]| {
+            let mut data = Vec::with_capacity((IMG_W * IMG_H) as usize);
+            for row in 0..IMG_H {
+                for col in 0..IMG_W {
+                    let dx = (col as f64 + 0.5 - cx) / FOCAL;
+                    let dy = (row as f64 + 0.5 - cy) / FOCAL;
+                    let v = surface(center, [dx, dy, 1.0]);
+                    data.push(v.clamp(0.0, 255.0).round() as u8);
+                }
+            }
+            ImageU8::new(IMG_W, IMG_H, 1, data)
+        };
+        Self {
+            centers: centers.to_vec(),
+            cameras: centers.iter().map(|_| pinhole()).collect(),
+            poses: centers.iter().map(|&c| pose(c)).collect(),
+            pyramids: centers
+                .iter()
+                .map(|&c| ImageU8Pyramid::build(&render(c), 4))
                 .collect(),
         }
     }

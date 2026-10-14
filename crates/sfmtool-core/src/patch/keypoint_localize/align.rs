@@ -60,7 +60,7 @@ pub(in crate::patch) fn faces_view(
 /// [`render_patch_bitmap`](crate::patch::stored_bitmap::render_patch_bitmap) stores it. Where the
 /// rule finds no eligible view there is no reference.
 #[allow(clippy::too_many_arguments)]
-pub(in crate::patch) fn resolve_reference(
+pub(crate) fn resolve_reference(
     patch: &OrientedPatch,
     views: &[ProjectedImage<'_>],
     view_set: &[u32],

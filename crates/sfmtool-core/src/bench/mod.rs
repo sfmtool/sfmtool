@@ -85,8 +85,9 @@ pub use nearby::{
     RangeOptions, RayMeeting, RayPatch, Refit, SourceReport, StopRule, WideAmong, PATCH_GRID,
 };
 pub use normal::{
-    finite_difference_normal, fit_normal, normal_preconditions, FiniteDifferenceOptions,
-    FitNormalOptions, NormalError, NormalEstimate, NormalReport, PieceLayout,
+    finite_difference_normal, fit_normal, grid_plane_normal, normal_preconditions,
+    FiniteDifferenceOptions, FitNormalOptions, GridPlaneCells, GridPlaneNormalOptions, NormalError,
+    NormalEstimate, NormalReport, PieceLayout,
 };
 pub use search::{
     search_descriptors, Found, SearchError, SearchMatch, SearchOptions, SearchReport,

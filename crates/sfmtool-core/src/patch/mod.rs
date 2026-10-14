@@ -5,9 +5,9 @@
 //! normal a refined cluster's cell displacements give once poses exist.
 
 pub mod blur_matched;
-mod cell_plane_fit;
+pub(crate) mod cell_plane_fit;
 pub mod cell_plane_normals;
-mod cell_registration;
+pub(crate) mod cell_registration;
 pub mod cloud;
 pub mod cluster_refine;
 pub mod display_bitmaps;

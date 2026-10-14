@@ -65,7 +65,7 @@ pub use params::{
 pub use reference::{NoTemplate, TemplateKind, TrackReferences, ViewScore, ViewSearch};
 pub use seed::keypoint_grid_offset;
 
-pub(super) use align::resolve_reference;
+pub(crate) use align::resolve_reference;
 pub(super) use seed::seed_offset;
 
 // Search machinery, re-exported into this module's namespace for the sibling
@@ -311,7 +311,7 @@ pub(super) fn project(view: &ProjectedImage<'_>, p: &Point3<f64>, w: f64) -> Opt
 /// patch-grid px: `X_p + au·wpp_u·û − av·wpp_v·v̂`. Grid rows count *downward*
 /// from `+v̂` (they map to `−v_axis`, matching `WarpMap::from_patch`), so a
 /// positive `av` steps along `−v̂`.
-pub(super) fn shifted_center(
+pub(crate) fn shifted_center(
     patch: &OrientedPatch,
     au: f64,
     av: f64,

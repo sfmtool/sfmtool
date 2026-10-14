@@ -1,13 +1,15 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! The two steps that estimate which way a track's patch faces and tilt it
-//! there: [`fit_normal`], from the photographs' agreement over the patch, and
-//! [`finite_difference_normal`], from where smaller pieces of the patch fit.
+//! The three steps that estimate which way a track's patch faces and tilt it
+//! there: [`fit_normal`], from the photographs' agreement over the patch,
+//! [`finite_difference_normal`], from where smaller pieces of the patch fit,
+//! and [`grid_plane_normal`], from the plane through the patch's nine cells,
+//! each registered in every view.
 //!
 //! `specs/core/bench/editable-track.md` § "Estimating the normal" is the
 //! design. A [`fit`] moves the patch's centre and leaves its
-//! normal as it was; these two do the opposite. Each estimates a normal, turns
+//! normal as it was; these do the opposite. Each estimates a normal, turns
 //! the patch to it with [`tilt_patch`] -- so the turn
 //! stops where that step's cap stops it, and every sighting keeps its in-plane
 //! offset -- and ends as a fit does, by reading the result back and rendering
@@ -27,6 +29,10 @@ use super::evaluate::{
 use super::fit::{fit, FitError, FitOptions};
 use super::steps::{resize_patch, tilt_patch, translate_patch, TiltReport, TrackEditError};
 use super::track::{EditableTrack, Stage, StageKind};
+
+mod grid_plane;
+
+pub use grid_plane::{grid_plane_normal, GridPlaneCells, GridPlaneNormalOptions};
 
 /// The smallest number of pieces [`FiniteDifferenceOptions::pieces`] takes: two
 /// fitted centres are the fewest that fix a line.
@@ -253,7 +259,7 @@ impl From<TrackEditError> for NormalError {
 }
 
 /// Where the normal a step turned the patch to came from.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum NormalEstimate {
     /// [`fit_normal`]'s photometric search.
     Photometric {
@@ -292,6 +298,8 @@ pub enum NormalEstimate {
         /// `NaN` when the centres fixed no plane.
         off_plane: f64,
     },
+    /// [`grid_plane_normal`]'s cells.
+    GridPlaneCells(GridPlaneCells),
 }
 
 /// What one normal step did.
@@ -308,13 +316,13 @@ pub struct NormalReport {
 
 impl std::fmt::Display for NormalReport {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.estimate {
-            NormalEstimate::Photometric {
+        match &self.estimate {
+            &NormalEstimate::Photometric {
                 before,
                 after,
                 views,
             } => write!(f, "ZNCC {before:.3} \u{23f5} {after:.3} over {views} views")?,
-            NormalEstimate::FiniteDifference {
+            &NormalEstimate::FiniteDifference {
                 pieces,
                 u,
                 v,
@@ -328,7 +336,7 @@ impl std::fmt::Display for NormalReport {
                     write!(f, ", one axis fixed")?;
                 }
             }
-            NormalEstimate::GridPlane {
+            &NormalEstimate::GridPlane {
                 pieces,
                 fitted,
                 both_axes,
@@ -345,6 +353,7 @@ impl std::fmt::Display for NormalReport {
                     write!(f, ", one axis fixed")?;
                 }
             }
+            NormalEstimate::GridPlaneCells(cells) => write!(f, "{cells}")?,
         }
         write!(f, ", turned {:.1}\u{b0}", self.tilt.degrees)?;
         if let Some(stop) = self.tilt.stopped {
@@ -356,7 +365,7 @@ impl std::fmt::Display for NormalReport {
 
 /// Whether a normal step can run on `track`, judged on the track alone.
 ///
-/// The half of [`fit_normal`]'s and [`finite_difference_normal`]'s validation
+/// The half of the normal steps' validation
 /// that reads no photograph, for a caller that would decode the photographs
 /// first to refuse in front of that work.
 ///

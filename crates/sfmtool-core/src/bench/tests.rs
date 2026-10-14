@@ -12,6 +12,7 @@
 //! slice is decided by what the reconstruction and the person already say.
 
 mod delete_image;
+mod grid_plane_normal;
 mod normal;
 mod observation_readings;
 mod reference_view;

@@ -1,0 +1,350 @@
+// Copyright The SfM Tool Authors
+// SPDX-License-Identifier: Apache-2.0
+
+//! The grid plane normal, decided against synthetic surfaces seen by the
+//! scene's three pinholes: a textured plane, the plane with a flat third, a
+//! step between two depths, and a flat wall.
+
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use super::scene::{fixture_of, texture, Scene, CENTERS, PLANE_Z, WORLD};
+use super::*;
+use crate::patch::cell_plane_normals::{CellPlaneStatus, NormalDeterminacy};
+use crate::patch::cluster_refine::{CellStatus, LoopStop};
+
+/// A half-length that projects to about 16 px in the scene's views, so each
+/// of the nine cells covers about 11 px of texture.
+const HALF: f64 = 0.4;
+
+/// Where the patch's cells fall on world `x`: the patch's `u` axis is world
+/// `-x`, so its first column of cells (smallest `u`) spans `x` from `HALF / 3`
+/// to `HALF`, and its last column from `-HALF` to `-HALF / 3`.
+const COLUMN_EDGE: f64 = HALF / 3.0;
+
+/// A version holding one point at [`WORLD`], seen by all three images, on a
+/// patch facing the cameras.
+fn three_view_edited(scene: &Scene) -> EditedReconstruction {
+    let patch = OrientedPatch::from_center_normal(
+        WORLD,
+        Vector3::new(0.0, 0.0, -1.0),
+        Vector3::new(0.0, 1.0, 0.0),
+        [HALF, HALF],
+    );
+    EditedReconstruction::new(Arc::new(fixture_of(scene, WORLD, 1.0, &[0, 1, 2], &patch)))
+}
+
+/// The plane's outward normal, toward the cameras.
+fn truth() -> Vector3<f64> {
+    Vector3::new(0.0, 0.0, -1.0)
+}
+
+fn degrees(a: Vector3<f64>, b: Vector3<f64>) -> f64 {
+    a.normalize()
+        .dot(&b.normalize())
+        .clamp(-1.0, 1.0)
+        .acos()
+        .to_degrees()
+}
+
+/// The fixture's track, its normal turned `by` degrees about the unit `axis`
+/// off the plane.
+fn tilted_track(edited: &EditedReconstruction, axis: Vector3<f64>, by: f64) -> EditableTrack {
+    let (bench, label) = bench_with_point(edited, 0);
+    let track = track_of(&bench, &label);
+    let turn =
+        nalgebra::Rotation3::from_axis_angle(&nalgebra::Unit::new_normalize(axis), by.to_radians());
+    let (tilted, report) = tilt_patch(&track, edited, turn * truth()).expect("a finite track");
+    assert!(report.changed && report.stopped.is_none());
+    tilted
+}
+
+/// Where the ray from `center` along `dir` meets the plane `z = depth`.
+fn hit(center: [f64; 3], dir: [f64; 3], depth: f64) -> (f64, f64) {
+    let lambda = (depth - center[2]) / dir[2];
+    (center[0] + lambda * dir[0], center[1] + lambda * dir[1])
+}
+
+/// A second texture, unlike the first at every scale, for a surface that must
+/// A second texture for a surface that must not be mistaken for the plane's:
+/// value noise, smoothly interpolated between pseudo-random levels on a
+/// lattice `SPACING` apart, so that no shift of it resembles another.
+fn other_texture(x: f64, y: f64) -> f64 {
+    const SPACING: f64 = 0.12;
+    let level = |i: i64, j: i64| {
+        let mut h = (i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+            ^ (j as u64).wrapping_mul(0xC2B2_AE3D_27D4_EB4F);
+        h ^= h >> 29;
+        h = h.wrapping_mul(0x1656_67B1_9E37_79F9);
+        h ^= h >> 32;
+        30.0 + 195.0 * (h % 1024) as f64 / 1023.0
+    };
+    let (u, v) = (x / SPACING, y / SPACING);
+    let (i, j) = (u.floor() as i64, v.floor() as i64);
+    let smooth = |t: f64| t * t * (3.0 - 2.0 * t);
+    let (s, t) = (smooth(u - u.floor()), smooth(v - v.floor()));
+    let top = level(i, j) * (1.0 - s) + level(i + 1, j) * s;
+    let bottom = level(i, j + 1) * (1.0 - s) + level(i + 1, j + 1) * s;
+    top * (1.0 - t) + bottom * t
+}
+
+/// The step's cells, from its report.
+fn cells_of(report: &NormalReport) -> &GridPlaneCells {
+    match &report.estimate {
+        NormalEstimate::GridPlaneCells(cells) => cells,
+        other => panic!("a grid plane estimate, not {other:?}"),
+    }
+}
+
+/// A working grid of one sample per photograph pixel: the patch's side,
+/// `2 · HALF = 0.8` world, spans 32 px at the scene's depth and focal length.
+const PIXEL_GRID: u32 = 32;
+
+fn run(
+    scene: &Scene,
+    edited: &EditedReconstruction,
+    track: &EditableTrack,
+) -> (EditableTrack, NormalReport) {
+    run_at(scene, edited, track, None)
+}
+
+fn run_at(
+    scene: &Scene,
+    edited: &EditedReconstruction,
+    track: &EditableTrack,
+    working_resolution: Option<u32>,
+) -> (EditableTrack, NormalReport) {
+    let options = GridPlaneNormalOptions {
+        working_resolution,
+        ..Default::default()
+    };
+    grid_plane_normal(track, edited, &scene.views(), &options, &Progress::none())
+        .expect("the step runs on a finite track with three views")
+}
+
+/// The patch is turned onto the plane from 10 to 20 degrees off, with every
+/// cell in the plane and both axes fixed, and the loop converges.
+///
+/// How close it comes depends on the working grid's density against the
+/// photographs'. At one sample per photograph pixel the normal ends within
+/// 0.5 degrees (0.10 to 0.27 measured over these starts). At the default, the
+/// fit's 24 samples over the patch's 32 px, it ends within 1 degree (0.67 to
+/// 0.90 measured), so that case is held to 1 degree.
+#[test]
+fn a_textured_plane_started_off_its_normal_is_turned_onto_it() {
+    let scene = Scene::new();
+    let edited = three_view_edited(&scene);
+    for (working_resolution, within) in [(Some(PIXEL_GRID), 0.5), (None, 1.0)] {
+        for (axis, by) in [
+            (Vector3::x(), 10.0),
+            (Vector3::y(), 15.0),
+            (Vector3::new(1.0, 1.0, 0.0), 20.0),
+        ] {
+            let track = tilted_track(&edited, axis, by);
+            let (turned, report) = run_at(&scene, &edited, &track, working_resolution);
+            let cells = cells_of(&report);
+            let after = degrees(placement_of(&turned).normal(), truth());
+            let case = format!("{working_resolution:?}, {by} deg about {axis:?}");
+            assert!(after < within, "{case}: {after:.3} deg off, {report}");
+            assert_eq!(cells.determinacy, NormalDeterminacy::BothAxes, "{case}");
+            assert_eq!(cells.cell_status, [CellPlaneStatus::InPlane; 9], "{case}");
+            assert_eq!(cells.stop, LoopStop::Converged, "{case}: {report}");
+            assert!(cells.score_after >= cells.score_before, "{case}: {report}");
+            assert!(cells.plane_rms.is_finite() && cells.plane_offset.is_finite());
+            // The centre does not move, and the track is read back.
+            assert!((placement_of(&turned).center - WORLD).norm() < 1e-9);
+            assert!(turned.track().expect("track stage").bitmap.is_some());
+            assert!(
+                report.to_string().starts_with("9 of 9 cells in the plane"),
+                "{report}"
+            );
+        }
+    }
+}
+
+/// A flat third of the patch is refused for curvature in every view, and the
+/// other six cells fix both axes.
+///
+/// Run at one sample per photograph pixel, where the normal ends within 1
+/// degree (0.09 to 0.24 measured over four starts). At the default grid the
+/// six cells leave it 1.4 to 3.3 degrees off.
+#[test]
+fn a_flat_third_is_refused_for_curvature_and_the_rest_fix_the_normal() {
+    // Flat wherever the plane's `x` passes the first column's inner edge, so
+    // that column's three cells hold no texture in any view.
+    let scene = Scene::from_surface(&CENTERS, |c, d| {
+        let (x, y) = hit(c, d, PLANE_Z);
+        if x > COLUMN_EDGE - 0.01 {
+            127.5
+        } else {
+            texture(x, y, PLANE_Z)
+        }
+    });
+    let edited = three_view_edited(&scene);
+    let track = tilted_track(&edited, Vector3::new(1.0, -1.0, 0.0), 15.0);
+    let (turned, report) = run_at(&scene, &edited, &track, Some(PIXEL_GRID));
+    let cells = cells_of(&report);
+
+    let rows = track.in_observations();
+    for &row in &rows {
+        for k in [0, 3, 6] {
+            assert_eq!(
+                cells.view_cells[row][k],
+                CellStatus::RefusedCurvature,
+                "row {row} cell {k}: {:?}",
+                cells.view_cells[row]
+            );
+        }
+    }
+    for k in [0, 3, 6] {
+        assert_ne!(cells.cell_status[k], CellPlaneStatus::InPlane);
+    }
+    for k in [1, 2, 4, 5, 7, 8] {
+        assert_eq!(cells.cell_status[k], CellPlaneStatus::InPlane, "{report}");
+    }
+    assert_eq!(cells.determinacy, NormalDeterminacy::BothAxes, "{report}");
+    let after = degrees(placement_of(&turned).normal(), truth());
+    assert!(after < 1.0, "{after:.3} deg off: {report}");
+}
+
+/// A patch over a depth step keeps only the column on the near plane, which
+/// fixes one axis: the normal's tilt across the column, and not its turn
+/// about it.
+///
+/// Run at one sample per photograph pixel, where the fixed axis ends within
+/// 1 degree of the near plane's (0.03 to 0.67 measured over four starts; 0.2
+/// to 1.8 at the default grid). From a fifth start, 20 degrees the other way
+/// about `x`, the first turn is rejected and the patch is not turned: the
+/// acceptance score reads the whole tile, two thirds of which is the far
+/// plane.
+#[test]
+fn a_depth_step_leaves_one_column_and_one_axis() {
+    // The plane `z = PLANE_Z` stops at the last column's inner edge; past it
+    // the views see a second, differently textured plane far behind, whose
+    // parallax carries its cells past the search bound.
+    const FAR: f64 = 2.0 * PLANE_Z;
+    let scene = Scene::from_surface(&CENTERS, |c, d| {
+        let (x, y) = hit(c, d, PLANE_Z);
+        if x < -COLUMN_EDGE {
+            texture(x, y, PLANE_Z)
+        } else {
+            let (x, y) = hit(c, d, FAR);
+            other_texture(x, y)
+        }
+    });
+    let edited = three_view_edited(&scene);
+    // Off the plane about both axes: the column fixes the turn about `x`,
+    // and the turn about `y`, along the column, is left as it was.
+    let start = nalgebra::Rotation3::from_axis_angle(&Vector3::y_axis(), 6f64.to_radians())
+        * nalgebra::Rotation3::from_axis_angle(&Vector3::x_axis(), 12f64.to_radians())
+        * truth();
+    let (bench, label) = bench_with_point(&edited, 0);
+    let (track, _) = tilt_patch(&track_of(&bench, &label), &edited, start).expect("a finite track");
+    let was = placement_of(&track).normal();
+
+    let (turned, report) = run_at(&scene, &edited, &track, Some(PIXEL_GRID));
+    let cells = cells_of(&report);
+    for k in [2, 5, 8] {
+        assert_eq!(
+            cells.cell_status[k],
+            CellPlaneStatus::InPlane,
+            "{report}: {cells:?}"
+        );
+    }
+    for k in [0, 1, 3, 4, 6, 7] {
+        assert_ne!(
+            cells.cell_status[k],
+            CellPlaneStatus::InPlane,
+            "{report}: {cells:?}"
+        );
+    }
+    let NormalDeterminacy::OneAxis { free_axis } = cells.determinacy else {
+        panic!("one axis: {report}");
+    };
+    let free = Vector3::from(free_axis);
+    assert!(
+        free.dot(&Vector3::y()).abs() > 5f64.to_radians().cos(),
+        "{free:?}"
+    );
+
+    // The fixed axis agrees with the near plane: the normal has no part along
+    // the column. The free one is where the patch had it.
+    let after = placement_of(&turned).normal();
+    assert!(
+        after.dot(&Vector3::y()).abs() < 1f64.to_radians().sin(),
+        "{after:?}: {report}"
+    );
+    let kept = Vector3::new(was.x, 0.0, was.z).normalize();
+    assert!(
+        degrees(after, kept) < 1.0,
+        "{after:?} vs {kept:?}: {report}"
+    );
+}
+
+#[test]
+fn flat_texture_throughout_fixes_no_axis_and_turns_nothing() {
+    let scene = Scene::from_surface(&CENTERS, |_, _| 127.5);
+    let edited = three_view_edited(&scene);
+    let track = tilted_track(&edited, Vector3::x(), 15.0);
+    let was = placement_of(&track).normal();
+
+    let (turned, report) = run(&scene, &edited, &track);
+    let cells = cells_of(&report);
+    assert_eq!(cells.determinacy, NormalDeterminacy::None);
+    assert_eq!(cells.cell_rays, [0; 9]);
+    assert!(cells.plane_offset.is_nan());
+    for &row in &track.in_observations() {
+        assert_eq!(cells.view_cells[row], [CellStatus::RefusedCurvature; 9]);
+    }
+    assert_eq!(report.tilt.degrees, 0.0);
+    assert!(degrees(placement_of(&turned).normal(), was) < 1e-9);
+    assert!(report
+        .to_string()
+        .starts_with("0 of 9 cells in the plane, no axis fixed"));
+}
+
+#[test]
+fn the_grid_plane_normal_refuses_a_bearing_and_stops_when_cancelled() {
+    let scene = Scene::new();
+    let edited = three_view_edited(&scene);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let track = track_of(&bench, &label);
+    let options = GridPlaneNormalOptions::default();
+
+    let bearing = as_bearing(&track, &edited);
+    assert_eq!(
+        grid_plane_normal(
+            &bearing,
+            &edited,
+            &scene.views(),
+            &options,
+            &Progress::none()
+        )
+        .err(),
+        Some(NormalError::AtInfinity)
+    );
+
+    let cancel = AtomicBool::new(true);
+    let cancelled = Progress::none().cancelled_by(&cancel);
+    assert_eq!(
+        grid_plane_normal(&track, &edited, &scene.views(), &options, &cancelled).err(),
+        Some(NormalError::Cancelled)
+    );
+    assert!(cancel.load(Ordering::Relaxed));
+}
+
+#[test]
+fn every_registered_view_reports_its_cells() {
+    let scene = Scene::new();
+    let edited = three_view_edited(&scene);
+    let track = tilted_track(&edited, Vector3::x(), 10.0);
+    let (_, report) = run(&scene, &edited, &track);
+    let cells = cells_of(&report);
+    assert_eq!(cells.view_cells.len(), track.observations.len());
+    // Two of the three rows are registered against the third, the
+    // reference, whose cells read as fitted templates; each cell is a ray
+    // in every view.
+    for row in track.in_observations() {
+        assert_eq!(cells.view_cells[row], [CellStatus::Fitted; 9], "row {row}");
+    }
+    assert_eq!(cells.cell_rays, [3; 9], "{report}");
+}
