@@ -587,7 +587,7 @@ fn test_from_sfmr_data_refuses_a_track_row_past_the_image_table() {
 }
 
 #[test]
-fn test_from_sfmr_data_builds_the_feature_maps_after_validating() {
+fn test_from_sfmr_data_builds_the_feature_maps_of_a_valid_value() {
     let recon = SfmrReconstruction::demo(4);
     let back = SfmrReconstruction::from_sfmr_data(recon.to_sfmr_data()).unwrap();
     assert_eq!(
