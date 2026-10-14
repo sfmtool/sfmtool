@@ -14,7 +14,7 @@ Amends:
 
 Amended by [surface-footprint-analysis.md](surface-footprint-analysis.md), which chooses the footprint above the floor per surface.
 
-Related drafts: [piece-gated-grid-normal.md](piece-gated-grid-normal.md) reads the same per-cell radii to estimate a normal; [two-tier-patch-density.md](two-tier-patch-density.md) chooses the density over a footprint that this draft and the surface step fix. The measurements behind this draft are in [patch-footprint-selection-measurements.md](patch-footprint-selection-measurements.md).
+Related drafts: [piece-gated-grid-normal.md](piece-gated-grid-normal.md) estimates a normal from the same nine cells, gated by their registration rather than by their radii; [two-tier-patch-density.md](two-tier-patch-density.md) chooses the density over a footprint that this draft and the surface step fix. The measurements behind this draft are in [patch-footprint-selection-measurements.md](patch-footprint-selection-measurements.md).
 
 ## Purpose
 

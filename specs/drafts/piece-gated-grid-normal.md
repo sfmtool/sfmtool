@@ -155,7 +155,7 @@ A patch on one textured plane passes everywhere, and the gates change nothing. T
 
 ### Retiring the photometric search
 
-The photometric normal search has three production callers: the embed-patches rounds, `sfm xform --refine-normals`, and the bench's *Fit Normal*. When each has moved to this estimator, the search and its two support modules, the fronto-parallel cache and the D-optimal view subset, have no caller and are deleted. The fronto-parallel prior goes with them.
+The photometric normal search has three production callers: the embed-patches rounds, `sfm xform --refine-normals`, and the bench's *Fit Normal*. When each has moved to this estimator, the search and its two support modules, the fronto-parallel cache and the D-optimal view subset, have no caller and are deleted. The fronto-parallel prior goes with them; a sweep over that prior found it degraded normals everywhere it was applied.
 
 The order is: build the shared kernels and the bench step and measure the step against today's Grid Plane Normal; move Surface Tiling Mode and the Track View button; move embed-patches; move `xform --refine-normals`; delete.
 
@@ -180,7 +180,7 @@ Renders and cell scores are `f32` on tile intensities, as the piecewise refineme
 | `min_cell_zncc` | `0.8` | A cell below this ZNCC in a view is refused in that view (`DEFAULT_MIN_CELL_ZNCC`) |
 | `min_cell_curvature` | `0.02` | A cell whose peak is flatter in a view is refused in that view (`DEFAULT_MIN_CELL_CURVATURE`) |
 | `working_resolution` | `None` (the track's patch resolution) | Side of the working grid; see the open question on density |
-| `plane` | `CellPlaneParams::default()` | `min_rays` 2, `min_triangulation_angle_deg` 2.0, `cell_shift_precision_grid_px` 0.1, `ray_noise_floor_px` 0.05, `irls_iters` 3, `tukey_c` 4.685, `min_cells` 3, `det_aniso` 0.10 |
+| `plane` | `CellPlaneParams::default()` | `include_refused_outlier` false, `min_rays` 2, `min_triangulation_angle_deg` 2.0, `cell_shift_precision_grid_px` 0.1, `ray_noise_floor_px` 0.05, `irls_iters` 3, `tukey_c` 4.685, `min_cells` 3, `det_aniso` 0.10 |
 | `update_tolerance_px` | `0.05` | The loop stops when no cell centre moves by more; the piecewise loop's default |
 | `max_iterations` | `5` | Render cap; the piecewise loop's default |
 

@@ -18,7 +18,7 @@ Amends:
 
 Amended by [surface-footprint-analysis.md](surface-footprint-analysis.md), which chooses the footprint the two tiers share.
 
-Related drafts: [sharper-patch-bitmap.md](sharper-patch-bitmap.md) decides what the stored bitmap is and how views are scored against it; this draft decides at what density and does not restate that. [patch-footprint-selection.md](patch-footprint-selection.md) supplies each anchor's floor, and [surface-footprint-analysis.md](surface-footprint-analysis.md) the footprint above it, in reference-view photograph pixels. [piece-gated-grid-normal.md](piece-gated-grid-normal.md) is the normal step of the upgrade and needs the fine tier for its per-cell radii.
+Related drafts: [sharper-patch-bitmap.md](sharper-patch-bitmap.md) decides what the stored bitmap is and how views are scored against it; this draft decides at what density and does not restate that. [patch-footprint-selection.md](patch-footprint-selection.md) supplies each anchor's floor, and [surface-footprint-analysis.md](surface-footprint-analysis.md) the footprint above it, in reference-view photograph pixels. [piece-gated-grid-normal.md](piece-gated-grid-normal.md) is the normal step of the upgrade; it renders each view on its own working grid, and how dense that grid is, against the tiers here, is one of its open questions.
 
 ## Purpose
 
@@ -37,7 +37,7 @@ The seed stage evaluates up to eight candidates per capture. Scored against the 
 The step is defined as an order, because each stage invalidates the one after it:
 
 1. **Resample.** Each view is rendered into the `R_fine` grid over the unchanged half-extent, with the sampler [sharper-patch-bitmap.md](sharper-patch-bitmap.md) chooses per view.
-2. **Normal.** The piece-gated grid estimator runs on the fine tiles, with the coarse normal as its prior. Only at this tier do its per-cell radii carry data.
+2. **Normal.** The piece-gated grid estimator turns the patch from the coarse normal. It renders each view on its own working grid rather than reading the fine tiles.
 3. **Keypoints.** The keypoints are re-localised on the fine bitmap with the new normal. A keypoint localised on the coarse bitmap is stale after the normal moves, and the project has already paid once for reading stale keypoints into an adjustment.
 4. **Adjustment.** Bundle adjustment reads the re-localised keypoints.
 

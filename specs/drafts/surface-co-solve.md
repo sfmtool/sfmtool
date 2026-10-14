@@ -117,8 +117,9 @@ such pieces over the whole patch and a plane through them
 ([`../core/bench/editable-track.md`](../core/bench/editable-track.md) §
 "Estimating the normal"). Each is one step: estimate and tilt, with no refit.
 
-The grid estimator with each piece gated by its own self-similarity radius and
-weighted by how sharply its depth is pinned is proposed in
+The grid estimator measured by registering the nine cells of the ZNCC grid on
+one render per view, each cell gated per view, with a weighted robust plane
+fitted through the triangulated cells, is proposed in
 [piece-gated-grid-normal.md](piece-gated-grid-normal.md).
 
 No estimator caps how far the normal may turn from the mean viewing
