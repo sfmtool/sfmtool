@@ -249,7 +249,10 @@ what is tested here is the wrapping.
 - **Adding, removing or walking an observation.** The track is read as it
   stands. Deciding which sightings a track should have is the bench's work
   ([../track-view.md](../track-view.md)), and the point menu's other entry is
-  how a reviewer gets there from the same gesture.
+  how a reviewer gets there from the same gesture. Reading every point's
+  keypoints again from the photographs before re-triangulating it, as the
+  bench's *Fit* does for one track, is proposed in
+  [`../../drafts/refit-all-points.md`](../../drafts/refit-all-points.md).
 - **Deleting a point the observations cannot place.** A point too few
   observations place keeps what it had and is counted, because a retriangulation asked for by hand
   should not quietly cost a reviewer their structure. Deleting is its own

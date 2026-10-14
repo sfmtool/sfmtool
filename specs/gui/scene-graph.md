@@ -347,7 +347,10 @@ fixed-height for virtualization.
   are not a reason, since each observation is solved through its own image's
   camera. The gate is `state::edits::retriangulate_refusal`, which the wire's
   `retriangulate_all_points` and the operation itself also ask, so the greyed
-  entry and a call that asks anyway give one answer.
+  entry and a call that asks anyway give one answer. A `Refit All Points` entry
+  directly under it, which reads every point's keypoints again from the
+  photographs as Track View's *Fit* does before re-triangulating, is proposed in
+  [`../drafts/refit-all-points.md`](../drafts/refit-all-points.md).
 - **`Prune Covered Observations`** retires every observation of the node a
   finer tracked one covers in the same photograph, and drops the points left
   with fewer than two, as the node's next version and on a worker thread
