@@ -97,3 +97,36 @@ fn no_turn_asked_and_no_score_stop_where_they_are() {
         (LoopStop::NotRun, 0, 1)
     );
 }
+
+#[test]
+fn the_working_side_follows_the_reference_footprint_within_r_and_2r() {
+    // A patch whose `u` axis spans 1.5 photograph px per grid px and whose
+    // `v` axis spans less: the longer side, 24 · 1.5 = 36 px, rounded up.
+    let j = [[1.5, 0.0], [0.0, 0.8]];
+    assert_eq!(working_side(Some(j), 24), 36);
+    // The longer side is read along either axis, at any angle in the image.
+    let s = std::f64::consts::FRAC_1_SQRT_2;
+    assert_eq!(working_side(Some([[0.3, 1.2 * s], [0.1, 1.2 * s]]), 20), 24);
+    // A fraction of a pixel rounds up.
+    assert_eq!(working_side(Some([[1.01, 0.0], [0.0, 1.0]]), 24), 25);
+    // More than 2R px clamps to 2R; fewer than R clamps to R.
+    assert_eq!(working_side(Some([[5.0, 0.0], [0.0, 5.0]]), 24), 48);
+    assert_eq!(working_side(Some([[0.4, 0.0], [0.0, 0.6]]), 24), 24);
+    // No Jacobian, or one that is not finite, is R.
+    assert_eq!(working_side(None, 24), 24);
+    assert_eq!(working_side(Some([[f64::NAN, 0.0], [0.0, 1.0]]), 24), 24);
+}
+
+#[test]
+fn each_loop_ending_maps_to_its_outcome() {
+    for (stop, outcome) in [
+        (LoopStop::Converged, GridPlaneOutcome::Turned),
+        (LoopStop::NotRun, GridPlaneOutcome::Undetermined),
+        (LoopStop::Measured, GridPlaneOutcome::Undetermined),
+        (LoopStop::Rejected, GridPlaneOutcome::Unstable),
+        (LoopStop::Oscillation, GridPlaneOutcome::Unstable),
+        (LoopStop::Cap, GridPlaneOutcome::Unstable),
+    ] {
+        assert_eq!(GridPlaneOutcome::of(stop), outcome, "{stop:?}");
+    }
+}

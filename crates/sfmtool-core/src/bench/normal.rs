@@ -32,7 +32,7 @@ use super::track::{EditableTrack, Stage, StageKind};
 
 mod grid_plane;
 
-pub use grid_plane::{grid_plane_normal, GridPlaneCells, GridPlaneNormalOptions};
+pub use grid_plane::{grid_plane_normal, GridPlaneCells, GridPlaneNormalOptions, GridPlaneOutcome};
 
 /// The smallest number of pieces [`FiniteDifferenceOptions::pieces`] takes: two
 /// fitted centres are the fewest that fix a line.

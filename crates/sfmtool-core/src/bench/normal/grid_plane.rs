@@ -81,9 +81,12 @@ pub struct GridPlaneNormalOptions {
     /// 0.02.
     pub min_cell_curvature: f32,
     /// Side of the working grid the views are rendered on, in samples, at
-    /// least 3. `None` renders at the reconstruction's own patch resolution
-    /// where it stores patch bitmaps, and otherwise at the fit's sub-pixel
-    /// resolution, the grid the track's bitmap is rendered on.
+    /// least 3. `None` renders at about one sample per photograph pixel of
+    /// the reference view: the patch's longer side as the reference view
+    /// sees it at the starting frame, rounded up and clamped to `R ..= 2R`
+    /// (see `working_side`), with `R` the reconstruction's own patch
+    /// resolution where it stores patch bitmaps and otherwise the fit's
+    /// sub-pixel resolution, the grid the track's bitmap is rendered on.
     pub working_resolution: Option<u32>,
     /// Triangulation, floors, Tukey loop and determinacy, as the cell plane
     /// normal kernel reads them.
@@ -119,9 +122,11 @@ impl Default for GridPlaneNormalOptions {
 }
 
 /// What the cells said, carried by [`NormalEstimate::GridPlaneCells`]. Every
-/// reading is of the last render the loop kept: the render at the frame the
-/// step turns the patch to, or, when the loop converged, the render one turn
-/// of under [`GridPlaneNormalOptions::update_tolerance_px`] before it.
+/// reading is of the last render the loop kept: when the step turned the
+/// patch, the render one turn of under
+/// [`GridPlaneNormalOptions::update_tolerance_px`] before the frame it turned
+/// to; otherwise the render at the frame the loop had reached, which the step
+/// does not keep (see [`GridPlaneOutcome`]).
 #[derive(Debug, Clone, PartialEq)]
 pub struct GridPlaneCells {
     /// Which axes of the normal the cells fixed.
@@ -147,6 +152,8 @@ pub struct GridPlaneCells {
     /// fitted normal, world units; `NaN` when the cells fixed no axis. The
     /// step does not move the centre.
     pub plane_offset: f64,
+    /// The side of the working grid every render was made on, in samples.
+    pub working_resolution: u32,
     /// The renders the loop made.
     pub iterations: u8,
     /// Why the loop stopped. [`LoopStop::NotRun`] when no reference could be
@@ -162,6 +169,47 @@ pub struct GridPlaneCells {
     /// The acceptance score at the last render the loop kept, the render the
     /// other readings are of.
     pub score_after: f64,
+    /// Whether the step turned the patch, and if not, why not.
+    pub outcome: GridPlaneOutcome,
+}
+
+/// What [`grid_plane_normal`] made of the cells: whether it turned the patch
+/// and, where it did not, why.
+///
+/// Only [`Self::Turned`] moves the normal. The other two leave the track at
+/// the normal it was given, not at a frame part way along the loop, and the
+/// step still reads the track back and returns it: neither is a refusal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GridPlaneOutcome {
+    /// The loop converged ([`LoopStop::Converged`]) with at least one axis
+    /// fixed, and the patch was turned: to the plane's normal under both
+    /// axes, about the fixed axis only under one.
+    Turned,
+    /// The cells cannot constrain the normal: the last render's cells fixed
+    /// no axis (too few live cells, or no spread; [`LoopStop::Measured`]), or
+    /// no view could be scored against the reference ([`LoopStop::NotRun`]).
+    /// Lack of evidence.
+    Undetermined,
+    /// The cells constrain the normal but the loop did not settle: a turn
+    /// the acceptance rule rejected ([`LoopStop::Rejected`]), an oscillation
+    /// ([`LoopStop::Oscillation`]), or the render cap without convergence
+    /// ([`LoopStop::Cap`]), even with every turn before it accepted. It
+    /// suggests a patch over two surfaces, a wrong correspondence on
+    /// repeating texture, or a surface that is not planar.
+    Unstable,
+}
+
+impl GridPlaneOutcome {
+    /// The outcome of a loop that stopped for `stop`.
+    pub fn of(stop: LoopStop) -> GridPlaneOutcome {
+        match stop {
+            LoopStop::Converged => GridPlaneOutcome::Turned,
+            LoopStop::NotRun | LoopStop::Measured => GridPlaneOutcome::Undetermined,
+            LoopStop::Rejected | LoopStop::Oscillation | LoopStop::Cap => {
+                GridPlaneOutcome::Unstable
+            }
+        }
+    }
 }
 
 impl GridPlaneCells {
@@ -199,7 +247,12 @@ impl std::fmt::Display for GridPlaneCells {
         } else {
             "renders"
         };
-        write!(f, ", {} {renders}, {stop}", self.iterations)
+        write!(f, ", {} {renders}, {stop}", self.iterations)?;
+        match self.outcome {
+            GridPlaneOutcome::Turned => Ok(()),
+            GridPlaneOutcome::Undetermined => write!(f, ", normal left unchanged: undetermined"),
+            GridPlaneOutcome::Unstable => write!(f, ", normal left unchanged: unstable"),
+        }
     }
 }
 
@@ -229,9 +282,15 @@ impl std::fmt::Display for GridPlaneCells {
 /// cells no less than the one before (the better-scoring of the two frames
 /// is kept), or when a turn is rejected.
 ///
+/// Only a loop that converges turns the patch ([`GridPlaneOutcome::Turned`]).
+/// Every other ending leaves the normal as it was before the step, even when
+/// earlier turns were accepted: [`GridPlaneOutcome::Undetermined`] when the
+/// cells fix no axis or no view can be scored, [`GridPlaneOutcome::Unstable`]
+/// when the loop stops on a rejected turn, an oscillation or the render cap.
+///
 /// The step ends as the other normal steps do: the original track is turned
-/// to the kept frame's normal with [`tilt_patch`] and read back, its bitmap
-/// rendered. The centre does not move.
+/// to the converged frame's normal, or to its own, with [`tilt_patch`] and
+/// read back, its bitmap rendered. The centre does not move.
 ///
 /// # Example
 ///
@@ -264,12 +323,10 @@ pub fn grid_plane_normal(
 ) -> Result<(EditableTrack, NormalReport), NormalError> {
     check_views(edited, images)?;
     normal_preconditions(track)?;
-    let resolution = options
-        .working_resolution
-        .or_else(|| stored_patch_resolution(&edited.base))
+    let base = stored_patch_resolution(&edited.base)
         .unwrap_or(options.fit.refine.resolution)
         .max(MIN_WORKING_RESOLUTION);
-    let cells = Cells::new(track, images, resolution, options, progress);
+    let cells = Cells::new(track, images, base, options, progress);
 
     let end = {
         let mut phase = progress.phase("grid plane normal");
@@ -287,6 +344,13 @@ pub fn grid_plane_normal(
     };
 
     let kept = frame_of(&end.state);
+    // Only a converged loop turns the patch; any other ending leaves the
+    // normal the step was given.
+    let outcome = GridPlaneOutcome::of(end.stop);
+    let normal = match outcome {
+        GridPlaneOutcome::Turned => kept.normal(),
+        GridPlaneOutcome::Undetermined | GridPlaneOutcome::Unstable => frame_of(track).normal(),
+    };
     let measured = &end.measured;
     let report = GridPlaneCells {
         determinacy: measured.plane.determinacy,
@@ -296,16 +360,18 @@ pub fn grid_plane_normal(
         view_cells: measured.view_cells.clone(),
         plane_rms: measured.plane.plane_rms,
         plane_offset: plane_offset(&measured.plane, &kept),
+        working_resolution: cells.layout.resolution as u32,
         iterations: end.iterations,
         stop: end.stop,
         score_before: end.start_score,
         score_after: measured.score,
+        outcome,
     };
     turn_and_read(
         track,
         edited,
         images,
-        kept.normal(),
+        normal,
         NormalEstimate::GridPlaneCells(report),
         &options.fit,
         progress,
@@ -351,14 +417,16 @@ struct Render {
 }
 
 impl<'a, 'v> Cells<'a, 'v> {
+    /// The rows, the reference and the working grid of one step, chosen
+    /// once from the starting frame. `base` is the resolution the reference
+    /// rule renders at and the working grid's floor, `R`.
     fn new(
         track: &EditableTrack,
         images: &'a [ProjectedImage<'v>],
-        resolution: u32,
+        base: u32,
         options: &'a GridPlaneNormalOptions,
         progress: &'a Progress<'a>,
     ) -> Self {
-        let layout = CellLayout::new(resolution, options.cell_shift_bound_px);
         let gates = CellGateOptions {
             min_cell_zncc: options.min_cell_zncc,
             min_cell_curvature: options.min_cell_curvature,
@@ -378,19 +446,40 @@ impl<'a, 'v> Cells<'a, 'v> {
             .collect();
         // The fit's reference: the one the track holds where its row is `in`
         // with a keypoint, and otherwise the reference-view rule's pick.
+        let frame = frame_of(track);
         let reference = resolve_reference(
-            &frame_of(track),
+            &frame,
             images,
             &view_set,
             &seeds,
             track_reference(track, &rows),
             options.fit.localize.min_grazing_cos,
-            resolution,
+            base,
             options.fit.localize.sampler,
             &ReferenceViewOptions::default(),
             progress,
         )
         .map(|k| rows[k]);
+        // The working grid, chosen once so that every render of the loop is
+        // on one grid: the caller's, or the reference view's footprint of the
+        // patch at the starting frame, at its keypoint.
+        let resolution = match options.working_resolution {
+            Some(side) => side.max(MIN_WORKING_RESOLUTION),
+            None => {
+                let jacobian = reference.and_then(|r| {
+                    let observation = &track.observations[r];
+                    let view = &images[observation.image as usize];
+                    let placement = seed_of(observation)
+                        .and_then(|kp| {
+                            frame.anchored_at_keypoint(view.camera, view.cam_from_world, kp)
+                        })
+                        .unwrap_or_else(|| frame.clone());
+                    patch_grid_jacobian(&placement, view.camera, view.cam_from_world, base as usize)
+                });
+                working_side(jacobian, base)
+            }
+        };
+        let layout = CellLayout::new(resolution, options.cell_shift_bound_px);
         let reach = layout
             .centres
             .iter()
@@ -603,6 +692,32 @@ impl<'a, 'v> Cells<'a, 'v> {
             channels,
         })
     }
+}
+
+/// The working grid's side for `None`: the patch's longer side in the
+/// reference view's photograph pixels, rounded up and clamped to
+/// `base ..= 2 · base`.
+///
+/// `jacobian` is the reference render map's Jacobian at the patch centre on a
+/// grid of `base` samples a side ([`patch_grid_jacobian`]), photograph px per
+/// grid px; its two columns are the patch's `u` and `v` axes as the view sees
+/// them, so the patch's side along each is `base` times a column's length.
+/// One sample per photograph pixel has no bound against the patch, which can
+/// span hundreds of pixels close up, and the cost grows with the square of
+/// the side, so the side is at most `2 · base`; at least `base`, it is never
+/// coarser than the patch's own grid. Without a Jacobian it is `base`.
+fn working_side(jacobian: Option<[[f64; 2]; 2]>, base: u32) -> u32 {
+    let Some(j) = jacobian else {
+        return base;
+    };
+    let along_u = j[0][0].hypot(j[1][0]);
+    let along_v = j[0][1].hypot(j[1][1]);
+    let side_px = f64::from(base) * along_u.max(along_v);
+    if !side_px.is_finite() {
+        return base;
+    }
+    let cap = base.saturating_mul(2);
+    (side_px.ceil().min(f64::from(cap)) as u32).clamp(base, cap)
 }
 
 /// A reference cell's status as a template: refused for curvature where it

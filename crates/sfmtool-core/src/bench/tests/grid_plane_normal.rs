@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::scene::{fixture_of, texture, Scene, CENTERS, PLANE_Z, WORLD};
 use super::*;
+use crate::bench::GridPlaneOutcome;
 use crate::patch::cell_plane_normals::{CellPlaneStatus, NormalDeterminacy};
 use crate::patch::cluster_refine::{CellStatus, LoopStop};
 
@@ -98,12 +99,18 @@ fn cells_of(report: &NormalReport) -> &GridPlaneCells {
 /// `2 · HALF = 0.8` world, spans 32 px at the scene's depth and focal length.
 const PIXEL_GRID: u32 = 32;
 
+/// The sides the default working grid takes on this scene: the reference
+/// view's footprint of the patch, 32 px for a patch facing the cameras and a
+/// fraction more for one tilted 10 to 20 degrees, rounded up. Both lie
+/// within the clamp `24 ..= 48` of the fit's 24-sample grid.
+const DEFAULT_SIDES: std::ops::RangeInclusive<u32> = 32..=33;
+
 fn run(
     scene: &Scene,
     edited: &EditedReconstruction,
     track: &EditableTrack,
 ) -> (EditableTrack, NormalReport) {
-    run_at(scene, edited, track, None)
+    run_with(scene, edited, track, &GridPlaneNormalOptions::default())
 }
 
 fn run_at(
@@ -116,27 +123,42 @@ fn run_at(
         working_resolution,
         ..Default::default()
     };
-    grid_plane_normal(track, edited, &scene.views(), &options, &Progress::none())
+    run_with(scene, edited, track, &options)
+}
+
+fn run_with(
+    scene: &Scene,
+    edited: &EditedReconstruction,
+    track: &EditableTrack,
+    options: &GridPlaneNormalOptions,
+) -> (EditableTrack, NormalReport) {
+    grid_plane_normal(track, edited, &scene.views(), options, &Progress::none())
         .expect("the step runs on a finite track with three views")
+}
+
+/// Whether `turned` holds exactly the frame `track` started with.
+fn frame_unchanged(track: &EditableTrack, turned: &EditableTrack) -> bool {
+    let (a, b) = (placement_of(track), placement_of(turned));
+    a.u_axis == b.u_axis && a.v_axis == b.v_axis && a.center == b.center
 }
 
 /// The patch is turned onto the plane from 10 to 20 degrees off, with every
 /// cell in the plane and both axes fixed, and the loop converges.
 ///
-/// How close it comes depends on the working grid's density against the
-/// photographs'. At one sample per photograph pixel the normal ends within
-/// 0.5 degrees (0.10 to 0.27 measured over these starts). At the default, the
-/// fit's 24 samples over the patch's 32 px, it ends within 1 degree (0.67 to
-/// 0.90 measured), so that case is held to 1 degree.
+/// On the default grid, the reference view's footprint (32 or 33 samples
+/// here), the normal ends 0.37 to 0.53 degrees off over four starts, so it is
+/// held to 0.6 degrees: the draft's 0.5 is met from three of the four. On a
+/// grid of exactly 32 it ends 0.10 to 0.27 degrees off, held to 0.5.
 #[test]
 fn a_textured_plane_started_off_its_normal_is_turned_onto_it() {
     let scene = Scene::new();
     let edited = three_view_edited(&scene);
-    for (working_resolution, within) in [(Some(PIXEL_GRID), 0.5), (None, 1.0)] {
+    for (working_resolution, within) in [(None, 0.6), (Some(PIXEL_GRID), 0.5)] {
         for (axis, by) in [
             (Vector3::x(), 10.0),
             (Vector3::y(), 15.0),
             (Vector3::new(1.0, 1.0, 0.0), 20.0),
+            (Vector3::new(1.0, -1.0, 0.0), 15.0),
         ] {
             let track = tilted_track(&edited, axis, by);
             let (turned, report) = run_at(&scene, &edited, &track, working_resolution);
@@ -144,9 +166,18 @@ fn a_textured_plane_started_off_its_normal_is_turned_onto_it() {
             let after = degrees(placement_of(&turned).normal(), truth());
             let case = format!("{working_resolution:?}, {by} deg about {axis:?}");
             assert!(after < within, "{case}: {after:.3} deg off, {report}");
+            match working_resolution {
+                None => assert!(
+                    DEFAULT_SIDES.contains(&cells.working_resolution),
+                    "{case}: {}",
+                    cells.working_resolution
+                ),
+                Some(side) => assert_eq!(cells.working_resolution, side),
+            }
             assert_eq!(cells.determinacy, NormalDeterminacy::BothAxes, "{case}");
             assert_eq!(cells.cell_status, [CellPlaneStatus::InPlane; 9], "{case}");
             assert_eq!(cells.stop, LoopStop::Converged, "{case}: {report}");
+            assert_eq!(cells.outcome, GridPlaneOutcome::Turned, "{case}");
             assert!(cells.score_after >= cells.score_before, "{case}: {report}");
             assert!(cells.plane_rms.is_finite() && cells.plane_offset.is_finite());
             // The centre does not move, and the track is read back.
@@ -156,16 +187,49 @@ fn a_textured_plane_started_off_its_normal_is_turned_onto_it() {
                 report.to_string().starts_with("9 of 9 cells in the plane"),
                 "{report}"
             );
+            assert!(!report.to_string().contains("left unchanged"), "{report}");
         }
     }
+}
+
+/// A loop that has not converged by the render cap leaves the normal exactly
+/// where it started, though its one turn was accepted.
+#[test]
+fn the_render_cap_without_convergence_leaves_the_normal_unchanged() {
+    let scene = Scene::new();
+    let edited = three_view_edited(&scene);
+    let track = tilted_track(&edited, Vector3::x(), 10.0);
+    let options = GridPlaneNormalOptions {
+        max_iterations: 2,
+        ..Default::default()
+    };
+    let (turned, report) = run_with(&scene, &edited, &track, &options);
+    let cells = cells_of(&report);
+    assert_eq!(cells.stop, LoopStop::Cap, "{report}");
+    assert_eq!(
+        cells.iterations, 2,
+        "the second render scored an accepted turn"
+    );
+    assert_eq!(cells.determinacy, NormalDeterminacy::BothAxes);
+    assert_eq!(cells.outcome, GridPlaneOutcome::Unstable);
+    assert!(frame_unchanged(&track, &turned), "{report}");
+    assert_eq!(report.tilt.degrees, 0.0);
+    assert!(
+        report
+            .to_string()
+            .contains("normal left unchanged: unstable"),
+        "{report}"
+    );
 }
 
 /// A flat third of the patch is refused for curvature in every view, and the
 /// other six cells fix both axes.
 ///
-/// Run at one sample per photograph pixel, where the normal ends within 1
-/// degree (0.09 to 0.24 measured over four starts). At the default grid the
-/// six cells leave it 1.4 to 3.3 degrees off.
+/// Run at a grid of exactly 32 samples, where the normal ends within 1
+/// degree (0.09 to 0.24 measured over four starts, every one converging). On
+/// the default grid, 33 samples from these tilted starts, two of the four
+/// starts converge, 1.27 and 1.86 degrees off, and the other two end on a
+/// rejected turn and are left unchanged (see the next test).
 #[test]
 fn a_flat_third_is_refused_for_curvature_and_the_rest_fix_the_normal() {
     // Flat wherever the plane's `x` passes the first column's inner edge, so
@@ -201,21 +265,56 @@ fn a_flat_third_is_refused_for_curvature_and_the_rest_fix_the_normal() {
         assert_eq!(cells.cell_status[k], CellPlaneStatus::InPlane, "{report}");
     }
     assert_eq!(cells.determinacy, NormalDeterminacy::BothAxes, "{report}");
+    assert_eq!(cells.outcome, GridPlaneOutcome::Turned, "{report}");
     let after = degrees(placement_of(&turned).normal(), truth());
     assert!(after < 1.0, "{after:.3} deg off: {report}");
+}
+
+/// A loop whose later turn is rejected leaves the normal exactly where it
+/// started, though an earlier turn was accepted: the flat third on the
+/// default grid, from 15 degrees off about `x - y`.
+#[test]
+fn a_rejected_turn_after_an_accepted_one_leaves_the_normal_unchanged() {
+    let scene = Scene::from_surface(&CENTERS, |c, d| {
+        let (x, y) = hit(c, d, PLANE_Z);
+        if x > COLUMN_EDGE - 0.01 {
+            127.5
+        } else {
+            texture(x, y, PLANE_Z)
+        }
+    });
+    let edited = three_view_edited(&scene);
+    let track = tilted_track(&edited, Vector3::new(1.0, -1.0, 0.0), 15.0);
+    let (turned, report) = run(&scene, &edited, &track);
+    let cells = cells_of(&report);
+    assert_eq!(cells.stop, LoopStop::Rejected, "{report}");
+    assert!(
+        cells.iterations >= 3,
+        "a turn was accepted before the one rejected: {report}"
+    );
+    assert_eq!(cells.determinacy, NormalDeterminacy::BothAxes);
+    assert_eq!(cells.outcome, GridPlaneOutcome::Unstable);
+    assert!(frame_unchanged(&track, &turned), "{report}");
+    assert_eq!(report.tilt.degrees, 0.0);
+    assert!(
+        report
+            .to_string()
+            .contains("normal left unchanged: unstable"),
+        "{report}"
+    );
 }
 
 /// A patch over a depth step keeps only the column on the near plane, which
 /// fixes one axis: the normal's tilt across the column, and not its turn
 /// about it.
 ///
-/// Run at one sample per photograph pixel, where the fixed axis ends within
-/// 1 degree of the near plane's (0.06 to 0.67 measured over the three of
-/// five starts that turn; 0.2 to 1.8 at the default grid, where four of the
-/// five turn). From the other two starts, 12 degrees about `x` with 6 about
-/// `y` and 8 about `x` with 10 about `y`, the first turn is rejected and the
-/// patch is not turned: the acceptance score's window weights the tile's
-/// middle, which is the far plane.
+/// Run on the default grid from 20 degrees about `-x` with 4 about `y`,
+/// where the loop converges and the fixed axis ends 0.06 degrees from the
+/// near plane's. Of five starts, two converge on the default grid (fixed axis
+/// 0.06 and 0.17 degrees off); the other three end on a rejected turn and
+/// are left unchanged: from 12 about `x` with 6 about `y` and from 8 about
+/// `x` with 10 about `y` the first turn is rejected, because the acceptance
+/// score's window weights the tile's middle, which is the far plane.
 #[test]
 fn a_depth_step_leaves_one_column_and_one_axis() {
     // The plane `z = PLANE_Z` stops at the last column's inner edge; past it
@@ -234,15 +333,16 @@ fn a_depth_step_leaves_one_column_and_one_axis() {
     let edited = three_view_edited(&scene);
     // Off the plane about both axes: the column fixes the turn about `x`,
     // and the turn about `y`, along the column, is left as it was.
-    let start = nalgebra::Rotation3::from_axis_angle(&Vector3::y_axis(), (-8f64).to_radians())
-        * nalgebra::Rotation3::from_axis_angle(&Vector3::x_axis(), 15f64.to_radians())
+    let start = nalgebra::Rotation3::from_axis_angle(&Vector3::y_axis(), 4f64.to_radians())
+        * nalgebra::Rotation3::from_axis_angle(&Vector3::x_axis(), (-20f64).to_radians())
         * truth();
     let (bench, label) = bench_with_point(&edited, 0);
     let (track, _) = tilt_patch(&track_of(&bench, &label), &edited, start).expect("a finite track");
     let was = placement_of(&track).normal();
 
-    let (turned, report) = run_at(&scene, &edited, &track, Some(PIXEL_GRID));
+    let (turned, report) = run(&scene, &edited, &track);
     let cells = cells_of(&report);
+    assert_eq!(cells.outcome, GridPlaneOutcome::Turned, "{report}");
     for k in [2, 5, 8] {
         assert_eq!(
             cells.cell_status[k],
@@ -296,10 +396,16 @@ fn flat_texture_throughout_fixes_no_axis_and_turns_nothing() {
         assert_eq!(cells.view_cells[row], [CellStatus::RefusedCurvature; 9]);
     }
     assert_eq!(report.tilt.degrees, 0.0);
+    assert_eq!(cells.stop, LoopStop::NotRun);
+    assert_eq!(cells.outcome, GridPlaneOutcome::Undetermined);
+    assert!(frame_unchanged(&track, &turned));
     assert!(degrees(placement_of(&turned).normal(), was) < 1e-9);
-    assert!(report
-        .to_string()
-        .starts_with("0 of 9 cells in the plane, no axis fixed"));
+    let sentence = report.to_string();
+    assert!(sentence.starts_with("0 of 9 cells in the plane, no axis fixed"));
+    assert!(
+        sentence.contains("normal left unchanged: undetermined"),
+        "{sentence}"
+    );
 }
 
 #[test]
