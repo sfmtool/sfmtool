@@ -14,8 +14,8 @@ one, on one node (or, for an open, on none), with an id of its own. One task
 runs at a time. The eighteen operations are `Open`, which reads files and
 makes them nodes (§ "Opening a file"); the six whole-value edits, `Bundle
 adjust`, `Convert to embedded patches`, `Retriangulate all points`, `Refit all
-points`, `Switch camera model` and `Prune covered observations`; `Add image to tracks`; and the
-ten the bench runs, `Fit track`, `Set track stage`, `Fit normal`, `Finite
+points`, `Switch camera model` and `Prune covered observations`; `Add image to
+tracks`; and the ten the bench runs, `Fit track`, `Set track stage`, `Fit normal`, `Finite
 difference normal`, `Grid plane normal`, `Search descriptors`, `Geometry
 search`, `Build index files`, `Create track at pixel` and `Find nearby tracks`
 ([bench.md](bench.md)). `Switch camera model` is a camera model proposal's

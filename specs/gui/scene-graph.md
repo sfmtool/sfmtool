@@ -313,9 +313,9 @@ fixed-height for virtualization.
   ([edits/switch-camera-model.md](edits/switch-camera-model.md)), the entries
   that edit it (`Reset Transform`, `Bake Transform`, `Bundle Adjust...`,
   `Retriangulate All Points`, `Refit All Points`, `Prune Covered Observations`,
-  `Convert to Embedded Patches`) are greyed with *"Apply or cancel the camera model
-  proposal first."*, after a busy node's sentence; `Close` applies the proposal
-  first.
+  `Convert to Embedded Patches`) are greyed with *"Apply or cancel the camera
+  model proposal first."*, after a busy node's sentence; `Close` applies the
+  proposal first.
   **`Solo` is not in the menu** — it is the row's `S` (see "Comparison
   Affordances").
 - **`Bundle Adjust...`** refines every pose and point of the node against its
@@ -375,10 +375,11 @@ fixed-height for virtualization.
   It re-solves nothing and moves nothing; the surviving points are renumbered,
   so the panel caches for the node are dropped when the version lands. It sits
   directly under `Refit All Points`, after the two entries that re-read the
-  points, because it is what a reviewer reaches for with them. It is **live only on a node whose points carry
-  a patch frame, whose observations carry a pixel, that has a posed image, and
-  that nothing is running on**, and greyed with the reason otherwise. The gate
-  is `state::edits::prune_covered_refusal`, which the wire's
+  points, because it is what a reviewer reaches for with them. It is **live
+  only on a node whose points carry a patch frame, whose observations carry a
+  pixel, that has a posed image, and that nothing is running on**, and greyed
+  with the reason otherwise. The gate is `state::edits::prune_covered_refusal`,
+  which the wire's
   `prune_covered_observations` and the operation itself also ask, so the greyed
   entry and a call that asks anyway give one answer. A prune that finds nothing
   covered pushes no version and says so in the Action Log.
