@@ -350,7 +350,13 @@ cost = Σ_i s² · ρ(r_i² / s²),   ρ(z) = 2·(√(1 + z) − 1),   s = loss_
   the model's construction invariant (the bracket behind its inverse) and the
   accepted spline is persisted into the camera, while unsupported
   coefficients are pinned anyway, so the wider check costs no legitimate
-  steps.
+  steps. No penalty constrains the released coefficients beyond the data, so a
+  coefficient that one or two observations touch follows those pixels, and a
+  rejected spline step is rejected whole, its pose and point updates included.
+  A second-difference penalty on the released coefficients, a retry of an
+  inadmissible step with the distortion held, and a round ending that is not
+  reported as converged while the distortion is held are proposed in
+  [`../../drafts/bundle-adjustment-spline-tail-amendment.md`](../../drafts/bundle-adjustment-spline-tail-amendment.md).
 - **Staged releases.** Callers open the shared parameters in stages:
   fixed → `opt_f` → `opt_f` plus a distortion release, so a distortion
   parameter opens only on a focal that has already settled — `opt_f + opt_k1`

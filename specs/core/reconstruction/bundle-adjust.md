@@ -212,6 +212,14 @@ to its own spline model
 adjustment with its distortion released brings the new coefficients to the
 observations.
 
+**A released spline is constrained by the data alone.** The kernel adds no
+smoothing to the coefficients it releases, unlike the refit
+([`../camera/refit-camera-intrinsics.md`](../camera/refit-camera-intrinsics.md)),
+so a coefficient near the domain end that few observations reach follows those
+few pixels. Regularizing the released tail, and keeping the kernel's step guard
+from stalling the poses and points, are proposed in
+[`../../drafts/bundle-adjustment-spline-tail-amendment.md`](../../drafts/bundle-adjustment-spline-tail-amendment.md).
+
 **The report carries each camera's outermost observation.** Measured under the
 camera the solve returned, as a radius and an incidence angle, because that is
 the camera whose domain the next adjustment would edit. Only the observations:
