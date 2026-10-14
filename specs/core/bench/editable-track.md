@@ -2899,7 +2899,9 @@ face the patch shows; under one axis only about the axis the cells fix, the
 normal being the patch's with its component along the cells' line removed;
 under none, not at all. The turned frame is rendered and registered again. The
 loop is the piecewise refinement's: its acceptance score is the mean over the
-non-reference views of the ZNCC of each view's tile at zero shift, its working
+non-reference views of the windowed ZNCC, with the cluster refinement's
+default window (`PatchWindow::GaussianDisk { sigma: 0.5 }`), of each view's
+tile at zero shift, its working
 grid's middle, against the reference's render, over the samples both carry;
 a turn whose score falls by more than `ACCEPT_ZNCC_TOLERANCE` (1e-4), or below
 the start's, is rejected and not taken. A turn by `θ` moves a cell centre `ρ`
@@ -3953,9 +3955,10 @@ unit-tested in `normal.rs` itself.
   only that column is in the plane, the verdict is one axis with the free axis
   along the column, the normal has no part along the column to within 1
   degree, and its turn about the column is where the patch had it. The
-  default grid is not tested here (0.2 to 1.8 degrees measured). Started 20
-  degrees the other way about the axis the column fixes, the first turn is
-  rejected and the patch is not turned; that start is not tested.
+  default grid is not tested here (0.2 to 1.8 degrees measured). From two of
+  five starts on the one-sample-per-pixel grid the first turn is rejected and
+  the patch is not turned, because the acceptance score's window weights the
+  tile's middle, which is the far plane; those starts are not tested.
 - Flat texture throughout: every cell is refused for curvature, none has a
   ray, the verdict is none, and the patch is not turned.
 - Every view of the textured plane reports all nine cells fitted, each cell a

@@ -53,9 +53,10 @@ pub use params::{
 pub(in crate::patch) use consensus::{irls_view_weights, ConsensusScratch};
 pub(in crate::patch) use level::{build_level_context, LevelContext};
 pub(in crate::patch) use params::{FLAT_NORM_SQ_EPS, MIN_MASK_PIXELS};
+pub(crate) use support::window_weights;
 pub(in crate::patch) use support::{
     build_support, grid_bounds, grid_cell_centres, middle_span, view_render_patch, view_samplers,
-    window_weights, PartZncc, Parts, Support, ViewSamplers,
+    PartZncc, Parts, Support, ViewSamplers,
 };
 pub(in crate::patch) use znorm::{
     normalized_stack, weighted_moments_pub, znorm_write, znormalize_into_kept,

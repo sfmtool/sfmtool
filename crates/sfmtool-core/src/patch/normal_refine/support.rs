@@ -14,7 +14,7 @@ use crate::patch::keypoint_localize;
 use super::params::{PatchWindow, ProjectedImage, Sampler, SamplerChoice, FLAT_NORM_SQ_EPS};
 
 /// Per-pixel window weight over the `R×R` patch grid, in row-major order.
-pub(in crate::patch) fn window_weights(window: PatchWindow, resolution: u32) -> Vec<f64> {
+pub(crate) fn window_weights(window: PatchWindow, resolution: u32) -> Vec<f64> {
     let r = resolution as usize;
     let step = 2.0 / r as f64;
     let mut w = Vec::with_capacity(r * r);

@@ -210,11 +210,12 @@ fn a_flat_third_is_refused_for_curvature_and_the_rest_fix_the_normal() {
 /// about it.
 ///
 /// Run at one sample per photograph pixel, where the fixed axis ends within
-/// 1 degree of the near plane's (0.03 to 0.67 measured over four starts; 0.2
-/// to 1.8 at the default grid). From a fifth start, 20 degrees the other way
-/// about `x`, the first turn is rejected and the patch is not turned: the
-/// acceptance score reads the whole tile, two thirds of which is the far
-/// plane.
+/// 1 degree of the near plane's (0.06 to 0.67 measured over the three of
+/// five starts that turn; 0.2 to 1.8 at the default grid, where four of the
+/// five turn). From the other two starts, 12 degrees about `x` with 6 about
+/// `y` and 8 about `x` with 10 about `y`, the first turn is rejected and the
+/// patch is not turned: the acceptance score's window weights the tile's
+/// middle, which is the far plane.
 #[test]
 fn a_depth_step_leaves_one_column_and_one_axis() {
     // The plane `z = PLANE_Z` stops at the last column's inner edge; past it
@@ -233,8 +234,8 @@ fn a_depth_step_leaves_one_column_and_one_axis() {
     let edited = three_view_edited(&scene);
     // Off the plane about both axes: the column fixes the turn about `x`,
     // and the turn about `y`, along the column, is left as it was.
-    let start = nalgebra::Rotation3::from_axis_angle(&Vector3::y_axis(), 6f64.to_radians())
-        * nalgebra::Rotation3::from_axis_angle(&Vector3::x_axis(), 12f64.to_radians())
+    let start = nalgebra::Rotation3::from_axis_angle(&Vector3::y_axis(), (-8f64).to_radians())
+        * nalgebra::Rotation3::from_axis_angle(&Vector3::x_axis(), 15f64.to_radians())
         * truth();
     let (bench, label) = bench_with_point(&edited, 0);
     let (track, _) = tilt_patch(&track_of(&bench, &label), &edited, start).expect("a finite track");

@@ -37,9 +37,11 @@ use crate::patch::cell_registration::{
     WorkingPatch,
 };
 use crate::patch::cloud::OrientedPatch;
-use crate::patch::cluster_refine::{CellStatus, LoopStop, PiecewiseParams, ACCEPT_ZNCC_TOLERANCE};
+use crate::patch::cluster_refine::{
+    CellStatus, ClusterRefineParams, LoopStop, PiecewiseParams, ACCEPT_ZNCC_TOLERANCE,
+};
 use crate::patch::keypoint_localize::{resolve_reference, shifted_center};
-use crate::patch::normal_refine::ProjectedImage;
+use crate::patch::normal_refine::{window_weights, ProjectedImage};
 use crate::patch::reference_view::ReferenceViewOptions;
 use crate::progress::Progress;
 use crate::progress_note;
@@ -153,8 +155,9 @@ pub struct GridPlaneCells {
     /// no turn was proposed.
     pub stop: LoopStop,
     /// The acceptance score at the frame the step started from: the mean over
-    /// the non-reference views of the ZNCC of each view's whole tile against
-    /// the reference's render. `NaN` when no view scored.
+    /// the non-reference views of the windowed ZNCC of each view's tile against
+    /// the reference's render, with the cluster refinement's default window.
+    /// `NaN` when no view scored.
     pub score_before: f64,
     /// The acceptance score at the last render the loop kept, the render the
     /// other readings are of.
@@ -218,7 +221,7 @@ impl std::fmt::Display for GridPlaneCells {
 /// the face the patch shows; under one, only about the axis the cells fix,
 /// keeping its rotation about the line they lie along; under none, not at
 /// all. Each turn is rendered and measured again, and kept only when the mean
-/// whole-tile ZNCC of the views against the reference does not fall by more
+/// windowed ZNCC of the views against the reference does not fall by more
 /// than [`ACCEPT_ZNCC_TOLERANCE`], nor below its starting value. The loop
 /// stops when a turn moves no cell centre by more than
 /// [`GridPlaneNormalOptions::update_tolerance_px`] (that turn is taken), at
@@ -322,6 +325,10 @@ struct Cells<'a, 'v> {
     reference: Option<usize>,
     /// The farthest a cell centre lies from the grid's middle, grid px.
     reach: f64,
+    /// The acceptance score's window over the working grid's `R×R` middle:
+    /// the cluster refinement's default window, which the piecewise loop's
+    /// whole-member ZNCC reads with.
+    window: Vec<f64>,
 }
 
 /// One render of every view at one frame, and what the cells said.
@@ -399,6 +406,7 @@ impl<'a, 'v> Cells<'a, 'v> {
             rows,
             reference,
             reach,
+            window: window_weights(ClusterRefineParams::default().window, resolution),
         }
     }
 
@@ -460,7 +468,13 @@ impl<'a, 'v> Cells<'a, 'v> {
             else {
                 continue;
             };
-            if let Some(z) = tile_zncc(&planes, ref_render.channels, &render, self.layout.margin) {
+            if let Some(z) = tile_zncc(
+                &planes,
+                ref_render.channels,
+                &render,
+                self.layout.margin,
+                &self.window,
+            ) {
                 scores.push(z);
             }
             let patch = WorkingPatch::new(render.side, render.channels, render.samples.clone());
@@ -667,47 +681,55 @@ fn planar(samples: &[f32], n: usize, channels: usize) -> Vec<f32> {
     planes
 }
 
-/// The ZNCC of a view's tile at zero shift, its working grid's middle `R×R`,
-/// against the reference's render `planes`, over the samples both carry,
-/// averaged over the channels the reference is not flat in; a channel the
-/// view is flat in scores `0`. `None` when no channel scores.
-fn tile_zncc(planes: &[f32], ref_channels: usize, render: &Render, margin: usize) -> Option<f64> {
+/// The windowed ZNCC of a view's tile at zero shift, its working grid's
+/// middle `R×R`, against the reference's render `planes`, each sample
+/// weighted by `window` (row-major over the `R×R` grid) and read where both
+/// carry it, averaged over the channels the reference is not flat in; a
+/// channel the view is flat in scores `0`. `None` when no channel scores.
+fn tile_zncc(
+    planes: &[f32],
+    ref_channels: usize,
+    render: &Render,
+    margin: usize,
+    window: &[f64],
+) -> Option<f64> {
     let side = render.side;
     let r = side - 2 * margin;
     let n = r * r;
     let (mut sum, mut scored) = (0.0, 0usize);
     for c in 0..ref_channels.min(render.channels) {
         let plane = &planes[c * n..][..n];
-        let mut pairs: Vec<(f64, f64)> = Vec::with_capacity(n);
+        let mut pairs: Vec<(f64, f64, f64)> = Vec::with_capacity(n);
         for y in 0..r {
             for x in 0..r {
+                let w = window[y * r + x];
                 let a = plane[y * r + x];
                 let b = render.samples[((y + margin) * side + x + margin) * render.channels + c];
-                if a.is_finite() && b.is_finite() {
-                    pairs.push((f64::from(a), f64::from(b)));
+                if w > 0.0 && a.is_finite() && b.is_finite() {
+                    pairs.push((w, f64::from(a), f64::from(b)));
                 }
             }
         }
         if pairs.len() < 2 {
             continue;
         }
-        let count = pairs.len() as f64;
+        let total: f64 = pairs.iter().map(|p| p.0).sum();
         let (ma, mb) = pairs
             .iter()
-            .fold((0.0, 0.0), |(sa, sb), (a, b)| (sa + a, sb + b));
-        let (ma, mb) = (ma / count, mb / count);
+            .fold((0.0, 0.0), |(sa, sb), (w, a, b)| (sa + w * a, sb + w * b));
+        let (ma, mb) = (ma / total, mb / total);
         let (mut saa, mut sbb, mut sab) = (0.0, 0.0, 0.0);
-        for (a, b) in &pairs {
+        for (w, a, b) in &pairs {
             let (da, db) = (a - ma, b - mb);
-            saa += da * da;
-            sbb += db * db;
-            sab += da * db;
+            saa += w * da * da;
+            sbb += w * db * db;
+            sab += w * da * db;
         }
-        if saa / count < FLAT_VARIANCE {
+        if saa / total < FLAT_VARIANCE {
             continue;
         }
         scored += 1;
-        if sbb / count >= FLAT_VARIANCE {
+        if sbb / total >= FLAT_VARIANCE {
             sum += sab / (saa * sbb).sqrt();
         }
     }
