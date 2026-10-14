@@ -395,21 +395,51 @@ cost = Σ_i s² · ρ(r_i² / s²),   ρ(z) = 2·(√(1 + z) − 1),   s = loss_
   its gradient entry, which removes the penalty's coupling to it as well; where
   a row of the round's set touches a slot that has lost support since the first
   linearization, its supported neighbours' gradient reads the pinned value as a
-  constant. **Step guard.** Inside the damping
-  ladder, exactly where a non-positive focal or a folded `k1` is rejected, a
-  candidate spline that is non-finite or violates the model's monotonicity
-  invariant `1 + δ'(d) > 0` anywhere on `[0, d_max]` — or on the linear tail
-  past it, where the single `1 + δ'(d_max) > 0` decides the whole half-line —
-  is rejected and the step
-  re-damped. The whole domain rather than the imaged field: monotonicity is
-  the model's construction invariant (the bracket behind its inverse) and the
-  accepted spline is persisted into the camera, while unsupported
-  coefficients are pinned anyway, so the wider check costs no legitimate
-  steps. A rejected spline step is rejected whole, its pose and point updates
-  included. A retry of an inadmissible step with the distortion held, and a
-  round ending that is not reported as converged while the distortion is held,
-  are proposed in
-  [`../../drafts/bundle-adjustment-spline-tail-amendment.md`](../../drafts/bundle-adjustment-spline-tail-amendment.md).
+  constant. **Step guard.** A candidate spline is admissible when it is
+  finite and keeps the model's monotonicity invariant `1 + δ'(d) > 0`
+  everywhere on `[0, d_max]` and on the linear tail past it, where the single
+  `1 + δ'(d_max) > 0` decides the whole half-line. The whole domain rather
+  than the imaged field: monotonicity is the model's construction invariant
+  (the bracket behind its inverse) and the accepted spline is persisted into
+  the camera, while unsupported coefficients are pinned anyway, so the wider
+  check costs no legitimate steps. What the damping ladder does with a
+  candidate that fails it is the next item.
+- **Step guards and the held-distortion retry.** Inside the damping ladder
+  each camera's candidate lens is checked. A focal that is not finite and
+  above `1e-6`, or a `k1` or spline coefficient that is not finite, rejects the
+  whole step, which is re-damped. A finite `k1` that folds the imaged field (it
+  fails `k1_step_admissible`) or a finite spline that breaks monotonicity does
+  not: the same rung solves the step again at the same `λ` with that camera's
+  distortion slots (the `k1` slot, or every spline slot) pinned in the reduced
+  system, with the identity row and column and zero gradient entry the support
+  pinning uses. Pinning a slot after the Schur elimination is the same as
+  removing that variable from the damped system, so the back-substituted
+  points are the exact solution with the distortion held, and the focal, the
+  poses, the points and every other camera's lens still move. The held
+  candidate is checked again: a held spline is the current, admissible one,
+  but a held `k1` is re-checked because `k1_step_admissible` reads the
+  candidate focal, and its failure rejects the whole step; a camera whose
+  distortion the held step makes inadmissible joins the held set and the step
+  is solved again, which ends within `n_cam` solves since the set only grows.
+  A held step is accepted or rejected on the cost like any other, and the next
+  rung, or the next iteration, tries the full step first again. The reduced
+  system is copied before its factorization for this, in every rung of a
+  solve that releases a distortion. The `λ > 10¹²` cap ends the ladder after
+  every kind of rejection.
+
+  Why: rejecting the whole joint step because the distortion part crosses
+  the guard raises `λ` for every slot under Marquardt scaling, so the poses'
+  and points' steps shrink with the distortion's, and two such steps end the
+  round by the tiny-step test with the poses and points unsettled. The held
+  step is not the constrained optimum along the guard. It moves everything
+  except the distortion, and it needs no constrained solver. Its limit: when
+  the full step crosses the guard because it overshoots rather than because
+  the optimum lies past the limit, the held step is accepted at the same `λ`,
+  `λ` falls, and a damped full step that would have moved the distortion
+  part of the way is not tried, so the distortion can stay where it was for
+  the round (see
+  [`../../drafts/bundle-adjustment-spline-tail-amendment.md`](../../drafts/bundle-adjustment-spline-tail-amendment.md)
+  § "After step 2").
 - **Staged releases.** Callers open the shared parameters in stages:
   fixed → `opt_f` → `opt_f` plus a distortion release, so a distortion
   parameter opens only on a focal that has already settled — `opt_f + opt_k1`
@@ -484,13 +514,32 @@ cost = Σ_i s² · ρ(r_i² / s²),   ρ(z) = 2·(√(1 + z) − 1),   s = loss_
   Rejected steps re-damp and re-solve from the same linearization (no
   re-evaluation), with Marquardt scaling `λ·diag(JᵀJ)` for the
   `x_scale="jac"` parameter-scale invariance of the scipy original.
-- **Termination.** `max_iters` accepted-step budget per round; stop early
-  when accepted steps improve the cost by less than `1e-8` relative TWICE
-  in a row (a single small improvement is also how a long run of small steps
-  across a nearly flat stretch of the cost begins, and a focal release can
-  move the focal 20% across one), or when no damping in a
-  bounded ladder (12 ×4 escalations, capped at `λ = 10¹²`) finds a
-  downhill step.
+- **Termination.** `max_iters` accepted-step budget per round. Each accepted
+  step is a **full** step or a **held** step (one retried with a distortion
+  held), and the round ends in one of four ways:
+  - *Converged*: two accepted full steps in a row each improve the cost by
+    less than `1e-8` relative (a single small improvement is also how a long
+    run of small steps across a nearly flat stretch of the cost begins, and a
+    focal release can move the focal 20% across one). An accepted held step
+    ends the run.
+  - *Settled at the guard*: two accepted held steps in a row each improve the
+    cost by less than `1e-8` relative; an accepted full step ends the run. The
+    poses and points have settled with the distortion held, so the round
+    stops, but the step that would lower the cost further is one the guard
+    forbids, and the round does not count as converged.
+  - *Ladder exhausted*: no rung of a bounded ladder (12 ×4 escalations,
+    capped at `λ = 10¹²`) finds a downhill step. The round ends settled at the
+    guard if any rung of that ladder made a held retry, and converged
+    otherwise.
+  - *Iteration budget*: `max_iters` accepted steps, or a cancellation; not
+    converged.
+
+  A round that ends settled at the guard says so on `progress`:
+  `the round settled with a distortion held at its step guard: camera 0
+  (spline end slope 0.013)`, naming each camera the latest retry held, with
+  its end slope `1 + δ'(d_max)` for a spline and its value for a `k1`
+  (`camera 1 (k1 -0.1234)`). Only the final round's ending reaches
+  `FreePointDecision::converged`, which is true for *converged* alone.
 
 ## Several cameras
 
@@ -534,9 +583,12 @@ Every rule the single block follows applies to each block separately:
   whose images has a kept observation in the round. Such a camera is not
   stepped, and comes back exactly as it went in.
 - **Step guards.** A candidate step is rejected, and re-damped, when any
-  camera's candidate focal is non-positive, its `k1` folds inside its own imaged
-  field (the largest pixel radius of its own kept observations about its own
-  principal point), or its spline breaks monotonicity on its own domain.
+  camera's candidate focal is not finite and above `1e-6`, or its distortion
+  step is not finite. A camera whose `k1` folds inside its own imaged field
+  (the largest pixel radius of its own kept observations about its own
+  principal point), or whose spline breaks monotonicity on its own domain, has
+  its distortion held for a retry of the step, and only that camera's: the
+  other cameras' distortions move in the held step.
 - **Staged releases** are the caller's schedule, as with one camera.
 
 ### What reads the camera, per observation
@@ -762,6 +814,14 @@ Python's point of view).
   spline and non-finite coefficients on either radial coordinate; end to
   end, a released solve never returns a spline violating `1 + δ'(d) > 0` on
   `[0, d_max]`.
+- **The held-distortion retry**: on a scene whose rim observations are folded
+  back, so a distortion fitted to them folds, a single iteration with the
+  focal and the distortion released returns the spline (and, on a
+  `SIMPLE_RADIAL_FISHEYE`, the `k1`) bit for bit while the focal and the poses
+  moved; with two cameras of which only one images the folded rim, only that
+  camera's spline is held and the other's moves; and the same round run to
+  its end reports `converged: false`, says on `progress` that it settled with
+  camera 0's spline held, and returns a monotone spline.
 - **Directions carry the `k1` release**: on a scene whose finite cloud sits near the
   optical axis (no `θ³` signal) and whose far field is marked at infinity,
   `opt_k1` recovers the planted curvature — and the same solve with the
@@ -1008,9 +1068,11 @@ handed is the one making a choice, and it says so.
 The kernel says what the decision did through its `progress`, after the
 rounds: `free points decided at noise 0.412 px: 3 to finite, 25 to directions`,
 with `, 2 not scored: too few kept observations` appended when some free
-points could not be scored and `; the final round stopped on its iteration
-budget` when it did not converge, or `free points not decided: the final round
-kept no observation of a finite point`. An empty schedule, which only measures,
+points could not be scored, `; the final round stopped on its iteration
+budget` when the final round ran out of iterations, and `; the final round
+settled with a distortion held at its step guard` when it settled at the guard
+(see "Termination"), or `free points not decided: the final round kept no
+observation of a finite point`. An empty schedule, which only measures,
 says nothing. `sfm xform --bundle-adjust` prints its own line from the returned
 decision instead (`Free points decided at 0.412 px: …`, without `noise`).
 
@@ -1250,10 +1312,12 @@ So the decision is read at the final round's measured level whether or not that
 round converged, `converged: false` and the progress line saying when it did
 not.
 
-**`converged` reports the iteration budget, not success.** It says whether the
-final round met its convergence test, and a solve that has collapsed meets it as
-readily as one that has recovered, so its points are decided all the same. A
-collapse shows in the final round's kept count and the median residual, not in
+**`converged` reports how the final round ended, not success.** It says whether
+the final round met its convergence test, rather than stopping on its iteration
+budget or settling with a distortion held at its step guard, and a solve that
+has collapsed meets it as readily as one that has recovered, so its points are
+decided all the same. A collapse shows in the final round's kept count and the
+median residual, not in
 `converged`, and it is not specific to the crossing: with the crossing off the
 same rough starts collapse too
 ([measurements](bundle-adjustment-measurements.md#collapsed-solves-that-report-convergence)).

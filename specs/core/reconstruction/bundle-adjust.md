@@ -220,8 +220,16 @@ so a coefficient near the domain end that few observations reach continues its
 neighbours instead of following those few pixels
 ([`../geometry/bundle-adjustment.md`](../geometry/bundle-adjustment.md)
 § "The solve"). The residuals this function reports are the data's alone.
-Keeping the kernel's step guard from stalling the poses and points is proposed
-in
+
+**A distortion at its step guard does not stop the poses and points.** When
+a released `k1` or spline would fold under a step, the kernel solves that step
+again with the camera's distortion held, so the focal, the poses and the
+points still move
+([`../geometry/bundle-adjustment.md`](../geometry/bundle-adjustment.md)
+§ "Step guards and the held-distortion retry"). A final round that settles
+that way is not converged: `report.free_point_decision` carries
+`converged: false`, and the kernel's progress names the held camera. Whether
+the report carries the held state per camera is open in
 [`../../drafts/bundle-adjustment-spline-tail-amendment.md`](../../drafts/bundle-adjustment-spline-tail-amendment.md).
 
 **The report carries each camera's outermost observation.** Measured under the
@@ -328,7 +336,9 @@ noise the solve measures comes back a position, and a position whose rays do
 not comes back a bearing. Deciding that during the solve rather than in a pass
 after it is what lets the poses be fitted with no representation imposed on a
 far point. `report.free_point_decision` says at what level the points were
-decided, whether the final round converged, and how many crossed each way.
+decided, whether the final round converged (rather than stopping on its
+iteration budget or settling with a distortion held at its step guard), and how
+many crossed each way.
 Under `FreePointPolicy::NO_CROSS` the mask is honoured for the **whole** solve, and
 re-deciding the representation is left to
 [`../../cli/reconstruction/xform/find-points-at-infinity.md`](../../cli/reconstruction/xform/find-points-at-infinity.md)

@@ -445,8 +445,8 @@ few kept observations` when the final round kept fewer than two usable
 observations of some free points, which are then stored in the representation
 they were handed in with (or, handed in with no estimate, the one the
 re-estimation gave them),
-and `; the final round stopped on its iteration budget` when it did not
-converge.
+and `; the final round did not converge` when it stopped on its iteration
+budget or settled with a distortion held at its step guard.
 
 `cross=off` (any of `off`, `false`, `0`, `no`; `on` is the default) keeps every
 point in the representation it has for the whole solve and prints no decision.

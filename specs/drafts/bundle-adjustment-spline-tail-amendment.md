@@ -3,17 +3,20 @@
 **Status:** Draft
 
 Amends [`../core/geometry/bundle-adjustment.md`](../core/geometry/bundle-adjustment.md)
-§ "The solve" (the spline release's step guard and "Termination") and
+§ "Testing requirements" and
 [`../core/reconstruction/bundle-adjust.md`](../core/reconstruction/bundle-adjust.md)
 § "Why it is shaped this way" (the distortion release). Both point back here.
 
-Decided: the two changes below, each landable on its own branch in the order
-given. The first change this draft proposed, the second-difference penalty on a
-released spline's coefficients, is built and specified in
+Decided: the regression test below. The first two changes this draft proposed
+are built and specified in
 [`../core/geometry/bundle-adjustment.md`](../core/geometry/bundle-adjustment.md)
-§ "The solve" ("The tail is regularized"). Not decided: the penalty weight's
-scaling under the robust loss, and whether the reconstruction report carries
-the held-at-the-guard state per camera (see "Open questions").
+§ "The solve": the second-difference penalty on a released spline's
+coefficients ("The tail is regularized"), and the step guard's retry with the
+distortion held together with the round endings that go with it ("Step guards
+and the held-distortion retry", "Termination"). Not decided: the penalty
+weight's scaling under the robust loss, whether the reconstruction report
+carries the held-at-the-guard state per camera, and whether the held retry
+should also let the distortion take a damped step (see "Open questions").
 
 ## Purpose
 
@@ -33,14 +36,14 @@ and points unsettled.
 The first problem is addressed by the tail regularization the standing spec
 now describes: a second-difference penalty on the released coefficients, the
 same one the camera refit uses, so a coefficient with little support continues
-its neighbours instead of following a few pixels. This draft proposes the two
-remaining changes, numbered as in the original three-step plan:
+its neighbours instead of following a few pixels. The second is addressed by
+the held-distortion retry the standing spec now describes: a step whose only
+fault is a camera's distortion is solved again with that distortion held, so
+the poses, the points and the focal still move, and a round that ends with
+the distortion held at the guard is not reported as converged. This draft
+proposes the one remaining change, numbered as in the original three-step
+plan:
 
-2. **A step guard that does not stall the joint solve.** When only a camera's
-   distortion is inadmissible, the same iteration is retried with that
-   distortion held for the step, so poses, points and focal still move, and a
-   round that ends with the distortion held at the guard is not reported as
-   converged.
 3. **A regression test** of the whole case.
 
 ## Evidence
@@ -114,137 +117,47 @@ median within 0.004 px of A's, and B released again moves back to within
 0.005 px of A. The first stage alone, `[(50, 5)]`, and the second alone,
 `[(12, 2)]`, still end at the monotonicity limit with the same coefficients as
 before: the penalty does not keep those rounds off the limit, and once there
-the whole-step rejection stalls them as before. That is what step 2 addresses.
+the whole-step rejection stalls them as before.
 
-## What the code does now
+**The single-stage medians are the schedule's, not the release's.** The same
+single-stage runs with nothing released end at nearly the same medians: A
+held under `[(50, 5)]` alone goes 0.674 → 0.7991 and under `[(12, 2)]` alone
+0.674 → 0.7500, and with the focal alone released 0.7990 and 0.7497. One round
+at a wide trim and a large loss scale ends at a state whose median is above
+A's whatever is released, so the medians of those rows above do not measure
+the stall; their end slopes and their convergence do.
 
-In [`bundle_adjust.rs`](../../crates/sfmtool-core/src/geometry/bundle_adjust.rs),
-`solve_lm` runs one round's Levenberg–Marquardt solve:
+**After step 2.** The same runs with the held-distortion retry in the kernel
+as well. "Final round" is how the final round ended (see the standing spec's
+"Termination"); the end slope is `1 + δ'(d_max)`:
 
-- It accumulates the camera block `h_cc` and gradient `g_c` from the kept
-  observations, then adds each released spline's `SplinePenalty`.
-- Inside the damping ladder, after the Schur elimination of the points, it pins
-  every lens slot that is not released and every spline slot whose data
-  diagonal is exactly zero (`_ => data_diag[slot] > 0.0`), with an identity
-  row and column and a zero gradient entry.
-- It builds the candidate lens state camera by camera. A non-positive focal, a
-  `k1` that fails `k1_step_admissible` or a spline that fails
-  `bspline_step_admissible` sets `admissible = false`, and the whole step is
-  rejected with `lambda *= 4.0; continue;`.
-- An accepted step halves `lambda`. Two accepted steps in a row that each
-  improve the cost by less than `1e-8` relative set `lambda = INFINITY`,
-  and a ladder of 12 rungs with no accepted step sets
-  `improved = false`. Either ends the round with `converged = true`.
+| Start | Release | Schedule | Median residual (px), before → after | Last three coefficients | End slope | Final round |
+|-------|---------|----------|--------------------------------------|-------------------------|-----------|-------------|
+| A | held | default | 0.674 → 0.674 | unchanged | 5.42 | converged |
+| A | focal + distortion | default | 0.674 → 0.6761 | 0.0130, 0.0164, 0.0159 | 0.97 | converged |
+| A | focal + distortion | `[(50, 5)]` only | 0.674 → 0.7990 | unchanged | 5.42 | settled at the guard |
+| A | focal + distortion | `[(12, 2)]` only | 0.674 → 0.7496 | 0.0123, 0.0224, 0.0074 | 0.019 | settled at the guard |
+| A | focal + distortion | `[(4, 1)]` only | 0.674 → 0.6664 | 0.0137, 0.0160, 0.0168 | 1.05 | converged |
+| B | focal + distortion | default | 0.7928 → 0.6760 | 0.0131, 0.0163, 0.0158 | 0.97 | converged |
+| B | held | default | 0.7928 → 0.6776 | unchanged | 0.013 | converged |
 
-The `converged` of the final round is what `FreePointDecision::converged`
-reports, and what the "stopped on its iteration budget" clause of the progress
-line reads.
+Under the default schedule the release from A ends 0.002 px above A's median,
+against 0.0035 px before step 2, and B released again ends at 0.6760, against
+0.6782 before step 2 and below B held. Neither reaches A's own median.
 
-Under Marquardt scaling `λ·diag(h_cc)` every slot's step shrinks with `λ`. So
-when the spline's part of the step crosses the guard, the rejections raise `λ`
-for all slots, the next accepted step is small for the poses and points as
-well, and two such steps end the round.
-
-## Step 2: the step guard does not stall the joint solve
-
-### The held-distortion retry
-
-When the candidate step fails only because a camera's distortion is
-inadmissible, the same iteration retries the step with that distortion held:
-
-1. Build the candidate lens state camera by camera, as today. Classify each
-   camera's failure:
-   - a focal that is non-finite or not above `1e-6`, or a non-finite `k1` or
-     spline coefficient, fails the whole step as today;
-   - a finite `k1` that fails `k1_step_admissible`, or a finite spline that
-     fails the monotonicity half of `bspline_step_admissible`, marks camera `j`
-     for holding and does not fail the step.
-2. If no camera failed the whole step and some cameras are marked, pin the
-   marked cameras' distortion slots (the `k1` slot, or every spline slot) in the
-   reduced system and its gradient, with the same identity row and column and
-   zero gradient entry the support pinning uses, and solve again at the same
-   `λ`. The reduced system has to be kept for this: clone `s` and `g_red` before
-   the first LU solve, or factor once and pin a copy. The cost is one extra
-   `d × d` copy and one extra LU solve, paid only in an iteration whose
-   distortion step was inadmissible.
-3. Rebuild the candidate from the new solution, with the marked cameras'
-   distortion at its current value. Their focals, the other cameras' lenses,
-   the poses and the back-substituted points all move. Pinning a slot after
-   the Schur elimination is the same as removing that variable from the
-   damped system, so the back-substitution `δp = −V⁻¹(g_p + Wᵀδc)` with
-   `δc = 0` in the pinned slots is the exact solution with the distortion held.
-4. Check the rebuilt candidate. A held spline is the current one, which was
-   admissible, and its check does not read the focal. A held `k1` is checked
-   again, because `k1_step_admissible` reads the candidate focal, and a smaller
-   focal can fold the imaged field at the same `k1`. A failure of a focal or of
-   a held `k1` fails the whole step. If any other camera's distortion is now inadmissible, it is
-   added to the marked set and step 2 repeats; the set only grows, so this ends
-   within `n_cam` repeats.
-5. Compare the cost as today. An accepted held step updates the state and halves
-   `λ` like any accepted step. A held step that does not lower the cost raises
-   `λ` as a cost failure does today, and the next rung tries the full step
-   first again.
-
-Each new iteration tries the full step first, so the distortion is released
-again as soon as a step that keeps it monotone exists.
-
-The held step is not the constrained optimum along the monotonicity limit. It
-moves everything except the distortion, and the next iteration moves the
-distortion if it can. That is enough to stop the stall, and it needs no
-constrained solver.
-
-The `lambda > 1e12` cap applies to every kind of rejection. Today the
-inadmissible path `continue`s without checking it, and only the 12-rung count
-ends the ladder.
-
-### How the round ends
-
-The round's ending must not say "converged" while a distortion is held against
-its guard and the rest could still move. Each accepted step is either a **full**
-step or a **held** step. The round ends in one of four ways:
-
-- **Converged**: two accepted full steps in a row, each improving the cost by
-  less than `1e-8` relative. This is today's test, counted over full steps
-  only; an accepted held step resets the count.
-- **Settled at the guard**: two accepted held steps in a row, each improving the
-  cost by less than `1e-8` relative. The poses and points have settled with the
-  distortion held, so the round stops, but it reports `converged = false`.
-- **Ladder exhausted**: no rung of the ladder found a downhill step. If any rung
-  of that ladder made a held retry, the round ends settled at the guard;
-  otherwise it ends converged, as today.
-- **Iteration budget**: `max_iters` accepted steps, `converged = false`, as
-  today.
-
-A round that ends settled at the guard says so on the progress stream, naming
-each camera whose distortion was held in its last held step and that camera's
-end slope `1 + δ'(d_max)` for a spline. Only the final round's ending reaches
-`FreePointDecision::converged`. Its doc comment and the progress line's
-"stopped on its iteration budget" clause need a wording that also covers
-settling at the guard.
-
-The tail regularization makes reaching the guard rarer; step 2 makes reaching
-it harmless to the poses and points.
-
-### The `k1` release takes the same treatment
-
-`k1_step_admissible` guards the `SIMPLE_RADIAL_FISHEYE` release the way
-`bspline_step_admissible` guards the spline, through the same `admissible` flag
-and the same whole-step rejection. A `k1` pushed toward the fold of the imaged
-field stalls the joint solve in the same way, so the held retry covers both: the
-marked slot is `k1` on a `k1` camera and the spline block on a spline camera. No
-`k1` case has been measured. The focal's guard is not given a retry: a focal at
-or below zero is a wild step, not a parameter at a limit, and keeps today's
-re-damping.
-
-### Tests that come with step 2
-
-- A constructed case whose full step is inadmissible for the spline and whose
-  held step lowers the cost: the iteration accepts the held step, the spline
-  comes back bit for bit, and the poses moved.
-- Two cameras, one of whose spline crosses the guard: only that camera's spline
-  is held, and the other camera's spline moves.
-- The same for `k1` on a `SIMPLE_RADIAL_FISHEYE` camera.
-- A round that settles at the guard reports `converged = false`.
+The single-stage runs show what the retry does and what it does not. Under
+`[(12, 2)]` alone the round still ends at the monotonicity limit with the same
+median, and now says so: it settles at the guard and is not reported as
+converged. Under `[(50, 5)]` alone the spline does not move at all. The round
+takes 8 held steps and no full step: A's tail starts far from the limit (end
+slope 5.4), the full step at each iteration's `λ` overshoots past it, the held
+step at that `λ` is accepted and halves `λ`, and the next full step overshoots
+further. A damped full step that would move the spline part of the way toward
+the limit, which is what step 1 alone took (ending that round at the limit
+with a median of 0.7987), is never tried. The default schedule's first round
+does the same (8 held steps, no full step); its second round takes 5 full and
+13 held steps and settles at the guard, and its third converges on 23 full
+steps.
 
 ## Step 3: a regression test of the whole case
 
@@ -296,12 +209,10 @@ level, is a maintainer decision.
 ## What the standing specs say after this lands
 
 - [`../core/geometry/bundle-adjustment.md`](../core/geometry/bundle-adjustment.md)
-  § "Step guard" and "Step guards" (under "Several cameras") describe the
-  held-distortion retry for both `k1` and the spline; § "Termination"
-  describes the four endings; its testing requirements list the tests of
-  steps 2 and 3.
+  § "Testing requirements" lists the regression test of step 3 beside the
+  held-distortion retry's tests.
 - [`../core/reconstruction/bundle-adjust.md`](../core/reconstruction/bundle-adjust.md)
-  says how a round settled at the guard shows in what the adjustment reports.
+  keeps its pointer here only while "Reporting the guard per camera" is open.
 
 Then this draft is deleted.
 
@@ -313,12 +224,22 @@ Then this draft is deleted.
   `z = (r/s)²`, and at the last stage's loss scale of 1 px many inliers have
   `z` near or above one. Should the penalty weight `w_j` count each
   observation by its robust weight, or by `s²`, rather than as two plain
-  rows? The penalty landed with
-  the refit's count. On the real case it keeps the default schedule's release
-  off the limit, but not the `[(50, 5)]` or `[(12, 2)]` stage run alone (see
-  "After the tail regularization"); whether a heavier weight would, or whether
-  step 2 is enough there, is what the test of step 3 and the real case should
-  show once step 2 lands.
+  rows? The penalty landed with the refit's count. On the real case it keeps
+  the default schedule's release off the limit, but not the `[(12, 2)]` stage
+  run alone, which with step 2 still ends at the limit, now reported as settled
+  at the guard (see "After step 2"). Whether a heavier weight would keep it off
+  is what the test of step 3 and the real case should show.
+- **A damped distortion step alongside the held one.** The held retry pins the
+  distortion outright, so when the full step crosses the guard by overshooting
+  rather than because the optimum lies past the limit, the distortion does not
+  move for the round (the `[(50, 5)]` run in "After step 2"). An alternative is
+  to damp the inadmissible camera's distortion slots more, by their own factor
+  on the diagonal, and retry at the same `λ` with that factor rising until the
+  step is admissible, pinning being the limit. The poses and points would keep
+  the step `λ` allows them while the distortion takes the largest admissible
+  damped step. It costs more LU solves per rung and a second damping factor to
+  carry between iterations; whether the real case needs it is open, since the
+  default schedule's later rounds move the spline anyway.
 - **Rows at a pinned coefficient.** Leaving out the rows that touch an
   unsupported coefficient lets the supported tail end freely next to it. The
   alternative, keeping every interior row with pinned values as constants, ties

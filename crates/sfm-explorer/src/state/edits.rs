@@ -169,9 +169,10 @@ fn focal_changes(cameras: &[sfmtool_core::CameraAdjustment]) -> String {
 ///
 /// `, free points decided at 0.412 px: 3 to finite, 25 to directions`, with `
 /// before the final round converged` appended when it stopped on its iteration
-/// budget, since a level read from such a round still carries pose error and
-/// errs toward directions, and `, 2 not scored` after the counts when the
-/// final round kept too few observations of some free points to score them.
+/// budget or settled with a distortion held at its step guard, since a level
+/// read from such a round still carries pose error and errs toward
+/// directions, and `, 2 not scored` after the counts when the final round kept
+/// too few observations of some free points to score them.
 /// `, free points not decided` when there was no level to decide at, and
 /// nothing when the adjustment kept every point's representation.
 fn free_point_clause(decision: Option<&sfmtool_core::geometry::FreePointDecision>) -> String {

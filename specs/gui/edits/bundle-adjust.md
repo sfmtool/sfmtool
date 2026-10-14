@@ -178,7 +178,8 @@ residual 1.402 → 0.631 px (v3 → v4)`
 with each camera's focal change appended when the focal was released, what the
 storage decision did, `, free points decided at 0.412 px: 3 to finite, 25 to
 directions` (` before the final round converged` after the level when the final
-round stopped on its iteration budget, `, 2 not scored` after the counts when
+round stopped on its iteration budget or settled with a distortion held at its
+step guard, `, 2 not scored` after the counts when
 the final round kept too few observations of some free points to score them,
 `, free points not decided` when there was no level, and nothing with the
 crossing off), and `, 12 points deleted`

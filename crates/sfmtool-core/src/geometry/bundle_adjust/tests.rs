@@ -6840,3 +6840,186 @@ fn focal_is_releasable_is_pinned_for_every_model() {
         );
     }
 }
+
+// ── The held-distortion retry at the step guard ─────────────────────────────
+
+/// Folds back every observation of the images `imgs` take whose pixel radius
+/// about `(240, 240)` is past `r0`: radius `r` goes to `r0 − 1.5·(r − r0)`. No
+/// monotone lens images a scene that way, so a distortion fitted to these
+/// observations folds, and its full step crosses the guard.
+fn fold_the_rim(s: &mut Scene, imgs: impl Fn(u32) -> bool, r0: f64) {
+    for (px, &i) in s.uv.iter_mut().zip(&s.obs_img) {
+        let (dx, dy) = (px[0] - 240.0, px[1] - 240.0);
+        let r = dx.hypot(dy);
+        if imgs(i) && r > r0 {
+            let k = (r0 - 1.5 * (r - r0)) / r;
+            *px = [240.0 + k * dx, 240.0 + k * dy];
+        }
+    }
+}
+
+/// One plain least-squares round (no trim, a loss scale far above every
+/// residual) over `cams`, with the focal and the distortion released, and the
+/// messages the solve said.
+fn run_at_the_guard(
+    s: &mut Scene,
+    cams: &[CameraIntrinsics],
+    image_camera: &[u32],
+    max_iters: usize,
+) -> (BundleAdjustment, Vec<String>) {
+    let said = std::sync::Mutex::new(Vec::new());
+    let sink = |event: crate::progress::Event<'_>| {
+        if let crate::progress::Event::Message { text, .. } = event {
+            said.lock().unwrap().push(text.to_string());
+        }
+    };
+    let out = bundle_adjust(
+        &BaCameras {
+            cameras: cams,
+            image_camera: image_camera.into(),
+            releases: None,
+        },
+        &mut s.quats,
+        &mut s.trans,
+        &mut s.points,
+        &s.uv,
+        &s.obs_img,
+        &s.obs_pt,
+        None,
+        None,
+        CROSS,
+        None,
+        DEFAULT_PROTECTED_LOSS_SCALE,
+        true,
+        true,
+        true,
+        &[BaSchedule {
+            trim_px: 1e6,
+            loss_scale: 1e4,
+        }],
+        max_iters,
+        2,
+        12,
+        &Progress::to(&sink),
+    );
+    (out, said.into_inner().unwrap())
+}
+
+/// The spline coefficients of camera `j` of a solve.
+fn spline_of(out: &BundleAdjustment, j: usize) -> Vec<f64> {
+    out.cameras[j]
+        .model
+        .radial_spline()
+        .map(|(b, _, _)| b.to_vec())
+        .unwrap()
+}
+
+/// Whether any pose of `s` differs from `quats`/`trans`.
+fn poses_moved(s: &Scene, quats: &[UnitQuaternion<f64>], trans: &[Vector3<f64>]) -> bool {
+    pose_bits(&s.quats, &s.trans) != pose_bits(quats, trans)
+}
+
+/// A first iteration whose full step folds the spline takes the step again at
+/// the same damping with the spline held: the spline comes back bit for bit,
+/// and the focal and the poses moved. Raising the damping until the spline
+/// step fits instead, as the guard did before the retry, moves the spline.
+#[test]
+fn an_inadmissible_spline_step_is_retried_with_the_spline_held() {
+    let f = 130.0;
+    let cam = sfmtool_fisheye(f, &[0.0; 8]);
+    let (mut s, _) = make_fisheye_scene_for(cam.clone(), 8, 140);
+    fold_the_rim(&mut s, |_| true, 170.0);
+    perturb_scene(&mut s);
+    let (quats, trans) = (s.quats.clone(), s.trans.clone());
+    let image_camera = vec![0u32; s.quats.len()];
+    let (out, _) = run_at_the_guard(&mut s, std::slice::from_ref(&cam), &image_camera, 1);
+    assert_eq!(
+        res_bits(&spline_of(&out, 0)),
+        res_bits(&[0.0; 8]),
+        "the spline moved: {:?}",
+        spline_of(&out, 0)
+    );
+    assert!(poses_moved(&s, &quats, &trans), "the poses did not move");
+    assert_ne!(ba_focal(&out), f, "the focal did not move");
+}
+
+/// Of two cameras, only the one whose spline step folds is held: the other
+/// camera's spline moves in the same step.
+#[test]
+fn only_the_camera_whose_spline_folds_is_held() {
+    let f = 130.0;
+    let cams = [sfmtool_fisheye(f, &[0.0; 8]), sfmtool_fisheye(f, &[0.0; 8])];
+    let image_camera: Vec<u32> = (0..12).map(|i| (i % 2) as u32).collect();
+    // The second camera images through the planted spline, so its own step has
+    // somewhere to go.
+    let truth = [
+        sfmtool_fisheye(f, &[0.0; 8]),
+        sfmtool_fisheye(f, &PLANTED_BSPLINE),
+    ];
+    let mut s = make_fisheye_scene_cams(&truth, &image_camera, 200);
+    fold_the_rim(&mut s, |i| i % 2 == 0, 170.0);
+    perturb_scene(&mut s);
+    let (out, _) = run_at_the_guard(&mut s, &cams, &image_camera, 1);
+    assert_eq!(
+        res_bits(&spline_of(&out, 0)),
+        res_bits(&[0.0; 8]),
+        "the folding camera's spline moved: {:?}",
+        spline_of(&out, 0)
+    );
+    assert!(
+        spline_of(&out, 1).iter().any(|&c| c != 0.0),
+        "the other camera's spline did not move"
+    );
+}
+
+/// The same retry holds a `k1` whose step folds the imaged field.
+#[test]
+fn an_inadmissible_k1_step_is_retried_with_k1_held() {
+    let f = 130.0;
+    let cam = radial_fisheye(f, 0.0);
+    let (mut s, _) = make_fisheye_scene_for(cam.clone(), 8, 140);
+    fold_the_rim(&mut s, |_| true, 170.0);
+    perturb_scene(&mut s);
+    let (quats, trans) = (s.quats.clone(), s.trans.clone());
+    let image_camera = vec![0u32; s.quats.len()];
+    let (out, _) = run_at_the_guard(&mut s, std::slice::from_ref(&cam), &image_camera, 1);
+    assert_eq!(
+        ba_k1(&out).to_bits(),
+        0.0f64.to_bits(),
+        "k1 moved: {}",
+        ba_k1(&out)
+    );
+    assert!(poses_moved(&s, &quats, &trans), "the poses did not move");
+    assert_ne!(ba_focal(&out), f, "the focal did not move");
+}
+
+/// A round whose poses and points settle while the spline is held at its step
+/// guard is not reported as converged, and the progress stream names the held
+/// camera, both at the round and in the decision line.
+#[test]
+fn a_round_settled_at_the_guard_is_not_converged() {
+    let f = 130.0;
+    let cam = sfmtool_fisheye(f, &[0.0; 8]);
+    let (mut s, _) = make_fisheye_scene_for(cam.clone(), 8, 140);
+    fold_the_rim(&mut s, |_| true, 170.0);
+    perturb_scene(&mut s);
+    let image_camera = vec![0u32; s.quats.len()];
+    let (out, said) = run_at_the_guard(&mut s, std::slice::from_ref(&cam), &image_camera, 60);
+    let decision = out.free_point_decision.expect("a decision");
+    assert!(!decision.converged, "{decision:?}");
+    assert!(
+        said.iter().any(|t| t
+            .starts_with("the round settled with a distortion held at its step guard: camera 0 (spline end slope ")),
+        "{said:?}"
+    );
+    assert!(
+        said.iter()
+            .any(|t| t.starts_with("free points decided at noise ")
+                && t.ends_with(
+                    "; the final round settled with a distortion held at its step guard"
+                )),
+        "{said:?}"
+    );
+    // The retry never returns a folded spline.
+    assert!(bspline_is_monotone(&ba_bspline(&out), THETA_MAX, THETA_MAX));
+}

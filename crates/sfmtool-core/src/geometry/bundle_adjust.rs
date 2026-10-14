@@ -29,7 +29,8 @@ use crate::analysis::reprojection_noise::{
     ReprojectionNoise, OUTLIER_GATE,
 };
 use crate::camera::distortion::bspline::{
-    basis_at, bspline_is_monotone, smoothing_weight, BSPLINE_SUPPORT, MIN_BSPLINE_COEFFS,
+    basis_at, bspline_is_monotone, delta_and_deriv as bspline_delta_and_deriv, smoothing_weight,
+    BSPLINE_SUPPORT, MIN_BSPLINE_COEFFS,
 };
 use crate::camera::intrinsics::SplineRadial;
 use crate::camera::CameraModel;
@@ -384,8 +385,11 @@ pub struct FreePointDecision {
     /// solve left it: a position where its inverse depth is positive and a
     /// direction where it is zero.
     pub decided: bool,
-    /// Whether the final round met its convergence test rather than stopping on
-    /// its iteration budget. The decision is read either way; a round that
+    /// Whether the final round met its convergence test, rather than stopping
+    /// on its iteration budget or settling with a camera's distortion held at
+    /// its step guard (a `k1` at the fold of the imaged field, a spline at its
+    /// monotonicity limit) while the step that would lower the cost further was
+    /// one the guard forbids. The decision is read either way; a round that
     /// stopped short measures a level that still carries pose error, which errs
     /// toward a direction, and this says so.
     pub converged: bool,
@@ -1944,6 +1948,46 @@ impl SplinePenalty {
     }
 }
 
+/// How one round's Levenberg–Marquardt solve ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RoundEnd {
+    /// Two accepted full steps in a row each improved the cost by less than
+    /// `1e-8` relative, or no rung of a damping ladder found a downhill step
+    /// and none of them had to hold a distortion.
+    Converged,
+    /// The poses and points settled with a camera's distortion held at its
+    /// step guard: two accepted held steps in a row each improved the cost by
+    /// less than `1e-8` relative, or no rung of a ladder in which some rung
+    /// held a distortion found a downhill step. Not converged: the step that
+    /// would lower the cost further is one the guard forbids.
+    SettledAtGuard,
+    /// The iteration budget ran out, or the solve was cancelled.
+    Stopped,
+}
+
+/// A candidate step's lens state, as the step guards read it.
+enum LensStep {
+    /// Every camera's candidate passes its guards: the candidate focals, `k1`s
+    /// and splines (`None` for a camera whose spline does not move).
+    Admissible(Vec<f64>, Vec<f64>, Vec<Option<Vec<f64>>>),
+    /// The cameras, not yet held, whose finite distortion step fails its
+    /// guard. Every focal passed.
+    Inadmissible(Vec<usize>),
+    /// A focal that is not finite and above `1e-6`, a distortion step that is
+    /// not finite, or a held `k1` that the candidate focal folds: the whole
+    /// step is rejected.
+    Rejected,
+}
+
+/// Pins `slot` of a reduced system: an identity row and column and a zero
+/// gradient entry, so the slot solves to zero and holds its value.
+fn pin_slot(s: &mut DMatrix<f64>, g: &mut DVector<f64>, slot: usize) {
+    s.row_mut(slot).fill(0.0);
+    s.column_mut(slot).fill(0.0);
+    s[(slot, slot)] = 1.0;
+    g[slot] = 0.0;
+}
+
 /// The summed penalty of `penalties` with each camera's coefficients read
 /// through `spline_of`.
 fn penalty_cost<'a>(penalties: &[SplinePenalty], spline_of: impl Fn(usize) -> &'a [f64]) -> f64 {
@@ -1984,9 +2028,16 @@ fn penalty_cost<'a>(penalties: &[SplinePenalty], spline_of: impl Fn(usize) -> &'
 /// before the damping, and its value to the cost the damping ladder compares;
 /// the support test that pins a coefficient reads the data alone.
 ///
-/// Returns whether the solve met its convergence test (two tiny accepted steps
-/// in a row, or no damping finding a downhill step) rather than stopping on
-/// `max_iters` or a cancellation.
+/// A candidate step whose only fault is a camera's distortion (a `k1` that
+/// folds the imaged field, or a spline that breaks monotonicity) is solved
+/// again at the same damping with that camera's distortion slots pinned, so
+/// the focal, the poses and the points still move. Only a step that fails
+/// with the distortion held, or whose focal or distortion is not finite, is
+/// rejected whole and re-damped.
+///
+/// Returns how the round ended: [`RoundEnd::Converged`],
+/// [`RoundEnd::SettledAtGuard`] (said on `progress`, naming the held
+/// cameras), or [`RoundEnd::Stopped`] on `max_iters` or a cancellation.
 ///
 /// The reduced system opens with one lens block per camera,
 /// `[f_j, k1_j, (c_j,0..c_j,N_j−1) | …]`, then the poses. `lenses` carries each
@@ -2026,7 +2077,7 @@ fn solve_lm<const CAM_COLS: usize>(
     protected: Option<&[bool]>,
     protected_loss_scale: f64,
     progress: &Progress<'_>,
-) -> bool {
+) -> RoundEnd {
     // The spline instantiation is selected by width; the staged loop requests
     // it exactly when some camera releases a well-formed spline.
     debug_assert!(
@@ -2299,8 +2350,15 @@ fn solve_lm<const CAM_COLS: usize>(
         )
     };
     let mut lambda = 1e-3;
-    let mut tiny_steps = 0usize;
-    let mut converged = false;
+    // Runs of accepted steps that each improved the cost by less than `1e-8`
+    // relative: full steps, and steps retried with a distortion held.
+    let mut tiny_full = 0usize;
+    let mut tiny_held = 0usize;
+    let mut ending: Option<RoundEnd> = None;
+    // The cameras whose distortion the latest retry held.
+    let mut guard_cams: Vec<usize> = Vec::new();
+    let releases_distortion =
+        (0..n_cam).any(|j| live[j] && (lenses[j].opt_k1 || lenses[j].opt_bspline));
     let mut cams: Vec<CameraIntrinsics> = lenses.iter().map(Lens::camera).collect();
     // The data part of the cost; the spline penalties are added at the first
     // linearization, which fixes their rows for the round.
@@ -2492,7 +2550,14 @@ fn solve_lm<const CAM_COLS: usize>(
         // ── Damping ladder: re-damp and re-solve from this linearization ──
         let ladder = progress.detail_phase("damping ladder");
         let mut improved = false;
+        // Whether a rung of this ladder retried its step with a distortion held.
+        let mut ladder_held = false;
         for _ in 0..12 {
+            // Every rejection raises `λ` fourfold and moves to the next rung,
+            // so the cap read here ends the ladder after any of them.
+            if lambda > 1e12 {
+                break;
+            }
             let mut s = h_cc.clone();
             for dd in 0..d {
                 s[(dd, dd)] += lambda * h_cc[(dd, dd)].max(1e-12);
@@ -2621,15 +2686,9 @@ fn solve_lm<const CAM_COLS: usize>(
                             K1_SLOT => lens.opt_k1,
                             _ => data_diag[slot] > 0.0,
                         };
-                    if released {
-                        continue;
+                    if !released {
+                        pin_slot(&mut s, &mut g_red, slot);
                     }
-                    for dd in 0..d {
-                        s[(slot, dd)] = 0.0;
-                        s[(dd, slot)] = 0.0;
-                    }
-                    s[(slot, slot)] = 1.0;
-                    g_red[slot] = 0.0;
                 }
             }
             if any_frozen {
@@ -2640,75 +2699,129 @@ fn solve_lm<const CAM_COLS: usize>(
                         continue;
                     }
                     for r in 0..3 {
-                        let slot = img_slot(c) + 3 + r;
-                        for dd in 0..d {
-                            s[(slot, dd)] = 0.0;
-                            s[(dd, slot)] = 0.0;
-                        }
-                        s[(slot, slot)] = 1.0;
-                        g_red[slot] = 0.0;
+                        pin_slot(&mut s, &mut g_red, img_slot(c) + 3 + r);
                     }
                 }
             }
 
-            let Some(delta) = s.lu().solve(&(-g_red)) else {
+            // The reduced system before its factorization, kept for a retry
+            // with a camera's distortion held; only a solve that releases a
+            // distortion can need one.
+            let reduced = releases_distortion.then(|| (s.clone(), g_red.clone()));
+            let Some(mut delta) = s.lu().solve(&(-g_red)) else {
                 lambda *= 4.0;
                 continue;
             };
 
             // Candidate lens state, camera by camera, each step checked against
             // that camera's own model and field. A camera no kept observation
-            // reaches is not stepped at all.
-            let mut f_cand = fs.clone();
-            let mut k1_cand = k1s.clone();
-            let mut bspline_cand: Vec<Option<Vec<f64>>> = vec![None; n_cam];
-            let mut admissible = true;
-            for (j, lens) in lenses.iter().enumerate() {
-                if !live[j] {
-                    continue;
-                }
-                let o = slot0[j];
-                if lens.opt_f {
-                    f_cand[j] = fs[j] + delta[o + F_SLOT];
-                    if !(f_cand[j].is_finite() && f_cand[j] > 1e-6) {
-                        admissible = false;
-                        break;
+            // reaches is not stepped at all, and a camera in `held` keeps its
+            // distortion.
+            let lens_step = |delta: &DVector<f64>, held: &[bool]| {
+                let mut f_cand = fs.clone();
+                let mut k1_cand = k1s.clone();
+                let mut bspline_cand: Vec<Option<Vec<f64>>> = vec![None; n_cam];
+                let mut inadmissible = Vec::new();
+                for (j, lens) in lenses.iter().enumerate() {
+                    if !live[j] {
+                        continue;
                     }
-                }
-                // The curvature rung's plausibility guard: a step that folds
-                // the distorted map inside the imaged field is rejected the way
-                // a non-positive focal is.
-                if lens.opt_k1 {
-                    k1_cand[j] = k1s[j] + delta[o + K1_SLOT];
-                    if !k1_step_admissible(f_cand[j], k1_cand[j], field_r[j]) {
-                        admissible = false;
-                        break;
-                    }
-                }
-                // The spline rung's plausibility guard: a step that folds the
-                // spline map anywhere on its domain is rejected the same way.
-                if lens.opt_bspline {
-                    let mut pc = bsplines[j].clone();
-                    for (i, c) in pc.iter_mut().enumerate() {
-                        let dv = delta[o + BSPLINE_SLOT0 + i];
-                        // Pinned (unsupported) slots solve to exactly zero;
-                        // skip the add so a `−0.0` coefficient keeps its sign
-                        // (the frozen-translation precedent).
-                        if dv != 0.0 {
-                            *c += dv;
+                    let o = slot0[j];
+                    if lens.opt_f {
+                        f_cand[j] = fs[j] + delta[o + F_SLOT];
+                        if !(f_cand[j].is_finite() && f_cand[j] > 1e-6) {
+                            return LensStep::Rejected;
                         }
                     }
-                    if !bspline_step_admissible(&pc, shapes[j].1) {
-                        admissible = false;
-                        break;
+                    // The curvature rung's plausibility guard: a step that
+                    // folds the distorted map inside the imaged field marks
+                    // the camera for a retry with its `k1` held. A held `k1` is
+                    // checked again, since the guard reads the candidate focal.
+                    if lens.opt_k1 {
+                        if held[j] {
+                            if !k1_step_admissible(f_cand[j], k1s[j], field_r[j]) {
+                                return LensStep::Rejected;
+                            }
+                        } else {
+                            k1_cand[j] = k1s[j] + delta[o + K1_SLOT];
+                            if !k1_cand[j].is_finite() {
+                                return LensStep::Rejected;
+                            }
+                            if !k1_step_admissible(f_cand[j], k1_cand[j], field_r[j]) {
+                                inadmissible.push(j);
+                            }
+                        }
                     }
-                    bspline_cand[j] = Some(pc);
+                    // The spline rung's plausibility guard: a step that folds
+                    // the spline map anywhere on its domain marks the camera the
+                    // same way. A held spline is the current, admissible one.
+                    if lens.opt_bspline && !held[j] {
+                        let mut pc = bsplines[j].clone();
+                        for (i, c) in pc.iter_mut().enumerate() {
+                            let dv = delta[o + BSPLINE_SLOT0 + i];
+                            // Pinned (unsupported) slots solve to exactly zero;
+                            // skip the add so a `−0.0` coefficient keeps its
+                            // sign (the frozen-translation precedent).
+                            if dv != 0.0 {
+                                *c += dv;
+                            }
+                        }
+                        if !pc.iter().all(|c| c.is_finite()) {
+                            return LensStep::Rejected;
+                        }
+                        if bspline_step_admissible(&pc, shapes[j].1) {
+                            bspline_cand[j] = Some(pc);
+                        } else {
+                            inadmissible.push(j);
+                        }
+                    }
                 }
-            }
-            if !admissible {
+                if inadmissible.is_empty() {
+                    LensStep::Admissible(f_cand, k1_cand, bspline_cand)
+                } else {
+                    LensStep::Inadmissible(inadmissible)
+                }
+            };
+            // A step whose only fault is a camera's distortion is solved again
+            // at the same damping with that distortion held, so the focal, the
+            // poses and the points still move. Pinning a slot after the Schur
+            // elimination removes that variable from the damped system, so the
+            // back-substitution below is the exact solution with it held. The
+            // held set only grows, so this ends within `n_cam` solves.
+            let mut held = vec![false; n_cam];
+            let step = loop {
+                match lens_step(&delta, &held) {
+                    LensStep::Inadmissible(marked) => {
+                        let Some((s0, g0)) = &reduced else {
+                            break LensStep::Rejected;
+                        };
+                        ladder_held = true;
+                        for j in marked {
+                            held[j] = true;
+                        }
+                        guard_cams = (0..n_cam).filter(|&j| held[j]).collect();
+                        let (mut s_held, mut g_held) = (s0.clone(), g0.clone());
+                        for j in (0..n_cam).filter(|&j| held[j]) {
+                            if lenses[j].opt_k1 {
+                                pin_slot(&mut s_held, &mut g_held, slot0[j] + K1_SLOT);
+                            }
+                            for i in 0..shapes[j].0 {
+                                pin_slot(&mut s_held, &mut g_held, slot0[j] + BSPLINE_SLOT0 + i);
+                            }
+                        }
+                        match s_held.lu().solve(&(-g_held)) {
+                            Some(dh) => delta = dh,
+                            None => break LensStep::Rejected,
+                        }
+                    }
+                    other => break other,
+                }
+            };
+            let LensStep::Admissible(f_cand, k1_cand, bspline_cand) = step else {
                 lambda *= 4.0;
                 continue;
-            }
+            };
+            let held_step = held.contains(&true);
             let mut q_cand = q.clone();
             let mut t_cand = t.clone();
             for c in 0..n_im {
@@ -2806,27 +2919,59 @@ fn solve_lm<const CAM_COLS: usize>(
                 // Converged only after tiny improvements twice in a row: a
                 // single small step is how a traverse of a nearly-flat
                 // valley STARTS (the focal release walks −20% through one),
-                // so one is not proof of convergence.
-                if rel < 1e-8 {
-                    tiny_steps += 1;
-                    if tiny_steps >= 2 {
-                        lambda = f64::INFINITY;
-                    }
+                // so one is not proof of convergence. Full and held steps
+                // count separately, and a step of one kind ends the other's
+                // run: two tiny full steps converge, two tiny held steps
+                // settle against the guard.
+                let (run, other) = if held_step {
+                    (&mut tiny_held, &mut tiny_full)
                 } else {
-                    tiny_steps = 0;
+                    (&mut tiny_full, &mut tiny_held)
+                };
+                *other = 0;
+                *run = if rel < 1e-8 { *run + 1 } else { 0 };
+                if tiny_full >= 2 {
+                    ending = Some(RoundEnd::Converged);
+                } else if tiny_held >= 2 {
+                    ending = Some(RoundEnd::SettledAtGuard);
                 }
                 break;
             }
             lambda *= 4.0;
-            if lambda > 1e12 {
-                break;
-            }
         }
         drop(ladder);
-        if !improved || lambda.is_infinite() {
-            converged = true;
+        // No rung found a downhill step. Where a rung had to hold a distortion,
+        // the step that would lower the cost is the one the guard forbids.
+        if !improved {
+            ending = Some(if ladder_held {
+                RoundEnd::SettledAtGuard
+            } else {
+                RoundEnd::Converged
+            });
+        }
+        if ending.is_some() {
             break;
         }
+    }
+    let ending = ending.unwrap_or(RoundEnd::Stopped);
+    if ending == RoundEnd::SettledAtGuard {
+        let held: Vec<String> = guard_cams
+            .iter()
+            .map(|&j| {
+                if lenses[j].opt_bspline {
+                    let (_, slope) =
+                        bspline_delta_and_deriv(&bsplines[j], shapes[j].1, shapes[j].1);
+                    format!("camera {j} (spline end slope {:.3})", 1.0 + slope)
+                } else {
+                    format!("camera {j} (k1 {:.4})", k1s[j])
+                }
+            })
+            .collect();
+        progress_info!(
+            progress,
+            "the round settled with a distortion held at its step guard: {}",
+            held.join(", ")
+        );
     }
 
     // Scatter the compact state back. A ranged point comes back as the
@@ -2870,7 +3015,7 @@ fn solve_lm<const CAM_COLS: usize>(
         lens.k1 = k1s[j];
         lens.bspline = std::mem::take(&mut bsplines[j]);
     }
-    converged
+    ending
 }
 
 /// The anchor of every free point solved in inverse depth: the centroid of the
@@ -3112,9 +3257,9 @@ fn bundle_adjust_staged(
         (Vec::new(), Vec::new())
     };
     // The solve set of the last round, whose residuals the storage decision
-    // measures, and whether that round met its convergence test.
+    // measures, and how that round ended.
     let mut prev_kept: Vec<usize> = Vec::new();
-    let mut last_converged = false;
+    let mut last_end = RoundEnd::Stopped;
     let rounds = progress.split_evenly(schedule.len());
     for ((rnd, stage), p_round) in schedule.iter().enumerate().zip(rounds) {
         // Between rounds the poses and the points hold what the last round
@@ -3201,7 +3346,7 @@ fn bundle_adjust_staged(
             };
         }
         let anchors_now = anchors.as_deref();
-        last_converged = if spline_cols {
+        last_end = if spline_cols {
             solve_lm::<BSPLINE_CAM_COLS>(
                 &mut lenses,
                 image_camera,
@@ -3251,8 +3396,9 @@ fn bundle_adjust_staged(
     // The storage decision: every free point is scored at the state the solve
     // ended at and the noise level its final round measures, over the
     // observations that round kept, and stored as the test says. A final round
-    // that stopped on its iteration budget is decided too, at the level it
-    // measures, and the decision says it did not converge.
+    // that stopped on its iteration budget or settled with a distortion held
+    // at its step guard is decided too, at the level it measures, and the
+    // decision says it did not converge.
     let free_point_decision = free_points.cross.then(|| {
         let noise = round_noise(
             &cams_final,
@@ -3305,10 +3451,12 @@ fn bundle_adjust_staged(
         // The decision in one line, said whenever there was a round to decide
         // after: an empty schedule only measures residuals.
         if !schedule.is_empty() {
-            let unconverged = if last_converged {
-                ""
-            } else {
-                "; the final round stopped on its iteration budget"
+            let unconverged = match last_end {
+                RoundEnd::Converged => "",
+                RoundEnd::SettledAtGuard => {
+                    "; the final round settled with a distortion held at its step guard"
+                }
+                RoundEnd::Stopped => "; the final round stopped on its iteration budget",
             };
             let unscored_clause = if unscored > 0 {
                 format!(", {unscored} not scored: too few kept observations")
@@ -3334,7 +3482,7 @@ fn bundle_adjust_staged(
             decided: sigma.is_some(),
             observation_count: noise.observation_count,
             outlier_count: noise.outlier_count,
-            converged: last_converged,
+            converged: last_end == RoundEnd::Converged,
             to_finite,
             to_direction,
             unscored,
