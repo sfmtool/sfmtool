@@ -822,6 +822,14 @@ Python's point of view).
   camera's spline is held and the other's moves; and the same round run to
   its end reports `converged: false`, says on `progress` that it settled with
   camera 0's spline held, and returns a monotone spline.
+- **A weakly supported spline tail**: a scene whose observations thin out
+  toward the domain end, started from a monotone spline with a wild tail,
+  adjusted under the default schedule once held and once with the focal and
+  the distortion released, gives a released median residual not above the
+  held one, an end slope `1 + δ'(d_max)` well away from 0, and a final round
+  that does not report convergence with the spline held at its guard
+  ([`../../drafts/bundle-adjustment-spline-tail-amendment.md`](../../drafts/bundle-adjustment-spline-tail-amendment.md)
+  § "Step 3: a regression test of the whole case").
 - **Directions carry the `k1` release**: on a scene whose finite cloud sits near the
   optical axis (no `θ³` signal) and whose far field is marked at infinity,
   `opt_k1` recovers the planted curvature — and the same solve with the
