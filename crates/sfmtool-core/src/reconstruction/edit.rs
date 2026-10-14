@@ -261,6 +261,12 @@ impl SfmrReconstruction {
     /// image is not kept are dropped. Frames with no kept image are dropped;
     /// rig and sensor definitions are preserved.
     ///
+    /// Each point's kept observations are sorted by their new image index, so
+    /// a reordered image list still gives tracks sorted by point then image.
+    /// Every per-observation column moves with its observation, and each
+    /// point's reference observation is renumbered to the observation's new
+    /// place in its track.
+    ///
     /// If `drop_orphaned_points` is true, 3D points with zero remaining
     /// observations are removed and point IDs are remapped to be contiguous.
     /// Otherwise, all 3D points are kept with their original IDs (some may
@@ -335,21 +341,33 @@ impl SfmrReconstruction {
             .map(|&i| self.image_table.depth_histogram_counts[i as usize].clone())
             .collect();
 
-        // Filter and remap tracks. Input tracks are grouped by point_index, so
-        // a simple single-pass filter preserves that grouping. The parallel
-        // feature_indexes column is filtered in lockstep (point-id remapping
-        // below preserves order, so it stays parallel to the final tracks).
-        let mut new_tracks: Vec<TrackObservation> = Vec::with_capacity(self.point_set.tracks.len());
-        let mut kept_obs: Vec<usize> = Vec::with_capacity(self.point_set.tracks.len());
-        for (i, obs) in self.point_set.tracks.iter().enumerate() {
-            if let Some(new_img_idx) = old_to_new[obs.image_index as usize] {
-                new_tracks.push(TrackObservation {
-                    image_index: new_img_idx,
-                    point_index: obs.point_index,
-                });
-                kept_obs.push(i);
-            }
-        }
+        // Select the kept observation rows. Input tracks are grouped by
+        // point_index, so a single-pass filter preserves that grouping. A
+        // reordered image list renumbers the images out of their old order,
+        // so each point's kept rows are then sorted by their new image index
+        // (ties kept in track order), which keeps the tracks sorted by point
+        // then image. Every per-observation column, and the reference
+        // observations, select by `kept_obs`, so they follow the sorted rows
+        // (point-id remapping below preserves order, so they stay parallel to
+        // the final tracks).
+        let tracks = &self.point_set.tracks;
+        let mut kept_obs: Vec<usize> = (0..tracks.len())
+            .filter(|&i| old_to_new[tracks[i].image_index as usize].is_some())
+            .collect();
+        kept_obs.sort_by_key(|&i| {
+            (
+                tracks[i].point_index,
+                old_to_new[tracks[i].image_index as usize],
+            )
+        });
+        let new_tracks: Vec<TrackObservation> = kept_obs
+            .iter()
+            .map(|&i| TrackObservation {
+                image_index: old_to_new[tracks[i].image_index as usize]
+                    .expect("kept rows are in kept images"),
+                point_index: tracks[i].point_index,
+            })
+            .collect();
 
         // The per-OBSERVATION confidence follows `kept_obs`, exactly as the
         // observation-source column below does — it is an observation row, not a

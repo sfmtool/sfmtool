@@ -790,6 +790,10 @@ impl PySfmrReconstruction {
     /// observations are removed and point IDs are remapped. Otherwise, all
     /// 3D points are kept (some may have zero observations).
     ///
+    /// Each point's kept observations are sorted by their new image index, so
+    /// a reordered ``image_indices`` still gives tracks in image order, and
+    /// every per-observation column moves with its observation.
+    ///
     /// Each kept point's :attr:`reference_observations` entry moves with its
     /// observation to the observation's place in the shortened track. A point
     /// whose reference observation was in a dropped image gets ``-1`` and

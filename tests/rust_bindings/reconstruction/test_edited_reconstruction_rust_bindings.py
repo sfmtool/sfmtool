@@ -14,6 +14,7 @@ import time
 import numpy as np
 import pytest
 
+from tests.conftest import SEOUL_BULL_GROUND_TRUTH
 from sfmtool.reconstruction import (
     EditedReconstruction,
     SfmrReconstruction,
@@ -923,3 +924,38 @@ def _rotation_matrix(wxyz):
             [2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)],
         ]
     )
+
+
+class TestRecordOrder:
+    """A record given out of image order is stored in image order."""
+
+    def test_a_record_given_out_of_image_order_is_stored_in_image_order(self):
+        base = SfmrReconstruction.load(str(SEOUL_BULL_GROUND_TRUTH))
+        edited = EditedReconstruction(base)
+        stored = edited.point(0)
+        n = len(stored["image_indexes"])
+        assert n >= 3
+        reverse = np.arange(n)[::-1]
+        per_row = ("image_indexes", "feature_indexes", "keypoints_xy")
+        given = dict(stored)
+        for key in per_row:
+            if key in given:
+                given[key] = np.asarray(given[key])[reverse]
+        # The reference is the first given observation, the last image.
+        given["reference_observation"] = 0
+
+        new_index = edited.add_point(given)
+        got = edited.point(new_index)
+        for key in per_row:
+            if key in stored:
+                np.testing.assert_array_equal(got[key], stored[key])
+        assert got["reference_observation"] == n - 1
+
+        recon, forward, _ = edited.materialize()
+        images = np.asarray(recon.track_image_indexes).astype(np.int64)
+        points = np.asarray(recon.track_point_indexes).astype(np.int64)
+        order = np.lexsort((images, points))
+        np.testing.assert_array_equal(order, np.arange(len(order)))
+        after = EditedReconstruction(recon).point(int(forward[new_index]))
+        np.testing.assert_array_equal(after["image_indexes"], stored["image_indexes"])
+        assert after["reference_observation"] == n - 1

@@ -11,6 +11,7 @@ import pytest
 from sfmtool.fileio import read_sfmr_content_hash, read_sfmr_metadata
 from sfmtool.reconstruction import SfmrReconstruction
 from sfmtool.patches import PatchCloud
+from tests.conftest import SEOUL_BULL_GROUND_TRUTH
 
 
 class TestHomogeneousPointAccessors:
@@ -851,3 +852,67 @@ class TestStatedWorkspacePath:
         out = tmp_path / "unstamped.sfmr"
         with pytest.raises(ValueError, match="stamped save"):
             recon.save(out, workspace_path=".")
+
+
+class TestSubsetByImageIndices:
+    """A reordered image list keeps every track sorted by point then image."""
+
+    def test_a_reordered_subset_keeps_each_track_in_image_order(self):
+        recon = SfmrReconstruction.load(str(SEOUL_BULL_GROUND_TRUTH))
+        n_obs = len(np.asarray(recon.track_image_indexes))
+        counts = np.asarray(recon.observation_counts).astype(np.int64)
+        # A confidence that names its row, so it can be followed, and each
+        # point's reference on its last observation, which the reversal below
+        # moves to the front of its track.
+        recon = recon.clone_with_changes(
+            observation_confidence=(np.arange(n_obs) % 251 + 1).astype(np.uint8),
+            reference_observations=(counts - 1).astype(np.int32),
+        )
+        images = np.asarray(recon.track_image_indexes).astype(np.int64)
+        points = np.asarray(recon.track_point_indexes).astype(np.int64)
+        keypoints = np.asarray(recon.keypoints_xy)
+        confidence = np.asarray(recon.observation_confidence)
+        offsets = np.concatenate([[0], np.cumsum(counts)[:-1]])
+        refs = np.asarray(recon.reference_observations).astype(np.int64)
+
+        # Reverse the images and drop one, so every image is renumbered.
+        keep = np.array(
+            [i for i in reversed(range(recon.image_count)) if i != 3], dtype=np.uint32
+        )
+        new_of = {int(old): new for new, old in enumerate(keep)}
+        out = recon.subset_by_image_indices(keep, False)
+
+        out_images = np.asarray(out.track_image_indexes).astype(np.int64)
+        out_points = np.asarray(out.track_point_indexes).astype(np.int64)
+        order = np.lexsort((out_images, out_points))
+        np.testing.assert_array_equal(order, np.arange(len(order)))
+
+        # Each row carries the keypoint and confidence of the row it came from.
+        expected = []
+        for p in range(recon.point_count):
+            rows = [
+                (new_of[int(images[k])], k)
+                for k in range(offsets[p], offsets[p] + counts[p])
+                if int(images[k]) in new_of
+            ]
+            expected.extend(k for _, k in sorted(rows))
+        expected = np.array(expected)
+        np.testing.assert_array_equal(out_points, points[expected])
+        np.testing.assert_array_equal(np.asarray(out.keypoints_xy), keypoints[expected])
+        np.testing.assert_array_equal(
+            np.asarray(out.observation_confidence), confidence[expected]
+        )
+
+        # Each reference still names the observation in the same image.
+        out_refs = np.asarray(out.reference_observations).astype(np.int64)
+        out_counts = np.asarray(out.observation_counts).astype(np.int64)
+        out_offsets = np.concatenate([[0], np.cumsum(out_counts)[:-1]])
+        checked = 0
+        for p in np.flatnonzero(refs >= 0):
+            image = int(images[offsets[p] + refs[p]])
+            if image not in new_of:
+                assert out_refs[p] == -1
+                continue
+            assert out_images[out_offsets[p] + out_refs[p]] == new_of[image]
+            checked += 1
+        assert checked > 0

@@ -352,15 +352,14 @@ point has been fitted. The fits read the copy before anything is written to it.
 - **Every record is written at its own row.** The observations a record carries
   are the point's own, all `in`, listed by image with ties in track order, as
   the commit sorts them. A stored track is in image order when it was read from
-  a file, but a value edited in memory need not be (`subset_by_image_indices`
-  with a reordered image list renumbers rows without sorting them, and a record
-  added from Python keeps the order it was given). So the writer sorts the
-  point's stored rows the same way and writes the record's `k`-th observation
-  over the `k`-th of them, the row it came from, and writes the record's
-  reference as the stored row it names. The point's track keeps its length, its
-  order and its offsets; no point and no observation row is added, removed or
-  renumbered. The writer asserts that each record's images are the stored rows'
-  in that order.
+  a file, but a value edited in memory need not be (tracks replaced through
+  `clone_with_changes` from Python keep the order they were given in). So the
+  writer sorts the point's stored rows the same way and writes the record's
+  `k`-th observation over the `k`-th of them, the row it came from, and writes
+  the record's reference as the stored row it names. The point's track keeps
+  its length, its order and its offsets; no point and no observation row is
+  added, removed or renumbered. The writer asserts that each record's images are
+  the stored rows' in that order.
 - **A point not rewritten is not touched**: one whose status is not `Refit`, or
   whose record agrees with the stored one while its reference is not a
   display-only pick. The stored record is put in the record's order first, its

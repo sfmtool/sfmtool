@@ -177,7 +177,10 @@ pub struct RecordObservation {
 pub struct PointRecord {
     /// Position, colour, error and normal.
     pub point: Point3D,
-    /// The whole track, in the order it is stored.
+    /// The whole track. A record read from a value lists it in the order it
+    /// is stored; [`EditedReconstruction::replace_point`] and
+    /// [`EditedReconstruction::add_point`] store it in image order, whatever
+    /// order it is given in.
     pub observations: Vec<RecordObservation>,
     /// The patch frame's in-plane half-vectors, when the base carries them.
     pub patch_u_halfvec: Option<[f32; 3]>,
@@ -240,6 +243,32 @@ impl PointRecord {
             && self.normal_confidence == other.normal_confidence
             && constraint_triples_agree(self.constraint, other.constraint)
             && self.reference_observation == other.reference_observation
+    }
+
+    /// This record with its observations sorted by image, ties kept in the
+    /// order given, and its reference observation renumbered to follow the
+    /// observation it names. A reference that names none of the observations
+    /// is kept as it is.
+    ///
+    /// A stored track is in image order ([`PointSet::tracks`]), so this is the
+    /// order a record is stored in.
+    pub(crate) fn into_image_order(mut self) -> Self {
+        let mut order: Vec<usize> = (0..self.observations.len()).collect();
+        order.sort_by_key(|&k| (self.observations[k].image_index, k));
+        if order.iter().enumerate().all(|(i, &k)| i == k) {
+            return self;
+        }
+        self.observations = order
+            .iter()
+            .map(|&k| self.observations[k].clone())
+            .collect();
+        self.reference_observation = self.reference_observation.map(|r| {
+            usize::try_from(r)
+                .ok()
+                .and_then(|r| order.iter().position(|&k| k == r))
+                .map_or(r, |k| k as i32)
+        });
+        self
     }
 }
 
@@ -1013,6 +1042,9 @@ impl EditedReconstruction {
     /// occupies is recorded against the replacement, so materialisation puts it
     /// back in its place; replacing a point that is itself a replacement keeps
     /// the original base index rather than chaining.
+    ///
+    /// The record's observations are stored in image order, the reference
+    /// observation following the observation it names, as a stored track is.
     pub fn replace_point(&mut self, index: u32, record: PointRecord) -> Result<u32, EditError> {
         let base_count = self.base.point_count() as u32;
         if self.point(index).is_none() {
@@ -1029,6 +1061,9 @@ impl EditedReconstruction {
     }
 
     /// Add a point that the base does not hold, and give back its index.
+    ///
+    /// The record's observations are stored in image order, as in
+    /// [`Self::replace_point`].
     pub fn add_point(&mut self, record: PointRecord) -> Result<u32, EditError> {
         self.push_record(record, None)
     }
@@ -1039,12 +1074,17 @@ impl EditedReconstruction {
     /// leaves the addition set exactly as it was -- otherwise a caller that
     /// recovers from an error would be reading a set whose columns had stopped
     /// being parallel.
+    ///
+    /// The record's observations are stored in image order
+    /// ([`PointRecord::into_image_order`]), whatever order they were given in,
+    /// so the materialised tracks stay sorted by point then image.
     fn push_record(
         &mut self,
         record: PointRecord,
         replaces: Option<u32>,
     ) -> Result<u32, EditError> {
         self.validate_record(&record)?;
+        let record = record.into_image_order();
 
         let image_count = self.base.image_count();
         let base_count = self.base.point_count();

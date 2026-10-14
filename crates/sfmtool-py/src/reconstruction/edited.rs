@@ -521,13 +521,17 @@ impl PyEditedReconstruction {
 
     /// Replace the point at `index` with `record`, and give back the index the
     /// replacement took. The base index it occupies is remembered, so a
-    /// materialisation puts it back in its place.
+    /// materialisation puts it back in its place. The record's observations
+    /// are stored in image order, and its ``reference_observation`` is
+    /// renumbered to follow the observation it names.
     fn replace_point(&mut self, index: u32, record: &Bound<'_, PyDict>) -> PyResult<u32> {
         let record = record_from_dict(record)?;
         self.inner.replace_point(index, record).map_err(value_err)
     }
 
-    /// Add a point the base does not hold, and give back its index.
+    /// Add a point the base does not hold, and give back its index. The
+    /// record's observations are stored in image order, as in
+    /// ``replace_point``.
     fn add_point(&mut self, record: &Bound<'_, PyDict>) -> PyResult<u32> {
         let record = record_from_dict(record)?;
         self.inner.add_point(record).map_err(value_err)

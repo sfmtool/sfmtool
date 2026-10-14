@@ -629,7 +629,7 @@ fn a_track_stored_out_of_image_order_is_written_back_at_its_own_rows() {
     sorted.point_set.reference_observations = Some(vec![0; sorted.point_count()]);
     // The same value with point 0's rows reversed, every per-observation
     // column with them and its reference renumbered to the same observation:
-    // what an image reorder in memory, or rows replaced by hand, leaves.
+    // what rows replaced by hand leave.
     let mut reversed = sorted.clone();
     let n = sorted.point_set.observation_offsets[1];
     {

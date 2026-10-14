@@ -775,3 +775,60 @@ fn a_creation_map_is_the_identity_forward_and_has_no_inverse_for_what_it_made() 
     assert_eq!(map.inverse(39), Some(39));
     assert_eq!(map.inverse(42), Some(42));
 }
+
+/// A record given out of image order is stored in image order, each
+/// observation's columns with it and the reference following the observation
+/// it names, so the materialised tracks stay sorted by point then image.
+#[test]
+fn a_record_given_out_of_image_order_is_stored_in_image_order() {
+    let base = Arc::new(fixture(6));
+    let mut given = new_record(2, 8);
+    let template = given.observations[0].clone();
+    given.observations = [5u32, 1, 3]
+        .iter()
+        .map(|&image| RecordObservation {
+            image_index: image,
+            feature_index: Some(1000 + image),
+            keypoint_xy: Some([image as f32, 10.0 * image as f32]),
+            confidence: Some(100 + image as u8),
+            ..template.clone()
+        })
+        .collect();
+    // The observation in image 5.
+    given.reference_observation = Some(0);
+    let mut sorted = given.clone();
+    sorted.observations = [1, 2, 0]
+        .iter()
+        .map(|&k| given.observations[k].clone())
+        .collect();
+    sorted.reference_observation = Some(2);
+
+    let mut edited = EditedReconstruction::new(Arc::clone(&base));
+    let added = edited.add_point(given.clone()).unwrap();
+    let replaced = edited.replace_point(4, given).unwrap();
+    for index in [added, replaced] {
+        assert!(
+            edited
+                .point(index)
+                .unwrap()
+                .to_record()
+                .agrees_with(&sorted),
+            "point {index}"
+        );
+    }
+
+    let (mat, map) = edited.materialize();
+    let set = &mat.point_set;
+    for p in 0..set.point_count() {
+        let run = &set.tracks[set.observation_offsets[p]..set.observation_offsets[p + 1]];
+        assert!(
+            run.windows(2).all(|w| w[0].image_index <= w[1].image_index),
+            "point {p}'s rows {run:?}"
+        );
+    }
+    let mat = EditedReconstruction::new(Arc::new(mat));
+    for index in [added, replaced] {
+        let at = map.forward(index).unwrap();
+        assert!(mat.point(at).unwrap().to_record().agrees_with(&sorted));
+    }
+}

@@ -392,7 +392,11 @@ A record must carry **exactly** the base's optional columns, no more and no
 fewer, which is what lets column presence be answered from the base alone and
 never from a walk; `add_point` refuses otherwise, with an `EditError` naming the
 column. Every edit validates before it pushes, so a refused record leaves the
-addition set exactly as it was. `delete_points` is the many-point form of
+addition set exactly as it was. A record's observations may come in any order:
+`replace_point` and `add_point` store them sorted by image, ties in the order
+given, and renumber the reference observation to follow the observation it
+names, so every track in the additions, and so in the materialisation, is in
+image order, as a stored track is. `delete_points` is the many-point form of
 `delete_point` and holds to the same rule across its list: every index is checked
 before any is deleted, so one index that names no live point refuses the whole
 list and leaves the deleted set as it was. An index named twice counts once, and

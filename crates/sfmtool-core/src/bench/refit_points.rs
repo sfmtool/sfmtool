@@ -713,14 +713,13 @@ fn refit_one(
 /// A record's observations are the point's own, all `in`, and the commit's
 /// record lists them in image order, ties kept in track order. A stored track
 /// is in image order when it was read from a file, but a value edited in memory
-/// need not be: an image reorder by `subset_by_image_indices` renumbers the
-/// rows without sorting them, and a record added from Python keeps the order
-/// it was given. So each record observation is written over the stored row it
-/// came from, the `k`-th row of the point's stored rows in that same order
-/// ([`record_rows`]), and no row moves. A track that names one image twice is
-/// written the same way: the tie goes to track order on both sides. The record's
-/// reference, an index into its own image-ordered list, is written as the
-/// stored row it names. The columns written are those `out`
+/// need not be: tracks replaced through `clone_with_changes` from Python keep
+/// the order they were given in. So each record observation is written over
+/// the stored row it came from, the `k`-th row of the point's stored rows in
+/// that same order ([`record_rows`]), and no row moves. A track that names one
+/// image twice is written the same way: the tie goes to track order on both
+/// sides. The record's reference, an index into its own image-ordered list, is
+/// written as the stored row it names. The columns written are those `out`
 /// carries, under the commit's rules: a readings row stands only under the
 /// column's own options, and a written point's display-only mark is cleared,
 /// since its reference is now the record's own. A bitmap column rendered for
@@ -855,19 +854,7 @@ fn record_rows(track: &[crate::reconstruction::data::TrackObservation]) -> Vec<u
 /// so that [`PointRecord::agrees_with`], which compares observations position
 /// by position, compares each stored row with the record observation that
 /// came from it. A reference that names none of the point's rows is kept as
-/// it is.
-pub(super) fn stored_in_record_order(mut stored: PointRecord) -> PointRecord {
-    let mut rows: Vec<usize> = (0..stored.observations.len()).collect();
-    rows.sort_by_key(|&k| (stored.observations[k].image_index, k));
-    stored.observations = rows
-        .iter()
-        .map(|&k| stored.observations[k].clone())
-        .collect();
-    stored.reference_observation = stored.reference_observation.map(|r| {
-        usize::try_from(r)
-            .ok()
-            .and_then(|r| rows.iter().position(|&k| k == r))
-            .map_or(r, |k| k as i32)
-    });
-    stored
+/// it is ([`PointRecord::into_image_order`]).
+pub(super) fn stored_in_record_order(stored: PointRecord) -> PointRecord {
+    stored.into_image_order()
 }

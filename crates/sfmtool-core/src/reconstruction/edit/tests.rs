@@ -427,3 +427,127 @@ fn subset_keeps_the_thumbnail_rows_of_the_kept_images_in_order() {
         before.index_axis(ndarray::Axis(0), 0)
     );
 }
+
+/// `demo_with_references` with every per-observation column filled with a
+/// value that names its row: the feature index, the inline keypoint, the
+/// confidence and the reading's view angle.
+fn demo_with_observation_columns() -> SfmrReconstruction {
+    use crate::camera::sampler::{Sampler, SamplerChoice};
+    use crate::patch::normal_refine::PatchWindow;
+    use crate::reconstruction::{ObservationReading, ObservationReadings};
+
+    let mut recon = demo_with_references();
+    let n = recon.point_set.tracks.len();
+    if let ObservationSource::SiftFiles {
+        feature_indexes,
+        keypoints_xy,
+        ..
+    } = &mut recon.point_set.observations
+    {
+        *feature_indexes = (0..n as u32).map(|k| 100 + k).collect();
+        *keypoints_xy = Some(Array2::from_shape_fn((n, 2), |(k, c)| (10 * k + c) as f32));
+    } else {
+        panic!("the demo is sift_files");
+    }
+    recon.point_set.observation_confidence = Some((0..n as u8).map(|k| 1 + k).collect());
+    let options = crate::reconstruction::observation_reading_options(
+        SamplerChoice::Fixed(Sampler::Bilinear),
+        8,
+        PatchWindow::Uniform,
+    );
+    let mut readings = ObservationReadings::not_measured(n, options);
+    for (k, row) in readings.rows.iter_mut().enumerate() {
+        *row = ObservationReading {
+            cos_view_angle: k as f32,
+            ..ObservationReading::NOT_MEASURED
+        };
+    }
+    recon.point_set.observation_readings = Some(readings);
+    recon.rebuild_derived_fields();
+    recon
+}
+
+/// Every per-observation value of row `row`: its image, its feature index, its
+/// keypoint, its confidence and its reading's view angle.
+fn observation_row(recon: &SfmrReconstruction, row: usize) -> (u32, u32, [f32; 2], u8, f32) {
+    let set = &recon.point_set;
+    let ObservationSource::SiftFiles {
+        feature_indexes,
+        keypoints_xy: Some(kp),
+        ..
+    } = &set.observations
+    else {
+        panic!("sift_files with inline keypoints");
+    };
+    (
+        set.tracks[row].image_index,
+        feature_indexes[row],
+        [kp[[row, 0]], kp[[row, 1]]],
+        set.observation_confidence.as_ref().unwrap()[row],
+        set.observation_readings.as_ref().unwrap().rows[row].cos_view_angle,
+    )
+}
+
+#[test]
+fn an_image_reorder_keeps_each_track_in_image_order_with_its_columns() {
+    let recon = demo_with_observation_columns();
+    let before_refs = reference_images(&recon);
+    // Reverse the images, so every two-observation track would come out
+    // backwards if its rows kept their input order, and drop image 2.
+    let keep: Vec<u32> = (0..8u32).rev().filter(|&i| i != 2).collect();
+    let new_of = |old: u32| keep.iter().position(|&k| k == old).map(|n| n as u32);
+    for drop_orphans in [false, true] {
+        let out = recon.subset_by_image_indices(&keep, drop_orphans).unwrap();
+        out.validate_observation_columns().unwrap();
+        out.validate_point_columns().unwrap();
+        let set = &out.point_set;
+
+        // Each point's rows are in image order.
+        for p in 0..set.point_count() {
+            let run = &set.tracks[set.observation_offsets[p]..set.observation_offsets[p + 1]];
+            assert!(
+                run.windows(2).all(|w| w[0].image_index <= w[1].image_index),
+                "drop_orphans {drop_orphans}: point {p}'s rows {run:?}"
+            );
+        }
+
+        // Each kept row carries the columns of the input row it came from:
+        // the same point (by the points it kept) in the renumbered image.
+        let kept_points: Vec<usize> = (0..recon.point_count())
+            .filter(|&p| {
+                !drop_orphans
+                    || recon.point_set.tracks[recon.point_set.observation_offsets[p]
+                        ..recon.point_set.observation_offsets[p + 1]]
+                        .iter()
+                        .any(|t| new_of(t.image_index).is_some())
+            })
+            .collect();
+        let mut expected = Vec::new();
+        for &p in &kept_points {
+            let mut rows: Vec<_> = (recon.point_set.observation_offsets[p]
+                ..recon.point_set.observation_offsets[p + 1])
+                .filter_map(|row| {
+                    let (image, f, kp, c, r) = observation_row(&recon, row);
+                    new_of(image).map(|image| (image, f, kp, c, r))
+                })
+                .collect();
+            rows.sort_by_key(|row| row.0);
+            expected.extend(rows);
+        }
+        let got: Vec<_> = (0..set.tracks.len())
+            .map(|row| observation_row(&out, row))
+            .collect();
+        assert_eq!(got, expected, "drop_orphans {drop_orphans}");
+
+        // Each reference follows its observation to its sorted place.
+        let want_refs: Vec<Option<u32>> = kept_points
+            .iter()
+            .map(|&p| before_refs[p].and_then(new_of))
+            .collect();
+        assert_eq!(
+            reference_images(&out),
+            want_refs,
+            "drop_orphans {drop_orphans}"
+        );
+    }
+}

@@ -67,7 +67,12 @@ impl ObservationSource {
 ///
 /// The tracks are one CSR structure: `tracks` sorted by point index then image
 /// index, `observation_counts` giving each point's run length, and
-/// `observation_offsets` their prefix sum. Every per-observation column
+/// `observation_offsets` their prefix sum. The edits in this crate keep each
+/// point's rows in image order; the validation does not require it, so tracks
+/// a caller supplies whole (`from_data` or `clone_with_changes` from Python, as
+/// the COLMAP import does) may hold a point's rows in another order, and the
+/// `.sfmr` writer sorts them on save.
+/// Every per-observation column
 /// (`observations`' pixel column, `observation_confidence`) is parallel to
 /// `tracks`; every per-point column (`normal_confidence`, the patch frame and
 /// bitmaps, `point_constraints`) is parallel to `points`.
