@@ -8,7 +8,7 @@
 //! Most of these run on the synthetic textured-plane scene; one runs on the
 //! seoul_bull ground truth and its photographs.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use sfmtool_sfmr_format::{
     NO_REFERENCE_IMAGE, POINT_CONSTRAINT_FREE, POINT_CONSTRAINT_HELD, POINT_CONSTRAINT_RANGED,
@@ -650,24 +650,42 @@ fn a_cancelled_run_writes_nothing() {
     .expect("cancelled before it started");
     assert_eq!(refused, RefitPointsError::Cancelled);
 
-    // Part way: the first point counted asks the run to stop.
+    // Part way: the first point counted asks the run to stop. On one thread
+    // the points are fitted one after another, so the check in front of each
+    // point's fit leaves every point after the first unfitted, and the count
+    // never passes one. Without that check every point would be fitted and
+    // counted before the check after the loop refused the run.
     let stop = AtomicBool::new(false);
+    let counted = AtomicU64::new(0);
     let sink = |event: Event<'_>| {
         if let Event::Count { done, .. } = event {
+            counted.fetch_max(done, Ordering::Relaxed);
             if done >= 1 {
                 stop.store(true, Ordering::Relaxed);
             }
         }
     };
-    let refused = refit_points(
-        &recon,
-        &scene.views(),
-        &refit_options(),
-        &Progress::to(&sink).cancelled_by(&stop),
-    )
-    .err()
-    .expect("cancelled part way");
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(1)
+        .build()
+        .expect("a pool");
+    let refused = pool
+        .install(|| {
+            refit_points(
+                &recon,
+                &scene.views(),
+                &refit_options(),
+                &Progress::to(&sink).cancelled_by(&stop),
+            )
+        })
+        .err()
+        .expect("cancelled part way");
     assert_eq!(refused, RefitPointsError::Cancelled);
+    assert_eq!(
+        counted.load(Ordering::Relaxed),
+        1,
+        "the run fitted points after it was asked to stop"
+    );
     assert_eq!(
         recon.content_xxh128().expect("hashes").content_xxh128,
         before.content_xxh128().expect("hashes").content_xxh128
@@ -741,6 +759,25 @@ fn the_run_refuses_a_value_it_cannot_refit() {
             expected: 3
         }
     );
+
+    // A track naming an image past the table, which a value whose tracks were
+    // replaced by hand can carry: refused up front, even with a view for it,
+    // rather than panicking where a step indexes the table by it.
+    let mut corrupt = with_columns(fixture_points(&scene, &three_points()), BITMAP_R);
+    let row = corrupt.point_set.observation_offsets[1] - 1;
+    corrupt.point_set.tracks[row].image_index = 3;
+    let mut extra = scene.views();
+    extra.extend(scene.views().into_iter().take(1));
+    for views in [&views[..], &extra[..]] {
+        assert_eq!(
+            run(&corrupt, views, &refit_options()),
+            RefitPointsError::ImageOutOfRange {
+                point: 0,
+                image: 3,
+                image_count: 3
+            }
+        );
+    }
 
     // No noise level: none given, and a value with no finite point to measure
     // one from; or one given that weights nothing.

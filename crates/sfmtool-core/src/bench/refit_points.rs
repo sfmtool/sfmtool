@@ -282,6 +282,16 @@ pub enum RefitPointsError {
         /// How many the value holds.
         expected: usize,
     },
+    /// An observation names an image the value does not hold, which only a
+    /// value whose tracks were replaced by hand can carry.
+    ImageOutOfRange {
+        /// The point whose track names it.
+        point: u32,
+        /// The index named.
+        image: u32,
+        /// How many images the value holds.
+        image_count: usize,
+    },
     /// No noise level to weight the rays by: no `sigma_px` was given and the
     /// value's reprojection noise could not be measured, or the one given is
     /// not a finite positive number. The sentence says why.
@@ -308,6 +318,15 @@ impl std::fmt::Display for RefitPointsError {
             RefitPointsError::ViewsMissing { got, expected } => write!(
                 f,
                 "{got} decoded views were supplied and the reconstruction has {expected} images"
+            ),
+            RefitPointsError::ImageOutOfRange {
+                point,
+                image,
+                image_count,
+            } => write!(
+                f,
+                "point {point}'s track names image {image}, and the reconstruction has \
+                 {image_count} images"
             ),
             RefitPointsError::NoNoiseLevel(why) => write!(
                 f,
@@ -525,6 +544,21 @@ fn check_preconditions(
             expected,
         });
     }
+    // Every image a track names is in the table, so no step indexes past it:
+    // the fit's minimum point depth reads each observation's camera centre
+    // and the record checks each `in` row's image.
+    if let Some(observation) = recon
+        .point_set
+        .tracks
+        .iter()
+        .find(|o| o.image_index as usize >= expected)
+    {
+        return Err(RefitPointsError::ImageOutOfRange {
+            point: observation.point_index,
+            image: observation.image_index,
+            image_count: expected,
+        });
+    }
     Ok(())
 }
 
@@ -632,8 +666,9 @@ fn refit_one(
         Err(CommitError::NoBitmap) => return (status(RefitOutcome::NoBitmap), None),
         // The run refused a `sift_files` value, and a fitted track is at the
         // track stage with a position, a frame, two or more `in` rows and a
-        // keypoint on every one of them, each in an image of the value; the
-        // record is built, never applied, so no edit refuses it.
+        // keypoint on every one of them, each in an image of the value, since
+        // the run refused a track naming any other; the record is built, never
+        // applied, so no edit refuses it.
         Err(e) => unreachable!("a fitted track's record is refused only for its bitmap: {e}"),
     };
     let at_infinity = record.point.is_at_infinity();

@@ -202,6 +202,9 @@ ranged points whose constraint was released (§ "Constraints").
 
 `RefitPointsError` is what refuses the run as a whole: `NoKeypoints` (a
 `sift_files` value), `NoPatchFrames`, `NoPosedImage`, `ViewsMissing { got, expected }`,
+`ImageOutOfRange { point, image, image_count }` (a track names an image the
+value does not hold, which only a value whose tracks were replaced by hand can
+carry; refused up front, since the fit reads every observation's camera centre),
 `NoNoiseLevel(String)` (no `sigma_px` given and the value's reprojection noise
 cannot be measured, or the `sigma_px` given is not a finite positive number,
 the fit's own refusals) and `Cancelled`. The error and the
@@ -539,7 +542,8 @@ stored point ([`../core/bench/editable-track.md`](../core/bench/editable-track.m
 
 Before the copy is taken, the run is refused as a whole, writing nothing,
 when the value is `sift_files`, carries no patch frame, has no posed image, is
-handed fewer views than images, or has no noise level.
+handed fewer views than images, has a track naming an image it does not hold,
+or has no noise level.
 
 **A photograph that cannot be read is an error for the whole run.** In the
 viewer, a photograph some point observes that cannot be read fails the job in
