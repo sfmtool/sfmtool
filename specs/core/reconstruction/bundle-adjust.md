@@ -229,8 +229,8 @@ points still move
 § "Step guards and the held-distortion retry"). A final round that settles
 that way is not converged: `report.free_point_decision` carries
 `converged: false`, and the kernel's progress names the held camera. Whether
-the report carries the held state per camera is open in
-[`../../drafts/bundle-adjustment-spline-tail-amendment.md`](../../drafts/bundle-adjustment-spline-tail-amendment.md).
+the report carries the held state per camera is an
+[open question](#open-questions).
 
 **The report carries each camera's outermost observation.** Measured under the
 camera the solve returned, as a radius and an incidence angle, because that is
@@ -611,3 +611,19 @@ untouched -- and the no-keypoints refusal.
   given.
 - Running in the background. The function is synchronous, and a caller that
   needs a responsive window runs it where a stall is acceptable.
+
+## Open questions
+
+- **Reporting the guard per camera.** When the final round settles with a
+  camera's distortion held at its step guard, the kernel's progress line names
+  the camera, and `report.free_point_decision.converged` is `false`. Whether
+  `BundleAdjustment` and this function's report also carry a per-camera flag,
+  so the viewer's report can say "the spline of camera 0 ended at its
+  monotonicity limit", is open.
+- **An end-to-end fixture of a weakly supported spline tail.** The
+  `dino_dog_toy` reconstruction behind the kernel's tail measurements
+  ([`../geometry/bundle-adjustment-measurements.md`](../geometry/bundle-adjustment-measurements.md#a-weakly-supported-spline-tail))
+  is not checked in, and the kernel's regression test of the case is
+  synthetic. Whether to check in a 739 KB minimal `.sfmr` of it, for an
+  end-to-end test at this level or through the Python binding, is a
+  maintainer decision.

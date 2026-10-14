@@ -437,9 +437,10 @@ cost = Σ_i s² · ρ(r_i² / s²),   ρ(z) = 2·(√(1 + z) − 1),   s = loss_
   the optimum lies past the limit, the held step is accepted at the same `λ`,
   `λ` falls, and a damped full step that would have moved the distortion
   part of the way is not tried, so the distortion can stay where it was for
-  the round (see
-  [`../../drafts/bundle-adjustment-spline-tail-amendment.md`](../../drafts/bundle-adjustment-spline-tail-amendment.md)
-  § "After step 2").
+  the round (measured in
+  [`bundle-adjustment-measurements.md`](bundle-adjustment-measurements.md#a-weakly-supported-spline-tail);
+  a damped distortion step in its place is an
+  [open question](#open-questions)).
 - **Staged releases.** Callers open the shared parameters in stages:
   fixed → `opt_f` → `opt_f` plus a distortion release, so a distortion
   parameter opens only on a focal that has already settled — `opt_f + opt_k1`
@@ -822,14 +823,21 @@ Python's point of view).
   camera's spline is held and the other's moves; and the same round run to
   its end reports `converged: false`, says on `progress` that it settled with
   camera 0's spline held, and returns a monotone spline.
-- **A weakly supported spline tail**: a scene whose observations thin out
-  toward the domain end, started from a monotone spline with a wild tail,
-  adjusted under the default schedule once held and once with the focal and
-  the distortion released, gives a released median residual not above the
-  held one, an end slope `1 + δ'(d_max)` well away from 0, and a final round
-  that does not report convergence with the spline held at its guard
-  ([`../../drafts/bundle-adjustment-spline-tail-amendment.md`](../../drafts/bundle-adjustment-spline-tail-amendment.md)
-  § "Step 3: a regression test of the whole case").
+- **A weakly supported spline tail**: on a pinhole scene with no distortion
+  whose observations thin out toward the domain end, the last four knot spans
+  holding 1, 3, 12 and 30 of them from the end, so that the last of 20
+  coefficients is reached by one observation, started from a monotone spline
+  whose last three coefficients
+  alternate and give an end slope `1 + δ'(d_max)` above 5, the poses and
+  points are settled under the default schedule with the lens held and then
+  adjusted again with the focal and the spline released. The released spline
+  is monotone with an end slope between 0.5 and 3, away from the limit at 0
+  and from the start; the median residual is not more than 0.01 px above the
+  held adjustment's, at a noise level near 0.16 px; and the final round does
+  not report convergence with the end slope under 0.05. Without the
+  regularization and the held retry the release ends at an end slope of 0.000
+  and reports convergence there
+  ([`bundle-adjustment-measurements.md`](bundle-adjustment-measurements.md#a-weakly-supported-spline-tail)).
 - **Directions carry the `k1` release**: on a scene whose finite cloud sits near the
   optical axis (no `θ³` signal) and whose far field is marked at infinity,
   `opt_k1` recovers the planted curvature — and the same solve with the
@@ -1658,3 +1666,35 @@ validation, and outputs are unchanged.
   through the reconstruction-level adjustment it backs the viewer's Bundle
   Adjust command, the `bundle_adjust` MCP tool and `sfm xform --bundle-adjust`
   on spline cameras.
+
+## Open questions
+
+- **The spline penalty's weight under the robust loss.** The refit's data rows
+  are plain least squares. The adjustment's are soft-L1 with second-order
+  scaling, so an observation's curvature is `(1 + z)^(−3/2)` of a plain row's,
+  with `z = (r/s)²`, and at the last stage's loss scale of 1 px many inliers
+  have `z` near or above one. The penalty weight `w_j` counts each kept
+  observation as two plain rows, as the refit does; counting each by its
+  robust weight, or by `s²`, would make the penalty heavier. On the
+  `dino_dog_toy` case the present weight keeps the default schedule's release
+  off the monotonicity limit, but not a `[(12, 2)]` round run alone, which
+  settles at the guard
+  ([`bundle-adjustment-measurements.md`](bundle-adjustment-measurements.md#a-weakly-supported-spline-tail)).
+  Whether a heavier weight keeps that round off the limit is not measured.
+- **A damped distortion step beside the held one.** The held-distortion retry
+  pins the distortion outright, so when the full step crosses the guard by
+  overshooting rather than because the optimum lies past the limit, the
+  distortion does not move for the round (the `[(50, 5)]` round run alone in
+  the measurements above). The alternative is to damp the inadmissible
+  camera's distortion slots more, by their own factor on the diagonal, and
+  retry at the same `λ` with that factor rising until the step is admissible,
+  pinning being the limit. The poses and points would keep the step `λ`
+  allows them while the distortion takes the largest admissible damped step.
+  It costs more LU solves per rung and a second damping factor to carry
+  between iterations. Whether a real case needs it is open, since the
+  default schedule's later rounds move the spline anyway.
+- **Penalty rows at a pinned coefficient.** Leaving out the penalty rows that
+  touch an unsupported coefficient lets the supported tail end freely next to
+  it. Keeping every interior row, with the pinned values as constants, would
+  tie the tail to the unsupported values instead. The kernel does the first;
+  a case where that bends the curve badly would reopen the choice.

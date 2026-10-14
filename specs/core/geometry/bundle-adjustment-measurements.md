@@ -1,7 +1,9 @@
 # Staged Bundle Adjustment Measurements
 
 This file records the measurements behind the free-point choices of
-[bundle-adjustment.md](bundle-adjustment.md#free-points-inverse-depth-and-the-storage-decision).
+[bundle-adjustment.md](bundle-adjustment.md#free-points-inverse-depth-and-the-storage-decision),
+and, in its last section, those behind the regularization and the step-guard
+retry of a released spline.
 Under `FreePointPolicy::CROSS` the bundle adjustment solves every free point in
 inverse depth and decides once, at the end of the solve, whether it is stored as
 a position or as a direction, by the point-or-bearing test at the noise level
@@ -419,4 +421,106 @@ which the test calls most points bearings; the decision's level, read over the
 observations the final round kept, is 1.0 to 1.3 px there. Those runs leave 28
 to 315 points unscored, each in the representation it was handed in with. No input produced a
 `NaN` point.
+
+## A weakly supported spline tail
+
+These measurements are behind the tail regularization of a released spline
+and the held-distortion retry at the step guard
+([bundle-adjustment.md](bundle-adjustment.md) § "The solve"). They were taken
+on a reconstruction of the `dino_dog_toy` images through one `SFMTOOL_PINHOLE`
+camera: `f ≈ 1459.3`, 2040 × 1536 pixels, 20 spline coefficients,
+`bspline_rho_max = 0.8635`. The adjustment ran the default schedule
+`[(50, 5), (12, 2), (4, 1)]` (trim px, loss scale) through the Python binding,
+`EditedReconstruction(SfmrReconstruction.load(path)).bundle_adjust(...)`, which
+gives the viewer's Bundle Adjust result exactly. The reconstruction is not
+checked in. A is the reconstruction before the release, and B is what
+releasing A's focal and distortion under the default schedule gave before
+either change.
+
+**The tail has almost no support.** With 20 coefficients there are 19 knot
+spans over `[0, ρ_max]`. Of the 17,575 kept observations, the last coefficient,
+`c19`, is touched by 1 (at `ρ = 0.849`, the outermost); `c18` by 23; `c17` by
+134; `c16` by 412. A's last three coefficients are 0.0163, −0.0075 and 0.0601,
+and its end slope `1 + δ'(d_max)` is about 5.4.
+
+**Without either change.**
+
+| Start | Release | Schedule | Median residual (px), before → after |
+|-------|---------|----------|--------------------------------------|
+| A | held | default | 0.674 → 0.674 |
+| A | focal | default | 0.674 → 0.674 |
+| A | focal + distortion | default | 0.674 → 0.7928 |
+| A | focal + distortion | `[(50, 5)]` only | 0.674 → 0.798 |
+| A | focal + distortion | `[(12, 2)]` only | 0.674 → 0.751 |
+| A | focal + distortion | `[(4, 1)]` only | 0.674 → 0.667 |
+| B | focal + distortion | default | 0.7928 → 0.7928 |
+| B | held | default | 0.7928 → 0.678 |
+
+Every released run, whatever the schedule, ends with the last three
+coefficients near 0.0125, 0.0225 and 0.0073 and an end slope of about 0.01,
+where the monotonicity limit is 0. Read on a grid, the slope falls from about
+1.06 at `ρ = 0.795` to about 0.57 near `ρ = 0.852`, inside the imaged field
+(the far corner is at `ρ ≈ 0.875`). B's residuals are worse than A's at every
+radius, including the centre, where the spline cannot act: the median in the
+innermost radial bin rises from 0.52 to 0.59 px, while the mean radial bias
+got smaller. So the release did not make the lens curve worse at the centre;
+it stopped the poses and points from converging. The coefficient fitted to
+one observation drives the end of the curve to the limit, the guard then
+rejects every joint step, the damping rises until the tiny-step test fires,
+and the round reports convergence with the poses and points unsettled.
+
+**With the tail regularization alone** (`SMOOTHING = 1e-6`, the refit's
+weight):
+
+| Start | Release | Schedule | Median residual (px), before → after | Last three coefficients | End slope |
+|-------|---------|----------|--------------------------------------|-------------------------|-----------|
+| A | focal + distortion | default | 0.674 → 0.6775 | 0.0130, 0.0160, 0.0156 | 0.98 |
+| A | focal + distortion | `[(50, 5)]` only | 0.674 → 0.7987 | 0.0125, 0.0225, 0.0073 | 0.013 |
+| A | focal + distortion | `[(12, 2)]` only | 0.674 → 0.7497 | 0.0123, 0.0225, 0.0073 | 0.013 |
+| A | focal + distortion | `[(4, 1)]` only | 0.674 → 0.6664 | 0.0137, 0.0160, 0.0168 | 1.05 |
+| B | focal + distortion | default | 0.7928 → 0.6782 | 0.0130, 0.0159, 0.0155 | 0.97 |
+| B | held | default | 0.7928 → 0.6776 | unchanged | 0.013 |
+
+The single-stage medians are the schedule's, not the release's: with nothing
+released, A goes to 0.7991 under `[(50, 5)]` alone and to 0.7500 under
+`[(12, 2)]` alone, and with the focal alone released to 0.7990 and 0.7497. So
+those rows measure the stall by their end slopes, not their medians.
+
+**With both changes.** "Final round" is how the final round ended (see
+[bundle-adjustment.md](bundle-adjustment.md) § "The solve", "Termination"):
+
+| Start | Release | Schedule | Median residual (px), before → after | Last three coefficients | End slope | Final round |
+|-------|---------|----------|--------------------------------------|-------------------------|-----------|-------------|
+| A | held | default | 0.674 → 0.674 | unchanged | 5.42 | converged |
+| A | focal + distortion | default | 0.674 → 0.6761 | 0.0130, 0.0164, 0.0159 | 0.97 | converged |
+| A | focal + distortion | `[(50, 5)]` only | 0.674 → 0.7990 | unchanged | 5.42 | settled at the guard |
+| A | focal + distortion | `[(12, 2)]` only | 0.674 → 0.7496 | 0.0123, 0.0224, 0.0074 | 0.019 | settled at the guard |
+| A | focal + distortion | `[(4, 1)]` only | 0.674 → 0.6664 | 0.0137, 0.0160, 0.0168 | 1.05 | converged |
+| B | focal + distortion | default | 0.7928 → 0.6760 | 0.0131, 0.0163, 0.0158 | 0.97 | converged |
+| B | held | default | 0.7928 → 0.6776 | unchanged | 0.013 | converged |
+
+Under the default schedule the release from A ends 0.002 px above A's median,
+and B released again ends at 0.6760, below B held; neither reaches A's own
+median, so a release is not guaranteed to end at or below the held
+adjustment's median. Under `[(12, 2)]` alone the round still ends at the
+monotonicity limit, and now says so. Under `[(50, 5)]` alone the spline does
+not move: the round takes 8 held steps and no full step, because from an end
+slope of 5.4 the full step at each iteration's `λ` overshoots past the limit,
+the held step at that `λ` is accepted and halves `λ`, and the next full step
+overshoots further. The default schedule's first round does the same; its
+second takes 5 full and 13 held steps and settles at the guard, and its third
+converges on 23 full steps.
+
+**The synthetic regression test.** The test of
+[bundle-adjustment.md](bundle-adjustment.md) § "Testing requirements" ("A
+weakly supported spline tail") is this case scaled down: `f = 250`, 10 images,
+a 20-coefficient spline over `[0, 0.835]`, at most 1, 3, 12 and 30
+observations in the last four knot spans, ±0.3 px of noise, and A's last three
+coefficients as the start. Without either change the release ends with an
+end slope of 0.000 (from 5.61) and reports the final round converged, while
+the median falls from 0.1568 to 0.1525 px, so on this scene the median does
+not show the stall. With the tail regularization alone, and with both
+changes, it ends at an end slope of 1.57, converged, at 0.1530 px. The two
+give the same result, so this scene exercises the regularization; the held
+retry has its own tests.
 
