@@ -708,9 +708,17 @@ fn refit_one(
 
 /// Write each `(row, record)` into `out` at the point's own row.
 ///
-/// A record's observations are the point's own, all `in`, in image order,
-/// which is the order its stored track is in, so each is written over its own
-/// observation row and no row moves. The columns written are those `out`
+/// A record's observations are the point's own, all `in`, and the commit's
+/// record lists them in image order, ties kept in track order. A stored track
+/// is in image order when it was read from a file, but a value edited in memory
+/// need not be: an image reorder by `subset_by_image_indices` renumbers the
+/// rows without sorting them, and a record added from Python keeps the order
+/// it was given. So each record observation is written over the stored row it
+/// came from, the `k`-th row of the point's stored rows in that same order
+/// ([`record_rows`]), and no row moves. A track that names one image twice is
+/// written the same way: the tie goes to track order on both sides. The record's
+/// reference, an index into its own image-ordered list, is written as the
+/// stored row it names. The columns written are those `out`
 /// carries, under the commit's rules: a readings row stands only under the
 /// column's own options, and a written point's display-only mark is cleared,
 /// since its reference is now the record's own. A bitmap column rendered for
@@ -749,17 +757,19 @@ fn write_in_place(out: &mut SfmrReconstruction, writes: Vec<(usize, PointRecord)
         .flatten();
 
     for (p, record) in writes {
-        let rows = observation_offsets[p]..observation_offsets[p + 1];
+        let start = observation_offsets[p];
+        let rows = record_rows(&tracks[start..observation_offsets[p + 1]]);
         assert!(
             record.observations.len() == rows.len()
                 && record
                     .observations
                     .iter()
-                    .zip(&tracks[rows.clone()])
-                    .all(|(o, t)| o.image_index == t.image_index),
+                    .zip(&rows)
+                    .all(|(o, &k)| o.image_index == tracks[start + k].image_index),
             "point {p}'s record observes other images than its stored track"
         );
-        for (row, observation) in rows.zip(&record.observations) {
+        for (&k, observation) in rows.iter().zip(&record.observations) {
+            let row = start + k;
             if let (Some(kp), Some([u, v])) = (keypoints.as_deref_mut(), observation.keypoint_xy) {
                 kp[[row, 0]] = u;
                 kp[[row, 1]] = v;
@@ -810,7 +820,10 @@ fn write_in_place(out: &mut SfmrReconstruction, writes: Vec<(usize, PointRecord)
             reference_observations.as_mut(),
             record.reference_observation,
         ) {
-            column[p] = r;
+            column[p] = usize::try_from(r)
+                .ok()
+                .and_then(|r| rows.get(r))
+                .map_or(r, |&k| k as i32);
         }
         if let Some(marks) = display_only_references.as_mut() {
             marks[p] = record.display_only_reference;
@@ -822,4 +835,15 @@ fn write_in_place(out: &mut SfmrReconstruction, writes: Vec<(usize, PointRecord)
     }
     // A point that crossed changes the count of points at infinity.
     out.rebuild_derived_fields();
+}
+
+/// A point's stored rows, as offsets into its run, in the order the commit's
+/// record lists its observations: by image, ties in track order. The bench's
+/// rows are the stored rows in order ([`track_of_point`]), and the record sorts
+/// them by `(image, row)`, so the record's `k`-th observation came from the
+/// stored row at offset `record_rows(..)[k]`.
+fn record_rows(track: &[crate::reconstruction::data::TrackObservation]) -> Vec<usize> {
+    let mut rows: Vec<usize> = (0..track.len()).collect();
+    rows.sort_by_key(|&k| (track[k].image_index, k));
+    rows
 }

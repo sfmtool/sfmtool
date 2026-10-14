@@ -620,6 +620,63 @@ fn a_point_with_no_eligible_reference_in_a_value_with_bitmaps_is_left_as_it_was(
     assert!(record_of(&recon, 0).agrees_with(&record_of(&out, 0)));
 }
 
+#[test]
+fn a_track_stored_out_of_image_order_is_written_back_at_its_own_rows() {
+    let scene = Scene::new();
+    let mut sorted = with_columns(fixture_points(&scene, &three_points()), BITMAP_R);
+    // Each point's reference is its first row, the observation in image 0,
+    // which the reversal moves to the last row.
+    sorted.point_set.reference_observations = Some(vec![0; sorted.point_count()]);
+    // The same value with point 0's rows reversed, every per-observation
+    // column with them and its reference renumbered to the same observation:
+    // what an image reorder in memory, or rows replaced by hand, leaves.
+    let mut reversed = sorted.clone();
+    let n = sorted.point_set.observation_offsets[1];
+    {
+        let set = &mut reversed.point_set;
+        set.tracks[..n].reverse();
+        if let Some(c) = set.observation_confidence.as_mut() {
+            c[..n].reverse();
+        }
+        if let Some(r) = set.observation_readings.as_mut() {
+            r.rows[..n].reverse();
+        }
+        let ObservationSource::EmbeddedPatches { keypoints_xy, .. } = &mut set.observations else {
+            panic!("the fixture is embedded_patches");
+        };
+        for k in 0..n / 2 {
+            for c in 0..2 {
+                keypoints_xy.swap([k, c], [n - 1 - k, c]);
+            }
+        }
+        let references = set.reference_observations.as_mut().expect("a reference");
+        references[0] = n as i32 - 1 - references[0];
+    }
+
+    let (want, want_report) = refit_over(&scene, &sorted);
+    let (got, got_report) = refit_over(&scene, &reversed);
+    assert!(matches!(
+        outcome_of(&got_report, 0),
+        RefitOutcome::Refit { .. }
+    ));
+    assert_eq!(got_report.refit(), want_report.refit());
+    assert_eq!(got.point_set.points, want.point_set.points);
+    // Each row keeps its image, and carries the answer for that image.
+    for k in 0..n {
+        let r = n - 1 - k;
+        assert_eq!(
+            got.point_set.tracks[k].image_index,
+            want.point_set.tracks[r].image_index
+        );
+        assert_eq!(keypoint_of(&got, 0, k), keypoint_of(&want, 0, r));
+    }
+    let reference = |recon: &SfmrReconstruction| {
+        let r = recon.point_set.reference_observations.as_ref().unwrap()[0];
+        recon.point_set.tracks[r as usize].image_index
+    };
+    assert_eq!(reference(&got), reference(&want));
+}
+
 /// The patch the scene's fixture stands its point on.
 fn placement_of_fixture(scene: &Scene) -> OrientedPatch {
     EditedReconstruction::new(Arc::new(fixture_with_columns(scene, WORLD, BITMAP_R)))

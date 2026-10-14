@@ -111,20 +111,21 @@ def test_a_held_point_is_left_out(ground_truth, images):
 def test_a_run_it_cannot_do_is_refused(ground_truth, images):
     with pytest.raises(ValueError, match="cannot be classified"):
         refit_points(ground_truth, images, sigma_px=0.0)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="images must be parallel"):
         refit_points(ground_truth, images[:-1])
 
 
-def _with_tracks(recon, image_indexes, keep):
-    """`recon` with its observation rows narrowed to `keep` and their images
-    replaced by `image_indexes`, as a script that edits tracks by hand makes it.
+def _with_tracks(recon, image_indexes, rows):
+    """`recon` with its observation rows taken as `rows` selects them (a mask
+    or an index array) and their images replaced by `image_indexes`, as a
+    script that edits tracks by hand makes it.
     """
-    points = np.asarray(recon.track_point_indexes)[keep]
+    points = np.asarray(recon.track_point_indexes)[rows]
     return recon.clone_with_changes(
-        track_image_indexes=np.asarray(image_indexes, np.uint32)[keep],
+        track_image_indexes=np.asarray(image_indexes, np.uint32)[rows],
         track_feature_indexes=np.zeros(len(points), np.uint32),
         track_point_indexes=points,
-        keypoints_xy=np.asarray(recon.keypoints_xy)[keep],
+        keypoints_xy=np.asarray(recon.keypoints_xy)[rows],
     )
 
 
@@ -155,3 +156,30 @@ def test_a_track_naming_an_image_past_the_table_is_refused(ground_truth, images)
     corrupt = _with_tracks(ground_truth, images_of, everything)
     with pytest.raises(ValueError, match="names image 17"):
         refit_points(corrupt, images, sigma_px=0.5)
+
+
+def test_a_track_stored_out_of_image_order_is_written_back_at_its_own_rows(
+    ground_truth, images
+):
+    # Point 0's rows reversed, every column with them: rows the reader would
+    # have sorted, left unsorted in memory.
+    n = int(np.asarray(ground_truth.observation_counts)[0])
+    order = np.arange(len(np.asarray(ground_truth.track_point_indexes)))
+    order[:n] = order[:n][::-1]
+    reversed_ = _with_tracks(ground_truth, ground_truth.track_image_indexes, order)
+
+    want, _ = refit_points(ground_truth, images, sigma_px=0.5)
+    got, report = refit_points(reversed_, images, sigma_px=0.5)
+    assert report["points"][0]["outcome"] == "refit"
+    np.testing.assert_array_equal(
+        np.asarray(got.track_image_indexes)[:n],
+        np.asarray(want.track_image_indexes)[:n][::-1],
+    )
+    np.testing.assert_array_equal(
+        np.asarray(got.keypoints_xy)[:n], np.asarray(want.keypoints_xy)[:n][::-1]
+    )
+    # The triangulation sums point 0's rays in stored order, so its
+    # coordinate agrees to rounding.
+    np.testing.assert_allclose(
+        np.asarray(got.positions_xyzw), np.asarray(want.positions_xyzw), rtol=1e-12
+    )

@@ -433,11 +433,20 @@ The run is a **bulk write** into a copy of the value it was handed, the shape
    read, once every point has been fitted. The fits read it before anything is
    written to it.
 2. Every record is written into that copy at its own row. The observations a
-   record carries are the point's own, all `in`, in image order, which is the
-   order the stored track is in, so each observation is written over its own
-   row: the point's track keeps its length and its offsets, and no point and
-   no observation row is added, removed or renumbered. The writer asserts that
-   each record's image list equals the stored track's. So the returned value
+   record carries are the point's own, all `in`, listed by image with ties in
+   track order, as the commit sorts them. A stored track is in image order when
+   it was read from a file, since the writer sorts it, but a value edited in
+   memory need not be: `subset_by_image_indices` with a reordered image list
+   renumbers the rows without sorting them, and `clone_with_changes` and a
+   record added from Python keep the order they are given. So the writer
+   sorts the point's stored rows the same way and writes the record's `k`-th
+   observation over the `k`-th of them, which is the row it came from, and
+   writes the record's reference as the stored row it names. A track that
+   names one image twice is written the same way, the tie going to track
+   order on both sides. The point's track keeps its length, its order and its
+   offsets, and no point and no observation row is added, removed or
+   renumbered. The writer asserts that each record's images are the stored
+   rows' in that order. So the returned value
    has the input's points at the input's indexes, and there is no `PointMap`
    to return.
 3. A point whose status is not `Refit`, or whose record agrees with the stored
