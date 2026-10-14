@@ -2951,13 +2951,14 @@ centre does not move, whatever the plane's offset.
 
 The working grid's density decides how close the step comes. On the
 synthetic plane of the tests, whose patch spans 32 photograph px at `R = 24`,
-the default grid comes out 33 samples (the footprint reads a fraction over
-32 px, facing the cameras or tilted 10 to 20 degrees, and is rounded up) and
-ends 0.37 to 0.53 degrees from the plane's normal; a grid of exactly 32 ends 0.1 to 0.3
-degrees from it, and the 24-sample patch grid 0.7 to 0.9. With a third of the
-patch flat, a grid of 32 ends 0.1 to 0.25 degrees off from four starts; the
-default grid turns from two of the four, 1.27 and 1.86 degrees off, and
-leaves the other two unchanged as unstable.
+the default grid comes out 32 samples for a patch facing the cameras and
+from two of four tilted starts, and 33 from the other two, whose footprints
+are 32.04 and 32.11 px; it ends 0.14 to 0.53 degrees from the plane's
+normal. A grid of exactly 32 ends 0.1 to 0.3 degrees from it, and the
+24-sample patch grid 0.7 to 0.9. With a third of the patch flat, a grid of
+32 ends 0.1 to 0.25 degrees off from four starts; the default grid turns from
+two of the four, 0.24 and 0.13 degrees off, and leaves the other two
+unchanged as unstable.
 
 The photometric estimate and the finite difference differ in what they can be
 fooled by. The photometric one
@@ -3973,9 +3974,9 @@ unit-tested in `normal.rs` itself.
 - A textured plane with the patch started 10 to 20 degrees off from four
   starts: the loop converges, the outcome is `Turned`, all nine cells are in
   the plane, both axes are fixed, the score does not fall, and the default
-  grid comes out 32 or 33 samples (33 measured from every start). The normal ends within 0.6 degrees on the
-  default grid (0.37 to 0.53 measured, so the draft's 0.5 holds from three of
-  the four starts) and within 0.5 degrees on a grid of exactly 32 (0.10 to
+  grid comes out 32 or 33 samples (32 from two starts, 33 from two). The
+  normal ends within 0.6 degrees on the default grid (0.14 to 0.53 measured,
+  so the draft's 0.5 holds from three of the four starts) and within 0.5 degrees on a grid of exactly 32 (0.10 to
   0.27). The centre does not move and the track is read back with its bitmap.
 - The same plane with the render cap at two renders, from 10 degrees off: the
   one turn is accepted, the loop stops at the cap, the outcome is `Unstable`,
@@ -3992,10 +3993,10 @@ unit-tested in `normal.rs` itself.
   column is in the plane, the verdict is one axis with the free axis along
   the column, the normal has no part along the column to within 1 degree
   (0.06 measured), and its turn about the column is where the patch had it.
-  Of five measured starts, two converge (fixed axis 0.06 and 0.17 degrees
-  off) and three end on a rejected turn and are left unchanged; from two of
-  those the first turn is rejected because the acceptance score's window
-  weights the tile's middle, which is the far plane.
+  Of five measured starts, that one converges and four end on a rejected
+  turn and are left unchanged; from two of those the first turn is rejected
+  because the acceptance score's window weights the tile's middle, which is
+  the far plane.
 - Flat texture throughout: every cell is refused for curvature, none has a
   ray, the verdict is none, the loop does not run, the outcome is
   `Undetermined`, and the frame is exactly the one the step was given.

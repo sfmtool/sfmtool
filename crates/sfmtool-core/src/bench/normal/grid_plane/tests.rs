@@ -109,6 +109,10 @@ fn the_working_side_follows_the_reference_footprint_within_r_and_2r() {
     assert_eq!(working_side(Some([[0.3, 1.2 * s], [0.1, 1.2 * s]]), 20), 24);
     // A fraction of a pixel rounds up.
     assert_eq!(working_side(Some([[1.01, 0.0], [0.0, 1.0]]), 24), 25);
+    // A whole number of pixels up to the Jacobian's error keeps that number:
+    // 32.0000005 px is 32, as the tests' scene reads its 32 px patch.
+    let over = 32.000_000_5 / 24.0;
+    assert_eq!(working_side(Some([[over, 0.0], [0.0, over]]), 24), 32);
     // More than 2R px clamps to 2R; fewer than R clamps to R.
     assert_eq!(working_side(Some([[5.0, 0.0], [0.0, 5.0]]), 24), 48);
     assert_eq!(working_side(Some([[0.4, 0.0], [0.0, 0.6]]), 24), 24);

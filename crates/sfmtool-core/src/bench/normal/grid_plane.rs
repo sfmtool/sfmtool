@@ -694,6 +694,17 @@ impl<'a, 'v> Cells<'a, 'v> {
     }
 }
 
+/// How far over a whole number of photograph pixels a footprint may read and
+/// still round up to that number, in px.
+///
+/// An absolute tolerance, because the footprint is compared with whole
+/// pixels whatever its size. The Jacobian is a central difference of the
+/// projection half a grid px either side of the centre, so a footprint that
+/// is a whole number of pixels reads a few ten-millionths of a pixel over it
+/// (32.0000005 on the tests' scene); a thousandth of a pixel is well above
+/// that and far below any footprint difference that matters to the grid.
+const FOOTPRINT_TOLERANCE_PX: f64 = 1e-3;
+
 /// The working grid's side for `None`: the patch's longer side in the
 /// reference view's photograph pixels, rounded up and clamped to
 /// `base ..= 2 · base`.
@@ -706,6 +717,10 @@ impl<'a, 'v> Cells<'a, 'v> {
 /// span hundreds of pixels close up, and the cost grows with the square of
 /// the side, so the side is at most `2 · base`; at least `base`, it is never
 /// coarser than the patch's own grid. Without a Jacobian it is `base`.
+///
+/// The side is rounded up after [`FOOTPRINT_TOLERANCE_PX`] is taken off, so a
+/// footprint that is a whole number of pixels up to the Jacobian's own error
+/// keeps that number.
 fn working_side(jacobian: Option<[[f64; 2]; 2]>, base: u32) -> u32 {
     let Some(j) = jacobian else {
         return base;
@@ -717,7 +732,8 @@ fn working_side(jacobian: Option<[[f64; 2]; 2]>, base: u32) -> u32 {
         return base;
     }
     let cap = base.saturating_mul(2);
-    (side_px.ceil().min(f64::from(cap)) as u32).clamp(base, cap)
+    let side = (side_px - FOOTPRINT_TOLERANCE_PX).ceil();
+    (side.min(f64::from(cap)) as u32).clamp(base, cap)
 }
 
 /// A reference cell's status as a template: refused for curvature where it

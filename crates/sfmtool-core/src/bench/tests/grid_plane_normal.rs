@@ -100,10 +100,12 @@ fn cells_of(report: &NormalReport) -> &GridPlaneCells {
 const PIXEL_GRID: u32 = 32;
 
 /// The sides the default working grid takes on this scene: the reference
-/// view's footprint of the patch, rounded up. The patch spans 32 px, and the
-/// footprint reads a fraction over that whether the patch faces the cameras
-/// or is tilted 10 to 20 degrees, so 33 is measured from every start. Both
-/// lie within the clamp `24 ..= 48` of the fit's 24-sample grid.
+/// view's footprint of the patch, rounded up. The patch spans 32 px facing
+/// the cameras (32.0000005 as the Jacobian reads it), and 32 is measured
+/// there and from 10 degrees about `x` and 15 about `y`, whose footprints
+/// read under a thousandth of a pixel over; 33 from 20 degrees about `x + y`
+/// and 15 about `x - y`, whose footprints are 32.04 and 32.11 px. Both lie
+/// within the clamp `24 ..= 48` of the fit's 24-sample grid.
 const DEFAULT_SIDES: std::ops::RangeInclusive<u32> = 32..=33;
 
 fn run(
@@ -146,10 +148,11 @@ fn frame_unchanged(track: &EditableTrack, turned: &EditableTrack) -> bool {
 /// The patch is turned onto the plane from 10 to 20 degrees off, with every
 /// cell in the plane and both axes fixed, and the loop converges.
 ///
-/// On the default grid, the reference view's footprint (33 samples
-/// here), the normal ends 0.37 to 0.53 degrees off over four starts, so it is
-/// held to 0.6 degrees: the draft's 0.5 is met from three of the four. On a
-/// grid of exactly 32 it ends 0.10 to 0.27 degrees off, held to 0.5.
+/// On the default grid, the reference view's footprint (32 or 33 samples
+/// here), the normal ends 0.14 to 0.53 degrees off over four starts, so it is
+/// held to 0.6 degrees: the draft's 0.5 is met from three of the four, and
+/// missed from 20 degrees about `x + y` (0.53, on 33 samples). On a grid of
+/// exactly 32 it ends 0.10 to 0.27 degrees off, held to 0.5.
 #[test]
 fn a_textured_plane_started_off_its_normal_is_turned_onto_it() {
     let scene = Scene::new();
@@ -228,9 +231,9 @@ fn the_render_cap_without_convergence_leaves_the_normal_unchanged() {
 ///
 /// Run at a grid of exactly 32 samples, where the normal ends within 1
 /// degree (0.09 to 0.24 measured over four starts, every one converging). On
-/// the default grid, 33 samples from these tilted starts, two of the four
-/// starts converge, 1.27 and 1.86 degrees off, and the other two end on a
-/// rejected turn and are left unchanged (see the next test).
+/// the default grid two of the four starts converge, on 32 samples, 0.24 and
+/// 0.13 degrees off; the other two, on 33 samples, end on a rejected turn and
+/// are left unchanged (see the next test).
 #[test]
 fn a_flat_third_is_refused_for_curvature_and_the_rest_fix_the_normal() {
     // Flat wherever the plane's `x` passes the first column's inner edge, so
@@ -311,11 +314,12 @@ fn a_rejected_turn_after_an_accepted_one_leaves_the_normal_unchanged() {
 ///
 /// Run on the default grid from 20 degrees about `-x` with 4 about `y`,
 /// where the loop converges and the fixed axis ends 0.06 degrees from the
-/// near plane's. Of five starts, two converge on the default grid (fixed axis
-/// 0.06 and 0.17 degrees off); the other three end on a rejected turn and
-/// are left unchanged: from 12 about `x` with 6 about `y` and from 8 about
-/// `x` with 10 about `y` the first turn is rejected, because the acceptance
-/// score's window weights the tile's middle, which is the far plane.
+/// near plane's. Of five starts it is the one that converges on the default
+/// grid; the other four end on a rejected turn and are left unchanged. From
+/// 12 about `x` with 6 about `y` and from 8 about `x` with 10 about `y` the
+/// first turn is rejected, because the acceptance score's window weights the
+/// tile's middle, which is the far plane; from 10 about `x` and from 15
+/// about `x` with -8 about `y` a turn is accepted and the next rejected.
 #[test]
 fn a_depth_step_leaves_one_column_and_one_axis() {
     // The plane `z = PLANE_Z` stops at the last column's inner edge; past it
