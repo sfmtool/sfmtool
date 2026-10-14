@@ -426,7 +426,7 @@ The run is a **bulk write** into a copy of the value it was handed, the shape
 
 1. The copy is the one the run took at its start (`clone_for_edit`, § "Why it
    is shaped this way"), taken back out of the wrapper the per-point steps
-   read once every point has been fitted. The fits read it before anything is
+   read, once every point has been fitted. The fits read it before anything is
    written to it.
 2. Every record is written into that copy at its own row. The observations a
    record carries are the point's own, all `in`, in image order, which is the
@@ -501,11 +501,12 @@ an atomic counter, as `render_patch_cloud_bitmaps` does.
 The run is cancellable. The flag is read in front of every stage, and in front
 of every point's fit inside the loop (`progress.is_cancelled()`); a point whose
 fit has begun runs to its end, so a cancel lands within one point's fit per
-worker thread. A cancelled run returns `RefitPointsError::Cancelled` and drops its
-copy before writing to it: the value the caller lent is unchanged, as it is
-after any run, and no partially refit value is returned, because a reconstruction in which some points were refit and others
-were not, chosen by thread scheduling, is not an answer anybody asked for. This
-is `retriangulate_points`'s rule.
+worker thread. A cancelled run returns `RefitPointsError::Cancelled` and
+drops its copy before writing to it: the value the caller lent is unchanged, as
+it is after any run, and no partially refit value is returned, because a
+reconstruction in which some points were refit and others were not, chosen by
+thread scheduling, is not an answer anybody asked for. This is
+`retriangulate_points`'s rule.
 
 ### Parallelism
 
