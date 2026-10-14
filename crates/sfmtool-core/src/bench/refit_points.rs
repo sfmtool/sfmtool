@@ -28,7 +28,8 @@ use crate::patch::normal_refine::ProjectedImage;
 use crate::progress::{Cancelled, Progress};
 use crate::reconstruction::bundle_adjust::is_posed;
 use crate::reconstruction::data::{
-    ImageTable, ObservationReading, ObservationSource, PointSet, SfmrReconstruction,
+    ImageTable, ObservationReading, ObservationReadings, ObservationSource, PointSet,
+    SfmrReconstruction,
 };
 use crate::reconstruction::edited::{reprojection_noise_level, EditedReconstruction, PointRecord};
 use crate::reconstruction::triangulation::points::PointDistance;
@@ -722,7 +723,8 @@ fn refit_one(
 /// reference, an index into its own image-ordered list, is written as the
 /// stored row it names. The columns written are those `out`
 /// carries, under the commit's rules: a readings row stands only under the
-/// column's own options, and a written point's display-only mark is cleared,
+/// column's own options, a value with no readings column gains one where a
+/// record brings a measured reading, and a written point's display-only mark is cleared,
 /// since its reference is now the record's own. A bitmap column rendered for
 /// display keeps its mark ([`PointSet::patch_bitmaps_for_display`]), so a save
 /// still writes the columns the file had.
@@ -757,6 +759,23 @@ fn write_in_place(out: &mut SfmrReconstruction, writes: Vec<(usize, PointRecord)
     let mut bitmaps = (!writes.is_empty())
         .then(|| patch_bitmaps_y_x_rgba.take().map(Arc::unwrap_or_clone))
         .flatten();
+    // A value with no readings column gains one where a record brings a
+    // measured reading, as a run of commits in point order would add it
+    // (`EditedReconstruction::push_record`): under the options of the first
+    // such record, every row not measured until a record writes it.
+    if observation_readings.is_none() {
+        *observation_readings = writes
+            .iter()
+            .find_map(|(_, record)| {
+                record
+                    .observations
+                    .iter()
+                    .any(|o| o.reading.is_some_and(|r| r.is_measured()))
+                    .then_some(record.reading_options)
+                    .flatten()
+            })
+            .map(|options| ObservationReadings::not_measured(tracks.len(), options));
+    }
 
     for (p, record) in writes {
         let start = observation_offsets[p];

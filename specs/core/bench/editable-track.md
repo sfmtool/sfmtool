@@ -3105,9 +3105,9 @@ The validation and the record are `point_record` in
 which `commit` calls before its edit and [`refit_points`](refit-points.md) calls
 for every point it fits, so the two write one record for one track. Its record
 is always free; the refit replaces the constraint with the point's own. The
-refit writes the record into the base's columns as they are rather than through
-the overlay, so it does not bring a readings column into a reconstruction that
-has none ([refit-points.md](refit-points.md) § "Writing the answers").
+refit writes the record into the base's columns rather than through the
+overlay, and brings a readings column into a reconstruction that has none as a
+commit does ([refit-points.md](refit-points.md) § "Writing the answers").
 
 - **With no origin that resolves**, `EditedReconstruction::add_point`.
   `replaced` is `None` and the map is a `Created` naming the index it took.

@@ -365,17 +365,26 @@ point has been fitted. The fits read the copy before anything is written to it.
   whose record agrees with the stored one while its reference is not a
   display-only pick. The stored record is put in the record's order first, its
   reference renumbered with it, since `agrees_with` compares observations
-  position by position.
-- **The columns written are the ones the value has**, under the commit's rules:
+  position by position. In a value with no readings column the stored rows
+  read as "not measured", so a record that brings a measured reading does not
+  agree and is rewritten, as the commit's own comparison decides.
+- **The columns written are the ones the value has, and the readings**, under
+  the commit's rules:
   `observation_confidence`, the observation readings, the normals, the normal
   confidences and the reference observations only where the value has the
   column, and the patch bitmap only where it stores bitmaps. A readings row is
   written only under the column's own options, and is "not measured" otherwise.
-  **In a value with no readings column the refit writes no readings**: it adds
-  no column. A bench commit of the same point does add one, because it writes
-  through the overlay, whose record carries the readings and their options; the
-  refit writes into the base's columns as they are, the way it treats every
-  other column. The constraint columns, where the value has them, take the
+  **A value with no readings column gains one**, as a run of bench commits in
+  point order adds it (`EditedReconstruction::push_record`): where a written
+  record brings a measured reading, the column is created under the options of
+  the first such record, every row "not measured", and the written records
+  fill their rows. The rows the refit does not write (a held point, a point
+  left as it was, a point not rewritten) stay "not measured". Every record of
+  one run is read under the same options, those of the run's evaluation at the
+  value's patch resolution, so no record's rows are dropped for standing under other
+  options. Where no record brings a measured reading, no column is added. The
+  readings are the one column the refit adds; it treats every other column as
+  the value has it. The constraint columns, where the value has them, take the
   record's triple, which is the stored one except for a released point; a value
   with no constraint columns gains none. A written point's display-only mark is
   cleared, since its reference is now the record's own.
@@ -497,7 +506,12 @@ and `reason`, its sentence. There is no point map, since no index moves.
 
 - **A refit of one point equals the bench's**: for each free point of a small
   value, the record written equals the one `create_track`, `fit` and `commit`
-  write for that point alone, column for column.
+  write for that point alone, column for column, both in a value with a
+  readings column and in one without, to which both add the column under the
+  same options.
+- **The readings column a refit adds** equals the one a run of commits of the
+  same points in point order adds, and a held point's rows in it are "not
+  measured".
 - **No index moves**: the point and observation counts are unchanged and every
   track keeps its images.
 - **Keypoints nudged off their content come back** on the seoul_bull ground

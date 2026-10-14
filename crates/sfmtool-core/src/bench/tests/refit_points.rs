@@ -18,7 +18,10 @@ use super::reference_view::GroundTruth;
 use super::scene::fixture_points;
 use super::*;
 use crate::progress::Event;
-use crate::reconstruction::data::{ObservationReadings, ObservationSource, PointConstraintColumns};
+use crate::reconstruction::data::{
+    ObservationReading, ObservationReadingOptions, ObservationReadings, ObservationSource,
+    PointConstraintColumns,
+};
 use crate::reconstruction::triangulation::{
     retriangulate_points, triangulate_points_from_observations, ObservationSet, PointDistance,
     PointRules, RetriangulateOptions, RetriangulateWhich,
@@ -124,53 +127,125 @@ fn far_bearing_with_baseline(scene: &Scene) -> SfmrReconstruction {
 
 // ---- One point's refit is the bench's ---------------------------------------
 
+/// The options the fit reads `recon`'s point `p` with.
+fn reading_options_of(
+    scene: &Scene,
+    recon: &SfmrReconstruction,
+    p: u32,
+) -> ObservationReadingOptions {
+    let edited = EditedReconstruction::new(Arc::new(recon.clone()));
+    let track = track_of_point(&edited, p, None).expect("a live point");
+    let (fitted, _) = fit_over(scene, &edited, &track).expect("three sightings in");
+    fitted.observations[0]
+        .track
+        .as_ref()
+        .and_then(|m| m.reading_options)
+        .expect("the fit reads its rows")
+}
+
 #[test]
 fn a_refit_of_a_point_writes_the_record_the_bench_s_fit_and_commit_write() {
     let scene = Scene::new();
-    let mut recon = with_columns(fixture_points(&scene, &three_points()), BITMAP_R);
-    // The readings column, under the options the fit reads with, so the rows
-    // the two write are compared as measured rows.
-    let options = {
-        let edited = EditedReconstruction::new(Arc::new(recon.clone()));
-        let track = track_of_point(&edited, 0, None).expect("a live point");
-        let (fitted, _) = fit_over(&scene, &edited, &track).expect("three sightings in");
-        fitted.observations[0]
-            .track
-            .as_ref()
-            .and_then(|m| m.reading_options)
-            .expect("the fit reads its rows")
-    };
-    recon.point_set.observation_readings = Some(ObservationReadings::not_measured(
-        recon.point_set.tracks.len(),
+    let bare = with_columns(fixture_points(&scene, &three_points()), BITMAP_R);
+    let options = reading_options_of(&scene, &bare, 0);
+    // The value as it is, with no readings column, and with the column under
+    // the options the fit reads with: in both, the rows the two write are
+    // compared as measured rows.
+    let mut with_readings = bare.clone();
+    with_readings.point_set.observation_readings = Some(ObservationReadings::not_measured(
+        bare.point_set.tracks.len(),
         options,
     ));
 
+    for recon in [bare, with_readings] {
+        let (out, report) = refit_over(&scene, &recon);
+        assert_eq!(report.refit(), 3, "{report:?}");
+        assert_eq!(report.unchanged(), 0, "{report:?}");
+        assert_eq!(
+            out.point_set
+                .observation_readings
+                .as_ref()
+                .map(|r| r.options),
+            Some(options),
+            "the refit's column stands under the fit's options"
+        );
+        let edited = EditedReconstruction::new(Arc::new(recon.clone()));
+        for p in 0..3u32 {
+            let (bench, created) =
+                create_track(&Bench::new(), &edited, p, &CreateTrackOptions::default())
+                    .expect("a live point");
+            let track = bench.track(&created.label).expect("just put on");
+            let (fitted, _) = fit_over(&scene, &edited, track).expect("three sightings in");
+            let (committed, written) = commit(&edited, &fitted).expect("the track commits");
+            assert_eq!(committed.observation_reading_options(), Some(options));
+            let bench_record = committed
+                .point(written.point)
+                .expect("the committed point")
+                .to_record();
+            let refit_record = record_of(&out, p);
+            assert!(
+                refit_record.agrees_with(&bench_record),
+                "point {p}: the refit wrote {refit_record:?} and the bench {bench_record:?}"
+            );
+            assert!(
+                refit_record
+                    .observations
+                    .iter()
+                    .all(|o| o.reading.is_some_and(|r| r.is_measured())),
+                "point {p}: every row is written as read"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_refit_that_adds_the_readings_column_leaves_the_rows_it_does_not_write_not_measured() {
+    let scene = Scene::new();
+    let mut recon = with_columns(fixture_points(&scene, &three_points()), BITMAP_R);
+    constrain(
+        &mut recon,
+        &[
+            (POINT_CONSTRAINT_HELD, f64::NAN, NO_REFERENCE_IMAGE),
+            FREE,
+            FREE,
+        ],
+    );
+    assert!(recon.point_set.observation_readings.is_none());
     let (out, report) = refit_over(&scene, &recon);
-    assert_eq!(report.refit(), 3, "{report:?}");
-    let edited = EditedReconstruction::new(Arc::new(recon.clone()));
-    for p in 0..3u32 {
+    assert_eq!(outcome_of(&report, 0), &RefitOutcome::Held);
+    assert_eq!(report.refit(), 2, "{report:?}");
+
+    // The same points committed one after another, in point order, through
+    // the overlay: the column a run of commits adds.
+    let mut edited = EditedReconstruction::new(Arc::new(recon.clone()));
+    for p in 1..3u32 {
         let (bench, created) =
             create_track(&Bench::new(), &edited, p, &CreateTrackOptions::default())
                 .expect("a live point");
         let track = bench.track(&created.label).expect("just put on");
         let (fitted, _) = fit_over(&scene, &edited, track).expect("three sightings in");
-        let (committed, written) = commit(&edited, &fitted).expect("the track commits");
-        let bench_record = committed
-            .point(written.point)
-            .expect("the committed point")
-            .to_record();
-        let refit_record = record_of(&out, p);
-        assert!(
-            refit_record.agrees_with(&bench_record),
-            "point {p}: the refit wrote {refit_record:?} and the bench {bench_record:?}"
-        );
-        assert!(
-            refit_record
-                .observations
-                .iter()
-                .all(|o| o.reading.is_some_and(|r| r.is_measured())),
-            "point {p}: every row is written as read"
-        );
+        let (next, written) = commit(&edited, &fitted).expect("the track commits");
+        assert!(written.changed);
+        edited = next;
+    }
+    let (committed, _) = edited.materialize();
+
+    let refit = out.point_set.observation_readings.as_ref().expect("added");
+    let commits = committed
+        .point_set
+        .observation_readings
+        .as_ref()
+        .expect("added");
+    assert_eq!(refit.options, commits.options);
+    assert_eq!(refit.rows, commits.rows);
+    // The held point's rows are not measured, and every other row is.
+    let offsets = &out.point_set.observation_offsets;
+    for (row, reading) in refit.rows.iter().enumerate() {
+        let held = row < offsets[1];
+        assert_eq!(reading.is_measured(), !held, "row {row}");
+        if held {
+            assert_eq!(*reading, ObservationReading::NOT_MEASURED);
+        }
     }
 }
 

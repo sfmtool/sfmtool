@@ -113,14 +113,12 @@ The cancel flag is read in front of the decode, between the photographs, after
 the decode, and by the core function in front of each stage and of each point's
 fit. A cancelled run pushes no version.
 
-**Readings are written where the column exists.** The refit writes the
-observation readings only into a reconstruction that already has the readings
-column. A bench commit of one point writes through the overlay and adds the
-column to a reconstruction that lacks it; the refit writes into the columns the
-value has and adds none
+**Readings are written as a commit writes them.** In a reconstruction with no
+readings column the refit adds one, as a bench commit of one point does, and
+the rows of the points it does not write are "not measured"
 ([../../core/bench/refit-points.md](../../core/bench/refit-points.md)
-§ "Writing the answers"). Likewise a bitmap column rendered for display keeps
-its display mark, so a save writes the columns the file had.
+§ "Writing the answers"). A bitmap column rendered for display keeps its
+display mark, so a save writes no bitmap column the file lacked.
 
 ### Run time
 
