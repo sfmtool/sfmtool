@@ -22,8 +22,13 @@ use super::super::{
 };
 use super::*;
 use crate::camera::image::{ImageU8, ImageU8Pyramid};
+use crate::patch::cell_registration::{
+    cell_zncc_at, fit_update, read_cell, CellReading, CellTemplate, Correspondence,
+    MEDIAN_LENGTH_TO_SIGMA,
+};
 use crate::patch::normal_refine::build_support;
 use crate::patch::normal_refine::grid_cell_centres;
+use crate::patch::normal_refine::{grid_bounds, FLAT_NORM_SQ_EPS};
 use ndarray::{Array2, Array3};
 
 /// The band-limited texture of the cluster-refinement tests, with fine terms
@@ -498,7 +503,7 @@ fn the_cell_search_reads_only_the_working_patch() {
                         &tmpl.src_channels,
                         &patch,
                         &layout,
-                        &pp,
+                        &pp.cell_gates(),
                         row,
                         col,
                     );
@@ -539,7 +544,7 @@ fn a_missing_sample_leaves_its_cell_not_attempted() {
             &tmpl.src_channels,
             &patch,
             &layout,
-            &pp,
+            &pp.cell_gates(),
             row,
             col,
         )

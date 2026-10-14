@@ -52,6 +52,7 @@ use ndarray::{Array2, Array3};
 use rayon::prelude::*;
 
 use crate::camera::image::ImageU8Pyramid;
+use crate::patch::cell_registration::{CellLayout, CellTemplates};
 use crate::patch::normal_refine::{
     build_support, weighted_moments_pub, znorm_write, PartZncc, Support, FLAT_NORM_SQ_EPS,
 };
@@ -65,6 +66,7 @@ use kernels::{
     eval_zncc, eval_zncc_parts, grid_bbox, nelder_mead, SupportTables, TemplateKernel, TileCache,
 };
 
+pub use crate::patch::cell_registration::CellStatus;
 pub use consistency::warp_consistency_residuals;
 pub use params::{
     capped_cell_count, ClusterRefineParams, ClusterRefineResult, FeatureGeometry, MemberStatus,
@@ -72,7 +74,7 @@ pub use params::{
     DEFAULT_REGATE_AT_REFINED_SHAPE, DEFAULT_ROTATION_STARTS, REFERENCE_UNREFINABLE,
 };
 pub use piecewise::{
-    member_cell_data, CellRefinement, CellStatus, LoopStop, PiecewiseParams, ACCEPT_ZNCC_TOLERANCE,
+    member_cell_data, CellRefinement, LoopStop, PiecewiseParams, ACCEPT_ZNCC_TOLERANCE,
     DEFAULT_MIN_CELL_CURVATURE, DEFAULT_MIN_CELL_ZNCC,
 };
 
@@ -1143,8 +1145,8 @@ fn refine_cluster(
             .filter(|&j| members[j].status == MemberStatus::Kept)
             .collect();
         if !kept.is_empty() {
-            let layout = piecewise::CellLayout::new(resolution, pp.cell_shift_bound_px);
-            let templates = piecewise::CellTemplates::new(&tmpl, &layout);
+            let layout = CellLayout::new(resolution, pp.cell_shift_bound_px);
+            let templates = CellTemplates::new(&tmpl, &layout);
             for j in kept {
                 let g = geo[j].as_ref().unwrap();
                 prof::count(&prof::N_PIECEWISE, 1);
@@ -1203,8 +1205,8 @@ fn refine_kept_member_cells(
     pyramid: &ImageU8Pyramid,
     seed_pos: [f64; 2],
     tmpl: &TemplateKernel,
-    templates: &piecewise::CellTemplates,
-    layout: &piecewise::CellLayout,
+    templates: &CellTemplates,
+    layout: &CellLayout,
     tables: &SupportTables,
     resolution: u32,
     step: f64,

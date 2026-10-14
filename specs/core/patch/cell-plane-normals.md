@@ -71,6 +71,20 @@ pub fn cell_plane_normals(
 
 **Why this shape.** The inputs are the cluster file's member-parallel arrays borrowed as they are, so a caller holding a `MatchesData` or the Python `MatchesFile` passes its columns without building per-cluster objects, and the cameras are the per-camera intrinsics, per-image camera index and per-image `cam_from_world` pose that the bundle adjustment and resection take. An image without a pose is `None`, so a partly posed seed passes the file's whole image list. The output keeps every cell's position, ray count and status, because a wrong normal is diagnosed by asking which cells were used and how each was seen.
 
+**The shared triangulation and plane fit.** `cell_plane_normals` builds each cell's rays from the cluster file's columns and each ray's noise floor from its member's shape, and hands the nine cells' rays to the crate-visible cell plane kernel in [cell_plane_fit.rs](../../../crates/sfmtool-core/src/patch/cell_plane_fit.rs), which does the rest: `PosedView` unpacks one image's camera and pose and turns a pixel into a `CellRay` with `ray_through(pixel, floor_px)`, the caller choosing the ray's floor, and `fit_cell_plane(&[Vec<CellRay>; 9], &CellPlaneParams) -> CellPlaneNormal` triangulates each cell, fits the plane and gives the verdict. The kernel reads none of the cluster file's types, so a caller can triangulate cells it places in each view some other way, with floors it computes some other way; the public types it fills, `CellPlaneNormal`, `CellPlaneStatus` and `NormalDeterminacy`, and the `CellPlaneParams` it reads, stay in `cell_plane_normals`.
+
+```rust
+pub(in crate::patch) struct PosedView<'a> { /* camera, world_from_cam rotation, centre, focal px */ }
+impl<'a> PosedView<'a> {
+    pub(in crate::patch) fn new(camera: &'a CameraIntrinsics, pose: &RigidTransform) -> Self;
+    pub(in crate::patch) fn ray_through(&self, pixel: [f64; 2], floor_px: f64) -> Option<CellRay>;
+}
+pub(in crate::patch) fn fit_cell_plane(
+    cell_rays: &[Vec<CellRay>; 9],   // [row * 3 + col], the top-left cell first
+    params: &CellPlaneParams,
+) -> CellPlaneNormal;
+```
+
 **Why `patch/`.** The kernel is a reading of the cluster-patches file's cell geometry: the grid split `[0, R/3, R − R/3, R]` and the map from a grid coordinate to a member's pixel. Both are defined in `patch/`, where `grid_bounds` is visible to the module without being widened. The binding is registered in the `analysis` submodule beside `estimate_adjacency_surfel_normals`, the other normal estimator a caller with poses chooses between.
 
 **Example.** A caller holding a `--piecewise` cluster file opened as `mf` (a `MatchesFile`) and a posed reconstruction `gt`, with `image_camera`, `quaternions_wxyz` and `translations` laid out per image of the cluster file, calls
@@ -122,6 +136,7 @@ The kernel takes 3 ms on `SeoulBull`'s 4407 clusters and 10 ms on `KerryPark480`
 ## Implementation notes
 
 - The cell centres come from `grid_cell_centres` in `patch/normal_refine/support.rs`, the function the piecewise refinement's `CellLayout` takes its centres from; a test checks that the two agree, and that each centre is the mean of its cell's grid positions, for `R` in {6, 12, 13, 24, 25}. The displacements are in grid px, so the kernel needs the file's `patch_size` and `resolution`, never the image's pixels.
+- The ray-noise floor is an input of each ray, not a reading of `CellPlaneParams`: `cell_plane_normals` computes it as `cell_shift_precision_grid_px · (patch_size / R) · ‖S‖` for each member and passes it to `ray_through`, and the triangulation in `cell_plane_fit` takes the root mean square of its rays' floors and floors that at `ray_noise_floor_px`. `cell_plane_fit/tests.rs` drives the kernel with rays from posed views and floors of its own choosing: it recovers a tilted plane with both axes fixed, gives one axis along a line of cells, quarters each cell's weight when every ray's floor doubles, and refuses a cell left with one ray.
 - A cluster with no reference carries `CLUSTER_REFERENCE_UNREFINABLE` from `sfmtool_matches_format`, the value the file format writes.
 - The geometry is `f64` throughout; the stored positions, shapes and displacements are `f32` and are widened on read.
 - The determinacy reads the live cells' spread within the plane with equal weights: the verdict asks where the cells are, not how sure the fit is of each. The live set and the spread are both taken from the final plane fit, so a cell the fit rejects neither counts nor spreads.

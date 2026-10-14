@@ -16,6 +16,12 @@
 //! least squares with a Tukey biweight, so a cell that disagrees with the
 //! others is refused as an outlier.
 //!
+//! The render is this module's; everything after it, from the working patch's
+//! summed-area tables through the cell search, the cell gates and the robust
+//! affine fit, is the shared cell registration kernel,
+//! [`crate::patch::cell_registration`], which this stage calls with
+//! [`PiecewiseParams`] supplying the bound and the two bars.
+//!
 //! By default ([`PiecewiseParams::move_shape`] is `true`) the fitted map is an
 //! update of the shape and the stage is a loop with two levels. An update is
 //! applied only when the cascade's own objective, the whole-member windowed
@@ -37,8 +43,10 @@
 use sfmtool_matches_format::{ClusterCellStatus, MemberCellData};
 
 use crate::camera::image::ImageU8Pyramid;
-use crate::numeric::median_in_place;
-use crate::patch::normal_refine::{grid_bounds, grid_cell_centres, FLAT_NORM_SQ_EPS};
+use crate::patch::cell_registration::{
+    fit_pass, read_cells, CellGateOptions, CellLayout, CellStatus, CellTemplates, Pass, Update,
+    UpdateModel, WorkingPatch,
+};
 
 use super::kernels::TemplateKernel;
 use super::{inv2, mul2, sample_grid_window, GridEdge, Mat2};
@@ -52,29 +60,6 @@ mod tests;
 /// away from the cascade's optimum; the tolerance only lets the loop cross a
 /// flat stretch above the start, and cannot accumulate past it.
 pub const ACCEPT_ZNCC_TOLERANCE: f64 = 1e-4;
-
-/// Rounds of reweighting after the first, curvature-weighted fit of the
-/// update.
-const IRLS_ROUNDS: usize = 3;
-
-/// The Tukey biweight's cut-off, in units of the residual scale: a cell whose
-/// residual to the fitted update is this many scales or more gets weight `0`.
-/// `4.685` is the conventional cut-off for one-dimensional residuals; here it
-/// is applied to the length of a two-dimensional residual, in units of the
-/// per-axis scale [`MEDIAN_LENGTH_TO_SIGMA`] estimates.
-const TUKEY_CUTOFF: f64 = 4.685;
-
-/// Converts the median length of the cells' two-dimensional residuals to the
-/// per-axis standard deviation `σ` of isotropic Gaussian noise: the length of
-/// such a residual is Rayleigh-distributed, with median `σ·√(2 ln 2)`, so
-/// `σ = median / √(2 ln 2)`. The factor `1.4826` used for one-dimensional
-/// residuals would overstate `σ` here by a factor of 1.75.
-const MEDIAN_LENGTH_TO_SIGMA: f64 = 0.849_321_800_288_019_1;
-
-/// The smallest residual scale the reweighting uses, grid px. Without it a
-/// fit through cells that agree to a few hundredths of a pixel would refuse a
-/// cell a tenth of a pixel off.
-const MIN_RESIDUAL_SCALE_PX: f64 = 0.1;
 
 /// Provisional default for [`PiecewiseParams::min_cell_zncc`].
 ///
@@ -143,40 +128,14 @@ impl Default for PiecewiseParams {
     }
 }
 
-/// What the piecewise refinement concluded about one cell of a member.
-///
-/// The discriminants are the canonical codes of the `.matches` cell-status
-/// column, [`ClusterCellStatus`], which [`member_cell_data`] stores them as.
-#[repr(u8)]
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum CellStatus {
-    /// The cell's shift was measured and the robust affine fit over the
-    /// member's cells gave it weight.
-    Fitted = 0,
-    /// The cell's own reading refused it: the reference is flat over the cell,
-    /// or the ZNCC peak is flatter than
-    /// [`PiecewiseParams::min_cell_curvature`].
-    RefusedCurvature = 1,
-    /// The cell's ZNCC at its optimum is below
-    /// [`PiecewiseParams::min_cell_zncc`]: it is over a different surface.
-    RefusedZncc = 2,
-    /// The cell was not registered: a sample the search needs could not be
-    /// read, or no cell of the member survived. Every cell is stored this way
-    /// when a render failed or the fitted map was not finite or reflected,
-    /// and, with [`PiecewiseParams::move_shape`], when the refined shape could
-    /// not be accepted (the readings at it failed the member's gates, or its
-    /// support left the frame). The member then keeps its cascade shape, and
-    /// the iteration count includes the pass that failed.
-    NotAttempted = 3,
-    /// The cell's best whole shift lies on the search bound
-    /// [`PiecewiseParams::cell_shift_bound_px`], so no whole-pixel neighbour
-    /// on that side was read and no sub-pixel peak can be fitted: the cell's
-    /// optimum is at or past the bound.
-    RefusedBound = 4,
-    /// The cell passed its own gates, but its shift disagrees with the
-    /// affine map the other cells agree on by so much that the robust fit
-    /// gave it weight `0`. Its shift is measured and stored.
-    RefusedOutlier = 5,
+impl PiecewiseParams {
+    /// The two bars the cell registration gates each cell's reading by.
+    pub(super) fn cell_gates(&self) -> CellGateOptions {
+        CellGateOptions {
+            min_cell_zncc: self.min_cell_zncc,
+            min_cell_curvature: self.min_cell_curvature,
+        }
+    }
 }
 
 /// Why the loop of one member stopped. Without
@@ -305,233 +264,14 @@ impl CellRefinement {
     }
 }
 
-/// The fixed geometry of the cells and the search for one grid size and one
-/// bound.
-pub(super) struct CellLayout {
-    /// `R`, the template's samples per axis.
-    resolution: usize,
-    /// Working-patch margin on each side, grid px: the bound rounded up.
-    margin: usize,
-    /// Half-width of the whole-shift search: the bound rounded down, at most
-    /// `margin`.
-    reach: usize,
-    /// `[0, R/3, R - R/3, R]`.
-    bounds: [usize; 4],
-    /// Cell centres in grid coordinates centred on the grid, `[x, y]`.
-    centres: [[[f64; 2]; 3]; 3],
-    /// The side of a corner cell, grid px.
-    cell_side: f64,
-}
-
-impl CellLayout {
-    pub(super) fn new(resolution: u32, bound: f32) -> CellLayout {
-        let resolution = resolution as usize;
-        let bound = if bound.is_finite() {
-            f64::from(bound.max(0.0))
-        } else {
-            0.0
-        };
-        let margin = bound.ceil() as usize;
-        let reach = (bound.floor() as usize).min(margin);
-        let bounds = grid_bounds(resolution as u32);
-        let centres = grid_cell_centres(resolution as u32);
-        CellLayout {
-            resolution,
-            margin,
-            reach,
-            bounds,
-            centres,
-            cell_side: (resolution / 3).max(1) as f64,
-        }
-    }
-
-    /// Side of the working patch, grid px.
-    fn patch_side(&self) -> usize {
-        self.resolution + 2 * self.margin
-    }
-}
-
-/// The reference's samples over one cell, per template channel.
-struct CellTemplate {
-    /// Per template channel: the mean-removed samples, row-major over the
-    /// cell, and their sum of squares; `None` where the channel is flat over
-    /// the cell.
-    channels: Vec<Option<(Vec<f64>, f64)>>,
-    /// Some pixel of the cell could not be sampled in the reference.
-    missing: bool,
-}
-
-/// The reference's samples over each of the nine cells.
-pub(super) struct CellTemplates {
-    cells: [[CellTemplate; 3]; 3],
-}
-
 impl CellTemplates {
     /// Cut the nine cells out of the template's samples over the whole square.
     pub(super) fn new(tmpl: &TemplateKernel, layout: &CellLayout) -> CellTemplates {
-        let r = layout.resolution;
-        let square = r * r;
-        let b = layout.bounds;
-        let cells = std::array::from_fn(|row| {
-            std::array::from_fn(|col| {
-                let mut missing = false;
-                let channels = (0..tmpl.channels)
-                    .map(|c| {
-                        let plane = &tmpl.square_samples[c * square..][..square];
-                        let mut vals = Vec::new();
-                        for y in b[row]..b[row + 1] {
-                            for x in b[col]..b[col + 1] {
-                                let v = plane[y * r + x];
-                                if !v.is_finite() {
-                                    missing = true;
-                                }
-                                vals.push(f64::from(v));
-                            }
-                        }
-                        centred(vals)
-                    })
-                    .collect();
-                CellTemplate { channels, missing }
-            })
-        });
-        CellTemplates { cells }
-    }
-}
-
-/// Mean-remove `vals`; `None` when they are flat (sum of squares under
-/// [`FLAT_NORM_SQ_EPS`]) or hold a non-finite value.
-fn centred(mut vals: Vec<f64>) -> Option<(Vec<f64>, f64)> {
-    if vals.is_empty() || vals.iter().any(|v| !v.is_finite()) {
-        return None;
-    }
-    let mean = vals.iter().sum::<f64>() / vals.len() as f64;
-    let mut norm_sq = 0.0;
-    for v in vals.iter_mut() {
-        *v -= mean;
-        norm_sq += *v * *v;
-    }
-    (norm_sq >= FLAT_NORM_SQ_EPS).then_some((vals, norm_sq))
-}
-
-/// The member's photograph rendered on the template's grid plus the margin,
-/// interleaved `side × side × channels`, `NaN` where a sample left the image,
-/// with the summed-area tables the cell search reads its window sums from.
-pub(super) struct WorkingPatch {
-    pub(super) side: usize,
-    pub(super) channels: usize,
-    pub(super) samples: Vec<f32>,
-    sums: PatchSums,
-}
-
-/// Summed-area tables of one working patch, `(side + 1)²` entries each,
-/// row-major, entry `(y, x)` the sum over the samples above and left of it.
-///
-/// A window's sum and sum of squares come from four entries each instead of a
-/// pass over the window, which is what makes the whole-shift search cheap:
-/// the template side of the ZNCC is mean-removed, so the cross term
-/// `Σ (u − ū)·t = Σ u·t` needs no window mean, and the window's own
-/// `Σ (u − ū)² = Σ u² − (Σ u)² / n` needs only the two sums.
-struct PatchSums {
-    /// Per channel, the mean of the channel's finite samples, subtracted from
-    /// every sample before it is summed so the tables hold small numbers and
-    /// `Σ u² − (Σ u)² / n` does not cancel. The ZNCC does not depend on it.
-    offset: Vec<f64>,
-    /// Per channel, the table of `u − offset`, a missing sample counted as
-    /// `0`.
-    sum: Vec<Vec<f64>>,
-    /// Per channel, the table of `(u − offset)²`.
-    sum_sq: Vec<Vec<f64>>,
-    /// The table of missing samples: `1` where any channel of the sample is
-    /// non-finite.
-    missing: Vec<u32>,
-}
-
-impl PatchSums {
-    fn new(side: usize, channels: usize, samples: &[f32]) -> PatchSums {
-        let n = side + 1;
-        let offset: Vec<f64> = (0..channels)
-            .map(|c| {
-                let (mut s, mut k) = (0.0f64, 0usize);
-                for v in samples.iter().skip(c).step_by(channels) {
-                    if v.is_finite() {
-                        s += f64::from(*v);
-                        k += 1;
-                    }
-                }
-                if k > 0 {
-                    s / k as f64
-                } else {
-                    0.0
-                }
-            })
-            .collect();
-        let mut sum = vec![vec![0.0f64; n * n]; channels];
-        let mut sum_sq = vec![vec![0.0f64; n * n]; channels];
-        let mut missing = vec![0u32; n * n];
-        for y in 0..side {
-            for x in 0..side {
-                let px = &samples[(y * side + x) * channels..][..channels];
-                let i = (y + 1) * n + x + 1;
-                let (up, left, diag) = (y * n + x + 1, (y + 1) * n + x, y * n + x);
-                let gone = px.iter().any(|v| !v.is_finite());
-                missing[i] = missing[up] + missing[left] - missing[diag] + u32::from(gone);
-                for c in 0..channels {
-                    let v = if px[c].is_finite() {
-                        f64::from(px[c]) - offset[c]
-                    } else {
-                        0.0
-                    };
-                    let (s, q) = (&mut sum[c], &mut sum_sq[c]);
-                    s[i] = s[up] + s[left] - s[diag] + v;
-                    q[i] = q[up] + q[left] - q[diag] + v * v;
-                }
-            }
-        }
-        PatchSums {
-            offset,
-            sum,
-            sum_sq,
-            missing,
-        }
-    }
-}
-
-/// A window of the working patch, columns `x0..x1` and rows `y0..y1`, read
-/// from a summed-area table whose rows are `stride` entries long.
-#[derive(Clone, Copy)]
-struct Window {
-    x0: usize,
-    x1: usize,
-    y0: usize,
-    y1: usize,
-    stride: usize,
-}
-
-impl Window {
-    /// The window's total in `table`.
-    fn rect<T>(&self, table: &[T]) -> T
-    where
-        T: Copy + std::ops::Add<Output = T> + std::ops::Sub<Output = T>,
-    {
-        let at = |y: usize, x: usize| table[y * self.stride + x];
-        // Added before subtracted, so an unsigned table never underflows.
-        at(self.y1, self.x1) + at(self.y0, self.x0) - at(self.y0, self.x1) - at(self.y1, self.x0)
+        CellTemplates::from_planes(&tmpl.square_samples, tmpl.channels, layout)
     }
 }
 
 impl WorkingPatch {
-    /// A working patch of `side × side × channels` interleaved samples, with
-    /// its summed-area tables.
-    pub(super) fn new(side: usize, channels: usize, samples: Vec<f32>) -> WorkingPatch {
-        let sums = PatchSums::new(side, channels, &samples);
-        WorkingPatch {
-            side,
-            channels,
-            samples,
-            sums,
-        }
-    }
-
     /// Render the member at position `p` and absolute shape `s`. `None` when
     /// the map is degenerate or the selected pyramid level is too small to
     /// sample.
@@ -557,412 +297,6 @@ impl WorkingPatch {
         let channels = samples.len() / (side * side);
         Some(WorkingPatch::new(side, channels, samples))
     }
-}
-
-/// One cell's reading at one render.
-#[derive(Clone, Copy, Debug)]
-struct CellReading {
-    status: CellStatus,
-    /// Sub-pixel shift, grid px; `NaN` where none was read.
-    shift: [f64; 2],
-    zncc: f64,
-    /// The peak's curvature, the least-squares weight of a fitted cell.
-    curvature: f64,
-}
-
-impl CellReading {
-    fn refused(status: CellStatus, zncc: f64) -> CellReading {
-        CellReading {
-            status,
-            shift: [f64::NAN; 2],
-            zncc,
-            curvature: 0.0,
-        }
-    }
-}
-
-/// The ZNCC of a cell's template against the working patch moved by
-/// `(dx, dy)` whole grid px, averaged over the template's textured channels.
-/// A channel the moved window is flat in, or the member image lacks, scores
-/// `0`. `None` when a sample the window reads is missing.
-///
-/// The window's sum and sum of squares come from the patch's summed-area
-/// tables; only the cross term with the mean-removed template is a pass over
-/// the window, and it reads the patch in place.
-#[allow(clippy::too_many_arguments)]
-fn cell_zncc_at(
-    tc: &CellTemplate,
-    src_channels: &[usize],
-    patch: &WorkingPatch,
-    layout: &CellLayout,
-    row: usize,
-    col: usize,
-    dx: i64,
-    dy: i64,
-) -> Option<f64> {
-    let b = layout.bounds;
-    let m = layout.margin as i64;
-    let side = patch.side;
-    let (x0, y0) = (b[col] as i64 + dx + m, b[row] as i64 + dy + m);
-    let (w, h) = (b[col + 1] - b[col], b[row + 1] - b[row]);
-    // The search never reads past the render: the margin covers the
-    // whole-shift reach on every side.
-    debug_assert!(
-        x0 >= 0 && y0 >= 0 && x0 as usize + w <= side && y0 as usize + h <= side,
-        "cell ({row}, {col}) at shift ({dx}, {dy}) reads from ({x0}, {y0}) \
-         outside the {side}x{side} working patch"
-    );
-    let (x0, y0) = (x0 as usize, y0 as usize);
-    let win = Window {
-        x0,
-        x1: x0 + w,
-        y0,
-        y1: y0 + h,
-        stride: side + 1,
-    };
-    let count = (w * h) as f64;
-    let sums = &patch.sums;
-    let (mut sum, mut scored) = (0.0, 0usize);
-    let mut checked = false;
-    for (tch, t) in tc.channels.iter().enumerate() {
-        let Some((t, t_norm)) = t else {
-            continue;
-        };
-        scored += 1;
-        let src = src_channels[tch];
-        if src >= patch.channels {
-            continue;
-        }
-        if !checked {
-            if win.rect(&sums.missing) > 0 {
-                return None;
-            }
-            checked = true;
-        }
-        let su = win.rect(&sums.sum[src]);
-        let norm_sq = win.rect(&sums.sum_sq[src]) - su * su / count;
-        if norm_sq < FLAT_NORM_SQ_EPS {
-            continue;
-        }
-        let k = sums.offset[src];
-        let mut cross = 0.0;
-        let mut tv = t.iter();
-        for y in y0..y0 + h {
-            let line = &patch.samples[(y * side + x0) * patch.channels..];
-            for x in 0..w {
-                let u = f64::from(line[x * patch.channels + src]) - k;
-                cross += u * tv.next().expect("one template sample per window sample");
-            }
-        }
-        sum += cross / (norm_sq * t_norm).sqrt();
-    }
-    (scored > 0).then(|| sum / scored as f64)
-}
-
-/// Register one cell against the working patch: the ZNCC at every whole
-/// shift within the reach, the best of them (first in row-major order on a
-/// tie), and a quadratic fitted to its three-by-three neighbourhood for the
-/// sub-pixel peak and its curvature.
-fn read_cell(
-    tc: &CellTemplate,
-    src_channels: &[usize],
-    patch: &WorkingPatch,
-    layout: &CellLayout,
-    params: &PiecewiseParams,
-    row: usize,
-    col: usize,
-) -> CellReading {
-    if tc.missing {
-        return CellReading::refused(CellStatus::NotAttempted, f64::NAN);
-    }
-    if tc.channels.iter().all(Option::is_none) {
-        return CellReading::refused(CellStatus::RefusedCurvature, f64::NAN);
-    }
-    let n = layout.reach as i64;
-    let w = (2 * n + 1) as usize;
-    let mut surface = vec![0.0f64; w * w];
-    let mut best = (0usize, f64::NEG_INFINITY);
-    for dy in -n..=n {
-        for dx in -n..=n {
-            let Some(z) = cell_zncc_at(tc, src_channels, patch, layout, row, col, dx, dy) else {
-                return CellReading::refused(CellStatus::NotAttempted, f64::NAN);
-            };
-            let k = ((dy + n) as usize) * w + (dx + n) as usize;
-            surface[k] = z;
-            if z > best.1 {
-                best = (k, z);
-            }
-        }
-    }
-    let (bx, by) = ((best.0 % w) as i64 - n, (best.0 / w) as i64 - n);
-    if bx.abs() >= n || by.abs() >= n {
-        // No whole-pixel neighbour on one side: the optimum is at or past the
-        // bound.
-        return CellReading::refused(CellStatus::RefusedBound, best.1);
-    }
-    let at = |dx: i64, dy: i64| surface[((by + dy + n) as usize) * w + (bx + dx + n) as usize];
-    let z0 = at(0, 0);
-    let gx = (at(1, 0) - at(-1, 0)) / 2.0;
-    let gy = (at(0, 1) - at(0, -1)) / 2.0;
-    // Negated Hessian of the ZNCC: positive definite at a peak.
-    let kxx = 2.0 * z0 - at(1, 0) - at(-1, 0);
-    let kyy = 2.0 * z0 - at(0, 1) - at(0, -1);
-    let kxy = -(at(1, 1) - at(1, -1) - at(-1, 1) + at(-1, -1)) / 4.0;
-    let half_trace = (kxx + kyy) / 2.0;
-    let gap = (((kxx - kyy) / 2.0).powi(2) + kxy * kxy).sqrt();
-    let curvature = half_trace - gap;
-    let peaked = curvature > 0.0 && curvature >= f64::from(params.min_cell_curvature);
-    if !peaked {
-        return CellReading::refused(CellStatus::RefusedCurvature, best.1);
-    }
-    // The quadratic's peak, `K⁻¹·g`, kept within the whole pixel it was found
-    // in.
-    let det = kxx * kyy - kxy * kxy;
-    let ox = ((kyy * gx - kxy * gy) / det).clamp(-0.5, 0.5);
-    let oy = ((kxx * gy - kxy * gx) / det).clamp(-0.5, 0.5);
-    let peak = z0 + gx * ox + gy * oy - 0.5 * (kxx * ox * ox + 2.0 * kxy * ox * oy + kyy * oy * oy);
-    let zncc = peak.min(1.0);
-    let status = if zncc < f64::from(params.min_cell_zncc) {
-        CellStatus::RefusedZncc
-    } else {
-        CellStatus::Fitted
-    };
-    CellReading {
-        status,
-        shift: [bx as f64 + ox, by as f64 + oy],
-        zncc,
-        curvature,
-    }
-}
-
-/// The affine update `c ↦ A·c + b` in centred grid coordinates.
-#[derive(Clone, Copy, Debug)]
-struct Update {
-    a: Mat2,
-    b: [f64; 2],
-}
-
-impl Update {
-    /// How far the update moves the point `c`.
-    fn moves(&self, c: [f64; 2]) -> [f64; 2] {
-        [
-            (self.a[0][0] - 1.0) * c[0] + self.a[0][1] * c[1] + self.b[0],
-            self.a[1][0] * c[0] + (self.a[1][1] - 1.0) * c[1] + self.b[1],
-        ]
-    }
-}
-
-/// Which model the update was fitted with, by the survivors' count and
-/// spread.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(super) enum UpdateModel {
-    Affine,
-    Similarity,
-    Shift,
-}
-
-/// One fitted cell as the update's fit reads it: its centre, its shift and
-/// its weight.
-type Correspondence = ([f64; 2], [f64; 2], f64);
-
-/// The weighted least-squares update through the surviving cells: each is a
-/// correspondence `centre → centre + shift` with weight `weight`.
-///
-/// The model is chosen by the survivors' count and spread, falling back one
-/// step at a time:
-///
-/// - a full affine from five or more cells whose spread is that of at least
-///   two rows or two columns of cells;
-/// - a similarity from three or more cells otherwise. That covers three or
-///   four cells, five or more that are not spread over two rows and two
-///   columns (a single row or column pins only one axis of an affine), and
-///   five or more well-spread cells whose affine normal equations are
-///   singular;
-/// - a shift from one or two cells, or from three or more whose spread is
-///   zero.
-///
-/// `None` without a survivor, or when the fitted update reflects or is not
-/// finite.
-fn fit_update(points: &[Correspondence], cell_side: f64) -> Option<(Update, UpdateModel)> {
-    let total: f64 = points.iter().map(|p| p.2).sum();
-    let weighted = total > 0.0;
-    if points.is_empty() || !weighted {
-        return None;
-    }
-    let mean = |f: &dyn Fn(&Correspondence) -> [f64; 2]| {
-        let mut m = [0.0; 2];
-        for p in points {
-            let v = f(p);
-            m[0] += p.2 * v[0];
-            m[1] += p.2 * v[1];
-        }
-        [m[0] / total, m[1] / total]
-    };
-    let src_mean = mean(&|p| p.0);
-    let dst_mean = mean(&|p| [p.0[0] + p.1[0], p.0[1] + p.1[1]]);
-    // Centred second moments: `sxx = Σ w·x·xᵀ`, `syx = Σ w·y·xᵀ`.
-    let mut sxx = [[0.0; 2]; 2];
-    let mut syx = [[0.0; 2]; 2];
-    for (c, d, w) in points {
-        let x = [c[0] - src_mean[0], c[1] - src_mean[1]];
-        let y = [c[0] + d[0] - dst_mean[0], c[1] + d[1] - dst_mean[1]];
-        for i in 0..2 {
-            for j in 0..2 {
-                sxx[i][j] += w * x[i] * x[j];
-                syx[i][j] += w * y[i] * x[j];
-            }
-        }
-    }
-    let spread_sq = sxx[0][0] + sxx[1][1];
-    let half_trace = spread_sq / 2.0;
-    let gap = (((sxx[0][0] - sxx[1][1]) / 2.0).powi(2) + sxx[0][1] * sxx[0][1]).sqrt();
-    let least_spread = (half_trace - gap) / total;
-    // Two full rows of cells a cell apart have a variance of `side²/4` across
-    // them; half of that still pins the affine's second axis.
-    let well_spread = least_spread >= cell_side * cell_side / 8.0;
-    let n = points.len();
-    let shift_only = || {
-        (
-            Update {
-                a: [[1.0, 0.0], [0.0, 1.0]],
-                b: [dst_mean[0] - src_mean[0], dst_mean[1] - src_mean[1]],
-            },
-            UpdateModel::Shift,
-        )
-    };
-    let affine = (n >= 5 && well_spread)
-        .then(|| {
-            let det = sxx[0][0] * sxx[1][1] - sxx[0][1] * sxx[1][0];
-            let invertible = det.abs() > 1e-12 * spread_sq * spread_sq;
-            invertible.then(|| {
-                let inv = [
-                    [sxx[1][1] / det, -sxx[0][1] / det],
-                    [-sxx[1][0] / det, sxx[0][0] / det],
-                ];
-                (mul2(&syx, &inv), UpdateModel::Affine)
-            })
-        })
-        .flatten();
-    let similarity = || {
-        (n >= 3 && spread_sq > 1e-12).then(|| {
-            let a = (syx[0][0] + syx[1][1]) / spread_sq;
-            let b = (syx[1][0] - syx[0][1]) / spread_sq;
-            ([[a, -b], [b, a]], UpdateModel::Similarity)
-        })
-    };
-    let Some((a, model)) = affine.or_else(similarity) else {
-        return Some(shift_only());
-    };
-    let b = [
-        dst_mean[0] - (a[0][0] * src_mean[0] + a[0][1] * src_mean[1]),
-        dst_mean[1] - (a[1][0] * src_mean[0] + a[1][1] * src_mean[1]),
-    ];
-    let det = a[0][0] * a[1][1] - a[0][1] * a[1][0];
-    let orientable = det > 0.0;
-    if !orientable || !b.iter().all(|v| v.is_finite()) {
-        return None;
-    }
-    Some((Update { a, b }, model))
-}
-
-/// The robust update through the surviving cells: [`fit_update`] reweighted
-/// by a Tukey biweight on each cell's residual to the update fitted in the
-/// round before.
-///
-/// The first fit takes each cell's own weight (its peak's curvature). Each of
-/// the [`IRLS_ROUNDS`] that follow measures every cell's residual to the last
-/// fit, the distance from `c + d` to `A·c + b`, takes the residual scale as
-/// [`MEDIAN_LENGTH_TO_SIGMA`] times the median residual length, floored at
-/// [`MIN_RESIDUAL_SCALE_PX`], and multiplies the cell's own weight by the
-/// biweight `(1 − (r / (TUKEY_CUTOFF·scale))²)²`, which is `0` at and past the
-/// cut-off. The update is refitted to the cells with a positive weight, so the
-/// model [`fit_update`] chooses follows the count and spread of those.
-///
-/// Returns the last fit and each cell's last weight, parallel to `points`;
-/// `None` when a fit fails (see [`fit_update`]). The median residual is under
-/// the cut-off, so at least half of the cells keep a positive weight.
-fn fit_update_robust(
-    points: &[Correspondence],
-    cell_side: f64,
-) -> Option<(Update, UpdateModel, Vec<f64>)> {
-    let fit_with = |weights: &[f64]| {
-        let kept: Vec<Correspondence> = points
-            .iter()
-            .zip(weights)
-            .filter(|(_, &w)| w > 0.0)
-            .map(|(&(c, d, _), &w)| (c, d, w))
-            .collect();
-        fit_update(&kept, cell_side)
-    };
-    let prior: Vec<f64> = points.iter().map(|p| p.2).collect();
-    let mut weights = prior.clone();
-    let (mut update, mut model) = fit_with(&weights)?;
-    for _ in 0..IRLS_ROUNDS {
-        let residuals: Vec<f64> = points
-            .iter()
-            .map(|(c, d, _)| {
-                let m = update.moves(*c);
-                (d[0] - m[0]).hypot(d[1] - m[1])
-            })
-            .collect();
-        let median = median_in_place(&mut residuals.clone());
-        let scale = (MEDIAN_LENGTH_TO_SIGMA * median).max(MIN_RESIDUAL_SCALE_PX);
-        let cut = TUKEY_CUTOFF * scale;
-        weights = prior
-            .iter()
-            .zip(&residuals)
-            .map(|(&w, &r)| {
-                if r < cut {
-                    let u = r / cut;
-                    w * (1.0 - u * u).powi(2)
-                } else {
-                    0.0
-                }
-            })
-            .collect();
-        (update, model) = fit_with(&weights)?;
-    }
-    Some((update, model, weights))
-}
-
-/// One render's readings with the update fitted to them.
-#[derive(Clone, Copy, Debug)]
-struct Pass {
-    readings: [[CellReading; 3]; 3],
-    update: Update,
-    model: UpdateModel,
-    /// Each cell's weight in the update's last fit: `0` for a cell that was
-    /// not fitted, or that the robust fit refused.
-    weights: [[f64; 3]; 3],
-}
-
-/// Fit the update to one render's readings: the cells whose status is
-/// [`CellStatus::Fitted`] are the correspondences, each weighted by its
-/// peak's curvature, and [`fit_update_robust`] fits them. `None` when no cell
-/// survived or the fit failed.
-fn fit_pass(readings: [[CellReading; 3]; 3], layout: &CellLayout) -> Option<Pass> {
-    let fitted: Vec<(usize, usize)> = (0..9)
-        .map(|i| (i / 3, i % 3))
-        .filter(|&(r, c)| readings[r][c].status == CellStatus::Fitted)
-        .collect();
-    let points: Vec<Correspondence> = fitted
-        .iter()
-        .map(|&(r, c)| {
-            let rd = readings[r][c];
-            (layout.centres[r][c], rd.shift, rd.curvature)
-        })
-        .collect();
-    let (update, model, w) = fit_update_robust(&points, layout.cell_side)?;
-    let mut weights = [[0.0; 3]; 3];
-    for (&(r, c), w) in fitted.iter().zip(w) {
-        weights[r][c] = w;
-    }
-    Some(Pass {
-        readings,
-        update,
-        model,
-        weights,
-    })
 }
 
 /// The outcome of the piecewise refinement of one member.
@@ -1002,11 +336,12 @@ fn compose(s: &Mat2, p: [f64; 2], update: &Update, step: f64) -> (Mat2, [f64; 2]
 /// [`LoopStop::Measured`]. A failed render or fit leaves every cell
 /// [`CellStatus::NotAttempted`] after one iteration.
 ///
-/// With `move_shape`, it runs the two-level loop. Each iteration renders the working patch at the current shape, reads the
-/// nine cells and fits an update to the cells that survive (see
-/// [`fit_update_robust`]). `score` reads the whole-member windowed ZNCC the
-/// cascade maximised at a shape and position, `None` when the support leaves
-/// the frame. The loop stops at the first of:
+/// With `move_shape`, it runs the two-level loop. Each iteration renders the
+/// working patch at the current shape, reads the nine cells and fits an
+/// update to the cells that survive (see
+/// [`fit_update_robust`](crate::patch::cell_registration::fit_update_robust)).
+/// `score` reads the whole-member windowed ZNCC the cascade maximised at a
+/// shape and position, `None` when the support leaves the frame. The loop stops at the first of:
 ///
 /// - the update lowers that ZNCC by more than [`ACCEPT_ZNCC_TOLERANCE`], or
 ///   below its value at the starting shape ([`LoopStop::Rejected`]): the
@@ -1047,21 +382,10 @@ pub(super) fn refine_member_cells(
     params: &PiecewiseParams,
     score: impl FnMut(&Mat2, [f64; 2]) -> Option<f64>,
 ) -> MemberCells {
+    let gates = params.cell_gates();
     let pass = |shape: &Mat2, position: [f64; 2]| {
         let patch = WorkingPatch::render(pyramid, position, shape, layout, step, off)?;
-        let readings: [[CellReading; 3]; 3] = std::array::from_fn(|row| {
-            std::array::from_fn(|col| {
-                read_cell(
-                    &templates.cells[row][col],
-                    src_channels,
-                    &patch,
-                    layout,
-                    params,
-                    row,
-                    col,
-                )
-            })
-        });
+        let readings = read_cells(templates, src_channels, &patch, layout, &gates);
         fit_pass(readings, layout)
     };
     run_loop(s, p, step, layout, params, pass, score)
