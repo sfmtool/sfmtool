@@ -577,12 +577,13 @@ impl SfmrReconstruction {
     /// A `w = 0` point has no depth to recover, so this does not triangulate.
     /// It places the point along its stored direction, at the camera-cloud
     /// centroid ([`ImageTable::camera_centroid`](crate::reconstruction::ImageTable::camera_centroid),
-    /// the mean of the posed images' centres) plus a distance `t · d`. `t` is the largest per-camera
-    /// distance beyond which the materialised point's parallax falls below one
-    /// pixel (`fᵢ · r⊥ᵢ`, the focal length times the camera-to-origin offset
-    /// perpendicular to the direction) — far enough to be faithful in every
-    /// camera, no farther. Finite points are left unchanged, as is any
-    /// malformed `w = 0` point whose stored direction has zero length.
+    /// the mean of the posed images' centres) plus a distance `t · d`. `t` is
+    /// the largest per-camera distance beyond which the materialised point's
+    /// parallax falls below one pixel (`fᵢ · r⊥ᵢ`, the focal length times the
+    /// camera-to-origin offset perpendicular to the direction) — far enough to
+    /// be faithful in every camera, no farther. Finite points are left
+    /// unchanged, as is any malformed `w = 0` point whose stored direction has
+    /// zero length.
     ///
     /// The result exists for consumers that cannot represent `w = 0` (COLMAP
     /// export, a finite-only solver). It is not the inverse of
