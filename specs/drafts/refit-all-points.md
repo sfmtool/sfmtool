@@ -274,8 +274,9 @@ between the two representations on its rays' account alone. A refit uses the
 fit's classification, as the bench's *Fit* does, so a free point can cross in
 either direction; the report counts the points that do (`crossed`). A refit
 and *Fit* then agree on every free point, and a refit and a retriangulation can
-disagree on which points are bearings. A ranged point does not cross: its `w`
-follows its distance (§ "Constraints").
+disagree on which points are bearings. A ranged point whose distance the rule
+applies does not cross: its `w` follows its distance. One whose reference image
+has no pose is fitted free and can cross (§ "Constraints").
 
 ### Constraints
 
@@ -622,7 +623,8 @@ changes what any current caller gets:
   report keeps its condition number. `refit_points` calls `fit_track` the way
   `fit` calls it at the track stage: after `check_views` and
   `fit_preconditions`, with the payload's own frame and the options at the
-  value's patch resolution (`FitOptions::at_patch_resolution`).
+  value's patch resolution (`FitOptions::at_patch_resolution`, a private method
+  of `fit.rs` today, which becomes `pub(super)` for it).
 - **The origin rule is shared.** The part of `ranged_entry` in
   [`retriangulate.rs`](../../crates/sfmtool-core/src/reconstruction/triangulation/retriangulate.rs)
   that reads a reference image's camera centre, or nothing where the image is
