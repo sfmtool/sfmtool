@@ -372,9 +372,10 @@ constraint is **released**, written free: the format allows a ranged point to be
 a direction only at an infinite distance, and it releases the constraint of any
 point whose representation an edit rewrites
 ([`sfmr-file-format.md`](../../formats/sfmr-file-format.md) § "Per-point
-constraints", "What an edit does to them"). The in-place and the overlay writes both apply this. Only such a
-point can be released, since a held point is never read and a ranged point
-solved at its distance keeps its representation.
+constraints", "What an edit does to them"). The in-place and the overlay
+writes both apply this. Only such a point can be released, since a held point
+is never read, a ranged point solved at its distance keeps its representation,
+and a direction stays one.
 
 **A point the operation cannot speak for keeps the geometry it has.** That is a
 point fewer than two of whose observations state a usable ray, which comes back
@@ -599,8 +600,9 @@ The in-front flag comes back beside the verdicts, which is what makes
   constraint, and one naming no reference is solved free. A ranged point whose
   reference has no pose is solved free: where it stays a position it keeps its
   constraint, and where the floor makes it a direction its constraint is
-  released and its status says so, under `All`, `TheseInBulk` and `These`. A point one sighting is left of keeps the geometry
-  it had and is counted as kept. A floor wider than the arc turns every point
+  released and its status says so, under `All`, `TheseInBulk` and `These`. A
+  point one sighting is left of keeps the geometry it had and is counted as
+  kept. A floor wider than the arc turns every point
   into a direction and reports the crossings, and no distance, since a crossing
   has none. A direction goes in marked and comes back one. One point is an
   overlay edit over the very same base under a `Replaced` map, a second pass

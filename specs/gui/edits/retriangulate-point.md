@@ -167,8 +167,8 @@ left out -- `(1 observation that sees it behind was left out)` -- and a point
 whose answer is the geometry it already had says `unchanged`. Then, where the
 point was rewritten, the index it took: `now point 5310`. A point that was not
 rewritten keeps its index and the tail names none. Last, where the call
-released the point's constraint, `its constraint released`. That tail is the answer the
-gesture was asked for: a point that did not move because one photograph is all
+released the point's constraint, `its constraint released`. That tail is the
+answer the gesture was asked for: a point that did not move because one photograph is all
 that sees it says so, rather than reporting silent success, and an agent reading
 the entry learns where to find the point next.
 
