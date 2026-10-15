@@ -43,8 +43,9 @@ pixi run -e test python scripts/track_at_pixel/harness.py --point-ids 144,177 --
 pixi run -e test python scripts/track_at_pixel/harness.py --opt max_query_offset_px=3 --opt normal_prior=false
 ```
 
-`--dataset` also takes the path of any ground-truth `.sfmr` whose directory
-holds its images and `.sfm-workspace.json`. A whole dataset runs faster in
+`--dataset` also takes the path of any ground-truth `.sfmr` inside a
+workspace: the nearest directory at or above it that holds a
+`.sfm-workspace.json`, with the images named relative to it. A whole dataset runs faster in
 parallel shards, one harness process per shard, merged into one run directory
 that `compare.py` reads like any other. The shards' track files are merged too,
 into one `tracks-full.sfmr` and one `tracks-empty.sfmr`, with each row's

@@ -29,8 +29,9 @@ import numpy as np
 
 REPO = Path(__file__).resolve().parents[2]
 
-# Name -> the ground-truth .sfmr. Its directory must hold the images and the
-# .sfm-workspace.json marker that says how their features are extracted.
+# Name -> the ground-truth .sfmr. It must lie in a workspace: a directory at or
+# above it holding the images and the .sfm-workspace.json marker that says how
+# their features are extracted.
 DATASETS = {
     "seoul_bull": REPO
     / "test-data/images/seoul_bull_sculpture/seoul_bull_sculpture_ground_truth.sfmr",
@@ -40,7 +41,7 @@ DATASETS = {
 @dataclass
 class PreparedDataset:
     name: str
-    ground_truth: Path  # the checked-in file the workspace was copied from
+    ground_truth: Path  # the source .sfmr the workspace was copied from
     workspace: Path
     source_workspace: Path  # the source's workspace, read only
     sfmr: Path
