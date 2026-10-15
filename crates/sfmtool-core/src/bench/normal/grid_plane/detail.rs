@@ -70,6 +70,7 @@ pub struct GridPlaneRender {
 /// A patch frame, world frame.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct GridPlaneFrame {
+    /// The patch centre, world frame.
     pub center: [f64; 3],
     /// Unit, in-plane.
     pub u_axis: [f64; 3],

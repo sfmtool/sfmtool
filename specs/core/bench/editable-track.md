@@ -829,7 +829,7 @@ pub struct GridPlaneCell {
     pub position: [f64; 3],
     pub residual_px: f64,
     pub sigma_px: f64,                        // the residual, floored
-    pub normal_variance: f64,                 // position variance along the plane's normal
+    pub normal_variance: f64,                 // along the normal the weights were computed with
     pub precision_weight: f64,                // its inverse
     pub tukey_weight: f64,
     pub weight: f64,                          // precision × Tukey
@@ -3114,8 +3114,8 @@ fit's model and map. Each cell holds its rays, the reference's first, each
 with the observation and image it is from, the pixel it passes through, its
 origin, direction and noise floor, and its triangulation and place in the
 plane fit: the position, the residual and the `σ` it was floored to, the
-variance along the plane's normal, the precision and Tukey weights and their
-product, and the plane-fit status. The plane holds its centroid, the
+variance along the normal its weight was computed with, the precision and
+Tukey weights and their product, and the plane-fit status. The plane holds its centroid, the
 least-variance direction of the weighted cells whatever the verdict, the
 verdict's normal and determinacy, the eigenvalues of the in-plane scatter the
 verdict reads, the anisotropy, `n_eff`, the rms, and the predicted precision
@@ -4261,7 +4261,7 @@ unit-tested in `normal.rs` itself.
 - A precision bar of `1e-6` degrees makes the textured plane's first render
   propose no turn: the trace's one entry is gated, the loop ends `Measured`,
   the outcome is `Undetermined`, and the frame is exactly the one the step was
-  given; a bar of 45 degrees gives   the same report as no bar.
+  given; a bar of 45 degrees gives the same report as no bar.
 - The textured plane from 10 degrees off with `record_detail`: the report
   without its `detail` equals the one without the option, whose `detail` is
   `None`, and the track is the same. The record holds one render per trace
