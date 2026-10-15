@@ -96,7 +96,7 @@ pub use normal::{
     GridPlaneDetail, GridPlaneFitModel, GridPlaneFrame, GridPlaneIteration, GridPlaneLayout,
     GridPlaneNormalOptions, GridPlaneOutcome, GridPlanePlane, GridPlaneRay, GridPlaneRender,
     GridPlaneTile, GridPlaneView, GridPlaneViewCell, GridPlaneViewFit, NormalError, NormalEstimate,
-    NormalReport, PieceLayout,
+    NormalReport, PieceLayout, BENCH_MIN_CELL_ZNCC,
 };
 pub use refit_points::{
     refit_points, RefitOutcome, RefitPoint, RefitPointsError, RefitPointsOptions,

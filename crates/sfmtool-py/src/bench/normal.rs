@@ -669,7 +669,7 @@ fn finite_difference_normal(
 /// within ``cell_shift_bound_px`` (grid px of the working grid, default 2.0).
 /// A cell is refused in a view when its peak is flatter than
 /// ``min_cell_curvature`` (ZNCC per grid px², default 0.02), its ZNCC at the
-/// optimum is below ``min_cell_zncc`` (default 0.8), its best shift lies on
+/// optimum is below ``min_cell_zncc`` (default 0.6), its best shift lies on
 /// the bound, or the view's robust affine fit gives it no weight. The
 /// surviving cells are triangulated and a weighted, robust plane fitted
 /// through them; the patch is turned toward it and measured again, until a

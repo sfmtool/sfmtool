@@ -720,9 +720,13 @@ pub fn grid_plane_normal(
     progress: &Progress<'_>,
 ) -> Result<(EditableTrack, NormalReport), NormalError>;
 
+// The step's default cell ZNCC bar, below the piecewise refinement's
+// DEFAULT_MIN_CELL_ZNCC (0.8), which stays the cluster pass's bar.
+pub const BENCH_MIN_CELL_ZNCC: f32 = 0.6;
+
 pub struct GridPlaneNormalOptions {
     pub cell_shift_bound_px: f32,       // search bound and render margin, grid px, 2.0
-    pub min_cell_zncc: f32,             // DEFAULT_MIN_CELL_ZNCC, 0.8
+    pub min_cell_zncc: f32,             // BENCH_MIN_CELL_ZNCC, 0.6
     pub min_cell_curvature: f32,        // DEFAULT_MIN_CELL_CURVATURE, 0.02
     pub working_resolution: Option<u32>, // None: the reference view's footprint, clamped to R..=2R
     pub plane: CellPlaneParams,         // the cell plane kernel's, default
@@ -3037,6 +3041,15 @@ centre whose template is textured. The cell plane kernel
 ([cell-plane-normals.md](../patch/cell-plane-normals.md)) triangulates the
 cells and fits the weighted, robust plane with its `NormalDeterminacy`.
 
+The ZNCC bar defaults to `BENCH_MIN_CELL_ZNCC`, `0.6`, not the piecewise
+refinement's `DEFAULT_MIN_CELL_ZNCC` (`0.8`), which stays the cluster pass's
+bar. The maintainer chose it after reviewing a run over every point of three
+captures: many cells refused under `0.8` looked like usable data, at `0.6`
+far fewer cells were refused and more points were turned without the first
+plane moving further from the stored normals, and below `0.6` the first plane
+moved further from them
+([piece-gated-grid-normal.md](../../drafts/piece-gated-grid-normal.md#the-cell-zncc-bar-2026-10-15)).
+
 Under both axes the patch is turned to the plane's normal, signed to keep the
 face the patch shows; under one axis only about the axis the cells fix, the
 normal being the patch's with its component along the cells' line removed;
@@ -4233,7 +4246,8 @@ unit-tested in `normal.rs` itself.
   `Unstable` and the frame is exactly the one the step was given.
 - A depth step, the near plane covering only the last column and a far plane
   with a different texture behind the rest, on the default grid from 20
-  degrees about `-x` with 4 about `y`: the outcome is `Turned`, only that
+  degrees about `-x` with 4 about `y` and the cell ZNCC bar at the piecewise
+  refinement's `0.8`: the outcome is `Turned`, only that
   column is in the plane, the verdict is one axis with the free axis along
   the column, the normal has no part along the column to within 1 degree
   (0.06 measured), and its turn about the column is where the patch had it.
@@ -4241,6 +4255,11 @@ unit-tested in `normal.rs` itself.
   turn and are left unchanged; from two of those the first turn is rejected
   because the acceptance score's window weights the tile's middle, which is
   the far plane.
+  At the step's default bar of `0.6` one far-plane cell registers in one view
+  and joins the plane with a small weight, both axes are fixed, and the turn
+  it asks for is rejected.
+- The step's default cell ZNCC bar is `BENCH_MIN_CELL_ZNCC`, `0.6`, and the
+  piecewise refinement's `DEFAULT_MIN_CELL_ZNCC` stays `0.8`.
 - Flat texture throughout: every cell is refused for curvature, none has a
   ray, the verdict is none, the loop does not run, the outcome is
   `Undetermined`, and the frame is exactly the one the step was given.

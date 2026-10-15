@@ -10,6 +10,7 @@
 - once this estimator covers the callers of the photometric normal search, that search is retired together with the fronto-parallel cache and the D-optimal view subset that exist only to serve it.
 - the working grid follows the reference view's footprint (decided by the maintainer): with `working_resolution` `None` its side is the patch's longer side in the reference view's photograph pixels at the starting frame, about one sample per photograph pixel, rounded up and clamped to `R ..= 2R` for `R` the resolution the track's bitmap is rendered at; the cap because one sample per pixel is unbounded against the patch and the cost grows with the square of the side, the floor so the grid is never coarser than the bitmap's. It is chosen once per step, so every render of the loop is on one grid;
 - the step changes the normal only on a good estimate (decided by the maintainer): only a loop that ends `Converged` with at least one axis fixed turns the patch (`GridPlaneOutcome::Turned`). Every other ending leaves the normal exactly as the step was given it, even when earlier turns were accepted, and is reported, not refused: `Undetermined` when the cells cannot constrain the normal (verdict none, or no view scored), `Unstable` when they constrain it but the loop did not settle (a rejected turn, an oscillation, or the render cap, including a cap reached with every turn accepted, because the step wants stable convergence).
+- the cell ZNCC bar defaults to `0.6` (decided by the maintainer), the step's own `BENCH_MIN_CELL_ZNCC`, below the piecewise refinement's `0.8`, which keeps its own; see [The cell ZNCC bar](#the-cell-zncc-bar-2026-10-15).
 
 Not decided: which score the loop's acceptance rule reads; whether the step moves the patch's centre onto the fitted plane; whether a cell registration cannot settle falls back to a full piece fit; whether the first iteration can read the localizer's tiles. See [Open questions](#open-questions).
 
@@ -74,7 +75,7 @@ pub struct GridPlaneNormalOptions {
     /// `cell_shift_bound_px`, 2.0.
     pub cell_shift_bound_px: f32,
     /// A cell whose ZNCC at its optimum is below this is refused in that view.
-    /// `DEFAULT_MIN_CELL_ZNCC`, 0.8.
+    /// `BENCH_MIN_CELL_ZNCC`, 0.6.
     pub min_cell_zncc: f32,
     /// A cell whose ZNCC peak is flatter than this is refused in that view.
     /// `DEFAULT_MIN_CELL_CURVATURE`, 0.02 ZNCC per grid px².
@@ -181,14 +182,14 @@ Renders and cell scores are `f32` on tile intensities, as the piecewise refineme
 | Parameter | Default | Meaning |
 |-----------|---------|---------|
 | `cell_shift_bound_px` | `2.0` | Shift search bound and render margin, working grid px; the piecewise refinement's default |
-| `min_cell_zncc` | `0.8` | A cell below this ZNCC in a view is refused in that view (`DEFAULT_MIN_CELL_ZNCC`) |
+| `min_cell_zncc` | `0.6` | A cell below this ZNCC in a view is refused in that view (`BENCH_MIN_CELL_ZNCC`); decided by the maintainer, see [The cell ZNCC bar](#the-cell-zncc-bar-2026-10-15) |
 | `min_cell_curvature` | `0.02` | A cell whose peak is flatter in a view is refused in that view (`DEFAULT_MIN_CELL_CURVATURE`) |
 | `working_resolution` | `None` (the reference view's footprint, clamped to `R ..= 2R`) | Side of the working grid; decided by the maintainer, see Status |
 | `plane` | `CellPlaneParams::default()` | `include_refused_outlier` false, `min_rays` 2, `min_triangulation_angle_deg` 2.0, `cell_shift_precision_grid_px` 0.1, `ray_noise_floor_px` 0.05, `irls_iters` 3, `tukey_c` 4.685, `min_cells` 3, `det_aniso` 0.10 |
 | `update_tolerance_px` | `0.05` | The loop stops when no cell centre moves by more; the piecewise loop's default |
 | `max_iterations` | `5` | Render cap; the piecewise loop's default |
 
-The two cell bars are the piecewise refinement's provisional defaults, set on synthetic tests; they are not measured for this use.
+`min_cell_curvature` is the piecewise refinement's provisional default, set on synthetic tests and not measured for this use. `min_cell_zncc` is the step's own, `0.6`, below the piecewise refinement's `DEFAULT_MIN_CELL_ZNCC` (`0.8`), which stays the cluster pass's bar.
 
 ## Testing
 
@@ -1114,6 +1115,30 @@ By baseline, `seoul_bull`:
 
 - **How the candidate's normals were set.** It is a candidate ground truth, not approved, and its provenance is not recorded here. Agreement within about a degree with the new step's turned points, and within a few degrees with today's 2×2 at narrow baselines, may mean that parts of it were set by those methods or by a related one; if so, those parts measure agreement with a method, not with the surface.
 - The other caveats of the sweep above hold: the ground-truth normals are estimates, most of the two approved ones were set with today's 3×3 step per the maintainer, and the gates and the first plane are read from the traces after the fact.
+
+## The cell ZNCC bar (2026-10-15)
+
+**Question.** In the walkthrough of the sweep's runs, many cells refused for a ZNCC under `0.8` looked like usable data. How do the first plane and the step change when the bar is lowered?
+
+**Setup.** The `bound4_none` variant of the sweep above (`cell_shift_bound_px` 4, acceptance `none`, `max_iterations` 8) was run again at `min_cell_zncc` 0.6, 0.4 and 0.0 and compared with its 0.8 run, on every point of `seoul_bull` (266), `kerry_park` (382) and the `dino_dog_toy` candidate ground truth v006 (961). Starts, estimators and errors are as in the sweep above.
+
+**Views' baseline 20° and over, 0.8 against 0.6** (errors in degrees, medians):
+
+| dataset | points | cells refused for ZNCC | points with a first plane | first plane error | turned | turned error |
+|---|---|---|---|---|---|---|
+| `seoul_bull` | 127 | 19% → 5% | 92 → 125 | 13.5 → 13.0 | 19 → 39 | 14.7 → 8.1 |
+| `kerry_park` | 301 | 26% → 10% | 211 → 279 | 13.1 → 10.1 | 67 → 106 | 5.3 → 3.3 |
+| `dino_dog_toy` | 882 | 27% → 6% | 746 → 833 | 3.6 → 3.5 | 317 → 391 | 1.2 → 1.1 |
+
+**What the numbers show.**
+
+- At narrow baselines on `dino_dog_toy` the first plane's median error falls from 16.8° to 8.3° under 10° and from 31.7° to 6.8° at 10–20°. `seoul_bull` stays poor at narrow baselines.
+- Below 0.6 the first plane gets worse at baselines of 20° and over: median 10.1°, 14.4° and 18.3° at 0.6, 0.4 and 0.0 on `kerry_park`, and 3.5°, 4.6° and 7.3° on `dino_dog_toy`.
+- Even at 0.6 the step turns only 31% to 44% of the points at 20° and over. The stopping rules lose more points than the bar does.
+
+**What the numbers cannot show.** The errors are against the stored normals, which are estimates, mostly set with today's 3×3 Grid Plane Normal; the `dino_dog_toy` file is a candidate ground truth, not an approved one.
+
+**Decision.** The maintainer chose 0.6 as the step's default, `BENCH_MIN_CELL_ZNCC`, after reviewing the walkthrough. The piecewise refinement of cluster patches keeps its own default of 0.8.
 
 ## Open questions
 

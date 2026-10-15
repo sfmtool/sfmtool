@@ -36,7 +36,7 @@ pub use grid_plane::{
     grid_plane_normal, GridPlaneAcceptance, GridPlaneCell, GridPlaneCells, GridPlaneDetail,
     GridPlaneFitModel, GridPlaneFrame, GridPlaneIteration, GridPlaneLayout, GridPlaneNormalOptions,
     GridPlaneOutcome, GridPlanePlane, GridPlaneRay, GridPlaneRender, GridPlaneTile, GridPlaneView,
-    GridPlaneViewCell, GridPlaneViewFit,
+    GridPlaneViewCell, GridPlaneViewFit, BENCH_MIN_CELL_ZNCC,
 };
 
 /// The smallest number of pieces [`FiniteDifferenceOptions::pieces`] takes: two

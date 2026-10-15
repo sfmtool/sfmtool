@@ -345,7 +345,16 @@ fn a_depth_step_leaves_one_column_and_one_axis() {
     let (track, _) = tilt_patch(&track_of(&bench, &label), &edited, start).expect("a finite track");
     let was = placement_of(&track).normal();
 
-    let (turned, report) = run(&scene, &edited, &track);
+    // At the default bar of 0.6 one far-plane cell, the middle column's top,
+    // registers in one view between 0.6 and 0.8 and joins the plane with a
+    // small weight, fixing both axes; the turn it asks for is then rejected.
+    // The piecewise refinement's 0.8 refuses it, which is the depth step this
+    // test is about.
+    let options = GridPlaneNormalOptions {
+        min_cell_zncc: crate::patch::cluster_refine::DEFAULT_MIN_CELL_ZNCC,
+        ..Default::default()
+    };
+    let (turned, report) = run_with(&scene, &edited, &track, &options);
     let cells = cells_of(&report);
     assert_eq!(cells.outcome, GridPlaneOutcome::Turned, "{report}");
     for k in [2, 5, 8] {

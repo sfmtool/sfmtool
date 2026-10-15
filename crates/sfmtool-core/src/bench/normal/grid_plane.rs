@@ -75,6 +75,20 @@ const MIN_WORKING_RESOLUTION: u32 = 3;
 /// A sample variance under this is flat for the acceptance score.
 const FLAT_VARIANCE: f64 = 1e-9;
 
+/// The bench's default [`GridPlaneNormalOptions::min_cell_zncc`].
+///
+/// `0.6`, below the piecewise refinement's own
+/// [`DEFAULT_MIN_CELL_ZNCC`](crate::patch::cluster_refine::DEFAULT_MIN_CELL_ZNCC)
+/// (`0.8`), which stays the cluster pass's bar. Chosen by the maintainer from
+/// a run over every point of seoul_bull, kerry_park and a candidate ground
+/// truth of dino_dog_toy: many cells refused under `0.8` looked like usable
+/// data, and at `0.6` the step refused far fewer cells, found a plane at more
+/// points and turned more of them, with the first plane no further from the
+/// stored normals at wide baselines and closer on dino_dog_toy at narrow ones.
+/// Below `0.6` the first plane moved further from the stored normals.
+/// `specs/drafts/piece-gated-grid-normal.md` gives the numbers.
+pub const BENCH_MIN_CELL_ZNCC: f32 = 0.6;
+
 /// How [`grid_plane_normal`] measures the cells and when its loop stops.
 #[derive(Debug, Clone)]
 pub struct GridPlaneNormalOptions {
@@ -84,8 +98,7 @@ pub struct GridPlaneNormalOptions {
     /// [`cell_shift_bound_px`](PiecewiseParams::cell_shift_bound_px), 2.0.
     pub cell_shift_bound_px: f32,
     /// A cell whose ZNCC at its optimum is below this is refused in that view.
-    /// [`DEFAULT_MIN_CELL_ZNCC`](crate::patch::cluster_refine::DEFAULT_MIN_CELL_ZNCC),
-    /// 0.8.
+    /// [`BENCH_MIN_CELL_ZNCC`], 0.6.
     pub min_cell_zncc: f32,
     /// A cell whose ZNCC peak is flatter than this along its flattest
     /// direction is refused in that view, in ZNCC per grid px².
@@ -136,7 +149,7 @@ impl Default for GridPlaneNormalOptions {
         let piecewise = PiecewiseParams::default();
         Self {
             cell_shift_bound_px: piecewise.cell_shift_bound_px,
-            min_cell_zncc: piecewise.min_cell_zncc,
+            min_cell_zncc: BENCH_MIN_CELL_ZNCC,
             min_cell_curvature: piecewise.min_cell_curvature,
             working_resolution: None,
             plane: CellPlaneParams::default(),

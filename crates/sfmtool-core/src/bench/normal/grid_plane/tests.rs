@@ -188,3 +188,13 @@ fn each_loop_ending_maps_to_its_outcome() {
         assert_eq!(GridPlaneOutcome::of(stop), outcome, "{stop:?}");
     }
 }
+
+/// The step's cell ZNCC bar is its own 0.6; the piecewise refinement of
+/// cluster patches keeps 0.8.
+#[test]
+fn the_step_and_the_piecewise_refinement_keep_separate_cell_zncc_bars() {
+    assert_eq!(BENCH_MIN_CELL_ZNCC, 0.6);
+    assert_eq!(GridPlaneNormalOptions::default().min_cell_zncc, 0.6);
+    assert_eq!(crate::patch::cluster_refine::DEFAULT_MIN_CELL_ZNCC, 0.8);
+    assert_eq!(PiecewiseParams::default().min_cell_zncc, 0.8);
+}
