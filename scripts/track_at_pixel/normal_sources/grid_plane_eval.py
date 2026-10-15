@@ -10,7 +10,9 @@ and fitted once with the bench ``fit``. From that one fitted track two steps
 are run:
 
 - ``old``: ``finite_difference_normal`` with ``layout="grid"``, 2x2 pieces and
-  no overlap, Track View's default Grid Plane Normal;
+  no overlap, Track View's default Grid Plane Normal (``--old-pieces`` sets the
+  pieces per axis); ``--also-old-pieces N``, repeated, runs it again at ``N``
+  pieces per axis into ``old{N}_*`` fields beside the ``old_*`` ones;
 - ``new``: ``grid_plane_normal`` at its defaults, or with the keywords
   ``--new-opt`` gives.
 
@@ -21,7 +23,7 @@ mean-view start's, the baseline both steps start from.
 
     pixi run -e test python scripts/track_at_pixel/normal_sources/grid_plane_eval.py \\
         DATASET --out DIR [--limit N] [--seed S] [--start ground_truth] [--no-fit] \\
-        [--new-opt KEY=VALUE ...]
+        [--old-pieces N] [--also-old-pieces N ...] [--new-opt KEY=VALUE ...]
 
 ``DATASET`` is a name ``dataset.py`` knows (``seoul_bull``) or the path of a
 ground-truth ``.sfmr``; ``prepare`` copies it into its cache workspace. Rows go
@@ -31,7 +33,8 @@ normal, the start normal, the fitted frame, each step's resulting frame, the
 reference and ``in`` sightings with their keypoints) and the new step's
 predicted precision, views' baseline and per-render trace, each proposed normal
 with its error; ``DIR/cameras.json`` holds each image's name, centre,
-world-from-camera rotation and lens summary, and the image directory.
+world-from-camera rotation and lens summary, and the workspace directories the
+image names are relative to: the cache's and the source's.
 ``--new-opt KEY=VALUE``, repeated, passes a keyword to ``grid_plane_normal``
 (``max_iterations=8``, ``acceptance=none``, ``cell_shift_bound_px=4``, ...).
 
@@ -111,14 +114,48 @@ def write_cameras(ds, prepared, out):
         "dataset": prepared.name,
         "ground_truth": str(prepared.ground_truth),
         "image_dir": str(prepared.workspace),
-        "source_image_dir": str(prepared.ground_truth.parent),
+        "source_image_dir": str(prepared.source_workspace),
         "images": images,
     }
     with open(out / "cameras.json", "w") as sink:
         json.dump(doc, sink, indent=1)
 
 
-def run_point(ds, edited, p, *, fit=True, start="mean_view", new_options=None):
+def run_old(row, prefix, track, edited, ds, pieces, to_cam, gt):
+    """Today's Grid Plane Normal at ``pieces`` per axis into ``{prefix}_*``."""
+    from sfmtool import bench as B
+
+    t0 = time.perf_counter()
+    try:
+        old, report = B.finite_difference_normal(
+            track, edited, ds.pyramids, layout="grid", pieces=pieces, overlap=0.0
+        )
+        row[f"{prefix}_ms"] = 1000 * (time.perf_counter() - t0)
+        est = report["estimate"]
+        row[f"{prefix}_ok"] = True
+        row[f"{prefix}_fitted"] = est["fitted"]
+        row[f"{prefix}_both_axes"] = est["both_axes"]
+        row[f"{prefix}_turned_deg"] = report["tilt"]["degrees"]
+        row[f"{prefix}_deg"] = angle(face(patch_normal(old), to_cam), gt)
+        row[f"{prefix}_frame"] = frame(old)
+    except ValueError as e:
+        row[f"{prefix}_ms"] = 1000 * (time.perf_counter() - t0)
+        row[f"{prefix}_ok"] = False
+        row[f"{prefix}_reason"] = str(e)
+        row[f"{prefix}_deg"] = row["start_deg"]  # a refusal leaves the normal
+
+
+def run_point(
+    ds,
+    edited,
+    p,
+    *,
+    fit=True,
+    start="mean_view",
+    new_options=None,
+    old_pieces=2,
+    also_old_pieces=(),
+):
     """One row: the start, the fit, and each step from the fitted track."""
     from sfmtool import bench as B
 
@@ -166,24 +203,9 @@ def run_point(ds, edited, p, *, fit=True, start="mean_view", new_options=None):
     row["fitted_frame"] = frame(track)
     row["sightings"] = sightings(track)
 
-    t0 = time.perf_counter()
-    try:
-        old, report = B.finite_difference_normal(
-            track, edited, ds.pyramids, layout="grid", pieces=2, overlap=0.0
-        )
-        row["old_ms"] = 1000 * (time.perf_counter() - t0)
-        est = report["estimate"]
-        row["old_ok"] = True
-        row["old_fitted"] = est["fitted"]
-        row["old_both_axes"] = est["both_axes"]
-        row["old_turned_deg"] = report["tilt"]["degrees"]
-        row["old_deg"] = angle(face(patch_normal(old), to_cam), gt)
-        row["old_frame"] = frame(old)
-    except ValueError as e:
-        row["old_ms"] = 1000 * (time.perf_counter() - t0)
-        row["old_ok"] = False
-        row["old_reason"] = str(e)
-        row["old_deg"] = row["start_deg"]  # a refusal leaves the normal
+    run_old(row, "old", track, edited, ds, old_pieces, to_cam, gt)
+    for pieces in also_old_pieces:
+        run_old(row, f"old{pieces}", track, edited, ds, pieces, to_cam, gt)
 
     t0 = time.perf_counter()
     try:
@@ -253,6 +275,17 @@ def stats(values):
     )
 
 
+def extra_old_keys(rows):
+    """The ``old{N}`` prefixes ``--also-old-pieces`` added to the rows."""
+    keys = set()
+    for r in rows:
+        keys |= {
+            k[: -len("_deg")] for k in r if k.startswith("old") and k.endswith("_deg")
+        }
+    keys -= {"old", "old_turned"}
+    return sorted(k for k in keys if not k.endswith("_turned"))
+
+
 def summarize(name, rows):
     ok = [r for r in rows if r["status"] == "ok"]
     print(f"\n== {name}: {len(rows)} points, {len(ok)} finite after the fit")
@@ -260,7 +293,9 @@ def summarize(name, rows):
         print(f"   {status}: {sum(r['status'] == status for r in rows)}")
     print("all points (error to the ground-truth normal, degrees)")
     print(f"  start              {stats(r['start_deg'] for r in ok)}")
-    print(f"  old 2x2 grid       {stats(r['old_deg'] for r in ok)}")
+    print(f"  old grid           {stats(r['old_deg'] for r in ok)}")
+    for key in extra_old_keys(rows):
+        print(f"  {key:18s} {stats(r.get(key + '_deg') for r in ok)}")
     print(f"  new grid_plane     {stats(r['new_deg'] for r in ok)}")
     old_ok = [r for r in ok if r["old_ok"]]
     print(f"old step: {len(old_ok)} turned, {len(ok) - len(old_ok)} refused")
@@ -279,7 +314,9 @@ def summarize(name, rows):
     turned = [r for r in ok if r["new_outcome"] == "turned"]
     print(f"points the new step turned ({len(turned)})")
     print(f"  start              {stats(r['start_deg'] for r in turned)}")
-    print(f"  old 2x2 grid       {stats(r['old_deg'] for r in turned)}")
+    print(f"  old grid           {stats(r['old_deg'] for r in turned)}")
+    for key in extra_old_keys(rows):
+        print(f"  {key:18s} {stats(r.get(key + '_deg') for r in turned)}")
     print(f"  new grid_plane     {stats(r['new_deg'] for r in turned)}")
     print(
         "median shift of the fitted centre from the ground truth: "
@@ -348,6 +385,20 @@ def main():
         help="run both steps from the turned ground-truth track, unfitted",
     )
     ap.add_argument(
+        "--old-pieces",
+        type=int,
+        default=2,
+        help="pieces per axis of today's Grid Plane Normal in the old_* fields",
+    )
+    ap.add_argument(
+        "--also-old-pieces",
+        type=int,
+        action="append",
+        default=[],
+        metavar="N",
+        help="also run today's step at N pieces per axis, into old{N}_* fields",
+    )
+    ap.add_argument(
         "--new-opt",
         action="append",
         default=[],
@@ -393,6 +444,8 @@ def main():
                 fit=not args.no_fit,
                 start=args.start,
                 new_options=new_options,
+                old_pieces=args.old_pieces,
+                also_old_pieces=args.also_old_pieces,
             )
             row["new_options"] = new_options
             rows.append(row)

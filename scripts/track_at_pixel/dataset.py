@@ -8,8 +8,12 @@ workspace it may write into, a ``.sift`` file per image (the constellation
 query is over detected keypoints), a ``.kdf`` descriptor index over those files
 in the reconstruction's own image order, so a match names a reconstruction image
 directly, and a cluster-patches ``.matches`` file built from that same index.
-``prepare`` builds all four in a cache directory, never beside the checked-in
-data, and reuses them on later runs. A ``.matches`` file supplied by the caller
+``prepare`` builds all four in a cache directory, never beside the source
+data, and reuses them on later runs. The source workspace is the nearest
+directory at or above the ``.sfmr`` that holds a ``.sfm-workspace.json``; the
+``.sfmr`` is copied to the same path relative to the cache workspace, so that
+the copy resolves its workspace to the cache, and ``prepare`` stops if it does
+not. A ``.matches`` file supplied by the caller
 is used as given instead of the built one.
 """
 
@@ -38,6 +42,7 @@ class PreparedDataset:
     name: str
     ground_truth: Path  # the checked-in file the workspace was copied from
     workspace: Path
+    source_workspace: Path  # the source's workspace, read only
     sfmr: Path
     kdf: Path
     matches: Path  # clusters + cluster-patches, over the same images
@@ -66,14 +71,24 @@ def prepare(
     if not gt.is_file():
         raise SystemExit(f"no ground truth at {gt} (known datasets: {list(DATASETS)})")
     name = name_or_path if name_or_path in DATASETS else gt.stem
-    source_ws = gt.parent
+    source_ws = next(
+        (
+            d
+            for d in [gt.parent, *gt.parent.parents]
+            if (d / ".sfm-workspace.json").is_file()
+        ),
+        None,
+    )
+    if source_ws is None:
+        raise SystemExit(f"{gt} has no .sfm-workspace.json at or above it")
     marker = source_ws / ".sfm-workspace.json"
-    if not marker.is_file():
-        raise SystemExit(f"{gt} has no .sfm-workspace.json beside it")
 
     workspace = (cache_dir or default_cache_dir()) / name
     workspace.mkdir(parents=True, exist_ok=True)
-    sfmr = workspace / gt.name
+    # The same path relative to the workspace, so a stored relative workspace
+    # path (``..`` for a file in a subdirectory) lands on the cache.
+    sfmr = workspace / gt.relative_to(source_ws)
+    sfmr.parent.mkdir(parents=True, exist_ok=True)
     # Copy only what is missing or stale, so runs started in parallel against
     # one cache never write a file another is reading.
     _copy_if_stale(gt, sfmr)
@@ -83,6 +98,14 @@ def prepare(
             _copy_if_stale(source_ws / extra, workspace / extra)
 
     recon = SfmrReconstruction.load(sfmr)
+    # The copy must resolve its workspace to the cache. One that fell back to
+    # the source's stored absolute path would read the source's workspace,
+    # and anything written beside its images would land there.
+    if Path(recon.workspace_dir).resolve() != workspace.resolve():
+        raise SystemExit(
+            f"the copy at {sfmr} resolves its workspace to {recon.workspace_dir}, "
+            f"not the cache workspace {workspace}; stopping"
+        )
     names = list(recon.image_names)
     image_paths = []
     for image_name in names:
@@ -109,6 +132,7 @@ def prepare(
         name=name,
         ground_truth=gt,
         workspace=workspace,
+        source_workspace=source_ws,
         sfmr=sfmr,
         kdf=kdf,
         matches=Path(matches),

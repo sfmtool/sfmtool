@@ -9,7 +9,10 @@
 ``DATASET_DIR`` holds one subdirectory per variant, each with the one
 ``*.jsonl`` that ``grid_plane_eval.py --out`` wrote for it; the variant's name
 is its directory's. Every run is from the same fitted mean-view starts, so the
-start and today's 2x2 Grid Plane Normal are read from the first variant.
+start and today's Grid Plane Normal are read from the first variant: the
+``old_*`` fields, run at 2x2 pieces, and the ``old3_*`` fields, at 3x3, where
+the runs carried them (``grid_plane_eval.py --also-old-pieces 3``); a column
+for 3x3 reads ``-`` where they did not.
 
 Errors are the rows' angles to the ground-truth normal, in degrees. Besides
 the step as built (``new``: the normal the step left, which differs from the
@@ -85,6 +88,11 @@ def in_bin(value, lo, hi):
     return value is not None and np.isfinite(value) and lo <= value < hi
 
 
+def old3(rows):
+    """Today's step at 3x3 over ``rows``, as :func:`stats`."""
+    return stats(r.get("old3_deg") for r in rows)
+
+
 def table(header, rows):
     out = ["| " + " | ".join(header) + " |", "|" + "---|" * len(header)]
     out += ["| " + " | ".join(str(c) for c in r) + " |" for r in rows]
@@ -104,8 +112,10 @@ def by_baseline(variants):
         "new <10",
         "new <20",
         "start med",
-        "old med",
-        "old <10",
+        "2x2 med",
+        "2x2 <10",
+        "3x3 med",
+        "3x3 <10",
         "new closer than start",
     ]
     rows = []
@@ -132,6 +142,8 @@ def by_baseline(variants):
                     stats(r["start_deg"] for r in turned)[0],
                     stats(r["old_deg"] for r in turned)[0],
                     stats(r["old_deg"] for r in turned)[2],
+                    old3(turned)[0],
+                    old3(turned)[2],
                     closer,
                 ]
             )
@@ -141,9 +153,10 @@ def by_baseline(variants):
 def baselines_alone(variants):
     """The start and today's step on every point, per baseline bin."""
     data = next(iter(variants.values()))
-    print("### Start and today's 2x2 on all points, by baseline\n")
-    header = ["baseline", "points", "start med", "start <20", "old med", "old <10"]
-    header += ["old <20", "old closer than start"]
+    print("### Start and today's step on all points, by baseline\n")
+    header = ["baseline", "points", "start med", "start <20", "2x2 med", "2x2 <10"]
+    header += ["2x2 <20", "2x2 closer than start", "3x3 med", "3x3 <10", "3x3 <20"]
+    header += ["3x3 closer than start"]
     rows = []
     for lo, hi in BASELINE_BINS:
         pts = [r for r in data if in_bin(baseline(r), lo, hi)]
@@ -154,7 +167,17 @@ def baselines_alone(variants):
             if pts
             else "-"
         )
-        rows.append([bin_name(lo, hi), len(pts), s[0], s[3], o[0], o[2], o[3], closer])
+        t = old3(pts)
+        with3 = [r for r in pts if r.get("old3_deg") is not None]
+        closer3 = (
+            f"{np.mean([r['old3_deg'] < r['start_deg'] for r in with3]):.0%}"
+            if with3
+            else "-"
+        )
+        rows.append(
+            [bin_name(lo, hi), len(pts), s[0], s[3], o[0], o[2], o[3], closer]
+            + [t[0], t[2], t[3], closer3]
+        )
     print(table(header, rows) + "\n")
 
 
@@ -162,7 +185,8 @@ def first_planes(variants):
     """The first render's plane per baseline bin, one row per search bound."""
     print("### The first plane, by baseline\n")
     header = ["variant", "baseline", "points", "proposed", "first med", "first p75"]
-    header += ["first <10", "first <20", "start med", "old med", "closer than start"]
+    header += ["first <10", "first <20", "start med", "2x2 med", "3x3 med"]
+    header += ["closer than start"]
     rows = []
     seen = set()
     for name, data in variants.items():
@@ -187,6 +211,7 @@ def first_planes(variants):
                     *f,
                     stats(r["start_deg"] for r, _ in prop)[0],
                     stats(r["old_deg"] for r, _ in prop)[0],
+                    old3([r for r, _ in prop])[0],
                     closer,
                 ]
             )
@@ -329,7 +354,7 @@ def precision(variants):
 
     print("### Gates on the first plane, by baseline\n")
     header = ["variant", "gate", "baseline", "points", "kept", "first med"]
-    header += ["first <10", "first <20", "start med", "old med"]
+    header += ["first <10", "first <20", "start med", "2x2 med", "3x3 med"]
     rows = []
     seen = set()
     for name, data in variants.items():
@@ -369,13 +394,14 @@ def precision(variants):
                         f[3],
                         stats(r["start_deg"] for r, _ in kept)[0],
                         stats(r["old_deg"] for r, _ in kept)[0],
+                        old3([r for r, _ in kept])[0],
                     ]
                 )
     print(table(header, rows) + "\n")
 
     print("### Gates on the step as built (Turned points)\n")
     header = ["variant", "gate", "turned", "kept", "new med", "new <10", "new <20"]
-    header += ["start med", "old med"]
+    header += ["start med", "2x2 med", "3x3 med"]
     rows = []
     for name, data in variants.items():
         turned = [r for r in data if r["new_outcome"] == "turned"]
@@ -398,6 +424,7 @@ def precision(variants):
                     f[3],
                     stats(r["start_deg"] for r in kept)[0],
                     stats(r["old_deg"] for r in kept)[0],
+                    old3(kept)[0],
                 ]
             )
     print(table(header, rows) + "\n")
