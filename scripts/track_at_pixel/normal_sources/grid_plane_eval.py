@@ -145,18 +145,17 @@ def run_old(row, prefix, track, edited, ds, pieces, to_cam, gt):
         row[f"{prefix}_deg"] = row["start_deg"]  # a refusal leaves the normal
 
 
-def run_point(
-    ds,
-    edited,
-    p,
-    *,
-    fit=True,
-    start="mean_view",
-    new_options=None,
-    old_pieces=2,
-    also_old_pieces=(),
-):
-    """One row: the start, the fit, and each step from the fitted track."""
+def start_track(ds, edited, p, *, fit=True, start="mean_view"):
+    """The point's start: its row so far, and the track both steps run from.
+
+    The point is put on the bench at its ground-truth position, sightings and
+    half-extent, turned to ``start`` (the mean viewing direction, or the
+    ground-truth normal), and fitted once unless ``fit`` is off. Returns
+    ``(row, track, to_cam, gt)``, with ``track`` ``None`` when the start was
+    refused or the fit put the point at infinity (``row["status"]`` says
+    which); ``to_cam`` is the unit direction to the first sighting's camera and
+    ``gt`` the ground-truth normal turned to face it.
+    """
     from sfmtool import bench as B
 
     images = ds.point_images[p]
@@ -190,10 +189,10 @@ def run_point(
     except ValueError as e:
         row["status"] = "start_refused"
         row["reason"] = str(e)
-        return row
+        return row, None, to_cam, gt
     if fit and fitted["at_infinity"]:
         row["status"] = "fit_at_infinity"
-        return row
+        return row, None, to_cam, gt
     row["fit_shift_half_extents"] = float(
         np.linalg.norm(np.asarray(track.position) - xyz) / ds.point_half[p]
     )
@@ -202,10 +201,15 @@ def run_point(
     row["start_normal"] = patch_normal(track).tolist()
     row["fitted_frame"] = frame(track)
     row["sightings"] = sightings(track)
+    return row, track, to_cam, gt
 
-    run_old(row, "old", track, edited, ds, old_pieces, to_cam, gt)
-    for pieces in also_old_pieces:
-        run_old(row, f"old{pieces}", track, edited, ds, pieces, to_cam, gt)
+
+def run_new(row, track, edited, ds, new_options, to_cam, gt):
+    """``grid_plane_normal`` with ``new_options`` into ``new_*``; its report.
+
+    Returns the step's report, or ``None`` when it refused.
+    """
+    from sfmtool import bench as B
 
     t0 = time.perf_counter()
     try:
@@ -217,7 +221,7 @@ def run_point(
         row["new_outcome"] = "refused"
         row["new_reason"] = str(e)
         row["new_deg"] = row["start_deg"]
-        return row
+        return None
     row["new_ms"] = 1000 * (time.perf_counter() - t0)
     cells = report["estimate"]
     row["new_outcome"] = cells["outcome"]
@@ -261,6 +265,30 @@ def run_point(
     row["new_trace"] = trace
     row["new_deg"] = angle(face(patch_normal(new), to_cam), gt)
     row["new_frame"] = frame(new)
+    return report
+
+
+def run_point(
+    ds,
+    edited,
+    p,
+    *,
+    fit=True,
+    start="mean_view",
+    new_options=None,
+    old_pieces=2,
+    also_old_pieces=(),
+):
+    """One row: the start, the fit, and each step from the fitted track."""
+    row, track, to_cam, gt = start_track(ds, edited, p, fit=fit, start=start)
+    if track is None:
+        return row
+
+    run_old(row, "old", track, edited, ds, old_pieces, to_cam, gt)
+    for pieces in also_old_pieces:
+        run_old(row, f"old{pieces}", track, edited, ds, pieces, to_cam, gt)
+
+    run_new(row, track, edited, ds, new_options, to_cam, gt)
     return row
 
 
