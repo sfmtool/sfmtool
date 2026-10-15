@@ -13,7 +13,7 @@
 
 Not decided: which score the loop's acceptance rule reads; whether the step moves the patch's centre onto the fitted plane; whether a cell registration cannot settle falls back to a full piece fit; whether the first iteration can read the localizer's tiles. See [Open questions](#open-questions).
 
-Built: the shared kernels (#954) and the bench step `grid_plane_normal` in [bench/normal/grid_plane.rs](../../crates/sfmtool-core/src/bench/normal/grid_plane.rs), with its tests, specified in [editable-track.md](../core/bench/editable-track.md) § "Estimating the normal". It stands beside `PieceLayout::Grid`, which is unchanged, so the two can be measured against each other; Track View's button, Surface Tiling Mode and the wire's `fit_bench_track_normal` still run `PieceLayout::Grid`; the Python bindings in `sfmtool.bench` bind both, as `finite_difference_normal` and `grid_plane_normal`. The step answers two open questions provisionally, the acceptance score and moving the centre; the density, decided by the maintainer with the synthetic evidence recorded below, is built as decided; see [What the built step chose](#what-the-built-step-chose). The measurement against today's Grid Plane Normal on the two ground truths is recorded under [Measurement against today's Grid Plane Normal](#measurement-against-todays-grid-plane-normal-2026-10-14). A sweep of the search bound and the acceptance rule, with precision and baseline gates applied after the fact, is recorded under [Sweep of the gates, the bound and the acceptance rule](#sweep-of-the-gates-the-bound-and-the-acceptance-rule-2026-10-15); the options it added (`acceptance`, `max_normal_precision_deg`) are off by default. Remaining: the hand review, then the moves listed under [Retiring the photometric search](#retiring-the-photometric-search).
+Built: the shared kernels (#954) and the bench step `grid_plane_normal` in [bench/normal/grid_plane.rs](../../crates/sfmtool-core/src/bench/normal/grid_plane.rs), with its tests, specified in [editable-track.md](../core/bench/editable-track.md) § "Estimating the normal". It stands beside `PieceLayout::Grid`, which is unchanged, so the two can be measured against each other; Track View's button, Surface Tiling Mode and the wire's `fit_bench_track_normal` still run `PieceLayout::Grid`; the Python bindings in `sfmtool.bench` bind both, as `finite_difference_normal` and `grid_plane_normal`. The step answers two open questions provisionally, the acceptance score and moving the centre; the density, decided by the maintainer with the synthetic evidence recorded below, is built as decided; see [What the built step chose](#what-the-built-step-chose). The measurement against today's Grid Plane Normal on the two ground truths is recorded under [Measurement against today's Grid Plane Normal](#measurement-against-todays-grid-plane-normal-2026-10-14). A sweep of the search bound and the acceptance rule, with precision and baseline gates applied after the fact, is recorded under [Sweep of the gates, the bound and the acceptance rule](#sweep-of-the-gates-the-bound-and-the-acceptance-rule-2026-10-15); the options it added (`acceptance`, `max_normal_precision_deg`) are off by default. [An addendum](#addendum-todays-step-at-33-and-a-third-capture-2026-10-15) adds today's step at 3×3 as a baseline and a third, candidate ground truth. Remaining: the hand review, then the moves listed under [Retiring the photometric search](#retiring-the-photometric-search).
 
 Amends:
 - [core/bench/editable-track.md](../core/bench/editable-track.md) § "Estimating the normal": `PieceLayout::Grid` of `finite_difference_normal`, the *Grid Plane Normal* step
@@ -348,7 +348,7 @@ Each row of the script's JSONL carries the point's ground-truth position and nor
 
 **What the numbers cannot show.**
 
-- **The ground-truth normals are estimates.** They are the patch frames stored in the two `.sfmr` files, not measured surfaces, so where a step disagrees with one the numbers cannot say which of the two is wrong; the [cell plane normal measurements](../core/patch/cluster-patch-refinement-measurements.md#cell-plane-normals-against-the-ground-truths-2026-10-08) carry the same caveat. Today's step moving off the truth on every point, and the new step's rejected turns from the truth, can each be a fault of the step or of the truth.
+- **The ground-truth normals are estimates, and most were set with today's step.** They are the patch frames stored in the two `.sfmr` files, not measured surfaces, and per the maintainer most of them were set with today's Grid Plane Normal at 3×3 pieces, so agreement with them partly measures agreement with that method (see [today's step at 3×3](#addendum-todays-step-at-33-and-a-third-capture-2026-10-15)). Where a step disagrees with one, the numbers cannot say which of the two is wrong; the [cell plane normal measurements](../core/patch/cluster-patch-refinement-measurements.md#cell-plane-normals-against-the-ground-truths-2026-10-08) carry the same caveat. Today's step moving off the truth on every point, and the new step's rejected turns from the truth, can each be a fault of the step or of the truth.
 - Whether a person prefers the turned patches. The hand review decides that, and a lower error here is not enough on its own.
 - Why turns are rejected. Whether the windowed whole-tile score refuses correct turns (the open question on a score over the kept cells) or the proposed turns are wrong is not separated here. From the truth, a rejected first turn ends Unstable with the normal unchanged, so Unstable there includes points already at the normal the score prefers.
 - Two small captures, 648 points in all; the Turned sets are 7 and 27 points.
@@ -404,137 +404,137 @@ Each row of the script's JSONL carries the point's ground-truth position and nor
 
 `seoul_bull`:
 
-| baseline | points | start med | start <20 | old med | old <10 | old <20 | old closer than start |
-|---|---|---|---|---|---|---|---|
-| <5 | 67 | 26.1 | 39% | 45.0 | 0% | 12% | 37% |
-| 5-10 | 58 | 28.9 | 34% | 29.9 | 16% | 33% | 45% |
-| 10-20 | 14 | 27.0 | 43% | 18.6 | 29% | 64% | 57% |
-| 20-40 | 30 | 47.4 | 13% | 26.5 | 13% | 33% | 80% |
-| >=40 | 97 | 38.2 | 8% | 28.2 | 6% | 25% | 85% |
+| baseline | points | start med | start <20 | 2x2 med | 2x2 <10 | 2x2 <20 | 2x2 closer than start | 3x3 med | 3x3 <10 | 3x3 <20 | 3x3 closer than start |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| <5 | 67 | 26.1 | 39% | 45.0 | 0% | 12% | 37% | 51.5 | 1% | 7% | 31% |
+| 5-10 | 58 | 28.9 | 34% | 29.9 | 16% | 33% | 45% | 32.6 | 7% | 28% | 41% |
+| 10-20 | 14 | 27.0 | 43% | 18.6 | 29% | 64% | 57% | 21.4 | 21% | 50% | 50% |
+| 20-40 | 30 | 47.4 | 13% | 26.5 | 13% | 33% | 80% | 41.8 | 3% | 17% | 77% |
+| >=40 | 97 | 38.2 | 8% | 28.2 | 6% | 25% | 85% | 34.8 | 2% | 12% | 82% |
 
 `kerry_park`:
 
-| baseline | points | start med | start <20 | old med | old <10 | old <20 | old closer than start |
-|---|---|---|---|---|---|---|---|
-| <5 | 12 | 0.7 | 83% | 71.1 | 0% | 0% | 8% |
-| 5-10 | 21 | 41.3 | 38% | 44.3 | 24% | 33% | 48% |
-| 10-20 | 48 | 28.6 | 46% | 19.7 | 23% | 50% | 54% |
-| 20-40 | 100 | 39.9 | 13% | 30.2 | 11% | 32% | 79% |
-| >=40 | 201 | 29.5 | 33% | 26.5 | 18% | 37% | 78% |
+| baseline | points | start med | start <20 | 2x2 med | 2x2 <10 | 2x2 <20 | 2x2 closer than start | 3x3 med | 3x3 <10 | 3x3 <20 | 3x3 closer than start |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| <5 | 12 | 0.7 | 83% | 71.1 | 0% | 0% | 8% | 71.8 | 0% | 8% | 8% |
+| 5-10 | 21 | 41.3 | 38% | 44.3 | 24% | 33% | 48% | 24.2 | 29% | 38% | 52% |
+| 10-20 | 48 | 28.6 | 46% | 19.7 | 23% | 50% | 54% | 17.9 | 27% | 54% | 52% |
+| 20-40 | 100 | 39.9 | 13% | 30.2 | 11% | 32% | 79% | 35.4 | 4% | 21% | 67% |
+| >=40 | 201 | 29.5 | 33% | 26.5 | 18% | 37% | 78% | 29.1 | 14% | 36% | 71% |
 
 **The first plane by baseline.** `proposed` is how many points' first render proposed a turn; the start and today's step are on those same points.
 
 `seoul_bull`:
 
-| variant | baseline | points | proposed | first med | first p75 | first <10 | first <20 | start med | old med | closer than start |
-|---|---|---|---|---|---|---|---|---|---|---|
-| bound2 | <5 | 67 | 46 | 39.8 | 48.7 | 7% | 11% | 28.2 | 34.2 | 39% |
-| bound2 | 5-10 | 58 | 50 | 44.7 | 64.3 | 4% | 16% | 29.1 | 30.5 | 36% |
-| bound2 | 10-20 | 14 | 8 | 38.7 | 60.7 | 12% | 25% | 27.0 | 18.6 | 38% |
-| bound2 | 20-40 | 30 | 11 | 23.7 | 36.0 | 27% | 45% | 40.5 | 27.1 | 82% |
-| bound2 | >=40 | 97 | 71 | 18.1 | 26.2 | 25% | 56% | 34.0 | 23.7 | 80% |
-| bound4 | <5 | 67 | 49 | 40.5 | 56.3 | 6% | 12% | 29.8 | 34.6 | 35% |
-| bound4 | 5-10 | 58 | 51 | 46.7 | 61.6 | 4% | 12% | 29.1 | 30.2 | 33% |
-| bound4 | 10-20 | 14 | 11 | 50.9 | 68.2 | 9% | 18% | 21.5 | 18.1 | 36% |
-| bound4 | 20-40 | 30 | 18 | 19.6 | 26.8 | 28% | 50% | 40.7 | 25.1 | 89% |
-| bound4 | >=40 | 97 | 74 | 13.1 | 22.0 | 32% | 68% | 34.0 | 24.2 | 82% |
-| bound6 | <5 | 67 | 50 | 41.0 | 58.2 | 6% | 12% | 28.2 | 34.8 | 36% |
-| bound6 | 5-10 | 58 | 52 | 47.7 | 62.0 | 4% | 10% | 29.1 | 29.9 | 35% |
-| bound6 | 10-20 | 14 | 11 | 50.9 | 65.3 | 9% | 27% | 21.5 | 18.1 | 36% |
-| bound6 | 20-40 | 30 | 19 | 16.5 | 24.4 | 32% | 58% | 40.9 | 23.2 | 89% |
-| bound6 | >=40 | 97 | 79 | 12.9 | 23.5 | 32% | 68% | 34.0 | 24.8 | 77% |
+| variant | baseline | points | proposed | first med | first p75 | first <10 | first <20 | start med | 2x2 med | 3x3 med | closer than start |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| bound2 | <5 | 67 | 46 | 39.8 | 48.7 | 7% | 11% | 28.2 | 34.2 | 45.3 | 39% |
+| bound2 | 5-10 | 58 | 50 | 44.7 | 64.3 | 4% | 16% | 29.1 | 30.5 | 32.6 | 36% |
+| bound2 | 10-20 | 14 | 8 | 38.7 | 60.7 | 12% | 25% | 27.0 | 18.6 | 17.5 | 38% |
+| bound2 | 20-40 | 30 | 11 | 23.7 | 36.0 | 27% | 45% | 40.5 | 27.1 | 33.6 | 82% |
+| bound2 | >=40 | 97 | 71 | 18.1 | 26.2 | 25% | 56% | 34.0 | 23.7 | 30.9 | 80% |
+| bound4 | <5 | 67 | 49 | 40.5 | 56.3 | 6% | 12% | 29.8 | 34.6 | 44.6 | 35% |
+| bound4 | 5-10 | 58 | 51 | 46.7 | 61.6 | 4% | 12% | 29.1 | 30.2 | 32.7 | 33% |
+| bound4 | 10-20 | 14 | 11 | 50.9 | 68.2 | 9% | 18% | 21.5 | 18.1 | 19.7 | 36% |
+| bound4 | 20-40 | 30 | 18 | 19.6 | 26.8 | 28% | 50% | 40.7 | 25.1 | 36.8 | 89% |
+| bound4 | >=40 | 97 | 74 | 13.1 | 22.0 | 32% | 68% | 34.0 | 24.2 | 30.9 | 82% |
+| bound6 | <5 | 67 | 50 | 41.0 | 58.2 | 6% | 12% | 28.2 | 34.8 | 45.3 | 36% |
+| bound6 | 5-10 | 58 | 52 | 47.7 | 62.0 | 4% | 10% | 29.1 | 29.9 | 33.6 | 35% |
+| bound6 | 10-20 | 14 | 11 | 50.9 | 65.3 | 9% | 27% | 21.5 | 18.1 | 19.7 | 36% |
+| bound6 | 20-40 | 30 | 19 | 16.5 | 24.4 | 32% | 58% | 40.9 | 23.2 | 37.4 | 89% |
+| bound6 | >=40 | 97 | 79 | 12.9 | 23.5 | 32% | 68% | 34.0 | 24.8 | 31.0 | 77% |
 
 `kerry_park`:
 
-| variant | baseline | points | proposed | first med | first p75 | first <10 | first <20 | start med | old med | closer than start |
-|---|---|---|---|---|---|---|---|---|---|---|
-| bound2 | <5 | 12 | 5 | 77.2 | 78.3 | 0% | 0% | 0.8 | 60.0 | 0% |
-| bound2 | 5-10 | 21 | 8 | 59.7 | 70.9 | 0% | 25% | 31.7 | 45.1 | 38% |
-| bound2 | 10-20 | 48 | 36 | 34.6 | 51.7 | 17% | 39% | 18.3 | 22.3 | 47% |
-| bound2 | 20-40 | 100 | 62 | 20.6 | 32.5 | 19% | 50% | 36.8 | 24.1 | 71% |
-| bound2 | >=40 | 201 | 118 | 11.3 | 22.3 | 43% | 72% | 22.5 | 20.5 | 75% |
-| bound4 | <5 | 12 | 9 | 76.6 | 78.7 | 0% | 0% | 0.8 | 65.8 | 0% |
-| bound4 | 5-10 | 21 | 12 | 65.3 | 72.1 | 0% | 17% | 20.6 | 46.4 | 25% |
-| bound4 | 10-20 | 48 | 42 | 35.2 | 58.1 | 14% | 36% | 18.3 | 19.7 | 48% |
-| bound4 | 20-40 | 100 | 68 | 19.1 | 31.4 | 29% | 50% | 37.1 | 25.7 | 74% |
-| bound4 | >=40 | 201 | 143 | 11.4 | 19.4 | 47% | 76% | 25.3 | 22.6 | 76% |
-| bound6 | <5 | 12 | 9 | 73.4 | 78.2 | 0% | 0% | 0.8 | 65.8 | 0% |
-| bound6 | 5-10 | 21 | 12 | 72.1 | 73.4 | 0% | 8% | 20.6 | 46.4 | 17% |
-| bound6 | 10-20 | 48 | 42 | 39.1 | 63.0 | 14% | 33% | 18.3 | 19.7 | 48% |
-| bound6 | 20-40 | 100 | 70 | 19.3 | 32.6 | 30% | 54% | 37.1 | 26.1 | 76% |
-| bound6 | >=40 | 201 | 152 | 12.3 | 23.8 | 47% | 68% | 25.5 | 24.0 | 72% |
+| variant | baseline | points | proposed | first med | first p75 | first <10 | first <20 | start med | 2x2 med | 3x3 med | closer than start |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| bound2 | <5 | 12 | 5 | 77.2 | 78.3 | 0% | 0% | 0.8 | 60.0 | 70.2 | 0% |
+| bound2 | 5-10 | 21 | 8 | 59.7 | 70.9 | 0% | 25% | 31.7 | 45.1 | 34.8 | 38% |
+| bound2 | 10-20 | 48 | 36 | 34.6 | 51.7 | 17% | 39% | 18.3 | 22.3 | 17.9 | 47% |
+| bound2 | 20-40 | 100 | 62 | 20.6 | 32.5 | 19% | 50% | 36.8 | 24.1 | 33.3 | 71% |
+| bound2 | >=40 | 201 | 118 | 11.3 | 22.3 | 43% | 72% | 22.5 | 20.5 | 20.9 | 75% |
+| bound4 | <5 | 12 | 9 | 76.6 | 78.7 | 0% | 0% | 0.8 | 65.8 | 70.2 | 0% |
+| bound4 | 5-10 | 21 | 12 | 65.3 | 72.1 | 0% | 17% | 20.6 | 46.4 | 36.1 | 25% |
+| bound4 | 10-20 | 48 | 42 | 35.2 | 58.1 | 14% | 36% | 18.3 | 19.7 | 17.9 | 48% |
+| bound4 | 20-40 | 100 | 68 | 19.1 | 31.4 | 29% | 50% | 37.1 | 25.7 | 33.6 | 74% |
+| bound4 | >=40 | 201 | 143 | 11.4 | 19.4 | 47% | 76% | 25.3 | 22.6 | 23.0 | 76% |
+| bound6 | <5 | 12 | 9 | 73.4 | 78.2 | 0% | 0% | 0.8 | 65.8 | 70.2 | 0% |
+| bound6 | 5-10 | 21 | 12 | 72.1 | 73.4 | 0% | 8% | 20.6 | 46.4 | 36.1 | 17% |
+| bound6 | 10-20 | 48 | 42 | 39.1 | 63.0 | 14% | 33% | 18.3 | 19.7 | 17.9 | 48% |
+| bound6 | 20-40 | 100 | 70 | 19.3 | 32.6 | 30% | 54% | 37.1 | 26.1 | 33.6 | 76% |
+| bound6 | >=40 | 201 | 152 | 12.3 | 23.8 | 47% | 68% | 25.5 | 24.0 | 25.0 | 72% |
 
 **The step as built, by baseline** (`Turned` points; start and today's 2×2 on the same points):
 
 `seoul_bull`:
 
-| variant | baseline | points | turned | new med | new p75 | new <10 | new <20 | start med | old med | old <10 | new closer than start |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-| bound2_none | <5 | 67 | 4 | 27.2 | 50.9 | 25% | 50% | 24.9 | 25.4 | 0% | 25% |
-| bound2_none | 5-10 | 58 | 3 | 71.4 | 73.9 | 0% | 0% | 6.3 | 33.6 | 0% | 33% |
-| bound2_none | 10-20 | 14 | 1 | 10.5 | 10.5 | 0% | 100% | 32.4 | 7.9 | 100% | 100% |
-| bound2_none | 20-40 | 30 | 2 | 27.1 | 32.9 | 0% | 50% | 40.3 | 18.1 | 50% | 100% |
-| bound2_none | >=40 | 97 | 9 | 12.1 | 22.7 | 33% | 56% | 32.1 | 25.4 | 0% | 78% |
-| bound2_windowed_zncc | <5 | 67 | 2 | 11.2 | 13.1 | 50% | 100% | 37.4 | 17.0 | 0% | 50% |
-| bound2_windowed_zncc | 5-10 | 58 | 1 | 71.4 | 71.4 | 0% | 0% | 6.3 | 33.6 | 0% | 0% |
-| bound2_windowed_zncc | 10-20 | 14 | 0 | - | - | - | - | - | - | - | - |
-| bound2_windowed_zncc | 20-40 | 30 | 2 | 27.1 | 32.9 | 0% | 50% | 40.3 | 18.1 | 50% | 100% |
-| bound2_windowed_zncc | >=40 | 97 | 3 | 12.1 | 17.4 | 33% | 67% | 39.0 | 27.0 | 0% | 100% |
-| bound4_none | <5 | 67 | 7 | 44.3 | 64.0 | 14% | 14% | 35.2 | 29.4 | 0% | 14% |
-| bound4_none | 5-10 | 58 | 6 | 74.8 | 77.2 | 0% | 0% | 30.7 | 44.9 | 0% | 0% |
-| bound4_none | 10-20 | 14 | 3 | 24.1 | 41.4 | 0% | 33% | 32.4 | 7.9 | 67% | 67% |
-| bound4_none | 20-40 | 30 | 6 | 18.1 | 22.1 | 33% | 50% | 44.3 | 26.8 | 0% | 100% |
-| bound4_none | >=40 | 97 | 13 | 14.6 | 18.8 | 38% | 77% | 35.3 | 22.2 | 0% | 77% |
-| bound4_windowed_zncc | <5 | 67 | 4 | 41.2 | 55.8 | 25% | 25% | 25.8 | 24.5 | 0% | 25% |
-| bound4_windowed_zncc | 5-10 | 58 | 1 | 43.9 | 43.9 | 0% | 0% | 33.9 | 42.7 | 0% | 0% |
-| bound4_windowed_zncc | 10-20 | 14 | 1 | 24.1 | 24.1 | 0% | 0% | 35.4 | 40.2 | 0% | 100% |
-| bound4_windowed_zncc | 20-40 | 30 | 3 | 22.6 | 26.0 | 0% | 33% | 40.9 | 30.4 | 0% | 100% |
-| bound4_windowed_zncc | >=40 | 97 | 1 | 22.2 | 22.2 | 0% | 0% | 22.0 | 17.4 | 0% | 0% |
-| bound6_none | <5 | 67 | 11 | 45.4 | 69.5 | 9% | 9% | 36.1 | 34.3 | 0% | 27% |
-| bound6_none | 5-10 | 58 | 11 | 71.3 | 76.5 | 0% | 0% | 29.6 | 47.1 | 9% | 9% |
-| bound6_none | 10-20 | 14 | 4 | 38.2 | 61.8 | 0% | 50% | 23.9 | 8.0 | 75% | 50% |
-| bound6_none | 20-40 | 30 | 4 | 19.3 | 25.1 | 25% | 50% | 44.0 | 22.9 | 25% | 100% |
-| bound6_none | >=40 | 97 | 23 | 11.3 | 24.9 | 35% | 70% | 36.4 | 21.5 | 0% | 83% |
-| bound6_windowed_zncc | <5 | 67 | 3 | 44.6 | 66.4 | 33% | 33% | 10.5 | 19.6 | 0% | 0% |
-| bound6_windowed_zncc | 5-10 | 58 | 3 | 43.8 | 53.8 | 0% | 0% | 33.9 | 42.7 | 0% | 33% |
-| bound6_windowed_zncc | 10-20 | 14 | 0 | - | - | - | - | - | - | - | - |
-| bound6_windowed_zncc | 20-40 | 30 | 2 | 24.7 | 29.0 | 0% | 50% | 40.7 | 22.9 | 0% | 100% |
-| bound6_windowed_zncc | >=40 | 97 | 5 | 11.3 | 15.9 | 40% | 80% | 40.2 | 22.2 | 0% | 100% |
+| variant | baseline | points | turned | new med | new p75 | new <10 | new <20 | start med | 2x2 med | 2x2 <10 | 3x3 med | 3x3 <10 | new closer than start |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| bound2_none | <5 | 67 | 4 | 27.2 | 50.9 | 25% | 50% | 24.9 | 25.4 | 0% | 28.9 | 0% | 25% |
+| bound2_none | 5-10 | 58 | 3 | 71.4 | 73.9 | 0% | 0% | 6.3 | 33.6 | 0% | 34.9 | 0% | 33% |
+| bound2_none | 10-20 | 14 | 1 | 10.5 | 10.5 | 0% | 100% | 32.4 | 7.9 | 100% | 10.0 | 0% | 100% |
+| bound2_none | 20-40 | 30 | 2 | 27.1 | 32.9 | 0% | 50% | 40.3 | 18.1 | 50% | 33.2 | 0% | 100% |
+| bound2_none | >=40 | 97 | 9 | 12.1 | 22.7 | 33% | 56% | 32.1 | 25.4 | 0% | 27.0 | 0% | 78% |
+| bound2_windowed_zncc | <5 | 67 | 2 | 11.2 | 13.1 | 50% | 100% | 37.4 | 17.0 | 0% | 26.7 | 0% | 50% |
+| bound2_windowed_zncc | 5-10 | 58 | 1 | 71.4 | 71.4 | 0% | 0% | 6.3 | 33.6 | 0% | 46.1 | 0% | 0% |
+| bound2_windowed_zncc | 10-20 | 14 | 0 | - | - | - | - | - | - | - | - | - | - |
+| bound2_windowed_zncc | 20-40 | 30 | 2 | 27.1 | 32.9 | 0% | 50% | 40.3 | 18.1 | 50% | 33.2 | 0% | 100% |
+| bound2_windowed_zncc | >=40 | 97 | 3 | 12.1 | 17.4 | 33% | 67% | 39.0 | 27.0 | 0% | 34.8 | 0% | 100% |
+| bound4_none | <5 | 67 | 7 | 44.3 | 64.0 | 14% | 14% | 35.2 | 29.4 | 0% | 25.3 | 14% | 14% |
+| bound4_none | 5-10 | 58 | 6 | 74.8 | 77.2 | 0% | 0% | 30.7 | 44.9 | 0% | 44.0 | 0% | 0% |
+| bound4_none | 10-20 | 14 | 3 | 24.1 | 41.4 | 0% | 33% | 32.4 | 7.9 | 67% | 10.0 | 33% | 67% |
+| bound4_none | 20-40 | 30 | 6 | 18.1 | 22.1 | 33% | 50% | 44.3 | 26.8 | 0% | 44.1 | 0% | 100% |
+| bound4_none | >=40 | 97 | 13 | 14.6 | 18.8 | 38% | 77% | 35.3 | 22.2 | 0% | 31.7 | 0% | 77% |
+| bound4_windowed_zncc | <5 | 67 | 4 | 41.2 | 55.8 | 25% | 25% | 25.8 | 24.5 | 0% | 24.3 | 25% | 25% |
+| bound4_windowed_zncc | 5-10 | 58 | 1 | 43.9 | 43.9 | 0% | 0% | 33.9 | 42.7 | 0% | 46.3 | 0% | 0% |
+| bound4_windowed_zncc | 10-20 | 14 | 1 | 24.1 | 24.1 | 0% | 0% | 35.4 | 40.2 | 0% | 43.5 | 0% | 100% |
+| bound4_windowed_zncc | 20-40 | 30 | 3 | 22.6 | 26.0 | 0% | 33% | 40.9 | 30.4 | 0% | 44.5 | 0% | 100% |
+| bound4_windowed_zncc | >=40 | 97 | 1 | 22.2 | 22.2 | 0% | 0% | 22.0 | 17.4 | 0% | 21.5 | 0% | 0% |
+| bound6_none | <5 | 67 | 11 | 45.4 | 69.5 | 9% | 9% | 36.1 | 34.3 | 0% | 31.9 | 0% | 27% |
+| bound6_none | 5-10 | 58 | 11 | 71.3 | 76.5 | 0% | 0% | 29.6 | 47.1 | 9% | 42.7 | 0% | 9% |
+| bound6_none | 10-20 | 14 | 4 | 38.2 | 61.8 | 0% | 50% | 23.9 | 8.0 | 75% | 8.4 | 50% | 50% |
+| bound6_none | 20-40 | 30 | 4 | 19.3 | 25.1 | 25% | 50% | 44.0 | 22.9 | 25% | 42.2 | 0% | 100% |
+| bound6_none | >=40 | 97 | 23 | 11.3 | 24.9 | 35% | 70% | 36.4 | 21.5 | 0% | 31.5 | 0% | 83% |
+| bound6_windowed_zncc | <5 | 67 | 3 | 44.6 | 66.4 | 33% | 33% | 10.5 | 19.6 | 0% | 27.7 | 0% | 0% |
+| bound6_windowed_zncc | 5-10 | 58 | 3 | 43.8 | 53.8 | 0% | 0% | 33.9 | 42.7 | 0% | 46.3 | 0% | 33% |
+| bound6_windowed_zncc | 10-20 | 14 | 0 | - | - | - | - | - | - | - | - | - | - |
+| bound6_windowed_zncc | 20-40 | 30 | 2 | 24.7 | 29.0 | 0% | 50% | 40.7 | 22.9 | 0% | 32.0 | 0% | 100% |
+| bound6_windowed_zncc | >=40 | 97 | 5 | 11.3 | 15.9 | 40% | 80% | 40.2 | 22.2 | 0% | 34.8 | 0% | 100% |
 
 `kerry_park`:
 
-| variant | baseline | points | turned | new med | new p75 | new <10 | new <20 | start med | old med | old <10 | new closer than start |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-| bound2_none | <5 | 12 | 0 | - | - | - | - | - | - | - | - |
-| bound2_none | 5-10 | 21 | 1 | 74.7 | 74.7 | 0% | 0% | 52.5 | 42.8 | 0% | 0% |
-| bound2_none | 10-20 | 48 | 9 | 19.1 | 35.0 | 44% | 56% | 37.5 | 15.0 | 11% | 78% |
-| bound2_none | 20-40 | 100 | 10 | 11.4 | 22.1 | 50% | 60% | 34.5 | 14.3 | 30% | 70% |
-| bound2_none | >=40 | 201 | 39 | 5.3 | 8.2 | 77% | 82% | 20.4 | 17.0 | 33% | 87% |
-| bound2_windowed_zncc | <5 | 12 | 0 | - | - | - | - | - | - | - | - |
-| bound2_windowed_zncc | 5-10 | 21 | 0 | - | - | - | - | - | - | - | - |
-| bound2_windowed_zncc | 10-20 | 48 | 1 | 9.4 | 9.4 | 100% | 100% | 13.4 | 10.3 | 0% | 100% |
-| bound2_windowed_zncc | 20-40 | 100 | 2 | 3.5 | 3.7 | 100% | 100% | 35.9 | 9.0 | 50% | 100% |
-| bound2_windowed_zncc | >=40 | 201 | 25 | 5.3 | 12.2 | 72% | 80% | 22.4 | 25.3 | 32% | 88% |
-| bound4_none | <5 | 12 | 1 | 62.5 | 62.5 | 0% | 0% | 26.7 | 22.1 | 0% | 0% |
-| bound4_none | 5-10 | 21 | 5 | 76.9 | 77.9 | 0% | 0% | 5.0 | 52.1 | 0% | 0% |
-| bound4_none | 10-20 | 48 | 19 | 58.1 | 74.4 | 37% | 37% | 35.1 | 17.7 | 16% | 47% |
-| bound4_none | 20-40 | 100 | 16 | 19.5 | 38.0 | 44% | 50% | 35.8 | 21.3 | 25% | 75% |
-| bound4_none | >=40 | 201 | 51 | 4.5 | 7.4 | 82% | 86% | 25.4 | 23.4 | 25% | 88% |
-| bound4_windowed_zncc | <5 | 12 | 0 | - | - | - | - | - | - | - | - |
-| bound4_windowed_zncc | 5-10 | 21 | 1 | 72.0 | 72.0 | 0% | 0% | 52.5 | 42.8 | 0% | 0% |
-| bound4_windowed_zncc | 10-20 | 48 | 3 | 9.4 | 44.0 | 67% | 67% | 13.4 | 12.2 | 0% | 67% |
-| bound4_windowed_zncc | 20-40 | 100 | 3 | 8.7 | 19.0 | 67% | 67% | 57.3 | 10.5 | 33% | 100% |
-| bound4_windowed_zncc | >=40 | 201 | 19 | 4.1 | 7.1 | 84% | 89% | 20.9 | 20.9 | 21% | 89% |
-| bound6_none | <5 | 12 | 1 | 57.7 | 57.7 | 0% | 0% | 26.7 | 22.1 | 0% | 0% |
-| bound6_none | 5-10 | 21 | 5 | 76.5 | 77.7 | 0% | 0% | 5.0 | 52.1 | 0% | 0% |
-| bound6_none | 10-20 | 48 | 17 | 58.1 | 74.6 | 35% | 35% | 21.5 | 15.0 | 18% | 47% |
-| bound6_none | 20-40 | 100 | 24 | 21.4 | 37.2 | 38% | 46% | 37.3 | 28.0 | 17% | 71% |
-| bound6_none | >=40 | 201 | 62 | 4.6 | 11.2 | 74% | 84% | 27.1 | 25.0 | 23% | 84% |
-| bound6_windowed_zncc | <5 | 12 | 0 | - | - | - | - | - | - | - | - |
-| bound6_windowed_zncc | 5-10 | 21 | 1 | 72.0 | 72.0 | 0% | 0% | 52.5 | 42.8 | 0% | 0% |
-| bound6_windowed_zncc | 10-20 | 48 | 5 | 21.0 | 73.0 | 40% | 40% | 13.4 | 12.2 | 0% | 60% |
-| bound6_windowed_zncc | 20-40 | 100 | 2 | 18.5 | 24.1 | 50% | 50% | 57.3 | 33.4 | 50% | 100% |
-| bound6_windowed_zncc | >=40 | 201 | 23 | 3.2 | 6.0 | 83% | 87% | 32.4 | 31.7 | 17% | 87% |
+| variant | baseline | points | turned | new med | new p75 | new <10 | new <20 | start med | 2x2 med | 2x2 <10 | 3x3 med | 3x3 <10 | new closer than start |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| bound2_none | <5 | 12 | 0 | - | - | - | - | - | - | - | - | - | - |
+| bound2_none | 5-10 | 21 | 1 | 74.7 | 74.7 | 0% | 0% | 52.5 | 42.8 | 0% | 36.8 | 0% | 0% |
+| bound2_none | 10-20 | 48 | 9 | 19.1 | 35.0 | 44% | 56% | 37.5 | 15.0 | 11% | 8.2 | 56% | 78% |
+| bound2_none | 20-40 | 100 | 10 | 11.4 | 22.1 | 50% | 60% | 34.5 | 14.3 | 30% | 19.9 | 10% | 70% |
+| bound2_none | >=40 | 201 | 39 | 5.3 | 8.2 | 77% | 82% | 20.4 | 17.0 | 33% | 20.5 | 33% | 87% |
+| bound2_windowed_zncc | <5 | 12 | 0 | - | - | - | - | - | - | - | - | - | - |
+| bound2_windowed_zncc | 5-10 | 21 | 0 | - | - | - | - | - | - | - | - | - | - |
+| bound2_windowed_zncc | 10-20 | 48 | 1 | 9.4 | 9.4 | 100% | 100% | 13.4 | 10.3 | 0% | 8.2 | 100% | 100% |
+| bound2_windowed_zncc | 20-40 | 100 | 2 | 3.5 | 3.7 | 100% | 100% | 35.9 | 9.0 | 50% | 20.3 | 0% | 100% |
+| bound2_windowed_zncc | >=40 | 201 | 25 | 5.3 | 12.2 | 72% | 80% | 22.4 | 25.3 | 32% | 22.3 | 32% | 88% |
+| bound4_none | <5 | 12 | 1 | 62.5 | 62.5 | 0% | 0% | 26.7 | 22.1 | 0% | 22.9 | 0% | 0% |
+| bound4_none | 5-10 | 21 | 5 | 76.9 | 77.9 | 0% | 0% | 5.0 | 52.1 | 0% | 32.8 | 0% | 0% |
+| bound4_none | 10-20 | 48 | 19 | 58.1 | 74.4 | 37% | 37% | 35.1 | 17.7 | 16% | 21.7 | 32% | 47% |
+| bound4_none | 20-40 | 100 | 16 | 19.5 | 38.0 | 44% | 50% | 35.8 | 21.3 | 25% | 32.6 | 6% | 75% |
+| bound4_none | >=40 | 201 | 51 | 4.5 | 7.4 | 82% | 86% | 25.4 | 23.4 | 25% | 25.3 | 20% | 88% |
+| bound4_windowed_zncc | <5 | 12 | 0 | - | - | - | - | - | - | - | - | - | - |
+| bound4_windowed_zncc | 5-10 | 21 | 1 | 72.0 | 72.0 | 0% | 0% | 52.5 | 42.8 | 0% | 36.8 | 0% | 0% |
+| bound4_windowed_zncc | 10-20 | 48 | 3 | 9.4 | 44.0 | 67% | 67% | 13.4 | 12.2 | 0% | 8.2 | 67% | 67% |
+| bound4_windowed_zncc | 20-40 | 100 | 3 | 8.7 | 19.0 | 67% | 67% | 57.3 | 10.5 | 33% | 41.0 | 0% | 100% |
+| bound4_windowed_zncc | >=40 | 201 | 19 | 4.1 | 7.1 | 84% | 89% | 20.9 | 20.9 | 21% | 20.8 | 21% | 89% |
+| bound6_none | <5 | 12 | 1 | 57.7 | 57.7 | 0% | 0% | 26.7 | 22.1 | 0% | 22.9 | 0% | 0% |
+| bound6_none | 5-10 | 21 | 5 | 76.5 | 77.7 | 0% | 0% | 5.0 | 52.1 | 0% | 32.8 | 0% | 0% |
+| bound6_none | 10-20 | 48 | 17 | 58.1 | 74.6 | 35% | 35% | 21.5 | 15.0 | 18% | 16.0 | 29% | 47% |
+| bound6_none | 20-40 | 100 | 24 | 21.4 | 37.2 | 38% | 46% | 37.3 | 28.0 | 17% | 35.7 | 4% | 71% |
+| bound6_none | >=40 | 201 | 62 | 4.6 | 11.2 | 74% | 84% | 27.1 | 25.0 | 23% | 27.1 | 16% | 84% |
+| bound6_windowed_zncc | <5 | 12 | 0 | - | - | - | - | - | - | - | - | - | - |
+| bound6_windowed_zncc | 5-10 | 21 | 1 | 72.0 | 72.0 | 0% | 0% | 52.5 | 42.8 | 0% | 36.8 | 0% | 0% |
+| bound6_windowed_zncc | 10-20 | 48 | 5 | 21.0 | 73.0 | 40% | 40% | 13.4 | 12.2 | 0% | 13.8 | 40% | 60% |
+| bound6_windowed_zncc | 20-40 | 100 | 2 | 18.5 | 24.1 | 50% | 50% | 57.3 | 33.4 | 50% | 55.9 | 0% | 100% |
+| bound6_windowed_zncc | >=40 | 201 | 23 | 3.2 | 6.0 | 83% | 87% | 32.4 | 31.7 | 17% | 32.3 | 17% | 87% |
 
 **Convergence under `acceptance` `none`.** Per render, over the points whose loop reached that render with a proposal: the proposed normal's error, its median change from the same point's first plane, and the turn's largest cell movement (grid px), with the share at or under today's tolerance, 0.05 px.
 
@@ -706,121 +706,121 @@ Each row of the script's JSONL carries the point's ground-truth position and nor
 
 `seoul_bull`:
 
-| variant | gate | baseline | points | kept | first med | first <10 | first <20 | start med | old med |
-|---|---|---|---|---|---|---|---|---|---|
-| bound2 | precision <= 5 | <5 | 67 | 3 | 63.1 | 0% | 0% | 14.7 | 69.5 |
-| bound2 | precision <= 5 | 5-10 | 58 | 14 | 41.9 | 7% | 14% | 40.9 | 24.3 |
-| bound2 | precision <= 5 | 10-20 | 14 | 4 | 39.7 | 25% | 50% | 32.8 | 13.1 |
-| bound2 | precision <= 5 | 20-40 | 30 | 7 | 23.7 | 29% | 43% | 39.9 | 16.0 |
-| bound2 | precision <= 5 | >=40 | 97 | 51 | 15.1 | 27% | 67% | 35.0 | 23.4 |
-| bound2 | precision <= 5 | all | 266 | 79 | 19.7 | 23% | 52% | 35.0 | 23.5 |
-| bound2 | precision <= 10 | all | 266 | 121 | 23.7 | 18% | 41% | 33.3 | 25.2 |
-| bound2 | precision <= 15 | all | 266 | 150 | 24.2 | 17% | 37% | 32.7 | 25.9 |
-| bound2 | precision <= 20 | all | 266 | 164 | 25.4 | 16% | 36% | 32.7 | 26.7 |
-| bound2 | baseline >= 5 | all | 266 | 140 | 24.2 | 17% | 39% | 32.6 | 25.3 |
-| bound2 | baseline >= 10 | all | 266 | 90 | 19.3 | 24% | 52% | 34.0 | 23.6 |
-| bound2 | baseline >= 20 | all | 266 | 82 | 18.2 | 26% | 55% | 34.5 | 24.2 |
-| bound4 | precision <= 5 | <5 | 67 | 6 | 62.5 | 0% | 17% | 12.6 | 68.8 |
-| bound4 | precision <= 5 | 5-10 | 58 | 15 | 33.1 | 7% | 7% | 40.6 | 25.1 |
-| bound4 | precision <= 5 | 10-20 | 14 | 6 | 45.1 | 17% | 33% | 32.8 | 16.8 |
-| bound4 | precision <= 5 | 20-40 | 30 | 13 | 16.9 | 23% | 54% | 40.9 | 28.2 |
-| bound4 | precision <= 5 | >=40 | 97 | 63 | 12.7 | 33% | 75% | 34.9 | 24.8 |
-| bound4 | precision <= 5 | all | 266 | 103 | 16.2 | 25% | 56% | 35.0 | 25.4 |
-| bound4 | precision <= 10 | all | 266 | 145 | 21.6 | 21% | 46% | 33.5 | 27.0 |
-| bound4 | precision <= 15 | all | 266 | 167 | 23.1 | 20% | 41% | 32.8 | 27.1 |
-| bound4 | precision <= 20 | all | 266 | 177 | 23.2 | 19% | 40% | 32.8 | 27.4 |
-| bound4 | baseline >= 5 | all | 266 | 154 | 22.7 | 21% | 44% | 32.7 | 25.3 |
-| bound4 | baseline >= 10 | all | 266 | 103 | 14.4 | 29% | 59% | 34.1 | 23.4 |
-| bound4 | baseline >= 20 | all | 266 | 92 | 13.5 | 32% | 64% | 35.1 | 24.2 |
-| bound6 | precision <= 5 | <5 | 67 | 6 | 62.5 | 0% | 17% | 12.6 | 68.8 |
-| bound6 | precision <= 5 | 5-10 | 58 | 17 | 34.3 | 6% | 6% | 31.1 | 25.1 |
-| bound6 | precision <= 5 | 10-20 | 14 | 5 | 12.5 | 20% | 60% | 33.2 | 18.1 |
-| bound6 | precision <= 5 | 20-40 | 30 | 14 | 16.4 | 29% | 64% | 43.3 | 27.6 |
-| bound6 | precision <= 5 | >=40 | 97 | 67 | 12.4 | 33% | 73% | 35.0 | 24.9 |
-| bound6 | precision <= 5 | all | 266 | 109 | 16.4 | 26% | 58% | 35.3 | 26.3 |
-| bound6 | precision <= 10 | all | 266 | 151 | 20.1 | 23% | 49% | 33.8 | 27.1 |
-| bound6 | precision <= 15 | all | 266 | 170 | 23.0 | 21% | 44% | 33.3 | 27.5 |
-| bound6 | precision <= 20 | all | 266 | 186 | 23.4 | 20% | 42% | 33.2 | 27.7 |
-| bound6 | baseline >= 5 | all | 266 | 161 | 22.8 | 21% | 45% | 33.2 | 25.4 |
-| bound6 | baseline >= 10 | all | 266 | 109 | 14.8 | 29% | 62% | 34.9 | 23.7 |
-| bound6 | baseline >= 20 | all | 266 | 98 | 13.5 | 32% | 66% | 35.3 | 24.7 |
+| variant | gate | baseline | points | kept | first med | first <10 | first <20 | start med | 2x2 med | 3x3 med |
+|---|---|---|---|---|---|---|---|---|---|---|
+| bound2 | precision <= 5 | <5 | 67 | 3 | 63.1 | 0% | 0% | 14.7 | 69.5 | 53.6 |
+| bound2 | precision <= 5 | 5-10 | 58 | 14 | 41.9 | 7% | 14% | 40.9 | 24.3 | 24.9 |
+| bound2 | precision <= 5 | 10-20 | 14 | 4 | 39.7 | 25% | 50% | 32.8 | 13.1 | 11.0 |
+| bound2 | precision <= 5 | 20-40 | 30 | 7 | 23.7 | 29% | 43% | 39.9 | 16.0 | 28.5 |
+| bound2 | precision <= 5 | >=40 | 97 | 51 | 15.1 | 27% | 67% | 35.0 | 23.4 | 31.0 |
+| bound2 | precision <= 5 | all | 266 | 79 | 19.7 | 23% | 52% | 35.0 | 23.5 | 30.6 |
+| bound2 | precision <= 10 | all | 266 | 121 | 23.7 | 18% | 41% | 33.3 | 25.2 | 31.0 |
+| bound2 | precision <= 15 | all | 266 | 150 | 24.2 | 17% | 37% | 32.7 | 25.9 | 31.3 |
+| bound2 | precision <= 20 | all | 266 | 164 | 25.4 | 16% | 36% | 32.7 | 26.7 | 31.6 |
+| bound2 | baseline >= 5 | all | 266 | 140 | 24.2 | 17% | 39% | 32.6 | 25.3 | 30.9 |
+| bound2 | baseline >= 10 | all | 266 | 90 | 19.3 | 24% | 52% | 34.0 | 23.6 | 30.7 |
+| bound2 | baseline >= 20 | all | 266 | 82 | 18.2 | 26% | 55% | 34.5 | 24.2 | 30.9 |
+| bound4 | precision <= 5 | <5 | 67 | 6 | 62.5 | 0% | 17% | 12.6 | 68.8 | 53.1 |
+| bound4 | precision <= 5 | 5-10 | 58 | 15 | 33.1 | 7% | 7% | 40.6 | 25.1 | 31.1 |
+| bound4 | precision <= 5 | 10-20 | 14 | 6 | 45.1 | 17% | 33% | 32.8 | 16.8 | 12.6 |
+| bound4 | precision <= 5 | 20-40 | 30 | 13 | 16.9 | 23% | 54% | 40.9 | 28.2 | 39.0 |
+| bound4 | precision <= 5 | >=40 | 97 | 63 | 12.7 | 33% | 75% | 34.9 | 24.8 | 31.5 |
+| bound4 | precision <= 5 | all | 266 | 103 | 16.2 | 25% | 56% | 35.0 | 25.4 | 32.7 |
+| bound4 | precision <= 10 | all | 266 | 145 | 21.6 | 21% | 46% | 33.5 | 27.0 | 31.7 |
+| bound4 | precision <= 15 | all | 266 | 167 | 23.1 | 20% | 41% | 32.8 | 27.1 | 32.0 |
+| bound4 | precision <= 20 | all | 266 | 177 | 23.2 | 19% | 40% | 32.8 | 27.4 | 32.5 |
+| bound4 | baseline >= 5 | all | 266 | 154 | 22.7 | 21% | 44% | 32.7 | 25.3 | 31.1 |
+| bound4 | baseline >= 10 | all | 266 | 103 | 14.4 | 29% | 59% | 34.1 | 23.4 | 30.9 |
+| bound4 | baseline >= 20 | all | 266 | 92 | 13.5 | 32% | 64% | 35.1 | 24.2 | 31.4 |
+| bound6 | precision <= 5 | <5 | 67 | 6 | 62.5 | 0% | 17% | 12.6 | 68.8 | 53.1 |
+| bound6 | precision <= 5 | 5-10 | 58 | 17 | 34.3 | 6% | 6% | 31.1 | 25.1 | 31.1 |
+| bound6 | precision <= 5 | 10-20 | 14 | 5 | 12.5 | 20% | 60% | 33.2 | 18.1 | 13.1 |
+| bound6 | precision <= 5 | 20-40 | 30 | 14 | 16.4 | 29% | 64% | 43.3 | 27.6 | 39.5 |
+| bound6 | precision <= 5 | >=40 | 97 | 67 | 12.4 | 33% | 73% | 35.0 | 24.9 | 31.5 |
+| bound6 | precision <= 5 | all | 266 | 109 | 16.4 | 26% | 58% | 35.3 | 26.3 | 32.9 |
+| bound6 | precision <= 10 | all | 266 | 151 | 20.1 | 23% | 49% | 33.8 | 27.1 | 32.2 |
+| bound6 | precision <= 15 | all | 266 | 170 | 23.0 | 21% | 44% | 33.3 | 27.5 | 32.8 |
+| bound6 | precision <= 20 | all | 266 | 186 | 23.4 | 20% | 42% | 33.2 | 27.7 | 32.8 |
+| bound6 | baseline >= 5 | all | 266 | 161 | 22.8 | 21% | 45% | 33.2 | 25.4 | 31.3 |
+| bound6 | baseline >= 10 | all | 266 | 109 | 14.8 | 29% | 62% | 34.9 | 23.7 | 31.0 |
+| bound6 | baseline >= 20 | all | 266 | 98 | 13.5 | 32% | 66% | 35.3 | 24.7 | 31.6 |
 
 `kerry_park`:
 
-| variant | gate | baseline | points | kept | first med | first <10 | first <20 | start med | old med |
-|---|---|---|---|---|---|---|---|---|---|
-| bound2 | precision <= 5 | <5 | 12 | 2 | 78.2 | 0% | 0% | 0.7 | 68.2 |
-| bound2 | precision <= 5 | 5-10 | 21 | 1 | 70.6 | 0% | 0% | 5.0 | 43.4 |
-| bound2 | precision <= 5 | 10-20 | 48 | 20 | 35.6 | 20% | 35% | 28.3 | 26.7 |
-| bound2 | precision <= 5 | 20-40 | 100 | 29 | 14.6 | 28% | 62% | 36.1 | 16.9 |
-| bound2 | precision <= 5 | >=40 | 201 | 85 | 11.0 | 44% | 72% | 21.8 | 20.0 |
-| bound2 | precision <= 5 | all | 382 | 137 | 13.2 | 36% | 63% | 25.4 | 20.6 |
-| bound2 | precision <= 10 | all | 382 | 193 | 14.6 | 35% | 60% | 25.6 | 20.6 |
-| bound2 | precision <= 15 | all | 382 | 214 | 16.1 | 32% | 60% | 26.1 | 21.6 |
-| bound2 | precision <= 20 | all | 382 | 223 | 16.6 | 31% | 59% | 26.7 | 21.8 |
-| bound2 | baseline >= 5 | all | 382 | 224 | 16.5 | 31% | 59% | 27.6 | 21.7 |
-| bound2 | baseline >= 10 | all | 382 | 216 | 16.0 | 32% | 60% | 27.6 | 21.4 |
-| bound2 | baseline >= 20 | all | 382 | 180 | 13.5 | 35% | 64% | 29.0 | 21.4 |
-| bound4 | precision <= 5 | <5 | 12 | 4 | 78.5 | 0% | 0% | 0.8 | 77.0 |
-| bound4 | precision <= 5 | 5-10 | 21 | 4 | 65.6 | 0% | 0% | 11.2 | 48.2 |
-| bound4 | precision <= 5 | 10-20 | 48 | 29 | 44.9 | 21% | 34% | 13.4 | 29.0 |
-| bound4 | precision <= 5 | 20-40 | 100 | 41 | 14.6 | 37% | 59% | 37.0 | 22.6 |
-| bound4 | precision <= 5 | >=40 | 201 | 108 | 9.4 | 51% | 80% | 23.4 | 20.7 |
-| bound4 | precision <= 5 | all | 382 | 186 | 13.1 | 41% | 65% | 25.5 | 22.7 |
-| bound4 | precision <= 10 | all | 382 | 248 | 13.8 | 37% | 60% | 26.9 | 23.5 |
-| bound4 | precision <= 15 | all | 382 | 260 | 13.9 | 36% | 60% | 27.1 | 24.3 |
-| bound4 | precision <= 20 | all | 382 | 270 | 14.9 | 34% | 59% | 28.0 | 24.6 |
-| bound4 | baseline >= 5 | all | 382 | 265 | 14.1 | 35% | 60% | 30.2 | 24.3 |
-| bound4 | baseline >= 10 | all | 382 | 253 | 13.7 | 37% | 62% | 30.3 | 22.6 |
-| bound4 | baseline >= 20 | all | 382 | 211 | 13.1 | 41% | 67% | 31.9 | 22.8 |
-| bound6 | precision <= 5 | <5 | 12 | 4 | 78.6 | 0% | 0% | 1.6 | 77.8 |
-| bound6 | precision <= 5 | 5-10 | 21 | 6 | 72.2 | 0% | 0% | 4.3 | 49.4 |
-| bound6 | precision <= 5 | 10-20 | 48 | 31 | 47.6 | 19% | 35% | 13.4 | 17.7 |
-| bound6 | precision <= 5 | 20-40 | 100 | 43 | 15.9 | 37% | 60% | 36.1 | 25.7 |
-| bound6 | precision <= 5 | >=40 | 201 | 118 | 10.3 | 50% | 71% | 25.3 | 22.4 |
-| bound6 | precision <= 5 | all | 382 | 202 | 13.9 | 40% | 60% | 26.9 | 24.0 |
-| bound6 | precision <= 10 | all | 382 | 258 | 15.6 | 37% | 57% | 27.6 | 25.4 |
-| bound6 | precision <= 15 | all | 382 | 271 | 16.0 | 36% | 57% | 29.5 | 25.6 |
-| bound6 | precision <= 20 | all | 382 | 278 | 17.0 | 35% | 56% | 29.4 | 25.4 |
-| bound6 | baseline >= 5 | all | 382 | 276 | 16.2 | 36% | 57% | 31.5 | 25.4 |
-| bound6 | baseline >= 10 | all | 382 | 264 | 15.0 | 37% | 59% | 32.1 | 24.3 |
-| bound6 | baseline >= 20 | all | 382 | 222 | 13.4 | 41% | 64% | 32.6 | 24.6 |
+| variant | gate | baseline | points | kept | first med | first <10 | first <20 | start med | 2x2 med | 3x3 med |
+|---|---|---|---|---|---|---|---|---|---|---|
+| bound2 | precision <= 5 | <5 | 12 | 2 | 78.2 | 0% | 0% | 0.7 | 68.2 | 45.1 |
+| bound2 | precision <= 5 | 5-10 | 21 | 1 | 70.6 | 0% | 0% | 5.0 | 43.4 | 32.8 |
+| bound2 | precision <= 5 | 10-20 | 48 | 20 | 35.6 | 20% | 35% | 28.3 | 26.7 | 20.5 |
+| bound2 | precision <= 5 | 20-40 | 100 | 29 | 14.6 | 28% | 62% | 36.1 | 16.9 | 30.4 |
+| bound2 | precision <= 5 | >=40 | 201 | 85 | 11.0 | 44% | 72% | 21.8 | 20.0 | 20.5 |
+| bound2 | precision <= 5 | all | 382 | 137 | 13.2 | 36% | 63% | 25.4 | 20.6 | 21.9 |
+| bound2 | precision <= 10 | all | 382 | 193 | 14.6 | 35% | 60% | 25.6 | 20.6 | 23.4 |
+| bound2 | precision <= 15 | all | 382 | 214 | 16.1 | 32% | 60% | 26.1 | 21.6 | 23.5 |
+| bound2 | precision <= 20 | all | 382 | 223 | 16.6 | 31% | 59% | 26.7 | 21.8 | 23.5 |
+| bound2 | baseline >= 5 | all | 382 | 224 | 16.5 | 31% | 59% | 27.6 | 21.7 | 23.7 |
+| bound2 | baseline >= 10 | all | 382 | 216 | 16.0 | 32% | 60% | 27.6 | 21.4 | 23.5 |
+| bound2 | baseline >= 20 | all | 382 | 180 | 13.5 | 35% | 64% | 29.0 | 21.4 | 25.0 |
+| bound4 | precision <= 5 | <5 | 12 | 4 | 78.5 | 0% | 0% | 0.8 | 77.0 | 70.6 |
+| bound4 | precision <= 5 | 5-10 | 21 | 4 | 65.6 | 0% | 0% | 11.2 | 48.2 | 35.4 |
+| bound4 | precision <= 5 | 10-20 | 48 | 29 | 44.9 | 21% | 34% | 13.4 | 29.0 | 16.7 |
+| bound4 | precision <= 5 | 20-40 | 100 | 41 | 14.6 | 37% | 59% | 37.0 | 22.6 | 33.3 |
+| bound4 | precision <= 5 | >=40 | 201 | 108 | 9.4 | 51% | 80% | 23.4 | 20.7 | 21.4 |
+| bound4 | precision <= 5 | all | 382 | 186 | 13.1 | 41% | 65% | 25.5 | 22.7 | 23.4 |
+| bound4 | precision <= 10 | all | 382 | 248 | 13.8 | 37% | 60% | 26.9 | 23.5 | 25.0 |
+| bound4 | precision <= 15 | all | 382 | 260 | 13.9 | 36% | 60% | 27.1 | 24.3 | 25.0 |
+| bound4 | precision <= 20 | all | 382 | 270 | 14.9 | 34% | 59% | 28.0 | 24.6 | 25.5 |
+| bound4 | baseline >= 5 | all | 382 | 265 | 14.1 | 35% | 60% | 30.2 | 24.3 | 25.3 |
+| bound4 | baseline >= 10 | all | 382 | 253 | 13.7 | 37% | 62% | 30.3 | 22.6 | 24.8 |
+| bound4 | baseline >= 20 | all | 382 | 211 | 13.1 | 41% | 67% | 31.9 | 22.8 | 27.0 |
+| bound6 | precision <= 5 | <5 | 12 | 4 | 78.6 | 0% | 0% | 1.6 | 77.8 | 71.8 |
+| bound6 | precision <= 5 | 5-10 | 21 | 6 | 72.2 | 0% | 0% | 4.3 | 49.4 | 36.7 |
+| bound6 | precision <= 5 | 10-20 | 48 | 31 | 47.6 | 19% | 35% | 13.4 | 17.7 | 16.7 |
+| bound6 | precision <= 5 | 20-40 | 100 | 43 | 15.9 | 37% | 60% | 36.1 | 25.7 | 33.3 |
+| bound6 | precision <= 5 | >=40 | 201 | 118 | 10.3 | 50% | 71% | 25.3 | 22.4 | 22.9 |
+| bound6 | precision <= 5 | all | 382 | 202 | 13.9 | 40% | 60% | 26.9 | 24.0 | 25.3 |
+| bound6 | precision <= 10 | all | 382 | 258 | 15.6 | 37% | 57% | 27.6 | 25.4 | 26.3 |
+| bound6 | precision <= 15 | all | 382 | 271 | 16.0 | 36% | 57% | 29.5 | 25.6 | 26.6 |
+| bound6 | precision <= 20 | all | 382 | 278 | 17.0 | 35% | 56% | 29.4 | 25.4 | 26.3 |
+| bound6 | baseline >= 5 | all | 382 | 276 | 16.2 | 36% | 57% | 31.5 | 25.4 | 26.7 |
+| bound6 | baseline >= 10 | all | 382 | 264 | 15.0 | 37% | 59% | 32.1 | 24.3 | 25.8 |
+| bound6 | baseline >= 20 | all | 382 | 222 | 13.4 | 41% | 64% | 32.6 | 24.6 | 29.0 |
 
 **Precision gates on the step as built** (`Turned` points; bars of 5° and 10°):
 
 `seoul_bull`:
 
-| variant | gate | turned | kept | new med | new <10 | new <20 | start med | old med |
-|---|---|---|---|---|---|---|---|---|
-| bound2_none | precision <= 5 | 19 | 14 | 19.1 | 21% | 50% | 35.7 | 24.5 |
-| bound2_none | precision <= 10 | 19 | 18 | 22.7 | 22% | 44% | 32.2 | 26.2 |
-| bound2_windowed_zncc | precision <= 5 | 8 | 5 | 15.6 | 20% | 60% | 39.6 | 27.0 |
-| bound2_windowed_zncc | precision <= 10 | 8 | 7 | 15.6 | 29% | 57% | 39.0 | 27.0 |
-| bound4_none | precision <= 5 | 35 | 26 | 18.5 | 27% | 54% | 35.3 | 29.9 |
-| bound4_none | precision <= 10 | 35 | 31 | 20.7 | 26% | 48% | 35.2 | 24.6 |
-| bound4_windowed_zncc | precision <= 5 | 10 | 6 | 26.8 | 0% | 17% | 40.7 | 35.3 |
-| bound4_windowed_zncc | precision <= 10 | 10 | 9 | 24.1 | 11% | 22% | 40.5 | 29.4 |
-| bound6_none | precision <= 5 | 53 | 39 | 18.1 | 23% | 51% | 35.4 | 27.0 |
-| bound6_none | precision <= 10 | 53 | 45 | 23.2 | 22% | 47% | 34.1 | 27.0 |
-| bound6_windowed_zncc | precision <= 5 | 13 | 9 | 16.1 | 22% | 56% | 40.5 | 21.5 |
-| bound6_windowed_zncc | precision <= 10 | 13 | 12 | 21.9 | 25% | 50% | 40.3 | 21.8 |
+| variant | gate | turned | kept | new med | new <10 | new <20 | start med | 2x2 med | 3x3 med |
+|---|---|---|---|---|---|---|---|---|---|
+| bound2_none | precision <= 5 | 19 | 14 | 19.1 | 21% | 50% | 35.7 | 24.5 | 26.5 |
+| bound2_none | precision <= 10 | 19 | 18 | 22.7 | 22% | 44% | 32.2 | 26.2 | 26.5 |
+| bound2_windowed_zncc | precision <= 5 | 8 | 5 | 15.6 | 20% | 60% | 39.6 | 27.0 | 34.8 |
+| bound2_windowed_zncc | precision <= 10 | 8 | 7 | 15.6 | 29% | 57% | 39.0 | 27.0 | 34.8 |
+| bound4_none | precision <= 5 | 35 | 26 | 18.5 | 27% | 54% | 35.3 | 29.9 | 33.9 |
+| bound4_none | precision <= 10 | 35 | 31 | 20.7 | 26% | 48% | 35.2 | 24.6 | 31.7 |
+| bound4_windowed_zncc | precision <= 5 | 10 | 6 | 26.8 | 0% | 17% | 40.7 | 35.3 | 42.6 |
+| bound4_windowed_zncc | precision <= 10 | 10 | 9 | 24.1 | 11% | 22% | 40.5 | 29.4 | 27.7 |
+| bound6_none | precision <= 5 | 53 | 39 | 18.1 | 23% | 51% | 35.4 | 27.0 | 31.5 |
+| bound6_none | precision <= 10 | 53 | 45 | 23.2 | 22% | 47% | 34.1 | 27.0 | 31.5 |
+| bound6_windowed_zncc | precision <= 5 | 13 | 9 | 16.1 | 22% | 56% | 40.5 | 21.5 | 31.5 |
+| bound6_windowed_zncc | precision <= 10 | 13 | 12 | 21.9 | 25% | 50% | 40.3 | 21.8 | 33.2 |
 
 `kerry_park`:
 
-| variant | gate | turned | kept | new med | new <10 | new <20 | start med | old med |
-|---|---|---|---|---|---|---|---|---|
-| bound2_none | precision <= 5 | 59 | 52 | 6.4 | 71% | 77% | 25.4 | 16.5 |
-| bound2_none | precision <= 10 | 59 | 55 | 6.4 | 71% | 76% | 25.4 | 16.0 |
-| bound2_windowed_zncc | precision <= 5 | 28 | 26 | 4.9 | 73% | 81% | 23.9 | 15.9 |
-| bound2_windowed_zncc | precision <= 10 | 28 | 28 | 4.9 | 75% | 82% | 23.9 | 15.9 |
-| bound4_none | precision <= 5 | 92 | 81 | 6.0 | 67% | 70% | 26.7 | 22.6 |
-| bound4_none | precision <= 10 | 92 | 88 | 6.6 | 64% | 67% | 27.1 | 24.0 |
-| bound4_windowed_zncc | precision <= 5 | 26 | 23 | 5.4 | 78% | 83% | 31.9 | 16.3 |
-| bound4_windowed_zncc | precision <= 10 | 26 | 26 | 5.9 | 77% | 81% | 34.7 | 18.4 |
-| bound6_none | precision <= 5 | 109 | 96 | 6.3 | 64% | 71% | 31.5 | 26.5 |
-| bound6_none | precision <= 10 | 109 | 104 | 7.0 | 59% | 66% | 31.5 | 25.6 |
-| bound6_windowed_zncc | precision <= 5 | 31 | 28 | 4.1 | 79% | 82% | 35.0 | 28.7 |
-| bound6_windowed_zncc | precision <= 10 | 31 | 30 | 4.8 | 73% | 77% | 35.0 | 25.6 |
+| variant | gate | turned | kept | new med | new <10 | new <20 | start med | 2x2 med | 3x3 med |
+|---|---|---|---|---|---|---|---|---|---|
+| bound2_none | precision <= 5 | 59 | 52 | 6.4 | 71% | 77% | 25.4 | 16.5 | 19.9 |
+| bound2_none | precision <= 10 | 59 | 55 | 6.4 | 71% | 76% | 25.4 | 16.0 | 19.8 |
+| bound2_windowed_zncc | precision <= 5 | 28 | 26 | 4.9 | 73% | 81% | 23.9 | 15.9 | 20.0 |
+| bound2_windowed_zncc | precision <= 10 | 28 | 28 | 4.9 | 75% | 82% | 23.9 | 15.9 | 20.0 |
+| bound4_none | precision <= 5 | 92 | 81 | 6.0 | 67% | 70% | 26.7 | 22.6 | 23.5 |
+| bound4_none | precision <= 10 | 92 | 88 | 6.6 | 64% | 67% | 27.1 | 24.0 | 25.1 |
+| bound4_windowed_zncc | precision <= 5 | 26 | 23 | 5.4 | 78% | 83% | 31.9 | 16.3 | 20.8 |
+| bound4_windowed_zncc | precision <= 10 | 26 | 26 | 5.9 | 77% | 81% | 34.7 | 18.4 | 25.7 |
+| bound6_none | precision <= 5 | 109 | 96 | 6.3 | 64% | 71% | 31.5 | 26.5 | 26.8 |
+| bound6_none | precision <= 10 | 109 | 104 | 7.0 | 59% | 66% | 31.5 | 25.6 | 25.8 |
+| bound6_windowed_zncc | precision <= 5 | 31 | 28 | 4.1 | 79% | 82% | 35.0 | 28.7 | 31.2 |
+| bound6_windowed_zncc | precision <= 10 | 31 | 30 | 4.8 | 73% | 77% | 35.0 | 25.6 | 31.2 |
 
 **What the numbers show.**
 
@@ -836,7 +836,7 @@ Each row of the script's JSONL carries the point's ground-truth position and nor
 
 **What the numbers cannot show.**
 
-- **The ground-truth normals are estimates**, the patch frames stored in the two `.sfmr` files; where a step disagrees with one, the numbers cannot say which is wrong. On `kerry_park` the 12 points under 5° baseline have a ground-truth normal a median 0.7° from their mean viewing direction, which suggests that those normals were set from the viewing direction rather than measured. If so, the errors under 10° there measure distance from the viewing direction, not from the surface. On `seoul_bull` that bin's start error is 26°, so this does not hold there.
+- **The ground-truth normals are estimates**, the patch frames stored in the two `.sfmr` files, and per the maintainer most of them were set with today's Grid Plane Normal at 3×3 pieces, so agreement with them partly measures agreement with that method (see [today's step at 3×3](#addendum-todays-step-at-33-and-a-third-capture-2026-10-15)). Where a step disagrees with one, the numbers cannot say which is wrong. On `kerry_park` the 12 points under 5° baseline have a ground-truth normal a median 0.7° from their mean viewing direction, which suggests that those normals were set from the viewing direction rather than measured. If so, the errors under 10° there measure distance from the viewing direction, not from the surface. On `seoul_bull` that bin's start error is 26°, so this does not hold there.
 - **Narrow baselines are measured, and these estimators fail on them against these truths**; whether a better measurement could succeed there is not shown. The narrow bins on `kerry_park` are small (12 and 21 points).
 - The first plane and the gates are read from the traces after the fact. A gate inside the loop, or a larger tolerance, changes the later renders, which these runs do not show.
 - Whether a person prefers the turned patches; the hand review decides that.
@@ -847,6 +847,272 @@ Each row of the script's JSONL carries the point's ground-truth position and nor
 - With that gate in place, **taking the first plane, or turns without the ZNCC veto**, at wide baselines: there the first plane is closer to the truth than the start on three quarters or more of the points, and the veto rejects about half the turns that would help.
 - **`cell_shift_bound_px` 4** rather than 2.
 - An **`update_tolerance_px` near the movements seen from the third render on** (0.1 to 0.9 px), or a fixed small number of renders, instead of 0.05 px, which few loops reach. Not measured here.
+
+## Addendum: today's step at 3×3 and a third capture (2026-10-15)
+
+**Why.** Per the maintainer, most of the two ground truths' normals were set with today's Grid Plane Normal at 3×3 pieces, not at Track View's default 2×2, so agreement with them partly measures agreement with that method. This addendum runs today's step at 3×3 beside 2×2 on every point, and repeats the sweep above on a third capture.
+
+**Setup.**
+
+- **Today's step at 3×3.** `grid_plane_eval.py --also-old-pieces 3` runs `finite_difference_normal` with `layout="grid"`, `pieces=3`, `overlap=0.0` from the same fitted track as every other estimator and records it in `old3_*` fields beside the 2×2 `old_*` ones. `grid_plane_sweep.py` adds a 3×3 column wherever 2×2 appears; the tables of the sweep above now carry it. All variants were run again with it; every value the sweep above reported came out the same to the last printed digit.
+- **The third capture.** `dino_dog_toy_ground_truth_candidate_v006.sfmr` from another checkout's `dino_dog_toy_ws` workspace: 85 images at 2040×1536, 961 finite points seen in two or more images, a median track of 13 images. It is a candidate ground truth, not an approved one. `prepare` was extended to find the workspace above the `.sfmr` (the file sits in `sfmr/` under the workspace), to copy it to the same relative path in the cache workspace so that it resolves its workspace to the cache, and to stop if it does not; a listing of the source workspace before and after showed no file of it changed by the runs. All 961 points were run, no sample. Its baseline bins hold 9, 25, 45, 179 and 703 points.
+- **Variants, estimators, errors.** As in the sweep above: bound 2, 4, 6 × acceptance `windowed_zncc`, `none`, `max_iterations` 8, from the fitted mean-view start, angles to the stored patch normal folded to 0–90°.
+- **Commit and machine.** Commit `d8e06ef6` for the scripts (the step and binding as at `a26e3483`); Intel Core i9-14900HX, 64 GB, Windows 11, release build.
+- **Commands.** As in the sweep above, with `--also-old-pieces 3` added to each run, and for the third capture
+  `C:/Dev/prod3/sfmtool/dino_dog_toy_ws/sfmr/dino_dog_toy_ground_truth_candidate_v006.sfmr` as `DATASET`, written to `OUT/dino_dog_toy/boundB_A`. A run took 20 to 32 s on `seoul_bull`, 77 to 107 s on `kerry_park` and 649 to 1235 s on `dino_dog_toy`, loading included. The median call of today's step took 21, 38 and 103 ms at 2×2 and 47, 87 and 227 ms at 3×3; `grid_plane_normal` 4 to 6, 7 to 13 and 31 to 108 ms.
+
+**Today's step at 2×2 and 3×3, all points** (degrees; median / p75 / under 10° / under 20°):
+
+| dataset | points | start | 2×2 | 3×3 | 3×3 closer than 2×2 | angle between the two, median |
+|---|---|---|---|---|---|---|
+| `seoul_bull` | 266 | 33.7 / 47.6 / 11% / 24% | 31.5 / 48.6 / 9% / 26% | 37.5 / 52.2 / 4% / 17% | 31% | 12.6 |
+| `kerry_park` | 382 | 34.6 / 51.7 / 15% / 31% | 29.3 / 47.6 / 16% / 36% | 31.3 / 50.9 / 13% / 34% | 37% | 7.5 |
+| `dino_dog_toy` | 961 | 30.9 / 43.5 / 6% / 23% | 21.2 / 33.8 / 27% / 48% | 26.8 / 38.9 / 17% / 34% | 17% | 5.7 |
+
+By baseline, `seoul_bull`:
+
+| baseline | points | start med | start <20 | 2x2 med | 2x2 <10 | 2x2 <20 | 2x2 closer than start | 3x3 med | 3x3 <10 | 3x3 <20 | 3x3 closer than start |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| <5 | 67 | 26.1 | 39% | 45.0 | 0% | 12% | 37% | 51.5 | 1% | 7% | 31% |
+| 5-10 | 58 | 28.9 | 34% | 29.9 | 16% | 33% | 45% | 32.6 | 7% | 28% | 41% |
+| 10-20 | 14 | 27.0 | 43% | 18.6 | 29% | 64% | 57% | 21.4 | 21% | 50% | 50% |
+| 20-40 | 30 | 47.4 | 13% | 26.5 | 13% | 33% | 80% | 41.8 | 3% | 17% | 77% |
+| >=40 | 97 | 38.2 | 8% | 28.2 | 6% | 25% | 85% | 34.8 | 2% | 12% | 82% |
+
+`kerry_park`:
+
+| baseline | points | start med | start <20 | 2x2 med | 2x2 <10 | 2x2 <20 | 2x2 closer than start | 3x3 med | 3x3 <10 | 3x3 <20 | 3x3 closer than start |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| <5 | 12 | 0.7 | 83% | 71.1 | 0% | 0% | 8% | 71.8 | 0% | 8% | 8% |
+| 5-10 | 21 | 41.3 | 38% | 44.3 | 24% | 33% | 48% | 24.2 | 29% | 38% | 52% |
+| 10-20 | 48 | 28.6 | 46% | 19.7 | 23% | 50% | 54% | 17.9 | 27% | 54% | 52% |
+| 20-40 | 100 | 39.9 | 13% | 30.2 | 11% | 32% | 79% | 35.4 | 4% | 21% | 67% |
+| >=40 | 201 | 29.5 | 33% | 26.5 | 18% | 37% | 78% | 29.1 | 14% | 36% | 71% |
+
+`dino_dog_toy`:
+
+| baseline | points | start med | start <20 | 2x2 med | 2x2 <10 | 2x2 <20 | 2x2 closer than start | 3x3 med | 3x3 <10 | 3x3 <20 | 3x3 closer than start |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| <5 | 9 | 48.5 | 22% | 11.2 | 33% | 67% | 67% | 20.4 | 22% | 44% | 67% |
+| 5-10 | 25 | 16.9 | 64% | 3.0 | 76% | 84% | 84% | 4.5 | 72% | 84% | 84% |
+| 10-20 | 45 | 34.4 | 33% | 7.5 | 53% | 67% | 93% | 11.9 | 49% | 53% | 84% |
+| 20-40 | 179 | 50.1 | 8% | 37.8 | 13% | 25% | 75% | 46.0 | 8% | 13% | 75% |
+| >=40 | 703 | 28.1 | 25% | 19.8 | 27% | 50% | 92% | 24.9 | 15% | 36% | 87% |
+
+**`dino_dog_toy`: outcomes.**
+
+| variant | converged | measured | rejected | oscillation | cap | not_run |
+|---|---|---|---|---|---|---|
+| bound2_none | 304 | 247 | 0 | 395 | 15 | 0 |
+| bound2_windowed_zncc | 105 | 208 | 589 | 59 | 0 | 0 |
+| bound4_none | 330 | 175 | 0 | 446 | 10 | 0 |
+| bound4_windowed_zncc | 112 | 155 | 650 | 44 | 0 | 0 |
+| bound6_none | 350 | 158 | 0 | 444 | 9 | 0 |
+| bound6_windowed_zncc | 118 | 140 | 675 | 28 | 0 | 0 |
+
+**`dino_dog_toy`: the step as built, by baseline** (`Turned` points; start and today's step on the same points):
+
+| variant | baseline | points | turned | new med | new p75 | new <10 | new <20 | start med | 2x2 med | 2x2 <10 | 3x3 med | 3x3 <10 | new closer than start |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| bound2_none | <5 | 9 | 1 | 4.3 | 4.3 | 100% | 100% | 49.5 | 10.0 | 100% | 7.5 | 100% | 100% |
+| bound2_none | 5-10 | 25 | 7 | 23.1 | 43.6 | 43% | 43% | 16.5 | 10.0 | 43% | 7.6 | 57% | 71% |
+| bound2_none | 10-20 | 45 | 2 | 30.2 | 43.2 | 50% | 50% | 20.1 | 1.4 | 100% | 2.4 | 100% | 50% |
+| bound2_none | 20-40 | 179 | 27 | 3.8 | 7.1 | 81% | 81% | 31.7 | 4.8 | 56% | 16.1 | 33% | 85% |
+| bound2_none | >=40 | 703 | 267 | 1.3 | 2.8 | 90% | 94% | 25.0 | 14.4 | 40% | 21.1 | 23% | 96% |
+| bound2_windowed_zncc | <5 | 9 | 0 | - | - | - | - | - | - | - | - | - | - |
+| bound2_windowed_zncc | 5-10 | 25 | 1 | 4.4 | 4.4 | 100% | 100% | 23.0 | 2.7 | 100% | 3.5 | 100% | 100% |
+| bound2_windowed_zncc | 10-20 | 45 | 0 | - | - | - | - | - | - | - | - | - | - |
+| bound2_windowed_zncc | 20-40 | 179 | 5 | 1.5 | 5.0 | 100% | 100% | 18.3 | 1.0 | 100% | 5.6 | 80% | 100% |
+| bound2_windowed_zncc | >=40 | 703 | 99 | 1.3 | 2.3 | 91% | 98% | 22.6 | 11.4 | 45% | 17.5 | 26% | 96% |
+| bound4_none | <5 | 9 | 1 | 4.3 | 4.3 | 100% | 100% | 49.5 | 10.0 | 100% | 7.5 | 100% | 100% |
+| bound4_none | 5-10 | 25 | 6 | 13.8 | 51.6 | 50% | 50% | 12.2 | 11.2 | 50% | 9.3 | 50% | 67% |
+| bound4_none | 10-20 | 45 | 6 | 6.3 | 44.3 | 67% | 67% | 21.5 | 3.0 | 67% | 3.4 | 67% | 67% |
+| bound4_none | 20-40 | 179 | 34 | 2.8 | 6.7 | 85% | 91% | 35.2 | 13.9 | 44% | 25.5 | 26% | 91% |
+| bound4_none | >=40 | 703 | 283 | 1.2 | 2.1 | 96% | 98% | 26.0 | 15.4 | 38% | 21.6 | 21% | 98% |
+| bound4_windowed_zncc | <5 | 9 | 0 | - | - | - | - | - | - | - | - | - | - |
+| bound4_windowed_zncc | 5-10 | 25 | 1 | 4.4 | 4.4 | 100% | 100% | 23.0 | 2.7 | 100% | 3.5 | 100% | 100% |
+| bound4_windowed_zncc | 10-20 | 45 | 1 | 1.9 | 1.9 | 100% | 100% | 65.0 | 40.2 | 0% | 48.9 | 0% | 100% |
+| bound4_windowed_zncc | 20-40 | 179 | 7 | 2.1 | 4.4 | 100% | 100% | 19.9 | 2.4 | 86% | 5.6 | 57% | 100% |
+| bound4_windowed_zncc | >=40 | 703 | 103 | 1.0 | 1.8 | 98% | 98% | 24.4 | 12.0 | 42% | 18.2 | 23% | 98% |
+| bound6_none | <5 | 9 | 1 | 4.3 | 4.3 | 100% | 100% | 49.5 | 10.0 | 100% | 7.5 | 100% | 100% |
+| bound6_none | 5-10 | 25 | 7 | 20.5 | 46.1 | 43% | 43% | 16.5 | 10.0 | 43% | 7.6 | 57% | 71% |
+| bound6_none | 10-20 | 45 | 9 | 2.4 | 8.4 | 78% | 78% | 62.5 | 14.5 | 33% | 36.5 | 33% | 78% |
+| bound6_none | 20-40 | 179 | 36 | 2.8 | 7.0 | 78% | 83% | 35.1 | 12.3 | 47% | 24.6 | 28% | 92% |
+| bound6_none | >=40 | 703 | 297 | 1.2 | 2.1 | 95% | 98% | 26.8 | 15.4 | 38% | 22.4 | 21% | 97% |
+| bound6_windowed_zncc | <5 | 9 | 0 | - | - | - | - | - | - | - | - | - | - |
+| bound6_windowed_zncc | 5-10 | 25 | 1 | 4.4 | 4.4 | 100% | 100% | 23.0 | 2.7 | 100% | 3.5 | 100% | 100% |
+| bound6_windowed_zncc | 10-20 | 45 | 1 | 2.1 | 2.1 | 100% | 100% | 65.0 | 40.2 | 0% | 48.9 | 0% | 100% |
+| bound6_windowed_zncc | 20-40 | 179 | 8 | 1.7 | 2.8 | 100% | 100% | 24.0 | 1.8 | 75% | 6.7 | 62% | 100% |
+| bound6_windowed_zncc | >=40 | 703 | 108 | 1.1 | 2.0 | 95% | 97% | 24.4 | 12.4 | 44% | 19.2 | 26% | 98% |
+
+**`dino_dog_toy`: the first plane, by baseline.**
+
+| variant | baseline | points | proposed | first med | first p75 | first <10 | first <20 | start med | 2x2 med | 3x3 med | closer than start |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| bound2 | <5 | 9 | 6 | 12.3 | 23.3 | 50% | 67% | 49.0 | 10.8 | 11.8 | 83% |
+| bound2 | 5-10 | 25 | 24 | 16.4 | 23.3 | 29% | 62% | 17.4 | 2.9 | 4.0 | 62% |
+| bound2 | 10-20 | 45 | 35 | 30.3 | 58.0 | 14% | 37% | 22.6 | 5.6 | 4.4 | 49% |
+| bound2 | 20-40 | 179 | 77 | 8.5 | 17.8 | 60% | 75% | 38.6 | 20.6 | 31.4 | 86% |
+| bound2 | >=40 | 703 | 617 | 5.0 | 10.3 | 74% | 91% | 27.0 | 18.3 | 23.2 | 97% |
+| bound4 | <5 | 9 | 6 | 12.3 | 32.7 | 50% | 67% | 49.0 | 10.8 | 11.8 | 83% |
+| bound4 | 5-10 | 25 | 25 | 17.6 | 30.4 | 32% | 60% | 16.9 | 3.0 | 4.5 | 60% |
+| bound4 | 10-20 | 45 | 36 | 31.7 | 56.5 | 31% | 39% | 22.8 | 5.8 | 5.1 | 50% |
+| bound4 | 20-40 | 179 | 89 | 7.8 | 13.5 | 65% | 82% | 40.9 | 23.3 | 34.3 | 91% |
+| bound4 | >=40 | 703 | 657 | 3.4 | 6.8 | 86% | 96% | 27.7 | 19.0 | 24.0 | 98% |
+| bound6 | <5 | 9 | 6 | 12.3 | 35.2 | 50% | 67% | 49.0 | 10.8 | 11.8 | 83% |
+| bound6 | 5-10 | 25 | 25 | 17.6 | 30.4 | 32% | 60% | 16.9 | 3.0 | 4.5 | 60% |
+| bound6 | 10-20 | 45 | 36 | 30.0 | 56.5 | 31% | 39% | 22.8 | 5.8 | 5.1 | 50% |
+| bound6 | 20-40 | 179 | 92 | 7.8 | 13.6 | 64% | 80% | 41.2 | 24.4 | 34.5 | 92% |
+| bound6 | >=40 | 703 | 665 | 3.3 | 6.3 | 86% | 96% | 27.7 | 19.1 | 24.3 | 98% |
+
+**`dino_dog_toy`: convergence under `acceptance` `none`.**
+
+| variant | render | points | proposed med | proposed p75 | change from first, med | move med px | move p10 | move p90 | moves <= 0.05 |
+|---|---|---|---|---|---|---|---|---|---|
+| bound2_none | 1 | 759 | 5.7 | 12.5 | +0.0 | 8.15 | 2.54 | 15.69 | 0% |
+| bound2_none | 2 | 732 | 2.6 | 7.0 | -1.2 | 1.20 | 0.23 | 4.97 | 2% |
+| bound2_none | 3 | 654 | 2.2 | 5.3 | -1.4 | 0.31 | 0.06 | 2.53 | 7% |
+| bound2_none | 4 | 506 | 1.8 | 4.0 | -2.0 | 0.14 | 0.02 | 1.18 | 24% |
+| bound2_none | 5 | 277 | 1.7 | 3.6 | -2.9 | 0.12 | 0.02 | 0.92 | 28% |
+| bound2_none | 6 | 119 | 2.0 | 4.2 | -4.0 | 0.12 | 0.02 | 1.12 | 27% |
+| bound2_none | 7 | 41 | 1.8 | 4.3 | -3.9 | 0.10 | 0.03 | 0.72 | 17% |
+| bound2_none | 8 | 18 | 2.3 | 3.6 | -5.5 | 0.10 | 0.04 | 0.59 | 17% |
+| bound4_none | 1 | 813 | 4.0 | 8.7 | +0.0 | 9.38 | 3.55 | 16.89 | 0% |
+| bound4_none | 2 | 797 | 2.2 | 5.4 | -1.1 | 1.00 | 0.24 | 4.87 | 1% |
+| bound4_none | 3 | 743 | 1.9 | 4.4 | -1.1 | 0.28 | 0.05 | 1.91 | 10% |
+| bound4_none | 4 | 578 | 1.8 | 3.7 | -1.5 | 0.16 | 0.02 | 1.05 | 24% |
+| bound4_none | 5 | 302 | 1.8 | 4.3 | -1.9 | 0.15 | 0.02 | 1.01 | 24% |
+| bound4_none | 6 | 122 | 2.0 | 3.9 | -2.4 | 0.16 | 0.03 | 0.79 | 21% |
+| bound4_none | 7 | 35 | 1.7 | 4.5 | -1.9 | 0.13 | 0.03 | 0.51 | 20% |
+| bound4_none | 8 | 11 | 4.6 | 5.8 | -4.8 | 0.25 | 0.05 | 1.08 | 9% |
+| bound6_none | 1 | 824 | 3.9 | 8.4 | +0.0 | 9.48 | 3.66 | 16.77 | 0% |
+| bound6_none | 2 | 814 | 2.2 | 5.4 | -0.9 | 0.98 | 0.23 | 4.91 | 2% |
+| bound6_none | 3 | 761 | 1.9 | 4.8 | -1.0 | 0.27 | 0.05 | 1.96 | 11% |
+| bound6_none | 4 | 582 | 1.7 | 3.7 | -1.4 | 0.15 | 0.02 | 1.06 | 24% |
+| bound6_none | 5 | 299 | 1.8 | 3.7 | -1.9 | 0.13 | 0.02 | 0.75 | 23% |
+| bound6_none | 6 | 130 | 1.9 | 4.1 | -2.5 | 0.13 | 0.03 | 0.67 | 19% |
+| bound6_none | 7 | 51 | 1.7 | 4.7 | -2.3 | 0.12 | 0.03 | 0.56 | 25% |
+| bound6_none | 8 | 11 | 1.6 | 4.1 | -2.3 | 0.21 | 0.04 | 0.31 | 18% |
+
+| variant | points with 2+ proposals | first is best | last better than first | last worse than first by 5+ deg |
+|---|---|---|---|---|
+| bound2_none | 732 | 24% | 70% | 6% |
+| bound4_none | 797 | 25% | 68% | 6% |
+| bound6_none | 814 | 25% | 67% | 6% |
+
+**`dino_dog_toy`: turns the ZNCC rule rejected.**
+
+| variant | baseline | rejected | would lower the error | by 5+ deg | would raise it by 5+ deg |
+|---|---|---|---|---|---|
+| bound2_windowed_zncc | <5 | 6 | 67% | 17% | 33% |
+| bound2_windowed_zncc | 5-10 | 23 | 35% | 13% | 26% |
+| bound2_windowed_zncc | 10-20 | 32 | 34% | 28% | 50% |
+| bound2_windowed_zncc | 20-40 | 68 | 46% | 24% | 18% |
+| bound2_windowed_zncc | >=40 | 460 | 56% | 15% | 4% |
+| bound4_windowed_zncc | <5 | 6 | 67% | 33% | 33% |
+| bound4_windowed_zncc | 5-10 | 24 | 29% | 12% | 25% |
+| bound4_windowed_zncc | 10-20 | 33 | 39% | 27% | 52% |
+| bound4_windowed_zncc | 20-40 | 75 | 52% | 25% | 13% |
+| bound4_windowed_zncc | >=40 | 512 | 52% | 13% | 4% |
+| bound6_windowed_zncc | <5 | 6 | 67% | 33% | 33% |
+| bound6_windowed_zncc | 5-10 | 24 | 29% | 12% | 25% |
+| bound6_windowed_zncc | 10-20 | 35 | 40% | 26% | 49% |
+| bound6_windowed_zncc | 20-40 | 80 | 52% | 25% | 12% |
+| bound6_windowed_zncc | >=40 | 530 | 52% | 13% | 4% |
+
+**`dino_dog_toy`: the first plane's error against its predicted precision.**
+
+| variant | precision | points | first med | first p75 | first <10 | first <20 | start med |
+|---|---|---|---|---|---|---|---|
+| bound2 | <2 | 209 | 2.9 | 5.9 | 85% | 91% | 18.3 |
+| bound2 | 2-5 | 281 | 4.9 | 9.3 | 77% | 93% | 28.4 |
+| bound2 | 5-10 | 137 | 9.8 | 15.6 | 52% | 82% | 31.7 |
+| bound2 | 10-20 | 71 | 14.8 | 24.4 | 31% | 68% | 38.6 |
+| bound2 | 20-45 | 42 | 9.0 | 24.4 | 55% | 71% | 37.9 |
+| bound2 | >=45 | 19 | 20.3 | 37.7 | 37% | 47% | 36.5 |
+| bound4 | <2 | 304 | 2.6 | 4.4 | 92% | 95% | 21.2 |
+| bound4 | 2-5 | 303 | 4.2 | 7.8 | 82% | 94% | 31.4 |
+| bound4 | 5-10 | 101 | 7.6 | 14.2 | 63% | 87% | 36.0 |
+| bound4 | 10-20 | 62 | 12.2 | 25.0 | 40% | 68% | 36.0 |
+| bound4 | 20-45 | 30 | 9.0 | 24.9 | 57% | 70% | 38.1 |
+| bound4 | >=45 | 13 | 8.6 | 35.0 | 62% | 69% | 41.4 |
+| bound6 | <2 | 328 | 2.6 | 4.4 | 91% | 95% | 22.6 |
+| bound6 | 2-5 | 304 | 4.3 | 7.5 | 82% | 94% | 31.2 |
+| bound6 | 5-10 | 96 | 6.5 | 15.2 | 61% | 84% | 36.9 |
+| bound6 | 10-20 | 55 | 13.2 | 24.6 | 38% | 69% | 33.5 |
+| bound6 | 20-45 | 28 | 9.0 | 27.1 | 57% | 71% | 38.0 |
+| bound6 | >=45 | 13 | 8.6 | 35.0 | 62% | 69% | 41.4 |
+
+**`dino_dog_toy`: gates on the first plane** (every gate over all points, and the precision bar of 5° by baseline), and on the step as built:
+
+| variant | gate | baseline | points | kept | first med | first <10 | first <20 | start med | 2x2 med | 3x3 med |
+|---|---|---|---|---|---|---|---|---|---|---|
+| bound2 | precision <= 5 | <5 | 9 | 0 | - | - | - | - | - | - |
+| bound2 | precision <= 5 | 5-10 | 25 | 1 | 70.9 | 0% | 0% | 7.9 | 58.2 | 28.9 |
+| bound2 | precision <= 5 | 10-20 | 45 | 10 | 23.7 | 20% | 40% | 45.5 | 14.7 | 22.5 |
+| bound2 | precision <= 5 | 20-40 | 179 | 32 | 5.1 | 69% | 81% | 29.9 | 6.5 | 16.4 |
+| bound2 | precision <= 5 | >=40 | 703 | 447 | 3.9 | 83% | 95% | 24.0 | 13.8 | 19.9 |
+| bound2 | precision <= 5 | all | 961 | 490 | 4.0 | 80% | 92% | 24.1 | 13.7 | 19.9 |
+| bound2 | precision <= 10 | all | 961 | 627 | 4.8 | 74% | 90% | 25.9 | 16.0 | 22.0 |
+| bound2 | precision <= 15 | all | 961 | 672 | 5.1 | 71% | 89% | 26.4 | 16.6 | 22.5 |
+| bound2 | precision <= 20 | all | 961 | 698 | 5.3 | 70% | 88% | 26.7 | 16.7 | 22.7 |
+| bound2 | baseline >= 5 | all | 961 | 753 | 5.7 | 68% | 86% | 27.7 | 17.7 | 23.2 |
+| bound2 | baseline >= 10 | all | 961 | 729 | 5.5 | 70% | 87% | 28.0 | 18.2 | 23.8 |
+| bound2 | baseline >= 20 | all | 961 | 694 | 5.1 | 72% | 89% | 28.1 | 18.5 | 24.2 |
+| bound4 | precision <= 5 | <5 | 9 | 0 | - | - | - | - | - | - |
+| bound4 | precision <= 5 | 5-10 | 25 | 3 | 36.3 | 0% | 0% | 7.9 | 35.0 | 28.9 |
+| bound4 | precision <= 5 | 10-20 | 45 | 14 | 18.8 | 43% | 50% | 64.6 | 30.9 | 36.9 |
+| bound4 | precision <= 5 | 20-40 | 179 | 49 | 5.6 | 67% | 84% | 39.6 | 16.3 | 27.6 |
+| bound4 | precision <= 5 | >=40 | 703 | 541 | 3.1 | 91% | 97% | 25.7 | 16.1 | 22.0 |
+| bound4 | precision <= 5 | all | 961 | 607 | 3.2 | 87% | 95% | 26.3 | 16.3 | 22.5 |
+| bound4 | precision <= 10 | all | 961 | 708 | 3.5 | 84% | 94% | 27.4 | 17.7 | 23.3 |
+| bound4 | precision <= 15 | all | 961 | 756 | 3.6 | 81% | 92% | 28.0 | 18.2 | 23.7 |
+| bound4 | precision <= 20 | all | 961 | 770 | 3.7 | 80% | 91% | 28.0 | 18.1 | 23.7 |
+| bound4 | baseline >= 5 | all | 961 | 807 | 4.0 | 79% | 90% | 28.2 | 18.5 | 24.4 |
+| bound4 | baseline >= 10 | all | 961 | 782 | 3.8 | 81% | 91% | 28.4 | 19.0 | 24.8 |
+| bound4 | baseline >= 20 | all | 961 | 746 | 3.6 | 83% | 94% | 28.5 | 19.4 | 25.1 |
+| bound6 | precision <= 5 | <5 | 9 | 0 | - | - | - | - | - | - |
+| bound6 | precision <= 5 | 5-10 | 25 | 3 | 36.3 | 0% | 0% | 7.9 | 35.0 | 28.9 |
+| bound6 | precision <= 5 | 10-20 | 45 | 16 | 12.6 | 44% | 56% | 65.7 | 28.5 | 36.9 |
+| bound6 | precision <= 5 | 20-40 | 179 | 50 | 5.6 | 66% | 82% | 41.0 | 16.6 | 28.7 |
+| bound6 | precision <= 5 | >=40 | 703 | 563 | 3.0 | 90% | 97% | 26.2 | 16.7 | 22.4 |
+| bound6 | precision <= 5 | all | 961 | 632 | 3.1 | 87% | 94% | 26.8 | 16.9 | 22.9 |
+| bound6 | precision <= 10 | all | 961 | 728 | 3.5 | 83% | 93% | 27.7 | 18.2 | 23.8 |
+| bound6 | precision <= 15 | all | 961 | 766 | 3.6 | 82% | 92% | 28.0 | 18.3 | 24.0 |
+| bound6 | precision <= 20 | all | 961 | 783 | 3.7 | 80% | 91% | 28.0 | 18.3 | 24.0 |
+| bound6 | baseline >= 5 | all | 961 | 818 | 3.9 | 79% | 91% | 28.2 | 18.8 | 24.6 |
+| bound6 | baseline >= 10 | all | 961 | 793 | 3.7 | 81% | 92% | 28.4 | 19.1 | 25.1 |
+| bound6 | baseline >= 20 | all | 961 | 757 | 3.6 | 83% | 94% | 28.9 | 19.6 | 25.3 |
+
+| variant | gate | turned | kept | new med | new <10 | new <20 | start med | 2x2 med | 3x3 med |
+|---|---|---|---|---|---|---|---|---|---|
+| bound2_none | precision <= 5 | 304 | 287 | 1.4 | 90% | 93% | 25.0 | 13.7 | 19.9 |
+| bound2_none | precision <= 10 | 304 | 295 | 1.4 | 89% | 92% | 25.0 | 13.7 | 19.9 |
+| bound2_windowed_zncc | precision <= 5 | 105 | 101 | 1.3 | 94% | 100% | 21.8 | 10.6 | 16.6 |
+| bound2_windowed_zncc | precision <= 10 | 105 | 105 | 1.4 | 91% | 98% | 22.6 | 10.7 | 17.1 |
+| bound4_none | precision <= 5 | 330 | 316 | 1.2 | 95% | 97% | 26.7 | 15.0 | 21.7 |
+| bound4_none | precision <= 10 | 330 | 323 | 1.2 | 94% | 97% | 26.2 | 14.7 | 21.5 |
+| bound4_windowed_zncc | precision <= 5 | 112 | 111 | 1.0 | 98% | 98% | 24.4 | 11.5 | 18.1 |
+| bound4_windowed_zncc | precision <= 10 | 112 | 112 | 1.0 | 98% | 98% | 23.8 | 11.4 | 17.9 |
+| bound6_none | precision <= 5 | 350 | 333 | 1.3 | 93% | 96% | 27.7 | 14.9 | 22.7 |
+| bound6_none | precision <= 10 | 350 | 345 | 1.3 | 92% | 95% | 27.7 | 14.9 | 22.7 |
+| bound6_windowed_zncc | precision <= 5 | 118 | 117 | 1.2 | 96% | 97% | 24.5 | 12.0 | 18.8 |
+| bound6_windowed_zncc | precision <= 10 | 118 | 118 | 1.2 | 96% | 97% | 24.4 | 12.0 | 18.5 |
+
+**What the numbers show.**
+
+- **One 3×3 press from the mean-view start does not reproduce the stored normals.** On all three captures today's step at 3×3 ends further from the ground truth than at 2×2 (median 37.5° against 31.5°, 31.3° against 29.3°, 26.8° against 21.2°), and closer than 2×2 on only 17% to 37% of points; the two land a median 5.7° to 12.6° apart. That most stored normals were set with the 3×3 step does not make one press from this start agree with them. They were presumably set from other starts or positions, or over several presses; this is inferred, not checked.
+- **On `dino_dog_toy` the new step agrees with the candidate's normals far more closely than on the other two captures.** Its turned points at 40° and over end at a median 1.0° to 1.3° in every variant (90% to 98% under 10°), against 11.4° to 15.4° for today's 2×2 and 17.5° to 22.4° for 3×3 on the same points; on `kerry_park` the same figure was 3.2° to 5.3°. The first plane at bound 4 lands at a median 3.4° at 40° and over and 7.8° at 20–40°, against a start of 27.7° and 40.9°, and is closer than the start on 98% and 91% of those points.
+- **The step turns more points here.** `windowed_zncc` turns 105 to 118 points (11% to 12%) and `none` 304 to 350 (32% to 36%), against 3% to 8% and 7% to 29% on the other two.
+- **Narrow baselines go the other way from the new step.** Under 20° on `dino_dog_toy` today's 2×2 is close to the candidate's normals (median 3.0° at 5–10°, 7.5° at 10–20°) while the first plane is not (17.6° and 31.7° at bound 4, against a start of 16.9° and 22.8°).
+- **Later renders help on `dino_dog_toy`.** The median change of a point's proposal from its own first plane is −0.9° to −4.0° over renders 2 to 6; the first plane is the best of a point's proposals on 24% to 25% of points with two or more, the last is better than the first on 67% to 70%, and 5° or more worse on 6%. The cell movements settle as on the other two: a median 8 to 9.5 px at the first render, about 1 px at the second, 0.3 px at the third and 0.1 to 0.25 px after, with at most 28% at or under 0.05 px at any render.
+- **The ZNCC rule rejects useful turns here.** At 40° and over 52% to 56% of the turns it rejected would have lowered the error and 4% would have raised it by 5° or more; at 10–20° about half would have raised it by 5° or more.
+- **The predicted precision ranks the first planes cleanly on this capture.** At bound 4 the median error is 2.6° under 2° predicted, 4.2° at 2–5°, 7.6° at 5–10° and 12.2° at 10–20°. A precision bar of 5° keeps 607 of 961 first planes at a median 3.2° (87% under 10°); a baseline bar of 20° keeps 746 at 3.6° (83%), and 10° keeps 782 at 3.8°.
+
+**What the numbers cannot show.**
+
+- **How the candidate's normals were set.** It is a candidate ground truth, not approved, and its provenance is not recorded here. Agreement within about a degree with the new step's turned points, and within a few degrees with today's 2×2 at narrow baselines, may mean that parts of it were set by those methods or by a related one; if so, those parts measure agreement with a method, not with the surface.
+- The other caveats of the sweep above hold: the ground-truth normals are estimates, most of the two approved ones were set with today's 3×3 step per the maintainer, and the gates and the first plane are read from the traces after the fact.
 
 ## Open questions
 
