@@ -408,7 +408,10 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           is solved in inverse depth and stored as a position or a direction by \
                           the point-or-bearing test at the end of the solve, and the report says \
                           at what noise level and how many crossed each way; \
-                          free_points_cross: false keeps each point as it is.",
+                          free_points_cross: false keeps each point as it is. schedule sets the \
+                          trim schedule, [[50, 5], [12, 2], [4, 1]] by default; \
+                          [[null, 1000]] keeps every observation that projects and solves \
+                          close to least squares.",
             kind: Write,
             schema: object(
                 &[
@@ -443,6 +446,31 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                              a direction whose rays give one a position. Defaults to true; false \
                              keeps each point in the representation it has.",
                         ),
+                    ),
+                    (
+                        "schedule",
+                        json!({
+                            "type": "array",
+                            "minItems": 1,
+                            "description":
+                                "The trim schedule, one [trim_px, loss_scale] pair per round, \
+                                 the Bundle Adjust dialog's Schedule box. Before each round every \
+                                 observation whose reprojection error is at or over trim_px is \
+                                 left out of it, and the round solves the rest under a soft-L1 \
+                                 loss of scale loss_scale, in pixels. trim_px is a positive \
+                                 number, or null for no trim, which keeps every observation that \
+                                 projects (JSON has no infinity); loss_scale is a positive \
+                                 number. Omitted, the default [[50, 5], [12, 2], [4, 1]], \
+                                 whatever the dialog last ran on the node. Refused, naming the \
+                                 round, when a value is out of range. [[null, 1000]] keeps \
+                                 every observation and solves close to least squares.",
+                            "items": {
+                                "type": "array",
+                                "minItems": 2,
+                                "maxItems": 2,
+                                "items": { "type": ["number", "null"] },
+                            },
+                        }),
                     ),
                     (
                         "cameras",

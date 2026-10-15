@@ -145,6 +145,7 @@ fn enter_runs_it_with_every_camera_held_and_the_points_crossing_which_is_the_def
             recon: id,
             releases: vec![HELD; 4],
             free_points: FreePointPolicy::CROSS,
+            schedule: DEFAULT_SCHEDULE.to_vec(),
         })
     );
     assert!(prompt.pending.is_none(), "the answered dialog stayed up");
@@ -240,4 +241,118 @@ fn drawing_a_row_clears_its_distortion_when_its_focal_is_clear() {
         !pending.rows[0].distortion,
         "the drawn row kept its distortion"
     );
+}
+
+fn round(trim_px: f64, loss_scale: f64) -> BaSchedule {
+    BaSchedule {
+        trim_px,
+        loss_scale,
+    }
+}
+
+#[test]
+fn the_default_schedule_reads_as_the_box_writes_it() {
+    assert_eq!(schedule_text(&DEFAULT_SCHEDULE), "(50, 5) (12, 2) (4, 1)");
+    assert_eq!(
+        parse_schedule("(50, 5) (12, 2) (4, 1)"),
+        Ok(DEFAULT_SCHEDULE.to_vec())
+    );
+    // Every preset survives the round trip through the box.
+    for (_, preset) in SCHEDULE_PRESETS {
+        assert_eq!(
+            parse_schedule(&schedule_text(preset)).as_deref(),
+            Ok(preset)
+        );
+    }
+}
+
+#[test]
+fn a_schedule_takes_commas_spaces_and_an_unbounded_trim() {
+    assert_eq!(
+        parse_schedule("  (inf,1000), (8 , 2.5)(4,1) "),
+        Ok(vec![
+            round(f64::INFINITY, 1000.0),
+            round(8.0, 2.5),
+            round(4.0, 1.0)
+        ])
+    );
+    assert_eq!(
+        schedule_text(&[round(f64::INFINITY, 1000.0)]),
+        "(inf, 1000)"
+    );
+}
+
+#[test]
+fn a_schedule_the_box_does_not_state_says_why() {
+    for (text, expected) in [
+        ("", "no rounds"),
+        ("   ", "no rounds"),
+        ("50, 5", "Round 1 does not start with '('"),
+        ("(50, 5) (12, 2", "Round 2 has no closing ')'"),
+        ("(50)", "Round 1, (50), is not two numbers"),
+        ("(50, 5, 1)", "is not two numbers"),
+        ("(fifty, 5)", "is not two numbers"),
+        ("(0, 5)", "Round 1 of the schedule has trim 0"),
+        ("(4, 1) (-inf, 1)", "Round 2 of the schedule has trim -inf"),
+        ("(NaN, 1)", "has trim NaN"),
+        ("(4, 0)", "has loss scale 0"),
+        ("(4, inf)", "has loss scale inf"),
+        ("(4, nan)", "has loss scale NaN"),
+    ] {
+        let why = parse_schedule(text).expect_err(text);
+        assert!(why.contains(expected), "{text:?}: {why}");
+        assert!(why.starts_with(char::is_uppercase), "{why}");
+        assert!(!why.contains("  "), "{why}");
+    }
+}
+
+#[test]
+fn enter_runs_the_schedule_the_box_states() {
+    let mut prompt = BundleAdjustPrompt::default();
+    prompt.ask(
+        ReconId::next(),
+        "bull".to_string(),
+        BundleAdjustGates::default(),
+    );
+    assert_eq!(
+        prompt.schedule_box(),
+        Some("(50, 5) (12, 2) (4, 1)"),
+        "the box opens on the default"
+    );
+    prompt.pending.as_mut().unwrap().schedule_text = "(inf, 1000)".to_string();
+
+    let answer = frame(&mut prompt, press(egui::Key::Enter)).expect("one answer");
+    assert_eq!(answer.schedule, vec![round(f64::INFINITY, 1000.0)]);
+}
+
+#[test]
+fn enter_does_not_run_a_schedule_the_box_does_not_state() {
+    let mut prompt = BundleAdjustPrompt::default();
+    prompt.ask(
+        ReconId::next(),
+        "bull".to_string(),
+        BundleAdjustGates::default(),
+    );
+    prompt.pending.as_mut().unwrap().schedule_text = "(4, 0)".to_string();
+
+    assert_eq!(frame(&mut prompt, press(egui::Key::Enter)), None);
+    assert!(
+        prompt.pending.is_some(),
+        "the dialog closed on a bad schedule"
+    );
+}
+
+#[test]
+fn the_dialog_opens_on_a_node_with_the_schedule_last_run_there() {
+    let mut prompt = BundleAdjustPrompt::default();
+    let adjusted = ReconId::next();
+    let other = ReconId::next();
+    prompt.remember_schedule(adjusted, &[round(f64::INFINITY, 1000.0)]);
+
+    prompt.ask(adjusted, "bull".to_string(), BundleAdjustGates::default());
+    assert_eq!(prompt.schedule_box(), Some("(inf, 1000)"));
+    assert_eq!(frame(&mut prompt, press(egui::Key::Escape)), None);
+
+    prompt.ask(other, "other".to_string(), BundleAdjustGates::default());
+    assert_eq!(prompt.schedule_box(), Some("(50, 5) (12, 2) (4, 1)"));
 }

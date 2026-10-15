@@ -1153,6 +1153,7 @@ fn the_log_entry_carries_the_counts_and_the_residuals() {
     );
     assert!(last.contains("median residual "), "{last}");
     assert!(!last.contains("focal"), "the focal was held: {last}");
+    assert!(!last.contains("schedule"), "the default schedule: {last}");
     // The default crosses, so the entry says what the storage decision did.
     assert!(last.contains(", free points decided at "), "{last}");
     assert!(
@@ -1163,6 +1164,42 @@ fn the_log_entry_carries_the_counts_and_the_residuals() {
     assert!(
         last.ends_with(&format!("({} → {})", serials[0].serial, serials[1].serial)),
         "{last}"
+    );
+}
+
+#[test]
+fn a_schedule_other_than_the_default_is_named_and_the_dialog_opens_with_it() {
+    let (mut state, id) = adjustable_state();
+    state.open_bundle_adjust(id);
+    assert_eq!(
+        state.bundle_adjust_prompt.schedule_box(),
+        Some("(50, 5) (12, 2) (4, 1)"),
+        "a node never adjusted opens with the default"
+    );
+    // Taken down, as Escape would, so the next open asks afresh. Nothing has
+    // run on the node yet, so a fresh dialog forgets nothing it remembered.
+    state.bundle_adjust_prompt = Default::default();
+
+    let options = sfmtool_core::BundleAdjustOptions {
+        schedule: vec![sfmtool_core::geometry::BaSchedule {
+            trim_px: f64::INFINITY,
+            loss_scale: 1000.0,
+        }],
+        ..sfmtool_core::BundleAdjustOptions::default()
+    };
+    state.start_bundle_adjust(id, &options).expect("well posed");
+    state.finish_background_task();
+
+    let last = texts(&state).last().expect("one entry").clone();
+    assert!(
+        last.contains(" px, schedule (inf, 1000)"),
+        "the entry does not name the schedule: {last}"
+    );
+
+    state.open_bundle_adjust(id);
+    assert_eq!(
+        state.bundle_adjust_prompt.schedule_box(),
+        Some("(inf, 1000)")
     );
 }
 

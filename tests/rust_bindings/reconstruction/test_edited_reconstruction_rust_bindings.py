@@ -624,6 +624,16 @@ class TestSwitchCameraModel:
         with pytest.raises(ValueError, match="camera 0 .* together with its focal"):
             switched.bundle_adjust(releases=[{"distortion": True}])
 
+    def test_a_schedule_out_of_range_is_refused(self, embedded):
+        with pytest.raises(ValueError, match="no rounds"):
+            embedded.bundle_adjust(schedule=[])
+        with pytest.raises(ValueError, match="round 2 of the schedule has trim 0"):
+            embedded.bundle_adjust(schedule=[(50.0, 5.0), (0.0, 1.0)])
+        with pytest.raises(ValueError, match="round 1 .* loss scale inf"):
+            embedded.bundle_adjust(schedule=[(4.0, float("inf"))])
+        with pytest.raises(ValueError, match="round 1 .* trim NaN"):
+            embedded.bundle_adjust(schedule=[(float("nan"), 1.0)])
+
     def test_the_release_capabilities_are_checked_per_camera(self, embedded):
         switched, _ = embedded.switch_camera_model("SFMTOOL_FISHEYE", coeff_count=6)
         spline = switched.materialize()[0].cameras[0]

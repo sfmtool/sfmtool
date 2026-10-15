@@ -113,10 +113,16 @@ pub enum BundleAdjustError {
     NoPosedImages,
     NoObservations,
     EmptySchedule,
+    ScheduleTrim { round: usize, trim_px: f64 },          // round counted from 1
+    ScheduleLossScale { round: usize, loss_scale: f64 },
     Constraints(PointConstraintsError),
     Cancelled,
     Degenerate { observations: usize, min_obs: usize },
 }
+
+/// The schedule refusals alone: `EmptySchedule`, `ScheduleTrim`,
+/// `ScheduleLossScale`, or `Ok`.
+pub fn check_schedule(schedule: &[BaSchedule]) -> Result<(), BundleAdjustError>;
 
 /// Whether the kernel's analytic focal column is exact for this camera.
 pub fn focal_is_releasable(camera: &CameraIntrinsics) -> bool;
@@ -290,7 +296,15 @@ for camera in &report.cameras {
 In order, cheapest first, so a caller greying a menu entry gets the same answers
 without solving anything:
 
-- An empty schedule (`EmptySchedule`).
+- A schedule the kernel cannot run, `check_schedule`: no rounds
+  (`EmptySchedule`), a round whose trim is not a positive number of pixels or
+  `f64::INFINITY` (`ScheduleTrim`), or one whose loss scale is not a positive
+  finite number of pixels (`ScheduleLossScale`), each naming the round counted
+  from 1. A NaN fails both: it compares false against everything, so a NaN trim
+  would trim every observation. An infinite trim is allowed and leaves out only
+  the observations that do not project. `check_schedule` is public so a caller
+  that takes a schedule from a person -- the viewer's dialog and its wire tool
+  -- refuses the same schedules in the same words before starting anything.
 - Observations with no pixel behind them (`NoKeypoints`): a `sift_files` value
   without the format's optional inline keypoint column states no coordinate for
   a sighting, and the residual has nothing to be measured against. The other
@@ -485,7 +499,7 @@ would leave the frame carrying the gauge drift of the solve.
 | Parameter | Default | Meaning |
 |-----------|---------|---------|
 | `releases` | empty: every camera held | One `CameraRelease` per camera-table entry: `focal` releases that camera's focal, `distortion` its `k1` or spline and needs `focal`. |
-| `schedule` | `DEFAULT_SCHEDULE`, `[(50, 5), (12, 2), (4, 1)]` | The staged trim schedule, `(trim_px, loss_scale)` per round. |
+| `schedule` | `DEFAULT_SCHEDULE`, `[(50, 5), (12, 2), (4, 1)]` | The staged trim schedule, `(trim_px, loss_scale)` per round; `trim_px` may be `f64::INFINITY`. |
 | `max_iters` | `60` | LM iteration budget per round. |
 | `min_track` | `2` | Trim survivors a point needs to stay in a round's solve. |
 | `min_obs` | `12` | Trim survivors below which a round exits degenerate. |

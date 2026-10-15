@@ -60,7 +60,7 @@ The kernel lives in
 
 ```rust
 pub struct BaSchedule {
-    pub trim_px: f64,     // pre-round trim threshold on the residual norm
+    pub trim_px: f64,     // pre-round trim threshold on the residual norm; may be ∞
     pub loss_scale: f64,  // soft-L1 scale for the round's solve, px
 }
 
@@ -186,6 +186,11 @@ Per schedule round:
 2. **Trim.** Keep observations with residual norm `< trim_px`, an in-front
    measure over the round's in-front floor (below), and a finite point; then
    drop observations of points with fewer than `min_track` survivors. The
+   trim never exceeds the invalid residual (`1e6` px), so an observation whose
+   projection fails is left out whatever `trim_px` is, and `trim_px =
+   f64::INFINITY` keeps exactly the observations that project; the
+   between-round re-estimation's capped cost and its count of observations
+   under the trim read the same bound. The
    in-front measure is model-aware: the canonical depth `−z_cam` for the
    perspective family, whose projection is defined only for `z_cam < 0`, and the
    range `‖p_cam‖` for a ray-path model (fisheye, equirectangular), which images

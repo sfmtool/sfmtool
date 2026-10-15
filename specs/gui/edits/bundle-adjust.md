@@ -67,7 +67,8 @@ behind it, not one a hand should be able to fire by accident.
 
 `Bundle Adjust...` opens a small window rather than running immediately, because
 there is one decision to take, camera by camera: how much of each lens may move,
-and in what form. One more is about the points.
+and in what form. One more is about the points, and one about which
+observations the solve keeps.
 
 - **One row per camera** the posed images use, in table order: `Camera 0
   SFMTOOL_FISHEYE  24 images`, then two checkboxes, both clear by default. A
@@ -105,9 +106,39 @@ and in what form. One more is about the points.
   § "Free points: inverse depth and the storage decision"). Cleared, every point
   keeps the representation it has, `FreePointPolicy::NO_CROSS`. Its hover text says
   both.
+- **Schedule**, a text box holding the trim schedule, one `(trim px, loss
+  scale)` pair per round, with spaces or commas between the rounds. Before each
+  round the adjustment leaves out every observation whose reprojection error is
+  at or over that round's trim, and solves the rest under a soft-L1 loss of that
+  round's scale
+  ([`../../core/geometry/bundle-adjustment.md`](../../core/geometry/bundle-adjustment.md)).
+  A trim of `inf` leaves out only the observations that do not project. Beside
+  the box, a drop-down of presets fills it:
+  - **Default (trims outliers)**, `(50, 5) (12, 2) (4, 1)`, the core function's
+    `DEFAULT_SCHEDULE`, written out from that constant.
+  - **Keep every observation**, `(inf, 1000)`: one round that leaves no
+    observation out, under a loss scale wide enough that the solve is close to
+    least squares. On a reconstruction whose bad observations have already been
+    removed, the default's final 4 px trim drops the observations of distant
+    points, which are the ones that hold the focal length against the cameras'
+    distance from the scene; with them dropped, alternating Refit All Points
+    and Bundle Adjust moves the points back and forth on every step. Under this
+    preset the alternation settles: on the `dino_dog_toy` ground-truth
+    candidate the points moved about 40 times less per step.
+
+  The drop-down shows the preset the box states, or `Custom`. The box opens
+  with the schedule last run on this node in this session, from the dialog or
+  the wire, so a second adjustment of the node repeats the first unless it is
+  changed; a node not adjusted this session opens with the default. A schedule
+  the box does not state greys **Run**, with the reason as its hover text: text
+  that is not a sequence of `(number, number)` pairs, and the core function's
+  own refusals, `check_schedule` in
+  [`../../core/reconstruction/bundle-adjust.md`](../../core/reconstruction/bundle-adjust.md)
+  -- no rounds, a trim that is not a positive number or `inf`, and a loss scale
+  that is not a positive finite number.
 - **Run** and **Cancel**. `Enter` runs, `Escape` cancels, and clicking the
   window's close button cancels, because this is a step in a gesture rather than
-  a window to leave lying open.
+  a window to leave lying open. `Enter` does nothing while **Run** is greyed.
 
 Asking twice while it is up does not stack a second dialog; the question already
 on screen is the one that gets answered.
@@ -123,11 +154,12 @@ options to the next value and a report. The viewer adds the invocation, the
 version and the history entry, in
 [state/edits.rs](../../../crates/sfm-explorer/src/state/edits.rs).
 
-The dialog sets two options. The camera rows are `releases`, which holds one
+The dialog sets three options. The camera rows are `releases`, which holds one
 `CameraRelease` per camera of the node's table: each row's two checkboxes for
 its camera, less anything its model cannot take, and held for a camera with no
-row. The crossing checkbox is `free_points`. The schedule, the iteration budget
-and the two floors are the core function's defaults, which are the kernel's.
+row. The crossing checkbox is `free_points`, and the Schedule box is
+`schedule`. The iteration budget and the two floors are the core function's
+defaults, which are the kernel's.
 
 No images are decoded. The adjustment reprojects points through the poses and
 the lens the value already carries, so this edit reads nothing off disk.
@@ -175,7 +207,9 @@ One entry, of kind `Edit`, the label plus what the solve did:
 `Bundle adjusted bull: 17 images, 4210 points, 19882 observations, median
 residual 1.402 → 0.631 px (v3 → v4)`
 
-with each camera's focal change appended when the focal was released, what the
+with the schedule appended when it is not the default, `, schedule (inf,
+1000)`, written as the dialog's box writes it, then each camera's focal change
+appended when the focal was released, what the
 storage decision did, `, free points decided at 0.412 px: 3 to finite, 25 to
 directions` (` before the final round converged` after the level when the final
 round stopped on its iteration budget or settled with a distortion held at its
@@ -228,7 +262,9 @@ Explorer (`sfm-explorer` lib tests, headless):
   focal, and the distortion gate closed on each camera with no spline and open,
   with the label naming each camera's release, once a camera is a spline model
   or a `SIMPLE_RADIAL_FISHEYE`; the entry's free-point clause by default, and
-  none with the crossing off.
+  none with the crossing off; no schedule clause for the default, and for
+  `(inf, 1000)` the clause naming it and the dialog reopened on the node
+  holding it.
 - `bundle_adjust_prompt/tests.rs`: the dialog's default (every camera held
   and the points crossing), the crossing checkbox cleared answering
   `FreePointPolicy::NO_CROSS`,
@@ -237,7 +273,15 @@ Explorer (`sfm-explorer` lib tests, headless):
   a row's distortion released only with its own focal and cleared when a drawn
   row's focal is clear, the refusal text naming the camera, the keys that run
   and cancel it, an ordinary frame answering nothing, and a second ask not
-  stacking a second dialog.
+  stacking a second dialog; the schedule box's text read and written for the
+  default and each preset, spaces, commas and `inf` accepted, each malformed
+  or out-of-range schedule refused with its reason, `Enter` answering the
+  schedule the box states and doing nothing while it states none, and the box
+  opening with the schedule last run on that node and the default on another.
+- `mcp/tests/edit.rs`: the wire's `schedule` parsed with `null` as the
+  unbounded trim, each malformed or out-of-range schedule refused at the
+  parse, and a run under `[[null, 1000]]` naming it in the report and
+  opening the dialog with it.
 - `scene_graph/tests.rs`: the context-menu entry live on an adjustable node,
   directly above `Retriangulate All Points`, reporting the node it was opened
   on; and drawn but dead on a node with no inline keypoints and on a busy one.
@@ -260,11 +304,11 @@ reconstruction. What it does is covered headlessly.
   switched to a spline model first.
 - Adjusting a selection -- one image's pose, one region's points. The edit is the
   whole node.
-- Choosing the schedule, the iteration budget or the trim floors from the dialog.
+- Choosing the iteration budget or the trim floors (`min_track`, `min_obs`)
+  from the dialog. They are the core function's defaults, and a value that needs
+  different ones needs a different tool.
 - Reading the bench: the solve takes the reconstruction's tracks alone. Feeding
   it hand-verified bench tracks, exempt from trimming, is proposed in
   [`bench-inconsistent-fit-amendment.md`](../../drafts/bench-inconsistent-fit-amendment.md).
-  They are the core function's defaults, and a value that needs different ones
-  needs a different tool.
 - Reporting progress, or a per-round trace. One entry, after it has run; live
   progress arrives with the background panel above.

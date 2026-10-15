@@ -32,6 +32,7 @@ pub(super) fn show(root_ui: &mut egui::Ui, parts: &mut UiParts<'_>, requests: &m
         let options = sfmtool_core::BundleAdjustOptions {
             releases: answer.releases,
             free_points: answer.free_points,
+            schedule: answer.schedule,
             ..sfmtool_core::BundleAdjustOptions::default()
         };
         // The refusal is already an Action Log row: the start writes it

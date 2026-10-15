@@ -750,6 +750,91 @@ fn an_unposed_table_and_an_empty_schedule_are_refused() {
 }
 
 #[test]
+fn a_round_with_a_trim_or_a_loss_scale_out_of_range_is_refused() {
+    let round = |trim_px: f64, loss_scale: f64| BaSchedule {
+        trim_px,
+        loss_scale,
+    };
+    assert_eq!(check_schedule(&DEFAULT_SCHEDULE), Ok(()));
+    assert_eq!(check_schedule(&[round(f64::INFINITY, 1000.0)]), Ok(()));
+    for trim_px in [0.0, -4.0, f64::NEG_INFINITY] {
+        assert_eq!(
+            check_schedule(&[round(50.0, 5.0), round(trim_px, 1.0)]),
+            Err(BundleAdjustError::ScheduleTrim { round: 2, trim_px })
+        );
+    }
+    assert!(matches!(
+        check_schedule(&[round(f64::NAN, 1.0)]),
+        Err(BundleAdjustError::ScheduleTrim { round: 1, .. })
+    ));
+    for loss_scale in [0.0, -1.0, f64::INFINITY] {
+        assert_eq!(
+            check_schedule(&[round(4.0, loss_scale)]),
+            Err(BundleAdjustError::ScheduleLossScale {
+                round: 1,
+                loss_scale
+            })
+        );
+    }
+    assert!(matches!(
+        check_schedule(&[round(4.0, f64::NAN)]),
+        Err(BundleAdjustError::ScheduleLossScale { round: 1, .. })
+    ));
+
+    // The adjustment asks the same question before anything else.
+    let options = BundleAdjustOptions {
+        schedule: vec![round(4.0, 0.0)],
+        ..BundleAdjustOptions::default()
+    };
+    assert_eq!(
+        bundle_adjust(&perturbed(), &options, &Progress::none()).err(),
+        Some(BundleAdjustError::ScheduleLossScale {
+            round: 1,
+            loss_scale: 0.0
+        })
+    );
+}
+
+#[test]
+fn an_unbounded_trim_keeps_an_observation_the_default_trims() {
+    // One sighting of point 7 pushed 30 px off: the default schedule's final
+    // 4 px trim drops it and the point settles on the rest of its track, while
+    // `(inf, 1000)` keeps it, a near least-squares solve that the sighting
+    // pulls the point towards.
+    let truth = truth();
+    let mut source = perturbed();
+    let row = source
+        .point_set
+        .tracks
+        .iter()
+        .position(|o| o.point_index == 7)
+        .expect("point 7 has a track");
+    let ObservationSource::EmbeddedPatches { keypoints_xy, .. } =
+        &mut source.point_set.observations
+    else {
+        panic!("the fixture is embedded_patches");
+    };
+    keypoints_xy[[row, 0]] += 30.0;
+
+    let error = |options: &BundleAdjustOptions| {
+        let (out, _) = bundle_adjust(&source, options, &Progress::none()).expect("well posed");
+        (out.point_set.points[7].position - truth.point_set.points[7].position).norm()
+    };
+    let trimmed = error(&BundleAdjustOptions::default());
+    let kept = error(&BundleAdjustOptions {
+        schedule: vec![BaSchedule {
+            trim_px: f64::INFINITY,
+            loss_scale: 1000.0,
+        }],
+        ..BundleAdjustOptions::default()
+    });
+    assert!(
+        kept > 3.0 * trimmed,
+        "point 7 is {kept} from the truth with the sighting kept and {trimmed} with it trimmed"
+    );
+}
+
+#[test]
 fn a_solve_that_exits_degenerate_is_refused_rather_than_emptying_the_value() {
     let mut source = perturbed();
     // Nothing agrees with anything: every observation is trimmed, the round

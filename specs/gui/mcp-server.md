@@ -3391,6 +3391,8 @@ The two bulk edits.
 //                 "cameras": [{ "camera_intrinsics_index": 1, "release_focal": false,
 //                               "release_distortion": false }] }
 // bundle_adjust { "reconstruction_label": "seoul_bull", "free_points_cross": false }
+// bundle_adjust { "reconstruction_label": "dino_dog_toy", "release_focal": true,
+//                 "schedule": [[null, 1000]] }
 ```
 
 `resect_camera_image` is the resection landed as the node's next
@@ -3426,7 +3428,19 @@ not in the solve, so what it is given is ignored. `free_points_cross` is the
 dialog's crossing checkbox: by default every free point is solved in inverse
 depth and stored as a position or a direction by the storage decision at the end
 of the solve, and `false` keeps each point in the representation it has.
-Everything else is the core function's defaults. A spline camera's coefficient
+`schedule` is the dialog's Schedule box: an array of `[trim_px, loss_scale]`
+pairs, one per round, `[[50, 5], [12, 2], [4, 1]]` when it is left out. JSON has
+no infinity, so a `null` trim is the unbounded one, which leaves out only the
+observations that do not project; `[[null, 1000]]` is the dialog's `Keep every
+observation` preset. An omitted `schedule` is the core function's default, not
+the schedule the dialog last ran on the node, so a call says the same thing
+whatever was run before it; a run from the wire is remembered for the dialog
+all the same. A schedule that is not an array of pairs of numbers is refused at
+the parse, and so is one the core function's `check_schedule` refuses -- no
+rounds, a trim that is not positive, a loss scale that is not positive -- in its
+words, naming the round. The report names a schedule other than the default,
+`, schedule (inf, 1000)`. Everything else is the core function's defaults. A
+spline camera's coefficient
 count and domain end are not the adjustment's: they are a refit of that camera,
 `switch_camera_model` (below), made before the adjustment that refines the
 coefficients.
@@ -5903,6 +5917,7 @@ Other candidates, in rough order of value:
 | `bundle_adjust` `release_distortion` | `false`, every camera's distortion is held | The other; `true` needs the same camera's focal. |
 | `bundle_adjust` `cameras` | empty, every camera takes the two defaults | An entry's left-out field takes the call's default, so an entry states only what differs. |
 | `bundle_adjust` `free_points_cross` | `true`, free points cross | The core function's default, `FreePointPolicy::CROSS`; `false` is the dialog's crossing checkbox cleared. |
+| `bundle_adjust` `schedule` | `[[50, 5], [12, 2], [4, 1]]` (`DEFAULT_SCHEDULE`) | The core function's default, whatever the dialog last ran on the node; a `null` trim is unbounded. |
 | `switch_camera_model` `camera_model` | the camera's own model | Which makes the call a refit of a spline camera's spline. |
 | `switch_camera_model` `coeff_count` | the camera's own count for its own spline model, else `8` (`DEFAULT_COEFF_COUNT`) | A refit changes only what it names. |
 | `switch_camera_model` `spline_domain_deg` | the camera's own domain end in a refit, else the far image corner | Kept exactly, not taken through degrees and back. |

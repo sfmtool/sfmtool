@@ -678,6 +678,77 @@ fn bundle_adjust_parses_its_camera_entries() {
     }
 }
 
+/// `schedule` parses to the rounds it lists, a `null` trim to the unbounded
+/// one, and a schedule the core function would refuse is refused at the
+/// parse, in its words.
+#[test]
+fn bundle_adjust_parses_its_schedule() {
+    let schedule = |value: Value| {
+        let map = json!({ "reconstruction_label": "a", "schedule": value })
+            .as_object()
+            .cloned()
+            .expect("an object");
+        tools::parse("bundle_adjust", Some(&map)).map(|command| match command {
+            Command::BundleAdjust { schedule, .. } => schedule,
+            _ => panic!("not a bundle_adjust"),
+        })
+    };
+    let round = |trim_px: f64, loss_scale: f64| sfmtool_core::geometry::BaSchedule {
+        trim_px,
+        loss_scale,
+    };
+    assert_eq!(
+        schedule(json!([[50, 5], [12.5, 2], [null, 1000]])).expect("well formed"),
+        Some(vec![
+            round(50.0, 5.0),
+            round(12.5, 2.0),
+            round(f64::INFINITY, 1000.0)
+        ])
+    );
+    assert_eq!(schedule(Value::Null).expect("well formed"), None);
+
+    for (value, expected) in [
+        (json!([]), "the schedule has no rounds to run"),
+        (
+            json!([[4, 1], [0, 1]]),
+            "round 2 of the schedule has trim 0",
+        ),
+        (
+            json!([[4, -1]]),
+            "round 1 of the schedule has loss scale -1",
+        ),
+        (json!([[4, null]]), "wants schedule to be an array of"),
+        (json!([[4]]), "wants schedule to be an array of"),
+        (json!([["inf", 1]]), "wants schedule to be an array of"),
+        (json!("(inf, 1000)"), "wants schedule to be an array of"),
+    ] {
+        let error = schedule(value.clone()).expect_err("refused at the parse");
+        assert!(error.0.contains(expected), "{value}: {error}");
+    }
+}
+
+/// A schedule given on the wire is the one the solve runs, the entry names it,
+/// and the dialog opens on the node with it.
+#[test]
+fn bundle_adjust_runs_the_schedule_it_is_given() {
+    let (mut state, mut viewer) = editable();
+    perturb(&mut state, 0.02);
+    let reply = adjusted(
+        &mut state,
+        &mut viewer,
+        json!({ "reconstruction_label": "run_a", "schedule": [[null, 1000]] }),
+    );
+    let report = reply["report"].as_str().expect("a report");
+    assert!(report.contains(", schedule (inf, 1000)"), "{report}");
+
+    let id = state.scene[0].id;
+    state.open_bundle_adjust(id);
+    assert_eq!(
+        state.bundle_adjust_prompt.schedule_box(),
+        Some("(inf, 1000)")
+    );
+}
+
 /// `switch_camera_model`'s arguments parse into the request the edit takes,
 /// with every default left open.
 #[test]
@@ -1993,6 +2064,7 @@ fn the_editing_defaults_are_what_the_schemas_say() {
             release_distortion: false,
             cameras: Vec::new(),
             free_points_cross: true,
+            schedule: None,
         }
     );
     assert_eq!(
@@ -2010,6 +2082,7 @@ fn the_editing_defaults_are_what_the_schemas_say() {
             release_distortion: true,
             cameras: Vec::new(),
             free_points_cross: true,
+            schedule: None,
         }
     );
     assert_eq!(
@@ -2023,6 +2096,7 @@ fn the_editing_defaults_are_what_the_schemas_say() {
             release_distortion: false,
             cameras: Vec::new(),
             free_points_cross: false,
+            schedule: None,
         }
     );
     assert_eq!(

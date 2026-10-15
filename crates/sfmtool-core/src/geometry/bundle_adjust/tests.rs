@@ -2028,6 +2028,68 @@ fn fixed_fisheye_intrinsics_keep_observations_past_ninety_degrees() {
 }
 
 #[test]
+fn an_unbounded_trim_still_trims_an_observation_whose_projection_fails() {
+    // `θ_d = θ·(1 − θ²)` folds at `θ = 1` rad, so a ray 70° off the axis is in
+    // front of this ray-path camera and has no pixel: its residual is the
+    // invalid one, which an infinite trim must not let through.
+    let cam = CameraIntrinsics {
+        model: CameraModel::SimpleRadialFisheye {
+            focal_length: 130.0,
+            principal_point_x: 240.0,
+            principal_point_y: 240.0,
+            radial_distortion_k1: -1.0,
+        },
+        width: 480,
+        height: 480,
+    };
+    let quats = vec![UnitQuaternion::identity(); 2];
+    let trans = vec![Vector3::zeros(), Vector3::new(0.2, 0.0, 0.0)];
+    let theta = 70.0_f64.to_radians();
+    let n_pt = 20;
+    let points: Vec<[f64; 3]> = (0..n_pt)
+        .map(|p| {
+            let phi = std::f64::consts::TAU * p as f64 / n_pt as f64;
+            [
+                5.0 * theta.sin() * phi.cos(),
+                5.0 * theta.sin() * phi.sin(),
+                -5.0 * theta.cos(),
+            ]
+        })
+        .collect();
+    let mut s = Scene {
+        cam,
+        quats,
+        trans,
+        points,
+        uv: vec![[240.0, 240.0]; 2 * n_pt],
+        obs_img: (0..2 * n_pt).map(|k| (k % 2) as u32).collect(),
+        obs_pt: (0..2 * n_pt).map(|k| (k / 2) as u32).collect(),
+    };
+    for k in 0..s.uv.len() {
+        let x = s.points[s.obs_pt[k] as usize];
+        let i = s.obs_img[k] as usize;
+        let c = s.quats[i] * Vector3::new(x[0], x[1], x[2]) + s.trans[i];
+        assert!(s.cam.ray_to_pixel([c.x, c.y, c.z]).is_none());
+    }
+    let unbounded = [BaSchedule {
+        trim_px: f64::INFINITY,
+        loss_scale: 1.0,
+    }];
+    let out = run_masked_with(
+        &mut s,
+        &vec![false; n_pt],
+        FreePointPolicy::CROSS,
+        false,
+        &unbounded,
+        12,
+    );
+    // Every observation trimmed, so the round exits degenerate under
+    // `min_obs`, which is the one way a crossing solve decides nothing.
+    assert!(out.free_point_decision.is_none());
+    assert!(out.residual_norms.iter().all(|r| *r == f64::INFINITY));
+}
+
+#[test]
 fn fixed_fisheye_intrinsics_converge_from_a_perturbed_state() {
     let (mut s, _) = make_fisheye_scene(6, 90);
     let truth_pts = s.points.clone();

@@ -7,10 +7,11 @@
 //! See `specs/gui/edits/bundle-adjust.md`. The adjustment takes its decisions
 //! about the lens from the user, camera by camera -- whether each camera's
 //! focal length is released, and whether with it the lens distortion the
-//! adjustment can free -- and one about the points: whether a point may cross
-//! between a position and a direction. That is the whole dialog: one row of
-//! two checkboxes per camera, the crossing checkbox, `Run` and `Cancel`.
-//! Everything else about the solve is the core function's defaults. A spline
+//! adjustment can free -- one about the points: whether a point may cross
+//! between a position and a direction -- and the trim schedule. That is the
+//! whole dialog: one row of two checkboxes per camera, the crossing checkbox,
+//! the schedule's text box with its presets, `Run` and `Cancel`. Everything
+//! else about the solve is the core function's defaults. A spline
 //! camera's coefficient count and domain are not the adjustment's to change:
 //! they are a refit of that camera, made from the Camera Intrinsics panel's
 //! `Switch Model…` proposal (`crate::camera_model_proposal`).
@@ -18,9 +19,11 @@
 //! The gate is here rather than in the menu because the edit reads it too, so
 //! the entry and the edit cannot disagree about when the adjustment can run.
 
-use sfmtool_core::geometry::FreePointPolicy;
+use std::collections::HashMap;
+
+use sfmtool_core::geometry::{BaSchedule, FreePointPolicy, DEFAULT_SCHEDULE};
 use sfmtool_core::reconstruction::bundle_adjust::{
-    distortion_is_releasable, focal_is_releasable, CameraRelease,
+    check_schedule, distortion_is_releasable, focal_is_releasable, CameraRelease,
 };
 use sfmtool_core::EditedReconstruction;
 
@@ -46,6 +49,83 @@ pub(crate) fn refusal(edited: &EditedReconstruction) -> Option<String> {
     }
     (edited.posed_lens_count() == 0)
         .then(|| "No image of this reconstruction carries a pose.".to_string())
+}
+
+/// The schedules the preset drop-down fills the text box with, by the name it
+/// lists them under: the core function's default, which trims outliers, and
+/// one round whose trim never removes an observation, under a loss scale wide
+/// enough that the solve is close to least squares.
+pub(crate) const SCHEDULE_PRESETS: [(&str, &[BaSchedule]); 2] = [
+    ("Default (trims outliers)", &DEFAULT_SCHEDULE),
+    (
+        "Keep every observation",
+        &[BaSchedule {
+            trim_px: f64::INFINITY,
+            loss_scale: 1000.0,
+        }],
+    ),
+];
+
+/// `schedule` as the text box writes it: each round `(trim_px, loss_scale)`,
+/// separated by spaces, with an unbounded trim written `inf`. The default
+/// schedule reads `(50, 5) (12, 2) (4, 1)`.
+pub(crate) fn schedule_text(schedule: &[BaSchedule]) -> String {
+    schedule
+        .iter()
+        .map(|round| format!("({}, {})", round.trim_px, round.loss_scale))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The schedule the text box states, or why it states none, as the sentence
+/// the greyed `Run` button carries.
+///
+/// The text is a sequence of `(trim_px, loss_scale)` rounds, with spaces or
+/// commas between them; `inf` is an unbounded trim. Once the text reads as
+/// numbers, whether they are a schedule is [`check_schedule`]'s question, so
+/// the dialog refuses what the core function refuses, in its words.
+pub(crate) fn parse_schedule(text: &str) -> Result<Vec<BaSchedule>, String> {
+    let mut rounds = Vec::new();
+    let mut rest = text.trim();
+    while !rest.is_empty() {
+        let n = rounds.len() + 1;
+        let Some(open) = rest.strip_prefix('(') else {
+            return Err(format!(
+                "Round {n} does not start with '('. Write each round as (trim px, loss scale)."
+            ));
+        };
+        let Some(close) = open.find(')') else {
+            return Err(format!("Round {n} has no closing ')'."));
+        };
+        let inner = &open[..close];
+        let number = |field: &str| field.trim().parse::<f64>().ok();
+        let round = match inner.split(',').collect::<Vec<_>>()[..] {
+            [trim, loss] => number(trim).zip(number(loss)),
+            _ => None,
+        };
+        let Some((trim_px, loss_scale)) = round else {
+            return Err(format!(
+                "Round {n}, ({inner}), is not two numbers (trim px, loss scale)."
+            ));
+        };
+        rounds.push(BaSchedule {
+            trim_px,
+            loss_scale,
+        });
+        rest = open[close + 1..].trim_start();
+        rest = rest.strip_prefix(',').unwrap_or(rest).trim_start();
+    }
+    check_schedule(&rounds).map_err(|e| {
+        let why = e.to_string();
+        let mut chars = why.chars();
+        let first: String = chars
+            .next()
+            .into_iter()
+            .flat_map(char::to_uppercase)
+            .collect();
+        format!("{first}{}.", chars.as_str())
+    })?;
+    Ok(rounds)
 }
 
 /// One camera the posed images use, as its row in the dialog shows it: which
@@ -148,12 +228,20 @@ pub struct BundleAdjustAnswer {
     /// Whether the free points cross between a position and a direction: the
     /// core function's default unless the user cleared the checkbox.
     pub free_points: FreePointPolicy,
+    /// The trim schedule the text box stated, already checked by
+    /// [`check_schedule`].
+    pub schedule: Vec<BaSchedule>,
 }
 
-/// The dialog, and what it remembers while it is up.
+/// The dialog, what it remembers while it is up, and the schedule last run on
+/// each node.
 #[derive(Default)]
 pub struct BundleAdjustPrompt {
     pending: Option<Pending>,
+    /// The schedule of the last adjustment started on each node this session,
+    /// from the dialog or the wire, which the dialog opens with on that node.
+    /// A node with no entry opens with the core function's default.
+    last_schedule: HashMap<ReconId, Vec<BaSchedule>>,
 }
 
 /// One camera row's two checkboxes, as the user left them.
@@ -174,6 +262,8 @@ struct Pending {
     /// The crossing checkbox, ticked to start with: the core function's
     /// default.
     free_points_cross: bool,
+    /// The schedule's text box, as the user left it.
+    schedule_text: String,
 }
 
 impl Pending {
@@ -208,10 +298,15 @@ impl BundleAdjustPrompt {
     /// Idempotent while the dialog is already up, so a menu item racing itself
     /// cannot stack two of them. Every checkbox starts **clear**: a lens that
     /// moves is a different claim about the capture than a pose that does, and
-    /// the default should be the smaller one.
+    /// the default should be the smaller one. The schedule starts as the one
+    /// last run on `recon` this session, or the core function's default.
     pub(crate) fn ask(&mut self, recon: ReconId, label: String, gates: BundleAdjustGates) {
         if self.pending.is_none() {
             let rows = vec![RowState::default(); gates.cameras.len()];
+            let schedule = self
+                .last_schedule
+                .get(&recon)
+                .map_or(&DEFAULT_SCHEDULE[..], Vec::as_slice);
             self.pending = Some(Pending {
                 recon,
                 label,
@@ -220,8 +315,22 @@ impl BundleAdjustPrompt {
                 free_points_cross: sfmtool_core::BundleAdjustOptions::default()
                     .free_points
                     .cross,
+                schedule_text: schedule_text(schedule),
             });
         }
+    }
+
+    /// Remember `schedule` as the one last run on `recon`, so the dialog opens
+    /// with it there. Called when an adjustment starts, whoever asked for it.
+    pub(crate) fn remember_schedule(&mut self, recon: ReconId, schedule: &[BaSchedule]) {
+        self.last_schedule.insert(recon, schedule.to_vec());
+    }
+
+    /// What the open dialog's Schedule box holds, for a test that opens the
+    /// dialog through the state.
+    #[cfg(test)]
+    pub(crate) fn schedule_box(&self) -> Option<&str> {
+        self.pending.as_ref().map(|p| p.schedule_text.as_str())
     }
 
     /// Draw one frame, returning the answer on the frame `Run` is pressed.
@@ -259,8 +368,14 @@ impl BundleAdjustPrompt {
                      keeps the representation it has.",
                 );
                 ui.add_space(8.0);
+                schedule_row(ui, &mut pending.schedule_text);
+                ui.add_space(8.0);
+                let refusal = parse_schedule(&pending.schedule_text).err();
                 ui.horizontal(|ui| {
-                    if ui.button("Run").clicked() {
+                    let button = ui
+                        .add_enabled(refusal.is_none(), egui::Button::new("Run"))
+                        .on_disabled_hover_text(refusal.unwrap_or_default());
+                    if button.clicked() {
                         run = true;
                     }
                     if ui.button("Cancel").clicked() {
@@ -271,18 +386,52 @@ impl BundleAdjustPrompt {
                 cancel |= ui.input(|i| i.key_pressed(egui::Key::Escape));
             });
 
-        let answer = run.then(|| BundleAdjustAnswer {
+        // Enter runs only what `Run` would: a box that states no schedule
+        // leaves the dialog up.
+        let schedule = parse_schedule(&pending.schedule_text).ok();
+        let answer = schedule.filter(|_| run).map(|schedule| BundleAdjustAnswer {
             recon: pending.recon,
             releases: pending.releases(),
             free_points: FreePointPolicy {
                 cross: pending.free_points_cross,
             },
+            schedule,
         });
         if answer.is_some() || cancel || !still_open {
             self.pending = None;
         }
         answer
     }
+}
+
+/// The schedule row: its label, the text box, and the preset drop-down that
+/// fills the box. The drop-down names the preset the box states, or `Custom`.
+fn schedule_row(ui: &mut egui::Ui, text: &mut String) {
+    ui.horizontal(|ui| {
+        ui.label("Schedule");
+        ui.add(egui::TextEdit::singleline(text).desired_width(180.0))
+            .on_hover_text(
+                "The adjustment's rounds, each (trim px, loss scale). Before a round, every \
+                 observation whose reprojection error is at or over its trim is left out of \
+                 it, and the round solves the rest under a soft-L1 loss of that scale. A \
+                 trim of inf leaves out only observations that do not project; a loss scale \
+                 much larger than the errors makes the solve close to least squares.",
+            );
+        let stated = parse_schedule(text).ok();
+        let selected = SCHEDULE_PRESETS
+            .iter()
+            .find(|(_, preset)| stated.as_deref() == Some(*preset))
+            .map_or("Custom", |(name, _)| *name);
+        egui::ComboBox::from_id_salt("bundle_adjust_schedule_preset")
+            .selected_text(selected)
+            .show_ui(ui, |ui| {
+                for (name, preset) in SCHEDULE_PRESETS {
+                    if ui.selectable_label(selected == name, name).clicked() {
+                        *text = schedule_text(preset);
+                    }
+                }
+            });
+    });
 }
 
 /// The camera rows: per camera the posed images use, its index, model and

@@ -376,6 +376,7 @@ pub(crate) fn parse(
             release_distortion: args.optional_bool("release_distortion")?.unwrap_or(false),
             cameras: args.camera_releases("cameras")?,
             free_points_cross: args.optional_bool("free_points_cross")?.unwrap_or(true),
+            schedule: args.schedule("schedule")?,
         },
         // The proposal form applies the open proposal, whose fit is already
         // stated, so it takes none of the fit's arguments.
@@ -1509,6 +1510,51 @@ impl Args<'_> {
             }
         }
         Ok(Some(shape))
+    }
+
+    /// `bundle_adjust`'s trim schedule; `None` when absent or `null`.
+    ///
+    /// An array of `[trim_px, loss_scale]` pairs, one per round. JSON has no
+    /// infinity, so a `null` trim is the unbounded one, which keeps every
+    /// observation that projects.
+    /// The pairs are then [`check_schedule`]'s to accept, so the wire refuses
+    /// what the dialog and the core function refuse, in the same words.
+    ///
+    /// [`check_schedule`]: sfmtool_core::reconstruction::bundle_adjust::check_schedule
+    fn schedule(
+        &self,
+        key: &str,
+    ) -> Result<Option<Vec<sfmtool_core::geometry::BaSchedule>>, ToolError> {
+        let expected = "an array of [trim_px, loss_scale] pairs, with null for an unbounded trim";
+        let value = match self.map.get(key) {
+            None | Some(Value::Null) => return Ok(None),
+            Some(value) => value,
+        };
+        let rounds = value
+            .as_array()
+            .ok_or_else(|| self.wrong_type(key, expected, value))?;
+        let schedule = rounds
+            .iter()
+            .map(|round| match round.as_array().map(Vec::as_slice) {
+                Some([trim, loss]) => {
+                    let trim_px = match trim {
+                        Value::Null => Some(f64::INFINITY),
+                        trim => trim.as_f64(),
+                    };
+                    trim_px
+                        .zip(loss.as_f64())
+                        .map(|(trim_px, loss_scale)| sfmtool_core::geometry::BaSchedule {
+                            trim_px,
+                            loss_scale,
+                        })
+                        .ok_or_else(|| self.wrong_type(key, expected, value))
+                }
+                _ => Err(self.wrong_type(key, expected, value)),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        sfmtool_core::reconstruction::bundle_adjust::check_schedule(&schedule)
+            .map_err(|e| self.error(format!("refuses {key}: {e}.")))?;
+        Ok(Some(schedule))
     }
 
     /// `bundle_adjust`'s per-camera release overrides; empty when absent.

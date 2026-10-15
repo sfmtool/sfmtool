@@ -165,6 +165,19 @@ fn focal_changes(cameras: &[sfmtool_core::CameraAdjustment]) -> String {
     }
 }
 
+/// The Action Log entry's schedule clause: `, schedule (inf, 1000)` when the
+/// adjustment ran a schedule other than the core function's default, and
+/// nothing when it ran the default.
+fn schedule_clause(schedule: &[sfmtool_core::geometry::BaSchedule]) -> String {
+    if schedule == sfmtool_core::geometry::DEFAULT_SCHEDULE {
+        return String::new();
+    }
+    format!(
+        ", schedule {}",
+        crate::bundle_adjust_prompt::schedule_text(schedule)
+    )
+}
+
 /// The Action Log entry's free-point clause: what the storage decision did.
 ///
 /// `, free points decided at 0.412 px: 3 to finite, 25 to directions`, with `
@@ -1518,8 +1531,12 @@ impl AppState {
             Ok(job) => self.start_background_task(Operation::BUNDLE_ADJUST, id, job),
             Err(message) => Err(message),
         };
-        if let Err(message) = &outcome {
-            self.action_log.fail(Kind::Edit, message.clone());
+        match &outcome {
+            // The dialog opens on this node with the schedule last run on it.
+            Ok(()) => self
+                .bundle_adjust_prompt
+                .remember_schedule(id, &options.schedule),
+            Err(message) => self.action_log.fail(Kind::Edit, message.clone()),
         }
         outcome
     }
@@ -1600,6 +1617,7 @@ impl AppState {
 
             let version_label =
                 format!("Bundle adjusted {label}{}", release_clause(&report.cameras));
+            let schedule = schedule_clause(&options.schedule);
             let focal = focal_changes(&report.cameras);
             let free_points = free_point_clause(report.free_point_decision.as_ref());
             let deleted = if report.points_deleted > 0 {
@@ -1608,7 +1626,7 @@ impl AppState {
                 String::new()
             };
             let text = format!(
-                "{version_label}: {} images, {} points, {} observations, median residual {:.3} → {:.3} px{focal}{free_points}{deleted}",
+                "{version_label}: {} images, {} points, {} observations, median residual {:.3} → {:.3} px{schedule}{focal}{free_points}{deleted}",
                 report.images,
                 report.points,
                 report.observations,

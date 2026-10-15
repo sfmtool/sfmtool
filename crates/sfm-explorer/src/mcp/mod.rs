@@ -319,13 +319,16 @@ pub(crate) enum Command {
     },
     /// Bundle-adjust one node. `release_focal` and `release_distortion` are
     /// the release every camera takes; `cameras` overrides them camera by
-    /// camera. `free_points_cross` is the adjustment's `free_points` switch.
+    /// camera. `free_points_cross` is the adjustment's `free_points` switch,
+    /// and `schedule` its trim schedule, `None` for the core function's
+    /// default.
     BundleAdjust {
         reconstruction_label: String,
         release_focal: bool,
         release_distortion: bool,
         cameras: Vec<CameraReleaseOverride>,
         free_points_cross: bool,
+        schedule: Option<Vec<sfmtool_core::geometry::BaSchedule>>,
     },
     /// Switch one camera of a node to a model fitted to it, as one version: a
     /// change of model, or, for a spline camera switched to its own model, a
@@ -1529,6 +1532,7 @@ pub(crate) fn apply_with_window(
             release_distortion,
             cameras,
             free_points_cross,
+            schedule,
         } => edit::bundle_adjust(
             state,
             &reconstruction_label,
@@ -1541,6 +1545,8 @@ pub(crate) fn apply_with_window(
                 free_points: sfmtool_core::geometry::FreePointPolicy {
                     cross: free_points_cross,
                 },
+                schedule: schedule
+                    .unwrap_or_else(|| sfmtool_core::geometry::DEFAULT_SCHEDULE.to_vec()),
                 ..sfmtool_core::BundleAdjustOptions::default()
             },
         ),

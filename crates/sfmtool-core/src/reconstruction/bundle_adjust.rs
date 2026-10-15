@@ -75,7 +75,11 @@ pub struct BundleAdjustOptions {
     /// With every camera held the solve still runs, and refines the poses and
     /// the points alone.
     pub releases: Vec<CameraRelease>,
-    /// The staged trim schedule, `(trim_px, loss_scale)` per round.
+    /// The staged trim schedule, `(trim_px, loss_scale)` per round. Each
+    /// round's `trim_px` is a positive number of pixels or `f64::INFINITY`,
+    /// which trims nothing on the residual, and its `loss_scale` a positive
+    /// finite number of pixels; [`check_schedule`] says which round breaks
+    /// that.
     pub schedule: Vec<BaSchedule>,
     /// LM iteration budget per round.
     pub max_iters: usize,
@@ -116,6 +120,36 @@ impl BundleAdjustOptions {
             ..Self::default()
         }
     }
+}
+
+/// Whether `schedule` is one [`bundle_adjust`] runs: at least one round, each
+/// with a trim that is a positive number of pixels or `f64::INFINITY` and a
+/// loss scale that is a positive finite number of pixels.
+///
+/// The adjustment asks it first, and a caller that takes a schedule from a
+/// person (a text box, a wire argument) asks it before starting one, so both
+/// refuse the same schedules in the same words. A NaN in either field is
+/// refused: it compares false against everything, so a NaN trim would trim
+/// every observation and a NaN loss scale would make every cost NaN.
+pub fn check_schedule(schedule: &[BaSchedule]) -> Result<(), BundleAdjustError> {
+    if schedule.is_empty() {
+        return Err(BundleAdjustError::EmptySchedule);
+    }
+    for (i, stage) in schedule.iter().enumerate() {
+        if stage.trim_px.is_nan() || stage.trim_px <= 0.0 {
+            return Err(BundleAdjustError::ScheduleTrim {
+                round: i + 1,
+                trim_px: stage.trim_px,
+            });
+        }
+        if !stage.loss_scale.is_finite() || stage.loss_scale <= 0.0 {
+            return Err(BundleAdjustError::ScheduleLossScale {
+                round: i + 1,
+                loss_scale: stage.loss_scale,
+            });
+        }
+    }
+    Ok(())
 }
 
 /// Why an adjustment produced nothing. Every variant names what did not hold,
@@ -160,6 +194,20 @@ pub enum BundleAdjustError {
     NoObservations,
     /// The schedule has no rounds, so there is nothing to run.
     EmptySchedule,
+    /// A round's trim is not a positive number of pixels or `f64::INFINITY`.
+    ScheduleTrim {
+        /// The round, counted from 1.
+        round: usize,
+        /// Its trim.
+        trim_px: f64,
+    },
+    /// A round's loss scale is not a positive finite number of pixels.
+    ScheduleLossScale {
+        /// The round, counted from 1.
+        round: usize,
+        /// Its loss scale.
+        loss_scale: f64,
+    },
     /// The value's constraint columns state something the adjustment cannot
     /// honour.
     Constraints(PointConstraintsError),
@@ -224,6 +272,16 @@ impl std::fmt::Display for BundleAdjustError {
             BundleAdjustError::EmptySchedule => {
                 write!(f, "the schedule has no rounds to run")
             }
+            BundleAdjustError::ScheduleTrim { round, trim_px } => write!(
+                f,
+                "round {round} of the schedule has trim {trim_px}; a trim is a positive \
+                 number of pixels, or inf for an unbounded trim"
+            ),
+            BundleAdjustError::ScheduleLossScale { round, loss_scale } => write!(
+                f,
+                "round {round} of the schedule has loss scale {loss_scale}; a loss scale is \
+                 a positive finite number of pixels"
+            ),
             BundleAdjustError::Cancelled => write!(
                 f,
                 "the adjustment was asked to stop before it had an answer, so nothing \
@@ -361,9 +419,7 @@ pub fn bundle_adjust(
     options: &BundleAdjustOptions,
     progress: &Progress<'_>,
 ) -> Result<(SfmrReconstruction, BundleAdjustReport), BundleAdjustError> {
-    if options.schedule.is_empty() {
-        return Err(BundleAdjustError::EmptySchedule);
-    }
+    check_schedule(&options.schedule)?;
     // Every observation states a pixel, or there is nothing to reproject
     // against. The optional inline column answers for `sift_files` too.
     let keypoints = recon

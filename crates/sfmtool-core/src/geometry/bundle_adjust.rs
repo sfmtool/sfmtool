@@ -60,9 +60,12 @@ const INVALID_RESIDUAL: f64 = 1e6;
 const IN_FRONT_FLOOR_FRACTION: f64 = 1e-6;
 
 /// One round of the trim schedule.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BaSchedule {
     /// Pre-round trim threshold on the reprojection residual norm, px.
+    /// `f64::INFINITY` trims nothing on the residual: every observation with a
+    /// valid projection is kept. An observation whose projection fails is
+    /// trimmed whatever the threshold.
     pub trim_px: f64,
     /// Soft-L1 scale for the round's solve, px.
     pub loss_scale: f64,
@@ -3287,6 +3290,10 @@ fn bundle_adjust_staged(
             break;
         }
         let round = p_round.phase("round");
+        // The round's trim, never above the invalid residual, so an
+        // observation whose projection fails is trimmed even under an
+        // unbounded trim.
+        let trim_px = stage.trim_px.min(INVALID_RESIDUAL);
         let cams_now: Vec<CameraIntrinsics> = lenses.iter().map(Lens::camera).collect();
         if rnd > 0 {
             retriangulate_round(
@@ -3300,7 +3307,7 @@ fn bundle_adjust_staged(
                 obs_img,
                 obs_pt,
                 cons,
-                free_points.cross.then_some(stage.trim_px),
+                free_points.cross.then_some(trim_px),
                 min_track,
             );
         }
@@ -3334,7 +3341,7 @@ fn bundle_adjust_staged(
                 } else {
                     finite_floor
                 };
-                is_prot(k) || (norms[k] < stage.trim_px && depths[k] > floor)
+                is_prot(k) || (norms[k] < trim_px && depths[k] > floor)
             })
             .collect();
         // Track survival: drop observations of points with < min_track kept
