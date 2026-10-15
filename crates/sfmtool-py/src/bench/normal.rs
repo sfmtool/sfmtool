@@ -401,10 +401,12 @@ fn finite_difference_normal(
 /// default 0.05) or ``max_iterations`` renders (default 5) are made.
 /// ``acceptance`` is the rule a rendered turn is kept by:
 /// ``"windowed_zncc"`` (the default), kept only when the views' mean windowed
-/// ZNCC against the reference does not fall, or ``"none"``, every turn kept.
+/// ZNCC against the reference falls by no more than a small tolerance and
+/// not below its starting value, or ``"none"``, every turn kept.
 /// ``max_normal_precision_deg`` (default ``None``) is a bar on the plane's
 /// predicted precision in degrees: a plane predicted less precise proposes
-/// no turn, and the step ends ``"undetermined"``. ``working_resolution`` is the side of the working grid in samples; the
+/// no turn, and the step ends ``"undetermined"``. ``working_resolution`` is
+/// the side of the working grid in samples; the
 /// default ``None`` follows the reference view's footprint of the patch,
 /// about one sample per photograph pixel, clamped to ``R`` to ``2R`` for
 /// ``R`` the bitmap's resolution. Every default is the Rust step's.

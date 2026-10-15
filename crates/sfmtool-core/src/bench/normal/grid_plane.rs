@@ -792,7 +792,7 @@ impl<'a, 'v> Cells<'a, 'v> {
             return Ok(Proposal::Nothing);
         }
         if let Some(bar) = self.options.max_normal_precision_deg {
-            // A precision that is not finite is under no bar.
+            // A precision that is not finite fails every bar.
             if measured.precision_deg.is_nan() || measured.precision_deg > bar {
                 return Ok(Proposal::Gated);
             }

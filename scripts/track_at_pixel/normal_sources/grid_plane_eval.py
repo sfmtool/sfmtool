@@ -20,7 +20,7 @@ A fit leaves the normal where it was, so the fitted track's error is the
 mean-view start's, the baseline both steps start from.
 
     pixi run -e test python scripts/track_at_pixel/normal_sources/grid_plane_eval.py \\
-        DATASET --out DIR [--limit N] [--seed S] [--start ground_truth] [--no-fit] \
+        DATASET --out DIR [--limit N] [--seed S] [--start ground_truth] [--no-fit] \\
         [--new-opt KEY=VALUE ...]
 
 ``DATASET`` is a name ``dataset.py`` knows (``seoul_bull``) or the path of a
