@@ -123,8 +123,7 @@ observations the solve keeps.
     points, which are the ones that hold the focal length against the cameras'
     distance from the scene; with them dropped, alternating Refit All Points
     and Bundle Adjust moves the points back and forth on every step. Under this
-    preset the alternation settles: on the `dino_dog_toy` ground-truth
-    candidate the points moved about 40 times less per step.
+    preset the alternation settles.
 
   The drop-down shows the preset the box states, or `Custom`. The box opens
   with the schedule last run on this node in this session, from the dialog or

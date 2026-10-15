@@ -3437,8 +3437,8 @@ the schedule the dialog last ran on the node, so a call says the same thing
 whatever was run before it; a run from the wire is remembered for the dialog
 all the same. A schedule that is not an array of pairs of numbers is refused at
 the parse, and so is one the core function's `check_schedule` refuses -- no
-rounds, a trim that is not positive, a loss scale that is not positive -- in its
-words, naming the round. The report names a schedule other than the default,
+rounds, a trim that is not positive, a loss scale that is not positive and
+finite -- in its words, naming the round. The report names a schedule other than the default,
 `, schedule (inf, 1000)`. Everything else is the core function's defaults. A
 spline camera's coefficient
 count and domain end are not the adjustment's: they are a refit of that camera,

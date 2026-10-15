@@ -188,7 +188,8 @@ Per schedule round:
    drop observations of points with fewer than `min_track` survivors. The
    trim never exceeds the invalid residual (`1e6` px), so an observation whose
    projection fails is left out whatever `trim_px` is, and `trim_px =
-   f64::INFINITY` keeps exactly the observations that project; the
+   f64::INFINITY` passes the residual test for exactly the observations that
+   project; the
    between-round re-estimation's capped cost and its count of observations
    under the trim read the same bound. The
    in-front measure is model-aware: the canonical depth `−z_cam` for the
