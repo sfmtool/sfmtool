@@ -11,7 +11,8 @@ are run:
 
 - ``old``: ``finite_difference_normal`` with ``layout="grid"``, 2x2 pieces and
   no overlap, Track View's default Grid Plane Normal;
-- ``new``: ``grid_plane_normal`` at its defaults.
+- ``new``: ``grid_plane_normal`` at its defaults, or with the keywords
+  ``--new-opt`` gives.
 
 The angle of each normal to the ground-truth normal is folded to 0..90 degrees
 (both turned to face the first sighting's camera, as in ``normal_diag.py``).
@@ -19,19 +20,24 @@ A fit leaves the normal where it was, so the fitted track's error is the
 mean-view start's, the baseline both steps start from.
 
     pixi run -e test python scripts/track_at_pixel/normal_sources/grid_plane_eval.py \\
-        DATASET --out DIR [--limit N] [--seed S] [--start ground_truth] [--no-fit]
+        DATASET --out DIR [--limit N] [--seed S] [--start ground_truth] [--no-fit] \
+        [--new-opt KEY=VALUE ...]
 
 ``DATASET`` is a name ``dataset.py`` knows (``seoul_bull``) or the path of a
 ground-truth ``.sfmr``; ``prepare`` copies it into its cache workspace. Rows go
 to ``DIR/<dataset>.jsonl``, one per point, and the summary is printed. Each row
-carries what a later render of the point needs: the ground-truth position and
-normal, the start normal, the fitted frame, each step's resulting frame, and
-the reference and ``in`` sightings with their keypoints; ``DIR/cameras.json``
-holds each image's name, centre, world-from-camera rotation and lens summary,
-and the image directory. With
-``--limit`` the first ``N`` points are run, or with ``--seed`` a random sample
-of ``N``. Two controls change the start, each adding a suffix to the file
-name: ``--start ground_truth`` (``_from_gt``) starts both steps from the
+carries what a later render of the point needs (the ground-truth position and
+normal, the start normal, the fitted frame, each step's resulting frame, the
+reference and ``in`` sightings with their keypoints) and the new step's
+predicted precision, views' baseline and per-render trace, each proposed normal
+with its error; ``DIR/cameras.json`` holds each image's name, centre,
+world-from-camera rotation and lens summary, and the image directory.
+``--new-opt KEY=VALUE``, repeated, passes a keyword to ``grid_plane_normal``
+(``max_iterations=8``, ``acceptance=none``, ``cell_shift_bound_px=4``, ...).
+
+With ``--limit`` the first ``N`` points are run, or with ``--seed`` a random
+sample of ``N``. Two controls change the start, each adding a suffix to the
+file name: ``--start ground_truth`` (``_from_gt``) starts both steps from the
 ground-truth normal instead of the mean view, which shows how far each moves
 off it, and ``--no-fit`` (``_no_fit``) skips the fit, so both steps start from
 the ground-truth position and keypoints.
@@ -112,7 +118,7 @@ def write_cameras(ds, prepared, out):
         json.dump(doc, sink, indent=1)
 
 
-def run_point(ds, edited, p, *, fit=True, start="mean_view"):
+def run_point(ds, edited, p, *, fit=True, start="mean_view", new_options=None):
     """One row: the start, the fit, and each step from the fitted track."""
     from sfmtool import bench as B
 
@@ -181,7 +187,9 @@ def run_point(ds, edited, p, *, fit=True, start="mean_view"):
 
     t0 = time.perf_counter()
     try:
-        new, report = B.grid_plane_normal(track, edited, ds.pyramids)
+        new, report = B.grid_plane_normal(
+            track, edited, ds.pyramids, **(new_options or {})
+        )
     except ValueError as e:
         row["new_ms"] = 1000 * (time.perf_counter() - t0)
         row["new_outcome"] = "refused"
@@ -206,6 +214,29 @@ def run_point(ds, edited, p, *, fit=True, start="mean_view"):
                 counts[word] = counts.get(word, 0) + 1
     row["new_view_cell_counts"] = counts
     row["new_turned_deg"] = report["tilt"]["degrees"]
+    row["new_normal_precision_deg"] = cells["normal_precision_deg"]
+    row["new_view_baseline_deg"] = cells["view_baseline_deg"]
+    trace = []
+    for entry in cells["trace"]:
+        proposed = entry["proposed_normal"]
+        if proposed is not None:
+            proposed = np.asarray(proposed, float)
+        trace.append(
+            {
+                "score": entry["score"],
+                "determinacy": entry["determinacy"],
+                "in_plane": entry["in_plane"],
+                "normal_precision_deg": entry["normal_precision_deg"],
+                "gated": entry["gated"],
+                "proposed_normal": None if proposed is None else proposed.tolist(),
+                "proposed_deg": None
+                if proposed is None
+                else angle(face(unit(proposed), to_cam), gt),
+                "largest_move_px": entry["largest_move_px"],
+                "taken": entry["taken"],
+            }
+        )
+    row["new_trace"] = trace
     row["new_deg"] = angle(face(patch_normal(new), to_cam), gt)
     row["new_frame"] = frame(new)
     return row
@@ -286,6 +317,19 @@ def summarize(name, rows):
         print(f"  old refused: {refused}")
 
 
+def parse_option(text):
+    """``key=value`` with the value read as an int, a float, ``None`` or a word."""
+    key, _, value = text.partition("=")
+    if not key or not _:
+        raise SystemExit(f"--new-opt takes key=value, not {text!r}")
+    for kind in (int, float):
+        try:
+            return key, kind(value)
+        except ValueError:
+            pass
+    return key, None if value == "None" else value
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("dataset")
@@ -303,7 +347,16 @@ def main():
         action="store_true",
         help="run both steps from the turned ground-truth track, unfitted",
     )
+    ap.add_argument(
+        "--new-opt",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="a grid_plane_normal keyword, repeated (max_iterations=8, "
+        "acceptance=none, cell_shift_bound_px=4, ...)",
+    )
     args = ap.parse_args()
+    new_options = dict(parse_option(o) for o in args.new_opt)
     from sfmtool.reconstruction import EditedReconstruction
 
     prepared = prepare(args.dataset, None, quiet=True)
@@ -333,7 +386,15 @@ def main():
     t0 = time.perf_counter()
     with open(path, "w") as sink:
         for k, p in enumerate(points):
-            row = run_point(ds, edited, p, fit=not args.no_fit, start=args.start)
+            row = run_point(
+                ds,
+                edited,
+                p,
+                fit=not args.no_fit,
+                start=args.start,
+                new_options=new_options,
+            )
+            row["new_options"] = new_options
             rows.append(row)
             sink.write(json.dumps(row) + "\n")
             if k % 50 == 0:

@@ -11,10 +11,26 @@ use super::*;
 /// turn from state `s` moves the cells by `moves[s]`. The proposal past the
 /// last move asks for no turn.
 fn run(scores: &[f64], moves: &[f64], max_iterations: u8) -> LoopEnd<usize, f64> {
+    run_under(
+        scores,
+        moves,
+        max_iterations,
+        GridPlaneAcceptance::WindowedZncc,
+    )
+}
+
+/// [`run`] under the acceptance rule `acceptance`.
+fn run_under(
+    scores: &[f64],
+    moves: &[f64],
+    max_iterations: u8,
+    acceptance: GridPlaneAcceptance,
+) -> LoopEnd<usize, f64> {
     let result: Result<_, ()> = turn_loop(
         0usize,
         max_iterations,
         0.05,
+        acceptance,
         |&s| Ok(scores[s]),
         |&m| m,
         |&s, _| Ok(moves.get(s).map(|&m| (s + 1, m))),
@@ -96,6 +112,44 @@ fn no_turn_asked_and_no_score_stop_where_they_are() {
         (end.stop, end.state, end.iterations),
         (LoopStop::NotRun, 0, 1)
     );
+}
+
+#[test]
+fn without_acceptance_a_turn_that_lowers_the_score_is_taken() {
+    // The ZNCC rule rejects the first turn; with no acceptance test it is
+    // taken, and the loop goes on to converge.
+    let scores = [0.9, 0.5, 0.4];
+    let moves = [1.0, 0.5, 0.01];
+    let end = run(&scores, &moves, 5);
+    assert_eq!((end.stop, end.state), (LoopStop::Rejected, 0));
+    assert_eq!(end.taken, vec![false]);
+
+    let end = run_under(&scores, &moves, 5, GridPlaneAcceptance::None);
+    assert_eq!((end.stop, end.state), (LoopStop::Converged, 3));
+    assert_eq!(end.taken, vec![true, true, true]);
+}
+
+#[test]
+fn without_acceptance_an_oscillation_ends_on_the_later_state() {
+    let lower = 0.8 - 0.5 * ACCEPT_ZNCC_TOLERANCE;
+    let end = run_under(
+        &[0.7, 0.8, lower],
+        &[1.0, 1.0],
+        5,
+        GridPlaneAcceptance::None,
+    );
+    assert_eq!((end.stop, end.state), (LoopStop::Oscillation, 2));
+    assert_eq!(end.taken, vec![true, true]);
+}
+
+#[test]
+fn the_loop_reports_which_proposals_it_took() {
+    // Two turns kept, the third left untaken at the cap.
+    let end = run(&[0.5, 0.6, 0.7, 0.8], &[1.0, 0.5, 0.25], 3);
+    assert_eq!(end.taken, vec![true, true, false]);
+    // A turn under the tolerance is taken without a render.
+    let end = run(&[0.7, 0.8, f64::NAN], &[1.0, 0.01], 5);
+    assert_eq!(end.taken, vec![true, true]);
 }
 
 #[test]

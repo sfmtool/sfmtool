@@ -728,10 +728,26 @@ pub struct GridPlaneNormalOptions {
     pub plane: CellPlaneParams,         // the cell plane kernel's, default
     pub update_tolerance_px: f32,       // largest cell-centre movement of a turn, 0.05
     pub max_iterations: u8,             // renders, 5
+    pub acceptance: GridPlaneAcceptance, // WindowedZncc (default) or None
+    pub max_normal_precision_deg: Option<f64>, // precision gate, None: off
     pub fit: FitOptions,                // the reading it ends with; tile sampler; reference rule
 }
 
-// Carried by NormalEstimate::GridPlaneCells.
+pub enum GridPlaneAcceptance { WindowedZncc, None }
+
+// One render of the loop, in the report's trace.
+pub struct GridPlaneIteration {
+    pub score: f64,                           // acceptance score at this render
+    pub determinacy: NormalDeterminacy,
+    pub in_plane: usize,
+    pub normal_precision_deg: f64,            // the plane's predicted precision
+    pub gated: bool,                          // the precision gate stopped its turn
+    pub proposed_normal: Option<[f64; 3]>,    // the normal its turn reaches
+    pub largest_move_px: f64,                 // grid px, NaN with no turn
+    pub taken: bool,                          // whether the loop took the turn
+}
+
+// Carried, boxed, by NormalEstimate::GridPlaneCells.
 pub struct GridPlaneCells {
     pub determinacy: NormalDeterminacy,       // the cell plane kernel's verdict
     pub cell_status: [CellPlaneStatus; 9],
@@ -746,6 +762,9 @@ pub struct GridPlaneCells {
     pub score_before: f64,                    // acceptance score at the start
     pub score_after: f64,                     // and at the last render kept
     pub outcome: GridPlaneOutcome,            // Turned, Undetermined or Unstable
+    pub normal_precision_deg: f64,            // the last kept render's plane's
+    pub view_baseline_deg: f64,               // widest angle between two `in` sightings
+    pub trace: Vec<GridPlaneIteration>,       // every render, in order
 }
 
 /// The localizer with every per-view gate off, which is what both steps run.
@@ -2972,6 +2991,25 @@ two scores and the outcome. Where the normal is left unchanged, the readings
 are of the frame the loop had reached, which the step does not keep. The
 centre does not move, whatever the plane's offset.
 
+The report also carries the plane's predicted precision, the views' baseline
+and a trace of the loop. The predicted precision is the one
+[cell-plane-normal-precision-gate.md](../../drafts/cell-plane-normal-precision-gate.md)
+defines, `σ = 1 / √(Σⱼ wⱼ (dⱼ · e)²)` in degrees over the live cells with
+their plane-fit weights `wⱼ` and offsets `dⱼ` from the weighted centroid,
+computed by the cell plane kernel's shared `normal_precision_deg`: along the
+plane's weaker in-plane axis `e` under both axes, and along the line the cells
+lie on, the one axis they fix, under one axis. The baseline is the largest
+angle between the directions from the patch centre to two of the rendered
+`in` sightings' cameras, at the starting frame. The trace holds one entry per
+render: its score, verdict, cells in the plane and precision, the normal its
+turn reaches, the turn's largest cell movement, whether the precision gate
+stopped the turn, and whether the loop took it. Two options change the loop
+for experiments and are off by default: `acceptance` `None` keeps every
+rendered turn (no turn is rejected, and an oscillation ends on the later
+frame), and `max_normal_precision_deg` makes a plane predicted less precise
+than the bar, or with no finite precision, propose no turn, so the loop ends
+`Measured` and the step `Undetermined`.
+
 The working grid's density decides how close the step comes. On the
 synthetic plane of the tests, whose patch spans 32 photograph px at `R = 24`,
 the default grid comes out 32 samples for a patch facing the cameras and
@@ -3626,8 +3664,10 @@ refuses bad settings before it reads a photograph; Track View's Grid Plane
 Normal is `layout="grid", pieces=2, overlap=0.0`. `grid_plane_normal` takes
 `working_resolution`, `cell_shift_bound_px`, `min_cell_zncc`,
 `min_cell_curvature`, `update_tolerance_px` and `max_iterations`, each
-defaulting to `GridPlaneNormalOptions::default()`'s when `None`; the plane
-fit's `CellPlaneParams` keep their defaults. Each returns `(EditableTrack,
+defaulting to `GridPlaneNormalOptions::default()`'s when `None`, `acceptance`
+as the word `"windowed_zncc"` (the default) or `"none"`, and
+`max_normal_precision_deg` (default `None`); the plane fit's
+`CellPlaneParams` keep their defaults. Each returns `(EditableTrack,
 report)`, the report carrying `normal` (the one the patch now shows), `tilt`
 (as `tilt_patch` reports it), `evaluate` (the reading's report), `text` (the
 `NormalReport` sentence) and `estimate`, a dict whose `kind` names the
@@ -3644,7 +3684,10 @@ under one axis, else `None`), `cell_status` as `[row][col]` lists of
 lists of the `.matches` cell-status words, `"fitted"`, `"refused_curvature"`,
 `"refused_zncc"`, `"not_attempted"`, `"refused_bound"`, `"refused_outlier"`),
 `plane_rms`, `plane_offset`, `working_resolution`, `iterations`,
-`score_before` and `score_after`.
+`score_before`, `score_after`, `normal_precision_deg`, `view_baseline_deg`
+and `trace`, a list of dicts with `score`, `determinacy`, `in_plane`,
+`normal_precision_deg`, `gated`, `proposed_normal` (an array or `None`),
+`largest_move_px` and `taken`.
 
 `spin_patch` and `shape_observation` take their numbers directly;
 `sight_observation`, `resize_patch`, `translate_patch_to_pixel` and
@@ -4072,13 +4115,29 @@ unit-tested in `normal.rs` itself.
   ray in each of the three views.
 - A bearing is refused as `AtInfinity`, and a set cancel flag stops the step
   as `Cancelled`.
+- The textured plane from 10 degrees off reports the baseline as the widest
+  angle between the three cameras seen from the point, a predicted precision
+  under 2 degrees, and one trace entry per render, each with both axes, nine
+  cells in the plane, a proposed normal and its turn taken, the last turn
+  under the movement tolerance and reaching the normal the step turned to.
+- The same plane seen from cameras drawn in to a quarter of the baseline
+  predicts a first-render precision more than twice as wide.
+- On the plane with a flat column, where the ZNCC rule rejects a turn, the
+  same start with `acceptance` `None` takes that turn and does not end
+  `Rejected`.
+- A precision bar of `1e-6` degrees makes the textured plane's first render
+  propose no turn: the trace's one entry is gated, the loop ends `Measured`,
+  the outcome is `Undetermined`, and the frame is exactly the one the step was
+  given; a bar of 45 degrees gives the same report as no bar.
 
 The loop's rules are unit-tested in `normal/grid_plane/tests.rs` on a state
 that is a number: a turn that lowers the score is not kept, the tolerance does
 not let the score fall below the start's, a turn under the movement tolerance
 is taken without a render, a turn that does not shrink ends on the better
 frame, the cap leaves its last turn untaken, and a start with no score or a
-measurement asking no turn stop where they are. Each loop stop maps to its
+measurement asking no turn stop where they are. The loop reports which
+proposals it took, and under `GridPlaneAcceptance::None` a turn that lowers
+the score is taken and an oscillation ends on the later state. Each loop stop maps to its
 `GridPlaneOutcome`, and the working grid's side follows the footprint's
 longer axis, rounded up, clamped to `R` below and `2R` above, and is `R`
 without a Jacobian.

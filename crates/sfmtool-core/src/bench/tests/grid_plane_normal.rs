@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::scene::{fixture_of, texture, Scene, CENTERS, PLANE_Z, WORLD};
 use super::*;
-use crate::bench::GridPlaneOutcome;
+use crate::bench::{GridPlaneAcceptance, GridPlaneOutcome};
 use crate::patch::cell_plane_normals::{CellPlaneStatus, NormalDeterminacy};
 use crate::patch::cluster_refine::{CellStatus, LoopStop};
 
@@ -458,4 +458,152 @@ fn every_registered_view_reports_its_cells() {
         assert_eq!(cells.view_cells[row], [CellStatus::Fitted; 9], "row {row}");
     }
     assert_eq!(cells.cell_rays, [3; 9], "{report}");
+}
+
+/// The largest angle between two of `centers` seen from `point`, degrees.
+fn widest_angle(centers: &[[f64; 3]], point: Point3<f64>) -> f64 {
+    let dirs: Vec<Vector3<f64>> = centers
+        .iter()
+        .map(|c| (Vector3::from(*c) - point.coords).normalize())
+        .collect();
+    let mut widest: f64 = 0.0;
+    for (i, a) in dirs.iter().enumerate() {
+        for b in &dirs[i + 1..] {
+            widest = widest.max(degrees(*a, *b));
+        }
+    }
+    widest
+}
+
+/// The step reports the views' baseline, the plane's predicted precision and
+/// one trace entry per render, the last one the converged turn it took.
+#[test]
+fn the_report_carries_the_baseline_the_precision_and_the_trace() {
+    let scene = Scene::new();
+    let edited = three_view_edited(&scene);
+    let track = tilted_track(&edited, Vector3::x(), 10.0);
+    let (_, report) = run(&scene, &edited, &track);
+    let cells = cells_of(&report);
+    assert_eq!(cells.outcome, GridPlaneOutcome::Turned, "{report}");
+
+    let expected = widest_angle(&CENTERS, WORLD);
+    assert!(
+        (cells.view_baseline_deg - expected).abs() < 1e-9,
+        "{} against {expected}",
+        cells.view_baseline_deg
+    );
+    assert!(
+        cells.normal_precision_deg.is_finite() && cells.normal_precision_deg < 2.0,
+        "{}",
+        cells.normal_precision_deg
+    );
+
+    assert_eq!(cells.trace.len(), cells.iterations as usize);
+    assert_eq!(cells.trace[0].score, cells.score_before);
+    for (k, entry) in cells.trace.iter().enumerate() {
+        assert_eq!(entry.determinacy, NormalDeterminacy::BothAxes, "render {k}");
+        assert_eq!(entry.in_plane, 9, "render {k}");
+        assert!(entry.normal_precision_deg.is_finite(), "render {k}");
+        assert!(!entry.gated);
+        assert!(entry.proposed_normal.is_some(), "render {k}");
+        assert!(entry.largest_move_px.is_finite(), "render {k}");
+        assert!(entry.taken, "every turn of a converged loop is taken");
+    }
+    let last = cells.trace.last().expect("one render at least");
+    assert!(
+        last.largest_move_px <= f64::from(GridPlaneNormalOptions::default().update_tolerance_px)
+    );
+    let reached = Vector3::from(last.proposed_normal.unwrap());
+    assert!(degrees(reached, report.tilt.normal) < 1e-9);
+}
+
+/// The same plane seen over a quarter of the baseline predicts a precision
+/// several times wider.
+#[test]
+fn a_narrow_baseline_predicts_a_wider_precision() {
+    let narrow_centers = CENTERS.map(|c| [0.25 * c[0], 0.25 * c[1], c[2]]);
+    let first_precision = |scene: &Scene| {
+        let edited = three_view_edited(scene);
+        let track = tilted_track(&edited, Vector3::x(), 10.0);
+        let options = GridPlaneNormalOptions {
+            max_iterations: 1,
+            ..Default::default()
+        };
+        let (_, report) = run_with(scene, &edited, &track, &options);
+        let cells = cells_of(&report);
+        (cells.trace[0].normal_precision_deg, cells.view_baseline_deg)
+    };
+    let (wide, wide_baseline) = first_precision(&Scene::new());
+    let (narrow, narrow_baseline) = first_precision(&Scene::from_centers(&narrow_centers, PLANE_Z));
+    assert!((narrow_baseline / wide_baseline - 0.25).abs() < 0.01);
+    assert!(wide.is_finite() && narrow.is_finite(), "{wide} {narrow}");
+    assert!(narrow > 2.0 * wide, "{narrow} against {wide}");
+}
+
+/// The turn the ZNCC rule rejects on the plane with a flat column is taken
+/// when no acceptance test is asked for.
+#[test]
+fn without_acceptance_the_rejected_turn_is_taken() {
+    let scene = Scene::from_surface(&CENTERS, |c, d| {
+        let (x, y) = hit(c, d, PLANE_Z);
+        if x > COLUMN_EDGE - 0.01 {
+            127.5
+        } else {
+            texture(x, y, PLANE_Z)
+        }
+    });
+    let edited = three_view_edited(&scene);
+    let track = tilted_track(&edited, Vector3::new(1.0, -1.0, 0.0), 15.0);
+    let (_, scored) = run(&scene, &edited, &track);
+    let scored = cells_of(&scored).clone();
+    assert_eq!(scored.stop, LoopStop::Rejected);
+    let rejected_at = scored
+        .trace
+        .iter()
+        .position(|e| e.proposed_normal.is_some() && !e.taken)
+        .expect("the rejected turn is in the trace");
+
+    let options = GridPlaneNormalOptions {
+        acceptance: GridPlaneAcceptance::None,
+        ..Default::default()
+    };
+    let (_, report) = run_with(&scene, &edited, &track, &options);
+    let cells = cells_of(&report);
+    assert_ne!(cells.stop, LoopStop::Rejected, "{report}");
+    assert!(
+        cells.trace[rejected_at].taken,
+        "the turn rejected under the score is taken: {report}"
+    );
+    assert!(cells.trace.len() > rejected_at + 1 || cells.stop == LoopStop::Converged);
+}
+
+/// A plane predicted less precise than the bar proposes no turn, and the step
+/// ends undetermined with the normal it was given; a loose bar changes
+/// nothing.
+#[test]
+fn the_precision_gate_leaves_an_imprecise_plane_undetermined() {
+    let scene = Scene::new();
+    let edited = three_view_edited(&scene);
+    let track = tilted_track(&edited, Vector3::x(), 10.0);
+
+    let tight = GridPlaneNormalOptions {
+        max_normal_precision_deg: Some(1e-6),
+        ..Default::default()
+    };
+    let (turned, report) = run_with(&scene, &edited, &track, &tight);
+    let cells = cells_of(&report);
+    assert_eq!(cells.stop, LoopStop::Measured, "{report}");
+    assert_eq!(cells.outcome, GridPlaneOutcome::Undetermined);
+    assert_eq!(cells.determinacy, NormalDeterminacy::BothAxes);
+    assert_eq!(cells.trace.len(), 1);
+    assert!(cells.trace[0].gated && cells.trace[0].proposed_normal.is_none());
+    assert!(frame_unchanged(&track, &turned), "{report}");
+
+    let loose = GridPlaneNormalOptions {
+        max_normal_precision_deg: Some(45.0),
+        ..Default::default()
+    };
+    let (_, gated) = run_with(&scene, &edited, &track, &loose);
+    let (_, plain) = run(&scene, &edited, &track);
+    assert_eq!(cells_of(&gated), cells_of(&plain));
 }

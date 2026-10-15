@@ -131,6 +131,25 @@ class TestGridPlaneNormal:
         for key in ("plane_rms", "plane_offset", "score_before", "score_after"):
             assert isinstance(cells[key], float)
 
+        assert isinstance(cells["normal_precision_deg"], float)
+        assert cells["view_baseline_deg"] > 0.0
+        assert len(cells["trace"]) == cells["iterations"]
+        for entry in cells["trace"]:
+            assert set(entry) == {
+                "score",
+                "determinacy",
+                "in_plane",
+                "normal_precision_deg",
+                "gated",
+                "proposed_normal",
+                "largest_move_px",
+                "taken",
+            }
+            if entry["proposed_normal"] is None:
+                assert not entry["taken"]
+            else:
+                assert np.linalg.norm(entry["proposed_normal"]) == pytest.approx(1.0)
+
         if cells["outcome"] != "turned":
             # Every ending but a converged one leaves the normal as given.
             np.testing.assert_allclose(_normal(turned), was, atol=1e-9)
@@ -148,6 +167,24 @@ class TestGridPlaneNormal:
         _, track = create_cluster(Bench(), 4, "IMG_0042", (142.0, 197.5), radius_px=7.5)
         with pytest.raises(ValueError, match="cluster"):
             grid_plane_normal(track, edited, images)
+
+    def test_the_acceptance_rule_and_the_precision_bar_reach_the_step(
+        self, fitted, edited, images
+    ):
+        _, report = grid_plane_normal(fitted, edited, images, acceptance="none")
+        assert report["estimate"]["stop"] != "rejected"
+
+        _, report = grid_plane_normal(
+            fitted, edited, images, max_normal_precision_deg=1e-9
+        )
+        cells = report["estimate"]
+        assert cells["outcome"] == "undetermined"
+        assert cells["stop"] == "measured"
+        first = cells["trace"][0]
+        assert first["gated"] or first["determinacy"] == "none"
+
+        with pytest.raises(ValueError, match="acceptance"):
+            grid_plane_normal(fitted, edited, images, acceptance="always")
 
 
 class TestFiniteDifferenceNormal:

@@ -229,6 +229,51 @@ pub(crate) fn fit_cell_plane(
     out
 }
 
+/// The precision the plane fit's weights predict for `plane`'s normal, in
+/// degrees, along its weaker and its stronger in-plane axis: `σ = 1 / √(Σⱼ
+/// wⱼ (dⱼ · e)²)` over the live cells (those with a positive
+/// [`CellPlaneNormal::cell_weight`]), with `dⱼ` a cell's offset from the
+/// weighted centroid and `e` the in-plane axis, as the precision gate draft
+/// (`specs/drafts/cell-plane-normal-precision-gate.md`) defines it.
+///
+/// The weights are the inverse of each cell's variance along the normal times
+/// its Tukey weight, so `Σⱼ wⱼ (dⱼ · e)²` is the weighted scatter's eigenvalue
+/// along `e`, and its inverse square root the standard deviation of the
+/// normal's tilt along `e`, in radians. The axes are the eigenvectors of that
+/// scatter, whose least is the fitted normal. Both are `NaN` where the cells
+/// fixed no axis or the scatter has no spread along the axis.
+pub(crate) fn normal_precision_deg(plane: &CellPlaneNormal) -> [f64; 2] {
+    if plane.determinacy == NormalDeterminacy::None {
+        return [f64::NAN; 2];
+    }
+    let live: Vec<(Vector3<f64>, f64)> = plane
+        .cell_positions
+        .iter()
+        .zip(&plane.cell_weight)
+        .filter(|(_, &w)| w > 0.0 && w.is_finite())
+        .map(|(p, &w)| (Vector3::from(*p), w))
+        .collect();
+    let sum_w: f64 = live.iter().map(|(_, w)| w).sum();
+    if live.is_empty() || sum_w.is_nan() || sum_w <= 0.0 {
+        return [f64::NAN; 2];
+    }
+    let centroid = live.iter().map(|(p, w)| *w * p).sum::<Vector3<f64>>() / sum_w;
+    let mut scatter = Matrix3::zeros();
+    for (p, w) in &live {
+        let d = p - centroid;
+        scatter += *w * (d * d.transpose());
+    }
+    let (evals, _) = sorted_eigen(&scatter);
+    let sigma = |lambda: f64| {
+        if lambda > EPS_SPREAD && lambda.is_finite() {
+            (1.0 / lambda.sqrt()).to_degrees()
+        } else {
+            f64::NAN
+        }
+    };
+    [sigma(evals[1]), sigma(evals[2])]
+}
+
 /// Which axes of the fitted `normal` the cells fix, from the spread within
 /// the plane of the live cells, those with a positive `weights` entry.
 ///

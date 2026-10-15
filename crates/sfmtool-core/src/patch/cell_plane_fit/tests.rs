@@ -43,8 +43,17 @@ fn centres() -> Vec<Vector3<f64>> {
 /// The rays of each of nine cells at `points`, from every camera at
 /// `centres()`, each ray given the floor `floor_px`.
 fn rays_to(points: &[Vector3<f64>; 9], floor_px: f64) -> [Vec<CellRay>; 9] {
+    rays_from(&centres(), points, floor_px)
+}
+
+/// [`rays_to`] from cameras at `centres`, each looking at the origin.
+fn rays_from(
+    centres: &[Vector3<f64>],
+    points: &[Vector3<f64>; 9],
+    floor_px: f64,
+) -> [Vec<CellRay>; 9] {
     let cam = camera();
-    let poses: Vec<RigidTransform> = centres().into_iter().map(look_at).collect();
+    let poses: Vec<RigidTransform> = centres.iter().copied().map(look_at).collect();
     let views: Vec<PosedView<'_>> = poses.iter().map(|p| PosedView::new(&cam, p)).collect();
     std::array::from_fn(|j| {
         views
@@ -135,4 +144,57 @@ fn a_cell_with_one_ray_is_not_triangulated() {
     assert_eq!(out.cell_status[4], CellPlaneStatus::TooFewRays);
     assert!(out.cell_positions[4].iter().all(|v| v.is_nan()));
     assert_eq!(out.determinacy, NormalDeterminacy::BothAxes);
+}
+
+/// The cameras of [`centres`] drawn toward the first one's axis by `scale`:
+/// at `1` the views span about 20 degrees, at `0.15` about 3.
+fn centres_scaled(scale: f64) -> Vec<Vector3<f64>> {
+    centres()
+        .into_iter()
+        .map(|c| Vector3::new(scale * c.x, scale * c.y, c.z))
+        .collect()
+}
+
+#[test]
+fn the_predicted_precision_is_small_with_a_wide_baseline_and_large_with_a_narrow_one() {
+    let n = Vector3::new(0.2, -0.1, 1.0).normalize();
+    let points = grid_on_plane(n, 0.1);
+    let params = CellPlaneParams::default();
+    let wide = fit_cell_plane(&rays_from(&centres_scaled(1.0), &points, 0.1), &params);
+    let narrow = fit_cell_plane(&rays_from(&centres_scaled(0.15), &points, 0.1), &params);
+    assert_eq!(wide.determinacy, NormalDeterminacy::BothAxes);
+    assert_eq!(narrow.determinacy, NormalDeterminacy::BothAxes);
+    let [wide_weak, wide_strong] = normal_precision_deg(&wide);
+    let [narrow_weak, narrow_strong] = normal_precision_deg(&narrow);
+    assert!(wide_weak.is_finite() && wide_strong.is_finite());
+    assert!(wide_strong <= wide_weak, "{wide_strong} {wide_weak}");
+    assert!(
+        wide_weak < 1.0,
+        "a wide baseline pins the normal: {wide_weak}"
+    );
+    assert!(
+        narrow_weak > 3.0 * wide_weak,
+        "a narrow baseline does not: {narrow_weak} against {wide_weak}"
+    );
+    assert!(narrow_strong.is_finite());
+}
+
+#[test]
+fn the_predicted_precision_follows_the_ray_floor() {
+    // Noise-free rays: each cell's variance is its floor's square, so
+    // doubling the floor doubles the predicted precision.
+    let n = Vector3::new(0.1, 0.2, 1.0).normalize();
+    let points = grid_on_plane(n, 0.1);
+    let params = CellPlaneParams::default();
+    let one = normal_precision_deg(&fit_cell_plane(&rays_to(&points, 0.5), &params));
+    let two = normal_precision_deg(&fit_cell_plane(&rays_to(&points, 1.0), &params));
+    for k in 0..2 {
+        assert!((two[k] / one[k] - 2.0).abs() < 1e-6, "{one:?} {two:?}");
+    }
+}
+
+#[test]
+fn no_precision_is_predicted_where_no_axis_is_fixed() {
+    let empty = fit_cell_plane(&Default::default(), &CellPlaneParams::default());
+    assert!(normal_precision_deg(&empty).iter().all(|v| v.is_nan()));
 }

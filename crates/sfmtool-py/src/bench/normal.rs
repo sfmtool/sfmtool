@@ -20,8 +20,8 @@ use pyo3::types::{PyDict, PyList};
 use sfmtool_core::bench::{
     finite_difference_normal as core_finite_difference_normal, fit_normal as core_fit_normal,
     grid_plane_normal as core_grid_plane_normal, FiniteDifferenceOptions, FitNormalOptions,
-    GridPlaneCells, GridPlaneNormalOptions, GridPlaneOutcome, NormalEstimate, NormalReport,
-    PieceLayout,
+    GridPlaneAcceptance, GridPlaneCells, GridPlaneIteration, GridPlaneNormalOptions,
+    GridPlaneOutcome, NormalEstimate, NormalReport, PieceLayout,
 };
 use sfmtool_core::patch::cell_plane_normals::{CellPlaneStatus, NormalDeterminacy};
 use sfmtool_core::patch::cluster_refine::{CellStatus, LoopStop};
@@ -67,18 +67,59 @@ fn word_grid<'py>(py: Python<'py>, words: [&'static str; 9]) -> PyResult<Bound<'
     PyList::new(py, rows)
 }
 
+/// The word for which axes of a normal the cells fixed.
+fn determinacy_name(determinacy: NormalDeterminacy) -> &'static str {
+    match determinacy {
+        NormalDeterminacy::BothAxes => "both_axes",
+        NormalDeterminacy::OneAxis { .. } => "one_axis",
+        NormalDeterminacy::None => "none",
+    }
+}
+
+/// The dict form of one render of the loop.
+fn iteration_dict<'py>(
+    py: Python<'py>,
+    entry: &GridPlaneIteration,
+) -> PyResult<Bound<'py, PyDict>> {
+    let d = PyDict::new(py);
+    d.set_item("score", entry.score)?;
+    d.set_item("determinacy", determinacy_name(entry.determinacy))?;
+    d.set_item("in_plane", entry.in_plane)?;
+    d.set_item("normal_precision_deg", entry.normal_precision_deg)?;
+    d.set_item("gated", entry.gated)?;
+    d.set_item(
+        "proposed_normal",
+        entry
+            .proposed_normal
+            .map(|n| PyArray1::from_vec(py, n.to_vec())),
+    )?;
+    d.set_item("largest_move_px", entry.largest_move_px)?;
+    d.set_item("taken", entry.taken)?;
+    Ok(d)
+}
+
+/// The acceptance rule `word` names.
+fn parse_acceptance(word: &str) -> PyResult<GridPlaneAcceptance> {
+    match word {
+        "windowed_zncc" => Ok(GridPlaneAcceptance::WindowedZncc),
+        "none" => Ok(GridPlaneAcceptance::None),
+        other => Err(PyValueError::new_err(format!(
+            "unknown acceptance: {other:?} (expected windowed_zncc|none)"
+        ))),
+    }
+}
+
 /// The dict form of the cells' report.
 fn cells_dict<'py>(py: Python<'py>, cells: &GridPlaneCells) -> PyResult<Bound<'py, PyDict>> {
     let d = PyDict::new(py);
     d.set_item("kind", "grid_plane_cells")?;
     d.set_item("outcome", outcome_name(cells.outcome))?;
     d.set_item("stop", loop_stop_name(cells.stop))?;
-    let (determinacy, free_axis) = match cells.determinacy {
-        NormalDeterminacy::BothAxes => ("both_axes", None),
-        NormalDeterminacy::OneAxis { free_axis } => ("one_axis", Some(free_axis)),
-        NormalDeterminacy::None => ("none", None),
+    let free_axis = match cells.determinacy {
+        NormalDeterminacy::OneAxis { free_axis } => Some(free_axis),
+        NormalDeterminacy::BothAxes | NormalDeterminacy::None => None,
     };
-    d.set_item("determinacy", determinacy)?;
+    d.set_item("determinacy", determinacy_name(cells.determinacy))?;
     d.set_item(
         "free_axis",
         free_axis.map(|a| PyArray1::from_vec(py, a.to_vec())),
@@ -116,6 +157,13 @@ fn cells_dict<'py>(py: Python<'py>, cells: &GridPlaneCells) -> PyResult<Bound<'p
     d.set_item("iterations", cells.iterations)?;
     d.set_item("score_before", cells.score_before)?;
     d.set_item("score_after", cells.score_after)?;
+    d.set_item("normal_precision_deg", cells.normal_precision_deg)?;
+    d.set_item("view_baseline_deg", cells.view_baseline_deg)?;
+    let trace = PyList::empty(py);
+    for entry in &cells.trace {
+        trace.append(iteration_dict(py, entry)?)?;
+    }
+    d.set_item("trace", trace)?;
     Ok(d)
 }
 
@@ -351,7 +399,12 @@ fn finite_difference_normal(
 /// through them; the patch is turned toward it and measured again, until a
 /// turn moves no cell centre by more than ``update_tolerance_px`` (grid px,
 /// default 0.05) or ``max_iterations`` renders (default 5) are made.
-/// ``working_resolution`` is the side of the working grid in samples; the
+/// ``acceptance`` is the rule a rendered turn is kept by:
+/// ``"windowed_zncc"`` (the default), kept only when the views' mean windowed
+/// ZNCC against the reference does not fall, or ``"none"``, every turn kept.
+/// ``max_normal_precision_deg`` (default ``None``) is a bar on the plane's
+/// predicted precision in degrees: a plane predicted less precise proposes
+/// no turn, and the step ends ``"undetermined"``. ``working_resolution`` is the side of the working grid in samples; the
 /// default ``None`` follows the reference view's footprint of the patch,
 /// about one sample per photograph pixel, clamped to ``R`` to ``2R`` for
 /// ``R`` the bitmap's resolution. Every default is the Rust step's.
@@ -383,8 +436,16 @@ fn finite_difference_normal(
 /// ``plane_rms`` and ``plane_offset`` (world units, ``NaN`` where there is no
 /// plane), ``working_resolution``, ``iterations`` (renders made), and
 /// ``score_before`` and ``score_after`` (the acceptance score at the start
-/// and at the last render kept). Raises ``ValueError`` with the reason when
-/// the step is refused.
+/// and at the last render kept), ``normal_precision_deg`` (the last kept
+/// render's plane's predicted precision in degrees, along its weaker in-plane
+/// axis under both axes and along the fixed one under one axis, ``NaN``
+/// with no axis fixed), ``view_baseline_deg`` (the largest angle between two
+/// ``in`` sightings' directions from the patch centre) and ``trace``, one
+/// dict per render in order with ``score``, ``determinacy``, ``in_plane``,
+/// ``normal_precision_deg``, ``gated`` (the precision bar stopped its turn),
+/// ``proposed_normal`` (the normal its turn reaches, or ``None``),
+/// ``largest_move_px`` (grid px, ``NaN`` with no turn) and ``taken``.
+/// Raises ``ValueError`` with the reason when the step is refused.
 #[pyfunction]
 #[pyo3(signature = (
     track,
@@ -397,6 +458,8 @@ fn finite_difference_normal(
     min_cell_curvature = None,
     update_tolerance_px = None,
     max_iterations = None,
+    acceptance = "windowed_zncc",
+    max_normal_precision_deg = None,
     max_seed_offset_px = None,
     max_cache_bytes = None,
     sigma_px = None,
@@ -414,6 +477,8 @@ fn grid_plane_normal(
     min_cell_curvature: Option<f32>,
     update_tolerance_px: Option<f32>,
     max_iterations: Option<u8>,
+    acceptance: &str,
+    max_normal_precision_deg: Option<f64>,
     max_seed_offset_px: Option<f64>,
     max_cache_bytes: Option<usize>,
     sigma_px: Option<f64>,
@@ -427,6 +492,8 @@ fn grid_plane_normal(
         min_cell_curvature: min_cell_curvature.unwrap_or(defaults.min_cell_curvature),
         update_tolerance_px: update_tolerance_px.unwrap_or(defaults.update_tolerance_px),
         max_iterations: max_iterations.unwrap_or(defaults.max_iterations),
+        acceptance: parse_acceptance(acceptance)?,
+        max_normal_precision_deg,
         fit: fit_options(
             max_seed_offset_px,
             max_cache_bytes,

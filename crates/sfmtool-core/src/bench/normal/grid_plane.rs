@@ -23,12 +23,14 @@
 //! the step; `specs/drafts/piece-gated-grid-normal.md` is the design it is
 //! built from.
 
+use std::cell::RefCell;
+
 use nalgebra::Vector3;
 
 use crate::camera::sampler::{render_phase, render_tile};
 use crate::camera::warp_map::{patch_grid_jacobian, singular_values_2x2};
 use crate::camera::WarpMap;
-use crate::patch::cell_plane_fit::{fit_cell_plane, CellRay, PosedView};
+use crate::patch::cell_plane_fit::{fit_cell_plane, normal_precision_deg, CellRay, PosedView};
 use crate::patch::cell_plane_normals::{
     CellPlaneNormal, CellPlaneParams, CellPlaneStatus, NormalDeterminacy,
 };
@@ -99,6 +101,15 @@ pub struct GridPlaneNormalOptions {
     /// turn is not taken unless it is under
     /// [`Self::update_tolerance_px`].
     pub max_iterations: u8,
+    /// Which rule decides whether a rendered turn is kept.
+    /// [`GridPlaneAcceptance::WindowedZncc`] by default.
+    pub acceptance: GridPlaneAcceptance,
+    /// A plane whose predicted precision
+    /// ([`GridPlaneIteration::normal_precision_deg`]) is worse than this, in
+    /// degrees, or not finite, proposes no turn, so a loop that meets one ends
+    /// [`LoopStop::Measured`] and the step [`GridPlaneOutcome::Undetermined`].
+    /// `None`, the default, gates nothing.
+    pub max_normal_precision_deg: Option<f64>,
     /// The reading the step ends with, the sampler the context tiles are
     /// rendered with (`refine.sampler`), and the reference-view rule's
     /// grazing gate and sampler (`localize`).
@@ -116,9 +127,59 @@ impl Default for GridPlaneNormalOptions {
             plane: CellPlaneParams::default(),
             update_tolerance_px: piecewise.update_tolerance_px,
             max_iterations: piecewise.max_iterations,
+            acceptance: GridPlaneAcceptance::WindowedZncc,
+            max_normal_precision_deg: None,
             fit: FitOptions::default(),
         }
     }
+}
+
+/// Which rule [`grid_plane_normal`]'s loop keeps a rendered turn by.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GridPlaneAcceptance {
+    /// The piecewise loop's rule: a turn is kept only when the mean windowed
+    /// ZNCC of the views against the reference does not fall by more than
+    /// [`ACCEPT_ZNCC_TOLERANCE`], nor below its starting value
+    /// ([`GridPlaneCells::score_before`]).
+    WindowedZncc,
+    /// Every rendered turn is kept; the loop stops only on the tolerance, the
+    /// render cap, an oscillation (keeping the later frame), or a plane that
+    /// proposes no turn. For measuring what the planes propose without the
+    /// score's veto.
+    None,
+}
+
+/// One render of [`grid_plane_normal`]'s loop and the turn its cells asked
+/// for: the loop's trace, in render order.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GridPlaneIteration {
+    /// The acceptance score at this render; `NaN` when no view scored.
+    pub score: f64,
+    /// Which axes of the normal this render's cells fixed.
+    pub determinacy: NormalDeterminacy,
+    /// How many cells the plane fit gave weight.
+    pub in_plane: usize,
+    /// The precision the plane fit's weights predict for the normal, degrees:
+    /// `σ = 1 / √(Σⱼ wⱼ (dⱼ · e)²)` along the plane's weaker in-plane axis `e`
+    /// under [`NormalDeterminacy::BothAxes`], and along the line the cells
+    /// lie on, the one axis they fix, under [`NormalDeterminacy::OneAxis`];
+    /// `NaN` under [`NormalDeterminacy::None`].
+    pub normal_precision_deg: f64,
+    /// Whether [`GridPlaneNormalOptions::max_normal_precision_deg`] stopped
+    /// this render's turn from being proposed.
+    pub gated: bool,
+    /// The outward normal the proposed turn reaches, world frame; `None`
+    /// when this render proposed no turn (no axis fixed, gated, or the loop
+    /// stopped at this render before proposing).
+    pub proposed_normal: Option<[f64; 3]>,
+    /// The farthest the proposed turn moves a cell centre, grid px; `NaN`
+    /// with no turn.
+    pub largest_move_px: f64,
+    /// Whether the loop took the proposed turn: under the tolerance, or
+    /// rendered and kept. A turn taken in a loop that does not end
+    /// [`LoopStop::Converged`] is still not applied to the track (see
+    /// [`GridPlaneOutcome`]).
+    pub taken: bool,
 }
 
 /// What the cells said, carried by [`NormalEstimate::GridPlaneCells`]. Every
@@ -171,6 +232,15 @@ pub struct GridPlaneCells {
     pub score_after: f64,
     /// Whether the step turned the patch, and if not, why not.
     pub outcome: GridPlaneOutcome,
+    /// The predicted precision of the last kept render's plane, degrees, as
+    /// [`GridPlaneIteration::normal_precision_deg`].
+    pub normal_precision_deg: f64,
+    /// The views' baseline: the largest angle between two of the rendered
+    /// `in` sightings' directions from the patch centre at the starting
+    /// frame, degrees; `NaN` with fewer than two.
+    pub view_baseline_deg: f64,
+    /// Every render of the loop, in order.
+    pub trace: Vec<GridPlaneIteration>,
 }
 
 /// What [`grid_plane_normal`] made of the cells: whether it turned the patch
@@ -327,7 +397,9 @@ pub fn grid_plane_normal(
         .unwrap_or(options.fit.refine.resolution)
         .max(MIN_WORKING_RESOLUTION);
     let cells = Cells::new(track, images, base, options, progress);
-
+    // One entry per render: `measure` opens it, `propose` fills in the turn,
+    // and the loop's decisions mark the turns it took.
+    let trace: RefCell<Vec<GridPlaneIteration>> = RefCell::new(Vec::new());
     let end = {
         let mut phase = progress.phase("grid plane normal");
         let tolerance = f64::from(options.update_tolerance_px);
@@ -335,13 +407,47 @@ pub fn grid_plane_normal(
             track.clone(),
             options.max_iterations,
             tolerance,
-            |t: &EditableTrack| cells.measure(t),
+            options.acceptance,
+            |t: &EditableTrack| {
+                let m = cells.measure(t)?;
+                trace.borrow_mut().push(GridPlaneIteration {
+                    score: m.score,
+                    determinacy: m.plane.determinacy,
+                    in_plane: in_plane_count(&m.plane),
+                    normal_precision_deg: m.precision_deg,
+                    gated: false,
+                    proposed_normal: None,
+                    largest_move_px: f64::NAN,
+                    taken: false,
+                });
+                Ok::<_, NormalError>(m)
+            },
             |m: &Measurement| m.score,
-            |t: &EditableTrack, m: &Measurement| cells.propose(t, edited, m),
+            |t: &EditableTrack, m: &Measurement| {
+                let proposal = cells.propose(t, edited, m)?;
+                let mut trace = trace.borrow_mut();
+                let entry = trace.last_mut().expect("a render precedes every proposal");
+                match &proposal {
+                    Proposal::Turn { normal, moved, .. } => {
+                        entry.proposed_normal = Some(*normal);
+                        entry.largest_move_px = *moved;
+                    }
+                    Proposal::Gated => entry.gated = true,
+                    Proposal::Nothing => {}
+                }
+                Ok(proposal.into_turn())
+            },
         )?;
         progress_note!(phase, "{} renders", end.iterations);
         end
     };
+    // The loop's decisions, one per proposal, in the order it met them; a
+    // proposal is always made from the latest render.
+    let mut trace = trace.into_inner();
+    let mut decisions = end.taken.iter();
+    for entry in trace.iter_mut().filter(|e| e.proposed_normal.is_some()) {
+        entry.taken = decisions.next().copied().unwrap_or(false);
+    }
 
     let kept = frame_of(&end.state);
     // Only a converged loop turns the patch; any other ending leaves the
@@ -366,13 +472,16 @@ pub fn grid_plane_normal(
         score_before: end.start_score,
         score_after: measured.score,
         outcome,
+        normal_precision_deg: measured.precision_deg,
+        view_baseline_deg: cells.baseline_deg,
+        trace,
     };
     turn_and_read(
         track,
         edited,
         images,
         normal,
-        NormalEstimate::GridPlaneCells(report),
+        NormalEstimate::GridPlaneCells(Box::new(report)),
         &options.fit,
         progress,
     )
@@ -395,6 +504,44 @@ struct Cells<'a, 'v> {
     /// the cluster refinement's default window, which the piecewise loop's
     /// whole-member ZNCC reads with.
     window: Vec<f64>,
+    /// The largest angle between two rows' sighting directions from the
+    /// starting frame's centre, degrees.
+    baseline_deg: f64,
+}
+
+/// What one render's cells ask of the loop.
+enum Proposal {
+    /// Turn to `state`, which reaches `normal` and moves the farthest cell
+    /// centre `moved` grid px.
+    Turn {
+        state: Box<EditableTrack>,
+        normal: [f64; 3],
+        moved: f64,
+    },
+    /// The cells fix an axis, but the plane's predicted precision fails
+    /// [`GridPlaneNormalOptions::max_normal_precision_deg`].
+    Gated,
+    /// The cells fix no axis.
+    Nothing,
+}
+
+impl Proposal {
+    /// The turn as [`turn_loop`] takes it.
+    fn into_turn(self) -> Option<(EditableTrack, f64)> {
+        match self {
+            Proposal::Turn { state, moved, .. } => Some((*state, moved)),
+            Proposal::Gated | Proposal::Nothing => None,
+        }
+    }
+}
+
+/// How many cells `plane` gave weight.
+fn in_plane_count(plane: &CellPlaneNormal) -> usize {
+    plane
+        .cell_status
+        .iter()
+        .filter(|&&s| s == CellPlaneStatus::InPlane)
+        .count()
 }
 
 /// One render of every view at one frame, and what the cells said.
@@ -403,6 +550,26 @@ struct Measurement {
     view_cells: Vec<[CellStatus; 9]>,
     /// The acceptance score, `NaN` when no view scored.
     score: f64,
+    /// The plane's predicted precision, degrees, along the axis its verdict
+    /// turns (see [`GridPlaneIteration::normal_precision_deg`]).
+    precision_deg: f64,
+}
+
+impl Measurement {
+    fn new(plane: CellPlaneNormal, view_cells: Vec<[CellStatus; 9]>, score: f64) -> Self {
+        let [weak, strong] = normal_precision_deg(&plane);
+        let precision_deg = match plane.determinacy {
+            NormalDeterminacy::BothAxes => weak,
+            NormalDeterminacy::OneAxis { .. } => strong,
+            NormalDeterminacy::None => f64::NAN,
+        };
+        Measurement {
+            plane,
+            view_cells,
+            score,
+            precision_deg,
+        }
+    }
 }
 
 /// One view's context tile.
@@ -486,6 +653,15 @@ impl<'a, 'v> Cells<'a, 'v> {
             .flatten()
             .map(|c| c[0].hypot(c[1]))
             .fold(0.0, f64::max);
+        let baseline_deg = view_baseline_deg(
+            frame.center.coords,
+            rows.iter().map(|&i| {
+                images[track.observations[i].image as usize]
+                    .cam_from_world
+                    .inverse_translation_origin()
+                    .coords
+            }),
+        );
         Self {
             images,
             options,
@@ -496,6 +672,7 @@ impl<'a, 'v> Cells<'a, 'v> {
             reference,
             reach,
             window: window_weights(ClusterRefineParams::default().window, resolution),
+            baseline_deg,
         }
     }
 
@@ -509,10 +686,12 @@ impl<'a, 'v> Cells<'a, 'v> {
         let params = &self.options.plane;
         let mut view_cells = vec![[CellStatus::NotAttempted; 9]; track.observations.len()];
         let mut rays: [Vec<CellRay>; 9] = Default::default();
-        let nothing = |view_cells| Measurement {
-            plane: fit_cell_plane(&Default::default(), params),
-            view_cells,
-            score: f64::NAN,
+        let nothing = |view_cells| {
+            Measurement::new(
+                fit_cell_plane(&Default::default(), params),
+                view_cells,
+                f64::NAN,
+            )
         };
 
         let Some(reference) = self.reference else {
@@ -592,24 +771,34 @@ impl<'a, 'v> Cells<'a, 'v> {
         } else {
             scores.iter().sum::<f64>() / scores.len() as f64
         };
-        Ok(Measurement {
-            plane: fit_cell_plane(&rays, params),
+        Ok(Measurement::new(
+            fit_cell_plane(&rays, params),
             view_cells,
             score,
-        })
+        ))
     }
 
-    /// The turn the cells of `measured` ask of `track`, and the farthest it
-    /// moves a cell centre, in grid px; `None` when they fix no axis.
+    /// The turn the cells of `measured` ask of `track`, with the normal it
+    /// reaches and the farthest it moves a cell centre, in grid px; none when
+    /// they fix no axis or the plane fails the precision gate.
     fn propose(
         &self,
         track: &EditableTrack,
         edited: &EditedReconstruction,
         measured: &Measurement,
-    ) -> Result<Option<(EditableTrack, f64)>, NormalError> {
+    ) -> Result<Proposal, NormalError> {
         let was = frame_of(track).normal();
+        if measured.plane.determinacy == NormalDeterminacy::None {
+            return Ok(Proposal::Nothing);
+        }
+        if let Some(bar) = self.options.max_normal_precision_deg {
+            // A precision that is not finite is under no bar.
+            if measured.precision_deg.is_nan() || measured.precision_deg > bar {
+                return Ok(Proposal::Gated);
+            }
+        }
         let target = match measured.plane.determinacy {
-            NormalDeterminacy::None => return Ok(None),
+            NormalDeterminacy::None => return Ok(Proposal::Nothing),
             NormalDeterminacy::BothAxes => {
                 let n = Vector3::from(measured.plane.normal);
                 // A plane has no sign: keep the face the patch shows.
@@ -623,19 +812,23 @@ impl<'a, 'v> Cells<'a, 'v> {
                 let line = Vector3::from(free_axis);
                 let length = line.norm();
                 if length.is_nan() || length <= 0.0 {
-                    return Ok(None);
+                    return Ok(Proposal::Nothing);
                 }
                 perpendicular_part(was, line / length).unwrap_or(was)
             }
         };
         if !target.iter().all(|c| c.is_finite()) {
-            return Ok(None);
+            return Ok(Proposal::Nothing);
         }
         let (turned, tilt) = tilt_patch(track, edited, target)?;
         // A turn by `θ` about the centre carries a cell centre `ρ` grid px
         // from it through a chord of `2ρ sin(θ/2)`.
         let largest_move = 2.0 * self.reach * (tilt.degrees.to_radians() / 2.0).sin();
-        Ok(Some((turned, largest_move)))
+        Ok(Proposal::Turn {
+            state: Box::new(turned),
+            normal: tilt.normal.into(),
+            moved: largest_move,
+        })
     }
 
     /// One view's context tile at `frame`: the patch re-anchored on
@@ -692,6 +885,26 @@ impl<'a, 'v> Cells<'a, 'v> {
             channels,
         })
     }
+}
+
+/// The largest angle between two of the directions from `centre` to the
+/// camera centres, degrees; `NaN` with fewer than two usable directions.
+fn view_baseline_deg(centre: Vector3<f64>, cameras: impl Iterator<Item = Vector3<f64>>) -> f64 {
+    let directions: Vec<Vector3<f64>> = cameras
+        .filter_map(|c| (c - centre).try_normalize(1e-12))
+        .collect();
+    let mut widest = f64::NAN;
+    for (i, a) in directions.iter().enumerate() {
+        for b in &directions[i + 1..] {
+            let angle = a.dot(b).clamp(-1.0, 1.0).acos().to_degrees();
+            widest = if widest.is_nan() {
+                angle
+            } else {
+                widest.max(angle)
+            };
+        }
+    }
+    widest
 }
 
 /// How far over a whole number of photograph pixels a footprint may read and
@@ -898,6 +1111,8 @@ struct LoopEnd<T, M> {
     stop: LoopStop,
     /// The score of the starting state.
     start_score: f64,
+    /// For each proposal, in order, whether the loop took it.
+    taken: Vec<bool>,
 }
 
 /// The piecewise refinement's two-level loop with the measurement and the
@@ -917,10 +1132,14 @@ struct LoopEnd<T, M> {
 /// states scores higher ([`LoopStop::Oscillation`]). A start that does not
 /// score stops at once ([`LoopStop::NotRun`]), and a measurement that asks for
 /// no turn stops where it is ([`LoopStop::Measured`]).
+///
+/// Under [`GridPlaneAcceptance::None`] the score decides nothing after the
+/// start: no turn is rejected, and an oscillation ends on the later state.
 fn turn_loop<T, M, E>(
     start: T,
     max_iterations: u8,
     tolerance: f64,
+    acceptance: GridPlaneAcceptance,
     mut measure: impl FnMut(&T) -> Result<M, E>,
     score: impl Fn(&M) -> f64,
     mut propose: impl FnMut(&T, &M) -> Result<Option<(T, f64)>, E>,
@@ -930,29 +1149,34 @@ fn turn_loop<T, M, E>(
     let mut measured = measure(&state)?;
     let mut iterations = 1u8;
     let start_score = score(&measured);
-    let end = |state, measured, iterations, stop| {
+    let mut taken: Vec<bool> = Vec::new();
+    let end = |state, measured, iterations, stop, taken| {
         Ok(LoopEnd {
             state,
             measured,
             iterations,
             stop,
             start_score,
+            taken,
         })
     };
     if !start_score.is_finite() {
-        return end(state, measured, iterations, LoopStop::NotRun);
+        return end(state, measured, iterations, LoopStop::NotRun, taken);
     }
+    let scored = acceptance == GridPlaneAcceptance::WindowedZncc;
     let mut current = start_score;
     let mut previous_move = f64::INFINITY;
     loop {
         let Some((next, largest_move)) = propose(&state, &measured)? else {
-            return end(state, measured, iterations, LoopStop::Measured);
+            return end(state, measured, iterations, LoopStop::Measured, taken);
         };
         if largest_move <= tolerance {
-            return end(next, measured, iterations, LoopStop::Converged);
+            taken.push(true);
+            return end(next, measured, iterations, LoopStop::Converged, taken);
         }
         if iterations >= max_iterations {
-            return end(state, measured, iterations, LoopStop::Cap);
+            taken.push(false);
+            return end(state, measured, iterations, LoopStop::Cap, taken);
         }
         let next_measured = measure(&next)?;
         iterations += 1;
@@ -960,16 +1184,26 @@ fn turn_loop<T, M, E>(
         // The floor: the current score less the tolerance, but never below
         // the start's, so the tolerance cannot accumulate over several turns.
         let floor = (current - ACCEPT_ZNCC_TOLERANCE).max(start_score);
-        if next_score.is_nan() || next_score < floor {
-            return end(state, measured, iterations, LoopStop::Rejected);
+        if scored && (next_score.is_nan() || next_score < floor) {
+            taken.push(false);
+            return end(state, measured, iterations, LoopStop::Rejected, taken);
         }
         if largest_move >= previous_move {
-            return if next_score >= current {
-                end(next, next_measured, iterations, LoopStop::Oscillation)
+            let keep_next = !scored || next_score >= current;
+            taken.push(keep_next);
+            return if keep_next {
+                end(
+                    next,
+                    next_measured,
+                    iterations,
+                    LoopStop::Oscillation,
+                    taken,
+                )
             } else {
-                end(state, measured, iterations, LoopStop::Oscillation)
+                end(state, measured, iterations, LoopStop::Oscillation, taken)
             };
         }
+        taken.push(true);
         (state, measured, current) = (next, next_measured, next_score);
         previous_move = largest_move;
     }

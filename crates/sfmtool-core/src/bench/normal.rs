@@ -32,7 +32,10 @@ use super::track::{EditableTrack, Stage, StageKind};
 
 mod grid_plane;
 
-pub use grid_plane::{grid_plane_normal, GridPlaneCells, GridPlaneNormalOptions, GridPlaneOutcome};
+pub use grid_plane::{
+    grid_plane_normal, GridPlaneAcceptance, GridPlaneCells, GridPlaneIteration,
+    GridPlaneNormalOptions, GridPlaneOutcome,
+};
 
 /// The smallest number of pieces [`FiniteDifferenceOptions::pieces`] takes: two
 /// fitted centres are the fewest that fix a line.
@@ -299,7 +302,7 @@ pub enum NormalEstimate {
         off_plane: f64,
     },
     /// [`grid_plane_normal`]'s cells.
-    GridPlaneCells(GridPlaneCells),
+    GridPlaneCells(Box<GridPlaneCells>),
 }
 
 /// What one normal step did.
