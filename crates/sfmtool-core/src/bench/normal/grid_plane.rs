@@ -30,13 +30,15 @@ use nalgebra::Vector3;
 use crate::camera::sampler::{render_phase, render_tile};
 use crate::camera::warp_map::{patch_grid_jacobian, singular_values_2x2};
 use crate::camera::WarpMap;
-use crate::patch::cell_plane_fit::{fit_cell_plane, normal_precision_deg, CellRay, PosedView};
+use crate::patch::cell_plane_fit::{
+    fit_cell_plane_recorded, normal_precision_deg, CellPlaneRecord, CellRay, PosedView,
+};
 use crate::patch::cell_plane_normals::{
     CellPlaneNormal, CellPlaneParams, CellPlaneStatus, NormalDeterminacy,
 };
 use crate::patch::cell_registration::{
     fit_pass, read_cells, CellGateOptions, CellLayout, CellReading, CellTemplate, CellTemplates,
-    WorkingPatch,
+    Pass, UpdateModel, WorkingPatch,
 };
 use crate::patch::cloud::OrientedPatch;
 use crate::patch::cluster_refine::{
@@ -56,6 +58,14 @@ use super::super::track::EditableTrack;
 use super::{
     frame_of, normal_preconditions, perpendicular_part, turn_and_read, NormalError, NormalEstimate,
     NormalReport,
+};
+
+mod detail;
+
+pub use detail::{
+    GridPlaneCell, GridPlaneDetail, GridPlaneFitModel, GridPlaneFrame, GridPlaneLayout,
+    GridPlanePlane, GridPlaneRay, GridPlaneRender, GridPlaneTile, GridPlaneView, GridPlaneViewCell,
+    GridPlaneViewFit,
 };
 
 /// The smallest working grid the step renders: three samples a side are the
@@ -114,6 +124,11 @@ pub struct GridPlaneNormalOptions {
     /// rendered with (`refine.sampler`), and the reference-view rule's
     /// grazing gate and sampler (`localize`).
     pub fit: FitOptions,
+    /// Keep a [`GridPlaneDetail`] of every render in
+    /// [`GridPlaneCells::detail`]: the tiles, every cell's reading in every
+    /// view, each view's affine fit, each cell's rays and triangulation, and
+    /// the plane. Off by default; the step's result does not depend on it.
+    pub record_detail: bool,
 }
 
 impl Default for GridPlaneNormalOptions {
@@ -130,6 +145,7 @@ impl Default for GridPlaneNormalOptions {
             acceptance: GridPlaneAcceptance::WindowedZncc,
             max_normal_precision_deg: None,
             fit: FitOptions::default(),
+            record_detail: false,
         }
     }
 }
@@ -241,6 +257,9 @@ pub struct GridPlaneCells {
     pub view_baseline_deg: f64,
     /// Every render of the loop, in order.
     pub trace: Vec<GridPlaneIteration>,
+    /// What the step read and decided at every render, with
+    /// [`GridPlaneNormalOptions::record_detail`]; `None` without it.
+    pub detail: Option<Box<GridPlaneDetail>>,
 }
 
 /// What [`grid_plane_normal`] made of the cells: whether it turned the patch
@@ -400,6 +419,8 @@ pub fn grid_plane_normal(
     // One entry per render: `measure` opens it, `propose` fills in the turn,
     // and the loop's decisions mark the turns it took.
     let trace: RefCell<Vec<GridPlaneIteration>> = RefCell::new(Vec::new());
+    // One entry per render, when the detail is recorded.
+    let renders: RefCell<Vec<GridPlaneRender>> = RefCell::new(Vec::new());
     let end = {
         let mut phase = progress.phase("grid plane normal");
         let tolerance = f64::from(options.update_tolerance_px);
@@ -409,7 +430,10 @@ pub fn grid_plane_normal(
             tolerance,
             options.acceptance,
             |t: &EditableTrack| {
-                let m = cells.measure(t)?;
+                let mut m = cells.measure(t)?;
+                if let Some(render) = m.record.take() {
+                    renders.borrow_mut().push(*render);
+                }
                 trace.borrow_mut().push(GridPlaneIteration {
                     score: m.score,
                     determinacy: m.plane.determinacy,
@@ -448,6 +472,16 @@ pub fn grid_plane_normal(
     for entry in trace.iter_mut().filter(|e| e.proposed_normal.is_some()) {
         entry.taken = decisions.next().copied().unwrap_or(false);
     }
+    let detail = options.record_detail.then(|| {
+        let mut renders = renders.into_inner();
+        for (render, entry) in renders.iter_mut().zip(&trace) {
+            render.iteration = entry.clone();
+        }
+        Box::new(GridPlaneDetail {
+            layout: cells.layout_record(),
+            renders,
+        })
+    });
 
     let kept = frame_of(&end.state);
     // Only a converged loop turns the patch; any other ending leaves the
@@ -475,6 +509,7 @@ pub fn grid_plane_normal(
         normal_precision_deg: measured.precision_deg,
         view_baseline_deg: cells.baseline_deg,
         trace,
+        detail,
     };
     turn_and_read(
         track,
@@ -553,21 +588,35 @@ struct Measurement {
     /// The plane's predicted precision, degrees, along the axis its verdict
     /// turns (see [`GridPlaneIteration::normal_precision_deg`]).
     precision_deg: f64,
+    /// The render's detail, with [`GridPlaneNormalOptions::record_detail`];
+    /// the loop moves it into the report as the render is made.
+    record: Option<Box<GridPlaneRender>>,
 }
 
 impl Measurement {
-    fn new(plane: CellPlaneNormal, view_cells: Vec<[CellStatus; 9]>, score: f64) -> Self {
+    /// The measurement of a render whose cells `plane` fitted, finishing
+    /// `record`'s plane where it is kept.
+    fn new(
+        plane: CellPlaneNormal,
+        view_cells: Vec<[CellStatus; 9]>,
+        score: f64,
+        mut record: Option<Box<GridPlaneRender>>,
+    ) -> Self {
         let [weak, strong] = normal_precision_deg(&plane);
         let precision_deg = match plane.determinacy {
             NormalDeterminacy::BothAxes => weak,
             NormalDeterminacy::OneAxis { .. } => strong,
             NormalDeterminacy::None => f64::NAN,
         };
+        if let Some(record) = record.as_deref_mut() {
+            record.plane.precision_deg = [weak, strong];
+        }
         Measurement {
             plane,
             view_cells,
             score,
             precision_deg,
+            record,
         }
     }
 }
@@ -676,6 +725,18 @@ impl<'a, 'v> Cells<'a, 'v> {
         }
     }
 
+    /// The working grid and its cells as the detail record states them.
+    fn layout_record(&self) -> GridPlaneLayout {
+        let layout = &self.layout;
+        GridPlaneLayout {
+            working_resolution: layout.resolution as u32,
+            margin: layout.margin as u32,
+            reach: layout.reach as u32,
+            cell_bounds: layout.bounds.map(|b| b as u32),
+            cell_centres: std::array::from_fn(|k| layout.centres[k / 3][k % 3]),
+        }
+    }
+
     /// Render every view at `track`'s frame, register and gate its cells,
     /// triangulate them and fit the plane, and score the views against the
     /// reference.
@@ -686,23 +747,32 @@ impl<'a, 'v> Cells<'a, 'v> {
         let params = &self.options.plane;
         let mut view_cells = vec![[CellStatus::NotAttempted; 9]; track.observations.len()];
         let mut rays: [Vec<CellRay>; 9] = Default::default();
-        let nothing = |view_cells| {
-            Measurement::new(
-                fit_cell_plane(&Default::default(), params),
-                view_cells,
-                f64::NAN,
-            )
+        // The render's detail, only when it is asked for.
+        let mut record = self
+            .options
+            .record_detail
+            .then(|| Box::new(empty_render(&frame)));
+        let mut plane_record = record.as_ref().map(|_| CellPlaneRecord::empty());
+        let nothing = |view_cells, mut record: Option<Box<GridPlaneRender>>| {
+            let plane = fit_cell_plane_recorded(&Default::default(), params, None);
+            if let Some(record) = record.as_deref_mut() {
+                record_plane(record, &plane, &CellPlaneRecord::empty());
+            }
+            Measurement::new(plane, view_cells, f64::NAN, record)
         };
 
         let Some(reference) = self.reference else {
-            return Ok(nothing(view_cells));
+            return Ok(nothing(view_cells, record));
         };
         self.progress.check_cancel()?;
         let ref_observation = &track.observations[reference];
         let ref_view = &self.images[ref_observation.image as usize];
         let Some(ref_render) = self.render(&frame, ref_view, seed_of(ref_observation), 0) else {
-            return Ok(nothing(view_cells));
+            return Ok(nothing(view_cells, record));
         };
+        if let Some(record) = record.as_deref_mut() {
+            record.reference = Some(tile_record(reference, ref_observation.image, &ref_render));
+        }
         let planes = planar(&ref_render.samples, r * r, ref_render.channels);
         let templates = CellTemplates::from_planes(&planes, ref_render.channels, &self.layout);
         let src_channels: Vec<usize> = (0..ref_render.channels).collect();
@@ -711,14 +781,24 @@ impl<'a, 'v> Cells<'a, 'v> {
             let status = template_status(&templates.cells[k / 3][k % 3]);
             view_cells[reference][k] = status;
             if status == CellStatus::Fitted {
-                rays[k].extend(cell_ray(
+                if let Some((ray, pixel)) = cell_ray(
                     &ref_render.placement,
                     ref_view,
                     &ref_posed,
                     *centre,
                     wpp,
                     params,
-                ));
+                ) {
+                    if let Some(record) = record.as_deref_mut() {
+                        record.cells[k].rays.push(ray_record(
+                            reference,
+                            ref_observation.image,
+                            &ray,
+                            pixel,
+                        ));
+                    }
+                    rays[k].push(ray);
+                }
             }
         }
 
@@ -736,18 +816,28 @@ impl<'a, 'v> Cells<'a, 'v> {
             else {
                 continue;
             };
-            if let Some(z) = tile_zncc(
+            let view_score = tile_zncc(
                 &planes,
                 ref_render.channels,
                 &render,
                 self.layout.margin,
                 &self.window,
-            ) {
+            );
+            if let Some(z) = view_score {
                 scores.push(z);
             }
             let patch = WorkingPatch::new(render.side, render.channels, render.samples.clone());
             let readings = read_cells(&templates, &src_channels, &patch, &self.layout, &self.gates);
-            let statuses = gated(readings, &self.layout);
+            let (statuses, pass) = gated(readings, &self.layout);
+            if let Some(record) = record.as_deref_mut() {
+                record.views.push(view_record(
+                    tile_record(row, observation.image, &render),
+                    view_score,
+                    &readings,
+                    &statuses,
+                    pass.as_ref(),
+                ));
+            }
             let posed = PosedView::new(view.camera, view.cam_from_world);
             for (k, (status, reading)) in statuses
                 .iter()
@@ -763,7 +853,16 @@ impl<'a, 'v> Cells<'a, 'v> {
                 }
                 let c = self.layout.centres[k / 3][k % 3];
                 let at = [c[0] + reading.shift[0], c[1] + reading.shift[1]];
-                rays[k].extend(cell_ray(&render.placement, view, &posed, at, wpp, params));
+                if let Some((ray, pixel)) =
+                    cell_ray(&render.placement, view, &posed, at, wpp, params)
+                {
+                    if let Some(record) = record.as_deref_mut() {
+                        record.cells[k]
+                            .rays
+                            .push(ray_record(row, observation.image, &ray, pixel));
+                    }
+                    rays[k].push(ray);
+                }
             }
         }
         let score = if scores.is_empty() {
@@ -771,11 +870,11 @@ impl<'a, 'v> Cells<'a, 'v> {
         } else {
             scores.iter().sum::<f64>() / scores.len() as f64
         };
-        Ok(Measurement::new(
-            fit_cell_plane(&rays, params),
-            view_cells,
-            score,
-        ))
+        let plane = fit_cell_plane_recorded(&rays, params, plane_record.as_mut());
+        if let (Some(record), Some(plane_record)) = (record.as_deref_mut(), &plane_record) {
+            record_plane(record, &plane, plane_record);
+        }
+        Ok(Measurement::new(plane, view_cells, score, record))
     }
 
     /// The turn the cells of `measured` ask of `track`, with the normal it
@@ -965,8 +1064,12 @@ fn template_status(template: &CellTemplate) -> CellStatus {
 /// The statuses of one view's readings after the view's robust affine fit: a
 /// fitted cell the fit gives no weight is an outlier, and where the fit fails
 /// (its map reflects or is not finite) no cell of the view is kept, as the
-/// piecewise refinement stores a failed fit.
-fn gated(readings: [[CellReading; 3]; 3], layout: &CellLayout) -> [[CellStatus; 3]; 3] {
+/// piecewise refinement stores a failed fit. Returns the fit too, `None` where
+/// it failed or no cell passed its own gates.
+fn gated(
+    readings: [[CellReading; 3]; 3],
+    layout: &CellLayout,
+) -> ([[CellStatus; 3]; 3], Option<Pass>) {
     let mut statuses = readings.map(|line| line.map(|reading| reading.status));
     let pass = fit_pass(readings, layout);
     for (row, line) in statuses.iter_mut().enumerate() {
@@ -981,14 +1084,15 @@ fn gated(readings: [[CellReading; 3]; 3], layout: &CellLayout) -> [[CellStatus; 
             };
         }
     }
-    statuses
+    (statuses, pass)
 }
 
 /// The ray through the photograph's pixel under grid position `at` of a
 /// render through `placement`, in grid px centred on the grid. Its noise floor
 /// is a measured shift's precision carried into the view's pixels by the
 /// render map's local Jacobian, floored at the kernel's absolute floor.
-/// `None` where the position does not project.
+/// Returns the ray with the pixel it passes through; `None` where the
+/// position does not project.
 fn cell_ray(
     placement: &OrientedPatch,
     view: &ProjectedImage<'_>,
@@ -996,7 +1100,7 @@ fn cell_ray(
     at: [f64; 2],
     wpp: f64,
     params: &CellPlaneParams,
-) -> Option<CellRay> {
+) -> Option<(CellRay, [f64; 2])> {
     let pixel = |gx: f64, gy: f64| {
         let world = shifted_center(placement, gx, gy, wpp, wpp);
         view.camera
@@ -1011,7 +1115,147 @@ fn cell_ray(
     ];
     let largest = singular_values_2x2(jacobian)[0];
     let floor = (params.cell_shift_precision_grid_px * largest).max(params.ray_noise_floor_px);
-    posed.ray_through(centre, floor)
+    posed.ray_through(centre, floor).map(|ray| (ray, centre))
+}
+
+/// A render's detail before anything is read: the frame, no tiles, no rays,
+/// and a plane with nothing fitted. The trace entry is filled in when the loop
+/// ends.
+fn empty_render(frame: &OrientedPatch) -> GridPlaneRender {
+    let nan3 = [f64::NAN; 3];
+    let cell = GridPlaneCell {
+        rays: Vec::new(),
+        status: CellPlaneStatus::TooFewRays,
+        position: nan3,
+        residual_px: f64::NAN,
+        sigma_px: f64::NAN,
+        normal_variance: f64::NAN,
+        precision_weight: 0.0,
+        tukey_weight: 0.0,
+        weight: 0.0,
+    };
+    GridPlaneRender {
+        frame: GridPlaneFrame {
+            center: frame.center.coords.into(),
+            u_axis: frame.u_axis.into(),
+            v_axis: frame.v_axis.into(),
+            normal: frame.normal().into(),
+            half_extent: frame.half_extent,
+        },
+        reference: None,
+        views: Vec::new(),
+        cells: std::array::from_fn(|_| cell.clone()),
+        plane: GridPlanePlane {
+            centroid: nan3,
+            fitted_normal: nan3,
+            normal: nan3,
+            determinacy: NormalDeterminacy::None,
+            scatter_eigenvalues: nan3,
+            anisotropy: f64::NAN,
+            n_eff: f64::NAN,
+            plane_rms: f64::NAN,
+            precision_deg: [f64::NAN; 2],
+        },
+        iteration: GridPlaneIteration {
+            score: f64::NAN,
+            determinacy: NormalDeterminacy::None,
+            in_plane: 0,
+            normal_precision_deg: f64::NAN,
+            gated: false,
+            proposed_normal: None,
+            largest_move_px: f64::NAN,
+            taken: false,
+        },
+    }
+}
+
+/// The detail record of `render`, the tile of `observation` in `image`.
+fn tile_record(observation: usize, image: u32, render: &Render) -> GridPlaneTile {
+    GridPlaneTile {
+        observation,
+        image,
+        side: render.side as u32,
+        channels: render.channels as u32,
+        samples: render.samples.clone(),
+    }
+}
+
+/// The detail record of a ray of `observation` in `image` through `pixel`.
+fn ray_record(observation: usize, image: u32, ray: &CellRay, pixel: [f64; 2]) -> GridPlaneRay {
+    GridPlaneRay {
+        observation,
+        image,
+        pixel,
+        origin: ray.origin(),
+        direction: ray.direction(),
+        floor_px: ray.floor_px(),
+    }
+}
+
+/// The detail record of one view: its tile, its score, each cell's reading
+/// and gated status, and its robust fit.
+fn view_record(
+    tile: GridPlaneTile,
+    score: Option<f64>,
+    readings: &[[CellReading; 3]; 3],
+    statuses: &[[CellStatus; 3]; 3],
+    pass: Option<&Pass>,
+) -> GridPlaneView {
+    let cells = std::array::from_fn(|k| {
+        let (row, col) = (k / 3, k % 3);
+        let reading = readings[row][col];
+        GridPlaneViewCell {
+            whole_shift: reading.whole_shift,
+            shift: reading.shift,
+            zncc: reading.zncc,
+            curvature: reading.curvature,
+            reading: reading.status,
+            status: statuses[row][col],
+            fit_weight: pass.map_or(0.0, |p| p.weights[row][col]),
+        }
+    });
+    let fit = pass.map(|p| GridPlaneViewFit {
+        model: match p.model {
+            UpdateModel::Affine => GridPlaneFitModel::Affine,
+            UpdateModel::Similarity => GridPlaneFitModel::Similarity,
+            UpdateModel::Shift => GridPlaneFitModel::Shift,
+        },
+        a: p.update.a,
+        b: p.update.b,
+    });
+    GridPlaneView {
+        tile,
+        score,
+        cells,
+        fit,
+    }
+}
+
+/// Fill `record`'s cells and plane from the plane fit: `plane` and the
+/// numbers `fitted` kept of it. The predicted precision is filled in by
+/// [`Measurement::new`].
+fn record_plane(record: &mut GridPlaneRender, plane: &CellPlaneNormal, fitted: &CellPlaneRecord) {
+    for (k, cell) in record.cells.iter_mut().enumerate() {
+        cell.status = plane.cell_status[k];
+        cell.position = plane.cell_positions[k];
+        cell.residual_px = plane.cell_residual_px[k];
+        cell.sigma_px = fitted.sigma_px[k];
+        cell.normal_variance = fitted.normal_variance[k];
+        cell.precision_weight = fitted.precision_weight[k];
+        cell.tukey_weight = fitted.tukey_weight[k];
+        cell.weight = plane.cell_weight[k];
+    }
+    record.plane = GridPlanePlane {
+        centroid: fitted.centroid,
+        fitted_normal: fitted.fitted_normal,
+        normal: plane.normal,
+        determinacy: plane.determinacy,
+        scatter_eigenvalues: fitted.scatter_eigenvalues,
+        anisotropy: plane.anisotropy,
+        n_eff: plane.n_eff,
+        plane_rms: plane.plane_rms,
+        precision_deg: record.plane.precision_deg,
+    };
 }
 
 /// Interleaved `n × channels` samples as `channels` planes of `n`.

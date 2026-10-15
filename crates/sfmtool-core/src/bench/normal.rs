@@ -33,8 +33,10 @@ use super::track::{EditableTrack, Stage, StageKind};
 mod grid_plane;
 
 pub use grid_plane::{
-    grid_plane_normal, GridPlaneAcceptance, GridPlaneCells, GridPlaneIteration,
-    GridPlaneNormalOptions, GridPlaneOutcome,
+    grid_plane_normal, GridPlaneAcceptance, GridPlaneCell, GridPlaneCells, GridPlaneDetail,
+    GridPlaneFitModel, GridPlaneFrame, GridPlaneIteration, GridPlaneLayout, GridPlaneNormalOptions,
+    GridPlaneOutcome, GridPlanePlane, GridPlaneRay, GridPlaneRender, GridPlaneTile, GridPlaneView,
+    GridPlaneViewCell, GridPlaneViewFit,
 };
 
 /// The smallest number of pieces [`FiniteDifferenceOptions::pieces`] takes: two

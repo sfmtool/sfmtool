@@ -121,9 +121,9 @@ pub(crate) struct CellLayout {
     pub(crate) margin: usize,
     /// Half-width of the whole-shift search: the bound rounded down, at most
     /// `margin`.
-    pub(in crate::patch) reach: usize,
+    pub(crate) reach: usize,
     /// `[0, R/3, R - R/3, R]`.
-    pub(in crate::patch) bounds: [usize; 4],
+    pub(crate) bounds: [usize; 4],
     /// Cell centres in grid coordinates centred on the grid, `[x, y]`.
     pub(crate) centres: [[[f64; 2]; 3]; 3],
     /// The side of a corner cell, grid px.
@@ -357,16 +357,24 @@ pub(crate) struct CellReading {
     pub(crate) status: CellStatus,
     /// Sub-pixel shift, grid px; `NaN` where none was read.
     pub(crate) shift: [f64; 2],
-    pub(in crate::patch) zncc: f64,
-    /// The peak's curvature, the least-squares weight of a fitted cell.
-    pub(in crate::patch) curvature: f64,
+    /// The best whole shift of the search, grid px; `None` where the search
+    /// did not run to its end.
+    pub(crate) whole_shift: Option<[i64; 2]>,
+    /// The ZNCC at the optimum: the sub-pixel peak's where one was fitted, the
+    /// best whole shift's where the cell was refused before that, `NaN` where
+    /// the search did not run to its end.
+    pub(crate) zncc: f64,
+    /// The peak's curvature, the least-squares weight of a fitted cell; `0`
+    /// where no peak was fitted.
+    pub(crate) curvature: f64,
 }
 
 impl CellReading {
-    fn refused(status: CellStatus, zncc: f64) -> CellReading {
+    fn refused(status: CellStatus, zncc: f64, whole_shift: Option<[i64; 2]>) -> CellReading {
         CellReading {
             status,
             shift: [f64::NAN; 2],
+            whole_shift,
             zncc,
             curvature: 0.0,
         }
@@ -468,10 +476,10 @@ pub(in crate::patch) fn read_cell(
     col: usize,
 ) -> CellReading {
     if tc.missing {
-        return CellReading::refused(CellStatus::NotAttempted, f64::NAN);
+        return CellReading::refused(CellStatus::NotAttempted, f64::NAN, None);
     }
     if tc.channels.iter().all(Option::is_none) {
-        return CellReading::refused(CellStatus::RefusedCurvature, f64::NAN);
+        return CellReading::refused(CellStatus::RefusedCurvature, f64::NAN, None);
     }
     let n = layout.reach as i64;
     let w = (2 * n + 1) as usize;
@@ -480,7 +488,7 @@ pub(in crate::patch) fn read_cell(
     for dy in -n..=n {
         for dx in -n..=n {
             let Some(z) = cell_zncc_at(tc, src_channels, patch, layout, row, col, dx, dy) else {
-                return CellReading::refused(CellStatus::NotAttempted, f64::NAN);
+                return CellReading::refused(CellStatus::NotAttempted, f64::NAN, None);
             };
             let k = ((dy + n) as usize) * w + (dx + n) as usize;
             surface[k] = z;
@@ -493,7 +501,7 @@ pub(in crate::patch) fn read_cell(
     if bx.abs() >= n || by.abs() >= n {
         // No whole-pixel neighbour on one side: the optimum is at or past the
         // bound.
-        return CellReading::refused(CellStatus::RefusedBound, best.1);
+        return CellReading::refused(CellStatus::RefusedBound, best.1, Some([bx, by]));
     }
     let at = |dx: i64, dy: i64| surface[((by + dy + n) as usize) * w + (bx + dx + n) as usize];
     let z0 = at(0, 0);
@@ -508,7 +516,7 @@ pub(in crate::patch) fn read_cell(
     let curvature = half_trace - gap;
     let peaked = curvature > 0.0 && curvature >= f64::from(gates.min_cell_curvature);
     if !peaked {
-        return CellReading::refused(CellStatus::RefusedCurvature, best.1);
+        return CellReading::refused(CellStatus::RefusedCurvature, best.1, Some([bx, by]));
     }
     // The quadratic's peak, `K⁻¹·g`, kept within the whole pixel it was found
     // in.
@@ -525,6 +533,7 @@ pub(in crate::patch) fn read_cell(
     CellReading {
         status,
         shift: [bx as f64 + ox, by as f64 + oy],
+        whole_shift: Some([bx, by]),
         zncc,
         curvature,
     }
@@ -555,9 +564,9 @@ pub(crate) fn read_cells(
 
 /// The affine update `c ↦ A·c + b` in centred grid coordinates.
 #[derive(Clone, Copy, Debug)]
-pub(in crate::patch) struct Update {
-    pub(in crate::patch) a: [[f64; 2]; 2],
-    pub(in crate::patch) b: [f64; 2],
+pub(crate) struct Update {
+    pub(crate) a: [[f64; 2]; 2],
+    pub(crate) b: [f64; 2],
 }
 
 impl Update {
@@ -573,7 +582,7 @@ impl Update {
 /// Which model the update was fitted with, by the survivors' count and
 /// spread.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(in crate::patch) enum UpdateModel {
+pub(crate) enum UpdateModel {
     Affine,
     Similarity,
     Shift,
@@ -761,8 +770,8 @@ pub(in crate::patch) fn fit_update_robust(
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Pass {
     pub(in crate::patch) readings: [[CellReading; 3]; 3],
-    pub(in crate::patch) update: Update,
-    pub(in crate::patch) model: UpdateModel,
+    pub(crate) update: Update,
+    pub(crate) model: UpdateModel,
     /// Each cell's weight in the update's last fit: `0` for a cell that was
     /// not fitted, or that the robust fit refused.
     pub(crate) weights: [[f64; 3]; 3],

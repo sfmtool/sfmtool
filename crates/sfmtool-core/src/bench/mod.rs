@@ -92,8 +92,10 @@ pub use nearby::{
 };
 pub use normal::{
     finite_difference_normal, fit_normal, grid_plane_normal, normal_preconditions,
-    FiniteDifferenceOptions, FitNormalOptions, GridPlaneAcceptance, GridPlaneCells,
-    GridPlaneIteration, GridPlaneNormalOptions, GridPlaneOutcome, NormalError, NormalEstimate,
+    FiniteDifferenceOptions, FitNormalOptions, GridPlaneAcceptance, GridPlaneCell, GridPlaneCells,
+    GridPlaneDetail, GridPlaneFitModel, GridPlaneFrame, GridPlaneIteration, GridPlaneLayout,
+    GridPlaneNormalOptions, GridPlaneOutcome, GridPlanePlane, GridPlaneRay, GridPlaneRender,
+    GridPlaneTile, GridPlaneView, GridPlaneViewCell, GridPlaneViewFit, NormalError, NormalEstimate,
     NormalReport, PieceLayout,
 };
 pub use refit_points::{

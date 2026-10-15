@@ -87,6 +87,7 @@ impl<'a> PosedView<'a> {
 }
 
 /// One cell's sighting in one view.
+#[derive(Clone, Copy, Debug)]
 pub(crate) struct CellRay {
     origin: Vector3<f64>,
     dir: Vector3<f64>,
@@ -96,9 +97,71 @@ pub(crate) struct CellRay {
     floor_px: f64,
 }
 
+impl CellRay {
+    /// The camera centre the ray leaves from, world frame.
+    pub(crate) fn origin(&self) -> [f64; 3] {
+        self.origin.into()
+    }
+
+    /// The ray's unit direction, world frame.
+    pub(crate) fn direction(&self) -> [f64; 3] {
+        self.dir.into()
+    }
+
+    /// The ray's pixel-noise floor, in its view's pixels.
+    pub(crate) fn floor_px(&self) -> f64 {
+        self.floor_px
+    }
+}
+
+/// What [`fit_cell_plane_recorded`] keeps of the fit beyond
+/// [`CellPlaneNormal`]: the numbers the cells' weights and the verdict were
+/// made from. `NaN` (or `0` for a weight) wherever the fit did not reach the
+/// value.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct CellPlaneRecord {
+    /// Each cell's `σ`, pixels: its ray-intersection residual floored at the
+    /// root mean square of its rays' floors and at
+    /// [`CellPlaneParams::ray_noise_floor_px`].
+    pub(crate) sigma_px: [f64; 9],
+    /// Each cell's position variance along the normal its final weight was
+    /// computed with, world units squared.
+    pub(crate) normal_variance: [f64; 9],
+    /// Each cell's precision weight, the inverse of that variance; `0` where
+    /// the variance is not positive and finite.
+    pub(crate) precision_weight: [f64; 9],
+    /// Each cell's Tukey weight after the last IRLS round.
+    pub(crate) tukey_weight: [f64; 9],
+    /// The weighted centroid of the cells, world frame.
+    pub(crate) centroid: [f64; 3],
+    /// The least-variance direction of the weighted cells, sign-aligned to
+    /// the view direction, whatever the verdict.
+    pub(crate) fitted_normal: [f64; 3],
+    /// The eigenvalues, ascending, of the live cells' equal-weight scatter
+    /// projected onto the fitted plane, which the verdict reads.
+    pub(crate) scatter_eigenvalues: [f64; 3],
+}
+
+impl CellPlaneRecord {
+    /// Nothing recorded: every reading `NaN`, every weight `0`.
+    pub(crate) fn empty() -> Self {
+        Self {
+            sigma_px: [f64::NAN; 9],
+            normal_variance: [f64::NAN; 9],
+            precision_weight: [0.0; 9],
+            tukey_weight: [0.0; 9],
+            centroid: [f64::NAN; 3],
+            fitted_normal: [f64::NAN; 3],
+            scatter_eigenvalues: [f64::NAN; 3],
+        }
+    }
+}
+
 /// A triangulated cell.
 struct CellPoint {
     position: Vector3<f64>,
+    /// The `σ` the covariance was scaled by, pixels.
+    sigma_px: f64,
     /// Position covariance, world units squared.
     cov: Matrix3<f64>,
     /// Sum of unit directions from the point to the rays' cameras.
@@ -118,7 +181,20 @@ pub(crate) fn fit_cell_plane(
     cell_rays: &[Vec<CellRay>; 9],
     params: &CellPlaneParams,
 ) -> CellPlaneNormal {
+    fit_cell_plane_recorded(cell_rays, params, None)
+}
+
+/// [`fit_cell_plane`], also filling `record`, where given, with the numbers
+/// the weights and the verdict were made from.
+pub(crate) fn fit_cell_plane_recorded(
+    cell_rays: &[Vec<CellRay>; 9],
+    params: &CellPlaneParams,
+    mut record: Option<&mut CellPlaneRecord>,
+) -> CellPlaneNormal {
     let mut out = CellPlaneNormal::empty();
+    if let Some(record) = record.as_deref_mut() {
+        *record = CellPlaneRecord::empty();
+    }
 
     // ── Triangulation per cell ───────────────────────────────────────────
     let mut points: [Option<CellPoint>; 9] = Default::default();
@@ -129,6 +205,9 @@ pub(crate) fn fit_cell_plane(
                 out.cell_positions[j] = point.position.into();
                 out.cell_residual_px[j] = residual_px;
                 out.cell_status[j] = CellPlaneStatus::Positioned;
+                if let Some(record) = record.as_deref_mut() {
+                    record.sigma_px[j] = point.sigma_px;
+                }
                 points[j] = Some(point);
             }
             Err(status) => out.cell_status[j] = status,
@@ -189,9 +268,21 @@ pub(crate) fn fit_cell_plane(
         robust = next;
     }
     let weights = combined_weights(&pts, &normal, &robust);
+    if let Some(record) = record.as_deref_mut() {
+        for (i, &j) in positioned.iter().enumerate() {
+            let var = normal_variance(pts[i], &normal);
+            record.normal_variance[j] = var;
+            record.precision_weight[j] = precision_weight(var);
+            record.tukey_weight[j] = robust[i];
+        }
+    }
     let (centroid, mut normal) = weighted_plane(&pts, &weights);
     if normal.dot(&view_dir) < 0.0 {
         normal = -normal;
+    }
+    if let Some(record) = record.as_deref_mut() {
+        record.centroid = centroid.into();
+        record.fitted_normal = normal.into();
     }
 
     let sum_w: f64 = weights.iter().sum();
@@ -220,8 +311,11 @@ pub(crate) fn fit_cell_plane(
         };
     }
 
-    let (anisotropy, verdict) = determinacy(&pts, &weights, &normal, &view_dir, params);
+    let (anisotropy, scatter, verdict) = determinacy(&pts, &weights, &normal, &view_dir, params);
     out.anisotropy = anisotropy;
+    if let Some(record) = record {
+        record.scatter_eigenvalues = scatter;
+    }
     if let Some((normal, determinacy)) = verdict {
         out.normal = normal;
         out.determinacy = determinacy;
@@ -274,11 +368,15 @@ pub(crate) fn normal_precision_deg(plane: &CellPlaneNormal) -> [f64; 2] {
     [sigma(evals[1]), sigma(evals[2])]
 }
 
+/// A normal with which of its axes the cells fix.
+type Verdict = ([f64; 3], NormalDeterminacy);
+
 /// Which axes of the fitted `normal` the cells fix, from the spread within
 /// the plane of the live cells, those with a positive `weights` entry.
 ///
 /// Returns the anisotropy `λ_mid / λ_max` of that spread (`0` without any),
-/// and the normal with its verdict: `None` with fewer than
+/// the spread's eigenvalues in ascending order, and the normal with its
+/// verdict: `None` with fewer than
 /// [`CellPlaneParams::min_cells`] live cells or no spread, both axes when the
 /// anisotropy reaches [`CellPlaneParams::det_aniso`], and otherwise one axis,
 /// the line the cells lie along, with the normal perpendicular to it and
@@ -289,7 +387,7 @@ fn determinacy(
     normal: &Vector3<f64>,
     view_dir: &Vector3<f64>,
     params: &CellPlaneParams,
-) -> (f64, Option<([f64; 3], NormalDeterminacy)>) {
+) -> (f64, [f64; 3], Option<Verdict>) {
     // A cell is live when the robust fit gives it any weight. Its precision
     // does not enter: a two-ray cell is as much a sample of where the surface
     // is as a five-ray one, and the precision already sets how hard each
@@ -316,11 +414,12 @@ fn determinacy(
         0.0
     };
     if live.len() < params.min_cells || evals[2] <= EPS_SPREAD {
-        return (anisotropy, None);
+        return (anisotropy, evals, None);
     }
     if anisotropy >= params.det_aniso {
         return (
             anisotropy,
+            evals,
             Some(((*normal).into(), NormalDeterminacy::BothAxes)),
         );
     }
@@ -334,6 +433,7 @@ fn determinacy(
     let n = n / n.norm();
     (
         anisotropy,
+        evals,
         Some((
             n.into(),
             NormalDeterminacy::OneAxis {
@@ -405,6 +505,7 @@ fn triangulate(
     Ok((
         CellPoint {
             position: x,
+            sigma_px: sigma,
             cov: (sigma * sigma) * info_inv,
             toward_cameras: toward,
         },
@@ -441,7 +542,7 @@ fn combined_weights(pts: &[&CellPoint], normal: &Vector3<f64>, robust: &[f64]) -
     pts.iter()
         .zip(robust)
         .map(|(p, &rob)| {
-            let var = normal.dot(&(p.cov * normal));
+            let var = normal_variance(p, normal);
             if var > 0.0 && var.is_finite() {
                 rob / var
             } else {
@@ -449,6 +550,21 @@ fn combined_weights(pts: &[&CellPoint], normal: &Vector3<f64>, robust: &[f64]) -
             }
         })
         .collect()
+}
+
+/// A cell's position variance along `normal`, world units squared.
+fn normal_variance(p: &CellPoint, normal: &Vector3<f64>) -> f64 {
+    normal.dot(&(p.cov * normal))
+}
+
+/// The precision weight of a variance along the normal: its inverse, `0`
+/// where it is not positive and finite.
+fn precision_weight(var: f64) -> f64 {
+    if var > 0.0 && var.is_finite() {
+        1.0 / var
+    } else {
+        0.0
+    }
 }
 
 /// The weighted centroid and least-variance direction of the points.

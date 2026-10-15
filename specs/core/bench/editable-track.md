@@ -731,6 +731,7 @@ pub struct GridPlaneNormalOptions {
     pub acceptance: GridPlaneAcceptance, // WindowedZncc (default) or None
     pub max_normal_precision_deg: Option<f64>, // precision gate, None: off
     pub fit: FitOptions,                // the reading it ends with; tile sampler; reference rule
+    pub record_detail: bool,            // keep a GridPlaneDetail of every render, false
 }
 
 pub enum GridPlaneAcceptance { WindowedZncc, None }
@@ -765,6 +766,94 @@ pub struct GridPlaneCells {
     pub normal_precision_deg: f64,            // the last kept render's plane's
     pub view_baseline_deg: f64,               // widest angle between two `in` sightings
     pub trace: Vec<GridPlaneIteration>,       // every render, in order
+    pub detail: Option<Box<GridPlaneDetail>>, // with record_detail; None without
+}
+
+// What the step read and decided at every render, parallel to the trace.
+pub struct GridPlaneDetail {
+    pub layout: GridPlaneLayout,              // the working grid, the same at every render
+    pub renders: Vec<GridPlaneRender>,
+}
+
+pub struct GridPlaneLayout {
+    pub working_resolution: u32,              // R
+    pub margin: u32,                          // a view tile is R + 2·margin a side
+    pub reach: u32,                           // half-width of the whole-shift search
+    pub cell_bounds: [u32; 4],                // [0, R/3, R − R/3, R]
+    pub cell_centres: [[f64; 2]; 9],          // [row * 3 + col], grid px centred on the grid
+}
+
+pub struct GridPlaneRender {
+    pub frame: GridPlaneFrame,                // center, u_axis, v_axis, normal, half_extent
+    pub reference: Option<GridPlaneTile>,     // the R×R render the templates are cut from
+    pub views: Vec<GridPlaneView>,            // each other `in` view rendered, in row order
+    pub cells: [GridPlaneCell; 9],            // each cell's rays and triangulation
+    pub plane: GridPlanePlane,
+    pub iteration: GridPlaneIteration,        // the render's trace entry
+}
+
+pub struct GridPlaneTile {
+    pub observation: usize,
+    pub image: u32,
+    pub side: u32,
+    pub channels: u32,
+    pub samples: Vec<f32>,                    // side × side × channels, NaN off the photograph
+}
+
+pub struct GridPlaneView {
+    pub tile: GridPlaneTile,                  // with the margin
+    pub score: Option<f64>,                   // its term of the acceptance score
+    pub cells: [GridPlaneViewCell; 9],
+    pub fit: Option<GridPlaneViewFit>,        // None: no cell passed, or the fit failed
+}
+
+pub struct GridPlaneViewCell {
+    pub whole_shift: Option<[i64; 2]>,        // best whole shift; None: the search did not finish
+    pub shift: [f64; 2],                      // sub-pixel, NaN with no peak
+    pub zncc: f64,
+    pub curvature: f64,
+    pub reading: CellStatus,                  // from the cell's own reading
+    pub status: CellStatus,                   // after the view's affine fit
+    pub fit_weight: f64,                      // IRLS weight in that fit
+}
+
+pub struct GridPlaneViewFit {
+    pub model: GridPlaneFitModel,             // Affine, Similarity or Shift
+    pub a: [[f64; 2]; 2],
+    pub b: [f64; 2],
+}
+
+pub struct GridPlaneCell {
+    pub rays: Vec<GridPlaneRay>,              // the reference's, then each view's, in row order
+    pub status: CellPlaneStatus,
+    pub position: [f64; 3],
+    pub residual_px: f64,
+    pub sigma_px: f64,                        // the residual, floored
+    pub normal_variance: f64,                 // position variance along the plane's normal
+    pub precision_weight: f64,                // its inverse
+    pub tukey_weight: f64,
+    pub weight: f64,                          // precision × Tukey
+}
+
+pub struct GridPlaneRay {
+    pub observation: usize,
+    pub image: u32,
+    pub pixel: [f64; 2],
+    pub origin: [f64; 3],
+    pub direction: [f64; 3],
+    pub floor_px: f64,
+}
+
+pub struct GridPlanePlane {
+    pub centroid: [f64; 3],
+    pub fitted_normal: [f64; 3],              // least-variance direction, whatever the verdict
+    pub normal: [f64; 3],                     // the verdict's normal, NaN under none
+    pub determinacy: NormalDeterminacy,       // with the free axis under one
+    pub scatter_eigenvalues: [f64; 3],        // ascending, the in-plane scatter the verdict reads
+    pub anisotropy: f64,
+    pub n_eff: f64,
+    pub plane_rms: f64,
+    pub precision_deg: [f64; 2],              // weaker and stronger in-plane axis
 }
 
 /// The localizer with every per-view gate off, which is what both steps run.
@@ -3010,6 +3099,32 @@ frame), and `max_normal_precision_deg` makes a plane predicted less precise
 than the bar, or with no finite precision, propose no turn, so the loop ends
 `Measured` and the step `Undetermined`.
 
+**The detail record.** With `record_detail` the report's `detail` holds a
+`GridPlaneDetail`, for a person to follow one point through the step; it is
+`None` otherwise, and the step's result is the same either way. Its `renders`
+run parallel to the trace, one per render, each carrying its trace entry, and
+its `layout` is the working grid the renders share: the side, the margin, the
+search's reach, the cells' bounds and their centres. Each render holds the
+frame it was made at; the reference's tile, the `R×R` render its templates
+are cut from; and each other `in` view it rendered, with its tile and margin,
+its term of the acceptance score, each cell's best whole shift, sub-pixel
+shift, ZNCC and curvature, the status the cell's own reading gave it and the
+status after the view's affine fit, the cell's weight in that fit, and the
+fit's model and map. Each cell holds its rays, the reference's first, each
+with the observation and image it is from, the pixel it passes through, its
+origin, direction and noise floor, and its triangulation and place in the
+plane fit: the position, the residual and the `σ` it was floored to, the
+variance along the plane's normal, the precision and Tukey weights and their
+product, and the plane-fit status. The plane holds its centroid, the
+least-variance direction of the weighted cells whatever the verdict, the
+verdict's normal and determinacy, the eigenvalues of the in-plane scatter the
+verdict reads, the anisotropy, `n_eff`, the rms, and the predicted precision
+along both in-plane axes. Each value is recorded where the step computes it,
+by the function that computes it: the cell registration kernel keeps the best
+whole shift on each reading, and the cell plane kernel fills a record of its
+weights, centroid and scatter as it fits. Without the option no record is
+allocated.
+
 The working grid's density decides how close the step comes. On the
 synthetic plane of the tests, whose patch spans 32 photograph px at `R = 24`,
 the default grid comes out 32 samples for a patch facing the cameras and
@@ -3687,7 +3802,25 @@ lists of the `.matches` cell-status words, `"fitted"`, `"refused_curvature"`,
 `score_before`, `score_after`, `normal_precision_deg`, `view_baseline_deg`
 and `trace`, a list of dicts with `score`, `determinacy`, `in_plane`,
 `normal_precision_deg`, `gated`, `proposed_normal` (an array or `None`),
-`largest_move_px` and `taken`.
+`largest_move_px` and `taken`. `grid_plane_normal(..., record_detail=True)`
+adds `detail` to that estimate, a list of one dict per render: the layout
+(`working_resolution`, `margin`, `reach`, `cell_bounds`, `cell_centres` as
+`(3, 3, 2)`), `frame` (`center`, `u_axis`, `v_axis`, `normal`,
+`half_extent`), `reference` (`None` or `observation`, `image` and `tile`, an
+`(R, R, channels)` float32 array, `NaN` off the photograph), `views` (each
+with `observation`, `image`, `tile` of side `R + 2 margin`, `score`,
+`whole_shift` and `shift` as `(3, 3, 2)` arrays, `NaN` where not read,
+`zncc`, `curvature` and `fit_weight` as `(3, 3)` arrays, `reading` and
+`status` as `[row][col]` registration words, and `fit`, `None` or `model`
+(`"affine"`, `"similarity"` or `"shift"`) with `a` and `b`), `cells`
+(`status` words, `position` `(3, 3, 3)`, and `(3, 3)` arrays `residual_px`,
+`sigma_px`, `normal_variance`, `precision_weight`, `tukey_weight`, `weight`
+and `ray_count`), `rays` (one row per ray: `cell`, `observation`, `image`,
+`pixel` `(n, 2)`, `origin` and `direction` `(n, 3)`, `floor_px`) and `plane`
+(`centroid`, `fitted_normal`, `normal`, `determinacy`, `free_axis`,
+`scatter_eigenvalues`, `anisotropy`, `n_eff`, `plane_rms`, `precision_deg`
+`(2,)`, and the render's trace entry: `score`, `normal_precision_deg`,
+`gated`, `proposed_normal`, `largest_move_px` and `taken`).
 
 `spin_patch` and `shape_observation` take their numbers directly;
 `sight_observation`, `resize_patch`, `translate_patch_to_pixel` and
@@ -4128,7 +4261,19 @@ unit-tested in `normal.rs` itself.
 - A precision bar of `1e-6` degrees makes the textured plane's first render
   propose no turn: the trace's one entry is gated, the loop ends `Measured`,
   the outcome is `Undetermined`, and the frame is exactly the one the step was
-  given; a bar of 45 degrees gives the same report as no bar.
+  given; a bar of 45 degrees gives   the same report as no bar.
+- The textured plane from 10 degrees off with `record_detail`: the report
+  without its `detail` equals the one without the option, whose `detail` is
+  `None`, and the track is the same. The record holds one render per trace
+  entry, each carrying that entry; the reference's tile is `R` a side and
+  each view's `R + 2 · margin`, with the samples that implies; every cell is
+  fitted in each view, by an affine fit, with a sub-pixel shift within half a
+  pixel of its whole shift; the cells in the plane number the entry's
+  `in_plane`, each cell has three rays, the reference's first, and its weight
+  is its precision weight times its Tukey weight; and the plane's normal is
+  the entry's proposed normal up to sign, with its weaker-axis precision the
+  entry's. The last render's cells and views give the report's statuses, ray
+  counts and weights, and the first render's frame is the start's.
 
 The loop's rules are unit-tested in `normal/grid_plane/tests.rs` on a state
 that is a number: a turn that lowers the score is not kept, the tolerance does

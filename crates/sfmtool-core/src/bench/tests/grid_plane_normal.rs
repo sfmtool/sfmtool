@@ -607,3 +607,107 @@ fn the_precision_gate_leaves_an_imprecise_plane_undetermined() {
     let (_, plain) = run(&scene, &edited, &track);
     assert_eq!(cells_of(&gated), cells_of(&plain));
 }
+
+/// The detail record is kept only when asked for, leaves the rest of the
+/// report as it was, and holds one render per trace entry: tiles of the
+/// working grid's size, readings that agree with the trace and the report,
+/// and the plane each turn was proposed from.
+#[test]
+fn the_detail_record_follows_the_trace() {
+    let scene = Scene::new();
+    let edited = three_view_edited(&scene);
+    let track = tilted_track(&edited, Vector3::x(), 10.0);
+    let (plain_track, plain) = run(&scene, &edited, &track);
+    assert!(cells_of(&plain).detail.is_none());
+
+    let options = GridPlaneNormalOptions {
+        record_detail: true,
+        ..Default::default()
+    };
+    let (recorded_track, recorded) = run_with(&scene, &edited, &track, &options);
+    let cells = cells_of(&recorded);
+    let detail = cells.detail.as_deref().expect("the detail was asked for");
+    let mut without = cells.clone();
+    without.detail = None;
+    assert_eq!(
+        &without,
+        cells_of(&plain),
+        "the record changes nothing else"
+    );
+    assert_eq!(placement_of(&recorded_track), placement_of(&plain_track));
+    assert_eq!(cells.outcome, GridPlaneOutcome::Turned, "{recorded}");
+
+    let layout = detail.layout;
+    let r = layout.working_resolution;
+    assert_eq!(r, cells.working_resolution);
+    assert_eq!(layout.margin, 2);
+    assert_eq!(layout.cell_bounds, [0, r / 3, r - r / 3, r]);
+    assert_eq!(detail.renders.len(), cells.trace.len());
+    let observations = track.in_observations();
+    for (k, (render, entry)) in detail.renders.iter().zip(&cells.trace).enumerate() {
+        assert_eq!(&render.iteration, entry, "render {k}");
+        let reference = render.reference.as_ref().expect("a reference render");
+        assert_eq!(reference.side, r);
+        let n = (r * r * reference.channels) as usize;
+        assert_eq!(reference.samples.len(), n);
+        assert_eq!(render.views.len(), observations.len() - 1, "render {k}");
+        for view in &render.views {
+            let side = r + 2 * layout.margin;
+            assert_eq!(view.tile.side, side);
+            let n = (side * side * view.tile.channels) as usize;
+            assert_eq!(view.tile.samples.len(), n);
+            assert_ne!(view.tile.observation, reference.observation);
+            assert!(view.score.is_some());
+            let fit = view.fit.expect("a fit over nine textured cells");
+            assert_eq!(fit.model, crate::bench::GridPlaneFitModel::Affine);
+            for cell in &view.cells {
+                assert_eq!(cell.status, CellStatus::Fitted, "render {k}");
+                assert!(cell.fit_weight > 0.0);
+                let whole = cell.whole_shift.expect("a searched cell");
+                assert!((cell.shift[0] - whole[0] as f64).abs() <= 0.5);
+                assert!((cell.shift[1] - whole[1] as f64).abs() <= 0.5);
+            }
+        }
+        let in_plane = render
+            .cells
+            .iter()
+            .filter(|c| c.status == CellPlaneStatus::InPlane)
+            .count();
+        assert_eq!(in_plane, entry.in_plane, "render {k}");
+        for cell in &render.cells {
+            assert_eq!(cell.rays.len(), 3, "render {k}");
+            assert_eq!(cell.rays[0].observation, reference.observation);
+            let product = cell.precision_weight * cell.tukey_weight;
+            assert!(
+                (cell.weight - product).abs() <= 1e-9 * product.abs(),
+                "render {k}"
+            );
+        }
+        assert_eq!(render.plane.determinacy, entry.determinacy);
+        let proposed = Vector3::from(entry.proposed_normal.expect("a proposed turn"));
+        let plane = Vector3::from(render.plane.normal);
+        assert!(
+            degrees(proposed, plane).min(degrees(proposed, -plane)) < 1e-6,
+            "render {k}"
+        );
+        assert_eq!(
+            render.plane.precision_deg[0], entry.normal_precision_deg,
+            "both axes: the weaker axis is the one reported"
+        );
+    }
+    // A converged loop's last render is the one the report reads.
+    let last = detail.renders.last().expect("one render at least");
+    for (k, cell) in last.cells.iter().enumerate() {
+        assert_eq!(cell.status, cells.cell_status[k]);
+        assert_eq!(cell.rays.len() as u32, cells.cell_rays[k]);
+        assert_eq!(cell.weight, cells.cell_weight[k]);
+    }
+    for view in &last.views {
+        let statuses: [CellStatus; 9] = std::array::from_fn(|k| view.cells[k].status);
+        assert_eq!(statuses, cells.view_cells[view.tile.observation]);
+    }
+    let first = &detail.renders[0].frame;
+    let start = placement_of(&track);
+    assert_eq!(first.center, <[f64; 3]>::from(start.center.coords));
+    assert_eq!(first.normal, <[f64; 3]>::from(start.normal()));
+}

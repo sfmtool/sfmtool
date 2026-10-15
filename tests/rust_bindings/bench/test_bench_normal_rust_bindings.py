@@ -163,6 +163,68 @@ class TestGridPlaneNormal:
         assert cells["working_resolution"] == 30
         assert cells["iterations"] <= 1
 
+    def test_the_detail_record_holds_every_render(self, fitted, edited, images):
+        _, plain = grid_plane_normal(fitted, edited, images)
+        assert "detail" not in plain["estimate"]
+        _, report = grid_plane_normal(fitted, edited, images, record_detail=True)
+        cells = report["estimate"]
+        # The record changes nothing else in the report.
+        for key in ("outcome", "stop", "iterations", "score_before", "score_after"):
+            assert cells[key] == plain["estimate"][key], key
+        np.testing.assert_array_equal(report["normal"], plain["normal"])
+
+        detail = cells["detail"]
+        assert len(detail) == len(cells["trace"])
+        r = cells["working_resolution"]
+        for render, entry in zip(detail, cells["trace"]):
+            assert render["working_resolution"] == r
+            side = r + 2 * render["margin"]
+            assert render["cell_bounds"].tolist() == [0, r // 3, r - r // 3, r]
+            assert render["cell_centres"].shape == (3, 3, 2)
+            assert set(render["frame"]) == {
+                "center",
+                "u_axis",
+                "v_axis",
+                "normal",
+                "half_extent",
+            }
+            reference = render["reference"]
+            assert reference["tile"].dtype == np.float32
+            assert reference["tile"].shape[:2] == (r, r)
+            for view in render["views"]:
+                assert view["observation"] != reference["observation"]
+                assert view["tile"].shape[:2] == (side, side)
+                for key in ("whole_shift", "shift"):
+                    assert view[key].shape == (3, 3, 2)
+                for key in ("zncc", "curvature", "fit_weight"):
+                    assert view[key].shape == (3, 3)
+                for key in ("reading", "status"):
+                    assert {w for row in view[key] for w in row} <= CELL_WORDS
+                if view["fit"] is not None:
+                    assert view["fit"]["model"] in {"affine", "similarity", "shift"}
+                    assert view["fit"]["a"].shape == (2, 2)
+            cell = render["cells"]
+            assert {w for row in cell["status"] for w in row} <= PLANE_WORDS
+            assert cell["position"].shape == (3, 3, 3)
+            assert (
+                sum(w == "in_plane" for row in cell["status"] for w in row)
+                == entry["in_plane"]
+            )
+            rays = render["rays"]
+            assert rays["origin"].shape == (len(rays["cell"]), 3)
+            np.testing.assert_array_equal(
+                np.bincount(rays["cell"], minlength=9).reshape(3, 3),
+                cell["ray_count"],
+            )
+            plane = render["plane"]
+            assert plane["determinacy"] == entry["determinacy"]
+            assert plane["taken"] == entry["taken"]
+            assert plane["precision_deg"].shape == (2,)
+            if entry["proposed_normal"] is not None:
+                np.testing.assert_array_equal(
+                    plane["proposed_normal"], entry["proposed_normal"]
+                )
+
     def test_a_cluster_is_refused(self, edited, images):
         _, track = create_cluster(Bench(), 4, "IMG_0042", (142.0, 197.5), radius_px=7.5)
         with pytest.raises(ValueError, match="cluster"):

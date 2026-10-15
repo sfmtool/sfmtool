@@ -229,6 +229,7 @@ The bench step follows the Rust API above, with these differences and with these
 - **Under one axis** the target normal is the patch's own with its component along the free axis removed, not the plane kernel's one-axis normal, which takes its turn about the line from the mean viewing direction.
 - **The centre does not move**, as the open question's first option; the plane's offset is reported.
 - **Not parallel.** The views are rendered and registered one after another, so the per-render cancel check stays simple.
+- **A detail record.** `GridPlaneNormalOptions::record_detail` (off by default) keeps, for every render, the tiles, every cell's reading in every view, each view's affine fit, each cell's rays and triangulation, and the plane, in `GridPlaneCells::detail` (see [editable-track.md](../core/bench/editable-track.md#estimating-the-normal)). [scripts/track_at_pixel/normal_sources/grid_plane_detail.py](../../scripts/track_at_pixel/normal_sources/grid_plane_detail.py) records it for named points from the evaluation's mean-view start and from the ground-truth normal, with today's Grid Plane Normal at 2×2 and 3×3 beside it.
 
 ### Synthetic evidence on the density
 

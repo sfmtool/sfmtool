@@ -1216,6 +1216,7 @@ fn scripted_pass(b: [f64; 2]) -> Pass {
     let reading = CellReading {
         status: CellStatus::Fitted,
         shift: b,
+        whole_shift: None,
         zncc: 0.95,
         curvature: 0.1,
     };
@@ -1292,6 +1293,7 @@ fn an_outlier_cell_is_refused_and_the_fit_follows_the_inliers() {
             CellReading {
                 status: CellStatus::Fitted,
                 shift,
+                whole_shift: None,
                 zncc: 0.95,
                 curvature: 0.05 + 0.02 * (row * 3 + col) as f64,
             }
@@ -1455,6 +1457,7 @@ fn measuring_refuses_an_outlier_and_keeps_every_raw_shift() {
             CellReading {
                 status: CellStatus::Fitted,
                 shift,
+                whole_shift: None,
                 zncc: 0.95,
                 curvature: 0.05 + 0.02 * (row * 3 + col) as f64,
             }
