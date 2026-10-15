@@ -13,7 +13,7 @@
 
 Not decided: which score the loop's acceptance rule reads; whether the step moves the patch's centre onto the fitted plane; whether a cell registration cannot settle falls back to a full piece fit; whether the first iteration can read the localizer's tiles. See [Open questions](#open-questions).
 
-Built: the shared kernels (#954) and the bench step `grid_plane_normal` in [bench/normal/grid_plane.rs](../../crates/sfmtool-core/src/bench/normal/grid_plane.rs), with its tests, specified in [editable-track.md](../core/bench/editable-track.md) § "Estimating the normal". It stands beside `PieceLayout::Grid`, which is unchanged, so the two can be measured against each other; Track View's button, Surface Tiling Mode and the wire's `fit_bench_track_normal` still run `PieceLayout::Grid`; the Python bindings in `sfmtool.bench` bind both, as `finite_difference_normal` and `grid_plane_normal`. The step answers two open questions provisionally, the acceptance score and moving the centre; the density, decided by the maintainer with the synthetic evidence recorded below, is built as decided; see [What the built step chose](#what-the-built-step-chose). The measurement against today's Grid Plane Normal on the two ground truths is recorded under [Measurement against today's Grid Plane Normal](#measurement-against-todays-grid-plane-normal-2026-10-14). Remaining: the hand review, then the moves listed under [Retiring the photometric search](#retiring-the-photometric-search).
+Built: the shared kernels (#954) and the bench step `grid_plane_normal` in [bench/normal/grid_plane.rs](../../crates/sfmtool-core/src/bench/normal/grid_plane.rs), with its tests, specified in [editable-track.md](../core/bench/editable-track.md) § "Estimating the normal". It stands beside `PieceLayout::Grid`, which is unchanged, so the two can be measured against each other; Track View's button, Surface Tiling Mode and the wire's `fit_bench_track_normal` still run `PieceLayout::Grid`; the Python bindings in `sfmtool.bench` bind both, as `finite_difference_normal` and `grid_plane_normal`. The step answers two open questions provisionally, the acceptance score and moving the centre; the density, decided by the maintainer with the synthetic evidence recorded below, is built as decided; see [What the built step chose](#what-the-built-step-chose). The measurement against today's Grid Plane Normal on the two ground truths is recorded under [Measurement against today's Grid Plane Normal](#measurement-against-todays-grid-plane-normal-2026-10-14). A sweep of the search bound and the acceptance rule, with precision and baseline gates applied after the fact, is recorded under [Sweep of the gates, the bound and the acceptance rule](#sweep-of-the-gates-the-bound-and-the-acceptance-rule-2026-10-15); the options it added (`acceptance`, `max_normal_precision_deg`) are off by default. Remaining: the hand review, then the moves listed under [Retiring the photometric search](#retiring-the-photometric-search).
 
 Amends:
 - [core/bench/editable-track.md](../core/bench/editable-track.md) § "Estimating the normal": `PieceLayout::Grid` of `finite_difference_normal`, the *Grid Plane Normal* step
@@ -352,6 +352,501 @@ Each row of the script's JSONL carries the point's ground-truth position and nor
 - Whether a person prefers the turned patches. The hand review decides that, and a lower error here is not enough on its own.
 - Why turns are rejected. Whether the windowed whole-tile score refuses correct turns (the open question on a score over the kept cells) or the proposed turns are wrong is not separated here. From the truth, a rejected first turn ends Unstable with the normal unchanged, so Unstable there includes points already at the normal the score prefers.
 - Two small captures, 648 points in all; the Turned sets are 7 and 27 points.
+
+## Sweep of the gates, the bound and the acceptance rule (2026-10-15)
+
+**Question.** The [measurement above](#measurement-against-todays-grid-plane-normal-2026-10-14) found the step turning 3% to 7% of points. A diagnostic showed that taking the first plane the cells give, with no acceptance test, turns most points and, where the views are wide apart, lands closer to the truth than the start and than today's 2×2 step, while where they are close together it can be far off. This sweep measures, on both ground truths, how the search bound and the acceptance rule change that, how the loop converges, and whether a gate on the plane's predicted precision or on the views' baseline separates the good planes from the bad. No default changes.
+
+**Setup.**
+
+- **Options added for the experiment** (defaults unchanged): `GridPlaneNormalOptions::acceptance`, `WindowedZncc` (today's rule) or `None` (every rendered turn is kept; the loop still stops on the tolerance, the render cap, an oscillation, or a render that proposes no turn); `max_normal_precision_deg`, a precision gate, not used in the runs (the bars below are applied after the fact). `GridPlaneCells` reports the plane's predicted precision (`σ = 1 / √(Σⱼ wⱼ (dⱼ · e)²)` as [cell-plane-normal-precision-gate.md](cell-plane-normal-precision-gate.md) defines it, along the weaker in-plane axis under both axes and along the fixed one under one axis), the views' baseline (the largest angle between two `in` sightings' directions from the patch centre), and a trace with one entry per render: the score, the verdict, the cells in the plane, the precision, the normal the proposed turn reaches, the turn's largest cell movement, and whether the loop took it.
+- **Points, start, errors.** As in the measurement above: every finite point seen twice or more (266 and 382), the same fitted mean-view start, the angle to the ground truth's stored patch normal folded to 0–90°. Today's 2×2 Grid Plane Normal and the start are the baselines and are the same in every variant.
+- **Variants.** `cell_shift_bound_px` 2, 4 and 6 × acceptance `windowed_zncc` and `none`, all with `max_iterations` 8; everything else at its default. `bound2_windowed_zncc` is the default step with the higher render cap.
+- **Estimators.** *new*: the normal the step left (it differs from the start only on `Turned` points). *first plane*: the normal the first render's turn would reach, read from the trace; it does not depend on the acceptance rule, so it is reported once per bound. With `update_tolerance_px` very large it is what the step itself returns, as the diagnostic ran it.
+- **Baseline bins.** Under 5°, 5–10°, 10–20°, 20–40°, 40° and over. `seoul_bull` has 67, 58, 14, 30 and 97 points in them; `kerry_park` 12, 21, 48, 100 and 201.
+- **Commit and machine.** Commit `a26e3483` for the step, the binding and the run script, `3d52abc2` for the summary script; Intel Core i9-14900HX, 64 GB, Windows 11, release build.
+- **Commands.** From the repository root, for each dataset (`seoul_bull`, and `test-data/images/kerry_park/kerry_park_ground_truth.sfmr` as `kerry_park`), bound `B` in 2, 4, 6 and acceptance `A` in `windowed_zncc`, `none`:
+
+  ```bash
+  pixi run -e test python scripts/track_at_pixel/normal_sources/grid_plane_eval.py DATASET \
+      --out OUT/DATASET/boundB_A \
+      --new-opt max_iterations=8 --new-opt cell_shift_bound_px=B --new-opt acceptance=A
+  pixi run -e test python scripts/track_at_pixel/normal_sources/grid_plane_sweep.py OUT/DATASET
+  ```
+
+  Each run took 9 to 11 s on `seoul_bull` and 33 to 54 s on `kerry_park`, loading included; the median `grid_plane_normal` call took 3 to 6 ms and 7 to 22 ms (the slowest `bound6_none` on `kerry_park`), against 16 to 17 ms and 41 to 58 ms for today's 2×2.
+
+**Outcomes.** `converged` is `Turned`; `measured` (and `not_run`, none here) is `Undetermined`; the rest are `Unstable`.
+
+`seoul_bull`:
+
+| variant | converged | measured | rejected | oscillation | cap | not_run |
+|---|---|---|---|---|---|---|
+| bound2_none | 19 | 132 | 0 | 111 | 4 | 0 |
+| bound2_windowed_zncc | 8 | 93 | 151 | 14 | 0 | 0 |
+| bound4_none | 35 | 111 | 0 | 118 | 2 | 0 |
+| bound4_windowed_zncc | 10 | 69 | 175 | 12 | 0 | 0 |
+| bound6_none | 53 | 104 | 0 | 108 | 1 | 0 |
+| bound6_windowed_zncc | 13 | 62 | 183 | 8 | 0 | 0 |
+
+`kerry_park`:
+
+| variant | converged | measured | rejected | oscillation | cap | not_run |
+|---|---|---|---|---|---|---|
+| bound2_none | 59 | 182 | 0 | 139 | 2 | 0 |
+| bound2_windowed_zncc | 28 | 163 | 171 | 20 | 0 | 0 |
+| bound4_none | 92 | 139 | 0 | 147 | 4 | 0 |
+| bound4_windowed_zncc | 26 | 122 | 219 | 15 | 0 | 0 |
+| bound6_none | 109 | 128 | 0 | 137 | 8 | 0 |
+| bound6_windowed_zncc | 31 | 105 | 229 | 17 | 0 | 0 |
+
+**Start and today's 2×2 by baseline** (all points, degrees):
+
+`seoul_bull`:
+
+| baseline | points | start med | start <20 | old med | old <10 | old <20 | old closer than start |
+|---|---|---|---|---|---|---|---|
+| <5 | 67 | 26.1 | 39% | 45.0 | 0% | 12% | 37% |
+| 5-10 | 58 | 28.9 | 34% | 29.9 | 16% | 33% | 45% |
+| 10-20 | 14 | 27.0 | 43% | 18.6 | 29% | 64% | 57% |
+| 20-40 | 30 | 47.4 | 13% | 26.5 | 13% | 33% | 80% |
+| >=40 | 97 | 38.2 | 8% | 28.2 | 6% | 25% | 85% |
+
+`kerry_park`:
+
+| baseline | points | start med | start <20 | old med | old <10 | old <20 | old closer than start |
+|---|---|---|---|---|---|---|---|
+| <5 | 12 | 0.7 | 83% | 71.1 | 0% | 0% | 8% |
+| 5-10 | 21 | 41.3 | 38% | 44.3 | 24% | 33% | 48% |
+| 10-20 | 48 | 28.6 | 46% | 19.7 | 23% | 50% | 54% |
+| 20-40 | 100 | 39.9 | 13% | 30.2 | 11% | 32% | 79% |
+| >=40 | 201 | 29.5 | 33% | 26.5 | 18% | 37% | 78% |
+
+**The first plane by baseline.** `proposed` is how many points' first render proposed a turn; the start and today's step are on those same points.
+
+`seoul_bull`:
+
+| variant | baseline | points | proposed | first med | first p75 | first <10 | first <20 | start med | old med | closer than start |
+|---|---|---|---|---|---|---|---|---|---|---|
+| bound2 | <5 | 67 | 46 | 39.8 | 48.7 | 7% | 11% | 28.2 | 34.2 | 39% |
+| bound2 | 5-10 | 58 | 50 | 44.7 | 64.3 | 4% | 16% | 29.1 | 30.5 | 36% |
+| bound2 | 10-20 | 14 | 8 | 38.7 | 60.7 | 12% | 25% | 27.0 | 18.6 | 38% |
+| bound2 | 20-40 | 30 | 11 | 23.7 | 36.0 | 27% | 45% | 40.5 | 27.1 | 82% |
+| bound2 | >=40 | 97 | 71 | 18.1 | 26.2 | 25% | 56% | 34.0 | 23.7 | 80% |
+| bound4 | <5 | 67 | 49 | 40.5 | 56.3 | 6% | 12% | 29.8 | 34.6 | 35% |
+| bound4 | 5-10 | 58 | 51 | 46.7 | 61.6 | 4% | 12% | 29.1 | 30.2 | 33% |
+| bound4 | 10-20 | 14 | 11 | 50.9 | 68.2 | 9% | 18% | 21.5 | 18.1 | 36% |
+| bound4 | 20-40 | 30 | 18 | 19.6 | 26.8 | 28% | 50% | 40.7 | 25.1 | 89% |
+| bound4 | >=40 | 97 | 74 | 13.1 | 22.0 | 32% | 68% | 34.0 | 24.2 | 82% |
+| bound6 | <5 | 67 | 50 | 41.0 | 58.2 | 6% | 12% | 28.2 | 34.8 | 36% |
+| bound6 | 5-10 | 58 | 52 | 47.7 | 62.0 | 4% | 10% | 29.1 | 29.9 | 35% |
+| bound6 | 10-20 | 14 | 11 | 50.9 | 65.3 | 9% | 27% | 21.5 | 18.1 | 36% |
+| bound6 | 20-40 | 30 | 19 | 16.5 | 24.4 | 32% | 58% | 40.9 | 23.2 | 89% |
+| bound6 | >=40 | 97 | 79 | 12.9 | 23.5 | 32% | 68% | 34.0 | 24.8 | 77% |
+
+`kerry_park`:
+
+| variant | baseline | points | proposed | first med | first p75 | first <10 | first <20 | start med | old med | closer than start |
+|---|---|---|---|---|---|---|---|---|---|---|
+| bound2 | <5 | 12 | 5 | 77.2 | 78.3 | 0% | 0% | 0.8 | 60.0 | 0% |
+| bound2 | 5-10 | 21 | 8 | 59.7 | 70.9 | 0% | 25% | 31.7 | 45.1 | 38% |
+| bound2 | 10-20 | 48 | 36 | 34.6 | 51.7 | 17% | 39% | 18.3 | 22.3 | 47% |
+| bound2 | 20-40 | 100 | 62 | 20.6 | 32.5 | 19% | 50% | 36.8 | 24.1 | 71% |
+| bound2 | >=40 | 201 | 118 | 11.3 | 22.3 | 43% | 72% | 22.5 | 20.5 | 75% |
+| bound4 | <5 | 12 | 9 | 76.6 | 78.7 | 0% | 0% | 0.8 | 65.8 | 0% |
+| bound4 | 5-10 | 21 | 12 | 65.3 | 72.1 | 0% | 17% | 20.6 | 46.4 | 25% |
+| bound4 | 10-20 | 48 | 42 | 35.2 | 58.1 | 14% | 36% | 18.3 | 19.7 | 48% |
+| bound4 | 20-40 | 100 | 68 | 19.1 | 31.4 | 29% | 50% | 37.1 | 25.7 | 74% |
+| bound4 | >=40 | 201 | 143 | 11.4 | 19.4 | 47% | 76% | 25.3 | 22.6 | 76% |
+| bound6 | <5 | 12 | 9 | 73.4 | 78.2 | 0% | 0% | 0.8 | 65.8 | 0% |
+| bound6 | 5-10 | 21 | 12 | 72.1 | 73.4 | 0% | 8% | 20.6 | 46.4 | 17% |
+| bound6 | 10-20 | 48 | 42 | 39.1 | 63.0 | 14% | 33% | 18.3 | 19.7 | 48% |
+| bound6 | 20-40 | 100 | 70 | 19.3 | 32.6 | 30% | 54% | 37.1 | 26.1 | 76% |
+| bound6 | >=40 | 201 | 152 | 12.3 | 23.8 | 47% | 68% | 25.5 | 24.0 | 72% |
+
+**The step as built, by baseline** (`Turned` points; start and today's 2×2 on the same points):
+
+`seoul_bull`:
+
+| variant | baseline | points | turned | new med | new p75 | new <10 | new <20 | start med | old med | old <10 | new closer than start |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| bound2_none | <5 | 67 | 4 | 27.2 | 50.9 | 25% | 50% | 24.9 | 25.4 | 0% | 25% |
+| bound2_none | 5-10 | 58 | 3 | 71.4 | 73.9 | 0% | 0% | 6.3 | 33.6 | 0% | 33% |
+| bound2_none | 10-20 | 14 | 1 | 10.5 | 10.5 | 0% | 100% | 32.4 | 7.9 | 100% | 100% |
+| bound2_none | 20-40 | 30 | 2 | 27.1 | 32.9 | 0% | 50% | 40.3 | 18.1 | 50% | 100% |
+| bound2_none | >=40 | 97 | 9 | 12.1 | 22.7 | 33% | 56% | 32.1 | 25.4 | 0% | 78% |
+| bound2_windowed_zncc | <5 | 67 | 2 | 11.2 | 13.1 | 50% | 100% | 37.4 | 17.0 | 0% | 50% |
+| bound2_windowed_zncc | 5-10 | 58 | 1 | 71.4 | 71.4 | 0% | 0% | 6.3 | 33.6 | 0% | 0% |
+| bound2_windowed_zncc | 10-20 | 14 | 0 | - | - | - | - | - | - | - | - |
+| bound2_windowed_zncc | 20-40 | 30 | 2 | 27.1 | 32.9 | 0% | 50% | 40.3 | 18.1 | 50% | 100% |
+| bound2_windowed_zncc | >=40 | 97 | 3 | 12.1 | 17.4 | 33% | 67% | 39.0 | 27.0 | 0% | 100% |
+| bound4_none | <5 | 67 | 7 | 44.3 | 64.0 | 14% | 14% | 35.2 | 29.4 | 0% | 14% |
+| bound4_none | 5-10 | 58 | 6 | 74.8 | 77.2 | 0% | 0% | 30.7 | 44.9 | 0% | 0% |
+| bound4_none | 10-20 | 14 | 3 | 24.1 | 41.4 | 0% | 33% | 32.4 | 7.9 | 67% | 67% |
+| bound4_none | 20-40 | 30 | 6 | 18.1 | 22.1 | 33% | 50% | 44.3 | 26.8 | 0% | 100% |
+| bound4_none | >=40 | 97 | 13 | 14.6 | 18.8 | 38% | 77% | 35.3 | 22.2 | 0% | 77% |
+| bound4_windowed_zncc | <5 | 67 | 4 | 41.2 | 55.8 | 25% | 25% | 25.8 | 24.5 | 0% | 25% |
+| bound4_windowed_zncc | 5-10 | 58 | 1 | 43.9 | 43.9 | 0% | 0% | 33.9 | 42.7 | 0% | 0% |
+| bound4_windowed_zncc | 10-20 | 14 | 1 | 24.1 | 24.1 | 0% | 0% | 35.4 | 40.2 | 0% | 100% |
+| bound4_windowed_zncc | 20-40 | 30 | 3 | 22.6 | 26.0 | 0% | 33% | 40.9 | 30.4 | 0% | 100% |
+| bound4_windowed_zncc | >=40 | 97 | 1 | 22.2 | 22.2 | 0% | 0% | 22.0 | 17.4 | 0% | 0% |
+| bound6_none | <5 | 67 | 11 | 45.4 | 69.5 | 9% | 9% | 36.1 | 34.3 | 0% | 27% |
+| bound6_none | 5-10 | 58 | 11 | 71.3 | 76.5 | 0% | 0% | 29.6 | 47.1 | 9% | 9% |
+| bound6_none | 10-20 | 14 | 4 | 38.2 | 61.8 | 0% | 50% | 23.9 | 8.0 | 75% | 50% |
+| bound6_none | 20-40 | 30 | 4 | 19.3 | 25.1 | 25% | 50% | 44.0 | 22.9 | 25% | 100% |
+| bound6_none | >=40 | 97 | 23 | 11.3 | 24.9 | 35% | 70% | 36.4 | 21.5 | 0% | 83% |
+| bound6_windowed_zncc | <5 | 67 | 3 | 44.6 | 66.4 | 33% | 33% | 10.5 | 19.6 | 0% | 0% |
+| bound6_windowed_zncc | 5-10 | 58 | 3 | 43.8 | 53.8 | 0% | 0% | 33.9 | 42.7 | 0% | 33% |
+| bound6_windowed_zncc | 10-20 | 14 | 0 | - | - | - | - | - | - | - | - |
+| bound6_windowed_zncc | 20-40 | 30 | 2 | 24.7 | 29.0 | 0% | 50% | 40.7 | 22.9 | 0% | 100% |
+| bound6_windowed_zncc | >=40 | 97 | 5 | 11.3 | 15.9 | 40% | 80% | 40.2 | 22.2 | 0% | 100% |
+
+`kerry_park`:
+
+| variant | baseline | points | turned | new med | new p75 | new <10 | new <20 | start med | old med | old <10 | new closer than start |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| bound2_none | <5 | 12 | 0 | - | - | - | - | - | - | - | - |
+| bound2_none | 5-10 | 21 | 1 | 74.7 | 74.7 | 0% | 0% | 52.5 | 42.8 | 0% | 0% |
+| bound2_none | 10-20 | 48 | 9 | 19.1 | 35.0 | 44% | 56% | 37.5 | 15.0 | 11% | 78% |
+| bound2_none | 20-40 | 100 | 10 | 11.4 | 22.1 | 50% | 60% | 34.5 | 14.3 | 30% | 70% |
+| bound2_none | >=40 | 201 | 39 | 5.3 | 8.2 | 77% | 82% | 20.4 | 17.0 | 33% | 87% |
+| bound2_windowed_zncc | <5 | 12 | 0 | - | - | - | - | - | - | - | - |
+| bound2_windowed_zncc | 5-10 | 21 | 0 | - | - | - | - | - | - | - | - |
+| bound2_windowed_zncc | 10-20 | 48 | 1 | 9.4 | 9.4 | 100% | 100% | 13.4 | 10.3 | 0% | 100% |
+| bound2_windowed_zncc | 20-40 | 100 | 2 | 3.5 | 3.7 | 100% | 100% | 35.9 | 9.0 | 50% | 100% |
+| bound2_windowed_zncc | >=40 | 201 | 25 | 5.3 | 12.2 | 72% | 80% | 22.4 | 25.3 | 32% | 88% |
+| bound4_none | <5 | 12 | 1 | 62.5 | 62.5 | 0% | 0% | 26.7 | 22.1 | 0% | 0% |
+| bound4_none | 5-10 | 21 | 5 | 76.9 | 77.9 | 0% | 0% | 5.0 | 52.1 | 0% | 0% |
+| bound4_none | 10-20 | 48 | 19 | 58.1 | 74.4 | 37% | 37% | 35.1 | 17.7 | 16% | 47% |
+| bound4_none | 20-40 | 100 | 16 | 19.5 | 38.0 | 44% | 50% | 35.8 | 21.3 | 25% | 75% |
+| bound4_none | >=40 | 201 | 51 | 4.5 | 7.4 | 82% | 86% | 25.4 | 23.4 | 25% | 88% |
+| bound4_windowed_zncc | <5 | 12 | 0 | - | - | - | - | - | - | - | - |
+| bound4_windowed_zncc | 5-10 | 21 | 1 | 72.0 | 72.0 | 0% | 0% | 52.5 | 42.8 | 0% | 0% |
+| bound4_windowed_zncc | 10-20 | 48 | 3 | 9.4 | 44.0 | 67% | 67% | 13.4 | 12.2 | 0% | 67% |
+| bound4_windowed_zncc | 20-40 | 100 | 3 | 8.7 | 19.0 | 67% | 67% | 57.3 | 10.5 | 33% | 100% |
+| bound4_windowed_zncc | >=40 | 201 | 19 | 4.1 | 7.1 | 84% | 89% | 20.9 | 20.9 | 21% | 89% |
+| bound6_none | <5 | 12 | 1 | 57.7 | 57.7 | 0% | 0% | 26.7 | 22.1 | 0% | 0% |
+| bound6_none | 5-10 | 21 | 5 | 76.5 | 77.7 | 0% | 0% | 5.0 | 52.1 | 0% | 0% |
+| bound6_none | 10-20 | 48 | 17 | 58.1 | 74.6 | 35% | 35% | 21.5 | 15.0 | 18% | 47% |
+| bound6_none | 20-40 | 100 | 24 | 21.4 | 37.2 | 38% | 46% | 37.3 | 28.0 | 17% | 71% |
+| bound6_none | >=40 | 201 | 62 | 4.6 | 11.2 | 74% | 84% | 27.1 | 25.0 | 23% | 84% |
+| bound6_windowed_zncc | <5 | 12 | 0 | - | - | - | - | - | - | - | - |
+| bound6_windowed_zncc | 5-10 | 21 | 1 | 72.0 | 72.0 | 0% | 0% | 52.5 | 42.8 | 0% | 0% |
+| bound6_windowed_zncc | 10-20 | 48 | 5 | 21.0 | 73.0 | 40% | 40% | 13.4 | 12.2 | 0% | 60% |
+| bound6_windowed_zncc | 20-40 | 100 | 2 | 18.5 | 24.1 | 50% | 50% | 57.3 | 33.4 | 50% | 100% |
+| bound6_windowed_zncc | >=40 | 201 | 23 | 3.2 | 6.0 | 83% | 87% | 32.4 | 31.7 | 17% | 87% |
+
+**Convergence under `acceptance` `none`.** Per render, over the points whose loop reached that render with a proposal: the proposed normal's error, its median change from the same point's first plane, and the turn's largest cell movement (grid px), with the share at or under today's tolerance, 0.05 px.
+
+`seoul_bull`:
+
+| variant | render | points | proposed med | proposed p75 | change from first, med | move med px | move p10 | move p90 | moves <= 0.05 |
+|---|---|---|---|---|---|---|---|---|---|
+| bound2_none | 1 | 186 | 25.9 | 47.7 | +0.0 | 8.45 | 3.02 | 13.81 | 0% |
+| bound2_none | 2 | 160 | 23.8 | 44.0 | +0.9 | 2.21 | 0.61 | 7.69 | 1% |
+| bound2_none | 3 | 119 | 22.3 | 36.2 | +0.7 | 0.85 | 0.11 | 4.92 | 7% |
+| bound2_none | 4 | 76 | 21.0 | 38.2 | +2.4 | 0.68 | 0.08 | 3.03 | 7% |
+| bound2_none | 5 | 41 | 19.5 | 34.4 | +2.4 | 0.38 | 0.05 | 1.85 | 10% |
+| bound2_none | 6 | 18 | 18.7 | 30.1 | +2.8 | 0.24 | 0.10 | 1.00 | 6% |
+| bound2_none | 7 | 9 | 19.6 | 23.4 | +9.6 | 0.36 | 0.12 | 0.67 | 0% |
+| bound2_none | 8 | 4 | 16.8 | 29.4 | +8.9 | 0.14 | 0.08 | 0.30 | 0% |
+| bound4_none | 1 | 203 | 24.6 | 49.5 | +0.0 | 9.47 | 3.67 | 14.24 | 0% |
+| bound4_none | 2 | 176 | 23.8 | 44.5 | +1.7 | 2.17 | 0.58 | 7.95 | 1% |
+| bound4_none | 3 | 139 | 21.7 | 40.3 | +1.3 | 0.77 | 0.08 | 3.95 | 8% |
+| bound4_none | 4 | 92 | 18.4 | 37.9 | +2.2 | 0.40 | 0.04 | 1.89 | 11% |
+| bound4_none | 5 | 50 | 15.2 | 31.2 | +2.0 | 0.21 | 0.04 | 1.49 | 14% |
+| bound4_none | 6 | 22 | 10.2 | 20.3 | -1.2 | 0.15 | 0.03 | 0.88 | 23% |
+| bound4_none | 7 | 6 | 10.6 | 17.5 | -2.2 | 0.14 | 0.05 | 0.22 | 17% |
+| bound4_none | 8 | 2 | 8.1 | 10.2 | +2.1 | 0.47 | 0.17 | 0.77 | 0% |
+| bound6_none | 1 | 211 | 24.4 | 49.5 | +0.0 | 10.25 | 4.32 | 14.87 | 0% |
+| bound6_none | 2 | 182 | 23.8 | 45.3 | +2.1 | 2.11 | 0.45 | 5.70 | 3% |
+| bound6_none | 3 | 146 | 22.4 | 42.3 | +2.4 | 0.75 | 0.04 | 4.51 | 12% |
+| bound6_none | 4 | 89 | 17.7 | 35.7 | +2.6 | 0.39 | 0.02 | 1.96 | 17% |
+| bound6_none | 5 | 49 | 14.6 | 27.1 | +0.8 | 0.25 | 0.02 | 1.36 | 18% |
+| bound6_none | 6 | 18 | 10.8 | 16.8 | +0.8 | 0.24 | 0.04 | 1.03 | 22% |
+| bound6_none | 7 | 6 | 8.4 | 9.7 | +4.8 | 0.22 | 0.08 | 0.78 | 17% |
+| bound6_none | 8 | 1 | 10.5 | 10.5 | +5.0 | 0.16 | 0.16 | 0.16 | 0% |
+
+`kerry_park`:
+
+| variant | render | points | proposed med | proposed p75 | change from first, med | move med px | move p10 | move p90 | moves <= 0.05 |
+|---|---|---|---|---|---|---|---|---|---|
+| bound2_none | 1 | 229 | 16.9 | 33.3 | +0.0 | 6.75 | 1.50 | 12.39 | 1% |
+| bound2_none | 2 | 207 | 12.9 | 31.8 | -0.3 | 1.51 | 0.30 | 4.81 | 5% |
+| bound2_none | 3 | 161 | 11.0 | 30.3 | -0.8 | 0.67 | 0.06 | 3.16 | 8% |
+| bound2_none | 4 | 106 | 9.9 | 22.5 | -1.7 | 0.27 | 0.03 | 1.71 | 14% |
+| bound2_none | 5 | 52 | 7.2 | 28.3 | -2.4 | 0.16 | 0.02 | 1.73 | 27% |
+| bound2_none | 6 | 16 | 9.1 | 18.3 | -3.1 | 0.24 | 0.05 | 1.07 | 12% |
+| bound2_none | 7 | 5 | 15.9 | 29.5 | -1.7 | 0.35 | 0.10 | 1.52 | 20% |
+| bound2_none | 8 | 2 | 11.6 | 13.9 | -7.1 | 0.78 | 0.35 | 1.21 | 0% |
+| bound4_none | 1 | 274 | 15.4 | 35.1 | +0.0 | 8.05 | 2.10 | 13.60 | 0% |
+| bound4_none | 2 | 253 | 13.1 | 29.9 | -0.1 | 1.70 | 0.25 | 4.96 | 5% |
+| bound4_none | 3 | 215 | 10.3 | 30.2 | +0.0 | 0.60 | 0.02 | 2.97 | 13% |
+| bound4_none | 4 | 147 | 10.5 | 27.8 | -0.2 | 0.43 | 0.03 | 2.08 | 15% |
+| bound4_none | 5 | 80 | 6.2 | 22.3 | -1.1 | 0.18 | 0.02 | 1.55 | 24% |
+| bound4_none | 6 | 36 | 8.6 | 24.4 | +0.4 | 0.24 | 0.03 | 1.35 | 17% |
+| bound4_none | 7 | 11 | 12.1 | 18.8 | +2.1 | 0.09 | 0.01 | 1.73 | 27% |
+| bound4_none | 8 | 4 | 5.7 | 9.1 | +1.2 | 0.52 | 0.19 | 1.13 | 0% |
+| bound6_none | 1 | 285 | 17.4 | 40.4 | +0.0 | 8.71 | 2.22 | 13.84 | 0% |
+| bound6_none | 2 | 262 | 13.4 | 35.1 | -0.1 | 1.46 | 0.21 | 4.65 | 7% |
+| bound6_none | 3 | 218 | 10.8 | 30.6 | -0.5 | 0.57 | 0.01 | 2.75 | 15% |
+| bound6_none | 4 | 146 | 7.3 | 25.1 | -1.1 | 0.26 | 0.02 | 2.42 | 18% |
+| bound6_none | 5 | 78 | 6.1 | 23.3 | -1.4 | 0.17 | 0.02 | 0.98 | 27% |
+| bound6_none | 6 | 32 | 6.4 | 27.5 | -2.3 | 0.13 | 0.02 | 0.79 | 19% |
+| bound6_none | 7 | 18 | 4.7 | 12.8 | -1.8 | 0.10 | 0.06 | 0.64 | 6% |
+| bound6_none | 8 | 11 | 6.3 | 12.7 | -0.7 | 0.10 | 0.02 | 0.28 | 27% |
+
+`seoul_bull`:
+
+| variant | points with 2+ proposals | first is best | last better than first | last worse than first by 5+ deg |
+|---|---|---|---|---|
+| bound2_none | 160 | 49% | 39% | 39% |
+| bound4_none | 176 | 51% | 38% | 40% |
+| bound6_none | 182 | 56% | 34% | 43% |
+
+`kerry_park`:
+
+| variant | points with 2+ proposals | first is best | last better than first | last worse than first by 5+ deg |
+|---|---|---|---|---|
+| bound2_none | 207 | 39% | 54% | 26% |
+| bound4_none | 253 | 42% | 49% | 25% |
+| bound6_none | 262 | 41% | 48% | 24% |
+
+**Turns the ZNCC rule rejected** (the `windowed_zncc` variants): whether the rejected turn's normal was closer to the truth than the frame it was proposed from.
+
+`seoul_bull`:
+
+| variant | baseline | rejected | would lower the error | by 5+ deg | would raise it by 5+ deg |
+|---|---|---|---|---|---|
+| bound2_windowed_zncc | <5 | 38 | 21% | 18% | 66% |
+| bound2_windowed_zncc | 5-10 | 43 | 23% | 16% | 60% |
+| bound2_windowed_zncc | 10-20 | 4 | 50% | 25% | 50% |
+| bound2_windowed_zncc | 20-40 | 9 | 33% | 11% | 33% |
+| bound2_windowed_zncc | >=40 | 57 | 37% | 14% | 23% |
+| bound4_windowed_zncc | <5 | 41 | 22% | 20% | 61% |
+| bound4_windowed_zncc | 5-10 | 45 | 22% | 18% | 60% |
+| bound4_windowed_zncc | 10-20 | 8 | 38% | 12% | 62% |
+| bound4_windowed_zncc | 20-40 | 13 | 62% | 46% | 15% |
+| bound4_windowed_zncc | >=40 | 68 | 43% | 16% | 18% |
+| bound6_windowed_zncc | <5 | 43 | 30% | 28% | 56% |
+| bound6_windowed_zncc | 5-10 | 46 | 28% | 22% | 54% |
+| bound6_windowed_zncc | 10-20 | 10 | 40% | 20% | 60% |
+| bound6_windowed_zncc | 20-40 | 17 | 59% | 35% | 12% |
+| bound6_windowed_zncc | >=40 | 67 | 37% | 15% | 27% |
+
+`kerry_park`:
+
+| variant | baseline | rejected | would lower the error | by 5+ deg | would raise it by 5+ deg |
+|---|---|---|---|---|---|
+| bound2_windowed_zncc | <5 | 3 | 0% | 0% | 67% |
+| bound2_windowed_zncc | 5-10 | 6 | 0% | 0% | 50% |
+| bound2_windowed_zncc | 10-20 | 30 | 40% | 27% | 47% |
+| bound2_windowed_zncc | 20-40 | 53 | 47% | 34% | 38% |
+| bound2_windowed_zncc | >=40 | 79 | 56% | 28% | 19% |
+| bound4_windowed_zncc | <5 | 4 | 0% | 0% | 75% |
+| bound4_windowed_zncc | 5-10 | 7 | 14% | 14% | 71% |
+| bound4_windowed_zncc | 10-20 | 35 | 29% | 20% | 51% |
+| bound4_windowed_zncc | 20-40 | 61 | 46% | 36% | 34% |
+| bound4_windowed_zncc | >=40 | 112 | 54% | 28% | 15% |
+| bound6_windowed_zncc | <5 | 5 | 0% | 0% | 80% |
+| bound6_windowed_zncc | 5-10 | 8 | 12% | 12% | 75% |
+| bound6_windowed_zncc | 10-20 | 33 | 27% | 15% | 52% |
+| bound6_windowed_zncc | 20-40 | 66 | 50% | 39% | 26% |
+| bound6_windowed_zncc | >=40 | 117 | 50% | 30% | 21% |
+
+**The first plane's error against its predicted precision** (degrees):
+
+`seoul_bull`:
+
+| variant | precision | points | first med | first p75 | first <10 | first <20 | start med |
+|---|---|---|---|---|---|---|---|
+| bound2 | <2 | 24 | 23.9 | 39.3 | 25% | 46% | 35.7 |
+| bound2 | 2-5 | 55 | 18.9 | 27.5 | 22% | 55% | 34.1 |
+| bound2 | 5-10 | 42 | 25.6 | 46.3 | 10% | 21% | 30.4 |
+| bound2 | 10-20 | 43 | 44.3 | 58.0 | 12% | 21% | 31.0 |
+| bound2 | 20-45 | 15 | 36.6 | 40.0 | 0% | 7% | 21.3 |
+| bound2 | >=45 | 7 | 47.5 | 51.0 | 0% | 0% | 66.9 |
+| bound4 | <2 | 46 | 11.8 | 22.9 | 41% | 67% | 36.5 |
+| bound4 | 2-5 | 57 | 21.4 | 32.3 | 12% | 47% | 34.0 |
+| bound4 | 5-10 | 42 | 31.9 | 57.8 | 12% | 21% | 27.8 |
+| bound4 | 10-20 | 32 | 42.4 | 58.7 | 9% | 12% | 26.6 |
+| bound4 | 20-45 | 20 | 40.1 | 52.0 | 5% | 10% | 27.6 |
+| bound4 | >=45 | 6 | 50.5 | 55.3 | 0% | 0% | 38.7 |
+| bound6 | <2 | 54 | 12.0 | 23.3 | 35% | 70% | 38.2 |
+| bound6 | 2-5 | 55 | 20.6 | 34.9 | 16% | 45% | 33.5 |
+| bound6 | 5-10 | 42 | 31.9 | 57.1 | 14% | 26% | 26.0 |
+| bound6 | 10-20 | 35 | 40.5 | 60.9 | 9% | 14% | 29.4 |
+| bound6 | 20-45 | 18 | 38.8 | 49.1 | 0% | 0% | 23.6 |
+| bound6 | >=45 | 7 | 53.5 | 58.0 | 0% | 0% | 66.9 |
+
+`kerry_park`:
+
+| variant | precision | points | first med | first p75 | first <10 | first <20 | start med |
+|---|---|---|---|---|---|---|---|
+| bound2 | <2 | 52 | 12.0 | 34.9 | 40% | 60% | 23.3 |
+| bound2 | 2-5 | 85 | 13.2 | 26.8 | 33% | 65% | 26.2 |
+| bound2 | 5-10 | 56 | 18.1 | 31.4 | 32% | 54% | 31.8 |
+| bound2 | 10-20 | 30 | 21.7 | 45.1 | 7% | 50% | 32.8 |
+| bound2 | 20-45 | 6 | 34.9 | 48.8 | 0% | 17% | 33.8 |
+| bound2 | >=45 | 0 | - | - | - | - | - |
+| bound4 | <2 | 82 | 8.8 | 27.9 | 51% | 72% | 25.4 |
+| bound4 | 2-5 | 104 | 15.7 | 30.4 | 33% | 59% | 26.4 |
+| bound4 | 5-10 | 62 | 20.1 | 40.0 | 26% | 48% | 33.6 |
+| bound4 | 10-20 | 22 | 26.6 | 56.5 | 5% | 36% | 37.2 |
+| bound4 | 20-45 | 4 | 57.6 | 63.7 | 0% | 25% | 27.0 |
+| bound4 | >=45 | 0 | - | - | - | - | - |
+| bound6 | <2 | 96 | 12.3 | 34.7 | 48% | 64% | 25.6 |
+| bound6 | 2-5 | 106 | 17.2 | 38.4 | 33% | 57% | 30.8 |
+| bound6 | 5-10 | 56 | 21.3 | 41.3 | 27% | 48% | 29.9 |
+| bound6 | 10-20 | 20 | 25.1 | 48.9 | 10% | 40% | 35.6 |
+| bound6 | 20-45 | 6 | 50.7 | 65.3 | 0% | 0% | 42.5 |
+| bound6 | >=45 | 1 | 14.5 | 14.5 | 0% | 100% | 50.0 |
+
+**Gates on the first plane.** Every gate over all points, and the precision bar of 5° by baseline:
+
+`seoul_bull`:
+
+| variant | gate | baseline | points | kept | first med | first <10 | first <20 | start med | old med |
+|---|---|---|---|---|---|---|---|---|---|
+| bound2 | precision <= 5 | <5 | 67 | 3 | 63.1 | 0% | 0% | 14.7 | 69.5 |
+| bound2 | precision <= 5 | 5-10 | 58 | 14 | 41.9 | 7% | 14% | 40.9 | 24.3 |
+| bound2 | precision <= 5 | 10-20 | 14 | 4 | 39.7 | 25% | 50% | 32.8 | 13.1 |
+| bound2 | precision <= 5 | 20-40 | 30 | 7 | 23.7 | 29% | 43% | 39.9 | 16.0 |
+| bound2 | precision <= 5 | >=40 | 97 | 51 | 15.1 | 27% | 67% | 35.0 | 23.4 |
+| bound2 | precision <= 5 | all | 266 | 79 | 19.7 | 23% | 52% | 35.0 | 23.5 |
+| bound2 | precision <= 10 | all | 266 | 121 | 23.7 | 18% | 41% | 33.3 | 25.2 |
+| bound2 | precision <= 15 | all | 266 | 150 | 24.2 | 17% | 37% | 32.7 | 25.9 |
+| bound2 | precision <= 20 | all | 266 | 164 | 25.4 | 16% | 36% | 32.7 | 26.7 |
+| bound2 | baseline >= 5 | all | 266 | 140 | 24.2 | 17% | 39% | 32.6 | 25.3 |
+| bound2 | baseline >= 10 | all | 266 | 90 | 19.3 | 24% | 52% | 34.0 | 23.6 |
+| bound2 | baseline >= 20 | all | 266 | 82 | 18.2 | 26% | 55% | 34.5 | 24.2 |
+| bound4 | precision <= 5 | <5 | 67 | 6 | 62.5 | 0% | 17% | 12.6 | 68.8 |
+| bound4 | precision <= 5 | 5-10 | 58 | 15 | 33.1 | 7% | 7% | 40.6 | 25.1 |
+| bound4 | precision <= 5 | 10-20 | 14 | 6 | 45.1 | 17% | 33% | 32.8 | 16.8 |
+| bound4 | precision <= 5 | 20-40 | 30 | 13 | 16.9 | 23% | 54% | 40.9 | 28.2 |
+| bound4 | precision <= 5 | >=40 | 97 | 63 | 12.7 | 33% | 75% | 34.9 | 24.8 |
+| bound4 | precision <= 5 | all | 266 | 103 | 16.2 | 25% | 56% | 35.0 | 25.4 |
+| bound4 | precision <= 10 | all | 266 | 145 | 21.6 | 21% | 46% | 33.5 | 27.0 |
+| bound4 | precision <= 15 | all | 266 | 167 | 23.1 | 20% | 41% | 32.8 | 27.1 |
+| bound4 | precision <= 20 | all | 266 | 177 | 23.2 | 19% | 40% | 32.8 | 27.4 |
+| bound4 | baseline >= 5 | all | 266 | 154 | 22.7 | 21% | 44% | 32.7 | 25.3 |
+| bound4 | baseline >= 10 | all | 266 | 103 | 14.4 | 29% | 59% | 34.1 | 23.4 |
+| bound4 | baseline >= 20 | all | 266 | 92 | 13.5 | 32% | 64% | 35.1 | 24.2 |
+| bound6 | precision <= 5 | <5 | 67 | 6 | 62.5 | 0% | 17% | 12.6 | 68.8 |
+| bound6 | precision <= 5 | 5-10 | 58 | 17 | 34.3 | 6% | 6% | 31.1 | 25.1 |
+| bound6 | precision <= 5 | 10-20 | 14 | 5 | 12.5 | 20% | 60% | 33.2 | 18.1 |
+| bound6 | precision <= 5 | 20-40 | 30 | 14 | 16.4 | 29% | 64% | 43.3 | 27.6 |
+| bound6 | precision <= 5 | >=40 | 97 | 67 | 12.4 | 33% | 73% | 35.0 | 24.9 |
+| bound6 | precision <= 5 | all | 266 | 109 | 16.4 | 26% | 58% | 35.3 | 26.3 |
+| bound6 | precision <= 10 | all | 266 | 151 | 20.1 | 23% | 49% | 33.8 | 27.1 |
+| bound6 | precision <= 15 | all | 266 | 170 | 23.0 | 21% | 44% | 33.3 | 27.5 |
+| bound6 | precision <= 20 | all | 266 | 186 | 23.4 | 20% | 42% | 33.2 | 27.7 |
+| bound6 | baseline >= 5 | all | 266 | 161 | 22.8 | 21% | 45% | 33.2 | 25.4 |
+| bound6 | baseline >= 10 | all | 266 | 109 | 14.8 | 29% | 62% | 34.9 | 23.7 |
+| bound6 | baseline >= 20 | all | 266 | 98 | 13.5 | 32% | 66% | 35.3 | 24.7 |
+
+`kerry_park`:
+
+| variant | gate | baseline | points | kept | first med | first <10 | first <20 | start med | old med |
+|---|---|---|---|---|---|---|---|---|---|
+| bound2 | precision <= 5 | <5 | 12 | 2 | 78.2 | 0% | 0% | 0.7 | 68.2 |
+| bound2 | precision <= 5 | 5-10 | 21 | 1 | 70.6 | 0% | 0% | 5.0 | 43.4 |
+| bound2 | precision <= 5 | 10-20 | 48 | 20 | 35.6 | 20% | 35% | 28.3 | 26.7 |
+| bound2 | precision <= 5 | 20-40 | 100 | 29 | 14.6 | 28% | 62% | 36.1 | 16.9 |
+| bound2 | precision <= 5 | >=40 | 201 | 85 | 11.0 | 44% | 72% | 21.8 | 20.0 |
+| bound2 | precision <= 5 | all | 382 | 137 | 13.2 | 36% | 63% | 25.4 | 20.6 |
+| bound2 | precision <= 10 | all | 382 | 193 | 14.6 | 35% | 60% | 25.6 | 20.6 |
+| bound2 | precision <= 15 | all | 382 | 214 | 16.1 | 32% | 60% | 26.1 | 21.6 |
+| bound2 | precision <= 20 | all | 382 | 223 | 16.6 | 31% | 59% | 26.7 | 21.8 |
+| bound2 | baseline >= 5 | all | 382 | 224 | 16.5 | 31% | 59% | 27.6 | 21.7 |
+| bound2 | baseline >= 10 | all | 382 | 216 | 16.0 | 32% | 60% | 27.6 | 21.4 |
+| bound2 | baseline >= 20 | all | 382 | 180 | 13.5 | 35% | 64% | 29.0 | 21.4 |
+| bound4 | precision <= 5 | <5 | 12 | 4 | 78.5 | 0% | 0% | 0.8 | 77.0 |
+| bound4 | precision <= 5 | 5-10 | 21 | 4 | 65.6 | 0% | 0% | 11.2 | 48.2 |
+| bound4 | precision <= 5 | 10-20 | 48 | 29 | 44.9 | 21% | 34% | 13.4 | 29.0 |
+| bound4 | precision <= 5 | 20-40 | 100 | 41 | 14.6 | 37% | 59% | 37.0 | 22.6 |
+| bound4 | precision <= 5 | >=40 | 201 | 108 | 9.4 | 51% | 80% | 23.4 | 20.7 |
+| bound4 | precision <= 5 | all | 382 | 186 | 13.1 | 41% | 65% | 25.5 | 22.7 |
+| bound4 | precision <= 10 | all | 382 | 248 | 13.8 | 37% | 60% | 26.9 | 23.5 |
+| bound4 | precision <= 15 | all | 382 | 260 | 13.9 | 36% | 60% | 27.1 | 24.3 |
+| bound4 | precision <= 20 | all | 382 | 270 | 14.9 | 34% | 59% | 28.0 | 24.6 |
+| bound4 | baseline >= 5 | all | 382 | 265 | 14.1 | 35% | 60% | 30.2 | 24.3 |
+| bound4 | baseline >= 10 | all | 382 | 253 | 13.7 | 37% | 62% | 30.3 | 22.6 |
+| bound4 | baseline >= 20 | all | 382 | 211 | 13.1 | 41% | 67% | 31.9 | 22.8 |
+| bound6 | precision <= 5 | <5 | 12 | 4 | 78.6 | 0% | 0% | 1.6 | 77.8 |
+| bound6 | precision <= 5 | 5-10 | 21 | 6 | 72.2 | 0% | 0% | 4.3 | 49.4 |
+| bound6 | precision <= 5 | 10-20 | 48 | 31 | 47.6 | 19% | 35% | 13.4 | 17.7 |
+| bound6 | precision <= 5 | 20-40 | 100 | 43 | 15.9 | 37% | 60% | 36.1 | 25.7 |
+| bound6 | precision <= 5 | >=40 | 201 | 118 | 10.3 | 50% | 71% | 25.3 | 22.4 |
+| bound6 | precision <= 5 | all | 382 | 202 | 13.9 | 40% | 60% | 26.9 | 24.0 |
+| bound6 | precision <= 10 | all | 382 | 258 | 15.6 | 37% | 57% | 27.6 | 25.4 |
+| bound6 | precision <= 15 | all | 382 | 271 | 16.0 | 36% | 57% | 29.5 | 25.6 |
+| bound6 | precision <= 20 | all | 382 | 278 | 17.0 | 35% | 56% | 29.4 | 25.4 |
+| bound6 | baseline >= 5 | all | 382 | 276 | 16.2 | 36% | 57% | 31.5 | 25.4 |
+| bound6 | baseline >= 10 | all | 382 | 264 | 15.0 | 37% | 59% | 32.1 | 24.3 |
+| bound6 | baseline >= 20 | all | 382 | 222 | 13.4 | 41% | 64% | 32.6 | 24.6 |
+
+**Precision gates on the step as built** (`Turned` points; bars of 5° and 10°):
+
+`seoul_bull`:
+
+| variant | gate | turned | kept | new med | new <10 | new <20 | start med | old med |
+|---|---|---|---|---|---|---|---|---|
+| bound2_none | precision <= 5 | 19 | 14 | 19.1 | 21% | 50% | 35.7 | 24.5 |
+| bound2_none | precision <= 10 | 19 | 18 | 22.7 | 22% | 44% | 32.2 | 26.2 |
+| bound2_windowed_zncc | precision <= 5 | 8 | 5 | 15.6 | 20% | 60% | 39.6 | 27.0 |
+| bound2_windowed_zncc | precision <= 10 | 8 | 7 | 15.6 | 29% | 57% | 39.0 | 27.0 |
+| bound4_none | precision <= 5 | 35 | 26 | 18.5 | 27% | 54% | 35.3 | 29.9 |
+| bound4_none | precision <= 10 | 35 | 31 | 20.7 | 26% | 48% | 35.2 | 24.6 |
+| bound4_windowed_zncc | precision <= 5 | 10 | 6 | 26.8 | 0% | 17% | 40.7 | 35.3 |
+| bound4_windowed_zncc | precision <= 10 | 10 | 9 | 24.1 | 11% | 22% | 40.5 | 29.4 |
+| bound6_none | precision <= 5 | 53 | 39 | 18.1 | 23% | 51% | 35.4 | 27.0 |
+| bound6_none | precision <= 10 | 53 | 45 | 23.2 | 22% | 47% | 34.1 | 27.0 |
+| bound6_windowed_zncc | precision <= 5 | 13 | 9 | 16.1 | 22% | 56% | 40.5 | 21.5 |
+| bound6_windowed_zncc | precision <= 10 | 13 | 12 | 21.9 | 25% | 50% | 40.3 | 21.8 |
+
+`kerry_park`:
+
+| variant | gate | turned | kept | new med | new <10 | new <20 | start med | old med |
+|---|---|---|---|---|---|---|---|---|
+| bound2_none | precision <= 5 | 59 | 52 | 6.4 | 71% | 77% | 25.4 | 16.5 |
+| bound2_none | precision <= 10 | 59 | 55 | 6.4 | 71% | 76% | 25.4 | 16.0 |
+| bound2_windowed_zncc | precision <= 5 | 28 | 26 | 4.9 | 73% | 81% | 23.9 | 15.9 |
+| bound2_windowed_zncc | precision <= 10 | 28 | 28 | 4.9 | 75% | 82% | 23.9 | 15.9 |
+| bound4_none | precision <= 5 | 92 | 81 | 6.0 | 67% | 70% | 26.7 | 22.6 |
+| bound4_none | precision <= 10 | 92 | 88 | 6.6 | 64% | 67% | 27.1 | 24.0 |
+| bound4_windowed_zncc | precision <= 5 | 26 | 23 | 5.4 | 78% | 83% | 31.9 | 16.3 |
+| bound4_windowed_zncc | precision <= 10 | 26 | 26 | 5.9 | 77% | 81% | 34.7 | 18.4 |
+| bound6_none | precision <= 5 | 109 | 96 | 6.3 | 64% | 71% | 31.5 | 26.5 |
+| bound6_none | precision <= 10 | 109 | 104 | 7.0 | 59% | 66% | 31.5 | 25.6 |
+| bound6_windowed_zncc | precision <= 5 | 31 | 28 | 4.1 | 79% | 82% | 35.0 | 28.7 |
+| bound6_windowed_zncc | precision <= 10 | 31 | 30 | 4.8 | 73% | 77% | 35.0 | 25.6 |
+
+**What the numbers show.**
+
+- **The views' baseline divides the points.** Where it is 20° or more (127 points on `seoul_bull`, 301 on `kerry_park`), the first plane at bound 4 lands at a median 19.6° and 13.1° (20–40°, 40° and over) on `seoul_bull` and 19.1° and 11.4° on `kerry_park`, against a start of 25° to 41° and today's 2×2 at 22.6° to 25.7°, and is closer to the truth than the start on 74% to 89% of the points that propose one. Under 10°, it is worse than the start in median on both captures (40° to 47° against 29° to 30° on `seoul_bull`, 65° to 77° against 1° and 21° on `kerry_park`) and closer than the start on only 0% to 39%. Today's 2×2 is also worse than the start under 5° (45.0° against 26.1°, 71.1° against 0.7°). The 10–20° bin is mixed: the first plane is worse than the start in median there on both.
+- **The step as built turns its best points where the baseline is wide.** At 40° and over on `kerry_park` its turned points end at a median 3.2° to 5.3° in every variant, against today's 17° to 32° on the same points. Its turned points under 10° are few (0 to 11 per bin and variant) and mostly far off (medians from 11° to 77°, most above 40°).
+- **The ZNCC rule vetoes useful turns at wide baselines and bad ones at narrow baselines.** Of the turns it rejected, those that would have lowered the error are 37% to 43% (`seoul_bull`) and 50% to 56% (`kerry_park`) at 40° and over, and 0% to 30% under 10°, where 50% to 80% would have raised it by 5° or more. It acts in part as a narrow-baseline guard.
+- **Dropping the acceptance test turns more points, but the loop rarely converges.** At bound 2 it turns 19 and 59 points instead of 8 and 28, at bound 6 53 and 109. Oscillation then ends 108 to 147 loops per variant, more than converge, and more loops end with no live cells (`seoul_bull` bound 2: 93 to 132; `kerry_park` bound 2: 163 to 182), likely because a turn the score would have refused leaves the next render's cells refused (inferred, not traced).
+- **Later renders help a little on `kerry_park` and drift on `seoul_bull`.** Over renders 2 to 6, the median change of a point's proposal from its own first plane is mostly between 0 and −3° on `kerry_park` and between +1° and +3° on `seoul_bull`. The first plane is the best of a point's proposals on 49% to 56% (`seoul_bull`) and 39% to 42% (`kerry_park`) of points with two or more, and the last is 5° or more worse than the first on 39% to 43% and 24% to 26%.
+- **Today's tolerance is far below the movements the loop settles to.** The largest cell movement falls from a median 7 to 10 px at the first render to 1.5 to 2.2 px at the second and 0.1 to 0.9 px from the third on, and at no render are more than 27% of the turns at or under 0.05 px. A cell centre lies about `√2 R / 3`, 11 to 23 px, from the middle on the 24- to 48-sample grids, so 0.05 px is a turn of about 0.13° to 0.25°, while 0.5 px would be about 1.3° to 2.5°.
+- **The predicted precision ranks the wide-baseline planes but does not catch the narrow-baseline failures.** Over all first planes the median error rises with the predicted precision (bound 4: 11.8° under 2° to 40.1° at 20–45° on `seoul_bull`; 8.8° to 57.6° on `kerry_park`). But under 10° baseline the first planes predicted within 5° have median errors of 33° to 79°, and those planes are turned a median 68° (`seoul_bull`) and 78° (`kerry_park`) from the mean viewing direction, against 28° to 34° for the planes at 20° and over. The precision reads each cell's variance along the fitted normal; a plane turned nearly edge-on to the views reads it across the rays, where even close views place a cell well, so a wrong edge-on plane reads as precise. This explanation is inferred from those two medians, not tested.
+- **A baseline gate does as well as the precision gate over all points.** On the first plane at bound 4, a precision bar of 5° keeps 103 of 266 points at a median 16.2° and 186 of 382 at 13.1°; a baseline bar of 20° keeps 92 at 13.5° and 211 at 13.1°, and 10° keeps 103 at 14.4° and 253 at 13.7°. On the step as built, a precision bar of 5° keeps 88% to 93% of the turned points on `kerry_park`, at medians of 4.1° to 6.4°.
+- **A wider bound helps a little.** Bound 4 makes more first renders propose (203 against 186, 274 against 229) and is as accurate or better at 20° and over (`seoul_bull` 40° and over 13.1° against 18.1°); bound 6 adds few proposals over 4 and costs more on `kerry_park`.
+
+**What the numbers cannot show.**
+
+- **The ground-truth normals are estimates**, the patch frames stored in the two `.sfmr` files; where a step disagrees with one, the numbers cannot say which is wrong. On `kerry_park` the 12 points under 5° baseline have a ground-truth normal a median 0.7° from their mean viewing direction, which suggests that those normals were set from the viewing direction rather than measured. If so, the errors under 10° there measure distance from the viewing direction, not from the surface. On `seoul_bull` that bin's start error is 26°, so this does not hold there.
+- **Narrow baselines are measured, and these estimators fail on them against these truths**; whether a better measurement could succeed there is not shown. The narrow bins on `kerry_park` are small (12 and 21 points).
+- The first plane and the gates are read from the traces after the fact. A gate inside the loop, or a larger tolerance, changes the later renders, which these runs do not show.
+- Whether a person prefers the turned patches; the hand review decides that.
+
+**Candidates the data supports** (for the maintainer; none is adopted here):
+
+- A **baseline gate** on the step (propose no turn below about 20° between the views), as the guard the narrow baselines need. The precision gate as defined is not a substitute, unless its variance is read so that an edge-on plane is not reported as precise.
+- With that gate in place, **taking the first plane, or turns without the ZNCC veto**, at wide baselines: there the first plane is closer to the truth than the start on three quarters or more of the points, and the veto rejects about half the turns that would help.
+- **`cell_shift_bound_px` 4** rather than 2.
+- An **`update_tolerance_px` near the movements seen from the third render on** (0.1 to 0.9 px), or a fixed small number of renders, instead of 0.05 px, which few loops reach. Not measured here.
 
 ## Open questions
 
