@@ -18,7 +18,7 @@ This draft proposes a way to estimate the normal by fitting the plane to the pho
 
 ### Why a new step
 
-`grid_plane_normal` ([piece-gated-grid-normal.md](piece-gated-grid-normal.md)) measures the normal by parallax: it renders each view once through the current plane, registers each of nine cells by a shift search within a small bound, gates each cell in each view by a robust affine fit, triangulates the cells and fits a plane through them, then turns the patch and repeats. Each part of that chain needs the starting plane to be near enough that every cell of a view lands within the shift bound and that the view's local affine map, which the gate fits, is close to the identity. In a wide view a wrong plane breaks both: the cells far from the centre are displaced past the bound, and the affine fit refuses the view.
+`grid_plane_normal` ([piece-gated-grid-normal.md](piece-gated-grid-normal.md)) measures the normal by parallax: it renders each view once through the current plane, registers each of nine cells by a shift search within a small bound, gates each cell in each view by a robust affine fit, triangulates the cells and fits a plane through them, then turns the patch and repeats. Each part of that chain needs the starting plane to be near enough that every cell of a view lands within the shift bound and that each cell's picture in the view differs from the reference's by little more than a shift, since a cell is registered by shift alone. In a wide view a wrong plane breaks both: the cells far from the centre are displaced past the bound, and the cells whose picture is stretched or turned against the reference's fall under the cell ZNCC bar.
 
 This step replaces the nine-cell shift search, the per-view affine gate and the cell triangulation with a direct fit of the plane to the photographs. It uses the plane's own prediction to reach the views the shift search cannot: a view taken late in the sequence is rendered through a plane fitted on the views before it, so its picture already arrives close to the reference's.
 
@@ -28,7 +28,7 @@ The glossary's **fit normal** / **finite-difference normal** / **grid-plane norm
 
 ## Rust API
 
-Proposed: the step lives beside `grid_plane_normal` under [bench/normal/](../../crates/sfmtool-core/src/bench/normal/) and has the signature every bench normal step has ([bench/normal.rs](../../crates/sfmtool-core/src/bench/normal.rs)), so Track View, the wire's `fit_bench_track_normal` and the Python bindings in `sfmtool.bench` can call it the way they call the other three.
+Proposed: the step lives beside `grid_plane_normal` under [bench/normal/](../../crates/sfmtool-core/src/bench/normal/) and has the signature every bench normal step has ([bench/normal.rs](../../crates/sfmtool-core/src/bench/normal.rs)), so the Python bindings in `sfmtool.bench` can call it the way they call the other three, and Track View and the wire's `fit_bench_track_normal` the way they call `fit_normal` and `finite_difference_normal` (neither calls `grid_plane_normal` yet).
 
 ```rust
 /// How [`grown_plane_normal`] grows its windows and when a view joins.
@@ -101,7 +101,7 @@ Every evaluation samples the photograph directly through the current plane, read
 
 Under a plane that is wrong, a sample at distance `r` from the window's centre is displaced in the view by about `‖A − I‖·r`, where `A` is the error in the view's local affine map. A small window therefore tolerates a large error in the map, and a map fitted over radius `r` is accurate enough to bring radius about `2r` within capture of the next fit.
 
-Stage 1 places a window of `spot_window` grid px (7×7) at the most contrasted spot of the middle cell of the reference tile, contrast being the sum over the window of the squared forward differences in x and y. It finds the view's shift alone, at the current plane, by an exhaustive search over a lattice of `spot_search_step_px` (0.5) image px within `spot_search_px` (12) of the view's keypoint. Each later stage widens the window about the same spot to the next of `window_half_widths` (6, 10, 16 and 24 grid px on the 48-sample working grid, the last the whole grid) and refines the tilt and the view's shift together for the best ZNCC over the window. The prototype used a pattern search; Gauss–Newton on the ZNCC is the obvious alternative, and the choice is open.
+Stage 1 places a window of `spot_window` grid px (7×7) at the most contrasted spot of the middle cell of the reference tile, contrast being the sum over the window of the squared forward differences in x and y. It finds the view's shift alone, at the current plane, by an exhaustive search over shifts of up to `spot_search_px` (12) image px along each axis, on a lattice of `spot_search_step_px` (0.5) image px. Each later stage widens the window about the same spot to the next of `window_half_widths` (6, 10, 16 and 24 grid px on the 48-sample working grid, the last the whole grid) and refines the tilt and the view's shift together for the best ZNCC over the window. The prototype used a pattern search; Gauss–Newton on the ZNCC is the obvious alternative, and the choice is open.
 
 ### Views in sequence, sharing the plane
 
@@ -119,11 +119,11 @@ Every ZNCC is the mean over the colour channels, over the samples that land on t
 
 ### A proposed ordering rule
 
-Not prototyped. The angle from the reference is a proxy for how far the current plane's prediction is from the truth in a view. The plane's uncertainty, carried into each remaining view, predicts that error directly: the map error over a cell, given the plane's covariance. The proposal is to take next the view the current plane is predicted to get closest, and to defer a view whose predicted squeeze is past capture. On the example capture lay at about 1.7×: from a single view, a start squeezed by 2× was captured and one squeezed by 3× was not.
+Not prototyped. The angle from the reference is a proxy for how far the current plane's prediction is from the truth in a view. The plane's uncertainty, carried into each remaining view, predicts that error directly: the map error over a cell, given the plane's covariance. The proposal is to take next the view the current plane is predicted to get closest, and to defer a view whose predicted squeeze is past about 1.7×. That bar sits below what was captured on the example: from a single view, image 62, whose start needed a stretch of about 2×, was captured, and images 65 and 66, whose starts were squeezed by about 3× and 4×, were not.
 
 ### Relation to `grid_plane_normal`
 
-`grid_plane_normal` reads the plane from where nine cells register, by shift alone, on a render made at the current plane, and gates each view by a robust affine fit; it can only measure what lands inside the shift bound. This step instead treats the plane as the thing being fitted, and every view's picture as evidence for it. The two share the reference rule, the starting frame and the final turn and readback. Where `grid_plane_normal` ends `Turned`, the two should agree; the cases this step is for are the wide views `grid_plane_normal`'s gates refuse at the starting plane.
+`grid_plane_normal` reads the plane from where nine cells register, by shift alone, on a render made at the current plane, and gates each cell in each view by its ZNCC, its curvature, the bound and the view's robust affine fit; it can only measure what lands inside the shift bound. This step instead treats the plane as the thing being fitted, and every view's picture as evidence for it. The two share the reference rule, the starting frame and the final turn and readback. Where `grid_plane_normal` ends `Turned`, the two should agree; the cases this step is for are the wide views `grid_plane_normal`'s gates refuse at the starting plane.
 
 ## Implementation notes
 
