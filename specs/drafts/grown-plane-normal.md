@@ -35,10 +35,12 @@ Proposed: the step lives beside `grid_plane_normal` under [bench/normal/](../../
 pub struct GrownPlaneNormalOptions {
     /// Side of the working grid the reference tile is sampled on. 48.
     pub working_resolution: u32,
-    /// Side of the first window, grid px, placed at the most contrasted spot
-    /// of the reference tile's middle cell. 7.
+    /// Side of the first window, grid px, placed at each candidate spot. 7.
     pub spot_window: u32,
-    /// Half-widths of the later windows about that spot, grid px, the last
+    /// How many candidate spots are tried: the most contrasted
+    /// non-overlapping first windows in the reference tile's middle cell. 5.
+    pub spot_candidates: u32,
+    /// Half-widths of the later windows about a spot, grid px, the last
     /// covering the whole grid. [6, 10, 16, 24].
     pub window_half_widths: Vec<u32>,
     /// The first window's search for the view's shift: bound and step, image px.
@@ -93,7 +95,7 @@ The plane has two unknowns, a tilt `(a, b)` of the starting frame's normal `n` a
 normal = unit(n + a·u + b·v)
 ```
 
-through the point where the reference keypoint's ray meets the starting frame. Each view adds its own image shift, two unknowns in image px, applied to the projected positions. The shift absorbs error in the point's position: a wrong depth along the reference ray moves every sample of a wide view by about the same amount, up to about 7 image px on the example below, which the tilt cannot express and should not try to.
+through the point where the reference keypoint's ray meets the starting frame. Each view adds its own image shift, two unknowns in image px, applied to the projected positions. The shift absorbs error in the point's position: a wrong depth along the reference ray moves every sample of a wide view by about the same amount, up to about 8 image px on the example below (image 36's shift was (−6.75, −4.25) px), which the tilt cannot express and should not try to.
 
 Every evaluation samples the photograph directly through the current plane, reading the photograph around the projected footprint, rather than resampling a tile rendered once at the starting plane. A tile rendered at a wrong plane has already lost detail along the axis that plane squeezed, and resampling it cannot recover that detail.
 
@@ -101,7 +103,9 @@ Every evaluation samples the photograph directly through the current plane, read
 
 Under a plane that is wrong, a sample at distance `r` from the window's centre is displaced in the view by about `‖A − I‖·r`, where `A` is the error in the view's local affine map. A small window therefore tolerates a large error in the map, and a map fitted over radius `r` is accurate enough to bring radius about `2r` within capture of the next fit.
 
-Stage 1 places a window of `spot_window` grid px (7×7) at the most contrasted spot of the middle cell of the reference tile, contrast being the sum over the window of the squared forward differences in x and y. It finds the view's shift alone, at the current plane, by an exhaustive search over shifts of up to `spot_search_px` (12) image px along each axis, on a lattice of `spot_search_step_px` (0.5) image px. Each later stage widens the window about the same spot to the next of `window_half_widths` (6, 10, 16 and 24 grid px on the 48-sample working grid, the last the whole grid) and refines the tilt and the view's shift together for the best ZNCC over the window. The prototype used a pattern search; Gauss–Newton on the ZNCC is the obvious alternative, and the choice is open.
+Stage 1 places a window of `spot_window` grid px (7×7) at a spot in the middle cell of the reference tile. It finds the view's shift alone, at the current plane, by an exhaustive search over shifts of up to `spot_search_px` (12) image px along each axis, on a lattice of `spot_search_step_px` (0.5) image px. Each later stage widens the window about the same spot to the next of `window_half_widths` (6, 10, 16 and 24 grid px on the 48-sample working grid, the last the whole grid) and refines the tilt and the view's shift together for the best ZNCC over the window. The prototype used a pattern search; Gauss–Newton on the ZNCC is the obvious alternative, and the choice is open.
+
+**Which spot.** The prototype's sequence used one spot, the most contrasted window of the middle cell, contrast being the sum over the window of the squared forward differences in x and y. The proposal is to take several candidate spots instead, the `spot_candidates` most contrasted non-overlapping windows of the middle cell, grow the view from each, and keep the result that converges with the best whole-grid ZNCC. A cheaper alternative is to grow only from the candidate whose stage-1 match has the best ZNCC; on the example that candidate converged in both views where it was tried. The several-spot rule was tested on single views only, not in the sequence (see [Prototype on one point](#prototype-on-one-point-2026-10-15)).
 
 ### Views in sequence, sharing the plane
 
@@ -112,7 +116,7 @@ The reference is the step's reference view, by the rule `grid_plane_normal` and 
 A view joins when all three hold:
 
 - its whole-grid ZNCC is at least `min_grid_zncc` (0.7);
-- as the window grows, the window ZNCC falls no more than `max_window_zncc_drop` (0.1) below the best of the earlier stages. A view that is not converging loses agreement as the window grows (0.80, 0.65, 0.31, 0.27 on one example), where a converging view keeps it (0.85, 0.86);
+- as the window grows, the window ZNCC falls no more than `max_window_zncc_drop` (0.1) below the best of the earlier stages. A view that is not converging loses agreement as the window grows (image 65 on the example: 0.80, 0.65, 0.31 and 0.27 over stages 2 to 5), where a converging view keeps it (image 62: 0.85, 0.82, 0.86 and 0.86);
 - stage 1's best shift is not on the edge of its search.
 
 Every ZNCC is the mean over the colour channels, over the samples that land on the photograph, and is read only when at least `min_coverage` (60%) of the window's samples do.
@@ -141,6 +145,7 @@ Photograph samples and ZNCC sums are `f32`, as for every bench tile; the tilt, t
 |-----------|---------|---------|
 | `working_resolution` | `48` | Side of the working grid, samples; the prototype's value |
 | `spot_window` | `7` | Side of the first window, grid px |
+| `spot_candidates` | `5` | Candidate spots tried per view; the prototype's sequence used 1 |
 | `window_half_widths` | `[6, 10, 16, 24]` | Half-widths of the later windows, grid px |
 | `spot_search_px` | `12.0` | Bound of the first window's shift search, image px |
 | `spot_search_step_px` | `0.5` | Step of that search, image px |
@@ -174,11 +179,17 @@ Then the measurement on every point of `seoul_bull_sculpture`, `kerry_park` and 
 
 **The model.** With the stored normal and one free shift per view, every view matches the reference well: mean cell ZNCC 0.79 to 0.95, and image 62 0.841 against 0.111 through the starting plane. The plane-induced warp therefore accounts for the wide views' rotation and stretch; for image 62 that is a 2.07× stretch along an oblique axis and a 4.7° rotation.
 
-**Near to far, one view at a time from the starting plane.** Image 62, 80° from the reference, reached 0.34° from the stored normal at the second stage and 0.83° at the end, whole-grid ZNCC 0.86. Images 25 and 36 reached 1.1° and 0.9°. Images 65 and 66, whose starts were squeezed to 0.33 and 0.24 of the stored normal's map, failed, ending about 11° off.
+**Near to far, one view at a time from the starting plane.** Image 62, about 80° (79.8°) from the reference, reached 0.34° from the stored normal at the second stage and 0.83° at the end, whole-grid ZNCC 0.86. Images 25 and 36 reached 1.1° and 0.9°. Images 65 and 66, whose starts were squeezed to 0.33 and 0.24 of the stored normal's map, failed, ending about 11° off.
 
 **Blur matching.** Blurring the reference to the view's sampling did not change the single-view results. At the stored normal image 65 has 1.45 to 1.97 photograph px per grid px, finer than the reference, so the reference needs no blur; the softness seen under the starting plane is that plane's upsampling, 0.52 photograph px per grid px along one axis.
 
 **In sequence.** The shared plane was 2.0° from the stored normal after the first view (image 24, 6.8° from the reference), 0.2° to 0.6° after the ninth, and 0.59° at the end. 15 of the 17 views joined, among them images 62, 65 and 66, each started from the shared plane and ending 0.79°, 0.57° and 0.42° from the stored normal. Two were left out: image 10, which ended 1.5° off with whole-grid ZNCC 0.806 while its window ZNCC fell from 0.92 to 0.81, and image 09, 0.9° off with whole-grid ZNCC 0.694, under the 0.7 bar. Both ended near the stored normal, so on this point the two convergence bars are close to their edge.
+
+**The starting spot.** The maintainer suspected the single-view failures came from the spot the contrast rule picked. Single views were run again from six candidate spots: the five most contrasted non-overlapping 7×7 windows of the middle cell, ranked by contrast, among them grid (20, 21), (29, 19), (18, 31) and (27, 31), and the geometric centre (24, 24).
+
+- Images 65 and 66 from the starting plane, 22.8° off: the most contrasted spot, (20, 21), the one the method picked, failed in both (65 ending 12.6° off, 66 11.6°), and so did the centre (10.3° and 10.5°). Other spots converged from the starting plane in a single view: image 65 at (29, 19) to 0.40°, though its stage-1 match was on the edge of the search, so the convergence test flagged it although it ended right, and at (27, 31) to 0.43°; image 66 at (29, 19) to 0.34°, at (18, 31) to 0.51° and at (27, 31) to 0.43°. For these two views the spot decided the outcome, and started at a good spot they need no plane from other views.
+- The spot with the best stage-1 ZNCC converged in both: (27, 31) in each, at 0.825 for image 65 and 0.803 for image 66, where the picked spot scored 0.694 and 0.713.
+- Images 09 and 10 from the stored normal: the spot made no difference. Image 09 ended about 1° off from four of five spots (from (18, 31) it wandered to 15°) and image 10 about 1.5° off from all five, with whole-grid ZNCC about 0.69 and 0.81 throughout. The sequence left them out by the convergence bars, image 09 for a whole-grid ZNCC just under 0.7 and image 10 for a window ZNCC that fell by 0.1 to 0.14 as the window grew; the bars failed them, not the spot.
 
 **What the numbers cannot show.** How often the method converges, on which kinds of point it fails, and what it costs. The full sweep has not been run.
 
@@ -191,9 +202,9 @@ Then the measurement on every point of `seoul_bull_sculpture`, `kerry_park` and 
 ## Open questions
 
 - **The optimiser.** Pattern search, as prototyped, or Gauss–Newton on the ZNCC.
-- **The window schedule and the spot rule.** Whether the most contrasted window of the middle cell is the right first window, and what to do when the centre is blank.
+- **The window schedule and the spot rule.** On the example the most contrasted window of the middle cell was the wrong first window for images 65 and 66, and other candidates converged; whether to grow every candidate and keep the best converged result, or only the candidate with the best stage-1 ZNCC, how many candidates to take, and what to do when the centre is blank. Neither rule has been run in the sequence.
 - **The order of the views** beyond angle from the reference; the predicted-error rule above is the candidate.
-- **The convergence bars.** Both views left out on the example ended near the stored normal.
+- **The convergence bars.** Both views the bars left out on the example ended within about 1° to 1.5° of the stored normal, from every starting spot. Judging a view by its agreement with the shared plane, rather than by its own ZNCC readings, is an alternative.
 - **Weighting the shared refinement.** Whether views should be weighted, since a wide view carries more information about the tilt per degree than a narrow one.
 - **Blur matching the other way.** A view finer than the reference aliases when sampled bilinearly from the full-resolution photograph; sampling it from a coarser pyramid level, or blurring it, may be needed.
 - **What the step reports**: each view's outcome and start, which joined and which were left out, the shared plane, and the plane's predicted precision.
