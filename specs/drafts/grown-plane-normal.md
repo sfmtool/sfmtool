@@ -2,9 +2,9 @@
 
 **Status:** Draft. Proposed: a fourth bench normal step, `grown_plane_normal`, beside `fit_normal`, `finite_difference_normal` and `grid_plane_normal`, that fits one plane shared by every view directly to the photographs. It is a separate step and not an option of `grid_plane_normal`, because it measures nothing that step measures: it has no cells, no shift search on a fixed render and no triangulation.
 
-Decided: the step's existence as a separate step, and that it writes each joined view's keypoint back from the shift it solved for (§ [The keypoints the step writes](#the-keypoints-the-step-writes)). Not decided: the optimiser, the window schedule and the spot rule, the order views are taken in, the convergence bars, the weighting of the shared refinement, what the step reports, and whether it also moves the patch's centre. See [Open questions](#open-questions).
+Decided: the step's existence as a separate step, and that it writes each joined view's keypoint back from the shift it solved for (§ [The keypoints the step writes](#the-keypoints-the-step-writes)). Not decided: the optimiser, the window schedule and the spot rule, the order views are taken in, the convergence bars, the weighting of the shared refinement, what the step reports, whether it also moves the patch's centre, and every rule of the optional wide-pair stage (§ [An optional wide-pair stage](#an-optional-wide-pair-stage)). See [Open questions](#open-questions).
 
-Built: nothing. A Python prototype, not in the repository, was run on one point of the `dino_dog_toy` candidate ground truth; its results are under [Prototype on one point](#prototype-on-one-point-2026-10-15).
+Built: nothing. A Python prototype, not in the repository, was run on one point of the `dino_dog_toy` candidate ground truth; its results are under [Prototype on one point](#prototype-on-one-point-2026-10-15). The optional wide-pair stage was not part of that prototype.
 
 Amends: [core/bench/editable-track.md](../core/bench/editable-track.md) § "Estimating the normal", which would describe a fourth step.
 
@@ -14,7 +14,7 @@ Related drafts: [piece-gated-grid-normal.md](piece-gated-grid-normal.md) designs
 
 A patch in a patch-based reconstruction is a small oriented square standing in the world, and its normal says which way the square faces. Each photograph that sees the patch is resampled onto the square through that plane, so a wrong normal stretches and shears every view's picture of the patch against the others, blurs the patch's stored bitmap and misleads every reading taken from it afterwards.
 
-This draft proposes a way to estimate the normal by fitting the plane to the photographs themselves. One view is the reference. For every other view, the plane predicts where each part of the reference's picture of the patch lands in that view's photograph. The step finds the plane under which the views' pictures agree with the reference's, by ZNCC. It reaches a plane far from the starting one in two ways. Within a view it registers a small window near the patch centre first and grows the window outward, because a small window tolerates a large error in the plane. Across views it takes the views closest in angle to the reference first and the wide views last, each starting from the plane the earlier views agreed on, because a wide view is where a wrong plane distorts the picture most. The step turns the patch to the plane it found, and writes each joined view's keypoint at the pixel where that plane and the view's own shift put the patch.
+This draft proposes a way to estimate the normal by fitting the plane to the photographs themselves. One view is the reference. For every other view, the plane predicts where each part of the reference's picture of the patch lands in that view's photograph. The step finds the plane under which the views' pictures agree with the reference's, by ZNCC. It reaches a plane far from the starting one in two ways. Within a view it registers a small window near the patch centre first and grows the window outward, because a small window tolerates a large error in the plane. Across views it takes the views closest in angle to the reference first and the wide views last, each starting from the plane the earlier views agreed on, because a wide view is where a wrong plane distorts the picture most. An optional last stage, off by default, compares two joined views on opposite sides of the reference with each other, since they are further apart than either is from the reference. The step turns the patch to the plane it found, and writes each joined view's keypoint at the pixel where that plane and the view's own shift put the patch.
 
 ### Why a new step
 
@@ -55,8 +55,31 @@ pub struct GrownPlaneNormalOptions {
     /// A ZNCC is read only when at least this share of the window's samples
     /// lands on the photograph. 0.6.
     pub min_coverage: f32,
+    /// Run the wide-pair stage after the last view has joined or been left
+    /// out. Off by default; not prototyped.
+    pub wide_pair_stage: bool,
     /// The reading the step ends with.
     pub fit: FitOptions,
+}
+
+/// What the wide-pair stage did, carried by `NormalEstimate::GrownPlane`;
+/// `None` there when the stage is off.
+pub enum GrownPlaneWidePair {
+    /// The stage was on but did not run: fewer than two views joined, or no
+    /// joined pair is wider than the widest joined view's angle from the
+    /// reference.
+    Skipped,
+    /// The stage ran on these pairs of observation indices, each with its
+    /// angle at the point, degrees.
+    Ran {
+        pairs: Vec<(usize, usize, f64)>,
+        /// The shared plane's normal before the stage and the one the stage
+        /// found, world frame.
+        before: [f64; 3],
+        found: [f64; 3],
+        /// Whether `found` was kept; otherwise the step goes on with `before`.
+        accepted: bool,
+    },
 }
 
 /// What happened to one observation, carried by `NormalEstimate::GrownPlane`.
@@ -123,11 +146,29 @@ Stage 1 places a window of `spot_window` grid px (7×7) at a spot in the middle 
 
 The reference is the step's reference view, by the rule `grid_plane_normal` and the fit use: the reference the track holds where its row is `in` with a keypoint, else the reference-view rule's pick. The other `in` views are taken in order of their angle from the reference as seen from the point. Each view starts from the plane found so far. When a view converges it joins, and the shared tilt is refined over every joined view, for the best mean whole-grid ZNCC, each view's shift being fitted again after. A view that fails is tried again from the starting plane. A view that fails from both goes to the back of the queue once, to be tried again from the shared plane after the views behind it have joined, and is otherwise left out.
 
+### An optional wide-pair stage
+
+Proposed, not prototyped, and off by default (`wide_pair_stage`). No number under [Prototype on one point](#prototype-on-one-point-2026-10-15) includes it.
+
+**Why.** How much a view says about the tilt grows with its angle from the view it is compared against: the further apart two views are, the more a change of tilt changes one view's picture of the patch against the other's. Every comparison in the sequence above is against the reference. When the reference sits among the cameras rather than at one end, two joined views on opposite sides of it are further apart from each other than either is from the reference, so comparing them with each other is more sensitive to the plane than any comparison with the reference.
+
+**Why at the end.** By the time every view has joined or been left out, the shared plane has converged from the reference comparisons, so both views' renders through it are already close to each other and the pair needs only a small correction to the tilt. The reason the sequence takes wide views last, that a wrong plane carries a wide view's picture out of capture, does not arise here.
+
+**What it does.** The stage runs only when at least two views have joined and the widest joined pair, by the angle between the two views' rays at the point, is wider than the widest joined view's angle from the reference; otherwise the pair adds nothing the reference comparisons lack, and the stage is skipped. It takes the joined pair with the widest angle. Both views are rendered through the shared plane onto the reference's working grid: each sample of the grid is followed along its reference ray to the plane and projected into each of the two photographs, each with its own shift. The stage then refines the tilt and the two views' shifts for the best ZNCC between the two renders over the whole grid, with every joined view's whole-grid ZNCC against the reference kept in the objective, so the plane stays anchored to the reference and cannot drift to one that only the two views agree on.
+
+The pair constrains only the difference between its two views' shifts: shifting both views by the same amount changes neither render against the other. Each view's shift relative to the reference stays fixed by its own reference comparison, which is why those comparisons stay in the objective.
+
+**Acceptance.** The stage keeps the plane and shifts it found only when the reference-based scores do not get worse: the proposal is that the mean whole-grid ZNCC over the joined views against the reference is not lower than before the stage, and that every joined view still has a whole-grid ZNCC of at least `min_grid_zncc`. Otherwise the step goes on with the plane and shifts from before the stage. The report records the pair, the plane before and after, and whether it was kept (`GrownPlaneWidePair`).
+
+**Risks.** The two views of a wide pair differ more from each other than either does from the reference: in foreshortening, so the two renders sample the photographs at more different scales; in sampling, so one render can be blurred where the other aliases; and in lighting, since the two look at the surface from further apart. Near an occlusion they can also see slightly different surface. Each of these lowers the pair's ZNCC for a reason other than the tilt, which is why the stage is optional and gated by the reference-based scores.
+
+**Where the write happens.** The stage comes after the last view has joined or been left out and before the turn. The turn uses the final shared plane, and the keypoint write that follows it uses that plane and each joined view's final shift: the ones the stage found where it was kept, and those from before it otherwise.
+
 ### The keypoints the step writes
 
 That the step writes the keypoints is decided; the rules below are proposed. The step solves for each joined view's shift, and the shift says where that view's photograph places the patch, so the step writes it back to the track rather than discarding it. The keypoint is the track-stage measurement `TrackMeasurement::keypoint` ([bench/track.rs](../../crates/sfmtool-core/src/bench/track.rs)): the pixel a commit writes and the place every reading of the row is anchored at, which the fit sets from its kernels and `sight_observation` sets by hand.
 
-- **A joined view.** Its keypoint is set to the pixel where the final shared plane and the view's final shift put the patch's anchor point. The anchor is the point where the reference keypoint's ray meets the final plane; every plane the step tries passes through the point where that ray meets the starting frame, so the anchor is that same point. It is projected into the view's photograph through the camera's lens model, as every sample of the view's window is, and the view's shift is added. That is the pixel the view's whole-grid ZNCC was read around. A pixel off the photograph is not written, and the report says so.
+- **A joined view.** Its keypoint is set to the pixel where the final shared plane and the view's final shift put the patch's anchor point, both taken after the wide-pair stage where it ran. The anchor is the point where the reference keypoint's ray meets the final plane; every plane the step tries passes through the point where that ray meets the starting frame, so the anchor is that same point. It is projected into the view's photograph through the camera's lens model, as every sample of the view's window is, and the view's shift is added. That is the pixel the view's whole-grid ZNCC was read around. A pixel off the photograph is not written, and the report says so.
 - **The reference.** It keeps the keypoint it had before the step. The anchor lies on the reference keypoint's ray, so it projects back to that keypoint, and the reference's shift is zero by construction: the reference tile is the template every other view is compared against, sampled at the plane's own positions, so it has no shift to fit. The step writes that keypoint back after the turn, because the turn moves it. The reference-view rule can pick a row with no keypoint, which it renders through the patch itself; its ray is then the one through the centre's projection, the anchor is the centre, and the step writes the centre's projection, which is also the keypoint the turn gives that row.
 - **Every other row**: a view left out, one never attempted, and every row not `in`. The step writes nothing for them. They keep the keypoint the turn gives them, as under every other normal step: `tilt_patch` keeps each sighting's offset from the centre in the patch's plane, rebuilds that point on the turned plane and projects it (`place_keypoints` in [bench/steps.rs](../../crates/sfmtool-core/src/bench/steps.rs)).
 
@@ -159,7 +200,8 @@ Not prototyped. The angle from the reference is a proxy for how far the current 
 
 - **Cost is unknown.** The prototype is Python and its time does not transfer. What dominates is one direct render of the window per optimiser evaluation per view, and one render per joined view per evaluation of the shared refinement. Gauss–Newton would cut the evaluations against a pattern search at the cost of a Jacobian of the render with respect to the tilt and the shift.
 - The render is the plane-induced map `WarpMap::from_patch` makes for every bench tile, applied over a window rather than the whole tile; the shift is applied in the photograph after projection, not by re-anchoring the patch on the view's keypoint. The search therefore reads no view's keypoint but the reference's.
-- The write sits between the turn and the readback. The other steps end through `turn_and_read` ([bench/normal.rs](../../crates/sfmtool-core/src/bench/normal.rs)), which runs `tilt_patch` and then `evaluate_rendering_bitmap` with nothing between them; this step needs its keypoint write between the two. The anchor and each joined view's final shift are kept from the search for it.
+- The write sits between the turn and the readback. The other steps end through `turn_and_read` ([bench/normal.rs](../../crates/sfmtool-core/src/bench/normal.rs)), which runs `tilt_patch` and then `evaluate_rendering_bitmap` with nothing between them; this step needs its keypoint write between the two. The anchor and each joined view's final shift are kept from the search for it, the wide-pair stage included.
+- The wide-pair stage, where it runs, adds two renders per evaluation, one per view of the pair, on top of the joined views' reference renders kept in its objective.
 - A track at infinity is refused by `normal_preconditions`, as for the other steps: its patch faces along its own bearing and has no plane to fit.
 
 ## Determinism and precision
@@ -179,8 +221,9 @@ Photograph samples and ZNCC sums are `f32`, as for every bench tile; the tilt, t
 | `min_grid_zncc` | `0.7` | Whole-grid ZNCC a view needs to join |
 | `max_window_zncc_drop` | `0.1` | Largest fall of the window ZNCC below its best earlier stage |
 | `min_coverage` | `0.6` | Share of a window's samples on the photograph for its ZNCC to be read |
+| `wide_pair_stage` | `false` | Run the wide-pair stage after the sequence; a proposal, not prototyped |
 
-Every default but `spot_candidates` is the prototype's, set on one point.
+Every default but `spot_candidates` and `wide_pair_stage` is the prototype's, set on one point.
 
 ## Testing
 
@@ -191,6 +234,7 @@ Synthetic planes rendered through known poses, as `grid_plane_normal`'s tests do
 - A wide view whose start is squeezed past capture: it fails from the starting plane and joins from the shared plane after the nearer views.
 - A flat patch: no view converges, and the normal and every keypoint are left as given.
 - The written keypoints: in the depth-error scene, each joined view's keypoint is, to within a fraction of a px, the projection of the true surface point on the reference keypoint's ray, the reference's keypoint is the one it had before the step, a view left out and a row that is `out` carry the keypoint `tilt_patch` gives them, and every row's readings are those of the readback at its new keypoint.
+- The wide-pair stage: with the reference in the middle of the views and the sequence stopped short of convergence, turning the stage on brings the normal closer to truth, and is reported as kept; with the reference at one end of the views it is reported as skipped; with lighting changed in one view of the widest pair so that the pair's ZNCC favours a wrong tilt, it is reported as not kept and the normal and keypoints are those the step gives with the stage off.
 
 Then the measurement on every point of `seoul_bull_sculpture`, `kerry_park` and the `dino_dog_toy` candidate, against `grid_plane_normal` and today's Grid Plane Normal at 2×2 and 3×3, from the same fitted mean-view start as [piece-gated-grid-normal.md](piece-gated-grid-normal.md)'s sweep, and a hand review in SfM Explorer.
 
@@ -219,7 +263,7 @@ Then the measurement on every point of `seoul_bull_sculpture`, `kerry_park` and 
 - The spot with the best stage-1 ZNCC converged in both: (27, 31) in each, at 0.825 for image 65 and 0.803 for image 66, where the picked spot scored 0.694 and 0.713.
 - Images 09 and 10 from the stored normal. For image 09 the spot did not change the verdict: it ended about 1° off from four of five spots (from (18, 31) it wandered to 15°), with whole-grid ZNCC about 0.69, just under the 0.7 bar, from all of them. For image 10 the spot changed the verdict but not the result: every spot ended 1.4° to 1.6° from the stored normal with whole-grid ZNCC 0.805 to 0.807, and its window ZNCC fell from its best by 0.07 from (29, 19), which passed the bars (ending 1.41° off), and by 0.11 to 0.15 from the other four, which failed the window-drop bar (from (20, 21) it ran 0.922, 0.923, 0.883, 0.832 and 0.810 over stages 1 to 5). Both views land near the stored normal (image 09 from all but one spot), so it is the bars that left them out of the sequence, not a wrong spot.
 
-**What the numbers cannot show.** How often the method converges, on which kinds of point it fails, and what it costs. The full sweep has not been run.
+**What the numbers cannot show.** How often the method converges, on which kinds of point it fails, and what it costs. The full sweep has not been run. None of these numbers includes the wide-pair stage, which was not prototyped.
 
 ## Non-goals
 
@@ -235,7 +279,10 @@ Then the measurement on every point of `seoul_bull_sculpture`, `kerry_park` and 
 - **The convergence bars.** Both views the bars left out on the example ended within about 1° to 1.5° of the stored normal, image 09 from four of five starting spots and image 10 from all five, though one spot let image 10 pass the bars. Judging a view by its agreement with the shared plane, rather than by its own ZNCC readings, is an alternative.
 - **Weighting the shared refinement.** Whether views should be weighted, since a wide view carries more information about the tilt per degree than a narrow one.
 - **Blur matching the other way.** A view finer than the reference aliases when sampled bilinearly from the full-resolution photograph; sampling it from a coarser pyramid level, or blurring it, may be needed.
-- **What the step reports**: each view's outcome and start, which joined and which were left out, each written view's keypoint before and after the write, the shared plane, and the plane's predicted precision.
+- **What the step reports**: each view's outcome and start, which joined and which were left out, each written view's keypoint before and after the write, the shared plane, the plane's predicted precision, and whether the wide-pair stage ran, on which pair or pairs, the plane before and after it, and whether its result was kept.
+- **The wide-pair stage's pair selection.** The widest joined pair only, as proposed; every joined pair whose angle at the point is over some bar; or every pair, weighted by its angle. Whether a pair must lie on opposite sides of the reference, or only be wider than the widest joined view's angle from the reference, as proposed.
+- **The wide-pair stage's acceptance rule.** Whether the mean whole-grid ZNCC against the reference not falling, with every joined view still over `min_grid_zncc`, is the right gate; whether a small fall should be allowed when the pair's ZNCC rises by much; and how the pair's term is weighted against the reference terms in the objective.
+- **The wide-pair stage's grid.** Whether the pair is compared on the reference's working grid, as proposed, or on a grid of its own, for example one centred on the bisector of the two views' rays, where both renders are foreshortened alike.
 - **The centre after the write.** A depth error shows up as the per-view shifts, so the written keypoints can imply a different centre than the patch's. Whether the step should re-triangulate the centre from the written keypoints before the readback, or leave it to the next fit, is not decided. The step's plane passes through the anchor and the turned patch's through its centre, so the two planes also differ in depth wherever the anchor is not the centre.
 - **A bound on the write.** A fit keeps a sighting at its seed when its kernels would move it further than `max_shift_px` on the patch's plane, and records the refusal in `walked_px` and `walked_to`. Whether this step should bound its write the same way, and what it measures the move from, is open; the size of the moves on real tracks has not been measured.
 - **The full sweep** over every point of `seoul_bull_sculpture`, `kerry_park` and `dino_dog_toy` is not done.
