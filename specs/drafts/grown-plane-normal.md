@@ -145,7 +145,7 @@ Photograph samples and ZNCC sums are `f32`, as for every bench tile; the tilt, t
 |-----------|---------|---------|
 | `working_resolution` | `48` | Side of the working grid, samples; the prototype's value |
 | `spot_window` | `7` | Side of the first window, grid px |
-| `spot_candidates` | `5` | Candidate spots tried per view; the prototype's sequence used 1 |
+| `spot_candidates` | `5` | Candidate spots tried per view, the centre not among them; a proposal, not measured: the prototype's sequence used 1, and the single-view test tried 5 and the centre |
 | `window_half_widths` | `[6, 10, 16, 24]` | Half-widths of the later windows, grid px |
 | `spot_search_px` | `12.0` | Bound of the first window's shift search, image px |
 | `spot_search_step_px` | `0.5` | Step of that search, image px |
@@ -153,7 +153,7 @@ Photograph samples and ZNCC sums are `f32`, as for every bench tile; the tilt, t
 | `max_window_zncc_drop` | `0.1` | Largest fall of the window ZNCC below its best earlier stage |
 | `min_coverage` | `0.6` | Share of a window's samples on the photograph for its ZNCC to be read |
 
-Every default is the prototype's, set on one point.
+Every default but `spot_candidates` is the prototype's, set on one point.
 
 ## Testing
 
@@ -204,7 +204,7 @@ Then the measurement on every point of `seoul_bull_sculpture`, `kerry_park` and 
 - **The optimiser.** Pattern search, as prototyped, or Gauss–Newton on the ZNCC.
 - **The window schedule and the spot rule.** On the example the most contrasted window of the middle cell was the wrong first window for images 65 and 66, and other candidates converged; whether to grow every candidate and keep the best converged result, or only the candidate with the best stage-1 ZNCC, how many candidates to take, and what to do when the centre is blank. Neither rule has been run in the sequence.
 - **The order of the views** beyond angle from the reference; the predicted-error rule above is the candidate.
-- **The convergence bars.** Both views the bars left out on the example ended within about 1° to 1.5° of the stored normal, from every starting spot. Judging a view by its agreement with the shared plane, rather than by its own ZNCC readings, is an alternative.
+- **The convergence bars.** Both views the bars left out on the example ended within about 1° to 1.5° of the stored normal, image 09 from four of five starting spots and image 10 from all five. Judging a view by its agreement with the shared plane, rather than by its own ZNCC readings, is an alternative.
 - **Weighting the shared refinement.** Whether views should be weighted, since a wide view carries more information about the tilt per degree than a narrow one.
 - **Blur matching the other way.** A view finer than the reference aliases when sampled bilinearly from the full-resolution photograph; sampling it from a coarser pyramid level, or blurring it, may be needed.
 - **What the step reports**: each view's outcome and start, which joined and which were left out, the shared plane, and the plane's predicted precision.
