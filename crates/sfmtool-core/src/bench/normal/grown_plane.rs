@@ -2,30 +2,34 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! [`grown_plane_normal`]: the patch's normal from one plane shared by every
-//! view, fitted directly to the photographs, near to far within each view and
-//! view by view across the track.
+//! view, fitted directly to the photographs, near to far within each view,
+//! and the views' planes combined by their information.
 //!
 //! The reference view's working grid is the template. For every other `in`
 //! view the plane predicts where each grid sample lands in that view's
 //! photograph (`render`); the step fits the plane's tilt and the view's image
 //! shift so that the view's samples agree with the reference's by ZNCC. Within
 //! a view it starts a small window at the grid's centre from the shift the
-//! view's keypoint implies, and only where that growth does not join, from an
+//! view's keypoint implies, and only where that growth is refused, from an
 //! exhaustive shift search about that shift; it grows the window outward,
 //! fitting tilt and shift by Levenberg–Marquardt (`solve`) at each size, and
-//! ends with a fit of the whole grid on the robust cell score. Across views
-//! it takes the views nearest the reference in angle first; each starts from
-//! the plane the views before it share, and joins when its own plane agrees
-//! with the shared one within the two planes' precision.
-//! The patch is turned to the shared plane whenever a view joined, and each
-//! joined view's keypoint is written where the plane and its shift put the
-//! patch.
+//! ends with a fit of the whole grid on the robust cell score. Each growth
+//! gives the view's own plane and its information about the tilt.
+//!
+//! The views' planes are combined by an information-weighted mean, with no
+//! fit of the views together (`combine`). [`GrownPlaneStrategy`] picks how:
+//! views in sequence from the mean of those before them (`sequential`), or
+//! each view against the reference alone, then a robust mean, optionally with
+//! the widest pairs of views matched against each other and a selection of
+//! which views to match (`independent`). The patch is turned to the combined
+//! plane whenever a view joined, and each joined view's keypoint is written
+//! where that plane and its shift put the patch.
 //!
 //! `specs/drafts/grown-plane-normal.md` is the design.
 
 use std::collections::BTreeSet;
 
-use nalgebra::{Matrix2, Vector2};
+use nalgebra::{Matrix2, Vector3};
 
 use crate::patch::keypoint_localize::resolve_reference;
 use crate::patch::normal_refine::ProjectedImage;
@@ -40,16 +44,65 @@ use super::super::track::{EditableTrack, TrackMeasurement};
 use super::grid_plane::{working_side, MIN_WORKING_RESOLUTION};
 use super::{frame_of, normal_preconditions, read_back, NormalError, NormalEstimate, NormalReport};
 
+mod combine;
+mod independent;
 mod render;
+mod sequential;
 mod solve;
 
+use combine::{sigmas_deg, Estimate};
 use render::{anchored, Grid, Samples, ViewImage, ViewRender};
-use solve::{live_cells, maximise, tilt_information, Iteration, JointFit, Reading, ViewFit};
+use solve::{
+    live_cells, maximise, normal_matrix, schur_tilt, shift_response, Iteration, Reading, ViewFit,
+};
+
+/// How [`grown_plane_normal`] combines its views' planes into one. The
+/// variants are kept side by side while they are measured; one is to be kept.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GrownPlaneStrategy {
+    /// The views in order of angle from the reference, each grown from the
+    /// plane the views before it share and joining by its agreement with it;
+    /// after each join the shared plane is the information-weighted mean of
+    /// the joined views' own planes.
+    SequentialMean,
+    /// [`Self::SequentialMean`], then the joined views' planes combined as
+    /// [`Self::Independent`] combines them, with up to
+    /// [`GrownPlaneNormalOptions::max_pairs`] of the widest pairs of kept
+    /// views matched against each other and their planes added to the mean.
+    #[default]
+    SequentialPairs,
+    /// Every view grown against the reference from the starting plane alone,
+    /// counted when it passes the floor on its own; then a robust
+    /// information-weighted mean of their planes.
+    Independent,
+    /// [`Self::Independent`], then up to
+    /// [`GrownPlaneNormalOptions::max_pairs`] of the widest pairs of kept
+    /// views matched against each other, their planes added to the mean.
+    IndependentPairs,
+    /// [`Self::IndependentPairs`] on a selection of views chosen from their
+    /// geometry, matched until the combined plane's `σ` reaches
+    /// [`GrownPlaneNormalOptions::target_sigma_deg`] or
+    /// [`GrownPlaneNormalOptions::max_selected_views`] views are matched; the
+    /// views not matched get their shift alone fitted at the final plane.
+    SelectedPairs,
+}
+
+impl GrownPlaneStrategy {
+    /// Whether the strategy matches pairs of views against each other.
+    fn pairs(self) -> bool {
+        matches!(
+            self,
+            Self::SequentialPairs | Self::IndependentPairs | Self::SelectedPairs
+        )
+    }
+}
 
 /// How [`grown_plane_normal`] grows its windows, fits its planes and decides
-/// when a view joins.
+/// which views it keeps.
 #[derive(Debug, Clone)]
 pub struct GrownPlaneNormalOptions {
+    /// How the views' planes are combined. [`GrownPlaneStrategy::SequentialPairs`].
+    pub strategy: GrownPlaneStrategy,
     /// Side of the working grid the views are sampled on, in samples. `None`
     /// follows the reference view's footprint of the patch at the starting
     /// frame, about one sample per photograph pixel, clamped to `R ..= 2R`,
@@ -66,7 +119,7 @@ pub struct GrownPlaneNormalOptions {
     pub window_fractions: Vec<f64>,
     /// The first window's search for the view's shift about the shift the
     /// view's keypoint implies, run when the growth from that shift itself
-    /// does not join: its bound, image px. 3.
+    /// is refused: its bound, image px. 3.
     pub keypoint_search_px: f64,
     /// The search widens to [`Self::spot_search_px`] when no shift within
     /// [`Self::keypoint_search_px`] reaches this ZNCC, or the best is on its
@@ -78,19 +131,29 @@ pub struct GrownPlaneNormalOptions {
     pub spot_search_px: f64,
     /// The step of both searches, image px. 0.5.
     pub spot_search_step_px: f64,
-    /// The ZNCC difference noise can produce, `τ`: a view's information about
-    /// the tilt becomes the covariance `2τ·I⁻¹`. 0.01.
+    /// The ZNCC difference noise can produce, `τ`: an estimate's information
+    /// about the tilt becomes the covariance `2τ·I⁻¹`. 0.01.
     pub zncc_tolerance: f64,
-    /// A view agrees when the Mahalanobis distance between its own plane and
-    /// the shared plane, the two covariances added, is at most this. 3.
+    /// An estimate agrees when the Mahalanobis distance between its own plane
+    /// and the shared or combined plane, the two covariances added, is at
+    /// most this. 3.
     pub max_agreement_distance: f64,
-    /// A view agrees only when, held to the shared plane with its shift
-    /// fitted again, its robust grid score is at least this; the first view
-    /// joins on its own score reaching this alone. 0.5.
+    /// The floor every whole-grid score is held to: a view's own score where
+    /// it is judged alone, its score held to the shared or final plane, and a
+    /// pair's score between its two views. 0.5.
     pub min_held_zncc: f64,
     /// A weakest-direction `σ` above this, degrees, is reported as low
     /// confidence. It does not stop the turn. 2.
     pub low_confidence_sigma_deg: f64,
+    /// The most pairs of views the strategies with pairs match against each
+    /// other. 3.
+    pub max_pairs: usize,
+    /// [`GrownPlaneStrategy::SelectedPairs`] stops matching views once the
+    /// combined plane's weakest `σ` is at most this, degrees. 0.5.
+    pub target_sigma_deg: f64,
+    /// [`GrownPlaneStrategy::SelectedPairs`] stops matching views once this
+    /// many have passed the floor. 6.
+    pub max_selected_views: usize,
     /// A ZNCC is read only when at least this share of its samples lands on
     /// the photograph. 0.6.
     pub min_coverage: f64,
@@ -115,6 +178,7 @@ pub struct GrownPlaneNormalOptions {
 impl Default for GrownPlaneNormalOptions {
     fn default() -> Self {
         Self {
+            strategy: GrownPlaneStrategy::default(),
             working_resolution: None,
             spot_window: 7,
             window_fractions: vec![1.0 / 8.0, 1.0 / 5.0, 1.0 / 3.0, 1.0 / 2.0],
@@ -126,6 +190,9 @@ impl Default for GrownPlaneNormalOptions {
             max_agreement_distance: 3.0,
             min_held_zncc: 0.5,
             low_confidence_sigma_deg: 2.0,
+            max_pairs: 3,
+            target_sigma_deg: 0.5,
+            max_selected_views: 6,
             min_coverage: 0.6,
             max_iterations: 20,
             initial_damping: 1e-3,
@@ -141,8 +208,9 @@ impl GrownPlaneNormalOptions {
     /// Whether the settings are ones the step takes: a first window of at
     /// least one sample, finite fractions above zero, finite search bounds of
     /// at least zero, a positive search step and Jacobian steps, a positive
-    /// tolerance, a coverage in `0 ..= 1` and a finite damping of at least
-    /// zero. The error names the first setting that fails.
+    /// tolerance and target `σ`, at least one selected view, a coverage in
+    /// `0 ..= 1` and a finite damping of at least zero. The error names the
+    /// first setting that fails.
     pub fn check(&self) -> Result<(), NormalError> {
         let bad = |name| Err(NormalError::BadGrownPlaneOption(name));
         let positive = |v: f64| v.is_finite() && v > 0.0;
@@ -163,6 +231,12 @@ impl GrownPlaneNormalOptions {
         }
         if !positive(self.zncc_tolerance) {
             return bad("zncc_tolerance");
+        }
+        if !positive(self.target_sigma_deg) {
+            return bad("target_sigma_deg");
+        }
+        if self.max_selected_views == 0 {
+            return bad("max_selected_views");
         }
         if !(0.0..=1.0).contains(&self.min_coverage) {
             return bad("min_coverage");
@@ -211,26 +285,29 @@ pub enum GrownPlaneStart {
     NoKeypoint,
 }
 
-/// Why a view's try did not join the shared plane.
+/// Why a view's growth, a view or a pair was not kept.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GrownPlaneRefusal {
-    /// The first view's own robust grid score is under
-    /// [`GrownPlaneNormalOptions::min_held_zncc`].
+    /// Its own robust grid score (a pair's: the score between its two views)
+    /// is under [`GrownPlaneNormalOptions::min_held_zncc`].
     UnderFloor,
     /// Its own plane is further than
-    /// [`GrownPlaneNormalOptions::max_agreement_distance`] from the shared
-    /// plane.
+    /// [`GrownPlaneNormalOptions::max_agreement_distance`] from the shared or
+    /// combined plane.
     TooFar,
-    /// Held to the shared plane, its robust grid score is under
+    /// Held to the shared or final plane, its robust grid score is under
     /// [`GrownPlaneNormalOptions::min_held_zncc`].
     HeldUnderFloor,
+    /// A pair one of whose views was left out.
+    ViewLeftOut,
 }
 
 /// One growth of one view from one starting plane, and how it was judged.
 #[derive(Debug, Clone, PartialEq)]
 pub struct GrownPlaneAttempt {
     /// Whether it grew from the starting plane rather than the shared one.
-    /// The first view, and a retry, grow from the starting plane.
+    /// Every growth but [`GrownPlaneStrategy::SequentialMean`]'s from a
+    /// shared plane grows from the starting plane.
     pub from_start: bool,
     /// How the first window found its shift.
     pub start: GrownPlaneStart,
@@ -245,33 +322,37 @@ pub struct GrownPlaneAttempt {
     /// The robust grid score there.
     pub grid_zncc: f64,
     /// The Mahalanobis distance of its plane from the shared plane; `None`
-    /// for the first view, which has none to agree with.
+    /// where there was none to agree with: the first view in sequence, and
+    /// every growth judged alone.
     pub distance: Option<f64>,
     /// Its robust grid score held to the shared plane with its shift fitted
-    /// again; `None` for the first view.
+    /// again; `None` where `distance` is.
     pub held_zncc: Option<f64>,
     /// `σ` along its own plane's weakest direction, degrees, from its own
-    /// information; `NaN` for the first view, whose information is read at
-    /// the shared plane once it joins.
+    /// information at its own plane and shift.
     pub sigma_deg: f64,
-    /// Why it did not join; `None` when it did.
+    /// Why it was refused; `None` when it was taken. A growth judged alone is
+    /// refused only under the floor; whether a taken one is kept is the
+    /// combination's verdict, in [`GrownPlaneSequence::views`].
     pub refusal: Option<GrownPlaneRefusal>,
 }
 
 /// What became of one try of a view.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GrownPlaneTryOutcome {
-    /// It joined the shared plane.
+    /// It joined the shared plane ([`GrownPlaneStrategy::SequentialMean`]).
     Joined,
+    /// A growth passed the floor on its own, and its plane goes to the
+    /// combination, which decides whether it is kept.
+    Matched,
     /// Every growth was refused, and the view went to the back of the queue
-    /// once.
+    /// once ([`GrownPlaneStrategy::SequentialMean`]).
     Deferred,
-    /// Every growth was refused on its second try, and the view was left
-    /// out.
+    /// Every growth was refused, and the view was left out.
     LeftOut,
 }
 
-/// One try of one view in the sequence, and the shared plane after it.
+/// One try of one view, and the shared plane after it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct GrownPlaneTry {
     /// The observation tried.
@@ -280,21 +361,73 @@ pub struct GrownPlaneTry {
     pub image: u32,
     /// Its angle from the reference as seen from the patch centre, degrees.
     pub angle_deg: f64,
-    /// Its growths, in the order made, up to the first that joined: from the
-    /// shared plane, then, where a shared plane existed, from the starting
-    /// plane; from each, at the keypoint-implied shift first and from the
-    /// stage-1 search after. A search that lands on the keypoint-implied shift
-    /// itself is not grown again, since that growth was the one just refused,
-    /// and a view with no implied shift is grown from the search alone.
+    /// Its growths, in the order made, up to the first that was taken: from
+    /// the shared plane, then, where a shared plane existed, from the
+    /// starting plane; from each, at the keypoint-implied shift first and from
+    /// the stage-1 search after. A search that lands on the keypoint-implied
+    /// shift itself is not grown again, since that growth was the one just
+    /// refused, and a view with no implied shift is grown from the search
+    /// alone. A try made because the combination refused the view's growth
+    /// with no search holds the searched growth alone.
     pub attempts: Vec<GrownPlaneAttempt>,
     pub outcome: GrownPlaneTryOutcome,
-    /// The shared plane's outward normal after the try, world frame; `None`
-    /// while no view has joined.
+    /// The shared or combined plane's outward normal after the try, world
+    /// frame; `None` while no view has joined, and for a try that was judged
+    /// alone and is combined only at the end.
     pub shared_normal: Option<[f64; 3]>,
-    /// `σ` along the shared plane's weakest direction after the try,
-    /// degrees, from the information the joined views gave when each
-    /// joined; `NaN` while no view has joined.
+    /// `σ` along that plane's weakest direction after the try, degrees;
+    /// `NaN` where `shared_normal` is `None`.
     pub shared_sigma_deg: f64,
+}
+
+/// One pair of kept views matched against each other.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GrownPlanePair {
+    /// The two observations, the first rendered at its held shift and the
+    /// second at its held shift plus `relative_shift`.
+    pub observations: [usize; 2],
+    pub images: [u32; 2],
+    /// The angle between the two views as seen from the patch centre,
+    /// degrees.
+    pub angle_deg: f64,
+    /// The outward normal of the pair's own plane, world frame.
+    pub normal: [f64; 3],
+    /// The second view's shift against the first's, beyond the two views'
+    /// held shifts, image px.
+    pub relative_shift: [f64; 2],
+    /// The robust score between the two views' renders at the pair's plane.
+    pub zncc: f64,
+    /// `σ` along the pair's plane's weakest direction, degrees.
+    pub sigma_deg: f64,
+    /// The Mahalanobis distance of its plane from the combined plane; `None`
+    /// for a pair refused under the floor, which was never combined.
+    pub distance: Option<f64>,
+    /// Why it was not kept; `None` when its plane is in the combined plane.
+    pub refusal: Option<GrownPlaneRefusal>,
+}
+
+/// One view [`GrownPlaneStrategy::SelectedPairs`] picked, and why.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GrownPlanePick {
+    pub observation: usize,
+    pub image: u32,
+    /// Its angle from the reference, degrees.
+    pub angle_deg: f64,
+    /// The unit direction of its offset from the reference in the starting
+    /// frame's `(u, v)`, along which its predicted information lies.
+    pub offset_direction: [f64; 2],
+    /// Its photograph px per world unit at the anchor, the square root of
+    /// the projection's area scale there.
+    pub scale_px: f64,
+    /// The smallest eigenvalue of the information predicted with it added to
+    /// that measured so far, in the measured information's units; `NaN` for
+    /// a pick made by angle alone, while no view had been matched.
+    pub predicted_weak: f64,
+    /// Whether its growth passed the floor.
+    pub matched: bool,
+    /// The combined plane's weakest `σ` after it, degrees; `NaN` when it was
+    /// not matched.
+    pub sigma_after_deg: f64,
 }
 
 /// What the step made of one observation of the track.
@@ -304,12 +437,15 @@ pub enum GrownPlaneView {
     /// turn: the one it had before the step, or the anchor's projection
     /// where it had none. `None` when no view joined and nothing was written.
     Reference { keypoint: Option<[f64; 2]> },
-    /// Joined the shared plane. `from_start`, `start`, `distance` and
-    /// `held_zncc` are those of the growth that joined; `shift` and
-    /// `grid_zncc` are its shift and robust grid score at the final shared
-    /// plane. `was` is its keypoint before the step and `keypoint` the one
-    /// the step wrote, both image px; `keypoint` is `None` where that pixel
-    /// is off the photograph and nothing was written.
+    /// Its own plane is in the final plane. `from_start` and `start` are
+    /// those of the growth that was kept; `distance` and `held_zncc` are, in
+    /// sequence, that growth's against the shared plane when it joined
+    /// (`None` for the first view), and otherwise its plane's distance from
+    /// the final plane and its score there. `shift` is its growth's shift
+    /// moved to the final plane by its own normal matrix, and `grid_zncc` its
+    /// robust grid score there. `was` is its keypoint before the step and
+    /// `keypoint` the one the step wrote, both image px; `keypoint` is `None`
+    /// where that pixel is off the photograph and nothing was written.
     Joined {
         from_start: bool,
         start: GrownPlaneStart,
@@ -320,8 +456,20 @@ pub enum GrownPlaneView {
         was: Option<[f64; 2]>,
         keypoint: Option<[f64; 2]>,
     },
-    /// Left out after its second try, with that try's last growth's refusal,
-    /// distance and held score. The step writes no keypoint for it.
+    /// Not matched by [`GrownPlaneStrategy::SelectedPairs`]: its shift alone
+    /// was fitted at the final plane, from its first window, and it is not in
+    /// the plane. `keypoint` is written when `grid_zncc` reaches
+    /// [`GrownPlaneNormalOptions::min_held_zncc`] and the pixel is on the
+    /// photograph, and is `None` otherwise.
+    ShiftOnly {
+        start: GrownPlaneStart,
+        shift: [f64; 2],
+        grid_zncc: f64,
+        was: Option<[f64; 2]>,
+        keypoint: Option<[f64; 2]>,
+    },
+    /// Left out, with the refusal, distance and held score that left it out.
+    /// The step writes no keypoint for it.
     LeftOut {
         reason: GrownPlaneRefusal,
         distance: Option<f64>,
@@ -332,14 +480,19 @@ pub enum GrownPlaneView {
     NotAttempted,
 }
 
-/// How precisely the joined views determine the shared plane.
+/// How precisely the kept estimates determine the plane.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct GrownPlanePrecision {
     /// `σ` along the plane's weakest and strongest directions, degrees, from
-    /// the joined views' information read at the final shared plane.
+    /// every kept estimate's information summed, each read at its own plane.
     pub sigma_weak_deg: f64,
     pub sigma_strong_deg: f64,
-    /// `sigma_weak_deg` is over
+    /// The same with each kept pair's information halved, so that a view
+    /// matched against the reference and in a pair counts about once.
+    /// Equal to the two above with no pair kept.
+    pub discounted_sigma_weak_deg: f64,
+    pub discounted_sigma_strong_deg: f64,
+    /// `discounted_sigma_weak_deg` is over
     /// [`GrownPlaneNormalOptions::low_confidence_sigma_deg`]. The patch is
     /// turned either way.
     pub low_confidence: bool,
@@ -348,6 +501,8 @@ pub struct GrownPlanePrecision {
 /// What [`grown_plane_normal`] did, carried by [`NormalEstimate::GrownPlane`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct GrownPlaneSequence {
+    /// The strategy the step ran.
+    pub strategy: GrownPlaneStrategy,
     /// The reference observation; `None` when the reference-view rule found
     /// none, and then nothing was tried.
     pub reference: Option<usize>,
@@ -360,7 +515,13 @@ pub struct GrownPlaneSequence {
     pub views: Vec<GrownPlaneView>,
     /// Every try, in the order made.
     pub trace: Vec<GrownPlaneTry>,
-    /// The shared plane's outward normal, world frame, which the patch was
+    /// [`GrownPlaneStrategy::SelectedPairs`]'s picks, in the order made;
+    /// empty under the other strategies.
+    pub picks: Vec<GrownPlanePick>,
+    /// The pairs matched against each other, widest first; empty under a
+    /// strategy with no pairs.
+    pub pairs: Vec<GrownPlanePair>,
+    /// The final plane's outward normal, world frame, which the patch was
     /// turned to; `None` when no view joined and the normal was left as it
     /// was.
     pub normal: Option<[f64; 3]>,
@@ -381,6 +542,26 @@ impl GrownPlaneSequence {
         self.count(|v| matches!(v, GrownPlaneView::LeftOut { .. }))
     }
 
+    /// How many views had their shift alone fitted.
+    pub fn shift_only(&self) -> usize {
+        self.count(|v| matches!(v, GrownPlaneView::ShiftOnly { .. }))
+    }
+
+    /// How many views were grown against the reference: every view with a
+    /// try.
+    pub fn matched(&self) -> usize {
+        self.trace
+            .iter()
+            .map(|t| t.observation)
+            .collect::<BTreeSet<_>>()
+            .len()
+    }
+
+    /// How many pairs were kept.
+    pub fn pairs_kept(&self) -> usize {
+        self.pairs.iter().filter(|p| p.refusal.is_none()).count()
+    }
+
     /// Whether the step turned the patch: some view joined.
     pub fn turned(&self) -> bool {
         self.normal.is_some()
@@ -398,6 +579,18 @@ impl std::fmt::Display for GrownPlaneSequence {
         if left > 0 {
             write!(f, ", {left} left out")?;
         }
+        let shift_only = self.shift_only();
+        if shift_only > 0 {
+            write!(f, ", {shift_only} shift only")?;
+        }
+        if !self.pairs.is_empty() {
+            write!(
+                f,
+                ", {} of {} pairs kept",
+                self.pairs_kept(),
+                self.pairs.len()
+            )?;
+        }
         match &self.precision {
             Some(p) => {
                 write!(
@@ -405,6 +598,13 @@ impl std::fmt::Display for GrownPlaneSequence {
                     "; \u{3c3} {:.2}\u{b0} weakest, {:.2}\u{b0} strongest",
                     p.sigma_weak_deg, p.sigma_strong_deg
                 )?;
+                if p.discounted_sigma_weak_deg != p.sigma_weak_deg {
+                    write!(
+                        f,
+                        " ({:.2}\u{b0} weakest with each view once)",
+                        p.discounted_sigma_weak_deg
+                    )?;
+                }
                 if p.low_confidence {
                     write!(f, ", low confidence")?;
                 }
@@ -425,41 +625,64 @@ impl std::fmt::Display for GrownPlaneSequence {
 /// side. The plane is the starting normal tilted by `(a, b)` along the frame's
 /// axes through that anchor; each view adds an image shift.
 ///
-/// The other views are taken in order of their angle from the reference.
-/// Each grows from the shared plane: a 7×7 window at the grid's centre starts
+/// A view is grown from a plane: a 7×7 window at the grid's centre starts
 /// from the shift the view's keypoint implies, the window grows by
 /// [`GrownPlaneNormalOptions::window_fractions`] with tilt and shift fitted at
-/// each size, and a last fit takes the whole
-/// grid on the robust cell score. The first view joins when that score reaches
-/// [`GrownPlaneNormalOptions::min_held_zncc`]; each later one when its own
-/// plane lies within [`GrownPlaneNormalOptions::max_agreement_distance`] of
-/// the shared plane by the Mahalanobis distance and, held to the shared
-/// plane, it still scores [`GrownPlaneNormalOptions::min_held_zncc`]. After
-/// each join the shared tilt and every joined view's shift are fitted
-/// together. A view whose growth from the implied shift is refused is grown
-/// again with its first window's shift found by an exhaustive search about
-/// that shift; a view with no keypoint is grown from the search alone. A view
-/// refused from the shared plane is grown the same two ways from the
-/// starting plane, and one refused every way is tried once more at the back
-/// of the queue before it is left out.
+/// each size, and a last fit takes the whole grid on the robust cell score.
+/// A growth that is refused is made again with its first window's shift
+/// found by an exhaustive search about that shift; a view with no keypoint
+/// is grown from the search alone. Each growth gives the view's own plane and
+/// its information about the tilt, the Schur complement of its normal matrix.
 ///
-/// When at least one view joined, the patch is turned to the shared plane with
+/// [`GrownPlaneNormalOptions::strategy`] combines the views' planes, always
+/// by an information-weighted mean and never by fitting the views together:
+///
+/// - [`GrownPlaneStrategy::SequentialMean`] takes the views in order of their
+///   angle from the reference, each grown from the plane the views before it
+///   share. The first joins when its own score reaches
+///   [`GrownPlaneNormalOptions::min_held_zncc`]; each later one when its own
+///   plane lies within [`GrownPlaneNormalOptions::max_agreement_distance`] of
+///   the shared plane by the Mahalanobis distance and, held to the shared
+///   plane, it still scores the floor. After each join the shared plane is the
+///   weighted mean of the joined views' own planes. A view refused from the
+///   shared plane is grown again from the starting plane, and one refused
+///   every way is tried once more at the back of the queue before it is left
+///   out.
+/// - [`GrownPlaneStrategy::Independent`] grows every view from the starting
+///   plane, keeps those passing the floor on their own, and takes their
+///   robust weighted mean: an estimate more than the agreement distance from
+///   the mean is left out, worst first, the mean read again, and every kept
+///   view must still score the floor at the final plane at its shift moved
+///   there. A view left out whose growth had no search is grown once more
+///   from the search, and the planes are combined again.
+/// - [`GrownPlaneStrategy::SequentialPairs`], the default, and
+///   [`GrownPlaneStrategy::IndependentPairs`] add to the first two the widest
+///   pairs of kept views matched against each other, the views' and pairs'
+///   planes combined by the robust mean.
+/// - [`GrownPlaneStrategy::SelectedPairs`] matches only the views a
+///   prediction of their information picks, and fits the shift alone of the
+///   others at the final plane.
+///
+/// When at least one view joined, the patch is turned to the final plane with
 /// [`tilt_patch`](crate::bench::tilt_patch), the reference's keypoint is
-/// written back as it was before the step and each joined view's at the
-/// anchor's projection plus its shift, and the track is read back with its
-/// bitmap rendered; the report gives the plane's precision and says when it is
-/// low. When none joined, the normal and the keypoints are left as given and
-/// the track is read back. The centre does not move.
+/// written back as it was before the step, each joined view's at the anchor's
+/// projection plus its shift moved to the final plane, and each shift-only
+/// view's that passed the floor at its fitted shift, and the track is read
+/// back with its bitmap rendered; the report gives the plane's precision and
+/// says when it is low. When none joined, the normal and the keypoints are
+/// left as given and the track is read back. The centre does not move.
 ///
 /// A track at infinity is refused, as by every normal step: its patch faces
 /// along its own bearing and has no plane to fit.
 ///
 /// The step opens the phase `grown plane normal` on `progress`, and under it
 /// `grown plane view` for each try. A detailed `progress` adds `setup`,
-/// `precision` and `turn and write` under the step; `growth` and `joint fit`
-/// under each try; and `keypoint search`, `widened search`, `window stage`,
-/// `whole-grid stage` and `judge` under each growth, each noted with what it
-/// reached. The result is the same with detail on or off.
+/// `mean` for each combination of planes, `selection` for each pick, `pairs`
+/// with a `pair fit` per pair, `shift-only fit` for each view not matched,
+/// and `turn and write` under the step; `growth` under each try, with `mean`
+/// after a join in sequence; and `keypoint search`, `widened search`,
+/// `window stage`, `whole-grid stage` and `judge` under each growth, each
+/// noted with what it reached. The result is the same with detail on or off.
 ///
 /// # Example
 ///
@@ -478,7 +701,7 @@ impl std::fmt::Display for GrownPlaneSequence {
 ///     &GrownPlaneNormalOptions::default(),
 ///     &Progress::none(),
 /// )?;
-/// println!("{report}"); // "16 of 17 views joined, 1 left out; σ 0.38° weakest, …"
+/// println!("{report}"); // "16 of 17 views joined, 1 left out, 3 of 3 pairs kept; σ …"
 /// # let _ = turned;
 /// # Ok(())
 /// # }
@@ -527,17 +750,20 @@ pub fn grown_plane_normal(
     )
     .map(|k| rows[k]);
 
-    let mut views = vec![GrownPlaneView::NotAttempted; track.observations.len()];
+    let views = vec![GrownPlaneView::NotAttempted; track.observations.len()];
     let Some(reference) = reference else {
         progress_note!(setup, "no reference");
         drop(setup);
         let turn = progress.detail_phase("turn and write");
         let sequence = GrownPlaneSequence {
+            strategy: options.strategy,
             reference: None,
             working_resolution: 0,
             window_half_widths: Vec::new(),
             views,
             trace: Vec::new(),
+            picks: Vec::new(),
+            pairs: Vec::new(),
             normal: None,
             precision: None,
             written: 0,
@@ -597,10 +823,24 @@ pub fn grown_plane_normal(
                 (Some(a), Some(b)) => a.dot(&b).clamp(-1.0, 1.0).acos().to_degrees(),
                 _ => f64::INFINITY,
             };
+            let offset_direction = match (ref_direction, direction) {
+                (Some(a), Some(b)) => {
+                    let d = b - a;
+                    let (x, y) = (d.dot(&frame.u_axis), d.dot(&frame.v_axis));
+                    let n = x.hypot(y);
+                    if n > 1e-12 {
+                        [x / n, y / n]
+                    } else {
+                        [0.0; 2]
+                    }
+                }
+                _ => [0.0; 2],
+            };
             let kp_shift = keypoint.and_then(|kp| {
                 grid.anchor_pixel(&image)
                     .map(|at| [kp[0] - at[0], kp[1] - at[1]])
             });
+            let scale_px = grid.scale_px(&image);
             Candidate {
                 row,
                 image_index: observation.image,
@@ -608,6 +848,9 @@ pub fn grown_plane_normal(
                 keypoint,
                 kp_shift,
                 angle_deg,
+                direction,
+                offset_direction,
+                scale_px,
             }
         })
         .collect();
@@ -618,9 +861,10 @@ pub fn grown_plane_normal(
         .collect();
     progress_note!(
         setup,
-        "grid {side}, {} other views, {} windows",
+        "grid {side}, {} other views, {} windows, {:?}",
         candidates.len(),
-        radii.len()
+        radii.len(),
+        options.strategy
     );
     drop(setup);
 
@@ -634,20 +878,28 @@ pub fn grown_plane_normal(
         candidates: &candidates,
         renders: &renders,
     };
-    let run = state.run(progress)?;
+    let outcome = match options.strategy {
+        GrownPlaneStrategy::SequentialMean | GrownPlaneStrategy::SequentialPairs => {
+            state.run_sequential(progress)?
+        }
+        _ => state.run_independent(progress)?,
+    };
 
-    record_views(&mut views, reference, &candidates, &run);
     let mut sequence = GrownPlaneSequence {
+        strategy: options.strategy,
         reference: Some(reference),
         working_resolution: side as u32,
         window_half_widths: radii.iter().map(|&r| r as u32).collect(),
         views,
-        trace: run.trace,
+        trace: outcome.trace,
+        picks: outcome.picks,
+        pairs: outcome.pairs,
         normal: None,
         precision: None,
         written: 0,
     };
-    if run.members.is_empty() {
+    let Some(tilt) = outcome.tilt else {
+        record_views(&mut sequence.views, reference, &candidates, &outcome.fates);
         let mut turn = progress.detail_phase("turn and write");
         progress_note!(turn, "no view joined, normal left unchanged");
         return read_back(
@@ -660,46 +912,30 @@ pub fn grown_plane_normal(
             &turn,
             |_| {},
         );
-    }
+    };
 
-    // The precision at the final plane, and each joined view's score there.
-    let mut measuring = progress.detail_phase("precision");
-    let renders_before = measuring.is_recording().then(|| state.renders_done());
-    let mut information = Matrix2::zeros();
-    for member in &run.members {
-        let fit = state.grid_fit(member.index, None);
-        let p = [run.tilt[0], run.tilt[1], member.shift[0], member.shift[1]];
-        information += tilt_information(&fit, &p, &state.iteration);
-        if let GrownPlaneView::Joined { grid_zncc, .. } =
-            &mut sequence.views[candidates[member.index].row]
-        {
-            *grid_zncc = fit.score_at(run.tilt, member.shift);
-        }
-    }
-    let [weak, strong] = sigmas_deg(&information, options.zncc_tolerance);
+    let [weak, strong] = sigmas_deg(&outcome.information, options.zncc_tolerance);
+    let [d_weak, d_strong] = sigmas_deg(&outcome.discounted, options.zncc_tolerance);
     sequence.precision = Some(GrownPlanePrecision {
         sigma_weak_deg: weak,
         sigma_strong_deg: strong,
-        low_confidence: weak.is_nan() || weak > options.low_confidence_sigma_deg,
+        discounted_sigma_weak_deg: d_weak,
+        discounted_sigma_strong_deg: d_strong,
+        low_confidence: d_weak.is_nan() || d_weak > options.low_confidence_sigma_deg,
     });
-    progress_note!(
-        measuring,
-        "{} views: \u{3c3} {weak:.2}\u{b0} weakest, {strong:.2}\u{b0} strongest, {} renders",
-        run.members.len(),
-        state.renders_done() - renders_before.unwrap_or(0)
-    );
-    drop(measuring);
-    let normal = grid.plane_normal(run.tilt);
+    let normal = grid.plane_normal(tilt);
     sequence.normal = Some(normal.into());
 
     let mut turn = progress.detail_phase("turn and write");
+    let finals = state.final_views(tilt, &outcome.fates);
+    record_views(&mut sequence.views, reference, &candidates, &finals);
     let writes = keypoint_writes(
         &grid,
         &ref_image,
         ref_keypoint,
         reference,
         &candidates,
-        &run.members,
+        options.min_held_zncc,
         &mut sequence.views,
     );
     sequence.written = writes.len();
@@ -723,53 +959,73 @@ pub fn grown_plane_normal(
     )
 }
 
-/// Fill `views` from how the sequence ended: the reference, each joined
-/// view's growth that joined and its final shift, and each view left out with
-/// its last growth's refusal. The scores at the final plane and the written
-/// keypoints are filled in later.
+/// Fill `views` from what became of each candidate: the reference, each
+/// joined view's growth that was kept and its shift and score at the final
+/// plane, each shift-only view's fit, and each view left out with its
+/// refusal. The written keypoints are filled in later.
 fn record_views(
     views: &mut [GrownPlaneView],
     reference: usize,
     candidates: &[Candidate<'_>],
-    run: &Run,
+    fates: &[Fate],
 ) {
     views[reference] = GrownPlaneView::Reference { keypoint: None };
-    for (i, candidate) in candidates.iter().enumerate() {
-        views[candidate.row] = match run.members.iter().find(|m| m.index == i) {
-            Some(member) => GrownPlaneView::Joined {
-                from_start: member.attempt.from_start,
-                start: member.attempt.start,
-                shift: member.shift,
-                grid_zncc: f64::NAN,
-                distance: member.attempt.distance,
-                held_zncc: member.attempt.held_zncc,
+    for (candidate, fate) in candidates.iter().zip(fates) {
+        views[candidate.row] = match fate {
+            Fate::Joined {
+                estimate,
+                distance,
+                held,
+                final_shift,
+                final_zncc,
+            } => GrownPlaneView::Joined {
+                from_start: estimate.attempt.from_start,
+                start: estimate.attempt.start,
+                shift: final_shift.unwrap_or(estimate.shift),
+                grid_zncc: final_zncc.unwrap_or(f64::NAN),
+                distance: *distance,
+                held_zncc: *held,
                 was: candidate.keypoint,
                 keypoint: None,
             },
-            None => match run.left_out.iter().find(|(k, _)| *k == i) {
-                Some((_, attempt)) => GrownPlaneView::LeftOut {
-                    reason: attempt.refusal.unwrap_or(GrownPlaneRefusal::UnderFloor),
-                    distance: attempt.distance,
-                    held_zncc: attempt.held_zncc,
-                },
-                None => GrownPlaneView::NotAttempted,
+            Fate::ShiftOnly {
+                start,
+                shift,
+                grid_zncc,
+            } => GrownPlaneView::ShiftOnly {
+                start: *start,
+                shift: *shift,
+                grid_zncc: *grid_zncc,
+                was: candidate.keypoint,
+                keypoint: None,
             },
+            Fate::LeftOut {
+                reason,
+                distance,
+                held,
+            } => GrownPlaneView::LeftOut {
+                reason: *reason,
+                distance: *distance,
+                held_zncc: *held,
+            },
+            Fate::NotTried => GrownPlaneView::NotAttempted,
         };
     }
 }
 
 /// The keypoints the step writes after the turn, as `(row, pixel)`: the
 /// reference's as it was before the step (the anchor's projection where it
-/// had none), and each joined view's at the anchor's projection plus its
-/// final shift, the pixel its whole-grid score was read around. A pixel off
-/// its photograph is not written. Each is recorded in `views` too.
+/// had none), each joined view's at the anchor's projection plus its shift at
+/// the final plane, the pixel its score there was read around, and each
+/// shift-only view's the same way where its score reaches `floor`. A pixel
+/// off its photograph is not written. Each is recorded in `views` too.
 fn keypoint_writes(
     grid: &Grid,
     ref_image: &ViewImage<'_>,
     ref_keypoint: Option<[f64; 2]>,
     reference: usize,
     candidates: &[Candidate<'_>],
-    members: &[Member],
+    floor: f64,
     views: &mut [GrownPlaneView],
 ) -> Vec<(usize, [f64; 2])> {
     let mut writes = Vec::new();
@@ -782,17 +1038,36 @@ fn keypoint_writes(
     views[reference] = GrownPlaneView::Reference {
         keypoint: ref_pixel,
     };
-    for member in members {
-        let candidate = &candidates[member.index];
-        let pixel = grid
-            .anchor_pixel(&candidate.image)
-            .map(|at| [at[0] + member.shift[0], at[1] + member.shift[1]])
-            .filter(|&p| on_photograph(&candidate.image, p));
-        if let Some(p) = pixel {
-            writes.push((candidate.row, p));
+    for candidate in candidates {
+        let at = |shift: [f64; 2]| {
+            grid.anchor_pixel(&candidate.image)
+                .map(|at| [at[0] + shift[0], at[1] + shift[1]])
+                .filter(|&p| on_photograph(&candidate.image, p))
+        };
+        match &mut views[candidate.row] {
+            GrownPlaneView::Joined {
+                shift, keypoint, ..
+            } => {
+                *keypoint = at(*shift);
+            }
+            GrownPlaneView::ShiftOnly {
+                shift,
+                grid_zncc,
+                keypoint,
+                ..
+            } => {
+                *keypoint = (*grid_zncc >= floor).then(|| at(*shift)).flatten();
+            }
+            _ => continue,
         }
-        if let GrownPlaneView::Joined { keypoint, .. } = &mut views[candidate.row] {
-            *keypoint = pixel;
+        if let GrownPlaneView::Joined {
+            keypoint: Some(p), ..
+        }
+        | GrownPlaneView::ShiftOnly {
+            keypoint: Some(p), ..
+        } = &views[candidate.row]
+        {
+            writes.push((candidate.row, *p));
         }
     }
     writes
@@ -808,13 +1083,14 @@ fn start_word(start: GrownPlaneStart) -> &'static str {
     }
 }
 
-/// Whether a growth joined, and why not, in a detail phase's note.
+/// Whether a growth was taken, and why not, in a detail phase's note.
 fn verdict_words(refusal: Option<GrownPlaneRefusal>) -> &'static str {
     match refusal {
-        None => "joined",
+        None => "taken",
         Some(GrownPlaneRefusal::UnderFloor) => "refused under the floor",
         Some(GrownPlaneRefusal::TooFar) => "refused too far",
         Some(GrownPlaneRefusal::HeldUnderFloor) => "refused held under the floor",
+        Some(GrownPlaneRefusal::ViewLeftOut) => "refused, a view left out",
     }
 }
 
@@ -848,30 +1124,6 @@ fn window_radii(side: usize, options: &GrownPlaneNormalOptions) -> Vec<usize> {
     std::iter::once(first).chain(later).collect()
 }
 
-/// `σ` along the weakest and strongest directions of `information`, degrees:
-/// `√(2τ/λ)` for each eigenvalue `λ`, floored at `1e-12`, a small tilt
-/// `(a, b)` being that many radians.
-fn sigmas_deg(information: &Matrix2<f64>, tau: f64) -> [f64; 2] {
-    let eigen = information.symmetric_eigen().eigenvalues;
-    let (lo, hi) = if eigen[0] <= eigen[1] {
-        (eigen[0], eigen[1])
-    } else {
-        (eigen[1], eigen[0])
-    };
-    let sigma = |lambda: f64| (2.0 * tau / lambda.max(1e-12)).sqrt().to_degrees();
-    [sigma(lo), sigma(hi)]
-}
-
-/// The covariance of the tilt that `information` gives: `2τ·(I + 10⁻⁶)⁻¹`,
-/// regularised so a direction with no information has a large variance
-/// rather than none.
-fn covariance(information: &Matrix2<f64>, tau: f64) -> Matrix2<f64> {
-    let reg = information + Matrix2::identity() * 1e-6;
-    reg.try_inverse()
-        .unwrap_or_else(|| Matrix2::identity() * 1e6)
-        * (2.0 * tau)
-}
-
 /// One view the step may try.
 struct Candidate<'a> {
     row: usize,
@@ -884,6 +1136,14 @@ struct Candidate<'a> {
     /// anchor.
     kp_shift: Option<[f64; 2]>,
     angle_deg: f64,
+    /// The unit direction from the patch centre to its camera.
+    direction: Option<Vector3<f64>>,
+    /// The unit direction of its offset from the reference in the starting
+    /// frame's `(u, v)`; zero where it has none.
+    offset_direction: [f64; 2],
+    /// Photograph px per world unit at the anchor; `NaN` where the anchor
+    /// does not project.
+    scale_px: f64,
 }
 
 /// What every growth of one step shares.
@@ -905,32 +1165,50 @@ struct Grown {
     attempt: GrownPlaneAttempt,
 }
 
-/// A view in the shared plane.
-struct Member {
-    /// Its index among the candidates.
-    index: usize,
-    shift: [f64; 2],
-    /// The growth that joined.
-    attempt: GrownPlaneAttempt,
-    /// Its information about the tilt, read when it joined.
-    information: Matrix2<f64>,
-}
-
-/// How the sequence ended.
-struct Run {
-    tilt: [f64; 2],
-    members: Vec<Member>,
-    left_out: Vec<(usize, GrownPlaneAttempt)>,
-    trace: Vec<GrownPlaneTry>,
-}
-
-/// A judgement of one growth against the shared plane.
+/// A judged growth: the growth, its verdict in its attempt, and the estimate
+/// it gives.
 struct Judged {
-    refusal: Option<GrownPlaneRefusal>,
-    distance: Option<f64>,
-    held_zncc: Option<f64>,
-    sigma_deg: f64,
-    information: Option<Matrix2<f64>>,
+    grown: Grown,
+    estimate: Estimate,
+}
+
+/// What became of one candidate.
+enum Fate {
+    /// Its plane is in the final plane; `final_shift` and `final_zncc` are
+    /// its shift and score there, filled in once the final plane is known.
+    Joined {
+        estimate: Box<Estimate>,
+        distance: Option<f64>,
+        held: Option<f64>,
+        final_shift: Option<[f64; 2]>,
+        final_zncc: Option<f64>,
+    },
+    ShiftOnly {
+        start: GrownPlaneStart,
+        shift: [f64; 2],
+        grid_zncc: f64,
+    },
+    LeftOut {
+        reason: GrownPlaneRefusal,
+        distance: Option<f64>,
+        held: Option<f64>,
+    },
+    NotTried,
+}
+
+/// How a strategy ended.
+struct Outcome {
+    /// The final plane; `None` when no view joined.
+    tilt: Option<[f64; 2]>,
+    /// Every kept estimate's information summed.
+    information: Matrix2<f64>,
+    /// The same with each kept pair's halved.
+    discounted: Matrix2<f64>,
+    /// One per candidate.
+    fates: Vec<Fate>,
+    trace: Vec<GrownPlaneTry>,
+    picks: Vec<GrownPlanePick>,
+    pairs: Vec<GrownPlanePair>,
 }
 
 impl Sequence<'_, '_, '_> {
@@ -947,157 +1225,155 @@ impl Sequence<'_, '_, '_> {
         }
     }
 
-    /// Take the views in order until every one has joined or been left out.
-    fn run(&self, progress: &Progress<'_>) -> Result<Run, NormalError> {
-        let mut queue: std::collections::VecDeque<usize> = (0..self.candidates.len()).collect();
-        let mut deferred = BTreeSet::new();
-        let mut tilt = [0.0; 2];
-        let mut members: Vec<Member> = Vec::new();
-        let mut left_out = Vec::new();
-        let mut trace = Vec::new();
-        while let Some(i) = queue.pop_front() {
-            progress.check_cancel()?;
-            let candidate = &self.candidates[i];
-            let mut phase = progress.phase("grown plane view");
-            progress_note!(phase, "image {}", candidate.image_index);
+    /// How many renders every view has made so far.
+    fn renders_done(&self) -> u64 {
+        self.renders.iter().map(ViewRender::renders).sum()
+    }
 
-            // From the shared plane, then from the starting plane; from each,
-            // at the keypoint-implied shift first and by the search after.
-            let starts: &[bool] = if members.is_empty() {
-                &[true]
-            } else {
-                &[false, true]
-            };
-            let rows = self.grid.window(self.radii[0]);
-            let mut attempts = Vec::new();
-            for &from_start in starts {
-                let tilt0 = if from_start { [0.0; 2] } else { tilt };
-                let plane = if from_start { "starting" } else { "shared" };
-                let try_from = |first,
-                                attempts: &mut Vec<(Grown, Judged)>,
-                                growth: &mut Phase<'_>| {
-                    let renders_before = self.renders[i].renders();
-                    let grown = self.grow(i, tilt0, from_start, first, growth)?;
-                    let judged = self.judge(i, grown, tilt, &members, growth);
-                    let attempt = &judged.0.attempt;
-                    let joins = attempt.refusal.is_none();
-                    progress_note!(
-                            *growth,
-                            "from the {plane} plane, {}: first window ZNCC {:.3}, grid ZNCC {:.3}, {}, {} renders",
-                            start_word(attempt.start),
-                            attempt.stage_zncc[0],
-                            attempt.grid_zncc,
-                            verdict_words(attempt.refusal),
-                            self.renders[i].renders() - renders_before
-                        );
-                    attempts.push(judged);
-                    Ok::<bool, NormalError>(joins)
-                };
-                if let Some(shift) = candidate.kp_shift {
-                    let mut growth = phase.detail_phase("growth");
-                    let z = self.spot_zncc(i, tilt0, &rows, shift);
-                    if try_from(
-                        (z, shift, GrownPlaneStart::NoSearch),
-                        &mut attempts,
-                        &mut growth,
-                    )? {
-                        break;
+    /// The estimate candidate `i`'s growth gives: its own plane and shift,
+    /// and its information about the tilt and normal matrix read there.
+    fn estimate_of(&self, i: usize, grown: &Grown) -> Estimate {
+        let p = [
+            grown.tilt[0],
+            grown.tilt[1],
+            grown.attempt.shift[0],
+            grown.attempt.shift[1],
+        ];
+        let normal = normal_matrix(&self.grid_fit(i, None), &p, &self.iteration);
+        let information = normal.as_ref().map_or_else(Matrix2::zeros, schur_tilt);
+        Estimate {
+            index: i,
+            tilt: grown.tilt,
+            shift: grown.attempt.shift,
+            information,
+            normal,
+            attempt: grown.attempt.clone(),
+        }
+    }
+
+    /// `estimate`'s shift moved to the plane `tilt` by its own normal matrix:
+    /// the shift the fit would reach there to first order, with no render.
+    fn moved_shift(&self, estimate: &Estimate, tilt: [f64; 2]) -> [f64; 2] {
+        let Some(n) = &estimate.normal else {
+            return estimate.shift;
+        };
+        let dt = [tilt[0] - estimate.tilt[0], tilt[1] - estimate.tilt[1]];
+        let ds = shift_response(n, dt);
+        [estimate.shift[0] + ds[0], estimate.shift[1] + ds[1]]
+    }
+
+    /// Candidate `i`'s robust grid score at `tilt` and `shift`: one render.
+    fn score_at(&self, i: usize, tilt: [f64; 2], shift: [f64; 2]) -> f64 {
+        self.grid_fit(i, None).score_at(tilt, shift)
+    }
+
+    /// Each joined view's shift and score at the final plane `tilt`.
+    fn final_views(&self, tilt: [f64; 2], fates: &[Fate]) -> Vec<Fate> {
+        fates
+            .iter()
+            .map(|fate| match fate {
+                Fate::Joined {
+                    estimate,
+                    distance,
+                    held,
+                    ..
+                } => {
+                    let shift = self.moved_shift(estimate, tilt);
+                    Fate::Joined {
+                        estimate: estimate.clone(),
+                        distance: *distance,
+                        held: *held,
+                        final_shift: Some(shift),
+                        final_zncc: Some(self.score_at(estimate.index, tilt, shift)),
                     }
                 }
+                Fate::ShiftOnly {
+                    start,
+                    shift,
+                    grid_zncc,
+                } => Fate::ShiftOnly {
+                    start: *start,
+                    shift: *shift,
+                    grid_zncc: *grid_zncc,
+                },
+                Fate::LeftOut {
+                    reason,
+                    distance,
+                    held,
+                } => Fate::LeftOut {
+                    reason: *reason,
+                    distance: *distance,
+                    held: *held,
+                },
+                Fate::NotTried => Fate::NotTried,
+            })
+            .collect()
+    }
+
+    /// The growths of candidate `i` from the plane at `tilt0`, each judged by
+    /// `judge`, up to the first it takes: from the keypoint-implied shift
+    /// with no search where `unsearched` and the view has one, then from the
+    /// stage-1 search, unless the search lands on the implied shift. Each
+    /// growth opens a `growth` phase on `phase`.
+    #[allow(clippy::too_many_arguments)]
+    fn growths(
+        &self,
+        i: usize,
+        tilt0: [f64; 2],
+        from_start: bool,
+        plane: &str,
+        unsearched: bool,
+        phase: &Progress<'_>,
+        judge: &dyn Fn(Grown, &Progress<'_>) -> Judged,
+    ) -> Result<Vec<Judged>, NormalError> {
+        let candidate = &self.candidates[i];
+        let rows = self.grid.window(self.radii[0]);
+        let mut judged = Vec::new();
+        let try_from = |first, judged: &mut Vec<Judged>, growth: &mut Phase<'_>| {
+            let renders_before = self.renders[i].renders();
+            let grown = self.grow(i, tilt0, from_start, first, growth)?;
+            let j = judge(grown, growth);
+            let attempt = &j.grown.attempt;
+            let taken = attempt.refusal.is_none();
+            progress_note!(
+                *growth,
+                "from the {plane} plane, {}: first window ZNCC {:.3}, grid ZNCC {:.3}, {}, {} renders",
+                start_word(attempt.start),
+                attempt.stage_zncc[0],
+                attempt.grid_zncc,
+                verdict_words(attempt.refusal),
+                self.renders[i].renders() - renders_before
+            );
+            judged.push(j);
+            Ok::<bool, NormalError>(taken)
+        };
+        if unsearched {
+            if let Some(shift) = candidate.kp_shift {
                 let mut growth = phase.detail_phase("growth");
-                let first = self.search_first_window(i, tilt0, &rows, &growth);
-                // A search that lands on the implied shift would repeat the
-                // growth just refused from it.
-                if candidate.kp_shift.is_some_and(|s| same_shift(s, first.1)) {
-                    progress_note!(
-                        growth,
-                        "from the {plane} plane, {}: the search landed on the implied shift, not grown",
-                        start_word(first.2)
-                    );
-                    continue;
-                }
-                if try_from(first, &mut attempts, &mut growth)? {
-                    break;
+                let z = self.spot_zncc(i, tilt0, &rows, shift);
+                if try_from(
+                    (z, shift, GrownPlaneStart::NoSearch),
+                    &mut judged,
+                    &mut growth,
+                )? {
+                    return Ok(judged);
                 }
             }
-            let joining = attempts
-                .iter()
-                .position(|(g, _)| g.attempt.refusal.is_none());
-            let outcome = match joining {
-                Some(k) => {
-                    let grown = attempts[k].0.clone();
-                    let information = attempts[k].1.information;
-                    if members.is_empty() {
-                        tilt = grown.tilt;
-                    }
-                    members.push(Member {
-                        index: i,
-                        shift: grown.attempt.shift,
-                        attempt: grown.attempt.clone(),
-                        information: information.unwrap_or_else(Matrix2::zeros),
-                    });
-                    let mut joint = phase.detail_phase("joint fit");
-                    let renders_before = joint.is_recording().then(|| self.renders_done());
-                    let (joined_tilt, score, taken) = self.joint(tilt, &mut members);
-                    tilt = joined_tilt;
-                    if members.len() == 1 {
-                        // The first view's information is read at the shared
-                        // plane, which its own growth found.
-                        let m = &mut members[0];
-                        let p = [tilt[0], tilt[1], m.shift[0], m.shift[1]];
-                        m.information =
-                            tilt_information(&self.grid_fit(i, None), &p, &self.iteration);
-                    }
-                    progress_note!(
-                        joint,
-                        "{} views: mean grid ZNCC {score:.3}, {taken} iterations, {} renders",
-                        members.len(),
-                        self.renders_done() - renders_before.unwrap_or(0)
-                    );
-                    drop(joint);
-                    GrownPlaneTryOutcome::Joined
-                }
-                None if deferred.insert(i) => {
-                    queue.push_back(i);
-                    GrownPlaneTryOutcome::Deferred
-                }
-                None => {
-                    let last = attempts.last().expect("one growth at least");
-                    left_out.push((i, last.0.attempt.clone()));
-                    GrownPlaneTryOutcome::LeftOut
-                }
-            };
-            progress_note!(
-                phase,
-                "image {}: {}",
-                candidate.image_index,
-                match outcome {
-                    GrownPlaneTryOutcome::Joined => "joined",
-                    GrownPlaneTryOutcome::Deferred => "deferred",
-                    GrownPlaneTryOutcome::LeftOut => "left out",
-                }
-            );
-            let shared = members.iter().map(|m| m.information).sum::<Matrix2<f64>>();
-            trace.push(GrownPlaneTry {
-                observation: candidate.row,
-                image: candidate.image_index,
-                angle_deg: candidate.angle_deg,
-                attempts: attempts.into_iter().map(|(g, _)| g.attempt).collect(),
-                outcome,
-                shared_normal: (!members.is_empty()).then(|| self.grid.plane_normal(tilt).into()),
-                shared_sigma_deg: if members.is_empty() {
-                    f64::NAN
-                } else {
-                    sigmas_deg(&shared, self.options.zncc_tolerance)[0]
-                },
-            });
         }
-        Ok(Run {
-            tilt,
-            members,
-            left_out,
-            trace,
-        })
+        let mut growth = phase.detail_phase("growth");
+        let first = self.search_first_window(i, tilt0, &rows, &growth);
+        // A search that lands on the implied shift would repeat the growth
+        // with no search, refused or never wanted.
+        if candidate.kp_shift.is_some_and(|s| same_shift(s, first.1)) {
+            progress_note!(
+                growth,
+                "from the {plane} plane, {}: the search landed on the implied shift, not grown",
+                start_word(first.2)
+            );
+            return Ok(judged);
+        }
+        try_from(first, &mut judged, &mut growth)?;
+        Ok(judged)
     }
 
     /// Grow candidate `i` from the plane at `tilt0`, from the first window's
@@ -1234,107 +1510,6 @@ impl Sequence<'_, '_, '_> {
                 (z, t, GrownPlaneStart::NoKeypoint)
             }
         }
-    }
-
-    /// Judge a growth of candidate `i` against the shared plane at `tilt`
-    /// over `members`.
-    fn judge(
-        &self,
-        i: usize,
-        mut grown: Grown,
-        tilt: [f64; 2],
-        members: &[Member],
-        progress: &Progress<'_>,
-    ) -> (Grown, Judged) {
-        let options = self.options;
-        let mut phase = progress.detail_phase("judge");
-        let renders_before = self.renders[i].renders();
-        let judged = if members.is_empty() {
-            Judged {
-                refusal: (grown.attempt.grid_zncc < options.min_held_zncc
-                    || grown.attempt.grid_zncc.is_nan())
-                .then_some(GrownPlaneRefusal::UnderFloor),
-                distance: None,
-                held_zncc: None,
-                sigma_deg: f64::NAN,
-                information: None,
-            }
-        } else {
-            let own = &grown.attempt;
-            let p = [grown.tilt[0], grown.tilt[1], own.shift[0], own.shift[1]];
-            let information = tilt_information(&self.grid_fit(i, None), &p, &self.iteration);
-            let shared = members.iter().map(|m| m.information).sum::<Matrix2<f64>>();
-            let d = Vector2::new(grown.tilt[0] - tilt[0], grown.tilt[1] - tilt[1]);
-            let c = covariance(&information, options.zncc_tolerance)
-                + covariance(&shared, options.zncc_tolerance);
-            let d2 = c
-                .try_inverse()
-                .map_or(f64::INFINITY, |inv| (d.transpose() * inv * d)[(0, 0)]);
-            let distance = d2.max(0.0).sqrt();
-            let (_, held, _) = maximise(&self.grid_fit(i, Some(tilt)), &own.shift, &self.iteration);
-            let bar = options.max_agreement_distance;
-            let refusal = if distance.is_nan() || distance > bar {
-                Some(GrownPlaneRefusal::TooFar)
-            } else if held.is_nan() || held < options.min_held_zncc {
-                Some(GrownPlaneRefusal::HeldUnderFloor)
-            } else {
-                None
-            };
-            Judged {
-                refusal,
-                distance: Some(distance),
-                held_zncc: Some(held),
-                sigma_deg: sigmas_deg(&information, options.zncc_tolerance)[0],
-                information: Some(information),
-            }
-        };
-        grown.attempt.refusal = judged.refusal;
-        grown.attempt.distance = judged.distance;
-        grown.attempt.held_zncc = judged.held_zncc;
-        grown.attempt.sigma_deg = judged.sigma_deg;
-        match (judged.distance, judged.held_zncc) {
-            (Some(distance), Some(held)) => progress_note!(
-                phase,
-                "distance {distance:.2}, held ZNCC {held:.3}, \u{3c3} {:.2}\u{b0}, {}, {} renders",
-                judged.sigma_deg,
-                verdict_words(judged.refusal),
-                self.renders[i].renders() - renders_before
-            ),
-            _ => progress_note!(
-                phase,
-                "first view, grid ZNCC {:.3}: {}",
-                grown.attempt.grid_zncc,
-                verdict_words(judged.refusal)
-            ),
-        }
-        drop(phase);
-        (grown, judged)
-    }
-
-    /// How many renders every view has made so far.
-    fn renders_done(&self) -> u64 {
-        self.renders.iter().map(ViewRender::renders).sum()
-    }
-
-    /// Fit the shared tilt and every member's shift together, from `tilt`
-    /// and the members' current shifts; the tilt reached, the mean robust
-    /// grid score there and the steps taken. The members' shifts are updated.
-    fn joint(&self, tilt: [f64; 2], members: &mut [Member]) -> ([f64; 2], f64, u32) {
-        let fit = JointFit {
-            views: members
-                .iter()
-                .map(|m| self.grid_fit(m.index, None))
-                .collect(),
-        };
-        let mut p = vec![tilt[0], tilt[1]];
-        for m in members.iter() {
-            p.extend_from_slice(&m.shift);
-        }
-        let (q, score, taken) = maximise(&fit, &p, &self.iteration);
-        for (k, m) in members.iter_mut().enumerate() {
-            m.shift = [q[2 + 2 * k], q[3 + 2 * k]];
-        }
-        ([q[0], q[1]], score, taken)
     }
 }
 

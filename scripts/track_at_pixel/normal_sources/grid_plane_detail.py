@@ -58,8 +58,10 @@ time per phase name (summed, slowest first, each with its share of the step;
 a phase's time includes the phases inside it) are printed for each point as
 it finishes, and at the end a table for each start: the
 point, the errors of the start, ``old``, ``new`` and the grown step, the grown
-step's weakest ``σ`` and confidence, its views joined of those tried, and its
-wall time.
+step's weakest ``σ`` (every kept estimate's information summed, and with each
+kept pair's halved) and confidence, its views joined of those tried, the
+views it grew against the reference of those beside the reference, the pairs
+kept of those matched, and its wall time.
 
 The 16 hand-picked points of the grown-plane draft are ``dino_dog_toy`` (the
 candidate ground truth, given by its path) ``0 1 528 672 810 933``,
@@ -181,7 +183,7 @@ def breakdown_lines(breakdown):
     return lines
 
 
-GROWN_HEADER = " point  start    old    new  grown  sigma conf joined       ms"
+GROWN_HEADER = " point  start    old    new  grown  sigma  sig_b conf joined matched pairs       ms"
 
 
 def grown_line(row):
@@ -192,11 +194,16 @@ def grown_line(row):
 
     confidence = {None: "-", True: "low", False: "ok"}[row.get("grown_low_confidence")]
     tried = row.get("grown_joined", 0) + row.get("grown_left_out", 0)
+    pairs = row.get("grown_pairs", [])
+    kept = sum(p["kept"] for p in pairs)
     return (
         f"{row['point']:6d} {deg(row.get('start_deg'))} {deg(row.get('old_deg'))} "
         f"{deg(row.get('new_deg'))} {deg(row.get('grown_deg'))} "
-        f"{deg(row.get('grown_sigma_weak_deg'))} {confidence:>4s} "
+        f"{deg(row.get('grown_sigma_weak_deg'))} "
+        f"{deg(row.get('grown_discounted_sigma_weak_deg'))} {confidence:>4s} "
         f"{row.get('grown_joined', 0):3d}/{tried:<3d} "
+        f"{row.get('grown_matched', 0):3d}/{row.get('grown_candidates', 0):<3d} "
+        f"{kept:2d}/{len(pairs):<2d} "
         f"{row.get('grown_ms', float('nan')):8.0f}"
     )
 

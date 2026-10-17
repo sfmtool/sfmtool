@@ -3,11 +3,12 @@
 
 //! The pieces of the grown plane normal that need no photograph: the robust
 //! cell score, the residual's link to ZNCC, the window schedule, the
-//! elimination of the shifts from the information, and the fit itself on a
-//! residual the test writes.
+//! elimination of the shifts from the information, the fit itself on a
+//! residual the test writes, and the information-weighted mean.
 
 use nalgebra::{DMatrix, Matrix2};
 
+use super::combine::{covariance, distance, weighted_mean};
 use super::render::{robust_score, zncc, Block, Samples};
 use super::solve::{maximise, schur_tilt, tilt_information, Iteration, Objective};
 use super::{sigmas_deg, window_radii, GrownPlaneNormalOptions};
@@ -240,4 +241,47 @@ fn the_fit_reaches_the_optimum_of_a_quadratic() {
     // and the tilt's information is the identity.
     let info = tilt_information(&objective, &p, &iteration());
     assert!((info - Matrix2::identity()).norm() < 1e-6, "{info}");
+}
+
+/// The information-weighted mean against a hand-computed case:
+/// `I₁ = [[2, 1], [1, 2]]` at `t₁ = (1, 1)` and `I₂ = [[1, 0], [0, 3]]` at
+/// `t₂ = (0, −1)` sum to `[[3, 1], [1, 5]]`, whose inverse is
+/// `[[5, −1], [−1, 3]] / 14`, and `I₁t₁ + I₂t₂ = (3, 0)`, so the mean is
+/// `(15, −3) / 14`. With diagonal information each axis is its own weighted
+/// mean, one estimate's mean is itself, and the covariance `2τ·(Σ I)⁻¹`
+/// gives the `σ` of the summed information.
+#[test]
+fn the_weighted_mean_matches_a_hand_computed_case() {
+    let i1 = Matrix2::new(2.0, 1.0, 1.0, 2.0);
+    let i2 = Matrix2::new(1.0, 0.0, 0.0, 3.0);
+    let mean = weighted_mean(&[([1.0, 1.0], i1), ([0.0, -1.0], i2)]).expect("two estimates");
+    assert!((mean[0] - 15.0 / 14.0).abs() < 1e-5, "{mean:?}");
+    assert!((mean[1] + 3.0 / 14.0).abs() < 1e-5, "{mean:?}");
+
+    let diagonal = weighted_mean(&[
+        ([1.0, 0.0], Matrix2::new(4.0, 0.0, 0.0, 1.0)),
+        ([0.0, 2.0], Matrix2::identity()),
+    ])
+    .expect("two estimates");
+    assert!((diagonal[0] - 0.8).abs() < 1e-5 && (diagonal[1] - 1.0).abs() < 1e-5);
+
+    // One estimate, informed along one axis only, is its own mean.
+    let one = weighted_mean(&[([0.3, -0.2], Matrix2::new(5.0, 0.0, 0.0, 0.0))]).expect("one");
+    assert!(
+        (one[0] - 0.3).abs() < 1e-9 && (one[1] + 0.2).abs() < 1e-9,
+        "{one:?}"
+    );
+    assert!(weighted_mean(&[]).is_none());
+
+    let tau = 0.01;
+    let sum = i1 + i2;
+    let cov = covariance(&sum, tau);
+    let expected = Matrix2::new(5.0, -1.0, -1.0, 3.0) * (2.0 * tau / 14.0);
+    assert!((cov - expected).norm() < 1e-8, "{cov}");
+    // Two estimates at the same plane are no distance apart; one the
+    // summed covariance away along an axis is one apart.
+    assert!(distance([0.1, 0.2], &i1, [0.1, 0.2], &i2, tau).abs() < 1e-12);
+    let unit = Matrix2::identity() * (4.0 * tau);
+    let d = distance([1.0, 0.0], &unit, [0.0, 0.0], &unit, tau);
+    assert!((d - 1.0).abs() < 1e-4, "{d}");
 }

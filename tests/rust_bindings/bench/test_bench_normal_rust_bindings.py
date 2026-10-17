@@ -263,14 +263,23 @@ GROWN_VIEW_KEYS = {
         "was",
         "keypoint",
     },
+    "shift_only": {"kind", "start", "shift", "grid_zncc", "was", "keypoint"},
     "left_out": {"kind", "reason", "distance", "held_zncc"},
     "not_attempted": {"kind"},
 }
 GROWN_STARTS = {"no_search", "keypoint", "widened", "no_keypoint"}
 GROWN_REFUSALS = {"under_floor", "too_far", "held_under_floor"}
+GROWN_STRATEGIES = (
+    "sequential_pairs",
+    "sequential_mean",
+    "independent_pairs",
+    "independent",
+    "selected_pairs",
+)
 
 # Every keyword of ``grown_plane_normal`` but the fit's, at the Rust default.
 GROWN_DEFAULTS = {
+    "strategy": "sequential_pairs",
     "spot_window": 7,
     "window_fractions": [1 / 8, 1 / 5, 1 / 3, 1 / 2],
     "keypoint_search_px": 3.0,
@@ -281,6 +290,9 @@ GROWN_DEFAULTS = {
     "max_agreement_distance": 3.0,
     "min_held_zncc": 0.5,
     "low_confidence_sigma_deg": 2.0,
+    "max_pairs": 3,
+    "target_sigma_deg": 0.5,
+    "max_selected_views": 6,
     "min_coverage": 0.6,
     "max_iterations": 20,
     "initial_damping": 1e-3,
@@ -296,12 +308,21 @@ def grown(fitted, edited, images):
     return grown_plane_normal(fitted, edited, images)
 
 
+@pytest.fixture(scope="module", params=GROWN_STRATEGIES)
+def grown_by_strategy(request, fitted, edited, images):
+    """``grown_plane_normal`` under each strategy, with its name."""
+    return request.param, grown_plane_normal(
+        fitted, edited, images, strategy=request.param
+    )
+
+
 class TestGrownPlaneNormal:
-    def test_the_report_carries_the_sequence(self, fitted, grown):
-        turned, report = grown
+    def test_the_report_carries_the_sequence(self, fitted, grown_by_strategy):
+        strategy, (turned, report) = grown_by_strategy
         _check_common(report, fitted, turned)
         seq = report["estimate"]
         assert seq["kind"] == "grown_plane"
+        assert seq["strategy"] == strategy
         assert isinstance(seq["reference"], int)
         assert seq["working_resolution"] >= GROWN_DEFAULTS["spot_window"]
         widths = seq["window_half_widths"]
@@ -318,6 +339,10 @@ class TestGrownPlaneNormal:
         joined = [v for v in views if v["kind"] == "joined"]
         assert seq["joined"] == len(joined)
         assert seq["left_out"] == sum(v["kind"] == "left_out" for v in views)
+        assert seq["shift_only"] == sum(v["kind"] == "shift_only" for v in views)
+        if strategy != "selected_pairs":
+            assert seq["shift_only"] == 0 and seq["picks"] == []
+        assert seq["matched"] == len({e["observation"] for e in seq["trace"]})
         for view in joined:
             assert view["start"] in GROWN_STARTS
             assert view["shift"].shape == (2,)
@@ -337,12 +362,17 @@ class TestGrownPlaneNormal:
                 "shared_normal",
                 "shared_sigma_deg",
             }
-            assert entry["outcome"] in {"joined", "deferred", "left_out"}
+            assert entry["outcome"] in {"joined", "matched", "deferred", "left_out"}
             # From the shared plane and then the starting plane, each from the
-            # keypoint-implied shift and then from the search.
-            assert 1 <= len(entry["attempts"]) <= 4
-            # A view with a keypoint is grown from its implied shift first.
-            assert entry["attempts"][0]["start"] in {"no_search", "no_keypoint"}
+            # keypoint-implied shift and then from the search; a retry after
+            # the combination is the search alone, or nothing where it lands
+            # on the implied shift.
+            assert len(entry["attempts"]) <= 4
+            if strategy.startswith("sequential"):
+                assert entry["outcome"] != "matched"
+                assert entry["attempts"]
+            else:
+                assert entry["outcome"] in {"matched", "left_out"}
             for attempt in entry["attempts"]:
                 assert attempt["start"] in GROWN_STARTS
                 assert attempt["stage_zncc"].dtype == np.float64
@@ -353,6 +383,43 @@ class TestGrownPlaneNormal:
             if entry["shared_normal"] is not None:
                 assert np.linalg.norm(entry["shared_normal"]) == pytest.approx(1.0)
 
+        for pick in seq["picks"]:
+            assert set(pick) == {
+                "observation",
+                "image",
+                "angle_deg",
+                "offset_direction",
+                "scale_px",
+                "predicted_weak",
+                "matched",
+                "sigma_after_deg",
+            }
+            assert pick["offset_direction"].shape == (2,)
+            assert isinstance(pick["matched"], bool)
+        if strategy in ("sequential_mean", "independent"):
+            assert seq["pairs"] == []
+        assert seq["pairs_kept"] == sum(p["kept"] for p in seq["pairs"])
+        for pair in seq["pairs"]:
+            assert set(pair) == {
+                "observations",
+                "images",
+                "angle_deg",
+                "normal",
+                "relative_shift",
+                "zncc",
+                "sigma_deg",
+                "distance",
+                "kept",
+                "refusal",
+            }
+            assert len(pair["observations"]) == 2
+            assert pair["relative_shift"].shape == (2,)
+            assert np.linalg.norm(pair["normal"]) == pytest.approx(1.0)
+            assert pair["kept"] == (pair["refusal"] is None)
+            assert pair["refusal"] is None or pair["refusal"] in GROWN_REFUSALS | {
+                "view_left_out"
+            }
+
         assert seq["turned"] == (seq["joined"] > 0)
         if seq["turned"]:
             np.testing.assert_allclose(report["normal"], seq["normal"], atol=1e-9)
@@ -360,9 +427,15 @@ class TestGrownPlaneNormal:
             assert set(precision) == {
                 "sigma_weak_deg",
                 "sigma_strong_deg",
+                "discounted_sigma_weak_deg",
+                "discounted_sigma_strong_deg",
                 "low_confidence",
             }
             assert precision["sigma_weak_deg"] >= precision["sigma_strong_deg"]
+            assert (
+                precision["discounted_sigma_weak_deg"]
+                >= precision["sigma_weak_deg"] - 1e-12
+            )
             assert isinstance(precision["low_confidence"], bool)
             assert seq["written"] >= 1
         else:
@@ -390,6 +463,9 @@ class TestGrownPlaneNormal:
             ("spot_search_step_px", 0.0),
             ("min_coverage", 1.5),
             ("zncc_tolerance", -1.0),
+            ("target_sigma_deg", 0.0),
+            ("max_selected_views", 0),
+            ("strategy", "joint_fit"),
         ]:
             with pytest.raises(ValueError, match=name):
                 grown_plane_normal(fitted, edited, images, **{name: value})
@@ -403,9 +479,13 @@ class TestGrownPlaneNormal:
         _, report = grown
         assert "phases" not in report
 
-    def test_recorded_phases_change_nothing(self, fitted, edited, images, grown):
-        plain_track, plain = grown
-        turned, report = grown_plane_normal(fitted, edited, images, record_phases=True)
+    def test_recorded_phases_change_nothing(
+        self, fitted, edited, images, grown_by_strategy
+    ):
+        strategy, (plain_track, plain) = grown_by_strategy
+        turned, report = grown_plane_normal(
+            fitted, edited, images, strategy=strategy, record_phases=True
+        )
         phases = report.pop("phases")
         _assert_same(report, plain)
         np.testing.assert_array_equal(_normal(turned), _normal(plain_track))
@@ -447,11 +527,13 @@ class TestGrownPlaneNormal:
         assert names.count("window stage") == growths * (
             len(seq["window_half_widths"]) - 1
         )
-        assert names.count("joint fit") == seq["joined"]
-        for once in ("setup", "precision", "turn and write"):
-            assert names.count(once) == (
-                0 if once == "precision" and not seq["turned"] else 1
-            )
+        assert names.count("joint fit") == 0
+        assert names.count("mean") >= (1 if seq["matched"] else 0)
+        assert names.count("pair fit") == len(seq["pairs"])
+        assert names.count("selection") == len(seq["picks"])
+        assert names.count("shift-only fit") == seq["shift_only"]
+        for once in ("setup", "turn and write"):
+            assert names.count(once) == 1
         # Every phase lies within the step's.
         step = phases[0]
         end = step["start_s"] + step["duration_s"]

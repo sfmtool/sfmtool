@@ -9,7 +9,8 @@
 //! ZNCCs, and a residual frozen at the current parameters whose sum of squares
 //! is `2 · (1 − score)` there ([`Block`]): the samples, the channels and the
 //! cells' robust weights are fixed at the linearisation point, and only the
-//! view's samples move with the parameters. The Jacobian is a forward
+//! view's samples move with the parameters (both views' in the pair fit, which
+//! normalises both again at every evaluation). The Jacobian is a forward
 //! difference of that residual. A step is kept only when the true score, read
 //! again from a fresh render, rises; otherwise the damping grows and the step
 //! is tried again, and a stage that cannot rise keeps the parameters it was
@@ -181,18 +182,7 @@ pub(super) fn tilt_information<O: Objective>(
     p: &[f64],
     it: &Iteration,
 ) -> Matrix2<f64> {
-    let (_, frozen) = objective.freeze(p);
-    let Some(fz) = frozen else {
-        return Matrix2::zeros();
-    };
-    let mut r0 = Vec::new();
-    objective.residuals(&fz, p, &mut r0);
-    if r0.is_empty() {
-        return Matrix2::zeros();
-    }
-    let j = objective.jacobian(&fz, p, &r0, &steps_for(p.len(), it));
-    let n = j.transpose() * &j;
-    schur_tilt(&n)
+    normal_matrix(objective, p, it).map_or_else(Matrix2::zeros, |n| schur_tilt(&n))
 }
 
 /// The tilt block of `n` with the other parameters eliminated:
@@ -358,78 +348,119 @@ impl Objective for ViewFit<'_, '_, '_> {
     }
 }
 
-/// Every joined view against the reference with one shared tilt: parameters
-/// `[a, b, sx₁, sy₁, sx₂, sy₂, …]`, the score the mean of the views' robust
-/// grid scores. Each view's residual is scaled by `1/√m` for `m` views, so
-/// the sum of squares is `2 · (1 − mean score)`.
-pub(super) struct JointFit<'r, 'g, 'a> {
-    pub(super) views: Vec<ViewFit<'r, 'g, 'a>>,
+/// Two views against each other through one plane: parameters `[a, b, rx,
+/// ry]`, the first view at its held shift and the second at its held shift
+/// plus the relative shift `(rx, ry)`. The score is the robust cell score of
+/// the ZNCC between the two renders over the cells the reference is textured
+/// in. Both renders move with the tilt, so the residual normalises both sides
+/// afresh at every evaluation; only the samples, channels and cell weights
+/// are frozen.
+pub(super) struct PairFit<'r, 'g, 'a> {
+    pub(super) first: &'r ViewRender<'g, 'a>,
+    pub(super) second: &'r ViewRender<'g, 'a>,
+    pub(super) live: &'r [bool; 9],
+    /// Each view's shift against the reference, held, image px.
+    pub(super) shifts: [[f64; 2]; 2],
+    pub(super) min_coverage: f64,
 }
 
-impl JointFit<'_, '_, '_> {
-    /// View `i`'s own parameters `[a, b, sx, sy]` from the joint `p`.
-    fn own(p: &[f64], i: usize) -> [f64; 4] {
-        [p[0], p[1], p[2 + 2 * i], p[3 + 2 * i]]
-    }
-}
-
-impl Objective for JointFit<'_, '_, '_> {
-    type Frozen = Vec<Option<Vec<Block>>>;
-
-    fn freeze(&self, p: &[f64]) -> (f64, Option<Self::Frozen>) {
-        let m = self.views.len() as f64;
-        let mut total = 0.0;
-        let mut frozen = Vec::with_capacity(self.views.len());
-        for (i, view) in self.views.iter().enumerate() {
-            let (s, f) = view.freeze(&Self::own(p, i));
-            total += s;
-            frozen.push(f.map(|blocks| scaled(blocks, 1.0 / m)));
-        }
-        let any = frozen.iter().any(Option::is_some);
-        (total / m, any.then_some(frozen))
+impl PairFit<'_, '_, '_> {
+    /// Both views' renders over the whole grid at `p`.
+    fn renders(&self, p: &[f64]) -> (Samples, Samples) {
+        let tilt = [p[0], p[1]];
+        let rows = self.first.grid.all();
+        let a = self.first.render(tilt, self.shifts[0], &rows);
+        let second = [self.shifts[1][0] + p[2], self.shifts[1][1] + p[3]];
+        let b = self.second.render(tilt, second, &rows);
+        (a, b)
     }
 
-    fn residuals(&self, frozen: &Self::Frozen, p: &[f64], out: &mut Vec<f64>) {
-        for (i, (view, blocks)) in self.views.iter().zip(frozen).enumerate() {
-            if let Some(blocks) = blocks {
-                view.residuals(blocks, &Self::own(p, i), out);
-            }
-        }
-    }
-
-    /// Each view's own four columns, placed: the two tilt columns are shared
-    /// and a view's shift columns touch only its own rows.
-    fn jacobian(
-        &self,
-        frozen: &Self::Frozen,
-        p: &[f64],
-        r0: &[f64],
-        steps: &[f64],
-    ) -> DMatrix<f64> {
-        let mut j = DMatrix::zeros(r0.len(), p.len());
-        let mut row = 0;
-        for (i, (view, blocks)) in self.views.iter().zip(frozen).enumerate() {
-            let Some(blocks) = blocks else {
-                continue;
-            };
-            let own = Self::own(p, i);
-            let mut base = Vec::new();
-            view.residuals(blocks, &own, &mut base);
-            let own_steps = [steps[0], steps[1], steps[2 + 2 * i], steps[3 + 2 * i]];
-            let local = view.jacobian(blocks, &own, &base, &own_steps);
-            let cols = [0, 1, 2 + 2 * i, 3 + 2 * i];
-            for r in 0..base.len() {
-                for (c, &col) in cols.iter().enumerate() {
-                    j[(row + r, col)] = local[(r, c)];
-                }
-            }
-            row += base.len();
-        }
-        j
+    /// The robust score of `a` against `b` and each cell's weight.
+    fn score_of(&self, a: &Samples, b: &Samples) -> (f64, [f64; 9]) {
+        let cells: [Option<f64>; 9] = std::array::from_fn(|k| {
+            self.live[k].then(|| zncc(a, b, &self.first.grid.cells[k], self.min_coverage))
+        });
+        robust_score(&cells)
     }
 }
 
-/// `blocks` with each weight multiplied by `factor`.
-fn scaled(blocks: Vec<Block>, factor: f64) -> Vec<Block> {
-    blocks.into_iter().map(|b| b.weighted(factor)).collect()
+impl Objective for PairFit<'_, '_, '_> {
+    type Frozen = Vec<Block>;
+
+    fn freeze(&self, p: &[f64]) -> (f64, Option<Vec<Block>>) {
+        let (a, b) = self.renders(p);
+        let (score, weights) = self.score_of(&a, &b);
+        let total: f64 = weights.iter().sum();
+        let blocks: Vec<Block> = if total <= 0.0 {
+            Vec::new()
+        } else {
+            (0..9)
+                .filter(|&k| weights[k] > 0.0)
+                .filter_map(|k| {
+                    Block::freeze(
+                        &a,
+                        &b,
+                        &self.first.grid.cells[k],
+                        weights[k] / total,
+                        self.min_coverage,
+                    )
+                })
+                .collect()
+        };
+        (score, (!blocks.is_empty()).then_some(blocks))
+    }
+
+    fn residuals(&self, frozen: &Vec<Block>, p: &[f64], out: &mut Vec<f64>) {
+        let (a, b) = self.renders(p);
+        for block in frozen {
+            block.pair_residuals(&a, &b, out);
+        }
+    }
+}
+
+/// The normal matrix `JᵀJ` of `objective`'s frozen residual at `p`, over every
+/// parameter; `None` where nothing can be read.
+pub(super) fn normal_matrix<O: Objective>(
+    objective: &O,
+    p: &[f64],
+    it: &Iteration,
+) -> Option<DMatrix<f64>> {
+    let (_, frozen) = objective.freeze(p);
+    let fz = frozen?;
+    let mut r0 = Vec::new();
+    objective.residuals(&fz, p, &mut r0);
+    if r0.is_empty() {
+        return None;
+    }
+    let j = objective.jacobian(&fz, p, &r0, &steps_for(p.len(), it));
+    Some(j.transpose() * &j)
+}
+
+/// How the shifts of a fit whose normal matrix is `n`, over `[a, b, s…]`,
+/// move when the tilt moves by `dt` and the shifts are fitted again:
+/// `−N_ss⁻¹ N_st · dt`, the Gauss–Newton minimiser of the shifts at the new
+/// tilt. Zero where `N_ss` cannot be inverted.
+pub(super) fn shift_response(n: &DMatrix<f64>, dt: [f64; 2]) -> Vec<f64> {
+    let k = n.nrows();
+    if k <= 2 {
+        return Vec::new();
+    }
+    let nss = n.view((2, 2), (k - 2, k - 2)).into_owned();
+    let nst = n.view((2, 0), (k - 2, 2)).into_owned();
+    let scale = (0..k - 2)
+        .map(|i| nss[(i, i)])
+        .fold(0.0, f64::max)
+        .max(1e-12);
+    let mut reg = nss;
+    for i in 0..k - 2 {
+        reg[(i, i)] += 1e-12 * scale;
+    }
+    match reg.cholesky() {
+        Some(chol) => {
+            let rhs = nst * DVector::from_column_slice(&dt);
+            let x = chol.solve(&rhs);
+            x.iter().map(|v| -v).collect()
+        }
+        None => vec![0.0; k - 2],
+    }
 }

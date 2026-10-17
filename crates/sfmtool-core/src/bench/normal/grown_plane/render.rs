@@ -162,6 +162,35 @@ impl Grid {
             .collect()
     }
 
+    /// `view`'s photograph px per world unit at the anchor: the square root
+    /// of the area scale of the projection of the starting frame there, read
+    /// by a central difference of a hundredth of the frame's half-extent
+    /// along each axis. `NaN` where the anchor's neighbourhood does not
+    /// project.
+    pub(super) fn scale_px(&self, view: &ViewImage<'_>) -> f64 {
+        let h = 0.01 * self.placement.half_extent[0].max(1e-12);
+        let at = |d: Vector3<f64>| {
+            view.camera
+                .project_homogeneous(view.cam_from_world, self.anchor + d, 1.0)
+        };
+        let (Some(up), Some(un), Some(vp), Some(vn)) = (
+            at(self.u * h),
+            at(-self.u * h),
+            at(self.v * h),
+            at(-self.v * h),
+        ) else {
+            return f64::NAN;
+        };
+        let du = [(up[0] - un[0]) / (2.0 * h), (up[1] - un[1]) / (2.0 * h)];
+        let dv = [(vp[0] - vn[0]) / (2.0 * h), (vp[1] - vn[1]) / (2.0 * h)];
+        (du[0] * dv[1] - du[1] * dv[0]).abs().sqrt()
+    }
+
+    /// The working grid's samples per world unit on the starting frame.
+    pub(super) fn density(&self) -> f64 {
+        self.side as f64 / (2.0 * self.placement.half_extent[0])
+    }
+
     /// Where the anchor lands in `view`'s photograph, full-resolution px.
     pub(super) fn anchor_pixel(&self, view: &ViewImage<'_>) -> Option<[f64; 2]> {
         view.camera
@@ -518,12 +547,6 @@ impl Block {
         })
     }
 
-    /// The block with its weight multiplied by `factor`.
-    pub(super) fn weighted(mut self, factor: f64) -> Block {
-        self.scale *= factor.max(0.0).sqrt();
-        self
-    }
-
     /// Append the block's residuals for `view` to `out`.
     pub(super) fn residuals(&self, view: &Samples, out: &mut Vec<f64>) {
         let n = self.rows.len();
@@ -536,6 +559,24 @@ impl Block {
                     .iter()
                     .zip(&unit)
                     .map(|(a, b)| self.scale * (a - b)),
+            );
+        }
+    }
+}
+
+impl Block {
+    /// Append the block's residuals between two views' renders to `out`:
+    /// `first` normalised afresh over the block's samples and channels in
+    /// place of the frozen reference, less `second` normalised the same way.
+    pub(super) fn pair_residuals(&self, first: &Samples, second: &Samples, out: &mut Vec<f64>) {
+        for &c in &self.channels {
+            let a: Vec<f64> = self.rows.iter().map(|&k| first.at(k, c)).collect();
+            let b: Vec<f64> = self.rows.iter().map(|&k| second.at(k, c)).collect();
+            out.extend(
+                unit_centred(&a)
+                    .iter()
+                    .zip(&unit_centred(&b))
+                    .map(|(x, y)| self.scale * (x - y)),
             );
         }
     }
