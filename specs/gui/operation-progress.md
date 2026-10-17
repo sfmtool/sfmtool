@@ -172,7 +172,29 @@ pub enum Level { Info, Warn }
 /// The caller asked the operation to stop. Each kernel error type carries it,
 /// as a variant or a `From`, so `?` propagates a cancellation like any failure.
 pub struct Cancelled;
+
+/// A sink that keeps every phase one call opened and closed, for a caller
+/// that wants the list afterwards: `record` takes each event, `phases` gives
+/// the closed ones in the order entered.
+pub struct PhaseLog { /* the moment it was made, and its slots */ }
+pub struct LoggedPhase {
+    pub name: &'static str,
+    pub depth: u8,
+    pub note: Option<String>,
+    pub start: Duration, // when its Enter arrived, from the log's making
+    pub took: Duration,  // its Leave's duration
+    pub messages: Vec<(Level, String)>,
+}
 ```
+
+`PhaseLog` ([phase_log.rs](../../crates/sfmtool-progress/src/phase_log.rs))
+gives a phase a slot when its `Enter` arrives, the slot open at its depth, and
+fills it from its `Leave`, so a phase always comes before the phases inside it
+and its start is the enter's. A message goes to the phase open one depth above
+it. One slot per depth is what a call reporting from one thread at a time
+needs; it is not a collector for phases opened concurrently at one depth. The
+Python bindings use it to hand a step's phases back
+([python-bindings.md](../python-bindings.md)).
 
 A caller that wants nothing passes `&Progress::none()`, whose every method is a
 branch on a null sink. That is what makes this affordable to put on functions

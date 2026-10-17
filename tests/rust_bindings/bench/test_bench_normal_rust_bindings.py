@@ -409,6 +409,11 @@ class TestGrownPlaneNormal:
         phases = report.pop("phases")
         _assert_same(report, plain)
         np.testing.assert_array_equal(_normal(turned), _normal(plain_track))
+        # The keypoints the step wrote are the same too.
+        _assert_same(
+            [o["track"] for o in turned.observations],
+            [o["track"] for o in plain_track.observations],
+        )
 
         assert phases
         for phase in phases:
@@ -427,6 +432,13 @@ class TestGrownPlaneNormal:
         names = [phase["name"] for phase in phases]
         assert names[0] == "grown plane normal"
         assert phases[0]["depth"] == 0
+        # In entry order: each phase follows the phase it is inside, and
+        # starts no earlier.
+        for k, phase in enumerate(phases[1:], start=1):
+            parent = next(
+                p for p in reversed(phases[:k]) if p["depth"] + 1 == phase["depth"]
+            )
+            assert parent["start_s"] <= phase["start_s"]
         seq = report["estimate"]
         assert names.count("grown plane view") == len(seq["trace"])
         growths = sum(len(entry["attempts"]) for entry in seq["trace"])

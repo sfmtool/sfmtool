@@ -103,6 +103,9 @@ use std::fmt;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
+mod phase_log;
+pub use phase_log::{LoggedPhase, PhaseLog};
+
 #[cfg(test)]
 mod tests;
 

@@ -1066,12 +1066,12 @@ fn grid_plane_normal(
 ///
 /// With ``record_phases=True`` (default ``False``; the result is the same
 /// either way) the step runs with a detailed progress record, and the report
-/// also carries ``phases``: one dict per phase the step closed, by start, a
-/// phase before the phases inside it, each with ``name``, ``depth``, ``note``
-/// (what the phase did, or ``None``), ``start_s`` and ``duration_s``
-/// (seconds, the start from the beginning of the call) and ``messages`` (a
-/// list of dicts with ``level`` and ``text``). Without it the report has no
-/// ``phases``.
+/// also carries ``phases``: one dict per phase the step closed, in the order
+/// entered, a phase before the phases inside it, each with ``name``,
+/// ``depth``, ``note`` (what the phase did, or ``None``), ``start_s`` (seconds
+/// from the beginning of the call to the phase's entry), ``duration_s``
+/// (seconds) and ``messages`` (a list of dicts with ``level`` and ``text``).
+/// Without it the report has no ``phases``.
 ///
 /// Raises ``ValueError`` with the reason when the step is refused, including a
 /// setting it does not take.

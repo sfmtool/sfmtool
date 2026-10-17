@@ -3874,7 +3874,8 @@ one dict per observation whose `kind` names the `GrownPlaneView`:
 `reason` word). Keypoints and vectors are float64 arrays, and a field the
 Rust report leaves `None` is `None`. `grown_plane_normal(...,
 record_phases=True)` runs the step with a detailed `Progress` and adds
-`phases` to the report, one dict per phase the step closed, by start, with
+`phases` to the report, one dict per phase the step closed, in the order
+entered, a phase before the phases inside it, with
 `name`, `depth`, `note`, `start_s`, `duration_s` and `messages`; without it
 the step runs with `Progress::none()` and the report has no `phases`. The
 result is the same either way.

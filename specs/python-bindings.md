@@ -31,11 +31,13 @@ calls ([explorer-command.md](cli/visualization/explorer-command.md)):
 A binding that hands a step's phases back to Python runs the step with a
 detailed `Progress` whose sink is a `PhaseRecord`
 ([phase_record.rs](../crates/sfmtool-py/src/phase_record.rs)), and puts the
-record's list in its report: one dict per closed phase, by start, with
-`name`, `depth`, `note`, `start_s`, `duration_s` and `messages`. The record
-keeps each phase when it closes and takes its start as the close less its
-duration, so it matches no `Enter` against a `Leave`; it gives a message to
-the next phase to close one depth above it, which holds for a call that
+record's list in its report: one dict per closed phase, in the order
+entered, with `name`, `depth`, `note`, `start_s`, `duration_s` and
+`messages`. The keeping is `sfmtool_progress::PhaseLog`'s: a phase takes the
+slot open at its depth when its `Enter` arrives and fills it when its `Leave`
+does, so a phase comes before the phases inside it, `start_s` is the time of
+the `Enter` and `duration_s` the `Leave`'s duration, and a message goes to the
+phase open one depth above it. One slot per depth holds for a call that
 reports from one thread at a time. `grown_plane_normal(...,
 record_phases=True)` is the one binding that offers it
 ([editable-track.md](core/bench/editable-track.md) § "Python bindings").
