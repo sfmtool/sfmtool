@@ -2940,13 +2940,13 @@ proposed in
 ### Estimating the normal
 
 A fit moves the patch along the sightings' rays and keeps the way it faces.
-Three steps do the opposite: each estimates which way the surface under the patch
+Four steps do the opposite: each estimates which way the surface under the patch
 faces, turns the patch to that normal with `tilt_patch` (§ "Placing, sizing and
 turning by hand"), and ends as a fit does, by reading the track back, rendering
 its stored bitmap over the turned square and scoring every row against it. The
 centre does not move, the turn is the
 least rotation, and it stops where `tilt_patch`'s cap stops it, which the
-`NormalReport`'s `tilt` says. All three take the track stage only, refuse a track at
+`NormalReport`'s `tilt` says. All four take the track stage only, refuse a track at
 infinity (whose patch faces along its own bearing) and need two `in`
 observations; `normal_preconditions` is that half of their validation.
 
@@ -3148,6 +3148,22 @@ normal. A grid of exactly 32 ends 0.1 to 0.3 degrees from it, and the
 32 ends 0.1 to 0.25 degrees off from four starts; the default grid turns from
 two of the four, 0.24 and 0.13 degrees off, and leaves the other two
 unchanged as unstable.
+
+**`grown_plane_normal` fits one plane shared by every view to the
+photographs.** It is the step
+[grown-plane-normal.md](../../drafts/grown-plane-normal.md) designs, still
+being evaluated, and so far only a library step: no binding, Track View entry
+or wire method calls it. It takes the reference and the working grid by
+`grid_plane_normal`'s rules, and for each other `in` view, nearest the
+reference in angle first, fits the plane's tilt and the view's image shift so
+that the view's samples through the plane agree with the reference's by ZNCC,
+over a window that grows from the grid's centre to the whole grid. A view
+joins when its own plane agrees with the one the views before it share,
+within the two planes' precision. Unlike `grid_plane_normal` it turns the
+patch whenever one view joined, however low the plane's precision, and
+reports that precision in `NormalEstimate::GrownPlane`; and between the turn
+and the read-back it writes the reference's keypoint as it was and each joined
+view's where the plane and its shift put the patch.
 
 The photometric estimate and the finite difference differ in what they can be
 fooled by. The photometric one
