@@ -70,8 +70,9 @@ pub struct GrownPlaneNormalOptions {
     /// [`Self::keypoint_search_px`] reaches this ZNCC, or the best is on its
     /// edge. 0.7.
     pub min_keypoint_zncc: f64,
-    /// The widened search's bound about zero shift, image px: also the whole
-    /// search of a view with no keypoint. 12.
+    /// The widened search's bound about the keypoint-implied shift, image px:
+    /// also the whole search of a view with no keypoint, which runs about zero
+    /// shift. 12.
     pub spot_search_px: f64,
     /// The step of both searches, image px. 0.5.
     pub spot_search_step_px: f64,
@@ -195,9 +196,11 @@ pub enum GrownPlaneStart {
     Keypoint,
     /// The search about the keypoint found no shift reaching
     /// [`GrownPlaneNormalOptions::min_keypoint_zncc`], or its best was on the
-    /// edge, so it widened to [`GrownPlaneNormalOptions::spot_search_px`].
+    /// edge, so it widened to [`GrownPlaneNormalOptions::spot_search_px`]
+    /// about the same keypoint-implied shift.
     Widened,
-    /// The view has no keypoint, so the whole search ran about zero shift.
+    /// The view has no keypoint, or the anchor does not project into it, so
+    /// the whole search ran about zero shift.
     NoKeypoint,
 }
 
@@ -1003,8 +1006,9 @@ impl Sequence<'_, '_, '_> {
     }
 
     /// The first window's shift at the plane `tilt`: the exhaustive search
-    /// about the keypoint-implied shift, widened about zero when it finds
-    /// nothing; its ZNCC, the shift and how it was found.
+    /// about the keypoint-implied shift, widened about the same shift when it
+    /// finds nothing, or about zero shift for a view with no keypoint; its
+    /// ZNCC, the shift and how it was found.
     fn first_window(
         &self,
         i: usize,
@@ -1042,7 +1046,7 @@ impl Sequence<'_, '_, '_> {
                 if z >= self.options.min_keypoint_zncc && off < reach - 1e-9 {
                     return (z, t, GrownPlaneStart::Keypoint);
                 }
-                let (z, t) = search([0.0; 2], wide);
+                let (z, t) = search(base, wide);
                 (z, t, GrownPlaneStart::Widened)
             }
             None => {

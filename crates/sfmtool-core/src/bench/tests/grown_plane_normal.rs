@@ -5,7 +5,8 @@
 //! that look at the point from around it: a textured plane seen out to 50
 //! degrees, one view whose top cells see something else, views all within a
 //! few degrees, a view that sees another plane, repeating texture seen from
-//! poses that are off, and a flat wall.
+//! poses that are off, keypoints off the content in views whose poses are
+//! further off, and a flat wall.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -368,8 +369,8 @@ fn checker(x: f64, y: f64) -> f64 {
 /// On repeating texture, with each view's pose turned so that its content
 /// sits 6 to 7 px from where the pose projects the point and its keypoint on
 /// the content, the first window started from each view's keypoint takes the
-/// right shift; searched from zero instead it takes a period off in some
-/// view.
+/// right shift; widened at once to the full search about the keypoint
+/// instead, it takes a period off in some view.
 #[test]
 fn the_keypoint_start_takes_the_right_peak_on_repeating_texture() {
     let centres = vec![
@@ -429,18 +430,82 @@ fn the_keypoint_start_takes_the_right_peak_on_repeating_texture() {
     assert!(worst < 0.75, "{worst:.2} px: {sequence:#?}");
 
     // A search bound of nothing about the keypoint always widens to the
-    // search about zero shift.
-    let from_zero = GrownPlaneNormalOptions {
+    // full search about it.
+    let widened = GrownPlaneNormalOptions {
         keypoint_search_px: 0.0,
         ..Default::default()
     };
-    let (sequence, worst) = written_off(&from_zero);
+    let (sequence, worst) = written_off(&widened);
     for view in &sequence.views {
         if let GrownPlaneView::Joined { start, .. } = view {
             assert_eq!(*start, GrownPlaneStart::Widened, "{sequence:#?}");
         }
     }
     assert!(worst > 4.0, "{worst:.2} px: {sequence:#?}");
+}
+
+/// With each view's pose turned so that its content sits about 16 px from
+/// where the pose projects the point, past the widened search's 12 px about
+/// zero shift, and each keypoint 6 px off the content, past the 3 px search
+/// about the keypoint, every view widens about its keypoint-implied shift,
+/// finds the content and is written on it.
+#[test]
+fn the_widened_search_is_centred_on_the_keypoint() {
+    let centres = vec![
+        centre(0.0, 0.0),
+        centre(20.0, 0.0),
+        centre(25.0, 120.0),
+        centre(30.0, 240.0),
+    ];
+    let mut scene = Scene::looking_at(&centres, WORLD, camera(), textured_plane);
+    // Where each photograph shows the point, before the poses are turned.
+    let content: Vec<[f64; 2]> = (0..scene.len()).map(|i| scene.project(i, WORLD)).collect();
+    // About 16 px at a focal length of 160.
+    let angle = 16.0f64 / 160.0;
+    scene.misplace_camera(1, angle, 0.0);
+    scene.misplace_camera(2, 0.0, angle);
+    scene.misplace_camera(3, -angle, 0.0);
+    // Each keypoint 6 px off the content along one axis and 2 px along the
+    // other.
+    let keypoint_offsets = [[0.0, 0.0], [6.0, 2.0], [-2.0, 6.0], [-6.0, -2.0]];
+    let edited = edited_of(&scene);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let mut track = track_of(&bench, &label);
+    for observation in &mut track.observations {
+        let i = observation.image as usize;
+        let (p, o) = (content[i], keypoint_offsets[i]);
+        observation.track = Some(TrackMeasurement {
+            keypoint: Some([(p[0] + o[0]) as f32, (p[1] + o[1]) as f32]),
+            ..TrackMeasurement::default()
+        });
+    }
+    // The content's shift from the pose's projection is past the widened
+    // search's bound about zero along some axis, so a search centred on zero
+    // shift could not reach it.
+    for (i, &at) in content.iter().enumerate().skip(1) {
+        let projected = scene.project(i, WORLD);
+        let off = (at[0] - projected[0])
+            .abs()
+            .max((at[1] - projected[1]).abs());
+        assert!(off > 13.0, "image {i}: {off:.2} px");
+    }
+    // The reference is the camera whose pose is right.
+    let (track, _) = set_reference(&track, row_of(&track, 0)).expect("an in row");
+
+    let (turned, report) = run(&scene, &edited, &track, &GrownPlaneNormalOptions::default());
+    let sequence = sequence_of(&report);
+    assert_eq!(sequence.joined(), 3, "{sequence:#?}");
+    for (row, view) in sequence.views.iter().enumerate() {
+        if let GrownPlaneView::Joined { start, .. } = view {
+            assert_eq!(*start, GrownPlaneStart::Widened, "{sequence:#?}");
+            let truth = content[track.observations[row].image as usize];
+            let held = keypoint_of(&turned, row).expect("written");
+            assert!(
+                distance_px(held, truth) < 0.75,
+                "row {row}: {held:?} vs {truth:?}: {sequence:#?}"
+            );
+        }
+    }
 }
 
 /// A flat wall: no view joins, and the normal and every keypoint are left as
