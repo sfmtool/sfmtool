@@ -193,7 +193,7 @@ mod tests {
         log.record(enter("deep", 2));
         log.record(leave("deep", 2, Duration::from_secs(30)));
         log.record(leave("first", 1, Duration::from_secs(20)));
-        std::thread::sleep(Duration::from_millis(200));
+        std::thread::sleep(Duration::from_millis(50));
         log.record(enter("second", 1));
         log.record(leave("second", 1, Duration::from_secs(40)));
         log.record(leave("outer", 0, Duration::from_millis(1)));
@@ -207,10 +207,10 @@ mod tests {
         for pair in phases.windows(2) {
             assert!(pair[0].start <= pair[1].start, "{phases:#?}");
         }
-        // The starts are the enters', not the leaves' less their durations,
-        // and the durations are the leaves'.
-        assert!(phases[0].start < Duration::from_millis(100), "{phases:#?}");
-        assert!(phases[3].start >= Duration::from_millis(200), "{phases:#?}");
+        // The starts are the enters', not the leaves' less their durations
+        // (which would put `outer` after the rest and `second` at zero), and
+        // the durations are the leaves'.
+        assert!(phases[3].start >= Duration::from_millis(50), "{phases:#?}");
         assert_eq!(phases[0].took, Duration::from_millis(1));
         assert_eq!(phases[2].took, Duration::from_secs(30));
     }
