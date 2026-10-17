@@ -1006,8 +1006,8 @@ fn grid_plane_normal(
 /// implies, widened to ``spot_search_px`` (default 12.0) when no shift reaches
 /// ``min_keypoint_zncc`` (default 0.7) or the best is on the edge, in steps of
 /// ``spot_search_step_px`` (default 0.5); the window then grows through
-/// ``window_fractions`` of the grid's side (default ``[1/8, 1/5, 1/3, 1/2]``),
-/// with tilt and shift fitted by Levenberg-Marquardt at each size
+/// half-widths of ``window_fractions`` of the grid's side (default
+/// ``[1/8, 1/5, 1/3, 1/2]``, ``1/2`` covering the whole grid), with tilt and shift fitted by Levenberg-Marquardt at each size
 /// (``max_iterations``, default 20, ``initial_damping``, default 1e-3,
 /// ``min_improvement``, default 1e-6, and the Jacobian steps
 /// ``jacobian_tilt_step``, default 1e-3, and ``jacobian_shift_step_px``,

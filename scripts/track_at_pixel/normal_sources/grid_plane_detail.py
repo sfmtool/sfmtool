@@ -193,7 +193,8 @@ def main():
     grown_options = grown_options_of(args)
     names = [f"{k}={v}" for k, v in new_options.items()]
     if grown_options:
-        names.append("grown-" + ",".join(f"{k}={v}" for k, v in grown_options.items()))
+        # As written, so a list keeps its commas and no brackets or spaces.
+        names.append("grown-" + ",".join(args.grown_opt))
     label = args.label or (",".join(names) or "defaults")
     from sfmtool.reconstruction import EditedReconstruction
 
