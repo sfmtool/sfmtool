@@ -1,29 +1,32 @@
 # Copyright The SfM Tool Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Compare the cell-registered grid-plane normal with today's Grid Plane Normal.
+"""Compare the cell-registered and grown-plane normals with today's Grid Plane Normal.
 
 At each finite ground-truth point seen in two or more images, the point is put
 on the bench at its ground-truth position, sightings and half-extent, its patch
 turned to the mean viewing direction (as ``normal_diag.py``'s ``mean_view``),
-and fitted once with the bench ``fit``. From that one fitted track two steps
-are run:
+and fitted once with the bench ``fit``. From that one fitted track two steps,
+or three, are run:
 
 - ``old``: ``finite_difference_normal`` with ``layout="grid"``, 2x2 pieces and
   no overlap, Track View's default Grid Plane Normal (``--old-pieces`` sets the
   pieces per axis); ``--also-old-pieces N``, repeated, runs it again at ``N``
   pieces per axis into ``old{N}_*`` fields beside the ``old_*`` ones;
 - ``new``: ``grid_plane_normal`` at its defaults, or with the keywords
-  ``--new-opt`` gives.
+  ``--new-opt`` gives;
+- ``grown``, with ``--grown``: ``grown_plane_normal`` at its defaults, or with
+  the keywords ``--grown-opt`` gives (which implies ``--grown``).
 
 The angle of each normal to the ground-truth normal is folded to 0..90 degrees
 (both turned to face the first sighting's camera, as in ``normal_diag.py``).
 A fit leaves the normal where it was, so the fitted track's error is the
-mean-view start's, the baseline both steps start from.
+mean-view start's, the baseline every step starts from.
 
     pixi run -e test python scripts/track_at_pixel/normal_sources/grid_plane_eval.py \\
         DATASET --out DIR [--limit N] [--seed S] [--start ground_truth] [--no-fit] \\
-        [--old-pieces N] [--also-old-pieces N ...] [--new-opt KEY=VALUE ...]
+        [--old-pieces N] [--also-old-pieces N ...] [--new-opt KEY=VALUE ...] \\
+        [--grown] [--grown-opt KEY=VALUE ...]
 
 ``DATASET`` is a name ``dataset.py`` knows (``seoul_bull``) or the path of a
 ground-truth ``.sfmr``; ``prepare`` copies it into its cache workspace. Rows go
@@ -36,13 +39,29 @@ with its error; ``DIR/cameras.json`` holds each image's name, centre,
 world-from-camera rotation and lens summary, and the workspace directories the
 image names are relative to: the cache's and the source's.
 ``--new-opt KEY=VALUE``, repeated, passes a keyword to ``grid_plane_normal``
-(``max_iterations=8``, ``acceptance=none``, ``cell_shift_bound_px=4``, ...).
+(``max_iterations=8``, ``acceptance=none``, ``cell_shift_bound_px=4``, ...),
+and ``--grown-opt KEY=VALUE`` one to ``grown_plane_normal``
+(``min_held_zncc=0.6``, ``window_fractions=0.125,0.5``, ...); a value with a
+comma is read as a list of numbers.
+
+The grown step's fields are ``grown_deg`` (its error to the ground truth),
+``grown_outcome`` (``"turned"``, ``"unchanged"`` when no view joined, or
+``"refused"``), ``grown_sigma_weak_deg`` and ``grown_sigma_strong_deg``
+(``None`` when no view joined), ``grown_low_confidence``, ``grown_joined``,
+``grown_left_out``, ``grown_view_kinds`` (a count of each per-view word),
+``grown_left_out_reasons``, ``grown_written``, ``grown_working_resolution``,
+``grown_window_half_widths``, ``grown_turned_deg``, ``grown_ms`` (the call's
+wall time), ``grown_text``, ``grown_frame`` and ``grown_trace``, one entry
+per try with its shared plane's error (``shared_deg``) and each attempt's own
+plane's error (``own_deg``) to the ground truth. The summary adds the grown
+step's errors, outcomes, confidence, views joined, and on how many points it
+beats ``old``.
 
 With ``--limit`` the first ``N`` points are run, or with ``--seed`` a random
 sample of ``N``. Two controls change the start, each adding a suffix to the
-file name: ``--start ground_truth`` (``_from_gt``) starts both steps from the
+file name: ``--start ground_truth`` (``_from_gt``) starts every step from the
 ground-truth normal instead of the mean view, which shows how far each moves
-off it, and ``--no-fit`` (``_no_fit``) skips the fit, so both steps start from
+off it, and ``--no-fit`` (``_no_fit``) skips the fit, so every step starts from
 the ground-truth position and keypoints.
 """
 
@@ -146,7 +165,7 @@ def run_old(row, prefix, track, edited, ds, pieces, to_cam, gt):
 
 
 def start_track(ds, edited, p, *, fit=True, start="mean_view"):
-    """The point's start: its row so far, and the track both steps run from.
+    """The point's start: its row so far, and the track every step runs from.
 
     The point is put on the bench at its ground-truth position, sightings and
     half-extent, turned to ``start`` (the mean viewing direction, or the
@@ -268,6 +287,88 @@ def run_new(row, track, edited, ds, new_options, to_cam, gt):
     return report
 
 
+def run_grown(row, track, edited, ds, grown_options, to_cam, gt):
+    """``grown_plane_normal`` with ``grown_options`` into ``grown_*``; its report.
+
+    Returns the step's report, or ``None`` when it refused.
+    """
+    from sfmtool import bench as B
+
+    def error(normal):
+        return angle(face(unit(np.asarray(normal, float)), to_cam), gt)
+
+    t0 = time.perf_counter()
+    try:
+        grown, report = B.grown_plane_normal(
+            track, edited, ds.pyramids, **(grown_options or {})
+        )
+    except ValueError as e:
+        row["grown_ms"] = 1000 * (time.perf_counter() - t0)
+        row["grown_outcome"] = "refused"
+        row["grown_reason"] = str(e)
+        row["grown_deg"] = row["start_deg"]
+        return None
+    row["grown_ms"] = 1000 * (time.perf_counter() - t0)
+    seq = report["estimate"]
+    row["grown_outcome"] = "turned" if seq["turned"] else "unchanged"
+    row["grown_text"] = report["text"]
+    row["grown_working_resolution"] = seq["working_resolution"]
+    row["grown_window_half_widths"] = seq["window_half_widths"]
+    row["grown_joined"] = seq["joined"]
+    row["grown_left_out"] = seq["left_out"]
+    row["grown_written"] = seq["written"]
+    precision = seq["precision"]
+    row["grown_sigma_weak_deg"] = (
+        None if precision is None else precision["sigma_weak_deg"]
+    )
+    row["grown_sigma_strong_deg"] = (
+        None if precision is None else precision["sigma_strong_deg"]
+    )
+    row["grown_low_confidence"] = (
+        None if precision is None else precision["low_confidence"]
+    )
+    kinds = {}
+    for view in seq["views"]:
+        kinds[view["kind"]] = kinds.get(view["kind"], 0) + 1
+    row["grown_view_kinds"] = kinds
+    row["grown_left_out_reasons"] = [
+        v["reason"] for v in seq["views"] if v["kind"] == "left_out"
+    ]
+    trace = []
+    for entry in seq["trace"]:
+        shared = entry["shared_normal"]
+        trace.append(
+            {
+                "observation": entry["observation"],
+                "image": entry["image"],
+                "angle_deg": entry["angle_deg"],
+                "outcome": entry["outcome"],
+                "shared_deg": None if shared is None else error(shared),
+                "shared_sigma_deg": entry["shared_sigma_deg"],
+                "attempts": [
+                    {
+                        "from_start": a["from_start"],
+                        "start": a["start"],
+                        "stage_zncc": a["stage_zncc"].tolist(),
+                        "shift": a["shift"].tolist(),
+                        "own_deg": error(a["normal"]),
+                        "grid_zncc": a["grid_zncc"],
+                        "distance": a["distance"],
+                        "held_zncc": a["held_zncc"],
+                        "sigma_deg": a["sigma_deg"],
+                        "refusal": a["refusal"],
+                    }
+                    for a in entry["attempts"]
+                ],
+            }
+        )
+    row["grown_trace"] = trace
+    row["grown_turned_deg"] = report["tilt"]["degrees"]
+    row["grown_deg"] = angle(face(patch_normal(grown), to_cam), gt)
+    row["grown_frame"] = frame(grown)
+    return report
+
+
 def run_point(
     ds,
     edited,
@@ -278,8 +379,13 @@ def run_point(
     new_options=None,
     old_pieces=2,
     also_old_pieces=(),
+    grown_options=None,
 ):
-    """One row: the start, the fit, and each step from the fitted track."""
+    """One row: the start, the fit, and each step from the fitted track.
+
+    ``grown_options`` ``None`` leaves the grown step out; a dict, empty for
+    its defaults, runs it.
+    """
     row, track, to_cam, gt = start_track(ds, edited, p, fit=fit, start=start)
     if track is None:
         return row
@@ -289,6 +395,8 @@ def run_point(
         run_old(row, f"old{pieces}", track, edited, ds, pieces, to_cam, gt)
 
     run_new(row, track, edited, ds, new_options, to_cam, gt)
+    if grown_options is not None:
+        run_grown(row, track, edited, ds, grown_options, to_cam, gt)
     return row
 
 
@@ -325,6 +433,9 @@ def summarize(name, rows):
     for key in extra_old_keys(rows):
         print(f"  {key:18s} {stats(r.get(key + '_deg') for r in ok)}")
     print(f"  new grid_plane     {stats(r['new_deg'] for r in ok)}")
+    grown = any("grown_deg" in r for r in ok)
+    if grown:
+        print(f"  grown_plane        {stats(r['grown_deg'] for r in ok)}")
     old_ok = [r for r in ok if r["old_ok"]]
     print(f"old step: {len(old_ok)} turned, {len(ok) - len(old_ok)} refused")
     if old_ok:
@@ -356,7 +467,10 @@ def summarize(name, rows):
             np.median([r["old_ms"] for r in ok]),
             np.median([r["new_ms"] for r in ok]),
         )
+        + (f", grown {np.median([r['grown_ms'] for r in ok]):.0f}" if grown else "")
     )
+    if grown:
+        summarize_grown(ok)
     resolutions = {}
     for r in ok:
         k = r.get("new_working_resolution")
@@ -382,17 +496,71 @@ def summarize(name, rows):
         print(f"  old refused: {refused}")
 
 
+def summarize_grown(ok):
+    """The grown step's outcomes, precision and views, and how it does against old."""
+    print("grown step outcomes")
+    for outcome in ("turned", "unchanged", "refused"):
+        n = sum(r["grown_outcome"] == outcome for r in ok)
+        print(f"  {outcome:12s} {n:4d}  {n / max(len(ok), 1):5.1%}")
+    turned = [r for r in ok if r["grown_outcome"] == "turned"]
+    low = [r for r in turned if r["grown_low_confidence"]]
+    print(f"  low confidence {len(low)} of {len(turned)} turned")
+    confident = [r for r in turned if not r["grown_low_confidence"]]
+    print(f"  confident          {stats(r['grown_deg'] for r in confident)}")
+    print(f"  low confidence     {stats(r['grown_deg'] for r in low)}")
+    joined = sum(r.get("grown_joined", 0) for r in ok)
+    tried = sum(r.get("grown_joined", 0) + r.get("grown_left_out", 0) for r in ok)
+    print(f"  views joined {joined} of {tried} tried")
+    beats = sum(r["grown_deg"] < r["old_deg"] for r in ok)
+    print(f"  grown beats old grid on {beats} of {len(ok)} points")
+    worst = sorted(ok, key=lambda r: -r["grown_deg"])[:10]
+    print(
+        "  worst grown: "
+        + ", ".join(f"{r['point']} ({r['grown_deg']:.1f})" for r in worst)
+    )
+
+
 def parse_option(text):
-    """``key=value`` with the value read as an int, a float, ``None`` or a word."""
+    """``key=value`` with the value read as an int, a float, ``None``, a list of
+    floats when it holds a comma (``window_fractions=0.125,0.5``) or a word."""
     key, _, value = text.partition("=")
     if not key or not _:
-        raise SystemExit(f"--new-opt takes key=value, not {text!r}")
+        raise SystemExit(f"an option takes key=value, not {text!r}")
+    if "," in value:
+        try:
+            return key, [float(v) for v in value.split(",") if v]
+        except ValueError:
+            raise SystemExit(f"{key} takes numbers separated by commas, not {value!r}")
     for kind in (int, float):
         try:
             return key, kind(value)
         except ValueError:
             pass
     return key, None if value == "None" else value
+
+
+def add_grown_arguments(ap):
+    """``--grown`` and ``--grown-opt``, shared with ``grid_plane_detail.py``."""
+    ap.add_argument(
+        "--grown",
+        action="store_true",
+        help="also run grown_plane_normal, into grown_* fields",
+    )
+    ap.add_argument(
+        "--grown-opt",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="a grown_plane_normal keyword, repeated (min_held_zncc=0.6, "
+        "max_agreement_distance=4, ...); implies --grown",
+    )
+
+
+def grown_options_of(args):
+    """The grown step's keywords, or ``None`` when it is not run."""
+    if not (args.grown or args.grown_opt):
+        return None
+    return dict(parse_option(o) for o in args.grown_opt)
 
 
 def main():
@@ -405,12 +573,12 @@ def main():
         "--start",
         choices=("mean_view", "ground_truth"),
         default="mean_view",
-        help="the normal both steps start from; ground_truth is a control",
+        help="the normal every step starts from; ground_truth is a control",
     )
     ap.add_argument(
         "--no-fit",
         action="store_true",
-        help="run both steps from the turned ground-truth track, unfitted",
+        help="run every step from the turned ground-truth track, unfitted",
     )
     ap.add_argument(
         "--old-pieces",
@@ -434,8 +602,10 @@ def main():
         help="a grid_plane_normal keyword, repeated (max_iterations=8, "
         "acceptance=none, cell_shift_bound_px=4, ...)",
     )
+    add_grown_arguments(ap)
     args = ap.parse_args()
     new_options = dict(parse_option(o) for o in args.new_opt)
+    grown_options = grown_options_of(args)
     from sfmtool.reconstruction import EditedReconstruction
 
     prepared = prepare(args.dataset, None, quiet=True)
@@ -474,8 +644,11 @@ def main():
                 new_options=new_options,
                 old_pieces=args.old_pieces,
                 also_old_pieces=args.also_old_pieces,
+                grown_options=grown_options,
             )
             row["new_options"] = new_options
+            if grown_options is not None:
+                row["grown_options"] = grown_options
             rows.append(row)
             sink.write(json.dumps(row) + "\n")
             if k % 50 == 0:

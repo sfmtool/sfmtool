@@ -15,11 +15,16 @@ starts:
 
 Today's Grid Plane Normal (``finite_difference_normal`` with
 ``layout="grid"``) is run from the same track at 2x2 and 3x3 pieces into the
-``old_*`` and ``old3_*`` fields, as the evaluation names them.
+``old_*`` and ``old3_*`` fields, as the evaluation names them. With
+``--grown``, ``grown_plane_normal`` is run from the same track too, into the
+evaluation's ``grown_*`` fields (its error, ``σ``, confidence, views joined
+and left out, wall time and per-try trace); ``--grown-opt KEY=VALUE``,
+repeated, passes it a keyword and implies ``--grown``.
 
     pixi run -e test python scripts/track_at_pixel/normal_sources/grid_plane_detail.py \\
         DATASET POINT [POINT ...] --out DIR [--label NAME] \\
-        [--start mean_view|ground_truth ...] [--new-opt KEY=VALUE ...]
+        [--start mean_view|ground_truth ...] [--new-opt KEY=VALUE ...] \\
+        [--grown] [--grown-opt KEY=VALUE ...]
 
 ``DATASET`` is a name ``dataset.py`` knows (``seoul_bull``) or the path of a
 ground-truth ``.sfmr``, as for ``grid_plane_eval.py``; ``prepare`` copies it
@@ -30,11 +35,13 @@ keyword to ``grid_plane_normal``, as in the evaluation. ``--start``, repeated,
 picks the starts (both by default).
 
 Output goes to ``DIR/<start>/<label>/``, with ``<label>`` ``defaults`` when no
-``--new-opt`` is given and otherwise the options joined (or ``--label``):
+``--new-opt`` or ``--grown-opt`` is given and otherwise the options joined,
+the grown step's after ``grown-`` (or ``--label``):
 
 - ``point_<index>.json``: the evaluation's row for the point (``old_*``,
-  ``old3_*`` and ``new_*`` fields, the trace with each proposal's error to the
-  ground truth), plus ``point_id``, ``start``, ``new_options`` and
+  ``old3_*``, ``new_*`` and, with ``--grown``, ``grown_*`` fields, the trace
+  with each proposal's error to the ground truth), plus ``point_id``,
+  ``start``, ``new_options``, ``grown_options`` with ``--grown``, and
   ``detail``, the step's detail record with every array replaced by
   ``{"npz": KEY, "shape": [...], "dtype": ...}``;
 - ``point_<index>.npz``: those arrays under their ``KEY`` (the path into the
@@ -43,7 +50,17 @@ Output goes to ``DIR/<start>/<label>/``, with ``<label>`` ``defaults`` when no
   bitmaps.
 
 ``DIR/cameras.json`` holds each image's name, pose and lens, as the
-evaluation writes it.
+evaluation writes it. With ``--grown``, the grown step's sentence is printed
+for each point as it finishes, and at the end a table for each start: the
+point, the errors of the start, ``old``, ``new`` and the grown step, the grown
+step's weakest ``σ`` and confidence, its views joined of those tried, and its
+wall time.
+
+The 16 hand-picked points of the grown-plane draft are ``dino_dog_toy`` (the
+candidate ground truth, given by its path) ``0 1 528 672 810 933``,
+``seoul_bull`` ``120 50 236 32``, and ``kerry_park``
+(``test-data/images/kerry_park/kerry_park_ground_truth.sfmr``)
+``85 200 228 342 91 242``.
 """
 
 import argparse
@@ -59,7 +76,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from context import DatasetContext  # noqa: E402
 from dataset import prepare  # noqa: E402
 from grid_plane_eval import (  # noqa: E402
+    add_grown_arguments,
+    grown_options_of,
     parse_option,
+    run_grown,
     run_new,
     run_old,
     start_track,
@@ -107,8 +127,11 @@ def split_arrays(value, key, arrays):
     return value
 
 
-def run(ds, edited, p, start, new_options):
-    """The evaluation's row for ``p`` from ``start``, with the step's detail."""
+def run(ds, edited, p, start, new_options, grown_options=None):
+    """The evaluation's row for ``p`` from ``start``, with the step's detail.
+
+    ``grown_options`` ``None`` leaves the grown step out.
+    """
     row, track, to_cam, gt = start_track(ds, edited, p, start=start)
     if track is None:
         return row, None
@@ -117,7 +140,29 @@ def run(ds, edited, p, start, new_options):
     report = run_new(
         row, track, edited, ds, {**new_options, "record_detail": True}, to_cam, gt
     )
+    if grown_options is not None:
+        run_grown(row, track, edited, ds, grown_options, to_cam, gt)
     return row, None if report is None else report["estimate"]["detail"]
+
+
+GROWN_HEADER = " point  start    old    new  grown  sigma conf joined       ms"
+
+
+def grown_line(row):
+    """One table line: the grown step on a point, beside the others."""
+
+    def deg(value):
+        return "     -" if value is None else f"{value:6.2f}"
+
+    confidence = {None: "-", True: "low", False: "ok"}[row.get("grown_low_confidence")]
+    tried = row.get("grown_joined", 0) + row.get("grown_left_out", 0)
+    return (
+        f"{row['point']:6d} {deg(row.get('start_deg'))} {deg(row.get('old_deg'))} "
+        f"{deg(row.get('new_deg'))} {deg(row.get('grown_deg'))} "
+        f"{deg(row.get('grown_sigma_weak_deg'))} {confidence:>4s} "
+        f"{row.get('grown_joined', 0):3d}/{tried:<3d} "
+        f"{row.get('grown_ms', float('nan')):8.0f}"
+    )
 
 
 def main():
@@ -140,13 +185,16 @@ def main():
         metavar="KEY=VALUE",
         help="a grid_plane_normal keyword, repeated",
     )
+    add_grown_arguments(ap)
     args = ap.parse_args()
     new_options = dict(parse_option(o) for o in args.new_opt)
     if "record_detail" in new_options:
         raise SystemExit("record_detail is always on here")
-    label = args.label or (
-        ",".join(f"{k}={v}" for k, v in new_options.items()) or "defaults"
-    )
+    grown_options = grown_options_of(args)
+    names = [f"{k}={v}" for k, v in new_options.items()]
+    if grown_options:
+        names.append("grown-" + ",".join(f"{k}={v}" for k, v in grown_options.items()))
+    label = args.label or (",".join(names) or "defaults")
     from sfmtool.reconstruction import EditedReconstruction
 
     prepared = prepare(args.dataset, None, quiet=True)
@@ -167,11 +215,14 @@ def main():
     for start in args.start or STARTS:
         directory = args.out / start / label
         directory.mkdir(parents=True, exist_ok=True)
+        lines = []
         for p in points:
-            row, detail = run(ds, edited, p, start, new_options)
+            row, detail = run(ds, edited, p, start, new_options, grown_options)
             row["point_id"] = f"pt3d_{hash8}_{p}"
             row["start"] = start
             row["new_options"] = new_options
+            if grown_options is not None:
+                row["grown_options"] = grown_options
             arrays = {}
             row["detail"] = split_arrays(detail, "detail", arrays)
             if bitmaps is not None:
@@ -184,6 +235,14 @@ def main():
                 f"{row.get('new_stop')}, {row.get('new_iterations')} renders",
                 flush=True,
             )
+            if grown_options is not None:
+                print(f"  grown: {row.get('grown_text', row['status'])}", flush=True)
+                if row["status"] == "ok":
+                    lines.append(grown_line(row))
+        if lines:
+            print(f"\n{prepared.name} from {start}, errors to the ground truth (deg)")
+            print(GROWN_HEADER)
+            print("\n".join(lines), flush=True)
 
 
 if __name__ == "__main__":
