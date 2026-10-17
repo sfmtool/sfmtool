@@ -23,6 +23,7 @@ use crate::camera::sampler::bilinear_mip_level;
 use crate::camera::warp_map::{patch_grid_jacobian, singular_values_2x2};
 use crate::camera::CameraIntrinsics;
 use crate::geometry::RigidTransform;
+use crate::numeric::median_in_place;
 use crate::patch::cell_registration::CellLayout;
 use crate::patch::cloud::OrientedPatch;
 use crate::patch::keypoint_localize::shifted_center;
@@ -411,9 +412,9 @@ pub(super) fn robust_score(cells: &[Option<f64>; 9]) -> (f64, [f64; 9]) {
     if live.is_empty() {
         return (-1.0, weights);
     }
-    let values: Vec<f64> = live.iter().map(|&(_, z)| z).collect();
-    let m = median(&values);
-    let upper: Vec<f64> = values
+    let mut values: Vec<f64> = live.iter().map(|&(_, z)| z).collect();
+    let m = median_in_place(&mut values);
+    let mut upper: Vec<f64> = values
         .iter()
         .filter(|&&z| z >= m)
         .map(|&z| (z - m).abs())
@@ -421,7 +422,7 @@ pub(super) fn robust_score(cells: &[Option<f64>; 9]) -> (f64, [f64; 9]) {
     let mad = if upper.is_empty() {
         0.0
     } else {
-        median(&upper)
+        median_in_place(&mut upper)
     };
     let cut = 4.685 * (1.4826 * mad).max(0.05);
     let (mut total, mut weighted) = (0.0, 0.0);
@@ -440,18 +441,6 @@ pub(super) fn robust_score(cells: &[Option<f64>; 9]) -> (f64, [f64; 9]) {
         return (-1.0, weights);
     }
     (weighted / total, weights)
-}
-
-/// The median, the mean of the middle two for an even count.
-fn median(values: &[f64]) -> f64 {
-    let mut sorted = values.to_vec();
-    sorted.sort_by(f64::total_cmp);
-    let n = sorted.len();
-    if n % 2 == 1 {
-        sorted[n / 2]
-    } else {
-        (sorted[n / 2 - 1] + sorted[n / 2]) / 2.0
-    }
 }
 
 /// The normalisation of one block of samples frozen at one render: which
