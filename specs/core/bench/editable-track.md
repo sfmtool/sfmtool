@@ -3863,7 +3863,7 @@ ints), `normal` (an array, or `None` when no view joined), `precision`
 `turned`, `joined`, `left_out`, `written`, `views` and `trace`. `views` holds
 one dict per observation whose `kind` names the `GrownPlaneView`:
 `"reference"` with `keypoint`; `"joined"` with `from_start`, `start`
-(`"keypoint"`, `"widened"` or `"no_keypoint"`), `shift`, `grid_zncc`,
+(`"no_search"`, `"keypoint"`, `"widened"` or `"no_keypoint"`), `shift`, `grid_zncc`,
 `distance`, `held_zncc`, `was` and `keypoint`; `"left_out"` with `reason`
 (`"under_floor"`, `"too_far"` or `"held_under_floor"`), `distance` and
 `held_zncc`; and `"not_attempted"`. `trace` holds one dict per try with

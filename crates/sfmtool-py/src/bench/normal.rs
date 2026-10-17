@@ -449,6 +449,7 @@ fn cells_dict<'py>(py: Python<'py>, cells: &GridPlaneCells) -> PyResult<Bound<'p
 /// The word for how a grown-plane view's first window found its shift.
 fn start_name(start: GrownPlaneStart) -> &'static str {
     match start {
+        GrownPlaneStart::NoSearch => "no_search",
         GrownPlaneStart::Keypoint => "keypoint",
         GrownPlaneStart::Widened => "widened",
         GrownPlaneStart::NoKeypoint => "no_keypoint",
@@ -1001,11 +1002,12 @@ fn grid_plane_normal(
 /// other ``in`` view, nearest the reference in angle first, the step fits the
 /// plane's tilt and the view's image shift so that the view's samples through
 /// the plane agree with the reference's by ZNCC: a ``spot_window``-sample
-/// window (default 7) at the grid's centre finds the shift by a search within
-/// ``keypoint_search_px`` (default 3.0) of the shift the view's keypoint
-/// implies, widened to ``spot_search_px`` (default 12.0) when no shift reaches
-/// ``min_keypoint_zncc`` (default 0.7) or the best is on the edge, in steps of
-/// ``spot_search_step_px`` (default 0.5); the window then grows through
+/// window (default 7) at the grid's centre starts from the shift the view's
+/// keypoint implies, with no search; where that growth does not join, it
+/// finds the shift by a search within ``keypoint_search_px`` (default 3.0)
+/// of that shift, widened to ``spot_search_px`` (default 12.0) when no shift
+/// reaches ``min_keypoint_zncc`` (default 0.7) or the best is on the edge, in
+/// steps of ``spot_search_step_px`` (default 0.5); the window then grows through
 /// half-widths of ``window_fractions`` of the grid's side (default
 /// ``[1/8, 1/5, 1/3, 1/2]``, ``1/2`` covering the whole grid), with tilt and shift fitted by Levenberg-Marquardt at each size
 /// (``max_iterations``, default 20, ``initial_damping``, default 1e-3,
@@ -1043,8 +1045,8 @@ fn grid_plane_normal(
 ///
 /// ``views`` has one dict per observation, ``kind`` naming what the step made
 /// of it: ``"reference"`` with ``keypoint`` (the one written, or ``None``);
-/// ``"joined"`` with ``from_start``, ``start`` (``"keypoint"``,
-/// ``"widened"`` or ``"no_keypoint"``), ``distance`` and ``held_zncc`` (each
+/// ``"joined"`` with ``from_start``, ``start`` (``"no_search"``,
+/// ``"keypoint"``, ``"widened"`` or ``"no_keypoint"``), ``distance`` and ``held_zncc`` (each
 /// ``None`` for the first view) of the growth that joined, ``shift`` (``(2,)``,
 /// image px) and ``grid_zncc`` at the final shared plane, ``was`` (the
 /// keypoint before the step, or ``None``) and ``keypoint`` (the one written,

@@ -5,8 +5,8 @@
 //! that look at the point from around it: a textured plane seen out to 50
 //! degrees, one view whose top cells see something else, views all within a
 //! few degrees, a view that sees another plane, repeating texture seen from
-//! poses that are off, keypoints off the content in views whose poses are
-//! further off, and a flat wall.
+//! poses that are off with keypoints on the content, keypoints off the
+//! content in views whose poses are further off, and a flat wall.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -347,9 +347,17 @@ fn a_view_whose_own_plane_disagrees_is_left_out() {
             GrownPlaneTryOutcome::LeftOut
         ]
     );
+    // From each plane it grows from its keypoint-implied shift; the search
+    // after it lands on that same shift, so it is not grown again.
     for t in &tries {
         let starts: Vec<bool> = t.attempts.iter().map(|a| a.from_start).collect();
         assert_eq!(starts, [false, true], "{t:?}");
+        assert!(
+            t.attempts
+                .iter()
+                .all(|a| a.start == GrownPlaneStart::NoSearch),
+            "{t:?}"
+        );
     }
 }
 
@@ -368,11 +376,12 @@ fn checker(x: f64, y: f64) -> f64 {
 
 /// On repeating texture, with each view's pose turned so that its content
 /// sits 6 to 7 px from where the pose projects the point and its keypoint on
-/// the content, the first window started from each view's keypoint takes the
-/// right shift; widened at once to the full search about the keypoint
-/// instead, it takes another peak of the checker in some view.
+/// the content, every view grows from its keypoint-implied shift with no
+/// search and joins on its first growth, written on the content. The same
+/// views searched instead, as a view with no keypoint is, land on other
+/// peaks of the checker (here up to 11.2 px off).
 #[test]
-fn the_keypoint_start_takes_the_right_peak_on_repeating_texture() {
+fn the_keypoint_implied_shift_takes_the_right_peak_on_repeating_texture() {
     let centres = vec![
         centre(0.0, 0.0),
         centre(20.0, 0.0),
@@ -406,8 +415,8 @@ fn the_keypoint_start_takes_the_right_peak_on_repeating_texture() {
     // The reference is the camera whose pose is right.
     let (track, _) = set_reference(&track, row_of(&track, 0)).expect("an in row");
 
-    let written_off = |options: &GrownPlaneNormalOptions| {
-        let (turned, report) = run(&scene, &edited, &track, options);
+    let written_off = |track: &EditableTrack| {
+        let (turned, report) = run(&scene, &edited, track, &GrownPlaneNormalOptions::default());
         let sequence = sequence_of(&report).clone();
         let mut worst: f64 = 0.0;
         for (row, view) in sequence.views.iter().enumerate() {
@@ -420,25 +429,29 @@ fn the_keypoint_start_takes_the_right_peak_on_repeating_texture() {
         (sequence, worst)
     };
 
-    let (sequence, worst) = written_off(&GrownPlaneNormalOptions::default());
+    let (sequence, worst) = written_off(&track);
     assert_eq!(sequence.joined(), 3, "{sequence:#?}");
-    for view in &sequence.views {
-        if let GrownPlaneView::Joined { start, .. } = view {
-            assert_eq!(*start, GrownPlaneStart::Keypoint, "{sequence:#?}");
-        }
+    for entry in &sequence.trace {
+        assert_eq!(entry.outcome, GrownPlaneTryOutcome::Joined, "{entry:#?}");
+        assert_eq!(entry.attempts.len(), 1, "{entry:#?}");
+        assert_eq!(entry.attempts[0].start, GrownPlaneStart::NoSearch);
+        // Stage 1 reads the window at the implied shift.
+        assert!(entry.attempts[0].stage_zncc[0].is_finite(), "{entry:#?}");
     }
     assert!(worst < 0.75, "{worst:.2} px: {sequence:#?}");
 
-    // A search bound of nothing about the keypoint always widens to the
-    // full search about it.
-    let widened = GrownPlaneNormalOptions {
-        keypoint_search_px: 0.0,
-        ..Default::default()
-    };
-    let (sequence, worst) = written_off(&widened);
+    // With no keypoint but the reference's, every view searches.
+    let mut searched = track.clone();
+    let reference = sequence.reference.expect("a reference");
+    for (row, observation) in searched.observations.iter_mut().enumerate() {
+        if row != reference {
+            observation.track = None;
+        }
+    }
+    let (sequence, worst) = written_off(&searched);
     for view in &sequence.views {
         if let GrownPlaneView::Joined { start, .. } = view {
-            assert_eq!(*start, GrownPlaneStart::Widened, "{sequence:#?}");
+            assert_eq!(*start, GrownPlaneStart::NoKeypoint, "{sequence:#?}");
         }
     }
     assert!(worst > 4.0, "{worst:.2} px: {sequence:#?}");
@@ -446,9 +459,11 @@ fn the_keypoint_start_takes_the_right_peak_on_repeating_texture() {
 
 /// With each view's pose turned so that its content sits about 16 px from
 /// where the pose projects the point, past the widened search's 12 px about
-/// zero shift, and each keypoint 6 px off the content, past the 3 px search
-/// about the keypoint, every view widens about its keypoint-implied shift,
-/// finds the content and is written on it.
+/// zero shift, and each keypoint 6 px off the content, past what the fit
+/// recovers and past the 3 px search about the keypoint, every view grown
+/// from its keypoint-implied shift with no search is refused; the search
+/// then widens about that shift, finds the content, and the view joins and
+/// is written on it.
 #[test]
 fn the_widened_search_is_centred_on_the_keypoint() {
     let centres = vec![
@@ -495,6 +510,21 @@ fn the_widened_search_is_centred_on_the_keypoint() {
     let (turned, report) = run(&scene, &edited, &track, &GrownPlaneNormalOptions::default());
     let sequence = sequence_of(&report);
     assert_eq!(sequence.joined(), 3, "{sequence:#?}");
+    // Grown from the keypoint-implied shift, 6 px off, a view is refused; the
+    // search that follows it is what joins.
+    for entry in &sequence.trace {
+        let starts: Vec<_> = entry.attempts.iter().map(|a| a.start).collect();
+        assert_eq!(
+            starts,
+            [GrownPlaneStart::NoSearch, GrownPlaneStart::Widened],
+            "{entry:#?}"
+        );
+        assert!(entry.attempts[0].refusal.is_some());
+        assert!(entry
+            .attempts
+            .iter()
+            .all(|a| a.from_start == entry.attempts[0].from_start));
+    }
     for (row, view) in sequence.views.iter().enumerate() {
         if let GrownPlaneView::Joined { start, .. } = view {
             assert_eq!(*start, GrownPlaneStart::Widened, "{sequence:#?}");

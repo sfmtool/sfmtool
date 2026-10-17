@@ -266,7 +266,7 @@ GROWN_VIEW_KEYS = {
     "left_out": {"kind", "reason", "distance", "held_zncc"},
     "not_attempted": {"kind"},
 }
-GROWN_STARTS = {"keypoint", "widened", "no_keypoint"}
+GROWN_STARTS = {"no_search", "keypoint", "widened", "no_keypoint"}
 GROWN_REFUSALS = {"under_floor", "too_far", "held_under_floor"}
 
 # Every keyword of ``grown_plane_normal`` but the fit's, at the Rust default.
@@ -338,7 +338,11 @@ class TestGrownPlaneNormal:
                 "shared_sigma_deg",
             }
             assert entry["outcome"] in {"joined", "deferred", "left_out"}
-            assert 1 <= len(entry["attempts"]) <= 2
+            # From the shared plane and then the starting plane, each from the
+            # keypoint-implied shift and then from the search.
+            assert 1 <= len(entry["attempts"]) <= 4
+            # A view with a keypoint is grown from its implied shift first.
+            assert entry["attempts"][0]["start"] in {"no_search", "no_keypoint"}
             for attempt in entry["attempts"]:
                 assert attempt["start"] in GROWN_STARTS
                 assert attempt["stage_zncc"].dtype == np.float64
