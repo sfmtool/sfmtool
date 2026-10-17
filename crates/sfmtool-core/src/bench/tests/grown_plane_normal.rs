@@ -370,7 +370,7 @@ fn checker(x: f64, y: f64) -> f64 {
 /// sits 6 to 7 px from where the pose projects the point and its keypoint on
 /// the content, the first window started from each view's keypoint takes the
 /// right shift; widened at once to the full search about the keypoint
-/// instead, it takes a period off in some view.
+/// instead, it takes another peak of the checker in some view.
 #[test]
 fn the_keypoint_start_takes_the_right_peak_on_repeating_texture() {
     let centres = vec![
