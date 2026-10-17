@@ -231,7 +231,7 @@ fn the_fit_reaches_the_optimum_of_a_quadratic() {
     let objective = Quadratic {
         target: target.clone(),
     };
-    let (p, score) = maximise(&objective, &[0.0; 4], &iteration());
+    let (p, score, _) = maximise(&objective, &[0.0; 4], &iteration());
     for (a, b) in p.iter().zip(&target) {
         assert!((a - b).abs() < 1e-6, "{p:?}");
     }

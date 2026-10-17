@@ -30,7 +30,7 @@ use nalgebra::{Matrix2, Vector2};
 use crate::patch::keypoint_localize::resolve_reference;
 use crate::patch::normal_refine::ProjectedImage;
 use crate::patch::reference_view::ReferenceViewOptions;
-use crate::progress::Progress;
+use crate::progress::{Phase, Progress};
 use crate::progress_note;
 use crate::reconstruction::edited::EditedReconstruction;
 
@@ -454,6 +454,13 @@ impl std::fmt::Display for GrownPlaneSequence {
 /// A track at infinity is refused, as by every normal step: its patch faces
 /// along its own bearing and has no plane to fit.
 ///
+/// The step opens the phase `grown plane normal` on `progress`, and under it
+/// `grown plane view` for each try. A detailed `progress` adds `setup`,
+/// `precision` and `turn and write` under the step; `growth` and `joint fit`
+/// under each try; and `keypoint search`, `widened search`, `window stage`,
+/// `whole-grid stage` and `judge` under each growth, each noted with what it
+/// reached. The result is the same with detail on or off.
+///
 /// # Example
 ///
 /// ```no_run
@@ -486,6 +493,9 @@ pub fn grown_plane_normal(
     check_views(edited, images)?;
     normal_preconditions(track)?;
     options.check()?;
+    let step = progress.phase("grown plane normal");
+    let progress: &Progress<'_> = &step;
+    let mut setup = progress.detail_phase("setup");
     let frame = frame_of(track);
     let base = stored_patch_resolution(&edited.base)
         .unwrap_or(options.fit.refine.resolution)
@@ -513,12 +523,15 @@ pub fn grown_plane_normal(
         base,
         options.fit.localize.sampler,
         &ReferenceViewOptions::default(),
-        progress,
+        &setup,
     )
     .map(|k| rows[k]);
 
     let mut views = vec![GrownPlaneView::NotAttempted; track.observations.len()];
     let Some(reference) = reference else {
+        progress_note!(setup, "no reference");
+        drop(setup);
+        let turn = progress.detail_phase("turn and write");
         let sequence = GrownPlaneSequence {
             reference: None,
             working_resolution: 0,
@@ -536,7 +549,7 @@ pub fn grown_plane_normal(
             frame.normal(),
             NormalEstimate::GrownPlane(Box::new(sequence)),
             &options.fit,
-            progress,
+            &turn,
             |_| {},
         );
     };
@@ -603,6 +616,13 @@ pub fn grown_plane_normal(
         .iter()
         .map(|c| ViewRender::new(&grid, &c.image))
         .collect();
+    progress_note!(
+        setup,
+        "grid {side}, {} other views, {} windows",
+        candidates.len(),
+        radii.len()
+    );
+    drop(setup);
 
     let state = Sequence {
         options,
@@ -614,10 +634,7 @@ pub fn grown_plane_normal(
         candidates: &candidates,
         renders: &renders,
     };
-    let run = {
-        let phase = progress.phase("grown plane normal");
-        state.run(&phase)?
-    };
+    let run = state.run(progress)?;
 
     record_views(&mut views, reference, &candidates, &run);
     let mut sequence = GrownPlaneSequence {
@@ -631,6 +648,8 @@ pub fn grown_plane_normal(
         written: 0,
     };
     if run.members.is_empty() {
+        let mut turn = progress.detail_phase("turn and write");
+        progress_note!(turn, "no view joined, normal left unchanged");
         return read_back(
             track,
             edited,
@@ -638,12 +657,14 @@ pub fn grown_plane_normal(
             frame.normal(),
             NormalEstimate::GrownPlane(Box::new(sequence)),
             &options.fit,
-            progress,
+            &turn,
             |_| {},
         );
     }
 
     // The precision at the final plane, and each joined view's score there.
+    let mut measuring = progress.detail_phase("precision");
+    let renders_before = measuring.is_recording().then(|| state.renders_done());
     let mut information = Matrix2::zeros();
     for member in &run.members {
         let fit = state.grid_fit(member.index, None);
@@ -661,9 +682,17 @@ pub fn grown_plane_normal(
         sigma_strong_deg: strong,
         low_confidence: weak.is_nan() || weak > options.low_confidence_sigma_deg,
     });
+    progress_note!(
+        measuring,
+        "{} views: \u{3c3} {weak:.2}\u{b0} weakest, {strong:.2}\u{b0} strongest, {} renders",
+        run.members.len(),
+        state.renders_done() - renders_before.unwrap_or(0)
+    );
+    drop(measuring);
     let normal = grid.plane_normal(run.tilt);
     sequence.normal = Some(normal.into());
 
+    let mut turn = progress.detail_phase("turn and write");
     let writes = keypoint_writes(
         &grid,
         &ref_image,
@@ -674,6 +703,7 @@ pub fn grown_plane_normal(
         &mut sequence.views,
     );
     sequence.written = writes.len();
+    progress_note!(turn, "{} keypoints written", writes.len());
     read_back(
         track,
         edited,
@@ -681,7 +711,7 @@ pub fn grown_plane_normal(
         normal,
         NormalEstimate::GrownPlane(Box::new(sequence)),
         &options.fit,
-        progress,
+        &turn,
         move |turned: &mut EditableTrack| {
             for (row, p) in writes {
                 turned.observations[row].track = Some(TrackMeasurement {
@@ -766,6 +796,26 @@ fn keypoint_writes(
         }
     }
     writes
+}
+
+/// How a growth's first window found its shift, in a detail phase's note.
+fn start_word(start: GrownPlaneStart) -> &'static str {
+    match start {
+        GrownPlaneStart::NoSearch => "no search",
+        GrownPlaneStart::Keypoint => "keypoint search",
+        GrownPlaneStart::Widened => "widened search",
+        GrownPlaneStart::NoKeypoint => "no keypoint",
+    }
+}
+
+/// Whether a growth joined, and why not, in a detail phase's note.
+fn verdict_words(refusal: Option<GrownPlaneRefusal>) -> &'static str {
+    match refusal {
+        None => "joined",
+        Some(GrownPlaneRefusal::UnderFloor) => "refused under the floor",
+        Some(GrownPlaneRefusal::TooFar) => "refused too far",
+        Some(GrownPlaneRefusal::HeldUnderFloor) => "refused held under the floor",
+    }
 }
 
 /// Whether two shifts are the same to within rounding, image px: a search
@@ -922,26 +972,51 @@ impl Sequence<'_, '_, '_> {
             let mut attempts = Vec::new();
             for &from_start in starts {
                 let tilt0 = if from_start { [0.0; 2] } else { tilt };
-                let try_from = |first, attempts: &mut Vec<(Grown, Judged)>| {
-                    let grown = self.grow(i, tilt0, from_start, first, &phase)?;
-                    let judged = self.judge(i, grown, tilt, &members);
-                    let joins = judged.0.attempt.refusal.is_none();
+                let plane = if from_start { "starting" } else { "shared" };
+                let try_from = |first,
+                                attempts: &mut Vec<(Grown, Judged)>,
+                                growth: &mut Phase<'_>| {
+                    let renders_before = self.renders[i].renders();
+                    let grown = self.grow(i, tilt0, from_start, first, growth)?;
+                    let judged = self.judge(i, grown, tilt, &members, growth);
+                    let attempt = &judged.0.attempt;
+                    let joins = attempt.refusal.is_none();
+                    progress_note!(
+                            *growth,
+                            "from the {plane} plane, {}: first window ZNCC {:.3}, grid ZNCC {:.3}, {}, {} renders",
+                            start_word(attempt.start),
+                            attempt.stage_zncc[0],
+                            attempt.grid_zncc,
+                            verdict_words(attempt.refusal),
+                            self.renders[i].renders() - renders_before
+                        );
                     attempts.push(judged);
                     Ok::<bool, NormalError>(joins)
                 };
                 if let Some(shift) = candidate.kp_shift {
+                    let mut growth = phase.detail_phase("growth");
                     let z = self.spot_zncc(i, tilt0, &rows, shift);
-                    if try_from((z, shift, GrownPlaneStart::NoSearch), &mut attempts)? {
+                    if try_from(
+                        (z, shift, GrownPlaneStart::NoSearch),
+                        &mut attempts,
+                        &mut growth,
+                    )? {
                         break;
                     }
                 }
-                let first = self.search_first_window(i, tilt0, &rows);
+                let mut growth = phase.detail_phase("growth");
+                let first = self.search_first_window(i, tilt0, &rows, &growth);
                 // A search that lands on the implied shift would repeat the
                 // growth just refused from it.
                 if candidate.kp_shift.is_some_and(|s| same_shift(s, first.1)) {
+                    progress_note!(
+                        growth,
+                        "from the {plane} plane, {}: the search landed on the implied shift, not grown",
+                        start_word(first.2)
+                    );
                     continue;
                 }
-                if try_from(first, &mut attempts)? {
+                if try_from(first, &mut attempts, &mut growth)? {
                     break;
                 }
             }
@@ -961,7 +1036,10 @@ impl Sequence<'_, '_, '_> {
                         attempt: grown.attempt.clone(),
                         information: information.unwrap_or_else(Matrix2::zeros),
                     });
-                    tilt = self.joint(tilt, &mut members);
+                    let mut joint = phase.detail_phase("joint fit");
+                    let renders_before = joint.is_recording().then(|| self.renders_done());
+                    let (joined_tilt, score, taken) = self.joint(tilt, &mut members);
+                    tilt = joined_tilt;
                     if members.len() == 1 {
                         // The first view's information is read at the shared
                         // plane, which its own growth found.
@@ -970,6 +1048,13 @@ impl Sequence<'_, '_, '_> {
                         m.information =
                             tilt_information(&self.grid_fit(i, None), &p, &self.iteration);
                     }
+                    progress_note!(
+                        joint,
+                        "{} views: mean grid ZNCC {score:.3}, {taken} iterations, {} renders",
+                        members.len(),
+                        self.renders_done() - renders_before.unwrap_or(0)
+                    );
+                    drop(joint);
                     GrownPlaneTryOutcome::Joined
                 }
                 None if deferred.insert(i) => {
@@ -982,6 +1067,16 @@ impl Sequence<'_, '_, '_> {
                     GrownPlaneTryOutcome::LeftOut
                 }
             };
+            progress_note!(
+                phase,
+                "image {}: {}",
+                candidate.image_index,
+                match outcome {
+                    GrownPlaneTryOutcome::Joined => "joined",
+                    GrownPlaneTryOutcome::Deferred => "deferred",
+                    GrownPlaneTryOutcome::LeftOut => "left out",
+                }
+            );
             let shared = members.iter().map(|m| m.information).sum::<Matrix2<f64>>();
             trace.push(GrownPlaneTry {
                 observation: candidate.row,
@@ -1022,6 +1117,8 @@ impl Sequence<'_, '_, '_> {
         let mut stage_zncc = vec![z1];
         for &half in &self.radii[1..] {
             progress.check_cancel()?;
+            let mut stage = progress.detail_phase("window stage");
+            let renders_before = render.renders();
             let fit = ViewFit {
                 render,
                 reference: self.reference,
@@ -1030,14 +1127,27 @@ impl Sequence<'_, '_, '_> {
                 held: None,
                 min_coverage: self.options.min_coverage,
             };
-            let (q, s) = maximise(&fit, &p, &self.iteration);
+            let (q, s, taken) = maximise(&fit, &p, &self.iteration);
             p = q;
             stage_zncc.push(s);
+            progress_note!(
+                stage,
+                "half-width {half}: ZNCC {s:.3}, {taken} iterations, {} renders",
+                render.renders() - renders_before
+            );
         }
         progress.check_cancel()?;
-        let (q, score) = maximise(&self.grid_fit(i, None), &p, &self.iteration);
+        let mut stage = progress.detail_phase("whole-grid stage");
+        let renders_before = render.renders();
+        let (q, score, taken) = maximise(&self.grid_fit(i, None), &p, &self.iteration);
         p = q;
         stage_zncc.push(score);
+        progress_note!(
+            stage,
+            "robust ZNCC {score:.3}, {taken} iterations, {} renders",
+            render.renders() - renders_before
+        );
+        drop(stage);
         let tilt = [p[0], p[1]];
         Ok(Grown {
             tilt,
@@ -1074,12 +1184,14 @@ impl Sequence<'_, '_, '_> {
         i: usize,
         tilt: [f64; 2],
         rows: &[usize],
+        progress: &Progress<'_>,
     ) -> (f64, [f64; 2], GrownPlaneStart) {
         let render = &self.renders[i];
         let pixels = self.grid.project(render.view, tilt, rows);
         let mut samples = Samples::new(self.grid.side * self.grid.side, render.view.channels);
         let step = self.options.spot_search_step_px;
-        let mut search = |centre: [f64; 2], reach: f64| {
+        let mut search = |name: &'static str, centre: [f64; 2], reach: f64, about: &str| {
+            let mut phase = progress.detail_phase(name);
             let n = (2.0 * reach / step + 1e-9).floor() as i64;
             let mut best = (f64::NEG_INFINITY, centre);
             for iy in 0..=n {
@@ -1095,22 +1207,30 @@ impl Sequence<'_, '_, '_> {
                     }
                 }
             }
+            progress_note!(
+                phase,
+                "\u{b1}{reach} px about {about}: best ZNCC {:.3} at ({:.2}, {:.2}) px from it, {} shifts",
+                best.0,
+                best.1[0] - centre[0],
+                best.1[1] - centre[1],
+                (n + 1) * (n + 1)
+            );
             best
         };
         let wide = self.options.spot_search_px;
         match self.candidates[i].kp_shift {
             Some(base) => {
                 let reach = self.options.keypoint_search_px;
-                let (z, t) = search(base, reach);
+                let (z, t) = search("keypoint search", base, reach, "the implied shift");
                 let off = (t[0] - base[0]).abs().max((t[1] - base[1]).abs());
                 if z >= self.options.min_keypoint_zncc && off < reach - 1e-9 {
                     return (z, t, GrownPlaneStart::Keypoint);
                 }
-                let (z, t) = search(base, wide);
+                let (z, t) = search("widened search", base, wide, "the implied shift");
                 (z, t, GrownPlaneStart::Widened)
             }
             None => {
-                let (z, t) = search([0.0; 2], wide);
+                let (z, t) = search("widened search", [0.0; 2], wide, "zero shift");
                 (z, t, GrownPlaneStart::NoKeypoint)
             }
         }
@@ -1124,8 +1244,11 @@ impl Sequence<'_, '_, '_> {
         mut grown: Grown,
         tilt: [f64; 2],
         members: &[Member],
+        progress: &Progress<'_>,
     ) -> (Grown, Judged) {
         let options = self.options;
+        let mut phase = progress.detail_phase("judge");
+        let renders_before = self.renders[i].renders();
         let judged = if members.is_empty() {
             Judged {
                 refusal: (grown.attempt.grid_zncc < options.min_held_zncc
@@ -1148,7 +1271,7 @@ impl Sequence<'_, '_, '_> {
                 .try_inverse()
                 .map_or(f64::INFINITY, |inv| (d.transpose() * inv * d)[(0, 0)]);
             let distance = d2.max(0.0).sqrt();
-            let (_, held) = maximise(&self.grid_fit(i, Some(tilt)), &own.shift, &self.iteration);
+            let (_, held, _) = maximise(&self.grid_fit(i, Some(tilt)), &own.shift, &self.iteration);
             let bar = options.max_agreement_distance;
             let refusal = if distance.is_nan() || distance > bar {
                 Some(GrownPlaneRefusal::TooFar)
@@ -1169,13 +1292,34 @@ impl Sequence<'_, '_, '_> {
         grown.attempt.distance = judged.distance;
         grown.attempt.held_zncc = judged.held_zncc;
         grown.attempt.sigma_deg = judged.sigma_deg;
+        match (judged.distance, judged.held_zncc) {
+            (Some(distance), Some(held)) => progress_note!(
+                phase,
+                "distance {distance:.2}, held ZNCC {held:.3}, \u{3c3} {:.2}\u{b0}, {}, {} renders",
+                judged.sigma_deg,
+                verdict_words(judged.refusal),
+                self.renders[i].renders() - renders_before
+            ),
+            _ => progress_note!(
+                phase,
+                "first view, grid ZNCC {:.3}: {}",
+                grown.attempt.grid_zncc,
+                verdict_words(judged.refusal)
+            ),
+        }
+        drop(phase);
         (grown, judged)
     }
 
+    /// How many renders every view has made so far.
+    fn renders_done(&self) -> u64 {
+        self.renders.iter().map(ViewRender::renders).sum()
+    }
+
     /// Fit the shared tilt and every member's shift together, from `tilt`
-    /// and the members' current shifts; the tilt reached. The members'
-    /// shifts are updated.
-    fn joint(&self, tilt: [f64; 2], members: &mut [Member]) -> [f64; 2] {
+    /// and the members' current shifts; the tilt reached, the mean robust
+    /// grid score there and the steps taken. The members' shifts are updated.
+    fn joint(&self, tilt: [f64; 2], members: &mut [Member]) -> ([f64; 2], f64, u32) {
         let fit = JointFit {
             views: members
                 .iter()
@@ -1186,11 +1330,11 @@ impl Sequence<'_, '_, '_> {
         for m in members.iter() {
             p.extend_from_slice(&m.shift);
         }
-        let (q, _) = maximise(&fit, &p, &self.iteration);
+        let (q, score, taken) = maximise(&fit, &p, &self.iteration);
         for (k, m) in members.iter_mut().enumerate() {
             m.shift = [q[2 + 2 * k], q[3 + 2 * k]];
         }
-        [q[0], q[1]]
+        ([q[0], q[1]], score, taken)
     }
 }
 

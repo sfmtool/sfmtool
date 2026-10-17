@@ -13,7 +13,7 @@
 //! rendered the same way at no tilt and no shift; its rays meet every plane at
 //! the reference pixels, so its tile is the same at every tilt.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 use nalgebra::Vector3;
 
@@ -278,6 +278,8 @@ pub(super) struct ViewRender<'g, 'a> {
     pub(super) grid: &'g Grid,
     pub(super) view: &'g ViewImage<'a>,
     cache: RefCell<Option<Projected>>,
+    /// How many times [`Self::render`] has run, for the detail phases' notes.
+    renders: Cell<u64>,
 }
 
 /// The projection of one tilt over one set of rows.
@@ -293,12 +295,19 @@ impl<'g, 'a> ViewRender<'g, 'a> {
             grid,
             view,
             cache: RefCell::new(None),
+            renders: Cell::new(0),
         }
+    }
+
+    /// How many renders this view has made so far.
+    pub(super) fn renders(&self) -> u64 {
+        self.renders.get()
     }
 
     /// The view's samples over `rows` through the plane at `tilt`, shifted by
     /// `shift`.
     pub(super) fn render(&self, tilt: [f64; 2], shift: [f64; 2], rows: &[usize]) -> Samples {
+        self.renders.set(self.renders.get() + 1);
         let mut out = Samples::new(self.grid.side * self.grid.side, self.view.channels);
         let mut cache = self.cache.borrow_mut();
         let hit = cache

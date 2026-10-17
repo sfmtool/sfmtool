@@ -83,14 +83,19 @@ fn steps_for(n: usize, it: &Iteration) -> Vec<f64> {
         .collect()
 }
 
-/// Fit `objective` from `p0`; the parameters reached and their score. The
-/// score never falls below the start's.
-pub(super) fn maximise<O: Objective>(objective: &O, p0: &[f64], it: &Iteration) -> (Vec<f64>, f64) {
+/// Fit `objective` from `p0`; the parameters reached, their score and how
+/// many steps were taken. The score never falls below the start's.
+pub(super) fn maximise<O: Objective>(
+    objective: &O,
+    p0: &[f64],
+    it: &Iteration,
+) -> (Vec<f64>, f64, u32) {
     let mut p = p0.to_vec();
     let (mut score, mut frozen) = objective.freeze(&p);
     let steps = steps_for(p.len(), it);
     let mut damping = it.damping;
     let mut r0 = Vec::new();
+    let mut taken = 0;
     for _ in 0..it.max_iterations {
         let Some(fz) = frozen.as_ref() else {
             break;
@@ -127,11 +132,12 @@ pub(super) fn maximise<O: Objective>(objective: &O, p0: &[f64], it: &Iteration) 
         };
         let gain = s - score;
         (p, score, frozen) = (q, s, f);
+        taken += 1;
         if gain < it.min_improvement {
             break;
         }
     }
-    (p, score)
+    (p, score, taken)
 }
 
 /// The Levenberg–Marquardt step `−(A + λ·diag(A))⁻¹ g`, with a small floor on

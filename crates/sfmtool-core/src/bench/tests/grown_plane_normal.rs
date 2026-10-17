@@ -624,3 +624,135 @@ fn the_grown_plane_normal_refuses_a_bearing_bad_options_and_stops_when_cancelled
     );
     assert!(cancel.load(Ordering::Relaxed));
 }
+
+/// The scene of [`a_view_whose_own_plane_disagrees_is_left_out`]: one view at
+/// 38 degrees sees the texture on a plane turned 25 degrees from the others'.
+fn disagreeing_scene() -> Scene {
+    let centres = wide_centres();
+    let odd = centres[4];
+    let turn = nalgebra::Rotation3::from_axis_angle(&Vector3::x_axis(), 25f64.to_radians());
+    let other_normal = turn * truth();
+    Scene::looking_at(&centres, WORLD, camera(), move |c, d| {
+        if c != odd {
+            let (x, y) = hit(c, d, PLANE_Z);
+            return plane_texture(x, y);
+        }
+        let (c, d) = (Vector3::from(c), Vector3::from(d));
+        let lambda = (WORLD.coords - c).dot(&other_normal) / d.dot(&other_normal);
+        let p = c + d * lambda - WORLD.coords;
+        let (u, v) = (turn * Vector3::x(), turn * Vector3::y());
+        plane_texture(p.dot(&u), p.dot(&v))
+    })
+}
+
+/// Detail phases change nothing: the step's track and report are the same
+/// with no sink, with a sink at the overview level and with a detailed one.
+/// The overview level records the step and one phase per try; the detailed
+/// one adds every stage under them, here including the searches of a view
+/// whose keypoints are removed, a refusal and the joint fits.
+#[test]
+fn the_grown_plane_normals_detail_phases_change_nothing() {
+    use crate::progress::Event;
+    use std::sync::Mutex;
+
+    let scene = disagreeing_scene();
+    let edited = edited_of(&scene);
+    let mut track = tilted_track(&edited, Vector3::y(), 10.0);
+    // One view other than the reference with no keypoint, so that its
+    // growth comes from the search.
+    let row = row_of(&track, 1);
+    track.observations[row].track = None;
+    let options = GrownPlaneNormalOptions::default();
+    let views = scene.views();
+
+    let quiet = grown_plane_normal(&track, &edited, &views, &options, &Progress::none())
+        .expect("the step runs");
+    let record = |detailed: bool| {
+        let seen: Mutex<Vec<(&'static str, u8, Option<String>)>> = Mutex::new(Vec::new());
+        let sink = |event: Event<'_>| {
+            if let Event::Leave {
+                phase, depth, note, ..
+            } = event
+            {
+                seen.lock()
+                    .unwrap()
+                    .push((phase, depth, note.map(str::to_string)));
+            }
+        };
+        let progress = Progress::to(&sink).detailed(detailed);
+        let result = grown_plane_normal(&track, &edited, &views, &options, &progress)
+            .expect("the step runs");
+        (result, seen.into_inner().unwrap())
+    };
+    let (overview, overview_phases) = record(false);
+    let (detailed, detailed_phases) = record(true);
+    for other in [&overview, &detailed] {
+        assert_eq!(format!("{:?}", quiet.0), format!("{:?}", other.0));
+        assert_eq!(format!("{:?}", quiet.1), format!("{:?}", other.1));
+    }
+
+    let sequence = sequence_of(&quiet.1);
+    let tries = sequence.trace.len();
+    let names = |phases: &[(&'static str, u8, Option<String>)], name: &str| {
+        phases.iter().filter(|(n, _, _)| *n == name).count()
+    };
+    // The overview: the step and one phase per try, nothing finer.
+    assert_eq!(names(&overview_phases, "grown plane normal"), 1);
+    assert_eq!(names(&overview_phases, "grown plane view"), tries);
+    for detail in ["growth", "window stage", "judge", "joint fit", "precision"] {
+        assert_eq!(names(&overview_phases, detail), 0, "{detail}");
+    }
+
+    // The detail: every stage, each noted.
+    let growths: usize = sequence.trace.iter().map(|t| t.attempts.len()).sum();
+    assert!(names(&detailed_phases, "growth") >= growths);
+    let windows = sequence.window_half_widths.len() - 1;
+    assert_eq!(names(&detailed_phases, "window stage"), growths * windows);
+    assert_eq!(names(&detailed_phases, "whole-grid stage"), growths);
+    assert_eq!(names(&detailed_phases, "judge"), growths);
+    assert_eq!(names(&detailed_phases, "joint fit"), sequence.joined());
+    assert!(
+        names(&detailed_phases, "widened search") >= 1,
+        "{:#?}",
+        sequence.trace
+    );
+    for once in ["setup", "precision", "turn and write", "grown plane normal"] {
+        assert_eq!(names(&detailed_phases, once), 1, "{once}");
+    }
+    let own = [
+        "grown plane view",
+        "setup",
+        "growth",
+        "keypoint search",
+        "widened search",
+        "window stage",
+        "whole-grid stage",
+        "judge",
+        "joint fit",
+        "precision",
+        "turn and write",
+    ];
+    for (name, _, note) in &detailed_phases {
+        assert!(!own.contains(name) || note.is_some(), "{name} has no note");
+    }
+    let depth_of = |name: &str| {
+        detailed_phases
+            .iter()
+            .find(|(n, _, _)| *n == name)
+            .map(|(_, d, _)| *d)
+            .expect("recorded")
+    };
+    assert_eq!(
+        depth_of("grown plane view"),
+        depth_of("grown plane normal") + 1
+    );
+    assert_eq!(depth_of("growth"), depth_of("grown plane view") + 1);
+    assert_eq!(depth_of("window stage"), depth_of("growth") + 1);
+    assert_eq!(depth_of("widened search"), depth_of("growth") + 1);
+    assert_eq!(depth_of("joint fit"), depth_of("grown plane view") + 1);
+    let refused = detailed_phases
+        .iter()
+        .filter(|(n, _, note)| *n == "judge" && note.as_deref().unwrap().contains("too far"))
+        .count();
+    assert!(refused >= 1, "{detailed_phases:#?}");
+}
