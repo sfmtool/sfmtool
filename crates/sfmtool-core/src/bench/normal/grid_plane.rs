@@ -70,7 +70,7 @@ pub use detail::{
 
 /// The smallest working grid the step renders: three samples a side are the
 /// fewest that cut into nine cells.
-const MIN_WORKING_RESOLUTION: u32 = 3;
+pub(super) const MIN_WORKING_RESOLUTION: u32 = 3;
 
 /// A sample variance under this is flat for the acceptance score.
 const FLAT_VARIANCE: f64 = 1e-9;
@@ -1046,7 +1046,7 @@ const FOOTPRINT_TOLERANCE_PX: f64 = 1e-3;
 /// The side is rounded up after [`FOOTPRINT_TOLERANCE_PX`] is taken off, so a
 /// footprint that is a whole number of pixels up to the Jacobian's own error
 /// keeps that number.
-fn working_side(jacobian: Option<[[f64; 2]; 2]>, base: u32) -> u32 {
+pub(super) fn working_side(jacobian: Option<[[f64; 2]; 2]>, base: u32) -> u32 {
     let Some(j) = jacobian else {
         return base;
     };

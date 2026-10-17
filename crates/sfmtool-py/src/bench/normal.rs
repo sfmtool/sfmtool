@@ -487,6 +487,11 @@ fn estimate_dict<'py>(py: Python<'py>, estimate: &NormalEstimate) -> PyResult<Bo
             d
         }
         NormalEstimate::GridPlaneCells(cells) => cells_dict(py, cells)?,
+        NormalEstimate::GrownPlane(_) => {
+            let d = PyDict::new(py);
+            d.set_item("kind", "grown_plane")?;
+            d
+        }
     };
     Ok(d)
 }

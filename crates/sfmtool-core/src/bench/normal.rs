@@ -1,11 +1,12 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! The three steps that estimate which way a track's patch faces and tilt it
+//! The four steps that estimate which way a track's patch faces and tilt it
 //! there: [`fit_normal`], from the photographs' agreement over the patch,
 //! [`finite_difference_normal`], from where smaller pieces of the patch fit,
-//! and [`grid_plane_normal`], from the plane through the patch's nine cells,
-//! each registered in every view.
+//! [`grid_plane_normal`], from the plane through the patch's nine cells,
+//! each registered in every view, and [`grown_plane_normal`], from one plane
+//! fitted directly to the photographs, view by view.
 //!
 //! `specs/core/bench/editable-track.md` § "Estimating the normal" is the
 //! design. A [`fit`] moves the patch's centre and leaves its
@@ -31,12 +32,18 @@ use super::steps::{resize_patch, tilt_patch, translate_patch, TiltReport, TrackE
 use super::track::{EditableTrack, Stage, StageKind};
 
 mod grid_plane;
+mod grown_plane;
 
 pub use grid_plane::{
     grid_plane_normal, GridPlaneAcceptance, GridPlaneCell, GridPlaneCells, GridPlaneDetail,
     GridPlaneFitModel, GridPlaneFrame, GridPlaneIteration, GridPlaneLayout, GridPlaneNormalOptions,
     GridPlaneOutcome, GridPlanePlane, GridPlaneRay, GridPlaneRender, GridPlaneTile, GridPlaneView,
     GridPlaneViewCell, GridPlaneViewFit, BENCH_MIN_CELL_ZNCC,
+};
+pub use grown_plane::{
+    grown_plane_normal, GrownPlaneAttempt, GrownPlaneNormalOptions, GrownPlanePrecision,
+    GrownPlaneRefusal, GrownPlaneSequence, GrownPlaneStart, GrownPlaneTry, GrownPlaneTryOutcome,
+    GrownPlaneView,
 };
 
 /// The smallest number of pieces [`FiniteDifferenceOptions::pieces`] takes: two
@@ -182,6 +189,9 @@ pub enum NormalError {
         /// How many the grid holds.
         of: usize,
     },
+    /// A [`GrownPlaneNormalOptions`] setting, named, is outside what the step
+    /// takes ([`GrownPlaneNormalOptions::check`]).
+    BadGrownPlaneOption(&'static str),
     /// The turn to the estimated normal was refused.
     Tilt(TrackEditError),
     /// The reading the step ends with failed.
@@ -230,6 +240,12 @@ impl std::fmt::Display for NormalError {
                 f,
                 "{fitted} of the grid's {of} pieces fitted, and a plane needs more"
             ),
+            NormalError::BadGrownPlaneOption(name) => {
+                write!(
+                    f,
+                    "the grown plane normal's {name} is outside what it takes"
+                )
+            }
             NormalError::Tilt(e) => write!(f, "{e}"),
             NormalError::Evaluate(e) => write!(f, "{e}"),
             NormalError::Cancelled => write!(f, "the step was cancelled"),
@@ -305,6 +321,8 @@ pub enum NormalEstimate {
     },
     /// [`grid_plane_normal`]'s cells.
     GridPlaneCells(Box<GridPlaneCells>),
+    /// [`grown_plane_normal`]'s sequence of views.
+    GrownPlane(Box<GrownPlaneSequence>),
 }
 
 /// What one normal step did.
@@ -359,6 +377,7 @@ impl std::fmt::Display for NormalReport {
                 }
             }
             NormalEstimate::GridPlaneCells(cells) => write!(f, "{cells}")?,
+            NormalEstimate::GrownPlane(sequence) => write!(f, "{sequence}")?,
         }
         write!(f, ", turned {:.1}\u{b0}", self.tilt.degrees)?;
         if let Some(stop) = self.tilt.stopped {
@@ -827,8 +846,35 @@ fn turn_and_read(
     options: &FitOptions,
     progress: &Progress<'_>,
 ) -> Result<(EditableTrack, NormalReport), NormalError> {
+    read_back(
+        track,
+        edited,
+        images,
+        normal,
+        estimate,
+        options,
+        progress,
+        |_| {},
+    )
+}
+
+/// [`turn_and_read`] with `write` run on the turned track before it is read
+/// back: for a step that writes keypoints of its own, which the turn would
+/// otherwise carry off the pixels the step found.
+#[allow(clippy::too_many_arguments)]
+fn read_back(
+    track: &EditableTrack,
+    edited: &EditedReconstruction,
+    images: &[ProjectedImage<'_>],
+    normal: Vector3<f64>,
+    estimate: NormalEstimate,
+    options: &FitOptions,
+    progress: &Progress<'_>,
+    write: impl FnOnce(&mut EditableTrack),
+) -> Result<(EditableTrack, NormalReport), NormalError> {
     progress.check_cancel()?;
-    let (turned, tilt) = tilt_patch(track, edited, normal)?;
+    let (mut turned, tilt) = tilt_patch(track, edited, normal)?;
+    write(&mut turned);
     let (rendered, evaluate) = evaluate_rendering_bitmap(
         &turned,
         edited,

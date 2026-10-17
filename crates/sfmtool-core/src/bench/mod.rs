@@ -91,12 +91,14 @@ pub use nearby::{
     RangeOptions, RayMeeting, RayPatch, Refit, SourceReport, StopRule, WideAmong, PATCH_GRID,
 };
 pub use normal::{
-    finite_difference_normal, fit_normal, grid_plane_normal, normal_preconditions,
-    FiniteDifferenceOptions, FitNormalOptions, GridPlaneAcceptance, GridPlaneCell, GridPlaneCells,
-    GridPlaneDetail, GridPlaneFitModel, GridPlaneFrame, GridPlaneIteration, GridPlaneLayout,
-    GridPlaneNormalOptions, GridPlaneOutcome, GridPlanePlane, GridPlaneRay, GridPlaneRender,
-    GridPlaneTile, GridPlaneView, GridPlaneViewCell, GridPlaneViewFit, NormalError, NormalEstimate,
-    NormalReport, PieceLayout, BENCH_MIN_CELL_ZNCC,
+    finite_difference_normal, fit_normal, grid_plane_normal, grown_plane_normal,
+    normal_preconditions, FiniteDifferenceOptions, FitNormalOptions, GridPlaneAcceptance,
+    GridPlaneCell, GridPlaneCells, GridPlaneDetail, GridPlaneFitModel, GridPlaneFrame,
+    GridPlaneIteration, GridPlaneLayout, GridPlaneNormalOptions, GridPlaneOutcome, GridPlanePlane,
+    GridPlaneRay, GridPlaneRender, GridPlaneTile, GridPlaneView, GridPlaneViewCell,
+    GridPlaneViewFit, GrownPlaneAttempt, GrownPlaneNormalOptions, GrownPlanePrecision,
+    GrownPlaneRefusal, GrownPlaneSequence, GrownPlaneStart, GrownPlaneTry, GrownPlaneTryOutcome,
+    GrownPlaneView, NormalError, NormalEstimate, NormalReport, PieceLayout, BENCH_MIN_CELL_ZNCC,
 };
 pub use refit_points::{
     refit_points, RefitOutcome, RefitPoint, RefitPointsError, RefitPointsOptions,

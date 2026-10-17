@@ -82,6 +82,29 @@ fn render_plane_view(center: [f64; 3], depth: f64) -> ImageU8 {
     ImageU8::new(IMG_W, IMG_H, 1, data)
 }
 
+/// The pose of a camera at `center` looking at `target`: its `-z` axis
+/// along the line of sight, its `y` axis world `-y` made perpendicular to it
+/// (world `-x` where the sight is along `y`), and `x = y × z`.
+fn look_at(center: [f64; 3], target: Point3<f64>) -> RigidTransform {
+    let c = Vector3::from(center);
+    let forward = (target.coords - c).normalize();
+    let hint = if forward.y.abs() > 0.99 {
+        Vector3::new(-1.0, 0.0, 0.0)
+    } else {
+        Vector3::new(0.0, -1.0, 0.0)
+    };
+    let up = (hint - forward * hint.dot(&forward)).normalize();
+    let back = -forward;
+    let right = up.cross(&back);
+    let r = nalgebra::Matrix3::from_rows(&[right.transpose(), up.transpose(), back.transpose()]);
+    let rotation = crate::geometry::RotQuaternion::from_rotation_matrix(r);
+    let translation = -(r * c);
+    RigidTransform {
+        rotation,
+        translation,
+    }
+}
+
 /// The pose of a camera at `center`: a half-turn about `x`, which puts the
 /// canonical `-z` camera axis along world `+z`.
 fn pose(center: [f64; 3]) -> RigidTransform {
@@ -155,6 +178,64 @@ impl Scene {
                 .map(|&c| ImageU8Pyramid::build(&render(c), 4))
                 .collect(),
         }
+    }
+
+    /// A capture of whatever `surface` returns for the ray from a camera
+    /// centre along a unit direction, from a camera at each of `centers`
+    /// looking at `target`, every camera `camera`.
+    ///
+    /// For a test that needs views at wide angles to a surface: each camera's
+    /// `-z` axis points at `target`, and its `y` (up) axis is world `-y`
+    /// made perpendicular to that, as [`Scene::new`]'s cameras have it.
+    pub(in crate::bench) fn looking_at(
+        centers: &[[f64; 3]],
+        target: Point3<f64>,
+        camera: CameraIntrinsics,
+        surface: impl Fn([f64; 3], [f64; 3]) -> f64,
+    ) -> Self {
+        let poses: Vec<RigidTransform> = centers.iter().map(|&c| look_at(c, target)).collect();
+        let pyramids = centers
+            .iter()
+            .zip(&poses)
+            .map(|(&c, pose)| {
+                let world_from_cam = pose.rotation.to_rotation_matrix().transpose();
+                let mut data = Vec::with_capacity((camera.width * camera.height) as usize);
+                for row in 0..camera.height {
+                    for col in 0..camera.width {
+                        let ray = camera.pixel_to_ray(col as f64 + 0.5, row as f64 + 0.5);
+                        let d = world_from_cam * Vector3::from(ray);
+                        let v = surface(c, [d.x, d.y, d.z]);
+                        data.push(v.clamp(0.0, 255.0).round() as u8);
+                    }
+                }
+                let image = ImageU8::new(camera.width, camera.height, 1, data);
+                ImageU8Pyramid::build(&image, 4)
+            })
+            .collect();
+        Self {
+            centers: centers.to_vec(),
+            cameras: centers.iter().map(|_| camera.clone()).collect(),
+            poses,
+            pyramids,
+        }
+    }
+
+    /// Turn camera `i`'s pose by `yaw` about its own `y` axis and `pitch`
+    /// about its own `x` axis, radians, without rendering it again: the
+    /// reconstruction then holds a pose the photograph was not taken from,
+    /// and the photograph's content sits about `f · angle` px from where the
+    /// pose projects it.
+    pub(in crate::bench) fn misplace_camera(&mut self, i: usize, yaw: f64, pitch: f64) {
+        let turn = nalgebra::Rotation3::from_axis_angle(&Vector3::y_axis(), yaw)
+            * nalgebra::Rotation3::from_axis_angle(&Vector3::x_axis(), pitch);
+        let m = turn.matrix();
+        let pose = &self.poses[i];
+        self.poses[i] = RigidTransform {
+            rotation: crate::geometry::RotQuaternion::from_rotation_matrix(
+                m * pose.rotation.to_rotation_matrix(),
+            ),
+            translation: m * pose.translation,
+        };
     }
 
     pub(in crate::bench) fn views(&self) -> Vec<ProjectedImage<'_>> {
@@ -232,17 +313,16 @@ pub(in crate::bench) fn fixture_of(
     let mut recon = SfmrReconstruction::demo(1);
     let n = scene.len();
 
-    recon.image_table.cameras = vec![pinhole()];
+    recon.image_table.cameras = vec![scene.cameras[0].clone()];
     recon.image_table.images = (0..n)
-        .map(|i| SfmrImage {
-            name: format!("image_{i}.jpg"),
-            camera_index: 0,
-            quaternion_wxyz: UnitQuaternion::from_quaternion(Quaternion::new(0.0, 1.0, 0.0, 0.0)),
-            translation_xyz: Vector3::new(
-                -scene.centers[i][0],
-                scene.centers[i][1],
-                scene.centers[i][2],
-            ),
+        .map(|i| {
+            let [w, x, y, z] = scene.poses[i].rotation.to_wxyz_array();
+            SfmrImage {
+                name: format!("image_{i}.jpg"),
+                camera_index: 0,
+                quaternion_wxyz: UnitQuaternion::from_quaternion(Quaternion::new(w, x, y, z)),
+                translation_xyz: scene.poses[i].translation,
+            }
         })
         .collect();
     // One row per image either way: `resize` covers a scene with fewer cameras

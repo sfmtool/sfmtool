@@ -13,6 +13,7 @@
 
 mod delete_image;
 mod grid_plane_normal;
+mod grown_plane_normal;
 mod normal;
 mod observation_readings;
 mod reference_view;
