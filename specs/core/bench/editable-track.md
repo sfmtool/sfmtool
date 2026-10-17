@@ -3152,8 +3152,9 @@ unchanged as unstable.
 **`grown_plane_normal` fits one plane shared by every view to the
 photographs.** It is the step
 [grown-plane-normal.md](../../drafts/grown-plane-normal.md) designs, still
-being evaluated, and so far only a library step: no binding, Track View entry
-or wire method calls it. It takes the reference and the working grid by
+being evaluated, and so far only a library step with a Python binding
+(`sfmtool.bench.grown_plane_normal`): no Track View entry or wire method calls
+it. It takes the reference and the working grid by
 `grid_plane_normal`'s rules, and for each other `in` view, nearest the
 reference in angle first, fits the plane's tilt and the view's image shift so
 that the view's samples through the plane agree with the reference's by ZNCC,
@@ -3797,7 +3798,7 @@ carries `by`, `center`, `moved`, `placed` and `changed`; `tilt_patch`'s carries
 `degrees`, `asked`, `normal`, `stopped` (`None`, or a dict of the
 `observation` and `image` whose cap ended the turn), `placed` and `changed`.
 
-The three normal steps, in
+The normal steps, in
 [bench/normal.rs](../../../crates/sfmtool-py/src/bench/normal.rs), take the
 track, the reconstruction and `images` the way `fit` does, with `fit`'s four
 keywords for the reading they end with (and, for `finite_difference_normal`,
@@ -3850,6 +3851,28 @@ and `ray_count`), `rays` (one row per ray: `cell`, `observation`, `image`,
 `scatter_eigenvalues`, `anisotropy`, `n_eff`, `plane_rms`, `precision_deg`
 `(2,)`, and the render's trace entry: `score`, `normal_precision_deg`,
 `gated`, `proposed_normal`, `largest_move_px` and `taken`).
+
+`grown_plane_normal` takes every `GrownPlaneNormalOptions` setting as a
+keyword of the same name, each defaulting to `GrownPlaneNormalOptions::default()`'s
+when `None` (`window_fractions` as a list of numbers), and refuses a setting
+`GrownPlaneNormalOptions::check` refuses before it reads a photograph. Its
+`estimate` has `kind` `"grown_plane"` and carries `reference` (an observation
+index, or `None`), `working_resolution`, `window_half_widths` (a list of
+ints), `normal` (an array, or `None` when no view joined), `precision`
+(`None`, or `sigma_weak_deg`, `sigma_strong_deg` and `low_confidence`),
+`turned`, `joined`, `left_out`, `written`, `views` and `trace`. `views` holds
+one dict per observation whose `kind` names the `GrownPlaneView`:
+`"reference"` with `keypoint`; `"joined"` with `from_start`, `start`
+(`"keypoint"`, `"widened"` or `"no_keypoint"`), `shift`, `grid_zncc`,
+`distance`, `held_zncc`, `was` and `keypoint`; `"left_out"` with `reason`
+(`"under_floor"`, `"too_far"` or `"held_under_floor"`), `distance` and
+`held_zncc`; and `"not_attempted"`. `trace` holds one dict per try with
+`observation`, `image`, `angle_deg`, `outcome` (`"joined"`, `"deferred"` or
+`"left_out"`), `shared_normal`, `shared_sigma_deg` and `attempts`, each with
+`from_start`, `start`, `stage_zncc` (a float64 array), `shift`, `normal`,
+`grid_zncc`, `distance`, `held_zncc`, `sigma_deg` and `refusal` (`None` or a
+`reason` word). Keypoints and vectors are float64 arrays, and a field the
+Rust report leaves `None` is `None`.
 
 `spin_patch` and `shape_observation` take their numbers directly;
 `sight_observation`, `resize_patch`, `translate_patch_to_pixel` and

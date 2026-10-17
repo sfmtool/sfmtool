@@ -1,10 +1,11 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Python bindings for the bench's three normal steps: *Fit Normal*
+//! Python bindings for the bench's normal steps: *Fit Normal*
 //! (`fit_normal`), *Finite Diff Normal* and today's *Grid Plane Normal*
-//! (`finite_difference_normal` with its two layouts), and the cell-registered
-//! grid-plane normal (`grid_plane_normal`).
+//! (`finite_difference_normal` with its two layouts), the cell-registered
+//! grid-plane normal (`grid_plane_normal`) and the grown-plane normal
+//! (`grown_plane_normal`).
 //!
 //! Each takes a track-stage track and gives back the turned track and a report,
 //! as every other step does, and refuses with the core's sentence.
@@ -19,10 +20,12 @@ use pyo3::types::{PyDict, PyList};
 
 use sfmtool_core::bench::{
     finite_difference_normal as core_finite_difference_normal, fit_normal as core_fit_normal,
-    grid_plane_normal as core_grid_plane_normal, FiniteDifferenceOptions, FitNormalOptions,
-    GridPlaneAcceptance, GridPlaneCells, GridPlaneDetail, GridPlaneFitModel, GridPlaneIteration,
-    GridPlaneNormalOptions, GridPlaneOutcome, GridPlaneRender, GridPlaneTile, GridPlaneView,
-    NormalEstimate, NormalReport, PieceLayout,
+    grid_plane_normal as core_grid_plane_normal, grown_plane_normal as core_grown_plane_normal,
+    FiniteDifferenceOptions, FitNormalOptions, GridPlaneAcceptance, GridPlaneCells,
+    GridPlaneDetail, GridPlaneFitModel, GridPlaneIteration, GridPlaneNormalOptions,
+    GridPlaneOutcome, GridPlaneRender, GridPlaneTile, GridPlaneView, GrownPlaneAttempt,
+    GrownPlaneNormalOptions, GrownPlaneRefusal, GrownPlaneSequence, GrownPlaneStart,
+    GrownPlaneTryOutcome, GrownPlaneView, NormalEstimate, NormalReport, PieceLayout,
 };
 use sfmtool_core::patch::cell_plane_normals::{CellPlaneStatus, NormalDeterminacy};
 use sfmtool_core::patch::cluster_refine::{CellStatus, LoopStop};
@@ -443,6 +446,155 @@ fn cells_dict<'py>(py: Python<'py>, cells: &GridPlaneCells) -> PyResult<Bound<'p
     Ok(d)
 }
 
+/// The word for how a grown-plane view's first window found its shift.
+fn start_name(start: GrownPlaneStart) -> &'static str {
+    match start {
+        GrownPlaneStart::Keypoint => "keypoint",
+        GrownPlaneStart::Widened => "widened",
+        GrownPlaneStart::NoKeypoint => "no_keypoint",
+    }
+}
+
+/// The word for why a grown-plane growth did not join.
+fn refusal_name(refusal: GrownPlaneRefusal) -> &'static str {
+    match refusal {
+        GrownPlaneRefusal::UnderFloor => "under_floor",
+        GrownPlaneRefusal::TooFar => "too_far",
+        GrownPlaneRefusal::HeldUnderFloor => "held_under_floor",
+    }
+}
+
+/// The word for what became of one try of a view.
+fn try_outcome_name(outcome: GrownPlaneTryOutcome) -> &'static str {
+    match outcome {
+        GrownPlaneTryOutcome::Joined => "joined",
+        GrownPlaneTryOutcome::Deferred => "deferred",
+        GrownPlaneTryOutcome::LeftOut => "left_out",
+    }
+}
+
+/// A fixed-length vector as a float64 array, `None` staying `None`.
+fn maybe_vector<'py, const N: usize>(
+    py: Python<'py>,
+    value: Option<[f64; N]>,
+) -> Option<Bound<'py, PyArray1<f64>>> {
+    value.map(|v| PyArray1::from_vec(py, v.to_vec()))
+}
+
+/// The dict form of one growth of one view.
+fn attempt_dict<'py>(py: Python<'py>, attempt: &GrownPlaneAttempt) -> PyResult<Bound<'py, PyDict>> {
+    let d = PyDict::new(py);
+    d.set_item("from_start", attempt.from_start)?;
+    d.set_item("start", start_name(attempt.start))?;
+    d.set_item(
+        "stage_zncc",
+        PyArray1::from_vec(py, attempt.stage_zncc.clone()),
+    )?;
+    d.set_item("shift", PyArray1::from_vec(py, attempt.shift.to_vec()))?;
+    d.set_item("normal", PyArray1::from_vec(py, attempt.normal.to_vec()))?;
+    d.set_item("grid_zncc", attempt.grid_zncc)?;
+    d.set_item("distance", attempt.distance)?;
+    d.set_item("held_zncc", attempt.held_zncc)?;
+    d.set_item("sigma_deg", attempt.sigma_deg)?;
+    d.set_item("refusal", attempt.refusal.map(refusal_name))?;
+    Ok(d)
+}
+
+/// The dict form of what the grown-plane step made of one observation,
+/// `kind` naming which.
+fn grown_view_dict<'py>(py: Python<'py>, view: &GrownPlaneView) -> PyResult<Bound<'py, PyDict>> {
+    let d = PyDict::new(py);
+    match view {
+        GrownPlaneView::Reference { keypoint } => {
+            d.set_item("kind", "reference")?;
+            d.set_item("keypoint", maybe_vector(py, *keypoint))?;
+        }
+        GrownPlaneView::Joined {
+            from_start,
+            start,
+            shift,
+            grid_zncc,
+            distance,
+            held_zncc,
+            was,
+            keypoint,
+        } => {
+            d.set_item("kind", "joined")?;
+            d.set_item("from_start", *from_start)?;
+            d.set_item("start", start_name(*start))?;
+            d.set_item("shift", PyArray1::from_vec(py, shift.to_vec()))?;
+            d.set_item("grid_zncc", *grid_zncc)?;
+            d.set_item("distance", *distance)?;
+            d.set_item("held_zncc", *held_zncc)?;
+            d.set_item("was", maybe_vector(py, *was))?;
+            d.set_item("keypoint", maybe_vector(py, *keypoint))?;
+        }
+        GrownPlaneView::LeftOut {
+            reason,
+            distance,
+            held_zncc,
+        } => {
+            d.set_item("kind", "left_out")?;
+            d.set_item("reason", refusal_name(*reason))?;
+            d.set_item("distance", *distance)?;
+            d.set_item("held_zncc", *held_zncc)?;
+        }
+        GrownPlaneView::NotAttempted => d.set_item("kind", "not_attempted")?,
+    }
+    Ok(d)
+}
+
+/// The dict form of the grown-plane step's sequence of views.
+fn sequence_dict<'py>(
+    py: Python<'py>,
+    sequence: &GrownPlaneSequence,
+) -> PyResult<Bound<'py, PyDict>> {
+    let d = PyDict::new(py);
+    d.set_item("kind", "grown_plane")?;
+    d.set_item("reference", sequence.reference)?;
+    d.set_item("working_resolution", sequence.working_resolution)?;
+    d.set_item("window_half_widths", sequence.window_half_widths.clone())?;
+    let views = PyList::empty(py);
+    for view in &sequence.views {
+        views.append(grown_view_dict(py, view)?)?;
+    }
+    d.set_item("views", views)?;
+    let trace = PyList::empty(py);
+    for entry in &sequence.trace {
+        let t = PyDict::new(py);
+        t.set_item("observation", entry.observation)?;
+        t.set_item("image", entry.image)?;
+        t.set_item("angle_deg", entry.angle_deg)?;
+        let attempts = PyList::empty(py);
+        for attempt in &entry.attempts {
+            attempts.append(attempt_dict(py, attempt)?)?;
+        }
+        t.set_item("attempts", attempts)?;
+        t.set_item("outcome", try_outcome_name(entry.outcome))?;
+        t.set_item("shared_normal", maybe_vector(py, entry.shared_normal))?;
+        t.set_item("shared_sigma_deg", entry.shared_sigma_deg)?;
+        trace.append(t)?;
+    }
+    d.set_item("trace", trace)?;
+    d.set_item("normal", maybe_vector(py, sequence.normal))?;
+    let precision = match &sequence.precision {
+        Some(p) => {
+            let q = PyDict::new(py);
+            q.set_item("sigma_weak_deg", p.sigma_weak_deg)?;
+            q.set_item("sigma_strong_deg", p.sigma_strong_deg)?;
+            q.set_item("low_confidence", p.low_confidence)?;
+            Some(q)
+        }
+        None => None,
+    };
+    d.set_item("precision", precision)?;
+    d.set_item("turned", sequence.turned())?;
+    d.set_item("joined", sequence.joined())?;
+    d.set_item("left_out", sequence.left_out())?;
+    d.set_item("written", sequence.written)?;
+    Ok(d)
+}
+
 /// The dict form of where a normal came from, `kind` naming which estimate.
 fn estimate_dict<'py>(py: Python<'py>, estimate: &NormalEstimate) -> PyResult<Bound<'py, PyDict>> {
     let d = match estimate {
@@ -487,11 +639,7 @@ fn estimate_dict<'py>(py: Python<'py>, estimate: &NormalEstimate) -> PyResult<Bo
             d
         }
         NormalEstimate::GridPlaneCells(cells) => cells_dict(py, cells)?,
-        NormalEstimate::GrownPlane(_) => {
-            let d = PyDict::new(py);
-            d.set_item("kind", "grown_plane")?;
-            d
-        }
+        NormalEstimate::GrownPlane(sequence) => sequence_dict(py, sequence)?,
     };
     Ok(d)
 }
@@ -846,10 +994,185 @@ fn grid_plane_normal(
     ))
 }
 
+/// Turn a track-stage `track`'s patch to the one plane its ``in`` views agree
+/// on, fitted directly to the photographs.
+///
+/// The reference and the working grid are :func:`grid_plane_normal`'s. For each
+/// other ``in`` view, nearest the reference in angle first, the step fits the
+/// plane's tilt and the view's image shift so that the view's samples through
+/// the plane agree with the reference's by ZNCC: a ``spot_window``-sample
+/// window (default 7) at the grid's centre finds the shift by a search within
+/// ``keypoint_search_px`` (default 3.0) of the shift the view's keypoint
+/// implies, widened to ``spot_search_px`` (default 12.0) when no shift reaches
+/// ``min_keypoint_zncc`` (default 0.7) or the best is on the edge, in steps of
+/// ``spot_search_step_px`` (default 0.5); the window then grows through
+/// ``window_fractions`` of the grid's side (default ``[1/8, 1/5, 1/3, 1/2]``),
+/// with tilt and shift fitted by Levenberg-Marquardt at each size
+/// (``max_iterations``, default 20, ``initial_damping``, default 1e-3,
+/// ``min_improvement``, default 1e-6, and the Jacobian steps
+/// ``jacobian_tilt_step``, default 1e-3, and ``jacobian_shift_step_px``,
+/// default 0.05). The first view joins when its robust grid score reaches
+/// ``min_held_zncc`` (default 0.5); each later one when its own plane is within
+/// ``max_agreement_distance`` (default 3.0) of the shared plane by the
+/// Mahalanobis distance and, held to the shared plane, it still scores
+/// ``min_held_zncc``. ``zncc_tolerance`` (default 0.01) turns a view's
+/// information into a covariance, ``min_coverage`` (default 0.6) is the share
+/// of a ZNCC's samples that must land on the photograph, and
+/// ``low_confidence_sigma_deg`` (default 2.0) is the weakest-direction ``σ``
+/// above which the plane is reported as low confidence. ``working_resolution``
+/// is :func:`grid_plane_normal`'s. Every default is the Rust step's, and a
+/// setting outside what the step takes is refused before the photographs are
+/// decoded.
+///
+/// The patch is turned to the shared plane whenever a view joined, however low
+/// its precision, and the reference's and each joined view's keypoints are
+/// written; when no view joined, the track is given back as it was, read
+/// again. The centre does not move. ``images`` and the last four keywords are
+/// :func:`fit`'s, and set the reading the step ends with.
+///
+/// Returns ``(EditableTrack, report)``, the report described under
+/// :func:`grid_plane_normal`. Here ``estimate`` has ``kind`` ``"grown_plane"``
+/// and carries ``reference`` (the reference observation, or ``None`` when
+/// none was found and nothing was tried), ``working_resolution`` (``0`` with
+/// no reference), ``window_half_widths`` (the stages' windows, grid px),
+/// ``normal`` (the shared plane's outward normal, or ``None`` when no view
+/// joined), ``precision`` (``None`` when no view joined, else
+/// ``sigma_weak_deg``, ``sigma_strong_deg`` and ``low_confidence``),
+/// ``turned``, ``joined``, ``left_out`` and ``written`` (keypoints written,
+/// the reference's among them), ``views`` and ``trace``.
+///
+/// ``views`` has one dict per observation, ``kind`` naming what the step made
+/// of it: ``"reference"`` with ``keypoint`` (the one written, or ``None``);
+/// ``"joined"`` with ``from_start``, ``start`` (``"keypoint"``,
+/// ``"widened"`` or ``"no_keypoint"``), ``distance`` and ``held_zncc`` (each
+/// ``None`` for the first view) of the growth that joined, ``shift`` (``(2,)``,
+/// image px) and ``grid_zncc`` at the final shared plane, ``was`` (the
+/// keypoint before the step, or ``None``) and ``keypoint`` (the one written,
+/// or ``None`` off the photograph); ``"left_out"`` with ``reason``
+/// (``"under_floor"``, ``"too_far"`` or ``"held_under_floor"``),
+/// ``distance`` and ``held_zncc``; or ``"not_attempted"``. ``trace`` has one
+/// dict per try in the order made: ``observation``, ``image``, ``angle_deg``
+/// (from the reference, seen from the patch centre), ``outcome``
+/// (``"joined"``, ``"deferred"`` or ``"left_out"``), ``shared_normal`` (or
+/// ``None`` while no view has joined), ``shared_sigma_deg`` (``NaN`` while
+/// none has) and ``attempts``, each with ``from_start``, ``start``,
+/// ``stage_zncc`` (a float64 array, one score per stage), ``shift``,
+/// ``normal`` (the growth's own plane), ``grid_zncc``, ``distance``,
+/// ``held_zncc``, ``sigma_deg`` (its own weakest ``σ``, ``NaN`` for the first
+/// view) and ``refusal`` (``None`` when it joined, else a ``reason`` word).
+///
+/// Raises ``ValueError`` with the reason when the step is refused, including a
+/// setting it does not take.
+#[pyfunction]
+#[pyo3(signature = (
+    track,
+    edited,
+    images,
+    *,
+    working_resolution = None,
+    spot_window = None,
+    window_fractions = None,
+    keypoint_search_px = None,
+    min_keypoint_zncc = None,
+    spot_search_px = None,
+    spot_search_step_px = None,
+    zncc_tolerance = None,
+    max_agreement_distance = None,
+    min_held_zncc = None,
+    low_confidence_sigma_deg = None,
+    min_coverage = None,
+    max_iterations = None,
+    initial_damping = None,
+    min_improvement = None,
+    jacobian_tilt_step = None,
+    jacobian_shift_step_px = None,
+    max_seed_offset_px = None,
+    max_cache_bytes = None,
+    sigma_px = None,
+    depth_likelihood_ratio_threshold = None,
+))]
+#[allow(clippy::too_many_arguments)]
+fn grown_plane_normal(
+    py: Python<'_>,
+    track: &PyEditableTrack,
+    edited: &PyEditedReconstruction,
+    images: &Bound<'_, PyAny>,
+    working_resolution: Option<u32>,
+    spot_window: Option<u32>,
+    window_fractions: Option<Vec<f64>>,
+    keypoint_search_px: Option<f64>,
+    min_keypoint_zncc: Option<f64>,
+    spot_search_px: Option<f64>,
+    spot_search_step_px: Option<f64>,
+    zncc_tolerance: Option<f64>,
+    max_agreement_distance: Option<f64>,
+    min_held_zncc: Option<f64>,
+    low_confidence_sigma_deg: Option<f64>,
+    min_coverage: Option<f64>,
+    max_iterations: Option<u32>,
+    initial_damping: Option<f64>,
+    min_improvement: Option<f64>,
+    jacobian_tilt_step: Option<f64>,
+    jacobian_shift_step_px: Option<f64>,
+    max_seed_offset_px: Option<f64>,
+    max_cache_bytes: Option<usize>,
+    sigma_px: Option<f64>,
+    depth_likelihood_ratio_threshold: Option<f64>,
+) -> PyResult<(PyEditableTrack, Py<PyDict>)> {
+    let defaults = GrownPlaneNormalOptions::default();
+    let options = GrownPlaneNormalOptions {
+        working_resolution,
+        spot_window: spot_window.unwrap_or(defaults.spot_window),
+        window_fractions: window_fractions.unwrap_or_else(|| defaults.window_fractions.clone()),
+        keypoint_search_px: keypoint_search_px.unwrap_or(defaults.keypoint_search_px),
+        min_keypoint_zncc: min_keypoint_zncc.unwrap_or(defaults.min_keypoint_zncc),
+        spot_search_px: spot_search_px.unwrap_or(defaults.spot_search_px),
+        spot_search_step_px: spot_search_step_px.unwrap_or(defaults.spot_search_step_px),
+        zncc_tolerance: zncc_tolerance.unwrap_or(defaults.zncc_tolerance),
+        max_agreement_distance: max_agreement_distance.unwrap_or(defaults.max_agreement_distance),
+        min_held_zncc: min_held_zncc.unwrap_or(defaults.min_held_zncc),
+        low_confidence_sigma_deg: low_confidence_sigma_deg
+            .unwrap_or(defaults.low_confidence_sigma_deg),
+        min_coverage: min_coverage.unwrap_or(defaults.min_coverage),
+        max_iterations: max_iterations.unwrap_or(defaults.max_iterations),
+        initial_damping: initial_damping.unwrap_or(defaults.initial_damping),
+        min_improvement: min_improvement.unwrap_or(defaults.min_improvement),
+        jacobian_tilt_step: jacobian_tilt_step.unwrap_or(defaults.jacobian_tilt_step),
+        jacobian_shift_step_px: jacobian_shift_step_px.unwrap_or(defaults.jacobian_shift_step_px),
+        fit: fit_options(
+            max_seed_offset_px,
+            max_cache_bytes,
+            sigma_px,
+            depth_likelihood_ratio_threshold,
+        ),
+    };
+    // Refuse the settings before the photographs are decoded.
+    options.check().map_err(refused)?;
+    let posed = PosedViews::from_reconstruction(&edited.inner.base);
+    let pyramids = resolve_pyramids(&posed, images)?;
+    let views = views_of(&posed, &pyramids);
+    let (next, report) = core_grown_plane_normal(
+        &track.inner,
+        &edited.inner,
+        &views,
+        &options,
+        &Progress::none(),
+    )
+    .map_err(refused)?;
+    let d = normal_report_dict(py, &report)?;
+    Ok((
+        PyEditableTrack {
+            inner: Arc::new(next),
+        },
+        d.unbind(),
+    ))
+}
+
 /// Register the normal steps on the `sfmtool.bench` submodule.
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(fit_normal, m)?)?;
     m.add_function(wrap_pyfunction!(finite_difference_normal, m)?)?;
     m.add_function(wrap_pyfunction!(grid_plane_normal, m)?)?;
+    m.add_function(wrap_pyfunction!(grown_plane_normal, m)?)?;
     Ok(())
 }

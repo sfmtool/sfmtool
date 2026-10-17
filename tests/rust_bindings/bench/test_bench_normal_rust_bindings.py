@@ -3,10 +3,10 @@
 
 """Tests for the bindings of the bench's normal steps.
 
-``fit_normal``, ``finite_difference_normal`` and ``grid_plane_normal`` are
-proved in Rust on synthetic planes; what is checked here is that each binding
-hands back a new track and a report that carries the step's numbers in the
-documented words, and that the settings reach the step.
+``fit_normal``, ``finite_difference_normal``, ``grid_plane_normal`` and
+``grown_plane_normal`` are proved in Rust on synthetic planes; what is checked
+here is that each binding hands back a new track and a report that carries the
+step's numbers in the documented words, and that the settings reach the step.
 """
 
 import numpy as np
@@ -20,6 +20,7 @@ from sfmtool.bench import (
     fit,
     fit_normal,
     grid_plane_normal,
+    grown_plane_normal,
 )
 from sfmtool.reconstruction import EditedReconstruction, SfmrReconstruction
 
@@ -247,6 +248,152 @@ class TestGridPlaneNormal:
 
         with pytest.raises(ValueError, match="acceptance"):
             grid_plane_normal(fitted, edited, images, acceptance="always")
+
+
+GROWN_VIEW_KEYS = {
+    "reference": {"kind", "keypoint"},
+    "joined": {
+        "kind",
+        "from_start",
+        "start",
+        "shift",
+        "grid_zncc",
+        "distance",
+        "held_zncc",
+        "was",
+        "keypoint",
+    },
+    "left_out": {"kind", "reason", "distance", "held_zncc"},
+    "not_attempted": {"kind"},
+}
+GROWN_STARTS = {"keypoint", "widened", "no_keypoint"}
+GROWN_REFUSALS = {"under_floor", "too_far", "held_under_floor"}
+
+# Every keyword of ``grown_plane_normal`` but the fit's, at the Rust default.
+GROWN_DEFAULTS = {
+    "spot_window": 7,
+    "window_fractions": [1 / 8, 1 / 5, 1 / 3, 1 / 2],
+    "keypoint_search_px": 3.0,
+    "min_keypoint_zncc": 0.7,
+    "spot_search_px": 12.0,
+    "spot_search_step_px": 0.5,
+    "zncc_tolerance": 0.01,
+    "max_agreement_distance": 3.0,
+    "min_held_zncc": 0.5,
+    "low_confidence_sigma_deg": 2.0,
+    "min_coverage": 0.6,
+    "max_iterations": 20,
+    "initial_damping": 1e-3,
+    "min_improvement": 1e-6,
+    "jacobian_tilt_step": 1e-3,
+    "jacobian_shift_step_px": 0.05,
+}
+
+
+@pytest.fixture(scope="module")
+def grown(fitted, edited, images):
+    """``grown_plane_normal`` at its defaults from the fitted track."""
+    return grown_plane_normal(fitted, edited, images)
+
+
+class TestGrownPlaneNormal:
+    def test_the_report_carries_the_sequence(self, fitted, grown):
+        turned, report = grown
+        _check_common(report, fitted, turned)
+        seq = report["estimate"]
+        assert seq["kind"] == "grown_plane"
+        assert isinstance(seq["reference"], int)
+        assert seq["working_resolution"] >= GROWN_DEFAULTS["spot_window"]
+        widths = seq["window_half_widths"]
+        assert widths == sorted(widths) and widths[0] == 3
+        # The last window, half the side rounded, covers the whole grid.
+        assert widths[-1] == int(np.floor(seq["working_resolution"] / 2 + 0.5))
+
+        views = seq["views"]
+        assert len(views) == fitted.observation_count
+        for view in views:
+            assert set(view) == GROWN_VIEW_KEYS[view["kind"]]
+        assert views[seq["reference"]]["kind"] == "reference"
+        assert sum(v["kind"] == "reference" for v in views) == 1
+        joined = [v for v in views if v["kind"] == "joined"]
+        assert seq["joined"] == len(joined)
+        assert seq["left_out"] == sum(v["kind"] == "left_out" for v in views)
+        for view in joined:
+            assert view["start"] in GROWN_STARTS
+            assert view["shift"].shape == (2,)
+            assert isinstance(view["grid_zncc"], float)
+        for view in views:
+            if view["kind"] == "left_out":
+                assert view["reason"] in GROWN_REFUSALS
+
+        assert seq["trace"]
+        for entry in seq["trace"]:
+            assert set(entry) == {
+                "observation",
+                "image",
+                "angle_deg",
+                "attempts",
+                "outcome",
+                "shared_normal",
+                "shared_sigma_deg",
+            }
+            assert entry["outcome"] in {"joined", "deferred", "left_out"}
+            assert 1 <= len(entry["attempts"]) <= 2
+            for attempt in entry["attempts"]:
+                assert attempt["start"] in GROWN_STARTS
+                assert attempt["stage_zncc"].dtype == np.float64
+                assert attempt["shift"].shape == (2,)
+                assert np.linalg.norm(attempt["normal"]) == pytest.approx(1.0)
+                refusal = attempt["refusal"]
+                assert refusal is None or refusal in GROWN_REFUSALS
+            if entry["shared_normal"] is not None:
+                assert np.linalg.norm(entry["shared_normal"]) == pytest.approx(1.0)
+
+        assert seq["turned"] == (seq["joined"] > 0)
+        if seq["turned"]:
+            np.testing.assert_allclose(report["normal"], seq["normal"], atol=1e-9)
+            precision = seq["precision"]
+            assert set(precision) == {
+                "sigma_weak_deg",
+                "sigma_strong_deg",
+                "low_confidence",
+            }
+            assert precision["sigma_weak_deg"] >= precision["sigma_strong_deg"]
+            assert isinstance(precision["low_confidence"], bool)
+            assert seq["written"] >= 1
+        else:
+            assert seq["normal"] is None and seq["precision"] is None
+            np.testing.assert_allclose(_normal(turned), _normal(fitted), atol=1e-9)
+
+    def test_the_defaults_are_the_rust_steps(self, fitted, edited, images, grown):
+        _, plain = grown
+        _, report = grown_plane_normal(fitted, edited, images, **GROWN_DEFAULTS)
+        assert report["text"] == plain["text"]
+        np.testing.assert_array_equal(report["normal"], plain["normal"])
+
+    def test_the_settings_reach_the_step(self, fitted, edited, images):
+        _, report = grown_plane_normal(
+            fitted, edited, images, working_resolution=30, window_fractions=[0.5]
+        )
+        seq = report["estimate"]
+        assert seq["working_resolution"] == 30
+        assert seq["window_half_widths"] == [3, 15]
+
+    def test_bad_settings_are_refused(self, fitted, edited, images):
+        for name, value in [
+            ("spot_window", 0),
+            ("window_fractions", [0.25, 0.0]),
+            ("spot_search_step_px", 0.0),
+            ("min_coverage", 1.5),
+            ("zncc_tolerance", -1.0),
+        ]:
+            with pytest.raises(ValueError, match=name):
+                grown_plane_normal(fitted, edited, images, **{name: value})
+
+    def test_a_cluster_is_refused(self, edited, images):
+        _, track = create_cluster(Bench(), 4, "IMG_0042", (142.0, 197.5), radius_px=7.5)
+        with pytest.raises(ValueError, match="cluster"):
+            grown_plane_normal(track, edited, images)
 
 
 class TestFiniteDifferenceNormal:
