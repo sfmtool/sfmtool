@@ -12,10 +12,11 @@
 //! a view it starts a small window at the grid's centre from the shift the
 //! view's keypoint implies, and only where that growth does not join, from an
 //! exhaustive shift search about that shift; it grows the window outward,
-//! fitting tilt and shift by Levenberg–Marquardt (`solve`) at each size, and ends with a fit of the whole grid on the robust
-//! cell score. Across views it takes the views nearest the reference in angle
-//! first; each starts from the plane the views before it share, and joins when
-//! its own plane agrees with the shared one within the two planes' precision.
+//! fitting tilt and shift by Levenberg–Marquardt (`solve`) at each size, and
+//! ends with a fit of the whole grid on the robust cell score. Across views
+//! it takes the views nearest the reference in angle first; each starts from
+//! the plane the views before it share, and joins when its own plane agrees
+//! with the shared one within the two planes' precision.
 //! The patch is turned to the shared plane whenever a view joined, and each
 //! joined view's keypoint is written where the plane and its shift put the
 //! patch.
