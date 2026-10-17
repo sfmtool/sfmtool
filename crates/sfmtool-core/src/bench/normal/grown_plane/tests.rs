@@ -223,8 +223,8 @@ fn iteration() -> Iteration {
     }
 }
 
-/// The fit reaches the target of a residual it can see, in steps no larger
-/// than its caps, and its information is the residual's.
+/// The fit reaches the target of a residual it can see, and its information
+/// is the residual's.
 #[test]
 fn the_fit_reaches_the_optimum_of_a_quadratic() {
     let target = vec![0.35, -0.2, 5.0, -3.0];

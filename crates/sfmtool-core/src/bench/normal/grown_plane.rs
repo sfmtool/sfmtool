@@ -136,9 +136,10 @@ impl Default for GrownPlaneNormalOptions {
 
 impl GrownPlaneNormalOptions {
     /// Whether the settings are ones the step takes: a first window of at
-    /// least one sample, finite fractions above zero, positive search steps,
-    /// bounds and Jacobian steps, a positive tolerance, and a coverage in
-    /// `0 ..= 1`. The error names the first setting that fails.
+    /// least one sample, finite fractions above zero, finite search bounds of
+    /// at least zero, a positive search step and Jacobian steps, a positive
+    /// tolerance, a coverage in `0 ..= 1` and a finite damping of at least
+    /// zero. The error names the first setting that fails.
     pub fn check(&self) -> Result<(), NormalError> {
         let bad = |name| Err(NormalError::BadGrownPlaneOption(name));
         let positive = |v: f64| v.is_finite() && v > 0.0;

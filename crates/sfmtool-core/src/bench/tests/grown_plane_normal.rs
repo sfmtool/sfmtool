@@ -12,7 +12,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use super::scene::{fixture_of, Scene, PLANE_Z, WORLD};
 use super::*;
 use crate::bench::{
-    GrownPlaneNormalOptions, GrownPlaneRefusal, GrownPlaneSequence, GrownPlaneStart, GrownPlaneView,
+    GrownPlaneNormalOptions, GrownPlaneRefusal, GrownPlaneSequence, GrownPlaneStart,
+    GrownPlaneTryOutcome, GrownPlaneView,
 };
 use crate::camera::CameraModel;
 
@@ -327,6 +328,28 @@ fn a_view_whose_own_plane_disagrees_is_left_out() {
         other => panic!("left out, not {other:?}: {report}"),
     }
     assert_eq!(sequence.joined(), centres.len() - 2, "{report}");
+    // The views are tried nearest the reference first; the odd view is
+    // grown again from the starting plane, deferred once and then left out.
+    let first_pass = &sequence.trace[..centres.len() - 1];
+    assert!(first_pass
+        .windows(2)
+        .all(|w| w[0].angle_deg <= w[1].angle_deg));
+    let tries: Vec<_> = sequence
+        .trace
+        .iter()
+        .filter(|t| t.observation == row)
+        .collect();
+    assert_eq!(
+        tries.iter().map(|t| t.outcome).collect::<Vec<_>>(),
+        [
+            GrownPlaneTryOutcome::Deferred,
+            GrownPlaneTryOutcome::LeftOut
+        ]
+    );
+    for t in &tries {
+        let starts: Vec<bool> = t.attempts.iter().map(|a| a.from_start).collect();
+        assert_eq!(starts, [false, true], "{t:?}");
+    }
 }
 
 /// A checker four image px a square, so that a 7×7 window matches equally
