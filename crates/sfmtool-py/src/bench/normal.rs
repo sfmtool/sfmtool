@@ -29,13 +29,14 @@ use sfmtool_core::bench::{
 };
 use sfmtool_core::patch::cell_plane_normals::{CellPlaneStatus, NormalDeterminacy};
 use sfmtool_core::patch::cluster_refine::{CellStatus, LoopStop};
-use sfmtool_core::progress::Progress;
+use sfmtool_core::progress::{Event, Progress};
 use sfmtool_matches_format::ClusterCellStatus;
 
 use super::{
     evaluate_report_dict, fit_options, refused, tilt_report_dict, views_of, PyEditableTrack,
 };
 use crate::patches::views::{resolve_pyramids, PosedViews};
+use crate::phase_record::PhaseRecord;
 use crate::reconstruction::edited::PyEditedReconstruction;
 
 /// The word for why a cell loop stopped.
@@ -1063,6 +1064,15 @@ fn grid_plane_normal(
 /// ``held_zncc``, ``sigma_deg`` (its own weakest ``σ``, ``NaN`` for the first
 /// view) and ``refusal`` (``None`` when it joined, else a ``reason`` word).
 ///
+/// With ``record_phases=True`` (default ``False``; the result is the same
+/// either way) the step runs with a detailed progress record, and the report
+/// also carries ``phases``: one dict per phase the step closed, by start, a
+/// phase before the phases inside it, each with ``name``, ``depth``, ``note``
+/// (what the phase did, or ``None``), ``start_s`` and ``duration_s``
+/// (seconds, the start from the beginning of the call) and ``messages`` (a
+/// list of dicts with ``level`` and ``text``). Without it the report has no
+/// ``phases``.
+///
 /// Raises ``ValueError`` with the reason when the step is refused, including a
 /// setting it does not take.
 #[pyfunction]
@@ -1092,6 +1102,7 @@ fn grid_plane_normal(
     max_cache_bytes = None,
     sigma_px = None,
     depth_likelihood_ratio_threshold = None,
+    record_phases = false,
 ))]
 #[allow(clippy::too_many_arguments)]
 fn grown_plane_normal(
@@ -1120,6 +1131,7 @@ fn grown_plane_normal(
     max_cache_bytes: Option<usize>,
     sigma_px: Option<f64>,
     depth_likelihood_ratio_threshold: Option<f64>,
+    record_phases: bool,
 ) -> PyResult<(PyEditableTrack, Py<PyDict>)> {
     let defaults = GrownPlaneNormalOptions::default();
     let options = GrownPlaneNormalOptions {
@@ -1153,15 +1165,20 @@ fn grown_plane_normal(
     let posed = PosedViews::from_reconstruction(&edited.inner.base);
     let pyramids = resolve_pyramids(&posed, images)?;
     let views = views_of(&posed, &pyramids);
-    let (next, report) = core_grown_plane_normal(
-        &track.inner,
-        &edited.inner,
-        &views,
-        &options,
-        &Progress::none(),
-    )
-    .map_err(refused)?;
+    let record = PhaseRecord::new();
+    let sink = |event: Event<'_>| record.sink(event);
+    let progress = if record_phases {
+        Progress::to(&sink).detailed(true)
+    } else {
+        Progress::none()
+    };
+    let (next, report) =
+        core_grown_plane_normal(&track.inner, &edited.inner, &views, &options, &progress)
+            .map_err(refused)?;
     let d = normal_report_dict(py, &report)?;
+    if record_phases {
+        d.set_item("phases", record.to_list(py)?)?;
+    }
     Ok((
         PyEditableTrack {
             inner: Arc::new(next),

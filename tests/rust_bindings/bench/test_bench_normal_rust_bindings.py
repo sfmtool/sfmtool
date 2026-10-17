@@ -399,6 +399,72 @@ class TestGrownPlaneNormal:
         with pytest.raises(ValueError, match="cluster"):
             grown_plane_normal(track, edited, images)
 
+    def test_no_phases_are_recorded_by_default(self, grown):
+        _, report = grown
+        assert "phases" not in report
+
+    def test_recorded_phases_change_nothing(self, fitted, edited, images, grown):
+        plain_track, plain = grown
+        turned, report = grown_plane_normal(fitted, edited, images, record_phases=True)
+        phases = report.pop("phases")
+        _assert_same(report, plain)
+        np.testing.assert_array_equal(_normal(turned), _normal(plain_track))
+
+        assert phases
+        for phase in phases:
+            assert set(phase) == {
+                "name",
+                "depth",
+                "note",
+                "start_s",
+                "duration_s",
+                "messages",
+            }
+            assert phase["duration_s"] >= 0.0 and phase["start_s"] >= 0.0
+            assert isinstance(phase["depth"], int)
+            for message in phase["messages"]:
+                assert message["level"] in {"info", "warn"}
+        names = [phase["name"] for phase in phases]
+        assert names[0] == "grown plane normal"
+        assert phases[0]["depth"] == 0
+        seq = report["estimate"]
+        assert names.count("grown plane view") == len(seq["trace"])
+        growths = sum(len(entry["attempts"]) for entry in seq["trace"])
+        assert names.count("judge") == growths
+        assert names.count("whole-grid stage") == growths
+        assert names.count("window stage") == growths * (
+            len(seq["window_half_widths"]) - 1
+        )
+        assert names.count("joint fit") == seq["joined"]
+        for once in ("setup", "precision", "turn and write"):
+            assert names.count(once) == (
+                0 if once == "precision" and not seq["turned"] else 1
+            )
+        # Every phase lies within the step's.
+        step = phases[0]
+        end = step["start_s"] + step["duration_s"]
+        for phase in phases[1:]:
+            assert phase["depth"] >= 1
+            assert phase["start_s"] + phase["duration_s"] <= end + 1e-3
+
+
+def _assert_same(a, b):
+    """``a`` and ``b`` are equal, arrays element by element and ``NaN`` equal."""
+    if isinstance(a, np.ndarray):
+        np.testing.assert_array_equal(a, b)
+    elif isinstance(a, dict):
+        assert set(a) == set(b)
+        for key in a:
+            _assert_same(a[key], b[key])
+    elif isinstance(a, (list, tuple)):
+        assert len(a) == len(b)
+        for x, y in zip(a, b):
+            _assert_same(x, y)
+    elif isinstance(a, float) and np.isnan(a):
+        assert isinstance(b, float) and np.isnan(b)
+    else:
+        assert a == b
+
 
 class TestFiniteDifferenceNormal:
     def test_the_grid_layout_is_todays_grid_plane_normal(self, fitted, edited, images):

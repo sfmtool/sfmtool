@@ -3872,7 +3872,12 @@ one dict per observation whose `kind` names the `GrownPlaneView`:
 `from_start`, `start`, `stage_zncc` (a float64 array), `shift`, `normal`,
 `grid_zncc`, `distance`, `held_zncc`, `sigma_deg` and `refusal` (`None` or a
 `reason` word). Keypoints and vectors are float64 arrays, and a field the
-Rust report leaves `None` is `None`.
+Rust report leaves `None` is `None`. `grown_plane_normal(...,
+record_phases=True)` runs the step with a detailed `Progress` and adds
+`phases` to the report, one dict per phase the step closed, by start, with
+`name`, `depth`, `note`, `start_s`, `duration_s` and `messages`; without it
+the step runs with `Progress::none()` and the report has no `phases`. The
+result is the same either way.
 
 `spin_patch` and `shape_observation` take their numbers directly;
 `sight_observation`, `resize_patch`, `translate_patch_to_pixel` and

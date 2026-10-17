@@ -135,6 +135,8 @@ pub use patches::{
 mod py_progress;
 pub use py_progress::ProgressCounter;
 
+mod phase_record;
+
 // ── The bench beside a reconstruction, and the editable track on it ───────
 
 mod bench;
