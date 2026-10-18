@@ -41,8 +41,9 @@ pub(super) const DAMPING_TRIES: u32 = 3;
 /// what the fit's first kept step raised it. A step is kept only when the
 /// score rises, so the first step's gain is positive, and the rule first
 /// applies to the second step: a fit whose first step does nearly all the
-/// work stops after its second. On the ground-truth sweep it took a fifth
-/// less time and kept the judged points that three damping tries alone kept.
+/// work stops after its second. On the ground-truth sweep, run alone, it took
+/// 9% less time than three damping tries without it and still had 55 of the
+/// 63 judged points right, as they did.
 pub(super) const MIN_RELATIVE_GAIN: f64 = 0.01;
 
 /// How a fit iterates.
