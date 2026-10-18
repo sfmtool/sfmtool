@@ -3163,8 +3163,11 @@ whole grid. It combines the views' own planes by a robust
 information-weighted mean, with no fit of the views together, adds the
 planes of the widest pairs of kept views matched against each other, and
 fits the shift alone of every view it did not pick. Unlike `grid_plane_normal` it turns
-the patch whenever one view joined, however low the plane's precision, and
-reports that precision in `NormalEstimate::GrownPlane`; and between the turn
+the patch whenever one view joined, however low the plane's precision, unless
+the turn is a large one on weak evidence (by default at least 70° and under
+3 times the plane's weakest `σ`), when it keeps the starting normal and the
+keypoints and reports the plane it found; it reports the precision in
+`NormalEstimate::GrownPlane`; and between the turn
 and the read-back it writes the reference's keypoint as it was and each joined
 view's where the plane and its shift put the patch.
 
@@ -3860,7 +3863,10 @@ when `None` (`window_fractions` as a list of numbers), and refuses a setting
 `GrownPlaneNormalOptions::check` refuses before it reads a photograph. Its
 `estimate` has `kind` `"grown_plane"` and carries `reference` (an
 observation index, or `None`), `working_resolution`, `window_half_widths` (a
-list of ints), `normal` (an array, or `None` when no view joined),
+list of ints), `outcome` (`"turned"`, `"none_joined"` or `"weak_turn"`),
+`normal` (an array, the plane found under `"weak_turn"` too, or `None` when
+no view joined), `turn_deg` and `turn_sigma_ratio` (the turn to that plane
+and its ratio to `sigma_weak_deg`, or `None`),
 `precision` (`None`, or `sigma_weak_deg`, `sigma_strong_deg`,
 `discounted_sigma_weak_deg`, `discounted_sigma_strong_deg` and
 `low_confidence`), `turned`, `joined`, `left_out`, `shift_only`, `matched`,

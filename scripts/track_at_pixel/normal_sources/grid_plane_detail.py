@@ -17,8 +17,10 @@ Today's Grid Plane Normal (``finite_difference_normal`` with
 ``layout="grid"``) is run from the same track at 2x2 and 3x3 pieces into the
 ``old_*`` and ``old3_*`` fields, as the evaluation names them. With
 ``--grown``, ``grown_plane_normal`` is run from the same track too, into the
-evaluation's ``grown_*`` fields (its error, ``σ``, confidence, views joined
-and left out, wall time and per-try trace), with its detail phases recorded
+evaluation's ``grown_*`` fields (its error, its outcome, ``"held"`` where
+it kept the start against a large turn on weak evidence, the error of the
+plane it found, ``σ``, confidence, views joined and left out, wall time and
+per-try trace), with its detail phases recorded
 (``record_phases=True``); ``--grown-opt KEY=VALUE``, repeated, passes it a
 keyword and implies ``--grown``.
 
@@ -58,7 +60,7 @@ time per phase name (summed, slowest first, each with its share of the step;
 a phase's time includes the phases inside it) are printed for each point as
 it finishes, and at the end a table for each start: the
 point, the errors of the start, ``old``, ``new`` and the grown step, the grown
-step's weakest ``σ`` (every kept estimate's information summed, and with each
+step's outcome and the error of the plane it found, its weakest ``σ`` (every kept estimate's information summed, and with each
 kept pair's halved) and confidence, its views joined of those tried, the
 views it grew against the reference of those beside the reference, the pairs
 kept of those matched, and its wall time.
@@ -183,7 +185,10 @@ def breakdown_lines(breakdown):
     return lines
 
 
-GROWN_HEADER = " point  start    old    new  grown  sigma  sig_b conf joined matched pairs       ms"
+GROWN_HEADER = (
+    " point  start    old    new  grown outcome  found  sigma  sig_b conf"
+    " joined matched pairs       ms"
+)
 
 
 def grown_line(row):
@@ -199,6 +204,7 @@ def grown_line(row):
     return (
         f"{row['point']:6d} {deg(row.get('start_deg'))} {deg(row.get('old_deg'))} "
         f"{deg(row.get('new_deg'))} {deg(row.get('grown_deg'))} "
+        f"{row.get('grown_outcome', '-'):>7s} {deg(row.get('grown_found_deg'))} "
         f"{deg(row.get('grown_sigma_weak_deg'))} "
         f"{deg(row.get('grown_discounted_sigma_weak_deg'))} {confidence:>4s} "
         f"{row.get('grown_joined', 0):3d}/{tried:<3d} "

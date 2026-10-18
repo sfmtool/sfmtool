@@ -41,9 +41,9 @@ pub use grid_plane::{
     GridPlaneViewCell, GridPlaneViewFit, BENCH_MIN_CELL_ZNCC,
 };
 pub use grown_plane::{
-    grown_plane_normal, GrownPlaneAttempt, GrownPlaneNormalOptions, GrownPlanePair, GrownPlanePick,
-    GrownPlanePrecision, GrownPlaneRefusal, GrownPlaneSequence, GrownPlaneStart, GrownPlaneTry,
-    GrownPlaneTryOutcome, GrownPlaneView,
+    grown_plane_normal, GrownPlaneAttempt, GrownPlaneNormalOptions, GrownPlaneOutcome,
+    GrownPlanePair, GrownPlanePick, GrownPlanePrecision, GrownPlaneRefusal, GrownPlaneSequence,
+    GrownPlaneStart, GrownPlaneTry, GrownPlaneTryOutcome, GrownPlaneView,
 };
 
 /// The smallest number of pieces [`FiniteDifferenceOptions::pieces`] takes: two

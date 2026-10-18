@@ -281,6 +281,8 @@ GROWN_DEFAULTS = {
     "max_agreement_distance": 3.0,
     "min_held_zncc": 0.5,
     "low_confidence_sigma_deg": 2.0,
+    "weak_turn_deg": 70.0,
+    "min_turn_sigma_ratio": 3.0,
     "max_pairs": 3,
     "target_sigma_deg": 0.5,
     "max_selected_views": 6,
@@ -396,9 +398,19 @@ class TestGrownPlaneNormal:
                 "view_left_out"
             }
 
-        assert seq["turned"] == (seq["joined"] > 0)
+        assert seq["outcome"] in {"turned", "none_joined", "weak_turn"}
+        assert seq["turned"] == (seq["outcome"] == "turned")
+        assert (seq["outcome"] == "none_joined") == (seq["joined"] == 0)
+        if seq["joined"] > 0:
+            assert seq["turn_deg"] >= 0.0
+            assert seq["turn_sigma_ratio"] == pytest.approx(
+                seq["turn_deg"] / seq["precision"]["sigma_weak_deg"]
+            )
+        else:
+            assert seq["turn_deg"] is None and seq["turn_sigma_ratio"] is None
         if seq["turned"]:
             np.testing.assert_allclose(report["normal"], seq["normal"], atol=1e-9)
+            assert seq["turn_deg"] == pytest.approx(report["tilt"]["degrees"])
             precision = seq["precision"]
             assert set(precision) == {
                 "sigma_weak_deg",
@@ -432,6 +444,31 @@ class TestGrownPlaneNormal:
         assert seq["working_resolution"] == 30
         assert seq["window_half_widths"] == [3, 15]
 
+    def test_a_large_turn_on_weak_evidence_keeps_the_start(
+        self, fitted, edited, images, grown
+    ):
+        # Every turn counts as large and no evidence is strong enough, so the
+        # plane the default run turned to is found again and not turned to.
+        _, plain = grown
+        found = plain["estimate"]
+        assert found["joined"] > 0
+        kept, report = grown_plane_normal(
+            fitted, edited, images, weak_turn_deg=0.0, min_turn_sigma_ratio=1e9
+        )
+        seq = report["estimate"]
+        assert seq["outcome"] == "weak_turn"
+        assert not seq["turned"]
+        assert report["tilt"]["degrees"] == 0.0
+        np.testing.assert_allclose(_normal(kept), _normal(fitted), atol=1e-9)
+        # The found plane, its turn and its precision are still reported.
+        np.testing.assert_allclose(seq["normal"], found["normal"], atol=1e-12)
+        assert seq["turn_deg"] == pytest.approx(found["turn_deg"])
+        assert seq["precision"] == found["precision"]
+        assert seq["joined"] == found["joined"]
+        assert seq["shift_only"] == 0
+        assert seq["written"] == 0
+        assert "normal left unchanged: large turn on weak evidence" in report["text"]
+
     def test_bad_settings_are_refused(self, fitted, edited, images):
         for name, value in [
             ("spot_window", 0),
@@ -440,6 +477,8 @@ class TestGrownPlaneNormal:
             ("min_coverage", 1.5),
             ("zncc_tolerance", -1.0),
             ("target_sigma_deg", 0.0),
+            ("weak_turn_deg", -1.0),
+            ("min_turn_sigma_ratio", float("nan")),
             ("max_selected_views", 0),
         ]:
             with pytest.raises(ValueError, match=name):

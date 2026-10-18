@@ -45,8 +45,13 @@ and ``--grown-opt KEY=VALUE`` one to ``grown_plane_normal``
 comma is read as a list of numbers.
 
 The grown step's fields are ``grown_deg`` (its error to the ground truth),
-``grown_outcome`` (``"turned"``, ``"unchanged"`` when no view joined, or
-``"refused"``), ``grown_sigma_weak_deg`` and
+``grown_outcome`` (``"turned"``, ``"held"`` when the plane found was a large
+turn on weak evidence and the step kept the start, ``"unchanged"`` when no
+view joined, or ``"refused"``), ``grown_found_deg`` (the error of the plane
+found, whether or not the patch was turned to it), ``grown_turn_deg`` (the
+turn from the start to that plane) and ``grown_turn_sigma_ratio`` (that turn
+over ``grown_sigma_weak_deg``), each ``None`` when no view joined,
+``grown_sigma_weak_deg`` and
 ``grown_sigma_strong_deg`` (every kept estimate's information summed) and
 ``grown_discounted_sigma_weak_deg`` (each kept pair's information halved),
 each ``None`` when no view joined, ``grown_low_confidence``,
@@ -317,8 +322,16 @@ def run_grown(row, track, edited, ds, grown_options, to_cam, gt):
         return None
     row["grown_ms"] = 1000 * (time.perf_counter() - t0)
     seq = report["estimate"]
-    row["grown_outcome"] = "turned" if seq["turned"] else "unchanged"
+    row["grown_outcome"] = {
+        "turned": "turned",
+        "weak_turn": "held",
+        "none_joined": "unchanged",
+    }[seq["outcome"]]
     row["grown_text"] = report["text"]
+    found = seq["normal"]
+    row["grown_found_deg"] = None if found is None else error(found)
+    row["grown_turn_deg"] = seq["turn_deg"]
+    row["grown_turn_sigma_ratio"] = seq["turn_sigma_ratio"]
     row["grown_working_resolution"] = seq["working_resolution"]
     row["grown_window_half_widths"] = seq["window_half_widths"]
     row["grown_joined"] = seq["joined"]
@@ -535,9 +548,13 @@ def summarize(name, rows):
 def summarize_grown(ok):
     """The grown step's outcomes, precision and views, and how it does against old."""
     print("grown step outcomes")
-    for outcome in ("turned", "unchanged", "refused"):
+    for outcome in ("turned", "held", "unchanged", "refused"):
         n = sum(r["grown_outcome"] == outcome for r in ok)
         print(f"  {outcome:12s} {n:4d}  {n / max(len(ok), 1):5.1%}")
+    held = [r for r in ok if r["grown_outcome"] == "held"]
+    if held:
+        print(f"  held, kept start   {stats(r['grown_deg'] for r in held)}")
+        print(f"  held, plane found  {stats(r['grown_found_deg'] for r in held)}")
     turned = [r for r in ok if r["grown_outcome"] == "turned"]
     low = [r for r in turned if r["grown_low_confidence"]]
     print(f"  low confidence {len(low)} of {len(turned)} turned")

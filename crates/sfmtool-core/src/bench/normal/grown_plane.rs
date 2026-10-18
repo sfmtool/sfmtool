@@ -21,9 +21,11 @@
 //! robust information-weighted mean, with no fit of the views together
 //! (`combine`); the widest pairs of kept views are then matched against each
 //! other and their planes added to the mean (`selected`). The patch is turned
-//! to the combined plane whenever a view joined, each joined view's keypoint
-//! is written where that plane and its shift put the patch, and each view not
-//! picked has its shift alone fitted at that plane.
+//! to the combined plane whenever a view joined, unless the turn is large and
+//! the evidence for it weak, when the starting normal is kept; on a turn,
+//! each joined view's keypoint is written where that plane and its shift put
+//! the patch, and each view not picked has its shift alone fitted at that
+//! plane.
 //!
 //! `specs/drafts/grown-plane-normal.md` is the design.
 
@@ -40,6 +42,7 @@ use crate::reconstruction::edited::EditedReconstruction;
 
 use super::super::evaluate::{check_views, seed_of, stored_patch_resolution, track_reference};
 use super::super::fit::FitOptions;
+use super::super::steps::tilt_degrees;
 use super::super::track::{EditableTrack, TrackMeasurement};
 use super::grid_plane::{working_side, MIN_WORKING_RESOLUTION};
 use super::{frame_of, normal_preconditions, read_back, NormalError, NormalEstimate, NormalReport};
@@ -98,8 +101,21 @@ pub struct GrownPlaneNormalOptions {
     /// a shift-only view's score at the final plane. 0.5.
     pub min_held_zncc: f64,
     /// A weakest-direction `σ` above this, degrees, is reported as low
-    /// confidence. It does not stop the turn. 2.
+    /// confidence. It does not by itself stop the turn. 2.
     pub low_confidence_sigma_deg: f64,
+    /// The smallest turn, degrees, that must be backed by evidence: a turn
+    /// from the starting normal to the combined plane of at least this, with
+    /// its ratio to the weakest-direction `σ` under
+    /// [`Self::min_turn_sigma_ratio`], is not made, and the step keeps the
+    /// starting normal ([`GrownPlaneOutcome::WeakTurn`]). Infinite never
+    /// keeps it. 70.
+    pub weak_turn_deg: f64,
+    /// The ratio of the turn to the combined plane's weakest-direction `σ`
+    /// ([`GrownPlanePrecision::sigma_weak_deg`], every kept estimate's
+    /// information summed, no pair halved) that a turn of at least
+    /// [`Self::weak_turn_deg`] needs to be made. A `σ` that is not finite
+    /// counts as no evidence, a ratio of 0. 0 never keeps the start. 3.
+    pub min_turn_sigma_ratio: f64,
     /// The most pairs of kept views matched against each other. 3.
     pub max_pairs: usize,
     /// The selection stops matching views once the combined plane's weakest
@@ -143,6 +159,8 @@ impl Default for GrownPlaneNormalOptions {
             max_agreement_distance: 3.0,
             min_held_zncc: 0.5,
             low_confidence_sigma_deg: 2.0,
+            weak_turn_deg: 70.0,
+            min_turn_sigma_ratio: 3.0,
             max_pairs: 3,
             target_sigma_deg: 0.5,
             max_selected_views: 6,
@@ -161,9 +179,10 @@ impl GrownPlaneNormalOptions {
     /// Whether the settings are ones the step takes: a first window of at
     /// least one sample, finite fractions above zero, finite search bounds of
     /// at least zero, a positive search step and Jacobian steps, a positive
-    /// tolerance and target `σ`, at least one selected view, a coverage in
-    /// `0 ..= 1` and a finite damping of at least zero. The error names the
-    /// first setting that fails.
+    /// tolerance and target `σ`, a weak-turn bound of at least zero (infinite
+    /// allowed) and a finite turn-to-`σ` ratio of at least zero, at least one
+    /// selected view, a coverage in `0 ..= 1` and a finite damping of at
+    /// least zero. The error names the first setting that fails.
     pub fn check(&self) -> Result<(), NormalError> {
         let bad = |name| Err(NormalError::BadGrownPlaneOption(name));
         let positive = |v: f64| v.is_finite() && v > 0.0;
@@ -187,6 +206,12 @@ impl GrownPlaneNormalOptions {
         }
         if !positive(self.target_sigma_deg) {
             return bad("target_sigma_deg");
+        }
+        if self.weak_turn_deg.is_nan() || self.weak_turn_deg < 0.0 {
+            return bad("weak_turn_deg");
+        }
+        if !(self.min_turn_sigma_ratio.is_finite() && self.min_turn_sigma_ratio >= 0.0) {
+            return bad("min_turn_sigma_ratio");
         }
         if self.max_selected_views == 0 {
             return bad("max_selected_views");
@@ -215,6 +240,22 @@ impl GrownPlaneNormalOptions {
             shift_step: self.jacobian_shift_step_px,
         }
     }
+}
+
+/// How [`grown_plane_normal`] ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GrownPlaneOutcome {
+    /// A view joined and the patch was turned to the combined plane.
+    Turned,
+    /// No view joined, or no reference was found: there is no plane, and the
+    /// normal and the keypoints are left as given.
+    NoneJoined,
+    /// A view joined, but the turn to the combined plane is at least
+    /// [`GrownPlaneNormalOptions::weak_turn_deg`] and under
+    /// [`GrownPlaneNormalOptions::min_turn_sigma_ratio`] times its weakest
+    /// `σ`: a large turn on weak evidence. The step keeps the starting normal
+    /// and the keypoints as given, and reports the plane it found.
+    WeakTurn,
 }
 
 /// How a view's first window found its shift.
@@ -372,7 +413,8 @@ pub struct GrownPlanePick {
 pub enum GrownPlaneView {
     /// The reference, with the keypoint the step wrote for it after the
     /// turn: the one it had before the step, or the anchor's projection
-    /// where it had none. `None` when no view joined and nothing was written.
+    /// where it had none. `None` when the step did not turn the patch and
+    /// nothing was written.
     Reference { keypoint: Option<[f64; 2]> },
     /// Its own plane is in the final plane. `start` is that of the growth
     /// that was kept; `distance` and `held_zncc` are its plane's distance
@@ -382,7 +424,9 @@ pub enum GrownPlaneView {
     /// combination's last held check read it at the final plane and that
     /// shift. `was` is its keypoint before the step and `keypoint` the one
     /// the step wrote, both image px; `keypoint` is `None` where that pixel
-    /// is off the photograph and nothing was written.
+    /// is off the photograph, or the turn was not made, and nothing was
+    /// written. Where the turn was not made, `shift` is its growth's own
+    /// shift, not moved.
     Joined {
         start: GrownPlaneStart,
         shift: [f64; 2],
@@ -412,8 +456,9 @@ pub enum GrownPlaneView {
         held_zncc: Option<f64>,
     },
     /// Not tried: not `in`, a second row in an image already tried, no
-    /// reference was found, or not picked by a selection that joined no view.
-    /// The step writes no keypoint for it.
+    /// reference was found, or not picked by a selection that joined no view
+    /// or whose turn was not made ([`GrownPlaneOutcome::WeakTurn`]). The step
+    /// writes no keypoint for it.
     NotAttempted,
 }
 
@@ -430,8 +475,9 @@ pub struct GrownPlanePrecision {
     pub discounted_sigma_weak_deg: f64,
     pub discounted_sigma_strong_deg: f64,
     /// `discounted_sigma_weak_deg` is over
-    /// [`GrownPlaneNormalOptions::low_confidence_sigma_deg`]. The patch is
-    /// turned either way.
+    /// [`GrownPlaneNormalOptions::low_confidence_sigma_deg`]. It does not by
+    /// itself decide the turn: that is the rule of
+    /// [`GrownPlaneNormalOptions::weak_turn_deg`], on `sigma_weak_deg`.
     pub low_confidence: bool,
 }
 
@@ -454,10 +500,19 @@ pub struct GrownPlaneSequence {
     pub picks: Vec<GrownPlanePick>,
     /// The pairs matched against each other, widest first.
     pub pairs: Vec<GrownPlanePair>,
-    /// The final plane's outward normal, world frame, which the patch was
-    /// turned to; `None` when no view joined and the normal was left as it
-    /// was.
+    /// How the step ended: turned, no view joined, or a large turn on weak
+    /// evidence not made.
+    pub outcome: GrownPlaneOutcome,
+    /// The final plane's outward normal, world frame: the plane the kept
+    /// estimates were combined on, which the patch was turned to when
+    /// `outcome` is [`GrownPlaneOutcome::Turned`] and not when it is
+    /// [`GrownPlaneOutcome::WeakTurn`]; `None` when no view joined.
     pub normal: Option<[f64; 3]>,
+    /// The turn from the starting normal to `normal`, degrees: the
+    /// [`TiltReport::degrees`](crate::bench::TiltReport::degrees) the turn
+    /// gives, or would have given where it was not made. `None` when no view
+    /// joined.
+    pub turn_deg: Option<f64>,
     /// `None` when no view joined.
     pub precision: Option<GrownPlanePrecision>,
     /// How many keypoints the step wrote, the reference's among them.
@@ -495,9 +550,19 @@ impl GrownPlaneSequence {
         self.pairs.iter().filter(|p| p.refusal.is_none()).count()
     }
 
-    /// Whether the step turned the patch: some view joined.
+    /// Whether the step turned the patch: some view joined, and the turn
+    /// was not a large one on weak evidence.
     pub fn turned(&self) -> bool {
-        self.normal.is_some()
+        self.outcome == GrownPlaneOutcome::Turned
+    }
+
+    /// The ratio of the turn to the combined plane's weakest-direction `σ`,
+    /// the quantity [`GrownPlaneNormalOptions::min_turn_sigma_ratio`] bounds:
+    /// 0 where that `σ` is not finite. `None` when no view joined.
+    pub fn turn_sigma_ratio(&self) -> Option<f64> {
+        let turn = self.turn_deg?;
+        let sigma = self.precision?.sigma_weak_deg;
+        Some(turn_sigma_ratio(turn, sigma))
     }
 
     fn count(&self, f: impl Fn(&GrownPlaneView) -> bool) -> usize {
@@ -541,7 +606,17 @@ impl std::fmt::Display for GrownPlaneSequence {
                 if p.low_confidence {
                     write!(f, ", low confidence")?;
                 }
-                write!(f, "; {} keypoints written", self.written)
+                if self.outcome == GrownPlaneOutcome::WeakTurn {
+                    write!(
+                        f,
+                        "; normal left unchanged: large turn on weak evidence, \
+                         {:.1}\u{b0} at {:.1}\u{3c3}",
+                        self.turn_deg.unwrap_or(f64::NAN),
+                        self.turn_sigma_ratio().unwrap_or(f64::NAN)
+                    )
+                } else {
+                    write!(f, "; {} keypoints written", self.written)
+                }
             }
             None => write!(f, ", normal left unchanged"),
         }
@@ -585,7 +660,14 @@ impl std::fmt::Display for GrownPlaneSequence {
 /// are matched against each other and their planes added to the mean. Every
 /// view not picked has its shift alone fitted at the final plane.
 ///
-/// When at least one view joined, the patch is turned to the final plane with
+/// When at least one view joined, the turn to the final plane is judged: a
+/// turn of at least [`GrownPlaneNormalOptions::weak_turn_deg`] under
+/// [`GrownPlaneNormalOptions::min_turn_sigma_ratio`] times the combined
+/// plane's weakest `σ` is a large turn on weak evidence and is not made
+/// ([`GrownPlaneOutcome::WeakTurn`]): the normal and the keypoints are left
+/// as given, the views not picked have no shift fitted, the track is read
+/// back, and the report gives the plane found, its precision, the views,
+/// picks and pairs. Otherwise the patch is turned to the final plane with
 /// [`tilt_patch`](crate::bench::tilt_patch), the reference's keypoint is
 /// written back as it was before the step, each joined view's at the anchor's
 /// projection plus its shift moved to the final plane, and each shift-only
@@ -685,7 +767,9 @@ pub fn grown_plane_normal(
             trace: Vec::new(),
             picks: Vec::new(),
             pairs: Vec::new(),
+            outcome: GrownPlaneOutcome::NoneJoined,
             normal: None,
+            turn_deg: None,
             precision: None,
             written: 0,
         };
@@ -798,7 +882,7 @@ pub fn grown_plane_normal(
         candidates: &candidates,
         renders: &renders,
     };
-    let outcome = state.run(progress)?;
+    let mut outcome = state.run(progress)?;
 
     let mut sequence = GrownPlaneSequence {
         reference: Some(reference),
@@ -808,7 +892,9 @@ pub fn grown_plane_normal(
         trace: outcome.trace,
         picks: outcome.picks,
         pairs: outcome.pairs,
+        outcome: GrownPlaneOutcome::NoneJoined,
         normal: None,
+        turn_deg: None,
         precision: None,
         written: 0,
     };
@@ -839,6 +925,30 @@ pub fn grown_plane_normal(
     });
     let normal = grid.plane_normal(tilt);
     sequence.normal = Some(normal.into());
+    let turn_deg = tilt_degrees(track, edited, normal)?;
+    sequence.turn_deg = Some(turn_deg);
+    if weak_turn(turn_deg, weak, options) {
+        sequence.outcome = GrownPlaneOutcome::WeakTurn;
+        record_views(&mut sequence.views, reference, &candidates, &outcome.fates);
+        let mut turn = progress.detail_phase("turn and write");
+        progress_note!(
+            turn,
+            "large turn on weak evidence, {turn_deg:.1}\u{b0} at {:.1}\u{3c3}: normal left unchanged",
+            turn_sigma_ratio(turn_deg, weak)
+        );
+        return read_back(
+            track,
+            edited,
+            images,
+            frame.normal(),
+            NormalEstimate::GrownPlane(Box::new(sequence)),
+            &options.fit,
+            &turn,
+            |_| {},
+        );
+    }
+    sequence.outcome = GrownPlaneOutcome::Turned;
+    state.fit_shift_only(tilt, &mut outcome.fates, progress)?;
 
     let mut turn = progress.detail_phase("turn and write");
     let finals = state.final_views(tilt, &outcome.fates);
@@ -983,6 +1093,23 @@ fn keypoint_writes(
         }
     }
     writes
+}
+
+/// The ratio of a turn to the weakest-direction `σ`: 0 where `sigma_deg` is
+/// not finite, which is no evidence.
+fn turn_sigma_ratio(turn_deg: f64, sigma_deg: f64) -> f64 {
+    if sigma_deg.is_finite() {
+        turn_deg / sigma_deg
+    } else {
+        0.0
+    }
+}
+
+/// Whether a turn of `turn_deg` to a plane of weakest `σ` `sigma_deg` is a
+/// large turn on weak evidence, which the step does not make.
+fn weak_turn(turn_deg: f64, sigma_deg: f64, options: &GrownPlaneNormalOptions) -> bool {
+    turn_deg >= options.weak_turn_deg
+        && turn_sigma_ratio(turn_deg, sigma_deg) < options.min_turn_sigma_ratio
 }
 
 /// How a growth's first window found its shift, in a detail phase's note.

@@ -2190,39 +2190,14 @@ pub fn tilt_patch(
     edited: &EditedReconstruction,
     normal: Vector3<f64>,
 ) -> Result<(EditableTrack, TiltReport), TrackEditError> {
-    let named = [normal.x, normal.y, normal.z];
-    let length = normal.norm();
-    if !named.iter().all(|c| c.is_finite()) || length < MIN_DIRECTION {
-        return Err(TrackEditError::BadNormal(named));
-    }
-    let asked = normal / length;
-    let frame = placement_of(track)?;
-    if frame.w == 0.0 {
-        return Err(TrackEditError::AtInfinity);
-    }
-    let was = frame.normal();
-
-    // The great arc from the normal the patch shows to the one asked for: its
-    // whole length `theta`, and the unit in-plane direction `perp` it leaves
-    // `was` in, so the normal part way along it is
-    // `was cos(phi) + perp sin(phi)`.
-    let along = was.dot(&asked).clamp(-1.0, 1.0);
-    let across = asked - was * along;
-    // `atan2` of the sine against the cosine rather than `acos` of the cosine
-    // alone. Near zero and near the half turn an `acos` loses the angle
-    // wholesale -- a turn of a nanoradian leaves the cosine `1.0` to the last
-    // bit, and the error in a cosine that *is* resolved lands on the answer
-    // divided by its sine -- and the bar a turn of nothing is judged by is a
-    // nanoradian. The two-argument form is conditioned the same at every angle.
-    let theta = across.norm().atan2(along);
-    let perp = if across.norm() > MIN_DIRECTION {
-        across.normalize()
-    } else {
-        // Collinear: at zero the arc has no length and this is never read, and
-        // at a half turn no direction is more nearly the least than another.
-        frame.u_axis
-    };
-    let (phi, stopped) = tilt_stop(track, edited, frame.center, was, perp, theta);
+    let TiltArc {
+        asked,
+        frame,
+        was,
+        perp,
+        phi,
+        stopped,
+    } = tilt_arc(track, edited, normal)?;
 
     let unchanged = TiltReport {
         degrees: phi.to_degrees(),
@@ -2275,6 +2250,81 @@ pub fn tilt_patch(
             ..unchanged
         },
     ))
+}
+
+/// How far [`tilt_patch`] would turn `track` toward `normal`, in degrees: the
+/// [`TiltReport::degrees`] it would give, with no track built. For a step
+/// that judges the turn before it decides whether to make it. Refuses what
+/// [`tilt_patch`] refuses.
+pub(crate) fn tilt_degrees(
+    track: &EditableTrack,
+    edited: &EditedReconstruction,
+    normal: Vector3<f64>,
+) -> Result<f64, TrackEditError> {
+    Ok(tilt_arc(track, edited, normal)?.phi.to_degrees())
+}
+
+/// The arc a tilt walks: the unit normal asked for, the frame and the normal
+/// it shows before the turn, the unit in-plane direction the arc leaves that
+/// normal in, and how far along it the turn goes, with the observation that
+/// stopped it.
+struct TiltArc<'t> {
+    asked: Vector3<f64>,
+    frame: &'t OrientedPatch,
+    was: Vector3<f64>,
+    perp: Vector3<f64>,
+    phi: f64,
+    stopped: Option<TiltStop>,
+}
+
+/// [`tilt_patch`]'s arc toward `normal`, refusing a `normal` that is not a
+/// finite direction and a track at infinity.
+fn tilt_arc<'t>(
+    track: &'t EditableTrack,
+    edited: &EditedReconstruction,
+    normal: Vector3<f64>,
+) -> Result<TiltArc<'t>, TrackEditError> {
+    let named = [normal.x, normal.y, normal.z];
+    let length = normal.norm();
+    if !named.iter().all(|c| c.is_finite()) || length < MIN_DIRECTION {
+        return Err(TrackEditError::BadNormal(named));
+    }
+    let asked = normal / length;
+    let frame = placement_of(track)?;
+    if frame.w == 0.0 {
+        return Err(TrackEditError::AtInfinity);
+    }
+    let was = frame.normal();
+
+    // The great arc from the normal the patch shows to the one asked for: its
+    // whole length `theta`, and the unit in-plane direction `perp` it leaves
+    // `was` in, so the normal part way along it is
+    // `was cos(phi) + perp sin(phi)`.
+    let along = was.dot(&asked).clamp(-1.0, 1.0);
+    let across = asked - was * along;
+    // `atan2` of the sine against the cosine rather than `acos` of the cosine
+    // alone. Near zero and near the half turn an `acos` loses the angle
+    // wholesale -- a turn of a nanoradian leaves the cosine `1.0` to the last
+    // bit, and the error in a cosine that *is* resolved lands on the answer
+    // divided by its sine -- and the bar a turn of nothing is judged by is a
+    // nanoradian. The two-argument form is conditioned the same at every angle.
+    let theta = across.norm().atan2(along);
+    let perp = if across.norm() > MIN_DIRECTION {
+        across.normalize()
+    } else {
+        // Collinear: at zero the arc has no length and this is never read, and
+        // at a half turn no direction is more nearly the least than another.
+        frame.u_axis
+    };
+    let (phi, stopped) = tilt_stop(track, edited, frame.center, was, perp, theta);
+    Ok(TiltArc {
+        asked,
+        frame,
+        was,
+        perp,
+        phi,
+        stopped,
+    })
 }
 
 /// How far along the arc the tilt may go, and the observation that stopped it.

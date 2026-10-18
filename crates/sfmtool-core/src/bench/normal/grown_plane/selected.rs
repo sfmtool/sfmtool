@@ -16,8 +16,8 @@
 //!
 //! The pairs are the widest among the kept views, each view in one pair at
 //! most; each is fitted from the combined plane with the two views' shifts
-//! held, and its plane joins the combination. Every view not picked has its
-//! shift alone fitted at the final plane.
+//! held, and its plane joins the combination. When the step turns the patch,
+//! every view not picked has its shift alone fitted at the final plane.
 
 use nalgebra::Matrix2;
 
@@ -37,8 +37,8 @@ type Matched = Result<Estimate, GrownPlaneAttempt>;
 
 impl Sequence<'_, '_, '_> {
     /// The selection, the combination of the selected views' planes, the
-    /// retry from the search of a view it left out, the pairs, and the
-    /// shift-only fits of the views not picked.
+    /// retry from the search of a view it left out, and the pairs. Every view
+    /// not picked is left [`Fate::NotTried`], for [`Self::fit_shift_only`].
     pub(super) fn run(&self, progress: &Progress<'_>) -> Result<Outcome, NormalError> {
         let n = self.candidates.len();
         let mut trace = Vec::new();
@@ -108,14 +108,6 @@ impl Sequence<'_, '_, '_> {
                 },
             };
         }
-        if let Some(tilt) = combined.tilt {
-            for (i, fate) in fates.iter_mut().enumerate() {
-                if matched[i].is_none() {
-                    progress.check_cancel()?;
-                    *fate = self.shift_only(i, tilt, progress);
-                }
-            }
-        }
         Ok(Outcome {
             tilt: combined.tilt,
             information: combined.information,
@@ -125,6 +117,23 @@ impl Sequence<'_, '_, '_> {
             picks,
             pairs,
         })
+    }
+
+    /// Fit the shift alone of every view not picked, each left
+    /// [`Fate::NotTried`] by [`Self::run`], at the final plane `tilt`.
+    pub(super) fn fit_shift_only(
+        &self,
+        tilt: [f64; 2],
+        fates: &mut [Fate],
+        progress: &Progress<'_>,
+    ) -> Result<(), NormalError> {
+        for (i, fate) in fates.iter_mut().enumerate() {
+            if matches!(fate, Fate::NotTried) {
+                progress.check_cancel()?;
+                *fate = self.shift_only(i, tilt, progress);
+            }
+        }
+        Ok(())
     }
 
     /// Grow candidate `i` from the starting plane against the reference

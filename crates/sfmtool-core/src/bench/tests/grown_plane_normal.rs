@@ -8,15 +8,16 @@
 //! poses that are off with keypoints on the content, keypoints off the
 //! content in views whose poses are further off, views on opposite sides of
 //! the reference whose pairs sharpen the plane, a selection that matches a
-//! few of many views, and a flat wall.
+//! few of many views, a flat wall, and large turns on weak and on strong
+//! evidence.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::scene::{fixture_of, Scene, PLANE_Z, WORLD};
 use super::*;
 use crate::bench::{
-    GrownPlaneNormalOptions, GrownPlaneRefusal, GrownPlaneSequence, GrownPlaneStart,
-    GrownPlaneTryOutcome, GrownPlaneView,
+    GrownPlaneNormalOptions, GrownPlaneOutcome, GrownPlaneRefusal, GrownPlaneSequence,
+    GrownPlaneStart, GrownPlaneTryOutcome, GrownPlaneView,
 };
 use crate::camera::CameraModel;
 
@@ -287,28 +288,149 @@ fn a_view_whose_top_cells_see_other_texture_still_joins() {
     );
 }
 
-/// Views all within three degrees of the reference turn the patch, with a
-/// low confidence.
-#[test]
-fn narrow_views_turn_the_patch_with_low_confidence() {
-    let centres = vec![
+/// Views all within three degrees of the reference.
+fn narrow_centres() -> Vec<[f64; 3]> {
+    vec![
         centre(0.0, 0.0),
         centre(2.0, 0.0),
         centre(3.0, 120.0),
         centre(2.5, 240.0),
-    ];
+    ]
+}
+
+/// Views all within three degrees of the reference turn the patch, with a
+/// low confidence. The turn is under three times its `σ`, weak evidence, but
+/// under the 70 degrees the weak-turn rule starts at, so it is made.
+#[test]
+fn narrow_views_turn_the_patch_with_low_confidence() {
+    let centres = narrow_centres();
     let scene = Scene::looking_at(&centres, WORLD, camera(), textured_plane);
     let edited = edited_of(&scene);
     let track = tilted_track(&edited, Vector3::y(), 20.0);
     let (turned, report) = run(&scene, &edited, &track, &GrownPlaneNormalOptions::default());
     let sequence = sequence_of(&report);
     assert!(sequence.turned(), "{report}");
+    assert_eq!(sequence.outcome, GrownPlaneOutcome::Turned);
     assert!(report.tilt.degrees > 0.0);
     let precision = sequence.precision.expect("views joined");
     assert!(precision.low_confidence, "{report}");
     assert!(precision.sigma_weak_deg > 2.0, "{report}");
     assert!(report.to_string().contains("low confidence"), "{report}");
+    // A small turn on weak evidence: the rule does not apply under 70 degrees.
+    let turn = sequence.turn_deg.expect("views joined");
+    assert!(turn < 70.0, "{report}");
+    assert!(
+        sequence.turn_sigma_ratio().expect("views joined") < 3.0,
+        "{report}"
+    );
+    assert!((turn - report.tilt.degrees).abs() < 1e-9, "{report}");
     let _ = turned;
+}
+
+/// The narrow views' turn of about 20 degrees on a `σ` of about 10, with the
+/// weak-turn rule starting at 10 degrees: a large turn on weak evidence. The
+/// step keeps the starting normal and every keypoint, fits no view's shift
+/// alone, and still reports the plane it found, its turn, its precision and
+/// the views that joined.
+#[test]
+fn a_large_turn_on_weak_evidence_keeps_the_start() {
+    let centres = narrow_centres();
+    let scene = Scene::looking_at(&centres, WORLD, camera(), textured_plane);
+    let edited = edited_of(&scene);
+    let track = tilted_track(&edited, Vector3::y(), 20.0);
+    let options = GrownPlaneNormalOptions {
+        weak_turn_deg: 10.0,
+        ..Default::default()
+    };
+    let (kept, report) = run(&scene, &edited, &track, &options);
+    let sequence = sequence_of(&report);
+    assert_eq!(sequence.outcome, GrownPlaneOutcome::WeakTurn, "{report}");
+    assert!(!sequence.turned());
+    assert_eq!(report.tilt.degrees, 0.0, "{report}");
+    let (a, b) = (placement_of(&track), placement_of(&kept));
+    assert_eq!(
+        (a.u_axis, a.v_axis, a.center),
+        (b.u_axis, b.v_axis, b.center)
+    );
+    for row in 0..track.observations.len() {
+        assert_eq!(
+            keypoint_of(&kept, row),
+            keypoint_of(&track, row),
+            "row {row}"
+        );
+    }
+    assert_eq!(sequence.written, 0);
+    assert_eq!(sequence.shift_only(), 0, "{report}");
+
+    // What was found is still reported: the plane, near the truth, its turn
+    // from the start, and its precision, weak.
+    let found = Vector3::from(sequence.normal.expect("a plane was found"));
+    assert!(degrees(found, truth()) < 2.0, "{report}");
+    let turn = sequence.turn_deg.expect("a plane was found");
+    assert!(
+        (turn - degrees(found, placement_of(&track).normal())).abs() < 1e-6,
+        "{report}"
+    );
+    assert!(turn >= options.weak_turn_deg, "{report}");
+    let precision = sequence.precision.expect("a plane was found");
+    let ratio = sequence.turn_sigma_ratio().expect("a plane was found");
+    assert!((ratio - turn / precision.sigma_weak_deg).abs() < 1e-12);
+    assert!(ratio < options.min_turn_sigma_ratio, "{report}");
+    assert_eq!(sequence.joined(), centres.len() - 1, "{report}");
+    assert!(!sequence.picks.is_empty());
+    for view in &sequence.views {
+        if let GrownPlaneView::Joined { keypoint, .. } = view {
+            assert_eq!(*keypoint, None);
+        }
+    }
+    assert_eq!(
+        sequence.views[sequence.reference.expect("a reference")],
+        GrownPlaneView::Reference { keypoint: None }
+    );
+    let sentence = report.to_string();
+    assert!(
+        sentence.contains("normal left unchanged: large turn on weak evidence"),
+        "{sentence}"
+    );
+    assert!(sentence.contains("turned 0.0\u{b0}"), "{sentence}");
+
+    // With the rule's ratio at 0 it never applies, and the same scene turns.
+    let never = GrownPlaneNormalOptions {
+        min_turn_sigma_ratio: 0.0,
+        ..options.clone()
+    };
+    let (_, report) = run(&scene, &edited, &track, &never);
+    assert_eq!(sequence_of(&report).outcome, GrownPlaneOutcome::Turned);
+}
+
+/// The wide views' turn of 25 degrees, with the weak-turn rule starting at
+/// 10: a large turn, but on strong evidence, many times its `σ`, so it is
+/// made.
+#[test]
+fn a_large_turn_on_strong_evidence_is_made() {
+    let centres = wide_centres();
+    let scene = Scene::looking_at(&centres, WORLD, camera(), textured_plane);
+    let edited = edited_of(&scene);
+    let track = tilted_track(&edited, Vector3::new(1.0, 0.5, 0.0), 25.0);
+    let options = GrownPlaneNormalOptions {
+        weak_turn_deg: 10.0,
+        ..Default::default()
+    };
+    let (turned, report) = run(&scene, &edited, &track, &options);
+    let sequence = sequence_of(&report);
+    assert_eq!(sequence.outcome, GrownPlaneOutcome::Turned, "{report}");
+    let turn = sequence.turn_deg.expect("views joined");
+    assert!(turn >= options.weak_turn_deg, "{report}");
+    assert!(
+        sequence.turn_sigma_ratio().expect("views joined") >= 3.0 * options.min_turn_sigma_ratio,
+        "{report}"
+    );
+    assert!((turn - report.tilt.degrees).abs() < 1e-9, "{report}");
+    assert!(
+        degrees(placement_of(&turned).normal(), truth()) < 1.0,
+        "{report}"
+    );
+    assert_eq!(sequence.written, centres.len(), "{report}");
 }
 
 /// A view that sees the texture on a plane turned 25 degrees from the one
@@ -557,6 +679,8 @@ fn a_flat_wall_joins_no_view_and_changes_nothing() {
     let sequence = sequence_of(&report);
     assert_eq!(sequence.joined(), 0, "{report}");
     assert!(!sequence.turned());
+    assert_eq!(sequence.outcome, GrownPlaneOutcome::NoneJoined);
+    assert_eq!((sequence.normal, sequence.turn_deg), (None, None));
     assert!(sequence.precision.is_none());
     assert_eq!(sequence.written, 0);
     assert_eq!(report.tilt.degrees, 0.0);
@@ -576,6 +700,7 @@ fn a_flat_wall_joins_no_view_and_changes_nothing() {
         report.to_string().contains("normal left unchanged"),
         "{report}"
     );
+    assert!(!report.to_string().contains("weak evidence"), "{report}");
 }
 
 #[test]
@@ -608,6 +733,42 @@ fn the_grown_plane_normal_refuses_a_bearing_bad_options_and_stops_when_cancelled
         grown_plane_normal(&track, &edited, &scene.views(), &bad, &Progress::none()).err(),
         Some(NormalError::BadGrownPlaneOption("spot_search_step_px"))
     );
+
+    // The weak-turn rule's two settings: a bound of at least zero, infinite
+    // allowed, and a finite ratio of at least zero.
+    for weak_turn_deg in [f64::NAN, -1.0] {
+        let bad = GrownPlaneNormalOptions {
+            weak_turn_deg,
+            ..Default::default()
+        };
+        assert_eq!(
+            bad.check(),
+            Err(NormalError::BadGrownPlaneOption("weak_turn_deg")),
+            "{weak_turn_deg}"
+        );
+    }
+    for min_turn_sigma_ratio in [f64::NAN, f64::INFINITY, -0.5] {
+        let bad = GrownPlaneNormalOptions {
+            min_turn_sigma_ratio,
+            ..Default::default()
+        };
+        assert_eq!(
+            bad.check(),
+            Err(NormalError::BadGrownPlaneOption("min_turn_sigma_ratio")),
+            "{min_turn_sigma_ratio}"
+        );
+    }
+    let edges = GrownPlaneNormalOptions {
+        weak_turn_deg: f64::INFINITY,
+        min_turn_sigma_ratio: 0.0,
+        ..Default::default()
+    };
+    assert_eq!(edges.check(), Ok(()));
+    let zero = GrownPlaneNormalOptions {
+        weak_turn_deg: 0.0,
+        ..Default::default()
+    };
+    assert_eq!(zero.check(), Ok(()));
 
     let cancel = AtomicBool::new(true);
     let cancelled = Progress::none().cancelled_by(&cancel);

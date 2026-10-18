@@ -24,9 +24,9 @@ use sfmtool_core::bench::{
     FiniteDifferenceOptions, FitNormalOptions, GridPlaneAcceptance, GridPlaneCells,
     GridPlaneDetail, GridPlaneFitModel, GridPlaneIteration, GridPlaneNormalOptions,
     GridPlaneOutcome, GridPlaneRender, GridPlaneTile, GridPlaneView, GrownPlaneAttempt,
-    GrownPlaneNormalOptions, GrownPlanePair, GrownPlanePick, GrownPlaneRefusal, GrownPlaneSequence,
-    GrownPlaneStart, GrownPlaneTryOutcome, GrownPlaneView, NormalEstimate, NormalReport,
-    PieceLayout,
+    GrownPlaneNormalOptions, GrownPlaneOutcome, GrownPlanePair, GrownPlanePick, GrownPlaneRefusal,
+    GrownPlaneSequence, GrownPlaneStart, GrownPlaneTryOutcome, GrownPlaneView, NormalEstimate,
+    NormalReport, PieceLayout,
 };
 use sfmtool_core::patch::cell_plane_normals::{CellPlaneStatus, NormalDeterminacy};
 use sfmtool_core::patch::cluster_refine::{CellStatus, LoopStop};
@@ -448,6 +448,15 @@ fn cells_dict<'py>(py: Python<'py>, cells: &GridPlaneCells) -> PyResult<Bound<'p
     Ok(d)
 }
 
+/// The word for how the grown-plane step ended.
+fn grown_outcome_name(outcome: GrownPlaneOutcome) -> &'static str {
+    match outcome {
+        GrownPlaneOutcome::Turned => "turned",
+        GrownPlaneOutcome::NoneJoined => "none_joined",
+        GrownPlaneOutcome::WeakTurn => "weak_turn",
+    }
+}
+
 /// The word for how a grown-plane view's first window found its shift.
 fn start_name(start: GrownPlaneStart) -> &'static str {
     match start {
@@ -634,7 +643,10 @@ fn sequence_dict<'py>(
         pairs.append(pair_dict(py, pair)?)?;
     }
     d.set_item("pairs", pairs)?;
+    d.set_item("outcome", grown_outcome_name(sequence.outcome))?;
     d.set_item("normal", maybe_vector(py, sequence.normal))?;
+    d.set_item("turn_deg", sequence.turn_deg)?;
+    d.set_item("turn_sigma_ratio", sequence.turn_sigma_ratio())?;
     let precision = match &sequence.precision {
         Some(p) => {
             let q = PyDict::new(py);
@@ -1093,14 +1105,21 @@ fn grid_plane_normal(
 /// photograph, and
 /// ``low_confidence_sigma_deg`` (default 2.0) is the weakest-direction ``σ``,
 /// with each pair's information halved, above which the plane is reported as
-/// low confidence. ``working_resolution`` is :func:`grid_plane_normal`'s.
+/// low confidence. A turn from the starting normal of at least
+/// ``weak_turn_deg`` (default 70.0) that is under ``min_turn_sigma_ratio``
+/// (default 3.0) times the weakest-direction ``σ`` (every kept estimate's
+/// information summed; a ``σ`` that is not finite counts as no evidence) is
+/// a large turn on weak evidence, and is not made. ``working_resolution`` is
+/// :func:`grid_plane_normal`'s.
 /// Every default is the Rust step's, and a setting outside what the step
 /// takes is refused before the photographs are decoded.
 ///
-/// The patch is turned to the final plane whenever a view joined, however
-/// low its precision, and the reference's, each joined view's and each
-/// shift-only view's that passed the floor keypoints are written; when no
-/// view joined, the track is given back as it was, read again. The centre
+/// The patch is turned to the final plane whenever a view joined and the
+/// turn is not a large one on weak evidence, and the reference's, each
+/// joined view's and each shift-only view's that passed the floor keypoints
+/// are written; when no view joined, or the turn is a large one on weak
+/// evidence, the track is given back as it was, read again, and in the
+/// second case no view has its shift alone fitted. The centre
 /// does not move. ``images`` and the last four keywords are :func:`fit`'s,
 /// and set the reading the step ends with.
 ///
@@ -1109,8 +1128,15 @@ fn grid_plane_normal(
 /// and carries ``reference`` (the reference observation, or
 /// ``None`` when none was found and nothing was tried),
 /// ``working_resolution`` (``0`` with no reference), ``window_half_widths``
-/// (the stages' windows, grid px), ``normal`` (the final plane's outward
-/// normal, or ``None`` when no view joined), ``precision`` (``None`` when no
+/// (the stages' windows, grid px), ``outcome`` (``"turned"``,
+/// ``"none_joined"`` when no view joined, or ``"weak_turn"`` when the plane
+/// found was a large turn on weak evidence and the start was kept),
+/// ``normal`` (the final plane's outward normal, reported under
+/// ``"weak_turn"`` too, or ``None`` when no view joined), ``turn_deg`` (the
+/// turn from the start to that plane, the report's ``tilt`` degrees it gives
+/// or would have given, or ``None``), ``turn_sigma_ratio`` (``turn_deg``
+/// over ``sigma_weak_deg``, 0 where that is not finite, or ``None``),
+/// ``precision`` (``None`` when no
 /// view joined, else ``sigma_weak_deg`` and ``sigma_strong_deg`` from every
 /// kept estimate's information summed, ``discounted_sigma_weak_deg`` and
 /// ``discounted_sigma_strong_deg`` with each kept pair's halved, and
@@ -1180,6 +1206,8 @@ fn grid_plane_normal(
     max_agreement_distance = None,
     min_held_zncc = None,
     low_confidence_sigma_deg = None,
+    weak_turn_deg = None,
+    min_turn_sigma_ratio = None,
     max_pairs = None,
     target_sigma_deg = None,
     max_selected_views = None,
@@ -1212,6 +1240,8 @@ fn grown_plane_normal(
     max_agreement_distance: Option<f64>,
     min_held_zncc: Option<f64>,
     low_confidence_sigma_deg: Option<f64>,
+    weak_turn_deg: Option<f64>,
+    min_turn_sigma_ratio: Option<f64>,
     max_pairs: Option<usize>,
     target_sigma_deg: Option<f64>,
     max_selected_views: Option<usize>,
@@ -1241,6 +1271,8 @@ fn grown_plane_normal(
         min_held_zncc: min_held_zncc.unwrap_or(defaults.min_held_zncc),
         low_confidence_sigma_deg: low_confidence_sigma_deg
             .unwrap_or(defaults.low_confidence_sigma_deg),
+        weak_turn_deg: weak_turn_deg.unwrap_or(defaults.weak_turn_deg),
+        min_turn_sigma_ratio: min_turn_sigma_ratio.unwrap_or(defaults.min_turn_sigma_ratio),
         max_pairs: max_pairs.unwrap_or(defaults.max_pairs),
         target_sigma_deg: target_sigma_deg.unwrap_or(defaults.target_sigma_deg),
         max_selected_views: max_selected_views.unwrap_or(defaults.max_selected_views),
