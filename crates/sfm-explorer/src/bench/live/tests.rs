@@ -277,17 +277,17 @@ fn undo_the_reconstruction_under_the_track_and_the_search_radius_are_inputs() {
 fn a_track_that_cannot_be_evaluated_says_why_and_starts_nothing() {
     let (mut state, id) = state();
     let label = put_on_bench(&mut state, id);
-    let mut frameless = (*track(&state, id, &label)).clone();
-    match &mut frameless.stage {
+    let mut without_placement = (*track(&state, id, &label)).clone();
+    match &mut without_placement.stage {
         Stage::Track(payload) => payload.placement = None,
         Stage::Cluster(_) => panic!("a point goes on the bench at the track stage"),
     }
     let history = &mut state.scene[0].history;
     let bench = history
         .current_bench()
-        .replace(&label, BenchItem::Track(Arc::new(frameless)))
+        .replace(&label, BenchItem::Track(Arc::new(without_placement)))
         .expect("on the bench");
-    history.push_bench(Arc::new(bench), "Dropped the frame");
+    history.push_bench(Arc::new(bench), "Dropped the placement");
 
     let evaluation = state.bench_evaluation(id, &label).expect("a track");
     match &evaluation {

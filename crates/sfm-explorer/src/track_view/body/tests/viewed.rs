@@ -489,14 +489,17 @@ fn the_crop_caption_gives_the_pixel_and_the_feature_index() {
 }
 
 #[test]
-fn a_frameless_point_shows_its_header_and_the_refusal_and_no_readings() {
+fn a_point_without_a_placement_shows_its_header_and_the_refusal_and_no_readings() {
     let mut state = AppState::new();
     state.append_node(SceneNode::demo(sfmtool_core::SfmrReconstruction::demo(12)));
     let id = state.selected_recon.expect("a selected reconstruction");
     view(&mut state, id, 3);
     let viewed = state.viewed_track().expect("a viewed track");
     let crate::bench::live::Evaluation::Refused(why) = viewed.evaluation.clone() else {
-        panic!("a frameless point was not refused: {:?}", viewed.evaluation);
+        panic!(
+            "a point without a placement was not refused: {:?}",
+            viewed.evaluation
+        );
     };
     let mut panel = TrackBody::new();
     let ctx = egui::Context::default();
@@ -510,8 +513,8 @@ fn a_frameless_point_shows_its_header_and_the_refusal_and_no_readings() {
     );
     assert!(!panel.rows().is_empty());
     for row in panel.rows() {
-        assert!(!row.crop, "a frameless row drew a crop");
-        assert!(!row.tile, "a frameless row drew a tile");
+        assert!(!row.crop, "a row without a placement drew a crop");
+        assert!(!row.tile, "a row without a placement drew a tile");
         assert!(row.cells[..4].iter().all(|c| c == "-"), "{row:?}");
         assert_eq!(row.verdict_text.as_deref(), Some("-"));
         assert_eq!(row.tint, None);

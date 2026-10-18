@@ -1408,7 +1408,9 @@ fn a_track_that_cannot_be_evaluated_shows_the_reason_instead_of_values() {
     let (mut state, id) = state();
     let (bench, _) = sfmtool_core::bench::Bench::new().put(
         "bearing",
-        sfmtool_core::bench::BenchItem::Track(std::sync::Arc::new(frameless_bearing_track())),
+        sfmtool_core::bench::BenchItem::Track(std::sync::Arc::new(
+            bearing_track_without_placement(),
+        )),
     );
     let index = state.node_index(id).expect("loaded");
     state.scene[index]
@@ -2719,7 +2721,7 @@ fn zncc_text_formats_both_readings() {
 /// A track-stage track standing on a bearing with **no patch**: the payload a
 /// `w = 0` point of a node with no patch frames arrives on the bench as, which
 /// is every row of a `sift_files` value.
-fn frameless_bearing_track() -> sfmtool_core::bench::EditableTrack {
+fn bearing_track_without_placement() -> sfmtool_core::bench::EditableTrack {
     use sfmtool_core::bench::{EditableTrack, Stage, TrackPayload};
 
     let direction = nalgebra::Point3::new(0.778, -0.611, -0.146);
@@ -2739,7 +2741,7 @@ fn frameless_bearing_track() -> sfmtool_core::bench::EditableTrack {
 /// unit from the world origin and the one thing that row is not.
 #[test]
 fn a_bearing_with_no_patch_still_reads_as_a_bearing() {
-    let said = header_text(&frameless_bearing_track());
+    let said = header_text(&bearing_track_without_placement());
     assert!(
         said.contains("Bearing (0.778, -0.611, -0.146)"),
         "the header should name it a bearing: {said}"
@@ -2753,8 +2755,8 @@ fn a_bearing_with_no_patch_still_reads_as_a_bearing() {
 /// is not offered and the sentence a person reads is the one the step would
 /// have refused with.
 #[test]
-fn the_photometric_entries_grey_with_their_own_sentence_on_a_frameless_track() {
-    let track = frameless_bearing_track();
+fn the_photometric_entries_grey_with_their_own_sentence_on_a_track_without_a_placement() {
+    let track = bearing_track_without_placement();
     let refusals = super::photometric_refusals(None, &track, StageKind::Cluster);
     for (what, refusal) in [
         ("Fit", &refusals.fit),
