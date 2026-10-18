@@ -135,21 +135,25 @@ at a 1 MiB chunk target and zstd level 3, via the version-1 revision of
 | `metadata` + `content_hash` | 0.0008 GB | 0.0001 GB | — |
 | **Payload** | **5.4674 GB** | **4.0257 GB** | **73.63%** |
 
-The decoded column reproduces the counts above to the byte: 5.467 GB total, and
-`tree_chunks` holds the 155,247,168 feature-ID bytes and 343,932,764 node and split
-bytes together. The file is **4.028 GB** including 2.7 MB of ZIP headers and
-directory across 16,394 entries.
+The build indexes 1,000 fewer rows than the study counted: the script holds out
+its query batch before building, and the DinoLedge runs used 1,000 queries, so
+9,702,948 - 1,000 = 9,701,948 rows were indexed. At that row count the decoded
+column matches the study's arithmetic to the byte: `tree_vectors` is
+4 x 9,701,948 x 128 = 4,967,397,376 bytes, and `tree_chunks` holds 155,231,168
+feature-ID bytes and the study's 343,932,764 node and split bytes together. The node
+count does not change, because each tree still has 1,048,576 leaves. The file is
+**4.028 GB** including 2.7 MB of ZIP headers and directory across 16,394 entries.
 
 Two things the projection could not know. Descriptors compress to **76.45%** in
 kd-tree leaf order, marginally better than the 76.96–76.98% image-order proxy —
 so the proxy was sound, and the vectors alone came in at 3.7975 GB, just under
 the projected 3.82–3.85 GB. And the ID/node/split arrays are far from
 incompressible: the ten-column node record compresses to **25.63%**, so those
-arrays cost 0.223 GB stored rather than the 0.499 GB the conservative allowance
+arrays cost 0.228 GB stored rather than the 0.499 GB the conservative allowance
 reserved. Both errors push the same way, which is why the total landed at 4.026 GB
 rather than mid-range.
 
-The same forest in the version-1 shared layout is **1.212 GB**, 3.33x smaller: one 0.9489 GB
+The same forest in the version-1 shared layout is **1.212 GB**, 3.32x smaller: one 0.9489 GB
 descriptor corpus at the same 76.41% ratio, plus a 0.0328 GB row map and a 0.0001 GB
 offsets array, against four copies. That is 2.816 GB saved, against the
 2.87–2.89 GB projected. Its `tree_chunks` section is byte-identical to tree-local's,
@@ -160,7 +164,7 @@ different forests. What the layout costs in query time is measured in
 Reproduction: enumerate sorted `features/*/*.sift`; read metadata and hash JSON
 with ZIP + zstd; sum descriptor entry shapes and stored frame sizes. Recursively
 calculate `nodes(n)=1` for n <= 16, otherwise `1+nodes(floor(n/2))+nodes(ceil(n/2))`;
-accept maximal subtrees satisfying `33*nodes(n)+132*n <= target`. Compress the
+accept maximal subtrees satisfying `41*nodes(n)+132*n <= target`. Compress the
 two little-endian origin columns in blocks of 131,072 rows. The SHA-256 of the
 concatenation of `filename + space + stored content_xxh128 + newline` for the
 sorted source files is
@@ -187,8 +191,8 @@ Descriptors are compressed, and therefore blocked and indexed, rather than
 stored as one flat fixed-stride array a reader could index arithmetically. The flat
 form is genuinely attractive on paper: it deletes the block-size choice, deletes
 `features/block_offsets`, and makes a descriptor read exactly `D * w` bytes at
-`row * D * w`. It costs about 24% more than the blocked corpus when descriptors
-compress to 76.4%.
+`row * D * w`. When descriptors compress to 76.4%, it is about 31% larger than
+the blocked corpus (1 / 0.764 = 1.31).
 
 What makes that trade unattractive is the storage layer's granularity. A filesystem
 read is a page, commonly 4 KiB, so a 128-byte descriptor read moves a page anyway;

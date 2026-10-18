@@ -213,6 +213,9 @@ the sampled sections below.
   - :191 says the flat array "costs about 24% more than the blocked corpus when descriptors compress to 76.4%"; 1/0.764 is 31% more. 24% is how much smaller the blocked corpus is.
   - :169 "No source files were modified and no `.kdf` was built" sits under the section reporting a built `.kdf`. Move it to the study section or say "the study itself built no `.kdf`".
   - Minor: :148 "0.223 GB" against the table's 0.2280 GB; :152 "3.33x" against 4.0257/1.212 = 3.32. No commit or PR is cited for the measured build, as TEMPLATE § "Measurement files" asks.
+
+> _Status (2026-10-17): **Partially done** — covers the formula, corpus-count, percentage and Minor-number bullets: the reproduction formula uses 41 bytes per node; the measured section says the build indexed 9,701,948 rows because the script holds out its 1,000-query batch before building, and gives the decoded bytes at that count; the flat array is "about 31% larger" (1 / 0.764 = 1.31); 0.228 GB and 3.32x. Still open: the misplaced "No source files were modified" paragraph, the missing commit or PR citation, the "Format tradeoffs" move, and the mannered prose, branch `fix-round-08-kdf-layout-numbers`._
+
 **Third copies:** "Format tradeoffs" (:171-203) is design rationale, not measurement. Its grouped-node-column argument repeats `kdf-file-format.md:416-428`. Move the flat-versus-blocked argument into the format spec's departures section and keep only the numbers here.
 **Recommendation:** update spec — fix the formula, the corpus count, the percentage, the misplaced paragraph, and cite the PR.
 **Unclear / incorrect / suspicious:** Mannered prose: "genuinely attractive on paper" (:188) → "has three advantages"; "blocking wins on the axis that turned out to dominate" (:199) → "blocking needs fewer page reads, and page reads are the larger cost".
@@ -658,6 +661,7 @@ path `formats/cluster-selection.md`.
    - `kdf-layout-measurements.md:163` gives 33 bytes per node where every
      figure uses 41, and its "to the byte" reproduction used a corpus 1,000
      rows smaller.
+     > _Status (2026-10-17): **Done** — both fixed in the spec, branch `fix-round-08-kdf-layout-numbers`._
 3. **The `*Options` naming rule, broken a day after it was recorded:**
    `PiecewiseParams` and `CellPlaneParams` (#870) are new caller-chosen
    settings structs. Rename them to `PiecewiseOptions` and `CellPlaneOptions`
