@@ -952,7 +952,7 @@ impl<'a, 'v> Cells<'a, 'v> {
         })
     }
 
-    /// One view's context tile at `frame`: the patch re-anchored on
+    /// One view's context tile at `patch_frame`: the patch re-anchored on
     /// `keypoint` (on the patch frame itself where there is none or its ray misses
     /// the plane), widened by `margin` grid px on every side, and drawn
     /// through its plane with the sampler the fit's bitmap render picks from
@@ -1347,7 +1347,7 @@ fn tile_zncc(
     (scored > 0).then(|| sum / scored as f64)
 }
 
-/// The signed distance of `plane`'s weighted cell centroid from `frame`'s
+/// The signed distance of `plane`'s weighted cell centroid from `patch_frame`'s
 /// centre along its normal; `NaN` when the cells fixed no axis.
 fn plane_offset(plane: &CellPlaneNormal, patch_frame: &OrientedPatch) -> f64 {
     if plane.determinacy == NormalDeterminacy::None {

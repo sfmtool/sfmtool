@@ -1440,7 +1440,7 @@ impl Rounds {
     }
 }
 
-/// Plan the rounds of one pass over `track` against `frame`, and name what each
+/// Plan the rounds of one pass over `track` against `patch_frame`, and name what each
 /// excluded observation was excluded for.
 ///
 /// The five exclusions are the localizer's own up-front refusals, decided here
@@ -1921,7 +1921,7 @@ pub(super) fn round_cache_bytes(
         .fold(0usize, |total, bytes| total.saturating_add(bytes))
 }
 
-/// The distance from `from` to `to`, two pixels of `view`, on `frame`'s plane
+/// The distance from `from` to `to`, two pixels of `view`, on `patch_frame`'s plane
 /// in patch-grid px, or `NaN` where either does not reach the plane.
 pub(super) fn grid_distance(
     patch_frame: &OrientedPatch,

@@ -4274,7 +4274,7 @@ fn a_fit_runs_in_the_grid_of_the_stored_patch_bitmaps() {
 }
 
 #[test]
-fn a_track_with_no_frame_has_nothing_to_register_against() {
+fn a_track_with_no_patch_frame_has_nothing_to_register_against() {
     let scene = Scene::new();
     let edited = edited_with_columns(&scene, WORLD);
     let (bench, label) = bench_with_point(&edited, 0);
@@ -4292,7 +4292,7 @@ fn a_track_with_no_frame_has_nothing_to_register_against() {
     );
     assert_eq!(
         stage_over(&scene, &edited, &track, StageKind::Cluster)
-            .expect_err("there is no frame to project"),
+            .expect_err("there is no patch frame to project"),
         StageError::NoPatchFrame
     );
 }
@@ -6542,7 +6542,7 @@ fn spread_point() -> Point3<f64> {
     Point3::new(0.0, 0.0, 2.0)
 }
 
-/// How large `frame` looks in image `i` of `scene`, in px: the geometric mean
+/// How large `patch_frame` looks in image `i` of `scene`, in px: the geometric mean
 /// of its two projected half-axes, read off the projections of its edge
 /// midpoints.
 fn looks_px(scene: &Scene, i: usize, patch_frame: &OrientedPatch) -> f64 {

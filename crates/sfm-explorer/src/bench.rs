@@ -891,7 +891,7 @@ impl AppState {
         node.edited().point(point)?.patch_frame()?;
         Some(format!(
             "{label} has no patch frame yet, and a copy of it would never get one. Put point \
-             {point} on the bench again to give {label} the frame the point now carries, then \
+             {point} on the bench again to give {label} the patch frame the point now carries, then \
              duplicate it."
         ))
     }

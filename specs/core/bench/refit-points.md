@@ -215,8 +215,8 @@ bench, *Fit* is pressed and *Commit* is pressed, and nothing else:
      read, and it is scored against the new bitmap. The record's observation
      readings and `observation_confidence` are written from these.
 
-   The alignment is against the reference render at the frame the point
-   arrived with; the stored bitmap is then rendered once more through the frame
+   The alignment is against the reference render at the patch frame the point
+   arrived with; the stored bitmap is then rendered once more through the patch frame
    the re-triangulation placed, so the bitmap written describes the patch that
    is written.
 3. **The record.** `bench::commit::point_record` builds the `PointRecord` the

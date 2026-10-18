@@ -671,7 +671,7 @@ pub fn fit_preconditions(track: &EditableTrack) -> Result<(), FitError> {
     Ok(())
 }
 
-/// How large `frame` looks in `view`, in source-image px: the geometric mean of
+/// How large `patch_frame` looks in `view`, in source-image px: the geometric mean of
 /// its two projected half-axes, each half the pixel distance between the
 /// projections of the patch's two opposite edge midpoints.
 ///
@@ -857,7 +857,7 @@ pub(super) fn placed_patch_frame(
     }
 }
 
-/// Register `frame` into every view, re-triangulate the `in` results, render
+/// Register `patch_frame` into every view, re-triangulate the `in` results, render
 /// the patch bitmap, write the geometry, and read the whole of it back.
 ///
 /// Shared by [`fit`] at the track stage and by the upgrade
@@ -1142,7 +1142,7 @@ struct Fit {
     keypoint: [f64; 2],
 }
 
-/// Localize and refine one round's observations against `frame`, and record
+/// Localize and refine one round's observations against `patch_frame`, and record
 /// where each landed.
 ///
 /// The round holds one observation per image, so an image index names exactly

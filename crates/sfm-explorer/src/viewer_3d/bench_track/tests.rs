@@ -182,7 +182,7 @@ fn a_cluster_stage_item_draws_nothing() {
 }
 
 #[test]
-fn a_track_with_no_frame_draws_nothing() {
+fn a_track_with_no_patch_frame_draws_nothing() {
     let (state, id, mut track) = staged_track();
     let Stage::Track(payload) = &mut track.stage else {
         unreachable!("the staged track is at the track stage");

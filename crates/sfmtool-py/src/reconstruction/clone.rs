@@ -932,8 +932,8 @@ fn check_patch_rows(recon: &SfmrReconstruction) -> PyResult<()> {
 /// columns); `None` drops the column. Either is refused where it would leave
 /// the column present without patch frames or absent with them, which a save
 /// would otherwise drop or fill with `-1` without a word. Otherwise the column
-/// follows the patch frame: a value with no frame carries none, and one with a
-/// frame carries one.
+/// follows the patch frame: a value with no patch frame carries none, and one with
+/// a patch frame carries one.
 ///
 /// A reference names the observation the point's bitmap is, or is to be,
 /// rendered from, so the column `inner` carried comes across whether or not

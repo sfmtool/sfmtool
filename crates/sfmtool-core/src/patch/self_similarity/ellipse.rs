@@ -98,12 +98,12 @@ impl SelfSimilarityEllipseUnits {
     /// use sfmtool_core::patch::self_similarity::{
     ///     PatchEllipse, SelfSimilarity, SelfSimilarityEllipseUnits,
     /// };
-    /// # fn bounds(reading: &SelfSimilarity, patch frame: &OrientedPatch,
+    /// # fn bounds(reading: &SelfSimilarity, patch_frame: &OrientedPatch,
     /// #           camera: &CameraIntrinsics, pose: &RigidTransform) {
     /// // `reading` is the whole of a 24 × 24 bitmap rendered through
     /// // `patch_frame`.
-    /// let jacobian = patch_grid_jacobian(patch frame, camera, pose, 24);
-    /// if let Some(units) = SelfSimilarityEllipseUnits::read(reading, jacobian, Some(patch frame), 24) {
+    /// let jacobian = patch_grid_jacobian(patch_frame, camera, pose, 24);
+    /// if let Some(units) = SelfSimilarityEllipseUnits::read(reading, jacobian, Some(patch_frame), 24) {
     ///     if let Some(PatchEllipse::Length(on_patch)) = units.patch {
     ///         // A match could land up to on_patch.axes[0] from the point
     ///         // along the patch, in the scene's world-space unit, in the

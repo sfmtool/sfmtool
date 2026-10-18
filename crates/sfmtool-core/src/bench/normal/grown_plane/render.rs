@@ -61,8 +61,8 @@ pub(super) struct Grid {
 }
 
 impl Grid {
-    /// The grid of `side` samples a side over `frame` re-anchored on the
-    /// reference's `keypoint` (on `frame` itself where there is none or its
+    /// The grid of `side` samples a side over `patch_frame` re-anchored on the
+    /// reference's `keypoint` (on `patch_frame` itself where there is none or its
     /// ray misses the plane), seen from the reference view `reference`.
     pub(super) fn new(
         patch_frame: &OrientedPatch,
@@ -198,7 +198,7 @@ impl Grid {
     }
 }
 
-/// `frame` re-anchored on `keypoint` in `view`, or `frame` itself where there
+/// `patch_frame` re-anchored on `keypoint` in `view`, or `patch_frame` itself where there
 /// is no keypoint or its ray misses the plane.
 pub(super) fn anchored(
     patch_frame: &OrientedPatch,
