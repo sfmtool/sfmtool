@@ -3877,7 +3877,8 @@ one dict per observation whose `kind` names the `GrownPlaneView`:
 with `start`, `stage_zncc` (a float64 array), `shift`, `normal`,
 `grid_zncc`, `sigma_deg` and `refusal` (`None` or `"under_floor"`). `picks` holds one dict per pick of the selection, with
 `observation`, `image`, `angle_deg`, `offset_direction`, `scale_px`,
-`predicted_weak`, `matched` and `sigma_after_deg`; `pairs` one per pair of
+`predicted_weak` (`NaN` for a pick made by angle alone), `matched` and
+`sigma_after_deg` (`NaN` when not matched); `pairs` one per pair of
 views matched against each other, with `observations`, `images`,
 `angle_deg`, `normal`, `relative_shift`, `zncc`, `sigma_deg`, `distance`,
 `kept` and `refusal` (`None`, a `reason` word or `"view_left_out"`). Keypoints and vectors are float64 arrays, and a field the

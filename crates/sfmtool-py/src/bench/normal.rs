@@ -1143,7 +1143,10 @@ fn grid_plane_normal(
 /// was taken, else ``"under_floor"``). ``picks`` has one dict per pick of
 /// the selection: ``observation``, ``image``,
 /// ``angle_deg``, ``offset_direction`` (``(2,)``, in the starting frame),
-/// ``scale_px``, ``predicted_weak``, ``matched`` and ``sigma_after_deg``.
+/// ``scale_px``, ``predicted_weak`` (the smallest eigenvalue of the
+/// information predicted with it added, ``NaN`` for a pick made by angle
+/// alone while no view had been matched), ``matched`` and
+/// ``sigma_after_deg`` (``NaN`` when it was not matched).
 /// ``pairs`` has one dict per pair: ``observations``, ``images``,
 /// ``angle_deg`` (between the two views), ``normal``, ``relative_shift``,
 /// ``zncc``, ``sigma_deg``, ``distance``, ``kept`` and ``refusal`` (a
