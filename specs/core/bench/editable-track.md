@@ -3162,7 +3162,8 @@ reference's by ZNCC, over a window that grows from the grid's centre to the
 whole grid. It combines the views' own planes by a robust
 information-weighted mean, with no fit of the views together, adds the
 planes of the widest pairs of kept views matched against each other, and
-fits the shift alone of every view it did not pick. Unlike `grid_plane_normal` it turns
+when it turns the patch fits the shift alone of every view it did not
+pick. Unlike `grid_plane_normal` it turns
 the patch whenever one view joined, however low the plane's precision, unless
 the turn is a large one on weak evidence (by default at least 70° and under
 3 times the plane's weakest `σ`), when it keeps the starting normal and the

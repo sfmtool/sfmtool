@@ -60,8 +60,8 @@ time per phase name (summed, slowest first, each with its share of the step;
 a phase's time includes the phases inside it) are printed for each point as
 it finishes, and at the end a table for each start: the
 point, the errors of the start, ``old``, ``new`` and the grown step, the grown
-step's outcome and the error of the plane it found, its weakest ``σ`` (every kept estimate's information summed, and with each
-kept pair's halved) and confidence, its views joined of those tried, the
+step's outcome and the error of the plane it found, its weakest ``σ``
+(every kept estimate's information summed, and with each kept pair's halved) and confidence, its views joined of those tried, the
 views it grew against the reference of those beside the reference, the pairs
 kept of those matched, and its wall time.
 
