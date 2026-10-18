@@ -200,6 +200,7 @@ impl AppState {
     /// map read off the two values is the identity. Records its own outcome,
     /// success or refusal, as one Action Log entry, and returns the camera's
     /// entry of the core report for a caller that shows the numbers.
+    #[cfg(any(test, feature = "mcp"))]
     pub(crate) fn switch_camera_model(
         &mut self,
         id: ReconId,

@@ -54,7 +54,7 @@ struct UiParts<'a> {
 /// [`App::run_egui_pass`] draws them, for a headless test that drives them with
 /// real egui frames: no GPU and no window, so the panels the menus drop caches
 /// from are held here fresh.
-#[cfg(test)]
+#[cfg(all(test, feature = "mcp"))]
 pub(crate) struct Chrome {
     image_browser: crate::image_browser::ImageBrowser,
     /// Public so a test that draws the Image Detail panel draws this one, the
@@ -66,7 +66,7 @@ pub(crate) struct Chrome {
     pub(crate) quit_requested: bool,
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "mcp"))]
 impl Chrome {
     pub(crate) fn new() -> Self {
         Self {

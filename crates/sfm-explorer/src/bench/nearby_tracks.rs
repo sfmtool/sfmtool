@@ -120,9 +120,11 @@ impl Landing {
 #[derive(Debug, Clone)]
 pub(crate) struct FoundNearby {
     /// What core found, every track and layer.
+    #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
     pub(crate) found: NearbyTracks,
     /// Per usable track, in [`NearbyTracks::bench_order`], its index into
     /// `found.tracks` and what became of it.
+    #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
     pub(crate) landed: Vec<(usize, Landing)>,
     /// Whether a version was pushed.
     pub(crate) changed: bool,

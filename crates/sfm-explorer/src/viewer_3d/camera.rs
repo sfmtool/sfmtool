@@ -176,6 +176,7 @@ impl ViewportCamera {
     ///
     /// The level counterpart of [`Self::fly_move`], whose axes are the
     /// camera's own; this is the move `set_view`'s `move` makes.
+    #[cfg(feature = "mcp")]
     pub(crate) fn move_level(&mut self, forward: f64, right: f64, up: f64) {
         let z = Vector3::z();
         let level_right = self.camera.forward().cross(&z);

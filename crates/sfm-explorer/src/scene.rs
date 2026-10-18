@@ -592,6 +592,7 @@ impl FitPoints {
     }
 
     /// Add `other`'s points to these.
+    #[cfg(feature = "mcp")]
     pub(crate) fn extend(&mut self, other: Self) {
         self.positions.extend(other.positions);
         self.bearings.extend(other.bearings);

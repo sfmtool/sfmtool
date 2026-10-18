@@ -265,6 +265,22 @@ jobs:
           -s "python=3.14.*"
           -- cargo check -p sfm-explorer --no-default-features --locked
 
+      # The same library, failing on any warning. No other build compiles the
+      # viewer without `mcp`, so an item only the MCP code uses (an import, a
+      # field, a method) warns here and nowhere else, and the step above would
+      # pass with it. `cargo rustc` hands `-D warnings` to the one crate named,
+      # not to its dependencies, so unlike RUSTFLAGS it rebuilds nothing the
+      # step above checked: it re-checks sfm-explorer's library alone. The
+      # library only, because `cargo rustc` takes extra flags for one target;
+      # the binary is a thin `main.rs` over it.
+      - name: Deny warnings in sfm-explorer without mcp at MSRV
+        run: >
+          pixi exec
+          -s "rust==${{ steps.msrv.outputs.version }}.*"
+          -s "python=3.14.*"
+          -- cargo rustc -p sfm-explorer --lib --profile check --no-default-features --locked
+          -- -D warnings
+
   # Full instrumented build + combined Rust/Python coverage, uploaded to
   # codecov. Coverage line numbers are platform-independent, so we only pay
   # the slower instrumented build once, on Linux. Windows and macOS still run

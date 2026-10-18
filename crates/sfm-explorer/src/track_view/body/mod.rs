@@ -71,6 +71,7 @@ mod tests;
 
 pub(crate) use patch::track_patch_image;
 pub(crate) use table::RowSummary;
+#[cfg(any(test, feature = "mcp"))]
 pub(crate) use tile::patch_jacobian;
 
 /// Display size of the track's own patch, left of the toolbar.

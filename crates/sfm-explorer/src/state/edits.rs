@@ -620,9 +620,11 @@ pub(crate) use refit_all_points::refit_refusal;
 
 #[cfg(test)]
 pub(crate) use switch_camera_model::tracks_of_camera;
+#[cfg(any(test, feature = "mcp"))]
+pub(crate) use switch_camera_model::ProposalApplied;
 pub(crate) use switch_camera_model::{
     monotone_clause, refit_change, switch_and_retriangulate, switch_refusal_in_version_numbering,
-    ProposalApplied, ResolvedSwitch, SwitchCameraModelRequest, SwitchEnd,
+    ResolvedSwitch, SwitchCameraModelRequest, SwitchEnd,
 };
 
 #[cfg(test)]
