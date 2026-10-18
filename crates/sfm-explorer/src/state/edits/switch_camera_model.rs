@@ -9,7 +9,7 @@
 //! camera switched to its own spline model is a refit of its spline to a new
 //! coefficient count or domain end. The edit has two forms:
 //!
-//! - **The direct switch** ([`AppState::switch_camera_model`]), lens only, on
+//! - **The direct switch** (`AppState::switch_camera_model`), lens only, on
 //!   the GUI thread: the MCP tool `switch_camera_model` in its direct form.
 //! - **The proposal's Apply** ([`AppState::apply_camera_model_proposal`]): the
 //!   switch followed by the retriangulation of the camera's tracks through
@@ -209,7 +209,7 @@ impl AppState {
         self.switch_camera_model_noting(id, request, None)
     }
 
-    /// [`Self::switch_camera_model`], with `note` added to the Action Log row
+    /// `Self::switch_camera_model`, with `note` added to the Action Log row
     /// after the fit's report: the proposal's Apply on a node it cannot
     /// retriangulate says there why the tracks were not moved.
     fn switch_camera_model_noting(
