@@ -132,7 +132,11 @@ edges and corners (`viewer_3d/overlay.rs::draw_info_overlay`):
   The parenthetical appears only when the reconstruction carries `w = 0`
   points; the frame rate only while the HUD's Debug > Frame rate toggle is on
   (it is, by default).
-- **Camera position** (top-centre): `Pos: [x, y, z]`
+- **Camera position** (top-centre): `Pos: [x, y, z]`, on the stats line's row
+  while at least 12 px separates the two. In a narrower view it drops to the
+  status line's row (28 px down) when that row is clear of the status message,
+  and otherwise to a row of its own under it (46 px down), so it is never
+  drawn over either (`overlay::camera_position_top`).
 - **Hover overlay** (bottom-left): Shows what's under the cursor
   - Over a point: `Point3D #N | depth: X.XXXX`
   - Over a frustum: `Camera: image_name`

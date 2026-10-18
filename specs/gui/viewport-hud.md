@@ -208,9 +208,11 @@ the words stay inside it and no line runs into the next. The words are in the
 `→` of a model change) is laid out in the monospace font, which has the
 arrow (`banner_job`), so it is not drawn as an empty box.
 
-Both banners start at `BANNER_TOP`, 50 px below the view's top edge, under the
-stats line and the status line (`STATUS_TOP`, 28 px), so neither covers the
-status message an edit or a tool call leaves there.
+Both banners start at `BANNER_TOP`, 64 px below the view's top edge, under the
+stats line, the status line (`STATUS_TOP`, 28 px) and the row the camera
+position drops to in a narrow view (`POSITION_THIRD_ROW_TOP`, 46 px), so
+neither covers the status message an edit or a tool call leaves there or the
+camera position.
 
 ---
 

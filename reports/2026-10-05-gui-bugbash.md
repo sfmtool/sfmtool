@@ -270,6 +270,13 @@ build.
 Expected: the readout moves to a second line, or is shortened, when the two
 would touch.
 
+> _Status (2026-10-17): **Done** — the 3D view measures the stats, status and
+> `Pos:` galleys and puts the centred camera position on the first row where
+> it keeps 12 px clear of the text to its left: beside the stats, on the
+> status line's row, or on a row of its own under it
+> (`overlay::camera_position_top`); the banners start at 64 px so they stay
+> under that third row, branch `fix-round-05-hud-overlap`._
+
 ## 12. The longest dino track holds several observations in one image (low)
 
 > _Status (2026-10-05): **Needs decision** — whether several observations of

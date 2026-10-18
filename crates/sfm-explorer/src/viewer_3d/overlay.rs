@@ -160,40 +160,37 @@ impl Viewer3D {
         // are directions rather than locations, so a lone total hides how much
         // of the cloud has no position at all.
         let stats = scene_stats_text(scene, solo, show_fps, fps);
-        painter.text(
-            Pos2::new(rect.left() + 10.0, rect.top() + 10.0),
-            egui::Align2::LEFT_TOP,
-            stats,
-            font.clone(),
-            text_color,
-        );
+        let stats = painter.layout_no_wrap(stats, font.clone(), text_color);
+        let stats_pos = Pos2::new(rect.left() + 10.0, rect.top() + STATS_TOP);
+        let stats_right = stats_pos.x + stats.size().x;
+        painter.galley(stats_pos, stats, text_color);
 
         // Directly under the stats: the status message. This is where an
         // `Align to…` outcome lands — the empty-state text in `dock.rs` only
         // shows it when *nothing* is loaded, and an alignment by definition
         // happens with two files open.
+        let mut status_right = None;
         if let Some(status) = status_message {
-            painter.text(
-                Pos2::new(rect.left() + 10.0, rect.top() + STATUS_TOP),
-                egui::Align2::LEFT_TOP,
-                status,
-                font.clone(),
-                Color32::from_rgb(235, 215, 150),
-            );
+            let status = painter.layout_no_wrap(status.to_owned(), font.clone(), BANNER_COLOUR);
+            let status_pos = Pos2::new(rect.left() + 10.0, rect.top() + STATUS_TOP);
+            status_right = Some(status_pos.x + status.size().x);
+            painter.galley(status_pos, status, BANNER_COLOUR);
         }
 
-        // Top-middle: camera info
+        // Top-middle: camera info, on the first row where it touches neither
+        // the stats nor the status message (`camera_position_top`).
         let cam_info = format!(
             "Pos: [{:.1}, {:.1}, {:.1}]",
             self.camera.position().x,
             self.camera.position().y,
             self.camera.position().z
         );
-        painter.text(
-            Pos2::new(rect.center().x, rect.top() + 10.0),
-            egui::Align2::CENTER_TOP,
+        let cam_info = painter.layout_no_wrap(cam_info, font.clone(), text_color);
+        let cam_left = rect.center().x - cam_info.size().x / 2.0;
+        let cam_top = camera_position_top(stats_right, status_right, cam_left);
+        painter.galley(
+            Pos2::new(cam_left, rect.top() + cam_top),
             cam_info,
-            font.clone(),
             text_color,
         );
 
@@ -367,14 +364,52 @@ pub(crate) fn hover_overlay_text(
 /// The colour the banners draw their words and frame in.
 const BANNER_COLOUR: Color32 = Color32::from_rgb(235, 215, 150);
 
+/// How far below the 3D view's top edge its stats line is drawn.
+pub(crate) const STATS_TOP: f32 = 10.0;
+
 /// How far below the 3D view's top edge its status line is drawn, under the
 /// stats line.
 pub(crate) const STATUS_TOP: f32 = 28.0;
 
-/// How far below the 3D view's top edge the banners start: under the
-/// stats line at 10 px and the status line at [`STATUS_TOP`], each a 12 pt
-/// line, so a banner never covers the status message.
-pub(crate) const BANNER_TOP: f32 = 50.0;
+/// How far below the 3D view's top edge the camera position is drawn when it
+/// would touch the text on both rows above it: a row of its own, under the
+/// status line.
+pub(crate) const POSITION_THIRD_ROW_TOP: f32 = 46.0;
+
+/// How far below the 3D view's top edge the banners start: under the stats
+/// line at [`STATS_TOP`], the status line at [`STATUS_TOP`] and the camera
+/// position's own row at [`POSITION_THIRD_ROW_TOP`], each a 12 pt line, so a
+/// banner never covers the status message or the camera position.
+pub(crate) const BANNER_TOP: f32 = 64.0;
+
+/// The least horizontal space kept between the centred camera position and
+/// the text to its left on the same row.
+const POSITION_GAP: f32 = 12.0;
+
+/// Which row of the 3D view's top text the camera position goes on, as its
+/// distance below the view's top edge.
+///
+/// The position is centred, with its left edge at `position_left`. It stays on
+/// the stats line's row while [`POSITION_GAP`] still separates it from the
+/// stats, whose right edge is at `stats_right`. In a narrower view it drops to
+/// the status line's row when no status message is shown or the message, whose
+/// right edge is at `status_right`, also leaves that gap; otherwise it takes a
+/// row of its own under the status line. All three are x coordinates on the
+/// screen.
+pub(crate) fn camera_position_top(
+    stats_right: f32,
+    status_right: Option<f32>,
+    position_left: f32,
+) -> f32 {
+    let clears = |right: f32| right + POSITION_GAP <= position_left;
+    if clears(stats_right) {
+        STATS_TOP
+    } else if status_right.is_none_or(clears) {
+        STATUS_TOP
+    } else {
+        POSITION_THIRD_ROW_TOP
+    }
+}
 
 /// `text` laid out for a banner in 12 pt words of `colour`, wrapping at
 /// `wrap`: in the proportional font, with each run of characters it has no
@@ -475,3 +510,6 @@ pub(crate) fn draw_proposal_banner(
     }
     Some(panel)
 }
+
+#[cfg(test)]
+mod tests;

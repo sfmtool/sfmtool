@@ -287,11 +287,12 @@ mod tests {
         assert!(checked);
     }
 
-    /// The banners start below the 3D view's status line, so neither covers
-    /// the status message.
+    /// The banners start below the 3D view's status line and the camera
+    /// position's own row under it, so neither covers the status message or
+    /// the camera position.
     #[test]
     fn the_banners_start_below_the_status_line() {
-        use crate::viewer_3d::overlay::{BANNER_TOP, STATUS_TOP};
+        use crate::viewer_3d::overlay::{BANNER_TOP, POSITION_THIRD_ROW_TOP, STATUS_TOP};
         let ctx = egui::Context::default();
         let mut height = 0.0;
         crate::test_support::painted_text_rects(&ctx, egui::RawInput::default(), |ui| {
@@ -304,8 +305,12 @@ mod tests {
         });
         assert!(height > 0.0);
         assert!(
-            STATUS_TOP + height <= BANNER_TOP,
-            "{STATUS_TOP} + {height} > {BANNER_TOP}"
+            STATUS_TOP + height <= POSITION_THIRD_ROW_TOP,
+            "{STATUS_TOP} + {height} > {POSITION_THIRD_ROW_TOP}"
+        );
+        assert!(
+            POSITION_THIRD_ROW_TOP + height <= BANNER_TOP,
+            "{POSITION_THIRD_ROW_TOP} + {height} > {BANNER_TOP}"
         );
     }
 }
