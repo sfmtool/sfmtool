@@ -393,6 +393,15 @@ fn representative_tool_calls() -> Vec<(&'static str, Value)> {
             }),
         ),
         (
+            "scroll",
+            json!({
+                "panel_name": "viewer_3d",
+                "at_px": [10, 10],
+                "delta_lines": [0, -1],
+                "modifiers": ["control"],
+            }),
+        ),
+        (
             "press_key",
             json!({ "key": "Z", "modifiers": ["command"], "panel_name": "viewer_3d" }),
         ),
@@ -1131,8 +1140,8 @@ fn only_the_reads_are_annotated_read_only() {
         ]
     );
     // Sixteen JSON reads, the one read that hands back a picture, seventy-one
-    // writes, five input tools, and the one that writes a file.
-    assert_eq!(catalog.len(), 94, "the catalog has grown or shrunk");
+    // writes, six input tools, and the one that writes a file.
+    assert_eq!(catalog.len(), 95, "the catalog has grown or shrunk");
     assert_eq!(
         catalog
             .iter()
@@ -1140,8 +1149,8 @@ fn only_the_reads_are_annotated_read_only() {
             .count(),
         71
     );
-    // One tool can overwrite a file by name, and five can press what a person
-    // can press, File ▸ Save included; those six are the ones annotated
+    // One tool can overwrite a file by name, and six can press what a person
+    // can press, File ▸ Save included; those seven are the ones annotated
     // destructive.
     let saves: Vec<&str> = catalog
         .iter()
@@ -1154,7 +1163,10 @@ fn only_the_reads_are_annotated_read_only() {
         .filter(|spec| spec.kind == ToolKind::Input)
         .map(|spec| spec.name)
         .collect();
-    assert_eq!(inputs, ["click", "hover", "drag", "press_key", "type_text"]);
+    assert_eq!(
+        inputs,
+        ["click", "hover", "drag", "scroll", "press_key", "type_text"]
+    );
 }
 
 /// The spec's prose carries counts the code owns, and a count written out in

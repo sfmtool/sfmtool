@@ -217,7 +217,7 @@ impl App {
         if self.mcp_input.is_empty() {
             return;
         }
-        let held = self.egui_ctx.input(|input| input.modifiers);
+        let held = super::input::EguiHeld::of(&self.egui_ctx);
         events.extend(self.mcp_input.before_pass(&mut self.state, held));
         // An idle viewer draws nothing of its own accord, and every step and
         // the reply after the last one needs a frame.

@@ -1,7 +1,7 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! The five input tools: the pointer and the keyboard, as a person uses them.
+//! The six input tools: the pointer and the keyboard, as a person uses them.
 
 use super::*;
 use crate::mcp::input::MAX_DRAG_POINTS;
@@ -119,6 +119,52 @@ pub(super) fn specs() -> Vec<ToolSpec> {
             ),
         },
         ToolSpec {
+            name: "scroll",
+            description: "Scroll the way a person's mouse wheel or trackpad does: the pointer \
+                          moves to the point and a frame is drawn, one scroll event is \
+                          delivered there in the next, and the reply is built once egui has \
+                          finished spreading the scroll over frames. Aimed as click is, with \
+                          at_px and an optional panel_name, or with widget. Give delta_lines \
+                          for a mouse wheel (one notch is one line) or delta_px for a trackpad \
+                          (physical pixels), as [x, y]: a positive y is the wheel turned away \
+                          from you or two fingers moved down, which moves the content down \
+                          and shows what is above, and a positive x moves the content right. \
+                          The panel under the pointer reads it as it reads a person's: a \
+                          wheel zooms the 3D Viewer and Image Detail, a trackpad scroll \
+                          orbits the 3D Viewer and pans Image Detail, either moves the Image \
+                          Browser's strip, and lists and tables scroll. modifiers are held \
+                          for the scroll: control zooms where a panel zooms, shift turns a \
+                          list's vertical scroll horizontal, and alt is the 3D Viewer's \
+                          target push and pull. The reply gives at_px, hit (the clickable \
+                          widget under the pointer, or null) and the dialogs and menus open \
+                          afterwards.",
+            kind: Input,
+            schema: object(
+                &[
+                    ("panel_name", panel_name_schema("at_px is a point of")),
+                    ("at_px", at_px_schema()),
+                    ("widget", widget_schema()),
+                    (
+                        "delta_lines",
+                        scroll_delta_schema(
+                            "How far a mouse wheel turns, in lines: one notch is 1, and egui \
+                             scrolls a list 40 points a line. Give this or delta_px.",
+                        ),
+                    ),
+                    (
+                        "delta_px",
+                        scroll_delta_schema(
+                            "How far two fingers move on a trackpad, in the window's physical \
+                             pixels, which egui reads in points as it reads a trackpad's. Give \
+                             this or delta_lines.",
+                        ),
+                    ),
+                    ("modifiers", modifiers_schema("during the scroll")),
+                ],
+                &[],
+            ),
+        },
+        ToolSpec {
             name: "press_key",
             description: "Press one key and release it in the next frame, with any modifiers \
                           held across both. It goes where a person's key would: to a menu bar \
@@ -207,6 +253,21 @@ fn at_px_schema() -> Value {
             "A point [x, y] in the physical pixels of the target, the space rect_px is in: the \
              window, or panel_name's body. A point outside the target is refused naming its \
              size.",
+    })
+}
+
+/// A scroll's distance, `[x, y]`, in the units `what` names.
+fn scroll_delta_schema(what: &str) -> Value {
+    json!({
+        "type": "array",
+        "items": { "type": "number" },
+        "minItems": 2,
+        "maxItems": 2,
+        "description": format!(
+            "{what} Positive y moves the content down, showing what is above (the wheel turned \
+             away from you); positive x moves it right, showing what is to the left. Not both \
+             0."
+        ),
     })
 }
 

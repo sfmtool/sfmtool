@@ -3813,3 +3813,118 @@ fn dragging_the_arrowhead_tilts_toward_the_pointer_and_the_segment_moves_along_t
         "one gesture, one version"
     );
 }
+
+// ── Scroll ─────────────────────────────────────────────────────────────
+
+/// One frame with `events` delivered and the pointer over the middle of the
+/// panel, its scroll read the way the app reads it.
+fn scroll_frame(
+    detail: &mut ImageDetail,
+    ctx: &egui::Context,
+    node: &SceneNode,
+    image: &ImageU8,
+    events: Vec<egui::Event>,
+) {
+    let feature_display = FeatureDisplaySettings::default();
+    let mut intrinsics_display = IntrinsicsDisplaySettings::default();
+    let middle = egui::pos2(PANEL.x / 2.0, PANEL.y / 2.0);
+    crate::platform::set_test_pointer_pos(Some(middle));
+    let mut events = events;
+    events.insert(0, egui::Event::PointerMoved(middle));
+    let input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, PANEL)),
+        events,
+        ..Default::default()
+    };
+    crate::test_support::run_frame_headless(ctx, input, |ui| {
+        let scroll_input = crate::platform::ScrollInput::from_ctx(ui.ctx(), false);
+        detail.show(
+            ui,
+            node.edited(),
+            node.id,
+            node.history.current_version().serial,
+            Some(0),
+            None,
+            None,
+            None,
+            super::BenchMenu::default(),
+            &[],
+            &scroll_input,
+            None,
+            crate::image_detail::DetailPhotograph::Decoded(image),
+            &feature_display,
+            &mut intrinsics_display,
+            None,
+        );
+    });
+}
+
+fn wheel(unit: egui::MouseWheelUnit, delta: egui::Vec2, modifiers: egui::Modifiers) -> egui::Event {
+    egui::Event::MouseWheel {
+        unit,
+        delta,
+        phase: egui::TouchPhase::Move,
+        modifiers,
+    }
+}
+
+/// A trackpad scroll pans the photograph the way egui's delta says the
+/// content moves, on both axes, as the DirectManipulation pan on Windows does.
+/// The x was once the other way round, so a two-finger scroll to the right
+/// moved the photograph left while one downward moved it down.
+#[test]
+fn a_trackpad_scroll_moves_the_photograph_with_its_delta_on_both_axes() {
+    let node = demo_node("/runs/a.sfmr");
+    let image = pixels(400, 300);
+    let ctx = egui::Context::default();
+    let mut detail = ImageDetail::new();
+    detail.zoom = 4.0;
+    frame(&mut detail, &ctx, &node, 0, &image, PANEL);
+    scroll_frame(&mut detail, &ctx, &node, &image, Vec::new());
+    let before = detail.pan;
+
+    let delta = egui::vec2(12.0, 8.0);
+    let events = vec![wheel(
+        egui::MouseWheelUnit::Point,
+        delta,
+        egui::Modifiers::NONE,
+    )];
+    scroll_frame(&mut detail, &ctx, &node, &image, events);
+    assert_close(detail.pan - before, delta, "the pan a trackpad scroll made");
+}
+
+/// A Ctrl+wheel notch zooms as far as a plain notch. egui also turns a
+/// Ctrl+scroll into a zoom factor of its own, spread over the frames after
+/// it, and reading that as a pinch zoomed the notch a second time.
+#[test]
+fn a_control_wheel_notch_zooms_as_far_as_a_plain_one() {
+    let zoom_after = |modifiers: egui::Modifiers| {
+        let node = demo_node("/runs/a.sfmr");
+        let image = pixels(400, 300);
+        let ctx = egui::Context::default();
+        let mut detail = ImageDetail::new();
+        frame(&mut detail, &ctx, &node, 0, &image, PANEL);
+        let mut events = vec![
+            egui::Event::ModifiersChanged(modifiers),
+            wheel(egui::MouseWheelUnit::Line, egui::vec2(0.0, 1.0), modifiers),
+        ];
+        // Long enough for egui's smoothing to have handed out all of it.
+        for _ in 0..40 {
+            scroll_frame(
+                &mut detail,
+                &ctx,
+                &node,
+                &image,
+                std::mem::take(&mut events),
+            );
+        }
+        detail.zoom
+    };
+    let plain = zoom_after(egui::Modifiers::NONE);
+    assert!(
+        (plain - 1.15).abs() < 1e-4,
+        "one notch zooms by 0.15: {plain}"
+    );
+    let control = zoom_after(egui::Modifiers::COMMAND);
+    assert!((control - plain).abs() < 1e-4, "{control} against {plain}");
+}

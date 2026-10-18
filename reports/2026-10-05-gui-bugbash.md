@@ -154,6 +154,16 @@ in `press_key`.
 > (`{panel_name, path_px, mouse_button, modifiers}`, one point per frame)
 > landed in PR #934; there is no `scroll` yet._
 
+> _Status (2026-10-18): **Done** — a `scroll` input tool
+> (`{panel_name, at_px | widget, delta_lines | delta_px, modifiers}`) delivers
+> one wheel or trackpad event as `egui_winit` would and replies once egui's
+> scroll smoothing has finished; the input tools now also move the cursor
+> position the viewer tracks on Windows, so the 3D Viewer, Image Detail and
+> Image Browser take the scroll (and Image Detail's `Z`). Verified live in
+> every panel; it fixed Ctrl+wheel zooming twice in the 3D Viewer and Image
+> Detail and Image Detail's trackpad pan running the wrong way in x, branch
+> `mcp-scroll-input`._
+
 The MCP input tools are `click`, `hover`, `press_key` and `type_text`. Every
 navigation gesture the tutorial teaches (drag to orbit, Shift+drag to pan,
 Alt+drag to look around, scroll and Control to zoom) is a drag or a scroll, so

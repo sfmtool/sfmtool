@@ -488,8 +488,12 @@ eviction.
 
 - **Graphics backend**: Metal via wgpu.
 - **Trackpad gestures**: no native handling of their own. A two-finger scroll
-  arrives through winit as a scroll, and a pinch through egui's built-in
-  `zoom_delta`, which the 3D viewport and Image Detail read.
+  arrives through winit as a scroll, and a pinch as egui's `Event::Zoom`,
+  which the 3D viewport and Image Detail read through
+  `platform::pinch_zoom_delta`. That reads the pinch alone, not egui's
+  `zoom_delta`, which also carries the zoom egui derives from a Ctrl+scroll;
+  the two panels zoom on that scroll through `platform::ScrollInput`
+  already.
 - **Event loop**: `winit` creates its event loop only on the process's main
   thread on macOS, which is one reason `sfm explorer` runs the viewer in a child
   process of its own.

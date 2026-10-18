@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 use egui_dock::{DockArea, TabViewer};
 
-use super::super::input::WidgetNames;
+use super::super::input::{EguiHeld, WidgetNames};
 use super::super::widgets::WidgetFrame;
 use super::super::{Deferred, Reply};
 use super::*;
@@ -51,6 +51,23 @@ struct Drags {
     with_shift: u32,
     /// The sum of its drag deltas, in points.
     moved: egui::Vec2,
+}
+
+/// Where the test list in the Background Task panel is, and how far it has
+/// been scrolled, both in points.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct List {
+    rect: egui::Rect,
+    offset: egui::Vec2,
+}
+
+impl Default for List {
+    fn default() -> Self {
+        Self {
+            rect: egui::Rect::NOTHING,
+            offset: egui::Vec2::ZERO,
+        }
+    }
 }
 
 /// The pixels and features the Image Detail panel draws from, synthesized as
@@ -95,6 +112,7 @@ struct Harness {
     photograph: Photograph,
     clicks: Clicks,
     drags: Drags,
+    list: List,
     names: WidgetNames,
 }
 
@@ -108,6 +126,7 @@ struct Tabs<'a> {
     photograph: &'a Photograph,
     clicks: &'a mut Clicks,
     drags: &'a mut Drags,
+    list: &'a mut List,
 }
 
 impl TabViewer for Tabs<'_> {
@@ -174,6 +193,17 @@ impl TabViewer for Tabs<'_> {
                     drags.with_shift += u32::from(ui.input(|input| input.modifiers.shift));
                     drags.moved += pad.drag_delta();
                 }
+                // A list larger than its area both ways, which a scroll moves.
+                let output = egui::ScrollArea::both()
+                    .id_salt("test_list")
+                    .max_width(160.0)
+                    .max_height(80.0)
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        ui.allocate_exact_size(egui::vec2(800.0, 900.0), egui::Sense::hover());
+                    });
+                self.list.rect = output.inner_rect;
+                self.list.offset = output.state.offset;
             }
             other => {
                 ui.label(format!("{} body", other.title()));
@@ -213,6 +243,7 @@ impl Harness {
             photograph,
             clicks: Clicks::default(),
             drags: Drags::default(),
+            list: List::default(),
             names: WidgetNames::default(),
         };
         harness.settle();
@@ -243,6 +274,7 @@ impl Harness {
             photograph,
             clicks,
             drags,
+            list,
             ..
         } = self;
         let mut output = ctx.run_ui(input, |root_ui| {
@@ -259,6 +291,7 @@ impl Harness {
                         photograph,
                         clicks,
                         drags,
+                        list,
                     },
                 );
                 state.dock = dock;
@@ -307,15 +340,17 @@ impl Harness {
             Outcome::Deferred(Deferred::Input(pending)) => pending,
             Outcome::Deferred(_) => panic!("{name} deferred as something other than input"),
         };
-        for _ in 0..16 {
-            let held = self.ctx.input(|input| input.modifiers);
+        // A scroll waits out egui's smoothing, which at the 1/60 s egui
+        // assumes for a frame with no time of its own is about twenty frames.
+        for _ in 0..64 {
+            let held = EguiHeld::of(&self.ctx);
             let events = pending.before_pass(&mut self.state, held, &self.names)?;
             let frame = self.frame(events);
             if let Some(reply) = pending.after_pass(frame) {
                 return reply;
             }
         }
-        panic!("{name} did not answer within sixteen frames");
+        panic!("{name} did not answer within 64 frames");
     }
 
     /// The JSON reply of a call that has to succeed.
@@ -645,6 +680,141 @@ fn a_drag_with_a_point_outside_its_target_is_refused_before_the_press() {
     assert_eq!(rows.len(), 1, "{rows:#?}");
     assert!(rows[0].failed);
     assert_eq!(rows[0].text, format!("drag failed: {error}"));
+}
+
+// ── scroll ──────────────────────────────────────────────────────────────
+
+/// The centre of the test list, in window pixels, with the list drawn.
+fn on_the_list(harness: &mut Harness) -> [f64; 2] {
+    harness.settle();
+    let centre = harness.list.rect.center();
+    [
+        f64::from((centre.x * PIXELS_PER_POINT).round()),
+        f64::from((centre.y * PIXELS_PER_POINT).round()),
+    ]
+}
+
+/// One wheel notch toward the person scrolls a list down by one line, which
+/// egui makes 40 points, and the reply comes once the whole line has been
+/// scrolled rather than in the middle of egui's smoothing. The row names the
+/// point and the notch.
+#[test]
+fn a_wheel_notch_scrolls_a_list_by_one_line() {
+    let mut harness = Harness::new();
+    let at = on_the_list(&mut harness);
+    assert_eq!(harness.list.offset, egui::Vec2::ZERO);
+    let since = harness.state.action_log.revision();
+
+    let reply = harness.ok("scroll", json!({ "at_px": at, "delta_lines": [0, -1] }));
+    assert_eq!(reply["at_px"], json!([at[0] as i64, at[1] as i64]));
+    assert_eq!(reply["dialogs"], json!([]));
+    assert_eq!(reply["menus"], json!([]));
+    let offset = harness.list.offset;
+    assert!(
+        (offset - egui::vec2(0.0, 40.0)).length() < 1e-3,
+        "scrolled {offset:?}"
+    );
+    assert!(!harness.ctx.input(|input| input.is_scrolling()));
+
+    let rows = harness.rows_since(since);
+    assert_eq!(rows.len(), 1, "{rows:#?}");
+    assert_eq!(
+        rows[0].text,
+        format!(
+            "scroll window {},{} by 0,-1 line",
+            at[0] as i64, at[1] as i64
+        )
+    );
+    assert_eq!(rows[0].actor, Actor::Mcp);
+    assert_eq!(rows[0].kind, Kind::Input);
+
+    // A notch away from the person scrolls back to the top.
+    harness.ok("scroll", json!({ "at_px": at, "delta_lines": [0, 1] }));
+    assert_eq!(harness.list.offset, egui::Vec2::ZERO);
+}
+
+/// A trackpad scroll is in physical pixels, which egui reads in points, and
+/// moves the list both ways at once: a negative x shows what is to the right.
+#[test]
+fn a_trackpad_scroll_moves_a_list_by_its_pixels_in_points() {
+    let mut harness = Harness::new();
+    let at = on_the_list(&mut harness);
+    let since = harness.state.action_log.revision();
+
+    harness.ok("scroll", json!({ "at_px": at, "delta_px": [-30, -45] }));
+    let expected = egui::vec2(30.0, 45.0) / PIXELS_PER_POINT;
+    let offset = harness.list.offset;
+    assert!((offset - expected).length() < 1e-3, "scrolled {offset:?}");
+    let rows = harness.rows_since(since);
+    assert_eq!(
+        rows[0].text,
+        format!(
+            "scroll window {},{} by -30,-45 px",
+            at[0] as i64, at[1] as i64
+        )
+    );
+}
+
+/// Shift turns a wheel's vertical scroll horizontal, as egui does for a
+/// person's, and the modifier is let go afterwards.
+#[test]
+fn shift_turns_a_wheel_scroll_horizontal_and_is_released() {
+    let mut harness = Harness::new();
+    let at = on_the_list(&mut harness);
+    let since = harness.state.action_log.revision();
+
+    harness.ok(
+        "scroll",
+        json!({ "at_px": at, "delta_lines": [0, -2], "modifiers": ["shift"] }),
+    );
+    let offset = harness.list.offset;
+    assert!(
+        (offset - egui::vec2(80.0, 0.0)).length() < 1e-3,
+        "scrolled {offset:?}"
+    );
+    assert!(!harness.ctx.input(|input| input.modifiers.shift));
+    let rows = harness.rows_since(since);
+    assert!(
+        rows[0].text.ends_with(" by 0,-2 lines with Shift"),
+        "{}",
+        rows[0].text
+    );
+}
+
+/// The scroll moves the pointer the viewer's own panels test against, not
+/// only egui's: the 3D Viewer, Image Detail and the Image Browser decide
+/// whether a wheel is theirs by `platform::pointer_in_rect`, which on Windows
+/// reads the cursor the window procedure tracks.
+#[test]
+fn a_scroll_moves_the_pointer_the_panels_test_against() {
+    let mut harness = Harness::new();
+    let at = on_the_list(&mut harness);
+    crate::platform::set_test_pointer_pos(None);
+    let list = harness.list.rect;
+
+    harness.ok("scroll", json!({ "at_px": at, "delta_lines": [0, -1] }));
+    assert!(crate::platform::pointer_in_rect(&harness.ctx, list));
+    harness.ok("hover", json!({ "at_px": [2, 2] }));
+    assert!(!crate::platform::pointer_in_rect(&harness.ctx, list));
+}
+
+/// A point outside the target is refused before anything is delivered, as one
+/// failed row, so nothing scrolls.
+#[test]
+fn a_scroll_outside_its_target_is_refused_before_it_is_delivered() {
+    let mut harness = Harness::new();
+    on_the_list(&mut harness);
+    let since = harness.state.action_log.revision();
+    let error = harness.refused(
+        "scroll",
+        json!({ "panel_name": "scene", "at_px": [-1, 4], "delta_lines": [0, -1] }),
+    );
+    assert!(error.0.contains("Scene panel's body"), "{error}");
+    assert_eq!(harness.list.offset, egui::Vec2::ZERO);
+    let rows = harness.rows_since(since);
+    assert_eq!(rows.len(), 1, "{rows:#?}");
+    assert!(rows[0].failed);
+    assert_eq!(rows[0].text, format!("scroll failed: {error}"));
 }
 
 /// `count: 2` is one double click: egui reports a click for each press, and
@@ -1108,6 +1278,47 @@ fn the_input_tools_parse_what_they_advertise() {
     )
     .0
     .contains("left, middle and right"));
+    assert!(refuse("scroll", json!({ "delta_lines": [0, 1] }))
+        .0
+        .contains("needs either at_px"));
+    assert!(refuse("scroll", json!({ "at_px": [1, 2] }))
+        .0
+        .contains("needs delta_lines"));
+    assert!(refuse(
+        "scroll",
+        json!({ "at_px": [1, 2], "delta_lines": [0, 1], "delta_px": [0, 1] })
+    )
+    .0
+    .contains("both delta_lines and delta_px"));
+    assert!(
+        refuse("scroll", json!({ "at_px": [1, 2], "delta_px": [0, 0] }))
+            .0
+            .contains("nothing to scroll")
+    );
+    assert!(
+        refuse("scroll", json!({ "at_px": [1, 2], "delta_lines": [1] }))
+            .0
+            .contains("an array of 2 numbers")
+    );
+    assert!(refuse(
+        "scroll",
+        json!({ "at_px": [1, 2], "delta_lines": [0, "1"] })
+    )
+    .0
+    .contains("an array of 2 numbers"));
+    assert!(refuse(
+        "scroll",
+        json!({ "at_px": [1, 2], "delta_lines": [0, 1], "modifiers": ["meta"] })
+    )
+    .0
+    .contains("shift, control, alt, command"));
+    // A scroll has no button.
+    assert!(refuse(
+        "scroll",
+        json!({ "at_px": [1, 2], "delta_lines": [0, 1], "mouse_button": "left" })
+    )
+    .0
+    .contains("mouse_button"));
 }
 
 // ── The wire vocabulary ─────────────────────────────────────────────────
@@ -1127,6 +1338,10 @@ fn input_replies_speak_the_wire_vocabulary() {
     let drag = harness.ok(
         "drag",
         json!({ "panel_name": "scene", "path_px": [[1, 1], [5, 5]] }),
+    );
+    let scroll = harness.ok(
+        "scroll",
+        json!({ "panel_name": "scene", "at_px": [1, 1], "delta_lines": [0, -1] }),
     );
     harness.state.open_goto_point();
     harness.settle();
@@ -1168,7 +1383,7 @@ fn input_replies_speak_the_wire_vocabulary() {
         }
     }
     let mut seen = std::collections::BTreeSet::new();
-    for reply in [&click, &hover, &drag, &key, &text] {
+    for reply in [&click, &hover, &drag, &scroll, &key, &text] {
         keys(reply, &mut seen);
     }
     for key in &seen {
@@ -1196,6 +1411,14 @@ fn input_replies_speak_the_wire_vocabulary() {
         .collect();
     drag_keys.sort_unstable();
     assert_eq!(drag_keys, click_keys);
+    let mut scroll_keys: Vec<&str> = scroll
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    scroll_keys.sort_unstable();
+    assert_eq!(scroll_keys, click_keys);
     let mut key_keys: Vec<&str> = key
         .as_object()
         .unwrap()

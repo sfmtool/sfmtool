@@ -188,6 +188,15 @@ pub fn pointer_client_pos() -> (i32, i32) {
     )
 }
 
+/// Move the tracked cursor position, as a mouse pointer message would, for a
+/// synthetic pointer move ([`super::move_tracked_pointer`]).
+#[cfg_attr(any(test, not(feature = "mcp")), allow(dead_code))]
+pub(crate) fn set_pointer_client_pos(x: i32, y: i32) {
+    POINTER_CLIENT_X.store(x, Ordering::Relaxed);
+    POINTER_CLIENT_Y.store(y, Ordering::Relaxed);
+    POINTER_CLIENT_SEEN.store(true, Ordering::Relaxed);
+}
+
 /// [`pointer_client_pos`] as a winit position, or `None` before any mouse
 /// pointer message has placed the cursor.
 fn tracked_cursor_pos() -> Option<PhysicalPosition<f64>> {

@@ -19,7 +19,7 @@ use serde_json::{json, Map, Value};
 use sfmtool_core::bench::{check_label, BenchError};
 use sfmtool_core::reconstruction::prune_covered::PruneCoveredOptions;
 
-use super::input::{InputCommand, ModifierKeys, PointerTarget, MAX_DRAG_POINTS};
+use super::input::{InputCommand, ModifierKeys, PointerTarget, ScrollDelta, MAX_DRAG_POINTS};
 use super::{
     Angles, CameraImageSel, CloseTarget, Command, DisplayChange, Movement, Placement, RelativeView,
     SelectionScope, ToolError, ViewCommand,
@@ -42,10 +42,11 @@ pub(crate) enum ToolKind {
     /// exists at all: it is the only call on this surface that can overwrite
     /// something the human cannot undo by name.
     Save,
-    /// Presses what a person could press: `click`, `hover`, `drag`, `press_key`
-    /// and `type_text`. What the input then does is decided by the widget it lands
-    /// on, and that includes File ▸ Save, File ▸ Quit and the items that open a
-    /// file chooser, so these are advertised as destructive with `Save`.
+    /// Presses what a person could press: `click`, `hover`, `drag`, `scroll`,
+    /// `press_key` and `type_text`. What the input then does is decided by the
+    /// widget it lands on, and that includes File ▸ Save, File ▸ Quit and the
+    /// items that open a file chooser, so these are advertised as destructive
+    /// with `Save`.
     Input,
 }
 
@@ -713,6 +714,11 @@ pub(crate) fn parse(
             },
             path_px: args.drag_path("path_px")?,
             button: args.mouse_button("mouse_button")?,
+            modifiers: args.modifier_keys("modifiers")?,
+        }),
+        "scroll" => Command::Input(InputCommand::Scroll {
+            target: pointer_target(&args)?,
+            delta: args.scroll_delta()?,
             modifiers: args.modifier_keys("modifiers")?,
         }),
         "press_key" => {
@@ -1932,6 +1938,33 @@ impl Args<'_> {
                 }
             })
             .collect()
+    }
+
+    /// A scroll's distance: `delta_lines` or `delta_px`, exactly one, and not
+    /// zero.
+    fn scroll_delta(&self) -> Result<ScrollDelta, ToolError> {
+        let lines = self.optional_numbers::<2>("delta_lines")?;
+        let px = self.optional_numbers::<2>("delta_px")?;
+        let delta =
+            match (lines, px) {
+                (Some(_), Some(_)) => return Err(self.error(
+                    "was given both delta_lines and delta_px. A mouse wheel reports lines and a \
+                     trackpad reports pixels, and one scroll comes from one of them, so give one.",
+                )),
+                (Some(lines), None) => ScrollDelta::Lines(lines),
+                (None, Some(px)) => ScrollDelta::Px(px),
+                (None, None) => return Err(self.error(
+                    "needs delta_lines, [x, y] in mouse wheel notches, or delta_px, [x, y] in the \
+                     physical pixels a trackpad reports.",
+                )),
+            };
+        let [x, y] = match delta {
+            ScrollDelta::Lines(xy) | ScrollDelta::Px(xy) => xy,
+        };
+        if x == 0.0 && y == 0.0 {
+            return Err(self.error("has nothing to scroll: both components of the delta are 0."));
+        }
+        Ok(delta)
     }
 
     /// The modifier keys a call holds, none when it names none.

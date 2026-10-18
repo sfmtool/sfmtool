@@ -1,7 +1,7 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Synthetic pointer and keyboard input: `click`, `hover`, `drag`,
+//! Synthetic pointer and keyboard input: `click`, `hover`, `drag`, `scroll`,
 //! `press_key` and `type_text`.
 //!
 //! The input goes into egui's `RawInput.events` as the same `egui::Event`s
@@ -43,7 +43,41 @@ use crate::state::AppState;
 /// drawing a heavy scene too.
 pub(crate) const MAX_DRAG_POINTS: usize = 120;
 
-/// One of the five input tools, parsed.
+/// The most frames a `scroll` waits for egui's scroll smoothing to finish
+/// before it replies, for the reason a drag's path is bounded. egui spreads a
+/// wheel notch over about a tenth of a second and ends the scroll 150 ms after
+/// the last event, so this is far more than a scroll takes at any frame rate.
+pub(crate) const MAX_SCROLL_COAST_FRAMES: usize = 120;
+
+/// How far a `scroll` moves, in the units of one of the two devices.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum ScrollDelta {
+    /// Lines, as a mouse wheel reports them: one notch is one line.
+    Lines([f64; 2]),
+    /// Physical pixels, as a trackpad reports them.
+    Px([f64; 2]),
+}
+
+impl ScrollDelta {
+    fn xy(self) -> [f64; 2] {
+        match self {
+            ScrollDelta::Lines(xy) | ScrollDelta::Px(xy) => xy,
+        }
+    }
+
+    /// `0,-3 lines` or `12,0 px`, for the Action Log.
+    fn text(self) -> String {
+        let [x, y] = self.xy();
+        let unit = match self {
+            ScrollDelta::Lines(_) if x.abs() + y.abs() == 1.0 => "line",
+            ScrollDelta::Lines(_) => "lines",
+            ScrollDelta::Px(_) => "px",
+        };
+        format!("{},{} {unit}", number_text(x), number_text(y))
+    }
+}
+
+/// One of the six input tools, parsed.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum InputCommand {
     /// Press and release a mouse button, once or twice.
@@ -65,6 +99,13 @@ pub(crate) enum InputCommand {
         /// fewer, and more than [`MAX_DRAG_POINTS`].
         path_px: Vec<[f64; 2]>,
         button: egui::PointerButton,
+        modifiers: ModifierKeys,
+    },
+    /// Move the pointer, then turn the wheel or move two fingers on a
+    /// trackpad there, in one event.
+    Scroll {
+        target: PointerTarget,
+        delta: ScrollDelta,
         modifiers: ModifierKeys,
     },
     /// Press one key and release it in the next frame.
@@ -91,6 +132,7 @@ impl InputCommand {
             InputCommand::Click { .. } => "click",
             InputCommand::Hover { .. } => "hover",
             InputCommand::Drag { .. } => "drag",
+            InputCommand::Scroll { .. } => "scroll",
             InputCommand::PressKey { .. } => "press_key",
             InputCommand::TypeText { .. } => "type_text",
         }
@@ -99,7 +141,9 @@ impl InputCommand {
     /// The panel the command names, if any.
     pub(crate) fn panel(&self) -> Option<Tab> {
         match self {
-            InputCommand::Click { target, .. } | InputCommand::Hover { target } => target.panel(),
+            InputCommand::Click { target, .. }
+            | InputCommand::Hover { target }
+            | InputCommand::Scroll { target, .. } => target.panel(),
             InputCommand::Drag { panel, .. } => *panel,
             InputCommand::PressKey { over, .. } => over.as_ref().and_then(PointerTarget::panel),
             InputCommand::TypeText { .. } => None,
@@ -111,6 +155,7 @@ impl InputCommand {
         match self {
             InputCommand::Click { target, .. }
             | InputCommand::Hover { target }
+            | InputCommand::Scroll { target, .. }
             | InputCommand::PressKey {
                 over: Some(target), ..
             } => match target {
@@ -148,6 +193,7 @@ impl InputCommand {
                 steps.extend([Up, Settle]);
                 steps.into()
             }
+            InputCommand::Scroll { .. } => [Look, Move, Wheel, Coast, Settle].into(),
             InputCommand::PressKey { over: Some(_), .. } => {
                 [Look, Move, KeyDown, KeyUp, Settle].into()
             }
@@ -162,9 +208,9 @@ impl InputCommand {
     /// Where the pointer goes, for the steps that move it.
     fn target(&self) -> Option<PointerTarget> {
         match self {
-            InputCommand::Click { target, .. } | InputCommand::Hover { target } => {
-                Some(target.clone())
-            }
+            InputCommand::Click { target, .. }
+            | InputCommand::Hover { target }
+            | InputCommand::Scroll { target, .. } => Some(target.clone()),
             InputCommand::Drag { panel, path_px, .. } => Some(PointerTarget::At {
                 panel: *panel,
                 at_px: path_px.first().copied(),
@@ -178,6 +224,7 @@ impl InputCommand {
         match self {
             InputCommand::Click { modifiers, .. }
             | InputCommand::Drag { modifiers, .. }
+            | InputCommand::Scroll { modifiers, .. }
             | InputCommand::PressKey { modifiers, .. } => *modifiers,
             InputCommand::Hover { .. } | InputCommand::TypeText { .. } => ModifierKeys::default(),
         }
@@ -276,6 +323,11 @@ enum Step {
     DragTo(usize),
     /// Release the button of a drag at the last point of its path.
     Up,
+    /// Turn the wheel, or move two fingers on a trackpad, at the pointer.
+    Wheel,
+    /// Deliver nothing while egui is still spreading the scroll over frames,
+    /// so the reply is built from a frame that has had the whole of it.
+    Coast,
     /// Press the key.
     KeyDown,
     /// Release it.
@@ -315,6 +367,29 @@ pub(crate) struct PendingInput {
     /// The modifiers egui held before this command pressed its own, restored
     /// when it is done.
     before: Option<egui::Modifiers>,
+    /// How many frames a scroll has waited out egui's smoothing.
+    coasted: usize,
+}
+
+/// What a command needs to know of egui's input state as the frame before
+/// it left it.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct EguiHeld {
+    /// The modifiers egui holds now.
+    pub(crate) modifiers: egui::Modifiers,
+    /// Whether egui is still spreading a scroll over frames
+    /// (`InputState::is_scrolling`).
+    pub(crate) scrolling: bool,
+}
+
+impl EguiHeld {
+    /// Read off a context, between two passes.
+    pub(crate) fn of(ctx: &egui::Context) -> Self {
+        ctx.input(|input| Self {
+            modifiers: input.modifiers,
+            scrolling: input.is_scrolling(),
+        })
+    }
 }
 
 impl PendingInput {
@@ -328,18 +403,19 @@ impl PendingInput {
             path: Vec::new(),
             hit: Value::Null,
             before: None,
+            coasted: 0,
         }
     }
 
     /// The events of the coming frame, or the refusal that ends the command.
     ///
-    /// `held` is the modifiers egui holds now. A refusal records one failed
+    /// `held` is what egui holds now. A refusal records one failed
     /// Action Log row, as the agent's; it is reached before any input has been
     /// delivered, so nothing the command did is left half done.
     pub(crate) fn before_pass(
         &mut self,
         state: &mut AppState,
-        held: egui::Modifiers,
+        held: EguiHeld,
         names: &WidgetNames,
     ) -> Result<Vec<egui::Event>, ToolError> {
         let events = self.step(state, held, names);
@@ -370,7 +446,7 @@ impl PendingInput {
     fn step(
         &mut self,
         state: &mut AppState,
-        held: egui::Modifiers,
+        held: EguiHeld,
         names: &WidgetNames,
     ) -> Result<Vec<egui::Event>, ToolError> {
         let Some(step) = self.steps.pop_front() else {
@@ -402,6 +478,7 @@ impl PendingInput {
                     let text = format!("hover {}{on}", self.where_text(aim));
                     state.action_log.record_as(Actor::Mcp, Kind::Input, text);
                 }
+                crate::platform::move_tracked_pointer(aim.pos, aim.window_px);
                 Ok(vec![egui::Event::PointerMoved(aim.pos)])
             }
             Step::Press | Step::PressAgain => {
@@ -430,7 +507,7 @@ impl PendingInput {
                         text.push_str(&on_text(frame.name_at(aim.window_px)));
                         state.action_log.record_as(Actor::Mcp, Kind::Input, text);
                     }
-                    events.extend(self.hold(held));
+                    events.extend(self.hold(held.modifiers));
                 }
                 for pressed in [true, false] {
                     events.push(egui::Event::PointerButton {
@@ -470,7 +547,7 @@ impl PendingInput {
                     text.push_str(&format!(" with {}", m.text()));
                 }
                 state.action_log.record_as(Actor::Mcp, Kind::Input, text);
-                let mut events: Vec<egui::Event> = self.hold(held).into_iter().collect();
+                let mut events: Vec<egui::Event> = self.hold(held.modifiers).into_iter().collect();
                 events.push(egui::Event::PointerButton {
                     pos: aim.pos,
                     button,
@@ -482,7 +559,63 @@ impl PendingInput {
             Step::DragTo(index) => {
                 let aim = self.path[index];
                 self.aim = Some(aim);
+                crate::platform::move_tracked_pointer(aim.pos, aim.window_px);
                 Ok(vec![egui::Event::PointerMoved(aim.pos)])
+            }
+            Step::Wheel => {
+                let InputCommand::Scroll {
+                    delta,
+                    modifiers: m,
+                    ..
+                } = &self.command
+                else {
+                    return Ok(Vec::new());
+                };
+                let (delta, m) = (*delta, *m);
+                let aim = self.aim.expect("a move precedes the scroll");
+                // What the pointer is over, from the frame egui resolves the
+                // scroll against, as a click's hit is.
+                let frame = self.frame.clone().expect("a move precedes the scroll");
+                self.hit = frame.hit_block(frame.topmost_at(aim.window_px));
+                let mut text = format!("scroll {}", self.where_text(aim));
+                text.push_str(&on_text(frame.name_at(aim.window_px)));
+                text.push_str(&format!(" by {}", delta.text()));
+                if !m.is_empty() {
+                    text.push_str(&format!(" with {}", m.text()));
+                }
+                state.action_log.record_as(Actor::Mcp, Kind::Input, text);
+                // As `egui_winit` turns a winit `MouseWheel` into egui's: a
+                // `LineDelta` crosses as lines, and a `PixelDelta` in physical
+                // pixels crosses in points. Its phase is `Move`, which is
+                // what Windows reports for a wheel and what egui asks for when
+                // the phase is unknown.
+                let (unit, xy) = match delta {
+                    ScrollDelta::Lines([x, y]) => {
+                        (egui::MouseWheelUnit::Line, egui::vec2(x as f32, y as f32))
+                    }
+                    ScrollDelta::Px([x, y]) => (
+                        egui::MouseWheelUnit::Point,
+                        frame.to_points([x as f32, y as f32]).to_vec2(),
+                    ),
+                };
+                let mut events: Vec<egui::Event> = self.hold(held.modifiers).into_iter().collect();
+                events.push(egui::Event::MouseWheel {
+                    unit,
+                    delta: xy,
+                    phase: egui::TouchPhase::Move,
+                    modifiers,
+                });
+                Ok(events)
+            }
+            Step::Coast => {
+                // egui spreads a wheel notch over several frames, and ends
+                // the scroll a little after the last of them; the reply waits
+                // for that, so what it reports is the whole scroll.
+                if held.scrolling && self.coasted < MAX_SCROLL_COAST_FRAMES {
+                    self.coasted += 1;
+                    self.steps.push_front(Step::Coast);
+                }
+                Ok(Vec::new())
             }
             Step::Up => {
                 let InputCommand::Drag { button, .. } = &self.command else {
@@ -527,7 +660,7 @@ impl PendingInput {
                         }
                     }
                     state.action_log.record_as(Actor::Mcp, Kind::Input, text);
-                    events.extend(self.hold(held));
+                    events.extend(self.hold(held.modifiers));
                 }
                 events.push(egui::Event::Key {
                     key,
@@ -691,7 +824,10 @@ impl PendingInput {
         let listing = frame.listing(panel, None)?;
         let mut out = Map::new();
         match &self.command {
-            InputCommand::Click { .. } | InputCommand::Hover { .. } | InputCommand::Drag { .. } => {
+            InputCommand::Click { .. }
+            | InputCommand::Hover { .. }
+            | InputCommand::Drag { .. }
+            | InputCommand::Scroll { .. } => {
                 let at = self.aim.map_or([0.0, 0.0], |aim| aim.at_px);
                 out.insert(
                     "at_px".into(),
@@ -884,11 +1020,7 @@ impl InputQueue {
     /// This frame's events: the next step of the command at the front. A
     /// command refused here is answered now, and the one behind it starts in
     /// the same frame.
-    pub(crate) fn before_pass(
-        &mut self,
-        state: &mut AppState,
-        held: egui::Modifiers,
-    ) -> Vec<egui::Event> {
+    pub(crate) fn before_pass(&mut self, state: &mut AppState, held: EguiHeld) -> Vec<egui::Event> {
         while let Some((input, _)) = self.pending.front_mut() {
             match input.before_pass(state, held, &self.names) {
                 Ok(events) => return events,

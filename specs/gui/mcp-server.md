@@ -113,13 +113,13 @@ place.
 
 ## The tool surface
 
-Ninety-four tools. Seventeen read -- sixteen that answer with JSON, and
+Ninety-five tools. Seventeen read -- sixteen that answer with JSON, and
 `screenshot`, which closes the loop by handing back a picture -- seventy-one
-write, five send input, and one writes a file. `get_widgets` and the five
-input tools, `click`, `hover`, `drag`, `press_key` and `type_text`, read and
-press the viewer's widgets the way a person's eyes, mouse and keyboard do
-(§ "`get_widgets`", § "`click` / `hover`", § "`drag`", § "`press_key` /
-`type_text`").
+write, six send input, and one writes a file. `get_widgets` and the six input
+tools, `click`, `hover`, `drag`, `scroll`, `press_key` and `type_text`, read
+and press the viewer's widgets the way a person's eyes, mouse and keyboard do
+(§ "`get_widgets`", § "`click` / `hover`", § "`drag`", § "`scroll`",
+§ "`press_key` / `type_text`").
 
 | Tool | Kind | What it does |
 |------|------|--------------|
@@ -214,6 +214,7 @@ press the viewer's widgets the way a person's eyes, mouse and keyboard do
 | `click` | input | Press and release a mouse button at a point of the window or a panel, or on a widget from a listing, as a person's mouse does, and report what was under the pointer and the dialogs and menus open after it |
 | `hover` | input | Move the pointer to a point or a widget and leave it there |
 | `drag` | input | Press a mouse button at the first point of a path, move through the rest one point per frame with the button held, and release at the last |
+| `scroll` | input | Move the pointer to a point or a widget and turn the mouse wheel or move two fingers on a trackpad there, with modifiers |
 | `press_key` | input | Press and release one key, with modifiers, optionally with the pointer moved over a panel first |
 | `type_text` | input | Type a string into the focused text input, or into one named by its widget id |
 
@@ -225,16 +226,16 @@ the menu saves; an **edit** makes a new version of a loaded value, which the
 human can undo), and every one of them `openWorldHint: false`. Every
 `inputSchema` is closed (`additionalProperties: false`).
 
-**Six tools are annotated `destructiveHint: true`**, and a client that treats
-a destructive tool differently, with a confirmation or a stricter policy,
-should treat these six differently and none of the others:
+**Seven tools are annotated `destructiveHint: true`**, and a client that
+treats a destructive tool differently, with a confirmation or a stricter
+policy, should treat these seven differently and none of the others:
 
 - **`save_reconstruction`**, the one tool whose `ToolKind` is `Save`. It is the
   only call that names a file and can overwrite what no undo brings back.
-- **The five input tools**, `click`, `hover`, `drag`, `press_key` and
-  `type_text`, whose `ToolKind` is `Input`. Each does no more than press what a
-  person could press, but what it presses is decided by the widget it lands
-  on, and that includes the viewer's own destructive items: a click on File ▸
+- **The six input tools**, `click`, `hover`, `drag`, `scroll`, `press_key`
+  and `type_text`, whose `ToolKind` is `Input`. Each does no more than press
+  what a person could press, but what it presses is decided by the widget it
+  lands on, and that includes the viewer's own destructive items: a click on File ▸
   Save writes the file as a person's click does, File ▸ Quit closes the viewer,
   and an item that opens a file chooser (`Open...`, `Save As...`, the Panels
   menu's `Save Layout...` and `Load Layout...`) stops the GUI thread until the
@@ -2669,6 +2670,90 @@ viewer_3d 400,300 to 460,300 through 3 points`, with ` right` or ` middle` after
 `drag` for another button, ` on "…"` after the first point as for `click`, and
 ` with Shift` at the end for modifiers.
 
+### `scroll`
+
+```jsonc
+{ "panel_name": "viewer_3d", "at_px": [340, 240], "delta_lines": [0, 1] }    // one wheel notch away: zoom in
+{ "panel_name": "image_browser", "at_px": [500, 80], "delta_px": [-200, 0] } // a trackpad swipe
+{ "panel_name": "camera_intrinsics", "at_px": [150, 200],
+  "delta_lines": [0, -1], "modifiers": ["shift"] }                           // a list, sideways
+{ "widget": "3b40fb8eeb670839", "delta_lines": [0, -3] }                     // over a widget
+```
+
+`scroll` moves the pointer to a point and delivers one scroll there, as a
+mouse wheel or a trackpad does. It reaches what only a scroll reaches: the
+wheel zoom of the 3D viewport and of Image Detail, the trackpad orbit and pan
+of the viewport, the Image Browser's strip, and every list and table drawn in
+an `egui::ScrollArea`.
+
+It is aimed as `click` and `hover` are: `at_px` with an optional
+`panel_name`, or `widget`. The distance is exactly one of two arrays `[x, y]`,
+one per device, because egui and the panels read the two differently:
+
+- **`delta_lines`** is a mouse wheel, in lines: one notch is 1. egui scrolls a
+  list 40 points a line, the 3D viewport zooms 7.5% a line and Image Detail
+  15%.
+- **`delta_px`** is a trackpad, in the window's physical pixels, as `winit`
+  reports a trackpad's `PixelDelta`. It is divided by the pixels per point on
+  the way in, as `egui_winit` divides it, so a list moves by the same distance
+  in the window's pixels.
+
+**The sign is egui's**: a delta says which way the content moves. Positive `y`
+moves the content down and shows what is above it, which is the wheel turned
+away from the person; positive `x` moves it right and shows what is to its
+left. So `delta_lines: [0, -1]` is one notch toward the person, which scrolls
+a list down to later rows and zooms the 3D viewport out. Both arrays zero is
+refused, as is giving both or neither.
+
+`modifiers` is `click`'s list, held for the scroll. egui and the panels give
+three of them a meaning: `shift` turns a list's vertical scroll horizontal (and
+pans the viewport under a trackpad), `control` zooms where a panel zooms on a
+trackpad scroll and stops a list scrolling (egui reads Ctrl+scroll as a zoom),
+and `alt` is the viewport's target push and pull
+([viewport-navigation.md](viewport-navigation.md) § "Controls").
+
+**What happens**, one step per frame:
+
+1. A frame is drawn with no input, and the target is resolved against it, as
+   for `click`.
+2. The pointer moves to the point.
+3. One `egui::Event::MouseWheel` is delivered there, the event `egui_winit`
+   makes from a `winit` `MouseWheel`: `MouseWheelUnit::Line` for
+   `delta_lines`, `MouseWheelUnit::Point` for `delta_px`, with phase `Move`
+   (what Windows reports for a wheel) and the modifiers.
+4. Frames are drawn with no input for as long as egui says it is still
+   scrolling (`InputState::is_scrolling`). egui spreads a wheel notch, and a
+   trackpad step of 8 points or more, over about a tenth of a second, and ends
+   the scroll 150 ms after the last event; a reply built in the frame after the
+   event would see a list part of the way there. The wait stops after 120
+   frames whatever egui says (`input::MAX_SCROLL_COAST_FRAMES`).
+5. The modifiers are released, one more frame is drawn, and the reply is built
+   after it.
+
+The panels that zoom or pan on a scroll (the 3D viewport, Image Detail and
+the Image Browser) read the event in the frame it arrives in, through
+`platform::ScrollInput`, and only when `platform::pointer_in_rect` puts the
+pointer over them. On Windows that reads the cursor position the window
+procedure tracks, so every pointer move of the input tools writes that
+position too, as a mouse move does (§ "What synthetic input does not
+exercise"). A list scrolls by egui's smoothed delta over the frames of step 4.
+
+**The reply** is `click`'s: `at_px`, `hit` (the topmost clickable widget at
+the point in the frame the scroll was resolved against, or `null`), and the
+dialogs and menus open afterwards. What the scroll did is read back with the
+tool that reports it: `get_scene`'s `view` for the viewport,
+`get_image_detail_view` for Image Detail, and `get_widgets` or `screenshot`
+for a list.
+
+**Refusals** are `click`'s, each one failed Action Log row before anything is
+delivered; the parse refuses no target, two targets, no delta, both deltas, a
+zero delta and a delta that is not two numbers.
+
+**In the Action Log**, kind `Input`, written in the frame of the scroll:
+`scroll viewer_3d 340,240 by 0,1 line`, with ` on "…"` after the point as for
+`click`, `lines` for more than one line, `px` for `delta_px`, and ` with Ctrl`
+at the end for modifiers.
+
 ### `press_key` / `type_text`
 
 ```jsonc
@@ -2756,19 +2841,22 @@ input for this reason ([architecture.md](architecture.md) § "Testing").
 
 On a real window on Windows, a synthetic left click selects a point in the 3D
 viewport, toggles a HUD check box, opens a menu bar menu and runs its items,
-and a right click opens a Scene row's context menu. What it does not reach
-there is the part of the viewer that reads the operating system's pointer
-rather than egui's. `platform::pointer_in_rect` reads the cursor position the
-window procedure tracks from `WM_POINTER` messages, and
-`platform::windows::mouse_button_state` the buttons, and a synthetic pointer
-moves neither. So on Windows a `hover`, or a `press_key` with `panel_name`,
-does not satisfy the checks built on them: Image Detail's `Z` (reset the view)
-and its scroll, the 3D viewport's scroll, pinch and touchpad gestures, and the
-Image Browser's and Track View's scrolling. Image Detail's `I` is read from
-egui's hover and works; the viewport's keys do not check the pointer at all.
-None of those is a click or a key on a widget, which is what the tools are for.
-On Linux and macOS `pointer_in_rect` reads egui's pointer, and they all follow
-the synthetic one.
+and a right click opens a Scene row's context menu. Part of the viewer reads
+the operating system's pointer rather than egui's: `platform::pointer_in_rect`
+reads the cursor position the window procedure tracks from `WM_POINTER`
+messages, and `platform::windows::mouse_button_state` the buttons. Every
+pointer move of the input tools writes that position as well
+(`platform::move_tracked_pointer`), as a real mouse move does, and the next
+real mouse message overwrites it. So on Windows a `hover`, a `scroll`, or a
+`press_key` with `panel_name` satisfies the checks built on it: Image
+Detail's `Z` (reset the view) and its scroll, the 3D viewport's scroll and
+pinch, and the Image Browser's scrolling all follow the synthetic pointer. On
+Linux and macOS `pointer_in_rect` reads egui's pointer, which the tools move.
+Nothing synthetic reaches the touchpad gestures DirectManipulation reports on
+Windows; `scroll` with `delta_px` is the trackpad scroll those gestures are
+turned into for egui (`platform::gesture_scroll_events`), and the panels that
+read the gestures themselves read it as the trackpad scroll of a platform
+without them.
 
 The 3D viewport tells a middle drag from a right drag by that button state
 alone: a middle drag pans and a right drag zooms only when
@@ -4769,8 +4857,8 @@ What this arrangement gives:
   such a screenshot waiting (§ "screenshot", "Mechanics"). Everything after that
   — the map, the crop, the PNG — is still in the readback phase.
 - **Input is the one thing fed into the egui pass.** `click`, `hover`, `drag`,
-  `press_key` and `type_text` are applied in the drain like every command, which
-  checks what the window snapshot can check (a minimized window, a panel that
+  `scroll`, `press_key` and `type_text` are applied in the drain like every
+  command, which checks what the window snapshot can check (a minimized window, a panel that
   is closed or behind a tab, a point outside the target's last laid-out size)
   and queues them on `App::mcp_input` (`mcp::InputQueue`) as a list of
   per-frame steps, rather than on `App::mcp_deferred` with the other deferred
@@ -4920,12 +5008,12 @@ testable without a window:
 | `window` | The `window` block renderer, and nothing else: what a window *is*, how a placement is applied, and the `WindowHost` seam are `crate::window`'s, unconditional because Panels ▸ Save Layout… needs them in every build |
 | `frame` | The three phases `run_ui_and_paint` calls: the drain, the surface copy, and the deferred screenshot; and the two calls from the egui pass, which feed an input step's events in and read the frame's widgets out |
 | `widgets` | The widget listing of one captured frame, and the lookups the input tools aim with |
-| `input` | The five input tools: the parsed command, the steps each runs a frame at a time, their Action Log rows and replies, and the queue on `App` that runs them one after another |
+| `input` | The six input tools: the parsed command, the steps each runs a frame at a time, their Action Log rows and replies, and the queue on `App` that runs them one after another |
 | `mod::apply_as_agent` | The drain's application phase without the channel: the Action Log's actor switch, one `apply` per command, and the query and refusal entries |
 | `server` | The `rmcp` handler and the `axum` / `tokio` plumbing |
 
 `Command`, in [`mcp/mod.rs`](../../crates/sfm-explorer/src/mcp/mod.rs), is the
-command vocabulary: one variant per tool, except that the five input tools
+command vocabulary: one variant per tool, except that the six input tools
 share `Input`, holding the arguments as the parse left them. A reconstruction
 is named by its label, which `apply` resolves against `AppState::scene`; an
 `Option<String>` label means the selected reconstruction when the argument is
@@ -5654,8 +5742,8 @@ where a test hands no host over.
   and the panel list in the prose above are asserted against `catalog()` and
   `Tab::ALL`, because a number written out in words is the first thing to go
   stale.
-- **The catalog is ninety-four tools**, seventeen of them reads, five of the
-  `Input` kind and one of the `Save` kind, those six carrying
+- **The catalog is ninety-five tools**, seventeen of them reads, six of the
+  `Input` kind and one of the `Save` kind, those seven carrying
   `destructiveHint: true`;
   `set_window_layout`'s schema advertises `sfm_explorer_layout`, `window` and
   `layout`, with the `window` section's five keys under it, and `screenshot`'s
@@ -5707,7 +5795,19 @@ where a test hands no host over.
   `modifiers` are held in every frame of it and the modifiers are released
   afterwards; a path with one point outside the target is refused before the
   press; and the parse refuses a missing path, one of fewer than 2 or more than
-  120 points, and a point that is not two numbers. In the windowed suite,
+  120 points, and a point that is not two numbers. A `scroll` over a list
+  larger than its `ScrollArea` both ways moves it by 40 points a line for
+  `delta_lines` and by its pixels in points for `delta_px`, on both axes at
+  once, and replies only once egui has finished the scroll; Shift turns a
+  wheel's vertical scroll horizontal and is released afterwards; a scroll
+  writes one row naming its point and its delta, and moves the pointer
+  `platform::pointer_in_rect` tests against; a point outside the target is
+  refused before anything is delivered; and the parse refuses no delta, both
+  deltas, a zero delta, a malformed one, an unknown modifier and a
+  `mouse_button`. The 3D viewport's and Image Detail's own tests check that a
+  Ctrl+wheel notch zooms as far as a plain notch, and Image Detail's that a
+  trackpad scroll pans the photograph the way its delta moves the content on
+  both axes. In the windowed suite,
   `ui_basic`, a left `drag` across the 3D viewport orbits the camera: the
   position `get_scene` reports moves and the target distance does not.
 - **Schema and parser cannot drift**: the cached catalog schema supplies the
@@ -5881,9 +5981,9 @@ Other candidates, in rough order of value:
   GUI thread pumping, so every queued tool call would time out behind a window
   only the human can answer. A `click` can still press a menu item that opens
   one, as a person's click would, and the same wait follows.
-- **No input below egui.** `click`, `hover`, `drag`, `press_key` and
-  `type_text` put events into egui's input, so they never pass through `winit`, the keyboard
-  layout or an input method (§ "What synthetic input does not exercise"). The
+- **No input below egui.** `click`, `hover`, `drag`, `scroll`, `press_key`
+  and `type_text` put events into egui's input, so they never pass through
+  `winit`, the keyboard layout or an input method (§ "What synthetic input does not exercise"). The
   command vocabulary stays the way an agent changes the viewer; the input tools
   are for what only a widget does and for testing the widgets themselves.
 - **No persistence of what an agent *set*.** The endpoint is not remembered
@@ -5975,11 +6075,6 @@ Other candidates, in rough order of value:
   `hold_ms` argument would cover them. There is none because `set_view` already
   moves the camera exactly, so only a test of the fly handling itself would need
   it.
-- **Scroll.** The input tools press, move, drag and type, and do not scroll,
-  which the 3D viewport and Image Detail read. Both panels have
-  command-vocabulary equivalents (`set_view`, `set_image_detail_view`), so an
-  agent does not need it for the viewer's own operations, only to test the
-  scroll handling itself.
 - **Tooltips.** egui draws them on their own `Tooltip` layer after a hover
   delay, and the listing skips that layer. Listing them as a third kind in
   `menus` would be easy, but a test would have to wait out the delay.

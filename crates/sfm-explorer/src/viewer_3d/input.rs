@@ -581,10 +581,12 @@ impl Viewer3D {
         }
     }
 
-    /// Handles pinch-to-zoom gesture.
+    /// Handles pinch-to-zoom gesture. A Ctrl+scroll is not a pinch here: it
+    /// zooms through [`Self::handle_scroll`] (see
+    /// [`crate::platform::pinch_zoom_delta`]).
     pub(super) fn handle_pinch(&mut self, ui: &egui::Ui, pointer_over: bool) {
         let zoom_delta = if pointer_over {
-            ui.input(|i| i.zoom_delta())
+            crate::platform::pinch_zoom_delta(ui.ctx())
         } else {
             1.0
         };

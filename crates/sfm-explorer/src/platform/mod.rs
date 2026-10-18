@@ -164,6 +164,29 @@ impl ScrollInput {
     }
 }
 
+/// This frame's pinch, as a zoom factor: a two-finger pinch on a touch screen
+/// (egui's multi-touch), or a trackpad pinch the platform reports as
+/// `egui::Event::Zoom`. 1 when there is none.
+///
+/// `InputState::zoom_delta` is not this: egui also turns a Ctrl+scroll into a
+/// zoom factor there, spread over the frames after the wheel event as its
+/// scroll smoothing is. The panels that zoom on a pinch already zoom on that
+/// scroll through [`ScrollInput`], so reading `zoom_delta` as a pinch zoomed a
+/// Ctrl+wheel notch twice, about a fifth again on top of the notch's own step.
+pub fn pinch_zoom_delta(ctx: &egui::Context) -> f32 {
+    ctx.input(|i| match i.multi_touch() {
+        Some(touch) => touch.zoom_delta,
+        None => i
+            .events
+            .iter()
+            .map(|event| match event {
+                egui::Event::Zoom(factor) => *factor,
+                _ => 1.0,
+            })
+            .product(),
+    })
+}
+
 /// Check if the platform's tracked pointer position is within the given egui rect.
 ///
 /// This uses the pointer position tracked directly from WM_POINTER messages,
@@ -186,6 +209,37 @@ pub fn pointer_in_rect(ctx: &egui::Context, rect: egui::Rect) -> bool {
     {
         ctx.input(|i| i.pointer.latest_pos())
             .is_some_and(|p| rect.contains(p))
+    }
+}
+
+/// Put the tracked pointer where a synthetic pointer move put egui's: `pos` in
+/// window points, `window_px` the same place in the window's physical pixels.
+///
+/// The MCP input tools move the pointer with egui events alone, which on
+/// Windows leaves [`pointer_in_rect`] reading wherever the real cursor last
+/// was, so a scroll aimed at the 3D viewport would be ignored by it, and a
+/// scroll aimed at a list could be taken by the viewport under the real
+/// cursor. Writing the move here as well is what a real mouse move does: the
+/// window procedure writes the same position from `WM_POINTER*`, and the next
+/// real mouse message overwrites this one. On Linux and macOS
+/// `pointer_in_rect` already reads egui's pointer, so there is nothing to do.
+/// Under `cfg(test)` it places the thread's test pointer instead, so headless
+/// tests see the move without sharing the window's statics.
+#[cfg_attr(not(feature = "mcp"), allow(dead_code))]
+pub(crate) fn move_tracked_pointer(pos: egui::Pos2, window_px: [f32; 2]) {
+    #[cfg(test)]
+    {
+        let _ = window_px;
+        set_test_pointer_pos(Some(pos));
+    }
+    #[cfg(all(not(test), target_os = "windows"))]
+    {
+        let _ = pos;
+        windows::set_pointer_client_pos(window_px[0].round() as i32, window_px[1].round() as i32);
+    }
+    #[cfg(all(not(test), not(target_os = "windows")))]
+    {
+        let _ = (pos, window_px);
     }
 }
 

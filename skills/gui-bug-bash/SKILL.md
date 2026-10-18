@@ -152,9 +152,12 @@ Each of these found at least one real bug in the first run.
   `max_dimension` around 1000.
 - **Drive the real gestures.** `get_widgets` gives ids and rectangles, and
   `click` (with `count: 2`, `mouse_button: "right"`, `modifiers`), `hover`,
-  `drag`, `press_key` and `type_text` reach the same code paths as a person.
-  `drag` holds a button along `path_px`, one point per frame, which is what
-  orbits the 3D viewport and moves a bench handle. The context menus of Image
+  `drag`, `scroll`, `press_key` and `type_text` reach the same code paths as
+  a person. `drag` holds a button along `path_px`, one point per frame, which
+  is what orbits the 3D viewport and moves a bench handle. `scroll` turns the
+  wheel (`delta_lines`) or moves two fingers on a trackpad (`delta_px`) at a
+  point, with `modifiers`, which zooms the viewport and Image Detail and
+  scrolls every list. The context menus of Image
   Detail and the Scene tree are listed in `click`'s reply as soon as they
   open.
 - **Change the layout.** `get_window_layout`, edit the document, and

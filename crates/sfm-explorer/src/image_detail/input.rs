@@ -120,10 +120,13 @@ impl ImageDetail {
                     let zoom_factor = 1.0 + delta.y * TRACKPAD_ZOOM_SPEED;
                     self.zoom_at(zoom_factor, cursor_rel);
                 } else {
-                    // Trackpad two-finger scroll = pan.
-                    // Sign convention matches 3D viewer shift+scroll → camera.pan(delta.x, -delta.y):
-                    // camera moves by (delta.x, -delta.y), content moves opposite.
-                    self.pan.x -= delta.x;
+                    // Trackpad two-finger scroll = pan. The photograph moves
+                    // the way egui's delta says the content moves, on both
+                    // axes, as it does under the DirectManipulation pan below:
+                    // that pan's `dx` is egui's x negated
+                    // (`platform::gesture_scroll_events`), so `-= dx` there is
+                    // `+= delta.x` here.
+                    self.pan.x += delta.x;
                     self.pan.y += delta.y;
                 }
                 self.clamp_pan(display_size, panel_size);
@@ -139,9 +142,11 @@ impl ImageDetail {
             }
         }
 
-        // Pinch-to-zoom (trackpad pinch) — only when pointer over panel
+        // Pinch-to-zoom (trackpad pinch) — only when pointer over panel. A
+        // Ctrl+scroll has zoomed above already, so it is not read again as a
+        // pinch here (`platform::pinch_zoom_delta`).
         let zoom_delta = if pointer_over {
-            ui.input(|i| i.zoom_delta())
+            platform::pinch_zoom_delta(ui.ctx())
         } else {
             1.0
         };

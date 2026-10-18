@@ -2402,3 +2402,44 @@ fn a_busy_node_greys_the_patch_entries() {
     );
     assert_eq!(offered(&staged.viewer).len(), 4, "greyed, not hidden");
 }
+
+/// A Ctrl+wheel notch zooms the viewport as far as a plain notch does. egui
+/// also turns a Ctrl+scroll into a zoom factor of its own, spread over the
+/// frames after it, and reading that as a pinch zoomed the notch a second
+/// time.
+#[test]
+fn a_control_wheel_notch_zooms_as_far_as_a_plain_one() {
+    let distance_after = |modifiers: egui::Modifiers| {
+        let (mut viewer, ctx, mut state) = settled();
+        let before = viewer.camera.camera.target_distance;
+        let mut events = vec![
+            egui::Event::ModifiersChanged(modifiers),
+            egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Line,
+                delta: egui::vec2(0.0, 1.0),
+                phase: egui::TouchPhase::Move,
+                modifiers,
+            },
+        ];
+        // Long enough for egui's smoothing to have handed out all of it.
+        for _ in 0..40 {
+            run_frame(
+                &mut viewer,
+                &ctx,
+                &mut state,
+                std::mem::take(&mut events),
+                OVER_A_POINT,
+                None,
+                None,
+            );
+        }
+        viewer.camera.camera.target_distance / before
+    };
+    let plain = distance_after(egui::Modifiers::NONE);
+    assert!(
+        plain < 1.0,
+        "a notch away from the person zooms in: {plain}"
+    );
+    let control = distance_after(egui::Modifiers::COMMAND);
+    assert!((control - plain).abs() < 1e-9, "{control} against {plain}");
+}
