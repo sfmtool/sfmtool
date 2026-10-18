@@ -128,10 +128,10 @@ filter in `mutual_best_match_sweep_geometric` and
 so `geom` must describe the cameras the keypoints are pixel positions of.
 `match_image_pair` sorts by rectified keypoints but filters with the original
 cameras, so it does not call `mutual_best_match_sweep_geometric`; it calls the
-shared sweep body with the raw positions as separate filter positions. The polar pair
-takes raw pixel positions and the row-major fundamental matrix, and returns
-`None` when either epipole is at infinity, which is the caller's signal to use
-the rectified sweep instead. The one-way functions take features already sorted
+shared sweep body with the raw positions as separate filter positions. The
+polar pair takes raw pixel positions and the row-major fundamental matrix, and
+returns `None` when either epipole is at infinity, which is the caller's signal
+to use the rectified sweep instead. The one-way functions take features already sorted
 by Y and return a map from sorted index in image 1 to `(sorted index in image
 2, distance)`; they are the single-direction step of the rectified sweep,
 exposed for tests and the bindings.
@@ -255,9 +255,8 @@ the other image, and drops window candidates that disagree. It has two stages.
    zero-length column fails.
 2. **Size, when triangulation is reliable.** The ray angle between the two
    features' unprojected rays is computed, from their raw pixel positions on
-   both paths. If it is below
-   `min_triangulation_angle` degrees, the depth is poorly determined and the
-   candidate passes without a size test. Otherwise the pair is triangulated by
+   both paths. If it is below `min_triangulation_angle` degrees, the depth is
+   poorly determined and the candidate passes without a size test. Otherwise the pair is triangulated by
    DLT; a degenerate solution or a point behind either camera fails. The rotated
    query shape is scaled by `d1 / d2` (its depths in camera 1 and camera 2), and
    the candidate passes when the ratio of its size to the scaled query size is
