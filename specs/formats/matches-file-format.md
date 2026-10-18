@@ -175,7 +175,7 @@ always store the pairwise backbone.
 
 ```json
 {
-  "version": 9,
+  "version": 10,
   "matching_method": "sequential",
   "matching_tool": "colmap",
   "matching_tool_version": "4.02",
@@ -224,7 +224,7 @@ A cluster-bearing file replaces the pairwise summary fields with cluster counts:
 ```
 
 **Field descriptions:**
-- `version`: Format version number. `1` through `9`; writers emit `9` (see
+- `version`: Format version number. `1` through `10`; writers emit `10` (see
   [Versioning and Migration](#versioning-and-migration))
 - `matching_method`: Type of matching used to produce these matches. The
   format does not restrict the string; these values have a defined meaning:

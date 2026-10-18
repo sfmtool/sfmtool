@@ -451,6 +451,9 @@ Non-goals/deferrals checked: 3; no longer hold: 0
   - Verification step 6 (~:1365) does not list the per-cell checks or the rejection of legend names newer than the file; both are stated elsewhere. One clause.
   - `refine_options.piecewise`: the SfM Explorer writer omits it (`cluster_patches.rs:1030-1038`); the spec gives no meaning to its absence. Say a missing key means the per-cell refinement did not run.
   - Mannered prose: "the bridge between features and reconstruction" (:18) → "the step between"; "makes working with the pipeline less fun" (:24) → "slows down repeated solves"; "rides inside" (:944, :1553) → "is stored in"; "the rows the cascade measured" (:535) → "the rows the refiner measured".
+
+> _Status (2026-10-17): **Partially done** — the first bullet (current version stated as 9): the top-level metadata example now shows `"version": 10` and the `version` field description says "`1` through `10`; writers emit `10`", matching `MATCHES_FORMAT_VERSION`; the section's other bullets are still open, branch `fix-round-06-matches-version`._
+
 **Third copies:** `MATCHES_FORMAT_VERSION` doc (`types.rs:68-101`, 34 lines) re-tells versions 7-10; shrink to contract plus link, as it already does below 7.
 **Recommendation:** update spec — the version line first.
 **Unclear / incorrect / suspicious:** none beyond the above. All five outbound links are background.
