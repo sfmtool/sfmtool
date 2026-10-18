@@ -157,7 +157,7 @@ Round 1 seeds from the SIFT detections (normal-refine → localize → sub-pixel
 refine); each later round re-refines every normal against the *previous* round's
 keypoints, then refines the keypoints again with the sub-pixel pass alone
 against the new normals (the localizer runs only in round 1) — a fixed-point
-alternation. The patch views are expanded once (step 3, round 1) and only ever shrinks
+alternation. The patch views are expanded once (step 3, round 1) and only ever shrink
 thereafter (the per-round obliquity drop).
 
 1. **Initialize a patch frame.** Seed each point's `(u, v)` frame with a starting

@@ -847,7 +847,7 @@ questions, and carrying it onto the new half would state it as fact.
 Most of what those functions call was already there, because the batch
 pipeline needed it: the cluster stage is `refine_cluster_patches` over an
 in-memory cluster; the upgrade is the spawn pipeline's steps over one candidate
-with a caller-supplied view set and seeds; the track-stage measurements are
+with caller-supplied patch views and seeds; the track-stage measurements are
 `localize_patch_keypoints`, `refine_patch_keypoints` and
 `score_localizability_stack_deprecated`; the commit is `add_point` and `replace_point`.
 What the sweep and the searches still need: `select_patch_views` for the
