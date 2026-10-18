@@ -233,7 +233,7 @@ pub(super) fn anchored_fit(
 ///
 /// Every sighting is set `in`, by hand, and the cluster is upgraded without a
 /// cluster reading: the upgrade triangulates the sightings as given and runs
-/// the track-stage fit over the frame it builds. Observation 0 is the query.
+/// the track-stage fit over the patch frame it builds. Observation 0 is the query.
 pub(super) fn track_from_sightings(
     ctx: &Ctx<'_>,
     image: u32,

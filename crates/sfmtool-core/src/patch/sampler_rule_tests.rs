@@ -84,11 +84,11 @@ fn keypoints(patch: &OrientedPatch, views: &[ProjectedImage<'_>]) -> Vec<[f64; 2
 /// The sampler the bench and Track View read for an observation: the rule on
 /// the patch re-anchored at its keypoint, through `patch_grid_jacobian` at `R`.
 fn bench_choice(patch: &OrientedPatch, view: &ProjectedImage<'_>, kp: [f64; 2]) -> Sampler {
-    let frame = patch
+    let patch_frame = patch
         .anchored_at_keypoint(view.camera, view.cam_from_world, kp)
         .unwrap_or_else(|| patch.clone());
     SamplerChoice::per_view().for_jacobian(patch_grid_jacobian(
-        &frame,
+        &patch_frame,
         view.camera,
         view.cam_from_world,
         R as usize,
@@ -374,14 +374,14 @@ fn the_kernels_choose_the_sampler_the_bench_reads() {
     }
 }
 
-/// A stored frame whose axes are not perpendicular is read by the rule as
-/// stored, re-anchored on the keypoint, whatever frame a kernel then renders
-/// through. The kernels that rebuild an orthonormal frame around the stored
+/// A stored patch frame whose axes are not perpendicular is read by the rule as
+/// stored, re-anchored on the keypoint, whatever patch frame a kernel then renders
+/// through. The kernels that rebuild an orthonormal patch frame around the stored
 /// `v` axis (the sub-pixel refiner, the localizer, normal refinement) would
 /// see this square facing the camera and compressed alike on both axes, and
-/// would keep `bilinear_mip`; the stored frame is sheared 30°, which
+/// would keep `bilinear_mip`; the stored patch frame is sheared 30°, which
 /// `bilinear_mip` reads at level 3 and the sampler rule moves. The stored
-/// bitmap's render follows the stored frame, as the bench does.
+/// bitmap's render follows the stored patch frame, as the bench does.
 #[test]
 fn every_kernel_reads_the_rule_from_the_stored_frame() {
     let cams = [camera(500.0), camera(500.0)];

@@ -84,7 +84,7 @@ pub fn render_patch_bitmap_column(
     if recon.keypoints_xy().is_none() {
         return Ok(None);
     }
-    let Some(cloud) = PatchCloud::from_stored_frames(recon) else {
+    let Some(cloud) = PatchCloud::from_stored_patch_frames(recon) else {
         return Ok(None);
     };
     let [decode, render] = progress.split([1.0, 3.0]);

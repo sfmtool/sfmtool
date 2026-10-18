@@ -160,7 +160,9 @@ fn geometry_search_adds_projected_candidate_without_moving_existing_rows() {
         (site[1] - expected[1]).abs() < 1e-4,
         "{site:?} vs {expected:?}"
     );
-    let shape = added.shape().expect("the projected frame seeds a shape");
+    let shape = added
+        .shape()
+        .expect("the projected patch frame seeds a shape");
     let det = shape[0][0] * shape[1][1] - shape[0][1] * shape[1][0];
     assert!(
         det > 0.0,
@@ -2756,14 +2758,14 @@ fn patch_frame_of(track: &EditableTrack) -> OrientedPatch {
 /// `scene` seeded at `seeds`: what the bench has to agree with.
 fn fit_directly(
     scene: &Scene,
-    frame: &OrientedPatch,
+    patch_frame: &OrientedPatch,
     view_set: &[u32],
     seeds: &[Option<[f64; 2]>],
 ) -> (KeypointLocalization, KeypointRefinement) {
     let views = scene.views();
     let options = FitOptions::default();
     let localized = localize_patch_keypoints(
-        frame,
+        patch_frame,
         &views,
         view_set,
         Some(seeds),
@@ -2771,7 +2773,7 @@ fn fit_directly(
         &options.localize,
     );
     let refined = refine_patch_keypoints(
-        frame,
+        patch_frame,
         &views,
         &localized.views,
         Some(
@@ -2843,23 +2845,27 @@ fn a_fit_squares_a_rectangular_frame_keeping_its_area() {
     let (bench, label) = bench_with_point(&edited, 0);
     let mut track = track_of(&bench, &label);
     let half = patch_frame_of(&track).half_extent[0];
-    // A frame written before the upgrade framed square: twice as tall as wide,
+    // A patch frame written before the upgrade framed square: twice as tall as wide,
     // with the area of the square it should be.
     let Stage::Track(payload) = &mut track.stage else {
         panic!("the fixture is at the track stage")
     };
-    payload.patch_frame.as_mut().expect("a frame").half_extent = [half / 2.0, half * 2.0];
+    payload
+        .patch_frame
+        .as_mut()
+        .expect("a patch frame")
+        .half_extent = [half / 2.0, half * 2.0];
 
     let (fitted, _) = fit_over(&scene, &edited, &track).expect("a fit");
-    let frame = patch_frame_of(&fitted);
+    let patch_frame = patch_frame_of(&fitted);
     assert_eq!(
-        frame.half_extent[0], frame.half_extent[1],
+        patch_frame.half_extent[0], patch_frame.half_extent[1],
         "the fit squared it"
     );
     assert!(
-        (frame.half_extent[0] / half - 1.0).abs() < 0.05,
+        (patch_frame.half_extent[0] / half - 1.0).abs() < 0.05,
         "the square keeps the area: {} against {half}",
-        frame.half_extent[0]
+        patch_frame.half_extent[0]
     );
 }
 
@@ -2887,7 +2893,7 @@ fn a_track_from_a_point_fits_to_the_kernels_own_numbers() {
     let edited = edited_with_columns(&scene, WORLD);
     let (bench, label) = bench_with_point(&edited, 0);
     let track = track_of(&bench, &label);
-    let frame = patch_frame_of(&track);
+    let patch_frame = patch_frame_of(&track);
     let seeds: Vec<Option<[f64; 2]>> = (0..2)
         .map(|k| {
             track.observations[k]
@@ -2906,8 +2912,8 @@ fn a_track_from_a_point_fits_to_the_kernels_own_numbers() {
         (2, 0)
     );
 
-    // The same two kernels, called straight on the same frame and seeds.
-    let (localized, refined) = fit_directly(&scene, &frame, &[0, 1], &seeds);
+    // The same two kernels, called straight on the same patch frame and seeds.
+    let (localized, refined) = fit_directly(&scene, &patch_frame, &[0, 1], &seeds);
     for &image in &localized.views {
         let at = refined
             .views
@@ -3055,7 +3061,7 @@ fn a_track_from_a_point_fits_to_the_kernels_own_numbers() {
         );
     }
 
-    // The track's own point is where its sightings say it is, and the frame
+    // The track's own point is where its sightings say it is, and the patch frame
     // stands there.
     let position = report.position.expect("a triangulation");
     assert!(
@@ -3065,7 +3071,7 @@ fn a_track_from_a_point_fits_to_the_kernels_own_numbers() {
     let payload = measured.track().expect("the track stage");
     assert_eq!(payload.position, Some(position));
     assert_eq!(
-        payload.patch_frame.as_ref().expect("a frame").center,
+        payload.patch_frame.as_ref().expect("a patch frame").center,
         position,
         "the frame follows the position"
     );
@@ -3153,7 +3159,7 @@ fn a_candidate_on_the_plane_scores_and_one_nowhere_is_not_evaluated() {
     );
 }
 
-/// An evaluation is a reading: the position, the frame and every keypoint come
+/// An evaluation is a reading: the position, the patch frame and every keypoint come
 /// back exactly as they went in, and what changes is what each row says about
 /// itself.
 #[test]
@@ -3523,7 +3529,7 @@ fn a_downgrade_then_an_upgrade_triangulates_back() {
     let track = track_of(&bench, &label);
 
     let (cluster, report) =
-        stage_over(&scene, &edited, &track, StageKind::Cluster).expect("a frame to project");
+        stage_over(&scene, &edited, &track, StageKind::Cluster).expect("a patch frame to project");
     assert_eq!(cluster.stage_kind(), StageKind::Cluster);
     assert!(report.changed);
     assert_eq!(
@@ -3531,7 +3537,7 @@ fn a_downgrade_then_an_upgrade_triangulates_back() {
         Some(cluster.cluster().expect("a cluster").reference)
     );
     // Every observation is seeded where its keypoint was, with the shape the
-    // frame projects to there.
+    // patch frame projects to there.
     for (k, observation) in cluster.observations.iter().enumerate() {
         let seed = observation.cluster.as_ref().expect("a cluster slot");
         let keypoint = track.observations[k]
@@ -3559,7 +3565,7 @@ fn a_downgrade_then_an_upgrade_triangulates_back() {
         let projected = edited
             .base
             .observation_affine_shape(0, observation.image as usize, keypoint)
-            .expect("the fixture's frame projects into every image");
+            .expect("the fixture's patch frame projects into every image");
         let expected = [
             f64::from(projected[0][0]).hypot(f64::from(projected[1][0])),
             f64::from(projected[0][1]).hypot(f64::from(projected[1][1])),
@@ -3905,9 +3911,9 @@ fn a_cluster_from_a_pixel_refines_upgrades_and_commits_onto_the_plane() {
         (position - WORLD).norm() < 0.1,
         "the hand-placed cluster landed at {position}"
     );
-    let frame = patch_frame_of(&upgraded);
+    let patch_frame = patch_frame_of(&upgraded);
     assert_eq!(
-        frame.half_extent[0], frame.half_extent[1],
+        patch_frame.half_extent[0], patch_frame.half_extent[1],
         "an upgrade frames a square patch"
     );
     // Only the track stage's measurements are on the observations now.
@@ -4036,14 +4042,14 @@ fn the_preconditions_are_the_steps_own_refusals() {
     assert_eq!(evaluate_preconditions(&whole), Ok(()));
     assert_eq!(fit_preconditions(&whole), Ok(()));
 
-    // A downgrade wants the frame it projects and the position it stands at.
-    let mut frameless = whole.clone();
-    if let Stage::Track(payload) = &mut frameless.stage {
+    // A downgrade wants the patch frame it projects and the position it stands at.
+    let mut without_patch_frame = whole.clone();
+    if let Stage::Track(payload) = &mut without_patch_frame.stage {
         payload.patch_frame = None;
     }
     assert_eq!(
-        set_stage_preconditions(&frameless, StageKind::Cluster),
-        Err(StageError::NoFrame)
+        set_stage_preconditions(&without_patch_frame, StageKind::Cluster),
+        Err(StageError::NoPatchFrame)
     );
     let mut placeless = whole.clone();
     if let Stage::Track(payload) = &mut placeless.stage {
@@ -4278,16 +4284,16 @@ fn a_track_with_no_frame_has_nothing_to_register_against() {
     }
     assert_eq!(
         evaluate_over(&scene, &edited, &track).expect_err("there is no patch"),
-        EvaluateError::NoFrame
+        EvaluateError::NoPatchFrame
     );
     assert_eq!(
         fit_over(&scene, &edited, &track).expect_err("there is no patch"),
-        FitError::NoFrame
+        FitError::NoPatchFrame
     );
     assert_eq!(
         stage_over(&scene, &edited, &track, StageKind::Cluster)
             .expect_err("there is no frame to project"),
-        StageError::NoFrame
+        StageError::NoPatchFrame
     );
 }
 
@@ -4354,7 +4360,8 @@ fn a_commit_of_a_duplicate_creates_a_point_rather_than_replacing_one() {
     let (bench, report) = duplicate(&bench, &label).expect("the label is on the bench");
     let copy = bench.track(&report.label).expect("just put on");
 
-    let (next, committed) = commit(&edited, copy).expect("a track with a position and a frame");
+    let (next, committed) =
+        commit(&edited, copy).expect("a track with a position and a patch frame");
     assert_eq!(committed.replaced, None, "a copy creates");
     assert_eq!(
         committed.point as usize,
@@ -4443,11 +4450,11 @@ fn projection_offsets(track: &EditableTrack, edited: &EditedReconstruction) -> V
         .iter()
         .map(|observation| {
             let (camera, pose) = view(edited, observation.image as usize);
-            let frame = track
+            let patch_frame = track
                 .track()
                 .and_then(|payload| payload.patch_frame.as_ref())
-                .expect("a frame");
-            let centre = corner_pixel(frame, &camera, &pose, 0.0, 0.0);
+                .expect("a patch frame");
+            let centre = corner_pixel(patch_frame, &camera, &pose, 0.0, 0.0);
             let site = observation.site().expect("a sighting");
             [site[0] - centre[0], site[1] - centre[1]]
         })
@@ -4455,7 +4462,7 @@ fn projection_offsets(track: &EditableTrack, edited: &EditedReconstruction) -> V
 }
 
 /// The outline a person sees at `observation`: the patch re-anchored on that
-/// sighting, which is the frame both the layer and the resize read.
+/// sighting, which is the patch frame both the layer and the resize read.
 fn outline_of(
     track: &EditableTrack,
     edited: &EditedReconstruction,
@@ -4577,7 +4584,7 @@ fn moving_a_cluster_sighting_moves_its_seed_and_keeps_the_shape_it_is_read_at() 
 /// invert the radial term, which is why the two are run with different
 /// tolerances rather than with one loose enough for both.
 ///
-/// The assertions are about the **frame** the step wrote, not about the outline
+/// The assertions are about the **patch frame** the step wrote, not about the outline
 /// redrawn from the keypoint it wrote beside it: a keypoint is an `f32` slot, so
 /// re-anchoring on it is within a rounding of the centre and not on it. That
 /// rounding is what the looser bound on the dot below allows for.
@@ -4599,7 +4606,7 @@ fn resize_edge_case(edited: &EditedReconstruction, tolerance: f64) {
     let unanchored = track
         .track()
         .and_then(|payload| payload.patch_frame.clone())
-        .expect("a frame");
+        .expect("a patch frame");
     // The far edge's midpoint, which the resize promises not to move.
     let far_before = corner_pixel(&before, &camera, &pose, -1.0, 0.0);
     // Aim well outside the outline, along the `+u` edge's own direction.
@@ -4615,7 +4622,7 @@ fn resize_edge_case(edited: &EditedReconstruction, tolerance: f64) {
     let after = next
         .track()
         .and_then(|p| p.patch_frame.clone())
-        .expect("a frame");
+        .expect("a patch frame");
     assert_eq!(
         after.half_extent[0], after.half_extent[1],
         "a patch frame is square, so a resize is one scale"
@@ -4629,7 +4636,7 @@ fn resize_edge_case(edited: &EditedReconstruction, tolerance: f64) {
         report.half - report.was,
     );
 
-    // The claim, stated on the **exact** frame the step's own numbers describe:
+    // The claim, stated on the **exact** patch frame the step's own numbers describe:
     // the outline is the patch re-anchored on the dragged sighting, and that
     // sighting's plane point moved by the same displacement, so this is what is
     // drawn -- without the `f32` keypoint slot standing between the arithmetic
@@ -4707,7 +4714,7 @@ fn translate_case(edited: &EditedReconstruction, tolerance: f64) {
     let was = track
         .track()
         .and_then(|payload| payload.patch_frame.clone())
-        .expect("a frame");
+        .expect("a patch frame");
     let outline = outline_of(&track, edited, dragged);
     // Aim at a place on the outline that is not its centre, so the slide is a
     // real move: the `(0.7, 0.4)` point of the square.
@@ -4722,24 +4729,27 @@ fn translate_case(edited: &EditedReconstruction, tolerance: f64) {
     assert_eq!(report.image, track.observations[dragged].image);
     assert_eq!(report.placed, next.observations.len());
 
-    let frame = next
+    let patch_frame = next
         .track()
         .and_then(|payload| payload.patch_frame.clone())
-        .expect("a frame");
+        .expect("a patch frame");
     // In-plane only: the normal, the axes and the size are untouched, and the
     // offset lies in the plane it moved across.
-    assert!((frame.normal() - was.normal()).norm() < 1e-12);
-    assert_eq!(frame.half_extent, was.half_extent);
-    assert_eq!(frame.u_axis, was.u_axis);
-    assert_eq!(frame.v_axis, was.v_axis);
-    let offset = frame.center - was.center;
+    assert!((patch_frame.normal() - was.normal()).norm() < 1e-12);
+    assert_eq!(patch_frame.half_extent, was.half_extent);
+    assert_eq!(patch_frame.u_axis, was.u_axis);
+    assert_eq!(patch_frame.v_axis, was.v_axis);
+    let offset = patch_frame.center - was.center;
     assert!(
         offset.dot(&was.normal()).abs() < 1e-12,
         "the patch left its own plane: {offset:?}"
     );
     assert!((report.moved - offset.norm()).abs() < 1e-12);
     assert_eq!(offset, displacement_of(&track, &next));
-    assert_eq!(next.track().and_then(|p| p.position), Some(frame.center));
+    assert_eq!(
+        next.track().and_then(|p| p.position),
+        Some(patch_frame.center)
+    );
     assert_eq!(next.track().and_then(|p| p.bitmap.clone()), None);
 
     // **The dot the drag came through lands under the pointer.** Its own plane
@@ -4822,7 +4832,7 @@ fn a_pixel_named_in_an_image_reads_the_patch_as_it_stands() {
     let patch = track
         .track()
         .and_then(|payload| payload.patch_frame.clone())
-        .expect("a frame");
+        .expect("a patch frame");
     let off = corner_pixel(&patch, &camera, &pose, 0.3, -0.2);
     let (track, _) = sight_observation(&track, &edited, 1, off).expect("a usable pixel");
 
@@ -4836,7 +4846,7 @@ fn a_pixel_named_in_an_image_reads_the_patch_as_it_stands() {
     let moved = slid
         .track()
         .and_then(|payload| payload.patch_frame.clone())
-        .expect("a frame");
+        .expect("a patch frame");
     let centre = corner_pixel(&moved, &camera, &pose, 0.0, 0.0);
     assert!(
         (centre[0] - target[0]).abs() < 1e-9 && (centre[1] - target[1]).abs() < 1e-9,
@@ -4853,7 +4863,7 @@ fn a_pixel_named_in_an_image_reads_the_patch_as_it_stands() {
     let grown = resized
         .track()
         .and_then(|payload| payload.patch_frame.clone())
-        .expect("a frame");
+        .expect("a patch frame");
     let landed = corner_pixel(&grown, &camera, &pose, 1.0, 0.0);
     let held = corner_pixel(&grown, &camera, &pose, -1.0, 0.0);
     assert!(
@@ -4890,7 +4900,7 @@ fn displacement_of(before: &EditableTrack, after: &EditableTrack) -> Vector3<f64
         track
             .track()
             .and_then(|payload| payload.patch_frame.as_ref())
-            .expect("a frame")
+            .expect("a patch frame")
             .center
     };
     centre(after) - centre(before)
@@ -4920,9 +4930,9 @@ fn a_resize_from_an_edge_holds_the_far_edge_of_a_direction_patch_too() {
             Stage::Track(payload) => payload,
             Stage::Cluster(_) => unreachable!("a track from a point is at the track stage"),
         };
-        let frame = payload.patch_frame.as_mut().expect("a stored patch");
-        let direction = frame.center.coords.normalize();
-        *frame = OrientedPatch::from_infinity_direction(
+        let patch_frame = payload.patch_frame.as_mut().expect("a stored patch");
+        let direction = patch_frame.center.coords.normalize();
+        *patch_frame = OrientedPatch::from_infinity_direction(
             Point3::from(direction),
             Vector3::new(0.0, 1.0, 0.0),
             [0.02, 0.02],
@@ -4930,12 +4940,12 @@ fn a_resize_from_an_edge_holds_the_far_edge_of_a_direction_patch_too() {
         payload.position = None;
     }
     // The keypoint has to be the bearing's own projection for the outline to be
-    // the frame; put it there.
+    // the patch frame; put it there.
     let centre = corner_pixel(
         track
             .track()
             .and_then(|p| p.patch_frame.as_ref())
-            .expect("a frame"),
+            .expect("a patch frame"),
         &camera,
         &pose,
         0.0,
@@ -4957,7 +4967,7 @@ fn a_resize_from_an_edge_holds_the_far_edge_of_a_direction_patch_too() {
     let after = next
         .track()
         .and_then(|p| p.patch_frame.clone())
-        .expect("a frame");
+        .expect("a patch frame");
     assert_eq!(after.w, 0.0, "a bearing stays a bearing");
     assert!(
         (after.center.coords.norm() - 1.0).abs() < 1e-12,
@@ -4980,7 +4990,7 @@ fn a_resize_from_an_edge_holds_the_far_edge_of_a_direction_patch_too() {
 
 /// The same track with its patch turned into a bearing along its own
 /// direction, and every sighting's keypoint put back on the bearing's own
-/// projection so the outline is the frame.
+/// projection so the outline is the patch frame.
 ///
 /// What the three handles of a track at infinity are driven against: the centre
 /// is a unit direction, the corners are directions too, and every step has to
@@ -4992,19 +5002,19 @@ fn as_bearing(track: &EditableTrack, edited: &EditedReconstruction) -> EditableT
             Stage::Track(payload) => payload,
             Stage::Cluster(_) => unreachable!("a track from a point is at the track stage"),
         };
-        let frame = payload.patch_frame.as_mut().expect("a stored patch");
-        let direction = frame.center.coords.normalize();
-        *frame = OrientedPatch::from_infinity_direction(
+        let patch_frame = payload.patch_frame.as_mut().expect("a stored patch");
+        let direction = patch_frame.center.coords.normalize();
+        *patch_frame = OrientedPatch::from_infinity_direction(
             Point3::from(direction),
             Vector3::new(0.0, 1.0, 0.0),
             [0.02, 0.02],
         );
         payload.position = None;
     }
-    let frame = patch_frame_of(&track);
+    let patch_frame = patch_frame_of(&track);
     for observation in &mut track.observations {
         let (camera, pose) = view(edited, observation.image as usize);
-        let centre = corner_pixel(&frame, &camera, &pose, 0.0, 0.0);
+        let centre = corner_pixel(&patch_frame, &camera, &pose, 0.0, 0.0);
         observation.track.as_mut().expect("a track slot").keypoint =
             Some([centre[0] as f32, centre[1] as f32]);
     }
@@ -5029,19 +5039,22 @@ fn a_translation_across_the_plane_moves_the_centre_and_every_sighting() {
     let (next, report) = translate_patch(&track, &edited, Vector3::new(0.05, -0.03, 0.0))
         .expect("a finite displacement");
     assert!(report.changed);
-    let frame = patch_frame_of(&next);
-    assert_eq!(frame.u_axis, was.u_axis);
-    assert_eq!(frame.v_axis, was.v_axis);
-    assert_eq!(frame.half_extent, was.half_extent);
-    let moved = frame.center - was.center;
+    let patch_frame = patch_frame_of(&next);
+    assert_eq!(patch_frame.u_axis, was.u_axis);
+    assert_eq!(patch_frame.v_axis, was.v_axis);
+    assert_eq!(patch_frame.half_extent, was.half_extent);
+    let moved = patch_frame.center - was.center;
     assert!(
         (moved - wanted).norm() < 1e-12,
         "the centre should have moved by the in-plane part alone, it moved by {moved:?}",
     );
     assert!((report.moved - wanted.norm()).abs() < 1e-12);
-    assert_eq!(report.center, frame.center);
+    assert_eq!(report.center, patch_frame.center);
     assert_eq!(report.placed, next.observations.len());
-    assert_eq!(next.track().and_then(|p| p.position), Some(frame.center));
+    assert_eq!(
+        next.track().and_then(|p| p.position),
+        Some(patch_frame.center)
+    );
     assert_eq!(next.track().and_then(|p| p.bitmap.clone()), None);
     // Every sighting kept its own offset from where the centre projects, which
     // is what the tile is cut on, and none of them was ruled on.
@@ -5057,7 +5070,7 @@ fn a_translation_across_the_plane_moves_the_centre_and_every_sighting() {
     let (again, report) =
         translate_patch(&next, &edited, Vector3::zeros()).expect("no displacement at all");
     assert!(!report.changed);
-    assert_eq!(patch_frame_of(&again).center, frame.center);
+    assert_eq!(patch_frame_of(&again).center, patch_frame.center);
 }
 
 /// **A mixed `by` is allowed rather than refused.** The carry takes an arbitrary
@@ -5151,7 +5164,7 @@ fn a_pixel_gesture_is_the_step_the_pointer_named() {
     let edited = edited_fixture(&scene, WORLD);
     let (bench, label) = bench_with_point(&edited, 0);
     let track = track_of(&bench, &label);
-    let frame = patch_frame_of(&track);
+    let patch_frame = patch_frame_of(&track);
 
     let dragged = 1;
     let (camera, pose) = view(&edited, track.observations[dragged].image as usize);
@@ -5162,7 +5175,11 @@ fn a_pixel_gesture_is_the_step_the_pointer_named() {
     let offset = outline
         .keypoint_plane_offset(&camera, &pose, target)
         .expect("the fixture's ray meets the plane");
-    let by = Vector3::new(offset.dot(&frame.u_axis), offset.dot(&frame.v_axis), 0.0);
+    let by = Vector3::new(
+        offset.dot(&patch_frame.u_axis),
+        offset.dot(&patch_frame.v_axis),
+        0.0,
+    );
 
     let (by_pixel, _) =
         translate_patch_to_pixel(&track, &edited, Viewpoint::Observation(dragged), target)
@@ -5177,7 +5194,7 @@ fn a_pixel_gesture_is_the_step_the_pointer_named() {
     let offset = outline
         .keypoint_plane_offset(&camera, &pose, edge)
         .expect("the fixture's ray meets the plane");
-    let half_length = (offset.dot(&frame.u_axis) + frame.half_extent[0]) / 2.0;
+    let half_length = (offset.dot(&patch_frame.u_axis) + patch_frame.half_extent[0]) / 2.0;
     let (by_pixel, pixel_report) = resize_patch_to_pixel(
         &track,
         &edited,
@@ -5299,11 +5316,11 @@ fn a_bearing_takes_a_tangential_translation_and_refuses_a_normal_one() {
     let (slid, report) =
         translate_patch(&track, &edited, Vector3::new(along, 0.0, 0.0)).expect("a tangent step");
     assert!(report.changed);
-    let frame = patch_frame_of(&slid);
-    assert_eq!(frame.w, 0.0, "a bearing stays a bearing");
-    assert!((frame.center.coords.norm() - 1.0).abs() < 1e-12);
+    let patch_frame = patch_frame_of(&slid);
+    assert_eq!(patch_frame.w, 0.0, "a bearing stays a bearing");
+    assert!((patch_frame.center.coords.norm() - 1.0).abs() < 1e-12);
     assert!(
-        (frame.center.coords.normalize() - point.coords.normalize()).norm() < 1e-12,
+        (patch_frame.center.coords.normalize() - point.coords.normalize()).norm() < 1e-12,
         "the bearing did not move onto the tangent place that was named",
     );
 
@@ -5329,16 +5346,16 @@ fn a_bearing_takes_a_tangential_translation_and_refuses_a_normal_one() {
     )
     .expect("a tangent length");
     assert!(report.changed);
-    let frame = patch_frame_of(&bigger);
-    assert_eq!(frame.w, 0.0);
-    assert!((frame.center.coords.norm() - 1.0).abs() < 1e-12);
-    assert_eq!(frame.half_extent[0], frame.half_extent[1]);
-    let far_after = corner_pixel(&frame, &camera, &pose, -1.0, 0.0);
+    let patch_frame = patch_frame_of(&bigger);
+    assert_eq!(patch_frame.w, 0.0);
+    assert!((patch_frame.center.coords.norm() - 1.0).abs() < 1e-12);
+    assert_eq!(patch_frame.half_extent[0], patch_frame.half_extent[1]);
+    let far_after = corner_pixel(&patch_frame, &camera, &pose, -1.0, 0.0);
     assert!(
         (far_after[0] - far_before[0]).abs() < 1e-6 && (far_after[1] - far_before[1]).abs() < 1e-6,
         "the far edge moved from {far_before:?} to {far_after:?}",
     );
-    let dragged = corner_pixel(&frame, &camera, &pose, 1.0, 0.0);
+    let dragged = corner_pixel(&patch_frame, &camera, &pose, 1.0, 0.0);
     let wanted = corner_pixel(&was, &camera, &pose, 1.8, 0.0);
     assert!(
         (dragged[0] - wanted[0]).abs() < 1e-6 && (dragged[1] - wanted[1]).abs() < 1e-6,
@@ -5388,7 +5405,7 @@ fn a_displacement_that_is_not_one_and_a_cluster_are_both_refused() {
 }
 
 /// Each sighting's in-plane offset `(a_i, b_i)` on the patch's own axes: where
-/// that photograph sees the patch's content against the frame's middle, read on
+/// that photograph sees the patch's content against the patch frame's middle, read on
 /// the plane rather than in pixels.
 ///
 /// **What an offset along the normal must not disturb.** The plane travels with
@@ -5396,17 +5413,20 @@ fn a_displacement_that_is_not_one_and_a_cluster_are_both_refused() {
 /// each keypoint afterwards has to be the projection of `c' + a_i u + b_i v` and
 /// of nothing else.
 fn plane_offsets(track: &EditableTrack, edited: &EditedReconstruction) -> Vec<(f64, f64)> {
-    let frame = patch_frame_of(track);
+    let patch_frame = patch_frame_of(track);
     track
         .observations
         .iter()
         .map(|observation| {
             let (camera, pose) = view(edited, observation.image as usize);
             let site = observation.site().expect("a sighting");
-            let offset = frame
+            let offset = patch_frame
                 .keypoint_plane_offset(&camera, &pose, site)
                 .expect("the fixture's rays meet the plane");
-            (offset.dot(&frame.u_axis), offset.dot(&frame.v_axis))
+            (
+                offset.dot(&patch_frame.u_axis),
+                offset.dot(&patch_frame.v_axis),
+            )
         })
         .collect()
 }
@@ -5435,7 +5455,7 @@ fn a_translation_along_the_normal_keeps_every_in_plane_offset() {
     // The fixture's keypoints are each point's exact projection, so every
     // in-plane offset is zero and a step that reset them all would pass. Put
     // each sighting somewhere of its own first, which is what a photograph says
-    // when it sees the patch's content off the frame's middle.
+    // when it sees the patch's content off the patch frame's middle.
     for (k, observation) in track.observations.iter_mut().enumerate() {
         let site = observation.site().expect("a sighting");
         observation.track.as_mut().expect("a track slot").keypoint = Some([
@@ -5457,19 +5477,22 @@ fn a_translation_along_the_normal_keeps_every_in_plane_offset() {
     assert_eq!(report.by.z, distance);
     assert_eq!(report.placed, next.observations.len());
 
-    // The frame moved along its normal and nowhere else, and nothing about its
+    // The patch frame moved along its normal and nowhere else, and nothing about its
     // shape or its orientation moved at all.
-    let frame = patch_frame_of(&next);
-    assert_eq!(frame.u_axis, was.u_axis);
-    assert_eq!(frame.v_axis, was.v_axis);
-    assert_eq!(frame.half_extent, was.half_extent);
-    let moved = frame.center - was.center;
+    let patch_frame = patch_frame_of(&next);
+    assert_eq!(patch_frame.u_axis, was.u_axis);
+    assert_eq!(patch_frame.v_axis, was.v_axis);
+    assert_eq!(patch_frame.half_extent, was.half_extent);
+    let moved = patch_frame.center - was.center;
     assert!(
         (moved - was.normal() * distance).norm() < 1e-12,
         "the centre should have moved {distance} along the normal, it moved by {moved:?}",
     );
-    assert_eq!(report.center, frame.center);
-    assert_eq!(next.track().and_then(|p| p.position), Some(frame.center));
+    assert_eq!(report.center, patch_frame.center);
+    assert_eq!(
+        next.track().and_then(|p| p.position),
+        Some(patch_frame.center)
+    );
     assert_eq!(next.track().and_then(|p| p.bitmap.clone()), None);
 
     // Every offset survived, and every keypoint is the projection of the place
@@ -5485,7 +5508,7 @@ fn a_translation_along_the_normal_keeps_every_in_plane_offset() {
     }
     for (observation, (a, b)) in next.observations.iter().zip(&offsets) {
         let (camera, pose) = view(&edited, observation.image as usize);
-        let place = frame.center + frame.u_axis * *a + frame.v_axis * *b;
+        let place = patch_frame.center + patch_frame.u_axis * *a + patch_frame.v_axis * *b;
         let (u, v) = camera
             .ray_to_pixel({
                 let pc = pose.transform_point_homogeneous(place.coords, 1.0);
@@ -5531,13 +5554,13 @@ fn a_translation_along_the_normal_keeps_every_in_plane_offset() {
     let (again, report) = translate_patch(
         &next,
         &edited,
-        Vector3::new(0.0, 0.0, frame.half_extent[0] * 1e-9),
+        Vector3::new(0.0, 0.0, patch_frame.half_extent[0] * 1e-9),
     )
     .expect("a finite displacement");
     assert!(!report.changed);
-    assert_eq!(report.center, frame.center);
+    assert_eq!(report.center, patch_frame.center);
     assert_eq!(report.placed, 0);
-    assert_eq!(patch_frame_of(&again).center, frame.center);
+    assert_eq!(patch_frame_of(&again).center, patch_frame.center);
 }
 
 /// A patch pushed past the cameras is in none of the photographs, and every
@@ -5630,11 +5653,11 @@ fn facing(track: &EditableTrack, normal: Vector3<f64>) -> EditableTrack {
     let Stage::Track(payload) = &mut next.stage else {
         unreachable!("a track from a point is at the track stage");
     };
-    let frame = payload.patch_frame.as_mut().expect("a stored patch");
-    let turn = nalgebra::Rotation3::rotation_between(&frame.normal(), &normal.normalize())
+    let patch_frame = payload.patch_frame.as_mut().expect("a stored patch");
+    let turn = nalgebra::Rotation3::rotation_between(&patch_frame.normal(), &normal.normalize())
         .expect("the direction asked for is not the reverse of the fixture's normal");
-    frame.u_axis = turn * frame.u_axis;
-    frame.v_axis = turn * frame.v_axis;
+    patch_frame.u_axis = turn * patch_frame.u_axis;
+    patch_frame.v_axis = turn * patch_frame.v_axis;
     next
 }
 
@@ -5662,7 +5685,7 @@ fn a_tilt_is_the_least_rotation_and_rebuilds_every_sighting_on_the_turned_axes()
     // The fixture's keypoints are each point's exact projection, so every
     // in-plane offset is zero and a step that reset them all would pass. Put
     // each sighting somewhere of its own first, which is what a photograph says
-    // when it sees the patch's content off the frame's middle.
+    // when it sees the patch's content off the patch frame's middle.
     for (k, observation) in track.observations.iter_mut().enumerate() {
         let site = observation.site().expect("a sighting");
         observation.track.as_mut().expect("a track slot").keypoint = Some([
@@ -5691,26 +5714,26 @@ fn a_tilt_is_the_least_rotation_and_rebuilds_every_sighting_on_the_turned_axes()
     assert!((report.degrees - 20.0).abs() < 1e-9, "{}", report.degrees);
     assert_eq!(report.placed, next.observations.len());
 
-    let frame = patch_frame_of(&next);
-    assert!((frame.normal() - asked).norm() < 1e-12);
-    assert!((report.normal - frame.normal()).norm() < 1e-12);
+    let patch_frame = patch_frame_of(&next);
+    assert!((patch_frame.normal() - asked).norm() < 1e-12);
+    assert!((report.normal - patch_frame.normal()).norm() < 1e-12);
     // The centre and the size stay exactly where they were: a tilt is a turn
     // about the centre and nothing else.
-    assert_eq!(frame.center, was.center);
-    assert_eq!(frame.half_extent, was.half_extent);
+    assert_eq!(patch_frame.center, was.center);
+    assert_eq!(patch_frame.half_extent, was.half_extent);
     assert_eq!(next.track().and_then(|p| p.position), Some(was.center));
     assert_eq!(next.track().and_then(|p| p.bitmap.clone()), None);
 
     // **The least rotation**: its axis is perpendicular to both normals, so `u`
     // and `v` keep their own components along it and no spin about the normal
     // comes with the turn.
-    let axis = was.normal().cross(&frame.normal()).normalize();
+    let axis = was.normal().cross(&patch_frame.normal()).normalize();
     assert!(
-        (frame.u_axis.dot(&axis) - was.u_axis.dot(&axis)).abs() < 1e-12
-            && (frame.v_axis.dot(&axis) - was.v_axis.dot(&axis)).abs() < 1e-12,
+        (patch_frame.u_axis.dot(&axis) - was.u_axis.dot(&axis)).abs() < 1e-12
+            && (patch_frame.v_axis.dot(&axis) - was.v_axis.dot(&axis)).abs() < 1e-12,
         "the turn spun the square about its own normal",
     );
-    assert!(frame.normal().dot(&axis).abs() < 1e-12);
+    assert!(patch_frame.normal().dot(&axis).abs() < 1e-12);
 
     // Every offset survived, and every keypoint is the projection of the place
     // that offset names on the **turned** axes -- worked out here from the pair
@@ -5725,7 +5748,7 @@ fn a_tilt_is_the_least_rotation_and_rebuilds_every_sighting_on_the_turned_axes()
     }
     for (observation, (a, b)) in next.observations.iter().zip(&offsets) {
         let (camera, pose) = view(&edited, observation.image as usize);
-        let place = frame.center + frame.u_axis * *a + frame.v_axis * *b;
+        let place = patch_frame.center + patch_frame.u_axis * *a + patch_frame.v_axis * *b;
         let (u, v) = camera
             .ray_to_pixel({
                 let pc = pose.transform_point_homogeneous(place.coords, 1.0);
@@ -5746,11 +5769,12 @@ fn a_tilt_is_the_least_rotation_and_rebuilds_every_sighting_on_the_turned_axes()
     }
 
     // A turn inside the tolerance is no turn, on the bar a spin is held to.
-    let (again, report) = tilt_patch(&next, &edited, frame.normal()).expect("a finite direction");
+    let (again, report) =
+        tilt_patch(&next, &edited, patch_frame.normal()).expect("a finite direction");
     assert!(!report.changed);
     assert_eq!(report.placed, 0);
-    assert_eq!(report.normal, frame.normal());
-    assert_eq!(patch_frame_of(&again).u_axis, frame.u_axis);
+    assert_eq!(report.normal, patch_frame.normal());
+    assert_eq!(patch_frame_of(&again).u_axis, patch_frame.u_axis);
 }
 
 /// A sighting whose own piece of the patch swings out behind its camera is left
@@ -5935,7 +5959,7 @@ fn a_resize_about_the_centre_moves_both_edges_and_drops_what_was_read_over_the_o
     let centre = track
         .track()
         .and_then(|p| p.patch_frame.as_ref())
-        .expect("a frame")
+        .expect("a patch frame")
         .center;
     let keypoints: Vec<_> = track
         .observations
@@ -5945,12 +5969,12 @@ fn a_resize_about_the_centre_moves_both_edges_and_drops_what_was_read_over_the_o
 
     let (next, report) = resize_patch(&track, &edited, 0.5, None).expect("a positive half-length");
     assert!(report.changed);
-    let frame = next
+    let patch_frame = next
         .track()
         .and_then(|p| p.patch_frame.clone())
-        .expect("a frame");
-    assert_eq!(frame.half_extent, [0.5, 0.5]);
-    assert_eq!(frame.center, centre, "a centred resize moves nothing");
+        .expect("a patch frame");
+    assert_eq!(patch_frame.half_extent, [0.5, 0.5]);
+    assert_eq!(patch_frame.center, centre, "a centred resize moves nothing");
     assert_eq!(next.track().and_then(|p| p.bitmap.clone()), None);
     for (k, observation) in next.observations.iter().enumerate() {
         let measurement = observation.track.as_ref().expect("a track slot");
@@ -5964,7 +5988,7 @@ fn a_resize_about_the_centre_moves_both_edges_and_drops_what_was_read_over_the_o
     let held = track
         .track()
         .and_then(|p| p.patch_frame.as_ref())
-        .expect("a frame")
+        .expect("a patch frame")
         .half_extent[0];
     assert!(
         !resize_patch(&track, &edited, held, None)
@@ -5984,7 +6008,7 @@ fn a_turn_keeps_the_axes_and_the_normal_and_lands_the_corner_under_the_release_p
     let before = track
         .track()
         .and_then(|p| p.patch_frame.clone())
-        .expect("a frame");
+        .expect("a patch frame");
 
     let angle = 0.42_f64;
     // Where the `(1, 1)` corner has to land for that turn: the corner's own
@@ -6007,7 +6031,7 @@ fn a_turn_keeps_the_axes_and_the_normal_and_lands_the_corner_under_the_release_p
     let after = next
         .track()
         .and_then(|p| p.patch_frame.clone())
-        .expect("a frame");
+        .expect("a patch frame");
     assert!((after.u_axis.norm() - before.u_axis.norm()).abs() < 1e-12);
     assert!((after.v_axis.norm() - before.v_axis.norm()).abs() < 1e-12);
     assert!(
@@ -6211,16 +6235,16 @@ fn far_angular_half() -> f64 {
 }
 
 /// A version of [`far_scene`] holding the far point as a `w = 0` bearing on its
-/// tangent frame, observed by the eight near cameras.
+/// tangent patch frame, observed by the eight near cameras.
 fn far_bearing_edited(scene: &Scene) -> EditedReconstruction {
-    let frame = OrientedPatch::from_infinity_direction(
+    let patch_frame = OrientedPatch::from_infinity_direction(
         far_direction(),
         Vector3::new(0.0, 1.0, 0.0),
         [far_angular_half(), far_angular_half()],
     );
     let observing: Vec<u32> = (0..FAR_NEAR_VIEWS as u32).collect();
     EditedReconstruction::new(Arc::new(with_columns(
-        fixture_of(scene, far_direction(), 0.0, &observing, &frame),
+        fixture_of(scene, far_direction(), 0.0, &observing, &patch_frame),
         BITMAP_R,
     )))
 }
@@ -6229,7 +6253,7 @@ fn far_bearing_edited(scene: &Scene) -> EditedReconstruction {
 /// a world-unit plane patch, observed by the same eight near cameras: the same
 /// sightings, stored as the thing the geometry does not support.
 fn far_finite_edited(scene: &Scene) -> EditedReconstruction {
-    let frame = OrientedPatch::from_center_normal(
+    let patch_frame = OrientedPatch::from_center_normal(
         far_world(),
         Vector3::new(0.0, 0.0, -1.0),
         Vector3::new(0.0, 1.0, 0.0),
@@ -6237,7 +6261,7 @@ fn far_finite_edited(scene: &Scene) -> EditedReconstruction {
     );
     let observing: Vec<u32> = (0..FAR_NEAR_VIEWS as u32).collect();
     EditedReconstruction::new(Arc::new(with_columns(
-        fixture_of(scene, far_world(), 1.0, &observing, &frame),
+        fixture_of(scene, far_world(), 1.0, &observing, &patch_frame),
         BITMAP_R,
     )))
 }
@@ -6259,7 +6283,7 @@ fn a_bearing_whose_rays_stay_parallel_stays_a_bearing_at_the_size_it_had() {
     assert_eq!(before.w, 0.0, "the fixture stores a bearing");
 
     // What a reading of the track as it stands makes of each sighting: the fit
-    // has to agree with this, because a fit that promoted the frame to a
+    // has to agree with this, because a fit that promoted the patch frame to a
     // provisional depth would re-warp every view and walk the sightings.
     // The fixture's stored bitmap is blank, so the reading renders its own
     // before it scores the rows against it.
@@ -6281,7 +6305,7 @@ fn a_bearing_whose_rays_stay_parallel_stays_a_bearing_at_the_size_it_had() {
             o.track
                 .as_ref()
                 .and_then(|m| m.plain_zncc)
-                .expect("a bearing's tangent frame registers in every view")
+                .expect("a bearing's tangent patch frame registers in every view")
         })
         .collect();
     assert!(
@@ -6479,7 +6503,7 @@ fn a_finite_track_whose_rays_no_longer_resolve_a_depth_becomes_a_bearing() {
     );
     // The world extents became the angular ones that keep the size the patch
     // looked in the images that see it, a factor of about the distance the
-    // frame stood at from them.
+    // patch frame stood at from them.
     let shrank = before.half_extent[0] / after.half_extent[0];
     assert!(
         (shrank / FAR_Z - 1.0).abs() < 0.1,
@@ -6521,9 +6545,9 @@ fn spread_point() -> Point3<f64> {
 /// How large `frame` looks in image `i` of `scene`, in px: the geometric mean
 /// of its two projected half-axes, read off the projections of its edge
 /// midpoints.
-fn looks_px(scene: &Scene, i: usize, frame: &OrientedPatch) -> f64 {
+fn looks_px(scene: &Scene, i: usize, patch_frame: &OrientedPatch) -> f64 {
     let at = |s: f64, t: f64| {
-        let (xyz, w) = frame.corner_homogeneous(s, t);
+        let (xyz, w) = patch_frame.corner_homogeneous(s, t);
         scene.project_homogeneous(i, Point3::from(xyz), w)
     };
     let half = |a: [f64; 2], b: [f64; 2]| 0.5 * (a[0] - b[0]).hypot(a[1] - b[1]);
@@ -6550,7 +6574,7 @@ fn a_bearing_placed_at_a_depth_keeps_its_size_in_the_images_that_see_it() {
 
     let direction = Point3::from(Vector3::new(0.05, -0.03, 1.0).normalize());
     let bearing = OrientedPatch::from_infinity_direction(direction, Vector3::y(), [0.03, 0.02]);
-    let placed = super::fit::placed_frame(&bearing, point, false, &views, &NEAR_IN_VIEWS);
+    let placed = super::fit::placed_patch_frame(&bearing, point, false, &views, &NEAR_IN_VIEWS);
 
     assert_eq!(placed.w, 1.0);
     assert_eq!(placed.center, point);
@@ -6581,10 +6605,10 @@ fn a_point_turned_bearing_and_back_keeps_its_size() {
     let finite =
         OrientedPatch::from_center_normal(point, -direction.coords, Vector3::y(), [0.05, 0.05]);
 
-    let bearing = super::fit::placed_frame(&finite, direction, true, &views, &NEAR_IN_VIEWS);
+    let bearing = super::fit::placed_patch_frame(&finite, direction, true, &views, &NEAR_IN_VIEWS);
     assert_eq!(bearing.w, 0.0);
     assert_eq!(bearing.center, direction);
-    let back = super::fit::placed_frame(&bearing, point, false, &views, &NEAR_IN_VIEWS);
+    let back = super::fit::placed_patch_frame(&bearing, point, false, &views, &NEAR_IN_VIEWS);
 
     for i in NEAR_IN_VIEWS {
         let was = looks_px(&scene, i, &finite);
@@ -6612,7 +6636,7 @@ fn a_point_moved_in_depth_keeps_its_size_in_the_images_that_see_it() {
     let far = Point3::from(near.coords * 3.0);
     let finite = OrientedPatch::from_center_normal(far, -Vector3::z(), Vector3::y(), [0.15, 0.15]);
 
-    let placed = super::fit::placed_frame(&finite, near, false, &views, &NEAR_IN_VIEWS);
+    let placed = super::fit::placed_patch_frame(&finite, near, false, &views, &NEAR_IN_VIEWS);
 
     assert_eq!(placed.w, 1.0);
     assert_eq!(placed.center, near);
@@ -6648,11 +6672,11 @@ fn a_patch_frame_with_nothing_to_measure_falls_back_to_the_observing_distance() 
         Vector3::y(),
         [0.03, 0.03],
     );
-    let placed = super::fit::placed_frame(&behind, point, false, &views, &[0]);
+    let placed = super::fit::placed_patch_frame(&behind, point, false, &views, &[0]);
     let distance = (point - views[0].cam_from_world.inverse_translation_origin()).norm();
     assert!((placed.half_extent[0] / (0.03 * distance) - 1.0).abs() < 1e-12);
 
-    let carried = super::fit::placed_frame(&bearing, point, false, &views, &[]);
+    let carried = super::fit::placed_patch_frame(&bearing, point, false, &views, &[]);
     assert_eq!(carried.half_extent, bearing.half_extent);
 }
 
@@ -6736,10 +6760,13 @@ fn a_sighting_the_fit_would_walk_past_the_bar_keeps_its_seed_and_says_so() {
         let payload = fitted.track().expect("a track-stage payload");
         let bitmap = payload.bitmap.as_ref().expect("the fit rendered a bitmap");
         let bitmap = stored_bitmap_planes(bitmap.view()).expect("a square bitmap");
-        let frame = payload.patch_frame.clone().expect("a track-stage frame");
+        let patch_frame = payload
+            .patch_frame
+            .clone()
+            .expect("a track-stage patch frame");
         let localize = EvaluateOptions::default().localize;
         let tile = render_view_tile(
-            &frame,
+            &patch_frame,
             &scene.views()[fitted.observations[0].image as usize],
             Some(to),
             localize.resolution.max(2) as usize,
@@ -6879,21 +6906,24 @@ fn an_upgrade_of_a_bearing_comes_back_a_bearing_and_commits_as_one() {
     let fitted = report.fit.expect("an upgrade runs the track stage's fit");
     let call = call_of(&fitted);
     assert!(call.at_infinity, "the upgrade said {call}");
-    let frame = patch_frame_of(&up);
-    assert_eq!(frame.w, 0.0, "an upgrade of a bearing frames a bearing");
+    let patch_frame = patch_frame_of(&up);
     assert_eq!(
-        frame.half_extent[0], frame.half_extent[1],
+        patch_frame.w, 0.0,
+        "an upgrade of a bearing frames a bearing"
+    );
+    assert_eq!(
+        patch_frame.half_extent[0], patch_frame.half_extent[1],
         "an upgrade frames a square bearing"
     );
     assert!(
-        (frame.center.coords.norm() - 1.0).abs() < 1e-12,
+        (patch_frame.center.coords.norm() - 1.0).abs() < 1e-12,
         "a bearing's coordinate is a unit direction, it is {}",
-        frame.center
+        patch_frame.center
     );
     assert!(
-        (frame.half_extent[0] / half - 1.0).abs() < 0.3,
+        (patch_frame.half_extent[0] / half - 1.0).abs() < 0.3,
         "a round trip through the cluster stage should keep the size: {} against {half}",
-        frame.half_extent[0]
+        patch_frame.half_extent[0]
     );
 
     // And the commit writes the row the format states for a bearing.
@@ -6925,14 +6955,14 @@ fn moving_sizing_and_turning_a_bearing_keeps_its_direction_on_the_unit_sphere() 
     let track = track_of(&bench, &label);
     let before = patch_frame_of(&track);
     let (camera, pose) = view(&edited, 0);
-    let unit = |frame: &OrientedPatch, what: &str| {
-        assert_eq!(frame.w, 0.0, "{what} kept the representation");
+    let unit = |patch_frame: &OrientedPatch, what: &str| {
+        assert_eq!(patch_frame.w, 0.0, "{what} kept the representation");
         assert!(
-            (frame.center.coords.norm() - 1.0).abs() < 1e-12,
+            (patch_frame.center.coords.norm() - 1.0).abs() < 1e-12,
             "{what} left the direction at {}",
-            frame.center.coords.norm()
+            patch_frame.center.coords.norm()
         );
-        assert!(frame.half_extent[0] > 0.0 && frame.half_extent[1] > 0.0);
+        assert!(patch_frame.half_extent[0] > 0.0 && patch_frame.half_extent[1] > 0.0);
     };
 
     // A slide: the pointer two pixels off the centre's own projection.
@@ -6944,42 +6974,45 @@ fn moving_sizing_and_turning_a_bearing_keeps_its_direction_on_the_unit_sphere() 
         [centre[0] + 2.0, centre[1]],
     )
     .expect("a pixel the ray reaches");
-    let frame = patch_frame_of(&slid);
-    unit(&frame, "a slide");
+    let patch_frame = patch_frame_of(&slid);
+    unit(&patch_frame, "a slide");
     assert_eq!(
         slid.track().expect("the track stage").position,
-        Some(frame.center),
+        Some(patch_frame.center),
         "a slide carries the coordinate with the centre"
     );
-    assert_ne!(frame.center, before.center, "a slide moves the bearing");
+    assert_ne!(
+        patch_frame.center, before.center,
+        "a slide moves the bearing"
+    );
 
     // An edge drag.
     let out = corner_pixel(&before, &camera, &pose, 0.0, 1.8);
     let (resized, _) =
         resize_patch_to_pixel(&track, &edited, Viewpoint::Observation(0), Edge::PlusV, out)
             .expect("a pixel the ray reaches");
-    let frame = patch_frame_of(&resized);
-    unit(&frame, "an edge drag");
+    let patch_frame = patch_frame_of(&resized);
+    unit(&patch_frame, "an edge drag");
     assert_eq!(
         resized.track().expect("the track stage").position,
-        Some(frame.center)
+        Some(patch_frame.center)
     );
 
     // A centred resize and a turn, neither of which moves the centre.
     let (sized, _) =
         resize_patch(&track, &edited, before.half_extent[0] * 1.5, None).expect("a positive half");
-    let frame = patch_frame_of(&sized);
-    unit(&frame, "a centred resize");
-    assert_eq!(frame.center, before.center);
+    let patch_frame = patch_frame_of(&sized);
+    unit(&patch_frame, "a centred resize");
+    assert_eq!(patch_frame.center, before.center);
 
     let (turned, _) = spin_patch(&track, 0.3).expect("a finite angle");
-    let frame = patch_frame_of(&turned);
-    unit(&frame, "a turn");
-    assert_eq!(frame.center, before.center);
+    let patch_frame = patch_frame_of(&turned);
+    unit(&patch_frame, "a turn");
+    assert_eq!(patch_frame.center, before.center);
     assert!(
-        (frame.normal() + before.center.coords).norm() < 1e-9,
+        (patch_frame.normal() + before.center.coords).norm() < 1e-9,
         "a bearing's outward normal is minus its direction, it turned to {}",
-        frame.normal()
+        patch_frame.normal()
     );
 }
 
@@ -7466,7 +7499,7 @@ fn a_fit_over_a_reconstruction_with_no_finite_point_needs_a_noise_level() {
 #[test]
 fn a_fit_of_the_unsupported_depth_writes_the_bearing() {
     // The same shape, through the whole fit rather than through the
-    // classification alone: what the step writes is the bearing, at the frame
+    // classification alone: what the step writes is the bearing, at the patch frame
     // size it arrived with.
     let scene = far_scene();
     let edited = far_bearing_edited(&scene);
@@ -7498,14 +7531,14 @@ fn a_fit_of_the_unsupported_depth_writes_the_bearing() {
 /// [`far_bearing_edited`] with the patch-frame columns stripped: the bearing a
 /// node with no `patch_u_halfvec` holds, which is every row of a `sift_files`
 /// value.
-fn far_bearing_frameless(scene: &Scene) -> EditedReconstruction {
-    let frame = OrientedPatch::from_infinity_direction(
+fn far_bearing_without_patch_frame(scene: &Scene) -> EditedReconstruction {
+    let patch_frame = OrientedPatch::from_infinity_direction(
         far_direction(),
         Vector3::new(0.0, 1.0, 0.0),
         [far_angular_half(), far_angular_half()],
     );
     let observing: Vec<u32> = (0..FAR_NEAR_VIEWS as u32).collect();
-    let mut recon = fixture_of(scene, far_direction(), 0.0, &observing, &frame);
+    let mut recon = fixture_of(scene, far_direction(), 0.0, &observing, &patch_frame);
     recon.point_set.patch_u_halfvec_xyz = None;
     recon.point_set.patch_v_halfvec_xyz = None;
     recon.rebuild_derived_fields();
@@ -7513,13 +7546,13 @@ fn far_bearing_frameless(scene: &Scene) -> EditedReconstruction {
 }
 
 /// A bearing is a bearing because the **point** says `w = 0`, and a node with no
-/// patch frames has no frame to read a `w` off. Reading the frame put the three
+/// patch frames has no patch frame to read a `w` off. Reading the patch frame put the three
 /// numbers under `position` and committed them back as a place one unit from the
 /// world origin.
 #[test]
 fn a_bearing_with_no_patch_frame_is_still_a_bearing() {
     let scene = far_scene();
-    let edited = far_bearing_frameless(&scene);
+    let edited = far_bearing_without_patch_frame(&scene);
     let (bench, label) = bench_with_point(&edited, 0);
     let track = track_of(&bench, &label);
     let payload = track.track().expect("the track stage");
@@ -7546,27 +7579,30 @@ fn a_bearing_with_no_patch_frame_is_still_a_bearing() {
     );
 
     // The two steps that need a patch still refuse, in their own words.
-    assert_eq!(evaluate_preconditions(&track), Err(EvaluateError::NoFrame));
-    assert_eq!(fit_preconditions(&track), Err(FitError::NoFrame));
+    assert_eq!(
+        evaluate_preconditions(&track),
+        Err(EvaluateError::NoPatchFrame)
+    );
+    assert_eq!(fit_preconditions(&track), Err(FitError::NoPatchFrame));
     assert_eq!(
         set_stage_preconditions(&track, StageKind::Cluster),
-        Err(StageError::NoFrame)
+        Err(StageError::NoPatchFrame)
     );
 }
 
 /// The same node's finite twin, so the flag is read and not assumed: a `w = 1`
-/// row with no frame is a place.
+/// row with no patch frame is a place.
 #[test]
 fn a_frameless_finite_point_is_not_a_bearing() {
     let scene = far_scene();
-    let frame = OrientedPatch::from_center_normal(
+    let patch_frame = OrientedPatch::from_center_normal(
         far_world(),
         Vector3::new(0.0, 0.0, -1.0),
         Vector3::new(0.0, 1.0, 0.0),
         [FAR_HALF_WORLD, FAR_HALF_WORLD],
     );
     let observing: Vec<u32> = (0..FAR_NEAR_VIEWS as u32).collect();
-    let mut recon = fixture_of(&scene, far_world(), 1.0, &observing, &frame);
+    let mut recon = fixture_of(&scene, far_world(), 1.0, &observing, &patch_frame);
     recon.point_set.patch_u_halfvec_xyz = None;
     recon.point_set.patch_v_halfvec_xyz = None;
     recon.rebuild_derived_fields();
@@ -7701,7 +7737,7 @@ fn a_painting_that_moves_no_verdict_reports_no_effect() {
 
 /// A pixel a pointer was dragged past the edge of the picture to, or a call
 /// carrying two numbers of its own, names no place on the photograph: `(-500,
-/// -500)` of a 128 px frame is no column and no row, and the patch whose centre
+/// -500)` of a 128 px patch_frame is no column and no row, and the patch whose centre
 /// was slid to meet that pixel's ray was flung across the reconstruction. The
 /// step takes the nearest place the photograph does name, and says that it did.
 #[test]

@@ -743,7 +743,7 @@ pub struct TrackPayload {
     /// Whether [`Self::position`] is a bearing rather than a place: the point's
     /// own `w == 0`.
     ///
-    /// **The flag is the authority and the frame is not.** The same three
+    /// **The flag is the authority and the patch frame is not.** The same three
     /// numbers are a place or a unit direction depending on this one bit, and a
     /// track can carry the bit with no patch at all -- a point put on the bench
     /// from a `sift_files` reconstruction has no patch frame to read a `w` off,
@@ -842,7 +842,7 @@ pub struct TrackPayload {
     /// The colour the point carries, used when there is no bitmap to read one
     /// from.
     pub color: [u8; 3],
-    /// Confidence in the frame's normal, in the stored column's byte scale.
+    /// Confidence in the patch frame's normal, in the stored column's byte scale.
     pub normal_confidence: Option<u8>,
     /// The last triangulation's condition number.
     pub condition_number: Option<f64>,

@@ -1011,7 +1011,7 @@ impl PatchCloud {
     /// with `w = 0` on the patches of points at infinity. `None` when the
     /// reconstruction carries no patch frame. Geometry only: bitmaps are not
     /// loaded into the cloud.
-    pub fn from_stored_frames(recon: &crate::SfmrReconstruction) -> Option<Self> {
+    pub fn from_stored_patch_frames(recon: &crate::SfmrReconstruction) -> Option<Self> {
         let u = recon.point_set.patch_u_halfvec_xyz.as_ref()?;
         let v = recon.point_set.patch_v_halfvec_xyz.as_ref()?;
         let centers: Vec<Point3<f64>> = recon.point_set.points.iter().map(|p| p.position).collect();

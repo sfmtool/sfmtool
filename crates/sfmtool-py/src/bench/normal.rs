@@ -214,28 +214,28 @@ fn render_detail_dict<'py>(
         cell_vectors(layout.cell_centres).into_pyarray(py),
     )?;
 
-    let frame = PyDict::new(py);
-    frame.set_item(
+    let patch_frame = PyDict::new(py);
+    patch_frame.set_item(
         "center",
-        PyArray1::from_vec(py, render.frame.center.to_vec()),
+        PyArray1::from_vec(py, render.patch_frame.center.to_vec()),
     )?;
-    frame.set_item(
+    patch_frame.set_item(
         "u_axis",
-        PyArray1::from_vec(py, render.frame.u_axis.to_vec()),
+        PyArray1::from_vec(py, render.patch_frame.u_axis.to_vec()),
     )?;
-    frame.set_item(
+    patch_frame.set_item(
         "v_axis",
-        PyArray1::from_vec(py, render.frame.v_axis.to_vec()),
+        PyArray1::from_vec(py, render.patch_frame.v_axis.to_vec()),
     )?;
-    frame.set_item(
+    patch_frame.set_item(
         "normal",
-        PyArray1::from_vec(py, render.frame.normal.to_vec()),
+        PyArray1::from_vec(py, render.patch_frame.normal.to_vec()),
     )?;
-    frame.set_item(
+    patch_frame.set_item(
         "half_extent",
-        PyArray1::from_vec(py, render.frame.half_extent.to_vec()),
+        PyArray1::from_vec(py, render.patch_frame.half_extent.to_vec()),
     )?;
-    d.set_item("frame", frame)?;
+    d.set_item("patch_frame", patch_frame)?;
 
     let reference = match &render.reference {
         Some(tile) => {
@@ -960,7 +960,7 @@ fn finite_difference_normal(
 /// half-width), ``cell_bounds`` (``(4,)``: cell ``(row, col)`` covers columns
 /// ``cell_bounds[col]:cell_bounds[col + 1]`` and the same rows of the
 /// reference tile) and ``cell_centres`` (``(3, 3, 2)``, ``[x, y]`` grid px
-/// centred on the grid). ``frame`` is the frame the render was made at
+/// centred on the grid). ``patch_frame`` is the patch frame the render was made at
 /// (``center``, ``u_axis``, ``v_axis``, ``normal``, ``half_extent``).
 /// ``reference`` is ``None`` or a dict with ``observation``, ``image`` and
 /// ``tile``, the ``(R, R, channels)`` float32 render the templates are cut
@@ -1168,7 +1168,7 @@ fn grid_plane_normal(
 /// ``sigma_deg`` (its own weakest ``σ``) and ``refusal`` (``None`` when it
 /// was taken, else ``"under_floor"``). ``picks`` has one dict per pick of
 /// the selection: ``observation``, ``image``,
-/// ``angle_deg``, ``offset_direction`` (``(2,)``, in the starting frame),
+/// ``angle_deg``, ``offset_direction`` (``(2,)``, in the starting patch frame),
 /// ``scale_px``, ``predicted_weak`` (the smallest eigenvalue of the
 /// information predicted with it added, ``NaN`` for a pick made by angle
 /// alone while no view had been matched), ``matched`` and

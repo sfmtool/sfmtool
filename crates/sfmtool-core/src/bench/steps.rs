@@ -38,7 +38,7 @@ use super::{check_label, Bench, BenchError, BenchItem, ItemKind};
 const HASH_PREFIX_LEN: usize = 8;
 
 /// A determinant this small makes an affine seed shape unusable: its columns
-/// span no area, so there is no frame to warp a template through.
+/// span no area, so there is no patch frame to warp a template through.
 const MIN_ABS_DET: f64 = 1e-9;
 
 /// Below this fraction of the value it is measured against -- the patch's own
@@ -140,7 +140,7 @@ impl std::error::Error for CreateTrackError {}
 
 /// Put the point at `point` on the bench as a track-stage editable track.
 ///
-/// The track arrives with the point's own frame, bitmap and keypoints, its
+/// The track arrives with the point's own patch frame, bitmap and keypoints, its
 /// origin set to that point, and every observation `in` and **pinned**: the
 /// point's observations are the ones a reconstruction already decided on, so
 /// they stand until a person hands them to the bars ([`unpin_verdicts`]), and
@@ -216,7 +216,7 @@ pub fn create_track(
 
 /// The point at `point` as a track-stage editable track, built as
 /// [`create_track`] builds the one it puts on the bench, with no bench and no
-/// label: its own frame, bitmap, colour, keypoints and stored readings, its
+/// label: its own patch frame, bitmap, colour, keypoints and stored readings, its
 /// stored reference observation as the track's reference (a pick only the
 /// display render made included), and every observation `in` and **pinned**.
 /// Nothing is recomputed.
@@ -270,8 +270,8 @@ pub fn track_of_point(
 
     let payload = TrackPayload {
         position: Some(stored.position),
-        // The **point's** own `w`, read off the row rather than off the frame: a
-        // node with no patch frames has no frame to read one from, and its
+        // The **point's** own `w`, read off the row rather than off the patch frame: a
+        // node with no patch frames has no patch frame to read one from, and its
         // bearings are still bearings.
         at_infinity: stored.is_at_infinity(),
         patch_frame: view.patch_frame(),
@@ -604,7 +604,7 @@ pub enum TrackEditError {
         is: StageKind,
     },
     /// The track is at the track stage and carries no patch to resize or turn.
-    NoFrame,
+    NoPatchFrame,
     /// The half-length asked for is not a positive finite length.
     BadSize(f64),
     /// The turn asked for is not a finite angle.
@@ -616,10 +616,10 @@ pub enum TrackEditError {
     /// to name one.
     BadNormal([f64; 3]),
     /// The track is at infinity, and a direction patch's normal is its own
-    /// bearing: there is no normal standing off the frame to move along or to
+    /// bearing: there is no normal standing off the patch frame to move along or to
     /// turn.
     AtInfinity,
-    /// The affine shape has no area, so there is no frame to warp a template
+    /// The affine shape has no area, so there is no patch frame to warp a template
     /// through.
     BadShape([[f64; 2]; 2]),
     /// Nothing says where the observation sits, so there is no place to re-seat
@@ -713,7 +713,7 @@ impl std::fmt::Display for TrackEditError {
             TrackEditError::WrongStage { wanted, is } => {
                 write!(f, "that is a {wanted}-stage step and this track is a {is}")
             }
-            TrackEditError::NoFrame => {
+            TrackEditError::NoPatchFrame => {
                 write!(f, "this track has no patch yet; fit it first")
             }
             TrackEditError::BadSize(size) => write!(f, "{} is not a size", Readable(*size)),
@@ -1584,7 +1584,7 @@ pub fn resize_patch(
     // A direction patch's centre is a unit bearing and its half-extents are
     // stated against one, so the moved centre is renormalized and the
     // half-length divided by the same factor. Scaling a bearing and its tangent
-    // frame together leaves every corner the same direction, which is what keeps
+    // patch frame together leaves every corner the same direction, which is what keeps
     // the far edge exactly where it was.
     let scale = if patch.w == 0.0 {
         let norm = center.coords.norm();
@@ -1814,7 +1814,7 @@ pub struct TranslateToPixelReport {
 /// means, and each photograph shows where it lands.
 ///
 /// The pointer is read against the outline as drawn. From a
-/// [`Viewpoint::Observation`] that is the frame re-anchored on the
+/// [`Viewpoint::Observation`] that is the patch frame re-anchored on the
 /// observation's own sighting, so the offset is measured from the square the
 /// person can see and that sighting lands under the pointer. From a
 /// [`Viewpoint::Image`] it is the patch as it stands, so the patch's own centre
@@ -2145,7 +2145,7 @@ pub struct TiltReport {
 /// The second edit no photograph can name, and the 3D viewer's arrowhead drag:
 /// a sighting says which ray the patch lies along and nothing about which way
 /// the surface under it faces, so the patch's orientation is settled out in the
-/// world where the frame can be seen against the geometry around it.
+/// world where the patch frame can be seen against the geometry around it.
 ///
 /// **The rotation is the least one** taking the normal the patch shows to
 /// `normal`, the rotation about `n_old x n_new`, and the report states the
@@ -2154,13 +2154,13 @@ pub struct TiltReport {
 /// by it, so a tilt adds no spin about the normal: spin is
 /// [`spin_patch`]'s. Where the two normals are collinear there is no such
 /// rotation to speak of -- at zero none is needed, and at a half turn every
-/// rotation about an axis in the frame's plane is equally least -- and the
-/// frame's own `u` is taken as the direction the arc leaves in, which holds `v`
+/// rotation about an axis in the patch frame's plane is equally least -- and the
+/// patch frame's own `u` is taken as the direction the arc leaves in, which holds `v`
 /// and reverses `u` and `n`.
 ///
 /// **The centre and the half-lengths do not move**, and each keypoint becomes
 /// the projection of `c + a_i u' + b_i v'`: every observation keeps the
-/// in-plane offset `(a_i, b_i)` it was measured at, read on the frame as it
+/// in-plane offset `(a_i, b_i)` it was measured at, read on the patch frame as it
 /// stood before the turn and rebuilt on the turned axes. That is not the rigid
 /// carry a slide makes -- the pair is kept and the point is built again -- but
 /// it preserves the same thing, which is where each photograph sees the patch's
@@ -2192,7 +2192,7 @@ pub fn tilt_patch(
 ) -> Result<(EditableTrack, TiltReport), TrackEditError> {
     let TiltArc {
         asked,
-        frame,
+        patch_frame,
         was,
         perp,
         phi,
@@ -2226,9 +2226,9 @@ pub fn tilt_patch(
         )
     });
 
-    let u = rotation * frame.u_axis;
-    let v = rotation * frame.v_axis;
-    let centre = frame.center;
+    let u = rotation * patch_frame.u_axis;
+    let v = rotation * patch_frame.v_axis;
+    let centre = patch_frame.center;
     let mut next = track.clone();
     {
         let (_, turned) = track_payload_mut(&mut next);
@@ -2237,9 +2237,9 @@ pub fn tilt_patch(
     }
     // Each sighting's offset read on the old axes and rebuilt on the new ones,
     // which is the tilt's whole effect on where the photographs look.
-    let placed = place_keypoints(&mut next, edited, frame, |at| {
+    let placed = place_keypoints(&mut next, edited, patch_frame, |at| {
         let offset = at - centre;
-        centre + u * offset.dot(&frame.u_axis) + v * offset.dot(&frame.v_axis)
+        centre + u * offset.dot(&patch_frame.u_axis) + v * offset.dot(&patch_frame.v_axis)
     });
     Ok((
         next,
@@ -2264,13 +2264,13 @@ pub(crate) fn tilt_degrees(
     Ok(tilt_arc(track, edited, normal)?.phi.to_degrees())
 }
 
-/// The arc a tilt walks: the unit normal asked for, the frame and the normal
+/// The arc a tilt walks: the unit normal asked for, the patch frame and the normal
 /// it shows before the turn, the unit in-plane direction the arc leaves that
 /// normal in, and how far along it the turn goes, with the observation that
 /// stopped it.
 struct TiltArc<'t> {
     asked: Vector3<f64>,
-    frame: &'t OrientedPatch,
+    patch_frame: &'t OrientedPatch,
     was: Vector3<f64>,
     perp: Vector3<f64>,
     phi: f64,
@@ -2290,11 +2290,11 @@ fn tilt_arc<'t>(
         return Err(TrackEditError::BadNormal(named));
     }
     let asked = normal / length;
-    let frame = patch_frame_of(track)?;
-    if frame.w == 0.0 {
+    let patch_frame = patch_frame_of(track)?;
+    if patch_frame.w == 0.0 {
         return Err(TrackEditError::AtInfinity);
     }
-    let was = frame.normal();
+    let was = patch_frame.normal();
 
     // The great arc from the normal the patch shows to the one asked for: its
     // whole length `theta`, and the unit in-plane direction `perp` it leaves
@@ -2314,12 +2314,12 @@ fn tilt_arc<'t>(
     } else {
         // Collinear: at zero the arc has no length and this is never read, and
         // at a half turn no direction is more nearly the least than another.
-        frame.u_axis
+        patch_frame.u_axis
     };
-    let (phi, stopped) = tilt_stop(track, edited, frame.center, was, perp, theta);
+    let (phi, stopped) = tilt_stop(track, edited, patch_frame.center, was, perp, theta);
     Ok(TiltArc {
         asked,
-        frame,
+        patch_frame,
         was,
         perp,
         phi,
@@ -2392,8 +2392,8 @@ pub struct SpinReport {
 
 /// Turn the track's patch by `angle_rad` about its own outward normal.
 ///
-/// The axes are rotated as a pair, by a rotation whose axis **is** the frame's
-/// normal, so both keep their lengths, the frame keeps its handedness and the
+/// The axes are rotated as a pair, by a rotation whose axis **is** the patch frame's
+/// normal, so both keep their lengths, the patch frame keeps its handedness and the
 /// patch keeps the plane and the face it had: what changes is which way up the
 /// square sits on that plane, which is what a person turning the outline in the
 /// Image Detail panel is saying.
@@ -2415,11 +2415,11 @@ pub fn spin_patch(
     let changed = angle_rad.abs() > NO_EFFECT_RAD;
     if changed {
         keep_keypoints_only(&mut next);
-        let (_, frame) = track_payload_mut(&mut next);
-        let axis = nalgebra::Unit::new_normalize(frame.normal());
+        let (_, patch_frame) = track_payload_mut(&mut next);
+        let axis = nalgebra::Unit::new_normalize(patch_frame.normal());
         let rotation = nalgebra::Rotation3::from_axis_angle(&axis, angle_rad);
-        frame.u_axis = rotation * frame.u_axis;
-        frame.v_axis = rotation * frame.v_axis;
+        patch_frame.u_axis = rotation * patch_frame.u_axis;
+        patch_frame.v_axis = rotation * patch_frame.v_axis;
     }
     Ok((
         next,
@@ -2597,7 +2597,10 @@ fn observation_at(
 /// a track nothing has triangulated.
 fn patch_frame_of(track: &EditableTrack) -> Result<&OrientedPatch, TrackEditError> {
     match &track.stage {
-        Stage::Track(payload) => payload.patch_frame.as_ref().ok_or(TrackEditError::NoFrame),
+        Stage::Track(payload) => payload
+            .patch_frame
+            .as_ref()
+            .ok_or(TrackEditError::NoPatchFrame),
         Stage::Cluster(_) => Err(TrackEditError::WrongStage {
             wanted: StageKind::Track,
             is: StageKind::Cluster,
@@ -2660,11 +2663,11 @@ fn carry_keypoints(
 /// camera and pose), `place` says where that piece of the patch's content has
 /// gone, and the result is projected back.
 ///
-/// **`was` is the frame as it stood before the move**, and it has to be: the
+/// **`was` is the patch frame as it stood before the move**, and it has to be: the
 /// offsets being preserved are the ones read on the plane the sightings were
 /// measured against. For a slide and a resize the plane does not move and
-/// either frame would answer the same; an offset along the normal and a tilt
-/// take the plane with them, and re-anchoring on the frame's new position would
+/// either patch frame would answer the same; an offset along the normal and a tilt
+/// take the plane with them, and re-anchoring on the patch frame's new position would
 /// read each ray against the plane it has already reached and displace it a
 /// second time.
 ///
@@ -3318,8 +3321,8 @@ pub struct SplitReport {
 /// hypothesis onto it would state as fact the thing the split is questioning.
 /// So a track-stage half is put down to the cluster stage through the same
 /// downgrade the stage step runs ([`set_stage`](super::stage::set_stage())),
-/// which needs the reconstruction for the cameras it projects the frame
-/// through, and a half whose frame projects nowhere is refused there rather
+/// which needs the reconstruction for the cameras it projects the patch frame
+/// through, and a half whose patch frame projects nowhere is refused there rather
 /// than half-moved. The first track keeps its stage, its origin and everything
 /// it was.
 ///

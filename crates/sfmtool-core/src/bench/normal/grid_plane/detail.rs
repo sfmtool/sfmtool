@@ -49,8 +49,8 @@ pub struct GridPlaneLayout {
 /// One render of the loop.
 #[derive(Debug, Clone, PartialEq)]
 pub struct GridPlaneRender {
-    /// The frame the render was made at.
-    pub frame: GridPlaneFrame,
+    /// The patch frame the render was made at.
+    pub patch_frame: GridPlanePatchFrame,
     /// The reference's render, the tile the nine templates are cut from;
     /// `None` when the step has no reference or its render left the
     /// photograph.
@@ -67,9 +67,9 @@ pub struct GridPlaneRender {
     pub iteration: GridPlaneIteration,
 }
 
-/// A patch frame, world frame.
+/// A patch frame, in world coordinates.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct GridPlaneFrame {
+pub struct GridPlanePatchFrame {
     /// The patch centre, world frame.
     pub center: [f64; 3],
     /// Unit, in-plane.

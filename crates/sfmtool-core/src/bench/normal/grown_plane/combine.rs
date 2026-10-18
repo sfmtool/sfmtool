@@ -6,7 +6,7 @@
 //! distance, and the robust combination that leaves out the estimates that
 //! disagree and the views that no longer match at the combined plane.
 //!
-//! Every estimate is a tilt `t` of the starting frame with its information
+//! Every estimate is a tilt `t` of the starting patch frame with its information
 //! `I` about the tilt, read at that tilt. The combined plane is
 //! `t = (Σ I)⁻¹ Σ I·t`, with covariance `2τ·(Σ I)⁻¹`: the estimate a sum of
 //! independent quadratic score losses `½·(t − tₑ)ᵀ Iₑ (t − tₑ)` is maximised

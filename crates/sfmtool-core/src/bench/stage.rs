@@ -5,8 +5,8 @@
 //!
 //! `specs/core/bench/editable-track.md` is the design. [`set_stage`] is the one
 //! operation, in both directions: **up** from a set of image patches to a
-//! patch at a position, which triangulates, frames and then fits; and
-//! **down** from the patch back to the patches, which projects the frame
+//! patch at a position, which triangulates, builds the patch frame and then fits; and
+//! **down** from the patch back to the patches, which projects the patch frame
 //! through each observation's camera and throws the 3D away on purpose.
 //!
 //! Setting the stage a track is already at changes nothing and says so, so a
@@ -35,7 +35,7 @@ pub enum StageError {
     Fit(FitError),
     /// A downgrade needs the patch it projects into each observation's camera,
     /// and the track carries none.
-    NoFrame,
+    NoPatchFrame,
     /// A downgrade needs the position the patch stands at, and the track
     /// carries none.
     NoPosition,
@@ -48,7 +48,7 @@ impl std::fmt::Display for StageError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             StageError::Fit(e) => write!(f, "{e}"),
-            StageError::NoFrame => write!(
+            StageError::NoPatchFrame => write!(
                 f,
                 "the track carries no patch, so there is nothing to project \
                  into each observation's image; a point put on the bench from a \
@@ -139,8 +139,8 @@ impl std::fmt::Display for StageReport {
 /// **Down, track to cluster.** Always possible, and lossy on purpose: the
 /// reference becomes the `in` observation with the largest projected patch
 /// scale, each observation is re-seeded at its keypoint with the affine shape
-/// the format derives by projecting the frame at that observation's anchor, and
-/// the position, the frame, the bitmap and the track-stage measurements are
+/// the format derives by projecting the patch frame at that observation's anchor, and
+/// the position, the patch frame, the bitmap and the track-stage measurements are
 /// dropped. This is the step for a track whose
 /// observations were right and whose 3D hypothesis was the problem: the cluster
 /// kernel then judges the observations on appearance alone.
@@ -154,7 +154,7 @@ impl std::fmt::Display for StageReport {
 ///
 /// `images` is one [`ProjectedImage`] per image of `edited`, as every
 /// photometric step takes them; a downgrade reads none of them, because
-/// projecting a frame needs poses and lenses rather than pixels.
+/// projecting a patch frame needs poses and lenses rather than pixels.
 ///
 /// # Example
 ///
@@ -235,8 +235,8 @@ pub fn set_stage(
 /// Whether `track` can be put into `stage`, judged on the track alone.
 ///
 /// The half of [`set_stage`]'s validation that reads no photograph. An upgrade
-/// needs two `in` observations to triangulate from; a downgrade needs the frame
-/// it projects into each observation's camera and the position that frame
+/// needs two `in` observations to triangulate from; a downgrade needs the patch frame
+/// it projects into each observation's camera and the position that patch frame
 /// stands at. Setting the stage a track is already at is not a refusal -- it is
 /// the change that does nothing, which [`set_stage`] reports as
 /// `changed: false`.
@@ -248,7 +248,7 @@ pub fn set_stage(
 /// cannot come to disagree about what is refused.
 ///
 /// The downgrade's third refusal, [`StageError::NoReference`], is not here: it
-/// depends on where the frame projects in each observation's camera, which is a
+/// depends on where the patch frame projects in each observation's camera, which is a
 /// question about the reconstruction rather than about the track.
 ///
 /// # Example
@@ -277,7 +277,7 @@ pub fn set_stage_preconditions(track: &EditableTrack, stage: StageKind) -> Resul
                 .track()
                 .expect("the stages differ, so this one is the track stage");
             if payload.patch_frame.is_none() {
-                return Err(StageError::NoFrame);
+                return Err(StageError::NoPatchFrame);
             }
             if payload.position.is_none() {
                 return Err(StageError::NoPosition);
@@ -287,7 +287,7 @@ pub fn set_stage_preconditions(track: &EditableTrack, stage: StageKind) -> Resul
     }
 }
 
-/// Cluster to track: triangulate, frame, then run the track stage's own fit
+/// Cluster to track: triangulate, build the patch frame, then run the track stage's own fit
 /// over the result.
 fn upgrade(
     track: &EditableTrack,
@@ -336,7 +336,7 @@ fn upgrade(
     //    For a bearing there is no depth, so the shape is unprojected at unit
     //    distance -- where a fronto-parallel half-axis *is* the tangent of the
     //    angle it subtends, which is what an infinity patch's half-extent is --
-    //    and the frame becomes the tangent one the format states for `w = 0`.
+    //    and the patch frame becomes the tangent one the format states for `w = 0`.
     let reference = upgrade_reference(track, &payload, &ins).ok_or(StageError::NoReference)?;
     let observation = &track.observations[reference];
     let measurement = observation
@@ -370,7 +370,7 @@ fn upgrade(
     )
     .ok_or(StageError::NoReference)?
     .squared();
-    let frame = if classification.at_infinity {
+    let patch_frame = if classification.at_infinity {
         OrientedPatch::from_infinity_direction(
             classification.coordinate,
             framed.v_axis,
@@ -396,7 +396,15 @@ fn upgrade(
 
     // 3-4. Localize, refine, re-triangulate, render the bitmap and read back: the track
     //      stage's own fit, over seeds that are the cluster's refined positions.
-    let (mut next, report) = fit_track(&seeded, edited, images, &frame, options, None, progress)?;
+    let (mut next, report) = fit_track(
+        &seeded,
+        edited,
+        images,
+        &patch_frame,
+        options,
+        None,
+        progress,
+    )?;
     // A cluster measurement is a registration against a reference and a
     // template the track no longer has, so it goes with the stage.
     for observation in &mut next.observations {
@@ -405,7 +413,7 @@ fn upgrade(
     Ok((next, report))
 }
 
-/// The observation an upgrade frames the patch from: the cluster's own
+/// The observation an upgrade builds the patch frame from: the cluster's own
 /// reference when it is `in`, and otherwise the largest-scale `in` observation,
 /// which is what the cluster kernel would have picked among them.
 fn upgrade_reference(
@@ -451,7 +459,7 @@ fn scaled(shape: [[f64; 2]; 2], by: f64) -> [[f64; 2]; 2] {
 /// difference between them.
 ///
 /// - A **patch-frame** shape is what `patch_affine_shape` returns: the columns
-///   are the projections of the frame's `u` and `v` half-vectors. `v` points
+///   are the projections of the patch frame's `u` and `v` half-vectors. `v` points
 ///   image-*up* while pixel rows count *down*, so a patch that faces the camera
 ///   projects to a **negative** determinant.
 /// - A **keypoint-frame** shape is what a cluster observation carries: the
@@ -473,16 +481,19 @@ fn flipped_chirality(shape: [[f64; 2]; 2]) -> [[f64; 2]; 2] {
 }
 
 /// Track to cluster: re-seed every observation from its keypoint and the shape
-/// the frame projects to there, and drop the 3D with the measurements made
+/// the patch frame projects to there, and drop the 3D with the measurements made
 /// against it.
 fn downgrade(
     track: &EditableTrack,
     edited: &EditedReconstruction,
 ) -> Result<(EditableTrack, usize), StageError> {
-    // The frame and the position are [`set_stage_preconditions`]'s, checked
+    // The patch frame and the position are [`set_stage_preconditions`]'s, checked
     // before the caller spent anything on the views.
     let payload = track.track().expect("the caller checked the stage");
-    let frame = payload.patch_frame.as_ref().ok_or(StageError::NoFrame)?;
+    let patch_frame = payload
+        .patch_frame
+        .as_ref()
+        .ok_or(StageError::NoPatchFrame)?;
     let position = payload.position.ok_or(StageError::NoPosition)?;
     let point = Point3D {
         position,
@@ -491,11 +502,11 @@ fn downgrade(
         error: 0.0,
         normal: Vector3::zeros(),
     };
-    let u = frame.u_axis * frame.half_extent[0];
-    let v = frame.v_axis * frame.half_extent[1];
+    let u = patch_frame.u_axis * patch_frame.half_extent[0];
+    let v = patch_frame.v_axis * patch_frame.half_extent[1];
     let table = &edited.base.image_table;
 
-    // Each observation's own seed: where it sits, and the footprint the frame
+    // Each observation's own seed: where it sits, and the footprint the patch frame
     // has there. The shape is the format's own rule for deriving a keypoint's
     // shape from a patch frame, which is the inverse of the framing the upgrade
     // does, so the two directions state one relationship.
@@ -534,7 +545,7 @@ fn downgrade(
             continue;
         };
         let Some(shape) = patch_affine_shape(&point, u, v, table, image, keypoint) else {
-            // The frame does not project into this image: the seed keeps
+            // The patch frame does not project into this image: the seed keeps
             // whatever the observation already carried, and the next reading
             // reports it as unmeasured.
             seeded.push(None);

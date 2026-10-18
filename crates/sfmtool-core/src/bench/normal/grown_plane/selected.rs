@@ -305,7 +305,7 @@ impl Sequence<'_, '_, '_> {
     ///
     /// A view's predicted information is `P = g · (α·d dᵀ + β·e eᵀ)`, with
     /// `d` the unit direction of its offset from the reference in the
-    /// starting frame, `e` the direction across it, and the geometric gain
+    /// starting patch frame, `e` the direction across it, and the geometric gain
     /// `g = (s / ρ)² · sin²θ`: `θ` its angle from the reference, `s` its
     /// photograph px per world unit at the anchor capped at the working
     /// grid's samples per world unit `ρ` (the grid samples no finer). `α` and

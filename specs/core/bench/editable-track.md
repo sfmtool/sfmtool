@@ -582,7 +582,7 @@ pub struct GeometryMatch {
 pub enum GeometrySearchError {
     NoSuchObservation { observation: usize, observation_count: usize },
     WrongStage { is: StageKind },
-    NoFrame,
+    NoPatchFrame,
     NoPlace { observation: usize },
     NoSuchImage { image: u32, view_count: usize },
     Cancelled,
@@ -788,7 +788,7 @@ pub struct GridPlaneLayout {
 }
 
 pub struct GridPlaneRender {
-    pub frame: GridPlaneFrame,                // center, u_axis, v_axis, normal, half_extent
+    pub patch_frame: GridPlanePatchFrame,     // center, u_axis, v_axis, normal, half_extent
     pub reference: Option<GridPlaneTile>,     // the R×R render the templates are cut from
     pub views: Vec<GridPlaneView>,            // each other `in` view rendered, in row order
     pub cells: [GridPlaneCell; 9],            // each cell's rays and triangulation
@@ -2247,8 +2247,8 @@ changes the half-length, `spin` turns the square about its normal and `tilt`
 turns the normal itself. Each word is said once along the path: a step sits in
 `sfmtool_core::bench` and takes an `&EditableTrack`, so it is `tilt_patch`, the
 enclosing namespace carrying the rest; nothing is called `bench_track_frame`,
-and `frame` is not a third noun the gestures need. It
-stays only where the geometry alone is meant, which is the
+and the gestures need no third noun. The geometry alone is the **patch frame**,
+never shortened to bare `frame`: the
 [`OrientedPatch`](../../../crates/sfmtool-core/src/patch/cloud.rs) type and
 `TrackPayload::patch_frame`.
 
@@ -3860,7 +3860,7 @@ and `trace`, a list of dicts with `score`, `determinacy`, `in_plane`,
 `largest_move_px` and `taken`. `grid_plane_normal(..., record_detail=True)`
 adds `detail` to that estimate, a list of one dict per render: the layout
 (`working_resolution`, `margin`, `reach`, `cell_bounds`, `cell_centres` as
-`(3, 3, 2)`), `frame` (`center`, `u_axis`, `v_axis`, `normal`,
+`(3, 3, 2)`), `patch_frame` (`center`, `u_axis`, `v_axis`, `normal`,
 `half_extent`), `reference` (`None` or `observation`, `image` and `tile`, an
 `(R, R, channels)` float32 array, `NaN` off the photograph), `views` (each
 with `observation`, `image`, `tile` of side `R + 2 margin`, `score`,
@@ -4272,9 +4272,9 @@ side gives real baseline. These fits classify at a stated 0.5 px
   `sigma_px` is `NoNoiseLevel`, as is one given a level of 0.
 
 **A bearing that carries no patch.**
-- A `w = 0` point with no stored frame is put on the bench as a bearing with a
+- A `w = 0` point with no stored patch frame is put on the bench as a bearing with a
   unit coordinate and commits back as one; the steps that need a patch refuse
-  it in their own words. A frameless `w = 1` point is a place.
+  it in their own words. A `w = 1` point without a patch frame is a place.
 
 **No effect.**
 - A patch edit, a cluster edit or a painting that would change nothing reports

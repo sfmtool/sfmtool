@@ -321,7 +321,7 @@ refit is the place that keeps the range.
 
 A point the fit refuses keeps every column it had, and its status names the
 refusal: fewer than two observations (`TooFewObservations`), no patch frame on
-this point (`NoFrame`, possible where the column exists but the row is empty),
+this point (`NoPatchFrame`, possible where the column exists but the row is empty),
 fewer than two usable rays (`TooFewRays`) or a linear solve that is not a number
 (`Triangulation`), or a round's tiles past `EvaluateOptions::max_cache_bytes`
 (`TooLarge`) or an allocation that failed (`OutOfMemory`).

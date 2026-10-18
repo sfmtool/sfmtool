@@ -1212,7 +1212,7 @@ fn project_shape_back(
         0,
         [keypoint[0] as f32, keypoint[1] as f32],
     )
-    .expect("the frame projects in the view it was built from")
+    .expect("the patch frame projects in the view it was built from")
 }
 
 /// A pose that is not the identity, so the round trip exercises the world/camera

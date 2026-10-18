@@ -93,8 +93,8 @@ pub use nearby::{
 pub use normal::{
     finite_difference_normal, fit_normal, grid_plane_normal, grown_plane_normal,
     normal_preconditions, FiniteDifferenceOptions, FitNormalOptions, GridPlaneAcceptance,
-    GridPlaneCell, GridPlaneCells, GridPlaneDetail, GridPlaneFitModel, GridPlaneFrame,
-    GridPlaneIteration, GridPlaneLayout, GridPlaneNormalOptions, GridPlaneOutcome, GridPlanePlane,
+    GridPlaneCell, GridPlaneCells, GridPlaneDetail, GridPlaneFitModel, GridPlaneIteration,
+    GridPlaneLayout, GridPlaneNormalOptions, GridPlaneOutcome, GridPlanePatchFrame, GridPlanePlane,
     GridPlaneRay, GridPlaneRender, GridPlaneTile, GridPlaneView, GridPlaneViewCell,
     GridPlaneViewFit, GrownPlaneAttempt, GrownPlaneNormalOptions, GrownPlaneOutcome,
     GrownPlanePair, GrownPlanePick, GrownPlanePrecision, GrownPlaneRefusal, GrownPlaneSequence,

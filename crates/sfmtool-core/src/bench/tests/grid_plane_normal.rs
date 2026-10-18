@@ -139,8 +139,8 @@ fn run_with(
         .expect("the step runs on a finite track with three views")
 }
 
-/// Whether `turned` holds exactly the frame `track` started with.
-fn frame_unchanged(track: &EditableTrack, turned: &EditableTrack) -> bool {
+/// Whether `turned` holds exactly the patch frame `track` started with.
+fn patch_frame_unchanged(track: &EditableTrack, turned: &EditableTrack) -> bool {
     let (a, b) = (patch_frame_of(track), patch_frame_of(turned));
     a.u_axis == b.u_axis && a.v_axis == b.v_axis && a.center == b.center
 }
@@ -216,7 +216,7 @@ fn the_render_cap_without_convergence_leaves_the_normal_unchanged() {
     );
     assert_eq!(cells.determinacy, NormalDeterminacy::BothAxes);
     assert_eq!(cells.outcome, GridPlaneOutcome::Unstable);
-    assert!(frame_unchanged(&track, &turned), "{report}");
+    assert!(patch_frame_unchanged(&track, &turned), "{report}");
     assert_eq!(report.tilt.degrees, 0.0);
     assert!(
         report
@@ -298,7 +298,7 @@ fn a_rejected_turn_after_an_accepted_one_leaves_the_normal_unchanged() {
     );
     assert_eq!(cells.determinacy, NormalDeterminacy::BothAxes);
     assert_eq!(cells.outcome, GridPlaneOutcome::Unstable);
-    assert!(frame_unchanged(&track, &turned), "{report}");
+    assert!(patch_frame_unchanged(&track, &turned), "{report}");
     assert_eq!(report.tilt.degrees, 0.0);
     assert!(
         report
@@ -412,7 +412,7 @@ fn flat_texture_throughout_fixes_no_axis_and_turns_nothing() {
     assert_eq!(report.tilt.degrees, 0.0);
     assert_eq!(cells.stop, LoopStop::NotRun);
     assert_eq!(cells.outcome, GridPlaneOutcome::Undetermined);
-    assert!(frame_unchanged(&track, &turned));
+    assert!(patch_frame_unchanged(&track, &turned));
     assert!(degrees(patch_frame_of(&turned).normal(), was) < 1e-9);
     let sentence = report.to_string();
     assert!(sentence.starts_with("0 of 9 cells in the plane, no axis fixed"));
@@ -606,7 +606,7 @@ fn the_precision_gate_leaves_an_imprecise_plane_undetermined() {
     assert_eq!(cells.determinacy, NormalDeterminacy::BothAxes);
     assert_eq!(cells.trace.len(), 1);
     assert!(cells.trace[0].gated && cells.trace[0].proposed_normal.is_none());
-    assert!(frame_unchanged(&track, &turned), "{report}");
+    assert!(patch_frame_unchanged(&track, &turned), "{report}");
 
     let loose = GridPlaneNormalOptions {
         max_normal_precision_deg: Some(45.0),
@@ -718,7 +718,7 @@ fn the_detail_record_follows_the_trace() {
         let statuses: [CellStatus; 9] = std::array::from_fn(|k| view.cells[k].status);
         assert_eq!(statuses, cells.view_cells[view.tile.observation]);
     }
-    let first = &detail.renders[0].frame;
+    let first = &detail.renders[0].patch_frame;
     let start = patch_frame_of(&track);
     assert_eq!(first.center, <[f64; 3]>::from(start.center.coords));
     assert_eq!(first.normal, <[f64; 3]>::from(start.normal()));

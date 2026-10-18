@@ -190,20 +190,27 @@ fn the_shared_tile_leaves_the_self_similarity_readings_as_a_direct_render_gives_
     let views = truth.views();
     let options = EvaluateOptions::default();
     let resolution = options.patch_resolution(&edited.base) as usize;
-    let frame = read
+    let patch_frame = read
         .track()
         .and_then(|t| t.patch_frame.clone())
-        .expect("a track-stage frame");
+        .expect("a track-stage patch frame");
     for (i, observation) in read.observations.iter().enumerate() {
         let view = &views[observation.image as usize];
-        let anchored =
-            frame.anchored_at_keypoint(view.camera, view.cam_from_world, keypoint_of(&read, i));
-        let patch_frame = anchored.as_ref().unwrap_or(&frame);
-        let jacobian =
-            patch_grid_jacobian(patch_frame, view.camera, view.cam_from_world, resolution);
+        let anchored = patch_frame.anchored_at_keypoint(
+            view.camera,
+            view.cam_from_world,
+            keypoint_of(&read, i),
+        );
+        let anchored_patch_frame = anchored.as_ref().unwrap_or(&patch_frame);
+        let jacobian = patch_grid_jacobian(
+            anchored_patch_frame,
+            view.camera,
+            view.cam_from_world,
+            resolution,
+        );
         let sampler = options.localize.sampler.for_jacobian(jacobian);
         let mut map = WarpMap::from_patch(
-            patch_frame,
+            anchored_patch_frame,
             view.camera,
             view.cam_from_world,
             resolution as u32,
@@ -233,8 +240,12 @@ fn the_shared_tile_leaves_the_self_similarity_readings_as_a_direct_render_gives_
         };
         let parts =
             zncc_self_similarity_parts(&tile, Some(&valid), &SelfSimilarityParams::default());
-        let ellipse =
-            SelfSimilarityEllipseUnits::read(&parts.whole, jacobian, Some(patch_frame), resolution);
+        let ellipse = SelfSimilarityEllipseUnits::read(
+            &parts.whole,
+            jacobian,
+            Some(anchored_patch_frame),
+            resolution,
+        );
 
         // Compared as printed, so that a `NaN` (a circle's major angle, a
         // textureless cell) matches itself.
@@ -265,10 +276,10 @@ fn the_pair_zncc_is_the_median_of_member_coherence_s_row_called_directly() {
     let (read, edited) = truth.evaluated_track();
     let views = truth.views();
     let options = EvaluateOptions::default();
-    let frame = read
+    let patch_frame = read
         .track()
         .and_then(|t| t.patch_frame.clone())
-        .expect("a track-stage frame");
+        .expect("a track-stage patch frame");
     let rows: Vec<usize> = (0..read.observations.len())
         .filter(|&i| read.observations[i].verdict == Verdict::In)
         .collect();
@@ -280,7 +291,7 @@ fn the_pair_zncc_is_the_median_of_member_coherence_s_row_called_directly() {
         sampler: options.localize.sampler,
         ..MemberCoherenceParams::default()
     };
-    let matrix = member_zncc_matrix(&frame, &views, &members, Some(&keypoints), &params);
+    let matrix = member_zncc_matrix(&patch_frame, &views, &members, Some(&keypoints), &params);
     assert_eq!(matrix.members, members);
     for (k, &i) in rows.iter().enumerate() {
         let others: Vec<f64> = (0..matrix.len())
@@ -303,12 +314,12 @@ fn tile_of_row(
     i: usize,
     resolution: usize,
 ) -> ViewTile {
-    let frame = read
+    let patch_frame = read
         .track()
         .and_then(|t| t.patch_frame.clone())
-        .expect("a track-stage frame");
+        .expect("a track-stage patch frame");
     render_view_tile(
-        &frame,
+        &patch_frame,
         &views[read.observations[i].image as usize],
         Some(keypoint_of(read, i)),
         resolution,
@@ -604,7 +615,7 @@ const PARTIAL_POINT: usize = 53;
 
 /// Point `p`'s patch, its images and its stored keypoints.
 fn point_inputs(recon: &SfmrReconstruction, p: usize) -> (OrientedPatch, Vec<u32>, Vec<[f64; 2]>) {
-    let cloud = PatchCloud::from_stored_frames(recon).expect("patch frames");
+    let cloud = PatchCloud::from_stored_patch_frames(recon).expect("patch frames");
     let kxy = recon.keypoints_xy().expect("inline keypoints");
     let offsets = &recon.point_set.observation_offsets;
     let rows = offsets[p]..offsets[p + 1];
@@ -739,7 +750,7 @@ fn normal_refinement_stores_the_bitmap_its_reference_names() {
     let out = refine_patch_normal(&patch, &views, 24, &params, Some(&anchors(&keypoints)));
     let rgba = out.representative.as_ref().expect("a bitmap");
     // The stored bitmap agrees with its reference: the named view's tile at
-    // the refined frame.
+    // the refined patch frame.
     let all_views: Vec<u32> = (0..views.len() as u32).collect();
     let render = render_reference(
         &out.patch,

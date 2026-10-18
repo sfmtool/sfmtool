@@ -333,7 +333,7 @@ fn main() {
         .iter()
         .map(|i| &recon.image_table.cameras[i.camera_index as usize])
         .collect();
-    let cloud = PatchCloud::from_stored_frames(&recon).expect("patch frames");
+    let cloud = PatchCloud::from_stored_patch_frames(&recon).expect("patch frames");
     let r = recon
         .point_set
         .patch_bitmaps_y_x_rgba

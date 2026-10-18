@@ -8,7 +8,7 @@
 //! read, [`fit`] is the modification: at the track stage it localizes every
 //! sighting against the patch, refines each to sub-pixel, re-triangulates the
 //! `in` results, renders the patch bitmap and writes the keypoints, the
-//! position and the frame. It sets no verdict -- the thresholds propose and
+//! position and the patch frame. It sets no verdict -- the thresholds propose and
 //! [`apply_thresholds`](super::steps::apply_thresholds) applies the proposal --
 //! so what it writes is geometry and a report, and a decision about nothing.
 //!
@@ -146,7 +146,7 @@ pub enum FitError {
     TooFewObservations(usize),
     /// The track carries no patch, so there is nothing the localizer can
     /// register a view against.
-    NoFrame,
+    NoPatchFrame,
     /// The `in` observations do not triangulate: the linear solve came back with
     /// a coordinate that is not a number.
     ///
@@ -199,7 +199,7 @@ impl std::fmt::Display for FitError {
                 f,
                 "{n} observations are in, and the track stage needs two or more"
             ),
-            FitError::NoFrame => write!(
+            FitError::NoPatchFrame => write!(
                 f,
                 "the track carries no patch to register against, as a point put \
                  on the bench from a sift_files reconstruction has none; convert the \
@@ -244,7 +244,7 @@ impl From<EvaluateError> for FitError {
                 FitError::ViewsMissing { got, expected }
             }
             EvaluateError::NoView { image } => FitError::NoView { image },
-            EvaluateError::NoFrame => FitError::NoFrame,
+            EvaluateError::NoPatchFrame => FitError::NoPatchFrame,
             EvaluateError::TooLarge { bytes, budget } => FitError::TooLarge { bytes, budget },
             EvaluateError::OutOfMemory { bytes } => FitError::OutOfMemory { bytes },
             EvaluateError::Cancelled => FitError::Cancelled,
@@ -320,7 +320,7 @@ impl std::fmt::Display for FitReport {
 /// **At the track stage** the patch is registered into every view of every
 /// round by the two kernels the embed pass chains -- as the
 /// track carries it, bearing and all -- the `in` results are re-triangulated,
-/// the frame is placed at what they resolve to and the patch bitmap is rendered
+/// the patch frame is placed at what they resolve to and the patch bitmap is rendered
 /// over them. An observation the kernels did not place keeps the pixel it had,
 /// so the column still says where the sighting is and the re-triangulation still
 /// has its ray. The fitted track is then evaluated, which is where its
@@ -332,7 +332,7 @@ impl std::fmt::Display for FitReport {
 /// reconstruction's measured noise level unless [`FitOptions::sigma_px`] gives
 /// one: a bearing whose sightings now carry a depth becomes a point at it, a
 /// point whose rays no longer fix one becomes a bearing, and either way the
-/// frame is carried across at the apparent size it had. A finite track is
+/// patch frame is carried across at the apparent size it had. A finite track is
 /// placed by the point fit started from where it stood.
 /// [`FitReport::classification`] says which it chose and on which outcome.
 ///
@@ -421,14 +421,22 @@ pub fn fit(
             ))
         }
         Stage::Track(payload) => {
-            // The frame goes in as the track carries it, bearing and all: a
+            // The patch frame goes in as the track carries it, bearing and all: a
             // `w = 0` patch is tangent to the direction sphere and registering
             // against it is what reads the photographs the track actually has.
             // Which representation the track leaves with is the
-            // re-triangulation's to say, not the frame it arrived on.
-            let frame = payload.patch_frame.clone().ok_or(FitError::NoFrame)?;
+            // re-triangulation's to say, not the patch frame it arrived on.
+            let patch_frame = payload.patch_frame.clone().ok_or(FitError::NoPatchFrame)?;
             let options = options.at_patch_resolution(&edited.base);
-            fit_track(track, edited, images, &frame, &options, None, progress)
+            fit_track(
+                track,
+                edited,
+                images,
+                &patch_frame,
+                &options,
+                None,
+                progress,
+            )
         }
     }
 }
@@ -654,7 +662,7 @@ pub fn fit_preconditions(track: &EditableTrack) -> Result<(), FitError> {
         return Ok(());
     };
     if payload.patch_frame.is_none() {
-        return Err(FitError::NoFrame);
+        return Err(FitError::NoPatchFrame);
     }
     let ins = track.in_observations().len();
     if ins < 2 {
@@ -669,12 +677,12 @@ pub fn fit_preconditions(track: &EditableTrack) -> Result<(), FitError> {
 ///
 /// Measured through the view's own camera model, so a fisheye's compression
 /// toward the rim of its image circle is in the number. The edge midpoints are
-/// homogeneous with the frame's own `w`, so a bearing's project as directions.
+/// homogeneous with the patch frame's own `w`, so a bearing's project as directions.
 /// `None` where one of them does not project or the size is not a positive
 /// finite number.
-fn projected_size_px(frame: &OrientedPatch, view: &ProjectedImage<'_>) -> Option<f64> {
+fn projected_size_px(patch_frame: &OrientedPatch, view: &ProjectedImage<'_>) -> Option<f64> {
     let project = |s: f64, t: f64| -> Option<[f64; 2]> {
-        let (xyz, w) = frame.corner_homogeneous(s, t);
+        let (xyz, w) = patch_frame.corner_homogeneous(s, t);
         let cam = view.cam_from_world.transform_point_homogeneous(xyz, w);
         let (x, y) = view.camera.ray_to_pixel([cam.x, cam.y, cam.z])?;
         Some([x, y])
@@ -762,18 +770,18 @@ fn scaled_extent(half_extent: [f64; 2], by: f64) -> [f64; 2] {
 /// Four cases:
 ///
 /// - **Bearing to bearing.** The direction moves to the refined one and the
-///   tangent frame is re-pinned on it, at the half-extents it already had, which
+///   tangent patch frame is re-pinned on it, at the half-extents it already had, which
 ///   are angular.
-/// - **Bearing to point.** The frame keeps its axes and takes the world
+/// - **Bearing to point.** The patch frame keeps its axes and takes the world
 ///   half-extents that make the patch look, in each image `in_images` names, as
 ///   large as the bearing did there, as nearly as one scale can
 ///   ([`size_matching_factor`]).
-/// - **Point to bearing.** The frame is re-expressed as the tangent one the
+/// - **Point to bearing.** The patch frame is re-expressed as the tangent one the
 ///   format states for a `w = 0` row, and takes the angular half-extents that
 ///   best keep the size the point's patch had in those images, by the same
 ///   criterion. One criterion for both directions is what makes a round trip
 ///   keep the size.
-/// - **Point to point.** The centre moves and the frame keeps its axes, with
+/// - **Point to point.** The centre moves and the patch frame keeps its axes, with
 ///   the world half-extents scaled to keep the size the patch looked in those
 ///   images. A fit that moves the point along its rays, from 170 units out to
 ///   50, would otherwise grow the patch more than threefold in every image.
@@ -791,40 +799,42 @@ fn scaled_extent(half_extent: [f64; 2], by: f64) -> [f64; 2] {
 /// geometric mean distance ([`observing_distance`]), looking straight at the
 /// patch, would see at the same size; and where that distance is not defined
 /// either, the numbers are carried over unchanged.
-pub(super) fn placed_frame(
-    frame: &OrientedPatch,
+pub(super) fn placed_patch_frame(
+    patch_frame: &OrientedPatch,
     coordinate: Point3<f64>,
     at_infinity: bool,
     images: &[ProjectedImage<'_>],
     in_images: &[usize],
 ) -> OrientedPatch {
-    match (frame.w == 0.0, at_infinity) {
-        (true, true) => {
-            OrientedPatch::from_infinity_direction(coordinate, frame.v_axis, frame.half_extent)
-        }
+    match (patch_frame.w == 0.0, at_infinity) {
+        (true, true) => OrientedPatch::from_infinity_direction(
+            coordinate,
+            patch_frame.v_axis,
+            patch_frame.half_extent,
+        ),
         (true, false) => {
             let start = observing_distance(&coordinate, images, in_images).unwrap_or(1.0);
             let trial = OrientedPatch::new(
                 coordinate,
-                frame.u_axis,
-                frame.v_axis,
-                scaled_extent(frame.half_extent, start),
+                patch_frame.u_axis,
+                patch_frame.v_axis,
+                scaled_extent(patch_frame.half_extent, start),
             );
-            let k = size_matching_factor(frame, &trial, images, in_images).unwrap_or(1.0);
+            let k = size_matching_factor(patch_frame, &trial, images, in_images).unwrap_or(1.0);
             OrientedPatch {
                 half_extent: scaled_extent(trial.half_extent, k),
                 ..trial
             }
         }
         (false, true) => {
-            let start = observing_distance(&frame.center, images, in_images)
+            let start = observing_distance(&patch_frame.center, images, in_images)
                 .map_or(1.0, |distance| 1.0 / distance);
             let trial = OrientedPatch::from_infinity_direction(
                 coordinate,
-                frame.v_axis,
-                scaled_extent(frame.half_extent, start),
+                patch_frame.v_axis,
+                scaled_extent(patch_frame.half_extent, start),
             );
-            let k = size_matching_factor(frame, &trial, images, in_images).unwrap_or(1.0);
+            let k = size_matching_factor(patch_frame, &trial, images, in_images).unwrap_or(1.0);
             OrientedPatch {
                 half_extent: scaled_extent(trial.half_extent, k),
                 ..trial
@@ -833,12 +843,12 @@ pub(super) fn placed_frame(
         (false, false) => {
             let trial = OrientedPatch {
                 center: coordinate,
-                u_axis: frame.u_axis,
-                v_axis: frame.v_axis,
-                half_extent: frame.half_extent,
+                u_axis: patch_frame.u_axis,
+                v_axis: patch_frame.v_axis,
+                half_extent: patch_frame.half_extent,
                 w: 1.0,
             };
-            let k = size_matching_factor(frame, &trial, images, in_images).unwrap_or(1.0);
+            let k = size_matching_factor(patch_frame, &trial, images, in_images).unwrap_or(1.0);
             OrientedPatch {
                 half_extent: scaled_extent(trial.half_extent, k),
                 ..trial
@@ -852,7 +862,7 @@ pub(super) fn placed_frame(
 ///
 /// Shared by [`fit`] at the track stage and by the upgrade
 /// ([`set_stage`](super::stage::set_stage)), which differ only in where the
-/// frame came from: the payload's own, or one framed from the cluster's
+/// patch frame came from: the payload's own, or one framed from the cluster's
 /// reference at the triangulated depth. Both pass no `range`.
 ///
 /// **`range` puts the coordinate under the distance rule.** With `None` the
@@ -872,17 +882,17 @@ pub(super) fn fit_track(
     track: &EditableTrack,
     edited: &EditedReconstruction,
     images: &[ProjectedImage<'_>],
-    frame: &OrientedPatch,
+    patch_frame: &OrientedPatch,
     options: &FitOptions,
     range: Option<PointDistance>,
     progress: &Progress<'_>,
 ) -> Result<(EditableTrack, FitReport), FitError> {
     check_observation_views(track, images)?;
-    // A patch is square. A frame that arrives otherwise -- written before the
+    // A patch is square. A patch frame that arrives otherwise -- written before the
     // upgrade framed square -- is squared before anything registers against
     // it, so a fit is also the repair.
-    let squared = frame.squared();
-    let frame = &squared;
+    let squared = patch_frame.squared();
+    let patch_frame = &squared;
     // The `in` count is [`fit_preconditions`]'s, checked before the caller
     // spent anything on the views.
     let ins = track.in_observations();
@@ -893,7 +903,7 @@ pub(super) fn fit_track(
     let plan = plan_rounds(
         track,
         images,
-        frame,
+        patch_frame,
         &options.localize,
         options.evaluate.max_seed_offset_px,
     );
@@ -902,7 +912,7 @@ pub(super) fn fit_track(
     fit_round(
         track,
         images,
-        frame,
+        patch_frame,
         &plan.first,
         options,
         progress,
@@ -911,7 +921,15 @@ pub(super) fn fit_track(
     for &i in &plan.contested {
         progress.check_cancel()?;
         let round = plan.contested_round(track, i);
-        fit_round(track, images, frame, &round, options, progress, &mut fits)?;
+        fit_round(
+            track,
+            images,
+            patch_frame,
+            &round,
+            options,
+            progress,
+            &mut fits,
+        )?;
     }
 
     // ── The keypoints, and the re-triangulation they feed ──
@@ -935,8 +953,8 @@ pub(super) fn fit_track(
             Some(fit) => {
                 // In grid px, the unit of the bar.
                 let view = &images[track.observations[i].image as usize];
-                let walked =
-                    seed.map(|s| grid_distance(frame, view, s, fit.keypoint, &options.localize));
+                let walked = seed
+                    .map(|s| grid_distance(patch_frame, view, s, fit.keypoint, &options.localize));
                 match (walked, seed) {
                     (Some(walked), Some(seed)) if walked.is_finite() && walked > bound => {
                         // Where the walk would have gone, so a person can
@@ -987,12 +1005,12 @@ pub(super) fn fit_track(
         }
     };
 
-    // ── The frame at the coordinate the fit found, and the bitmap it shows ──
+    // ── The patch frame at the coordinate the fit found, and the bitmap it shows ──
     let in_images: Vec<usize> = ins
         .iter()
         .map(|&i| next.observations[i].image as usize)
         .collect();
-    let placed = placed_frame(frame, position, at_infinity, images, &in_images);
+    let placed = placed_patch_frame(patch_frame, position, at_infinity, images, &in_images);
     let (bitmap, reference, color) = {
         let mut phase = progress.phase("bitmap");
         let rendered = render_bitmap(
@@ -1133,7 +1151,7 @@ struct Fit {
 fn fit_round(
     track: &EditableTrack,
     images: &[ProjectedImage<'_>],
-    frame: &OrientedPatch,
+    patch_frame: &OrientedPatch,
     round: &[usize],
     options: &FitOptions,
     progress: &Progress<'_>,
@@ -1159,7 +1177,7 @@ fn fit_round(
     let localized = {
         let mut phase = progress.phase("localize");
         let localized = try_localize_patch_keypoints(
-            frame,
+            patch_frame,
             images,
             &view_set,
             Some(&seeds),
@@ -1173,7 +1191,7 @@ fn fit_round(
     let refined = {
         let mut phase = progress.phase("refine");
         let refined = refine_patch_keypoints_reporting(
-            frame,
+            patch_frame,
             images,
             &localized.views,
             Some(

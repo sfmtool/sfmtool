@@ -45,7 +45,9 @@ use super::super::fit::FitOptions;
 use super::super::steps::tilt_degrees;
 use super::super::track::{EditableTrack, TrackMeasurement};
 use super::grid_plane::{working_side, MIN_WORKING_RESOLUTION};
-use super::{frame_of, normal_preconditions, read_back, NormalError, NormalEstimate, NormalReport};
+use super::{
+    normal_preconditions, patch_frame_of, read_back, NormalError, NormalEstimate, NormalReport,
+};
 
 mod combine;
 mod render;
@@ -64,7 +66,7 @@ use solve::{
 pub struct GrownPlaneNormalOptions {
     /// Side of the working grid the views are sampled on, in samples. `None`
     /// follows the reference view's footprint of the patch at the starting
-    /// frame, about one sample per photograph pixel, clamped to `R ..= 2R`,
+    /// patch frame, about one sample per photograph pixel, clamped to `R ..= 2R`,
     /// the rule [`grid_plane_normal`](super::grid_plane_normal) uses. At least
     /// [`Self::spot_window`] either way.
     pub working_resolution: Option<u32>,
@@ -392,7 +394,7 @@ pub struct GrownPlanePick {
     /// Its angle from the reference, degrees.
     pub angle_deg: f64,
     /// The unit direction of its offset from the reference in the starting
-    /// frame's `(u, v)`, along which its predicted information lies.
+    /// patch frame's `(u, v)`, along which its predicted information lies.
     pub offset_direction: [f64; 2],
     /// Its photograph px per world unit at the anchor, the square root of
     /// the projection's area scale there.
@@ -628,9 +630,9 @@ impl std::fmt::Display for GrownPlaneSequence {
 ///
 /// The reference is the fit's: the reference the track holds where its row is
 /// `in` with a keypoint, else the reference-view rule's pick among the `in`
-/// rows, one row per image. Its working grid is the starting frame re-anchored
+/// rows, one row per image. Its working grid is the starting patch frame re-anchored
 /// on its keypoint, [`GrownPlaneNormalOptions::working_resolution`] samples a
-/// side. The plane is the starting normal tilted by `(a, b)` along the frame's
+/// side. The plane is the starting normal tilted by `(a, b)` along the patch frame's
 /// axes through that anchor; each view adds an image shift.
 ///
 /// A view is grown from the starting plane: a 7×7 window at the grid's
@@ -723,7 +725,7 @@ pub fn grown_plane_normal(
     let step = progress.phase("grown plane normal");
     let progress: &Progress<'_> = &step;
     let mut setup = progress.detail_phase("setup");
-    let frame = frame_of(track);
+    let patch_frame = patch_frame_of(track);
     let base = stored_patch_resolution(&edited.base)
         .unwrap_or(options.fit.refine.resolution)
         .max(MIN_WORKING_RESOLUTION);
@@ -741,7 +743,7 @@ pub fn grown_plane_normal(
         .map(|&i| seed_of(&track.observations[i]))
         .collect();
     let reference = resolve_reference(
-        &frame,
+        &patch_frame,
         images,
         &view_set,
         &seeds,
@@ -777,7 +779,7 @@ pub fn grown_plane_normal(
             track,
             edited,
             images,
-            frame.normal(),
+            patch_frame.normal(),
             NormalEstimate::GrownPlane(Box::new(sequence)),
             &options.fit,
             &turn,
@@ -792,9 +794,9 @@ pub fn grown_plane_normal(
     let side = match options.working_resolution {
         Some(side) => side.max(floor),
         None => {
-            let patch_frame = anchored(&frame, ref_view, ref_keypoint);
+            let anchored_patch_frame = anchored(&patch_frame, ref_view, ref_keypoint);
             let jacobian = crate::camera::warp_map::patch_grid_jacobian(
-                &patch_frame,
+                &anchored_patch_frame,
                 ref_view.camera,
                 ref_view.cam_from_world,
                 base as usize,
@@ -802,8 +804,8 @@ pub fn grown_plane_normal(
             working_side(jacobian, base).max(floor)
         }
     } as usize;
-    let grid = Grid::new(&frame, ref_view, ref_keypoint, side);
-    let ref_image = ViewImage::new(ref_view, &grid.patch_frame, side);
+    let grid = Grid::new(&patch_frame, ref_view, ref_keypoint, side);
+    let ref_image = ViewImage::new(ref_view, &grid.anchored_patch_frame, side);
     let reference_samples =
         ViewRender::new(&grid, &ref_image).render([0.0; 2], [0.0; 2], &grid.all());
     let live = live_cells(&grid.cells, &reference_samples);
@@ -811,7 +813,7 @@ pub fn grown_plane_normal(
 
     // The candidates: every other row, nearest the reference in angle first,
     // ties by row.
-    let centre = frame.center.coords;
+    let centre = patch_frame.center.coords;
     let ref_direction =
         (ref_view.cam_from_world.inverse_translation_origin().coords - centre).try_normalize(1e-12);
     let mut candidates: Vec<Candidate<'_>> = rows
@@ -820,7 +822,7 @@ pub fn grown_plane_normal(
         .map(|&row| {
             let observation = &track.observations[row];
             let view = &images[observation.image as usize];
-            let image = ViewImage::new(view, &grid.patch_frame, side);
+            let image = ViewImage::new(view, &grid.anchored_patch_frame, side);
             let keypoint = seed_of(observation);
             let direction = (view.cam_from_world.inverse_translation_origin().coords - centre)
                 .try_normalize(1e-12);
@@ -831,7 +833,7 @@ pub fn grown_plane_normal(
             let offset_direction = match (ref_direction, direction) {
                 (Some(a), Some(b)) => {
                     let d = b - a;
-                    let (x, y) = (d.dot(&frame.u_axis), d.dot(&frame.v_axis));
+                    let (x, y) = (d.dot(&patch_frame.u_axis), d.dot(&patch_frame.v_axis));
                     let n = x.hypot(y);
                     if n > 1e-12 {
                         [x / n, y / n]
@@ -906,7 +908,7 @@ pub fn grown_plane_normal(
             track,
             edited,
             images,
-            frame.normal(),
+            patch_frame.normal(),
             NormalEstimate::GrownPlane(Box::new(sequence)),
             &options.fit,
             &turn,
@@ -940,7 +942,7 @@ pub fn grown_plane_normal(
             track,
             edited,
             images,
-            frame.normal(),
+            patch_frame.normal(),
             NormalEstimate::GrownPlane(Box::new(sequence)),
             &options.fit,
             &turn,
@@ -1178,7 +1180,7 @@ struct Candidate<'a> {
     /// The unit direction from the patch centre to its camera.
     direction: Option<Vector3<f64>>,
     /// The unit direction of its offset from the reference in the starting
-    /// frame's `(u, v)`; zero where it has none.
+    /// patch frame's `(u, v)`; zero where it has none.
     offset_direction: [f64; 2],
     /// Photograph px per world unit at the anchor; `NaN` where the anchor
     /// does not project.

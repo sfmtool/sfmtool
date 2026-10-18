@@ -79,7 +79,7 @@ fn left_as_they_were(error: Option<&FitError>) -> (usize, &'static str) {
         Some(FitError::TooFewObservations(_)) => (0, "with too few observations"),
         Some(FitError::TooFewRays { .. }) => (1, "with too few rays"),
         Some(FitError::Triangulation) => (2, "whose rays do not triangulate"),
-        Some(FitError::NoFrame) => (3, "with no patch frame"),
+        Some(FitError::NoPatchFrame) => (3, "with no patch frame"),
         None => (4, "with no bitmap to render"),
         Some(FitError::TooLarge { .. }) | Some(FitError::OutOfMemory { .. }) => {
             (5, "too large to read in memory")

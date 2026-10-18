@@ -111,7 +111,7 @@ pub enum CommitError {
     NoPosition,
     /// The reconstruction carries a patch frame per point and the track
     /// has none.
-    NoFrame,
+    NoPatchFrame,
     /// The reconstruction carries a patch bitmap per point and the track has
     /// none to commit: it has no bitmap, or only one for judging
     /// ([`TrackPayload::bitmap_for_judging`]). The next evaluation that
@@ -156,7 +156,7 @@ impl std::fmt::Display for CommitError {
             CommitError::NoPosition => {
                 write!(f, "the track has no position; fit it before committing")
             }
-            CommitError::NoFrame => write!(
+            CommitError::NoPatchFrame => write!(
                 f,
                 "the reconstruction stores a patch frame per point and the track has none"
             ),
@@ -190,8 +190,8 @@ impl From<EditError> for CommitError {
 /// Write `track` into `edited` as one point.
 ///
 /// The record is the track's payload plus its `in` observations' keypoints: the
-/// coordinate it carries, the frame it stands on, the patch bitmap, the
-/// colour read from that bitmap's centre, the normal the frame states, and one
+/// coordinate it carries, the patch frame it stands on, the patch bitmap, the
+/// colour read from that bitmap's centre, the normal the patch frame states, and one
 /// observation per `in` observation with its keypoint and, in
 /// `observation_confidence` where the column exists, its blur-matched score against
 /// the stored bitmap
@@ -199,11 +199,11 @@ impl From<EditError> for CommitError {
 /// clamped to `0 ..= 1` and scaled to a byte (`0` where the row has no score,
 /// `255` for the reference observation).
 ///
-/// **A bearing commits as a bearing.** The point's `w` is the frame's, so a
+/// **A bearing commits as a bearing.** The point's `w` is the patch frame's, so a
 /// track the classification put at infinity is written as the `w = 0` row it is:
 /// its coordinate is the unit direction, and its normal and normal confidence
 /// are zero, which is what the format states for such a row. Nothing here
-/// re-decides which it is -- that was settled by the fit that wrote the frame.
+/// re-decides which it is -- that was settled by the fit that wrote the patch frame.
 ///
 /// With **no origin that resolves**, the point is appended. With **an origin
 /// that resolves** in this value, it takes that point's place, which is what
@@ -382,7 +382,7 @@ pub(crate) fn point_record(
     }
     let position = payload.position.ok_or(CommitError::NoPosition)?;
     if edited.has_patch_frames() && payload.patch_frame.is_none() {
-        return Err(CommitError::NoFrame);
+        return Err(CommitError::NoPatchFrame);
     }
     if edited.has_patch_bitmaps() && payload.committable_bitmap().is_none() {
         return Err(CommitError::NoBitmap);
@@ -448,18 +448,18 @@ pub(crate) fn point_record(
     }
 
     // ---- The point the record stands on ----
-    let frame = payload.patch_frame.as_ref();
-    // The track's own flag rather than the frame's `w`. A track put on the bench
+    let patch_frame = payload.patch_frame.as_ref();
+    // The track's own flag rather than the patch frame's `w`. A track put on the bench
     // from a `sift_files` reconstruction has no patch frame at all, and a bearing
-    // it came from is still a bearing: reading the frame would commit it back as
+    // it came from is still a bearing: reading the patch frame would commit it back as
     // a place one unit from the world origin.
     let at_infinity = payload.at_infinity;
     // A `w = 0` row carries a zero normal: the format states it, and the two
-    // conversions across the boundary hold to it -- a bearing's frame is tangent
+    // conversions across the boundary hold to it -- a bearing's patch frame is tangent
     // to the direction sphere and its cross product is the bearing itself, which
     // says nothing about a surface. The confidence goes to zero with it, because
     // the format keeps the two coherent.
-    let normal = frame
+    let normal = patch_frame
         .filter(|_| !at_infinity)
         .map_or_else(Vector3::zeros, |patch| {
             let n = patch.normal();
@@ -474,10 +474,10 @@ pub(crate) fn point_record(
             normal,
         },
         observations,
-        patch_u_halfvec: frame
+        patch_u_halfvec: patch_frame
             .filter(|_| edited.has_patch_frames())
             .map(|patch| halfvec(patch.u_axis * patch.half_extent[0])),
-        patch_v_halfvec: frame
+        patch_v_halfvec: patch_frame
             .filter(|_| edited.has_patch_frames())
             .map(|patch| halfvec(patch.v_axis * patch.half_extent[1])),
         patch_bitmap: edited.has_patch_bitmaps().then(|| {

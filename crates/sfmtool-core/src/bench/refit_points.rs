@@ -271,8 +271,8 @@ pub enum RefitPointsError {
     /// commit ([`CommitError::NotEmbeddedPatches`]), needs an
     /// `embedded_patches` value.
     NoKeypoints,
-    /// The points carry no patch frame, and a fit registers the frame into
-    /// every view ([`FitError::NoFrame`]).
+    /// The points carry no patch frame, and a fit registers the patch frame into
+    /// every view ([`FitError::NoPatchFrame`]).
     NoPatchFrames,
     /// No image of the value carries a pose.
     NoPosedImage,
@@ -360,7 +360,7 @@ impl From<Cancelled> for RefitPointsError {
 /// observation `in` and pinned: [`track_of_point`], the fit at the track stage
 /// with [`RefitPointsOptions::fit`] and [`RefitPointsOptions::max_shift_px`]
 /// (every sighting aligned to the render of the point's reference observation,
-/// the point re-triangulated, its frame placed at the answer and its bitmap
+/// the point re-triangulated, its patch frame placed at the answer and its bitmap
 /// rendered again, then evaluated), and the record a commit would build from
 /// the fitted track. No index moves: the returned value has the input's points
 /// at the input's indexes, each track keeps its images and its length, and
@@ -650,16 +650,16 @@ fn refit_one(
     if let Err(e) = fit_preconditions(&track) {
         return (status(RefitOutcome::NotFitted(e)), None);
     }
-    let frame = match &track.stage {
+    let patch_frame = match &track.stage {
         Stage::Track(payload) => payload.patch_frame.clone(),
         Stage::Cluster(_) => None,
     }
-    .expect("fit_preconditions refuses a track-stage track with no frame");
+    .expect("fit_preconditions refuses a track-stage track with no patch frame");
     let (fitted, report) = match fit_track(
         &track,
         edited,
         images,
-        &frame,
+        &patch_frame,
         options,
         entry,
         &Progress::none(),
@@ -673,7 +673,7 @@ fn refit_one(
         Ok(record) => record,
         Err(CommitError::NoBitmap) => return (status(RefitOutcome::NoBitmap), None),
         // The run refused a `sift_files` value, and a fitted track is at the
-        // track stage with a position, a frame, two or more `in` rows and a
+        // track stage with a position, a patch frame, two or more `in` rows and a
         // keypoint on every one of them, each in an image of the value, since
         // the run refused a track naming any other; the record is built, never
         // applied, so no edit refuses it.

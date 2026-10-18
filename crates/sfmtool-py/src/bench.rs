@@ -605,15 +605,21 @@ impl PyEditableTrack {
     /// :func:`spin_patch` are read back through.
     #[getter]
     fn patch_frame<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyDict>>> {
-        let Some(frame) = self.inner.track().and_then(|p| p.patch_frame.as_ref()) else {
+        let Some(patch_frame) = self.inner.track().and_then(|p| p.patch_frame.as_ref()) else {
             return Ok(None);
         };
         let vector = |v: nalgebra::Vector3<f64>| PyArray1::from_vec(py, vec![v.x, v.y, v.z]);
         let d = PyDict::new(py);
-        d.set_item("center", vector(frame.center.coords))?;
-        d.set_item("u_halfvec", vector(frame.u_axis * frame.half_extent[0]))?;
-        d.set_item("v_halfvec", vector(frame.v_axis * frame.half_extent[1]))?;
-        d.set_item("w", frame.w)?;
+        d.set_item("center", vector(patch_frame.center.coords))?;
+        d.set_item(
+            "u_halfvec",
+            vector(patch_frame.u_axis * patch_frame.half_extent[0]),
+        )?;
+        d.set_item(
+            "v_halfvec",
+            vector(patch_frame.v_axis * patch_frame.half_extent[1]),
+        )?;
+        d.set_item("w", patch_frame.w)?;
         Ok(Some(d))
     }
 

@@ -47,7 +47,7 @@ pub enum GeometrySearchError {
         is: StageKind,
     },
     /// The track stage carries no patch to project.
-    NoFrame,
+    NoPatchFrame,
     /// The searched observation has no pixel at which to anchor its reference
     /// appearance.
     NoPlace {
@@ -80,7 +80,7 @@ impl std::fmt::Display for GeometrySearchError {
                 f,
                 "geometry search needs the track stage, and this track is a {is}"
             ),
-            Self::NoFrame => write!(f, "this track has no patch yet; fit it first"),
+            Self::NoPatchFrame => write!(f, "this track has no patch yet; fit it first"),
             Self::NoPlace { observation } => write!(
                 f,
                 "nothing says where observation {observation} sits in its photograph, so there is no reference appearance"
@@ -211,7 +211,7 @@ pub fn search_geometry(
     let patch = payload
         .patch_frame
         .as_ref()
-        .ok_or(GeometrySearchError::NoFrame)?;
+        .ok_or(GeometrySearchError::NoPatchFrame)?;
     selected
         .site()
         .ok_or(GeometrySearchError::NoPlace { observation })?;

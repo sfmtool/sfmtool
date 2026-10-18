@@ -81,7 +81,7 @@ fn a_turn_under_the_tolerance_is_taken_without_a_render() {
 fn a_turn_that_does_not_shrink_ends_on_the_better_frame() {
     // The second turn moves as far as the first: the loop is alternating. Its
     // score falls by less than the acceptance tolerance, so it is not
-    // rejected, and the better of the two frames is kept.
+    // rejected, and the better of the two patch frames is kept.
     let lower = 0.8 - 0.5 * ACCEPT_ZNCC_TOLERANCE;
     let end = run(&[0.7, 0.8, lower], &[1.0, 1.0], 5);
     assert_eq!(end.stop, LoopStop::Oscillation);

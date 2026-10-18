@@ -884,7 +884,7 @@ class TestEvaluating:
     def test_an_evaluation_moves_nothing(self, edited, images, long_track_point):
         """A reading writes measurements and no geometry.
 
-        The position, the frame's colour and confidence, and every keypoint come
+        The position, the patch frame, its colour and confidence, and every keypoint come
         back exactly as they went in: what a reading changes is what each row
         says about itself.
         """
@@ -1030,7 +1030,7 @@ class TestEvaluating:
             keypoint = before["track"]["keypoint"]
             seed = after["cluster"]["seed_position"]
             np.testing.assert_allclose(seed, keypoint, atol=1e-5)
-            # The shape is the frame projected into that image, so it spans an
+            # The shape is the patch frame projected into that image, so it spans an
             # area, and it is per keypoint-frame unit: read over the cluster's
             # radius it is the patch's own footprint in that photograph, which
             # fits inside it, rather than the radius times that, which would
@@ -1532,10 +1532,10 @@ class TestPlacingSizingAndTurningByHand:
         sized, report = resize_patch(track, edited, 0.4)
 
         assert report["changed"] and report["half"] == 0.4
-        frame = sized.patch_frame
-        assert np.linalg.norm(frame["u_halfvec"]) == pytest.approx(0.4, rel=1e-12)
-        assert np.linalg.norm(frame["v_halfvec"]) == pytest.approx(0.4, rel=1e-12)
-        np.testing.assert_allclose(frame["center"], track.patch_frame["center"])
+        patch_frame = sized.patch_frame
+        assert np.linalg.norm(patch_frame["u_halfvec"]) == pytest.approx(0.4, rel=1e-12)
+        assert np.linalg.norm(patch_frame["v_halfvec"]) == pytest.approx(0.4, rel=1e-12)
+        np.testing.assert_allclose(patch_frame["center"], track.patch_frame["center"])
         # Every number read over the old square goes; where each sighting sits
         # does not.
         for before, after in zip(track.observations, sized.observations):
@@ -1561,8 +1561,8 @@ class TestPlacingSizingAndTurningByHand:
             )
         np.testing.assert_allclose(after["center"], before["center"])
 
-        def normal(frame):
-            cross = np.cross(frame["u_halfvec"], frame["v_halfvec"])
+        def normal(patch_frame):
+            cross = np.cross(patch_frame["u_halfvec"], patch_frame["v_halfvec"])
             return cross / np.linalg.norm(cross)
 
         np.testing.assert_allclose(normal(after), normal(before), atol=1e-12)
@@ -1586,9 +1586,9 @@ class TestPlacingSizingAndTurningByHand:
         assert report["observation"] == 0
         assert report["image"] == track.observation(0)["image"]
         assert report["half"] > report["was"], "the edge was pulled outward"
-        frame = resized.patch_frame
-        assert np.linalg.norm(frame["u_halfvec"]) == pytest.approx(
-            np.linalg.norm(frame["v_halfvec"]), rel=1e-12
+        patch_frame = resized.patch_frame
+        assert np.linalg.norm(patch_frame["u_halfvec"]) == pytest.approx(
+            np.linalg.norm(patch_frame["v_halfvec"]), rel=1e-12
         )
         # The patch grew toward the edge that was dragged, so its centre moved
         # with it and every dot follows.
@@ -1694,8 +1694,8 @@ class TestTheNormalHandSteps:
     """
 
     @staticmethod
-    def _normal(frame):
-        cross = np.cross(frame["u_halfvec"], frame["v_halfvec"])
+    def _normal(patch_frame):
+        cross = np.cross(patch_frame["u_halfvec"], patch_frame["v_halfvec"])
         return cross / np.linalg.norm(cross)
 
     def test_an_offset_along_the_normal_moves_the_centre_that_far(

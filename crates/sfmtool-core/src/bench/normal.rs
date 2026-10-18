@@ -36,9 +36,9 @@ mod grown_plane;
 
 pub use grid_plane::{
     grid_plane_normal, GridPlaneAcceptance, GridPlaneCell, GridPlaneCells, GridPlaneDetail,
-    GridPlaneFitModel, GridPlaneFrame, GridPlaneIteration, GridPlaneLayout, GridPlaneNormalOptions,
-    GridPlaneOutcome, GridPlanePlane, GridPlaneRay, GridPlaneRender, GridPlaneTile, GridPlaneView,
-    GridPlaneViewCell, GridPlaneViewFit, BENCH_MIN_CELL_ZNCC,
+    GridPlaneFitModel, GridPlaneIteration, GridPlaneLayout, GridPlaneNormalOptions,
+    GridPlaneOutcome, GridPlanePatchFrame, GridPlanePlane, GridPlaneRay, GridPlaneRender,
+    GridPlaneTile, GridPlaneView, GridPlaneViewCell, GridPlaneViewFit, BENCH_MIN_CELL_ZNCC,
 };
 pub use grown_plane::{
     grown_plane_normal, GrownPlaneAttempt, GrownPlaneNormalOptions, GrownPlaneOutcome,
@@ -156,7 +156,7 @@ pub enum NormalError {
     /// turn.
     ClusterStage,
     /// The track carries no patch.
-    NoFrame,
+    NoPatchFrame,
     /// The track is at infinity, where the patch's normal is its own bearing.
     AtInfinity,
     /// Fewer than two observations are `in`, so there is no consensus to read
@@ -208,7 +208,7 @@ impl std::fmt::Display for NormalError {
                 "the track is at the cluster stage, which has no patch to turn; upgrade it \
                  to the track stage first"
             ),
-            NormalError::NoFrame => write!(f, "the track carries no patch to turn"),
+            NormalError::NoPatchFrame => write!(f, "the track carries no patch to turn"),
             NormalError::AtInfinity => write!(
                 f,
                 "the track is at infinity, where the patch faces along its own bearing"
@@ -406,10 +406,10 @@ pub fn normal_preconditions(track: &EditableTrack) -> Result<(), NormalError> {
     let Stage::Track(payload) = &track.stage else {
         return Err(NormalError::ClusterStage);
     };
-    let Some(frame) = &payload.patch_frame else {
-        return Err(NormalError::NoFrame);
+    let Some(patch_frame) = &payload.patch_frame else {
+        return Err(NormalError::NoPatchFrame);
     };
-    if payload.at_infinity || frame.w == 0.0 {
+    if payload.at_infinity || patch_frame.w == 0.0 {
         return Err(NormalError::AtInfinity);
     }
     let ins = track.in_observations().len();
@@ -459,7 +459,7 @@ pub fn fit_normal(
 ) -> Result<(EditableTrack, NormalReport), NormalError> {
     check_views(edited, images)?;
     normal_preconditions(track)?;
-    let frame = frame_of(track);
+    let patch_frame = patch_frame_of(track);
 
     let mut views: Vec<ProjectedImage<'_>> = Vec::new();
     let mut keypoints: Vec<Option<[f64; 2]>> = Vec::new();
@@ -479,7 +479,7 @@ pub fn fit_normal(
     let result = {
         let mut phase = progress.phase("normal");
         let result = refine_patch_normal(
-            &frame,
+            &patch_frame,
             &views,
             options.resolution,
             &options.refine,
@@ -557,9 +557,10 @@ pub fn finite_difference_normal(
     check_views(edited, images)?;
     normal_preconditions(track)?;
     options.check()?;
-    let frame = frame_of(track);
-    let was = frame.normal();
-    let (piece_half, offsets) = piece_layout(frame.half_extent[0], options.pieces, options.overlap);
+    let patch_frame = patch_frame_of(track);
+    let was = patch_frame.normal();
+    let (piece_half, offsets) =
+        piece_layout(patch_frame.half_extent[0], options.pieces, options.overlap);
     let pieces = Pieces {
         track,
         edited,
@@ -572,7 +573,7 @@ pub fn finite_difference_normal(
     };
     let (normal, estimate) = match options.layout {
         PieceLayout::Cross => cross_normal(&pieces)?,
-        PieceLayout::Grid => grid_normal(&pieces, frame.half_extent[0])?,
+        PieceLayout::Grid => grid_normal(&pieces, patch_frame.half_extent[0])?,
     };
     // A line or a plane has no sign: keep the face the patch showed.
     let normal = if normal.dot(&was) < 0.0 {
@@ -726,7 +727,7 @@ fn grid_normal(
 
 /// The square patch the track carries, which [`normal_preconditions`] has
 /// checked is there.
-fn frame_of(track: &EditableTrack) -> OrientedPatch {
+fn patch_frame_of(track: &EditableTrack) -> OrientedPatch {
     track
         .track()
         .and_then(|payload| payload.patch_frame.as_ref())

@@ -5,8 +5,8 @@
 //! the scores [`grown_plane_normal`](super::grown_plane_normal) reads from it.
 //!
 //! Every sample of the working grid is a ray from the reference camera through
-//! a point of the starting frame re-anchored on the reference keypoint. A plane
-//! through the anchor, the starting normal tilted by `(a, b)` along the frame's
+//! a point of the starting patch frame re-anchored on the reference keypoint. A plane
+//! through the anchor, the starting normal tilted by `(a, b)` along the patch frame's
 //! `u` and `v` axes, cuts each ray at one world point, which is projected into
 //! a view through its own lens model and sampled from one level of the view's
 //! pyramid, after the view's image shift is added. The reference itself is
@@ -38,20 +38,20 @@ pub(super) const FLAT_SPREAD: f64 = 0.5;
 const TINY_NORM: f64 = 1e-9;
 
 /// The reference's working grid: one ray per sample, the anchor every plane
-/// passes through, and the starting frame the tilt is stated against.
+/// passes through, and the starting patch frame the tilt is stated against.
 pub(super) struct Grid {
     /// Samples per side, `W`.
     pub(super) side: usize,
-    /// The starting frame re-anchored on the reference keypoint: the plane at
+    /// The starting patch frame re-anchored on the reference keypoint: the plane at
     /// no tilt, whose square the grid's samples cover.
-    pub(super) patch_frame: OrientedPatch,
+    pub(super) anchored_patch_frame: OrientedPatch,
     /// The reference camera's centre.
     origin: Vector3<f64>,
     /// Each sample's ray direction from `origin`, row-major, unnormalised.
     rays: Vec<Vector3<f64>>,
-    /// Where the reference keypoint's ray meets the starting frame.
+    /// Where the reference keypoint's ray meets the starting patch frame.
     pub(super) anchor: Vector3<f64>,
-    /// The starting frame's outward normal and in-plane axes.
+    /// The starting patch frame's outward normal and in-plane axes.
     normal: Vector3<f64>,
     u: Vector3<f64>,
     v: Vector3<f64>,
@@ -65,20 +65,20 @@ impl Grid {
     /// reference's `keypoint` (on `frame` itself where there is none or its
     /// ray misses the plane), seen from the reference view `reference`.
     pub(super) fn new(
-        frame: &OrientedPatch,
+        patch_frame: &OrientedPatch,
         reference: &ProjectedImage<'_>,
         keypoint: Option<[f64; 2]>,
         side: usize,
     ) -> Grid {
-        let patch_frame = anchored(frame, reference, keypoint);
+        let anchored_patch_frame = anchored(patch_frame, reference, keypoint);
         let origin = reference.cam_from_world.inverse_translation_origin().coords;
-        let wpp = 2.0 * patch_frame.half_extent[0] / side as f64;
+        let wpp = 2.0 * anchored_patch_frame.half_extent[0] / side as f64;
         let half = side as f64 / 2.0;
         let mut rays = Vec::with_capacity(side * side);
         for row in 0..side {
             for col in 0..side {
                 let (gx, gy) = (col as f64 + 0.5 - half, row as f64 + 0.5 - half);
-                rays.push(shifted_center(&patch_frame, gx, gy, wpp, wpp).coords - origin);
+                rays.push(shifted_center(&anchored_patch_frame, gx, gy, wpp, wpp).coords - origin);
             }
         }
         let bounds = CellLayout::new(side as u32, 0.0).bounds;
@@ -96,11 +96,11 @@ impl Grid {
             side,
             origin,
             rays,
-            anchor: patch_frame.center.coords,
-            patch_frame,
-            normal: frame.normal(),
-            u: frame.u_axis,
-            v: frame.v_axis,
+            anchor: anchored_patch_frame.center.coords,
+            anchored_patch_frame,
+            normal: patch_frame.normal(),
+            u: patch_frame.u_axis,
+            v: patch_frame.v_axis,
             cells,
         }
     }
@@ -163,12 +163,12 @@ impl Grid {
     }
 
     /// `view`'s photograph px per world unit at the anchor: the square root
-    /// of the area scale of the projection of the starting frame there, read
-    /// by a central difference of a hundredth of the frame's half-extent
+    /// of the area scale of the projection of the starting patch frame there, read
+    /// by a central difference of a hundredth of the patch frame's half-extent
     /// along each axis. `NaN` where the anchor's neighbourhood does not
     /// project.
     pub(super) fn scale_px(&self, view: &ViewImage<'_>) -> f64 {
-        let h = 0.01 * self.patch_frame.half_extent[0].max(1e-12);
+        let h = 0.01 * self.anchored_patch_frame.half_extent[0].max(1e-12);
         let at = |d: Vector3<f64>| {
             view.camera
                 .project_homogeneous(view.cam_from_world, self.anchor + d, 1.0)
@@ -186,9 +186,9 @@ impl Grid {
         (du[0] * dv[1] - du[1] * dv[0]).abs().sqrt()
     }
 
-    /// The working grid's samples per world unit on the starting frame.
+    /// The working grid's samples per world unit on the starting patch frame.
     pub(super) fn density(&self) -> f64 {
-        self.side as f64 / (2.0 * self.patch_frame.half_extent[0])
+        self.side as f64 / (2.0 * self.anchored_patch_frame.half_extent[0])
     }
 
     /// Where the anchor lands in `view`'s photograph, full-resolution px.
@@ -201,13 +201,13 @@ impl Grid {
 /// `frame` re-anchored on `keypoint` in `view`, or `frame` itself where there
 /// is no keypoint or its ray misses the plane.
 pub(super) fn anchored(
-    frame: &OrientedPatch,
+    patch_frame: &OrientedPatch,
     view: &ProjectedImage<'_>,
     keypoint: Option<[f64; 2]>,
 ) -> OrientedPatch {
     keypoint
-        .and_then(|kp| frame.anchored_at_keypoint(view.camera, view.cam_from_world, kp))
-        .unwrap_or_else(|| frame.clone())
+        .and_then(|kp| patch_frame.anchored_at_keypoint(view.camera, view.cam_from_world, kp))
+        .unwrap_or_else(|| patch_frame.clone())
 }
 
 /// One view's photograph as the step reads it: one pyramid level, chosen once.

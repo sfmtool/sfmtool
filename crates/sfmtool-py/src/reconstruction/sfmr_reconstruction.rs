@@ -658,7 +658,7 @@ impl PySfmrReconstruction {
     /// bitmaps, if stored, are not loaded into the cloud).
     #[getter]
     fn patches(&self) -> Option<crate::PyPatchCloud> {
-        let cloud = sfmtool_core::patch::PatchCloud::from_stored_frames(&self.inner)?;
+        let cloud = sfmtool_core::patch::PatchCloud::from_stored_patch_frames(&self.inner)?;
         Some(crate::PyPatchCloud { inner: cloud })
     }
 

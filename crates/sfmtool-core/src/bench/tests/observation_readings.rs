@@ -70,7 +70,7 @@ fn the_readings_are_float32_and_match_a_reading_of_the_committed_reconstruction(
     let (next, point, _) = evaluated_and_committed(&scene);
     let (recon, map) = next.materialize();
     let p = map.forward(point).expect("kept") as usize;
-    let cloud = PatchCloud::from_stored_frames(&recon).expect("a patch frame");
+    let cloud = PatchCloud::from_stored_patch_frames(&recon).expect("a patch frame");
     let views: Vec<_> = scene.views().into_iter().map(Some).collect();
     let rows = read_cloud_observations(
         &cloud,
@@ -90,8 +90,8 @@ fn the_readings_are_float32_and_match_a_reading_of_the_committed_reconstruction(
         .rows;
     let run = recon.point_set.observation_offsets[p]..recon.point_set.observation_offsets[p + 1];
     for j in run {
-        // The committed frame is stored in `f32`, so the render differs from
-        // the evaluation's by the rounding of the frame.
+        // The committed patch frame is stored in `f32`, so the render differs from
+        // the evaluation's by the rounding of the patch frame.
         let (a, b) = (rows.rows[j], stored[j]);
         assert_eq!(a.ellipse_axes_is_at_least, b.ellipse_axes_is_at_least);
         for (x, y) in [
@@ -188,7 +188,7 @@ fn a_reading_carries_the_rows_of_a_point_it_does_not_read() {
         recon.point_set.observation_readings,
         written.point_set.observation_readings
     );
-    let mut cloud = PatchCloud::from_stored_frames(&recon).expect("a patch frame");
+    let mut cloud = PatchCloud::from_stored_patch_frames(&recon).expect("a patch frame");
     let at = cloud
         .point_indexes
         .iter()

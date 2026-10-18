@@ -217,7 +217,7 @@ fn a_batch_cancelled_before_it_starts_does_no_work() {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../test-data/images/seoul_bull_sculpture/seoul_bull_sculpture_ground_truth.sfmr");
     let recon = SfmrReconstruction::load(&path, &Progress::none()).expect("the ground truth loads");
-    let stored = PatchCloud::from_stored_frames(&recon).expect("the ground truth has frames");
+    let stored = PatchCloud::from_stored_patch_frames(&recon).expect("the ground truth has frames");
     let none: Vec<Option<ProjectedImage<'_>>> = vec![None; recon.image_count()];
     check("the stored bitmaps", &|progress, done| {
         render_patch_cloud_bitmaps(

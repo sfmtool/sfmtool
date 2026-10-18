@@ -104,14 +104,14 @@ fn three_points() -> Vec<Point3<f64>> {
 /// whose sighting sits where the far plane's own point projects: a bearing
 /// whose rays now have a baseline.
 fn far_bearing_with_baseline(scene: &Scene) -> SfmrReconstruction {
-    let frame = OrientedPatch::from_infinity_direction(
+    let patch_frame = OrientedPatch::from_infinity_direction(
         far_direction(),
         Vector3::new(0.0, 1.0, 0.0),
         [far_angular_half(), far_angular_half()],
     );
     let observing: Vec<u32> = (0..=FAR_OFFSET_IMAGE).collect();
     let mut recon = with_columns(
-        fixture_of(scene, far_direction(), 0.0, &observing, &frame),
+        fixture_of(scene, far_direction(), 0.0, &observing, &patch_frame),
         BITMAP_R,
     );
     let pixel = scene.project(FAR_OFFSET_IMAGE as usize, far_world());
@@ -765,7 +765,7 @@ fn patch_frame_of_fixture(scene: &Scene) -> OrientedPatch {
     EditedReconstruction::new(Arc::new(fixture_with_columns(scene, WORLD, BITMAP_R)))
         .point(0)
         .and_then(|p| p.patch_frame())
-        .expect("the fixture's frame")
+        .expect("the fixture's patch frame")
 }
 
 // ---- The run -----------------------------------------------------------------
@@ -873,11 +873,11 @@ fn the_run_refuses_a_value_it_cannot_refit() {
     );
 
     // No patch frames.
-    let mut frameless = recon.clone();
-    frameless.point_set.patch_u_halfvec_xyz = None;
-    frameless.point_set.patch_v_halfvec_xyz = None;
+    let mut without_patch_frame = recon.clone();
+    without_patch_frame.point_set.patch_u_halfvec_xyz = None;
+    without_patch_frame.point_set.patch_v_halfvec_xyz = None;
     assert_eq!(
-        run(&frameless, &views, &refit_options()),
+        run(&without_patch_frame, &views, &refit_options()),
         RefitPointsError::NoPatchFrames
     );
 

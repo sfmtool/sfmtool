@@ -93,8 +93,8 @@ from normal_diag import angle, face, unit  # noqa: E402
 
 
 def patch_normal(track):
-    frame = track.patch_frame
-    return unit(np.cross(frame["u_halfvec"], frame["v_halfvec"]))
+    patch_frame = track.patch_frame
+    return unit(np.cross(patch_frame["u_halfvec"], patch_frame["v_halfvec"]))
 
 
 def frame(track):

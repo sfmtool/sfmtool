@@ -177,7 +177,7 @@ fn fit_error_name(e: &FitError) -> &'static str {
         FitError::ViewsMissing { .. } => "views_missing",
         FitError::NoView { .. } => "no_view",
         FitError::TooFewObservations(_) => "too_few_observations",
-        FitError::NoFrame => "no_frame",
+        FitError::NoPatchFrame => "no_patch_frame",
         FitError::Triangulation => "triangulation",
         FitError::TooLarge { .. } => "too_large",
         FitError::OutOfMemory { .. } => "out_of_memory",

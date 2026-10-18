@@ -531,7 +531,7 @@ zero rows elsewhere; `from_halfvec_arrays` takes the points' positions as
 `centers`, keeps the present rows (non-zero `u`), and recovers their point
 indices. The half-vector arrays don't encode the homogeneous weight (it lives in
 the points' `w`), so `from_halfvec_arrays` builds every patch finite (`w = 1`).
-`PatchCloud::from_stored_frames(recon)` is the cloud a reconstruction stores:
+`PatchCloud::from_stored_patch_frames(recon)` is the cloud a reconstruction stores:
 `from_halfvec_arrays` over its frame columns and point positions, with the rows
 of points at infinity marked `w = 0` afterward, and `None` when the
 reconstruction carries no frame. The `recon.patches` getter returns it, and the

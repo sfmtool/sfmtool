@@ -6,7 +6,7 @@
 //! `specs/core/bench/editable-track.md` is the design. [`evaluate`] is a pure
 //! function from a track, the reconstruction it belongs to and one decoded view
 //! per image to the same track with its measurement slots filled. It moves
-//! nothing: the position, the frame, the bitmap, the keypoints and every
+//! nothing: the position, the patch frame, the bitmap, the keypoints and every
 //! verdict come back exactly as they went in, and what changes is the report
 //! each observation carries about itself. The step that *changes* the track is
 //! [`fit`](super::fit::fit), which ends by calling this so that a fit and a
@@ -232,7 +232,7 @@ pub enum EvaluateError {
     },
     /// The track carries no patch, so there is nothing any view can be read
     /// against.
-    NoFrame,
+    NoPatchFrame,
     /// One round's per-view tiles would take more memory than
     /// [`EvaluateOptions::max_cache_bytes`] allows.
     ///
@@ -266,7 +266,7 @@ impl std::fmt::Display for EvaluateError {
                 f,
                 "image {image} has no decoded view with a pose in this evaluation"
             ),
-            EvaluateError::NoFrame => write!(
+            EvaluateError::NoPatchFrame => write!(
                 f,
                 "the track carries no patch to read against, as a point put on \
                  the bench from a sift_files reconstruction has none; convert the \
@@ -449,7 +449,7 @@ impl std::fmt::Display for EvaluateReport {
 /// ([`walked_blur_matched_zncc`](super::track::TrackMeasurement::walked_blur_matched_zncc)); a track
 /// with no bitmap gets no such score, and its rows say
 /// [`Unmeasured::NoBitmap`]. This call does not render the bitmap;
-/// [`evaluate_rendering_bitmap`] does. **The keypoint itself is not written**, nor the position, the frame or
+/// [`evaluate_rendering_bitmap`] does. **The keypoint itself is not written**, nor the position, the patch frame or
 /// the bitmap: what a reading gives back is the same track with its own account
 /// of itself.
 ///
@@ -1019,7 +1019,7 @@ fn judged_count(track: &EditableTrack) -> usize {
 pub fn evaluate_preconditions(track: &EditableTrack) -> Result<(), EvaluateError> {
     match &track.stage {
         Stage::Cluster(_) => Ok(()),
-        Stage::Track(payload) if payload.patch_frame.is_none() => Err(EvaluateError::NoFrame),
+        Stage::Track(payload) if payload.patch_frame.is_none() => Err(EvaluateError::NoPatchFrame),
         Stage::Track(_) => Ok(()),
     }
 }
@@ -1458,12 +1458,12 @@ impl Rounds {
 pub(super) fn plan_rounds(
     track: &EditableTrack,
     images: &[ProjectedImage<'_>],
-    frame: &OrientedPatch,
+    patch_frame: &OrientedPatch,
     localize: &KeypointLocalizeParams,
     max_seed_offset_px: f64,
 ) -> Rounds {
     let min_grazing_cos = localize.min_grazing_cos;
-    let normal = frame.normal();
+    let normal = patch_frame.normal();
     let mut excluded: Vec<(usize, Unmeasured)> = Vec::new();
     let readable = |i: usize| -> Result<(), Unmeasured> {
         let observation = &track.observations[i];
@@ -1481,10 +1481,10 @@ pub(super) fn plan_rounds(
         // The viewing direction is camera-to-point for a finite point, and the
         // direction itself for one at infinity, exactly as the localizer reads
         // it.
-        let d = if frame.w == 0.0 {
-            frame.center.coords
+        let d = if patch_frame.w == 0.0 {
+            patch_frame.center.coords
         } else {
-            frame.center - view.cam_from_world.inverse_translation_origin()
+            patch_frame.center - view.cam_from_world.inverse_translation_origin()
         };
         let norm = d.norm();
         let cosine = if norm > 1e-12 {
@@ -1495,14 +1495,14 @@ pub(super) fn plan_rounds(
         if norm <= 1e-12 || cosine < min_grazing_cos {
             return Err(Unmeasured::Grazing { cosine });
         }
-        if project_unclipped(view, &frame.center, frame.w).is_none() {
+        if project_unclipped(view, &patch_frame.center, patch_frame.w).is_none() {
             return Err(Unmeasured::NoProjection);
         }
         // How far the window would have to be widened to reach this seed, and
         // whether that is a widening worth making. A seed the kernel cannot
         // measure an offset for at all -- the same refusals the seeding itself
         // makes -- is left to the round, which seeds it at the projection.
-        if let Some(off) = keypoint_grid_offset(frame, view, seed, localize) {
+        if let Some(off) = keypoint_grid_offset(patch_frame, view, seed, localize) {
             let offset_px = off[0].hypot(off[1]);
             if offset_px.is_finite() && offset_px > max_seed_offset_px {
                 return Err(Unmeasured::SeedTooFar {
@@ -1568,13 +1568,16 @@ fn evaluate_track(
     options: &EvaluateOptions,
     progress: &Progress<'_>,
 ) -> Result<(EditableTrack, EvaluateReport, KeptTiles), EvaluateError> {
-    let frame = payload.patch_frame.clone().ok_or(EvaluateError::NoFrame)?;
+    let patch_frame = payload
+        .patch_frame
+        .clone()
+        .ok_or(EvaluateError::NoPatchFrame)?;
     check_observation_views(track, images)?;
 
     let plan = plan_rounds(
         track,
         images,
-        &frame,
+        &patch_frame,
         &options.localize,
         options.max_seed_offset_px,
     );
@@ -1586,7 +1589,7 @@ fn evaluate_track(
         read_round(
             track,
             images,
-            &frame,
+            &patch_frame,
             &plan.first,
             options,
             progress,
@@ -1600,7 +1603,7 @@ fn evaluate_track(
             read_round(
                 track,
                 images,
-                &frame,
+                &patch_frame,
                 &round,
                 options,
                 progress,
@@ -1676,16 +1679,16 @@ fn evaluate_track(
                 // against; the reprojection error below is against the
                 // triangulated position, which is the residual a commit
                 // stores. For a fitted track the two are one point.
-                if let Some((u, v)) = project_unclipped(view, &frame.center, frame.w) {
+                if let Some((u, v)) = project_unclipped(view, &patch_frame.center, patch_frame.w) {
                     measurement.projection_offset_px = finite((u - pixel[0]).hypot(v - pixel[1]));
                 }
                 if let Some(position) = payload.position {
-                    let (error, angle) = observation_metrics(view, &position, frame.w, pixel);
+                    let (error, angle) = observation_metrics(view, &position, patch_frame.w, pixel);
                     measurement.reprojection_error = finite(error);
                     measurement.ray_angle_deg = finite(angle);
                 }
                 let tile = render_view_tile(
-                    &frame,
+                    &patch_frame,
                     view,
                     Some(pixel),
                     resolution,
@@ -1727,13 +1730,20 @@ fn evaluate_track(
         progress_note!(phase, "{} observations", track.observations.len());
     }
     progress.check_cancel()?;
-    let walked = walked_tiles(track, images, &frame, options, progress)?;
+    let walked = walked_tiles(track, images, &patch_frame, options, progress)?;
     let in_tiles: Vec<(usize, &ViewTile)> = kept_tiles
         .iter()
         .filter(|(i, _)| next.observations[*i].verdict == Verdict::In)
         .map(|(i, tile)| (*i, tile))
         .collect();
-    read_reference_view(&mut next, images, &frame, &in_tiles, options, progress);
+    read_reference_view(
+        &mut next,
+        images,
+        &patch_frame,
+        &in_tiles,
+        options,
+        progress,
+    );
     score_against_bitmap(&mut next, &kept_tiles, &walked, progress);
     let kept = KeptTiles {
         tiles: kept_tiles,
@@ -1749,8 +1759,8 @@ fn evaluate_track(
             unmeasured,
             reference: None,
             position: payload.position,
-            // The payload's flag, not the frame's `w`: the two agree wherever a
-            // frame exists, and the flag is the one a frameless track also
+            // The payload's flag, not the patch frame's `w`: the two agree wherever a
+            // patch frame exists, and the flag is the one a track without a patch frame also
             // carries.
             at_infinity: payload.at_infinity,
             condition_number: payload.condition_number,
@@ -1774,7 +1784,7 @@ fn evaluate_track(
 fn read_round(
     track: &EditableTrack,
     images: &[ProjectedImage<'_>],
-    frame: &OrientedPatch,
+    patch_frame: &OrientedPatch,
     round: &[usize],
     options: &EvaluateOptions,
     progress: &Progress<'_>,
@@ -1800,7 +1810,7 @@ fn read_round(
     let at_image: HashMap<u32, usize> = view_set.iter().copied().zip(0..round.len()).collect();
 
     let params = KeypointLocalizeParams {
-        search: search_radius(track, images, frame, round, options),
+        search: search_radius(track, images, patch_frame, round, options),
         ..options.localize.clone()
     };
     // What this round would cost, before a byte of it is asked for: the tile
@@ -1815,7 +1825,7 @@ fn read_round(
         });
     }
     let localized = try_localize_patch_keypoints(
-        frame,
+        patch_frame,
         images,
         &view_set,
         Some(&seeds),
@@ -1840,7 +1850,7 @@ fn read_round(
         // unprojection the localizer seeds from.
         let view = &images[image as usize];
         let shift = match seeds[at] {
-            Some(seed) => grid_distance(frame, view, seed, peak, &params),
+            Some(seed) => grid_distance(patch_frame, view, seed, peak, &params),
             None => f64::NAN,
         };
         let seed_shift_px = if localized.zncc[slot].is_finite() {
@@ -1914,15 +1924,15 @@ pub(super) fn round_cache_bytes(
 /// The distance from `from` to `to`, two pixels of `view`, on `frame`'s plane
 /// in patch-grid px, or `NaN` where either does not reach the plane.
 pub(super) fn grid_distance(
-    frame: &OrientedPatch,
+    patch_frame: &OrientedPatch,
     view: &ProjectedImage<'_>,
     from: [f64; 2],
     to: [f64; 2],
     params: &KeypointLocalizeParams,
 ) -> f64 {
     match (
-        keypoint_grid_offset(frame, view, from, params),
-        keypoint_grid_offset(frame, view, to, params),
+        keypoint_grid_offset(patch_frame, view, from, params),
+        keypoint_grid_offset(patch_frame, view, to, params),
     ) {
         (Some(a), Some(b)) => (b[0] - a[0]).hypot(b[1] - a[1]),
         _ => f64::NAN,
@@ -1972,7 +1982,7 @@ fn grid_drift(
 fn search_radius(
     track: &EditableTrack,
     images: &[ProjectedImage<'_>],
-    frame: &OrientedPatch,
+    patch_frame: &OrientedPatch,
     round: &[usize],
     options: &EvaluateOptions,
 ) -> f64 {
@@ -1983,7 +1993,7 @@ fn search_radius(
             continue;
         };
         let view = &images[observation.image as usize];
-        if let Some(off) = keypoint_grid_offset(frame, view, seed, &options.localize) {
+        if let Some(off) = keypoint_grid_offset(patch_frame, view, seed, &options.localize) {
             let distance = off[0].hypot(off[1]);
             if distance.is_finite() {
                 widest = widest.max(distance);
@@ -2084,7 +2094,7 @@ fn slot_semi_axes(measurement: Option<&super::track::TrackMeasurement>) -> Optio
 fn read_reference_view(
     next: &mut EditableTrack,
     images: &[ProjectedImage<'_>],
-    frame: &OrientedPatch,
+    patch_frame: &OrientedPatch,
     tiles: &[(usize, &ViewTile)],
     options: &EvaluateOptions,
     progress: &Progress<'_>,
@@ -2107,7 +2117,7 @@ fn read_reference_view(
         .collect();
     let refs: Vec<&ViewTile> = tiles.iter().map(|(_, tile)| *tile).collect();
     let reading = read_track(
-        frame,
+        patch_frame,
         images,
         &members,
         &keypoints,
@@ -2322,7 +2332,8 @@ pub fn score_bitmap(
     let Stage::Track(payload) = &track.stage else {
         return Ok(next);
     };
-    let (Some(frame), Some(_)) = (payload.patch_frame.as_ref(), payload.bitmap.as_ref()) else {
+    let (Some(patch_frame), Some(_)) = (payload.patch_frame.as_ref(), payload.bitmap.as_ref())
+    else {
         return Ok(next);
     };
     check_observation_views(track, images)?;
@@ -2342,7 +2353,7 @@ pub fn score_bitmap(
             };
             let view = &images[observation.image as usize];
             let tile = render_view_tile(
-                frame,
+                patch_frame,
                 view,
                 Some(pixel),
                 resolution,
@@ -2352,7 +2363,7 @@ pub fn score_bitmap(
             tiles.push((i, tile));
         }
     }
-    let walked = walked_tiles(track, images, frame, &options, progress)?;
+    let walked = walked_tiles(track, images, patch_frame, &options, progress)?;
     score_against_bitmap(&mut next, &tiles, &walked, progress);
     Ok(next)
 }
@@ -2365,7 +2376,7 @@ pub fn score_bitmap(
 fn walked_tiles(
     track: &EditableTrack,
     images: &[ProjectedImage<'_>],
-    frame: &OrientedPatch,
+    patch_frame: &OrientedPatch,
     options: &EvaluateOptions,
     progress: &Progress<'_>,
 ) -> Result<Vec<(usize, ViewTile)>, EvaluateError> {
@@ -2379,7 +2390,7 @@ fn walked_tiles(
         progress.check_cancel()?;
         let view = &images[observation.image as usize];
         let tile = render_view_tile(
-            frame,
+            patch_frame,
             view,
             Some(to),
             resolution,
