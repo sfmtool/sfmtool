@@ -89,16 +89,14 @@ class TestUndistortCLI:
 
 def _run_undistort(sfmr_path, tmp_path, fit="inside", **kwargs):
     """Run undistort and return (recon, output_dir, sfmr_path, undistorted_recon)."""
-    from sfmtool._workspace import find_workspace_for_path, load_workspace_config
+    from sfmtool._workspace import find_workspace_for_path
 
     recon = SfmrReconstruction.load(sfmr_path)
     output_dir = tmp_path / "undistorted"
 
     source_workspace_dir = find_workspace_for_path(sfmr_path)
-    source_workspace_config = None
     source_sfmr_path = None
     if source_workspace_dir is not None:
-        source_workspace_config = load_workspace_config(source_workspace_dir)
         try:
             source_sfmr_path = (
                 sfmr_path.resolve()
@@ -112,7 +110,6 @@ def _run_undistort(sfmr_path, tmp_path, fit="inside", **kwargs):
         recon=recon,
         output_dir=output_dir,
         fit=fit,
-        source_workspace_config=source_workspace_config,
         source_sfmr_path=source_sfmr_path,
         **kwargs,
     )
@@ -343,6 +340,39 @@ class TestUndistortWorkspace:
         assert config["version"] == 1
         assert "feature_prefix_dir" in config
         assert config["feature_type"] == "sift-sfmtool-undistort"
+
+    def test_reads_the_features_the_reconstruction_was_built_from(
+        self, seoul_bull_workspace, tmp_path
+    ):
+        """A workspace config changed after the solve does not redirect the read.
+
+        The config is rewritten to name another feature tool and a features
+        directory that holds no ``.sift`` files, as after a re-extraction. The
+        command still reads the ``.sift`` files the reconstruction's metadata
+        names, and records that feature tool as the source.
+        """
+        sfmr_path = seoul_bull_workspace
+        config_path = sfmr_path.parent / ".sfm-workspace.json"
+        config = json.loads(config_path.read_text())
+        config["feature_tool"] = "opencv"
+        config["feature_options"] = {"changed": True}
+        config["feature_prefix_dir"] = "features/sift-opencv-does-not-exist"
+        config_path.write_text(json.dumps(config))
+
+        recon, output_dir, _, undistorted_recon = _run_undistort(sfmr_path, tmp_path)
+
+        contents = recon.metadata()["workspace"]["contents"]
+        assert contents["feature_tool"] != "opencv"
+        out_config = json.loads((output_dir / ".sfm-workspace.json").read_text())
+        assert (
+            out_config["feature_options"]["source_feature_tool"]
+            == contents["feature_tool"]
+        )
+        assert (
+            out_config["feature_options"]["source_feature_options"]
+            == contents["feature_options"]
+        )
+        assert undistorted_recon.image_count == recon.image_count
 
     def test_sfmr_output(self, seoul_bull_workspace, tmp_path):
         """.sfmr exists, is loadable, has pinhole cameras and same image count."""

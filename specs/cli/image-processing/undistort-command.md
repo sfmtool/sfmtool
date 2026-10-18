@@ -94,9 +94,8 @@ written as a 3-channel image
 
 `feature_tool` is the sentinel `sfmtool-undistort`; `feature_type` is the
 compound string `sift-sfmtool-undistort`. `source_feature_tool` and
-`source_feature_options` are copied from the source workspace (falling back to
-`"colmap"` with empty options when the source workspace config cannot be
-located).
+`source_feature_options` are the `feature_tool` and `feature_options` recorded
+in the input `.sfmr`'s `workspace.contents`, the features it was built from.
 
 Features in this workspace are produced by undistortion, not extraction. The
 sentinel `feature_tool` value is reserved so that extraction tooling can
@@ -128,6 +127,14 @@ the camera intrinsics; extrinsics are invariant.
 
 For every image the command writes a new `.sift` file under
 `{image_dir}/features/sift-sfmtool-undistort-{hash}/{image_basename}.sift`.
+
+**Source.** Each image's source `.sift` file is found through the
+`feature_prefix_dir` recorded in the input `.sfmr`'s `workspace.contents`
+(`get_sift_path_from_recon` in
+[`sift/file.py`](../../../src/sfmtool/sift/file.py)), not through the source
+workspace's current `.sfm-workspace.json`. The reconstruction's feature indexes
+refer to rows of those files, so the lookup still finds them after the
+workspace has been re-extracted with another tool or other options.
 
 **Positions.** Each keypoint `(x, y)` in the distorted image is mapped to the
 pinhole frame via `pinhole.project(distorted.unproject(x, y))`. Keypoints that

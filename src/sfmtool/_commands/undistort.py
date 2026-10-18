@@ -78,7 +78,7 @@ def undistort(
 
     try:
         from .._sfmtool.reconstruction import SfmrReconstruction
-        from .._workspace import find_workspace_for_path, load_workspace_config
+        from .._workspace import find_workspace_for_path
 
         # Load reconstruction
         recon = SfmrReconstruction.load(reconstruction_path)
@@ -91,12 +91,11 @@ def undistort(
         else:
             output_dir = Path(output_dir)
 
-        # Load source workspace config
+        # The source .sfmr's path relative to its workspace, for the output's
+        # metadata
         source_workspace_dir = find_workspace_for_path(reconstruction_path)
-        source_workspace_config = None
         source_sfmr_path = None
         if source_workspace_dir is not None:
-            source_workspace_config = load_workspace_config(source_workspace_dir)
             try:
                 source_sfmr_path = (
                     reconstruction_path.resolve()
@@ -112,7 +111,6 @@ def undistort(
             output_dir=output_dir,
             fit=fit,
             resampling_filter=resampling_filter,
-            source_workspace_config=source_workspace_config,
             source_sfmr_path=source_sfmr_path,
         )
 

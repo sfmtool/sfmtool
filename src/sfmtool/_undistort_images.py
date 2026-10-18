@@ -223,7 +223,6 @@ def undistort_reconstruction_images(
     fit: str = "inside",
     resampling_filter: str = "aniso",
     progress_callback=None,
-    source_workspace_config: dict | None = None,
     source_sfmr_path: str | None = None,
 ) -> tuple[int, str, str | None]:
     """
@@ -238,7 +237,6 @@ def undistort_reconstruction_images(
         fit: "inside" (no black borders) or "outside" (no cropping)
         resampling_filter: "aniso" (anisotropic, higher quality) or "bilinear"
         progress_callback: Optional callback(current, total, image_name) for progress
-        source_workspace_config: Workspace config from the source workspace
         source_sfmr_path: Relative path of the source .sfmr within its workspace
 
     Returns:
@@ -252,11 +250,10 @@ def undistort_reconstruction_images(
     from .sift.file import (
         SiftReader,
         get_feature_tool_xxh128,
-        get_sift_path_for_image,
+        get_sift_path_from_recon,
         write_sift,
         xxh128_of_file,
     )
-    from ._workspace import find_workspace_for_path, load_workspace_config
 
     recon = materialize_infinity_for_export(recon, "Undistortion")
 
@@ -265,17 +262,11 @@ def undistort_reconstruction_images(
     cameras_meta = recon.cameras
     camera_indexes = recon.camera_indexes
 
-    # Read source workspace feature config
-    if source_workspace_config is None:
-        ws_dir = find_workspace_for_path(workspace_dir)
-        if ws_dir is not None:
-            source_workspace_config = load_workspace_config(ws_dir)
-    if source_workspace_config is None:
-        source_feature_tool = "colmap"
-        source_feature_options = {}
-    else:
-        source_feature_tool = source_workspace_config.get("feature_tool", "colmap")
-        source_feature_options = source_workspace_config.get("feature_options", {})
+    # The source features are the ones the reconstruction was built from, as
+    # its metadata records them, not whatever the workspace config names now.
+    source_contents = recon.metadata()["workspace"]["contents"]
+    source_feature_tool = source_contents["feature_tool"]
+    source_feature_options = source_contents["feature_options"]
 
     image_count = len(image_names)
     print(
@@ -384,11 +375,7 @@ def undistort_reconstruction_images(
         thumbnails.append(thumbnail_rgb)
 
         # Step 4: Read source .sift file and transform features
-        source_sift_path = get_sift_path_for_image(
-            image_path,
-            feature_tool=source_feature_tool,
-            feature_options=source_feature_options if source_feature_options else None,
-        )
+        source_sift_path = get_sift_path_from_recon(recon, image_name)
         with SiftReader(source_sift_path) as reader:
             src_positions = reader.read_positions()  # Nx2 float32
             src_affine_shapes = reader.read_affine_shapes()  # Nx2x2 float32
