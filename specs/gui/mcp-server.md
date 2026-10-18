@@ -2708,8 +2708,9 @@ refused, as is giving both or neither.
 `modifiers` is `click`'s list, held for the scroll. egui and the panels give
 three of them a meaning: `shift` turns a list's vertical scroll horizontal (and
 pans the viewport under a trackpad), `control` zooms where a panel zooms on a
-trackpad scroll and stops a list scrolling (egui reads Ctrl+scroll as a zoom),
-and `alt` is the viewport's target push and pull
+trackpad scroll, and stops a list scrolling except on macOS (egui reads a
+scroll with its command modifier as a zoom, and that modifier is Ctrl except
+on macOS, where it is `command`), and `alt` is the viewport's target push and pull
 ([viewport-navigation.md](viewport-navigation.md) § "Controls").
 
 **What happens**, one step per frame:

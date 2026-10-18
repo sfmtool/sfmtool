@@ -1017,13 +1017,13 @@ image, similar to how the 3D viewer navigates the point cloud but in 2D.
   measured against, recorded at the end of each frame that drew an image and
   cleared by a view reset. See "View persistence" below.
 
-**Navigation controls** (sign conventions match the 3D viewer):
+**Navigation controls** (sign conventions in the list after the table):
 
 | Action | Input | Behavior |
 |--------|-------|----------|
 | Pan | Left/middle button drag | Translate the image (grab-and-drag) |
-| Pan | Trackpad two-finger scroll | Translate the image (push convention) |
-| Pan | DM Pan gesture | Translate the image (push convention) |
+| Pan | Trackpad two-finger scroll | Translate the image (scroll direction, see below) |
+| Pan | DM Pan gesture | Translate the image (scroll direction, see below) |
 | Zoom | Scroll wheel | Zoom toward cursor position |
 | Zoom | Right button drag (vertical) | Zoom toward cursor position |
 | Zoom | Pinch | Zoom toward cursor position |
@@ -1035,9 +1035,11 @@ image, similar to how the 3D viewer navigates the point cloud but in 2D.
 | Create Track Here | Ctrl + Shift + left click | Build a track at the clicked pixel, put it on the bench and commit it (see "the context menu" below) |
 
 - **Sign conventions**: Mouse drag uses "grab the content" convention (content
-  follows cursor). DM gestures and trackpad scroll use "push/scroll viewport"
-  convention (opposite direction), matching the 3D viewer's shift+scroll→pan
-  and shift+DM→pan mappings.
+  follows cursor). A trackpad scroll moves the photograph the way egui's
+  scroll delta says the content moves, on both axes, as an `egui::ScrollArea`
+  and the image strip move theirs, so it follows the system's scroll-direction
+  setting. A DM pan does the same: its `dx` is egui's x negated
+  (`platform::gesture_scroll_events`), so the photograph moves by `-dx, dy`.
 - **Zoom-to-cursor**: Zoom is anchored at the cursor position so the point
   under the cursor stays fixed: `pan = pan * ratio + cursor_rel * (1 - ratio)`.
 - **Zoom limits**: Minimum = 1.0 (fit-to-panel). Maximum = 32×.

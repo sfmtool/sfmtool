@@ -173,7 +173,7 @@ impl ScrollInput {
 /// scroll smoothing is. The panels that zoom on a pinch already zoom on that
 /// scroll through [`ScrollInput`], so reading `zoom_delta` as a pinch zoomed a
 /// Ctrl+wheel notch twice, about a fifth again on top of the notch's own step.
-pub fn pinch_zoom_delta(ctx: &egui::Context) -> f32 {
+pub(crate) fn pinch_zoom_delta(ctx: &egui::Context) -> f32 {
     ctx.input(|i| match i.multi_touch() {
         Some(touch) => touch.zoom_delta,
         None => i

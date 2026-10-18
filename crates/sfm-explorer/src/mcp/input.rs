@@ -47,7 +47,7 @@ pub(crate) const MAX_DRAG_POINTS: usize = 120;
 /// before it replies, for the reason a drag's path is bounded. egui spreads a
 /// wheel notch over about a tenth of a second and ends the scroll 150 ms after
 /// the last event, so this is far more than a scroll takes at any frame rate.
-pub(crate) const MAX_SCROLL_COAST_FRAMES: usize = 120;
+const MAX_SCROLL_COAST_FRAMES: usize = 120;
 
 /// How far a `scroll` moves, in the units of one of the two devices.
 #[derive(Debug, Clone, Copy, PartialEq)]
