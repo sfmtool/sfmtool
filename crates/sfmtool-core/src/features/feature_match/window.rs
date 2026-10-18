@@ -128,8 +128,8 @@ impl WindowMatcher {
 /// The pairs are sorted by their image-1 index, so the output does not depend
 /// on the order the maps iterate in, which `HashMap`'s random hasher changes
 /// from run to run. The sort has no ties: `forward` has one entry per sorted
-/// image-1 index and `original1` is a permutation, so each image-1 index
-/// appears at most once.
+/// image-1 index and `original1` maps distinct sorted indices to distinct
+/// original ones, so each image-1 index appears at most once.
 pub(super) fn mutual_matches(
     forward: &HashMap<usize, (usize, f64)>,
     backward: &HashMap<usize, (usize, f64)>,

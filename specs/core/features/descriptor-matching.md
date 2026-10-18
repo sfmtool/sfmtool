@@ -80,9 +80,10 @@ the two poses, picks the polar sweep when either epipole lies inside its image
 grown by `rectification_margin` pixels on every side, and the rectified sweep
 otherwise. It returns `(index1, index2, distance)` for every mutual match, in
 the caller's original feature indices, sorted by `index1`; each `index1`
-appears at most once, so the order is the same from run to run. A pair whose intrinsic matrix is
-singular has no fundamental matrix and returns no matches. The geometric filter
-runs only when `affines1`, `affines2` and `geometric_config` are all `Some`.
+appears at most once, so the order is the same from run to run. A pair whose
+intrinsic matrix is singular has no fundamental matrix and returns no matches.
+The geometric filter runs only when `affines1`, `affines2` and
+`geometric_config` are all `Some`.
 `match_image_pairs_batch` runs `match_image_pair` over a list of pairs in
 parallel with Rayon, taking per-camera intrinsics and image sizes and per-image
 poses and features, and returns one result per pair in input order. The core
@@ -133,10 +134,10 @@ shared sweep body with the raw positions as separate filter positions. The
 polar pair takes raw pixel positions and the row-major fundamental matrix, and
 returns `None` when either epipole is at infinity, which is the caller's signal
 to use the rectified sweep instead. All four return their matches sorted by
-`index1`. The one-way functions take features already sorted
-by Y and return a map from sorted index in image 1 to `(sorted index in image
-2, distance)`; they are the single-direction step of the rectified sweep,
-exposed for tests and the bindings.
+`index1`. The one-way functions take features already sorted by Y and return a
+map from sorted index in image 1 to `(sorted index in image 2, distance)`; they
+are the single-direction step of the rectified sweep, exposed for tests and the
+bindings.
 
 Each `_geometric` variant runs the same sweep as its plain counterpart; the
 only difference is that it narrows each window with the geometric filter before
