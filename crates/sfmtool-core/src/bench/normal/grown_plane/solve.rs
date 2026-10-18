@@ -29,8 +29,11 @@ const MAX_TILT_STEP: f64 = 0.1;
 /// The largest change of a shift one step may make, image px.
 const MAX_SHIFT_STEP_PX: f64 = 2.0;
 
-/// How many times one iteration raises the damping before it gives up.
-const DAMPING_TRIES: u32 = 8;
+/// How many damped steps one iteration tries before the fit gives up. More
+/// than half of all fits end on an iteration that cannot rise, and each try
+/// costs a render; three tries kept the quality that eight gave on the
+/// ground-truth sweep.
+pub(super) const DAMPING_TRIES: u32 = 3;
 
 /// How a fit iterates.
 #[derive(Debug, Clone, Copy)]

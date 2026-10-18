@@ -257,7 +257,7 @@ Every fit is Levenberg–Marquardt on the photometric residual of mean- and spre
 
 so maximising the ZNCC is minimising that residual. A block of samples (a window, or one cell) contributes its channels' residuals scaled by `√(w / C)` for its weight `w` and its `C` scored channels, so its residual sum of squares is `w · (2 − 2z)` for its mean-channel ZNCC `z`. A window is one block of weight 1; a whole grid is its live cells, each weighted by its Tukey weight over the weights' sum. Either way the residual sum of squares is `S = 2 · (1 − score)` for the score being fitted.
 
-The residual is frozen at the parameters it is linearised at: which samples are on the photograph, which channels are scored, and the cells' Tukey weights, which are read again at the start of every iteration, as an iteratively reweighted fit. Only the view's samples move with the parameters. The Jacobian is a forward difference of the frozen residual, with steps of `jacobian_tilt_step` (10⁻³) along each tilt parameter and `jacobian_shift_step_px` (0.05 px) along each shift. An iteration solves `(JᵀJ + λ·diag(JᵀJ) + ε) δ = −Jᵀr`, with `λ` from `initial_damping` (10⁻³) and `ε` 10⁻⁹ of the largest diagonal entry, scales `δ` back so that no tilt parameter moves more than 0.1 and no shift more than 2 px, and reads the true score at the new parameters from a fresh render. The step is kept only when the score rises, and `λ` falls tenfold; the render that scored the kept step also gives the residual, frozen there, that the next iteration linearises at, so a kept point is rendered once; otherwise `λ` rises tenfold and the step is solved again, up to eight times. A stage ends after `max_iterations` (20) iterations, when an iteration raises the score by less than `min_improvement` (10⁻⁶), or when no damping finds a rise; a stage that cannot rise keeps the parameters it was given.
+The residual is frozen at the parameters it is linearised at: which samples are on the photograph, which channels are scored, and the cells' Tukey weights, which are read again at the start of every iteration, as an iteratively reweighted fit. Only the view's samples move with the parameters. The Jacobian is a forward difference of the frozen residual, with steps of `jacobian_tilt_step` (10⁻³) along each tilt parameter and `jacobian_shift_step_px` (0.05 px) along each shift. An iteration solves `(JᵀJ + λ·diag(JᵀJ) + ε) δ = −Jᵀr`, with `λ` from `initial_damping` (10⁻³) and `ε` 10⁻⁹ of the largest diagonal entry, scales `δ` back so that no tilt parameter moves more than 0.1 and no shift more than 2 px, and reads the true score at the new parameters from a fresh render. The step is kept only when the score rises, and `λ` falls tenfold; the render that scored the kept step also gives the residual, frozen there, that the next iteration linearises at, so a kept point is rendered once; otherwise `λ` rises tenfold and the step is solved again, up to three tries in all. A stage ends after `max_iterations` (20) iterations, when an iteration raises the score by less than `min_improvement` (10⁻⁶), or when no damping finds a rise; a stage that cannot rise keeps the parameters it was given.
 
 The parameters are a view's tilt and shift `[a, b, sx, sy]` within a view, its shift alone with the tilt held in the shift-only fit, and in the pair fit the tilt and the second view's shift against the first's `[a, b, rx, ry]` (§ [Wide pairs](#wide-pairs)). The pair fit's residual compares two renders that both move with the tilt, so it normalises both sides afresh at every evaluation, where a view against the reference normalises the reference once. No fit has more than four parameters.
 
@@ -653,6 +653,31 @@ The 114 views are every candidate beside the reference over the sixteen points; 
 **Caveat.** The thresholds were chosen on the same points they are scored on, so 56 of 62 is an optimistic figure for points not yet judged. That every combination near 70° and 3 beats turning every time is the stronger evidence that the rule helps.
 
 **Reading.** Turns under about 65° were right almost every time, however weak their σ, so a gate on σ alone would hold back good turns. The wrong turns were large ones on weak evidence: the views were narrow, the score was flat in the tilt, and the growth drifted toward a plane seen edge on. The step keeps the start on that case alone, as `weak_turn_deg` 70 and `min_turn_sigma_ratio` 3 (§ [Turn and report](#turn-and-report)).
+
+## Fewer renders per fit (2026-10-18)
+
+**Question.** The Levenberg–Marquardt fits make about 94% of the step's renders. Can they make fewer without changing what the step finds?
+
+**Changes.** Two changes, each measured on all 1609 points of § [Sweep of all ground-truth points](#sweep-of-all-ground-truth-points-2026-10-17) with the defaults, the weak-turn rule included.
+
+- The render that scores a kept step also gives the residual the next iteration linearises at, where before the next iteration rendered the same parameters again (§ [The optimiser](#the-optimiser)). The residual is a function of that render and the frozen blocks alone, so every point's result is the same, bit for bit, on every point of the three datasets.
+- An iteration tries at most three damped steps, where it tried eight. More than half of all fits end on an iteration whose steps all fail to raise the score, and such an iteration cost 11.5 renders on average, its four Jacobian columns and every try.
+
+**Renders.** Counted over the whole sweep, the fits made 69.1 renders each before, 58.0 with the residual reused and 52.7 with three tries as well; the step made 5.11 million renders in all, then 4.31 million and 3.92 million, 23% fewer.
+
+**Others measured.** With three tries the fits ending without a rise cost 6.5 renders each, and two tries gave the same results within 0.02° in every median for 1% less time. Four tries moved the bull's median to 19.59°. Against the residual reused with eight tries, in the same runs: a `min_improvement` of 10⁻⁵ lost a judged point (54 of 63), and 10⁻⁴ took 23% less time but brought the bull to 15.4% within 5° and Kerry Park's median to 6.99°. Stopping once a step gains under 1% of the fit's first step, with three tries, took 20% less time and kept 55 of 63 judged points, but moved 107 points by more than 1° and brought the bull to 15.8% within 5°; at 0.1%, with eight tries, it lost a judged point.
+
+**Results.** The judged points are the 63 of § [Judged by eye](#judged-by-eye-2026-10-18) as the judgement script scores them against the normals judged right; "moved" counts the points more than 1° better or worse than before.
+
+| Form | Judged right | Bull median, < 5° | Kerry Park median, < 5° | Dino median, < 5° | Moved better / worse | Time alone | Time shared |
+|---|---|---|---|---|---|---|---|
+| before | 55 of 63 | 19.04°, 16.2% | 6.87°, 40.8% | 1.46°, 85.1% | – | 460 s | 926 s, 874 s |
+| residual reused | 55 of 63 | 19.04°, 16.2% | 6.87°, 40.8% | 1.46°, 85.1% | 0 / 0 | – | 895 s, 840 s |
+| and three tries | 55 of 63 | 19.06°, 16.2% | 6.88°, 40.8% | 1.45°, 85.1% | 24 / 18 | 387 s | 829 s, 772 s |
+
+"Time alone" is the sum of the step's times over the 1609 points with the three datasets run at once on one machine; "time shared" is the same sum in two runs that each ran six or seven forms at once, so only the ratios within a column hold. Alone, the step takes 16% less time, a median of 167 ms a point against 206 ms; shared, the residual reused takes 3% to 4% less and three tries 8% less again, 11% to 12% in all. The time falls less than the renders do because the render the reuse saves is at a tilt whose projection is kept, which samples the photograph again but does not project the grid.
+
+**Reading.** Reusing the residual changes nothing and saves the cheapest renders. Three tries changes the fits that needed a fourth to eighth try to rise; they end where the fit stops a little earlier, and the points that move do so in both directions in about equal numbers, with every measure of the bar the same within 0.02°.
 
 ## Non-goals
 

@@ -12,7 +12,9 @@ use nalgebra::{DMatrix, Matrix2};
 
 use super::combine::{covariance, distance, weighted_mean};
 use super::render::{robust_score, zncc, Block, Samples};
-use super::solve::{maximise, schur_tilt, tilt_information, Iteration, Linearised, Objective};
+use super::solve::{
+    maximise, schur_tilt, tilt_information, Iteration, Linearised, Objective, DAMPING_TRIES,
+};
 use super::{sigmas_deg, window_radii, GrownPlaneNormalOptions};
 
 /// Samples of `channels` channels, every one valid, from `values` laid out
@@ -285,6 +287,28 @@ fn the_fit_does_not_render_a_scored_point_again() {
     for q in read_at.iter() {
         assert!(!frozen_at.contains(q), "{q:?} rendered twice");
     }
+}
+
+/// A fit started at its optimum cannot rise: it builds one Jacobian, tries
+/// [`DAMPING_TRIES`] damped steps, rendering each, keeps none and stops at
+/// the start.
+#[test]
+fn a_fit_that_cannot_rise_stops_after_its_damping_tries() {
+    let target = vec![0.35, -0.2, 5.0, -3.0];
+    let objective = Logged {
+        inner: Quadratic {
+            target: target.clone(),
+        },
+        frozen_at: RefCell::new(Vec::new()),
+        read_at: RefCell::new(Vec::new()),
+    };
+    let (p, score, taken) = maximise(&objective, &target, &iteration());
+    assert_eq!((p, score, taken), (target, 1.0, 0));
+    assert_eq!(objective.read_at.borrow().len(), 4);
+    assert_eq!(
+        objective.frozen_at.borrow().len(),
+        1 + DAMPING_TRIES as usize
+    );
 }
 
 /// The information-weighted mean against a hand-computed case:
