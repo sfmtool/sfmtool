@@ -6,11 +6,13 @@
 //! elimination of the shifts from the information, the fit itself on a
 //! residual the test writes, and the information-weighted mean.
 
+use std::cell::RefCell;
+
 use nalgebra::{DMatrix, Matrix2};
 
 use super::combine::{covariance, distance, weighted_mean};
 use super::render::{robust_score, zncc, Block, Samples};
-use super::solve::{maximise, schur_tilt, tilt_information, Iteration, Objective};
+use super::solve::{maximise, schur_tilt, tilt_information, Iteration, Linearised, Objective};
 use super::{sigmas_deg, window_radii, GrownPlaneNormalOptions};
 
 /// Samples of `channels` channels, every one valid, from `values` laid out
@@ -199,13 +201,11 @@ struct Quadratic {
 impl Objective for Quadratic {
     type Frozen = ();
 
-    fn freeze(&self, p: &[f64]) -> (f64, Option<()>) {
-        let ss: f64 = p
-            .iter()
-            .zip(&self.target)
-            .map(|(a, b)| (a - b) * (a - b))
-            .sum();
-        (1.0 - 0.5 * ss, Some(()))
+    fn freeze(&self, p: &[f64]) -> (f64, Option<Linearised<()>>) {
+        let mut r = Vec::new();
+        self.residuals(&(), p, &mut r);
+        let ss: f64 = r.iter().map(|v| v * v).sum();
+        (1.0 - 0.5 * ss, Some(((), r)))
     }
 
     fn residuals(&self, _: &(), p: &[f64], out: &mut Vec<f64>) {
@@ -241,6 +241,50 @@ fn the_fit_reaches_the_optimum_of_a_quadratic() {
     // and the tilt's information is the identity.
     let info = tilt_information(&objective, &p, &iteration());
     assert!((info - Matrix2::identity()).norm() < 1e-6, "{info}");
+}
+
+/// [`Quadratic`] with a log of the points it is read at: each `freeze` and
+/// each `residuals` call stands for one render of a real objective.
+struct Logged {
+    inner: Quadratic,
+    frozen_at: RefCell<Vec<Vec<f64>>>,
+    read_at: RefCell<Vec<Vec<f64>>>,
+}
+
+impl Objective for Logged {
+    type Frozen = ();
+
+    fn freeze(&self, p: &[f64]) -> (f64, Option<Linearised<()>>) {
+        self.frozen_at.borrow_mut().push(p.to_vec());
+        self.inner.freeze(p)
+    }
+
+    fn residuals(&self, frozen: &(), p: &[f64], out: &mut Vec<f64>) {
+        self.read_at.borrow_mut().push(p.to_vec());
+        self.inner.residuals(frozen, p, out);
+    }
+}
+
+/// The fit reads the residual at a point it has scored from that score's
+/// render: every `residuals` call is a Jacobian column, at a point no
+/// `freeze` was made at, so no point is rendered twice.
+#[test]
+fn the_fit_does_not_render_a_scored_point_again() {
+    let objective = Logged {
+        inner: Quadratic {
+            target: vec![0.35, -0.2, 5.0, -3.0],
+        },
+        frozen_at: RefCell::new(Vec::new()),
+        read_at: RefCell::new(Vec::new()),
+    };
+    let (_, _, taken) = maximise(&objective, &[0.0; 4], &iteration());
+    assert!(taken >= 2, "{taken}");
+    let frozen_at = objective.frozen_at.borrow();
+    let read_at = objective.read_at.borrow();
+    assert_eq!(read_at.len() % 4, 0, "{}", read_at.len());
+    for q in read_at.iter() {
+        assert!(!frozen_at.contains(q), "{q:?} rendered twice");
+    }
 }
 
 /// The information-weighted mean against a hand-computed case:

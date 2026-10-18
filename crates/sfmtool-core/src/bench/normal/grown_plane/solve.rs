@@ -14,7 +14,8 @@
 //! difference of that residual. A step is kept only when the true score, read
 //! again from a fresh render, rises; otherwise the damping grows and the step
 //! is tried again, and a stage that cannot rise keeps the parameters it was
-//! given.
+//! given. The render that scores a kept step also gives the residual the next
+//! iteration linearises at, so a kept point is rendered once.
 
 use nalgebra::{DMatrix, DVector, Matrix2};
 
@@ -41,14 +42,19 @@ pub(super) struct Iteration {
     pub(super) shift_step: f64,
 }
 
+/// A residual frozen at a point, and its value there.
+pub(super) type Linearised<F> = (F, Vec<f64>);
+
 /// An objective over a parameter vector whose first two entries are a tilt
 /// and whose others are shifts in image px.
 pub(super) trait Objective {
     type Frozen;
 
-    /// The score at `p`, higher better, and the residual frozen there; no
-    /// frozen residual where nothing can be read.
-    fn freeze(&self, p: &[f64]) -> (f64, Option<Self::Frozen>);
+    /// The score at `p`, higher better, the residual frozen there and that
+    /// residual's value at `p`, read from the same render as the score; no
+    /// frozen residual where nothing can be read. The value is the one
+    /// [`Self::residuals`] gives at `p`, bit for bit.
+    fn freeze(&self, p: &[f64]) -> (f64, Option<Linearised<Self::Frozen>>);
 
     /// The frozen residual read at `p`.
     fn residuals(&self, frozen: &Self::Frozen, p: &[f64], out: &mut Vec<f64>);
@@ -95,20 +101,17 @@ pub(super) fn maximise<O: Objective>(
     let (mut score, mut frozen) = objective.freeze(&p);
     let steps = steps_for(p.len(), it);
     let mut damping = it.damping;
-    let mut r0 = Vec::new();
     let mut taken = 0;
     for _ in 0..it.max_iterations {
-        let Some(fz) = frozen.as_ref() else {
+        let Some((fz, r0)) = frozen.as_ref() else {
             break;
         };
-        r0.clear();
-        objective.residuals(fz, &p, &mut r0);
         if r0.is_empty() {
             break;
         }
-        let j = objective.jacobian(fz, &p, &r0, &steps);
+        let j = objective.jacobian(fz, &p, r0, &steps);
         let a = j.transpose() * &j;
-        let g = j.transpose() * DVector::from_column_slice(&r0);
+        let g = j.transpose() * DVector::from_column_slice(r0);
         let mut accepted = None;
         for _ in 0..DAMPING_TRIES {
             let Some(delta) = damped_step(&a, &g, damping) else {
@@ -306,7 +309,7 @@ pub(super) fn live_cells(render_cells: &[Vec<usize>; 9], reference: &Samples) ->
 impl Objective for ViewFit<'_, '_, '_> {
     type Frozen = Vec<Block>;
 
-    fn freeze(&self, p: &[f64]) -> (f64, Option<Vec<Block>>) {
+    fn freeze(&self, p: &[f64]) -> (f64, Option<Linearised<Vec<Block>>>) {
         let (tilt, shift) = self.split(p);
         let samples = self.render.render(tilt, shift, &self.rows());
         let (score, weights) = self.score_of(&samples);
@@ -336,7 +339,14 @@ impl Objective for ViewFit<'_, '_, '_> {
                 }
             }
         };
-        (score, (!blocks.is_empty()).then_some(blocks))
+        if blocks.is_empty() {
+            return (score, None);
+        }
+        let mut r0 = Vec::new();
+        for block in &blocks {
+            block.residuals(&samples, &mut r0);
+        }
+        (score, Some((blocks, r0)))
     }
 
     fn residuals(&self, frozen: &Vec<Block>, p: &[f64], out: &mut Vec<f64>) {
@@ -387,7 +397,7 @@ impl PairFit<'_, '_, '_> {
 impl Objective for PairFit<'_, '_, '_> {
     type Frozen = Vec<Block>;
 
-    fn freeze(&self, p: &[f64]) -> (f64, Option<Vec<Block>>) {
+    fn freeze(&self, p: &[f64]) -> (f64, Option<Linearised<Vec<Block>>>) {
         let (a, b) = self.renders(p);
         let (score, weights) = self.score_of(&a, &b);
         let total: f64 = weights.iter().sum();
@@ -407,7 +417,14 @@ impl Objective for PairFit<'_, '_, '_> {
                 })
                 .collect()
         };
-        (score, (!blocks.is_empty()).then_some(blocks))
+        if blocks.is_empty() {
+            return (score, None);
+        }
+        let mut r0 = Vec::new();
+        for block in &blocks {
+            block.pair_residuals(&a, &b, &mut r0);
+        }
+        (score, Some((blocks, r0)))
     }
 
     fn residuals(&self, frozen: &Vec<Block>, p: &[f64], out: &mut Vec<f64>) {
@@ -426,9 +443,7 @@ pub(super) fn normal_matrix<O: Objective>(
     it: &Iteration,
 ) -> Option<DMatrix<f64>> {
     let (_, frozen) = objective.freeze(p);
-    let fz = frozen?;
-    let mut r0 = Vec::new();
-    objective.residuals(&fz, p, &mut r0);
+    let (fz, r0) = frozen?;
     if r0.is_empty() {
         return None;
     }
