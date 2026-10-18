@@ -69,7 +69,7 @@ pub(crate) use geometry::PatchEdit;
 /// Here rather than in either panel because both draw the same track: the Image
 /// Detail panel's bench layer marks it in each photograph
 /// (`specs/gui/multi-panel-image-browser.md` § "The bench layer") and the 3D
-/// viewer draws its frame where it stands in the world
+/// viewer draws its placement where it stands in the world
 /// ([`crate::viewer_3d::bench_track`]). The overlays around them draw the
 /// reconstruction in greens, greys and the colormaps; the bench is violet
 /// throughout, so what is committed and what is being considered are never
@@ -84,8 +84,8 @@ pub(crate) const OUT_COLOR: egui::Color32 = egui::Color32::from_rgb(130, 104, 15
 ///
 /// It names the one remedy, Convert to Embedded Patches, by its menu entry and
 /// by its MCP tool, and what to do after it: an item put on the bench before
-/// the conversion is rebuilt with a patch frame when its point is put on the
-/// bench again.
+/// the conversion is rebuilt with a patch placement when its point is put on
+/// the bench again.
 pub(crate) fn view_only_sentence(label: &str) -> String {
     format!(
         "Bench editing needs embedded patches, and {label} keeps its patches in .sift files \
@@ -741,9 +741,9 @@ impl AppState {
     /// has: the person asked to work on that point, and there it is. That
     /// case pushes no version, and so is not refused while the node is busy.
     /// The one exception is an item put on the bench while the node was
-    /// `sift_files`, which has no patch frame: once the point has one, the
+    /// `sift_files`, which has no patch placement: once the point has one, the
     /// item is rebuilt from it under its own label, keeping its edits, as one
-    /// version ([`Self::rebuilt_with_frame`]). A caller that names a label
+    /// version ([`Self::rebuilt_with_placement`]). A caller that names a label
     /// other than the one that track has is refused, naming the label it has,
     /// rather than having the name it asked for dropped without a word: a
     /// rename is its own step, and the item's label is what every earlier
@@ -772,7 +772,7 @@ impl AppState {
                 ));
             }
             let label = existing;
-            if let Some(track) = self.rebuilt_with_frame(point, &label) {
+            if let Some(track) = self.rebuilt_with_placement(point, &label) {
                 return self.reinstall_rebuilt(point, &label, track);
             }
             self.focus_bench_item(point.recon, &label)?;
@@ -829,10 +829,10 @@ impl AppState {
     /// Why `id`'s bench is view-only, or `None` when it is not.
     ///
     /// A `sift_files` reconstruction keeps its patches in the `.sift` files,
-    /// so a point put on the bench from it carries no patch frame, and a track
-    /// built there could not be committed back. Its bench items can be looked
-    /// at, and nothing on its bench can be edited (`specs/gui/bench.md` §
-    /// "A view-only bench").
+    /// so a point put on the bench from it carries no patch placement, and a
+    /// track built there could not be committed back. Its bench items can be
+    /// looked at, and nothing on its bench can be edited (`specs/gui/bench.md`
+    /// § "A view-only bench").
     pub(crate) fn bench_view_only_refusal(&self, id: ReconId) -> Option<String> {
         let node = self.node(id)?;
         node.edited()
@@ -844,19 +844,19 @@ impl AppState {
     /// `None` when the item stays as it is.
     ///
     /// An item put on the bench while the node was `sift_files` has no patch
-    /// frame. Once the node carries embedded patches, putting the same point on
-    /// the bench again builds the track afresh from the point's frame, under
-    /// the item's own label, and keeps what the item itself holds
-    /// ([`with_frame_of`]). The bench is editable from the conversion on, so the
-    /// item may have taken edits between the conversion and the re-bench, and
-    /// none of them is dropped.
-    fn rebuilt_with_frame(&self, point: PointRef, label: &str) -> Option<EditableTrack> {
+    /// placement. Once the node carries embedded patches, putting the same
+    /// point on the bench again builds the track afresh from the point's
+    /// placement, under the item's own label, and keeps what the item itself
+    /// holds ([`with_placement_of`]). The bench is editable from the conversion
+    /// on, so the item may have taken edits between the conversion and the
+    /// re-bench, and none of them is dropped.
+    fn rebuilt_with_placement(&self, point: PointRef, label: &str) -> Option<EditableTrack> {
         if self.bench_view_only_refusal(point.recon).is_some() {
             return None;
         }
         let node = self.node(point.recon)?;
         let old = node.history.current_bench().track(label)?;
-        if !lacks_frame(old) {
+        if !lacks_placement(old) {
             return None;
         }
         let options = CreateTrackOptions {
@@ -867,24 +867,24 @@ impl AppState {
             bench::create_track(&Bench::new(), node.edited(), point.point, &options).ok()?;
         let fresh = fresh.track(&report.label)?;
         matches!(&fresh.stage, Stage::Track(payload) if payload.placement.is_some())
-            .then(|| with_frame_of(old, fresh))
+            .then(|| with_placement_of(old, fresh))
     }
 
     /// Why the item `label` on `id`'s bench cannot be duplicated yet, or
-    /// `None`: it is waiting for the patch frame a re-bench of its point would
-    /// give it ([`Self::rebuilt_with_frame`]).
+    /// `None`: it is waiting for the patch placement a re-bench of its point
+    /// would give it ([`Self::rebuilt_with_placement`]).
     ///
-    /// A copy drops the origin, so a copy made now would keep no frame and
+    /// A copy drops the origin, so a copy made now would keep no placement and
     /// could never be given one. Cheap enough to grey Track View's *Duplicate*
-    /// with every frame: it reads the point's stored frame rather than building
-    /// a track.
+    /// with every frame: it reads the point's stored placement rather than
+    /// building a track.
     pub(crate) fn duplicate_refusal(&self, id: ReconId, label: &str) -> Option<String> {
         if self.bench_view_only_refusal(id).is_some() {
             return None;
         }
         let node = self.node(id)?;
         let track = node.history.current_bench().track(label)?;
-        if !lacks_frame(track) {
+        if !lacks_placement(track) {
             return None;
         }
         let point = self.resolved_origin(node, track)?;
@@ -896,8 +896,8 @@ impl AppState {
         ))
     }
 
-    /// Replace the frame-less item `label` with `track`, which carries the
-    /// frame of `point`, as one bench version, and focus it.
+    /// Replace the placement-less item `label` with `track`, which carries the
+    /// placement of `point`, as one bench version, and focus it.
     fn reinstall_rebuilt(
         &mut self,
         point: PointRef,
@@ -1443,8 +1443,9 @@ impl AppState {
             let (camera, pose) = geometry::view_of(&node.edited().base.image_table, image)?;
             let half = match track.stage_kind() {
                 StageKind::Track => {
-                    let frame = track.track()?.placement.as_ref()?;
-                    let anchored = geometry::anchored_frame(frame, &camera, &pose, observation);
+                    let placement = track.track()?.placement.as_ref()?;
+                    let anchored =
+                        geometry::anchored_placement(placement, &camera, &pose, observation);
                     geometry::half_width_px(&anchored, &camera, &pose)?
                 }
                 StageKind::Cluster => sfmtool_core::bench::half_width_px(
@@ -1461,7 +1462,7 @@ impl AppState {
             track
                 .track()
                 .and_then(|payload| payload.placement.as_ref())
-                .map(|frame| format!("a half-length of {:.4}", frame.half_extent[0]))
+                .map(|placement| format!("a half-length of {:.4}", placement.half_extent[0]))
                 .unwrap_or_else(|| "its new size".to_string())
         })
     }
@@ -1974,7 +1975,7 @@ impl AppState {
     ///
     /// The step that **moves** the track: at the track stage it localizes every
     /// sighting against the patch, re-triangulates the `in` ones, re-centres
-    /// the frame and renders the stored bitmap from the reference view, and
+    /// the placement and renders the stored bitmap from the reference view, and
     /// then reads the result back so the numbers it leaves behind are the ones
     /// an evaluation reports. The reading looks for each peak within the
     /// track's own `max_shift_px`.
@@ -2038,7 +2039,7 @@ impl AppState {
     /// **What the track alone decides is decided here**, through
     /// [`sfmtool_core::bench::set_stage_preconditions`]: too few `in`
     /// observations to triangulate from, or a downgrade of a track carrying no
-    /// frame or no position. Those are refusals of the gesture, in the
+    /// placement or no position. Those are refusals of the gesture, in the
     /// caller's own hand, rather than a task that decodes a dozen photographs
     /// and then fails for a reason that was knowable before it started.
     pub(crate) fn start_bench_stage(
@@ -3127,16 +3128,16 @@ fn install(bench: &Bench, label: &str, track: EditableTrack) -> Result<Bench, St
         .map_err(|e| format!("Cannot install that step: {e}"))
 }
 
-/// Whether `track` is a track-stage track with no patch frame, which is what
-/// a point put on the bench from a `sift_files` reconstruction is.
-fn lacks_frame(track: &EditableTrack) -> bool {
+/// Whether `track` is a track-stage track with no patch placement, which is
+/// what a point put on the bench from a `sift_files` reconstruction is.
+fn lacks_placement(track: &EditableTrack) -> bool {
     matches!(&track.stage, Stage::Track(payload) if payload.placement.is_none())
 }
 
-/// `old`, a track with no frame, given the frame of `fresh`, a track just
-/// built from the same point now that the point has one.
+/// `old`, a track with no placement, given the placement of `fresh`, a track
+/// just built from the same point now that the point has one.
 ///
-/// The stage (the frame, position, bitmap and colour) and the origin are
+/// The stage (the placement, position, bitmap and colour) and the origin are
 /// `fresh`'s. Everything the person can have changed on `old` is kept: its
 /// thresholds, every observation's verdict and pin, and any observation that
 /// was sighted elsewhere or added. An observation still where the point puts
@@ -3149,9 +3150,9 @@ fn lacks_frame(track: &EditableTrack) -> bool {
 /// `fresh`'s bitmap is the render of its reference observation as `fresh`
 /// holds that row. A kept row the person turned out drops the bitmap with its
 /// reference, and a kept row sighted elsewhere drops the bitmap and keeps the
-/// reference, as the same edits made on a track with a frame do, so the next
-/// evaluation renders a bitmap from the rows the item holds.
-fn with_frame_of(old: &EditableTrack, fresh: &EditableTrack) -> EditableTrack {
+/// reference, as the same edits made on a track with a placement do, so the
+/// next evaluation renders a bitmap from the rows the item holds.
+fn with_placement_of(old: &EditableTrack, fresh: &EditableTrack) -> EditableTrack {
     let keypoint = |o: &Observation| o.track.as_ref().and_then(|t| t.keypoint);
     // A keypoint the old item never knew (a node loaded without its keypoint
     // column) is not a sighting, so it does not hold the observation back.

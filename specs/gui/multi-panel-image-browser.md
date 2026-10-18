@@ -655,7 +655,7 @@ press on it pans the photograph as a press on empty image does.
   person expects is the other three where the geometry puts them rather than the
   far edge running away: with the dragged edge at `+h` from the centre and the
   far one at `-h`, a pointer naming the offset `p` gives the new half-length
-  `(p + h) / 2` and moves the centre by `h' - h` along the drag. Patch frames are
+  `(p + h) / 2` and moves the centre by `h' - h` along the drag. Patch placements are
   square, so that is **one** scale and not two ([`../core/patch/patch-cloud.md`](../core/patch/patch-cloud.md)).
   The cursor comes from the edge's orientation **on screen**, which is what says
   which edge is under the pointer when a lens has bent the square: near
@@ -692,7 +692,7 @@ offset of that meeting on the patch's axes
 (`OrientedPatch::keypoint_plane_offset`). So an edge put under the pointer
 *reprojects onto the pointer*, through whatever distortion the lens has, and a
 turn is the angle swept on the patch's own surface rather than the foreshortened
-one swept on screen. The frame the pointer is read against is the one drawn: the
+one swept on screen. The placement the pointer is read against is the one drawn: the
 patch re-anchored on the observation whose outline it is, or for the ghost the
 patch itself, which is what `sfmtool_core::bench::Viewpoint` names to the two
 pixel steps (`Observation` and `Image`). The normal's two handles read the same

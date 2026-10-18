@@ -4,13 +4,13 @@
 //! The focused item as world geometry, for the 3D viewer to draw.
 //!
 //! Where the Image Detail panel's bench layer shows the track in each
-//! photograph that observes it, this shows it where it stands: the patch frame
-//! as a square in the world, its outward normal standing off it, and one mark
-//! per observation saying where that photograph sees the patch's content
-//! against where the frame's middle is. One difference from Image Detail is
-//! deliberate -- there the outline is the patch **re-anchored on that image's
-//! keypoint**, because the panel shows where the sighting is in that
-//! photograph; here there is no photograph and the frame drawn is the patch
+//! photograph that observes it, this shows it where it stands: the patch
+//! placement as a square in the world, its outward normal standing off it, and
+//! one mark per observation saying where that photograph sees the patch's
+//! content against where the placement's middle is. One difference from Image
+//! Detail is deliberate -- there the outline is the patch **re-anchored on that
+//! image's keypoint**, because the panel shows where the sighting is in that
+//! photograph; here there is no photograph and the placement drawn is the patch
 //! itself, at its centre.
 //!
 //! What this module produces is a
@@ -18,8 +18,8 @@
 //! directions and colours, with no window and no GPU in it, so the geometry is
 //! assertable without a frame and without a device. [`crate::scene_renderer`]
 //! turns it into instances and draws it after the EDL pass, depth-aware, so
-//! where the frame cuts through the point cloud the part in front reads at full
-//! strength and the part behind is drawn through, dimmed.
+//! where the placement cuts through the point cloud the part in front reads at
+//! full strength and the part behind is drawn through, dimmed.
 //!
 //! **What it draws, it edits.** The handles
 //! ([`Handles`](crate::viewer_3d::bench_track::Handles)) project the very figure
@@ -54,22 +54,23 @@ use super::ViewportCamera;
 /// Segments in the centre disc and in each mark's hollow circle.
 const CIRCLE_SEGMENTS: usize = 24;
 
-/// The disc's and the circles' radius, as a fraction of the frame's
+/// The disc's and the circles' radius, as a fraction of the placement's
 /// half-length: small enough to sit inside the square it marks the middle of.
 const CIRCLE_RADIUS: f64 = 1.0 / 8.0;
 
-/// How far everything drawn in the frame's plane is lifted along the outward
-/// normal, as a fraction of the frame's half-length. The patch's own bitmap
-/// lies in that plane, and the pass reads in-front-or-behind off the depth
-/// buffer, so geometry exactly coplanar with it flickers between the two. A
-/// fraction of the half-length keeps the lift independent of the scene's size.
+/// How far everything drawn in the placement's plane is lifted along the
+/// outward normal, as a fraction of the placement's half-length. The patch's
+/// own bitmap lies in that plane, and the pass reads in-front-or-behind off the
+/// depth buffer, so geometry exactly coplanar with it flickers between the two.
+/// A fraction of the half-length keeps the lift independent of the scene's
+/// size.
 const PLANE_LIFT: f64 = 1e-3;
 
 /// How far behind the scene the figure fades to the floor, in half-lengths.
 ///
-/// Two side lengths, so the falloff is in the patch's own units: a frame sunk a
-/// fraction of its size into a surface reads as slightly veiled, and one well
-/// behind it sits at the floor.
+/// Two side lengths, so the falloff is in the patch's own units: a placement
+/// sunk a fraction of its size into a surface reads as slightly veiled, and one
+/// well behind it sits at the floor.
 const FOG_DISTANCE: f64 = 4.0;
 
 /// How much larger the circle of the observation selected in Track View is
@@ -98,7 +99,7 @@ pub(super) const HANDLE_HIT_RADIUS: f32 = 9.0;
 /// distance.
 const EDGE_HIT_WIDTH: f32 = 8.0;
 
-/// The four `(s, t)` corners of the frame's square, in the order
+/// The four `(s, t)` corners of the placement's square, in the order
 /// [`OrientedPatch::boundary`] walks them, so consecutive pairs are its edges.
 const CORNERS: [(f64, f64); 4] = [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)];
 
@@ -111,7 +112,7 @@ const CORNERS: [(f64, f64); 4] = [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 
 #[derive(Clone, Copy)]
 pub(crate) struct BenchTrack<'a> {
     /// The node whose bench it is. A gesture that outlives a change of selected
-    /// node is dropped: its handle names a frame that is no longer up.
+    /// node is dropped: its handle names a placement that is no longer up.
     pub(crate) node: ReconId,
     /// The focused item, which is the one item of the bench this layer draws.
     pub(crate) track: &'a EditableTrack,
@@ -161,20 +162,20 @@ pub(crate) struct DiscVertex {
 
 /// One observation's mark: where that photograph sees the patch's content.
 ///
-/// The segment runs from the frame's centre to `q_i`, the point of the frame's
-/// plane the observation's keypoint ray meets, and the circle is drawn there.
-/// Both are in that observation's own verdict colour, whatever the verdict is:
-/// an observation already judged in is exactly the one whose answer is worth
-/// seeing.
+/// The segment runs from the placement's centre to `q_i`, the point of the
+/// placement's plane the observation's keypoint ray meets, and the circle is
+/// drawn there. Both are in that observation's own verdict colour, whatever the
+/// verdict is: an observation already judged in is exactly the one whose answer
+/// is worth seeing.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Mark {
     /// Which observation it is, by its position in the track's list -- which is
-    /// not this mark's own position, an observation whose ray misses the frame
-    /// drawing none. It is the row a click on the circle selects.
+    /// not this mark's own position, an observation whose ray misses the
+    /// placement drawing none. It is the row a click on the circle selects.
     pub(crate) observation: usize,
     /// Centre to `q_i`.
     pub(crate) segment: Stroke,
-    /// The hollow circle at `q_i`, in the frame's plane.
+    /// The hollow circle at `q_i`, in the placement's plane.
     pub(crate) circle: Vec<Stroke>,
 }
 
@@ -183,25 +184,25 @@ pub(crate) struct Mark {
 pub(crate) struct Figure {
     /// The square, four edges in `(s, t)` boundary order, in the `in` colour
     /// whatever any observation's verdict is. Edge `k` runs from corner `k` to
-    /// corner `k + 1`, so `frame[k].a` is corner `k`.
-    pub(crate) frame: [Stroke; 4],
-    /// Where the frame's centre is, on [`Stroke`]'s `(xyz, w)` convention.
+    /// corner `k + 1`, so `square[k].a` is corner `k`.
+    pub(crate) square: [Stroke; 4],
+    /// Where the placement's centre is, on [`Stroke`]'s `(xyz, w)` convention.
     ///
     /// The disc is drawn around it and every mark's segment runs from it, so it
     /// is in the figure twice over already; it is named once here because the
     /// hit test wants the dot itself rather than a vertex of the fan.
     pub(crate) centre: [f32; 4],
     /// The filled centre disc, as `CIRCLE_SEGMENTS` triangles fanned from the
-    /// centre. In the frame's plane, so it foreshortens with the frame and goes
-    /// to a line when the frame is edge-on -- which is what says it is part of
-    /// the patch and not a billboard like a 3D point.
+    /// centre. In the placement's plane, so it foreshortens with the placement
+    /// and goes to a line when the placement is edge-on -- which is what says
+    /// it is part of the patch and not a billboard like a 3D point.
     pub(crate) disc: Vec<DiscVertex>,
     /// The normal's segment and the arrowhead's two barbs, or `None` for a
     /// track at infinity: a direction patch's normal is fixed by its bearing,
     /// so there is nothing to say and nothing to grab.
     pub(crate) normal: Option<[Stroke; 3]>,
-    /// One per observation whose keypoint ray meets the frame, in the track's
-    /// own observation order.
+    /// One per observation whose keypoint ray meets the placement, in the
+    /// track's own observation order.
     pub(crate) marks: Vec<Mark>,
     /// How far behind the scene a fragment fades to the floor opacity, in world
     /// units: [`FOG_DISTANCE`] half-lengths, so the fade is stated in the
@@ -212,29 +213,32 @@ pub(crate) struct Figure {
 impl Figure {
     /// Every stroke, in the order the pass uploads them.
     pub(crate) fn strokes(&self) -> impl Iterator<Item = &Stroke> {
-        self.frame.iter().chain(self.normal.iter().flatten()).chain(
-            self.marks
-                .iter()
-                .flat_map(|mark| std::iter::once(&mark.segment).chain(mark.circle.iter())),
-        )
+        self.square
+            .iter()
+            .chain(self.normal.iter().flatten())
+            .chain(
+                self.marks
+                    .iter()
+                    .flat_map(|mark| std::iter::once(&mark.segment).chain(mark.circle.iter())),
+            )
     }
 }
 
 /// The figure the focused item draws, or `None` when it draws nothing.
 ///
 /// `None` for a cluster-stage item, which has no geometry behind it, and for a
-/// track nothing has given a frame. `eye` is the viewport camera's position in
-/// world coordinates, which the arrowhead's barbs turn to face.
+/// track nothing has given a placement. `eye` is the viewport camera's position
+/// in world coordinates, which the arrowhead's barbs turn to face.
 pub(crate) fn figure(bench: &BenchTrack<'_>, eye: Point3<f64>) -> Option<Figure> {
     let Stage::Track(payload) = &bench.track.stage else {
         return None;
     };
-    let frame = payload.placement.as_ref()?;
+    let placement = payload.placement.as_ref()?;
     // The patch's own `w` rather than the payload's `at_infinity`: what is
     // drawn is the patch, and core keeps the two equal wherever both exist.
-    let at_infinity = frame.w == 0.0;
+    let at_infinity = placement.w == 0.0;
     // A patch is square, so one half-length says the whole of the size.
-    let half = frame.half_extent[0];
+    let half = placement.half_extent[0];
     if !half.is_finite() || half <= 0.0 {
         return None;
     }
@@ -244,7 +248,7 @@ pub(crate) fn figure(bench: &BenchTrack<'_>, eye: Point3<f64>) -> Option<Figure>
     // rotation, the translation dropping out and the uniform scale cancelling
     // in the projection's divide.
     // A direction has no depth to fight over, so only a place is lifted.
-    let lift = frame.normal() * (PLANE_LIFT * half);
+    let lift = placement.normal() * (PLANE_LIFT * half);
     let place = |xyz: Vector3<f64>| -> [f32; 4] {
         if at_infinity {
             let d = rotation * xyz;
@@ -256,21 +260,21 @@ pub(crate) fn figure(bench: &BenchTrack<'_>, eye: Point3<f64>) -> Option<Figure>
     };
 
     let in_color = rgba(crate::bench::IN_COLOR);
-    let centre = place(frame.center.coords);
+    let centre = place(placement.center.coords);
 
     let corners: Vec<[f32; 4]> = CORNERS
         .into_iter()
-        .map(|(s, t)| place(frame.corner_homogeneous(s, t).0))
+        .map(|(s, t)| place(placement.corner_homogeneous(s, t).0))
         .collect();
-    let frame_edges = std::array::from_fn(|k| Stroke {
+    let square = std::array::from_fn(|k| Stroke {
         a: corners[k],
         b: corners[(k + 1) % 4],
         color: in_color,
     });
 
     let radius = half * CIRCLE_RADIUS;
-    let disc = disc(frame, radius, &place, in_color);
-    let normal = (!at_infinity).then(|| arrow(frame, half, bench.transform, &rotation, eye));
+    let disc = disc(placement, radius, &place, in_color);
+    let normal = (!at_infinity).then(|| arrow(placement, half, bench.transform, &rotation, eye));
 
     let image_table = &bench.edited.base.image_table;
     let marks = bench
@@ -282,11 +286,12 @@ pub(crate) fn figure(bench: &BenchTrack<'_>, eye: Point3<f64>) -> Option<Figure>
             let site = sighting.site()?;
             let (camera, pose) = geometry::view_of(image_table, sighting.image as usize)?;
             // The one unprojection, core's own: the keypoint's ray meets the
-            // frame's plane and what it named is read off that meeting. A ray
-            // that cannot meet the plane in front of its camera -- including a
-            // bearing pointing away from a direction patch -- says so here.
-            let offset = frame.keypoint_plane_offset(&camera, &pose, site)?;
-            let q = frame.center.coords + offset;
+            // placement's plane and what it named is read off that meeting. A
+            // ray that cannot meet the plane in front of its camera --
+            // including a bearing pointing away from a direction patch -- says
+            // so here.
+            let offset = placement.keypoint_plane_offset(&camera, &pose, site)?;
+            let q = placement.center.coords + offset;
             let color = rgba(verdict_color(sighting.verdict));
             let radius = if bench.selected == Some(observation) {
                 radius * SELECTED_CIRCLE_SCALE
@@ -300,13 +305,13 @@ pub(crate) fn figure(bench: &BenchTrack<'_>, eye: Point3<f64>) -> Option<Figure>
                     b: place(q),
                     color,
                 },
-                circle: circle(frame, q, radius, &place, color),
+                circle: circle(placement, q, radius, &place, color),
             })
         })
         .collect();
 
     Some(Figure {
-        frame: frame_edges,
+        square,
         centre,
         disc,
         normal,
@@ -316,10 +321,10 @@ pub(crate) fn figure(bench: &BenchTrack<'_>, eye: Point3<f64>) -> Option<Figure>
 }
 
 /// The track's patch, or `None` when there is nothing to take hold of: a
-/// cluster-stage item, or a track nothing has given a frame.
+/// cluster-stage item, or a track nothing has given a placement.
 ///
-/// The frame is in the **reconstruction's own** coordinates, which is where the
-/// core steps act and where a pointer has to be brought back to.
+/// The placement is in the **reconstruction's own** coordinates, which is where
+/// the core steps act and where a pointer has to be brought back to.
 pub(crate) fn placement_of(track: &EditableTrack) -> Option<&OrientedPatch> {
     match &track.stage {
         Stage::Track(payload) => payload.placement.as_ref(),
@@ -327,19 +332,19 @@ pub(crate) fn placement_of(track: &EditableTrack) -> Option<&OrientedPatch> {
     }
 }
 
-/// The centre disc, as a triangle fan about the frame's centre laid out as a
-/// triangle list.
+/// The centre disc, as a triangle fan about the placement's centre laid out as
+/// a triangle list.
 fn disc(
-    frame: &OrientedPatch,
+    placement: &OrientedPatch,
     radius: f64,
     place: &impl Fn(Vector3<f64>) -> [f32; 4],
     color: [f32; 4],
 ) -> Vec<DiscVertex> {
     let centre = DiscVertex {
-        at: place(frame.center.coords),
+        at: place(placement.center.coords),
         color,
     };
-    let rim: Vec<DiscVertex> = ring(frame, frame.center.coords, radius)
+    let rim: Vec<DiscVertex> = ring(placement, placement.center.coords, radius)
         .into_iter()
         .map(|at| DiscVertex {
             at: place(at),
@@ -351,15 +356,15 @@ fn disc(
         .collect()
 }
 
-/// A hollow circle in the frame's plane, as its `CIRCLE_SEGMENTS` chords.
+/// A hollow circle in the placement's plane, as its `CIRCLE_SEGMENTS` chords.
 fn circle(
-    frame: &OrientedPatch,
+    placement: &OrientedPatch,
     at: Vector3<f64>,
     radius: f64,
     place: &impl Fn(Vector3<f64>) -> [f32; 4],
     color: [f32; 4],
 ) -> Vec<Stroke> {
-    let rim: Vec<[f32; 4]> = ring(frame, at, radius).into_iter().map(place).collect();
+    let rim: Vec<[f32; 4]> = ring(placement, at, radius).into_iter().map(place).collect();
     (0..CIRCLE_SEGMENTS)
         .map(|k| Stroke {
             a: rim[k],
@@ -370,12 +375,13 @@ fn circle(
 }
 
 /// `CIRCLE_SEGMENTS` points of the circle of radius `radius` about `at`, in the
-/// frame's own plane.
-fn ring(frame: &OrientedPatch, at: Vector3<f64>, radius: f64) -> Vec<Vector3<f64>> {
+/// placement's own plane.
+fn ring(placement: &OrientedPatch, at: Vector3<f64>, radius: f64) -> Vec<Vector3<f64>> {
     (0..CIRCLE_SEGMENTS)
         .map(|k| {
             let angle = std::f64::consts::TAU * k as f64 / CIRCLE_SEGMENTS as f64;
-            at + frame.u_axis * (radius * angle.cos()) + frame.v_axis * (radius * angle.sin())
+            at + placement.u_axis * (radius * angle.cos())
+                + placement.v_axis * (radius * angle.sin())
         })
         .collect()
 }
@@ -387,7 +393,7 @@ fn ring(frame: &OrientedPatch, at: Vector3<f64>, radius: f64) -> Vec<Vector3<f64
 /// squares the barbs to the viewer is the eye, which is in world coordinates.
 /// A similarity preserves angles, so the head is the same shape either way.
 fn arrow(
-    frame: &OrientedPatch,
+    placement: &OrientedPatch,
     half: f64,
     transform: &Se3Transform,
     rotation: &nalgebra::Matrix3<f64>,
@@ -395,11 +401,11 @@ fn arrow(
 ) -> [Stroke; 3] {
     let color = rgba(crate::bench::IN_COLOR);
     let arrow = geometry::arrow(
-        transform.apply_to_point(&frame.center),
-        rotation * frame.normal(),
+        transform.apply_to_point(&placement.center),
+        rotation * placement.normal(),
         geometry::NORMAL_LENGTH * half * transform.scale,
         eye,
-        rotation * frame.u_axis,
+        rotation * placement.u_axis,
     );
     let point = |p: Point3<f64>| [p.x as f32, p.y as f32, p.z as f32, 1.0];
     let tip = point(arrow.tip);
@@ -474,9 +480,9 @@ pub(crate) enum BenchGesture {
 /// reconstruction's coordinates, rather than pixels of the window: what the
 /// gesture means is a statement about the patch, so it does not depend on where
 /// the figure happened to be drawn. Which geometry depends on the handle -- the
-/// frame's plane for the three that name a place on it, the normal's line for
-/// the segment -- and the press decided the handle, so both ends of one drag are
-/// read the same way.
+/// placement's plane for the three that name a place on it, the normal's line
+/// for the segment -- and the press decided the handle, so both ends of one
+/// drag are read the same way.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct Drag {
     /// The node whose bench it edits. A drag that outlives a change of selected
@@ -533,7 +539,7 @@ impl Drag {
     /// corner swept, and the half-length an edge's place names. `None` when the
     /// gesture names nothing the patch can be given: a cancelled drag, a circle,
     /// or a turn read about the centre itself.
-    pub(crate) fn edit(&self, frame: &OrientedPatch) -> Option<PatchEdit> {
+    pub(crate) fn edit(&self, placement: &OrientedPatch) -> Option<PatchEdit> {
         if self.cancelled {
             return None;
         }
@@ -551,7 +557,11 @@ impl Drag {
             Handle::Dot => {
                 let travel = self.to - self.from;
                 Some(PatchEdit::Translate {
-                    by: [travel.dot(&frame.u_axis), travel.dot(&frame.v_axis), 0.0],
+                    by: [
+                        travel.dot(&placement.u_axis),
+                        travel.dot(&placement.v_axis),
+                        0.0,
+                    ],
                 })
             }
             // With the dragged edge at `+h` from the centre and the far one at
@@ -561,40 +571,37 @@ impl Drag {
             // component off the plane the meeting had.
             Handle::Edge(edge) => {
                 let direction = match edge.axis() {
-                    Axis::U => frame.u_axis,
-                    Axis::V => frame.v_axis,
+                    Axis::U => placement.u_axis,
+                    Axis::V => placement.v_axis,
                 } * edge.sign();
-                let along = (self.to - frame.center).dot(&direction);
+                let along = (self.to - placement.center).dot(&direction);
                 Some(PatchEdit::Resize {
-                    half_length: (along + frame.half_extent[0]) / 2.0,
+                    half_length: (along + placement.half_extent[0]) / 2.0,
                     moved_edge: Some(edge),
                 })
             }
-            Handle::Corner(_) => geometry::turn_on_plane(frame, self.from, self.to)
+            Handle::Corner(_) => geometry::turn_on_plane(placement, self.from, self.to)
                 .map(|angle_rad| PatchEdit::Spin { angle_rad }),
             // Both ends are points of the normal's own line, so their
             // difference along it is the whole gesture -- and it is a
             // difference, so a segment grabbed at its tip does not jump the
             // patch out to where the tip was.
             Handle::Normal => Some(PatchEdit::Translate {
-                by: [0.0, 0.0, (self.to - self.from).dot(&frame.normal())],
+                by: [0.0, 0.0, (self.to - self.from).dot(&placement.normal())],
             }),
             // Both gestures state their answer as a normal, so the core step
             // knows nothing of which one named it.
-            Handle::Arrowhead(tilt) => {
-                geometry::tilt_normal(frame, tilt, self.from, self.to).map(|normal| {
-                    PatchEdit::Tilt {
-                        normal: [normal.x, normal.y, normal.z],
-                    }
-                })
-            }
+            Handle::Arrowhead(tilt) => geometry::tilt_normal(placement, tilt, self.from, self.to)
+                .map(|normal| PatchEdit::Tilt {
+                    normal: [normal.x, normal.y, normal.z],
+                }),
             Handle::Circle { .. } => None,
         }
     }
 }
 
 /// The figure's handles in panel coordinates: what the pointer can take hold of
-/// on the frame it is looking at.
+/// on the placement it is looking at.
 ///
 /// Built from the [`Figure`] the pass drew and the camera it was drawn through,
 /// so the hit test is against the picture on screen rather than against a second
@@ -620,9 +627,9 @@ pub(crate) struct Handles {
     /// is no arrowhead to press.
     ///
     /// Carried here rather than worked out in [`Handles::hit`] because it is a
-    /// reading of the **eye** against the frame, in the reconstruction's own
-    /// coordinates, and neither of those is in the picture this projection is
-    /// of.
+    /// reading of the **eye** against the placement, in the reconstruction's
+    /// own coordinates, and neither of those is in the picture this projection
+    /// is of.
     tilt: Option<Tilt>,
 }
 
@@ -644,7 +651,7 @@ impl Handles {
         };
         Handles {
             dot: at(figure.centre),
-            corners: std::array::from_fn(|k| at(figure.frame[k].a)),
+            corners: std::array::from_fn(|k| at(figure.square[k].a)),
             circles: figure
                 .marks
                 .iter()

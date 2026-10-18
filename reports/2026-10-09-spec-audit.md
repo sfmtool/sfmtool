@@ -583,7 +583,11 @@ Each item was re-measured at `13c1578e`; line numbers are current.
 ### Needs decision
 
 - **MCP `set_view` and a held Move Camera lock:** code and spec (`mcp-server.md:1476-1486`) agree that a leaving form ends the lock even when it is then refused. Keeping the lock would mean splitting every form into check and apply.
+
+  > _Status (2026-10-17): **Declined** — decided by the maintainer on 2026-10-17: the current behaviour stays, in which a leaving form ends a held Move Camera lock even when the form is then refused. Code and `mcp-server.md` already agree on it, and keeping the lock would mean splitting every form into a check and an apply, which is not worth it; no code change, branch `decided-1017-01-placement-identifiers`._
 - **`frame` identifiers for patch geometry** (#891): the spec says *placement*; `crates/sfm-explorer/src/track_view/body/patch.rs:164` `render_frame` and `crates/sfm-explorer/src/bench/geometry.rs:440` `anchored_frame` still say `frame`.
+
+  > _Status (2026-10-17): **Done** — decided by the maintainer on 2026-10-17: the glossary's *placement* applies, so the viewer's identifiers for a patch's geometry say placement. `render_frame` is now `render_placement` and `anchored_frame` is `anchored_placement`; with them `frame_color_image` → `placement_color_image`, `AppState::rebuilt_with_frame` → `rebuilt_with_placement`, `lacks_frame` → `lacks_placement`, `with_frame_of` → `with_placement_of`, the 3D bench `Figure::frame` field → `square`, every `frame: &OrientedPatch` parameter and local in the bench geometry, the 3D bench figure, the viewport input, Track View's tile and crop code and their tests, and the doc comments there. `bench.md`, `track-view.md` and `multi-panel-image-browser.md` follow. No wire name used the word. User-facing strings ("has no patch frame yet", "which now carries a patch frame") and the node-level "patch frame per point" wording, shared with the `.sfmr` format and core, are unchanged. Branch `decided-1017-01-placement-identifiers`._
 - **Patch view-set keyword** (c15214ab, #865): tracked in `reports/2026-10-08-hygiene-audit.md:164-183`; not repeated here.
 
 ### Since fixed (dropped)

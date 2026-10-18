@@ -894,7 +894,7 @@ fn a_verdict_and_a_stage_change_are_two_versions_and_the_evaluations_after_them_
     state.settle_bench_evaluation();
     state
         .start_bench_stage(id, &label, StageKind::Cluster)
-        .expect("a track with a frame downgrades");
+        .expect("a track with a placement downgrades");
     state.finish_background_task();
     state.settle_bench_evaluation();
 
@@ -1926,7 +1926,7 @@ fn a_geometry_search_reads_only_the_images_that_could_see_the_patch() {
 /// it. Where the item kept the person's edit of that row, the bitmap does not
 /// stay beside it: a row turned out drops the bitmap with its reference, and a
 /// row sighted elsewhere drops the bitmap and keeps the reference, as the same
-/// steps do on a track with a frame. An unedited row keeps both.
+/// steps do on a track with a placement. An unedited row keeps both.
 #[test]
 fn a_rebench_drops_a_bitmap_its_kept_reference_row_no_longer_matches() {
     use sfmtool_core::bench::{create_track, Bench, CreateTrackOptions, Stage};
@@ -1951,7 +1951,7 @@ fn a_rebench_drops_a_bitmap_its_kept_reference_row_no_longer_matches() {
     };
     assert!(
         payload.placement.is_some(),
-        "the converted point has a frame"
+        "the converted point has a placement"
     );
     // The fixture has no photographs to render from; a stored bitmap stands
     // in for the conversion's render of row `r`.
@@ -1959,7 +1959,7 @@ fn a_rebench_drops_a_bitmap_its_kept_reference_row_no_longer_matches() {
     payload.reference = Some(r);
 
     let outcome = |old: &sfmtool_core::bench::EditableTrack| {
-        let Stage::Track(p) = super::with_frame_of(old, &fresh).stage else {
+        let Stage::Track(p) = super::with_placement_of(old, &fresh).stage else {
             panic!("a track");
         };
         (p.bitmap.is_some(), p.reference)

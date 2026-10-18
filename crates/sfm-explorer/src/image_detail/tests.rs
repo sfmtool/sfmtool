@@ -1384,8 +1384,8 @@ fn to_panel(image: &sfmtool_core::camera::image::ImageU8, pixel: [f64; 2]) -> eg
     )
 }
 
-/// The patch's outline is drawn where the frame's corners really project, and
-/// it is a sampled curve rather than the four corners joined up.
+/// The patch's outline is drawn where the placement's corners really project,
+/// and it is a sampled curve rather than the four corners joined up.
 #[test]
 fn the_bench_layer_outlines_the_patch_where_its_corners_project() {
     use sfmtool_core::geometry::RigidTransform;
@@ -1413,10 +1413,10 @@ fn the_bench_layer_outlines_the_patch_where_its_corners_project() {
     );
 
     // The corners, projected here rather than through the layer's own code.
-    let frame = track
+    let placement = track
         .track()
         .and_then(|payload| payload.placement.as_ref())
-        .expect("a track from a point carries the stored patch as its frame");
+        .expect("a track from a point carries the stored patch as its placement");
     let table = &node.edited().base.image_table;
     let image = &table.images[0];
     let camera = &table.cameras[image.camera_index as usize];
@@ -1430,8 +1430,8 @@ fn the_bench_layer_outlines_the_patch_where_its_corners_project() {
         ],
     );
     let photograph = pixels(640, 480);
-    // The outline is the frame re-anchored on this image's keypoint, as the
-    // tile is rendered, so the corners are the anchored frame's.
+    // The outline is the placement re-anchored on this image's keypoint, as
+    // the tile is rendered, so the corners are the anchored placement's.
     let keypoint = track
         .observations
         .iter()
@@ -1440,10 +1440,10 @@ fn the_bench_layer_outlines_the_patch_where_its_corners_project() {
         .and_then(|m| m.keypoint)
         .map(|k| [f64::from(k[0]), f64::from(k[1])])
         .expect("a track from a point carries its keypoints");
-    let anchored = frame.anchored_at_keypoint(camera, &pose, keypoint);
-    let frame = anchored.as_ref().unwrap_or(frame);
+    let anchored = placement.anchored_at_keypoint(camera, &pose, keypoint);
+    let placement = anchored.as_ref().unwrap_or(placement);
     for (s, t) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
-        let (xyz, w) = frame.corner_homogeneous(s, t);
+        let (xyz, w) = placement.corner_homogeneous(s, t);
         let p = pose.transform_point_homogeneous(xyz, w);
         let (u, v) = camera
             .ray_to_pixel([p.x, p.y, p.z])
@@ -1472,10 +1472,10 @@ fn the_bench_layer_draws_the_projection_offset_for_every_verdict() {
     let (node, track) = bench_track_fixture();
     // Where the patch's centre lands in this image, projected here rather
     // than through the layer's own code.
-    let frame = track
+    let placement = track
         .track()
         .and_then(|payload| payload.placement.as_ref())
-        .expect("a track from a point carries the stored patch as its frame");
+        .expect("a track from a point carries the stored patch as its placement");
     let table = &node.edited().base.image_table;
     let image = &table.images[0];
     let camera = &table.cameras[image.camera_index as usize];
@@ -1489,7 +1489,7 @@ fn the_bench_layer_draws_the_projection_offset_for_every_verdict() {
         ],
     );
     let centre = {
-        let p = pose.transform_point_homogeneous(frame.center.coords, frame.w);
+        let p = pose.transform_point_homogeneous(placement.center.coords, placement.w);
         let (u, v) = camera
             .ray_to_pixel([p.x, p.y, p.z])
             .expect("the demo's patch is in front of the camera");
@@ -2403,11 +2403,11 @@ fn outline_at(
     let table = &node.edited().base.image_table;
     let (camera, pose) = crate::bench::geometry::view_of(table, sighting.image as usize)
         .expect("the fixture's images have cameras");
-    let frame = track
+    let placement = track
         .track()
         .and_then(|payload| payload.placement.as_ref())
         .expect("a track from a point carries the stored patch");
-    let anchored = crate::bench::geometry::anchored_frame(frame, &camera, &pose, sighting);
+    let anchored = crate::bench::geometry::anchored_placement(placement, &camera, &pose, sighting);
     (anchored, camera, pose)
 }
 
@@ -2422,7 +2422,7 @@ fn projection_offsets(
     node: &SceneNode,
     track: &sfmtool_core::bench::EditableTrack,
 ) -> Vec<[f64; 2]> {
-    let frame = track
+    let placement = track
         .track()
         .and_then(|payload| payload.placement.clone())
         .expect("a track from a point carries the stored patch");
@@ -2436,7 +2436,7 @@ fn projection_offsets(
             )
             .expect("the fixture's images have cameras");
             let centre = camera
-                .project_homogeneous(&pose, frame.center.coords, frame.w)
+                .project_homogeneous(&pose, placement.center.coords, placement.w)
                 .expect("the demo's patch is in front of every camera");
             let site = observation.site().expect("a sighting");
             [site[0] - centre[0], site[1] - centre[1]]
@@ -2463,13 +2463,13 @@ fn hovering_an_edge_of_the_outline_asks_for_the_resize_cursor_its_orientation_na
     let (state, id, label) = bench_state();
     let track = on_bench(&state, id, &label);
     let node = &state.scene[0];
-    let (frame, camera, pose) = outline_at(node, &track, 0);
-    let centre = patch_pixel(&frame, &camera, &pose, 0.0, 0.0);
+    let (placement, camera, pose) = outline_at(node, &track, 0);
+    let centre = patch_pixel(&placement, &camera, &pose, 0.0, 0.0);
 
     // The `+u` edge of this fixture's patch runs all but horizontally on
     // screen, so it is the edge you move up and down.
-    let across = patch_pixel(&frame, &camera, &pose, 1.0, 0.0);
-    let along = patch_pixel(&frame, &camera, &pose, 0.0, 1.0);
+    let across = patch_pixel(&placement, &camera, &pose, 1.0, 0.0);
+    let along = patch_pixel(&placement, &camera, &pose, 0.0, 1.0);
     let steepness = |edge: [f64; 2]| ((edge[1] - centre[1]) / (edge[0] - centre[0])).abs();
     assert!(
         steepness(across) < 0.4 && steepness(along) > 2.5,
@@ -2492,7 +2492,7 @@ fn hovering_an_edge_of_the_outline_asks_for_the_resize_cursor_its_orientation_na
     // the sector a diagonal cursor answers for, a slope between `tan 22.5°`
     // and `tan 67.5°`.
     for (s, t) in [(1.0, 1.0), (1.0, -1.0)] {
-        let corner = patch_pixel(&frame, &camera, &pose, s, t);
+        let corner = patch_pixel(&placement, &camera, &pose, s, t);
         let radius = [corner[0] - centre[0], corner[1] - centre[1]];
         let slope = (radius[1] / radius[0]).abs();
         assert!(
@@ -2557,19 +2557,19 @@ fn dragging_the_dot_slides_the_patch_and_every_sighting_follows_it() {
     );
     // And the slide is in the patch's own plane: the normal is untouched and
     // the offset lies in it.
-    let before_frame = track
+    let before_placement = track
         .track()
         .and_then(|payload| payload.placement.clone())
-        .expect("a frame");
-    let after_frame = moved
+        .expect("a placement");
+    let after_placement = moved
         .track()
         .and_then(|payload| payload.placement.clone())
-        .expect("a frame");
-    assert!((after_frame.normal() - before_frame.normal()).norm() < 1e-12);
-    assert_eq!(after_frame.half_extent, before_frame.half_extent);
-    let offset = after_frame.center - before_frame.center;
+        .expect("a placement");
+    assert!((after_placement.normal() - before_placement.normal()).norm() < 1e-12);
+    assert_eq!(after_placement.half_extent, before_placement.half_extent);
+    let offset = after_placement.center - before_placement.center;
     assert!(
-        offset.dot(&before_frame.normal()).abs() < 1e-12,
+        offset.dot(&before_placement.normal()).abs() < 1e-12,
         "the patch left its own plane: {offset:?}",
     );
     // Every sighting moved with the patch and **kept its own offset** from
@@ -2605,11 +2605,11 @@ fn dragging_the_dot_slides_the_patch_and_every_sighting_follows_it() {
 fn dragging_an_edge_resizes_the_patch_so_it_reprojects_under_the_release_point() {
     let (mut state, id, label) = bench_state();
     let track = on_bench(&state, id, &label);
-    let (frame, camera, pose) = outline_at(&state.scene[0], &track, 0);
-    let centre = patch_pixel(&frame, &camera, &pose, 0.0, 0.0);
-    let from = patch_pixel(&frame, &camera, &pose, 1.0, 0.0);
-    let to = patch_pixel(&frame, &camera, &pose, 2.0, 0.0);
-    let far_before = patch_pixel(&frame, &camera, &pose, -1.0, 0.0);
+    let (placement, camera, pose) = outline_at(&state.scene[0], &track, 0);
+    let centre = patch_pixel(&placement, &camera, &pose, 0.0, 0.0);
+    let from = patch_pixel(&placement, &camera, &pose, 1.0, 0.0);
+    let to = patch_pixel(&placement, &camera, &pose, 2.0, 0.0);
+    let far_before = patch_pixel(&placement, &camera, &pose, -1.0, 0.0);
     let offsets = projection_offsets(&state.scene[0], &track);
 
     let edit = bench_drag(&state.scene[0], 0, &track, centre, from, to, false)
@@ -2646,10 +2646,10 @@ fn dragging_an_edge_resizes_the_patch_so_it_reprojects_under_the_release_point()
     let resized = after
         .track()
         .and_then(|payload| payload.placement.clone())
-        .expect("a frame");
+        .expect("a placement");
     assert_eq!(
         resized.half_extent[0], resized.half_extent[1],
-        "a patch frame is square"
+        "a patch placement is square"
     );
     // A resize moves the centre, so every sighting is carried by the same
     // displacement and keeps its own offset, exactly as a slide's are; nothing
@@ -2686,12 +2686,12 @@ fn dragging_an_edge_resizes_the_patch_so_it_reprojects_under_the_release_point()
 fn dragging_a_corner_turns_the_patch_and_pushes_one_version() {
     let (mut state, id, label) = bench_state();
     let track = on_bench(&state, id, &label);
-    let (frame, camera, pose) = outline_at(&state.scene[0], &track, 0);
-    let centre = patch_pixel(&frame, &camera, &pose, 0.0, 0.0);
-    let from = patch_pixel(&frame, &camera, &pose, 1.0, 1.0);
+    let (placement, camera, pose) = outline_at(&state.scene[0], &track, 0);
+    let centre = patch_pixel(&placement, &camera, &pose, 0.0, 0.0);
+    let from = patch_pixel(&placement, &camera, &pose, 1.0, 1.0);
     // A quarter turn in the patch's own plane: the `(1, 1)` corner's offset
     // rotated onto the `(-1, 1)` corner's.
-    let to = patch_pixel(&frame, &camera, &pose, -1.0, 1.0);
+    let to = patch_pixel(&placement, &camera, &pose, -1.0, 1.0);
 
     let edit = bench_drag(&state.scene[0], 0, &track, centre, from, to, false)
         .edit
@@ -2722,12 +2722,12 @@ fn dragging_a_corner_turns_the_patch_and_pushes_one_version() {
     let was = track
         .track()
         .and_then(|payload| payload.placement.clone())
-        .expect("a frame");
+        .expect("a placement");
     let turned = on_bench(&state, id, &label);
     let turned = turned
         .track()
         .and_then(|payload| payload.placement.clone())
-        .expect("a frame");
+        .expect("a placement");
     assert_eq!(turned.center, was.center, "a turn moves the patch nowhere");
     assert!((turned.u_axis.norm() - was.u_axis.norm()).abs() < 1e-12);
     assert!((turned.normal() - was.normal()).norm() < 1e-12);
@@ -2777,9 +2777,9 @@ fn escape_cancels_a_drag_and_a_drag_that_ends_where_it_started_pushes_nothing() 
 fn a_press_on_a_handle_takes_the_gesture_before_egui_would_call_it_a_drag() {
     let (mut state, id, label) = bench_state();
     let track = on_bench(&state, id, &label);
-    let (frame, camera, pose) = outline_at(&state.scene[0], &track, 0);
-    let centre = patch_pixel(&frame, &camera, &pose, 0.0, 0.0);
-    let edge = patch_pixel(&frame, &camera, &pose, 1.0, 0.0);
+    let (placement, camera, pose) = outline_at(&state.scene[0], &track, 0);
+    let centre = patch_pixel(&placement, &camera, &pose, 0.0, 0.0);
+    let edge = patch_pixel(&placement, &camera, &pose, 1.0, 0.0);
     // Two panel pixels, then thirty: the first is under egui's drag threshold
     // and is exactly what used to be spent panning the photograph.
     let steps = [egui::vec2(2.0, 0.0), egui::vec2(30.0, 0.0)];
@@ -2900,11 +2900,11 @@ fn with_the_lock_off_the_dot_moves_one_sighting_and_leaves_the_patch_and_the_res
 fn with_the_lock_off_the_outline_takes_no_drag_at_the_track_stage() {
     let (mut state, id, label) = bench_state();
     let track = on_bench(&state, id, &label);
-    let (frame, camera, pose) = outline_at(&state.scene[0], &track, 0);
-    let centre = patch_pixel(&frame, &camera, &pose, 0.0, 0.0);
-    let edge = patch_pixel(&frame, &camera, &pose, 1.0, 0.0);
-    let corner = patch_pixel(&frame, &camera, &pose, 1.0, 1.0);
-    let beyond = patch_pixel(&frame, &camera, &pose, 2.0, 0.0);
+    let (placement, camera, pose) = outline_at(&state.scene[0], &track, 0);
+    let centre = patch_pixel(&placement, &camera, &pose, 0.0, 0.0);
+    let edge = patch_pixel(&placement, &camera, &pose, 1.0, 0.0);
+    let corner = patch_pixel(&placement, &camera, &pose, 1.0, 1.0);
+    let beyond = patch_pixel(&placement, &camera, &pose, 2.0, 0.0);
     for grabbed in [edge, corner] {
         let dragged = unlocked_drag(&state.scene[0], 0, &track, centre, grabbed, beyond);
         assert!(
@@ -3042,8 +3042,8 @@ fn the_held_dot_previews_what_its_release_does_in_both_lock_states() {
 fn a_press_off_the_handles_still_pans_and_a_press_that_does_not_move_edits_nothing() {
     let (state, id, label) = bench_state();
     let track = on_bench(&state, id, &label);
-    let (frame, camera, pose) = outline_at(&state.scene[0], &track, 0);
-    let centre = patch_pixel(&frame, &camera, &pose, 0.0, 0.0);
+    let (placement, camera, pose) = outline_at(&state.scene[0], &track, 0);
+    let centre = patch_pixel(&placement, &camera, &pose, 0.0, 0.0);
     let steps = [egui::vec2(2.0, 0.0), egui::vec2(30.0, 0.0)];
 
     // Far outside the outline, which is a couple of source pixels across.
@@ -3066,7 +3066,7 @@ fn a_press_off_the_handles_still_pans_and_a_press_that_does_not_move_edits_nothi
     );
 
     // And a press on the edge that never moves leaves the track alone.
-    let edge = patch_pixel(&frame, &camera, &pose, 1.0, 0.0);
+    let edge = patch_pixel(&placement, &camera, &pose, 1.0, 0.0);
     let still = gesture(&state.scene[0], 0, &track, centre, edge, &[], false, true);
     assert!(still.edit.is_none(), "a click edited the track");
     assert_eq!(still.panned, egui::Vec2::ZERO);

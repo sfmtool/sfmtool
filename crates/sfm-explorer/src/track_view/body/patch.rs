@@ -4,19 +4,19 @@
 //! The two pictures the body draws of a patch: a row's tile, warped out of
 //! one photograph, and the track's own stored bitmap.
 //!
-//! [`patch_color_image`] warps a photograph through a surfel's frame,
-//! re-anchored on the observation's keypoint first ([`render_frame`]), and
-//! [`frame_color_image`] is its body for a frame already where it should be,
-//! which the tile's hover view renders a wider frame through. The tile and its
-//! hover view are rendered with the sampler the bench's evaluation renders the
-//! same view with: its sampler choice (`crate::bench::sampler_choice`, the
-//! sampler rule by default) applied to the view's Jacobian at `R`
-//! ([`PatchJacobian::sampler`]), so a view the rule moves is drawn with the
-//! anisotropic sampler and every other view with one bilinear sample per texel
-//! from the mip level the warp's compression picks at that texel.
-//! [`PatchJacobian`] holds the Jacobian at the tile's centre of the warp from
-//! the patch grid at the reconstruction's patch resolution `R` -- not the
-//! tile's display resolution -- which the table's *Zoom* column prints the
+//! [`patch_color_image`] warps a photograph through a surfel's placement,
+//! re-anchored on the observation's keypoint first ([`render_placement`]), and
+//! [`placement_color_image`] is its body for a placement already where it
+//! should be, which the tile's hover view renders a wider placement through.
+//! The tile and its hover view are rendered with the sampler the bench's
+//! evaluation renders the same view with: its sampler choice
+//! (`crate::bench::sampler_choice`, the sampler rule by default) applied to the
+//! view's Jacobian at `R` ([`PatchJacobian::sampler`]), so a view the rule
+//! moves is drawn with the anisotropic sampler and every other view with one
+//! bilinear sample per texel from the mip level the warp's compression picks at
+//! that texel. [`PatchJacobian`] holds the Jacobian at the tile's centre of the
+//! warp from the patch grid at the reconstruction's patch resolution `R` -- not
+//! the tile's display resolution -- which the table's *Zoom* column prints the
 //! zoom of.
 //! [`stored_patch_image`] turns a patch bitmap into an opaque picture, which
 //! is what the header's patch slot draws at the track stage, and
@@ -40,32 +40,32 @@ use sfmtool_core::patch::cloud::OrientedPatch;
 pub(crate) const PATCH_RES: u32 = 64;
 
 /// One observation's patch tile, as an RGBA picture: `src` warped through
-/// `frame` re-anchored on `keypoint` ([`render_frame`]) at [`PATCH_RES`]
-/// texels a side with `sampler`, so the tile shows the surface as *this*
-/// sighting sees it rather than as the point's residual leaves it.
+/// `placement` re-anchored on `keypoint` ([`render_placement`]) at
+/// [`PATCH_RES`] texels a side with `sampler`, so the tile shows the surface as
+/// *this* sighting sees it rather than as the point's residual leaves it.
 ///
 /// The warp itself, with no `egui::Context` in it, so what a tile shows is
 /// testable without a texture manager -- which is what lets a headless test
 /// assert that two ways of naming the same place produce the same tile.
 pub(crate) fn patch_color_image(
-    frame: &OrientedPatch,
+    placement: &OrientedPatch,
     camera: &CameraIntrinsics,
     cam_from_world: &RigidTransform,
     keypoint: Option<[f64; 2]>,
     src: &ImageU8Pyramid,
     sampler: Sampler,
 ) -> egui::ColorImage {
-    let frame = render_frame(frame, camera, cam_from_world, keypoint);
-    frame_color_image(&frame, camera, cam_from_world, src, PATCH_RES, sampler)
+    let anchored = render_placement(placement, camera, cam_from_world, keypoint);
+    placement_color_image(&anchored, camera, cam_from_world, src, PATCH_RES, sampler)
 }
 
-/// `frame` warped out of `src` at `resolution` texels a side, as an RGBA
-/// image: the body of [`patch_color_image`] for a frame that is already where
-/// it should be.
+/// `placement` warped out of `src` at `resolution` texels a side, as an RGBA
+/// image: the body of [`patch_color_image`] for a placement that is already
+/// where it should be.
 ///
-/// Separate so that a wider frame can be rendered at the same sampling as the
-/// tile -- a frame `k` times as wide at `k` times the resolution -- which is
-/// what the tile shows in its hover view.
+/// Separate so that a wider placement can be rendered at the same sampling as
+/// the tile -- a placement `k` times as wide at `k` times the resolution --
+/// which is what the tile shows in its hover view.
 ///
 /// Under [`Sampler::BilinearMip`] each texel is one bilinear sample from the
 /// pyramid level the warp's local compression picks, `round(log2(s_major))`
@@ -78,15 +78,15 @@ pub(crate) fn patch_color_image(
 /// the level follows the smaller singular value and several samples are
 /// averaged along the more compressed direction, so the less compressed one
 /// keeps its detail.
-pub(crate) fn frame_color_image(
-    frame: &OrientedPatch,
+pub(crate) fn placement_color_image(
+    placement: &OrientedPatch,
     camera: &CameraIntrinsics,
     cam_from_world: &RigidTransform,
     src: &ImageU8Pyramid,
     resolution: u32,
     sampler: Sampler,
 ) -> egui::ColorImage {
-    let mut map = WarpMap::from_patch(frame, camera, cam_from_world, resolution);
+    let mut map = WarpMap::from_patch(placement, camera, cam_from_world, resolution);
     let tile = render_tile(src, &mut map, sampler);
     // Expand 3-channel RGB (same channel count as the cached source) to RGBA.
     let (w, h) = (tile.width() as usize, tile.height() as usize);
@@ -156,20 +156,20 @@ impl PatchJacobian {
 /// kernels render such a view.
 pub(crate) const FALLBACK_SAMPLER: Sampler = Sampler::BilinearMip;
 
-/// The frame one observation's tile is rendered through: the point's patch
+/// The placement one observation's tile is rendered through: the point's patch
 /// re-anchored so its centre projects onto `keypoint`, or the stored geometric
-/// frame when the observation has no keypoint to anchor on or the keypoint's ray
-/// cannot meet the patch (parallel to its plane, behind the camera under a
-/// ray-path model, or pointing away from a direction patch).
-pub(super) fn render_frame(
-    frame: &OrientedPatch,
+/// placement when the observation has no keypoint to anchor on or the
+/// keypoint's ray cannot meet the patch (parallel to its plane, behind the
+/// camera under a ray-path model, or pointing away from a direction patch).
+pub(super) fn render_placement(
+    placement: &OrientedPatch,
     camera: &CameraIntrinsics,
     cam_from_world: &RigidTransform,
     keypoint: Option<[f64; 2]>,
 ) -> OrientedPatch {
     keypoint
-        .and_then(|kp| frame.anchored_at_keypoint(camera, cam_from_world, kp))
-        .unwrap_or_else(|| frame.clone())
+        .and_then(|kp| placement.anchored_at_keypoint(camera, cam_from_world, kp))
+        .unwrap_or_else(|| placement.clone())
 }
 
 /// What a track's bitmap is, for the header's patch slot to say.

@@ -84,8 +84,8 @@ pub(super) fn render(
 /// The Jacobian at the centre of one observation's track-stage tile, in
 /// photograph pixels per patch-grid px, without the photograph: core's
 /// `patch_grid_jacobian` of the patch re-anchored where the observation sits
-/// ([`super::patch::render_frame`]), the frame [`image()`] renders the tile
-/// through, on a grid of `recon`'s patch resolution `R`
+/// ([`super::patch::render_placement`]), the placement [`image()`] renders the
+/// tile through, on a grid of `recon`'s patch resolution `R`
 /// ([`crate::bench::patch_resolution`]). What the *Zoom* cell prints the zoom
 /// of and the *Zoom* column orders by, and what `get_bench_track` reports for
 /// the row as `patch_jacobian`. The tile's display resolution
@@ -103,9 +103,9 @@ pub(crate) fn patch_jacobian(
     observation: usize,
 ) -> Option<PatchJacobian> {
     let (placement, camera, pose, keypoint) = track_tile_geometry(recon, track, observation)?;
-    let frame = super::patch::render_frame(placement, camera, &pose, Some(keypoint));
+    let anchored = super::patch::render_placement(placement, camera, &pose, Some(keypoint));
     let resolution = crate::bench::patch_resolution(recon) as usize;
-    patch_grid_jacobian(&frame, camera, &pose, resolution).map(PatchJacobian)
+    patch_grid_jacobian(&anchored, camera, &pose, resolution).map(PatchJacobian)
 }
 
 /// The sampler one observation's track-stage tile and its hover view are
@@ -170,9 +170,10 @@ pub(super) fn image(
     let site = crate::bench::observation_site(row)?;
     match &track.stage {
         Stage::Track(_) => {
-            let (frame, camera, pose, keypoint) = track_tile_geometry(recon, track, observation)?;
+            let (placement, camera, pose, keypoint) =
+                track_tile_geometry(recon, track, observation)?;
             Some(super::patch::patch_color_image(
-                frame,
+                placement,
                 camera,
                 &pose,
                 Some(keypoint),
@@ -217,8 +218,8 @@ pub(super) const CONTEXT_FACTOR: u32 = 3;
 /// and `(side, side)` its bottom-right.
 #[derive(Debug, Clone)]
 pub(super) struct TileContext {
-    /// The picture: the tile's own frame widened [`CONTEXT_FACTOR`] times, at
-    /// the tile's sampling.
+    /// The picture: the tile's own placement widened [`CONTEXT_FACTOR`] times,
+    /// at the tile's sampling.
     pub(super) image: egui::ColorImage,
     /// The texels the row's tile covers, which is the patch.
     pub(super) patch_box: egui::Rect,
@@ -245,7 +246,7 @@ pub(super) struct TileContext {
 /// The hover view of one observation's tile, or `None` wherever [`image()`]
 /// would render no tile.
 ///
-/// At the track stage the frame the tile is rendered through, re-anchored
+/// At the track stage the placement the tile is rendered through, re-anchored
 /// where the observation sits, is widened by [`CONTEXT_FACTOR`] about its
 /// centre and rendered at that many times the tile's resolution. At the cluster
 /// stage the member grid is sampled over that many times the cluster's radius
@@ -254,7 +255,7 @@ pub(super) struct TileContext {
 ///
 /// What is projected is what the row's *Proj. err* column measures to: the
 /// track's triangulated point, or before there is one the patch's own centre.
-/// The projected pixel is read onto the widened frame's plane through
+/// The projected pixel is read onto the widened placement's plane through
 /// `OrientedPatch::keypoint_plane_offset`, the reading the tile's own anchoring
 /// uses, so the marker sits on the part of the photograph the picture shows at
 /// that pixel.
@@ -270,15 +271,15 @@ pub(super) fn context(
     let k = CONTEXT_FACTOR;
     match &track.stage {
         Stage::Track(payload) => {
-            let frame = payload.placement.as_ref()?;
+            let placement = payload.placement.as_ref()?;
             let image = recon.image_table.images.get(img_idx)?;
             let camera = recon.image_table.cameras.get(image.camera_index as usize)?;
             let pose = crate::scene::cam_from_world(image);
-            let anchored = frame.anchored_at_keypoint(camera, &pose, site.pixel);
-            let mut wide = anchored.clone().unwrap_or_else(|| frame.clone());
+            let anchored = placement.anchored_at_keypoint(camera, &pose, site.pixel);
+            let mut wide = anchored.clone().unwrap_or_else(|| placement.clone());
             wide.half_extent = wide.half_extent.map(|h| h * f64::from(k));
             let side = super::patch::PATCH_RES * k;
-            let picture = super::patch::frame_color_image(
+            let picture = super::patch::placement_color_image(
                 &wide,
                 camera,
                 &pose,
@@ -288,9 +289,9 @@ pub(super) fn context(
             );
             let side = side as f32;
             // The pixel of the photograph at `pixel`, as a place in the
-            // picture: its ray met with the widened frame's plane, read on the
-            // frame's axes, `s` along `u` to the right and `t` along `v`
-            // upward, each `-1 ..= 1` across the picture.
+            // picture: its ray met with the widened placement's plane, read on
+            // the placement's axes, `s` along `u` to the right and `t` along
+            // `v` upward, each `-1 ..= 1` across the picture.
             let to_picture = |pixel: [f64; 2]| {
                 let offset = wide.keypoint_plane_offset(camera, &pose, pixel)?;
                 let s = offset.dot(&wide.u_axis) / wide.half_extent[0];
@@ -305,8 +306,8 @@ pub(super) fn context(
                 Some(_) => Some(egui::pos2(side / 2.0, side / 2.0)),
                 None => to_picture(site.pixel),
             };
-            let target = payload.position.unwrap_or(frame.center);
-            let projected = camera.project_homogeneous(&pose, target.coords, frame.w);
+            let target = payload.position.unwrap_or(placement.center);
+            let projected = camera.project_homogeneous(&pose, target.coords, placement.w);
             Some(TileContext {
                 image: picture,
                 patch_box: middle_box(side),

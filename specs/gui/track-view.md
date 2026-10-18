@@ -1460,7 +1460,7 @@ stretch of the photograph with few samples averages away detail the
 photograph has, so the zoom says how much of what the patch holds is the
 photograph's own detail. It is the Jacobian of the warp from the patch grid to
 the photograph, through the placement the row's tile is rendered through, the
-patch re-anchored where the observation sits (`patch::render_frame`), so it
+patch re-anchored where the observation sits (`patch::render_placement`), so it
 describes the warp the tile shows and not a separately derived placement.
 
 **The zoom is in patch-grid px at the reconstruction's patch resolution `R`**,
@@ -1745,7 +1745,7 @@ carries, and that discrepancy is what the *Proj. err* column reports: a column
 of matching tiles beside a large error is a well-aligned patch whose position or
 pose is off, not a bad match. The stored placement is used as it is when the
 observation has no keypoint or the keypoint's ray cannot meet the patch
-(`patch::render_frame`).
+(`patch::render_placement`).
 
 **Where the observation sits is one rule** at either stage: the track-stage
 keypoint, else the refined cluster position, else the seed it was proposed
@@ -1820,7 +1820,7 @@ it. The crop is the photograph itself, cut around the outline Image Detail's
 bench layer strokes for the row, with that outline over it in the row's
 verdict colour and none of the layer's other marks: no dot, no normal, no SIFT
 features. At the track stage the outline is the patch re-anchored where the
-observation sits (`crate::bench::geometry::anchored_frame`, the placement the tile
+observation sits (`crate::bench::geometry::anchored_placement`, the placement the tile
 is rendered through) with its boundary projected through the camera's own
 model (`geometry::project_outline`, the function Image Detail strokes), so on a
 fisheye the edges show as the curves they are. At the cluster stage it is the

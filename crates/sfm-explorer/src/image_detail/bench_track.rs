@@ -379,7 +379,7 @@ impl Layer {
     /// is one patch: two sightings in a photograph are two readings of where
     /// it lands, not two squares. Its colour is `in` when either is, so an
     /// image the track is `in` reads as `in`. It is drawn through
-    /// the frame re-anchored on that sighting, as the tile is rendered: the
+    /// the placement re-anchored on that sighting, as the tile is rendered: the
     /// sighting is where the patch sits in this photograph, and the geometric
     /// projection is where the 3D says it should, which the hollow centre and
     /// the projection-offset segment show separately.
@@ -387,7 +387,7 @@ impl Layer {
     /// The normal leaves the **anchored** centre, which is the sighting's dot,
     /// for the reason the outline is anchored: the arrow belongs to the square
     /// drawn, and one standing out of the hollow centre instead would part from
-    /// its own outline by the projection offset. The anchored frame is the
+    /// its own outline by the projection offset. The anchored placement is the
     /// patch moved across its own plane, so its normal line is parallel to the
     /// patch's and the two gestures read the same depth and the same facing off
     /// either; the square a person looks at is the one the pointer is read
@@ -495,9 +495,10 @@ impl Layer {
     /// An image counts as the track's when it holds an observation of any
     /// verdict, so an `out` sighting keeps the member drawing
     /// and only an image with none gets the ghost. What is projected is the
-    /// patch **itself**, not a frame re-anchored on a keypoint, because there is
-    /// no keypoint here to anchor on: the ghost is where the 3D places the
-    /// square, which is also where the hollow centre of a member image sits.
+    /// patch **itself**, not a placement re-anchored on a keypoint, because
+    /// there is no keypoint here to anchor on: the ghost is where the 3D places
+    /// the square, which is also where the hollow centre of a member image
+    /// sits.
     ///
     /// There is nothing to draw, and so no ghost, at the cluster stage (no
     /// shared geometry exists to project), at a track stage with no placement
@@ -949,7 +950,7 @@ fn square_of(
     let patch = payload.placement.as_ref()?;
     Some(match viewpoint {
         Viewpoint::Observation(observation) => {
-            geometry::anchored_frame(patch, camera, pose, track.observations.get(observation)?)
+            geometry::anchored_placement(patch, camera, pose, track.observations.get(observation)?)
         }
         Viewpoint::Image(_) => patch.clone(),
     })

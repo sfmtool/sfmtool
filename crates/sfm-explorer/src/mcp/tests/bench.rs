@@ -336,10 +336,10 @@ fn the_patch_tools_slide_resize_and_turn_and_each_is_one_version() {
         let track = state
             .bench_track(state.scene[0].id, &item)
             .expect("the track is on the bench");
-        let frame = track
+        let placement = track
             .track()
             .and_then(|payload| payload.placement.clone())
-            .expect("a frame");
+            .expect("a placement");
         for observation in &track.observations {
             let (camera, pose) = crate::bench::geometry::view_of(
                 &state.scene[0].edited().base.image_table,
@@ -347,7 +347,7 @@ fn the_patch_tools_slide_resize_and_turn_and_each_is_one_version() {
             )
             .expect("the fixture's images have cameras");
             let expected = camera
-                .project_homogeneous(&pose, frame.center.coords, frame.w)
+                .project_homogeneous(&pose, placement.center.coords, placement.w)
                 .expect("the demo's patch is in front of every camera");
             let site = observation.site().expect("a sighting");
             assert!(
@@ -370,11 +370,12 @@ fn the_patch_tools_slide_resize_and_turn_and_each_is_one_version() {
             sighting.image as usize,
         )
         .expect("the fixture's images have cameras");
-        let frame = track
+        let placement = track
             .track()
             .and_then(|payload| payload.placement.clone())
             .expect("a track from a point carries the stored patch");
-        let anchored = crate::bench::geometry::anchored_frame(&frame, &camera, &pose, sighting);
+        let anchored =
+            crate::bench::geometry::anchored_placement(&placement, &camera, &pose, sighting);
         (anchored, camera, pose)
     };
     let corner = |patch: &sfmtool_core::patch::cloud::OrientedPatch,
@@ -415,14 +416,14 @@ fn the_patch_tools_slide_resize_and_turn_and_each_is_one_version() {
     // The claim, on the outline as it is **redrawn** -- the patch re-anchored
     // on the sighting whose edge was dragged, which is what a person sees:
     // that edge lands on the pixel the call named, the far edge has not moved,
-    // and the frame is still square. A thousandth of a pixel, because the
+    // and the placement is still square. A thousandth of a pixel, because the
     // redrawing goes through an `f32` keypoint slot.
     let (redrawn, _, _) = outline(&state);
-    let frame = state
+    let placement = state
         .bench_track(state.scene[0].id, &item)
         .and_then(|track| track.track().and_then(|payload| payload.placement.clone()))
-        .expect("a frame");
-    assert_eq!(frame.half_extent[0], frame.half_extent[1]);
+        .expect("a placement");
+    assert_eq!(placement.half_extent[0], placement.half_extent[1]);
     let landed = corner(&redrawn, &camera, &pose, 1.0, 0.0);
     assert!(
         (landed[0] - target[0]).abs() < 1e-3 && (landed[1] - target[1]).abs() < 1e-3,
@@ -450,9 +451,12 @@ fn the_patch_tools_slide_resize_and_turn_and_each_is_one_version() {
     let after = state
         .bench_track(state.scene[0].id, &item)
         .and_then(|track| track.track().and_then(|payload| payload.placement.clone()))
-        .expect("a frame");
-    assert_eq!(after.center, frame.center, "a turn moves the patch nowhere");
-    assert!((after.normal() - frame.normal()).norm() < 1e-12);
+        .expect("a placement");
+    assert_eq!(
+        after.center, placement.center,
+        "a turn moves the patch nowhere"
+    );
+    assert!((after.normal() - placement.normal()).norm() < 1e-12);
 
     // And the three are versions of one history, walked back one at a time.
     for _ in 0..3 {
@@ -543,7 +547,7 @@ fn the_patch_tools_take_a_pixel_in_a_camera_image_the_track_has_no_sighting_in()
         state
             .bench_track(id, &item)
             .and_then(|track| track.track().and_then(|payload| payload.placement.clone()))
-            .expect("a frame")
+            .expect("a placement")
     };
     let corner = |patch: &sfmtool_core::patch::cloud::OrientedPatch, s: f64, t: f64| {
         let (xyz, w) = patch.corner_homogeneous(s, t);
@@ -652,13 +656,13 @@ fn translating_a_bench_patch_along_its_normal_says_how_far_and_which_way() {
     let (mut state, mut viewer) = benchable();
     let item = on_the_bench(&mut state, &mut viewer);
     let before = version_count(&state);
-    let frame = |state: &AppState| {
+    let placement = |state: &AppState| {
         state
             .bench_track(state.scene[0].id, &item)
             .and_then(|track| track.track().and_then(|payload| payload.placement.clone()))
             .expect("a track from a point carries the stored patch")
     };
-    let was = frame(&state);
+    let was = placement(&state);
 
     let distance = -0.042;
     let moved = call(
@@ -675,7 +679,7 @@ fn translating_a_bench_patch_along_its_normal_says_how_far_and_which_way() {
     // The sentence a drag of the normal's segment writes, and the sign is in
     // it: an offset toward the cameras and one away from them are opposite
     // answers about how far off the patch is.
-    let now = frame(&state);
+    let now = placement(&state);
     assert_eq!(
         moved["label"].as_str().expect("a version label"),
         format!(
@@ -730,8 +734,8 @@ fn translating_a_bench_patch_along_its_normal_says_how_far_and_which_way() {
 /// A track at infinity has no normal standing off it -- a direction patch's
 /// normal is its own bearing -- so the **normal part** of a translation is
 /// refused in those words while a purely tangential one is carried; and a
-/// displacement JSON cannot carry is turned away at the parse. The refusals push
-/// nothing.
+/// displacement JSON cannot carry is turned away at the parse. The refusals
+/// push nothing.
 #[test]
 fn a_bearing_refuses_a_translation_along_its_normal_and_takes_a_tangential_one() {
     let (mut state, mut viewer) = benchable_with(bearing_demo());
@@ -799,13 +803,13 @@ fn tilting_a_bench_patch_turns_its_normal_and_says_how_far() {
     let (mut state, mut viewer) = benchable();
     let item = on_the_bench(&mut state, &mut viewer);
     let before = version_count(&state);
-    let frame = |state: &AppState| {
+    let placement = |state: &AppState| {
         state
             .bench_track(state.scene[0].id, &item)
             .and_then(|track| track.track().and_then(|payload| payload.placement.clone()))
             .expect("a track from a point carries the stored patch")
     };
-    let was = frame(&state);
+    let was = placement(&state);
 
     // Ten degrees over toward the patch's own `+u`, which every observation can
     // still see it at, so the turn is made whole. Named at three times unit
@@ -836,7 +840,7 @@ fn tilting_a_bench_patch_turns_its_normal_and_says_how_far() {
 
     // The patch really faces there now, and its centre and size did not move:
     // a tilt is a turn about the centre and nothing else.
-    let now = frame(&state);
+    let now = placement(&state);
     assert_eq!(now.center, was.center);
     assert_eq!(now.half_extent, was.half_extent);
     assert!(
@@ -2689,12 +2693,12 @@ fn fit_and_set_stage_run_as_background_tasks_and_the_evaluation_follows_them() {
 fn a_tilt_scores_the_rows_against_the_bitmap_rendered_after_it() {
     let (mut state, mut viewer) = benchable();
     let item = on_the_bench(&mut state, &mut viewer);
-    let frame = state
+    let placement = state
         .bench_track(state.scene[0].id, &item)
         .and_then(|track| track.track().and_then(|payload| payload.placement.clone()))
         .expect("a track from a point carries the stored patch");
     let (sin, cos) = 10.0_f64.to_radians().sin_cos();
-    let asked = frame.normal() * cos + frame.u_axis * sin;
+    let asked = placement.normal() * cos + placement.u_axis * sin;
     call(
         &mut state,
         &mut viewer,
@@ -4179,8 +4183,8 @@ fn create_bench_track_carries_the_read_only_bars_for_the_viewed_point_only() {
 /// A `sift_files` node's bench is view-only: a point goes on the bench, and
 /// every tool that would edit it is refused up front with the sentence that
 /// names Convert to Embedded Patches, pushing nothing. After the conversion,
-/// putting the same point on the bench again rebuilds the frame-less item
-/// with a patch frame under its own label, and the item takes edits.
+/// putting the same point on the bench again rebuilds the placement-less item
+/// with a patch placement under its own label, and the item takes edits.
 #[test]
 fn a_sift_files_bench_is_view_only_until_converted_and_rebenched() {
     let dir = tempfile::tempdir().expect("a temporary directory");
@@ -4197,11 +4201,12 @@ fn a_sift_files_bench_is_view_only_until_converted_and_rebenched() {
         json!({ "reconstruction_label": "run_a", "point": 0 }),
     );
     let item = made["item"].as_str().expect("an item").to_string();
-    let frameless = |state: &AppState| match &state.bench_track(id, &item).expect("on").stage {
+    let lacks_placement = |state: &AppState| match &state.bench_track(id, &item).expect("on").stage
+    {
         sfmtool_core::bench::Stage::Track(payload) => payload.placement.is_none(),
         sfmtool_core::bench::Stage::Cluster(_) => panic!("a point goes on at the track stage"),
     };
-    assert!(frameless(&state));
+    assert!(lacks_placement(&state));
     let versions = version_count(&state);
 
     let refusals = [
@@ -4310,7 +4315,7 @@ fn a_sift_files_bench_is_view_only_until_converted_and_rebenched() {
     state.finish_background_task();
     assert!(state.bench_edit_refusal(id).is_none());
     assert!(
-        frameless(&state),
+        lacks_placement(&state),
         "the conversion leaves the bench as it was"
     );
 
@@ -4324,7 +4329,10 @@ fn a_sift_files_bench_is_view_only_until_converted_and_rebenched() {
     );
     assert_eq!(again["item"], json!(item), "{again}");
     assert_eq!(version_count(&state), versions + 1);
-    assert!(!frameless(&state), "the rebuilt item carries a patch frame");
+    assert!(
+        !lacks_placement(&state),
+        "the rebuilt item carries a patch placement"
+    );
     // A second put of the point only focuses the rebuilt item.
     call(
         &mut state,
@@ -4346,9 +4354,10 @@ fn a_sift_files_bench_is_view_only_until_converted_and_rebenched() {
 
 /// The bench is editable from the conversion on, so an item put on it before
 /// the conversion can take edits before its point is put on the bench again.
-/// The re-bench gives the item the point's frame and keeps those edits: the
+/// The re-bench gives the item the point's placement and keeps those edits: the
 /// verdict, the thresholds and a sighting all survive it. A duplicate made
-/// before the re-bench would never get a frame, so it is refused until then.
+/// before the re-bench would never get a placement, so it is refused until
+/// then.
 #[test]
 fn edits_made_between_the_conversion_and_the_rebench_survive_it() {
     let dir = tempfile::tempdir().expect("a temporary directory");
@@ -4371,7 +4380,7 @@ fn edits_made_between_the_conversion_and_the_rebench_survive_it() {
     state.finish_background_task();
     assert!(state.bench_edit_refusal(id).is_none());
 
-    // A copy now would drop the origin and never get a frame.
+    // A copy now would drop the origin and never get a placement.
     let versions = version_count(&state);
     let error = refused_call(
         &mut state,
@@ -4385,7 +4394,7 @@ fn edits_made_between_the_conversion_and_the_rebench_survive_it() {
     );
     assert_eq!(version_count(&state), versions, "a refusal pushes nothing");
 
-    // Edits the frame-less item takes before the re-bench.
+    // Edits the placement-less item takes before the re-bench.
     call(
         &mut state,
         &mut viewer,
@@ -4420,7 +4429,7 @@ fn edits_made_between_the_conversion_and_the_rebench_survive_it() {
     };
     assert!(
         payload.placement.is_some(),
-        "the item has the point's frame"
+        "the item has the point's placement"
     );
     assert_eq!(rebuilt.observations.len(), edited.observations.len());
     assert_eq!(
@@ -4434,7 +4443,7 @@ fn edits_made_between_the_conversion_and_the_rebench_survive_it() {
         "the sighted observation is kept as it was"
     );
 
-    // With the frame in place, a copy keeps it.
+    // With the placement in place, a copy keeps it.
     call(
         &mut state,
         &mut viewer,

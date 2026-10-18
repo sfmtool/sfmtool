@@ -66,7 +66,7 @@ fn staged_track() -> (AppState, crate::scene::ReconId, EditableTrack) {
     (state, id, track)
 }
 
-/// The track's frame, which every test here has one of.
+/// The track's placement, which every test here has one of.
 fn placement_of(track: &EditableTrack) -> &sfmtool_core::patch::cloud::OrientedPatch {
     match &track.stage {
         Stage::Track(payload) => payload
@@ -92,13 +92,15 @@ fn the_figure_holds_the_frame_the_disc_the_arrow_and_one_mark_per_observation() 
 
     let figure = figure_of(&state, id, &track).expect("a track-stage track draws a figure");
 
-    assert_eq!(figure.frame.len(), 4, "the square is four edges");
+    assert_eq!(figure.square.len(), 4, "the square is four edges");
     assert_eq!(
         figure.disc.len(),
         CIRCLE_SEGMENTS * 3,
         "the disc is one triangle per segment, fanned from the centre"
     );
-    let normal = figure.normal.expect("a finite frame carries its normal");
+    let normal = figure
+        .normal
+        .expect("a finite placement carries its normal");
     assert_eq!(normal.len(), 3, "the segment and the arrowhead's two barbs");
     assert_eq!(figure.marks.len(), with_keypoints);
     for mark in &figure.marks {
@@ -106,7 +108,7 @@ fn the_figure_holds_the_frame_the_disc_the_arrow_and_one_mark_per_observation() 
     }
     // The arrow stands off the centre along the outward normal, one side
     // length long, and the barbs come back off its tip.
-    let centre = figure.frame[0].a;
+    let centre = figure.square[0].a;
     assert_ne!(normal[0].b, normal[0].a, "the normal has length");
     assert_eq!(normal[1].a, normal[0].b, "a barb starts at the tip");
     assert_eq!(normal[2].a, normal[0].b);
@@ -145,9 +147,9 @@ fn a_track_at_infinity_draws_directions_and_no_normal() {
         unreachable!("the staged track is at the track stage");
     };
     payload.at_infinity = true;
-    let frame = payload.placement.as_mut().expect("a patch");
-    frame.center = Point3::from((frame.center - seen_from).normalize());
-    frame.w = 0.0;
+    let placement = payload.placement.as_mut().expect("a patch");
+    placement.center = Point3::from((placement.center - seen_from).normalize());
+    placement.w = 0.0;
 
     let figure = figure_of(&state, id, &track).expect("a figure");
 
@@ -209,8 +211,8 @@ fn each_mark_reprojects_onto_the_keypoint_it_came_from() {
     let Stage::Track(payload) = &track.stage else {
         panic!("a track-stage track");
     };
-    let frame = payload.placement.as_ref().expect("a frame");
-    let lift = frame.normal() * (super::PLANE_LIFT * frame.half_extent[0]);
+    let placement = payload.placement.as_ref().expect("a placement");
+    let lift = placement.normal() * (super::PLANE_LIFT * placement.half_extent[0]);
 
     for (observation, mark) in placed.iter().zip(&figure.marks) {
         let (camera, pose) =
@@ -248,10 +250,10 @@ fn the_marks_carry_their_verdicts_while_the_frame_and_the_normal_stay_in() {
     let figure = figure_of(&state, id, &judged).expect("a figure");
 
     let in_color = rgba(crate::bench::IN_COLOR);
-    for stroke in figure.frame.iter().chain(figure.normal.iter().flatten()) {
+    for stroke in figure.square.iter().chain(figure.normal.iter().flatten()) {
         assert_eq!(
             stroke.color, in_color,
-            "the frame and the normal are the patch, not any one sighting"
+            "the square and the normal are the patch, not any one sighting"
         );
     }
     for vertex in &figure.disc {
@@ -267,7 +269,7 @@ fn the_marks_carry_their_verdicts_while_the_frame_and_the_normal_stay_in() {
 }
 
 #[test]
-fn the_fog_distance_is_four_half_lengths_of_the_frame() {
+fn the_fog_distance_is_four_half_lengths_of_the_placement() {
     let (state, id, track) = staged_track();
     let half = placement_of(&track).half_extent[0];
     let figure = figure_of(&state, id, &track).expect("a figure");
@@ -279,10 +281,10 @@ fn the_fog_distance_is_four_half_lengths_of_the_frame() {
 /// The order the pointer takes the handles in, where their reaches overlap.
 ///
 /// Built from the projected geometry directly rather than driven through a
-/// frame, because what is claimed is the **order** and a view that puts three
-/// handles within eight pixels of each other is a view no test could read
-/// anything else off. The normal's segment leaves the frame's centre, where the
-/// dot and every mark of a well-placed track already sit, so it has to come
+/// placement, because what is claimed is the **order** and a view that puts
+/// three handles within eight pixels of each other is a view no test could read
+/// anything else off. The normal's segment leaves the placement's centre, where
+/// the dot and every mark of a well-placed track already sit, so it has to come
 /// last or it would take presses meant for them.
 #[test]
 fn the_normal_segment_is_the_last_handle_the_pointer_can_take() {

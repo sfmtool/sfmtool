@@ -499,7 +499,7 @@ fn the_reference_cell_names_the_cost_and_the_term_that_adds_most_to_it() {
         .starts_with("Not considered for the reference view"));
 
     // Nothing at the cluster stage or for a track that could not be evaluated.
-    let refused = crate::bench::live::Evaluation::Refused("no frame".to_string());
+    let refused = crate::bench::live::Evaluation::Refused("no placement".to_string());
     let picked = row(picked_standing());
     let rows = rows_of(&picked);
     assert_eq!(
@@ -1115,7 +1115,7 @@ fn every_row_draws_a_tile_at_either_stage() {
 
     state
         .start_bench_stage(id, &label, StageKind::Cluster)
-        .expect("a track with a frame downgrades");
+        .expect("a track with a placement downgrades");
     state.finish_background_task();
     run_frame(&mut panel, &ctx, &state);
     assert!(
@@ -1208,7 +1208,7 @@ fn a_search_candidate_draws_its_tile_where_the_seed_put_it() {
     // picture the row draws once a reading has written that pixel as its
     // keypoint: where an observation is, is one question however it is
     // answered.
-    let frame = match &track.stage {
+    let placement = match &track.stage {
         Stage::Track(payload) => payload.placement.clone().expect("a fitted patch"),
         Stage::Cluster(_) => panic!("a track put on from a point is at the track stage"),
     };
@@ -1216,12 +1216,18 @@ fn a_search_candidate_draws_its_tile_where_the_seed_put_it() {
     let camera = &recon.image_table.cameras[sfmr_image.camera_index as usize];
     let cam_from_world = crate::scene::cam_from_world(sfmr_image);
     let sampler = super::tile::tile_sampler(recon, &track, candidate);
-    let at_the_seed =
-        super::patch::patch_color_image(&frame, camera, &cam_from_world, Some(site), &src, sampler);
+    let at_the_seed = super::patch::patch_color_image(
+        &placement,
+        camera,
+        &cam_from_world,
+        Some(site),
+        &src,
+        sampler,
+    );
     assert_eq!(drawn, at_the_seed, "the tile is not cut around the seed");
 
     let at_the_projection =
-        super::patch::patch_color_image(&frame, camera, &cam_from_world, None, &src, sampler);
+        super::patch::patch_color_image(&placement, camera, &cam_from_world, None, &src, sampler);
     assert_ne!(
         drawn, at_the_projection,
         "the tile is the point's own projection rather than the sighting's place"
@@ -1239,7 +1245,7 @@ fn the_cells_follow_the_stage_the_track_is_in() {
 
     state
         .start_bench_stage(id, &label, StageKind::Cluster)
-        .expect("a track with a frame downgrades");
+        .expect("a track with a placement downgrades");
     state.finish_background_task();
     state.settle_bench_evaluation();
     run_frame(&mut panel, &ctx, &state);
@@ -2315,8 +2321,8 @@ fn bearing_track() -> sfmtool_core::bench::EditableTrack {
     let mut track = EditableTrack::empty_cluster();
     track.stage = Stage::Track(TrackPayload {
         position: Some(direction),
-        // The track's own flag is what the header reads; the frame's `w` agrees
-        // with it wherever a frame exists.
+        // The track's own flag is what the header reads; the placement's `w`
+        // agrees with it wherever a placement exists.
         at_infinity: true,
         placement: Some(OrientedPatch::from_infinity_direction(
             direction,
@@ -2469,7 +2475,7 @@ fn the_cluster_stage_shows_its_template_in_the_slot() {
     let (mut state, id, label, mut panel, ctx) = on_the_bench();
     state
         .start_bench_stage(id, &label, StageKind::Cluster)
-        .expect("a track with a frame downgrades");
+        .expect("a track with a placement downgrades");
     state.finish_background_task();
     run_frame(&mut panel, &ctx, &state);
     let track = state.bench_track(id, &label).expect("on the bench");
@@ -3551,7 +3557,7 @@ fn a_tile_s_hover_view_holds_the_tile_in_its_middle_at_either_stage() {
 
     state
         .start_bench_stage(id, &label, StageKind::Cluster)
-        .expect("a track with a frame downgrades");
+        .expect("a track with a placement downgrades");
     state.finish_background_task();
     check(&state, "cluster stage");
 }
@@ -3571,7 +3577,7 @@ fn a_hover_view_marks_the_projection_as_far_off_as_the_row_s_error() {
     let Stage::Track(payload) = &track.stage else {
         panic!("a track put on from a point is at the track stage");
     };
-    let frame = payload.placement.clone().expect("a patch");
+    let placement = payload.placement.clone().expect("a patch");
     let position = payload.position.expect("a triangulated point");
 
     // A sighting of the point in a fourth image, placed a few pixels off
@@ -3581,7 +3587,7 @@ fn a_hover_view_marks_the_projection_as_far_off_as_the_row_s_error() {
     let (camera, pose) =
         crate::bench::geometry::view_of(&recon.image_table, image).expect("a view");
     let projected = camera
-        .project_homogeneous(&pose, position.coords, frame.w)
+        .project_homogeneous(&pose, position.coords, placement.w)
         .expect("the demo cameras see every point");
     let off = [4.0, -3.0];
     state
@@ -3620,13 +3626,13 @@ fn a_hover_view_marks_the_projection_as_far_off_as_the_row_s_error() {
     );
     let keypoint = context.keypoint.expect("a keypoint");
     let mark = context.projection.expect("a projection mark");
-    // The picture's own map back into the photograph: the widened frame the
+    // The picture's own map back into the photograph: the widened placement the
     // picture was rendered through, a texel read as `(s, t)` on it, and that
     // place on the plane projected. The patch is seen at a slant here, so a
     // single pixels-per-texel scale would not do; the map is what scales an
     // offset in the picture into the photograph's pixels.
     let keypoint_px = [projected[0] + off[0], projected[1] + off[1]];
-    let mut wide = frame
+    let mut wide = placement
         .anchored_at_keypoint(&camera, &pose, keypoint_px)
         .expect("the keypoint meets the patch");
     wide.half_extent = wide
@@ -3682,7 +3688,7 @@ fn a_cluster_stage_hover_view_has_no_projection() {
     let (mut state, id, label, _, _) = on_the_bench();
     state
         .start_bench_stage(id, &label, StageKind::Cluster)
-        .expect("a track with a frame downgrades");
+        .expect("a track with a placement downgrades");
     state.finish_background_task();
     let (_, context) = tile_and_context(&state, id, &label, 0);
     assert_eq!(context.projection, None);
@@ -4303,7 +4309,7 @@ fn every_row_draws_a_crop_at_either_stage() {
 
     state
         .start_bench_stage(id, &label, StageKind::Cluster)
-        .expect("a track with a frame downgrades");
+        .expect("a track with a placement downgrades");
     state.finish_background_task();
     run_frame(&mut panel, &ctx, &state);
     assert!(
@@ -4412,7 +4418,7 @@ fn a_crop_holds_the_whole_outline_with_a_pixel_to_spare() {
 
     state
         .start_bench_stage(id, &label, StageKind::Cluster)
-        .expect("a track with a frame downgrades");
+        .expect("a track with a placement downgrades");
     state.finish_background_task();
     check(&state, "cluster stage");
 }
@@ -4475,9 +4481,9 @@ fn a_crop_s_hover_view_gives_the_axes_in_photograph_pixels() {
     let recon = state.node(id).expect("loaded").recon();
     let (camera, pose) =
         crate::bench::geometry::view_of(&recon.image_table, row.image as usize).expect("a view");
-    let frame = crate::bench::geometry::anchored_frame(&patch, &camera, &pose, row);
+    let placement = crate::bench::geometry::anchored_placement(&patch, &camera, &pose, row);
     let across = |s: f64, t: f64| {
-        let (xyz, w) = frame.corner_homogeneous(s, t);
+        let (xyz, w) = placement.corner_homogeneous(s, t);
         camera.project_homogeneous(&pose, xyz, w).expect("projects")
     };
     let chord = |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).hypot(a[1] - b[1]);
@@ -4501,7 +4507,7 @@ fn a_crop_s_hover_view_gives_the_axes_in_photograph_pixels() {
 
     state
         .start_bench_stage(id, &label, StageKind::Cluster)
-        .expect("a track with a frame downgrades");
+        .expect("a track with a placement downgrades");
     state.finish_background_task();
     let track = state.bench_track(id, &label).expect("on the bench").clone();
     let Stage::Cluster(payload) = &track.stage else {
@@ -4577,7 +4583,7 @@ fn a_crop_s_hover_view_marks_the_keypoint_and_the_projection() {
     let Stage::Track(payload) = &track.stage else {
         panic!("a track put on from a point is at the track stage");
     };
-    let frame = payload.placement.clone().expect("a patch");
+    let placement = payload.placement.clone().expect("a patch");
     let position = payload.position.expect("a triangulated point");
 
     // A sighting of the point in a fourth image, 5 px off its projection.
@@ -4586,7 +4592,7 @@ fn a_crop_s_hover_view_marks_the_keypoint_and_the_projection() {
     let (camera, pose) =
         crate::bench::geometry::view_of(&recon.image_table, image).expect("a view");
     let projected = camera
-        .project_homogeneous(&pose, position.coords, frame.w)
+        .project_homogeneous(&pose, position.coords, placement.w)
         .expect("the demo cameras see every point");
     let keypoint = [projected[0] + 4.0, projected[1] - 3.0];
     state
@@ -4643,7 +4649,7 @@ fn a_crop_s_hover_view_marks_the_keypoint_and_the_projection() {
 
     state
         .start_bench_stage(id, &label, StageKind::Cluster)
-        .expect("a track with a frame downgrades");
+        .expect("a track with a placement downgrades");
     state.finish_background_task();
     let (_, _, context) = crop_and_context(&state, id, &label, 0);
     assert_eq!(context.projection, None);
@@ -4654,18 +4660,19 @@ fn a_crop_s_hover_view_marks_the_keypoint_and_the_projection() {
     );
 }
 
-// ── The tile's frame, and the name column ───────────────────────────────────
+// ── The tile's placement, and the name column
+// ───────────────────────────────────
 
-/// A row's tile is rendered through the point's frame re-anchored so that its
-/// centre projects onto the observation's own keypoint, even when the keypoint
-/// sits pixels off where the geometric frame lands; with no keypoint the
-/// geometric frame is used as it is.
+/// A row's tile is rendered through the point's placement re-anchored so that
+/// its centre projects onto the observation's own keypoint, even when the
+/// keypoint sits pixels off where the geometric placement lands; with no
+/// keypoint the geometric placement is used as it is.
 #[test]
 fn the_tile_frame_is_anchored_on_the_observation_s_own_keypoint() {
     let (state, id) = state();
     let node = state.node(id).expect("loaded");
     let view = node.edited().point(POINT).expect("a live point");
-    let frame = view.placement().expect("the point has a frame");
+    let placement = view.placement().expect("the point has a placement");
     for (k, obs) in view.observations().iter().enumerate() {
         let (camera, pose) =
             crate::bench::geometry::view_of(&node.recon().image_table, obs.image_index as usize)
@@ -4673,33 +4680,37 @@ fn the_tile_frame_is_anchored_on_the_observation_s_own_keypoint() {
         let stored = view.keypoint_xy(k).expect("a stored keypoint");
         // Displaced from the projection, so the two anchors differ.
         let keypoint = [f64::from(stored[0]) + 6.0, f64::from(stored[1]) - 4.0];
-        let centre = |frame: &sfmtool_core::patch::cloud::OrientedPatch| {
+        let centre = |placement: &sfmtool_core::patch::cloud::OrientedPatch| {
             camera
-                .project_homogeneous(&pose, frame.center.coords, frame.w)
+                .project_homogeneous(&pose, placement.center.coords, placement.w)
                 .expect("the centre projects")
         };
-        let geometric = centre(&frame);
+        let geometric = centre(&placement);
         let miss = (geometric[0] - keypoint[0]).hypot(geometric[1] - keypoint[1]);
-        assert!(miss > 1.0, "the geometric frame missed by only {miss} px");
+        assert!(
+            miss > 1.0,
+            "the geometric placement missed by only {miss} px"
+        );
 
-        let anchored = super::patch::render_frame(&frame, &camera, &pose, Some(keypoint));
+        let anchored = super::patch::render_placement(&placement, &camera, &pose, Some(keypoint));
         let landed = centre(&anchored);
         assert!(
             (landed[0] - keypoint[0]).abs() < 1e-6 && (landed[1] - keypoint[1]).abs() < 1e-6,
-            "the anchored frame is centred at {landed:?}, not {keypoint:?}"
+            "the anchored placement is centred at {landed:?}, not {keypoint:?}"
         );
 
-        // With no keypoint to anchor on, the stored frame is drawn as it is.
-        let unanchored = super::patch::render_frame(&frame, &camera, &pose, None);
-        assert_eq!(unanchored.center, frame.center);
+        // With no keypoint to anchor on, the stored placement is drawn as it
+        // is.
+        let unanchored = super::patch::render_placement(&placement, &camera, &pose, None);
+        assert_eq!(unanchored.center, placement.center);
     }
 }
 
 /// A keypoint whose ray cannot meet the patch -- here a direction patch
-/// pointing behind the camera -- leaves the tile on the stored frame rather
-/// than on no frame at all.
+/// pointing behind the camera -- leaves the tile on the stored placement rather
+/// than on no placement at all.
 #[test]
-fn a_keypoint_whose_ray_cannot_meet_the_patch_falls_back_to_the_geometric_frame() {
+fn a_keypoint_whose_ray_cannot_meet_the_patch_falls_back_to_the_geometric_placement() {
     use nalgebra::{Point3, Vector3};
     let (state, id) = state();
     let (camera, pose) =
@@ -4713,7 +4724,7 @@ fn a_keypoint_whose_ray_cannot_meet_the_patch_falls_back_to_the_geometric_frame(
     assert!(behind
         .anchored_at_keypoint(&camera, &pose, [320.0, 240.0])
         .is_none());
-    let rendered = super::patch::render_frame(&behind, &camera, &pose, Some([320.0, 240.0]));
+    let rendered = super::patch::render_placement(&behind, &camera, &pose, Some([320.0, 240.0]));
     assert_eq!(rendered.center, behind.center);
     assert_eq!(rendered.w, behind.w);
 }
@@ -5844,7 +5855,7 @@ fn the_hover_bitmap_is_none_at_the_cluster_stage() {
     let (mut state, id, label, mut panel, ctx) = on_the_bench();
     state
         .start_bench_stage(id, &label, StageKind::Cluster)
-        .expect("a track with a frame downgrades");
+        .expect("a track with a placement downgrades");
     state.finish_background_task();
     let track = state.bench_track(id, &label).expect("on the bench").clone();
     assert_eq!(track.stage_kind(), StageKind::Cluster);
@@ -6212,7 +6223,7 @@ fn an_evaluated_row_hovers_the_ellipses_its_measurement_carries_at_both_stages()
 
     state
         .start_bench_stage(id, &label, StageKind::Cluster)
-        .expect("a track with a frame downgrades");
+        .expect("a track with a placement downgrades");
     state.finish_background_task();
     state.settle_bench_evaluation();
     run_frame(&mut panel, &ctx, &state);

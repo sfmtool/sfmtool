@@ -211,7 +211,7 @@ impl Viewer3D {
         let Some(bench) = live else {
             return false;
         };
-        let (Some(frame), Some(figure)) = (
+        let (Some(placement), Some(figure)) = (
             bench_track::placement_of(bench.track),
             self.bench_figure.as_ref(),
         ) else {
@@ -232,8 +232,8 @@ impl Viewer3D {
         // handle takes no press and shows no cursor, which is a refusal the
         // person can see in the figure.
         let eye = into_recon.apply_to_point(&self.camera.position());
-        let plane_refused = geometry::plane_is_edge_on(frame, eye);
-        let normal_refused = geometry::normal_is_end_on(frame, eye);
+        let plane_refused = geometry::plane_is_edge_on(placement, eye);
+        let normal_refused = geometry::normal_is_end_on(placement, eye);
         // The arrowhead takes no refusal of its own, and needs none: its two
         // gestures are decided by the same cosine the two above are, at a third
         // bar, and each is well determined exactly where the other is not.
@@ -241,7 +241,7 @@ impl Viewer3D {
             figure,
             &self.camera,
             rect,
-            geometry::tilt_gesture(frame, eye),
+            geometry::tilt_gesture(placement, eye),
         );
         let takes_press = |handle: bench_track::Handle| !match handle {
             bench_track::Handle::Normal => normal_refused,
@@ -273,7 +273,7 @@ impl Viewer3D {
                 .filter(|_| response.contains_pointer())
                 .and_then(|press| Some((press, handles.hit(press).filter(|h| takes_press(*h))?)))
                 .and_then(|(press, handle)| {
-                    let at = self.bench_ray_point(rect, frame, &into_recon, press, handle)?;
+                    let at = self.bench_ray_point(rect, placement, &into_recon, press, handle)?;
                     Some(bench_track::Drag::new(bench.node, handle, at, press))
                 });
             if let Some(drag) = taken {
@@ -289,7 +289,7 @@ impl Viewer3D {
             .or(pointer)
             .zip(self.bench_drag.map(|drag| drag.handle))
         {
-            let at = self.bench_ray_point(rect, frame, &into_recon, pos, handle);
+            let at = self.bench_ray_point(rect, placement, &into_recon, pos, handle);
             // Escape abandons the gesture. The drag is kept until the button
             // comes up so the viewport does not start orbiting halfway through.
             let cancelled = ui.input(|i| i.key_pressed(egui::Key::Escape));
@@ -306,7 +306,7 @@ impl Viewer3D {
             if let Some(drag) = self.bench_drag.take() {
                 ended = true;
                 self.bench_gesture = if drag.moved {
-                    drag.edit(frame).map(bench_track::BenchGesture::Edit)
+                    drag.edit(placement).map(bench_track::BenchGesture::Edit)
                 } else if let bench_track::Handle::Circle { observation } = drag.handle {
                     (!drag.cancelled).then_some(bench_track::BenchGesture::SelectRow(observation))
                 } else {
@@ -342,13 +342,13 @@ impl Viewer3D {
     ///
     /// **The handle decides what the ray is met with**, because that is what
     /// the gesture is about: the three plane handles name a point of the
-    /// frame's plane, the normal's segment a point of the line the normal runs
-    /// along, and the arrowhead a point of whichever plane the gesture it took
-    /// at the press reads.
+    /// placement's plane, the normal's segment a point of the line the normal
+    /// runs along, and the arrowhead a point of whichever plane the gesture it
+    /// took at the press reads.
     fn bench_ray_point(
         &self,
         rect: Rect,
-        frame: &sfmtool_core::patch::cloud::OrientedPatch,
+        placement: &sfmtool_core::patch::cloud::OrientedPatch,
         into_recon: &sfmtool_core::Se3Transform,
         pos: egui::Pos2,
         handle: bench_track::Handle,
@@ -357,11 +357,13 @@ impl Viewer3D {
         let origin = into_recon.apply_to_point(&origin);
         let direction = into_recon.rotation.to_rotation_matrix() * direction;
         match handle {
-            bench_track::Handle::Normal => geometry::normal_line_point(frame, origin, direction),
-            bench_track::Handle::Arrowhead(tilt) => {
-                geometry::tilt_point(frame, tilt, origin, direction)
+            bench_track::Handle::Normal => {
+                geometry::normal_line_point(placement, origin, direction)
             }
-            _ => geometry::plane_point(frame, origin, direction),
+            bench_track::Handle::Arrowhead(tilt) => {
+                geometry::tilt_point(placement, tilt, origin, direction)
+            }
+            _ => geometry::plane_point(placement, origin, direction),
         }
     }
 
