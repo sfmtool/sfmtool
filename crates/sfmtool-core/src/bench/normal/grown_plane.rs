@@ -378,7 +378,9 @@ pub enum GrownPlaneView {
     /// that was kept; `distance` and `held_zncc` are its plane's distance
     /// from the final plane and its score there. `shift` is its growth's shift
     /// moved to the final plane by its own normal matrix, and `grid_zncc` its
-    /// robust grid score there. `was` is its keypoint before the step and
+    /// robust grid score there, the same value as `held_zncc`: the
+    /// combination's last held check read it at the final plane and that
+    /// shift. `was` is its keypoint before the step and
     /// `keypoint` the one the step wrote, both image px; `keypoint` is `None`
     /// where that pixel is off the photograph and nothing was written.
     Joined {
@@ -889,11 +891,10 @@ fn record_views(
                 distance,
                 held,
                 final_shift,
-                final_zncc,
             } => GrownPlaneView::Joined {
                 start: estimate.attempt.start,
                 shift: final_shift.unwrap_or(estimate.shift),
-                grid_zncc: final_zncc.unwrap_or(f64::NAN),
+                grid_zncc: held.unwrap_or(f64::NAN),
                 distance: *distance,
                 held_zncc: *held,
                 was: candidate.keypoint,
@@ -1085,14 +1086,14 @@ struct Judged {
 
 /// What became of one candidate.
 enum Fate {
-    /// Its plane is in the final plane; `final_shift` and `final_zncc` are
-    /// its shift and score there, filled in once the final plane is known.
+    /// Its plane is in the final plane; `held` is its score there, from the
+    /// combination's last held check, and `final_shift` its shift there,
+    /// filled in once the final plane is known.
     Joined {
         estimate: Box<Estimate>,
         distance: Option<f64>,
         held: Option<f64>,
         final_shift: Option<[f64; 2]>,
-        final_zncc: Option<f64>,
     },
     ShiftOnly {
         start: GrownPlaneStart,
@@ -1178,7 +1179,10 @@ impl Sequence<'_, '_, '_> {
         self.grid_fit(i, None).score_at(tilt, shift)
     }
 
-    /// Each joined view's shift and score at the final plane `tilt`.
+    /// Each joined view's shift at the final plane `tilt`, moved there with
+    /// no render. Its score there is not read again: the combination's last
+    /// held check scored every kept view at that same plane and shift and
+    /// left none out, so `held` already is that score.
     fn final_views(&self, tilt: [f64; 2], fates: &[Fate]) -> Vec<Fate> {
         fates
             .iter()
@@ -1188,16 +1192,12 @@ impl Sequence<'_, '_, '_> {
                     distance,
                     held,
                     ..
-                } => {
-                    let shift = self.moved_shift(estimate, tilt);
-                    Fate::Joined {
-                        estimate: estimate.clone(),
-                        distance: *distance,
-                        held: *held,
-                        final_shift: Some(shift),
-                        final_zncc: Some(self.score_at(estimate.index, tilt, shift)),
-                    }
-                }
+                } => Fate::Joined {
+                    estimate: estimate.clone(),
+                    distance: *distance,
+                    held: *held,
+                    final_shift: Some(self.moved_shift(estimate, tilt)),
+                },
                 Fate::ShiftOnly {
                     start,
                     shift,

@@ -100,7 +100,6 @@ impl Sequence<'_, '_, '_> {
                     distance: verdict.distance,
                     held: verdict.held,
                     final_shift: None,
-                    final_zncc: None,
                 },
                 Some(reason) => Fate::LeftOut {
                     reason,

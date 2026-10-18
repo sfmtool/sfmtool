@@ -183,8 +183,8 @@ fn wide_centres() -> Vec<[f64; 3]> {
 /// From 25 degrees off, the patch is turned to within a degree of the plane.
 /// The plane's `σ` stays over the target, so the selection matches all five
 /// views; every one joins on its growth with no search, each written
-/// keypoint is at the point's projection and the reference keeps its own.
-/// The two pairs are kept, and halving their information raises `σ`.
+/// keypoint is at the point's projection and the reference keeps its own, and
+/// each joined view's score at the final plane is its held score. The two pairs are kept, and halving their information raises `σ`.
 #[test]
 fn a_textured_plane_started_far_off_is_turned_onto_it() {
     let centres = wide_centres();
@@ -220,7 +220,15 @@ fn a_textured_plane_started_far_off_is_turned_onto_it() {
         "the reference keeps its keypoint"
     );
     for (row, view) in sequence.views.iter().enumerate() {
-        if let GrownPlaneView::Joined { keypoint, .. } = view {
+        if let GrownPlaneView::Joined {
+            keypoint,
+            grid_zncc,
+            held_zncc,
+            ..
+        } = view
+        {
+            // The score at the final plane is the last held score.
+            assert_eq!(Some(*grid_zncc), *held_zncc, "row {row}");
             let written = keypoint.expect("on the photograph");
             let truth = scene.project(track.observations[row].image as usize, WORLD);
             assert!(
