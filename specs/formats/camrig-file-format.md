@@ -399,18 +399,18 @@ $ zstd -d --rm *.zst cameras/*.zst sensors/*.zst
 
 $ jq . metadata.json
 {
-  "version": 1,
+  "version": 2,
   "name": "spherical_tiles_n1280",
   "sensor_count": 1280,
   "camera_count": 1,
   "rig_type": "spherical_tiles",
   "rig_attributes": {
+    "atlas_cols": 36,
     "centre": [0.0, 0.0, 0.0],
     "half_fov_rad": 0.0654,
-    "measured_max_nn_angle": 0.1138,
     "measured_max_coverage_angle": 0.0569,
-    "patch_size": 21,
-    "atlas_cols": 36
+    "measured_max_nn_angle": 0.1138,
+    "patch_size": 21
   }
 }
 
@@ -464,10 +464,8 @@ while still passing structural validation, so the upgrade dispatches on
 bytes, so hashes verify before conversion; a converted-then-saved file is a
 new version 2 file with new hashes.
 
-As a consequence, `test-data/images/kerry_park/kerry_park.camrig` must be
-regenerated in the canonical convention. See
-[`sfmr-file-format.md`](sfmr-file-format.md#coordinate-system-conventions) for
-the canonical convention and the `S`/`W` conversion math.
+See [`sfmr-file-format.md`](sfmr-file-format.md#coordinate-system-conventions)
+for the canonical convention and the `S`/`W` conversion math.
 
 ## Version history
 

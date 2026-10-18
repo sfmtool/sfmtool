@@ -25,6 +25,8 @@ Seven more were read regardless of the draw:
   #857), `matches-file-format` (versions 8-10, #870) and `camrig-file-format`
   (one example slip).
 
+> _Status (2026-10-17): the camrig example slip is **Done** — branch `fix-round-09-camrig-example-version`._
+
 The mechanical checks below cover all 202. This report replaces
 `2026-10-06-spec-audit.md`. That report's findings that are still open are
 re-measured under **Carried forward**, and the specs it and the earlier audits
@@ -135,6 +137,8 @@ No work-order headings remain. The wider phrase grep found:
 | core/camera/projection-jacobian.md:184 | "multi-coefficient fisheye models and equirectangular — deferred" | deferral |
 | formats/camrig-file-format.md:~467 | "`kerry_park.camrig` must be regenerated in the canonical convention" | done: the file is version 2 |
 
+> _Status (2026-10-17): camrig row **Done** — sentence deleted, branch `fix-round-09-camrig-example-version`._
+
 Deferral language in standing specs: "not yet" 18 hits in 15 files, "future
 work" 2/2, "v2" 8/5, "planned" 4/4, "deferred" 45/13; 33 files in all, most of
 the "deferred" and "v2" hits technical (deferred screenshots, the "v2 model" of
@@ -201,6 +205,8 @@ Hits outside a heading named *Implementations*. Counts in parentheses are 2026-1
 Version constants agree with the specs for sfmr (12), sift (1) and kdf (3), and
 disagree for matches (10 vs 9) and the camrig example (2 vs 1). Details are in
 the sampled sections below.
+
+> _Status (2026-10-17): camrig row **Done** — the example shows version 2 and the "must be regenerated" sentence is deleted, branch `fix-round-09-camrig-example-version`._
 
 ## Sampled specs
 
@@ -463,6 +469,9 @@ Non-goals/deferrals checked: 1; no longer hold: 0
   - The § "Using CLI tools" `jq` output (:402) shows `"version": 1`; writers always write 2 (:463 and `types.rs:66`). Show 2.
   - Work-order residue (~:467): "As a consequence, `test-data/images/kerry_park/kerry_park.camrig` must be regenerated in the canonical convention." It has been (`sfm inspect` reports version 2), and a repository test file has no place in the format proper. Delete the sentence.
   - Deferred meaning, minor: the `spherical_tiles` row lists `measured_max_nn_angle` and `measured_max_coverage_angle` and points at `specs/core/spherical/spherical-tiles-rig.md` (a plain path, not a link, so check 6 does not see it); the format spec never says what the two angles are. One clause each ("the largest angle from a tile centre to its nearest neighbour", "the largest angle from any direction to its nearest tile centre") would let another tool write them. "the sphere-point relaxer" is an implementation term.
+
+> _Status (2026-10-17): **Partially done** — bullets 1 and 2: the `jq` example now shows `"version": 2`, with its `rig_attributes` keys in the alphabetical order the writer emits; the "must be regenerated" sentence is deleted (`sfm inspect` confirms `kerry_park.camrig` is version 2), branch `fix-round-09-camrig-example-version`. Still open: the third bullet (say what the two `measured_*` angles are)._
+
 **Third copies:** none found.
 **Recommendation:** update spec — three small edits.
 **Unclear / incorrect / suspicious:** none.
@@ -666,6 +675,8 @@ path `formats/cluster-selection.md`.
    `.sfmr` § `tracks/reference_observations` into *Implementations*, and
    restate "re-anchored" and "the sampler rule" in format terms; fix the camrig
    example's version and delete its "must be regenerated" sentence.
+
+   > _Status (2026-10-17): camrig part **Done** — branch `fix-round-09-camrig-example-version`._
 5. **Openings, one spec per PR:** `keypoint-localization-consensus-basis.md`,
    `relative-pose.md` and `adjacency-surfel-normals.md` fail, and
    `cell-plane-normals.md` and `refine-normals-command.md` are borderline
