@@ -465,7 +465,7 @@ and the tests that aim at it cannot drift.
 
 | Entry | What it does | Hover text |
 |---|---|---|
-| **Set to Origin** | The patch's frame becomes the world frame: `X` along `u`, `Y` along `v`, `Z` along the outward normal, and the centre at the origin. | "Draw the scene in this patch's own frame: its centre at the origin, its normal along +Z." |
+| **Set to Origin** | The patch's coordinate system becomes the world's: `X` along `u`, `Y` along `v`, `Z` along the outward normal, and the centre at the origin. | "Draw the scene in this patch's coordinate system: its centre at the origin, its normal along +Z." |
 | **Align Normal to Z** | Tips the scene about the patch's centre by the shortest rotation taking its normal to `+Z`. Position and heading are otherwise untouched. | "Tip the scene so this patch faces +Z, turning about the patch so it stays where it is." |
 | **Translate to Origin** | Moves the scene so the patch's centre is at the origin. Orientation untouched. | "Move the scene so this patch's centre is at the origin." |
 | **Translate to XY Plane** | Moves the scene along world `Z` alone, so the patch's centre lands at `z = 0`. | "Drop the scene along Z so this patch's centre sits on the ground plane." |
@@ -473,7 +473,7 @@ and the tests that aim at it cannot drift.
 Once the normal is `+Z`, **Translate to XY Plane** puts the patch's plane exactly
 on the `XY` plane, which makes **Align Normal to Z** followed by it the two-step
 way to lay a surface on the ground without moving it sideways. The log reads
-`Set run_b to the frame of patch tk104`, `Aligned run_b's patch tk104 normal to
+`Set run_b to patch tk104's coordinate system`, `Aligned run_b's patch tk104 normal to
 +Z`, `Translated run_b's patch tk104 to the origin` and `Translated run_b's
 patch tk104 to the XY plane`, each followed by its version transition; the
 focused item's label names the patch because it is what the Bench group and Track
@@ -520,7 +520,7 @@ node already carries. With that transform `T0 = (R0, t0, s0)` and the patch fram
 in the node's own coordinates, `c = T0(c_own)`, `u = R0 u_own`,
 `v = R0 v_own` and `n = u × v`. The scale is dropped from the axes: `Se3Transform`
 carries a uniform scale, which stretches no direction relative to another, so
-the three stay orthonormal and right-handed. `PatchAxes::of` squares them up
+the three stay orthonormal and right-handed. `PatchCoordinateSystem::of` squares them up
 besides, keeping `u` and rebuilding `v` from the normal, because a stored patch frame
 is orthonormal only to the `f32` it was read from and a matrix that is not quite
 a rotation makes a quaternion that is not quite unit.

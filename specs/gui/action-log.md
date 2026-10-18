@@ -190,7 +190,7 @@ Texts are the exact strings, with `{…}` for the values that vary.
 | Scene | — | MCP | `Set transform of {label}: {deg} deg, {d} scene units ({from} → {to})`, with `, x{scale}` before the transition when the scale is not `1` |
 | Scene | — | User | `Aligned {src} → {tgt}: {i}/{n} {cameras|points}, RMS {rms:.3} ({from} → {to})` |
 | Scene | — | User | `Align {src} → {tgt} failed: {reason}` — **failed** |
-| Scene | — | User / MCP | `Set {label} to the frame of patch {item}` / `Aligned {label}'s patch {item} normal to +Z` / `Translated {label}'s patch {item} to the origin` / `Translated {label}'s patch {item} to the XY plane`, each with ` ({from} → {to})` ([viewer-3d-bench-layer.md](viewer-3d-bench-layer.md) § "The patch menu") |
+| Scene | — | User / MCP | `Set {label} to patch {item}'s coordinate system` / `Aligned {label}'s patch {item} normal to +Z` / `Translated {label}'s patch {item} to the origin` / `Translated {label}'s patch {item} to the XY plane`, each with ` ({from} → {to})` ([viewer-3d-bench-layer.md](viewer-3d-bench-layer.md) § "The patch menu") |
 | Scene | — | User / MCP | the reason a reframe was refused, **failed**, whether a busy node, nothing active on the bench, a cluster, a track with no patch or at infinity, or a reset of a node already in its own frame |
 | Edit | — | User / MCP | `Baked transform of {label}: {deg} deg, {d} scene units ({from} → {to})`, with `, x{scale}` before the transition when the scale is not `1` ([edits/bake-transform.md](edits/bake-transform.md)) |
 | Edit | — | User / MCP | `Deleted point {index} in {label} ({from} → {to})` |

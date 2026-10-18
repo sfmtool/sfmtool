@@ -43,13 +43,13 @@ mod tests;
 
 /// One of the four ways the world's coordinate frame can be put onto a patch.
 ///
-/// They differ only in how much of the patch's axes the world adopts: all of
-/// them, its normal, its centre, or its height. Each is a map acting in **world**
+/// They differ only in how much of the patch's coordinate system the world adopts:
+/// all of it, its normal, its centre, or its height. Each is a map acting in **world**
 /// space ([`PatchReframe::map`]), with a scale of `1`: they re-frame the scene
 /// and never resize it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PatchReframe {
-    /// The patch's axes become the world's axes: `X` along `u`, `Y` along `v`,
+    /// The patch's coordinate system becomes the world's: `X` along `u`, `Y` along `v`,
     /// `Z` along the outward normal, and the centre at the origin.
     SetToOrigin,
     /// The scene tips about the patch's centre by the shortest rotation taking
@@ -85,8 +85,8 @@ impl PatchReframe {
     pub(crate) fn hint(self) -> &'static str {
         match self {
             Self::SetToOrigin => {
-                "Draw the scene in this patch's own frame: its centre at the origin, its normal \
-                 along +Z."
+                "Draw the scene in this patch's coordinate system: its centre at the origin, \
+                 its normal along +Z."
             }
             Self::AlignNormalToZ => {
                 "Tip the scene so this patch faces +Z, turning about the patch so it stays where \
@@ -123,7 +123,7 @@ impl PatchReframe {
     /// find the square the sentence is about.
     fn sentence(self, node: &str, patch: &str) -> String {
         match self {
-            Self::SetToOrigin => format!("Set {node} to the frame of patch {patch}"),
+            Self::SetToOrigin => format!("Set {node} to patch {patch}'s coordinate system"),
             Self::AlignNormalToZ => format!("Aligned {node}'s patch {patch} normal to +Z"),
             Self::TranslateToOrigin => format!("Translated {node}'s patch {patch} to the origin"),
             Self::TranslateToXyPlane => {
@@ -133,18 +133,22 @@ impl PatchReframe {
     }
 
     /// The map this entry applies, acting on **world** space, for a patch
-    /// whose axes in world coordinates are `axes`.
+    /// whose coordinate system, in world coordinates, is `coordinate_system`.
     ///
     /// Set to Origin is `Mᵀ` and not `M`, with `M = [u v n]` as columns: a
     /// world point is `c + M·(a, b, d)`, so its coordinates on the patch's axes
     /// are `Mᵀ(p − c)`. Align Normal to Z turns about `c` rather than about the
     /// world origin, so the patch stays where it is and everything else tips
     /// around it.
-    pub(crate) fn map(self, axes: &PatchAxes) -> Se3Transform {
-        let c = axes.centre.coords;
+    pub(crate) fn map(self, coordinate_system: &PatchCoordinateSystem) -> Se3Transform {
+        let c = coordinate_system.centre.coords;
         match self {
             Self::SetToOrigin => {
-                let m = Matrix3::from_columns(&[axes.u, axes.v, axes.n]);
+                let m = Matrix3::from_columns(&[
+                    coordinate_system.u,
+                    coordinate_system.v,
+                    coordinate_system.n,
+                ]);
                 // Renormalised, so the quaternion is unit to the last bit and
                 // not merely to the matrix's own rounding.
                 let q = *RotQuaternion::from_rotation_matrix(m.transpose()).as_nalgebra();
@@ -158,10 +162,10 @@ impl PatchReframe {
                 // patch's own `u` is the axis taken there: it leaves `u` alone
                 // and sends `v` to `-v`, so the heading a person can see in the
                 // square survives.
-                let turn =
-                    UnitQuaternion::rotation_between(&axes.n, &Vector3::z()).unwrap_or_else(|| {
+                let turn = UnitQuaternion::rotation_between(&coordinate_system.n, &Vector3::z())
+                    .unwrap_or_else(|| {
                         UnitQuaternion::from_axis_angle(
-                            &nalgebra::Unit::new_normalize(axes.u),
+                            &nalgebra::Unit::new_normalize(coordinate_system.u),
                             std::f64::consts::PI,
                         )
                     });
@@ -177,12 +181,12 @@ impl PatchReframe {
     }
 }
 
-/// The patch's axes, anchored at its centre, as the patch is drawn: the centre
-/// and the orthonormal, right-handed axes `u`, `v` and `n` in **world**
-/// coordinates, with no half-extent. Set to Origin and Align Normal to Z map the
-/// scene onto them.
+/// The patch coordinate system, as the patch is drawn: the patch's centre and its
+/// unit axes `u`, `v` and `n = u × v`, orthonormal and right-handed, in **world**
+/// coordinates, with no extent. It is the coordinate system Set to Origin and Align
+/// Normal to Z re-express the scene in.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct PatchAxes {
+pub(crate) struct PatchCoordinateSystem {
     /// The centre, through the node's display transform.
     pub(crate) centre: Point3<f64>,
     /// The in-plane `u` axis, rotated and unit.
@@ -193,8 +197,8 @@ pub(crate) struct PatchAxes {
     pub(crate) n: Vector3<f64>,
 }
 
-impl PatchAxes {
-    /// The axes of `patch_frame`, which is in the reconstruction's own
+impl PatchCoordinateSystem {
+    /// The coordinate system of `patch_frame`, which is in the reconstruction's own
     /// coordinates, as the node draws it under `transform`.
     ///
     /// The transform's uniform scale is dropped from the axes: it stretches no
@@ -464,7 +468,7 @@ impl AppState {
             )));
         }
         let current = node.transform();
-        let map = mode.map(&PatchAxes::of(patch_frame, current));
+        let map = mode.map(&PatchCoordinateSystem::of(patch_frame, current));
         Ok((current.compose(&map), mode.sentence(&node.label, item)))
     }
 

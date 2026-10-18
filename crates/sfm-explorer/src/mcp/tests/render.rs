@@ -2239,7 +2239,7 @@ fn set_reconstruction_transform_from_patch_frames_the_scene_on_the_active_patch(
     assert_eq!(reply["dirty"], false);
     assert_eq!(
         reply["label"],
-        format!("Set run_a to the frame of patch {item}")
+        format!("Set run_a to patch {item}'s coordinate system")
     );
     assert_ne!(transform_block(&mut state, &mut viewer), identity_block());
 
