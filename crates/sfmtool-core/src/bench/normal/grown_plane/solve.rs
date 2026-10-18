@@ -15,7 +15,9 @@
 //! again from a fresh render, rises; otherwise the damping grows and the step
 //! is tried again, and a stage that cannot rise keeps the parameters it was
 //! given. The render that scores a kept step also gives the residual the next
-//! iteration linearises at, so a kept point is rendered once.
+//! iteration linearises at, so a kept point is rendered once. A fit stops
+//! once a kept step raises the score by less than `min_improvement`, or by
+//! less than [`MIN_RELATIVE_GAIN`] of what its first kept step raised it.
 
 use nalgebra::{DMatrix, DVector, Matrix2};
 
@@ -34,6 +36,14 @@ const MAX_SHIFT_STEP_PX: f64 = 2.0;
 /// costs a render; three tries kept the quality that eight gave on the
 /// ground-truth sweep.
 pub(super) const DAMPING_TRIES: u32 = 3;
+
+/// A fit stops once a kept step raises the score by less than this share of
+/// what the fit's first kept step raised it. A step is kept only when the
+/// score rises, so the first step's gain is positive, and the rule first
+/// applies to the second step: a fit whose first step does nearly all the
+/// work stops after its second. On the ground-truth sweep it took a fifth
+/// less time and kept the judged points that three damping tries alone kept.
+pub(super) const MIN_RELATIVE_GAIN: f64 = 0.01;
 
 /// How a fit iterates.
 #[derive(Debug, Clone, Copy)]
@@ -94,7 +104,9 @@ fn steps_for(n: usize, it: &Iteration) -> Vec<f64> {
 }
 
 /// Fit `objective` from `p0`; the parameters reached, their score and how
-/// many steps were taken. The score never falls below the start's.
+/// many steps were taken. The score never falls below the start's. The fit
+/// stops after a kept step that gains less than `it.min_improvement`, or less
+/// than [`MIN_RELATIVE_GAIN`] of the first kept step's gain.
 pub(super) fn maximise<O: Objective>(
     objective: &O,
     p0: &[f64],
@@ -105,6 +117,7 @@ pub(super) fn maximise<O: Objective>(
     let steps = steps_for(p.len(), it);
     let mut damping = it.damping;
     let mut taken = 0;
+    let mut first_gain = None;
     for _ in 0..it.max_iterations {
         let Some((fz, r0)) = frozen.as_ref() else {
             break;
@@ -140,7 +153,8 @@ pub(super) fn maximise<O: Objective>(
         let gain = s - score;
         (p, score, frozen) = (q, s, f);
         taken += 1;
-        if gain < it.min_improvement {
+        let first = *first_gain.get_or_insert(gain);
+        if gain < it.min_improvement || gain < MIN_RELATIVE_GAIN * first {
             break;
         }
     }

@@ -14,6 +14,7 @@ use super::combine::{covariance, distance, weighted_mean};
 use super::render::{robust_score, zncc, Block, Samples};
 use super::solve::{
     maximise, schur_tilt, tilt_information, Iteration, Linearised, Objective, DAMPING_TRIES,
+    MIN_RELATIVE_GAIN,
 };
 use super::{sigmas_deg, window_radii, GrownPlaneNormalOptions};
 
@@ -309,6 +310,41 @@ fn a_fit_that_cannot_rise_stops_after_its_damping_tries() {
         objective.frozen_at.borrow().len(),
         1 + DAMPING_TRIES as usize
     );
+}
+
+/// With no absolute floor, a fit stops after the first kept step that gains
+/// less than [`MIN_RELATIVE_GAIN`] of its first step's gain. On a quadratic
+/// whose target lies within one capped step, the first step reaches all but
+/// `λ/(1 + λ)` of the target, so the second gains about a millionth of the
+/// first, and the fit keeps it and stops there.
+#[test]
+fn a_fit_stops_once_a_step_gains_under_its_share_of_the_first() {
+    let target = vec![0.09, -0.05, 1.9, -1.0];
+    let objective = Logged {
+        inner: Quadratic {
+            target: target.clone(),
+        },
+        frozen_at: RefCell::new(Vec::new()),
+        read_at: RefCell::new(Vec::new()),
+    };
+    let it = Iteration {
+        min_improvement: 0.0,
+        ..iteration()
+    };
+    let (p, _, taken) = maximise(&objective, &[0.0; 4], &it);
+    assert_eq!(taken, 2);
+    // Every step was kept on its first try: the start and the two kept
+    // points are the only points scored, and the fit stops at the second.
+    let frozen_at = objective.frozen_at.borrow();
+    assert_eq!(frozen_at.len(), 3, "{frozen_at:?}");
+    assert_eq!(frozen_at[2], p);
+    let score = |q: &[f64]| objective.inner.freeze(q).0;
+    let first = score(&frozen_at[1]) - score(&frozen_at[0]);
+    let second = score(&frozen_at[2]) - score(&frozen_at[1]);
+    assert!(second > 0.0 && second < MIN_RELATIVE_GAIN * first);
+    // The absolute floor alone would not have stopped it: the second step's
+    // gain is over the default `min_improvement`.
+    assert!(second > iteration().min_improvement, "{second}");
 }
 
 /// The information-weighted mean against a hand-computed case:
