@@ -19,6 +19,24 @@ Thanks for contributing to sfmtool! A few notes before you fill this out:
 
 <!-- How did you verify this works? Commands run, datasets used, manual steps. -->
 
+## Screenshots
+
+<!--
+Include screenshots when the change is something you can see: in the SfM
+Explorer viewer, in an image a CLI command writes, or on a docs page. For a
+visual fix, a before/after pair is the most useful. Write "n/a" or delete this
+section when there is nothing to see.
+
+Check that a screenshot shows no sensitive data. Prefer screenshots of the
+checked-in test data under `test-data/images/`, such as
+`seoul_bull_sculpture_ground_truth.sfmr` or `kerry_park_ground_truth.sfmr`.
+Make sure no local paths, usernames, private images or other personal data are
+visible, for example in a window title or a file dialog. Screenshot one panel
+rather than the whole desktop. The viewer's MCP endpoint
+(`pixi run gui-mcp`, see `specs/gui/mcp-server.md`) can screenshot a single
+panel.
+-->
+
 ## Checklist
 
 - [ ] Python changes: `pixi run fmt && pixi run check`

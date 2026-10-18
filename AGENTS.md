@@ -135,10 +135,10 @@ the work directly and do not invoke it again.
 
 **Every PR body follows `.github/PULL_REQUEST_TEMPLATE.md`** — read it before
 writing the description, not after. Its sections (Summary / Changes / Testing /
-Checklist / License) are what reviewers look for, and `gh pr create --body`
-bypasses the template silently: GitHub only prefills it in the web editor, so a
-PR opened from the CLI gets whatever body you hand it and no warning that a
-template existed. Keep the checklist items and the License block verbatim,
+Screenshots / Checklist / License) are what reviewers look for, and
+`gh pr create --body` bypasses the template silently: GitHub only prefills it
+in the web editor, so a PR opened from the CLI gets whatever body you hand it
+and no warning that a template existed. Keep the checklist items and the License block verbatim,
 ticking what applies and marking the rest `n/a` with the reason, rather than
 deleting the lines.
 
