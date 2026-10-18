@@ -141,11 +141,11 @@ pub struct PatchBitmap { pub rgba: Vec<u8>, pub reference: usize } // the pick
 pub fn bitmap_from_tile(tile: &ViewTile) -> Vec<u8>; // alpha 255 on the photograph
 pub struct ReferenceRender { pub tiles: Vec<ViewTile>, pub semi_axes: Vec<Option<TileSemiAxes>>,
     pub reading: TrackReading }
-pub fn render_reference(patch: &OrientedPatch, views: &[ProjectedImage<'_>], view_set: &[u32],
+pub fn render_reference(patch: &OrientedPatch, views: &[ProjectedImage<'_>], patch_views: &[u32],
     keypoints: &[Option<[f64; 2]>], resolution: u32, sampler: SamplerChoice,
     options: &ReferenceViewOptions, progress: &Progress<'_>) -> ReferenceRender;
 pub fn render_patch_bitmap(patch: &OrientedPatch, views: &[ProjectedImage<'_>],
-    view_set: &[u32], keypoints: &[[f64; 2]], params: &KeypointSubpixelParams,
+    patch_views: &[u32], keypoints: &[[f64; 2]], params: &KeypointSubpixelParams,
     progress: &Progress<'_>) -> Option<PatchBitmap>; // None where no view is eligible
 pub struct PatchBitmapColumn { pub bitmaps: Array4<u8>, pub reference_observations: Vec<i32> }
 pub enum UnreferencedPoints { Pick, Skip } // what a point at -1 gets

@@ -28,9 +28,9 @@ It is bound as `PatchCloud.refine_keypoints` and run by the pipeline in
 pub fn refine_patch_keypoints(
     patch: &OrientedPatch,
     views: &[ProjectedImage<'_>],          // one per reconstruction image
-    view_set: &[u32],                      // the views to refine
-    starting_keypoints: Option<&[Option<[f64; 2]>]>, // parallel to view_set
-    reference: Option<usize>,              // position in view_set of the reference
+    patch_views: &[u32],                   // the views to refine
+    patch_keypoints: Option<&[Option<[f64; 2]>]>, // parallel to patch_views
+    reference: Option<usize>,              // position in patch_views of the reference
     params: &KeypointSubpixelParams,
 ) -> KeypointRefinement;
 
@@ -40,8 +40,8 @@ pub fn refine_patch_keypoints_reporting(/* the same */, progress: &Progress<'_>)
 pub fn refine_patch_cloud_keypoints(
     cloud: &PatchCloud,
     views: &[ProjectedImage<'_>],
-    view_sets: &[Vec<u32>],
-    starting_keypoints: Option<&[Vec<Option<[f64; 2]>>]>,
+    patch_views: &[Vec<u32>],
+    patch_keypoints: Option<&[Vec<Option<[f64; 2]>>]>,
     references: Option<&[Option<usize>]>,  // parallel to the cloud
     params: &KeypointSubpixelParams,
     progress: &Progress<'_>,
@@ -66,7 +66,7 @@ pub fn refine_view_against_reference(
 
 - **The reference is an argument**, as in the localizer: the caller knows the
   point's stored reference observation, or the reference a bench track holds,
-  and passes its position in `view_set`; it is matched by image, so a
+  and passes its position in `patch_views`; it is matched by image, so a
   reference given at the dropped slot of a repeated image still counts. `None`
   has the [reference-view rule](reference-view.md) pick one from the renders at
   the starting keypoints. Both kernels resolve the reference by one function
@@ -76,11 +76,11 @@ pub fn refine_view_against_reference(
   before it resolves, never reports a grazing one. Given the localizer's
   reported reference, the refiner therefore aligns to the same observation's
   render, and later `embed-patches` rounds keep a point's stored reference
-  while it is in the view set and renders. The `embed-patches` obliquity cut
+  while it is in the patch views and renders. The `embed-patches` obliquity cut
   (`max_obliquity_deg`, 80° by default, stricter than this pre-filter's
   `0.1`, about 84°) runs before each round's sub-pixel pass and drops a
   reference like any other view; the refiner is then given a reference that
-  is not in its view set, sets it aside, and the rule picks again from the
+  is not in its patch views, sets it aside, and the rule picks again from the
   views left, which is the reference the output records. Where the localizer
   reported no reference, the refiner resolves again from the views and
   keypoints it is handed, which are the localizer's kept views at their new
@@ -132,7 +132,7 @@ This is a **local refiner**, and its guarantees hold only inside that scope:
   observation's stored keypoint, falling back per view to the reprojected
   centre for views carrying no observation (ones `select_views` admitted beyond
   the SIFT track). On a `sift_files` reconstruction, which stores none, a call
-  without explicit `starting_keypoints` raises `ValueError`: a projection alone
+  without explicit `patch_keypoints` raises `ValueError`: a projection alone
   is not a keypoint for a local refiner, so convert to `embedded_patches` first
   or supply per-point seeds. (`refine_normals` is a normal optimizer rather
   than a local refiner, so its `use_stored_keypoints` flag stays a plain bool
@@ -145,7 +145,7 @@ This is a **local refiner**, and its guarantees hold only inside that scope:
   the only drop is the projection gate: a view in which the patch centre fails
   to project (behind the camera or outside the frame) is dropped, since the
   per-view offset is reported relative to that projection. A repeated image in
-  the view set is refined once.
+  the patch views is refined once.
 - **The reference is not moved.** Its keypoint is returned exactly as given,
   with score `1.0`. Whatever error it carries is shared by every view aligned to
   it, so it moves the triangulated point rather than adding reprojection error;

@@ -11,7 +11,7 @@ synthetically. See ``specs/core/patch/keypoint-subpixel-refinement.md``.
 
 The refiner is a *local* refiner that changes no view membership and is never
 worse than the seed; the checks here are the binding's array contract, the
-unchanged view set, and the never-worse-than-seed guarantee (compared against a
+unchanged patch views, and the never-worse-than-seed guarantee (compared against a
 zero-step "seed only" run on the same data).
 """
 
@@ -54,7 +54,7 @@ def test_refine_keypoints_array_contract_and_never_worse(
     assert cloud is not None and len(cloud) > 0
 
     sample = sample_point_ids(cloud)
-    view_sets = {
+    patch_views = {
         int(r["point_index"]): np.asarray(r["admitted"]).tolist()
         for r in cloud.select_views(recon, images, point_indexes=sample, resolution=12)
     }
@@ -62,7 +62,7 @@ def test_refine_keypoints_array_contract_and_never_worse(
     common = dict(
         recon=recon,
         images=images,
-        view_sets=view_sets,
+        patch_views=patch_views,
         point_indexes=sample,
         resolution=12,
     )
@@ -90,10 +90,10 @@ def test_refine_keypoints_array_contract_and_never_worse(
         assert len(set(views.tolist())) == len(views)
         assert np.all(views >= 0) and np.all(views < len(images))
 
-        # View set is UNCHANGED versus the seed run (no membership change, same order).
+        # Patch views are UNCHANGED versus the seed run (no membership change, same order).
         sviews = np.asarray(seed_by_pid[pid]["views"], dtype=np.int64)
         assert np.array_equal(views, sviews), (
-            f"point {pid}: refine changed the view set/order"
+            f"point {pid}: refine changed the patch views/order"
         )
 
         # The reported offset is the keypoint's distance from the projection.
@@ -123,7 +123,7 @@ def test_refine_keypoints_array_contract_and_never_worse(
 
 
 def test_refine_keypoints_defaults_to_track(seoul_bull_workspace: Path):
-    """With no view_sets, each point refines over its track; the view set is the
+    """With no patch_views, each point refines over its track; the patch views are the
     track's views, in order, unchanged by the local refiner."""
     recon = SfmrReconstruction.load(seoul_bull_workspace).to_embedded_patches(
         extent_value=5.0
@@ -145,7 +145,7 @@ def test_refine_keypoints_defaults_to_track(seoul_bull_workspace: Path):
         assert views.issubset(tracks[pid])
 
 
-def test_refine_keypoints_empty_view_set_yields_empty_arrays(
+def test_refine_keypoints_empty_patch_views_yields_empty_arrays(
     seoul_bull_workspace: Path,
 ):
     recon = SfmrReconstruction.load(seoul_bull_workspace).to_embedded_patches(
@@ -156,7 +156,7 @@ def test_refine_keypoints_empty_view_set_yields_empty_arrays(
     assert cloud is not None
     pid = int(np.asarray(cloud.point_indexes)[0])
     res = cloud.refine_keypoints(
-        recon, images, view_sets={pid: []}, point_indexes=[pid], resolution=12
+        recon, images, patch_views={pid: []}, point_indexes=[pid], resolution=12
     )
     assert len(res) == 1
     assert np.asarray(res[0]["views"]).shape == (0,)
@@ -180,15 +180,15 @@ def test_refine_keypoints_rejects_out_of_range_view_index(
     bad = {pid: [0, len(images)]}
     with pytest.raises(ValueError):
         cloud.refine_keypoints(
-            recon, images, view_sets=bad, point_indexes=[pid], resolution=12
+            recon, images, patch_views=bad, point_indexes=[pid], resolution=12
         )
 
 
-def test_refine_keypoints_rejects_sift_files_recon_without_starting_keypoints(
+def test_refine_keypoints_rejects_sift_files_recon_without_patch_keypoints(
     seoul_bull_workspace: Path,
 ):
     """The strict requirement: a local refiner needs starting keypoints. A
-    sift-files recon without explicit `starting_keypoints` errors fast — before
+    sift-files recon without explicit `patch_keypoints` errors fast — before
     any pyramid decode — so callers don't accidentally refine off the bare
     projection."""
     import pytest
@@ -211,10 +211,10 @@ def test_refine_keypoints_rejects_sift_files_recon_without_starting_keypoints(
         cloud.refine_keypoints(recon, [], resolution=12)
 
 
-def test_refine_keypoints_honors_starting_keypoints(
+def test_refine_keypoints_honors_patch_keypoints(
     seoul_bull_workspace: Path,
 ):
-    """``starting_keypoints`` shifts the GN seed off the recon's default
+    """``patch_keypoints`` shifts the GN seed off the recon's default
     inline stored keypoint: a refinement seeded ~0.5 px away lands somewhere
     subtly different from the stored-seeded refinement, because GN's basin
     is *local* — the seed direction biases which side of the photometric
@@ -233,14 +233,14 @@ def test_refine_keypoints_honors_starting_keypoints(
     cloud = recon.patches
     assert cloud is not None
     sample = sample_point_ids(cloud, n=50)
-    view_sets = {
+    patch_views = {
         int(r["point_index"]): np.asarray(r["admitted"]).tolist()
         for r in cloud.select_views(recon, images, point_indexes=sample, resolution=12)
     }
     common = dict(
         recon=recon,
         images=images,
-        view_sets=view_sets,
+        patch_views=patch_views,
         point_indexes=sample,
         resolution=12,
         max_gn_steps=10,
@@ -269,7 +269,7 @@ def test_refine_keypoints_honors_starting_keypoints(
     seeded_pids: list[int] = []
     for r in baseline:
         pid = int(r["point_index"])
-        views = view_sets[pid]
+        views = patch_views[pid]
         if len(views) < 2:
             continue
         per_view = []
@@ -290,7 +290,7 @@ def test_refine_keypoints_honors_starting_keypoints(
 
     assert seeded_pids, "no multi-view point to seed-shift"
 
-    shifted = cloud.refine_keypoints(**common, starting_keypoints=seeds)
+    shifted = cloud.refine_keypoints(**common, patch_keypoints=seeds)
 
     # At least one point's refined keypoints actually move when the seed is
     # shifted. This is the binding contract (seeds are honored), not a
@@ -313,14 +313,14 @@ def test_refine_keypoints_honors_starting_keypoints(
     )
 
     # Length mismatch is rejected up front (per-point seeds must be parallel
-    # to that point's view set).
+    # to that point's patch views).
     bad_pid = seeded_pids[0]
     bad_seeds = {bad_pid: seeds[bad_pid][:-1]}  # one short
     with pytest.raises(
         ValueError,
-        match=r"starting_keypoints\[\d+\] has \d+ seeds but the view set has \d+ views",
+        match=r"patch_keypoints\[\d+\] has \d+ seeds but the point has \d+ patch views",
     ):
-        cloud.refine_keypoints(**common, starting_keypoints=bad_seeds)
+        cloud.refine_keypoints(**common, patch_keypoints=bad_seeds)
 
     # Unknown pid (not a point in this patch cloud) is rejected with a clear
     # message — silently passing it through hid bugs in callers that built
@@ -329,32 +329,32 @@ def test_refine_keypoints_honors_starting_keypoints(
     unknown_pid = max_pid + 1000
     with pytest.raises(
         ValueError,
-        match=r"starting_keypoints\[\d+\] is not a point in this patch cloud",
+        match=r"patch_keypoints\[\d+\] is not a point in this patch cloud",
     ):
         cloud.refine_keypoints(
             **common,
-            starting_keypoints={unknown_pid: [[0.0, 0.0]]},
+            patch_keypoints={unknown_pid: [[0.0, 0.0]]},
         )
 
     # A pid that exists in the cloud but is excluded by ``point_ids`` is also
-    # rejected (rather than producing the confusing "has K seeds but view set
-    # has 0 views" message the cleared set would otherwise yield).
+    # rejected (rather than producing the confusing "has K seeds but the point has
+    # 0 patch views" message the cleared set would otherwise yield).
     excluded_pid = next(
         int(p) for p in np.asarray(cloud.point_indexes).tolist() if p not in sample
     )
     with pytest.raises(
-        ValueError, match=r"starting_keypoints\[\d+\] is excluded by point_indexes"
+        ValueError, match=r"patch_keypoints\[\d+\] is excluded by point_indexes"
     ):
         cloud.refine_keypoints(
             **common,
-            starting_keypoints={excluded_pid: [[0.0, 0.0]]},
+            patch_keypoints={excluded_pid: [[0.0, 0.0]]},
         )
 
 
 def test_refine_keypoints_default_seeds_from_embedded_recon(
     seoul_bull_workspace: Path,
 ):
-    """On an embedded_patches recon, the default (``starting_keypoints=None``)
+    """On an embedded_patches recon, the default (``patch_keypoints=None``)
     seeds each view at that observation's inline keypoint — not the projection.
     A zero-step "seed only" refinement reproduces the recon's stored keypoints
     bit-for-bit, confirming the seed source.
@@ -403,7 +403,7 @@ def test_refine_keypoints_default_falls_back_to_projection_for_non_track_view(
     seoul_bull_workspace: Path,
 ):
     """The third branch of the seed-source ladder: on an embedded_patches recon,
-    a view that's in the refiner's view set but NOT in the point's SIFT track
+    a view that's in the refiner's patch views but NOT in the point's SIFT track
     has no inline stored keypoint, so its seed falls back to the projection
     ``project_i(X_p)``. Track views in the same call still seed at their
     inline keypoint (covered by the test above); this one pins the per-view
@@ -454,14 +454,14 @@ def test_refine_keypoints_default_falls_back_to_projection_for_non_track_view(
         "either pick a larger sample or another dataset"
     )
 
-    # Construct a view set that mixes one track view (seeded at its stored
+    # Construct patch views that mix one track view (seeded at its stored
     # keypoint) and the non-track view (which must seed at the projection).
     track_img = next(iter(track_by_pid[pid]))
-    view_sets = {pid: [track_img, non_track_img]}
+    patch_views = {pid: [track_img, non_track_img]}
     seed_only = cloud.refine_keypoints(
         emb,
         images,
-        view_sets=view_sets,
+        patch_views=patch_views,
         point_indexes=[pid],
         resolution=12,
         max_gn_steps=0,
@@ -489,7 +489,7 @@ def test_refine_keypoints_explicit_seeds_override_recon_default_on_embedded(
     seoul_bull_workspace: Path,
 ):
     """The override branch of the seed-source ladder on an embedded_patches
-    recon: explicit ``starting_keypoints`` for a point silence the recon-default
+    recon: explicit ``patch_keypoints`` for a point silence the recon-default
     (the inline stored keypoint) and the refiner takes the explicit seed
     instead. Verified by a ``max_gn_steps=0`` "seed only" refine: the result
     keypoints for overridden points must equal the override, not the stored
@@ -525,9 +525,9 @@ def test_refine_keypoints_explicit_seeds_override_recon_default_on_embedded(
     seed_only = cloud.refine_keypoints(
         recon,
         images,
-        view_sets={pid: views},
+        patch_views={pid: views},
         point_indexes=[pid],
-        starting_keypoints={pid: override},
+        patch_keypoints={pid: override},
         resolution=12,
         max_gn_steps=0,
     )

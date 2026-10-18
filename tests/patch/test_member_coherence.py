@@ -7,7 +7,7 @@ Drives the pairwise member-agreement kernel over a real reconstruction's patches
 and source images — the multi-view rendering path the Rust unit tests cannot
 exercise without on-disk imagery — and pins the *binding* surface: the dict keys
 and dtypes, the ``k×k`` matrix, the two member-list sources (tracks vs an explicit
-``member_views`` map), and the unscored-member contract. The decision rule itself
+``patch_views`` map), and the unscored-member contract. The decision rule itself
 is covered by the Rust tests. See ``specs/core/patch/member-coherence-validation.md``.
 """
 
@@ -160,7 +160,7 @@ def test_point_indexes_selects_exactly_that_subset(scene):
     assert set(sample) <= every
 
 
-def test_member_views_overrides_the_track_and_dedups_first_seen_wins(scene):
+def test_patch_views_overrides_the_track_and_dedups_first_seen_wins(scene):
     recon, cloud, _ = scene
     pid = sample_point_ids(cloud, n=1)[0]
     n_images = recon.image_count
@@ -170,20 +170,20 @@ def test_member_views_overrides_the_track_and_dedups_first_seen_wins(scene):
     # An explicit list, in an order the track does not use, with duplicates: the
     # binding keeps first-seen order and drops the repeats.
     wanted = [2, 0, 2, 1, 0]
-    overridden = _validate(scene, point_indexes=[pid], member_views={pid: wanted})[0]
+    overridden = _validate(scene, point_indexes=[pid], patch_views={pid: wanted})[0]
     assert overridden["members"].tolist() == [2, 0, 1]
     assert overridden["members"].tolist() != from_track["members"].tolist()
     assert len(overridden["kept"]) == 3
 
 
-def test_member_views_rejects_an_out_of_range_image(scene):
+def test_patch_views_rejects_an_out_of_range_image(scene):
     recon, cloud, _ = scene
     pid = sample_point_ids(cloud, n=1)[0]
     with pytest.raises(ValueError, match="out of range"):
-        _validate(scene, point_indexes=[pid], member_views={pid: [recon.image_count]})
+        _validate(scene, point_indexes=[pid], patch_views={pid: [recon.image_count]})
 
 
-def test_camera_views_requires_member_views(scene):
+def test_camera_views_requires_patch_views(scene):
     recon, cloud, images = scene
     views = CameraViews(
         recon.cameras,
@@ -191,7 +191,7 @@ def test_camera_views_requires_member_views(scene):
         np.asarray(recon.translations, np.float64),
         np.asarray(recon.camera_indexes, np.uint32),
     )
-    with pytest.raises(ValueError, match="member_views is required"):
+    with pytest.raises(ValueError, match="patch_views is required"):
         cloud.validate_member_coherence(views, images, resolution=12)
 
 
@@ -208,7 +208,7 @@ def test_unscored_members_are_kept(scene):
     results = _validate(
         scene,
         point_indexes=sample,
-        member_views={int(p): everything for p in sample},
+        patch_views={int(p): everything for p in sample},
     )
 
     n_unscored = 0
@@ -305,7 +305,7 @@ def test_keypoint_anchoring_is_a_no_op_without_inline_keypoints(scene):
         np.testing.assert_array_equal(np.asarray(a["zncc"]), np.asarray(p["zncc"]))
 
 
-def test_keypoint_anchoring_survives_a_member_views_override(embedded_scene):
+def test_keypoint_anchoring_survives_a_patch_views_override(embedded_scene):
     """An overridden member list is re-keyed against the point's own track, so a
     member the point really observes still carries its keypoint and one it does
     not falls back to its projection - either way the call goes through."""
@@ -317,7 +317,7 @@ def test_keypoint_anchoring_survives_a_member_views_override(embedded_scene):
         images,
         resolution=12,
         point_indexes=sample,
-        member_views={int(p): everything for p in sample},
+        patch_views={int(p): everything for p in sample},
     )
     assert len(out) == len(sample)
     for r in out:

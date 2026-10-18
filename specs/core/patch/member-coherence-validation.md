@@ -646,15 +646,16 @@ pub fn validate_member_coherence(
 // `Err(Cancelled)` when `progress` was cancelled before every point was
 // validated, rather than the points it finished.
 pub fn validate_patch_cloud_member_coherence(
-    cloud: &PatchCloud, views: &[ProjectedImage<'_>], member_views: &[Vec<u32>],
-    member_keypoints: Option<&[Vec<Option<[f64; 2]>>]>,
+    cloud: &PatchCloud, views: &[ProjectedImage<'_>], patch_views: &[Vec<u32>],
+    patch_keypoints: Option<&[Vec<Option<[f64; 2]>>]>,
     params: &MemberCoherenceParams, done: Option<&AtomicUsize>, progress: &Progress<'_>,
 ) -> Result<Vec<MemberCoherence>, Cancelled>;
 
-pub fn member_views_from_reconstruction(recon, cloud) -> Vec<Vec<u32>>;
-// The stored keypoint of each of those members, in the same order; all `None`
-// for a `sift_files` reconstruction.
-pub fn member_keypoints_from_reconstruction(recon, cloud) -> Vec<Vec<Option<[f64; 2]>>>;
+// In `patch`, shared with the other batch drivers: each patch's track views
+// (its source point's observing images), and the stored keypoint of each, in
+// the same order; all `None` for a `sift_files` reconstruction.
+pub fn track_views_from_reconstruction(recon, cloud) -> Vec<Vec<u32>>;
+pub fn track_keypoints_from_reconstruction(recon, cloud) -> Vec<Vec<Option<[f64; 2]>>>;
 ```
 
 `MemberMatrix::from_zncc` builds a matrix from an already-computed table, so a
@@ -676,16 +677,16 @@ PatchCloud.validate_member_coherence(
     exoneration_ratio=0.90, resolution=24,
     window="gaussian_disk", window_sigma=0.6, sampler="per_view",
     min_valid_fraction=0.6, min_support_pixels=8, point_indexes=None,
-    member_views=None, keypoint_anchor=True, matching="plain",
+    patch_views=None, keypoint_anchor=True, matching="plain",
     min_ellipse_ratio=1.25, return_matrix=False, progress=None,
 ) -> list[dict]
 ```
 
 `recon` is a reconstruction (member lists come from the tracks) or a
-`CameraViews` (then `member_views` — a `point_index -> [image_index, ...]` map —
+`CameraViews` (then `patch_views` — a `point_index -> [image_index, ...]` map —
 is required); `images` is a per-image list or a prebuilt `ImagePyramidSet`.
 `keypoint_anchor` (default `True`) sources each member's stored keypoint from the
-reconstruction; an overridden `member_views` entry is re-keyed against the point's
+reconstruction; an overridden `patch_views` entry is re-keyed against the point's
 own track, so an image it does not observe is anchored at its projection.
 `keypoint_anchor=False` — and a `CameraViews` scene, which has no keypoints to
 source — anchors every member at its projection.
@@ -785,8 +786,8 @@ against divisibility and the minimum-grid floor.
 
 `tests/patch/test_member_coherence.py` covers the binding surface against a real
 reconstruction: the dict keys and dtypes, the `k×k` `zncc` under `return_matrix`
-(symmetry and unit diagonal), `point_indexes` subsetting, `member_views` override
-and its first-seen-wins dedup, the `CameraViews`-without-`member_views` error,
+(symmetry and unit diagonal), `point_indexes` subsetting, `patch_views` override
+and its first-seen-wins dedup, the `CameraViews`-without-`patch_views` error,
 the unscored-member-kept contract end to end, and blur matching: its matrix and
 `pairs_blurred`, the plain matrix left as it was, a ratio no pair reaches
 leaving every pair plain, and the refusals.

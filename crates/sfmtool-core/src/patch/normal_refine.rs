@@ -25,7 +25,6 @@ use crate::patch::reference_view::ReferenceViewOptions;
 use crate::patch::stored_bitmap::{bitmap_from_tile, render_reference};
 use crate::patch::PatchCounter;
 use crate::progress::{Cancelled, Progress};
-use crate::reconstruction::SfmrReconstruction;
 
 mod consensus;
 mod fronto_cache;
@@ -398,10 +397,11 @@ fn refine_patch_normal_impl(
 /// Batch [`refine_patch_normal`] over a [`PatchCloud`], parallel across
 /// patches (rayon). `patch_views[i]` lists, for patch `i`, the indices into
 /// `views` of the cameras observing it (see
-/// [`view_indices_from_reconstruction`]). Each patch is replaced with
-/// its refined copy; the per-patch results are returned in order.
+/// [`track_views_from_reconstruction`](super::track_views_from_reconstruction)).
+/// Each patch is replaced with its refined copy; the per-patch results are
+/// returned in order.
 ///
-/// `patch_view_keypoints`, when given, is parallel to the cloud (one entry per
+/// `patch_keypoints`, when given, is parallel to the cloud (one entry per
 /// patch); entry `i` is parallel to `patch_views[i]` (one `Option<[x, y]>` per
 /// view in that patch's view list, in the same order). `Some([x, y])` positions
 /// that view's patch at the keypoint; `None` leaves it at the point center.
@@ -420,7 +420,7 @@ fn refine_patch_normal_impl(
 ///
 /// # Panics
 ///
-/// Panics if `patch_views.len() != cloud.len()` (or `patch_view_keypoints` is
+/// Panics if `patch_views.len() != cloud.len()` (or `patch_keypoints` is
 /// given and not parallel to the cloud) or an index is out of range.
 #[allow(clippy::too_many_arguments)]
 pub fn refine_patch_cloud_normals(
@@ -429,7 +429,7 @@ pub fn refine_patch_cloud_normals(
     patch_views: &[Vec<u32>],
     resolution: u32,
     params: &NormalRefineParams,
-    patch_view_keypoints: Option<&[Vec<Option<[f64; 2]>>]>,
+    patch_keypoints: Option<&[Vec<Option<[f64; 2]>>]>,
     done: Option<&std::sync::atomic::AtomicUsize>,
     progress: &Progress<'_>,
 ) -> Result<Vec<NormalRefineResult>, Cancelled> {
@@ -438,11 +438,11 @@ pub fn refine_patch_cloud_normals(
         cloud.len(),
         "patch_views must be parallel to the cloud"
     );
-    if let Some(kps) = patch_view_keypoints {
+    if let Some(kps) = patch_keypoints {
         assert_eq!(
             kps.len(),
             cloud.len(),
-            "patch_view_keypoints must be parallel to the cloud"
+            "patch_keypoints must be parallel to the cloud"
         );
     }
     if prof::enabled() {
@@ -460,7 +460,7 @@ pub fn refine_patch_cloud_normals(
                 return None;
             }
             let pv: Vec<ProjectedImage<'_>> = vidx.iter().map(|&i| views[i as usize]).collect();
-            let kps = patch_view_keypoints.map(|k| k[i].as_slice());
+            let kps = patch_keypoints.map(|k| k[i].as_slice());
             let out = refine_patch_normal_reporting(patch, &pv, resolution, params, kps, progress);
             counter.finished();
             Some(out)
@@ -478,36 +478,6 @@ pub fn refine_patch_cloud_normals(
         *p = r.patch.clone();
     }
     Ok(results)
-}
-
-/// For each patch of `cloud` (linked to `recon` via `point_indexes`), the image
-/// indices observing its source 3D point — ready to use as the `patch_views`
-/// of [`refine_patch_cloud_normals`] with one [`ProjectedImage`] per reconstruction image.
-///
-/// # Panics
-///
-/// Panics if `cloud.point_indexes` is not parallel to its patches.
-pub fn view_indices_from_reconstruction(
-    recon: &SfmrReconstruction,
-    cloud: &PatchCloud,
-) -> Vec<Vec<u32>> {
-    assert_eq!(
-        cloud.point_indexes.len(),
-        cloud.len(),
-        "cloud must carry a point_index per patch"
-    );
-    cloud
-        .point_indexes
-        .iter()
-        .map(|&p| {
-            let p = p as usize;
-            recon.point_set.tracks
-                [recon.point_set.observation_offsets[p]..recon.point_set.observation_offsets[p + 1]]
-                .iter()
-                .map(|o| o.image_index)
-                .collect()
-        })
-        .collect()
 }
 
 #[cfg(test)]

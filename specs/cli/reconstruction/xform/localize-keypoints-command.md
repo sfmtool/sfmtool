@@ -182,7 +182,7 @@ The transform prints a structural summary in the established `xform` style:
   Either op is also useful alone.
 - **`--refine-normals` is an option on either side.** Refining normals first
   gives the localizer a better patch plane to search over; localizing first
-  gives the normal refiner cleaner view sets. Both orderings are legitimate —
+  gives the normal refiner cleaner patch views. Both orderings are legitimate —
   pick per dataset rather than by rule.
 - **Invariant to global similarity.** `--rotate` / `--translate` / `--scale`
   move points and poses together, so the renders the views are aligned to are

@@ -2759,7 +2759,7 @@ fn patch_frame_of(track: &EditableTrack) -> OrientedPatch {
 fn fit_directly(
     scene: &Scene,
     patch_frame: &OrientedPatch,
-    view_set: &[u32],
+    patch_views: &[u32],
     seeds: &[Option<[f64; 2]>],
 ) -> (KeypointLocalization, KeypointRefinement) {
     let views = scene.views();
@@ -2767,7 +2767,7 @@ fn fit_directly(
     let localized = localize_patch_keypoints(
         patch_frame,
         &views,
-        view_set,
+        patch_views,
         Some(seeds),
         None,
         &options.localize,

@@ -244,8 +244,8 @@ def test_stored_keypoints_at_reprojection_match_centered(
     )
 
 
-def test_use_stored_keypoints_with_view_indices(seoul_bull_workspace: Path):
-    # view_indices override + use_stored_keypoints: track images resolve to a
+def test_use_stored_keypoints_with_patch_views(seoul_bull_workspace: Path):
+    # patch_views override + use_stored_keypoints: track images resolve to a
     # stored keypoint; a non-track image added per patch resolves to None (left
     # centered). Exercises the mixed Some/None path through the binding's
     # (point, image) -> keypoint map.
@@ -264,21 +264,21 @@ def test_use_stored_keypoints_with_view_indices(seoul_bull_workspace: Path):
     ):
         by_point.setdefault(int(p), set()).add(int(im))
 
-    # view_indices must be parallel to every cloud patch.
-    view_indices: list[list[int]] = []
+    # patch_views must be parallel to every cloud patch.
+    patch_views: list[list[int]] = []
     for pid in np.asarray(cloud.point_indexes).tolist():
         obs = set(by_point.get(int(pid), set()))
         extra = next((i for i in range(num_images) if i not in obs), None)
         if extra is not None:
             obs = obs | {extra}  # a non-track image -> None keypoint
-        view_indices.append(sorted(obs) if obs else [0])
+        patch_views.append(sorted(obs) if obs else [0])
 
     point_ids = sample_point_ids(cloud, n=100)
     res = cloud.refine_normals(
         recon,
         images,
         point_indexes=point_ids,
-        view_indices=view_indices,
+        patch_views=patch_views,
         use_stored_keypoints=True,
         resolution=12,
         init_steps=5,

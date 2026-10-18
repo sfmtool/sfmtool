@@ -104,7 +104,7 @@ class RefineKeypointsTransform:
 
         # The reconstruction is embedded_patches (enforced by apply_transforms), so
         # the patch frame is already stored — read it back as the cloud rather than
-        # rebuilding it. With view_sets=None and starting_keypoints=None the binding
+        # rebuilding it. With patch_views=None and patch_keypoints=None the binding
         # seeds every view from the recon's stored inline keypoint and refines each
         # point's full track — "refine the keypoints already here, in place" —
         # against its stored reference observation where it has one.

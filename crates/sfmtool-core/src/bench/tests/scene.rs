@@ -430,8 +430,8 @@ pub(in crate::bench) fn fixture_with_columns(
         let Some(patch) = point.patch_frame() else {
             continue;
         };
-        let view_set: Vec<u32> = point.observations().iter().map(|o| o.image_index).collect();
-        let Some(keypoints) = (0..view_set.len())
+        let patch_views: Vec<u32> = point.observations().iter().map(|o| o.image_index).collect();
+        let Some(keypoints) = (0..patch_views.len())
             .map(|k| {
                 point
                     .keypoint_xy(k)
@@ -444,7 +444,7 @@ pub(in crate::bench) fn fixture_with_columns(
         let Some(rendered) = render_patch_bitmap(
             &patch,
             &views,
-            &view_set,
+            &patch_views,
             &keypoints,
             &params,
             &Progress::none(),

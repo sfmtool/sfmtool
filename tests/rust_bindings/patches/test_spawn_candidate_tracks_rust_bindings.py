@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Binding tests for ``patches.spawn_candidate_tracks`` and the
-``starting_keypoints`` parameter of ``PatchCloud.localize_keypoints``.
+``patch_keypoints`` parameter of ``PatchCloud.localize_keypoints``.
 
 Both run on a fully synthetic scene — pinhole cameras looking down world ``+z``
 at a textured plane — so the geometric truth is known exactly and no dataset
@@ -126,17 +126,17 @@ def scene():
     return views, ImagePyramidSet(views, images)
 
 
-def _spawn(scene, offsets, view_sets=None, parents=None, **kw):
+def _spawn(scene, offsets, patch_views=None, parents=None, **kw):
     views, pyramids = scene
     offsets = np.ascontiguousarray(np.asarray(offsets, dtype=np.float64).reshape(-1, 2))
     n = len(offsets)
     if parents is None:
         parents = np.zeros(n, dtype=np.uint32)
-    if view_sets is None:
-        view_sets = [[0, 1, 2, 3]] * n
+    if patch_views is None:
+        patch_views = [[0, 1, 2, 3]] * n
     kw.setdefault("resolution", RES)
     return spawn_candidate_tracks(
-        views, pyramids, _cloud(), parents, offsets, view_sets, **kw
+        views, pyramids, _cloud(), parents, offsets, patch_views, **kw
     )
 
 
@@ -245,8 +245,8 @@ class TestSpawnBehaviour:
         assert np.isnan(out["reproj_rms_px"][0])
         assert out["obs_offsets"].tolist() == [0, 0]
 
-    def test_empty_view_set_reports_too_few_views(self, scene):
-        out = _spawn(scene, [[2.0, 0.0]], view_sets=[[]])
+    def test_empty_patch_views_reports_too_few_views(self, scene):
+        out = _spawn(scene, [[2.0, 0.0]], patch_views=[[]])
         assert out["status"][0] == 1
         assert out["n_views"][0] == 0
 
@@ -356,17 +356,17 @@ class TestSpawnValidation:
                 [[0, 1]],
             )
 
-    def test_view_sets_length_mismatch(self, scene):
-        with pytest.raises(ValueError, match="view_sets has 2 entries"):
-            _spawn(scene, [[2.0, 0.0]], view_sets=[[0, 1], [0, 1]])
+    def test_patch_views_length_mismatch(self, scene):
+        with pytest.raises(ValueError, match="patch_views has 2 entries"):
+            _spawn(scene, [[2.0, 0.0]], patch_views=[[0, 1], [0, 1]])
 
     def test_view_index_out_of_range(self, scene):
         with pytest.raises(ValueError, match="out of range for this scene"):
-            _spawn(scene, [[2.0, 0.0]], view_sets=[[0, 1, 9]])
+            _spawn(scene, [[2.0, 0.0]], patch_views=[[0, 1, 9]])
 
 
 # ---------------------------------------------------------------------------
-# `localize_keypoints(starting_keypoints=...)`
+# `localize_keypoints(patch_keypoints=...)`
 # ---------------------------------------------------------------------------
 
 # Displacement of the wrong-position cloud, in patch-grid px along the parent's
@@ -382,10 +382,10 @@ def _localize(scene, cloud, seeds=None, **kw):
     return cloud.localize_keypoints(
         views,
         pyramids,
-        view_sets={0: [0, 1, 2, 3]},
+        patch_views={0: [0, 1, 2, 3]},
         resolution=RES,
         max_shift_px=12.0,
-        starting_keypoints=seeds,
+        patch_keypoints=seeds,
         **kw,
     )[0]
 
@@ -400,7 +400,7 @@ class TestLocalizeStartingKeypoints:
         b = cloud.localize_keypoints(
             views,
             pyramids,
-            view_sets={0: [0, 1, 2, 3]},
+            patch_views={0: [0, 1, 2, 3]},
             resolution=RES,
             max_shift_px=12.0,
         )[0]
@@ -449,9 +449,11 @@ class TestLocalizeStartingKeypoints:
         # And the two paths genuinely disagree, by about the displacement.
         assert default_err.min() > 3.0 * seeded_err.max()
 
-    def test_seed_count_must_match_the_view_set(self, scene):
+    def test_seed_count_must_match_the_patch_views(self, scene):
         cloud = _cloud()
-        with pytest.raises(ValueError, match="has 2 seeds but the view set has 4"):
+        with pytest.raises(
+            ValueError, match="has 2 seeds but the point has 4 patch views"
+        ):
             _localize(scene, cloud, seeds={0: [[10.0, 10.0], [11.0, 11.0]]})
 
     def test_seeds_for_an_unknown_point(self, scene):

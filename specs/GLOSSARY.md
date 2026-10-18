@@ -199,6 +199,18 @@ The tools on the 3D viewport's tool strip, in
 |------|-------|-----|-----|
 | **eraser brush** | the paint tool that deletes the visible points of the selected reconstruction a stroke passes over: `Tool::EraserBrush`, the `tool` value `"eraser_brush"` on `get_viewer_3d_display` / `set_viewer_3d_display`, the tool strip's **Eraser brush** button and the Action Log's `Eraser brush tool` | `delete brush`, `delete_brush` | the tool's name and its icon, an eraser, say the same thing, and the name no longer reads as the verb for the edit. *Delete* stays the word for the edit the stroke commits (`delete_points`, the `Deleted N points in <label>` version), so the tool is an eraser and what it does is delete |
 
+## Per-patch view lists
+
+The words for the lists of images a patch kernel reads for each patch of a
+patch cloud, in `sfmtool-core`'s `patch` module, the `PatchCloud` bindings and
+their Python keyword arguments, and the specs in
+[core/patch/](core/patch/README.md).
+
+| Word | Means | Not | Why |
+|------|-------|-----|-----|
+| **track views** | per patch, the image indices its source point's track observes, read from the reconstruction in track order (`patch::track_views_from_reconstruction`), and with them the **track keypoints**, the stored keypoint of each (`patch::track_keypoints_from_reconstruction`, `None` for a `sift_files` reconstruction). View selection's input is named for them (`select_patch_cloud_views(track_views, track_keypoints, …)`, `ViewSelection::track_view_count`), and so is the map that replaces them in `PatchCloud.select_views(track_views=…)`, since those views take the track's role whether or not a reconstruction supplied them | `view_indices`, `member_views` | one function reads them, so one name: the tree had four copies of it under three names, one per kernel that called it |
+| **patch views** | per patch, the ordered list of images a batch driver evaluates that patch against: either its track views or view selection's output (the track views first, then the admitted extra views), and with it the **patch keypoints**, the starting keypoint of each, parallel entry by entry. The batch drivers' arguments (`patch_views`, `patch_keypoints`), a one-patch kernel's (`localize_patch_keypoints(…, patch_views, patch_keypoints, …)`), and the bindings' keywords (`localize_keypoints`, `refine_keypoints`, `refine_normals`, `validate_member_coherence`, `spawn_candidate_tracks`). In prose, "the patch's views `G`" | `view set`, `view_sets`, `view_indices`, `member_views`; `starting_keypoints`, `member_keypoints`, `patch_view_keypoints` for the keypoints | the lists are ordered, so *set* misstates them: `ViewSelection::admitted` puts the track views first, `track_view_count` splits it by position, a `reference` is a position in it, and the keypoint lists run parallel to it entry by entry. *Member* is member coherence's word for one track view, and `members`, with `member_keypoints` parallel to it, stays the argument of its one-patch kernel (`member_zncc_matrix`), where the members are exactly what it validates |
+
 ## Rendering a view's tile
 
 The words for how a patch kernel resamples a photograph into a patch's grid,

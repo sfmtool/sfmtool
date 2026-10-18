@@ -737,7 +737,7 @@ pub fn grown_plane_normal(
         .into_iter()
         .filter(|&i| seen.insert(track.observations[i].image))
         .collect();
-    let view_set: Vec<u32> = rows.iter().map(|&i| track.observations[i].image).collect();
+    let patch_views: Vec<u32> = rows.iter().map(|&i| track.observations[i].image).collect();
     let seeds: Vec<Option<[f64; 2]>> = rows
         .iter()
         .map(|&i| seed_of(&track.observations[i]))
@@ -745,7 +745,7 @@ pub fn grown_plane_normal(
     let reference = resolve_reference(
         &patch_frame,
         images,
-        &view_set,
+        &patch_views,
         &seeds,
         track_reference(track, &rows),
         options.fit.localize.min_grazing_cos,

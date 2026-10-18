@@ -114,7 +114,7 @@ def main():
             res = cloud.refine_normals(
                 views,
                 ds.pyramids,
-                view_indices=[list(map(int, images))],
+                patch_views=[list(map(int, images))],
                 use_stored_keypoints=False,
                 min_views=2,
                 **kw,

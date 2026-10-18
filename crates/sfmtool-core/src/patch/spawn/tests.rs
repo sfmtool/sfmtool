@@ -137,7 +137,7 @@ fn params() -> SpawnParams {
     }
 }
 
-/// `n` copies of the full view set `[0, 1, 2, 3]`.
+/// `n` copies of the patch views `[0, 1, 2, 3]`.
 fn all_views(n: usize) -> Vec<Vec<u32>> {
     vec![vec![0, 1, 2, 3]; n]
 }
@@ -222,7 +222,7 @@ fn candidate_pushed_off_every_image_is_too_few_views() {
 }
 
 #[test]
-fn empty_view_set_is_too_few_views() {
+fn empty_patch_views_are_too_few_views() {
     let scene = scene();
     let cloud = parent_cloud();
     let out = spawn_candidate_tracks(
@@ -377,7 +377,7 @@ fn csr_bookkeeping_is_consistent() {
         &cloud,
         &[0, 0, 0],
         &offsets,
-        // A deliberately unsorted view set: the CSR contract is view-index order
+        // Deliberately unsorted patch views: the CSR contract is view-index order
         // regardless of how the caller listed them.
         &vec![vec![2, 0, 3, 1]; 3],
         &params(),

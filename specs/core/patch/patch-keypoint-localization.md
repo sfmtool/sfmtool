@@ -33,9 +33,9 @@ and the keypoint-to-grid mapping in
 pub fn localize_patch_keypoints(
     patch: &OrientedPatch,
     views: &[ProjectedImage<'_>],          // one per reconstruction image
-    view_set: &[u32],                      // the views to localize
-    starting_keypoints: Option<&[Option<[f64; 2]>]>, // parallel to view_set
-    reference: Option<usize>,              // position in view_set of the reference
+    patch_views: &[u32],                   // the views to localize
+    patch_keypoints: Option<&[Option<[f64; 2]>]>, // parallel to patch_views
+    reference: Option<usize>,              // position in patch_views of the reference
     params: &KeypointLocalizeParams,
 ) -> KeypointLocalization;
 
@@ -46,8 +46,8 @@ pub fn try_localize_patch_keypoints(
 pub fn localize_patch_cloud_keypoints(
     cloud: &PatchCloud,
     views: &[ProjectedImage<'_>],
-    view_sets: &[Vec<u32>],
-    starting_keypoints: Option<&[Vec<Option<[f64; 2]>>]>,
+    patch_views: &[Vec<u32>],
+    patch_keypoints: Option<&[Vec<Option<[f64; 2]>>]>,
     references: Option<&[Option<usize>]>,  // parallel to the cloud
     params: &KeypointLocalizeParams,
     done: Option<&AtomicUsize>,
@@ -68,11 +68,11 @@ pub fn view_cache_bytes(params: &KeypointLocalizeParams, channels: usize) -> usi
   reference observation is stored with the point (`tracks/reference_observations`
   in the `.sfmr` file, an index within the point's own track) or held by a
   bench track (`TrackPayload::reference`), so the caller is the one that knows
-  it. It passes the position of that observation in `view_set`. `None` has the
+  it. It passes the position of that observation in `patch_views`. `None` has the
   kernel ask the [reference-view rule](reference-view.md) instead, so a caller
   with no reference gets the same template a writer of the stored bitmap would
   pick.
-- **Each starting keypoint is independently optional.** A view set can mix
+- **Each starting keypoint is independently optional.** The patch views can mix
   views that carry a keypoint (an observation's stored position) with views
   that carry none (a view added by [view selection](patch-view-selection.md)
   observes nothing, so it has no keypoint); `None` starts that view at the
@@ -100,9 +100,9 @@ tile cannot be rendered at its keypoint:
 let localized = try_localize_patch_keypoints(
     patch,
     views,
-    view_set,
+    patch_views,
     None,      // every view starts at the point's projection
-    Some(0),   // view_set[0] is the reference observation
+    Some(0),   // patch_views[0] is the reference observation
     &KeypointLocalizeParams::default(),
     &Progress::none(),
 )?;
@@ -139,7 +139,7 @@ placed against the same pixels every score on the bench reads them against.
 
 **Which reference.**
 
-1. The caller's: the position in `view_set` of the point's stored reference
+1. The caller's: the position in `patch_views` of the point's stored reference
    observation, or on the bench the reference the track holds. It is matched
    by image, so a reference given at the dropped slot of a repeated image still
    counts.
@@ -151,7 +151,7 @@ placed against the same pixels every score on the bench reads them against.
    reference and no template: every view keeps its starting keypoint, unscored
    (step 3 of the algorithm below), and the point has no stored bitmap.
 
-A view set of one view is its own reference. The resolution is one function,
+A single patch view is its own reference. The resolution is one function,
 `resolve_reference`, which the sub-pixel refiner calls too, with the same
 grazing pre-filter.
 
@@ -180,9 +180,9 @@ only a localization moves it.
 
 ## Algorithm
 
-For one point with view set `G`:
+For one point with patch views `G`:
 
-1. **Deduplicate** the view set in order (a point can carry two observations in
+1. **Deduplicate** the patch views in order (a point can carry two observations in
    one image), and **pre-filter grazing views**: drop a view whose ray is
    near-parallel to the plane (`|d̂ · n̂|` below `min_grazing_cos`), where the
    in-plane anchor is ill-conditioned, and a view the point does not project

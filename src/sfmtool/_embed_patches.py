@@ -6,7 +6,7 @@
 :func:`embed_patches` runs the whole photometric pipeline (see
 [the pipeline spec](../../specs/core/patch/sift-to-patch-reconstruction.md)): it
 converts to the baseline embedded form, photometrically refines each point's
-patch normal, selects + vets the view set per point, aligns every view's
+patch normal, selects + vets the patch views per point, aligns every view's
 keypoint to the point's reference render (with sub-pixel refinement), then hands the results to
 :func:`sfmtool._patch_compaction.compact_to_embedded_patches` — the write tail
 that culls under-supported points and renumbers the survivors into a valid
@@ -56,7 +56,7 @@ def _refine_subpixel(
     localizer's per-point dicts (preserving the kept-view membership, order, and
     every other field — only the per-view ``keypoints`` array is replaced).
 
-    Per-point view sets and seeds are derived from the localizer's output so the
+    Per-point patch views and seeds are derived from the localizer's output so the
     refiner sees exactly the same membership the localizer chose; a point the
     localizer dropped (or never localized) keeps its localization dict unchanged.
     Each point's ``reference_image`` is passed on, so the refiner aligns the
@@ -88,10 +88,10 @@ def _refine_subpixel(
     if render_bitmaps:
         kwargs["render_bitmaps"] = True
 
-    # Build per-point view sets + starting keypoints parallel to each other (the
-    # refiner reads `starting_keypoints[pid][k]` as the seed for the k'th view
-    # of `view_sets[pid]`, in order — so the two MUST be built in the same loop).
-    view_sets: dict[int, list[int]] = {}
+    # Build per-point patch views + patch keypoints parallel to each other (the
+    # refiner reads `patch_keypoints[pid][k]` as the seed for the k'th view
+    # of `patch_views[pid]`, in order — so the two MUST be built in the same loop).
+    patch_views: dict[int, list[int]] = {}
     seeds: dict[int, list[list[float]]] = {}
     references: dict[int, int] = {}
     for loc in localizations:
@@ -100,21 +100,21 @@ def _refine_subpixel(
         kpts = np.asarray(loc["keypoints"], dtype=np.float64).reshape(-1, 2)
         if not views:
             continue
-        view_sets[pid] = views
+        patch_views[pid] = views
         seeds[pid] = [[float(p[0]), float(p[1])] for p in kpts]
         if loc.get("reference_image") is not None:
             references[pid] = int(loc["reference_image"])
 
-    if not view_sets:
+    if not patch_views:
         # Nothing to refine (and nothing that could hold a bitmap).
         return localizations, None, None
 
     refined = cloud.refine_keypoints(
         embedded,
         images,
-        view_sets=view_sets,
-        starting_keypoints=seeds,
-        point_indexes=list(view_sets.keys()),
+        patch_views=patch_views,
+        patch_keypoints=seeds,
+        point_indexes=list(patch_views.keys()),
         reference_images=references,
         resolution=resolution,
         sampler=sampler,
@@ -238,7 +238,7 @@ def _stored_keypoints_by_image(
     recon's inline observations — the stored keypoint each view was matched at.
 
     First observation wins where a point is observed twice in one image, matching
-    the order-preserving dedup the kernels apply to a view set. A point (or a
+    the order-preserving dedup the kernels apply to a patch's views. A point (or a
     whole recon) with no inline keypoints simply contributes no entries, so every
     lookup misses and the caller falls back to the projection.
     """
@@ -422,7 +422,7 @@ def embed_patches(
        (SIFT) keypoint rather than the reprojected point center
        (``use_stored_keypoints``). Points at infinity keep their fixed
        tangent-sphere frame untouched.
-    2. **Select the view set** per point: the track plus other views that
+    2. **Select the patch views** per point: the track plus other views that
        geometrically see the surfel and clear ``min_relative_zncc`` against a
        track-seeded template — the track views again rendered at their stored
        keypoints, both when fusing that template and when scoring against it.
@@ -500,7 +500,7 @@ def embed_patches(
             seed), then the sub-pixel keypoint refine. Each subsequent round
             re-refines every normal against the *previous* round's keypoints, then
             re-refines the keypoints against the new normals — a fixed-point
-            alternation. The per-point view set can only shrink across rounds (the
+            alternation. The per-point patch views can only shrink across rounds (the
             grazing-observation drop below); it is never expanded after round 1.
         max_obliquity_deg: After **each** round's normal refinement, before its
             sub-pixel pass, drop every observation viewing its surfel more than
@@ -526,12 +526,12 @@ def embed_patches(
             basis** at this many views per point — the D-optimal geometric pick of
             the most normal-informative views (see
             ``specs/core/patch/patch-normal-refine-view-subset.md``). Applied only to the
-            fine-tuning rounds, whose view set is the ``select_views``-expanded one;
+            fine-tuning rounds, whose patch views are the ``select_views``-expanded one;
             the round-1 (raw-track) refine is untouched. Lossless for the output:
             only the refinement basis shrinks — every observation stays, and the
-            stored bitmaps still pick their reference view from the full view set. ``0`` uses
+            stored bitmaps still pick their reference view from all the patch views. ``0`` uses
             all views (disables the cap); the default is ``8`` (cuts roughly a
-            third off end-to-end time on large view sets — the round-2+ refine
+            third off end-to-end time on points with many views — the round-2+ refine
             pass itself ~5x — at the cost of a different, not necessarily worse,
             normal on high-view points).
         max_zncc_self_similarity_radius: Cull points whose round-1 stored
@@ -616,7 +616,7 @@ def embed_patches(
             progress=counter,
         )
 
-    # 2. Expand + vet the view set per point (round 1 only; membership is fixed
+    # 2. Expand + vet the patch views per point (round 1 only; membership is fixed
     #    afterwards).
     with (
         _timed_step(log, f"  round 1/{rounds}: selecting views ({len(cloud)} pts)..."),
@@ -635,7 +635,7 @@ def embed_patches(
             keypoint_anchor=keypoint_anchor,
             progress=counter,
         )
-    view_sets: dict[int, list[int]] = {
+    patch_views: dict[int, list[int]] = {
         int(s["point_index"]): np.asarray(s["admitted"]).tolist() for s in selections
     }
 
@@ -651,7 +651,7 @@ def embed_patches(
     if keypoint_anchor:
         stored = _stored_keypoints_by_image(embedded)
         localize_seeds = {}
-        for pid, views in view_sets.items():
+        for pid, views in patch_views.items():
             by_image = stored.get(pid)
             localize_seeds[pid] = (
                 [None] * len(views)
@@ -667,8 +667,8 @@ def embed_patches(
         localizations = cloud.localize_keypoints(
             embedded,
             pyramids,
-            view_sets=view_sets,
-            starting_keypoints=localize_seeds,
+            patch_views=patch_views,
+            patch_keypoints=localize_seeds,
             reference_images=reference_images_by_point(embedded),
             search=search,
             max_shift_px=max_shift_px,
@@ -790,7 +790,7 @@ def embed_patches(
                 obliquity_weight_power=obliquity_weight_power,
                 fronto_prior_weight=fronto_prior_weight,
                 sampler=sampler,
-                # The round-2+ view set is the select_views-expanded one; the
+                # The round-2+ patch views are the select_views-expanded ones; the
                 # D-optimal cap (0 = off) trims the refinement basis only —
                 # membership (and the stored bitmaps' reference pick) still span every view.
                 max_refine_views=max_refine_views,

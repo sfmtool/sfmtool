@@ -39,9 +39,11 @@ def _run_pipeline(recon, images, resolution=12):
         recon, images, resolution=resolution, render_bitmaps=True
     )
     sel = cloud.select_views(recon, images, resolution=resolution)
-    view_sets = {int(r["point_index"]): np.asarray(r["admitted"]).tolist() for r in sel}
+    patch_views = {
+        int(r["point_index"]): np.asarray(r["admitted"]).tolist() for r in sel
+    }
     locs = cloud.localize_keypoints(
-        recon, images, view_sets=view_sets, resolution=resolution
+        recon, images, patch_views=patch_views, resolution=resolution
     )
     return cloud, res["bitmaps"], locs
 

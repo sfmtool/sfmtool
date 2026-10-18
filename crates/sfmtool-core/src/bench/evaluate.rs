@@ -1797,17 +1797,17 @@ fn read_round(
         }
         return Ok(());
     }
-    let view_set: Vec<u32> = round.iter().map(|&i| track.observations[i].image).collect();
+    let patch_views: Vec<u32> = round.iter().map(|&i| track.observations[i].image).collect();
     let seeds: Vec<Option<[f64; 2]>> = round
         .iter()
         .map(|&i| seed_of(&track.observations[i]))
         .collect();
-    let of_image: HashMap<u32, usize> = view_set
+    let of_image: HashMap<u32, usize> = patch_views
         .iter()
         .copied()
         .zip(round.iter().copied())
         .collect();
-    let at_image: HashMap<u32, usize> = view_set.iter().copied().zip(0..round.len()).collect();
+    let at_image: HashMap<u32, usize> = patch_views.iter().copied().zip(0..round.len()).collect();
 
     let params = KeypointLocalizeParams {
         search: search_radius(track, images, patch_frame, round, options),
@@ -1827,7 +1827,7 @@ fn read_round(
     let localized = try_localize_patch_keypoints(
         patch_frame,
         images,
-        &view_set,
+        &patch_views,
         Some(&seeds),
         track_reference(track, round),
         &params,

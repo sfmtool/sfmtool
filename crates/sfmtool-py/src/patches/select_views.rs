@@ -1,17 +1,16 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! `PatchCloud.select_views`: photometric view-set selection.
+//! `PatchCloud.select_views`: photometric view selection.
 
 use numpy::IntoPyArray;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-use sfmtool_core::patch::normal_refine::{view_indices_from_reconstruction, ProjectedImage};
-use sfmtool_core::patch::view_selection::{
-    select_patch_cloud_views, track_keypoints_from_reconstruction, ViewSelectParams,
-};
+use sfmtool_core::patch::normal_refine::ProjectedImage;
+use sfmtool_core::patch::view_selection::{select_patch_cloud_views, ViewSelectParams};
+use sfmtool_core::patch::{track_keypoints_from_reconstruction, track_views_from_reconstruction};
 
 use super::args::{parse_patch_window, parse_sampler};
 use super::cloud::PyPatchCloud;
@@ -21,7 +20,7 @@ use sfmtool_core::progress::Progress;
 
 #[pymethods]
 impl PyPatchCloud {
-    /// Select, per patch, the **view set** ``G`` that photometrically sees it:
+    /// Select, per patch, the views ``G`` that photometrically see it:
     /// the point's track views plus every other image that geometrically sees the
     /// surfel and whose windowed ZNCC to a robust reference appearance (fused from
     /// the track views) clears ``min_relative_zncc`` × the track's own
@@ -32,7 +31,7 @@ impl PyPatchCloud {
     ///     recon: The reconstruction the cloud was built from (provides cameras,
     ///         poses, and the per-point track view lists via ``point_indexes``),
     ///         **or** a :class:`CameraViews` — which carries no tracks, so
-    ///         ``candidate_views`` becomes required.
+    ///         ``track_views`` becomes required.
     ///     images: One source image (HxWxC uint8 numpy array) per reconstruction
     ///         image, parallel to ``recon`` (index = image index), **or** an
     ///         :class:`ImagePyramidSet` prebuilt from those images (decode the
@@ -60,15 +59,15 @@ impl PyPatchCloud {
     ///         ``min_relative_zncc`` × self-agreement.
     ///     point_indexes: If given, select only for the patches with these source
     ///         point ids; ``None`` (default) selects for every patch.
-    ///     candidate_views: Optional mapping ``point_index -> [image_index, ...]``
-    ///         giving each point's base (always-admitted) view list — the role the
-    ///         track observations play in reconstruction mode. **Required** when the
-    ///         first argument is a :class:`CameraViews` (there are no tracks);
-    ///         with a reconstruction it *overrides* the track-derived list for the
-    ///         points present in the map (points absent keep their track views).
-    ///         Despite the name, this is not the pool of candidates to vet: the
-    ///         listed views build the reference and are admitted unchecked, and the
-    ///         candidates are every other image that geometrically sees the surfel.
+    ///     track_views: Optional mapping ``point_index -> [image_index, ...]``
+    ///         giving each point's track views, the always-admitted base list that
+    ///         the track observations supply in reconstruction mode. **Required**
+    ///         when the first argument is a :class:`CameraViews` (there are no
+    ///         tracks); with a reconstruction it *overrides* the track-derived list
+    ///         for the points present in the map (points absent keep their track
+    ///         views). The listed views build the reference and are admitted
+    ///         unchecked; the candidates are every other image that geometrically
+    ///         sees the surfel.
     ///     keypoint_anchor: Render the **track views** anchored at their stored
     ///         keypoints — the appearance that was actually matched — rather than at
     ///         the point's reprojection, both when fusing the reference and when
@@ -91,7 +90,7 @@ impl PyPatchCloud {
     #[pyo3(signature = (
         recon, images, *, min_relative_zncc=0.7, resolution=24, window="gaussian_disk",
         window_sigma=0.6, sampler="per_view", min_valid_fraction=0.6, min_track_views=2,
-        robust_iters=3, min_self_agreement=0.3, point_indexes=None, candidate_views=None,
+        robust_iters=3, min_self_agreement=0.3, point_indexes=None, track_views=None,
         keypoint_anchor=false, progress=None
     ))]
     fn select_views<'py>(
@@ -109,16 +108,16 @@ impl PyPatchCloud {
         robust_iters: u32,
         min_self_agreement: f64,
         point_indexes: Option<Vec<u32>>,
-        candidate_views: Option<std::collections::HashMap<u32, Vec<u32>>>,
+        track_views: Option<std::collections::HashMap<u32, Vec<u32>>>,
         keypoint_anchor: bool,
         progress: Option<ProgressCounter>,
     ) -> PyResult<Vec<Bound<'py, PyDict>>> {
         let (posed, recon_guard, n_images) = resolve_patch_scene(
             recon,
             &self.inner,
-            candidate_views.is_some(),
-            "candidate_views",
-            "per-patch candidate views",
+            track_views.is_some(),
+            "track_views",
+            "per-patch track views",
         )?;
         let recon_opt = recon_guard.as_ref().map(|r| &r.inner);
 
@@ -145,13 +144,14 @@ impl PyPatchCloud {
             })
             .collect();
 
-        // Per-patch base (always-admitted) view lists. In reconstruction mode these
-        // default to the track observations; `candidate_views` overrides the listed
-        // points (and is the only source in views mode). An empty list makes a
-        // patch's selection trivially empty, so `point_indexes` selects a subset by
-        // clearing the rest.
+        // Per-patch track views, the always-admitted base lists. In reconstruction
+        // mode these default to the track observations; the `track_views` map
+        // overrides the listed points (and is the only source in views mode). An
+        // empty list makes a patch's selection trivially empty, so `point_indexes`
+        // selects a subset by clearing the rest.
+        let overrides = track_views;
         let mut track_views = match recon_opt {
-            Some(recon) => view_indices_from_reconstruction(recon, &self.inner),
+            Some(recon) => track_views_from_reconstruction(recon, &self.inner),
             None => vec![Vec::new(); self.inner.len()],
         };
         // Stored keypoints for those base views, parallel to `track_views`. Only a
@@ -160,11 +160,11 @@ impl PyPatchCloud {
             (true, Some(recon)) => Some(track_keypoints_from_reconstruction(recon, &self.inner)),
             _ => None,
         };
-        if let Some(map) = &candidate_views {
+        if let Some(map) = &overrides {
             for vs in map.values() {
                 if let Some(&bad) = vs.iter().find(|&&i| i >= n_images) {
                     return Err(PyValueError::new_err(format!(
-                        "candidate_views contains image index {bad} out of range for this \
+                        "track_views contains image index {bad} out of range for this \
                          scene's {n_images} views"
                     )));
                 }

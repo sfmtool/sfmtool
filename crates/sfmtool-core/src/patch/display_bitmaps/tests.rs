@@ -196,7 +196,7 @@ fn a_missing_view_leaves_each_reference_naming_its_own_observation() {
         let kept: Vec<usize> = range
             .filter(|&j| slot[tracks[j].image_index as usize].is_some())
             .collect();
-        let view_set: Vec<u32> = kept
+        let patch_views: Vec<u32> = kept
             .iter()
             .map(|&j| slot[tracks[j].image_index as usize].unwrap())
             .collect();
@@ -212,7 +212,7 @@ fn a_missing_view_leaves_each_reference_naming_its_own_observation() {
         let rendered = render_patch_bitmap(
             patch,
             &present,
-            &view_set,
+            &patch_views,
             &keypoints,
             &params,
             &Progress::none(),

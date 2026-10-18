@@ -499,7 +499,7 @@ fn grazing_views_are_prefiltered() {
 
 #[test]
 fn fewer_than_two_views_returns_seed_projection() {
-    // A single-view set has nothing to align: its one view is the reference,
+    // A single patch view has nothing to align: its one view is the reference,
     // with or without the caller naming it, and keeps its projection.
     let centers = [[0.4, 0.0, 0.0]];
     let offs = [[0.0; 2]];
@@ -552,12 +552,12 @@ fn batch_matches_per_patch() {
         patches: vec![plane_patch(), plane_patch()],
         point_indexes: vec![0, 1],
     };
-    let view_sets = vec![vec![0u32, 1, 2, 3], vec![0u32, 1, 2, 3]];
+    let patch_views = vec![vec![0u32, 1, 2, 3], vec![0u32, 1, 2, 3]];
 
     let batch = localize_patch_cloud_keypoints(
         &cloud,
         &views,
-        &view_sets,
+        &patch_views,
         None,
         None,
         &params(),
@@ -570,7 +570,7 @@ fn batch_matches_per_patch() {
         let single = localize_patch_keypoints(
             &cloud.patches[i],
             &views,
-            &view_sets[i],
+            &patch_views[i],
             None,
             None,
             &params(),
@@ -587,7 +587,7 @@ fn batch_matches_per_patch() {
     let batch = localize_patch_cloud_keypoints(
         &cloud,
         &views,
-        &view_sets,
+        &patch_views,
         None,
         Some(&references),
         &params(),
@@ -599,14 +599,14 @@ fn batch_matches_per_patch() {
         let single = localize_patch_keypoints(
             &cloud.patches[i],
             &views,
-            &view_sets[i],
+            &patch_views[i],
             None,
             references[i],
             &params(),
         );
         assert_eq!(res.views, single.views);
         assert_eq!(res.keypoints, single.keypoints);
-        assert_eq!(res.reference, Some(view_sets[i][references[i].unwrap()]));
+        assert_eq!(res.reference, Some(patch_views[i][references[i].unwrap()]));
     }
 }
 
@@ -675,7 +675,7 @@ fn all_none_seeds_match_the_unseeded_run() {
     // A seed table of all `None` says "every view seeds at its projection", which
     // is what passing no table at all means — so the two runs must agree to the
     // bit, not merely closely. This is the contract a caller relies on when it
-    // builds one table for a view set where no view happens to have a keypoint.
+    // builds one table for patch views where no view happens to have a keypoint.
     let centers = [
         [0.4, 0.0, 0.0],
         [-0.4, 0.0, 0.0],
@@ -806,7 +806,7 @@ fn batch_mixed_seeds_match_the_single_patch_call() {
         patches: vec![plane_patch(), plane_patch()],
         point_indexes: vec![0, 1],
     };
-    let view_sets = vec![vec![0u32, 1, 2], vec![0u32, 1, 2]];
+    let patch_views = vec![vec![0u32, 1, 2], vec![0u32, 1, 2]];
     let proj0 = {
         let (x, y) = project(&views[0], &cloud.patches[0].center, cloud.patches[0].w).unwrap();
         [x + src_per_grid(), y]
@@ -817,7 +817,7 @@ fn batch_mixed_seeds_match_the_single_patch_call() {
     let batch = localize_patch_cloud_keypoints(
         &cloud,
         &views,
-        &view_sets,
+        &patch_views,
         Some(&seeds),
         None,
         &params(),
@@ -829,7 +829,7 @@ fn batch_mixed_seeds_match_the_single_patch_call() {
     let single0 = localize_patch_keypoints(
         &cloud.patches[0],
         &views,
-        &view_sets[0],
+        &patch_views[0],
         Some(&seeds[0]),
         None,
         &params(),
@@ -837,7 +837,7 @@ fn batch_mixed_seeds_match_the_single_patch_call() {
     let single1 = localize_patch_keypoints(
         &cloud.patches[1],
         &views,
-        &view_sets[1],
+        &patch_views[1],
         None,
         None,
         &params(),
@@ -1194,7 +1194,7 @@ fn absolute_gates_at_zero_reproduce_the_ungated_run() {
 }
 
 #[test]
-fn empty_view_set_returns_empty() {
+fn empty_patch_views_return_empty() {
     // A patch with no views to refine yields an empty (but well-formed) result.
     let centers = [[0.4, 0.0, 0.0]];
     let offs = [[0.0; 2]];
@@ -1824,7 +1824,7 @@ fn search_shift_matches_reference_dropped_channel() {
 }
 
 /// End-to-end equivalence: `PlusDescent` and `Exhaustive` must agree on the
-/// kept view set and converge to nearly-the-same per-view keypoints on a clean
+/// kept views and converge to nearly-the-same per-view keypoints on a clean
 /// well-posed scene (aligned plus one misregistered view). Locks
 /// the new default's behaviour against the original whole-grid path on a case
 /// where the ZNCC landscape is unimodal — the descent's local-optima failure
@@ -1860,7 +1860,7 @@ fn plus_descent_agrees_with_exhaustive_on_well_posed_scene() {
 
     assert_eq!(
         a.views, b.views,
-        "the two strategies must agree on the kept view set on a well-posed scene"
+        "the two strategies must agree on the kept views on a well-posed scene"
     );
     for (i, (&ka, &kb)) in a.keypoints.iter().zip(&b.keypoints).enumerate() {
         let dx = ka[0] - kb[0];

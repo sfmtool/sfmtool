@@ -30,7 +30,7 @@ use super::views::{resolve_pyramids, resolve_scene};
 /// Args:
 ///     views: The scene the parents live in — a :class:`CameraViews` or an
 ///         :class:`SfmrReconstruction` (only its cameras and poses are read;
-///         the per-candidate view sets are always explicit).
+///         the per-candidate patch views are always explicit).
 ///     images: An :class:`ImagePyramidSet` built from that scene, or one source
 ///         image (HxWxC uint8 numpy array) per view.
 ///     cloud: The :class:`PatchCloud` holding the parents.
@@ -38,7 +38,7 @@ use super::views::{resolve_pyramids, resolve_scene};
 ///         patches. May repeat.
 ///     offsets_uv: Per candidate, shape ``(n, 2)`` float64 ``(du, dv)`` in units
 ///         of the parent's half-extent vectors.
-///     view_sets: Per candidate, a sequence of image indices to search in
+///     patch_views: Per candidate, a sequence of image indices to search in
 ///         (typically the parent's views). An empty entry is allowed — that
 ///         candidate simply dies at ``too_few_views``.
 ///     resolution: The R×R sampling grid every stage scores on.
@@ -70,7 +70,7 @@ use super::views::{resolve_pyramids, resolve_scene};
     cloud,
     parents,
     offsets_uv,
-    view_sets,
+    patch_views,
     *,
     resolution = 24,
     search = 6.0,
@@ -87,7 +87,7 @@ pub fn spawn_candidate_tracks(
     cloud: &PyPatchCloud,
     parents: PyReadonlyArray1<u32>,
     offsets_uv: PyReadonlyArray2<f64>,
-    view_sets: Vec<Vec<u32>>,
+    patch_views: Vec<Vec<u32>>,
     resolution: u32,
     search: f64,
     max_shift_px: f64,
@@ -105,10 +105,10 @@ pub fn spawn_candidate_tracks(
             offsets_uv.shape()[0]
         )));
     }
-    if view_sets.len() != n {
+    if patch_views.len() != n {
         return Err(PyValueError::new_err(format!(
-            "view_sets has {} entries but parents has {n}",
-            view_sets.len()
+            "patch_views has {} entries but parents has {n}",
+            patch_views.len()
         )));
     }
 
@@ -135,10 +135,10 @@ pub fn spawn_candidate_tracks(
 
     let (posed, _recon) = resolve_scene(views)?;
     let n_images = posed.len() as u32;
-    for (i, vs) in view_sets.iter().enumerate() {
+    for (i, vs) in patch_views.iter().enumerate() {
         if let Some(&bad) = vs.iter().find(|&&v| v >= n_images) {
             return Err(PyValueError::new_err(format!(
-                "view_sets[{i}] contains image index {bad} out of range for this \
+                "patch_views[{i}] contains image index {bad} out of range for this \
                  scene's {n_images} views"
             )));
         }
@@ -173,7 +173,7 @@ pub fn spawn_candidate_tracks(
             &cloud.inner,
             &parent_data,
             &offsets,
-            &view_sets,
+            &patch_views,
             &params,
         )
     });

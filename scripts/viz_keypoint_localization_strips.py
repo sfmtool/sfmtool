@@ -141,11 +141,11 @@ def gather(recon, cloud, images, args):
     sel = cloud.select_views(
         recon, images, point_indexes=sample, resolution=args.resolution
     )
-    view_sets = {int(r["point_index"]): np.asarray(r["admitted"]).tolist() for r in sel}
+    patch_views = {int(r["point_index"]): np.asarray(r["admitted"]).tolist() for r in sel}
     loc = cloud.localize_keypoints(
         recon,
         images,
-        view_sets=view_sets,
+        patch_views=patch_views,
         point_indexes=sample,
         resolution=args.resolution,
         search=args.search,
@@ -155,7 +155,7 @@ def gather(recon, cloud, images, args):
     for r in loc:
         pid = int(r["point_index"])
         kept = np.asarray(r["views"], dtype=np.int64).tolist()
-        in_set = view_sets.get(pid, sorted(tracks.get(pid, set())))
+        in_set = patch_views.get(pid, sorted(tracks.get(pid, set())))
         if len(kept) < 2 or len(in_set) < 2:
             continue
         offs = np.asarray(r["offsets_px"], dtype=np.float64)

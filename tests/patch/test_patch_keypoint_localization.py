@@ -4,7 +4,7 @@
 """Integration test for ``PatchCloud.localize_keypoints`` against real
 reconstructions.
 
-Builds a patch cloud from a real reconstruction, selects each point's view set
+Builds a patch cloud from a real reconstruction, selects each point's patch views
 photometrically, then aligns the per-view keypoints to the reference render over the real
 ``.sift``-derived patches and source images — the multi-view rendering + shift
 search the Rust unit tests can't exercise without on-disk images. See
@@ -40,8 +40,8 @@ def _project(recon, point_xyz: np.ndarray, image_idx: int):
     return np.asarray(cam.project(x_cam[0] / -x_cam[2], x_cam[1] / -x_cam[2]))
 
 
-def _view_sets_from_selection(cloud, recon, images, sample):
-    """Photometric view sets keyed by point id, for the sampled points."""
+def _patch_views_from_selection(cloud, recon, images, sample):
+    """Photometric patch views keyed by point id, for the sampled points."""
     sel = cloud.select_views(recon, images, point_indexes=sample, resolution=12)
     return {int(r["point_index"]): np.asarray(r["admitted"]).tolist() for r in sel}
 
@@ -55,13 +55,13 @@ def test_localize_keypoints_convex_dataset(seoul_bull_workspace: Path):
     assert len(cloud) > 0
 
     sample = sample_point_ids(cloud)
-    view_sets = _view_sets_from_selection(cloud, recon, images, sample)
+    patch_views = _patch_views_from_selection(cloud, recon, images, sample)
 
     max_shift_px = 3.0
     results = cloud.localize_keypoints(
         recon,
         images,
-        view_sets=view_sets,
+        patch_views=patch_views,
         point_indexes=sample,
         resolution=12,
         max_shift_px=max_shift_px,
@@ -85,7 +85,7 @@ def test_localize_keypoints_convex_dataset(seoul_bull_workspace: Path):
         assert zncc.shape == (len(views),)
         assert len(set(views.tolist())) == len(views)
         assert np.all(views >= 0) and np.all(views < len(images))
-        assert set(views.tolist()).issubset(set(view_sets[pid]))
+        assert set(views.tolist()).issubset(set(patch_views[pid]))
 
         for k, image_idx in enumerate(views.tolist()):
             # The reported offset is the keypoint's distance from the projection.
@@ -137,14 +137,14 @@ def test_localize_keypoints_nonconvex_fisheye_rig(kerry_park_workspace: Path):
 
 
 def test_localize_keypoints_defaults_to_track(seoul_bull_workspace: Path):
-    """With no view_sets, each point is localized over its track; kept ⊆ track."""
+    """With no patch_views, each point is localized over its track; kept ⊆ track."""
     recon = SfmrReconstruction.load(seoul_bull_workspace)
     images = load_images(recon)
     cloud = PatchCloud.from_reconstruction(
         recon, normal="mean_viewing", extent_value=5.0
     )
 
-    # The track view set per point.
+    # The track views per point.
     point_ids = np.asarray(recon.track_point_indexes)
     image_idxs = np.asarray(recon.track_image_indexes)
     tracks: dict[int, set[int]] = {}
@@ -173,7 +173,7 @@ def _tracks(recon) -> dict[int, set[int]]:
     return out
 
 
-def test_localize_keypoints_view_sets_override_is_honored(
+def test_localize_keypoints_patch_views_override_is_honored(
     seoul_bull_workspace: Path,
 ):
     """A strict-subset override is actually applied — not silently replaced by the
@@ -192,7 +192,7 @@ def test_localize_keypoints_view_sets_override_is_honored(
     base = cloud.localize_keypoints(
         recon,
         images,
-        view_sets={pid: sorted(tracks[pid]) for pid in sample},
+        patch_views={pid: sorted(tracks[pid]) for pid in sample},
         point_indexes=sample,
         resolution=12,
     )
@@ -211,7 +211,7 @@ def test_localize_keypoints_view_sets_override_is_honored(
     res = cloud.localize_keypoints(
         recon,
         images,
-        view_sets={target_pid: override},
+        patch_views={target_pid: override},
         point_indexes=[target_pid],
         resolution=12,
     )
@@ -224,10 +224,10 @@ def test_localize_keypoints_view_sets_override_is_honored(
     )
     assert got.issubset(set(override))
 
-    # A point left out of view_sets entirely still localizes over its track.
+    # A point left out of patch_views entirely still localizes over its track.
     uncovered = next(p for p in sample if p != target_pid)
     res2 = cloud.localize_keypoints(
-        recon, images, view_sets={}, point_indexes=[uncovered], resolution=12
+        recon, images, patch_views={}, point_indexes=[uncovered], resolution=12
     )
     got2 = set(np.asarray(res2[0]["views"], dtype=np.int64).tolist())
     assert got2.issubset(tracks[uncovered])
@@ -269,10 +269,10 @@ def test_localize_keypoints_grazing_cutoff_drops_views(kerry_park_workspace: Pat
     )
 
 
-def test_localize_keypoints_empty_view_set_yields_empty_arrays(
+def test_localize_keypoints_empty_patch_views_yields_empty_arrays(
     seoul_bull_workspace: Path,
 ):
-    """An empty view_set override yields a well-formed empty result (the binding's
+    """An empty patch_views override yields a well-formed empty result (the binding's
     explicit (0, 2) keypoints array, not a column-inference failure)."""
     recon = SfmrReconstruction.load(seoul_bull_workspace)
     images = load_images(recon)
@@ -281,7 +281,7 @@ def test_localize_keypoints_empty_view_set_yields_empty_arrays(
     )
     pid = int(np.asarray(cloud.point_indexes)[0])
     res = cloud.localize_keypoints(
-        recon, images, view_sets={pid: []}, point_indexes=[pid], resolution=12
+        recon, images, patch_views={pid: []}, point_indexes=[pid], resolution=12
     )
     assert len(res) == 1
     assert np.asarray(res[0]["views"]).shape == (0,)
@@ -294,7 +294,7 @@ def test_localize_keypoints_empty_view_set_yields_empty_arrays(
 def test_localize_keypoints_rejects_out_of_range_view_index(
     seoul_bull_workspace: Path,
 ):
-    """An out-of-range image index in view_sets is a clean ValueError, not a panic."""
+    """An out-of-range image index in patch_views is a clean ValueError, not a panic."""
     import pytest
 
     recon = SfmrReconstruction.load(seoul_bull_workspace)
@@ -306,7 +306,7 @@ def test_localize_keypoints_rejects_out_of_range_view_index(
     bad = {pid: [0, len(images)]}  # len(images) is one past the last valid index
     with pytest.raises(ValueError):
         cloud.localize_keypoints(
-            recon, images, view_sets=bad, point_indexes=[pid], resolution=12
+            recon, images, patch_views=bad, point_indexes=[pid], resolution=12
         )
 
 
@@ -390,14 +390,14 @@ def test_select_views_reports_the_track_view_count(
         assert set(adm[t:]).isdisjoint(by_pid.get(pid, set()))
 
 
-def _seeded_run(cloud, recon, images, view_sets, sample, seeds):
+def _seeded_run(cloud, recon, images, patch_views, sample, seeds):
     return {
         int(r["point_index"]): r
         for r in cloud.localize_keypoints(
             recon,
             images,
-            view_sets=view_sets,
-            starting_keypoints=seeds,
+            patch_views=patch_views,
+            patch_keypoints=seeds,
             point_indexes=sample,
             resolution=12,
         )
@@ -407,7 +407,7 @@ def _seeded_run(cloud, recon, images, view_sets, sample, seeds):
 def test_localize_keypoints_per_view_optional_seeds(
     seoul_bull_workspace: Path,
 ):
-    """``starting_keypoints`` takes a per-view ``None``: that view seeds at the
+    """``patch_keypoints`` takes a per-view ``None``: that view seeds at the
     point's projection while its siblings keep their explicit seeds. An all-``None``
     table therefore reproduces the unseeded run, and displacing one view's seed
     moves only what a seed can move."""
@@ -417,21 +417,21 @@ def test_localize_keypoints_per_view_optional_seeds(
         recon, normal="mean_viewing", extent_value=5.0
     )
     sample = sample_point_ids(cloud, n=80)
-    view_sets = _view_sets_from_selection(cloud, recon, images, sample)
-    sample = [pid for pid in sample if len(view_sets.get(pid, [])) >= 2]
+    patch_views = _patch_views_from_selection(cloud, recon, images, sample)
+    sample = [pid for pid in sample if len(patch_views.get(pid, [])) >= 2]
     assert sample, "no multi-view point in the sample"
     positions = np.asarray(recon.positions, dtype=np.float64)
 
-    unseeded = _seeded_run(cloud, recon, images, view_sets, sample, None)
+    unseeded = _seeded_run(cloud, recon, images, patch_views, sample, None)
 
     # 1. Every view unseeded via the table == no table at all.
     all_none = _seeded_run(
         cloud,
         recon,
         images,
-        view_sets,
+        patch_views,
         sample,
-        {pid: [None] * len(view_sets[pid]) for pid in sample},
+        {pid: [None] * len(patch_views[pid]) for pid in sample},
     )
     for pid, r in unseeded.items():
         assert np.array_equal(
@@ -444,16 +444,16 @@ def test_localize_keypoints_per_view_optional_seeds(
     # 2. A mixed table: the first view of each point is seeded a few px off its
     #    projection, every other view is left at `None`. The seeds must be read
     #    (some point's result moves) and the un-seeded views must still be
-    #    localized (no point loses its whole view set to a length/parse error).
+    #    localized (no point loses all its patch views to a length/parse error).
     mixed: dict[int, list[list[float] | None]] = {}
     for pid in sample:
-        views = view_sets[pid]
+        views = patch_views[pid]
         seeds: list[list[float] | None] = [None] * len(views)
         p = _project(recon, positions[pid], int(views[0]))
         if p is not None:
             seeds[0] = [float(p[0]) + 2.0, float(p[1])]
         mixed[pid] = seeds
-    seeded = _seeded_run(cloud, recon, images, view_sets, sample, mixed)
+    seeded = _seeded_run(cloud, recon, images, patch_views, sample, mixed)
 
     assert set(seeded) == set(unseeded)
     moved = 0
@@ -473,11 +473,11 @@ def test_localize_keypoints_per_view_optional_seeds(
     assert moved > 0, "a displaced per-view seed changed nothing"
 
 
-def test_localize_keypoints_rejects_mismatched_starting_keypoints(
+def test_localize_keypoints_rejects_mismatched_patch_keypoints(
     seoul_bull_workspace: Path,
 ):
     """The parallel-length check is unchanged by the per-view ``None``: a seed
-    list that is not parallel to the point's view set is still a clean
+    list that is not parallel to the point's patch views is still a clean
     ValueError."""
     import pytest
 
@@ -491,8 +491,8 @@ def test_localize_keypoints_rejects_mismatched_starting_keypoints(
         cloud.localize_keypoints(
             recon,
             images,
-            view_sets={pid: [0, 1]},
-            starting_keypoints={pid: [None]},
+            patch_views={pid: [0, 1]},
+            patch_keypoints={pid: [None]},
             point_indexes=[pid],
             resolution=12,
         )
@@ -510,8 +510,8 @@ def test_localize_keypoints_chunked_with_whole_cloud_reference_images(
         recon, normal="mean_viewing", extent_value=5.0
     )
     sample = sample_point_ids(cloud, n=60)
-    view_sets = _view_sets_from_selection(cloud, recon, images, sample)
-    references = {pid: views[-1] for pid, views in view_sets.items() if views}
+    patch_views = _patch_views_from_selection(cloud, recon, images, sample)
+    references = {pid: views[-1] for pid, views in patch_views.items() if views}
 
     halves = [sample[: len(sample) // 2], sample[len(sample) // 2 :]]
     chunked = []
@@ -520,7 +520,7 @@ def test_localize_keypoints_chunked_with_whole_cloud_reference_images(
             cloud.localize_keypoints(
                 recon,
                 images,
-                view_sets=view_sets,
+                patch_views=patch_views,
                 reference_images=references,
                 point_indexes=chunk,
                 resolution=12,
@@ -529,7 +529,7 @@ def test_localize_keypoints_chunked_with_whole_cloud_reference_images(
     one_shot = cloud.localize_keypoints(
         recon,
         images,
-        view_sets=view_sets,
+        patch_views=patch_views,
         reference_images=references,
         point_indexes=sample,
         resolution=12,
@@ -581,18 +581,18 @@ def test_reference_keypoint_is_not_moved(seoul_bull_workspace: Path):
     pids = _distinct_track_points(recon, cloud, 12)
     assert pids
 
-    view_sets, seeds, references = {}, {}, {}
+    patch_views, seeds, references = {}, {}, {}
     for k, pid in enumerate(pids):
         imgs, kpts = _stored_seeds(recon, pid)
-        view_sets[pid], seeds[pid] = imgs, kpts
+        patch_views[pid], seeds[pid] = imgs, kpts
         # Not always the first view, so the reference is not just the default.
         references[pid] = imgs[k % len(imgs)]
 
     localized = cloud.localize_keypoints(
         recon,
         images,
-        view_sets=view_sets,
-        starting_keypoints=seeds,
+        patch_views=patch_views,
+        patch_keypoints=seeds,
         reference_images=references,
         point_indexes=pids,
         resolution=12,
@@ -603,8 +603,8 @@ def test_reference_keypoint_is_not_moved(seoul_bull_workspace: Path):
     refined = cloud.refine_keypoints(
         recon,
         images,
-        view_sets=view_sets,
-        starting_keypoints=seeds,
+        patch_views=patch_views,
+        patch_keypoints=seeds,
         reference_images=references,
         point_indexes=pids,
         resolution=12,
@@ -624,23 +624,23 @@ def test_reference_keypoint_is_not_moved(seoul_bull_workspace: Path):
             views = np.asarray(r["views"]).astype(int).tolist()
             assert ref in views, name
             k = views.index(ref)
-            given = seeds[pid][view_sets[pid].index(ref)]
+            given = seeds[pid][patch_views[pid].index(ref)]
             got = np.asarray(r["keypoints"], dtype=np.float64)[k]
             assert np.array_equal(got, np.asarray(given)), (name, pid, got, given)
             assert np.asarray(r[score_key])[k] == 1.0, name
             for j, v in enumerate(views):
                 if v != ref:
-                    seed = np.asarray(seeds[pid][view_sets[pid].index(v)])
+                    seed = np.asarray(seeds[pid][patch_views[pid].index(v)])
                     moved_any |= not np.array_equal(
                         np.asarray(r["keypoints"], dtype=np.float64)[j], seed
                     )
         assert moved_any, f"{name} moved no view but the reference either"
 
 
-def test_reference_outside_the_view_set_falls_back_to_the_rule(
+def test_reference_outside_the_patch_views_falls_back_to_the_rule(
     seoul_bull_workspace: Path,
 ):
-    """A ``reference_images`` entry whose image is not in the point's view set
+    """A ``reference_images`` entry whose image is not in the point's patch views
     is set aside, and the reference-view rule picks, exactly as with no entry."""
     recon = SfmrReconstruction.load(seoul_bull_workspace)
     images = load_images(recon)
@@ -648,12 +648,12 @@ def test_reference_outside_the_view_set_falls_back_to_the_rule(
         recon, normal="mean_viewing", extent_value=5.0
     )
     sample = sample_point_ids(cloud, n=20)
-    view_sets = _view_sets_from_selection(cloud, recon, images, sample)
+    patch_views = _patch_views_from_selection(cloud, recon, images, sample)
     outside = {
         pid: next(i for i in range(len(images)) if i not in views)
-        for pid, views in view_sets.items()
+        for pid, views in patch_views.items()
     }
-    common = dict(view_sets=view_sets, point_indexes=sample, resolution=12)
+    common = dict(patch_views=patch_views, point_indexes=sample, resolution=12)
     ruled = cloud.localize_keypoints(recon, images, **common)
     fallback = cloud.localize_keypoints(
         recon, images, reference_images=outside, **common
@@ -691,7 +691,7 @@ def _healthy_two_view_point(recon, cloud, images) -> tuple[int, list[int]]:
         res = cloud.localize_keypoints(
             recon,
             images,
-            view_sets={pid: pair},
+            patch_views={pid: pair},
             reference_images={pid: pair[0]},
             point_indexes=[pid],
             max_member_zncc_self_similarity_radius=MEMBER_GATE,
@@ -724,7 +724,7 @@ def test_localize_keypoints_flat_member_culls_a_two_view_point(
         res = cloud.localize_keypoints(
             recon,
             imgs,
-            view_sets={pid: pair},
+            patch_views={pid: pair},
             reference_images={pid: pair[0]},
             point_indexes=[pid],
             **kwargs,

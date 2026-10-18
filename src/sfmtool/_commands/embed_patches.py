@@ -249,7 +249,7 @@ def embed_patches_command(
     """Convert a sift_files reconstruction to embedded_patches.
 
     Builds a patch frame for each point (mean-viewing normal, refined
-    photometrically), expands and vets each point's view set, aligns the
+    photometrically), expands and vets each point's patch views, aligns the
     per-view keypoints to each point's reference render and refines them to
     sub-pixel, then writes a NEW embedded_patches .sfmr that
     loads and verifies with no .sift companion. The input is never modified.

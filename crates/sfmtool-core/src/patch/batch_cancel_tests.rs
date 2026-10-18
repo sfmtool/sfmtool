@@ -117,7 +117,7 @@ fn a_batch_cancelled_before_it_starts_does_no_work() {
         })
         .collect();
     let cloud = cloud(40);
-    let view_sets: Vec<Vec<u32>> = vec![vec![0, 1, 2]; cloud.len()];
+    let patch_views: Vec<Vec<u32>> = vec![vec![0, 1, 2]; cloud.len()];
     let cancel = AtomicBool::new(true);
 
     let check = |name: &str, run: &dyn Fn(&Progress<'_>, &AtomicUsize) -> bool| {
@@ -141,7 +141,7 @@ fn a_batch_cancelled_before_it_starts_does_no_work() {
         let out = refine_patch_cloud_normals(
             &mut refined,
             &views,
-            &view_sets,
+            &patch_views,
             R,
             &params,
             None,
@@ -163,7 +163,7 @@ fn a_batch_cancelled_before_it_starts_does_no_work() {
         select_patch_cloud_views(
             &cloud,
             &views,
-            &view_sets,
+            &patch_views,
             None,
             &params,
             Some(done),
@@ -179,7 +179,7 @@ fn a_batch_cancelled_before_it_starts_does_no_work() {
         localize_patch_cloud_keypoints(
             &cloud,
             &views,
-            &view_sets,
+            &patch_views,
             None,
             None,
             &params,
@@ -193,7 +193,7 @@ fn a_batch_cancelled_before_it_starts_does_no_work() {
             resolution: R,
             ..KeypointSubpixelParams::default()
         };
-        refine_patch_cloud_keypoints(&cloud, &views, &view_sets, None, None, &params, progress)
+        refine_patch_cloud_keypoints(&cloud, &views, &patch_views, None, None, &params, progress)
             .is_err()
     });
     check("member coherence", &|progress, done| {
@@ -204,7 +204,7 @@ fn a_batch_cancelled_before_it_starts_does_no_work() {
         validate_patch_cloud_member_coherence(
             &cloud,
             &views,
-            &view_sets,
+            &patch_views,
             None,
             &params,
             Some(done),
@@ -256,7 +256,7 @@ fn normal_refinement_cancelled_part_way_leaves_the_cloud() {
         })
         .collect();
     let original = cloud(2000);
-    let view_sets: Vec<Vec<u32>> = vec![vec![0, 1, 2]; original.len()];
+    let patch_views: Vec<Vec<u32>> = vec![vec![0, 1, 2]; original.len()];
     let cancel = AtomicBool::new(false);
     let sink = |event: Event<'_>| {
         if let Event::Count { .. } = event {
@@ -269,7 +269,7 @@ fn normal_refinement_cancelled_part_way_leaves_the_cloud() {
     let out = refine_patch_cloud_normals(
         &mut refined,
         &views,
-        &view_sets,
+        &patch_views,
         R,
         &NormalRefineParams::default(),
         None,

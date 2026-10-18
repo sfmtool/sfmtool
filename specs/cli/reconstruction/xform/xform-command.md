@@ -754,7 +754,7 @@ remove its reference observation. Dropping and adding the bitmaps gives such
 a point the rule's pick.
 [`render_patch_cloud_bitmaps`](../../../../crates/sfmtool-core/src/patch/stored_bitmap.rs)
 renders the whole cloud, parallel over points. It takes one view per image as
-an `Option`, leaving a `None` view out of every patch's view set, and a
+an `Option`, leaving a `None` view out of every patch's views, and a
 `Progress` that counts `patches` and can cancel it, and an
 `UnreferencedPoints` that says whether a point at `-1` runs the rule (`Pick`)
 or gets a zero row (`Skip`). It is bound as

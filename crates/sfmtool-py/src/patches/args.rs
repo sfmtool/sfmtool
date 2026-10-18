@@ -112,16 +112,16 @@ pub(super) fn parse_extent(
     }
 }
 
-/// Each patch's reference observation as a position in its view set, from the
+/// Each patch's reference observation as a position in its patch views, from the
 /// caller's `reference_images` map (`point_index -> image index`). A point
 /// absent from the map, mapped to `None` or `-1`, or whose image is not in its
-/// view set, gets `None`: the kernel's reference-view rule picks one from the
+/// patch views, gets `None`: the kernel's reference-view rule picks one from the
 /// renders at the starting keypoints.
 ///
 /// A point index the cloud does not have (a negative one included, which is
 /// why the map is keyed `i64`), a negative image index other than
 /// `-1`, or an image index past the scene's `n_images` is a `ValueError`, as
-/// it is for `starting_keypoints`: such an entry is a caller's mistake (an
+/// it is for `patch_keypoints`: such an entry is a caller's mistake (an
 /// observation index passed for an image index, say), not a request for the
 /// rule's pick.
 pub(super) fn reference_positions(

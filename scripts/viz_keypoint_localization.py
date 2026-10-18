@@ -3,7 +3,7 @@
 """Visualize ``PatchCloud.localize_keypoints`` (alignment to the reference
 render) as before/after mean patches.
 
-For each sampled 3D point the production kernel selects a view set and aligns
+For each sampled 3D point the production kernel selects the patch views and aligns
 each view's keypoint to the point's reference render. This tool renders, per
 point, the mean of the surfel's views **before** the alignment (every kept
 view's patch rendered at the point's raw projection) next to the mean **after**
@@ -112,11 +112,11 @@ def render_rows(recon, cloud, images, args):
     sel = cloud.select_views(
         recon, images, point_indexes=sample, resolution=args.resolution
     )
-    view_sets = {int(r["point_index"]): np.asarray(r["admitted"]).tolist() for r in sel}
+    patch_views = {int(r["point_index"]): np.asarray(r["admitted"]).tolist() for r in sel}
     loc = cloud.localize_keypoints(
         recon,
         images,
-        view_sets=view_sets,
+        patch_views=patch_views,
         point_indexes=sample,
         resolution=args.resolution,
         max_shift_px=args.max_shift_px,

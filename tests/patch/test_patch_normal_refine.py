@@ -253,8 +253,8 @@ def test_render_bitmaps_round_trips_through_sfmr(seoul_bull_workspace: Path, tmp
     assert recon.patch_bitmaps is None
 
 
-def test_view_indices_override_expands_view_set(seoul_bull_workspace: Path):
-    """``view_indices`` refines each patch over an explicit view set, overriding
+def test_patch_views_override_expands_patch_views(seoul_bull_workspace: Path):
+    """``patch_views`` refines each patch over explicit patch views, overriding
     the track observations — the hook for MVS-style all-visible-view refinement."""
     recon = SfmrReconstruction.load(seoul_bull_workspace)
     images = load_images(recon)
@@ -267,12 +267,12 @@ def test_view_indices_override_expands_view_set(seoul_bull_workspace: Path):
     base = cloud.refine_normals(recon, images, point_indexes=pids, **common)
     base_vvc = np.asarray(base["valid_view_count"])
 
-    # Override every patch's view set with *all* images (a superset of any track).
+    # Override every patch's views with *all* images (a superset of any track).
     # A fresh cloud so both refinements start from the same stored normals.
     cloud2 = PatchCloud.from_reconstruction(recon, normal="stored", extent_value=5.0)
     all_views = [list(range(n_images))] * len(cloud2)
     expanded = cloud2.refine_normals(
-        recon, images, point_indexes=pids, view_indices=all_views, **common
+        recon, images, point_indexes=pids, patch_views=all_views, **common
     )
     exp_vvc = np.asarray(expanded["valid_view_count"])
 
@@ -287,21 +287,21 @@ def test_view_indices_override_expands_view_set(seoul_bull_workspace: Path):
     assert bool((exp_vvc > base_vvc).any())
 
 
-def test_view_indices_validation(seoul_bull_workspace: Path):
-    """``view_indices`` must be parallel to the cloud and reference real images."""
+def test_patch_views_validation(seoul_bull_workspace: Path):
+    """``patch_views`` must be parallel to the cloud and reference real images."""
     recon = SfmrReconstruction.load(seoul_bull_workspace)
     images = load_images(recon)
     cloud = PatchCloud.from_reconstruction(recon, normal="stored", extent_value=5.0)
 
     with pytest.raises(ValueError, match="parallel to the cloud"):
-        cloud.refine_normals(recon, images, view_indices=[[0, 1]])
+        cloud.refine_normals(recon, images, patch_views=[[0, 1]])
 
     out_of_range = [[len(images)]] * len(cloud)
     with pytest.raises(ValueError, match="out of range"):
-        cloud.refine_normals(recon, images, view_indices=out_of_range)
+        cloud.refine_normals(recon, images, patch_views=out_of_range)
 
 
-def test_view_indices_dedupes_repeated_views(seoul_bull_workspace: Path):
+def test_patch_views_dedupes_repeated_views(seoul_bull_workspace: Path):
     """Repeated views within a patch are ignored, so a duplicated index gives the
     same result (and view count) as listing each view once."""
     recon = SfmrReconstruction.load(seoul_bull_workspace)
@@ -315,7 +315,7 @@ def test_view_indices_dedupes_repeated_views(seoul_bull_workspace: Path):
         recon,
         images,
         point_indexes=pids,
-        view_indices=[list(range(n_images))] * len(cloud),
+        patch_views=[list(range(n_images))] * len(cloud),
         **common,
     )
 
@@ -324,7 +324,7 @@ def test_view_indices_dedupes_repeated_views(seoul_bull_workspace: Path):
         recon,
         images,
         point_indexes=pids,
-        view_indices=[list(range(n_images)) * 2] * len(cloud2),
+        patch_views=[list(range(n_images)) * 2] * len(cloud2),
         **common,
     )
 

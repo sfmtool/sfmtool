@@ -8,7 +8,7 @@ patch-view selection over its real ``.sift``-derived patches and source images â
 the multi-view rendering path the Rust unit tests can't exercise without on-disk
 images. See ``specs/core/patch/patch-view-selection.md``.
 
-``seoul_bull`` is the convex case: the selected view set must be a superset of
+``seoul_bull`` is the convex case: the selected patch views must be a superset of
 each point's track. ``kerry_park`` (a back-to-back fisheye rig) is the
 non-convex / cluttered stress case, exercised for shape and sanity.
 """

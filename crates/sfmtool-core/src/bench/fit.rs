@@ -1160,12 +1160,12 @@ fn fit_round(
     if round.len() < 2 {
         return Ok(());
     }
-    let view_set: Vec<u32> = round.iter().map(|&i| track.observations[i].image).collect();
+    let patch_views: Vec<u32> = round.iter().map(|&i| track.observations[i].image).collect();
     let seeds: Vec<Option<[f64; 2]>> = round
         .iter()
         .map(|&i| seed_of(&track.observations[i]))
         .collect();
-    let of_image: HashMap<u32, usize> = view_set
+    let of_image: HashMap<u32, usize> = patch_views
         .iter()
         .copied()
         .zip(round.iter().copied())
@@ -1179,7 +1179,7 @@ fn fit_round(
         let localized = try_localize_patch_keypoints(
             patch_frame,
             images,
-            &view_set,
+            &patch_views,
             Some(&seeds),
             super::evaluate::track_reference(track, round),
             &options.localize,
@@ -1382,7 +1382,7 @@ fn render_bitmap(
 ) -> (Option<Array3<u8>>, Option<usize>, Option<[u8; 3]>) {
     let (resolution, channels) = bitmap_layout(edited, options);
     let mut rows: Vec<usize> = Vec::with_capacity(ins.len());
-    let mut view_set: Vec<u32> = Vec::with_capacity(ins.len());
+    let mut patch_views: Vec<u32> = Vec::with_capacity(ins.len());
     let mut keypoints: Vec<[f64; 2]> = Vec::with_capacity(ins.len());
     for &i in ins {
         let observation = &track.observations[i];
@@ -1390,10 +1390,10 @@ fn render_bitmap(
             continue;
         };
         rows.push(i);
-        view_set.push(observation.image);
+        patch_views.push(observation.image);
         keypoints.push([f64::from(keypoint[0]), f64::from(keypoint[1])]);
     }
-    if view_set.len() < 2 {
+    if patch_views.len() < 2 {
         return (None, None, None);
     }
     // The row the caller names is rendered from where it is one of the keyed
@@ -1402,7 +1402,7 @@ fn render_bitmap(
     if let Some(k) = held {
         let tile = render_view_tile(
             patch,
-            &images[view_set[k] as usize],
+            &images[patch_views[k] as usize],
             Some(keypoints[k]),
             resolution,
             options.refine.sampler,
@@ -1416,7 +1416,7 @@ fn render_bitmap(
         ..options.refine.clone()
     };
     let Some(rendered) =
-        render_patch_bitmap(patch, images, &view_set, &keypoints, &params, progress)
+        render_patch_bitmap(patch, images, &patch_views, &keypoints, &params, progress)
     else {
         return (None, None, None);
     };

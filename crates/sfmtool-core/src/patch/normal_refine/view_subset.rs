@@ -105,7 +105,7 @@ pub(super) fn select_refine_subset(
     // No conditioning fallback to "all views": conditioning is a property of the
     // view-direction *geometry*, not the count. The greedy above already returns
     // the best-conditioned K available, and if that still leaves one tilt DOF
-    // loose (a degenerate single-azimuth-arc point), the full view set is no
+    // loose (a degenerate single-azimuth-arc point), all the patch views are no
     // better conditioned — inflating to all views would only add render cost
     // without constraining the loose DOF, which the fronto-parallel prior
     // resolves at refine time exactly as for any low-parallax point. (Photometric

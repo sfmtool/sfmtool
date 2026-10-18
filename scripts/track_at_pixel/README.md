@@ -1047,7 +1047,7 @@ are good references, not exact truth: a built track can beat the GT ZNCC.
 | Fitting it (localize, refine, re-triangulate, render the bitmap again) | `bench.fit` |
 | Moving between cluster and track stage | `bench.set_stage` |
 | Hand moves | `bench.tilt_patch`, `translate_patch`, `translate_patch_to_pixel`, `resize_patch`, `spin_patch`, `sight_observation` |
-| Aligning a subset of views to the reference render | `PatchCloud.localize_keypoints(view_sets=…, reference_images=…)` |
+| Aligning a subset of views to the reference render | `PatchCloud.localize_keypoints(patch_views=…, reference_images=…)` |
 | Sub-pixel refinement against the reference render | `PatchCloud.refine_keypoints(reference_images=…)` |
 | Normal refinement | `PatchCloud.refine_normals` |
 | Member coherence (a pairwise ZNCC matrix, and a split proposal) | `PatchCloud.validate_member_coherence` |

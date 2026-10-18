@@ -273,7 +273,7 @@ def _photo_normal_at(ctx, track, init, to_cam, opts, **kw):
             res = cloud.refine_normals(
                 camera_views(ctx),
                 ctx.pyramids,
-                view_indices=[images],
+                patch_views=[images],
                 use_stored_keypoints=False,
                 min_views=2,
                 angular_range_deg=opts["photo_range_deg"] if it == 0 else 20.0,

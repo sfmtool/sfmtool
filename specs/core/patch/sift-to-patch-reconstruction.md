@@ -157,7 +157,7 @@ Round 1 seeds from the SIFT detections (normal-refine → localize → sub-pixel
 refine); each later round re-refines every normal against the *previous* round's
 keypoints, then refines the keypoints again with the sub-pixel pass alone
 against the new normals (the localizer runs only in round 1) — a fixed-point
-alternation. The view set is expanded once (step 3, round 1) and only ever shrinks
+alternation. The patch views are expanded once (step 3, round 1) and only ever shrinks
 thereafter (the per-round obliquity drop).
 
 1. **Initialize a patch frame.** Seed each point's `(u, v)` frame with a starting
@@ -179,7 +179,7 @@ thereafter (the per-round obliquity drop).
    [patch-normal-refine-view-subset.md](patch-normal-refine-view-subset.md)).
 3. **Select the views (per point).** Run [patch-view
    selection](patch-view-selection.md): geometric candidacy plus photometric
-   vetting against a track-seeded template yields the view set `G`.
+   vetting against a track-seeded template yields the patch's views `G`.
 4. **Starting keypoints (per point).** Each view of `G` the point already
    observes starts at its stored keypoint; a view step 3 added has no
    observation, so it starts at the point's projection `project_i(X_p)`.
@@ -276,7 +276,7 @@ spec).
 ## Scope
 
 For each point, the conversion builds a patch frame (initializes and refines
-the normal), selects its view set (track and photometrically vetted views),
+the normal), selects its patch views (track and photometrically vetted views),
 aligns each view's keypoint to the point's reference render (the localizer
 drops views that cannot be aligned), culls points left below `min_views`, and compacts the
 result into a valid `embedded_patches` reconstruction. The observation set starts from the

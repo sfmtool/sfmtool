@@ -11,10 +11,10 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
 use sfmtool_core::patch::member_coherence::{
-    member_keypoints_from_reconstruction, member_views_from_reconstruction,
     validate_patch_cloud_member_coherence, MemberCoherenceParams, MemberVerdict,
 };
 use sfmtool_core::patch::normal_refine::ProjectedImage;
+use sfmtool_core::patch::{track_keypoints_from_reconstruction, track_views_from_reconstruction};
 
 use super::args::{parse_matching, parse_patch_window, parse_sampler};
 use super::cloud::PyPatchCloud;
@@ -46,7 +46,7 @@ impl PyPatchCloud {
     ///     recon: The reconstruction the cloud was built from (provides cameras,
     ///         poses, and the per-point member lists via ``point_indexes``),
     ///         **or** a :class:`CameraViews` — which carries no tracks, so
-    ///         ``member_views`` becomes required.
+    ///         ``patch_views`` becomes required.
     ///     images: One source image (HxWxC uint8 numpy array) per reconstruction
     ///         image, parallel to ``recon`` (index = image index), **or** an
     ///         :class:`ImagePyramidSet` prebuilt from those images.
@@ -105,7 +105,7 @@ impl PyPatchCloud {
     ///         where the intersection can shrink to a sliver of the R×R grid.
     ///     point_indexes: If given, validate only the patches with these source
     ///         point ids; ``None`` (default) validates every patch.
-    ///     member_views: Optional mapping ``point_index -> [image_index, ...]``
+    ///     patch_views: Optional mapping ``point_index -> [image_index, ...]``
     ///         giving each point's member list — the role the track observations
     ///         play in reconstruction mode. **Required** when the first argument is
     ///         a :class:`CameraViews`; with a reconstruction it *overrides* the
@@ -115,7 +115,7 @@ impl PyPatchCloud {
     ///         appearance that was actually matched in that image, so a member's
     ///         reprojection residual does not deflate the pairwise scores it takes
     ///         part in. Members with no stored keypoint (a ``sift_files``
-    ///         reconstruction, a :class:`CameraViews` scene, or a ``member_views``
+    ///         reconstruction, a :class:`CameraViews` scene, or a ``patch_views``
     ///         entry naming an image the point does not observe) fall back to
     ///         projection anchoring individually. ``False`` anchors every member at
     ///         its projection. ``bar`` is calibrated per anchoring — the two are not
@@ -184,7 +184,7 @@ impl PyPatchCloud {
         resolution=24,
         window="gaussian_disk", window_sigma=0.6, sampler="per_view",
         min_valid_fraction=0.6, min_support_pixels=8,
-        point_indexes=None, member_views=None, keypoint_anchor=true,
+        point_indexes=None, patch_views=None, keypoint_anchor=true,
         matching="plain", min_ellipse_ratio=1.25, return_matrix=false,
         progress=None
     ))]
@@ -204,7 +204,7 @@ impl PyPatchCloud {
         min_valid_fraction: f64,
         min_support_pixels: u32,
         point_indexes: Option<Vec<u32>>,
-        member_views: Option<std::collections::HashMap<u32, Vec<u32>>>,
+        patch_views: Option<std::collections::HashMap<u32, Vec<u32>>>,
         keypoint_anchor: bool,
         matching: &str,
         min_ellipse_ratio: f64,
@@ -214,8 +214,8 @@ impl PyPatchCloud {
         let (posed, recon_guard, n_images) = resolve_patch_scene(
             recon,
             &self.inner,
-            member_views.is_some(),
-            "member_views",
+            patch_views.is_some(),
+            "patch_views",
             "per-patch member views",
         )?;
         let recon_opt = recon_guard.as_ref().map(|r| &r.inner);
@@ -247,24 +247,24 @@ impl PyPatchCloud {
             .collect();
 
         // Per-patch member lists. In reconstruction mode these default to the track
-        // observations; `member_views` overrides the listed points (and is the only
+        // observations; `patch_views` overrides the listed points (and is the only
         // source in views mode). An empty list makes a patch's validation trivially
         // empty, so `point_indexes` selects a subset by clearing the rest.
         let mut members = match recon_opt {
-            Some(recon) => member_views_from_reconstruction(recon, &self.inner),
+            Some(recon) => track_views_from_reconstruction(recon, &self.inner),
             None => vec![Vec::new(); self.inner.len()],
         };
         // Per-member stored keypoints, parallel to `members`. Only a
         // reconstruction has them; a `CameraViews` scene renders at projections.
         let mut keypoints: Option<Vec<Vec<Option<[f64; 2]>>>> = match (keypoint_anchor, recon_opt) {
-            (true, Some(recon)) => Some(member_keypoints_from_reconstruction(recon, &self.inner)),
+            (true, Some(recon)) => Some(track_keypoints_from_reconstruction(recon, &self.inner)),
             _ => None,
         };
-        if let Some(map) = &member_views {
+        if let Some(map) = &patch_views {
             for vs in map.values() {
                 if let Some(&bad) = vs.iter().find(|&&i| i >= n_images) {
                     return Err(PyValueError::new_err(format!(
-                        "member_views contains image index {bad} out of range for this \
+                        "patch_views contains image index {bad} out of range for this \
                          scene's {n_images} views"
                     )));
                 }

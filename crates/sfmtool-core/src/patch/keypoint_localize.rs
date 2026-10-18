@@ -6,7 +6,7 @@
 //!
 //! See `specs/core/patch/patch-keypoint-localization.md` and
 //! `specs/core/patch/keypoint-localization-search-cache.md`. Given one 3D point
-//! with its oriented patch, a view set, and a starting keypoint per view,
+//! with its oriented patch, its patch views, and a starting keypoint per view,
 //! [`localize_patch_keypoints`] moves each view's keypoint to where its tile best
 //! matches the point's reference render, and reports which views it kept.
 //!
@@ -53,7 +53,6 @@ use crate::progress::{Cancelled, Progress};
 // Only the reference scorer (`znorm_core`, test-only) needs the moment helper.
 #[cfg(test)]
 use crate::patch::normal_refine::{build_support, weighted_moments_pub, PatchWindow};
-use crate::reconstruction::SfmrReconstruction;
 use nalgebra::Point3;
 use rayon::prelude::*;
 
@@ -685,16 +684,16 @@ fn subpixel_peak(peak: f64, py: i64, px: i64, nb: impl Fn(i64, i64) -> Option<f6
     (sy, sx)
 }
 
-/// Localize the keypoints of one oriented patch over a view set by aligning
+/// Localize the keypoints of one oriented patch over its patch views by aligning
 /// every view to the point's reference render.
 ///
 /// `views` is one [`ProjectedImage`] per reconstruction image (indexed by image
-/// index); `view_set` lists the views to localize (the output of
-/// [view selection](super::view_selection), or a track). `starting_keypoints`,
-/// when given, is one **optional** seed per `view_set` entry (source-image px),
+/// index); `patch_views` lists the views to localize (the output of
+/// [view selection](super::view_selection), or a track). `patch_keypoints`,
+/// when given, is one **optional** seed per `patch_views` entry (source-image px),
 /// parallel to it: `Some([x, y])` starts that view there, `None` starts it at
 /// the point's own projection `project_i(X_p)`, and so does `None` for the
-/// whole slice. `reference` is the position in `view_set` of the point's
+/// whole slice. `reference` is the position in `patch_views` of the point's
 /// reference observation, whose render at its starting keypoint is the template
 /// and whose keypoint is not moved; `None`, or a reference the grazing
 /// pre-filter turns away, has the reference-view rule pick one from the renders
@@ -711,16 +710,16 @@ fn subpixel_peak(peak: f64, py: i64, px: i64, nb: impl Fn(i64, i64) -> Option<f6
 pub fn localize_patch_keypoints(
     patch: &OrientedPatch,
     views: &[ProjectedImage<'_>],
-    view_set: &[u32],
-    starting_keypoints: Option<&[Option<[f64; 2]>]>,
+    patch_views: &[u32],
+    patch_keypoints: Option<&[Option<[f64; 2]>]>,
     reference: Option<usize>,
     params: &KeypointLocalizeParams,
 ) -> KeypointLocalization {
     try_localize_patch_keypoints(
         patch,
         views,
-        view_set,
-        starting_keypoints,
+        patch_views,
+        patch_keypoints,
         reference,
         params,
         &Progress::none(),
@@ -752,7 +751,7 @@ pub fn localize_patch_keypoints(
 /// # fn run(
 /// #     patch: &OrientedPatch,
 /// #     views: &[ProjectedImage<'_>],
-/// #     view_set: &[u32],
+/// #     patch_views: &[u32],
 /// # ) -> Result<(), Box<dyn std::error::Error>> {
 /// // The first view of the set is the point's reference observation. It is
 /// // the reference reported unless the grazing pre-filter turns it away or its
@@ -760,7 +759,7 @@ pub fn localize_patch_keypoints(
 /// let localized = try_localize_patch_keypoints(
 ///     patch,
 ///     views,
-///     view_set,
+///     patch_views,
 ///     None,
 ///     Some(0),
 ///     &KeypointLocalizeParams::default(),
@@ -776,8 +775,8 @@ pub fn localize_patch_keypoints(
 pub fn try_localize_patch_keypoints(
     patch: &OrientedPatch,
     views: &[ProjectedImage<'_>],
-    view_set: &[u32],
-    starting_keypoints: Option<&[Option<[f64; 2]>]>,
+    patch_views: &[u32],
+    patch_keypoints: Option<&[Option<[f64; 2]>]>,
     reference: Option<usize>,
     params: &KeypointLocalizeParams,
     progress: &Progress<'_>,
@@ -786,8 +785,8 @@ pub fn try_localize_patch_keypoints(
         align::align_to_reference(
             patch,
             views,
-            view_set,
-            starting_keypoints,
+            patch_views,
+            patch_keypoints,
             reference,
             params,
             progress,
@@ -796,14 +795,14 @@ pub fn try_localize_patch_keypoints(
 }
 
 /// Batch [`localize_patch_keypoints`] over a [`PatchCloud`], parallel across
-/// patches (rayon). `view_sets[i]` lists, for patch `i`, the views to localize.
-/// `starting_keypoints`, when given, is parallel to `view_sets` in both
+/// patches (rayon). `patch_views[i]` lists, for patch `i`, the views to localize.
+/// `patch_keypoints`, when given, is parallel to `patch_views` in both
 /// dimensions (one **optional** seed per view); `None` seeds every view at the
 /// point's projection, and so does an **empty** per-patch entry -- the batch
 /// form has no per-patch `Option`, so it says "this patch is unseeded" with an
 /// empty list -- and so does a `None` for one view inside a seeded patch's list.
 /// `references`, when given, is parallel to the cloud: per patch, the position
-/// in its view set of its reference observation, or `None` to have the
+/// in its patch views of its reference observation, or `None` to have the
 /// reference-view rule pick one. Results are returned in cloud order.
 ///
 /// `done`, when given, is bumped once per patch, for a caller polling progress
@@ -819,30 +818,30 @@ pub fn try_localize_patch_keypoints(
 ///
 /// # Panics
 ///
-/// Panics if `view_sets.len() != cloud.len()` (or `starting_keypoints` /
+/// Panics if `patch_views.len() != cloud.len()` (or `patch_keypoints` /
 /// `references` are given and not parallel), if an index is out of range, or
 /// if a search buffer cannot be allocated.
 #[allow(clippy::too_many_arguments)]
 pub fn localize_patch_cloud_keypoints(
     cloud: &PatchCloud,
     views: &[ProjectedImage<'_>],
-    view_sets: &[Vec<u32>],
-    starting_keypoints: Option<&[Vec<Option<[f64; 2]>>]>,
+    patch_views: &[Vec<u32>],
+    patch_keypoints: Option<&[Vec<Option<[f64; 2]>>]>,
     references: Option<&[Option<usize>]>,
     params: &KeypointLocalizeParams,
     done: Option<&std::sync::atomic::AtomicUsize>,
     progress: &Progress<'_>,
 ) -> Result<Vec<KeypointLocalization>, Cancelled> {
     assert_eq!(
-        view_sets.len(),
+        patch_views.len(),
         cloud.len(),
-        "view_sets must be parallel to the cloud"
+        "patch_views must be parallel to the cloud"
     );
-    if let Some(seeds) = starting_keypoints {
+    if let Some(seeds) = patch_keypoints {
         assert_eq!(
             seeds.len(),
             cloud.len(),
-            "starting_keypoints must be parallel to the cloud"
+            "patch_keypoints must be parallel to the cloud"
         );
     }
     if let Some(refs) = references {
@@ -865,14 +864,14 @@ pub fn localize_patch_cloud_keypoints(
             if progress.is_cancelled() {
                 return None;
             }
-            let seeds = starting_keypoints
+            let seeds = patch_keypoints
                 .map(|s| s[i].as_slice())
                 .filter(|s| !s.is_empty());
             let reference = references.and_then(|r| r[i]);
             let out = try_localize_patch_keypoints(
                 patch,
                 views,
-                &view_sets[i],
+                &patch_views[i],
                 seeds,
                 reference,
                 params,
@@ -896,22 +895,6 @@ pub fn localize_patch_cloud_keypoints(
         .into_iter()
         .map(|o| o.expect("every patch ran when nothing was cancelled"))
         .collect())
-}
-
-/// For each patch of `cloud` (linked to `recon` via `point_indexes`), the track image
-/// indices observing its source 3D point — a convenience default `view_sets` for
-/// [`localize_patch_cloud_keypoints`] when no view selection has been run.
-/// Identical to
-/// [`view_indices_from_reconstruction`](super::normal_refine::view_indices_from_reconstruction).
-///
-/// # Panics
-///
-/// Panics if `cloud.point_indexes` is not parallel to its patches.
-pub fn track_views_from_reconstruction(
-    recon: &SfmrReconstruction,
-    cloud: &PatchCloud,
-) -> Vec<Vec<u32>> {
-    super::normal_refine::view_indices_from_reconstruction(recon, cloud)
 }
 
 /// Reference (pre-optimization) translation search: score each candidate by

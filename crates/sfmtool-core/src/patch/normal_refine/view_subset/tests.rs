@@ -87,8 +87,8 @@ fn anchor_is_the_least_oblique_view() {
 }
 
 #[test]
-fn large_view_set_is_capped_to_k() {
-    // A large view set is always capped to the best K — there is no
+fn many_patch_views_are_capped_to_k() {
+    // Many patch views are always capped to the best K — there is no
     // fall-back-to-all keyed on view count (the original bug) or on subset
     // conditioning: the greedy returns the best K available regardless.
     let dirs: Vec<_> = (0..24)

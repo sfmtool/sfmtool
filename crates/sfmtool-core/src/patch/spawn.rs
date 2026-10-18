@@ -152,7 +152,7 @@ impl SpawnedTracks {
 /// `views` is one [`ProjectedImage`] per image (indexed by image index);
 /// `cloud` holds the parents, indexed by `parents`; `offsets_uv[i]` is
 /// candidate `i`'s `(du, dv)` in units of its parent's half-extent vectors;
-/// `view_sets[i]` lists the views candidate `i` is searched in (typically its
+/// `patch_views[i]` lists the views candidate `i` is searched in (typically its
 /// parent's). A repeated parent is fine — candidates are independent.
 ///
 /// Every candidate goes through the batch kernels as **one** batch each (one
@@ -167,7 +167,7 @@ impl SpawnedTracks {
 ///
 /// # Panics
 ///
-/// Panics if `offsets_uv` or `view_sets` is not parallel to `parents`, or a
+/// Panics if `offsets_uv` or `patch_views` is not parallel to `parents`, or a
 /// parent index is out of range for `cloud`. The binding validates these and
 /// raises `ValueError` instead.
 pub fn spawn_candidate_tracks(
@@ -175,7 +175,7 @@ pub fn spawn_candidate_tracks(
     cloud: &PatchCloud,
     parents: &[u32],
     offsets_uv: &[[f64; 2]],
-    view_sets: &[Vec<u32>],
+    patch_views: &[Vec<u32>],
     params: &SpawnParams,
 ) -> SpawnedTracks {
     let n = parents.len();
@@ -184,7 +184,11 @@ pub fn spawn_candidate_tracks(
         n,
         "offsets_uv must be parallel to parents"
     );
-    assert_eq!(view_sets.len(), n, "view_sets must be parallel to parents");
+    assert_eq!(
+        patch_views.len(),
+        n,
+        "patch_views must be parallel to parents"
+    );
 
     let mut out = SpawnedTracks::with_capacity(n);
     out.obs_offsets.push(0);
@@ -221,7 +225,7 @@ pub fn spawn_candidate_tracks(
     let localized = localize_patch_cloud_keypoints(
         &candidates,
         views,
-        view_sets,
+        patch_views,
         None,
         None,
         &localize_params,
@@ -296,7 +300,7 @@ pub fn spawn_candidate_tracks(
     };
 
     // Observations go out in view-index order regardless of the order the caller
-    // listed the view set in, so the CSR layout is a stable contract.
+    // listed the patch views in, so the CSR layout is a stable contract.
     let observations: Vec<(Vec<u32>, Vec<[f64; 2]>)> = observations
         .into_iter()
         .map(|(v, k)| {

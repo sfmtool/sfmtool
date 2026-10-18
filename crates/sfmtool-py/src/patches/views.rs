@@ -283,9 +283,9 @@ pub(super) fn extract_camera_list(obj: &Bound<'_, PyAny>) -> PyResult<Vec<Camera
 ///
 /// A ``CameraViews`` carries no tracks, so the per-point view lists the kernels
 /// otherwise derive from the reconstruction's tracks must be supplied explicitly:
-/// ``view_sets`` (:meth:`PatchCloud.localize_keypoints`,
-/// :meth:`PatchCloud.refine_keypoints`), ``view_indices``
-/// (:meth:`PatchCloud.refine_normals`), and ``candidate_views``
+/// ``patch_views`` (:meth:`PatchCloud.localize_keypoints`,
+/// :meth:`PatchCloud.refine_keypoints`, :meth:`PatchCloud.refine_normals`,
+/// :meth:`PatchCloud.validate_member_coherence`) and ``track_views``
 /// (:meth:`PatchCloud.select_views`) become required.
 ///
 /// Args:

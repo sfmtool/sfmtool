@@ -9,9 +9,9 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
 use sfmtool_core::patch::normal_refine::{
-    refine_patch_cloud_normals, view_indices_from_reconstruction, CacheMode, NormalRefineParams,
-    Objective, ProjectedImage,
+    refine_patch_cloud_normals, CacheMode, NormalRefineParams, Objective, ProjectedImage,
 };
+use sfmtool_core::patch::track_views_from_reconstruction;
 
 use super::args::{parse_patch_window, parse_sampler};
 use super::cloud::PyPatchCloud;
@@ -29,7 +29,7 @@ impl PyPatchCloud {
     ///     recon: The reconstruction the cloud was built from (provides cameras,
     ///         poses, and the per-point observing-image lists via ``point_indexes``),
     ///         **or** a :class:`CameraViews` — which carries no tracks, so
-    ///         ``view_indices`` becomes required.
+    ///         ``patch_views`` becomes required.
     ///     images: One source image (HxWxC uint8 numpy array) per reconstruction
     ///         image, parallel to ``recon`` (index = image index), **or** an
     ///         :class:`ImagePyramidSet` prebuilt from those images (decode the
@@ -54,10 +54,10 @@ impl PyPatchCloud {
     ///     point_indexes: If given, refine only the patches with these source point
     ///         ids (the rest keep their input normal) — cheap when refining a few
     ///         patches out of a large cloud. ``None`` refines every patch.
-    ///     view_indices: If given, a per-patch list of image indices to refine
+    ///     patch_views: If given, a per-patch list of image indices to refine
     ///         that patch over (parallel to the cloud's patches), *overriding* the
     ///         reconstruction's track-based observing-view lists. This lets a
-    ///         caller refine against an arbitrary view set — e.g. every image that
+    ///         caller refine against arbitrary patch views — e.g. every image that
     ///         geometrically sees the point, not just the ones that matched a
     ///         feature there (an MVS-style expansion). Indices must be in range for
     ///         the reconstruction; duplicates within a patch are ignored (the
@@ -88,7 +88,7 @@ impl PyPatchCloud {
     ///         ``specs/core/patch/patch-normal-refine-view-subset.md``). ``0`` (default)
     ///         disables the cap — byte-for-byte the uncapped behavior. The cap is
     ///         floored at ``min_views`` internally. There is no fallback to the
-    ///         full view set for conditioning: a patch keeps every view only when
+    ///         full list of patch views for conditioning: a patch keeps every view only when
     ///         it is a point at infinity or no view faces it. Only the refinement
     ///         basis shrinks — no observation is dropped from the reconstruction.
     ///     use_stored_keypoints: When ``True`` (the default), anchor each
@@ -96,7 +96,7 @@ impl PyPatchCloud {
     ///         keypoint (the inline keypoint an ``embedded_patches`` recon
     ///         carries) — the stored anchor gives a cleaner cross-view
     ///         consensus than the reprojected point center. A view with no
-    ///         stored keypoint — either a candidate from ``view_indices`` /
+    ///         stored keypoint — either a candidate from ``patch_views`` /
     ///         ``select_views`` that the SIFT track didn't observe, or any
     ///         view on a ``sift_files`` recon (which has no inline keypoints
     ///         at all) — falls back per-view to the reprojected center.
@@ -133,7 +133,7 @@ impl PyPatchCloud {
         window_sigma=0.6, min_valid_fraction=0.6, min_views=3, sampler="per_view",
         cache="fronto", cache_supersample=2.0, compute_confidence=false,
         search_robust_iters=None, obliquity_weight_power=0.0, fronto_prior_weight=0.0,
-        max_refine_views=0, point_indexes=None, view_indices=None,
+        max_refine_views=0, point_indexes=None, patch_views=None,
         use_stored_keypoints=true, render_bitmaps=false, progress=None
     ))]
     fn refine_normals<'py>(
@@ -160,7 +160,7 @@ impl PyPatchCloud {
         fronto_prior_weight: f64,
         max_refine_views: u32,
         point_indexes: Option<Vec<u32>>,
-        view_indices: Option<Vec<Vec<u32>>>,
+        patch_views: Option<Vec<Vec<u32>>>,
         use_stored_keypoints: bool,
         render_bitmaps: bool,
         progress: Option<ProgressCounter>,
@@ -168,8 +168,8 @@ impl PyPatchCloud {
         let (posed, recon_guard, n_images) = resolve_patch_scene(
             recon,
             &self.inner,
-            view_indices.is_some(),
-            "view_indices",
+            patch_views.is_some(),
+            "patch_views",
             "per-patch views",
         )?;
         let recon_opt = recon_guard.as_ref().map(|r| &r.inner);
@@ -232,21 +232,21 @@ impl PyPatchCloud {
                 pyramid: &pyramids[i],
             })
             .collect();
-        // The per-patch view sets the consensus is scored over. In reconstruction
-        // mode these default to the track observations; `view_indices` overrides
+        // The patch views the consensus is scored over. In reconstruction
+        // mode these default to the track observations; `patch_views` overrides
         // them with an explicit per-patch list (also the only source in views mode).
-        let mut patch_views = match view_indices {
+        let mut patch_views = match patch_views {
             Some(mut views) => {
                 if views.len() != self.inner.len() {
                     return Err(PyValueError::new_err(format!(
-                        "view_indices must be parallel to the cloud's {} patches, got {}",
+                        "patch_views must be parallel to the cloud's {} patches, got {}",
                         self.inner.len(),
                         views.len()
                     )));
                 }
                 if views.iter().flatten().any(|&i| i >= n_images) {
                     return Err(PyValueError::new_err(
-                        "view_indices contains an image index out of range for this scene",
+                        "patch_views contains an image index out of range for this scene",
                     ));
                 }
                 // Drop repeated views within a patch: the consensus weights each
@@ -260,7 +260,7 @@ impl PyPatchCloud {
                 views
             }
             // Guaranteed `Some` in views mode by the early required-arg check.
-            None => view_indices_from_reconstruction(recon_opt.unwrap(), &self.inner),
+            None => track_views_from_reconstruction(recon_opt.unwrap(), &self.inner),
         };
         // Optional subset: refine only patches whose point id is listed. Cleared
         // view-lists make `refine_patch_normal` skip a patch immediately (it sees
@@ -282,7 +282,7 @@ impl PyPatchCloud {
         // through per-view to the reprojected center.
         // Only a reconstruction carries inline keypoints; a CameraViews has none,
         // so every view falls through per-view to the reprojected center.
-        let patch_view_keypoints: Option<Vec<Vec<Option<[f64; 2]>>>> = if use_stored_keypoints {
+        let patch_keypoints: Option<Vec<Vec<Option<[f64; 2]>>>> = if use_stored_keypoints {
             recon_opt.and_then(|recon| {
                 recon.keypoints_xy().map(|keypoints_xy| {
                     // (point_index, image_index) -> stored keypoint. `keypoints_xy`
@@ -327,7 +327,7 @@ impl PyPatchCloud {
                 &patch_views,
                 resolution,
                 &params,
-                patch_view_keypoints.as_deref(),
+                patch_keypoints.as_deref(),
                 progress_handle.as_deref(),
                 &Progress::none(),
             )

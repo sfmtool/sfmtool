@@ -40,8 +40,8 @@ It is therefore a **pure in-place modifier** — the keypoint counterpart of
 The refiner is *local*: it needs a seed already close to the optimum (≲ 1 px),
 and only an `embedded_patches` recon carries real per-observation keypoints to
 seed from. The refiner seeds every view from the recon's stored inline keypoint
-and refines each point's full track (the binding's `view_sets=None` /
-`starting_keypoints=None` default path), passing each point's stored reference
+and refines each point's full track (the binding's `patch_views=None` /
+`patch_keypoints=None` default path), passing each point's stored reference
 observation as `reference_images`; the stored per-point patch frame
 (`recon.patches`) supplies the patch geometry and is never rebuilt.
 

@@ -21,6 +21,7 @@ pub mod reference_view;
 pub mod self_similarity;
 pub mod spawn;
 pub mod stored_bitmap;
+mod track_views;
 pub mod view_selection;
 
 #[cfg(test)]
@@ -29,6 +30,7 @@ mod batch_cancel_tests;
 mod sampler_rule_tests;
 
 pub use cloud::{PatchCloud, PatchCloudError};
+pub use track_views::{track_keypoints_from_reconstruction, track_views_from_reconstruction};
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;

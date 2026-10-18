@@ -465,7 +465,7 @@ pub fn refine_patch_normal(
 /// Batch over a PatchCloud (parallel across patches, rayon). Replaces each patch
 /// with the refined one (same `center`/`half_extent`/in-plane convention, new
 /// normal) and returns the per-patch results in order. `patch_views[i]` indexes
-/// `views` for patch `i` (see `view_indices_from_reconstruction`). `done`, when
+/// `views` for patch `i` (see `track_views_from_reconstruction`). `done`, when
 /// given, is bumped as each patch finishes so a Python poller can report
 /// intra-pass progress with the GIL released; `progress` receives a `patches`
 /// count, is polled for cancellation before each patch (a cancelled batch
@@ -477,14 +477,16 @@ pub fn refine_patch_cloud_normals(
     patch_views: &[Vec<u32>],
     resolution: u32,
     params: &NormalRefineParams,
-    patch_view_keypoints: Option<&[Vec<Option<[f64; 2]>>]>,
+    patch_keypoints: Option<&[Vec<Option<[f64; 2]>>]>,
     done: Option<&std::sync::atomic::AtomicUsize>,
     progress: &Progress<'_>,
 ) -> Result<Vec<NormalRefineResult>, Cancelled>;
 
 /// For each patch of `cloud` (linked to `recon` by `point_indexes`), the image
 /// indices observing its source 3D point — the default `patch_views` above.
-pub fn view_indices_from_reconstruction(
+/// In `patch` (`patch::track_views_from_reconstruction`), shared by every batch
+/// driver.
+pub fn track_views_from_reconstruction(
     recon: &SfmrReconstruction,
     cloud: &PatchCloud,
 ) -> Vec<Vec<u32>>;
@@ -532,9 +534,9 @@ unnecessary. What remains open:
    candidate. Beyond the soft IRLS weights, an explicit **good-view set** —
    refine, drop views whose residual to `x̄` stays high (occluded / wrong
    surface), re-refine — is the discrete complement to `RobustWeighted` and the
-   most impactful add for scenes with real occlusion. The per-patch view set is
-   already a first-class input: `PatchCloud.refine_normals(view_indices=…)`
-   overrides the track-based lists with an explicit per-patch view set, so a
+   most impactful add for scenes with real occlusion. The per-patch views are
+   already a first-class input: `PatchCloud.refine_normals(patch_views=…)`
+   overrides the track-based lists with explicit per-patch views, so a
    good-view (or MVS-expanded) set can be vetted in the caller and fed straight
    back in without touching the core search.
 

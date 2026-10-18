@@ -30,7 +30,7 @@ Per request `(parent p, du, dv)`:
   and stays in its plane.
 - Frame: the parent's `(hu, hv)` translated to `X_c` (same orientation and
   extents — the candidate hypothesizes locally planar surface).
-- View set: per candidate, the images in which the pipeline will *attempt*
+- Patch views: per candidate, the images in which the pipeline will *attempt*
   to find it — its whole search scope. Localization can only drop views
   from this set, never add any, so it is the ceiling on the spawned
   track's observations and the baseline `too_few_views` is judged
@@ -104,7 +104,7 @@ pub fn spawn_candidate_tracks(
     cloud: &PatchCloud,               // the parents
     parents: &[u32],                  // per candidate; may repeat
     offsets_uv: &[[f64; 2]],          // per candidate (du, dv)
-    view_sets: &[Vec<u32>],           // per candidate
+    patch_views: &[Vec<u32>],         // per candidate
     params: &SpawnParams,
 ) -> SpawnedTracks
 ```
@@ -125,37 +125,37 @@ pub fn spawn_candidate_tracks(
   (`(n_obs, 2)` f64) — the surviving observations of every candidate that
   reached triangulation, in view-index order.
 
-The Python binding (`views, images, cloud, parents, offsets_uv, view_sets`)
+The Python binding (`views, images, cloud, parents, offsets_uv, patch_views`)
 takes the existing `CameraViews` / `ImagePyramidSet` / `PatchCloud` objects —
 or, like its sibling patch kernels, a reconstruction and a list of images —
-plus numpy arrays (`view_sets` as a list of sequences), keyword params with the
+plus numpy arrays (`patch_views` as a list of sequences), keyword params with the
 defaults above, and returns the result arrays as a dict keyed as above. It
 raises `ValueError` for a parent index out of range, a parent at infinity, an
-`offsets_uv` / `view_sets` length or shape mismatch, and a view index out of
+`offsets_uv` / `patch_views` length or shape mismatch, and a view index out of
 range for the scene.
 
-### Seeding localization with `starting_keypoints`
+### Seeding localization with `patch_keypoints`
 
 `spawn_candidate_tracks` itself seeds localization at each view's
 projection of `X_c`, and seeds sub-pixel refinement at the localized
 keypoints. The localization kernels also accept explicit per-view seeds,
 for callers that have better seeds than a projection. The single-point
 kernels take them as `Option<&[Option<[f64; 2]>]>`, parallel to the point's
-view set, where a `None` entry seeds that view at the point's own
+patch views, where a `None` entry seeds that view at the point's own
 projection. The batch entry `localize_patch_cloud_keypoints` (in
 [keypoint_localize.rs](../../../crates/sfmtool-core/src/patch/keypoint_localize.rs))
 takes one such list per patch, and an empty list seeds every view of that
 patch at its projection.
 
 The Python binding `PatchCloud.localize_keypoints` exposes these seeds as the
-optional `starting_keypoints` parameter: a dict `point_index -> [[x, y] |
+optional `patch_keypoints` parameter: a dict `point_index -> [[x, y] |
 None, ...]` in source-image pixels, one entry per view of that point's view
 set, in order. A `None` entry seeds that view at the projection while the
 other views keep their explicit seeds. A point absent from the dict, and
 every point when the parameter is `None` (the default), is seeded at its
 projection in every view. This differs from `refine_keypoints`'s
-`starting_keypoints`, which accepts only `[x, y]` pairs. The binding raises
-`ValueError` for a seed list whose length differs from the point's view set,
+`patch_keypoints`, which accepts only `[x, y]` pairs. The binding raises
+`ValueError` for a seed list whose length differs from the point's patch views,
 for a point that is not in the cloud, and for a point that `point_indexes`
 excludes.
 
@@ -178,7 +178,7 @@ per parent in one batch matching the same candidates spawned separately
 (batch independence); and CSR bookkeeping (offsets sum to observation
 count, view-index ordering). Binding tests exercise the dict surface, the
 dtype acceptance, `ValueError` on malformed inputs, and the
-`starting_keypoints` parameter of `localize_keypoints` (explicit seeds at
+`patch_keypoints` parameter of `localize_keypoints` (explicit seeds at
 the true keypoints reproduce the default behaviour when the projection is
 already correct, and recover a point whose cloud position is displaced
 while its seeds point at the true image locations — the case the default

@@ -254,7 +254,7 @@ def test_embed_patches_refine_max_views_is_lossless(seoul_bull_workspace):
     """`--refine-max-views` caps only the round-2+ normal-refinement *basis*
     (see specs/core/patch/patch-normal-refine-view-subset.md): every observation stays
     in the output and each stored bitmap's reference view is still picked from
-    the full view set, so a capped run must produce the same output shape (point and
+    all the patch views, so a capped run must produce the same output shape (point and
     observation counts) as the all-views default — within a hair's tolerance:
     the cap never drops an observation itself, but the slightly different
     round-2 normal can flip a borderline grazing-drop / sub-pixel-cull decision

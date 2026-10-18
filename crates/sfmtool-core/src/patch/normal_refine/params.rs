@@ -167,7 +167,7 @@ pub struct NormalRefineParams {
     /// (default) disables the cap (use all views; byte-for-byte the uncapped
     /// behavior). Internally floored at [`min_views`](Self::min_views) so a cap
     /// below the refine floor can't strand a patch. There is no conditioning
-    /// fallback to the full view set: the greedy already returns the
+    /// fallback to all the patch views: the greedy already returns the
     /// best-conditioned `K` available, and a point whose views leave one tilt
     /// DOF loose is no better conditioned with all of them. The subset does
     /// widen back to every view where there is nothing to select from — a point

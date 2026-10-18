@@ -594,18 +594,18 @@ is frozen once built, and `len(views)` is the view count `N`.
 A `CameraViews` is accepted anywhere the patch kernel methods take `recon`:
 
 - `ImagePyramidSet(views, images)` — the same per-image camera-dimension check.
-- `PatchCloud.localize_keypoints(views, images, view_sets=..., ...)` and
+- `PatchCloud.localize_keypoints(views, images, patch_views=..., ...)` and
   `refine_keypoints`, `refine_normals`, `select_views` likewise.
 
 Because a `CameraViews` carries no tracks, the track-derived per-point view
-defaults do not exist in this mode: `view_sets` (`localize_keypoints`,
-`refine_keypoints`) and `view_indices` (`refine_normals`) are **required** (a
-`ValueError` names the missing argument), and `select_views` grows an optional
-`candidate_views` mapping (`point_index -> [image_index, ...]`, mirroring
-`view_sets`) that is required with a `CameraViews` and, with a reconstruction,
-overrides the track-derived lists. Despite its name it plays the track's role
-(the always-admitted views the reference is fused from), not the role of the
-candidates that `select_views` vets. The reconstruction-mode point-range
+defaults do not exist in this mode: `patch_views` (`localize_keypoints`,
+`refine_keypoints`, `refine_normals`, `validate_member_coherence`) is
+**required** (a `ValueError` names the missing argument), and so is the
+`track_views` mapping of `select_views` (`point_index -> [image_index, ...]`,
+shaped like the `patch_views` maps), which with a reconstruction overrides the
+track-derived lists. It plays the track's role (the always-admitted views the
+reference is fused from), not the role of the candidates that `select_views`
+vets. The reconstruction-mode point-range
 validation (cloud `point_indexes` against `recon.points`) does not apply; image
 indexes in the supplied view lists are still validated against `N`.
 
@@ -663,7 +663,7 @@ Semantics match `from_reconstruction` exactly, sourced from the arrays:
 - **Points at infinity** (`w = 0` rows) get the tangent-sphere frame under
   `exclude_points_at_infinity=False`, exactly as from a reconstruction.
 - `point_indexes` of the resulting cloud are row indexes into `positions_xyzw`,
-  so the kernels' `view_sets` / `point_indexes` arguments key the same way as in
+  so the kernels' `patch_views` / `point_indexes` arguments key the same way as in
   reconstruction mode.
 
 In core there is one implementation. Both `from_reconstruction` and
@@ -689,9 +689,8 @@ reason every scene-taking binding (`ImagePyramidSet`, `localize_keypoints`,
 `spawn_candidate_tracks`) accepts either as its first argument. That parameter keeps
 the public name `recon` even though its type is wider than that, so `recon=`-keyword
 callers keep working. In views mode the per-patch view lists have no track to
-come from, so `view_sets` / `view_indices` / `select_views(candidate_views=…)`
-become required — and `candidate_views` overrides the track-derived lists in
-reconstruction mode too. Python coverage is in
+come from, so `patch_views` and `select_views(track_views=…)` become required,
+and each overrides the track-derived lists in reconstruction mode too. Python coverage is in
 `tests/rust_bindings/patches/test_camera_views_rust_bindings.py`.
 
 ## Routine: project an image onto a patch

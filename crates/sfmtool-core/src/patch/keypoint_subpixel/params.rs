@@ -101,7 +101,7 @@ impl Default for KeypointSubpixelParams {
 /// — a view whose GN solve fails the guard stays at its seed.
 #[derive(Debug, Clone, Default)]
 pub struct KeypointRefinement {
-    /// The image indices, in the input `view_set` order (deduplicated; a repeated
+    /// The image indices, in the input `patch_views` order (deduplicated; a repeated
     /// image is refined once).
     pub views: Vec<u32>,
     /// The refined keypoint `project_i(X_p) + δ_v` per view, in source-image

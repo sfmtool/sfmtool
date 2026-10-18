@@ -53,7 +53,7 @@ naturally — with three characteristics that shape the design:
    reconstruction *as it stands at that point in the pipeline*, so a
    `--to-embedded-patches --refine-normals` chain converts first and passes.
    The pass re-refines the normal (and, with `bitmaps`, re-renders the texture)
-   over the stored keypoints and the stored view set; it runs no view selection
+   over the stored keypoints and the stored patch views; it runs no view selection
    and no keypoint localization of its own — those are `--localize-keypoints`
    and `--refine-keypoints`.
 

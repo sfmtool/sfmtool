@@ -74,7 +74,7 @@ generalization rather than a second render path.
 
 ## Output
 
-The selected **view set** `G` — the admitted views for the point (track views
+The patch's views `G` — the admitted views for the point (track views
 first, then the photometrically-vetted candidates in ascending index order),
 their per-view ZNCC to the reference, the track's self-agreement, and the
 **track-view count**: how many leading admitted entries are track views, so a
@@ -111,7 +111,7 @@ keypoint localization.
 views`, counts the views scored, and checks cancellation before and after
 reference construction and between views — where a selection over a capture's
 worth of images spends its time. A cancelled call returns `Cancelled` rather
-than a partial view set, so an interactive caller never installs half a
+than a partial list of views, so an interactive caller never installs half a
 selection.
 
 There is one entry point rather than a reporting one beside a plain one,

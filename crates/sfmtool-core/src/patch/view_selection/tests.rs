@@ -1502,38 +1502,9 @@ fn batch_with_all_none_keypoints_matches_unanchored() {
     }
 }
 
-/// A `sift_files` reconstruction stores no inline keypoints, so the helper's
-/// documented behavior is an all-`None` table parallel to the track views —
-/// those members anchor at their projections.
-#[test]
-fn track_keypoints_from_reconstruction_is_all_none_without_inline_keypoints() {
-    use crate::patch::cloud::{PatchExtent, PatchNormal};
-    use crate::progress::Progress;
-
-    let recon = crate::reconstruction::SfmrReconstruction::demo(6);
-    let cloud = PatchCloud::from_reconstruction(
-        &recon,
-        PatchNormal::MeanViewing,
-        PatchExtent::Fixed(0.05),
-        true,
-        &Progress::none(),
-    )
-    .unwrap();
-    let tv = track_views_from_reconstruction(&recon, &cloud);
-    let kps = track_keypoints_from_reconstruction(&recon, &cloud);
-    assert_eq!(kps.len(), tv.len());
-    for (k, v) in kps.iter().zip(&tv) {
-        assert_eq!(k.len(), v.len(), "keypoints parallel to track views");
-        assert!(
-            k.iter().all(|e| e.is_none()),
-            "sift_files reconstruction has no inline keypoints"
-        );
-    }
-}
-
 /// The selector's own `Progress`: the two phases are entered, the views are
 /// counted, and a flag already set stops it with `Cancelled` rather than a
-/// short view set. This is the contract the bench's geometry search is
+/// short list of views. This is the contract the bench's geometry search is
 /// cancellable through, held here at the selector rather than only through
 /// its caller.
 #[test]

@@ -138,10 +138,10 @@ struct ViewState {
 /// Gauss–Newton against the point's reference render.
 ///
 /// `views` is one [`ProjectedImage`] per reconstruction image (indexed by image
-/// index); `view_set` lists the views to refine. `starting_keypoints`, when given,
-/// is one seed per `view_set` entry (source-image px); `None` seeds every view at
+/// index); `patch_views` lists the views to refine. `patch_keypoints`, when given,
+/// is one seed per `patch_views` entry (source-image px); `None` seeds every view at
 /// the point's own projection `project_i(X_p)`. `reference` is the position in
-/// `view_set` of the point's reference observation, whose render at its
+/// `patch_views` of the point's reference observation, whose render at its
 /// starting keypoint is the template and whose keypoint is returned unmoved;
 /// `None` has the reference-view rule pick one from the renders at the starting
 /// keypoints, as the localizer does. Returns the views (input order,
@@ -153,16 +153,16 @@ struct ViewState {
 pub fn refine_patch_keypoints(
     patch: &OrientedPatch,
     views: &[ProjectedImage<'_>],
-    view_set: &[u32],
-    starting_keypoints: Option<&[Option<[f64; 2]>]>,
+    patch_views: &[u32],
+    patch_keypoints: Option<&[Option<[f64; 2]>]>,
     reference: Option<usize>,
     params: &KeypointSubpixelParams,
 ) -> KeypointRefinement {
     refine_patch_keypoints_reporting(
         patch,
         views,
-        view_set,
-        starting_keypoints,
+        patch_views,
+        patch_keypoints,
         reference,
         params,
         &Progress::none(),
@@ -176,8 +176,8 @@ pub fn refine_patch_keypoints(
 pub fn refine_patch_keypoints_reporting(
     patch: &OrientedPatch,
     views: &[ProjectedImage<'_>],
-    view_set: &[u32],
-    starting_keypoints: Option<&[Option<[f64; 2]>]>,
+    patch_views: &[u32],
+    patch_keypoints: Option<&[Option<[f64; 2]>]>,
     reference: Option<usize>,
     params: &KeypointSubpixelParams,
     progress: &Progress<'_>,
@@ -186,8 +186,8 @@ pub fn refine_patch_keypoints_reporting(
         refine_patch_keypoints_impl(
             patch,
             views,
-            view_set,
-            starting_keypoints,
+            patch_views,
+            patch_keypoints,
             reference,
             params,
             progress,
@@ -201,8 +201,8 @@ pub fn refine_patch_keypoints_reporting(
 fn refine_patch_keypoints_impl(
     patch: &OrientedPatch,
     views: &[ProjectedImage<'_>],
-    view_set: &[u32],
-    starting_keypoints: Option<&[Option<[f64; 2]>]>,
+    patch_views: &[u32],
+    patch_keypoints: Option<&[Option<[f64; 2]>]>,
     reference: Option<usize>,
     params: &KeypointSubpixelParams,
     progress: &Progress<'_>,
@@ -220,7 +220,7 @@ fn refine_patch_keypoints_impl(
     // (it has no seed to keep), matching the localizer's projection gate.
     let mut seen = std::collections::HashSet::new();
     let mut states: Vec<ViewState> = Vec::new();
-    for (k, &i) in view_set.iter().enumerate() {
+    for (k, &i) in patch_views.iter().enumerate() {
         if !seen.insert(i) {
             continue;
         }
@@ -228,7 +228,7 @@ fn refine_patch_keypoints_impl(
         let Some(proj) = project(view, &patch.center, patch.w) else {
             continue;
         };
-        let seed = starting_keypoints.and_then(|seeds| seeds[k]);
+        let seed = patch_keypoints.and_then(|seeds| seeds[k]);
         let unprojected = seed.map(|kp| seed_offset(patch, view, kp, wpp_u, wpp_v));
         let seed_is_keypoint = !matches!(unprojected, Some(None));
         let off = unprojected.flatten().unwrap_or([0.0, 0.0]);
@@ -297,7 +297,7 @@ fn refine_patch_keypoints_impl(
         // Matched by image, so a reference given at a repeated image's
         // dropped slot is kept.
         let given = reference
-            .and_then(|k| view_set.get(k))
+            .and_then(|k| patch_views.get(k))
             .and_then(|&img| states.iter().position(|st| st.idx == img));
         let set: Vec<u32> = states.iter().map(|st| st.idx).collect();
         let seeds: Vec<Option<[f64; 2]>> = states.iter().map(|st| st.keypoint).collect();
@@ -737,10 +737,10 @@ pub fn refine_view_against_reference(
 }
 
 /// Batch [`refine_patch_keypoints`] over a [`PatchCloud`], parallel across patches
-/// (rayon). `view_sets[i]` lists, for patch `i`, the views to refine.
-/// `starting_keypoints`, when given, is parallel to `view_sets` (one seed per
+/// (rayon). `patch_views[i]` lists, for patch `i`, the views to refine.
+/// `patch_keypoints`, when given, is parallel to `patch_views` (one seed per
 /// view); `None` seeds every view at the point's projection. `references`,
-/// when given, is parallel to the cloud: per patch, the position in its view set
+/// when given, is parallel to the cloud: per patch, the position in its patch views
 /// of its reference observation, or `None` to have the reference-view rule pick
 /// one. Results are returned in cloud order.
 ///
@@ -762,27 +762,27 @@ pub fn refine_view_against_reference(
 ///
 /// # Panics
 ///
-/// Panics if `view_sets.len() != cloud.len()` (or `starting_keypoints` or
+/// Panics if `patch_views.len() != cloud.len()` (or `patch_keypoints` or
 /// `references` is given and not parallel), or an index is out of range.
 pub fn refine_patch_cloud_keypoints(
     cloud: &PatchCloud,
     views: &[ProjectedImage<'_>],
-    view_sets: &[Vec<u32>],
-    starting_keypoints: Option<&[Vec<Option<[f64; 2]>>]>,
+    patch_views: &[Vec<u32>],
+    patch_keypoints: Option<&[Vec<Option<[f64; 2]>>]>,
     references: Option<&[Option<usize>]>,
     params: &KeypointSubpixelParams,
     progress: &Progress<'_>,
 ) -> Result<Vec<KeypointRefinement>, Cancelled> {
     assert_eq!(
-        view_sets.len(),
+        patch_views.len(),
         cloud.len(),
-        "view_sets must be parallel to the cloud"
+        "patch_views must be parallel to the cloud"
     );
-    if let Some(seeds) = starting_keypoints {
+    if let Some(seeds) = patch_keypoints {
         assert_eq!(
             seeds.len(),
             cloud.len(),
-            "starting_keypoints must be parallel to the cloud"
+            "patch_keypoints must be parallel to the cloud"
         );
     }
     if let Some(refs) = references {
@@ -803,11 +803,11 @@ pub fn refine_patch_cloud_keypoints(
             if progress.is_cancelled() {
                 return None;
             }
-            let seeds = starting_keypoints.map(|s| s[i].as_slice());
+            let seeds = patch_keypoints.map(|s| s[i].as_slice());
             let out = refine_patch_keypoints_reporting(
                 patch,
                 views,
-                &view_sets[i],
+                &patch_views[i],
                 seeds,
                 references.and_then(|r| r[i]),
                 params,

@@ -204,11 +204,11 @@ fn pos(res: &KeypointRefinement, i: u32) -> usize {
 /// Build the robust consensus image (channel-averaged, R×R) from the views at the
 /// given per-view offsets, and return its gradient energy (a sharpness metric:
 /// well-registered views average without blurring detail away, so it rises as the
-/// views co-register). Offsets are patch-grid px, parallel to `view_set`.
+/// views co-register). Offsets are patch-grid px, parallel to `patch_views`.
 fn consensus_sharpness(
     patch: &OrientedPatch,
     views: &[ProjectedImage<'_>],
-    view_set: &[u32],
+    patch_views: &[u32],
     offsets: &[[f64; 2]],
     p: &KeypointSubpixelParams,
 ) -> f64 {
@@ -217,11 +217,11 @@ fn consensus_sharpness(
     let wpp_v = 2.0 * patch.half_extent[1] / p.resolution as f64;
     // Full-grid support (uniform), so the consensus image covers the whole R×R.
     let n = r * r;
-    let channels = views[view_set[0] as usize].pyramid.level(0).channels() as usize;
+    let channels = views[patch_views[0] as usize].pyramid.level(0).channels() as usize;
     // Robust weighted mean over views, per pixel/channel (raw intensities).
     let mut sum = vec![0f64; n * channels];
     let mut count = 0;
-    for (k, &i) in view_set.iter().enumerate() {
+    for (k, &i) in patch_views.iter().enumerate() {
         let center = shifted_center(patch, offsets[k][0], offsets[k][1], wpp_u, wpp_v);
         let mut cp = OrientedPatch::from_center_normal(
             center,
@@ -320,7 +320,7 @@ fn recovers_planted_subpixel_offset_fine_grid() {
     );
 
     let res = refine_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, Some(0), &params());
-    assert_eq!(res.views, vec![0, 1, 2, 3], "view set unchanged");
+    assert_eq!(res.views, vec![0, 1, 2, 3], "patch views unchanged");
     let p3 = pos(&res, 3);
     let proj3 = project(&views[3], &patch.center, patch.w).unwrap();
     let dx = res.keypoints[p3][0] - proj3.0;
@@ -357,7 +357,7 @@ fn recovers_planted_subpixel_offset_finite() {
     let patch = plane_patch();
 
     let res = refine_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, Some(0), &params());
-    assert_eq!(res.views, vec![0, 1, 2, 3], "view set unchanged");
+    assert_eq!(res.views, vec![0, 1, 2, 3], "patch views unchanged");
 
     // The planted world-x shift maps to +image-x for this fronto camera; the
     // recovered keypoint must move by +planted_grid·src_per_grid in image-x, with y
@@ -590,29 +590,29 @@ fn consensus_sharpens_after_refinement() {
     let scene = Scene::new(&centers, &offs, &texs);
     let views = scene.views();
     let patch = plane_patch();
-    let view_set = vec![0u32, 1, 2, 3, 4];
+    let patch_views = vec![0u32, 1, 2, 3, 4];
 
     let p = params();
     let seed_offsets = vec![[0.0, 0.0]; 5];
-    let before = consensus_sharpness(&patch, &views, &view_set, &seed_offsets, &p);
+    let before = consensus_sharpness(&patch, &views, &patch_views, &seed_offsets, &p);
 
     // Recover the per-view offsets by refining, then convert keypoint offsets back to
     // patch-grid px for the after-consensus (the refiner reports source-px offsets;
     // here we re-derive grid offsets from the refined δ via a second refine that
     // exposes them — instead we re-run and read the keypoints, converting through the
     // known src_per_grid mapping along x/y).
-    let res = refine_patch_keypoints(&patch, &views, &view_set, None, Some(0), &p);
+    let res = refine_patch_keypoints(&patch, &views, &patch_views, None, Some(0), &p);
     let mut after_offsets = vec![[0.0, 0.0]; 5];
     let wpp_u = 2.0 * patch.half_extent[0] / p.resolution as f64;
     let wpp_v = 2.0 * patch.half_extent[1] / p.resolution as f64;
-    for (k, &i) in view_set.iter().enumerate() {
+    for (k, &i) in patch_views.iter().enumerate() {
         // Convert each refined source-px keypoint back to a patch-grid offset with
         // the same inverse mapping production uses (`seed_offset`), so this stays
         // correct for any patch frame rather than baking in a fixed u/v→x/y layout.
         after_offsets[k] = seed_offset(&patch, &views[i as usize], res.keypoints[k], wpp_u, wpp_v)
             .unwrap_or([0.0, 0.0]);
     }
-    let after = consensus_sharpness(&patch, &views, &view_set, &after_offsets, &p);
+    let after = consensus_sharpness(&patch, &views, &patch_views, &after_offsets, &p);
 
     assert!(
         after >= before * 0.999,
@@ -639,7 +639,7 @@ fn flat_texture_keeps_seed() {
     let patch = plane_patch();
 
     let res = refine_patch_keypoints(&patch, &views, &[0, 1, 2], None, Some(0), &params());
-    assert_eq!(res.views, vec![0, 1, 2], "view set preserved");
+    assert_eq!(res.views, vec![0, 1, 2], "patch views preserved");
     for (k, &o) in res.offsets_px.iter().enumerate() {
         assert!(
             o.is_finite() && o < 1e-6,
@@ -651,7 +651,7 @@ fn flat_texture_keeps_seed() {
 #[test]
 fn aligned_views_do_not_move() {
     // Perfectly aligned, textured views seeded at the projection: there is no
-    // improving step, so the guard keeps every seed (offset ≈ 0) and the view set is
+    // improving step, so the guard keeps every seed (offset ≈ 0) and the patch views are
     // unchanged. Never worse than the seed.
     let centers = [
         [0.4, 0.0, 0.0],
@@ -695,7 +695,7 @@ fn out_of_frame_seed_keeps_seed() {
     assert_eq!(
         res.views,
         vec![0, 1],
-        "view set preserved even with an OOF seed"
+        "patch views preserved even with an OOF seed"
     );
     // View 1's score is NaN (never scored) and its keypoint falls back to the
     // projection (the shifted center failed to project, or its core was OOF).
@@ -775,7 +775,7 @@ fn fewer_than_two_views_returns_seed_projection() {
 }
 
 #[test]
-fn empty_view_set_returns_empty() {
+fn empty_patch_views_return_empty() {
     let centers = [[0.4, 0.0, 0.0]];
     let offs = [[0.0; 2]];
     let texs = vec![texture as fn(f64, f64) -> f64];
@@ -807,12 +807,12 @@ fn batch_matches_per_patch() {
         patches: vec![plane_patch(), plane_patch()],
         point_indexes: vec![0, 1],
     };
-    let view_sets = vec![vec![0u32, 1, 2, 3], vec![0u32, 1, 2, 3]];
+    let patch_views = vec![vec![0u32, 1, 2, 3], vec![0u32, 1, 2, 3]];
 
     let batch = refine_patch_cloud_keypoints(
         &cloud,
         &views,
-        &view_sets,
+        &patch_views,
         None,
         None,
         &params(),
@@ -824,7 +824,7 @@ fn batch_matches_per_patch() {
         let single = refine_patch_keypoints(
             &cloud.patches[i],
             &views,
-            &view_sets[i],
+            &patch_views[i],
             None,
             None,
             &params(),
@@ -840,7 +840,7 @@ fn batch_matches_per_patch() {
     let batch = refine_patch_cloud_keypoints(
         &cloud,
         &views,
-        &view_sets,
+        &patch_views,
         None,
         Some(&references),
         &params(),
@@ -851,7 +851,7 @@ fn batch_matches_per_patch() {
         let single = refine_patch_keypoints(
             &cloud.patches[i],
             &views,
-            &view_sets[i],
+            &patch_views[i],
             None,
             references[i],
             &params(),

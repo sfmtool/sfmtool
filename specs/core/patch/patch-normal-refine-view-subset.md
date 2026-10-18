@@ -12,7 +12,7 @@ the render of the reference view chosen from all of them, not from the subset
 (`refine_patch_normal` keeps the full view list for that pick).
 
 `sfm embed-patches` uses it in its second and later refinement rounds, where the
-view set has been expanded by view selection
+patch views have been expanded by view selection
 ([patch-view-selection.md](patch-view-selection.md)). On the 250-image
 reconstruction used for profiling, that expanded set averages about 36 views per
 point (from the localizer counters: 24,701,485 searches over 681,396 rounds),
@@ -123,7 +123,7 @@ removes.
 The greedy returns the best-conditioned `K` views available, and the selection
 returns them whenever an anchor exists. If those `K` views still leave one tilt
 direction loose — a point whose views all lie along one azimuth arc — the full
-view set is no better conditioned, because conditioning depends on the
+list of patch views is no better conditioned, because conditioning depends on the
 directions of the views, not on their number. Using all views there would add
 render cost without constraining the loose direction. That direction is settled
 by the fronto-parallel prior during refinement, the same way as for any point
@@ -166,7 +166,7 @@ a calibrated optimum.
 - **Why the output loses nothing.** Refinement changes only the patch normal; it
   does not touch the reconstruction's tracks. In `embed_patches` the stored
   patch bitmaps are rendered by the sub-pixel keypoint pass of the final round,
-  with the reference-view rule choosing among the full view set, not by the
+  with the reference-view rule choosing among all the patch views, not by the
   normal refinement. And every view in the
   round-2 set already passed view selection's ZNCC threshold, so the photometric
   quality floor is enforced by membership; the subset only has to choose among
@@ -201,8 +201,8 @@ does not get worse.
 - [view_subset/tests.rs](../../../crates/sfmtool-core/src/patch/normal_refine/view_subset/tests.rs):
   the no-op cases (`K == 0`, `m ≤ K`, a point at infinity) return every view;
   the greedy pick prefers oblique, azimuthally spread views over a near-frontal
-  cluster; the anchor is the least-oblique view; a large view set is capped to
-  `K`; a view set along a single azimuth arc returns the best `K` rather than
+  cluster; the anchor is the least-oblique view; a large list of patch views is capped to
+  `K`; patch views along a single azimuth arc returns the best `K` rather than
   every view; back-facing views are never selected; the selection is
   deterministic.
 - [normal_refine/tests.rs](../../../crates/sfmtool-core/src/patch/normal_refine/tests.rs)

@@ -80,14 +80,20 @@ fn run_method(
     _method: &str,
     patch: &OrientedPatch,
     views: &[ProjectedImage<'_>],
-    view_set: &[u32],
+    patch_views: &[u32],
     seeds: &[Option<[f64; 2]>],
     _reference: Option<usize>,
     base: &KeypointLocalizeParams,
 ) -> (KeypointLocalization, Vec<f64>) {
-    let loc =
-        try_localize_patch_keypoints(patch, views, view_set, Some(seeds), base, &Progress::none())
-            .unwrap();
+    let loc = try_localize_patch_keypoints(
+        patch,
+        views,
+        patch_views,
+        Some(seeds),
+        base,
+        &Progress::none(),
+    )
+    .unwrap();
     let z = loc.loo_zncc.clone();
     (loc, z)
 }
@@ -97,7 +103,7 @@ fn run_method(
     method: &str,
     patch: &OrientedPatch,
     views: &[ProjectedImage<'_>],
-    view_set: &[u32],
+    patch_views: &[u32],
     seeds: &[Option<[f64; 2]>],
     reference: Option<usize>,
     base: &KeypointLocalizeParams,
@@ -110,7 +116,7 @@ fn run_method(
     let loc = try_localize_patch_keypoints(
         patch,
         views,
-        view_set,
+        patch_views,
         Some(seeds),
         reference,
         &p,
@@ -167,14 +173,14 @@ fn bitmap_scores(
 fn rule_pick(
     patch: &OrientedPatch,
     views: &[ProjectedImage<'_>],
-    view_set: &[u32],
+    patch_views: &[u32],
     seeds: &[Option<[f64; 2]>],
     base: &KeypointLocalizeParams,
 ) -> Option<usize> {
     let loc = try_localize_patch_keypoints(
         patch,
         views,
-        view_set,
+        patch_views,
         Some(seeds),
         None,
         base,
@@ -182,7 +188,7 @@ fn rule_pick(
     )
     .unwrap();
     loc.reference
-        .and_then(|im| view_set.iter().position(|&v| v == im))
+        .and_then(|im| patch_views.iter().position(|&v| v == im))
 }
 
 /// Congealing has no reference rule; without `--references` and a stored
@@ -191,7 +197,7 @@ fn rule_pick(
 fn rule_pick(
     _patch: &OrientedPatch,
     _views: &[ProjectedImage<'_>],
-    _view_set: &[u32],
+    _patch_views: &[u32],
     _seeds: &[Option<[f64; 2]>],
     _base: &KeypointLocalizeParams,
 ) -> Option<usize> {
@@ -469,13 +475,14 @@ fn main() {
             let patch = &cloud.patches[ci];
             let pid = cloud.point_indexes[ci] as usize;
             let range = offsets[pid] as usize..offsets[pid + 1] as usize;
-            let view_set: Vec<u32> = range.clone().map(|j| tracks[j].image_index).collect();
-            let view_set_c: Vec<u32> = view_set.iter().map(|&i| compact[i as usize]).collect();
+            let patch_views: Vec<u32> = range.clone().map(|j| tracks[j].image_index).collect();
+            let patch_views_c: Vec<u32> =
+                patch_views.iter().map(|&i| compact[i as usize]).collect();
             let stored: Vec<[f64; 2]> = range
                 .clone()
                 .map(|j| [kps[[j, 0]] as f64, kps[[j, 1]] as f64])
                 .collect();
-            let gt: Vec<Option<[f64; 2]>> = view_set
+            let gt: Vec<Option<[f64; 2]>> = patch_views
                 .iter()
                 .map(|&i| {
                     cams[i as usize].project_homogeneous(
@@ -493,11 +500,11 @@ fn main() {
                 None => stored_refs
                     .as_ref()
                     .and_then(|v| usize::try_from(v[pid]).ok())
-                    .or_else(|| rule_pick(patch, &views, &view_set_c, &stored_seeds, &base)),
+                    .or_else(|| rule_pick(patch, &views, &patch_views_c, &stored_seeds, &base)),
             };
             let mut runs = Vec::new();
             for (di, &d) in disps.iter().enumerate() {
-                let seeds: Vec<Option<[f64; 2]>> = (0..view_set.len())
+                let seeds: Vec<Option<[f64; 2]>> = (0..patch_views.len())
                     .map(|k| {
                         if d == 0.0 || (!displace_reference && Some(k) == reference) {
                             return Some(stored[k]);
@@ -512,15 +519,15 @@ fn main() {
                 for &m in &methods {
                     let t = Instant::now();
                     let (loc, z) =
-                        run_method(m, patch, &views, &view_set_c, &seeds, reference, &base);
+                        run_method(m, patch, &views, &patch_views_c, &seeds, reference, &base);
                     let secs = t.elapsed().as_secs_f64();
                     #[cfg(not(congeal))]
                     let scores = bitmap_scores(patch, &views, &loc, &base);
                     let mut per = Vec::new();
                     let mut obs = Vec::new();
                     for (k, &imc) in loc.views.iter().enumerate() {
-                        let slot = view_set_c.iter().position(|&v| v == imc).unwrap();
-                        let im = view_set[slot];
+                        let slot = patch_views_c.iter().position(|&v| v == imc).unwrap();
+                        let im = patch_views[slot];
                         let kp = loc.keypoints[k];
                         obs.push((cams[im as usize], &poses[im as usize], kp));
                         let err = gt[slot].map(|g| (kp[0] - g[0]).hypot(kp[1] - g[1]));
@@ -545,7 +552,7 @@ fn main() {
                     runs.push(json!({"disp": d, "method": m, "secs": secs, "views": per}));
                 }
             }
-            json!({"point": pid, "n": view_set.len(), "reference": reference, "runs": runs})
+            json!({"point": pid, "n": patch_views.len(), "reference": reference, "runs": runs})
         })
         .collect();
     let references: serde_json::Map<String, Value> = results

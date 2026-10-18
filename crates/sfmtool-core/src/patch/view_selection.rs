@@ -5,7 +5,7 @@
 //!
 //! See `specs/core/patch/patch-view-selection.md`. Given one 3D point with its
 //! oriented patch and the track views that already observe it,
-//! [`select_patch_views`] returns the **view set** `G` — the track views plus
+//! [`select_patch_views`] returns the patch's views `G`: the track views plus
 //! every other image that *photometrically* sees the patch.
 //!
 //! The pipeline is the same render → z-normalize → robust-consensus machinery
@@ -50,7 +50,6 @@ use crate::patch::normal_refine::{
 };
 use crate::patch::PatchCounter;
 use crate::progress::{Cancelled, Progress};
-use crate::reconstruction::SfmrReconstruction;
 use rayon::prelude::*;
 
 pub mod prof;
@@ -111,7 +110,7 @@ impl Default for ViewSelectParams {
     }
 }
 
-/// The selected view set `G` for one point.
+/// The patch's views `G` selected for one point.
 #[derive(Debug, Clone, Default)]
 pub struct ViewSelection {
     /// Admitted image indices (into the `views` slice): the track views plus the
@@ -133,7 +132,7 @@ pub struct ViewSelection {
     /// How many leading [`admitted`](Self::admitted) entries are the point's
     /// **track** views (the deduped track, always admitted first); the rest are
     /// the photometrically-vetted expansion candidates. Lets a consumer split
-    /// the view set by provenance without re-deriving the track.
+    /// the patch's views by provenance without re-deriving the track.
     pub track_view_count: usize,
 }
 
@@ -891,7 +890,7 @@ fn normal_refine_shim(params: &ViewSelectParams) -> super::normal_refine::Normal
     }
 }
 
-/// Select the view set `G` for one oriented patch.
+/// Select the patch's views `G` for one oriented patch.
 ///
 /// `views` is one [`ProjectedImage`] per reconstruction image (indexed by image
 /// index); `track_views` lists the image indices that already observe the point
@@ -936,7 +935,7 @@ fn normal_refine_shim(params: &ViewSelectParams) -> super::normal_refine::Normal
 /// the views scored, and is polled for cancellation before and after reference
 /// construction and between views — which is where a selection over a capture's
 /// worth of images spends its time. A cancelled call returns [`Cancelled`]
-/// rather than a partial view set, so a caller never installs half a selection.
+/// rather than a partial list of views, so a caller never installs half a selection.
 /// A batch caller with no one watching passes [`Progress::none`], which reports
 /// nothing and never cancels.
 ///
@@ -1228,7 +1227,7 @@ fn select_patch_views_impl(
 /// Batch [`select_patch_views`] over a [`PatchCloud`], parallel across patches
 /// (rayon). `track_views[i]` lists, for patch `i`, the track image indices of its
 /// source point (see
-/// [`view_indices_from_reconstruction`](super::normal_refine::view_indices_from_reconstruction)).
+/// [`track_views_from_reconstruction`](super::track_views_from_reconstruction)).
 /// Results are returned in cloud order.
 ///
 /// `track_keypoints`, when given, is parallel to `track_views` in both
@@ -1313,38 +1312,6 @@ pub fn select_patch_cloud_views(
         .into_iter()
         .map(|o| o.expect("every patch ran when nothing was cancelled"))
         .collect())
-}
-
-/// For each patch of `cloud` (linked to `recon` via `point_indexes`), the track image
-/// indices observing its source 3D point — ready to use as the `track_views` of
-/// [`select_patch_cloud_views`]. Identical to
-/// [`view_indices_from_reconstruction`](super::normal_refine::view_indices_from_reconstruction);
-/// re-exported here for symmetry with the selection API.
-///
-/// # Panics
-///
-/// Panics if `cloud.point_indexes` is not parallel to its patches.
-pub fn track_views_from_reconstruction(
-    recon: &SfmrReconstruction,
-    cloud: &PatchCloud,
-) -> Vec<Vec<u32>> {
-    super::normal_refine::view_indices_from_reconstruction(recon, cloud)
-}
-
-/// The stored keypoint of each track view returned by
-/// [`track_views_from_reconstruction`], in the same order — the
-/// `track_keypoints` of [`select_patch_cloud_views`]. All `None` for a
-/// `sift_files` reconstruction (no inline keypoints), which anchors those views
-/// at their projections.
-///
-/// # Panics
-///
-/// Panics if `cloud.point_indexes` is not parallel to its patches.
-pub fn track_keypoints_from_reconstruction(
-    recon: &SfmrReconstruction,
-    cloud: &PatchCloud,
-) -> Vec<Vec<Option<[f64; 2]>>> {
-    super::member_coherence::member_keypoints_from_reconstruction(recon, cloud)
 }
 
 #[cfg(test)]

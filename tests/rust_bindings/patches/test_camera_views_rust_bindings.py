@@ -9,7 +9,7 @@
 of a full reconstruction, and ``PatchCloud.from_tracks`` builds a cloud from
 arrays. See ``specs/core/patch/patch-cloud.md`` ("Patch operations without a
 reconstruction"). The equivalence tests prove a reconstruction and an equivalent
-``CameraViews`` + explicit view sets produce identical patch-kernel output.
+``CameraViews`` + explicit patch views produce identical patch-kernel output.
 """
 
 import numpy as np
@@ -262,30 +262,30 @@ class TestViewsModeRequiredArguments:
         images = [np.zeros((16, 16, 3), np.uint8), np.zeros((16, 16, 3), np.uint8)]
         return views, cloud, images
 
-    def test_localize_requires_view_sets(self, scene):
+    def test_localize_requires_patch_views(self, scene):
         views, cloud, images = scene
-        with pytest.raises(ValueError, match="view_sets is required"):
+        with pytest.raises(ValueError, match="patch_views is required"):
             cloud.localize_keypoints(views, images)
 
-    def test_refine_normals_requires_view_indices(self, scene):
+    def test_refine_normals_requires_patch_views(self, scene):
         views, cloud, images = scene
-        with pytest.raises(ValueError, match="view_indices is required"):
+        with pytest.raises(ValueError, match="patch_views is required"):
             cloud.refine_normals(views, images)
 
-    def test_select_views_requires_candidate_views(self, scene):
+    def test_select_views_requires_track_views(self, scene):
         views, cloud, images = scene
-        with pytest.raises(ValueError, match="candidate_views is required"):
+        with pytest.raises(ValueError, match="track_views is required"):
             cloud.select_views(views, images)
 
-    def test_refine_keypoints_requires_view_sets(self, scene):
+    def test_refine_keypoints_requires_patch_views(self, scene):
         views, cloud, images = scene
-        with pytest.raises(ValueError, match="view_sets is required"):
+        with pytest.raises(ValueError, match="patch_views is required"):
             cloud.refine_keypoints(views, images)
 
-    def test_localize_runs_with_view_sets(self, scene):
+    def test_localize_runs_with_patch_views(self, scene):
         views, cloud, images = scene
-        view_sets = {0: [0, 1], 1: [0, 1], 2: [0, 1]}
-        results = cloud.localize_keypoints(views, images, view_sets=view_sets)
+        patch_views = {0: [0, 1], 1: [0, 1], 2: [0, 1]}
+        results = cloud.localize_keypoints(views, images, patch_views=patch_views)
         assert len(results) == 3
 
 
@@ -294,9 +294,9 @@ class TestViewsModeRequiredArguments:
 # ---------------------------------------------------------------------------
 
 
-def _view_sets_from_recon(recon):
+def _track_views_from_recon(recon):
     """``point_index -> [image_index, ...]`` in track order (the same lists
-    ``view_indices_from_reconstruction`` derives internally)."""
+    ``track_views_from_reconstruction`` derives internally)."""
     tpi = np.asarray(recon.track_point_indexes)
     tii = np.asarray(recon.track_image_indexes)
     sets: dict[int, list[int]] = {}
@@ -374,9 +374,9 @@ class TestReconstructionEquivalence:
         subset = [int(p) for p in np.asarray(cloud.point_indexes)[:8]]
         recon_out = cloud.localize_keypoints(recon, images, point_indexes=subset)
 
-        view_sets = _view_sets_from_recon(recon)
+        patch_views = _track_views_from_recon(recon)
         views_out = cloud_tracks.localize_keypoints(
-            views, images, view_sets=view_sets, point_indexes=subset
+            views, images, patch_views=patch_views, point_indexes=subset
         )
 
         assert len(recon_out) == len(views_out)
@@ -411,9 +411,9 @@ class TestReconstructionEquivalence:
         )
 
         # Pick a point and an image its track did NOT observe; overriding its
-        # candidate list must make that image show up in the always-admitted set,
-        # proving `candidate_views` took precedence over the track views.
-        sets = _view_sets_from_recon(recon)
+        # track views must make that image show up in the always-admitted set,
+        # proving the `track_views` map took precedence over the track.
+        sets = _track_views_from_recon(recon)
         pid = int(np.asarray(cloud.point_indexes)[0])
         n_images = recon.image_count
         track_imgs = set(sets[pid])
@@ -422,7 +422,7 @@ class TestReconstructionEquivalence:
         out = cloud.select_views(
             recon,
             images,
-            candidate_views={pid: [extra]},
+            track_views={pid: [extra]},
             point_indexes=[pid],
         )
         assert len(out) == 1

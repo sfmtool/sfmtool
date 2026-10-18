@@ -153,7 +153,7 @@ impl Default for KeypointLocalizeParams {
 }
 
 /// The localized keypoints for one point -- parallel arrays over the **kept**
-/// views (a subset of the input view set, in the input's order; grazing,
+/// views (a subset of the input patch views, in the input's order; grazing,
 /// out-of-frame, unlocalizable, large-shift and low-agreement views are
 /// dropped).
 ///
@@ -172,7 +172,7 @@ impl Default for KeypointLocalizeParams {
 #[derive(Debug, Clone, Default)]
 pub struct KeypointLocalization {
     /// The kept image indices (into the `views` slice), a subset of the input
-    /// view set preserving its order.
+    /// patch views preserving their order.
     pub views: Vec<u32>,
     /// The keypoint per kept view, in source-image pixels (`[x, y]`), parallel
     /// to [`views`](Self::views). The reference's is its starting keypoint.

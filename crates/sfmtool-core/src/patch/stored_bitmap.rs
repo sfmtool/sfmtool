@@ -107,10 +107,10 @@ pub struct ReferenceRender {
     pub reading: TrackReading,
 }
 
-/// Render each of `view_set`'s views of `patch` at its keypoint and run the
+/// Render each view in `patch_views` of `patch` at its keypoint and run the
 /// reference-view rule over the tiles.
 ///
-/// `view_set` indexes `views`, and `keypoints` is parallel to it, in
+/// `patch_views` indexes `views`, and `keypoints` is parallel to it, in
 /// source-image px; a view with no keypoint is rendered through the patch
 /// itself rather than re-anchored. The tiles are rendered at `resolution` with
 /// the sampler `sampler` picks for each view ([`render_view_tile`]), each
@@ -122,13 +122,13 @@ pub struct ReferenceRender {
 ///
 /// # Panics
 ///
-/// Panics if `keypoints` is not parallel to `view_set` or a view index is out
+/// Panics if `keypoints` is not parallel to `patch_views` or a view index is out
 /// of range.
 #[allow(clippy::too_many_arguments)]
 pub fn render_reference(
     patch: &OrientedPatch,
     views: &[ProjectedImage<'_>],
-    view_set: &[u32],
+    patch_views: &[u32],
     keypoints: &[Option<[f64; 2]>],
     resolution: u32,
     sampler: SamplerChoice,
@@ -137,11 +137,11 @@ pub fn render_reference(
 ) -> ReferenceRender {
     assert_eq!(
         keypoints.len(),
-        view_set.len(),
-        "keypoints must be parallel to view_set"
+        patch_views.len(),
+        "keypoints must be parallel to patch_views"
     );
     let resolution = resolution.max(2) as usize;
-    let tiles: Vec<ViewTile> = view_set
+    let tiles: Vec<ViewTile> = patch_views
         .iter()
         .zip(keypoints)
         .map(|(&v, &kp)| {
@@ -151,7 +151,15 @@ pub fn render_reference(
     let semi_axes: Vec<Option<TileSemiAxes>> = tiles.iter().map(tile_semi_axes).collect();
     let refs: Vec<&ViewTile> = tiles.iter().collect();
     let reading = read_track(
-        patch, views, view_set, keypoints, &refs, &semi_axes, sampler, options, progress,
+        patch,
+        views,
+        patch_views,
+        keypoints,
+        &refs,
+        &semi_axes,
+        sampler,
+        options,
+        progress,
     );
     ReferenceRender {
         tiles,
@@ -160,7 +168,7 @@ pub fn render_reference(
     }
 }
 
-/// Render `patch`'s stored bitmap from `view_set`'s views at `keypoints`: the
+/// Render `patch`'s stored bitmap from the views in `patch_views` at `keypoints`: the
 /// tile of the view the reference-view rule picks ([`render_reference`],
 /// [`bitmap_from_tile`]). `None` with fewer than two views, or where the rule
 /// picks none because no view is eligible.
@@ -187,29 +195,29 @@ pub fn render_reference(
 ///
 /// # Panics
 ///
-/// Panics if `keypoints` is not parallel to `view_set` or a view index is out
+/// Panics if `keypoints` is not parallel to `patch_views` or a view index is out
 /// of range.
 pub fn render_patch_bitmap(
     patch: &OrientedPatch,
     views: &[ProjectedImage<'_>],
-    view_set: &[u32],
+    patch_views: &[u32],
     keypoints: &[[f64; 2]],
     params: &KeypointSubpixelParams,
     progress: &Progress<'_>,
 ) -> Option<PatchBitmap> {
     assert_eq!(
         keypoints.len(),
-        view_set.len(),
-        "keypoints must be parallel to view_set"
+        patch_views.len(),
+        "keypoints must be parallel to patch_views"
     );
-    if view_set.len() < 2 {
+    if patch_views.len() < 2 {
         return None;
     }
     let anchors: Vec<Option<[f64; 2]>> = keypoints.iter().map(|&kp| Some(kp)).collect();
     let render = render_reference(
         patch,
         views,
-        view_set,
+        patch_views,
         &anchors,
         params.resolution,
         params.sampler,
@@ -330,7 +338,7 @@ pub fn render_patch_cloud_bitmaps(
             if progress.is_cancelled() {
                 return (p, None);
             }
-            let mut view_set: Vec<u32> = Vec::new();
+            let mut patch_views: Vec<u32> = Vec::new();
             let mut keypoints: Vec<[f64; 2]> = Vec::new();
             // The position within the point's track of each view in the set.
             let mut within: Vec<usize> = Vec::new();
@@ -338,7 +346,7 @@ pub fn render_patch_cloud_bitmaps(
                 let Some(view) = slot[tracks[j].image_index as usize] else {
                     continue;
                 };
-                view_set.push(view);
+                patch_views.push(view);
                 keypoints.push([
                     f64::from(keypoints_xy[[j, 0]]),
                     f64::from(keypoints_xy[[j, 1]]),
@@ -359,7 +367,7 @@ pub fn render_patch_cloud_bitmaps(
                     Some(i) => {
                         let tile = render_view_tile(
                             patch,
-                            &present[view_set[i] as usize],
+                            &present[patch_views[i] as usize],
                             Some(keypoints[i]),
                             resolution,
                             params.sampler,
@@ -371,7 +379,7 @@ pub fn render_patch_cloud_bitmaps(
                 }),
                 None if unreferenced == UnreferencedPoints::Skip => None,
                 None => {
-                    render_patch_bitmap(patch, &present, &view_set, &keypoints, params, progress)
+                    render_patch_bitmap(patch, &present, &patch_views, &keypoints, params, progress)
                         .map(|b| (b.rgba, within[b.reference] as i32))
                 }
             };

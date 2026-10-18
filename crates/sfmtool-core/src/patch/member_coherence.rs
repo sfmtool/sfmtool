@@ -27,9 +27,10 @@
 //! `specs/core/patch/patch-view-selection.md` — not the identical number.
 //!
 //! **Members are sampled at their stored keypoints** when the caller supplies
-//! them ([`member_keypoints_from_reconstruction`]): each member's render is
-//! recentered in-plane so it is anchored where that image's feature actually
-//! *is*, not where the current geometry reprojects the point. See
+//! them ([`track_keypoints_from_reconstruction`](super::track_keypoints_from_reconstruction)):
+//! each member's render is recentered in-plane so it is anchored where that
+//! image's feature actually *is*, not where the current geometry reprojects the
+//! point. See
 //! [`member_zncc_matrix`].
 //!
 //! Members that carry no pairwise evidence (nothing rendered them, or nothing
@@ -43,7 +44,6 @@ use crate::patch::normal_refine::{PatchWindow, ProjectedImage, SamplerChoice, MI
 use crate::patch::pair_sharpness::PairMatching;
 use crate::patch::PatchCounter;
 use crate::progress::{Cancelled, Progress};
-use crate::reconstruction::SfmrReconstruction;
 
 /// Tunables for [`validate_member_coherence`].
 ///
@@ -528,12 +528,14 @@ pub fn validate_member_coherence(
 }
 
 /// Batch [`validate_member_coherence`] over a [`PatchCloud`], parallel across
-/// patches (rayon). `member_views[i]` lists, for patch `i`, the track image
-/// indices of its source point (see [`member_views_from_reconstruction`]);
-/// `member_keypoints`, when given, is parallel to it in both dimensions and
+/// patches (rayon). `patch_views[i]` lists, for patch `i`, the members to
+/// validate, usually the track image indices of its source point (see
+/// [`track_views_from_reconstruction`](super::track_views_from_reconstruction));
+/// `patch_keypoints`, when given, is parallel to it in both dimensions and
 /// carries each member's stored keypoint (see
-/// [`member_keypoints_from_reconstruction`]). Results are returned in cloud
-/// order — the kernel is per point, so nothing depends on thread scheduling.
+/// [`track_keypoints_from_reconstruction`](super::track_keypoints_from_reconstruction)).
+/// Results are returned in cloud order — the kernel is per point, so nothing
+/// depends on thread scheduling.
 ///
 /// `done`, when given, is bumped once per patch, for a caller polling progress
 /// from another thread. `progress` receives a `patches` count about every
@@ -548,27 +550,27 @@ pub fn validate_member_coherence(
 ///
 /// # Panics
 ///
-/// Panics if `member_views.len() != cloud.len()`, if `member_keypoints` is given
-/// and not parallel to `member_views`, or if an index is out of range.
+/// Panics if `patch_views.len() != cloud.len()`, if `patch_keypoints` is given
+/// and not parallel to `patch_views`, or if an index is out of range.
 pub fn validate_patch_cloud_member_coherence(
     cloud: &PatchCloud,
     views: &[ProjectedImage<'_>],
-    member_views: &[Vec<u32>],
-    member_keypoints: Option<&[Vec<Option<[f64; 2]>>]>,
+    patch_views: &[Vec<u32>],
+    patch_keypoints: Option<&[Vec<Option<[f64; 2]>>]>,
     params: &MemberCoherenceParams,
     done: Option<&std::sync::atomic::AtomicUsize>,
     progress: &Progress<'_>,
 ) -> Result<Vec<MemberCoherence>, Cancelled> {
     assert_eq!(
-        member_views.len(),
+        patch_views.len(),
         cloud.len(),
-        "member_views must be parallel to the cloud"
+        "patch_views must be parallel to the cloud"
     );
-    if let Some(kps) = member_keypoints {
+    if let Some(kps) = patch_keypoints {
         assert_eq!(
             kps.len(),
-            member_views.len(),
-            "member_keypoints must be parallel to member_views"
+            patch_views.len(),
+            "patch_keypoints must be parallel to patch_views"
         );
     }
     let counter = PatchCounter::new(cloud.len(), done, progress);
@@ -576,13 +578,13 @@ pub fn validate_patch_cloud_member_coherence(
         .patches
         .par_iter()
         .enumerate()
-        .zip(member_views.par_iter())
-        .map(|((i, patch), mv)| {
+        .zip(patch_views.par_iter())
+        .map(|((i, patch), pv)| {
             if progress.is_cancelled() {
                 return None;
             }
-            let kps = member_keypoints.map(|k| k[i].as_slice());
-            let matrix = member_zncc_matrix_reporting(patch, views, mv, kps, params, progress);
+            let kps = patch_keypoints.map(|k| k[i].as_slice());
+            let matrix = member_zncc_matrix_reporting(patch, views, pv, kps, params, progress);
             let decision = decide_member_coherence(&matrix, params);
             counter.finished();
             Some(MemberCoherence { matrix, decision })
@@ -593,58 +595,6 @@ pub fn validate_patch_cloud_member_coherence(
         .into_iter()
         .map(|o| o.expect("every patch ran when nothing was cancelled"))
         .collect())
-}
-
-/// For each patch of `cloud` (linked to `recon` via `point_indexes`), the track
-/// image indices observing its source 3D point — ready to use as the
-/// `member_views` of [`validate_patch_cloud_member_coherence`].
-///
-/// # Panics
-///
-/// Panics if `cloud.point_indexes` is not parallel to its patches.
-pub fn member_views_from_reconstruction(
-    recon: &SfmrReconstruction,
-    cloud: &PatchCloud,
-) -> Vec<Vec<u32>> {
-    super::normal_refine::view_indices_from_reconstruction(recon, cloud)
-}
-
-/// The stored keypoint of each member returned by
-/// [`member_views_from_reconstruction`], in the same order — the
-/// `member_keypoints` of [`validate_patch_cloud_member_coherence`].
-///
-/// `None` for every member of a `sift_files` reconstruction (it carries feature
-/// indexes rather than inline keypoints), which anchors those members at their
-/// projections.
-///
-/// # Panics
-///
-/// Panics if `cloud.point_indexes` is not parallel to its patches.
-pub fn member_keypoints_from_reconstruction(
-    recon: &SfmrReconstruction,
-    cloud: &PatchCloud,
-) -> Vec<Vec<Option<[f64; 2]>>> {
-    assert_eq!(
-        cloud.point_indexes.len(),
-        cloud.len(),
-        "cloud must carry a point_index per patch"
-    );
-    let kxy = recon.keypoints_xy();
-    cloud
-        .point_indexes
-        .iter()
-        .map(|&p| {
-            let p = p as usize;
-            let range =
-                recon.point_set.observation_offsets[p]..recon.point_set.observation_offsets[p + 1];
-            match kxy {
-                Some(k) => range
-                    .map(|r| Some([k[[r, 0]] as f64, k[[r, 1]] as f64]))
-                    .collect(),
-                None => range.map(|_| None).collect(),
-            }
-        })
-        .collect()
 }
 
 #[cfg(test)]

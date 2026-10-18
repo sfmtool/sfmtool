@@ -141,8 +141,8 @@ def stored_keypoints_by_point(
     recon: SfmrReconstruction,
 ) -> dict[int, list[list[float]]]:
     """``point_index -> [[x, y], ...]``, each point's stored keypoints in the
-    order of its track: the ``starting_keypoints`` of a kernel run over each
-    point's track (``view_sets=None``) that starts every view where it was
+    order of its track: the ``patch_keypoints`` of a kernel run over each
+    point's track (``patch_views=None``) that starts every view where it was
     observed. Points with no observation are left out.
     """
     kxy = np.asarray(recon.keypoints_xy, dtype=np.float64).reshape(-1, 2)
@@ -213,7 +213,7 @@ def compact_to_embedded_patches(
     ``reference_image``, that is the image; ``None`` gives ``-1`` (the views
     were aligned to nothing, and there is no bitmap).
     The kernels align to a point's stored reference whenever it is in the
-    view set and renders, so a stored reference survives a refinement that
+    patch views and renders, so a stored reference survives a refinement that
     moves keypoints or the frame, and is replaced only where it could not be
     used. Where the localization carries no ``reference_image``, the point
     keeps the reference observation ``recon`` stores for it if the new track

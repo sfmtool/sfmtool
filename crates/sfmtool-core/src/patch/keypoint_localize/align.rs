@@ -52,7 +52,7 @@ pub(in crate::patch) fn faces_view(
 /// sub-pixel refiner both call this, so given the same views and keypoints they
 /// align to the same reference render.
 ///
-/// `view_set` and `seeds` are parallel; `given` is the position in them of the caller's reference,
+/// `patch_views` and `seeds` are parallel; `given` is the position in them of the caller's reference,
 /// which is the reference. With none, only views that pass the grazing pre-filter ([`faces_view`]
 /// at `min_grazing_cos`) are candidates: the reference-view rule, run with `reference_view`, reads
 /// the facing views' renders at their starting keypoints (a view with no seed rendered through the
@@ -63,7 +63,7 @@ pub(in crate::patch) fn faces_view(
 pub(crate) fn resolve_reference(
     patch: &OrientedPatch,
     views: &[ProjectedImage<'_>],
-    view_set: &[u32],
+    patch_views: &[u32],
     seeds: &[Option<[f64; 2]>],
     given: Option<usize>,
     min_grazing_cos: f64,
@@ -72,18 +72,18 @@ pub(crate) fn resolve_reference(
     reference_view: &ReferenceViewOptions,
     progress: &Progress<'_>,
 ) -> Option<usize> {
-    let facing: Vec<usize> = (0..view_set.len())
-        .filter(|&k| faces_view(patch, &views[view_set[k] as usize], min_grazing_cos))
+    let facing: Vec<usize> = (0..patch_views.len())
+        .filter(|&k| faces_view(patch, &views[patch_views[k] as usize], min_grazing_cos))
         .collect();
     if given.is_some() || facing.len() < 2 {
         return given.or((facing.len() == 1).then(|| facing[0]));
     }
-    let view_set: Vec<u32> = facing.iter().map(|&k| view_set[k]).collect();
+    let patch_views: Vec<u32> = facing.iter().map(|&k| patch_views[k]).collect();
     let seeds: Vec<Option<[f64; 2]>> = facing.iter().map(|&k| seeds[k]).collect();
     let render = render_reference(
         patch,
         views,
-        &view_set,
+        &patch_views,
         &seeds,
         resolution,
         sampler,
@@ -174,14 +174,14 @@ impl Template {
     }
 }
 
-/// Align every view of `view_set` to the point's reference render, once.
+/// Align every view of `patch_views` to the point's reference render, once.
 ///
 /// See [`super::try_localize_patch_keypoints`], which this is the body of.
 pub(super) fn align_to_reference(
     patch: &OrientedPatch,
     views: &[ProjectedImage<'_>],
-    view_set: &[u32],
-    starting_keypoints: Option<&[Option<[f64; 2]>]>,
+    patch_views: &[u32],
+    patch_keypoints: Option<&[Option<[f64; 2]>]>,
     reference: Option<usize>,
     params: &KeypointLocalizeParams,
     progress: &Progress<'_>,
@@ -195,10 +195,10 @@ pub(super) fn align_to_reference(
     let n = support.pixels.len();
 
     // Dedup (a point can carry two observations in one image), the grazing
-    // pre-filter and the projection, in the view set's order.
+    // pre-filter and the projection, in the patch views' order.
     let mut seen = std::collections::HashSet::new();
     let mut states: Vec<AlignedView> = Vec::new();
-    for (slot, &i) in view_set.iter().enumerate() {
+    for (slot, &i) in patch_views.iter().enumerate() {
         if !seen.insert(i) {
             continue;
         }
@@ -209,7 +209,7 @@ pub(super) fn align_to_reference(
         let Some(proj) = project(view, &patch.center, patch.w) else {
             continue;
         };
-        let seed = starting_keypoints.and_then(|seeds| seeds[slot]);
+        let seed = patch_keypoints.and_then(|seeds| seeds[slot]);
         let unprojected = seed.map(|kp| seed_offset(patch, view, kp, wpp_u, wpp_v));
         let start_is_seed = !matches!(unprojected, Some(None));
         let start = unprojected.flatten().unwrap_or([0.0, 0.0]);
@@ -238,7 +238,7 @@ pub(super) fn align_to_reference(
     // rule's pick from the renders at the starting keypoints. It is matched by
     // image, so a reference given at a repeated image's dropped slot is kept.
     let given = reference
-        .and_then(|k| view_set.get(k))
+        .and_then(|k| patch_views.get(k))
         .and_then(|&img| states.iter().position(|st| st.idx == img));
     let anchor = prof::REFERENCE.time(|| {
         let set: Vec<u32> = states.iter().map(|st| st.idx).collect();

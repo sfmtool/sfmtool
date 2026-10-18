@@ -497,8 +497,8 @@ def _localize(recon, pyramids, tracks, resolution):
         results = cloud.localize_keypoints(
             recon,
             pyramids,
-            view_sets={p: [r["image"] for r in plans[p][1]] for p in points},
-            starting_keypoints={
+            patch_views={p: [r["image"] for r in plans[p][1]] for p in points},
+            patch_keypoints={
                 p: [r["keypoint"] for r in plans[p][1]] for p in points
             },
             reference_images={p: plans[p][2][k] for p in points},

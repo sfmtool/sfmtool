@@ -91,7 +91,7 @@ class LocalizeKeypointsTransform:
     ``options`` are ``PatchCloud.localize_keypoints`` keyword arguments; only
     the ones given are forwarded, so every other search setting is the binding's
     own default. ``min_views`` (default 2) is the compaction cull threshold.
-    Localization runs over each point's full track (``view_sets=None``) and the
+    Localization runs over each point's full track (``patch_views=None``) and the
     write-back rebuilds the track arrays from the kept views via
     ``compact_to_embedded_patches`` — views and points can be dropped, and the
     survivors are renumbered densely.
@@ -138,7 +138,7 @@ class LocalizeKeypointsTransform:
 
         # The reconstruction is embedded_patches (enforced by apply_transforms),
         # so the patch frame is already stored — read it back as the cloud rather
-        # than rebuilding it. With view_sets=None the localizer runs over each
+        # than rebuilding it. With patch_views=None the localizer runs over each
         # point's full track, seeding each view at its stored keypoint, so the
         # reference observation stays where it is, and drops the views that
         # won't co-register.
@@ -157,8 +157,8 @@ class LocalizeKeypointsTransform:
         localizations = cloud.localize_keypoints(
             recon,
             images,
-            view_sets=None,
-            starting_keypoints=stored_keypoints_by_point(recon),
+            patch_views=None,
+            patch_keypoints=stored_keypoints_by_point(recon),
             reference_images=reference_images_by_point(recon),
             **self.options,
         )
