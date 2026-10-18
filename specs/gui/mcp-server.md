@@ -435,7 +435,8 @@ An argument that carries a unit names the quantity first and the unit second:
 `angle_deg`. A bare `degrees` says how the number is measured but not what it
 measures. The catalog test asserts that no argument, at the top level or in a
 nested object, is named only for a unit (`degrees`, `radians`, `pixels`, `px`,
-`meters`, `seconds` and their other spellings).
+`meters`, `seconds`, `percent` and their other spellings, `units` and
+`scene_units`).
 
 #### Where the GUI has no word, the code's word wins
 
