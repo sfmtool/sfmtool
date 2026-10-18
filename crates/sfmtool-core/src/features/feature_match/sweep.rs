@@ -17,6 +17,17 @@
 //! geometric filter before any descriptor is compared. That is the whole
 //! difference, and it is carried by one `Option` parameter rather than by a
 //! parallel family of `_geometric` functions.
+//!
+//! ## Sort positions and filter positions
+//!
+//! The geometric filter unprojects positions through the cameras in its
+//! [`StereoPairGeometry`], so it must read them in those cameras' pixels. The
+//! public `_geometric` functions read the filter positions from the keypoints
+//! they sort by, so the geometry has to describe the cameras those keypoints
+//! are pixels of. [`super::match_image_pair`] sorts by rectified keypoints but
+//! holds the geometry of the original cameras, so it calls
+//! `mutual_best_match_sweep_inner` with the raw positions as separate filter
+//! positions, carried through the Y sort with the other per-feature arrays.
 
 use std::collections::HashMap;
 
@@ -28,15 +39,15 @@ use super::window::{affine_row, mutual_matches, WindowFilter, WindowMatcher};
 pub type SweepMatches = HashMap<usize, (usize, f64)>;
 
 /// The extra per-feature data the geometric path needs, already in Y order:
-/// query-side and candidate-side affine shapes, and the filter to apply.
+/// query-side and candidate-side filter positions and affine shapes, and the
+/// filter to apply.
 ///
-/// Positions are not carried here — the sweep already holds both keypoint
-/// arrays, since Y *is* its sort key, and the filter reads its positions from
-/// those. A second field naming a position array could later be pointed at a
-/// different one than the window slider indexes. (The polar sweep's
-/// same-named struct *does* carry positions, because there the sort key is the
-/// angle and the positions are genuinely separate data.)
+/// The filter positions are the keypoints the sweep sorts by on the public
+/// entry points, and the raw pixel positions when [`super::match_image_pair`]
+/// sorts by rectified keypoints (see the module doc).
 struct GeometricInputs<'a> {
+    positions1: &'a [f64],
+    positions2: &'a [f64],
     affines1: &'a [f64],
     affines2: &'a [f64],
     geom: &'a StereoPairGeometry,
@@ -95,9 +106,9 @@ fn match_one_way_sweep_inner(
 
         let query_desc = &sorted_descs1[idx1 * desc_len..(idx1 + 1) * desc_len];
         let filter = geometric.map(|g| WindowFilter {
-            x1: [sorted_kpts1[idx1 * 2], sorted_kpts1[idx1 * 2 + 1]],
+            x1: [g.positions1[idx1 * 2], g.positions1[idx1 * 2 + 1]],
             affine1: affine_row(g.affines1, idx1),
-            positions2: &sorted_kpts2[win_start * 2..win_end * 2],
+            positions2: &g.positions2[win_start * 2..win_end * 2],
             affines2: &g.affines2[win_start * 4..win_end * 4],
             geom: g.geom,
             config: g.config,
@@ -120,6 +131,8 @@ fn match_one_way_sweep_inner(
 /// The geometric filter's inputs, gathered into Y order once and held for both
 /// sweep directions.
 struct SortedGeometry<'a> {
+    positions1: Vec<f64>,
+    positions2: Vec<f64>,
     affines1: Vec<f64>,
     affines2: Vec<f64>,
     geom: &'a StereoPairGeometry,
@@ -132,6 +145,8 @@ struct SortedGeometry<'a> {
 impl SortedGeometry<'_> {
     fn forward(&self) -> GeometricInputs<'_> {
         GeometricInputs {
+            positions1: &self.positions1,
+            positions2: &self.positions2,
             affines1: &self.affines1,
             affines2: &self.affines2,
             geom: self.geom,
@@ -141,6 +156,8 @@ impl SortedGeometry<'_> {
 
     fn backward(&self) -> GeometricInputs<'_> {
         GeometricInputs {
+            positions1: &self.positions2,
+            positions2: &self.positions1,
             affines1: &self.affines2,
             affines2: &self.affines1,
             geom: &self.geom_swapped,
@@ -149,15 +166,32 @@ impl SortedGeometry<'_> {
     }
 }
 
+/// The geometric filter's per-feature inputs for a bidirectional sweep, in the
+/// caller's feature order: the positions the filter reads (`N × 2` and
+/// `M × 2`), the affine shapes (`N × 4` and `M × 4`), the camera geometry and
+/// the filter settings.
+///
+/// `positions1` and `positions2` must be pixel positions in the cameras `geom`
+/// describes. They may differ from the keypoints the sweep sorts by, as on
+/// [`super::match_image_pair`]'s rectified path, where the sweep sorts by
+/// rectified keypoints and the filter reads the raw ones.
+pub(super) struct SweepFilterInputs<'a> {
+    pub(super) positions1: &'a [f64],
+    pub(super) positions2: &'a [f64],
+    pub(super) affines1: &'a [f64],
+    pub(super) affines2: &'a [f64],
+    pub(super) geom: &'a StereoPairGeometry,
+    pub(super) config: &'a GeometricFilterConfig,
+}
+
 /// The shared body of both bidirectional entry points,
 /// [`mutual_best_match_sweep`] and [`mutual_best_match_sweep_geometric`], which
 /// document the parameters.
 ///
-/// `geometric` carries the only difference between them: `Some((affines1,
-/// affines2, geom, config))` runs the geometric filter over each window,
-/// `None` compares the whole window.
+/// `geometric` carries the only difference between them: `Some` runs the
+/// geometric filter over each window, `None` compares the whole window.
 #[allow(clippy::too_many_arguments)]
-fn mutual_best_match_sweep_inner(
+pub(super) fn mutual_best_match_sweep_inner(
     keypoints1: &[f64],
     descriptors1: &[u8],
     n1: usize,
@@ -167,7 +201,7 @@ fn mutual_best_match_sweep_inner(
     desc_len: usize,
     window_size: usize,
     threshold: Option<f64>,
-    geometric: Option<(&[f64], &[f64], &StereoPairGeometry, &GeometricFilterConfig)>,
+    geometric: Option<SweepFilterInputs<'_>>,
 ) -> Vec<(usize, usize, f64)> {
     if n1 == 0 || n2 == 0 {
         return Vec::new();
@@ -182,12 +216,14 @@ fn mutual_best_match_sweep_inner(
     let sorted_kpts2 = gather_rows(keypoints2, 2, sort_idx2.iter().copied());
     let sorted_descs2 = gather_rows(descriptors2, desc_len, sort_idx2.iter().copied());
 
-    let sorted_geometry = geometric.map(|(affines1, affines2, geom, config)| SortedGeometry {
-        affines1: gather_rows(affines1, 4, sort_idx1.iter().copied()),
-        affines2: gather_rows(affines2, 4, sort_idx2.iter().copied()),
-        geom,
-        geom_swapped: geom.swapped(),
-        config,
+    let sorted_geometry = geometric.map(|g| SortedGeometry {
+        positions1: gather_rows(g.positions1, 2, sort_idx1.iter().copied()),
+        positions2: gather_rows(g.positions2, 2, sort_idx2.iter().copied()),
+        affines1: gather_rows(g.affines1, 4, sort_idx1.iter().copied()),
+        affines2: gather_rows(g.affines2, 4, sort_idx2.iter().copied()),
+        geom: g.geom,
+        geom_swapped: g.geom.swapped(),
+        config: g.config,
     });
 
     // Forward matching: image1 -> image2
@@ -324,6 +360,8 @@ pub fn match_one_way_sweep_geometric(
         window_size,
         threshold,
         Some(&GeometricInputs {
+            positions1: sorted_kpts1,
+            positions2: sorted_kpts2,
             affines1: sorted_affines1,
             affines2: sorted_affines2,
             geom,
@@ -432,7 +470,14 @@ pub fn mutual_best_match_sweep_geometric(
         desc_len,
         window_size,
         threshold,
-        Some((affines1, affines2, geom, config)),
+        Some(SweepFilterInputs {
+            positions1: keypoints1,
+            positions2: keypoints2,
+            affines1,
+            affines2,
+            geom,
+            config,
+        }),
     )
 }
 

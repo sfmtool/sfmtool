@@ -122,7 +122,13 @@ pub fn match_one_way_sweep_geometric(/* … */) -> SweepMatches;
 ```
 
 The `mutual_best_match_sweep` pair takes keypoints that are already rectified
-(`match_image_pair` rectifies them) and does its own sorting. The polar pair
+(`match_image_pair` rectifies them) and does its own sorting. The geometric
+filter in `mutual_best_match_sweep_geometric` and
+`match_one_way_sweep_geometric` reads its positions from those same keypoints,
+so `geom` must describe the cameras the keypoints are pixel positions of.
+`match_image_pair` sorts by rectified keypoints but filters with the original
+cameras, so it does not call `mutual_best_match_sweep_geometric`; it calls the
+shared sweep body with the raw positions as separate filter positions. The polar pair
 takes raw pixel positions and the row-major fundamental matrix, and returns
 `None` when either epipole is at infinity, which is the caller's signal to use
 the rectified sweep instead. The one-way functions take features already sorted
@@ -203,7 +209,10 @@ their image by more than `rectification_margin` pixels, or at infinity.
 rotation equally between the two cameras, rotates both so the baseline is
 horizontal, and uses the average of the two intrinsic matrices as the new
 intrinsics. The keypoints are mapped through `K⁻¹`, the rectifying rotation and
-the new projection, and sorted by Y with X breaking ties.
+the new projection, and sorted by Y with X breaking ties. The rectified
+positions are only the sort key: the geometric filter's cameras are the
+original ones, so it reads each feature's raw position and affine shape, which
+travel through the Y sort with the descriptors.
 
 ### Polar path
 
@@ -245,7 +254,8 @@ the other image, and drops window candidates that disagree. It has two stages.
    the candidate's shape is at most `max_angle_difference` degrees. A
    zero-length column fails.
 2. **Size, when triangulation is reliable.** The ray angle between the two
-   features' unprojected rays is computed. If it is below
+   features' unprojected rays is computed, from their raw pixel positions on
+   both paths. If it is below
    `min_triangulation_angle` degrees, the depth is poorly determined and the
    candidate passes without a size test. Otherwise the pair is triangulated by
    DLT; a degenerate solution or a point behind either camera fails. The rotated

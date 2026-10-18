@@ -164,21 +164,28 @@ pub fn match_image_pair(
         rectification::rectify_points(positions2, n2, &k2_inv, &rect.r2_rect, &rect.p2);
 
     if use_geometric {
+        // The sweep sorts by the rectified positions, but `geom` holds the
+        // original cameras, so the filter reads the raw positions (and the
+        // affine shapes, which are also in raw pixels).
         let geom = StereoPairGeometry::new(k1, k2, r1, r2, t1, t2);
-        mutual_best_match_sweep_geometric(
+        sweep::mutual_best_match_sweep_inner(
             &rectified1,
             descriptors1,
             n1,
             &rectified2,
             descriptors2,
             n2,
-            affines1.unwrap(),
-            affines2.unwrap(),
             desc_len,
             window_size,
             threshold,
-            &geom,
-            geometric_config.unwrap(),
+            Some(sweep::SweepFilterInputs {
+                positions1,
+                positions2,
+                affines1: affines1.unwrap(),
+                affines2: affines2.unwrap(),
+                geom: &geom,
+                config: geometric_config.unwrap(),
+            }),
         )
     } else {
         mutual_best_match_sweep(
