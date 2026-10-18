@@ -838,8 +838,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           stage it is the refinement, which is what a reading is too. Nothing \
                           is dropped by a gate: a sighting that does not belong is turned out \
                           with set_bench_observation_verdict or by the thresholds, not deleted \
-                          from \
-                          the evidence. The fit ends by evaluating its own result, and the \
+                          from the evidence. The fit ends by evaluating its own result, and the \
                           track is then evaluated again like after any other change. Refused for a track stage with fewer than two \
                           in observations, which an evaluation permits. It runs on a worker \
                           thread, so a fit still going after 200 ms replies with running: true \
