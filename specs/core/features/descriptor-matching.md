@@ -79,7 +79,8 @@ pub fn match_image_pairs_batch(/* per-image arrays, indexed by pair */)
 the two poses, picks the polar sweep when either epipole lies inside its image
 grown by `rectification_margin` pixels on every side, and the rectified sweep
 otherwise. It returns `(index1, index2, distance)` for every mutual match, in
-the caller's original feature indices. A pair whose intrinsic matrix is
+the caller's original feature indices, sorted by `index1`; each `index1`
+appears at most once, so the order is the same from run to run. A pair whose intrinsic matrix is
 singular has no fundamental matrix and returns no matches. The geometric filter
 runs only when `affines1`, `affines2` and `geometric_config` are all `Some`.
 `match_image_pairs_batch` runs `match_image_pair` over a list of pairs in
@@ -131,7 +132,8 @@ cameras, so it does not call `mutual_best_match_sweep_geometric`; it calls the
 shared sweep body with the raw positions as separate filter positions. The
 polar pair takes raw pixel positions and the row-major fundamental matrix, and
 returns `None` when either epipole is at infinity, which is the caller's signal
-to use the rectified sweep instead. The one-way functions take features already sorted
+to use the rectified sweep instead. All four return their matches sorted by
+`index1`. The one-way functions take features already sorted
 by Y and return a map from sorted index in image 1 to `(sorted index in image
 2, distance)`; they are the single-direction step of the rectified sweep,
 exposed for tests and the bindings.
@@ -241,7 +243,9 @@ kept only when each feature is the other's nearest in its window. This rejects
 a match to a feature that is nearer to some other query, which is the role a
 ratio test would play, without needing a second-nearest distance. The returned
 distance is the forward one. Within a window, the first of several equally near
-candidates wins.
+candidates wins. Each direction's one-way matches are held in a `HashMap`,
+whose iteration order changes from run to run, so `window::mutual_matches`
+sorts the kept pairs by `index1` to make the output reproducible.
 
 ### Geometric filter
 

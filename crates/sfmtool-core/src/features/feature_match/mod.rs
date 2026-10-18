@@ -38,6 +38,9 @@ pub use sweep::{
 /// 4. If unsafe: runs polar sweep matching
 /// 5. Optionally applies geometric filtering
 ///
+/// Returns `(index1, index2, distance)` for every mutual match, in the
+/// caller's original feature indices, sorted by `index1`.
+///
 /// **Convention.** This pipeline is pixel-space `K`-matrix algebra
 /// throughout (F, rectification homographies, epipolar filters), so the
 /// poses must be in the COLMAP/OpenCV **optical** camera convention

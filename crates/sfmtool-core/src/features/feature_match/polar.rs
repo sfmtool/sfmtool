@@ -566,7 +566,8 @@ fn polar_mutual_best_match_inner(
 ///
 /// # Returns
 ///
-/// `Some(Vec<(orig_idx1, orig_idx2, distance)>)` for mutual matches,
+/// `Some(Vec<(orig_idx1, orig_idx2, distance)>)` for mutual matches, sorted
+/// by `orig_idx1`,
 /// or `None` if either epipole is at infinity.
 #[allow(clippy::too_many_arguments)]
 pub fn polar_mutual_best_match(
@@ -623,7 +624,8 @@ pub fn polar_mutual_best_match(
 ///
 /// # Returns
 ///
-/// `Some(Vec<(orig_idx1, orig_idx2, distance)>)` for mutual matches,
+/// `Some(Vec<(orig_idx1, orig_idx2, distance)>)` for mutual matches, sorted
+/// by `orig_idx1`,
 /// or `None` if either epipole is at infinity.
 #[allow(clippy::too_many_arguments)]
 pub fn polar_mutual_best_match_geometric(

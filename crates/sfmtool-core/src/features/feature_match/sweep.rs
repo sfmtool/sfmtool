@@ -392,7 +392,7 @@ pub fn match_one_way_sweep_geometric(
 /// # Returns
 ///
 /// `Vec<(orig_idx1, orig_idx2, distance)>` for every pair that is each
-/// other's best match.
+/// other's best match, sorted by `orig_idx1`.
 #[allow(clippy::too_many_arguments)]
 pub fn mutual_best_match_sweep(
     keypoints1: &[f64],
@@ -443,7 +443,7 @@ pub fn mutual_best_match_sweep(
 /// # Returns
 ///
 /// `Vec<(orig_idx1, orig_idx2, distance)>` for every pair that is each
-/// other's best match.
+/// other's best match, sorted by `orig_idx1`.
 #[allow(clippy::too_many_arguments)]
 pub fn mutual_best_match_sweep_geometric(
     keypoints1: &[f64],

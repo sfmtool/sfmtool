@@ -124,6 +124,12 @@ impl WindowMatcher {
 /// when the backward match of its image-2 feature is the image-1 feature it
 /// came from; it is reported with the forward distance, its indices mapped
 /// back through `original1` and `original2`.
+///
+/// The pairs are sorted by their image-1 index, so the output does not depend
+/// on the order the maps iterate in, which `HashMap`'s random hasher changes
+/// from run to run. The sort has no ties: `forward` has one entry per sorted
+/// image-1 index and `original1` is a permutation, so each image-1 index
+/// appears at most once.
 pub(super) fn mutual_matches(
     forward: &HashMap<usize, (usize, f64)>,
     backward: &HashMap<usize, (usize, f64)>,
@@ -138,5 +144,9 @@ pub(super) fn mutual_matches(
             }
         }
     }
+    mutual.sort_unstable_by_key(|&(idx1, _, _)| idx1);
     mutual
 }
+
+#[cfg(test)]
+mod tests;
