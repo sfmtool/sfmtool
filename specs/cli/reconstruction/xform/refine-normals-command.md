@@ -106,19 +106,19 @@ long positional tuple.)
 
 ### `key=value` modifiers
 
-Every key except `quality` and `bitmaps` is forwarded to
-`PatchCloud.refine_normals`, with `confidence` passed as `compute_confidence`.
-`RefineNormalsTransform.__init__` states a default for each of these keys and
-passes every one to the binding explicitly, because the transform uses some of
-the values itself: `resolution` and `sampler` for the bitmap render and the
-observation readings after the refinement, `confidence` for the summary, and a
-`quality` preset sets `cache` and `cache_supersample`. Each of those defaults
-equals the binding's own default, which the "Default" column lists, and
+`quality` is not passed to `PatchCloud.refine_normals`; every other key is,
+`confidence` as `compute_confidence`, `bitmaps` as `render_bitmaps`, and the
+rest under their own names. `RefineNormalsTransform.__init__` states a default
+for each key and passes every forwarded one to the binding explicitly, because
+the transform uses some of the values itself: `resolution` and `sampler` for
+the bitmap render and the observation readings after the refinement,
+`confidence` for the summary, and a `quality` preset sets `cache` and
+`cache_supersample`. Each of those defaults except `bitmaps` equals the
+binding's own default, which the "Default" column lists, and
 `test_forwarded_defaults_match_the_binding` in
 [`tests/xform/test_refine_normals.py`](../../../../tests/xform/test_refine_normals.py)
-fails if one of them differs from the binding's signature. `bitmaps` is passed
-as `render_bitmaps`; it defaults to `true` here, while the binding's default is
-`false`.
+fails if one of them differs from the binding's signature. `bitmaps` defaults
+to `true` here, while the binding's `render_bitmaps` defaults to `false`.
 
 | Key                 | Default         | Forwards to                       |
 |---------------------|-----------------|-----------------------------------|

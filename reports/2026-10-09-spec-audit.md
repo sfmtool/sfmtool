@@ -652,7 +652,9 @@ path `formats/cluster-selection.md`.
 2. **Spec statements that would make a caller act wrongly:**
    - `refine-normals-command.md:108-110` says the CLI "re-specifies nothing"
      and "cannot drift"; the transform restates all 16 defaults.
+
      > _Status (2026-10-17): **Done** — the spec and class docstring now say the defaults are restated, and a test pins them to the binding's signature, branch `fix-round-10-refine-normals-defaults`._
+
    - `editable-track.md`'s Python section says the bindings mirror the Rust
      names and shapes; two names differ, eight steps are unbound, and
      `reference_observation` is `None` after `set_reference`. Two of its
