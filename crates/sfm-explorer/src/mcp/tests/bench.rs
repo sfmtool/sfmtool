@@ -146,7 +146,7 @@ fn a_cluster_an_observation_and_a_verdict_round_trip_through_get_bench_track() {
     call(
         &mut state,
         &mut viewer,
-        "set_bench_track_verdict",
+        "set_bench_observation_verdict",
         json!({
             "reconstruction_label": "run_a",
             "observation": observation,
@@ -187,11 +187,10 @@ fn a_cluster_an_observation_and_a_verdict_round_trip_through_get_bench_track() {
     let unpinned = call(
         &mut state,
         &mut viewer,
-        "set_bench_track_verdict",
+        "unpin_bench_observations",
         json!({
             "reconstruction_label": "run_a",
             "observation": observation,
-            "verdict": "unpin",
         }),
     );
     assert_eq!(unpinned["verdict"], json!("out"), "{unpinned}");
@@ -499,11 +498,10 @@ fn the_patch_tools_slide_resize_and_turn_and_each_is_one_version() {
     call(
         &mut state,
         &mut viewer,
-        "set_bench_track_verdict",
+        "unpin_bench_observations",
         json!({
             "reconstruction_label": "run_a",
             "observations": "all",
-            "verdict": "unpin",
         }),
     );
     let one = call(
@@ -1481,7 +1479,7 @@ fn an_added_observation_commits_at_its_pixel_without_a_fit() {
     call(
         &mut state,
         &mut viewer,
-        "set_bench_track_verdict",
+        "set_bench_observation_verdict",
         json!({
             "reconstruction_label": "run_a",
             "observation": candidate,
@@ -2312,7 +2310,7 @@ fn the_bench_refuses_in_its_own_words() {
     let unknown = refused_call(
         &mut state,
         &mut viewer,
-        "set_bench_track_verdict",
+        "set_bench_observation_verdict",
         json!({
             "reconstruction_label": "run_a",
             "track": "nothing-is-called-this",
@@ -2328,7 +2326,7 @@ fn the_bench_refuses_in_its_own_words() {
     let past_the_end = refused_call(
         &mut state,
         &mut viewer,
-        "set_bench_track_verdict",
+        "set_bench_observation_verdict",
         json!({ "reconstruction_label": "run_a", "observation": 9, "verdict": "out" }),
     );
     assert!(
@@ -2842,7 +2840,7 @@ fn set_bench_track_reference_renders_the_bitmap_from_the_row() {
     call(
         &mut state,
         &mut viewer,
-        "set_bench_track_verdict",
+        "set_bench_observation_verdict",
         json!({ "reconstruction_label": "run_a", "observation": out, "verdict": "out" }),
     );
     let error = refused_call(
@@ -3055,7 +3053,7 @@ fn the_observation_count_follows_the_version() {
     call(
         &mut state,
         &mut viewer,
-        "set_bench_track_verdict",
+        "set_bench_observation_verdict",
         json!({ "reconstruction_label": "run_a", "observation": rows - 1, "verdict": "out" }),
     );
     call(
@@ -3642,7 +3640,7 @@ fn the_selection_survives_a_step_and_is_cleared_by_an_undo() {
     call(
         &mut state,
         &mut viewer,
-        "set_bench_track_verdict",
+        "set_bench_observation_verdict",
         json!({ "reconstruction_label": "run_a", "observation": 0, "verdict": "out" }),
     );
     assert_eq!(selected(&mut state, &mut viewer, &item), json!([1]));
@@ -3787,7 +3785,7 @@ fn set_view_looks_through_a_bench_observation() {
 }
 
 /// An unpin names one observation, a list of them, or `"all"`, and each is one
-/// version; `in` and `out` name one observation only.
+/// version; a verdict is set `in` or `out` on one observation only.
 #[test]
 fn an_unpin_names_a_list_of_observations_or_all_of_them() {
     let (mut state, mut viewer) = benchable();
@@ -3814,11 +3812,10 @@ fn an_unpin_names_a_list_of_observations_or_all_of_them() {
     let listed = call(
         &mut state,
         &mut viewer,
-        "set_bench_track_verdict",
+        "unpin_bench_observations",
         json!({
             "reconstruction_label": "run_a",
             "observations": [0, 1],
-            "verdict": "unpin",
         }),
     );
     assert_eq!(listed["item"], json!(item), "{listed}");
@@ -3843,11 +3840,10 @@ fn an_unpin_names_a_list_of_observations_or_all_of_them() {
     let all = call(
         &mut state,
         &mut viewer,
-        "set_bench_track_verdict",
+        "unpin_bench_observations",
         json!({
             "reconstruction_label": "run_a",
             "observations": "all",
-            "verdict": "unpin",
         }),
     );
     assert_eq!(all["changed"], json!(true), "{all}");
@@ -3884,48 +3880,62 @@ fn an_unpin_names_a_list_of_observations_or_all_of_them() {
     let again = call(
         &mut state,
         &mut viewer,
-        "set_bench_track_verdict",
+        "unpin_bench_observations",
         json!({
             "reconstruction_label": "run_a",
             "observations": "all",
-            "verdict": "unpin",
         }),
     );
     assert_eq!(again["changed"], json!(false), "{again}");
     assert_eq!(version_count(&state), before + 2);
 
-    // in and out rule on one observation at a time.
+    // A verdict is set on one observation at a time, and is in or out.
     let several = refused_call(
         &mut state,
         &mut viewer,
-        "set_bench_track_verdict",
+        "set_bench_observation_verdict",
         json!({
             "reconstruction_label": "run_a",
             "observations": [0, 1],
             "verdict": "in",
         }),
     );
-    assert!(several.0.contains("only to pin or unpin them"), "{several}");
+    assert!(
+        several.0.contains("has no argument \"observations\""),
+        "{several}"
+    );
+    let pin_word = refused_call(
+        &mut state,
+        &mut viewer,
+        "set_bench_observation_verdict",
+        json!({ "reconstruction_label": "run_a", "observation": 0, "verdict": "unpin" }),
+    );
+    assert!(pin_word.0.contains("it is in or out"), "{pin_word}");
+    let neither = refused_call(
+        &mut state,
+        &mut viewer,
+        "unpin_bench_observations",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    assert!(neither.0.contains("needs observation"), "{neither}");
     let both = refused_call(
         &mut state,
         &mut viewer,
-        "set_bench_track_verdict",
+        "unpin_bench_observations",
         json!({
             "reconstruction_label": "run_a",
             "observation": 0,
             "observations": "all",
-            "verdict": "unpin",
         }),
     );
     assert!(both.0.contains("not both"), "{both}");
     let past = refused_call(
         &mut state,
         &mut viewer,
-        "set_bench_track_verdict",
+        "unpin_bench_observations",
         json!({
             "reconstruction_label": "run_a",
             "observations": [0, 99],
-            "verdict": "unpin",
         }),
     );
     assert!(past.0.contains("no observation 99"), "{past}");
@@ -3952,26 +3962,28 @@ fn a_pin_names_a_list_of_observations_or_all_of_them_and_keeps_their_verdicts() 
             .map(|row| (row["verdict"].clone(), row["pinned"] == json!(true)))
             .collect::<Vec<_>>()
     };
-    let verdict = |state: &mut AppState, viewer: &mut Viewer3D, body: Value| {
+    let step = |state: &mut AppState, viewer: &mut Viewer3D, tool: &str, body: Value| {
         let mut args = json!({ "reconstruction_label": "run_a" });
         for (key, value) in body.as_object().expect("an object") {
             args[key] = value.clone();
         }
-        call(state, viewer, "set_bench_track_verdict", args)
+        call(state, viewer, tool, args)
     };
-    verdict(
+    step(
         &mut state,
         &mut viewer,
-        json!({ "observations": "all", "verdict": "unpin" }),
+        "unpin_bench_observations",
+        json!({ "observations": "all" }),
     );
     let unpinned = rows(&mut state, &mut viewer);
     assert!(unpinned.iter().all(|(_, p)| !p), "{unpinned:?}");
 
     let before = version_count(&state);
-    let one = verdict(
+    let one = step(
         &mut state,
         &mut viewer,
-        json!({ "observation": 0, "verdict": "pin" }),
+        "pin_bench_observations",
+        json!({ "observation": 0 }),
     );
     assert_eq!(one["item"], json!(item), "{one}");
     assert_eq!(one["changed"], json!(true), "{one}");
@@ -3980,10 +3992,11 @@ fn a_pin_names_a_list_of_observations_or_all_of_them_and_keeps_their_verdicts() 
     assert_eq!(one["verdict"], unpinned[0].0, "{one}");
     assert_eq!(version_count(&state), before + 1);
 
-    let listed = verdict(
+    let listed = step(
         &mut state,
         &mut viewer,
-        json!({ "observations": [0, 1], "verdict": "pin" }),
+        "pin_bench_observations",
+        json!({ "observations": [0, 1] }),
     );
     assert_eq!(listed["changed"], json!(true), "{listed}");
     let named = listed["observations"]
@@ -4000,10 +4013,11 @@ fn a_pin_names_a_list_of_observations_or_all_of_them_and_keeps_their_verdicts() 
     );
     assert_eq!(version_count(&state), before + 2);
 
-    let all = verdict(
+    let all = step(
         &mut state,
         &mut viewer,
-        json!({ "observations": "all", "verdict": "pin" }),
+        "pin_bench_observations",
+        json!({ "observations": "all" }),
     );
     assert_eq!(all["changed"], json!(true), "{all}");
     assert_eq!(version_count(&state), before + 3);
@@ -4016,10 +4030,11 @@ fn a_pin_names_a_list_of_observations_or_all_of_them_and_keeps_their_verdicts() 
     );
 
     // Everything is pinned now, so another pin of all is no version.
-    let again = verdict(
+    let again = step(
         &mut state,
         &mut viewer,
-        json!({ "observations": "all", "verdict": "pin" }),
+        "pin_bench_observations",
+        json!({ "observations": "all" }),
     );
     assert_eq!(again["changed"], json!(false), "{again}");
     assert_eq!(version_count(&state), before + 3);
@@ -4027,11 +4042,10 @@ fn a_pin_names_a_list_of_observations_or_all_of_them_and_keeps_their_verdicts() 
     let past = refused_call(
         &mut state,
         &mut viewer,
-        "set_bench_track_verdict",
+        "pin_bench_observations",
         json!({
             "reconstruction_label": "run_a",
             "observations": [0, 99],
-            "verdict": "pin",
         }),
     );
     assert!(past.0.contains("no observation 99"), "{past}");
@@ -4264,7 +4278,7 @@ fn a_sift_files_bench_is_view_only_until_converted_and_rebenched() {
             json!({ "reconstruction_label": "run_a", "stage": "track" }),
         ),
         (
-            "set_bench_track_verdict",
+            "set_bench_observation_verdict",
             json!({ "reconstruction_label": "run_a", "observation": 0, "verdict": "out" }),
         ),
         (
@@ -4382,7 +4396,7 @@ fn a_sift_files_bench_is_view_only_until_converted_and_rebenched() {
     call(
         &mut state,
         &mut viewer,
-        "set_bench_track_verdict",
+        "set_bench_observation_verdict",
         json!({ "reconstruction_label": "run_a", "observation": 0, "verdict": "out" }),
     );
     assert_eq!(version_count(&state), versions + 2);
@@ -4434,7 +4448,7 @@ fn edits_made_between_the_conversion_and_the_rebench_survive_it() {
     call(
         &mut state,
         &mut viewer,
-        "set_bench_track_verdict",
+        "set_bench_observation_verdict",
         json!({ "reconstruction_label": "run_a", "observation": 0, "verdict": "out" }),
     );
     call(

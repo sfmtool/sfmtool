@@ -113,8 +113,8 @@ place.
 
 ## The tool surface
 
-Ninety-five tools. Seventeen read -- sixteen that answer with JSON, and
-`screenshot`, which closes the loop by handing back a picture -- seventy-one
+Ninety-seven tools. Seventeen read -- sixteen that answer with JSON, and
+`screenshot`, which closes the loop by handing back a picture -- seventy-three
 write, six send input, and one writes a file. `get_widgets` and the six input
 tools, `click`, `hover`, `drag`, `scroll`, `press_key` and `type_text`, read
 and press the viewer's widgets the way a person's eyes, mouse and keyboard do
@@ -194,7 +194,9 @@ and press the viewer's widgets the way a person's eyes, mouse and keyboard do
 | `tilt_bench_patch` | write | Turn the patch to face a new outward normal, no further than its observations can see |
 | `spin_bench_patch` | write | Turn the patch about its own outward normal |
 | `spin_bench_shape` | write | Turn one cluster sighting's parallelogram in its image's pixels |
-| `set_bench_track_verdict` | write | Rule on one observation by hand, in or out, which pins it; `pin`, which pins one observation, a list of them or `"all"` at the verdicts they have; or `unpin`, which hands them back to the thresholds; each one version |
+| `set_bench_observation_verdict` | write | Rule on one observation by hand, in or out, which pins it |
+| `pin_bench_observations` | write | Pin one observation, a list of them or `"all"` at the verdicts they have, moving none, as one version |
+| `unpin_bench_observations` | write | Clear the pins on one observation, a list of them or `"all"` and hand their verdicts back to the thresholds, as one version |
 | `set_bench_track_reference` | write | Make one observation the track's reference, the row its patch bitmap is rendered from, and pin it: Track View's *Set as reference* |
 | `apply_bench_track_thresholds` | write | Set a track's bars and paint the verdicts they propose; Track View's threshold boxes are this step on their release |
 | `split_bench_track` | write | Move some observations onto a second track beside this one |
@@ -219,7 +221,7 @@ and press the viewer's widgets the way a person's eyes, mouse and keyboard do
 | `type_text` | input | Type a string into the focused text input, or into one named by its widget id |
 
 Every tool is annotated: the sixteen reads and `screenshot` carry
-`readOnlyHint: true`, the seventy-one writes `destructiveHint: false` (none of
+`readOnlyHint: true`, the seventy-three writes `destructiveHint: false` (none of
 them touches a file on disk: `close_reconstruction` unloads, it does not
 delete; `set_window_layout` changes the window and the dock, not the layout file
 the menu saves; an **edit** makes a new version of a loaded value, which the
@@ -4044,7 +4046,7 @@ image of which carries a pose projects nothing.
 
 ### The bench family
 
-Thirty-four tools that read and work the **bench** beside a node
+Thirty-six tools that read and work the **bench** beside a node
 ([bench.md](bench.md)): the place where a track is held and judged before it is
 written into the reconstruction. Every one of them is one `AppState` call from
 `crate::bench` -- the same call a Track View gesture or the Image
@@ -4111,19 +4113,24 @@ the same reason: a commit selects the point it wrote
 ([edits/commit-track.md](edits/commit-track.md)), which is where the call left
 the viewer looking rather than what the call did.
 
-**A pin or an unpin names one observation or several.**
-`set_bench_track_verdict` with `"verdict": "unpin"` takes `observation`, one
-index, or in its place `observations`, a list of indexes or `"all"`, and hands
-every pinned one of them back to the thresholds in one step (core's
-`unpin_verdicts`), so the bars decide them together and the history gains one
-version. `"verdict": "pin"` takes the same forms and pins every named row that
-is not pinned at the verdict it has now, moving none, in one step (core's
+**A verdict is set on one observation; a pin or an unpin names one or
+several.** The three tools are core's three verdict steps.
+`set_bench_observation_verdict` takes `observation` and `verdict`, `in` or
+`out`, and sets that row's verdict by hand, which pins it (core's
+`set_verdict`); turning a row `in` while another row of the same image is `in`
+is refused. `unpin_bench_observations` takes `observation`, one index, or in
+its place `observations`, a list of indexes or `"all"`, and hands every pinned
+one of them back to the thresholds in one step (core's `unpin_verdicts`), so
+the bars decide them together and the history gains one version.
+`pin_bench_observations` takes the same forms and pins every named row that is
+not pinned at the verdict it has now, moving none, in one step (core's
 `pin_verdicts`); it is what Track View's *Keep* heading pin does when no row is
-pinned. The reply to either then carries `observations`, one
-`{observation, verdict, pinned}` entry per named row, where the single form
-carries `observation`, `verdict` and `pinned` as before. `in` and `out` rule on
-one observation at a time; `observations` with either is refused, as is a call
-carrying both `observation` and `observations`.
+pinned. A pin or an unpin takes exactly one of `observation` and
+`observations`: a call carrying both, or neither, is refused. The reply to
+`set_bench_observation_verdict`, and to a pin or an unpin that names its row
+by `observation`, carries `observation`, `verdict` and `pinned`, the row's
+verdict and pin afterwards; a pin or an unpin by `observations` carries
+`observations`, one `{observation, verdict, pinned}` entry per named row.
 
 **`set_bench_track_reference` makes one row the reference.** It takes
 `observation` and is Track View's *Set as reference* (`AppState::set_bench_reference`,
@@ -4139,7 +4146,7 @@ has been rendered, so it can name a row that `get_bench_track` showed as
 dropped the bitmap and kept the reference). It is refused at the cluster
 stage, for an `out` row and for a row with no keypoint; a call on the
 reference the track holds on a pinned row has no effect. Unpinning the
-reference's row with `set_bench_track_verdict` hands the reference back to the
+reference's row with `unpin_bench_observations` hands the reference back to the
 reference-view rule's pick at the next render; where the rule picks another
 row, the unpin clears every row's score and keeps the bitmap until the render
 replaces it, its report ends `waiting for the bitmap to be rendered from
@@ -4149,7 +4156,7 @@ goes with it and the report ends the same way. The live evaluation logs `Evaluat
 bars turned N in and M out` where its repaint moves verdicts.
 
 **A step that had no effect answers successfully, with `changed: false`.**
-Setting the verdict an observation already has, unpinning rows none of which is
+Setting the verdict a pinned observation already has, unpinning rows none of which is
 pinned, pinning rows all of which are pinned already, dragging the patch to the pixel
 it already sits under, painting the verdicts the track already carries,
 committing a track the point it wrote already holds: the
@@ -4569,7 +4576,7 @@ walk is accepted with `sight_bench_observation`**, passing `walked_to` as the
 the observation and drops the measurements read at the seed. No tool of its own
 carries it, because what it writes is exactly what that tool writes.
 
-**Eight of the thirty-four are the patch a track is**, and they are the
+**Eight of the thirty-six are the patch a track is**, and they are the
 wire's half of the handles the two panels offer
 ([multi-panel-image-browser.md](multi-panel-image-browser.md) § "The bench
 layer"). **Each is named for the part it acts on** -- the patch, one sighting,
@@ -4685,7 +4692,7 @@ creates one, which is what it must do; otherwise the second commit would delete
 what the first wrote. The copy is the focused item and the reply names it, as a
 split's does.
 
-**Four of the thirty-four are about the index files**, the node's SIFT index and
+**Four of the thirty-six are about the index files**, the node's SIFT index and
 its cluster patches, which are the node's rather than any track's:
 `open_index_files` opens both, from the node's own paths or from a
 `sift_index_path` and a `cluster_patches_path` of the caller's;
@@ -5743,7 +5750,7 @@ where a test hands no host over.
   and the panel list in the prose above are asserted against `catalog()` and
   `Tab::ALL`, because a number written out in words is the first thing to go
   stale.
-- **The catalog is ninety-five tools**, seventeen of them reads, six of the
+- **The catalog is ninety-seven tools**, seventeen of them reads, six of the
   `Input` kind and one of the `Save` kind, those seven carrying
   `destructiveHint: true`;
   `set_window_layout`'s schema advertises `sfm_explorer_layout`, `window` and

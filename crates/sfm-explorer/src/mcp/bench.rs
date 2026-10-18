@@ -31,7 +31,8 @@
 
 use serde_json::{json, Value};
 use sfmtool_core::bench::{
-    Bench, Edge, EditableTrack, Observation, Provenance, Stage, StageKind, Thresholds, Viewpoint,
+    Bench, Edge, EditableTrack, Observation, Provenance, Stage, StageKind, Thresholds, Verdict,
+    Viewpoint,
 };
 use sfmtool_core::patch::reference_view::ReferenceStanding;
 use sfmtool_core::patch::self_similarity::{
@@ -40,8 +41,8 @@ use sfmtool_core::patch::self_similarity::{
 
 use super::{
     edit, resolve_camera_image, resolve_point_in, resolve_reconstruction, BackgroundReply,
-    CameraImageSel, Deferred, JsonReply, Outcome, ResizeTarget, ThresholdChange, ToolError,
-    TranslateTarget, VerdictAction, VerdictRows, ViewpointSel,
+    CameraImageSel, Deferred, JsonReply, Outcome, PinRows, ResizeTarget, ThresholdChange,
+    ToolError, TranslateTarget, ViewpointSel,
 };
 use crate::bench::{PatchEdit, Seed};
 use crate::scene::ReconId;
@@ -1024,55 +1025,85 @@ fn stage_must_be(
     )))
 }
 
-pub(super) fn set_bench_track_verdict(
+/// `set_bench_observation_verdict`: one observation set `in` or `out` by hand,
+/// which pins it. The reply carries the verdict and the pin it has afterwards.
+pub(super) fn set_bench_observation_verdict(
     state: &mut AppState,
     label: &str,
     named: Option<&str>,
-    rows: VerdictRows,
-    verdict: VerdictAction,
+    observation: usize,
+    verdict: Verdict,
+) -> JsonReply {
+    let (id, item) = edit_target(state, label, named)?;
+    let reply = edit::edited(state, id, |state| {
+        state.set_bench_verdict(id, &item, observation, verdict)
+    })?;
+    let mut reply = with_item(reply, &item);
+    insert_row_verdict(state, id, &item, &mut reply, observation);
+    Ok(reply)
+}
+
+/// `pin_bench_observations`: the named rows pinned at the verdicts they have,
+/// moving none, as one version (core's `pin_verdicts`).
+pub(super) fn pin_bench_observations(
+    state: &mut AppState,
+    label: &str,
+    named: Option<&str>,
+    rows: PinRows,
+) -> JsonReply {
+    pin_step(state, label, named, rows, true)
+}
+
+/// `unpin_bench_observations`: the pins of the named rows cleared and the bars
+/// left to decide them together, as one version (core's `unpin_verdicts`).
+pub(super) fn unpin_bench_observations(
+    state: &mut AppState,
+    label: &str,
+    named: Option<&str>,
+    rows: PinRows,
+) -> JsonReply {
+    pin_step(state, label, named, rows, false)
+}
+
+/// The pin or the unpin of the named rows. The reply carries the verdict and
+/// the pin each named row has afterwards, which for an unpin is what the
+/// thresholds gave it and for a pin what it had: in the single form for one
+/// row named by `observation`, and as one entry per row otherwise.
+fn pin_step(
+    state: &mut AppState,
+    label: &str,
+    named: Option<&str>,
+    rows: PinRows,
+    pin: bool,
 ) -> JsonReply {
     let (id, item) = edit_target(state, label, named)?;
     let observations = match &rows {
-        VerdictRows::One(observation) => vec![*observation],
-        VerdictRows::Listed(listed) => listed.clone(),
-        VerdictRows::All => {
+        PinRows::One(observation) => vec![*observation],
+        PinRows::Listed(listed) => listed.clone(),
+        PinRows::All => {
             let count = state
                 .bench_track(id, &item)
                 .map_or(0, |track| track.observations.len());
             (0..count).collect()
         }
     };
-    let reply = edit::edited(state, id, |state| match (verdict, &rows) {
-        (VerdictAction::Set(verdict), VerdictRows::One(observation)) => {
-            state.set_bench_verdict(id, &item, *observation, verdict)
+    let reply = edit::edited(state, id, |state| {
+        if pin {
+            state.pin_bench_verdicts(id, &item, &observations)
+        } else {
+            state.unpin_bench_verdicts(id, &item, &observations)
         }
-        // The parse lets several rows through only for a pin or an unpin.
-        (VerdictAction::Set(_), _) => Err("Set in or out one observation at a time.".to_string()),
-        (VerdictAction::Pin, _) => state.pin_bench_verdicts(id, &item, &observations),
-        (VerdictAction::Unpin, _) => state.unpin_bench_verdicts(id, &item, &observations),
     })?;
-    // The verdict and the pin each named observation carries now, which for
-    // an unpin is what the thresholds gave it, and for a pin what it had.
-    let now = |observation: usize| {
-        state
-            .bench_track(id, &item)
-            .and_then(|track| track.observations.get(observation))
-            .map(|o| (o.verdict, o.pinned))
-    };
     let mut reply = with_item(reply, &item);
     match rows {
-        VerdictRows::One(observation) => {
-            insert(&mut reply, "observation", json!(observation));
-            if let Some((verdict, pinned)) = now(observation) {
-                insert(&mut reply, "verdict", json!(verdict.to_string()));
-                insert(&mut reply, "pinned", json!(pinned));
-            }
+        PinRows::One(observation) => {
+            insert_row_verdict(state, id, &item, &mut reply, observation);
         }
-        VerdictRows::Listed(_) | VerdictRows::All => {
+        PinRows::Listed(_) | PinRows::All => {
             let rows: Vec<Value> = observations
                 .iter()
                 .filter_map(|&observation| {
-                    now(observation).map(|(verdict, pinned)| {
+                    row_verdict(state, id, &item, observation).map(|(verdict, pinned)| {
                         json!({
                             "observation": observation,
                             "verdict": verdict.to_string(),
@@ -1085,6 +1116,35 @@ pub(super) fn set_bench_track_verdict(
         }
     }
     Ok(reply)
+}
+
+/// The verdict and the pin one observation of the track carries now.
+fn row_verdict(
+    state: &AppState,
+    id: ReconId,
+    item: &str,
+    observation: usize,
+) -> Option<(Verdict, bool)> {
+    state
+        .bench_track(id, item)
+        .and_then(|track| track.observations.get(observation))
+        .map(|o| (o.verdict, o.pinned))
+}
+
+/// The single form of a verdict reply: `observation`, and the `verdict` and
+/// `pinned` it carries now.
+fn insert_row_verdict(
+    state: &AppState,
+    id: ReconId,
+    item: &str,
+    reply: &mut Value,
+    observation: usize,
+) {
+    insert(reply, "observation", json!(observation));
+    if let Some((verdict, pinned)) = row_verdict(state, id, item, observation) {
+        insert(reply, "verdict", json!(verdict.to_string()));
+        insert(reply, "pinned", json!(pinned));
+    }
 }
 
 /// `set_bench_track_reference`: Track View's *Set as reference*, one row made

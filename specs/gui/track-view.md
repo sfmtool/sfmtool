@@ -1022,7 +1022,7 @@ harder to read than one that stays as it is shown. It is panel state for
 the session, one for the viewer, and is not saved with the layout. A sequence
 is session state on `AppState` (`surface_tiling`), not part of any version. The
 wire has no copy of the box, as it has none of *Lock*: an agent calls
-`duplicate_bench_item`, `set_bench_track_verdict`, the patch tools,
+`duplicate_bench_item`, `set_bench_observation_verdict`, the patch tools,
 `fit_bench_track`, `search_bench_track_geometry`, `fit_bench_track_normal` and
 `commit_bench_track` in the order it chooses, and can tick the box with `click`
 like any other widget. Dropping a copy's `out` rows is the one step of the mode

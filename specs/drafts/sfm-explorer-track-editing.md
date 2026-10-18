@@ -695,7 +695,7 @@ out from the rest:
 [`../gui/mcp-server.md`](../gui/mcp-server.md) § "The bench family": the two
 creates with all three seed forms, the three item tools, the two reads, and the
 eight steps on a track (`add_bench_track_observation`,
-`set_bench_track_verdict`, `apply_bench_track_thresholds`,
+`set_bench_observation_verdict`, `apply_bench_track_thresholds`,
 `evaluate_bench_track`, `fit_bench_track`, `set_bench_track_stage`,
 `split_bench_track` and `commit_bench_track`). The two searches are built too:
 `search_bench_track_descriptors` against the SIFT index, and the sweep as
@@ -735,7 +735,7 @@ variant, since the history they walk already holds the bench steps, and
 // An editable track on it. "track" omitted means the active track.
 // add_bench_track_observation    { "track": "bull-nose", "camera_image": 4, "pixel": [142.0, 197.5] }
 // add_bench_track_observation    { "track": "bull-nose", "camera_image": 4, "feature": 847 }
-// set_bench_track_verdict        { "track": "bull-nose", "observation": 3, "verdict": "in" }
+// set_bench_observation_verdict  { "track": "bull-nose", "observation": 3, "verdict": "in" }
 // search_bench_track_descriptors { "track": "bull-nose", "observation": 0, "alpha": 0.8 }
 // sweep_bench_track_views        { "track": "bull-nose", "keypoint_search": true, "max_shift_px": 3.0 }
 // evaluate_bench_track           { "track": "bull-nose" }

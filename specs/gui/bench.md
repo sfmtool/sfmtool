@@ -917,7 +917,7 @@ the reference is on:
   reference, whatever the pins, and where the rule picks none that bitmap stays.
 - **An unpinned reference row hands it to the rule.** Unpinning the row
   (`AppState::unpin_bench_verdicts`, Track View's pin or *Unpin*, the wire's
-  `set_bench_track_verdict` with `unpin`) moves the reference to the rule's
+  `unpin_bench_observations`) moves the reference to the rule's
   pick at the next evaluation. Where the rule picks another row, the unpin
   clears every row's score against the bitmap and keeps the bitmap until the
   render replaces it, so the bars judge nothing in that step, and its Action Log row says so: `Handed IMG_0040.jpg
@@ -1439,8 +1439,10 @@ when the focused item was already what the call asked for.
 // get_bench_track              { "reconstruction_label": "bull" }
 // add_bench_track_observation  { "reconstruction_label": "bull", "track": "bull-nose",
 //                                "camera_image": 7, "pixel": [88.5, 210.0] }
-// set_bench_track_verdict      { "reconstruction_label": "bull", "observation": 3,
-//                                "verdict": "in" }
+// set_bench_observation_verdict { "reconstruction_label": "bull", "observation": 3,
+//                                 "verdict": "in" }
+// pin_bench_observations       { "reconstruction_label": "bull", "observations": [3, 5] }
+// unpin_bench_observations     { "reconstruction_label": "bull", "observations": "all" }
 //
 // The patch, named for the part each tool acts on: the patch itself, one
 // sighting, or a cluster sighting's parallelogram.

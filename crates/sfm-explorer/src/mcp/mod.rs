@@ -524,14 +524,26 @@ pub(crate) enum Command {
         /// Keypoint-frame units to that image's pixels.
         shape: [[f64; 2]; 2],
     },
-    SetBenchTrackVerdict {
+    /// Set one observation's verdict by hand, which pins it.
+    SetBenchObservationVerdict {
         reconstruction_label: String,
         track: Option<String>,
-        /// The observations the call rules on: one for `in` and `out`, and one,
-        /// several or all of them for a pin or an unpin.
-        rows: VerdictRows,
-        /// What the call does to them.
-        verdict: VerdictAction,
+        /// The observation's position in the track's list.
+        observation: usize,
+        verdict: sfmtool_core::bench::Verdict,
+    },
+    /// Pin the named observations at the verdicts they have, moving none.
+    PinBenchObservations {
+        reconstruction_label: String,
+        track: Option<String>,
+        rows: PinRows,
+    },
+    /// Clear the pins of the named observations and let the bars decide them
+    /// together.
+    UnpinBenchObservations {
+        reconstruction_label: String,
+        track: Option<String>,
+        rows: PinRows,
     },
     /// Make one observation the track's reference and pin it.
     SetBenchTrackReference {
@@ -885,25 +897,14 @@ pub(crate) enum TranslateTarget {
     },
 }
 
-/// What `set_bench_track_verdict` does to the observations it names: the
-/// wire's `verdict` word.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum VerdictAction {
-    /// `in` or `out`: set the verdict by hand, which pins it.
-    Set(sfmtool_core::bench::Verdict),
-    /// `pin`: pin the verdicts as they stand, moving none.
-    Pin,
-    /// `unpin`: clear the pins and let the bars decide the rows together.
-    Unpin,
-}
-
-/// Which observations `set_bench_track_verdict` names.
+/// Which observations `pin_bench_observations` and `unpin_bench_observations`
+/// name.
 ///
-/// `in` and `out` rule on one observation at a time, since each is a hand
-/// ruling on one sighting; a pin or an unpin may name several, or all of them,
-/// because it moves the pins of the rows together in one step.
+/// A pin or an unpin may name several rows, or all of them, because it moves
+/// their pins together in one step. One row named by `observation` is kept
+/// apart from a list of one, because the reply answers it in the single form.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum VerdictRows {
+pub(crate) enum PinRows {
     /// One observation, by its position in the track's list.
     One(usize),
     /// Several, by their positions.
@@ -1778,17 +1779,37 @@ pub(crate) fn apply_with_window(
             observation,
             shape,
         )),
-        Command::SetBenchTrackVerdict {
+        Command::SetBenchObservationVerdict {
+            reconstruction_label,
+            track,
+            observation,
+            verdict,
+        } => done(bench::set_bench_observation_verdict(
+            state,
+            &reconstruction_label,
+            track.as_deref(),
+            observation,
+            verdict,
+        )),
+        Command::PinBenchObservations {
             reconstruction_label,
             track,
             rows,
-            verdict,
-        } => done(bench::set_bench_track_verdict(
+        } => done(bench::pin_bench_observations(
             state,
             &reconstruction_label,
             track.as_deref(),
             rows,
-            verdict,
+        )),
+        Command::UnpinBenchObservations {
+            reconstruction_label,
+            track,
+            rows,
+        } => done(bench::unpin_bench_observations(
+            state,
+            &reconstruction_label,
+            track.as_deref(),
+            rows,
         )),
         Command::SetBenchTrackReference {
             reconstruction_label,

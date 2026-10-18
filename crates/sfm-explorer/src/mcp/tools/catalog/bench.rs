@@ -545,29 +545,47 @@ pub(super) fn specs() -> Vec<ToolSpec> {
             ),
         },
         ToolSpec {
-            name: "set_bench_track_verdict",
-            description: "Rule on one observation of a bench track by hand, in or out, pin \
-                          verdicts as they stand with pin, or hand verdicts back to the \
-                          thresholds with unpin. A verdict set in or out is pinned, which is what \
-                          leaves it alone when the thresholds are applied and when the track is \
-                          evaluated. pin pins each named row at the verdict it has now and moves \
-                          none. unpin clears the pins and lets the bars decide the rows together \
-                          from their measurements, best score first and one in per image. \
-                          Unpinning the row that holds the track's reference \
-                          (stage_data.reference_observation) also hands the reference to the \
-                          reference-view rule's pick at the next render. A bitmap that names \
-                          no row (reference_observation null with a bitmap, a point stored at \
-                          -1) is held by no pin, so unpinning hands nothing on there: the \
-                          evaluation renders it from the rule's pick whatever the pins, unless \
-                          the rule picks no row, where the mean stays. in and \
-                          out name one observation; pin and unpin name one with observation, or \
-                          several with observations, a list of indexes or \"all\", as one \
-                          version. A track cannot see one image twice, so turning an observation \
-                          in while another observation of the same image is in is refused. A \
-                          call that changes nothing, such as an unpin of rows none of which is \
-                          pinned or a pin of rows all pinned already, pushes no version. The \
-                          reply carries the verdict and the pin the observation has afterwards, \
-                          or for observations one entry per named row.",
+            name: "set_bench_observation_verdict",
+            description: "Rule on one observation of a bench track by hand, in or out. A \
+                          verdict set this way is pinned, which is what leaves it alone when \
+                          the thresholds are applied and when the track is evaluated; \
+                          unpin_bench_observations hands it back to the thresholds. A track \
+                          cannot see one image twice, so turning an observation in while \
+                          another observation of the same image is in is refused. A call that \
+                          changes nothing, setting the verdict a pinned observation already \
+                          has, pushes no version. The reply carries the verdict \
+                          and the pin the observation has afterwards.",
+            kind: Write,
+            schema: object(
+                &[("track", bench_track_schema())],
+                &[
+                    ("reconstruction_label", edited_label_schema()),
+                    ("observation", observation_schema()),
+                    (
+                        "verdict",
+                        json!({
+                            "type": "string",
+                            "enum": ["in", "out"],
+                            "description":
+                                "in: the observation belongs to the track, and a commit writes \
+                                 it. out: the track does not keep it; it stays in the list so \
+                                 the refusal is visible.",
+                        }),
+                    ),
+                ],
+            ),
+        },
+        ToolSpec {
+            name: "pin_bench_observations",
+            description: "Pin observations of a bench track at the verdicts they have now, \
+                          moving none, so the thresholds leave them alone when they are applied \
+                          and when the track is evaluated: Track View's pushpin on an unpinned \
+                          row, and the Keep heading's pin while no row is pinned. Name one row \
+                          with observation, or several with observations, a list of indexes or \
+                          \"all\", as one version; exactly one of the two. A call that changes \
+                          nothing, a pin of rows all pinned already, pushes no version. The \
+                          reply carries the verdict and the pin the observation has \
+                          afterwards, or for observations one entry per named row.",
             kind: Write,
             schema: object(
                 &[
@@ -575,38 +593,40 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                     ("observation", observation_schema()),
                     (
                         "observations",
-                        json!({
-                            "anyOf": [
-                                {
-                                    "type": "array",
-                                    "items": { "type": "integer", "minimum": 0 },
-                                },
-                                { "type": "string", "enum": ["all"] },
-                            ],
-                            "description":
-                                "Only with verdict pin or unpin, in place of observation: the \
-                                 observations to pin or to hand back to the thresholds, by \
-                                 their positions in get_bench_track's list, or \"all\" for \
-                                 every observation of the track.",
-                        }),
+                        pin_rows_schema("the observations to pin"),
                     ),
                 ],
+                &[("reconstruction_label", edited_label_schema())],
+            ),
+        },
+        ToolSpec {
+            name: "unpin_bench_observations",
+            description: "Clear the pins on observations of a bench track and hand their \
+                          verdicts back to the thresholds: the bars decide the rows together \
+                          from their measurements, best score first and one in per image. \
+                          Unpinning the row that holds the track's reference \
+                          (stage_data.reference_observation) also hands the reference to the \
+                          reference-view rule's pick at the next render. A bitmap that names \
+                          no row (reference_observation null with a bitmap, a point stored at \
+                          -1) is held by no pin, so unpinning hands nothing on there: the \
+                          evaluation renders it from the rule's pick whatever the pins, unless \
+                          the rule picks no row, where the mean stays. Name one row with \
+                          observation, or several with observations, a list of indexes or \
+                          \"all\", as one version; exactly one of the two. A call that changes \
+                          nothing, an unpin of rows none of which is pinned, pushes no version. \
+                          The reply carries the verdict and the pin the observation has \
+                          afterwards, or for observations one entry per named row.",
+            kind: Write,
+            schema: object(
                 &[
-                    ("reconstruction_label", edited_label_schema()),
+                    ("track", bench_track_schema()),
+                    ("observation", observation_schema()),
                     (
-                        "verdict",
-                        json!({
-                            "type": "string",
-                            "enum": ["in", "out", "pin", "unpin"],
-                            "description":
-                                "in: the observation belongs to the track, and a commit writes \
-                                 it. out: the track does not keep it; it stays in the list so \
-                                 the refusal is visible. pin: keep each verdict as it stands and \
-                                 pin it, so the thresholds leave it alone. unpin: clear the \
-                                 verdicts set by hand and take the ones the thresholds propose.",
-                        }),
+                        "observations",
+                        pin_rows_schema("the observations to hand back to the thresholds"),
                     ),
                 ],
+                &[("reconstruction_label", edited_label_schema())],
             ),
         },
         ToolSpec {
@@ -615,7 +635,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           the row its patch bitmap is rendered from, and pin it: Track View's \
                           row entry Set as reference. While the row stays pinned every render \
                           renders the bitmap from it, whichever row the reference-view rule \
-                          picks; unpinning it with set_bench_track_verdict hands the reference \
+                          picks; unpinning it with unpin_bench_observations hands the reference \
                           back to the rule. The bitmap the track held is dropped unless the row \
                           was the reference already, and the live evaluation that follows \
                           renders the bitmap from the row and scores every row against it, so \
@@ -817,7 +837,8 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           view's tile; at the cluster \
                           stage it is the refinement, which is what a reading is too. Nothing \
                           is dropped by a gate: a sighting that does not belong is turned out \
-                          with set_bench_track_verdict or by the thresholds, not deleted from \
+                          with set_bench_observation_verdict or by the thresholds, not deleted \
+                          from \
                           the evidence. The fit ends by evaluating its own result, and the \
                           track is then evaluated again like after any other change. Refused for a track stage with fewer than two \
                           in observations, which an evaluation permits. It runs on a worker \
@@ -1079,4 +1100,22 @@ pub(super) fn specs() -> Vec<ToolSpec> {
             schema: object(&[], &[("reconstruction_label", edited_label_schema())]),
         },
     ]
+}
+
+/// The `observations` argument of a pin or an unpin: a list of indexes or
+/// `"all"`, in place of `observation`.
+fn pin_rows_schema(what: &str) -> Value {
+    json!({
+        "anyOf": [
+            {
+                "type": "array",
+                "items": { "type": "integer", "minimum": 0 },
+            },
+            { "type": "string", "enum": ["all"] },
+        ],
+        "description": format!(
+            "In place of observation: {what}, by their positions in get_bench_track's \
+             list, or \"all\" for every observation of the track."
+        ),
+    })
 }

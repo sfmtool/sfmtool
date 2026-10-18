@@ -100,7 +100,9 @@ impl Command {
             Command::TiltBenchPatch { .. } => "tilt_bench_patch",
             Command::SightBenchObservation { .. } => "sight_bench_observation",
             Command::ShapeBenchObservation { .. } => "shape_bench_observation",
-            Command::SetBenchTrackVerdict { .. } => "set_bench_track_verdict",
+            Command::SetBenchObservationVerdict { .. } => "set_bench_observation_verdict",
+            Command::PinBenchObservations { .. } => "pin_bench_observations",
+            Command::UnpinBenchObservations { .. } => "unpin_bench_observations",
             Command::SetBenchTrackReference { .. } => "set_bench_track_reference",
             Command::ApplyBenchTrackThresholds { .. } => "apply_bench_track_thresholds",
             Command::SplitBenchTrack { .. } => "split_bench_track",
@@ -408,7 +410,9 @@ impl Command {
             | Command::TiltBenchPatch { .. }
             | Command::SightBenchObservation { .. }
             | Command::ShapeBenchObservation { .. }
-            | Command::SetBenchTrackVerdict { .. }
+            | Command::SetBenchObservationVerdict { .. }
+            | Command::PinBenchObservations { .. }
+            | Command::UnpinBenchObservations { .. }
             | Command::SetBenchTrackReference { .. }
             | Command::ApplyBenchTrackThresholds { .. }
             | Command::SplitBenchTrack { .. }

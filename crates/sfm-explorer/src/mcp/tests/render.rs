@@ -743,7 +743,7 @@ fn leave_one_in(state: &mut AppState, viewer: &mut Viewer3D) {
         call(
             state,
             viewer,
-            "set_bench_track_verdict",
+            "set_bench_observation_verdict",
             json!({
                 "reconstruction_label": "run_a",
                 "observation": observation,
@@ -975,7 +975,7 @@ fn a_history_move_keeps_the_photograph_and_the_point_selected() {
     call(
         &mut state,
         &mut viewer,
-        "set_bench_track_verdict",
+        "set_bench_observation_verdict",
         json!({ "reconstruction_label": "run_a", "observation": 1, "verdict": "out" }),
     );
 
@@ -1792,17 +1792,17 @@ fn a_bench_step_with_no_effect_pushes_nothing_and_says_so() {
     call(
         &mut state,
         &mut viewer,
-        "set_bench_track_verdict",
+        "unpin_bench_observations",
         json!({
             "reconstruction_label": "run_a", "track": item,
-            "observation": 0, "verdict": "unpin",
+            "observation": 0,
         }),
     );
     let verdict_call = |state: &mut _, viewer: &mut _| {
         call(
             state,
             viewer,
-            "set_bench_track_verdict",
+            "set_bench_observation_verdict",
             json!({
                 "reconstruction_label": "run_a", "track": item,
                 "observation": 0, "verdict": "in",

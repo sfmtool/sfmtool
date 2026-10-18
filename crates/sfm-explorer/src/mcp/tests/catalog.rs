@@ -312,12 +312,20 @@ fn representative_tool_calls() -> Vec<(&'static str, Value)> {
             }),
         ),
         (
-            "set_bench_track_verdict",
+            "set_bench_observation_verdict",
             json!({
                 "reconstruction_label": "alpha",
                 "observation": 0,
                 "verdict": "in",
             }),
+        ),
+        (
+            "pin_bench_observations",
+            json!({ "reconstruction_label": "alpha", "observations": [0, 1] }),
+        ),
+        (
+            "unpin_bench_observations",
+            json!({ "reconstruction_label": "alpha", "observations": "all" }),
         ),
         (
             "set_bench_track_reference",
@@ -1032,16 +1040,19 @@ fn argument_names(schema: &Value, out: &mut Vec<String>) {
 }
 
 /// The wire names retired by a clean break are refused rather than kept as
-/// aliases: `set_solo` is now `solo_reconstruction`, and the spins' `degrees`
-/// is now `angle_deg`.
+/// aliases: `set_solo` is now `solo_reconstruction`, `set_bench_track_verdict`
+/// is split into `set_bench_observation_verdict`, `pin_bench_observations` and
+/// `unpin_bench_observations`, and the spins' `degrees` is now `angle_deg`.
 #[test]
 fn the_retired_wire_names_are_refused() {
-    assert!(
-        tools::catalog().iter().all(|spec| spec.name != "set_solo"),
-        "set_solo is still advertised"
-    );
-    let error = tools::parse("set_solo", None).expect_err("an unknown tool");
-    assert!(error.0.contains("set_solo"), "{error}");
+    for retired in ["set_solo", "set_bench_track_verdict"] {
+        assert!(
+            tools::catalog().iter().all(|spec| spec.name != retired),
+            "{retired} is still advertised"
+        );
+        let error = tools::parse(retired, None).expect_err("an unknown tool");
+        assert!(error.0.contains(retired), "{error}");
+    }
 
     for (name, mut arguments) in [
         (
@@ -1139,15 +1150,15 @@ fn only_the_reads_are_annotated_read_only() {
             "get_widgets",
         ]
     );
-    // Sixteen JSON reads, the one read that hands back a picture, seventy-one
+    // Sixteen JSON reads, the one read that hands back a picture, seventy-three
     // writes, six input tools, and the one that writes a file.
-    assert_eq!(catalog.len(), 95, "the catalog has grown or shrunk");
+    assert_eq!(catalog.len(), 97, "the catalog has grown or shrunk");
     assert_eq!(
         catalog
             .iter()
             .filter(|spec| spec.kind == ToolKind::Write)
             .count(),
-        71
+        73
     );
     // One tool can overwrite a file by name, and six can press what a person
     // can press, File ▸ Save included; those seven are the ones annotated
