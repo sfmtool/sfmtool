@@ -144,7 +144,7 @@ ones that are not duplicates, the ones the bench takes, are `bench_order()`,
 in the order of their labels.
 
 **Why an existing point carries its index and not a track.** A point near the
-pixel is already a track with its own frame, bitmap and keypoints; rebuilding
+pixel is already a track with its own patch frame, bitmap and keypoints; rebuilding
 it from its sightings would give a second, worse copy. So a
 `NearbySource::Points` track carries `point` and no `track`, and the caller
 puts the point's own track on the bench, as *Edit on Bench* does

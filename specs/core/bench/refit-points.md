@@ -187,7 +187,7 @@ bench, *Fit* is pressed and *Commit* is pressed, and nothing else:
 
 1. **The track.** `bench::track_of_point` builds the point's track-stage
    `EditableTrack` the way `create_track` builds the one it puts on the bench:
-   its own frame, bitmap, colour, keypoints and stored readings, its stored
+   its own patch frame, bitmap, colour, keypoints and stored readings, its stored
    reference observation as the track's reference, and every observation `in`
    and **pinned**. Nothing is recomputed, and no bench or label is involved
    ([`editable-track.md`](editable-track.md) § "Putting a point on the bench").

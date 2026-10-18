@@ -75,7 +75,7 @@ fn same_transform(a: &Se3Transform, b: &Se3Transform, tolerance: f64) {
 // ── The four reframes ─────────────────────────────────────────────────────
 
 #[test]
-fn set_to_origin_puts_the_patchs_frame_on_the_worlds() {
+fn set_to_origin_puts_the_patch_coordinate_system_on_the_worlds() {
     let (mut state, id, label) = framed();
     state
         .reframe_on_patch(id, PatchReframe::SetToOrigin)

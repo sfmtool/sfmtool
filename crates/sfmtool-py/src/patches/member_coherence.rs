@@ -34,7 +34,7 @@ fn verdict_name(v: MemberVerdict) -> &'static str {
 #[pymethods]
 impl PyPatchCloud {
     /// Validate each point's track against itself: render every member's patch
-    /// through the point's own frame, correlate every **pair** of members, and
+    /// through the point's own patch frame, correlate every **pair** of members, and
     /// read a verdict off that matrix. See
     /// ``specs/core/patch/member-coherence-validation.md``.
     ///

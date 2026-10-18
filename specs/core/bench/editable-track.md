@@ -1999,7 +1999,7 @@ its reference in agreement.
 track-stage track from it with `track_of_point`, then puts it on the bench under
 a minted label. `track_of_point` is the track alone, with no bench and no label,
 which [`refit_points`](refit-points.md) builds for every point. The track is
-the point's own frame, bitmap with its reference
+the point's own patch frame, bitmap with its reference
 observation (read with or without a bitmap), colour and keypoints, its
 origin set to that point, and every observation `in` and **pinned**. The
 point's observations are ones a reconstruction already decided on, so they stand
