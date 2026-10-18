@@ -3928,3 +3928,30 @@ fn a_control_wheel_notch_zooms_as_far_as_a_plain_one() {
     let control = zoom_after(egui::Modifiers::COMMAND);
     assert!((control - plain).abs() < 1e-4, "{control} against {plain}");
 }
+
+/// A trackpad pinch still zooms the photograph by its factor. A macOS pinch
+/// reaches egui as `Event::Zoom` (winit's `PinchGesture` through
+/// `egui_winit`), which the panel reads through `platform::pinch_zoom_delta`.
+#[test]
+fn a_trackpad_pinch_zooms_the_photograph_by_its_factor() {
+    let node = demo_node("/runs/a.sfmr");
+    let image = pixels(400, 300);
+    let ctx = egui::Context::default();
+    let mut detail = ImageDetail::new();
+    frame(&mut detail, &ctx, &node, 0, &image, PANEL);
+    scroll_frame(&mut detail, &ctx, &node, &image, Vec::new());
+    assert_eq!(detail.zoom, 1.0);
+
+    scroll_frame(
+        &mut detail,
+        &ctx,
+        &node,
+        &image,
+        vec![egui::Event::Zoom(1.2)],
+    );
+    assert!(
+        (detail.zoom - 1.2).abs() < 1e-5,
+        "zoomed to {}",
+        detail.zoom
+    );
+}

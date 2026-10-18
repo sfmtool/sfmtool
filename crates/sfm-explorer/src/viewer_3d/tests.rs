@@ -2443,3 +2443,27 @@ fn a_control_wheel_notch_zooms_as_far_as_a_plain_one() {
     let control = distance_after(egui::Modifiers::COMMAND);
     assert!((control - plain).abs() < 1e-9, "{control} against {plain}");
 }
+
+/// A trackpad pinch still zooms the viewport. A macOS pinch reaches egui as
+/// `Event::Zoom` (winit's `PinchGesture` through `egui_winit`), which the
+/// viewport reads through `platform::pinch_zoom_delta`; a pinch of 1.2 takes
+/// the camera 2% of the way to its target (`ViewportCamera::zoom` at 0.2).
+#[test]
+fn a_trackpad_pinch_zooms_the_viewport() {
+    let (mut viewer, ctx, mut state) = settled();
+    let before = viewer.camera.camera.target_distance;
+    run_frame(
+        &mut viewer,
+        &ctx,
+        &mut state,
+        vec![egui::Event::Zoom(1.2)],
+        OVER_A_POINT,
+        None,
+        None,
+    );
+    let ratio = viewer.camera.camera.target_distance / before;
+    assert!(
+        (ratio - 0.98).abs() < 1e-6,
+        "the distance changed by {ratio}"
+    );
+}
