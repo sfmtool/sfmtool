@@ -45,7 +45,7 @@ impl Command {
                 "set_reconstruction_transform_from_patch"
             }
             Command::BakeReconstructionTransform { .. } => "bake_reconstruction_transform",
-            Command::SetSolo { .. } => "set_solo",
+            Command::SoloReconstruction { .. } => "solo_reconstruction",
             Command::GetImageDetailDisplay => "get_image_detail_display",
             Command::SetImageDetailDisplay { .. } => "set_image_detail_display",
             Command::GetImageDetailView => "get_image_detail_view",
@@ -434,7 +434,7 @@ impl Command {
             | Command::UnfocusBenchItem
             | Command::ClearSelection { .. } => Kind::Selection,
             Command::SetReconstructionDisplay { .. }
-            | Command::SetSolo { .. }
+            | Command::SoloReconstruction { .. }
             // A reframe pushes a version and is still not an edit: nothing it
             // does reaches the file, which is the bench step's case exactly.
             | Command::SetReconstructionTransform { .. }

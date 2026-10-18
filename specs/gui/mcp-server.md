@@ -148,7 +148,7 @@ press the viewer's widgets the way a person's eyes, mouse and keyboard do
 | `set_reconstruction_transform` | write | Set one reconstruction's display transform outright, the identity included |
 | `set_reconstruction_transform_from_patch` | write | Set it from the focused item's patch, in one of the four ways the viewport's patch menu offers |
 | `bake_reconstruction_transform` | write | Write the display transform into the reconstruction and return it to its own frame, as one version |
-| `set_solo` | write | Draw only one reconstruction, or end the solo |
+| `solo_reconstruction` | write | Draw only one reconstruction, or end the solo |
 | `set_image_detail_display` | write | Change any of the Image Detail panel's controls, leaving the rest alone |
 | `set_image_detail_view` | write | Point that panel at a pixel, a rectangle, a point's observation, a feature, a bench observation, or the whole photograph |
 | `set_viewer_3d_display` | write | Change any of the 3D viewport's display controls, leaving the rest alone |
@@ -427,6 +427,15 @@ always does, so a bare `model` leaves the reader to work out which model it
 is. The catalog test asserts that no tool takes an argument named `model`.
 The one place the bare word stays is a serialized camera, such as the `.sfmr`
 camera JSON, where the object is itself the camera ([../GLOSSARY.md](../GLOSSARY.md)).
+
+#### `<quantity>_<unit>`, never a bare unit
+
+An argument that carries a unit names the quantity first and the unit second:
+`yaw_deg`, `fov_short_axis_deg`, `radius_px`, `overlap_percent`, and the spins'
+`angle_deg`. A bare `degrees` says how the number is measured but not what it
+measures. The catalog test asserts that no argument, at the top level or in a
+nested object, is named only for a unit (`degrees`, `radians`, `pixels`, `px`,
+`meters`, `seconds` and their other spellings).
 
 #### Where the GUI has no word, the code's word wins
 
@@ -966,10 +975,10 @@ version and changes what a screenshot shows, and an agent that aimed one at
 whatever happened to be selected could not check that it landed where it meant.
 
 **The reset is `set_reconstruction_transform` with the identity**, not a tool of
-its own, in the way `set_solo` with `null` ends a solo. Given the identity it
-records the sentence the Scene panel's `Reset Transform` writes, so the log reads
-the same whoever asked, and on a node already at the identity it is refused as
-that entry is greyed. The rotation is normalised on arrival; a zero quaternion
+its own, in the way `solo_reconstruction` with `null` ends a solo. Given the
+identity it records the sentence the Scene panel's `Reset Transform` writes, so
+the log reads the same whoever asked, and on a node already at the identity it
+is refused as that entry is greyed. The rotation is normalised on arrival; a zero quaternion
 and a scale that is not positive and finite are refused at the parse. A
 transform that carries the node out to where its distances cannot be measured
 is refused too: when any corner of the box around the node's finite points,
@@ -1006,7 +1015,7 @@ patch is, `set_reconstruction_transform_from_patch` moves the world onto it,
 `bake_reconstruction_transform` followed by `save_reconstruction` keeps it.
 `undo` steps back out of any of them, the transform included.
 
-### `set_solo`
+### `solo_reconstruction`
 
 ```jsonc
 { "reconstruction_label": "global" }   // draw only this one
@@ -1032,10 +1041,10 @@ Two properties an agent has to know, both of them deliberate in the viewer:
   soloing, so ending a solo restores precisely the visibility the user had —
   including reconstructions they had already hidden by hand.
 
-`set_solo` sets rather than toggles, unlike the GUI's `AppState::toggle_solo`. A
-toggle is fine for a click, where the user can see the current state; an agent
-issuing one cannot know the outcome without reading the scene first, and a
-retried call would undo itself.
+`solo_reconstruction` sets rather than toggles, unlike the GUI's
+`AppState::toggle_solo`. A toggle is fine for a click, where the user can see
+the current state; an agent issuing one cannot know the outcome without reading
+the scene first, and a retried call would undo itself.
 
 ### `get_image_detail_display` / `set_image_detail_display`
 
@@ -2913,9 +2922,9 @@ moving anything.
 
 `hide_panel` is `AppState::hide_panel`, and **is idempotent**: hiding a panel
 that is closed succeeds and changes nothing, exactly as the method does. Both
-tools *set* rather than toggle, for the reason `set_solo` does — an agent
-issuing a toggle cannot know the outcome without reading first, and a retried
-call would undo itself.
+tools *set* rather than toggle, for the reason `solo_reconstruction` does — an
+agent issuing a toggle cannot know the outcome without reading first, and a
+retried call would undo itself.
 
 Neither takes a position. Where a panel goes is the home rule's decision; an
 agent that wants a panel *there* sends the tree through `set_window_layout`.
@@ -4485,7 +4494,7 @@ which the centre of the square drawn there lands under. `resize_bench_patch`
 sizes it, again by one of two: a world `half_length` with an optional
 `moved_edge`, or an `edge` (`"+u"`, `"-u"`, `"+v"`, `"-v"`) and a `pixel` with
 the photograph it is in, with the **opposite edge left where it is**.
-`spin_bench_patch` turns it by `degrees` about its own normal. The pixel is
+`spin_bench_patch` turns it by `angle_deg` about its own normal. The pixel is
 unprojected onto the patch's own plane, so an edge lands there exactly through
 whatever distortion the lens has, and because a patch is square the whole square
 follows one scale. **A pixel form names its photograph as exactly one of

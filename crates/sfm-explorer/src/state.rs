@@ -1216,9 +1216,10 @@ impl AppState {
         self.set_solo((self.solo != Some(id)).then_some(id));
     }
 
-    /// Solo one node, or end the solo — the *set* form, which the MCP `set_solo`
-    /// tool needs because an agent issuing a toggle cannot know the outcome
-    /// without reading the scene first, and a retried call would undo itself.
+    /// Solo one node, or end the solo — the *set* form, which the MCP
+    /// `solo_reconstruction` tool needs because an agent issuing a toggle cannot
+    /// know the outcome without reading the scene first, and a retried call
+    /// would undo itself.
     ///
     /// [`AppState::toggle_solo`] resolves the click into a request and comes
     /// through here, so the two cannot disagree about what soloing does or

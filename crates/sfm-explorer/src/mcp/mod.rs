@@ -174,7 +174,7 @@ pub(crate) enum Command {
     BakeReconstructionTransform {
         reconstruction_label: String,
     },
-    SetSolo {
+    SoloReconstruction {
         reconstruction_label: Option<String>,
     },
     GetImageDetailDisplay,
@@ -487,7 +487,7 @@ pub(crate) enum Command {
         reconstruction_label: String,
         track: Option<String>,
         /// How far, positive about the patch's outward normal.
-        degrees: f64,
+        angle_deg: f64,
     },
     /// Turn one cluster sighting's parallelogram in its own image's pixels.
     SpinBenchShape {
@@ -496,7 +496,7 @@ pub(crate) enum Command {
         /// The observation whose shape turns.
         observation: usize,
         /// How far, positive from `+x` toward `+y` of the image raster.
-        degrees: f64,
+        angle_deg: f64,
     },
     /// Turn the track-stage patch to face a new outward normal. Every
     /// sighting is rebuilt on the turned axes.
@@ -1411,9 +1411,12 @@ pub(crate) fn apply_with_window(
             state,
             &reconstruction_label,
         )),
-        Command::SetSolo {
+        Command::SoloReconstruction {
             reconstruction_label,
-        } => done(write::set_solo(state, reconstruction_label.as_deref())),
+        } => done(write::solo_reconstruction(
+            state,
+            reconstruction_label.as_deref(),
+        )),
         Command::GetImageDetailDisplay => done(display::get(state)),
         Command::SetImageDetailDisplay { change } => done(display::set(state, &change)),
         Command::GetImageDetailView => done(display::get_view(state)),
@@ -1722,24 +1725,24 @@ pub(crate) fn apply_with_window(
         Command::SpinBenchPatch {
             reconstruction_label,
             track,
-            degrees,
+            angle_deg,
         } => done(bench::spin_bench_patch(
             state,
             &reconstruction_label,
             track.as_deref(),
-            degrees,
+            angle_deg,
         )),
         Command::SpinBenchShape {
             reconstruction_label,
             track,
             observation,
-            degrees,
+            angle_deg,
         } => done(bench::spin_bench_shape(
             state,
             &reconstruction_label,
             track.as_deref(),
             observation,
-            degrees,
+            angle_deg,
         )),
         Command::TiltBenchPatch {
             reconstruction_label,

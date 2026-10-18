@@ -253,7 +253,7 @@ pub(crate) fn parse(
         "bake_reconstruction_transform" => Command::BakeReconstructionTransform {
             reconstruction_label: args.required_string("reconstruction_label")?,
         },
-        "set_solo" => Command::SetSolo {
+        "solo_reconstruction" => Command::SoloReconstruction {
             reconstruction_label: args.optional_string("reconstruction_label")?,
         },
         "get_image_detail_display" => Command::GetImageDetailDisplay,
@@ -278,9 +278,9 @@ pub(crate) fn parse(
             change: super::viewer_3d_display::parse_change(&args)?,
         },
         "get_timing_detail" => Command::GetTimingDetail,
-        // Required rather than a toggle, for the reason `set_solo` takes the
-        // state it wants: an agent issuing a toggle cannot know the outcome
-        // without reading first, and a retried call would undo itself.
+        // Required rather than a toggle, for the reason `solo_reconstruction`
+        // takes the state it wants: an agent issuing a toggle cannot know the
+        // outcome without reading first, and a retried call would undo itself.
         "set_timing_detail" => Command::SetTimingDetail {
             enabled: args.required_bool("enabled")?,
         },
@@ -551,13 +551,13 @@ pub(crate) fn parse(
         "spin_bench_patch" => Command::SpinBenchPatch {
             reconstruction_label: args.required_string("reconstruction_label")?,
             track: args.optional_string("track")?,
-            degrees: args.required_f64("degrees")?,
+            angle_deg: args.required_f64("angle_deg")?,
         },
         "spin_bench_shape" => Command::SpinBenchShape {
             reconstruction_label: args.required_string("reconstruction_label")?,
             track: args.optional_string("track")?,
             observation: args.required_usize("observation")?,
-            degrees: args.required_f64("degrees")?,
+            angle_deg: args.required_f64("angle_deg")?,
         },
         "set_bench_track_verdict" => {
             let verdict = args.verdict("verdict")?;

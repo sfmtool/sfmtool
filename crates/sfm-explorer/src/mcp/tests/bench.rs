@@ -438,9 +438,9 @@ fn the_patch_tools_slide_resize_and_turn_and_each_is_one_version() {
         &mut state,
         &mut viewer,
         "spin_bench_patch",
-        json!({ "reconstruction_label": "run_a", "degrees": 30.0 }),
+        json!({ "reconstruction_label": "run_a", "angle_deg": 30.0 }),
     );
-    assert_eq!(turned["degrees"], json!(30.0), "{turned}");
+    assert_eq!(turned["angle_deg"], json!(30.0), "{turned}");
     assert_eq!(
         turned["label"].as_str().expect("a version label"),
         format!("Spun {item} by 30.0 degrees"),
@@ -1081,7 +1081,7 @@ fn the_two_spins_each_refuse_the_other_stage_and_name_it() {
         &mut state,
         &mut viewer,
         "spin_bench_patch",
-        json!({ "reconstruction_label": "run_a", "degrees": 45.0 }),
+        json!({ "reconstruction_label": "run_a", "angle_deg": 45.0 }),
     )
     .to_string();
     assert!(refused.contains("spin_bench_shape"), "{refused}");
@@ -1092,7 +1092,7 @@ fn the_two_spins_each_refuse_the_other_stage_and_name_it() {
         "spin_bench_shape",
         json!({
             "reconstruction_label": "run_a", "track": track_stage,
-            "degrees": 45.0, "observation": 0,
+            "angle_deg": 45.0, "observation": 0,
         }),
     )
     .to_string();
@@ -1109,7 +1109,7 @@ fn the_two_spins_each_refuse_the_other_stage_and_name_it() {
         json!({
             "reconstruction_label": "run_a",
             "track": item,
-            "degrees": 90.0,
+            "angle_deg": 90.0,
             "observation": 0,
         }),
     );
@@ -4248,7 +4248,7 @@ fn a_sift_files_bench_is_view_only_until_converted_and_rebenched() {
         ),
         (
             "spin_bench_patch",
-            json!({ "reconstruction_label": "run_a", "degrees": 10.0 }),
+            json!({ "reconstruction_label": "run_a", "angle_deg": 10.0 }),
         ),
         (
             "add_bench_track_observation",

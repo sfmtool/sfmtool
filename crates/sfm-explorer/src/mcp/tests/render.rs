@@ -1775,7 +1775,7 @@ fn a_bench_step_with_no_effect_pushes_nothing_and_says_so() {
         &mut state,
         &mut viewer,
         "spin_bench_patch",
-        json!({ "reconstruction_label": "run_a", "track": item, "degrees": 0.0 }),
+        json!({ "reconstruction_label": "run_a", "track": item, "angle_deg": 0.0 }),
     );
     assert_eq!(turned["changed"], json!(false), "{turned}");
     assert!(

@@ -240,7 +240,7 @@ fn resolve_tint(name: &str) -> Result<&'static crate::scene::TintColor, ToolErro
 /// issuing one cannot know the outcome without reading the scene first, and a
 /// retried call would undo itself — and a retry that changes nothing writes no
 /// Action Log entry either.
-pub(super) fn set_solo(state: &mut AppState, label: Option<&str>) -> JsonReply {
+pub(super) fn solo_reconstruction(state: &mut AppState, label: Option<&str>) -> JsonReply {
     match label {
         Some(label) => {
             let id = resolve_reconstruction(state, Some(label))?;

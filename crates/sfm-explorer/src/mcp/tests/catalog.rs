@@ -103,7 +103,10 @@ fn representative_tool_calls() -> Vec<(&'static str, Value)> {
             "bake_reconstruction_transform",
             json!({ "reconstruction_label": "alpha" }),
         ),
-        ("set_solo", json!({ "reconstruction_label": "alpha" })),
+        (
+            "solo_reconstruction",
+            json!({ "reconstruction_label": "alpha" }),
+        ),
         ("set_image_detail_display", json!({ "tracked_only": true })),
         ("set_timing_detail", json!({ "enabled": true })),
         ("set_view", json!({ "fit": "alpha" })),
@@ -298,14 +301,14 @@ fn representative_tool_calls() -> Vec<(&'static str, Value)> {
         ),
         (
             "spin_bench_patch",
-            json!({ "reconstruction_label": "alpha", "degrees": 12.5 }),
+            json!({ "reconstruction_label": "alpha", "angle_deg": 12.5 }),
         ),
         (
             "spin_bench_shape",
             json!({
                 "reconstruction_label": "alpha",
                 "observation": 0,
-                "degrees": 12.5,
+                "angle_deg": 12.5,
             }),
         ),
         (
@@ -932,6 +935,19 @@ fn the_wire_vocabulary_holds_across_the_catalog() {
                 spec.name
             );
         }
+        // An argument that carries a unit names its quantity and then the
+        // unit, `<quantity>_<unit>` (`yaw_deg`, `radius_px`,
+        // `overlap_percent`), so a unit is never an argument's whole name,
+        // at the top level or in a nested object.
+        let mut every_argument = Vec::new();
+        argument_names(&spec.schema, &mut every_argument);
+        for argument in &every_argument {
+            assert!(
+                !BARE_UNIT_NAMES.contains(&argument.as_str()),
+                "{}: {argument:?} is a bare unit; name the quantity, as `angle_deg`",
+                spec.name
+            );
+        }
     }
     assert!(!names.iter().any(|name| name.contains("recon_")));
     let unique: std::collections::BTreeSet<&&str> = names.iter().collect();
@@ -951,6 +967,96 @@ fn the_wire_vocabulary_holds_across_the_catalog() {
         .map(|spec| spec.name)
         .collect();
     assert_eq!(hud_takers, ["screenshot"]);
+}
+
+/// The units the catalog's `<quantity>_<unit>` suffixes use (`_deg`, `_px`,
+/// `_percent`), their other spellings, and the other units a viewer argument
+/// could carry. None of them is an argument's whole name. The singular `pixel`
+/// is left out on purpose: it names a position in an image, a thing rather
+/// than a unit, and it is the argument `set_image_detail_view` and the bench
+/// tools take.
+const BARE_UNIT_NAMES: &[&str] = &[
+    "deg",
+    "degree",
+    "degrees",
+    "rad",
+    "radian",
+    "radians",
+    "px",
+    "pixels",
+    "percent",
+    "pct",
+    "m",
+    "meter",
+    "meters",
+    "metre",
+    "metres",
+    "s",
+    "sec",
+    "second",
+    "seconds",
+    "ms",
+    "milliseconds",
+    "units",
+    "scene_units",
+];
+
+/// Every argument name in `schema`: its own properties, and those of every
+/// object nested in them or in an array's items.
+fn argument_names(schema: &Value, out: &mut Vec<String>) {
+    if let Some(properties) = schema.get("properties").and_then(Value::as_object) {
+        for (name, nested) in properties {
+            out.push(name.clone());
+            argument_names(nested, out);
+        }
+    }
+    if let Some(items) = schema.get("items") {
+        argument_names(items, out);
+    }
+    for key in ["oneOf", "anyOf", "allOf"] {
+        if let Some(branches) = schema.get(key).and_then(Value::as_array) {
+            for branch in branches {
+                argument_names(branch, out);
+            }
+        }
+    }
+}
+
+/// The wire names retired by a clean break are refused rather than kept as
+/// aliases: `set_solo` is now `solo_reconstruction`, and the spins' `degrees`
+/// is now `angle_deg`.
+#[test]
+fn the_retired_wire_names_are_refused() {
+    assert!(
+        tools::catalog().iter().all(|spec| spec.name != "set_solo"),
+        "set_solo is still advertised"
+    );
+    let error = tools::parse("set_solo", None).expect_err("an unknown tool");
+    assert!(error.0.contains("set_solo"), "{error}");
+
+    for (name, mut arguments) in [
+        (
+            "spin_bench_patch",
+            json!({ "reconstruction_label": "alpha", "degrees": 12.5 }),
+        ),
+        (
+            "spin_bench_shape",
+            json!({ "reconstruction_label": "alpha", "observation": 0, "degrees": 12.5 }),
+        ),
+    ] {
+        let error = tools::parse(name, arguments.as_object()).expect_err("rejected");
+        assert!(
+            error
+                .0
+                .starts_with(&format!("{name} has no argument \"degrees\" — ")),
+            "{name}: {error}"
+        );
+        // The same call with the quantity named parses.
+        let map = arguments.as_object_mut().expect("an object");
+        let angle = map.remove("degrees").expect("a degrees argument");
+        map.insert("angle_deg".into(), angle);
+        tools::parse(name, Some(map)).expect("angle_deg is the argument");
+    }
 }
 
 /// The tool that hands back a picture advertises what it can photograph.

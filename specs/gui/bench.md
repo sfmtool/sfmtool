@@ -1453,7 +1453,7 @@ when the focused item was already what the call asked for.
 // resize_bench_patch         { "reconstruction_label": "bull", "half_length": 0.0184 }
 // translate_bench_patch      { "reconstruction_label": "bull", "camera_image": 11,
 //                              "pixel": [388.0, 502.5] }   // the ghost's centre
-// spin_bench_patch           { "reconstruction_label": "bull", "degrees": 12.3 }
+// spin_bench_patch           { "reconstruction_label": "bull", "angle_deg": 12.3 }
 // tilt_bench_patch           { "reconstruction_label": "bull",
 //                              "normal": [0.1, -0.2, 0.97] }
 // sight_bench_observation    { "reconstruction_label": "bull", "observation": 3,
@@ -1463,7 +1463,7 @@ when the focused item was already what the call asked for.
 // resize_bench_shape         { "reconstruction_label": "bull", "observation": 3,
 //                              "edge": "+u", "pixel": [1049.0, 1702.9] }
 // spin_bench_shape           { "reconstruction_label": "bull", "observation": 3,
-//                              "degrees": 12.3 }
+//                              "angle_deg": 12.3 }
 // shape_bench_observation    { "reconstruction_label": "bull", "observation": 3,
 //                              "shape": [[7.1, -0.4], [0.4, 7.1]] }
 //

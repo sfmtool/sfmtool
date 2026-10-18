@@ -954,16 +954,16 @@ pub(super) fn spin_bench_patch(
     state: &mut AppState,
     label: &str,
     named: Option<&str>,
-    degrees: f64,
+    angle_deg: f64,
 ) -> JsonReply {
     let (id, item) = edit_target(state, label, named)?;
     stage_must_be(state, id, &item, StageKind::Track, "spin_bench_shape")?;
     let edit = PatchEdit::Spin {
-        angle_rad: degrees.to_radians(),
+        angle_rad: angle_deg.to_radians(),
     };
     let (reply, _) = patched(state, id, &item, &edit)?;
     let mut reply = with_item(reply, &item);
-    insert(&mut reply, "degrees", json!(degrees));
+    insert(&mut reply, "angle_deg", json!(angle_deg));
     Ok(reply)
 }
 
@@ -979,18 +979,18 @@ pub(super) fn spin_bench_shape(
     label: &str,
     named: Option<&str>,
     observation: usize,
-    degrees: f64,
+    angle_deg: f64,
 ) -> JsonReply {
     let (id, item) = edit_target(state, label, named)?;
     stage_must_be(state, id, &item, StageKind::Cluster, "spin_bench_patch")?;
     let edit = PatchEdit::SpinShape {
         observation,
-        angle_rad: degrees.to_radians(),
+        angle_rad: angle_deg.to_radians(),
     };
     let (reply, _) = patched(state, id, &item, &edit)?;
     let mut reply = with_item(reply, &item);
     insert(&mut reply, "observation", json!(observation));
-    insert(&mut reply, "degrees", json!(degrees));
+    insert(&mut reply, "angle_deg", json!(angle_deg));
     Ok(reply)
 }
 

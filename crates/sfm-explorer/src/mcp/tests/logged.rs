@@ -13,7 +13,7 @@ fn a_mutating_call_announces_itself_in_the_status_line() {
     call(
         &mut state,
         &mut viewer,
-        "set_solo",
+        "solo_reconstruction",
         json!({ "reconstruction_label": "beta" }),
     );
     let message = state.status_message().expect("a status message");
@@ -55,7 +55,7 @@ fn each_mutating_command_records_one_entry_as_the_agent() {
         Command::ClearSelection {
             scope: super::super::SelectionScope::All,
         },
-        Command::SetSolo {
+        Command::SoloReconstruction {
             reconstruction_label: Some("beta".into()),
         },
         Command::SetReconstructionDisplay {

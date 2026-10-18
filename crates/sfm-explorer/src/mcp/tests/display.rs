@@ -59,7 +59,7 @@ fn solo_moves_rather_than_accumulating_and_leaves_selection_alone() {
     let out = call(
         &mut state,
         &mut viewer,
-        "set_solo",
+        "solo_reconstruction",
         json!({ "reconstruction_label": "beta" }),
     );
     assert_eq!(out["solo"], "beta");
@@ -72,12 +72,12 @@ fn solo_moves_rather_than_accumulating_and_leaves_selection_alone() {
     let out = call(
         &mut state,
         &mut viewer,
-        "set_solo",
+        "solo_reconstruction",
         json!({ "reconstruction_label": "alpha" }),
     );
     assert_eq!(out["solo"], "alpha", "a second solo moves it");
 
-    let out = call(&mut state, &mut viewer, "set_solo", json!({}));
+    let out = call(&mut state, &mut viewer, "solo_reconstruction", json!({}));
     assert_eq!(out["solo"], Value::Null);
 
     let selection = ok(&mut state, &mut viewer, Command::GetScene)["selection"].clone();
@@ -99,7 +99,7 @@ fn hidden_by_hand_and_hidden_by_a_solo_are_distinguishable() {
     let entry = call(
         &mut state,
         &mut viewer,
-        "set_solo",
+        "solo_reconstruction",
         json!({ "reconstruction_label": "beta" }),
     )["scene"][0]
         .clone();

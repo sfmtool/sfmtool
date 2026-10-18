@@ -378,7 +378,7 @@ fn hide_panel_closes_and_show_panel_takes_it_home() {
 
     // Idempotent, as the method is: hiding a closed panel succeeds and
     // changes nothing. Both tools *set* rather than toggle, for the reason
-    // `set_solo` does.
+    // `solo_reconstruction` does.
     let again = call(
         &mut state,
         &mut viewer,

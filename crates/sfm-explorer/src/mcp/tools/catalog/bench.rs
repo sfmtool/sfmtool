@@ -504,7 +504,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                 &[
                     ("reconstruction_label", edited_label_schema()),
                     (
-                        "degrees",
+                        "angle_deg",
                         json!({
                             "type": "number",
                             "description":
@@ -533,7 +533,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                 &[
                     ("reconstruction_label", edited_label_schema()),
                     (
-                        "degrees",
+                        "angle_deg",
                         json!({
                             "type": "number",
                             "description":

@@ -263,7 +263,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
             schema: object(&[], &[("reconstruction_label", edited_label_schema())]),
         },
         ToolSpec {
-            name: "set_solo",
+            name: "solo_reconstruction",
             description: "Draw only one reconstruction, or end the solo. At most one is soloed at \
                           a time and soloing a second moves the solo. Solo is independent of \
                           selection and never writes the per-reconstruction eyes, so ending it \
