@@ -274,6 +274,9 @@ Non-goals/deferrals checked: 5; no longer hold: 0
   - The Tests section promises a Python test of agreement with Rust; there is none.
   - Failure 2: no Rust signatures and no example call; `RayEssentialOptions`, `RayRotationOptions`, `EpipolarSide` are never named. The rationale is present.
   - Mannered prose: "gets the projection for free" → "the SVD a caller computes to decompose E also yields its projection onto the essential manifold"; "starved consensus" → "a consensus smaller than `min_inliers`".
+
+> _Status (2026-10-17): **Partially done** — the "Wrong documented default" bullet: the Inputs table now gives `min_inliers` defaults of 12 for the essential estimator and 20 for the rotation, matching `RayEssentialOptions::default`, `RayRotationOptions::default` and both bindings; the section's other bullets are still open, branch `fix-round-07-relative-pose-min-inliers`._
+
 **Third copies:** The core module doc (:4-31, 28 lines) restates the spec's overview nearly word for word and does not link the spec; the binding module doc (:4-13) restates it again. Cut the core doc to the contract plus a link.
 **Recommendation:** update spec — 12 / 20, the type names, one call, the Python `side` strings; soften or test the platform claim.
 **Unclear / incorrect / suspicious:** Opening: see check 4, row 2. The spec could say these are bindings for experiments, as `focal-vote.md:355` implies.
