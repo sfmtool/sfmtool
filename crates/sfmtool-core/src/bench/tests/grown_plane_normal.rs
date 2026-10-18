@@ -184,7 +184,8 @@ fn wide_centres() -> Vec<[f64; 3]> {
 /// The plane's `σ` stays over the target, so the selection matches all five
 /// views; every one joins on its growth with no search, each written
 /// keypoint is at the point's projection and the reference keeps its own, and
-/// each joined view's score at the final plane is its held score. The two pairs are kept, and halving their information raises `σ`.
+/// each joined view's score at the final plane is its held score. The two
+/// pairs are kept, and halving their information raises `σ`.
 #[test]
 fn a_textured_plane_started_far_off_is_turned_onto_it() {
     let centres = wide_centres();

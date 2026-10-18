@@ -89,8 +89,8 @@ pub enum GrownPlaneView {
     Reference { keypoint: Option<[f64; 2]> },
     /// start of the growth that was kept; its plane's distance from the
     /// final plane and its score there; shift (moved to the final plane) and
-    /// grid_zncc at the final plane, equal to held_zncc; the keypoint before the step and the one
-    /// written (None when off the photograph).
+    /// grid_zncc at the final plane, equal to held_zncc; the keypoint
+    /// before the step and the one written (None when off the photograph).
     Joined {
         start: GrownPlaneStart,
         shift: [f64; 2],

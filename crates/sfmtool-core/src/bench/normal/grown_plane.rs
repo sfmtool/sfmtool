@@ -380,9 +380,9 @@ pub enum GrownPlaneView {
     /// moved to the final plane by its own normal matrix, and `grid_zncc` its
     /// robust grid score there, the same value as `held_zncc`: the
     /// combination's last held check read it at the final plane and that
-    /// shift. `was` is its keypoint before the step and
-    /// `keypoint` the one the step wrote, both image px; `keypoint` is `None`
-    /// where that pixel is off the photograph and nothing was written.
+    /// shift. `was` is its keypoint before the step and `keypoint` the one
+    /// the step wrote, both image px; `keypoint` is `None` where that pixel
+    /// is off the photograph and nothing was written.
     Joined {
         start: GrownPlaneStart,
         shift: [f64; 2],
