@@ -3,14 +3,12 @@
 
 //! The grown plane normal, decided against synthetic planes seen by pinholes
 //! that look at the point from around it: a textured plane seen out to 50
-//! degrees under every strategy, one view whose top cells see something
-//! else, views all within a few degrees, a view that sees another plane,
-//! repeating texture seen from poses that are off with keypoints on the
-//! content, keypoints off the content in views whose poses are further off,
-//! views on opposite sides of the reference whose pairs sharpen the plane,
-//! a selection that matches a few of many views, and a flat wall. Every test
-//! runs the default strategy, [`GrownPlaneStrategy::SequentialPairs`],
-//! unless it names another.
+//! degrees, one view whose top cells see something else, views all within a
+//! few degrees, a view that sees another plane, repeating texture seen from
+//! poses that are off with keypoints on the content, keypoints off the
+//! content in views whose poses are further off, views on opposite sides of
+//! the reference whose pairs sharpen the plane, a selection that matches a
+//! few of many views, and a flat wall.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -18,24 +16,8 @@ use super::scene::{fixture_of, Scene, PLANE_Z, WORLD};
 use super::*;
 use crate::bench::{
     GrownPlaneNormalOptions, GrownPlaneRefusal, GrownPlaneSequence, GrownPlaneStart,
-    GrownPlaneStrategy, GrownPlaneTryOutcome, GrownPlaneView,
+    GrownPlaneTryOutcome, GrownPlaneView,
 };
-
-/// Every strategy, the default first.
-const STRATEGIES: [GrownPlaneStrategy; 5] = [
-    GrownPlaneStrategy::SequentialPairs,
-    GrownPlaneStrategy::SequentialMean,
-    GrownPlaneStrategy::IndependentPairs,
-    GrownPlaneStrategy::Independent,
-    GrownPlaneStrategy::SelectedPairs,
-];
-
-fn with_strategy(strategy: GrownPlaneStrategy) -> GrownPlaneNormalOptions {
-    GrownPlaneNormalOptions {
-        strategy,
-        ..Default::default()
-    }
-}
 use crate::camera::CameraModel;
 
 /// A half-length that projects to 16 px in a view facing the plane from the
@@ -198,73 +180,66 @@ fn wide_centres() -> Vec<[f64; 3]> {
     ]
 }
 
-/// From 25 degrees off, under every strategy, the patch is turned to within a
-/// degree of the plane; every view joins (under the selection, every view
-/// matched joins and every other is fitted for its shift alone), each written
+/// From 25 degrees off, the patch is turned to within a degree of the plane.
+/// The plane's `σ` stays over the target, so the selection matches all five
+/// views; every one joins on its growth with no search, each written
 /// keypoint is at the point's projection and the reference keeps its own.
-/// Under the default the two pairs sharpen `σ`, and halving their information
-/// leaves it between the two.
+/// The two pairs are kept, and halving their information raises `σ`.
 #[test]
 fn a_textured_plane_started_far_off_is_turned_onto_it() {
     let centres = wide_centres();
     let scene = Scene::looking_at(&centres, WORLD, camera(), textured_plane);
     let edited = edited_of(&scene);
     let track = tilted_track(&edited, Vector3::new(1.0, 0.5, 0.0), 25.0);
-    for strategy in STRATEGIES {
-        let (turned, report) = run(&scene, &edited, &track, &with_strategy(strategy));
-        let sequence = sequence_of(&report);
-        assert_eq!(sequence.strategy, strategy);
+    let (turned, report) = run(&scene, &edited, &track, &GrownPlaneNormalOptions::default());
+    let sequence = sequence_of(&report);
 
-        let after = degrees(placement_of(&turned).normal(), truth());
-        assert!(after < 1.0, "{strategy:?}: {after:.3} deg off: {report}");
-        assert_eq!(
-            sequence.joined() + sequence.shift_only(),
-            centres.len() - 1,
-            "{strategy:?}: {report}: {sequence:#?}"
-        );
-        assert_eq!(sequence.left_out(), 0, "{strategy:?}: {report}");
-        let precision = sequence.precision.expect("views joined");
-        assert!(precision.sigma_weak_deg >= precision.sigma_strong_deg);
-        assert!(precision.discounted_sigma_weak_deg >= precision.sigma_weak_deg);
-        // The centre does not move, and the track is read back.
-        assert!((placement_of(&turned).center - WORLD).norm() < 1e-9);
-        assert!(turned.track().expect("track stage").bitmap.is_some());
+    let after = degrees(placement_of(&turned).normal(), truth());
+    assert!(after < 1.0, "{after:.3} deg off: {report}");
+    assert_eq!(sequence.matched(), centres.len() - 1, "{sequence:#?}");
+    assert_eq!(sequence.picks.len(), centres.len() - 1, "{sequence:#?}");
+    assert_eq!(sequence.joined(), centres.len() - 1, "{report}");
+    assert_eq!(sequence.left_out(), 0, "{report}");
+    assert_eq!(sequence.shift_only(), 0, "{report}");
+    for entry in &sequence.trace {
+        assert_eq!(entry.attempts.len(), 1, "{entry:#?}");
+        assert_eq!(entry.attempts[0].start, GrownPlaneStart::NoSearch);
+    }
+    let precision = sequence.precision.expect("views joined");
+    assert!(precision.sigma_weak_deg >= precision.sigma_strong_deg);
+    assert!(precision.discounted_sigma_weak_deg > precision.sigma_weak_deg);
+    assert!(!precision.low_confidence, "{report}");
+    // The centre does not move, and the track is read back.
+    assert!((placement_of(&turned).center - WORLD).norm() < 1e-9);
+    assert!(turned.track().expect("track stage").bitmap.is_some());
 
-        let reference = sequence.reference.expect("a reference");
-        assert_eq!(
-            keypoint_of(&turned, reference),
-            keypoint_of(&track, reference),
-            "the reference keeps its keypoint"
-        );
-        for (row, view) in sequence.views.iter().enumerate() {
-            if let GrownPlaneView::Joined { keypoint, .. }
-            | GrownPlaneView::ShiftOnly { keypoint, .. } = view
-            {
-                let written = keypoint.expect("on the photograph");
-                let truth = scene.project(track.observations[row].image as usize, WORLD);
-                assert!(
-                    distance_px(written, truth) < 0.5,
-                    "{strategy:?}, row {row}: {written:?} vs {truth:?}"
-                );
-                let held = keypoint_of(&turned, row).expect("written");
-                assert!(distance_px(held, written) < 1e-3);
-            }
-        }
-        assert_eq!(sequence.written, centres.len(), "{strategy:?}: {report}");
-        if strategy == GrownPlaneStrategy::default() {
-            assert!(!precision.low_confidence, "{report}");
-            assert_eq!(sequence.matched(), centres.len() - 1);
-            assert_eq!(sequence.pairs.len(), 2, "{sequence:#?}");
-            assert_eq!(sequence.pairs_kept(), 2, "{sequence:#?}");
-            assert!(precision.discounted_sigma_weak_deg > precision.sigma_weak_deg);
-            let sentence = report.to_string();
+    let reference = sequence.reference.expect("a reference");
+    assert_eq!(
+        keypoint_of(&turned, reference),
+        keypoint_of(&track, reference),
+        "the reference keeps its keypoint"
+    );
+    for (row, view) in sequence.views.iter().enumerate() {
+        if let GrownPlaneView::Joined { keypoint, .. } = view {
+            let written = keypoint.expect("on the photograph");
+            let truth = scene.project(track.observations[row].image as usize, WORLD);
             assert!(
-                sentence.starts_with("5 of 5 views joined, 2 of 2 pairs kept; "),
-                "{sentence}"
+                distance_px(written, truth) < 0.5,
+                "row {row}: {written:?} vs {truth:?}"
             );
-            assert!(sentence.contains("6 keypoints written"), "{sentence}");
+            let held = keypoint_of(&turned, row).expect("written");
+            assert!(distance_px(held, written) < 1e-3);
         }
     }
+    assert_eq!(sequence.written, centres.len(), "{report}");
+    assert_eq!(sequence.pairs.len(), 2, "{sequence:#?}");
+    assert_eq!(sequence.pairs_kept(), 2, "{sequence:#?}");
+    let sentence = report.to_string();
+    assert!(
+        sentence.starts_with("5 of 5 views joined, 2 of 2 pairs kept; "),
+        "{sentence}"
+    );
+    assert!(sentence.contains("6 keypoints written"), "{sentence}");
 }
 
 /// A view whose top cells see another surface still joins under the robust
@@ -328,10 +303,10 @@ fn narrow_views_turn_the_patch_with_low_confidence() {
 }
 
 /// A view that sees the texture on a plane turned 25 degrees from the one
-/// the others see is left out, and the plane is the others'. Matched alone it
-/// passes the floor; the combination leaves it out as too far, its search
-/// lands on its keypoint-implied shift, and it stays out. In sequence it is
-/// grown again from the starting plane, deferred once and then left out.
+/// the others see is left out, and the plane is the others'. The selection
+/// matches every view; this one passes the floor on its own, the combination
+/// leaves it out as too far, its search lands on its keypoint-implied shift,
+/// and it stays out.
 #[test]
 fn a_view_whose_own_plane_disagrees_is_left_out() {
     let centres = wide_centres();
@@ -339,80 +314,39 @@ fn a_view_whose_own_plane_disagrees_is_left_out() {
     let edited = edited_of(&scene);
     let track = tilted_track(&edited, Vector3::y(), 10.0);
     let row = row_of(&track, 4);
-    for strategy in [
-        GrownPlaneStrategy::SequentialPairs,
-        GrownPlaneStrategy::SequentialMean,
-        GrownPlaneStrategy::IndependentPairs,
-    ] {
-        let sequential = matches!(
-            strategy,
-            GrownPlaneStrategy::SequentialMean | GrownPlaneStrategy::SequentialPairs
-        );
-        let (turned, report) = run(&scene, &edited, &track, &with_strategy(strategy));
-        let sequence = sequence_of(&report);
-        let after = degrees(placement_of(&turned).normal(), truth());
-        assert!(after < 1.0, "{strategy:?}: {after:.3} deg off: {report}");
-        match &sequence.views[row] {
-            GrownPlaneView::LeftOut {
-                reason, distance, ..
-            } => {
-                assert_eq!(*reason, GrownPlaneRefusal::TooFar, "{strategy:?}");
-                assert!(distance.expect("a shared plane") > 3.0, "{distance:?}");
-            }
-            other => panic!("{strategy:?}: left out, not {other:?}: {report}"),
+    let (turned, report) = run(&scene, &edited, &track, &GrownPlaneNormalOptions::default());
+    let sequence = sequence_of(&report);
+    let after = degrees(placement_of(&turned).normal(), truth());
+    assert!(after < 1.0, "{after:.3} deg off: {report}");
+    assert_eq!(sequence.matched(), centres.len() - 1, "{sequence:#?}");
+    match &sequence.views[row] {
+        GrownPlaneView::LeftOut {
+            reason, distance, ..
+        } => {
+            assert_eq!(*reason, GrownPlaneRefusal::TooFar);
+            assert!(distance.expect("a combined plane") > 3.0, "{distance:?}");
         }
-        assert_eq!(
-            sequence.joined(),
-            centres.len() - 2,
-            "{strategy:?}: {report}"
-        );
-        // No kept pair holds it.
-        for pair in &sequence.pairs {
-            assert!(pair.refusal.is_some() || !pair.observations.contains(&row));
-        }
-        let tries: Vec<_> = sequence
-            .trace
-            .iter()
-            .filter(|t| t.observation == row)
-            .collect();
-        let outcomes: Vec<_> = tries.iter().map(|t| t.outcome).collect();
-        if sequential {
-            // The views are tried nearest the reference first.
-            let first_pass = &sequence.trace[..centres.len() - 1];
-            assert!(first_pass
-                .windows(2)
-                .all(|w| w[0].angle_deg <= w[1].angle_deg));
-            assert_eq!(
-                outcomes,
-                [
-                    GrownPlaneTryOutcome::Deferred,
-                    GrownPlaneTryOutcome::LeftOut
-                ]
-            );
-            // From each plane it grows from its keypoint-implied shift; the
-            // search after it lands on that same shift, so it is not grown
-            // again.
-            for t in &tries {
-                let starts: Vec<bool> = t.attempts.iter().map(|a| a.from_start).collect();
-                assert_eq!(starts, [false, true], "{t:?}");
-                assert!(
-                    t.attempts
-                        .iter()
-                        .all(|a| a.start == GrownPlaneStart::NoSearch),
-                    "{t:?}"
-                );
-            }
-        } else {
-            assert_eq!(
-                outcomes,
-                [GrownPlaneTryOutcome::Matched, GrownPlaneTryOutcome::LeftOut],
-                "{tries:#?}"
-            );
-            assert_eq!(tries[0].attempts.len(), 1);
-            assert_eq!(tries[0].attempts[0].start, GrownPlaneStart::NoSearch);
-            assert!(tries[1].attempts.is_empty(), "{tries:#?}");
-        }
+        other => panic!("left out, not {other:?}: {report}"),
     }
+    assert_eq!(sequence.joined(), centres.len() - 2, "{report}");
+    // No kept pair holds it.
+    for pair in &sequence.pairs {
+        assert!(pair.refusal.is_some() || !pair.observations.contains(&row));
+    }
+    let tries: Vec<_> = sequence
+        .trace
+        .iter()
+        .filter(|t| t.observation == row)
+        .collect();
+    let outcomes: Vec<_> = tries.iter().map(|t| t.outcome).collect();
+    assert_eq!(
+        outcomes,
+        [GrownPlaneTryOutcome::Matched, GrownPlaneTryOutcome::LeftOut],
+        "{tries:#?}"
+    );
+    assert_eq!(tries[0].attempts.len(), 1);
+    assert_eq!(tries[0].attempts[0].start, GrownPlaneStart::NoSearch);
+    assert!(tries[1].attempts.is_empty(), "{tries:#?}");
 }
 
 /// A checker four image px a square, so that a 7×7 window matches equally
@@ -497,7 +431,7 @@ fn the_keypoint_implied_shift_takes_the_right_peak_on_repeating_texture() {
         let (run_sequence, worst) = written_off(&track, &options);
         assert_eq!(run_sequence.joined(), 3, "{run_sequence:#?}");
         for entry in &run_sequence.trace {
-            assert_eq!(entry.outcome, GrownPlaneTryOutcome::Joined, "{entry:#?}");
+            assert_eq!(entry.outcome, GrownPlaneTryOutcome::Matched, "{entry:#?}");
             assert_eq!(entry.attempts.len(), 1, "{entry:#?}");
             assert_eq!(entry.attempts[0].start, GrownPlaneStart::NoSearch);
             // Stage 1 reads the window at the implied shift.
@@ -588,10 +522,6 @@ fn the_widened_search_is_centred_on_the_keypoint() {
             "{entry:#?}"
         );
         assert!(entry.attempts[0].refusal.is_some());
-        assert!(entry
-            .attempts
-            .iter()
-            .all(|a| a.from_start == entry.attempts[0].from_start));
     }
     for (row, view) in sequence.views.iter().enumerate() {
         if let GrownPlaneView::Joined { start, .. } = view {
@@ -699,13 +629,12 @@ fn disagreeing_scene() -> Scene {
     })
 }
 
-/// Detail phases change nothing: under every strategy, the step's track and
-/// report are the same with no sink, with a sink at the overview level and
-/// with a detailed one. The overview level records the step and one phase
-/// per try; the detailed one adds every stage under them, here including the
-/// searches of a view whose keypoints are removed, a refusal, the means, and
-/// under the strategies that have them the pairs, the picks and the
-/// shift-only fits. No joint fit is recorded.
+/// Detail phases change nothing: the step's track and report are the same
+/// with no sink, with a sink at the overview level and with a detailed one.
+/// The overview level records the step and one phase per try; the detailed
+/// one adds every stage under them, here including the searches of a view
+/// whose keypoints are removed, a view left out by the means, the pairs, the
+/// picks and the shift-only fits. No joint fit is recorded.
 #[test]
 fn the_grown_plane_normals_detail_phases_change_nothing() {
     use crate::progress::Event;
@@ -720,18 +649,11 @@ fn the_grown_plane_normals_detail_phases_change_nothing() {
     track.observations[row].track = None;
     let views = scene.views();
 
-    for strategy in STRATEGIES {
-        let with_pairs = matches!(
-            strategy,
-            GrownPlaneStrategy::SequentialPairs
-                | GrownPlaneStrategy::IndependentPairs
-                | GrownPlaneStrategy::SelectedPairs
-        );
+    // Three picks, so that some views are fitted for their shift alone, and
+    // the default, under which every view is matched.
+    for max_selected_views in [3, 6] {
         let options = GrownPlaneNormalOptions {
-            strategy,
-            // Few enough picks that some views are fitted for their shift
-            // alone.
-            max_selected_views: 3,
+            max_selected_views,
             ..Default::default()
         };
         let quiet = grown_plane_normal(&track, &edited, &views, &options, &Progress::none())
@@ -776,7 +698,7 @@ fn the_grown_plane_normals_detail_phases_change_nothing() {
             "pairs",
             "selection",
         ] {
-            assert_eq!(names(&overview_phases, detail), 0, "{strategy:?}: {detail}");
+            assert_eq!(names(&overview_phases, detail), 0, "{detail}");
         }
 
         // The detail: every stage, each noted.
@@ -789,31 +711,22 @@ fn the_grown_plane_normals_detail_phases_change_nothing() {
         assert_eq!(names(&detailed_phases, "judge"), growths);
         assert_eq!(names(&detailed_phases, "joint fit"), 0);
         assert_eq!(names(&detailed_phases, "precision"), 0);
-        assert!(names(&detailed_phases, "mean") >= 1, "{strategy:?}");
-        assert_eq!(
-            names(&detailed_phases, "pairs"),
-            usize::from(with_pairs),
-            "{strategy:?}"
-        );
+        assert!(names(&detailed_phases, "mean") >= 1);
+        assert_eq!(names(&detailed_phases, "pairs"), 1);
+        assert!(!sequence.pairs.is_empty(), "{sequence:#?}");
         assert_eq!(names(&detailed_phases, "pair fit"), sequence.pairs.len());
         assert_eq!(names(&detailed_phases, "selection"), sequence.picks.len());
         assert_eq!(names(&detailed_phases, "shift-only fit"), shift_only);
-        match strategy {
-            GrownPlaneStrategy::SequentialMean => {
-                assert_eq!(names(&detailed_phases, "mean"), sequence.joined());
-            }
-            GrownPlaneStrategy::SequentialPairs | GrownPlaneStrategy::IndependentPairs => {
-                assert!(!sequence.pairs.is_empty())
-            }
-            GrownPlaneStrategy::SelectedPairs => {
-                assert_eq!(sequence.picks.len(), 3, "{sequence:#?}");
-                assert!(shift_only >= 1, "{sequence:#?}");
-            }
-            GrownPlaneStrategy::Independent => {}
-        }
+        let picked = max_selected_views.min(sequence.views.len() - 1);
+        assert_eq!(sequence.picks.len(), picked, "{sequence:#?}");
+        assert_eq!(
+            shift_only,
+            sequence.views.len() - 1 - picked,
+            "{sequence:#?}"
+        );
         assert!(
             names(&detailed_phases, "widened search") >= 1,
-            "{strategy:?}: {:#?}",
+            "{:#?}",
             sequence.trace
         );
         for once in ["setup", "turn and write", "grown plane normal"] {
@@ -862,38 +775,34 @@ fn the_grown_plane_normals_detail_phases_change_nothing() {
                     .iter()
                     .any(|(n, d, _)| *n == "widened search" && *d == depth_of("growth") + 1)
         );
-        if matches!(
-            strategy,
-            GrownPlaneStrategy::SequentialMean | GrownPlaneStrategy::SequentialPairs
-        ) {
-            // The first mean closed is the one after the first join.
-            assert_eq!(depth_of("mean"), depth_of("grown plane view") + 1);
+        assert_eq!(depth_of("mean"), step + 1);
+        assert_eq!(depth_of("selection"), step + 1);
+        assert_eq!(depth_of("pair fit"), depth_of("pairs") + 1);
+        if max_selected_views == 3 {
+            assert_eq!(depth_of("shift-only fit"), step + 1);
         } else {
-            assert_eq!(depth_of("mean"), step + 1);
+            // Every view is matched, and the means leave the disagreeing
+            // one out.
+            let refused = detailed_phases
+                .iter()
+                .filter(|(n, _, note)| {
+                    let note = note.as_deref().unwrap_or("");
+                    let words: Vec<&str> = note.split_whitespace().collect();
+                    *n == "mean" && words.len() > 2 && words[0] != words[2]
+                })
+                .count();
+            assert!(refused >= 1, "{detailed_phases:#?}");
         }
-        if with_pairs {
-            assert_eq!(depth_of("pair fit"), depth_of("pairs") + 1);
-        }
-        let refused = detailed_phases
-            .iter()
-            .filter(|(n, _, note)| {
-                let note = note.as_deref().unwrap_or("");
-                let words: Vec<&str> = note.split_whitespace().collect();
-                (*n == "judge" && note.contains("too far"))
-                    || (*n == "mean" && words.len() > 2 && words[0] != words[2])
-            })
-            .count();
-        assert!(refused >= 1, "{strategy:?}: {detailed_phases:#?}");
     }
 }
 
 /// The information-weighted plane of the views on opposite sides of a
 /// reference that faces the plane: each view is 20 degrees from it, and the
-/// two pairs, the views opposite each other, are 40 degrees apart. The pairs
-/// are matched widest first and both are kept; with them the weakest `σ` is
-/// under that of the reference matches alone, and still is with each pair's
-/// information halved, and the plane stays on the truth. This holds with the
-/// views matched alone and in sequence.
+/// two pairs, the views opposite each other, are 40 degrees apart. The
+/// selection matches all four, the pairs are matched widest first and both
+/// are kept; with them the weakest `σ` is under that of the reference matches
+/// alone (with `max_pairs` 0), and still is with each pair's information
+/// halved, and the plane stays on the truth.
 #[test]
 fn wide_pairs_sharpen_the_plane_over_reference_matches_alone() {
     let centres = vec![
@@ -908,49 +817,44 @@ fn wide_pairs_sharpen_the_plane_over_reference_matches_alone() {
     let track = tilted_track(&edited, Vector3::new(1.0, 0.3, 0.0), 15.0);
     let (track, _) = set_reference(&track, row_of(&track, 0)).expect("an in row");
 
-    for (without, with) in [
-        (
-            GrownPlaneStrategy::Independent,
-            GrownPlaneStrategy::IndependentPairs,
-        ),
-        (
-            GrownPlaneStrategy::SequentialMean,
-            GrownPlaneStrategy::SequentialPairs,
-        ),
-    ] {
-        let (alone, alone_report) = run(&scene, &edited, &track, &with_strategy(without));
-        let (paired, paired_report) = run(&scene, &edited, &track, &with_strategy(with));
-        let (alone_seq, paired_seq) = (sequence_of(&alone_report), sequence_of(&paired_report));
-        assert!(alone_seq.pairs.is_empty());
-        assert_eq!(paired_seq.pairs.len(), 2, "{with:?}: {paired_seq:#?}");
-        assert_eq!(paired_seq.pairs_kept(), 2, "{with:?}: {paired_seq:#?}");
-        for pair in &paired_seq.pairs {
-            assert!((pair.angle_deg - 40.0).abs() < 0.5, "{pair:?}");
-            let images: Vec<u32> = pair
-                .observations
-                .iter()
-                .map(|&r| track.observations[r].image)
-                .collect();
-            assert!(
-                images == [1, 2] || images == [2, 1] || images == [3, 4] || images == [4, 3],
-                "opposite views: {images:?}"
-            );
-        }
-        let a = alone_seq.precision.expect("views joined");
-        let p = paired_seq.precision.expect("views joined");
+    let without = GrownPlaneNormalOptions {
+        max_pairs: 0,
+        ..Default::default()
+    };
+    let (alone, alone_report) = run(&scene, &edited, &track, &without);
+    let (paired, paired_report) = run(&scene, &edited, &track, &GrownPlaneNormalOptions::default());
+    let (alone_seq, paired_seq) = (sequence_of(&alone_report), sequence_of(&paired_report));
+    assert_eq!(alone_seq.joined(), 4, "{alone_seq:#?}");
+    assert_eq!(paired_seq.joined(), 4, "{paired_seq:#?}");
+    assert!(alone_seq.pairs.is_empty());
+    assert_eq!(paired_seq.pairs.len(), 2, "{paired_seq:#?}");
+    assert_eq!(paired_seq.pairs_kept(), 2, "{paired_seq:#?}");
+    for pair in &paired_seq.pairs {
+        assert!((pair.angle_deg - 40.0).abs() < 0.5, "{pair:?}");
+        let images: Vec<u32> = pair
+            .observations
+            .iter()
+            .map(|&r| track.observations[r].image)
+            .collect();
         assert!(
-            p.sigma_weak_deg < a.sigma_weak_deg,
-            "{paired_report} vs {alone_report}"
+            images == [1, 2] || images == [2, 1] || images == [3, 4] || images == [4, 3],
+            "opposite views: {images:?}"
         );
-        assert!(
-            p.discounted_sigma_weak_deg < a.sigma_weak_deg,
-            "{paired_report} vs {alone_report}"
-        );
-        assert!(p.discounted_sigma_weak_deg > p.sigma_weak_deg);
-        for turned in [&alone, &paired] {
-            let after = degrees(placement_of(turned).normal(), truth());
-            assert!(after < 1.0, "{with:?}: {after:.3}: {paired_report}");
-        }
+    }
+    let a = alone_seq.precision.expect("views joined");
+    let p = paired_seq.precision.expect("views joined");
+    assert!(
+        p.sigma_weak_deg < a.sigma_weak_deg,
+        "{paired_report} vs {alone_report}"
+    );
+    assert!(
+        p.discounted_sigma_weak_deg < a.sigma_weak_deg,
+        "{paired_report} vs {alone_report}"
+    );
+    assert!(p.discounted_sigma_weak_deg > p.sigma_weak_deg);
+    for turned in [&alone, &paired] {
+        let after = degrees(placement_of(turned).normal(), truth());
+        assert!(after < 1.0, "{after:.3}: {paired_report}");
     }
 }
 
@@ -974,7 +878,6 @@ fn the_selection_reaches_the_target_sigma_matching_few_views() {
     let (track, _) = set_reference(&track, row_of(&track, 0)).expect("an in row");
     let target = 1.0;
     let options = GrownPlaneNormalOptions {
-        strategy: GrownPlaneStrategy::SelectedPairs,
         target_sigma_deg: target,
         max_selected_views: 16,
         ..Default::default()

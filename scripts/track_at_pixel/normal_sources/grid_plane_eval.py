@@ -46,7 +46,7 @@ comma is read as a list of numbers.
 
 The grown step's fields are ``grown_deg`` (its error to the ground truth),
 ``grown_outcome`` (``"turned"``, ``"unchanged"`` when no view joined, or
-``"refused"``), ``grown_strategy``, ``grown_sigma_weak_deg`` and
+``"refused"``), ``grown_sigma_weak_deg`` and
 ``grown_sigma_strong_deg`` (every kept estimate's information summed) and
 ``grown_discounted_sigma_weak_deg`` (each kept pair's information halved),
 each ``None`` when no view joined, ``grown_low_confidence``,
@@ -59,8 +59,8 @@ each per-view word),
 ``grown_left_out_reasons``, ``grown_written``, ``grown_working_resolution``,
 ``grown_window_half_widths``, ``grown_turned_deg``, ``grown_ms`` (the call's
 wall time), ``grown_text``, ``grown_frame`` and ``grown_trace``, one entry
-per try with its shared plane's error (``shared_deg``) and each attempt's own
-plane's error (``own_deg``) to the ground truth. The summary adds the grown
+per try with the error of the combined plane after it (``combined_deg``) and
+each attempt's own plane's error (``own_deg``) to the ground truth. The summary adds the grown
 step's errors, outcomes, confidence, views joined, and on how many points it
 beats ``old``.
 
@@ -328,7 +328,6 @@ def run_grown(row, track, edited, ds, grown_options, to_cam, gt):
     row["grown_candidates"] = sum(
         v["kind"] not in ("reference", "not_attempted") for v in seq["views"]
     )
-    row["grown_strategy"] = seq["strategy"]
     row["grown_written"] = seq["written"]
     precision = seq["precision"]
     row["grown_sigma_weak_deg"] = (
@@ -376,25 +375,22 @@ def run_grown(row, track, edited, ds, grown_options, to_cam, gt):
     ]
     trace = []
     for entry in seq["trace"]:
-        shared = entry["shared_normal"]
+        combined = entry["combined_normal"]
         trace.append(
             {
                 "observation": entry["observation"],
                 "image": entry["image"],
                 "angle_deg": entry["angle_deg"],
                 "outcome": entry["outcome"],
-                "shared_deg": None if shared is None else error(shared),
-                "shared_sigma_deg": entry["shared_sigma_deg"],
+                "combined_deg": None if combined is None else error(combined),
+                "combined_sigma_deg": entry["combined_sigma_deg"],
                 "attempts": [
                     {
-                        "from_start": a["from_start"],
                         "start": a["start"],
                         "stage_zncc": a["stage_zncc"].tolist(),
                         "shift": a["shift"].tolist(),
                         "own_deg": error(a["normal"]),
                         "grid_zncc": a["grid_zncc"],
-                        "distance": a["distance"],
-                        "held_zncc": a["held_zncc"],
                         "sigma_deg": a["sigma_deg"],
                         "refusal": a["refusal"],
                     }

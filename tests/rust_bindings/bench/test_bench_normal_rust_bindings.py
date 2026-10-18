@@ -254,7 +254,6 @@ GROWN_VIEW_KEYS = {
     "reference": {"kind", "keypoint"},
     "joined": {
         "kind",
-        "from_start",
         "start",
         "shift",
         "grid_zncc",
@@ -269,17 +268,9 @@ GROWN_VIEW_KEYS = {
 }
 GROWN_STARTS = {"no_search", "keypoint", "widened", "no_keypoint"}
 GROWN_REFUSALS = {"under_floor", "too_far", "held_under_floor"}
-GROWN_STRATEGIES = (
-    "sequential_pairs",
-    "sequential_mean",
-    "independent_pairs",
-    "independent",
-    "selected_pairs",
-)
 
 # Every keyword of ``grown_plane_normal`` but the fit's, at the Rust default.
 GROWN_DEFAULTS = {
-    "strategy": "sequential_pairs",
     "spot_window": 7,
     "window_fractions": [1 / 8, 1 / 5, 1 / 3, 1 / 2],
     "keypoint_search_px": 3.0,
@@ -308,21 +299,12 @@ def grown(fitted, edited, images):
     return grown_plane_normal(fitted, edited, images)
 
 
-@pytest.fixture(scope="module", params=GROWN_STRATEGIES)
-def grown_by_strategy(request, fitted, edited, images):
-    """``grown_plane_normal`` under each strategy, with its name."""
-    return request.param, grown_plane_normal(
-        fitted, edited, images, strategy=request.param
-    )
-
-
 class TestGrownPlaneNormal:
-    def test_the_report_carries_the_sequence(self, fitted, grown_by_strategy):
-        strategy, (turned, report) = grown_by_strategy
+    def test_the_report_carries_the_sequence(self, fitted, grown):
+        turned, report = grown
         _check_common(report, fitted, turned)
         seq = report["estimate"]
         assert seq["kind"] == "grown_plane"
-        assert seq["strategy"] == strategy
         assert isinstance(seq["reference"], int)
         assert seq["working_resolution"] >= GROWN_DEFAULTS["spot_window"]
         widths = seq["window_half_widths"]
@@ -340,9 +322,12 @@ class TestGrownPlaneNormal:
         assert seq["joined"] == len(joined)
         assert seq["left_out"] == sum(v["kind"] == "left_out" for v in views)
         assert seq["shift_only"] == sum(v["kind"] == "shift_only" for v in views)
-        if strategy != "selected_pairs":
-            assert seq["shift_only"] == 0 and seq["picks"] == []
         assert seq["matched"] == len({e["observation"] for e in seq["trace"]})
+        # Every view grown against the reference was picked, and every view
+        # picked was grown.
+        assert {p["observation"] for p in seq["picks"]} == {
+            e["observation"] for e in seq["trace"]
+        }
         for view in joined:
             assert view["start"] in GROWN_STARTS
             assert view["shift"].shape == (2,)
@@ -359,29 +344,22 @@ class TestGrownPlaneNormal:
                 "angle_deg",
                 "attempts",
                 "outcome",
-                "shared_normal",
-                "shared_sigma_deg",
+                "combined_normal",
+                "combined_sigma_deg",
             }
-            assert entry["outcome"] in {"joined", "matched", "deferred", "left_out"}
-            # From the shared plane and then the starting plane, each from the
-            # keypoint-implied shift and then from the search; a retry after
-            # the combination is the search alone, or nothing where it lands
-            # on the implied shift.
-            assert len(entry["attempts"]) <= 4
-            if strategy.startswith("sequential"):
-                assert entry["outcome"] != "matched"
-                assert entry["attempts"]
-            else:
-                assert entry["outcome"] in {"matched", "left_out"}
+            assert entry["outcome"] in {"matched", "left_out"}
+            # From the keypoint-implied shift and then from the search; a
+            # retry after the combination is the search alone, or nothing
+            # where it lands on the implied shift.
+            assert len(entry["attempts"]) <= 2
             for attempt in entry["attempts"]:
                 assert attempt["start"] in GROWN_STARTS
                 assert attempt["stage_zncc"].dtype == np.float64
                 assert attempt["shift"].shape == (2,)
                 assert np.linalg.norm(attempt["normal"]) == pytest.approx(1.0)
-                refusal = attempt["refusal"]
-                assert refusal is None or refusal in GROWN_REFUSALS
-            if entry["shared_normal"] is not None:
-                assert np.linalg.norm(entry["shared_normal"]) == pytest.approx(1.0)
+                assert attempt["refusal"] in {None, "under_floor"}
+            if entry["combined_normal"] is not None:
+                assert np.linalg.norm(entry["combined_normal"]) == pytest.approx(1.0)
 
         for pick in seq["picks"]:
             assert set(pick) == {
@@ -396,8 +374,6 @@ class TestGrownPlaneNormal:
             }
             assert pick["offset_direction"].shape == (2,)
             assert isinstance(pick["matched"], bool)
-        if strategy in ("sequential_mean", "independent"):
-            assert seq["pairs"] == []
         assert seq["pairs_kept"] == sum(p["kept"] for p in seq["pairs"])
         for pair in seq["pairs"]:
             assert set(pair) == {
@@ -465,7 +441,6 @@ class TestGrownPlaneNormal:
             ("zncc_tolerance", -1.0),
             ("target_sigma_deg", 0.0),
             ("max_selected_views", 0),
-            ("strategy", "joint_fit"),
         ]:
             with pytest.raises(ValueError, match=name):
                 grown_plane_normal(fitted, edited, images, **{name: value})
@@ -479,13 +454,9 @@ class TestGrownPlaneNormal:
         _, report = grown
         assert "phases" not in report
 
-    def test_recorded_phases_change_nothing(
-        self, fitted, edited, images, grown_by_strategy
-    ):
-        strategy, (plain_track, plain) = grown_by_strategy
-        turned, report = grown_plane_normal(
-            fitted, edited, images, strategy=strategy, record_phases=True
-        )
+    def test_recorded_phases_change_nothing(self, fitted, edited, images, grown):
+        plain_track, plain = grown
+        turned, report = grown_plane_normal(fitted, edited, images, record_phases=True)
         phases = report.pop("phases")
         _assert_same(report, plain)
         np.testing.assert_array_equal(_normal(turned), _normal(plain_track))

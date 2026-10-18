@@ -42,8 +42,8 @@ pub use grid_plane::{
 };
 pub use grown_plane::{
     grown_plane_normal, GrownPlaneAttempt, GrownPlaneNormalOptions, GrownPlanePair, GrownPlanePick,
-    GrownPlanePrecision, GrownPlaneRefusal, GrownPlaneSequence, GrownPlaneStart,
-    GrownPlaneStrategy, GrownPlaneTry, GrownPlaneTryOutcome, GrownPlaneView,
+    GrownPlanePrecision, GrownPlaneRefusal, GrownPlaneSequence, GrownPlaneStart, GrownPlaneTry,
+    GrownPlaneTryOutcome, GrownPlaneView,
 };
 
 /// The smallest number of pieces [`FiniteDifferenceOptions::pieces`] takes: two

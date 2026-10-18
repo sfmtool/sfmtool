@@ -1,12 +1,12 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! The strategies that grow each view against the reference alone and
-//! combine afterwards: [`Independent`](super::GrownPlaneStrategy::Independent),
-//! [`IndependentPairs`](super::GrownPlaneStrategy::IndependentPairs) and
-//! [`SelectedPairs`](super::GrownPlaneStrategy::SelectedPairs).
+//! The selection, the pairs and the shift-only fits of
+//! [`grown_plane_normal`](super::grown_plane_normal).
 //!
-//! Every view matched grows from the starting plane, from its
+//! The selection predicts each view's information about the tilt from its
+//! geometry and matches views greedily until the combined plane is precise
+//! enough. Every view matched grows from the starting plane, from its
 //! keypoint-implied shift first and from the stage-1 search where that growth
 //! is under the floor, and counts when a growth passes the floor on its own.
 //! The robust combination (`combine`) then keeps the planes that agree. A
@@ -16,45 +16,37 @@
 //!
 //! The pairs are the widest among the kept views, each view in one pair at
 //! most; each is fitted from the combined plane with the two views' shifts
-//! held, and its plane joins the combination. The selection predicts each
-//! view's information about the tilt from its geometry and matches views
-//! greedily until the combined plane is precise enough.
+//! held, and its plane joins the combination. Every view not picked has its
+//! shift alone fitted at the final plane.
 
 use nalgebra::Matrix2;
 
 use super::combine::{sigmas_deg, Combined, Estimate, PairEstimate};
 use super::solve::{maximise, tilt_information, PairFit};
 use super::{
-    same_shift, start_word, verdict_words, Fate, Grown, GrownPlanePair, GrownPlanePick,
-    GrownPlaneRefusal, GrownPlaneStart, GrownPlaneStrategy, GrownPlaneTry, GrownPlaneTryOutcome,
-    Judged, NormalError, Outcome, Sequence,
+    same_shift, start_word, verdict_words, Fate, GrownPlaneAttempt, GrownPlanePair, GrownPlanePick,
+    GrownPlaneRefusal, GrownPlaneStart, GrownPlaneTry, GrownPlaneTryOutcome, NormalError, Outcome,
+    Sequence,
 };
 use crate::progress::Progress;
 use crate::progress_note;
 
 /// A view grown against the reference: its estimate when a growth passed the
 /// floor, else its last growth.
-type Matched = Result<Estimate, super::GrownPlaneAttempt>;
+type Matched = Result<Estimate, GrownPlaneAttempt>;
 
 impl Sequence<'_, '_, '_> {
-    /// Run [`GrownPlaneStrategy::Independent`],
-    /// [`GrownPlaneStrategy::IndependentPairs`] or
-    /// [`GrownPlaneStrategy::SelectedPairs`].
-    pub(super) fn run_independent(&self, progress: &Progress<'_>) -> Result<Outcome, NormalError> {
-        let strategy = self.options.strategy;
+    /// The selection, the combination of the selected views' planes, the
+    /// retry from the search of a view it left out, the pairs, and the
+    /// shift-only fits of the views not picked.
+    pub(super) fn run(&self, progress: &Progress<'_>) -> Result<Outcome, NormalError> {
         let n = self.candidates.len();
         let mut trace = Vec::new();
         let mut picks = Vec::new();
         // Each candidate's estimate, or the growth that left it under the
         // floor; `None` for a view not matched.
         let mut matched: Vec<Option<Matched>> = (0..n).map(|_| None).collect();
-        if strategy == GrownPlaneStrategy::SelectedPairs {
-            self.select(progress, &mut matched, &mut trace, &mut picks)?;
-        } else {
-            for (i, slot) in matched.iter_mut().enumerate() {
-                *slot = self.match_view(i, true, progress, &mut trace)?;
-            }
-        }
+        self.select(progress, &mut matched, &mut trace, &mut picks)?;
 
         let mut estimates: Vec<Estimate> = matched
             .iter()
@@ -79,13 +71,11 @@ impl Sequence<'_, '_, '_> {
         }
 
         let mut pairs = Vec::new();
-        if strategy.pairs() {
-            if let Some(tilt) = combined.tilt {
-                let pair_estimates;
-                (pair_estimates, pairs) = self.fit_pairs(&estimates, &combined, tilt, progress)?;
-                if !pair_estimates.is_empty() {
-                    combined = self.combine(&estimates, &pair_estimates, progress);
-                }
+        if let Some(tilt) = combined.tilt {
+            let pair_estimates;
+            (pair_estimates, pairs) = self.fit_pairs(&estimates, &combined, tilt, progress)?;
+            if !pair_estimates.is_empty() {
+                combined = self.combine(&estimates, &pair_estimates, progress);
             }
         }
         for (pair, verdict) in pairs.iter_mut().zip(&combined.pairs) {
@@ -119,13 +109,11 @@ impl Sequence<'_, '_, '_> {
                 },
             };
         }
-        if strategy == GrownPlaneStrategy::SelectedPairs {
-            if let Some(tilt) = combined.tilt {
-                for (i, fate) in fates.iter_mut().enumerate() {
-                    if matched[i].is_none() {
-                        progress.check_cancel()?;
-                        *fate = self.shift_only(i, tilt, progress);
-                    }
+        if let Some(tilt) = combined.tilt {
+            for (i, fate) in fates.iter_mut().enumerate() {
+                if matched[i].is_none() {
+                    progress.check_cancel()?;
+                    *fate = self.shift_only(i, tilt, progress);
                 }
             }
         }
@@ -157,8 +145,7 @@ impl Sequence<'_, '_, '_> {
         progress.check_cancel()?;
         let candidate = &self.candidates[i];
         let mut phase = progress.phase("grown plane view");
-        let judge = |grown: Grown, growth: &Progress<'_>| self.judge_alone(i, grown, growth);
-        let judged = self.growths(i, [0.0; 2], true, "starting", unsearched, &phase, &judge)?;
+        let judged = self.growths(i, unsearched, &phase)?;
         let taken = judged
             .iter()
             .find(|j| j.grown.attempt.refusal.is_none())
@@ -185,41 +172,14 @@ impl Sequence<'_, '_, '_> {
             angle_deg: candidate.angle_deg,
             attempts: judged.into_iter().map(|j| j.grown.attempt).collect(),
             outcome,
-            shared_normal: None,
-            shared_sigma_deg: f64::NAN,
+            combined_normal: None,
+            combined_sigma_deg: f64::NAN,
         });
         Ok(match (taken, last) {
             (Some(e), _) => Some(Ok(e)),
             (None, Some(a)) => Some(Err(a)),
             (None, None) => None,
         })
-    }
-
-    /// Judge a growth of candidate `i` alone: taken when its own robust grid
-    /// score reaches the floor, its information read at its own plane.
-    fn judge_alone(&self, i: usize, mut grown: Grown, progress: &Progress<'_>) -> Judged {
-        let options = self.options;
-        let mut phase = progress.detail_phase("judge");
-        let renders_before = self.renders[i].renders();
-        let estimate = self.estimate_of(i, &grown);
-        let sigma = sigmas_deg(&estimate.information, options.zncc_tolerance)[0];
-        let attempt = &mut grown.attempt;
-        attempt.sigma_deg = sigma;
-        attempt.refusal = (attempt.grid_zncc.is_nan() || attempt.grid_zncc < options.min_held_zncc)
-            .then_some(GrownPlaneRefusal::UnderFloor);
-        progress_note!(
-            phase,
-            "alone, grid ZNCC {:.3}, \u{3c3} {sigma:.2}\u{b0}: {}, {} renders",
-            attempt.grid_zncc,
-            verdict_words(attempt.refusal),
-            self.renders[i].renders() - renders_before
-        );
-        drop(phase);
-        let estimate = Estimate {
-            attempt: grown.attempt.clone(),
-            ..estimate
-        };
-        Judged { grown, estimate }
     }
 
     /// The widest pairs among the views `combined` kept, each view in one
@@ -230,7 +190,7 @@ impl Sequence<'_, '_, '_> {
     /// the angle between the two views' directions from the patch centre,
     /// widest first, ties by the two views' order among the candidates; a
     /// pair is taken when neither view is in a pair taken already.
-    pub(super) fn fit_pairs(
+    fn fit_pairs(
         &self,
         estimates: &[Estimate],
         combined: &Combined,
@@ -329,8 +289,8 @@ impl Sequence<'_, '_, '_> {
         Ok((pair_estimates, pairs))
     }
 
-    /// [`GrownPlaneStrategy::SelectedPairs`]'s matching: pick views one at a
-    /// time by their predicted information and match each against the
+    /// The selection: pick views one at a time by their predicted
+    /// information and match each against the
     /// reference, until the combined plane's weakest `σ` reaches
     /// `target_sigma_deg` or `max_selected_views` views have passed the
     /// floor. A pick under the floor is replaced by the next pick.
@@ -479,8 +439,8 @@ impl Sequence<'_, '_, '_> {
                     .sum();
                 sigma_after = combined.sigma_weak_deg(tau);
                 if let (Some(t), Some(last)) = (combined.tilt, trace.last_mut()) {
-                    last.shared_normal = Some(self.grid.plane_normal(t).into());
-                    last.shared_sigma_deg = sigma_after;
+                    last.combined_normal = Some(self.grid.plane_normal(t).into());
+                    last.combined_sigma_deg = sigma_after;
                 }
             }
             matched[i] = Some(result);

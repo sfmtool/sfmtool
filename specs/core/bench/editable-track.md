@@ -3155,14 +3155,14 @@ photographs.** It is the step
 being evaluated, and so far only a library step with a Python binding
 (`sfmtool.bench.grown_plane_normal`): no Track View entry or wire method calls
 it. It takes the reference and the working grid by
-`grid_plane_normal`'s rules, and for each other `in` view it matches fits the
-plane's tilt and the view's image shift so that the view's samples through
-the plane agree with the reference's by ZNCC, over a window that grows from
-the grid's centre to the whole grid. It combines the views' own planes by an
-information-weighted mean, with no fit of the views together; its
-`strategy` setting picks how (in sequence, or each view alone with a robust
-mean, optionally with the widest pairs of views matched against each other
-and a selection of which views to match). Unlike `grid_plane_normal` it turns
+`grid_plane_normal`'s rules, picks a few of the other `in` views by their
+geometry, and for each view picked fits the plane's tilt and the view's image
+shift so that the view's samples through the plane agree with the
+reference's by ZNCC, over a window that grows from the grid's centre to the
+whole grid. It combines the views' own planes by a robust
+information-weighted mean, with no fit of the views together, adds the
+planes of the widest pairs of kept views matched against each other, and
+fits the shift alone of every view it did not pick. Unlike `grid_plane_normal` it turns
 the patch whenever one view joined, however low the plane's precision, and
 reports that precision in `NormalEstimate::GrownPlane`; and between the turn
 and the read-back it writes the reference's keypoint as it was and each joined
@@ -3857,10 +3857,8 @@ and `ray_count`), `rays` (one row per ray: `cell`, `observation`, `image`,
 `grown_plane_normal` takes every `GrownPlaneNormalOptions` setting as a
 keyword of the same name, each defaulting to `GrownPlaneNormalOptions::default()`'s
 when `None` (`window_fractions` as a list of numbers), and refuses a setting
-`GrownPlaneNormalOptions::check` refuses before it reads a photograph;
-`strategy` is a word, `"sequential_mean"`, `"independent"`,
-`"independent_pairs"` or `"selected_pairs"`. Its
-`estimate` has `kind` `"grown_plane"` and carries `strategy`, `reference` (an
+`GrownPlaneNormalOptions::check` refuses before it reads a photograph. Its
+`estimate` has `kind` `"grown_plane"` and carries `reference` (an
 observation index, or `None`), `working_resolution`, `window_half_widths` (a
 list of ints), `normal` (an array, or `None` when no view joined),
 `precision` (`None`, or `sigma_weak_deg`, `sigma_strong_deg`,
@@ -3868,18 +3866,16 @@ list of ints), `normal` (an array, or `None` when no view joined),
 `low_confidence`), `turned`, `joined`, `left_out`, `shift_only`, `matched`,
 `pairs_kept`, `written`, `views`, `trace`, `picks` and `pairs`. `views` holds
 one dict per observation whose `kind` names the `GrownPlaneView`:
-`"reference"` with `keypoint`; `"joined"` with `from_start`, `start`
+`"reference"` with `keypoint`; `"joined"` with `start`
 (`"no_search"`, `"keypoint"`, `"widened"` or `"no_keypoint"`), `shift`, `grid_zncc`,
 `distance`, `held_zncc`, `was` and `keypoint`; `"shift_only"` with `start`,
 `shift`, `grid_zncc`, `was` and `keypoint`; `"left_out"` with `reason`
 (`"under_floor"`, `"too_far"` or `"held_under_floor"`), `distance` and
 `held_zncc`; and `"not_attempted"`. `trace` holds one dict per try with
-`observation`, `image`, `angle_deg`, `outcome` (`"joined"`, `"matched"`,
-`"deferred"` or `"left_out"`), `shared_normal`, `shared_sigma_deg` and
-`attempts`, each with
-`from_start`, `start`, `stage_zncc` (a float64 array), `shift`, `normal`,
-`grid_zncc`, `distance`, `held_zncc`, `sigma_deg` and `refusal` (`None` or a
-`reason` word). `picks` holds one dict per pick of the selection, with
+`observation`, `image`, `angle_deg`, `outcome` (`"matched"` or
+`"left_out"`), `combined_normal`, `combined_sigma_deg` and `attempts`, each
+with `start`, `stage_zncc` (a float64 array), `shift`, `normal`,
+`grid_zncc`, `sigma_deg` and `refusal` (`None` or `"under_floor"`). `picks` holds one dict per pick of the selection, with
 `observation`, `image`, `angle_deg`, `offset_direction`, `scale_px`,
 `predicted_weak`, `matched` and `sigma_after_deg`; `pairs` one per pair of
 views matched against each other, with `observations`, `images`,
