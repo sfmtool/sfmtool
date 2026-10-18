@@ -96,7 +96,9 @@ def _check_common(report, before, after):
     assert report["evaluate"]["stage"] == "track"
     assert isinstance(report["text"], str) and report["text"]
     # A normal step turns the patch about its centre.
-    np.testing.assert_allclose(before.patch_frame["center"], after.patch_frame["center"])
+    np.testing.assert_allclose(
+        before.patch_frame["center"], after.patch_frame["center"]
+    )
 
 
 class TestGridPlaneNormal:
