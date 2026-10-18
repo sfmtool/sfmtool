@@ -3668,8 +3668,22 @@ rather than the commit.
 
 ## Python bindings
 
-`sfmtool.bench`. The steps are module-level functions with the same
-names and the same shape as the Rust ones; `EditableTrack` is a read-only value
+`sfmtool.bench`. The steps are module-level functions. Each takes the
+arguments of its Rust step other than the `Progress`, with the fields of an
+options or seed struct as arguments of their own, and returns the new track,
+bench or reconstruction with the step's report as a dict; the paragraphs
+below give each step's arguments and report fields.
+Most carry the Rust step's name. The exceptions are `pin_verdict` and
+`unpin_verdict`, which are `pin_verdicts` and `unpin_verdicts` and take one
+index, a list of indices or `"all"`; `create_track` and `create_cluster`, which
+return `(Bench, EditableTrack)` rather than a report; and `evaluate`, which runs
+`evaluate` or `evaluate_rendering_bitmap` as its `render_bitmap` keyword says.
+`verdicts_if_unpinned`, `bar_checks`, `track_of_point`,
+`render_bitmap_in_place`, `score_bitmap`, `bitmap_target`,
+`clamp_to_photograph`, `half_width_px`, `classify_track_rays`,
+`open_localizer`, the four `*_preconditions` checks, and the methods
+`EditableTrack::delete_image`, `drop_out_observations` and `held_reference`
+have no binding. `EditableTrack` is a read-only value
 class whose observations cross as dicts, with each stage's measurements under
 `"cluster"` and `"track"` and a key present exactly when something has measured
 it. Verdicts and provenance kinds are the lowercase words (`"in"`, `"out"`;
@@ -3718,7 +3732,8 @@ leaves the bitmap to be rendered (an unpin that reports `bitmap_pending`,
 `set_reference`, a patch move) it scores no row and the bars judge nothing.
 `set_stage` takes
 the stage as the word `"cluster"` or `"track"`. Their reports are dicts:
-`stage`, `measured`, `unmeasured` and `scored`, with `reference` at the cluster stage and
+`stage`, `measured`, `unmeasured`, `scored`, and `turned_in` and `turned_out`
+for what the repaint moved, with `reference` at the cluster stage and
 `at_infinity` with `position` or `direction` and `condition_number` at the track
 stage; `placed`, `kept_at_seed`, `at_infinity` with `position` or `direction`,
 `condition_number`, `classification` and the reading's own `evaluate` report for
@@ -3751,7 +3766,11 @@ costliest term by name (`"sharpness"`, `"capped_radius"`, `"angle"`,
 by name (`"no_tile"`, `"coverage"`, `"back_facing"` or `None`)
 ([../patch/reference-view.md](../patch/reference-view.md) § "Python bindings").
 `EditableTrack.reference_observation` is the reference in use, the row the
-stored bitmap is the tile of, or `None`; `EditableTrack.reference_view_observation`
+stored bitmap is the tile of, or `None`. It is not `EditableTrack::held_reference`,
+which has no binding: `set_reference` drops the bitmap unless the row was the
+reference already, so right after it `reference_observation` is `None` until
+the next render renders the bitmap from that row, and the step's report names
+the row. `EditableTrack.reference_view_observation`
 is the row the last evaluation's reference-view rule picked, or `None`.
 `EditableTrack.bitmap_for_judging` says whether the bitmap is one for judging
 only (§ "The stored bitmap's reference"). `EditableTrack.bitmap_pending` says
@@ -3928,7 +3947,7 @@ from sfmtool.reconstruction import EditedReconstruction
 edited = EditedReconstruction(recon)
 bench = bench_module.Bench()
 bench, track = bench_module.create_track(bench, edited, point=1207)
-track, read = bench_module.evaluate(track, edited, images)   # measures, moves nothing
+track, read = bench_module.evaluate(track, edited, images)   # reads; renders the bitmap if due, repaints unpinned rows
 print(read["scored"], "of", track.observation_count, "sightings scored")
 track, fitted = bench_module.fit(track, edited, images)      # moves it, then reads it back
 print(fitted["placed"], "sightings placed at", fitted["position"])

@@ -632,7 +632,10 @@ impl PyEditableTrack {
     /// A point stored at ``-1`` with a bitmap that names no row reads
     /// ``None`` until the first evaluation that renders where the rule picks a
     /// row, which renders the bitmap from that pick whatever the pins and makes it the reference.
-    /// :func:`set_reference` makes a row the reference and pins it.
+    /// :func:`set_reference` makes a row the reference and pins it, and drops
+    /// the bitmap unless the row was the reference already, so this reads
+    /// ``None`` until the next render renders the bitmap from that row; the
+    /// step's report names the row.
     #[getter]
     fn reference_observation(&self) -> Option<usize> {
         let payload = self.inner.track()?;
