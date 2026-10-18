@@ -503,7 +503,7 @@ bindings are tested in
 - Fitting the principal point. sfmtool's Rust bundle adjustment never frees
   it, and the fit keeps that. The pycolmap bundle adjustment behind
   `sfm densify --ba-refine-principal-point` and
-  `BundleAdjustTransform(refine_principal_point=True)` (on a reconstruction
+  `BundleAdjustTransform(release_principal_point=True)` (on a reconstruction
   with no spline camera) can; a camera refined there brings its moved
   principal point to a refit, which copies it.
 - An aspect for the spline models. They have one focal, and a lens whose `fx`

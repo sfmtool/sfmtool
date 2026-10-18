@@ -72,6 +72,13 @@ class BundleAdjustTransform:
     """Apply bundle adjustment to refine camera poses and 3D points.
 
     Args:
+        release_focal: Whether a released camera's focal may move.
+        release_principal_point: Whether a released camera's principal point
+            may move. Only the pycolmap path can move it; sfmtool's adjustment
+            always holds it.
+        release_distortion: Whether a released camera's lens distortion may
+            move. sfmtool's adjustment releases it only together with the
+            focal, and only where the camera model has distortion it can free.
         cameras: Camera-table indexes whose lens is released
             (``--bundle-adjust cameras=0+1``); every other camera is held, its
             intrinsics unchanged. ``None``, the default, releases every camera.
@@ -83,15 +90,15 @@ class BundleAdjustTransform:
 
     def __init__(
         self,
-        refine_focal_length: bool = True,
-        refine_principal_point: bool = False,
-        refine_extra_params: bool = True,
+        release_focal: bool = True,
+        release_principal_point: bool = False,
+        release_distortion: bool = True,
         cameras: list[int] | None = None,
         cross: bool = True,
     ):
-        self.refine_focal_length = refine_focal_length
-        self.refine_principal_point = refine_principal_point
-        self.refine_extra_params = refine_extra_params
+        self.release_focal = release_focal
+        self.release_principal_point = release_principal_point
+        self.release_distortion = release_distortion
         self.cameras = None if cameras is None else sorted(set(cameras))
         self.cross = cross
 
@@ -140,10 +147,10 @@ class BundleAdjustTransform:
         # solve can free, its lens distortion; a held camera frees neither.
         releases = [
             {
-                "focal": released and self.refine_focal_length,
+                "focal": released and self.release_focal,
                 "distortion": released
-                and self.refine_focal_length
-                and self.refine_extra_params
+                and self.release_focal
+                and self.release_distortion
                 and distortion_is_releasable(camera),
             }
             for camera, released in zip(recon.cameras, self._released(recon))
@@ -213,9 +220,9 @@ class BundleAdjustTransform:
             reconstruction.read_binary(str(colmap_dir))
 
             ba_config = pycolmap.BundleAdjustmentOptions()
-            ba_config.refine_focal_length = self.refine_focal_length
-            ba_config.refine_principal_point = self.refine_principal_point
-            ba_config.refine_extra_params = self.refine_extra_params
+            ba_config.refine_focal_length = self.release_focal
+            ba_config.refine_principal_point = self.release_principal_point
+            ba_config.refine_extra_params = self.release_distortion
 
             print(f"    Optimizing {len(reconstruction.points3D)} points...")
             if self.cameras is None:
@@ -407,11 +414,11 @@ class BundleAdjustTransform:
 
     def description(self) -> str:
         opts = []
-        if self.refine_focal_length:
+        if self.release_focal:
             opts.append("focal")
-        if self.refine_principal_point:
+        if self.release_principal_point:
             opts.append("pp")
-        if self.refine_extra_params:
+        if self.release_distortion:
             opts.append("extra")
         opt_str = ",".join(opts) if opts else "none"
         params = ""

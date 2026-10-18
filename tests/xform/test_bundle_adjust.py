@@ -3,6 +3,7 @@
 
 """Tests for BundleAdjustTransform."""
 
+import pytest
 import numpy as np
 
 from sfmtool.reconstruction import SfmrReconstruction
@@ -297,6 +298,26 @@ def test_bundle_adjust_description():
     desc = ba.description()
 
     assert "bundle" in desc.lower() or "adjust" in desc.lower() or "BA" in desc
+
+
+def test_bundle_adjust_release_keywords():
+    """The constructor takes the *release* keywords, keeps them as attributes
+    of the same names and lists the released intrinsics in its description;
+    the old pycolmap-style ``refine_*`` keywords are not accepted."""
+    ba = BundleAdjustTransform(
+        release_focal=False, release_principal_point=True, release_distortion=False
+    )
+    assert ba.release_focal is False
+    assert ba.release_principal_point is True
+    assert ba.release_distortion is False
+    assert ba.description() == "Bundle adjustment (refine: pp)"
+
+    default = BundleAdjustTransform()
+    assert default.release_focal and default.release_distortion
+    assert not default.release_principal_point
+
+    with pytest.raises(TypeError):
+        BundleAdjustTransform(refine_focal_length=False)
 
 
 def test_free_point_decision_line_names_the_unscored_points():
