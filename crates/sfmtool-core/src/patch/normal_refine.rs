@@ -12,7 +12,7 @@
 //!
 //! The implementation is split across sibling modules: `params` (config /
 //! result types), `parameterization` (sphere exp-map), `support` (window /
-//! patch placement), `level` (per-level frozen support), `znorm` (render +
+//! patch frame), `level` (per-level frozen support), `znorm` (render +
 //! z-normalize), `consensus` (the `Φ` objective) and `search` (coarse-to-fine).
 //! This module wires them together into the public [`refine_patch_normal`] /
 //! [`refine_patch_cloud_normals`] entry points.

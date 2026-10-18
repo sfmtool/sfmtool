@@ -187,7 +187,7 @@ fn ellipse_to_dict<'py>(
 /// reads, in the shape `get_bench_track` reports it except that `patch`
 /// carries no `unit`, since the dict does not carry the reconstruction:
 /// `grid_px` in grid px; `image_px` in the photograph's px, `None` without a
-/// Jacobian; and `patch`, `None` without a placement, as `{"kind",
+/// Jacobian; and `patch`, `None` without a patch frame, as `{"kind",
 /// "ellipse"}`: `kind` `"length"` in the reconstruction's `world_space_unit`,
 /// or `"angle"` in degrees for a patch at infinity. Each ellipse is
 /// [`ellipse_to_dict`]'s.
@@ -558,7 +558,7 @@ impl PyEditableTrack {
     /// Whether the track's coordinate is a bearing (``w == 0``) rather than a
     /// point.
     ///
-    /// The track's own flag and not its placement's ``w``: a track put on the
+    /// The track's own flag and not its patch frame's ``w``: a track put on the
     /// bench from a reconstruction with no patches carries no patch at all, and a
     /// bearing it came from is still a bearing. ``False`` at the cluster stage,
     /// which states no direction.
@@ -604,8 +604,8 @@ impl PyEditableTrack {
     /// what :func:`resize_patch`, :func:`resize_patch_to_pixel` and
     /// :func:`spin_patch` are read back through.
     #[getter]
-    fn placement<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyDict>>> {
-        let Some(frame) = self.inner.track().and_then(|p| p.placement.as_ref()) else {
+    fn patch_frame<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyDict>>> {
+        let Some(frame) = self.inner.track().and_then(|p| p.patch_frame.as_ref()) else {
             return Ok(None);
         };
         let vector = |v: nalgebra::Vector3<f64>| PyArray1::from_vec(py, vec![v.x, v.y, v.z]);
@@ -849,7 +849,7 @@ impl PyBench {
 
 /// Put the point at `point` on the bench as a track-stage editable track.
 ///
-/// The track arrives with the point's own placement, bitmap and keypoints, its
+/// The track arrives with the point's own patch frame, bitmap and keypoints, its
 /// origin set to that point, and every observation ``in`` and pinned, so an
 /// :func:`evaluate` leaves those verdicts alone until :func:`unpin_verdict`
 /// hands them to the bars. The measurements are
@@ -1753,7 +1753,7 @@ fn parse_stage(word: &str) -> PyResult<StageKind> {
 /// Read `track` as it stands: fill the measurement slots of every observation,
 /// whatever its verdict, at the stage it is in, then let the bars decide every
 /// unpinned verdict from those readings, and **move nothing else**. The
-/// position, the placement, the bitmap and every keypoint come back exactly as they
+/// position, the patch frame, the bitmap and every keypoint come back exactly as they
 /// went in; each unpinned observation takes the verdict :func:`apply_thresholds`
 /// would give it, best score first and one ``in`` per image, and a pinned one
 /// keeps its own. An ``out`` observation is scored the way an ``in`` one is.
@@ -1879,7 +1879,7 @@ fn evaluate(
 /// At the **track stage** the patch is localized into every view, refined to
 /// sub-pixel, the ``in`` results are re-triangulated, the patch is placed at
 /// what they resolve to and the patch bitmap is rendered over them; the
-/// keypoints, the coordinate, the placement and the bitmap are written. At the
+/// keypoints, the coordinate, the patch frame and the bitmap are written. At the
 /// **cluster stage** a fit is the refinement, which is what a reading is too: a
 /// cluster has no geometry behind it to move.
 ///
@@ -1969,7 +1969,7 @@ fn fit(
 /// **Down**, track to cluster: always possible and lossy on purpose. The
 /// reference becomes the ``in`` observation with the largest projected patch
 /// scale, every observation is re-seeded at its keypoint with the shape the
-/// patch projects to there, and the position, the placement, the bitmap and the
+/// patch projects to there, and the position, the patch frame, the bitmap and the
 /// track-stage measurements are dropped.
 ///
 /// Setting the stage a track is already at gives the track back unchanged, with

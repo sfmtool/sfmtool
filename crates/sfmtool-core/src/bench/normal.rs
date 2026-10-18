@@ -406,7 +406,7 @@ pub fn normal_preconditions(track: &EditableTrack) -> Result<(), NormalError> {
     let Stage::Track(payload) = &track.stage else {
         return Err(NormalError::ClusterStage);
     };
-    let Some(frame) = &payload.placement else {
+    let Some(frame) = &payload.patch_frame else {
         return Err(NormalError::NoFrame);
     };
     if payload.at_infinity || frame.w == 0.0 {
@@ -729,7 +729,7 @@ fn grid_normal(
 fn frame_of(track: &EditableTrack) -> OrientedPatch {
     track
         .track()
-        .and_then(|payload| payload.placement.as_ref())
+        .and_then(|payload| payload.patch_frame.as_ref())
         .expect("normal_preconditions checked the patch is there")
         .squared()
 }

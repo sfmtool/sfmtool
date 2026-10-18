@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Patch window kernel, the frozen `R×R` scoring [`Support`], and the
-//! patch-placement helpers ([`repose_patch`], [`view_render_patch`]) shared by
+//! patch-frame helpers ([`repose_patch`], [`view_render_patch`]) shared by
 //! the refinement and the per-point patch operations, and which sampler each
 //! view of a multi-view render uses ([`ViewSamplers`]).
 

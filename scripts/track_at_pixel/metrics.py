@@ -19,17 +19,17 @@ from context import texel_scale
 
 
 def _texel_scales(dataset, track) -> dict[int, dict]:
-    placement = track.placement
-    if placement is None:
+    patch_frame = track.patch_frame
+    if patch_frame is None:
         return {}
     out = {}
     for i, o in enumerate(track.observations):
         s = texel_scale(
             dataset.cameras[int(o["image"])],
-            placement["center"],
-            placement["u_halfvec"],
-            placement["v_halfvec"],
-            float(placement["w"]),
+            patch_frame["center"],
+            patch_frame["u_halfvec"],
+            patch_frame["v_halfvec"],
+            float(patch_frame["w"]),
         )
         if s is not None:
             out[i] = s
@@ -196,10 +196,10 @@ def score(
             coord if at_inf else coord - cam.center, gt_dir
         )
 
-    placement = track.placement
-    if placement is not None:
-        u = np.asarray(placement["u_halfvec"], float)
-        v = np.asarray(placement["v_halfvec"], float)
+    patch_frame = track.patch_frame
+    if patch_frame is not None:
+        u = np.asarray(patch_frame["u_halfvec"], float)
+        v = np.asarray(patch_frame["v_halfvec"], float)
         normal = np.cross(u, v)
         m["normal_err_deg"] = _angle_deg(normal, gt_normal) if gt_w != 0 else None
         half = float(np.linalg.norm(u))

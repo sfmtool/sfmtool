@@ -562,7 +562,7 @@ panel was showing. The panel is handed `&AppState` and cannot build it, so the
 dock asks for it before drawing the panel (`AppState::refresh_viewed_track`).
 
 **What Viewed mode reads.** Everything about the point, including its position,
-colour and error, its whole track, each observation's keypoint, its patch placement
+colour and error, its whole track, each observation's keypoint, its patch frame
 and stored bitmap, and its triangulation diagnostics, is read through the
 version's overlay accessor rather than off the base, so a point an edit modified
 shows the track it holds now.
@@ -667,7 +667,7 @@ point a metre from the world origin. So the line is `Bearing (x, y, z), at
 infinity` for a bearing and `Position (x, y, z)` otherwise, *at infinity* being
 the Viewed header's word for the same thing. It comes from the track's own
 `at_infinity` and not from its patch's `w`, so a point put on the bench from a
-reconstruction with no patch placements reads as the bearing it is. A fit that
+reconstruction with no patch frames reads as the bearing it is. A fit that
 crosses the boundary changes the headline's first word, which is how a person
 sees that it crossed. The same flag puts **an infinity mark** (∞, U+221E, which
 egui's bundled fonts draw) left of the label, as the Viewed header puts one left
@@ -1459,9 +1459,9 @@ over reads interpolation rather than detail, and one that spans a large
 stretch of the photograph with few samples averages away detail the
 photograph has, so the zoom says how much of what the patch holds is the
 photograph's own detail. It is the Jacobian of the warp from the patch grid to
-the photograph, through the placement the row's tile is rendered through, the
-patch re-anchored where the observation sits (`patch::render_placement`), so it
-describes the warp the tile shows and not a separately derived placement.
+the photograph, through the patch frame the row's tile is rendered through, the
+patch re-anchored where the observation sits (`patch::render_patch_frame`), so it
+describes the warp the tile shows and not a separately derived patch frame.
 
 **The zoom is in patch-grid px at the reconstruction's patch resolution `R`**,
 per photograph pixel: the grid the bench's shift and self-similarity readings
@@ -1628,7 +1628,7 @@ prints `-` at the cluster stage, before the track is evaluated, and where it
 could not be evaluated. Where the rule picks no row, no render the rule
 decides gives a bitmap
 ([`../core/patch/reference-view.md`](../core/patch/reference-view.md) § "The
-stored bitmap"). On a file with patch placements but no stored bitmaps, the bitmap
+stored bitmap"). On a file with patch frames but no stored bitmaps, the bitmap
 is the one SfM Explorer rendered for display when it opened the file, and the
 reference is the row it was rendered from: the file's reference observation,
 or the display render's own pick for a point the file stores at `-1`, held by
@@ -1734,7 +1734,7 @@ its wider patch the same way, with the row's sampler and at the tile's
 sampling, so each texel picks the level the tile's own texel there does and the
 tile is still the middle of the picture texel for texel.
 
-**The track-stage tile's placement is re-anchored on the observation's keypoint**
+**The track-stage tile's patch frame is re-anchored on the observation's keypoint**
 (`OrientedPatch::anchored_at_keypoint`, [patch-cloud.md](../core/patch/patch-cloud.md)):
 the patch centre slides within its own plane, on its tangent sphere for a point
 at infinity, until it projects onto the keypoint this observation carries. The
@@ -1743,9 +1743,9 @@ aligned the pixels rather than at the point's geometric projection. The tiles of
 a well-localized track then match each other whatever discrepancy the geometry
 carries, and that discrepancy is what the *Proj. err* column reports: a column
 of matching tiles beside a large error is a well-aligned patch whose position or
-pose is off, not a bad match. The stored placement is used as it is when the
+pose is off, not a bad match. The stored patch frame is used as it is when the
 observation has no keypoint or the keypoint's ray cannot meet the patch
-(`patch::render_placement`).
+(`patch::render_patch_frame`).
 
 **Where the observation sits is one rule** at either stage: the track-stage
 keypoint, else the refined cluster position, else the seed it was proposed
@@ -1765,7 +1765,7 @@ lower levels where a warp shrinks the photograph. A failed decode is
 remembered so a missing file is not reopened every frame. Before the body
 draws, the dock asks for every image the drawn track observes: the focused
 item's in Edited mode, and in Viewed mode the selected point's, when the
-reconstruction carries patch placements, with the SIFT cache filled for them on a
+reconstruction carries patch frames, with the SIFT cache filled for them on a
 `sift_files` reconstruction. Asking (`state::display_photograph`) starts a
 decode on the rayon pool for each photograph the cache does not hold, and
 repaints when it lands; the body only peeks at the cache, and a row whose
@@ -1778,7 +1778,7 @@ first.
 over three times the patch's width (`tile::CONTEXT_FACTOR`), 288 points across,
 so a person can see what surrounds the patch and whether it sits on the surface
 they meant. The wider picture is rendered at the tile's own sampling, so the
-tile is its middle third texel for texel: at the track stage the tile's placement,
+tile is its middle third texel for texel: at the track stage the tile's patch frame,
 re-anchored where the observation sits, is widened three times about its centre
 and warped at three times the tile's resolution; at the cluster stage the kernel's
 sampler reads the member grid over three times the cluster's radius at three
@@ -1790,7 +1790,7 @@ reads. Over the picture are drawn:
 - at the track stage, a ring where the track's point projects into this
   photograph, or, before the track is triangulated, where its patch's centre
   projects: the other end of the distance the *Proj. err* cell reports. The
-  projected pixel is read onto the widened placement's plane
+  projected pixel is read onto the widened patch frame's plane
   (`OrientedPatch::keypoint_plane_offset`, the reading that anchors the tile),
   so the ring sits on the part of the photograph the picture shows at that
   pixel;
@@ -1820,7 +1820,7 @@ it. The crop is the photograph itself, cut around the outline Image Detail's
 bench layer strokes for the row, with that outline over it in the row's
 verdict colour and none of the layer's other marks: no dot, no normal, no SIFT
 features. At the track stage the outline is the patch re-anchored where the
-observation sits (`crate::bench::geometry::anchored_placement`, the placement the tile
+observation sits (`crate::bench::geometry::anchored_patch_frame`, the patch frame the tile
 is rendered through) with its boundary projected through the camera's own
 model (`geometry::project_outline`, the function Image Detail strokes), so on a
 fisheye the edges show as the curves they are. At the cluster stage it is the
@@ -2060,21 +2060,21 @@ index the cluster patches are judged against, has moved. A session so finds the
 files the last one built without anyone asking, and a look that found nothing
 is remembered, so a node with neither file is not checked on every frame.
 
-#### A point with no patch placement
+#### A point with no patch frame
 
-A reconstruction whose points carry no patch placement, which is the usual case for
+A reconstruction whose points carry no patch frame, which is the usual case for
 a `sift_files` reconstruction imported from COLMAP, is drawn as any other, and
 what that shows is less than the rest of this section describes. `create_track`
-builds a track-stage track with no placement, and core's `evaluate_preconditions`
+builds a track-stage track with no patch frame, and core's `evaluate_preconditions`
 refuses it, so the toolbar shows the refusal sentence (*"Cannot evaluate
 pt3d_…: the track carries no patch to read against; …"*) and every
 number cell reads `-`, the reprojection error and ray angle included, and every
 *Verdict* cell `-`. The *Crop* and *Patch* cells are empty frames, and there is
 no crop hover view to carry the pixel and the feature index. The header still
 carries the point's summary (its colour, `xyzw`, error, track length, max pair
-angle, depth z and cond), which reads the point and needs no placement. So for
+angle, depth z and cond), which reads the point and needs no patch frame. So for
 such a point the panel shows its header and no per-observation readings. Which
-readings an evaluation without a placement should produce and what the *Crop*
+readings an evaluation without a patch frame should produce and what the *Crop*
 cell would show without one are not decided here (§ "Non-goals").
 
 **Such an item is not edited here.** A `sift_files` reconstruction's bench is
@@ -2083,7 +2083,7 @@ but *Discard* and *Rename*, the threshold boxes, the *Keep* switches and pins
 and the row menus' editing entries are greyed and take no click, with the
 sentence that names Convert to Embedded Patches as their hover. After the
 conversion, putting the point on the bench again (*Edit*, *Edit on Bench* or a
-double-click) rebuilds the item with the point's new patch placement, and from
+double-click) rebuilds the item with the point's new patch frame, and from
 then on it is edited like any other.
 
 #### The gestures that name a pixel
@@ -2247,7 +2247,7 @@ texels, so their geometry is checked without reading pixels off the screen.
   infinity mark,
   the line under the header in both forms, the crop's pixel and feature index
   for a row put on by index, the evaluation state, a point with no patch
-  placement (§ "A point with no patch placement"), a row click, which selects
+  patch frame (§ "A point with no patch frame"), a row click, which selects
   and reveals with no row selection, and a double-click, which asks for
   camera view.
 - **Edited mode and the table**:
@@ -2256,7 +2256,7 @@ texels, so their geometry is checked without reading pixels off the screen.
   section:
   - § "The toolbar": no *Evaluate* button, and the evaluation state in the
     toolbar and the Status cells as the evaluation runs, lands and runs again,
-    with core's refusal sentence for a bearing that has no placement; no item
+    with core's refusal sentence for a bearing that has no patch frame; no item
     tabs, other items on the bench appearing nowhere in what the panel drew;
     *Lock* starting ticked and toggling with no version and no gesture
     reported, greyed at the cluster stage, where a click leaves it as it was;
@@ -2365,7 +2365,7 @@ texels, so their geometry is checked without reading pixels off the screen.
     entries, signs included, and changes no zoom; a slanted patch gives a range
     of zooms; a tile whose middle is off the photograph has the zoom it has on
     it; a patch behind the camera or seen edge on has none; a keypoint moved
-    off the projection gives exactly the re-anchored placement's Jacobian; 48
+    off the projection gives exactly the re-anchored patch frame's Jacobian; 48
     px patch bitmaps give a Jacobian half the size and zooms twice as large as
     no bitmaps; and the cell prints the zoom with no photograph decoded.
   - The order of the rows (§ "The rows are ordered by a column"): increasing
@@ -2456,8 +2456,8 @@ texels, so their geometry is checked without reading pixels off the screen.
 - **Editing the patch by hand in this panel.** The hand edits that move it are
   the two bench layers' handles and the wire's patch tools
   ([`bench.md`](bench.md) § "The wire").
-- **Per-observation readings for a point with no patch placement** (§ "A point
-  with no patch placement"); a projected outline of the viewed track in Image Detail or
+- **Per-observation readings for a point with no patch frame** (§ "A point
+  with no patch frame"); a projected outline of the viewed track in Image Detail or
   a figure of it in the 3D viewer, which would need its own way of reading as
   not editable; the stored bitmap's alpha channel as a tile; a per-row highlight of
   the track ray in the 3D viewer; and a positional uncertainty display.

@@ -358,7 +358,7 @@ impl Layer {
                 layer.build_track_stage(
                     track,
                     &here,
-                    payload.placement.as_ref(),
+                    payload.patch_frame.as_ref(),
                     view.as_ref(),
                     &to_panel,
                 );
@@ -379,7 +379,7 @@ impl Layer {
     /// is one patch: two sightings in a photograph are two readings of where
     /// it lands, not two squares. Its colour is `in` when either is, so an
     /// image the track is `in` reads as `in`. It is drawn through
-    /// the placement re-anchored on that sighting, as the tile is rendered: the
+    /// the patch frame re-anchored on that sighting, as the tile is rendered: the
     /// sighting is where the patch sits in this photograph, and the geometric
     /// projection is where the 3D says it should, which the hollow centre and
     /// the projection-offset segment show separately.
@@ -387,7 +387,7 @@ impl Layer {
     /// The normal leaves the **anchored** centre, which is the sighting's dot,
     /// for the reason the outline is anchored: the arrow belongs to the square
     /// drawn, and one standing out of the hollow centre instead would part from
-    /// its own outline by the projection offset. The anchored placement is the
+    /// its own outline by the projection offset. The anchored patch frame is the
     /// patch moved across its own plane, so its normal line is parallel to the
     /// patch's and the two gestures read the same depth and the same facing off
     /// either; the square a person looks at is the one the pointer is read
@@ -495,13 +495,13 @@ impl Layer {
     /// An image counts as the track's when it holds an observation of any
     /// verdict, so an `out` sighting keeps the member drawing
     /// and only an image with none gets the ghost. What is projected is the
-    /// patch **itself**, not a placement re-anchored on a keypoint, because
+    /// patch **itself**, not a patch frame re-anchored on a keypoint, because
     /// there is no keypoint here to anchor on: the ghost is where the 3D places
     /// the square, which is also where the hollow centre of a member image
     /// sits.
     ///
     /// There is nothing to draw, and so no ghost, at the cluster stage (no
-    /// shared geometry exists to project), at a track stage with no placement
+    /// shared geometry exists to project), at a track stage with no patch frame
     /// yet, and in a view that cannot see the square: the patch's back face
     /// turned toward the camera ([`OrientedPatch::is_front_facing`]), its plane
     /// seen within [`geometry::MIN_PLANE_ANGLE_DEG`] of edge-on
@@ -528,7 +528,7 @@ impl Layer {
         let Stage::Track(payload) = &track.stage else {
             return None;
         };
-        let patch = payload.placement.as_ref()?;
+        let patch = payload.patch_frame.as_ref()?;
         let (camera, pose) = geometry::view_of(image_table, img_idx)?;
         if !patch.is_front_facing(&pose)
             || geometry::plane_is_edge_on(patch, pose.inverse_translation_origin())
@@ -934,7 +934,7 @@ pub(super) fn ghost_color() -> Color32 {
 /// The square an outline drawn from `viewpoint` shows in a view, at the track
 /// stage: the patch re-anchored on the observation's keypoint, or the patch
 /// itself for an image. `None` at the cluster stage, for a track with no
-/// placement, and for an observation index past the end.
+/// patch frame, and for an observation index past the end.
 ///
 /// The one place both the drawing and the drag decide it, so the square a
 /// pointer is read against is the square drawn.
@@ -947,11 +947,14 @@ fn square_of(
     let Stage::Track(payload) = &track.stage else {
         return None;
     };
-    let patch = payload.placement.as_ref()?;
+    let patch = payload.patch_frame.as_ref()?;
     Some(match viewpoint {
-        Viewpoint::Observation(observation) => {
-            geometry::anchored_placement(patch, camera, pose, track.observations.get(observation)?)
-        }
+        Viewpoint::Observation(observation) => geometry::anchored_patch_frame(
+            patch,
+            camera,
+            pose,
+            track.observations.get(observation)?,
+        ),
         Viewpoint::Image(_) => patch.clone(),
     })
 }

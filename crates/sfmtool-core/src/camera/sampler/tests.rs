@@ -156,27 +156,27 @@ fn tilted_square(tilt_deg: f64) -> OrientedPatch {
     )
 }
 
-/// The placement form reads the Jacobian `patch_grid_jacobian` reads: a
+/// The patch frame form reads the Jacobian `patch_grid_jacobian` reads: a
 /// facing square stays on `BilinearMip`, the same square at 70° moves.
 #[test]
-fn the_placement_form_applies_the_rule_to_the_patch_grid_jacobian() {
+fn the_patch_frame_form_applies_the_rule_to_the_patch_grid_jacobian() {
     let (camera, pose) = camera();
     let rule = SamplerChoice::default();
     for tilt in [0.0, 30.0, 50.0, 70.0] {
         let patch = tilted_square(tilt);
         let jacobian = patch_grid_jacobian(&patch, &camera, &pose, 24);
         assert_eq!(
-            rule.for_placement(&patch, &camera, &pose, 24),
+            rule.for_patch_frame(&patch, &camera, &pose, 24),
             rule.for_jacobian(jacobian),
             "tilt {tilt}"
         );
     }
     assert_eq!(
-        rule.for_placement(&tilted_square(0.0), &camera, &pose, 24),
+        rule.for_patch_frame(&tilted_square(0.0), &camera, &pose, 24),
         Sampler::BilinearMip
     );
     assert_eq!(
-        rule.for_placement(&tilted_square(70.0), &camera, &pose, 24),
+        rule.for_patch_frame(&tilted_square(70.0), &camera, &pose, 24),
         Sampler::Anisotropic
     );
     // A context tile twice as wide at twice the resolution has the same texel,
@@ -186,8 +186,8 @@ fn the_placement_form_applies_the_rule_to_the_patch_grid_jacobian() {
         let mut wide = core.clone();
         wide.half_extent = [1.0, 1.0];
         assert_eq!(
-            rule.for_placement(&wide, &camera, &pose, 48),
-            rule.for_placement(&core, &camera, &pose, 24),
+            rule.for_patch_frame(&wide, &camera, &pose, 48),
+            rule.for_patch_frame(&core, &camera, &pose, 24),
             "tilt {tilt}"
         );
     }

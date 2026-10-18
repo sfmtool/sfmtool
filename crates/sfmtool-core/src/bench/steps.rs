@@ -274,7 +274,7 @@ pub fn track_of_point(
         // node with no patch frames has no frame to read one from, and its
         // bearings are still bearings.
         at_infinity: stored.is_at_infinity(),
-        placement: view.placement(),
+        patch_frame: view.patch_frame(),
         bitmap: view.patch_bitmap().map(|b| b.to_owned()),
         // The bench's rows are the stored track's observations in order, so
         // the stored index names the row. Read with or without a bitmap: the
@@ -1539,7 +1539,7 @@ pub fn resize_patch(
     if !half_length.is_finite() || half_length <= 0.0 {
         return Err(TrackEditError::BadSize(half_length));
     }
-    let patch = placement_of(track)?;
+    let patch = patch_frame_of(track)?;
     let was = patch.half_extent[0];
     let unchanged = ResizeReport {
         observation: None,
@@ -1672,7 +1672,7 @@ pub fn resize_patch_to_pixel(
     match (&track.stage, viewpoint) {
         (Stage::Track(_), _) => {
             let pointed = pointed_at(track, edited, viewpoint, pixel)?;
-            let patch = placement_of(track)?;
+            let patch = patch_frame_of(track)?;
             let direction = match edge.axis() {
                 Axis::U => patch.u_axis,
                 Axis::V => patch.v_axis,
@@ -1848,7 +1848,7 @@ pub fn translate_patch_to_pixel(
         return Err(TrackEditError::BadPixel(pixel));
     }
     let pointed = pointed_at(track, edited, viewpoint, pixel)?;
-    let patch = placement_of(track)?;
+    let patch = patch_frame_of(track)?;
     // The offset lies in the plane by construction, so reading it on the two
     // in-plane axes is the whole of it and the normal part is zero outright.
     let offset = pointed.offset;
@@ -1964,7 +1964,7 @@ pub fn translate_patch(
     if !named.iter().all(|c| c.is_finite()) {
         return Err(TrackEditError::BadDisplacement(named));
     }
-    let patch = placement_of(track)?;
+    let patch = patch_frame_of(track)?;
     if patch.w == 0.0 && by.z != 0.0 {
         return Err(TrackEditError::AtInfinity);
     }
@@ -2072,7 +2072,7 @@ fn pointed_at(
         }
         Viewpoint::Image(image) => (image, None),
     };
-    let patch = placement_of(track)?;
+    let patch = patch_frame_of(track)?;
     let (camera, cam_from_world) = view_of(edited, image)?;
     let (clamped_from, pixel) = clamp_to_photograph(&camera, pixel);
     let refused = || TrackEditError::NoProjection { viewpoint };
@@ -2290,7 +2290,7 @@ fn tilt_arc<'t>(
         return Err(TrackEditError::BadNormal(named));
     }
     let asked = normal / length;
-    let frame = placement_of(track)?;
+    let frame = patch_frame_of(track)?;
     if frame.w == 0.0 {
         return Err(TrackEditError::AtInfinity);
     }
@@ -2410,7 +2410,7 @@ pub fn spin_patch(
     if !angle_rad.is_finite() {
         return Err(TrackEditError::BadAngle(angle_rad));
     }
-    placement_of(track)?;
+    patch_frame_of(track)?;
     let mut next = track.clone();
     let changed = angle_rad.abs() > NO_EFFECT_RAD;
     if changed {
@@ -2595,9 +2595,9 @@ fn observation_at(
 
 /// The track-stage patch, or the refusal a track-stage step owes a cluster or
 /// a track nothing has triangulated.
-fn placement_of(track: &EditableTrack) -> Result<&OrientedPatch, TrackEditError> {
+fn patch_frame_of(track: &EditableTrack) -> Result<&OrientedPatch, TrackEditError> {
     match &track.stage {
-        Stage::Track(payload) => payload.placement.as_ref().ok_or(TrackEditError::NoFrame),
+        Stage::Track(payload) => payload.patch_frame.as_ref().ok_or(TrackEditError::NoFrame),
         Stage::Cluster(_) => Err(TrackEditError::WrongStage {
             wanted: StageKind::Track,
             is: StageKind::Cluster,
@@ -2609,7 +2609,7 @@ fn placement_of(track: &EditableTrack) -> Result<&OrientedPatch, TrackEditError>
 /// as a track stage carrying a patch, for a step that moves the patch.
 ///
 /// The bitmap is dropped here and the reference observation kept: every
-/// caller moves the patch, and a bitmap rendered through the old placement no
+/// caller moves the patch, and a bitmap rendered through the old patch frame no
 /// longer shows the new one.
 fn track_payload_mut(
     track: &mut EditableTrack,
@@ -2620,12 +2620,12 @@ fn track_payload_mut(
     payload.drop_stale_bitmap();
     let TrackPayload {
         position,
-        placement,
+        patch_frame,
         ..
     } = payload;
     (
         position,
-        placement
+        patch_frame
             .as_mut()
             .expect("the patch was read before the clone"),
     )

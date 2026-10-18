@@ -456,20 +456,20 @@ pub(crate) fn pixel_ray(
 /// The track's patch re-anchored on where `observation` sits in its
 /// photograph, or the patch itself when the ray cannot meet it.
 ///
-/// The placement the Image Detail layer outlines, so it is the placement a drag
+/// The patch frame the Image Detail layer outlines, so it is the patch frame a drag
 /// of that outline is read against: a pointer is judged against the square a
 /// person can see, not against the one the 3D position alone would draw. The
-/// same placement `resize_patch_to_pixel` reads and writes.
-pub(crate) fn anchored_placement(
-    placement: &OrientedPatch,
+/// same patch frame `resize_patch_to_pixel` reads and writes.
+pub(crate) fn anchored_patch_frame(
+    patch_frame: &OrientedPatch,
     camera: &CameraIntrinsics,
     pose: &RigidTransform,
     observation: &Observation,
 ) -> OrientedPatch {
     observation
         .site()
-        .and_then(|site| placement.anchored_at_keypoint(camera, pose, site))
-        .unwrap_or_else(|| placement.clone())
+        .and_then(|site| patch_frame.anchored_at_keypoint(camera, pose, site))
+        .unwrap_or_else(|| patch_frame.clone())
 }
 
 /// Samples per edge of a projected patch boundary, before the size of the
@@ -492,14 +492,14 @@ pub(crate) const CORNERS: [(f64, f64); 4] = [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.
 /// this outline and Track View crops the photograph around it, so the two draw
 /// one curve.
 pub(crate) fn project_outline(
-    placement: &OrientedPatch,
+    patch_frame: &OrientedPatch,
     camera: &CameraIntrinsics,
     pose: &RigidTransform,
 ) -> (Vec<Option<[f64; 2]>>, usize) {
-    let corners: Vec<[f64; 2]> = placement
+    let corners: Vec<[f64; 2]> = patch_frame
         .boundary(1)
         .into_iter()
-        .filter_map(|p| camera.project_homogeneous(pose, p.coords, placement.w))
+        .filter_map(|p| camera.project_homogeneous(pose, p.coords, patch_frame.w))
         .collect();
     let span = corners.iter().fold(0.0f64, |span, a| {
         corners.iter().fold(span, |span, b| {
@@ -509,10 +509,10 @@ pub(crate) fn project_outline(
     // One sample per dozen source pixels of the widest side, which is finer
     // than the eye can tell a chord from an arc at any zoom the panel offers.
     let samples = ((span / 12.0).ceil() as usize).clamp(BASE_SAMPLES, MAX_SAMPLES);
-    let projected = placement
+    let projected = patch_frame
         .boundary(samples)
         .iter()
-        .map(|point| camera.project_homogeneous(pose, point.coords, placement.w))
+        .map(|point| camera.project_homogeneous(pose, point.coords, patch_frame.w))
         .collect();
     (projected, samples)
 }
@@ -542,18 +542,18 @@ pub(crate) fn parallelogram(
 /// at a slant turns by what the person aimed at on its own surface rather than
 /// by the foreshortened angle the pointer swept.
 pub(crate) fn turn_between(
-    placement: &OrientedPatch,
+    patch_frame: &OrientedPatch,
     camera: &CameraIntrinsics,
     pose: &RigidTransform,
     from: [f64; 2],
     to: [f64; 2],
 ) -> Option<f64> {
-    let start = in_plane(placement, camera, pose, from)?;
-    let now = in_plane(placement, camera, pose, to)?;
+    let start = in_plane(patch_frame, camera, pose, from)?;
+    let now = in_plane(patch_frame, camera, pose, to)?;
     Some(wrapped(now.1.atan2(now.0) - start.1.atan2(start.0)))
 }
 
-/// An angle in `(-pi, pi]`, so a drag across the placement's own `-u` axis
+/// An angle in `(-pi, pi]`, so a drag across the patch frame's own `-u` axis
 /// reads as the small turn it looks like rather than as its explement.
 fn wrapped(angle: f64) -> f64 {
     angle - std::f64::consts::TAU * (angle / std::f64::consts::TAU).round()
@@ -563,13 +563,16 @@ fn wrapped(angle: f64) -> f64 {
 /// axes, or `None` when the ray cannot meet the patch or meets it at its
 /// centre, where no direction is named.
 fn in_plane(
-    placement: &OrientedPatch,
+    patch_frame: &OrientedPatch,
     camera: &CameraIntrinsics,
     pose: &RigidTransform,
     pixel: [f64; 2],
 ) -> Option<(f64, f64)> {
-    let offset = placement.keypoint_plane_offset(camera, pose, pixel)?;
-    let pair = (offset.dot(&placement.u_axis), offset.dot(&placement.v_axis));
+    let offset = patch_frame.keypoint_plane_offset(camera, pose, pixel)?;
+    let pair = (
+        offset.dot(&patch_frame.u_axis),
+        offset.dot(&patch_frame.v_axis),
+    );
     (pair.0.hypot(pair.1) > MIN_OFFSET).then_some(pair)
 }
 
@@ -603,7 +606,7 @@ pub(crate) fn edge_of(k: usize) -> Edge {
 
 // ---- Reading a pointer of the 3D viewport against a patch ------------------
 
-/// How square-on the placement's plane has to be seen before a pointer can be
+/// How square-on the patch frame's plane has to be seen before a pointer can be
 /// read against it, in degrees.
 ///
 /// Three of the viewport's handles -- the dot, an edge and a corner -- name a
@@ -656,14 +659,14 @@ fn ray_plane(
     (distance > 0.0 && distance.is_finite()).then(|| origin + ray * distance)
 }
 
-/// Where the ray from `origin` along `direction` meets the placement, in the
-/// placement's own coordinates.
+/// Where the ray from `origin` along `direction` meets the patch frame, in the
+/// patch frame's own coordinates.
 ///
 /// The counterpart of `OrientedPatch::keypoint_plane_offset` for a pointer that
 /// is already a ray rather than a pixel of a photograph, and the one place the
 /// 3D viewport's three plane handles read the pointer.
 ///
-/// For a finite placement this is the ray's meeting with the plane the square
+/// For a finite patch frame this is the ray's meeting with the plane the square
 /// lies in, in front of the eye. For a **direction patch** (`w == 0`) the
 /// origin drops out -- a direction has no parallax, and the viewer is in effect
 /// at the sphere's centre -- so what meets the tangent plane is the ray's
@@ -672,23 +675,23 @@ fn ray_plane(
 /// it behind the eye, or points more than [`MAX_BEARING_ANGLE_DEG`] from the
 /// bearing.
 pub(crate) fn plane_point(
-    placement: &OrientedPatch,
+    patch_frame: &OrientedPatch,
     origin: Point3<f64>,
     direction: Vector3<f64>,
 ) -> Option<Point3<f64>> {
     let ray = unit(direction)?;
-    if placement.w == 0.0 {
-        let bearing = placement.center.coords.normalize();
+    if patch_frame.w == 0.0 {
+        let bearing = patch_frame.center.coords.normalize();
         let along = ray.dot(&bearing);
         if along <= MAX_BEARING_ANGLE_DEG.to_radians().cos() {
             return None;
         }
-        return Some(Point3::from(ray / ray.dot(&placement.center.coords)));
+        return Some(Point3::from(ray / ray.dot(&patch_frame.center.coords)));
     }
-    ray_plane(origin, ray, placement.center, placement.normal())
+    ray_plane(origin, ray, patch_frame.center, patch_frame.normal())
 }
 
-/// Whether the placement's plane is too near edge-on from `eye` for a pointer
+/// Whether the patch frame's plane is too near edge-on from `eye` for a pointer
 /// to be read against it: the angle between the view ray through the centre and
 /// the plane is under [`MIN_PLANE_ANGLE_DEG`].
 ///
@@ -700,11 +703,11 @@ pub(crate) fn plane_point(
 /// Never true for a **direction patch**, whose tangent plane faces the eye by
 /// construction: the bearing is read rotation-only, so the viewer stands at the
 /// centre of the sphere it is tangent to.
-pub(crate) fn plane_is_edge_on(placement: &OrientedPatch, eye: Point3<f64>) -> bool {
-    if placement.w == 0.0 {
+pub(crate) fn plane_is_edge_on(patch_frame: &OrientedPatch, eye: Point3<f64>) -> bool {
+    if patch_frame.w == 0.0 {
         return false;
     }
-    let Some(cosine) = view_cosine(placement, eye) else {
+    let Some(cosine) = view_cosine(patch_frame, eye) else {
         return true;
     };
     // The sine of the angle between the ray and the plane is its cosine against
@@ -712,7 +715,7 @@ pub(crate) fn plane_is_edge_on(placement: &OrientedPatch, eye: Point3<f64>) -> b
     cosine < MIN_PLANE_ANGLE_DEG.to_radians().sin()
 }
 
-/// Whether the placement's normal is too near end-on from `eye` for a pointer
+/// Whether the patch frame's normal is too near end-on from `eye` for a pointer
 /// to be read along it: the angle between the normal and the view ray through
 /// the centre is under [`MIN_PLANE_ANGLE_DEG`].
 ///
@@ -733,18 +736,18 @@ pub(crate) fn plane_is_edge_on(placement: &OrientedPatch, eye: Point3<f64>) -> b
 /// handles, when this is true from that photograph's camera.
 ///
 /// Always true for a **direction patch**, whose normal is its own bearing:
-/// there is no line standing off the placement to take hold of.
-pub(crate) fn normal_is_end_on(placement: &OrientedPatch, eye: Point3<f64>) -> bool {
-    if placement.w == 0.0 {
+/// there is no line standing off the patch frame to take hold of.
+pub(crate) fn normal_is_end_on(patch_frame: &OrientedPatch, eye: Point3<f64>) -> bool {
+    if patch_frame.w == 0.0 {
         return true;
     }
-    let Some(cosine) = view_cosine(placement, eye) else {
+    let Some(cosine) = view_cosine(patch_frame, eye) else {
         return true;
     };
     cosine > MIN_PLANE_ANGLE_DEG.to_radians().cos()
 }
 
-/// The magnitude of the cosine between the placement's normal and the view ray
+/// The magnitude of the cosine between the patch frame's normal and the view ray
 /// through its centre, or `None` when `eye` names no view of it.
 ///
 /// The one number all three of this module's view tests are decided by, which
@@ -752,14 +755,14 @@ pub(crate) fn normal_is_end_on(placement: &OrientedPatch, eye: Point3<f64>) -> b
 /// the arrowhead ([`tilt_gesture`]) needs no refusal of its own: it reads the
 /// same cosine at a third bar, and its two gestures fail where the two refusals
 /// do, one each.
-fn view_cosine(placement: &OrientedPatch, eye: Point3<f64>) -> Option<f64> {
-    let view = placement.center - eye;
+fn view_cosine(patch_frame: &OrientedPatch, eye: Point3<f64>) -> Option<f64> {
+    let view = patch_frame.center - eye;
     let length = view.norm();
     (length.is_finite() && length >= MIN_DIRECTION)
-        .then(|| (view.dot(&placement.normal()) / length).abs())
+        .then(|| (view.dot(&patch_frame.normal()) / length).abs())
 }
 
-/// The point of the placement's normal line `c + t n` nearest the ray from
+/// The point of the patch frame's normal line `c + t n` nearest the ray from
 /// `origin` along `direction`.
 ///
 /// Where the normal-segment drag of either panel reads the pointer, and the
@@ -778,38 +781,38 @@ fn view_cosine(placement: &OrientedPatch, eye: Point3<f64>) -> Option<f64> {
 ///
 /// `None` for a **direction patch**, which has no normal to move along.
 pub(crate) fn normal_line_point(
-    placement: &OrientedPatch,
+    patch_frame: &OrientedPatch,
     origin: Point3<f64>,
     direction: Vector3<f64>,
 ) -> Option<Point3<f64>> {
-    if placement.w == 0.0 {
+    if patch_frame.w == 0.0 {
         return None;
     }
     let ray = unit(direction)?;
-    let normal = placement.normal();
+    let normal = patch_frame.normal();
     let along = ray.dot(&normal);
     let denominator = 1.0 - along * along;
     if denominator < MIN_DIRECTION {
         return None;
     }
-    let to_centre = placement.center - origin;
+    let to_centre = patch_frame.center - origin;
     let t = (to_centre.dot(&ray) * along - to_centre.dot(&normal)) / denominator;
-    t.is_finite().then(|| placement.center + normal * t)
+    t.is_finite().then(|| patch_frame.center + normal * t)
 }
 
 /// The turn, in radians about the patch's outward normal, that carries the
 /// in-plane direction of `from` onto that of `to`, both read about the
-/// placement's centre.
+/// patch frame's centre.
 ///
 /// The 3D viewport's corner drag, and the counterpart of [`turn_between`] for a
 /// pointer that is already a point of the patch's plane rather than a pixel.
 /// `None` when either place is the centre itself, where no direction is named.
 pub(crate) fn turn_on_plane(
-    placement: &OrientedPatch,
+    patch_frame: &OrientedPatch,
     from: Point3<f64>,
     to: Point3<f64>,
 ) -> Option<f64> {
-    turn_about(placement.center, placement.normal(), from, to)
+    turn_about(patch_frame.center, patch_frame.normal(), from, to)
 }
 
 /// The turn, in radians about the unit `axis`, that carries the direction from
@@ -844,7 +847,7 @@ pub(crate) fn turn_about(
 
 // ---- The arrowhead's two gestures ------------------------------------------
 
-/// How near the line of sight the placement's normal has to lie before the
+/// How near the line of sight the patch frame's normal has to lie before the
 /// arrowhead **aims** rather than swings, in degrees.
 ///
 /// The same cosine the two degenerate-view refusals are decided by
@@ -855,7 +858,7 @@ pub(crate) fn turn_about(
 /// gestures are each other's cure, so between them the handle is always live.
 pub(crate) const AIM_ANGLE_DEG: f64 = 45.0;
 
-/// The aim's lever arm, in the placement's own half-lengths: the normal is
+/// The aim's lever arm, in the patch frame's own half-lengths: the normal is
 /// answered as `4h` along the old one plus the pointer's travel, so `4h` of
 /// travel is 45 degrees.
 ///
@@ -951,7 +954,7 @@ pub(crate) enum Tilt {
     /// across it since the press swings the normal off by [`AIM_LEVER`].
     Aim,
     /// The normal lies across the line of sight, so the pointer turns it about
-    /// this one axis: the unit vector of the placement's **own plane** nearest
+    /// this one axis: the unit vector of the patch frame's **own plane** nearest
     /// the eye. The normal therefore keeps to the one plane through it square
     /// to this axis and never rolls toward or away from the viewer, which is
     /// the motion that is hardest to aim when the arrowhead is nearly side-on.
@@ -960,20 +963,20 @@ pub(crate) enum Tilt {
 
 /// Which gesture the arrowhead makes from `eye`, or `None` when there is no
 /// arrowhead to press: a **direction patch**, whose normal is fixed by its
-/// bearing, or an eye that names no view of the placement.
-pub(crate) fn tilt_gesture(placement: &OrientedPatch, eye: Point3<f64>) -> Option<Tilt> {
-    if placement.w == 0.0 {
+/// bearing, or an eye that names no view of the patch frame.
+pub(crate) fn tilt_gesture(patch_frame: &OrientedPatch, eye: Point3<f64>) -> Option<Tilt> {
+    if patch_frame.w == 0.0 {
         return None;
     }
-    let cosine = view_cosine(placement, eye)?;
+    let cosine = view_cosine(patch_frame, eye)?;
     if cosine > AIM_ANGLE_DEG.to_radians().cos() {
         return Some(Tilt::Aim);
     }
     // The part of the view direction square to the normal, which is the unit
-    // vector of the placement's plane nearest the eye. It is well determined
+    // vector of the patch frame's plane nearest the eye. It is well determined
     // exactly where the aim is not, `view_cosine` being its own complement.
-    let to_eye = unit(eye - placement.center)?;
-    let normal = placement.normal();
+    let to_eye = unit(eye - patch_frame.center)?;
+    let normal = patch_frame.normal();
     unit(to_eye - normal * to_eye.dot(&normal)).map(Tilt::Swing)
 }
 
@@ -983,7 +986,7 @@ pub(crate) fn tilt_gesture(placement: &OrientedPatch, eye: Point3<f64>) -> Optio
 /// arrowhead. Both gestures read a plane **through the centre**, and which one
 /// is the whole of what tells them apart: square to the normal for an aim, and
 /// square to the swing's axis -- the plane the arrowhead travels in, and, the
-/// axis pointing at the eye as nearly as the placement allows, the plane most
+/// axis pointing at the eye as nearly as the patch frame allows, the plane most
 /// nearly facing the window -- for a swing.
 ///
 /// Neither plane can fall behind the eye, both passing through a centre that is
@@ -994,21 +997,21 @@ pub(crate) fn tilt_gesture(placement: &OrientedPatch, eye: Point3<f64>) -> Optio
 /// answers from every view it is drawn in, which is what it means for it to
 /// take no degenerate-view refusal.
 ///
-/// The placement is the one the press was taken against, so the plane is fixed
+/// The patch frame is the one the press was taken against, so the plane is fixed
 /// for the whole drag and the gesture is a single map from the window onto the
 /// sphere of normals rather than a thing that moves as it is used.
 pub(crate) fn tilt_point(
-    placement: &OrientedPatch,
+    patch_frame: &OrientedPatch,
     tilt: Tilt,
     origin: Point3<f64>,
     direction: Vector3<f64>,
 ) -> Option<Point3<f64>> {
     let ray = unit(direction)?;
     let square_to = match tilt {
-        Tilt::Aim => placement.normal(),
+        Tilt::Aim => patch_frame.normal(),
         Tilt::Swing(axis) => axis,
     };
-    ray_plane(origin, ray, placement.center, square_to)
+    ray_plane(origin, ray, patch_frame.center, square_to)
 }
 
 /// The outward normal a drag of the arrowhead names, from the two places
@@ -1024,7 +1027,7 @@ pub(crate) fn tilt_point(
 /// `n`, which leaves the whole `4h` standing along the old normal: the sum of a
 /// fixed vector and one square to it can never turn through a right angle, so
 /// one gesture turns the normal by less than 90 degrees and cannot push it
-/// through the placement at all.
+/// through the patch frame at all.
 ///
 /// **Swinging** answers with the normal turned about the axis by the angle the
 /// pointer swept about the centre, which is the corner's reading with the swing
@@ -1032,18 +1035,21 @@ pub(crate) fn tilt_point(
 ///
 /// `None` when the places name no answer: a swing read about the centre itself.
 pub(crate) fn tilt_normal(
-    placement: &OrientedPatch,
+    patch_frame: &OrientedPatch,
     tilt: Tilt,
     from: Point3<f64>,
     to: Point3<f64>,
 ) -> Option<Vector3<f64>> {
     match tilt {
         Tilt::Aim => {
-            unit(placement.normal() * (AIM_LEVER * placement.half_extent[0]) + (to - from))
+            unit(patch_frame.normal() * (AIM_LEVER * patch_frame.half_extent[0]) + (to - from))
         }
         Tilt::Swing(axis) => {
-            let angle = turn_about(placement.center, axis, from, to)?;
-            Some(Rotation3::from_axis_angle(&Unit::new_normalize(axis), angle) * placement.normal())
+            let angle = turn_about(patch_frame.center, axis, from, to)?;
+            Some(
+                Rotation3::from_axis_angle(&Unit::new_normalize(axis), angle)
+                    * patch_frame.normal(),
+            )
         }
     }
 }
@@ -1054,13 +1060,13 @@ pub(crate) fn tilt_normal(
 /// The number a size is reported in, because a world half-length says nothing
 /// to a person looking at a photograph. `None` when either projection fails.
 pub(crate) fn half_width_px(
-    placement: &OrientedPatch,
+    patch_frame: &OrientedPatch,
     camera: &CameraIntrinsics,
     pose: &RigidTransform,
 ) -> Option<f64> {
-    let (center, w) = placement.corner_homogeneous(0.0, 0.0);
+    let (center, w) = patch_frame.corner_homogeneous(0.0, 0.0);
     let center = camera.project_homogeneous(pose, center, w)?;
-    let (edge, w) = placement.corner_homogeneous(1.0, 0.0);
+    let (edge, w) = patch_frame.corner_homogeneous(1.0, 0.0);
     let edge = camera.project_homogeneous(pose, edge, w)?;
     Some((edge[0] - center[0]).hypot(edge[1] - center[1]))
 }

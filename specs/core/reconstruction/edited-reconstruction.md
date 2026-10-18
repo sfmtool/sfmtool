@@ -605,7 +605,7 @@ the base's point count it is a base index, at or above it an addition, and the
 caller does not learn which. It hands back a `PointView`, a borrow into whichever
 point set holds the point, with accessors for the geometry, the whole track and
 every column, plus `to_record` for the owned form. The panel, the track rays,
-the point picker and Go to Point read that one accessor. `placement` reads the
+the point picker and Go to Point read that one accessor. `patch_frame` reads the
 two half-vector columns as an `OrientedPatch`: unit axes and half-sizes, the
 point's position as the centre and the point's own `w`, or `None` where the
 columns are absent or the row's half-vectors are zero. Putting a point on the

@@ -166,7 +166,7 @@ Each of these found at least one real bug in the first run.
   undo, or `cancel_background_task`, and check what is left on disk and on
   the bench.
 - **Sample instead of guessing.** For "how often" questions (patch sizes,
-  missing placements, error spread) use `probes/sample.py` over a few hundred
+  missing patch frames, error spread) use `probes/sample.py` over a few hundred
   indexes and look at the distribution.
 
 ## 5. Harness pitfalls

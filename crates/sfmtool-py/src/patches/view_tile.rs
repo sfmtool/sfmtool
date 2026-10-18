@@ -36,7 +36,7 @@ impl PyOrientedPatch {
     ///
     /// The patch is re-anchored on ``keypoint`` first, when one is given, so
     /// its centre projects onto it; the tile is rendered with the sampler the
-    /// sampler rule picks from that placement's Jacobian at ``resolution``
+    /// sampler rule picks from that patch frame's Jacobian at ``resolution``
     /// (``sampler="per_view"``), or with the one sampler named. A sample the
     /// warp cannot place on the photograph is black and marked invalid.
     ///
@@ -67,7 +67,7 @@ impl PyOrientedPatch {
     ///     and the direction in the patch's plane, from ``u`` towards ``v``,
     ///     the ray from the camera leans along (``None`` for a view within
     ///     0.1 degrees of facing the patch); ``jacobian`` the ``(2, 2)`` image
-    ///     px per grid px at the tile's centre, or ``None``; and ``placement``
+    ///     px per grid px at the tile's centre, or ``None``; and ``patch_frame``
     ///     the :class:`OrientedPatch` the tile was rendered through.
     ///
     /// Raises:
@@ -177,11 +177,11 @@ impl PyOrientedPatch {
         });
         d.set_item("jacobian", jacobian)?;
         d.set_item(
-            "placement",
+            "patch_frame",
             Py::new(
                 py,
                 PyOrientedPatch {
-                    inner: tile.placement,
+                    inner: tile.patch_frame,
                 },
             )?,
         )?;

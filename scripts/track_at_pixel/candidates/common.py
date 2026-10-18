@@ -241,10 +241,10 @@ def _tangent_basis(normal: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
 
 
 def patch_normal(track) -> np.ndarray | None:
-    placement = track.placement
-    if placement is None:
+    patch_frame = track.patch_frame
+    if patch_frame is None:
         return None
-    n = np.cross(placement["u_halfvec"], placement["v_halfvec"])
+    n = np.cross(patch_frame["u_halfvec"], patch_frame["v_halfvec"])
     norm = np.linalg.norm(n)
     return n / norm if norm > 0 else None
 

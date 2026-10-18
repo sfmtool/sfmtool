@@ -427,7 +427,7 @@ pub(in crate::bench) fn fixture_with_columns(
         let Some(point) = edited.point(i as u32) else {
             continue;
         };
-        let Some(patch) = point.placement() else {
+        let Some(patch) = point.patch_frame() else {
             continue;
         };
         let view_set: Vec<u32> = point.observations().iter().map(|o| o.image_index).collect();

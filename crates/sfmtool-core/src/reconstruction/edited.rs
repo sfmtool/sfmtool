@@ -409,14 +409,14 @@ impl<'a> PointView<'a> {
         halfvec_row(&self.set.patch_v_halfvec_xyz, self.local)
     }
 
-    /// The point's patch placement, when the base carries the frame columns
+    /// The point's patch frame, when the base carries the frame columns
     /// and this row's half-vectors are non-zero.
     ///
     /// The stored half-vectors are split into a unit axis and a half-size, the
     /// centre is the point's position, and `w` is the **point's** own, since a
     /// bearing's patch is tangent to the direction sphere and the two stored
     /// half-vectors do not say which kind it is.
-    pub fn placement(&self) -> Option<OrientedPatch> {
+    pub fn patch_frame(&self) -> Option<OrientedPatch> {
         let axis = |h: [f32; 3]| Vector3::new(f64::from(h[0]), f64::from(h[1]), f64::from(h[2]));
         let u = axis(self.patch_u_halfvec()?);
         let v = axis(self.patch_v_halfvec()?);

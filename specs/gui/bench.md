@@ -439,10 +439,10 @@ commit, which changes both, would have to appear in both or in neither.
 **Closing a node drops its bench with its history.** An item names images of one
 node and is meaningless without it.
 
-**A bake puts the bench's placements through the same transform** as the value,
+**A bake puts the bench's patch frames through the same transform** as the value,
 in the one version that states all three halves
 ([`edits/bake-transform.md`](edits/bake-transform.md)). A track-stage item's
-placement and position are in the reconstruction's own coordinates, the same
+patch frame and position are in the reconstruction's own coordinates, the same
 coordinates the bake rewrites, so a bake that left them alone would stand the
 focused item's square in the old frame and the 3D viewer's figure would jump.
 The centre goes through the whole similarity, the axes are rotated and the
@@ -572,11 +572,11 @@ cursor. That case pushes no version.
 
 **The bench of a `sift_files` reconstruction is view-only.** Such a
 reconstruction keeps its patches in the `.sift` files rather than in the
-`.sfmr`, so a point put on its bench carries no placement, and a track built
+`.sfmr`, so a point put on its bench carries no patch frame, and a track built
 there could not be committed back. Its bench items can be viewed as fully as
 the data allows: a point goes on the bench, is focused, and shows its header,
 its keypoints (which the load fills from the `.sift` files) and whatever
-evaluation its placement allows. Every step that edits an item is refused up front.
+evaluation its patch frame allows. Every step that edits an item is refused up front.
 
 One question decides it, `AppState::bench_view_only_refusal`, and every editing
 step asks `AppState::bench_edit_refusal`, which is the busy refusal followed by
@@ -611,32 +611,32 @@ that is not busy. The same sentence is given everywhere:
 **Not refused**: putting a point on the bench (`create_bench_track`, *Edit on
 Bench*, a double-click), focusing and unfocusing, selecting rows, renaming,
 discarding and clearing the bench, none of which edits a track, and *Find
-Nearby Tracks* without a commit, whose items are built with a placement and viewed
+Nearby Tracks* without a commit, whose items are built with a patch frame and viewed
 like any other. *Create Track Here* and a committing find are refused as before
 (§ "Create Track Here").
 
 **After Convert to Embedded Patches, putting the point on the bench again
 rebuilds its item.** The conversion leaves the bench as it was, so an item put
-on the bench before it still has no placement. A put of a point whose item is a
-track-stage track with no placement, on a node that is no longer view-only and
+on the bench before it still has no patch frame. A put of a point whose item is a
+track-stage track with no patch frame, on a node that is no longer view-only and
 whose point now has one, builds the track afresh from the point
-(`AppState::rebuilt_with_placement`) and replaces the item under its own label and
+(`AppState::rebuilt_with_patch_frame`) and replaces the item under its own label and
 `ItemId`, as one version (`Rebuilt … from point …, which now carries a patch
 frame`). The bench is editable from the conversion on, so the item may have
-taken edits before the re-bench, and the rebuild keeps them (`with_placement_of`):
-the stage (placement, position, bitmap, colour) and the origin come from the fresh
+taken edits before the re-bench, and the rebuild keeps them (`with_patch_frame_of`):
+the stage (patch frame, position, bitmap, colour) and the origin come from the fresh
 build, and the item keeps its thresholds, every verdict and pin, and every
 observation that was sighted elsewhere or added. An observation still at the
 point's keypoint takes the fresh build's measurement. An item nobody edited
 comes out exactly as a fresh put of the point would build it. Until the
 re-bench, *Duplicate* is refused on such an item
 (`AppState::duplicate_refusal`), because the copy drops the origin and could
-never be given the placement. Rebuilding on the re-bench
+never be given the patch frame. Rebuilding on the re-bench
 was chosen over refreshing every item when the conversion lands because it is
 one step in one place (`put_point_on_bench`), it needs nothing from the
 background task that pushes the conversion's version, and the refusal sentence
 already tells the person to put the point on the bench again. Undoing the
-rebuild puts the placement-less item back; undoing the conversion makes the bench
+rebuild puts back the item with no patch frame; undoing the conversion makes the bench
 view-only again.
 
 ## The focused item
@@ -855,7 +855,7 @@ the reference too, and one that takes that row off the track (a delete of its
 image, a split) or turns it `out` drops both
 ([../core/bench/editable-track.md](../core/bench/editable-track.md) § "The
 stored bitmap's reference"). When the evaluation reads a track-stage
-track that has a placement and either no bitmap, or a reference row that is
+track that has a patch frame and either no bitmap, or a reference row that is
 not pinned while the rule picks another row ([§ "The reference"](#the-reference)
 below), it also renders the bitmap on the photographs it has already decoded. That renders
 the patch as it now lies at the keypoints. Where the track holds a defined
@@ -983,7 +983,7 @@ either: it does not appear in the Background panel, is not what
   current ones is running or starts on the next frame. The numbers are the
   previous evaluation's, and are presented as that.
 - `Refused(why)` -- core's `evaluate_preconditions` refuses the track as it
-  stands, a track-stage track with no placement, in the sentence `Cannot
+  stands, a track-stage track with no patch frame, in the sentence `Cannot
   evaluate {item}: …`. Nothing runs until a step changes that.
 - `Failed(why)` -- the evaluation of the current inputs failed, for instance
   because a photograph could not be read. It is not retried until an input
@@ -1110,7 +1110,7 @@ as the live evaluation asks `evaluate_preconditions` before it starts one
 (§ "Live evaluation"). So a track being fitted with fewer than two `in`
 observations (which an *evaluation* of the same track permits), or one being
 taken down to the
-cluster stage with no placement or no position, is a refusal of the **gesture**: a
+cluster stage with no patch frame or no position, is a refusal of the **gesture**: a
 sentence in the caller's own hand, no task, no version. The step itself calls
 the same function first, so the two answers cannot drift. What is left for the
 task is everything that needs the pixels, which is the rest.
@@ -1543,7 +1543,7 @@ patch-grid px per photograph pixel, and `patch_jacobian`, the Jacobian it is
 read from: the Jacobian of the warp from the patch grid to the photograph, at
 the patch's centre, as `[[dx/dcol, dx/drow], [dy/dcol, dy/drow]]` in photograph
 pixels per patch-grid px, core's `camera::warp_map::patch_grid_jacobian` of the
-patch re-anchored where the row sits, the placement its tile is rendered
+patch re-anchored where the row sits, the patch frame its tile is rendered
 through. Both are at the reconstruction's patch resolution `R`, which the track
 stage's data reports as `patch_resolution`: the edge of its patch bitmaps, which
 an `.sfmr` declares as `patch_bitmap_resolution`, and where it stores none the
@@ -1570,7 +1570,7 @@ carries `at_infinity` with the coordinate under `direction` or `position`, the
 other null, for the reason Track View's edit header carries a word in front of it:
 the same three numbers are a place or a bearing depending on `w`, and an agent
 that read `position` off a `w = 0` track would be holding a place one unit from
-the world origin. It carries the patch too, as `placement` -- centre, unit
+the world origin. It carries the patch too, as `patch_frame` -- centre, unit
 axes, outward `normal` and `half_extent`, or `null` before one is fitted -- in
 the block `get_point` reports a committed point's patch in, so an agent can
 read the normal it would `tilt_bench_patch` from and compare it with the point
@@ -1861,7 +1861,7 @@ and the next drive evaluates it; an answer for inputs a step has moved on from
 is not installed, the drive after the step cancels it without starting a second
 evaluation beside it, and the track is `Current` only once the evaluation of the
 new inputs lands; an undo, a document edit under the track and a change of the
-search radius each make it `Evaluating`; a track-stage track with no placement is
+search radius each make it `Evaluating`; a track-stage track with no patch frame is
 `Refused` with core's sentence and starts nothing; nothing starts while a
 background task holds the node; the focused item is evaluated first when it is
 on a node after another in the scene; and a rename keeps an evaluated track
@@ -1961,7 +1961,7 @@ The view-only bench is tested over the wire in
 `sift_files` node with `.sift` files beside it: a point goes on the bench, every
 editing tool is refused with the view-only sentence and pushes nothing, the
 conversion runs, and putting the point on the bench again rebuilds the item
-with a placement in one version, after which it takes a verdict. Image Detail's
+with a patch frame in one version, after which it takes a verdict. Image Detail's
 greyed entries are tested in
 [image_detail/tests.rs](../../crates/sfm-explorer/src/image_detail/tests.rs).
 

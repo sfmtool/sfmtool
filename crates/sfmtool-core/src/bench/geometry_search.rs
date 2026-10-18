@@ -209,7 +209,7 @@ pub fn search_geometry(
         }
     };
     let patch = payload
-        .placement
+        .patch_frame
         .as_ref()
         .ok_or(GeometrySearchError::NoFrame)?;
     selected

@@ -44,7 +44,7 @@ pub(super) struct Grid {
     pub(super) side: usize,
     /// The starting frame re-anchored on the reference keypoint: the plane at
     /// no tilt, whose square the grid's samples cover.
-    pub(super) placement: OrientedPatch,
+    pub(super) patch_frame: OrientedPatch,
     /// The reference camera's centre.
     origin: Vector3<f64>,
     /// Each sample's ray direction from `origin`, row-major, unnormalised.
@@ -70,15 +70,15 @@ impl Grid {
         keypoint: Option<[f64; 2]>,
         side: usize,
     ) -> Grid {
-        let placement = anchored(frame, reference, keypoint);
+        let patch_frame = anchored(frame, reference, keypoint);
         let origin = reference.cam_from_world.inverse_translation_origin().coords;
-        let wpp = 2.0 * placement.half_extent[0] / side as f64;
+        let wpp = 2.0 * patch_frame.half_extent[0] / side as f64;
         let half = side as f64 / 2.0;
         let mut rays = Vec::with_capacity(side * side);
         for row in 0..side {
             for col in 0..side {
                 let (gx, gy) = (col as f64 + 0.5 - half, row as f64 + 0.5 - half);
-                rays.push(shifted_center(&placement, gx, gy, wpp, wpp).coords - origin);
+                rays.push(shifted_center(&patch_frame, gx, gy, wpp, wpp).coords - origin);
             }
         }
         let bounds = CellLayout::new(side as u32, 0.0).bounds;
@@ -96,8 +96,8 @@ impl Grid {
             side,
             origin,
             rays,
-            anchor: placement.center.coords,
-            placement,
+            anchor: patch_frame.center.coords,
+            patch_frame,
             normal: frame.normal(),
             u: frame.u_axis,
             v: frame.v_axis,
@@ -168,7 +168,7 @@ impl Grid {
     /// along each axis. `NaN` where the anchor's neighbourhood does not
     /// project.
     pub(super) fn scale_px(&self, view: &ViewImage<'_>) -> f64 {
-        let h = 0.01 * self.placement.half_extent[0].max(1e-12);
+        let h = 0.01 * self.patch_frame.half_extent[0].max(1e-12);
         let at = |d: Vector3<f64>| {
             view.camera
                 .project_homogeneous(view.cam_from_world, self.anchor + d, 1.0)
@@ -188,7 +188,7 @@ impl Grid {
 
     /// The working grid's samples per world unit on the starting frame.
     pub(super) fn density(&self) -> f64 {
-        self.side as f64 / (2.0 * self.placement.half_extent[0])
+        self.side as f64 / (2.0 * self.patch_frame.half_extent[0])
     }
 
     /// Where the anchor lands in `view`'s photograph, full-resolution px.
@@ -224,12 +224,12 @@ pub(super) struct ViewImage<'a> {
 
 impl<'a> ViewImage<'a> {
     /// `view` read at the level the bilinear-mip rule picks for the map from a
-    /// working grid of `side` samples over `placement` into the photograph,
+    /// working grid of `side` samples over `patch_frame` into the photograph,
     /// at the grid's centre: `round(log2 σ_major)` for the map's larger
     /// singular value, clamped to the pyramid; level 0 where the centre does
     /// not project.
-    pub(super) fn new(view: &ProjectedImage<'a>, placement: &OrientedPatch, side: usize) -> Self {
-        let jacobian = patch_grid_jacobian(placement, view.camera, view.cam_from_world, side);
+    pub(super) fn new(view: &ProjectedImage<'a>, patch_frame: &OrientedPatch, side: usize) -> Self {
+        let jacobian = patch_grid_jacobian(patch_frame, view.camera, view.cam_from_world, side);
         let level = jacobian
             .map(|j| bilinear_mip_level(singular_values_2x2(j)[0]) as usize)
             .unwrap_or(0)

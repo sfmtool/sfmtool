@@ -583,13 +583,13 @@ impl Viewer3D {
             Some(MenuTarget::Patch(node)) => {
                 // The patch as it stands now. A menu left up across an undo that
                 // took the patch away has nothing to stand on, and closes.
-                let placement = bench
+                let patch_frame = bench
                     .filter(|bench| bench.node == node)
-                    .and_then(|bench| bench_track::placement_of(bench.track));
-                match placement {
-                    Some(placement) => {
+                    .and_then(|bench| bench_track::patch_frame_of(bench.track));
+                match patch_frame {
+                    Some(patch_frame) => {
                         let refusal = busy.map(str::to_string).or_else(|| {
-                            (placement.w == 0.0).then(|| PATCH_AT_INFINITY_HINT.to_string())
+                            (patch_frame.w == 0.0).then(|| PATCH_AT_INFINITY_HINT.to_string())
                         });
                         self.show_patch_entries(response, node, refusal.as_deref());
                     }
@@ -900,7 +900,7 @@ impl Viewer3D {
         self.bench_figure = bench.and_then(|bench| {
             let previewed = drag
                 .filter(|drag| drag.node == bench.node)
-                .and_then(|drag| drag.edit(bench_track::placement_of(bench.track)?))
+                .and_then(|drag| drag.edit(bench_track::patch_frame_of(bench.track)?))
                 .and_then(|edit| {
                     crate::bench::geometry::apply(bench.track, bench.edited, &edit).ok()
                 })

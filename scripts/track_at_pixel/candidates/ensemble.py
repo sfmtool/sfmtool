@@ -63,7 +63,7 @@ DEFAULTS = {
 
 
 def _half(track) -> float:
-    p = track.placement
+    p = track.patch_frame
     return float(np.linalg.norm(p["u_halfvec"])) if p is not None else 0.0
 
 

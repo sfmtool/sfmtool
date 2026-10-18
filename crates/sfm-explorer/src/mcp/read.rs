@@ -543,7 +543,7 @@ pub(super) fn get_point(state: &mut AppState, query: &crate::goto_point::PointQu
         "color": point.color,
         "error": point.error,
         "at_infinity": point.is_at_infinity(),
-        "placement": render::placement(view.placement().as_ref()),
+        "patch_frame": render::patch_frame(view.patch_frame().as_ref()),
         "normal_confidence": view.normal_confidence(),
         "track": track,
     });

@@ -8,7 +8,7 @@
 //! bend the patch; the crop shows the bending. It is the Image Detail bench
 //! layer's outline and the pixels under it, without the layer's dot, its
 //! normal or the SIFT overlays: at the track stage the patch re-anchored where
-//! the observation sits ([`crate::bench::geometry::anchored_placement`]), its
+//! the observation sits ([`crate::bench::geometry::anchored_patch_frame`]), its
 //! boundary projected through the camera's own model
 //! ([`crate::bench::geometry::project_outline`]), and at the cluster stage the
 //! observation's own parallelogram ([`crate::bench::geometry::parallelogram`]).
@@ -120,10 +120,10 @@ pub(super) fn outline(
     let keypoint = crate::bench::observation_site(row)?.pixel;
     match &track.stage {
         Stage::Track(payload) => {
-            let patch = payload.placement.as_ref()?;
+            let patch = payload.patch_frame.as_ref()?;
             let (camera, pose) = geometry::view_of(&recon.image_table, row.image as usize)?;
-            let placement = geometry::anchored_placement(patch, &camera, &pose, row);
-            let (samples, per_edge) = geometry::project_outline(&placement, &camera, &pose);
+            let patch_frame = geometry::anchored_patch_frame(patch, &camera, &pose, row);
+            let (samples, per_edge) = geometry::project_outline(&patch_frame, &camera, &pose);
             // Each axis sampled as densely as the edges beside it, so a
             // fisheye's bent axis is measured along its bend.
             let axis = |along: fn(f64) -> (f64, f64)| {
@@ -131,7 +131,7 @@ pub(super) fn outline(
                 let mut points = Vec::with_capacity(n + 1);
                 for i in 0..=n {
                     let (s, t) = along(2.0 * i as f64 / n as f64 - 1.0);
-                    let (xyz, w) = placement.corner_homogeneous(s, t);
+                    let (xyz, w) = patch_frame.corner_homogeneous(s, t);
                     points.push(camera.project_homogeneous(&pose, xyz, w)?);
                 }
                 Some(polyline_length(&points))

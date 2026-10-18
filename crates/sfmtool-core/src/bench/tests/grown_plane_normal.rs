@@ -196,7 +196,7 @@ fn a_textured_plane_started_far_off_is_turned_onto_it() {
     let (turned, report) = run(&scene, &edited, &track, &GrownPlaneNormalOptions::default());
     let sequence = sequence_of(&report);
 
-    let after = degrees(placement_of(&turned).normal(), truth());
+    let after = degrees(patch_frame_of(&turned).normal(), truth());
     assert!(after < 1.0, "{after:.3} deg off: {report}");
     assert_eq!(sequence.matched(), centres.len() - 1, "{sequence:#?}");
     assert_eq!(sequence.picks.len(), centres.len() - 1, "{sequence:#?}");
@@ -212,7 +212,7 @@ fn a_textured_plane_started_far_off_is_turned_onto_it() {
     assert!(precision.discounted_sigma_weak_deg > precision.sigma_weak_deg);
     assert!(!precision.low_confidence, "{report}");
     // The centre does not move, and the track is read back.
-    assert!((placement_of(&turned).center - WORLD).norm() < 1e-9);
+    assert!((patch_frame_of(&turned).center - WORLD).norm() < 1e-9);
     assert!(turned.track().expect("track stage").bitmap.is_some());
 
     let reference = sequence.reference.expect("a reference");
@@ -278,7 +278,7 @@ fn a_view_whose_top_cells_see_other_texture_still_joins() {
     let track = tilted_track(&edited, Vector3::x(), 15.0);
     let (turned, report) = run(&scene, &edited, &track, &GrownPlaneNormalOptions::default());
     let sequence = sequence_of(&report);
-    let after = degrees(placement_of(&turned).normal(), truth());
+    let after = degrees(patch_frame_of(&turned).normal(), truth());
     assert!(after < 1.0, "{after:.3} deg off: {report}");
     let row = row_of(&track, 3);
     assert!(
@@ -347,7 +347,7 @@ fn a_large_turn_on_weak_evidence_keeps_the_start() {
     assert_eq!(sequence.outcome, GrownPlaneOutcome::WeakTurn, "{report}");
     assert!(!sequence.turned());
     assert_eq!(report.tilt.degrees, 0.0, "{report}");
-    let (a, b) = (placement_of(&track), placement_of(&kept));
+    let (a, b) = (patch_frame_of(&track), patch_frame_of(&kept));
     assert_eq!(
         (a.u_axis, a.v_axis, a.center),
         (b.u_axis, b.v_axis, b.center)
@@ -368,7 +368,7 @@ fn a_large_turn_on_weak_evidence_keeps_the_start() {
     assert!(degrees(found, truth()) < 2.0, "{report}");
     let turn = sequence.turn_deg.expect("a plane was found");
     assert!(
-        (turn - degrees(found, placement_of(&track).normal())).abs() < 1e-6,
+        (turn - degrees(found, patch_frame_of(&track).normal())).abs() < 1e-6,
         "{report}"
     );
     assert!(turn >= options.weak_turn_deg, "{report}");
@@ -427,7 +427,7 @@ fn a_large_turn_on_strong_evidence_is_made() {
     );
     assert!((turn - report.tilt.degrees).abs() < 1e-9, "{report}");
     assert!(
-        degrees(placement_of(&turned).normal(), truth()) < 1.0,
+        degrees(patch_frame_of(&turned).normal(), truth()) < 1.0,
         "{report}"
     );
     assert_eq!(sequence.written, centres.len(), "{report}");
@@ -447,7 +447,7 @@ fn a_view_whose_own_plane_disagrees_is_left_out() {
     let row = row_of(&track, 4);
     let (turned, report) = run(&scene, &edited, &track, &GrownPlaneNormalOptions::default());
     let sequence = sequence_of(&report);
-    let after = degrees(placement_of(&turned).normal(), truth());
+    let after = degrees(patch_frame_of(&turned).normal(), truth());
     assert!(after < 1.0, "{after:.3} deg off: {report}");
     assert_eq!(sequence.matched(), centres.len() - 1, "{sequence:#?}");
     match &sequence.views[row] {
@@ -684,7 +684,7 @@ fn a_flat_wall_joins_no_view_and_changes_nothing() {
     assert!(sequence.precision.is_none());
     assert_eq!(sequence.written, 0);
     assert_eq!(report.tilt.degrees, 0.0);
-    let (a, b) = (placement_of(&track), placement_of(&turned));
+    let (a, b) = (patch_frame_of(&track), patch_frame_of(&turned));
     assert_eq!(
         (a.u_axis, a.v_axis, a.center),
         (b.u_axis, b.v_axis, b.center)
@@ -1023,7 +1023,7 @@ fn wide_pairs_sharpen_the_plane_over_reference_matches_alone() {
     );
     assert!(p.discounted_sigma_weak_deg > p.sigma_weak_deg);
     for turned in [&alone, &paired] {
-        let after = degrees(placement_of(turned).normal(), truth());
+        let after = degrees(patch_frame_of(turned).normal(), truth());
         assert!(after < 1.0, "{after:.3}: {paired_report}");
     }
 }
@@ -1080,7 +1080,7 @@ fn the_selection_reaches_the_target_sigma_matching_few_views() {
     );
     let precision = sequence.precision.expect("views joined");
     assert!(precision.discounted_sigma_weak_deg <= target, "{report}");
-    let after = degrees(placement_of(&turned).normal(), truth());
+    let after = degrees(patch_frame_of(&turned).normal(), truth());
     assert!(after < 1.0, "{after:.3} deg off: {report}");
     assert_eq!(
         sequence.shift_only(),

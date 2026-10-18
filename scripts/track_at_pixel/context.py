@@ -346,8 +346,8 @@ class HoldoutContext:
         Keyed by observation index, over the observations with ``verdict``
         (every observation when ``None``). Empty when the track has no patch.
         """
-        placement = track.placement
-        if placement is None:
+        patch_frame = track.patch_frame
+        if patch_frame is None:
             return {}
         out = {}
         for i, o in enumerate(track.observations):
@@ -355,10 +355,10 @@ class HoldoutContext:
                 continue
             s = texel_scale(
                 self.camera(int(o["image"])),
-                placement["center"],
-                placement["u_halfvec"],
-                placement["v_halfvec"],
-                float(placement["w"]),
+                patch_frame["center"],
+                patch_frame["u_halfvec"],
+                patch_frame["v_halfvec"],
+                float(patch_frame["w"]),
             )
             if s is not None:
                 out[i] = s

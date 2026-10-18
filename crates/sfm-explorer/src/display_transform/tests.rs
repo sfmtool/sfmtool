@@ -1,7 +1,7 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! The four patch reframes and the bake, asserted on the frame and the picture
+//! The four patch reframes and the bake, asserted on the patch's axes and the picture
 //! they leave rather than on the arithmetic that produced them.
 //!
 //! The fixture is the bench's own ([`crate::bench::tests::state`]): the demo
@@ -36,16 +36,16 @@ fn framed() -> (AppState, ReconId, String) {
 }
 
 /// The staged track's patch, in the reconstruction's own coordinates.
-fn placement(state: &AppState, id: ReconId, label: &str) -> OrientedPatch {
-    bench_track::placement_of(state.bench_track(id, label).expect("the staged track"))
+fn patch_frame(state: &AppState, id: ReconId, label: &str) -> OrientedPatch {
+    bench_track::patch_frame_of(state.bench_track(id, label).expect("the staged track"))
         .expect("a point carries its patch")
         .clone()
 }
 
 /// The staged patch as the node draws it now.
-fn drawn(state: &AppState, id: ReconId, label: &str) -> PatchFrame {
+fn drawn(state: &AppState, id: ReconId, label: &str) -> PatchAxes {
     let node = state.node(id).expect("loaded");
-    PatchFrame::of(&placement(state, id, label), node.transform())
+    PatchAxes::of(&patch_frame(state, id, label), node.transform())
 }
 
 fn transform_of(state: &AppState, id: ReconId) -> Se3Transform {
@@ -81,11 +81,11 @@ fn set_to_origin_puts_the_patchs_frame_on_the_worlds() {
         .reframe_on_patch(id, PatchReframe::SetToOrigin)
         .expect("a finite patch");
 
-    let frame = drawn(&state, id, &label);
-    close(&frame.centre.coords, &Vector3::zeros(), 1e-12);
-    close(&frame.u, &Vector3::x(), 1e-12);
-    close(&frame.v, &Vector3::y(), 1e-12);
-    close(&frame.n, &Vector3::z(), 1e-12);
+    let axes = drawn(&state, id, &label);
+    close(&axes.centre.coords, &Vector3::zeros(), 1e-12);
+    close(&axes.u, &Vector3::x(), 1e-12);
+    close(&axes.v, &Vector3::y(), 1e-12);
+    close(&axes.n, &Vector3::z(), 1e-12);
     assert_eq!(transform_of(&state, id).scale, prior().scale);
 }
 
@@ -122,20 +122,20 @@ fn align_normal_to_z_holds_a_patch_far_from_the_origin_where_it_is() {
 fn a_normal_at_minus_z_turns_half_about_u() {
     // Built directly, so the input really is antiparallel and the shortest arc
     // really is undetermined.
-    let frame = PatchFrame {
+    let axes = PatchAxes {
         centre: Point3::new(1.0, 2.0, 3.0),
         u: Vector3::x(),
         v: -Vector3::y(),
         n: -Vector3::z(),
     };
-    assert!(UnitQuaternion::rotation_between(&frame.n, &Vector3::z()).is_none());
-    let map = PatchReframe::AlignNormalToZ.map(&frame);
-    close(&map.rotation.rotate_vector(&frame.n), &Vector3::z(), 1e-12);
-    close(&map.rotation.rotate_vector(&frame.u), &frame.u, 1e-12);
-    close(&map.rotation.rotate_vector(&frame.v), &-frame.v, 1e-12);
+    assert!(UnitQuaternion::rotation_between(&axes.n, &Vector3::z()).is_none());
+    let map = PatchReframe::AlignNormalToZ.map(&axes);
+    close(&map.rotation.rotate_vector(&axes.n), &Vector3::z(), 1e-12);
+    close(&map.rotation.rotate_vector(&axes.u), &axes.u, 1e-12);
+    close(&map.rotation.rotate_vector(&axes.v), &-axes.v, 1e-12);
     close(
-        &map.apply_to_point(&frame.centre).coords,
-        &frame.centre.coords,
+        &map.apply_to_point(&axes.centre).coords,
+        &axes.centre.coords,
         1e-12,
     );
 }
@@ -182,7 +182,7 @@ fn level_then_drop_lays_the_patch_on_the_ground() {
     state
         .reframe_on_patch(id, PatchReframe::TranslateToXyPlane)
         .expect("a finite patch");
-    let patch = placement(&state, id, &label);
+    let patch = patch_frame(&state, id, &label);
     let transform = transform_of(&state, id);
     for (s, t) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
         let corner = transform.apply_to_point(&patch.to_world(s, t));
@@ -448,15 +448,15 @@ fn the_bake_does_not_move_any_reprojection() {
 fn the_bench_figure_does_not_move_across_the_bake() {
     let (mut state, id, label) = framed();
     let before = figure(&state, id, &label);
-    let frame = drawn(&state, id, &label);
-    let half = placement(&state, id, &label).half_extent[0];
+    let axes = drawn(&state, id, &label);
+    let half = patch_frame(&state, id, &label).half_extent[0];
     state.bake_node_transform(id).expect("a bake");
     same_figure(&before, &figure(&state, id, &label));
     let after = drawn(&state, id, &label);
-    close(&after.centre.coords, &frame.centre.coords, 1e-9);
-    close(&after.n, &frame.n, 1e-12);
-    // The placement's size is in the value's units, which the bake rescaled.
-    let patch = placement(&state, id, &label);
+    close(&after.centre.coords, &axes.centre.coords, 1e-9);
+    close(&after.n, &axes.n, 1e-12);
+    // The patch axes's size is in the value's units, which the bake rescaled.
+    let patch = patch_frame(&state, id, &label);
     assert!((patch.half_extent[0] - half * prior().scale).abs() <= 1e-12);
 }
 
@@ -542,6 +542,6 @@ fn set_to_origin_after_a_bake_is_the_identity_to_rounding() {
     // Float arithmetic, not an algebraic identity: `has_transform` compares
     // exactly and may still say yes, which is the wart the spec records.
     same_transform(&transform_of(&state, id), &Se3Transform::identity(), 1e-12);
-    let frame = drawn(&state, id, &label);
-    close(&frame.centre.coords, &Vector3::zeros(), 1e-12);
+    let axes = drawn(&state, id, &label);
+    close(&axes.centre.coords, &Vector3::zeros(), 1e-12);
 }

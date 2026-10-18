@@ -738,7 +738,7 @@ impl WarpMap {
     }
 }
 
-/// The Jacobian of the map from a tile rendered through `placement` at
+/// The Jacobian of the map from a tile rendered through `patch_frame` at
 /// `resolution` texels a side to the source image, at the tile's centre, in
 /// image px per grid px: `[[dx/dcol, dx/drow], [dy/dcol, dy/drow]]`, `col`
 /// along `+u` and `row` along `−v` as [`WarpMap::from_patch`] steps them.
@@ -756,7 +756,7 @@ impl WarpMap {
 /// differences are averaged; a patch straddling the seam behind the camera
 /// reads the same Jacobian as one in front of it.
 pub fn patch_grid_jacobian(
-    placement: &OrientedPatch,
+    patch_frame: &OrientedPatch,
     camera: &CameraIntrinsics,
     cam_from_world: &RigidTransform,
     resolution: usize,
@@ -766,7 +766,7 @@ pub fn patch_grid_jacobian(
     }
     let step = 2.0 / resolution as f64;
     let at = |gx: f64, gy: f64| -> Option<[f64; 2]> {
-        let (xyz, w) = placement.corner_homogeneous(gx * step, -gy * step);
+        let (xyz, w) = patch_frame.corner_homogeneous(gx * step, -gy * step);
         let [x, y] = camera.project_homogeneous(cam_from_world, xyz, w)?;
         (x.is_finite() && y.is_finite()).then_some([x, y])
     };

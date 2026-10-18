@@ -426,7 +426,7 @@ pub fn fit(
             // against it is what reads the photographs the track actually has.
             // Which representation the track leaves with is the
             // re-triangulation's to say, not the frame it arrived on.
-            let frame = payload.placement.clone().ok_or(FitError::NoFrame)?;
+            let frame = payload.patch_frame.clone().ok_or(FitError::NoFrame)?;
             let options = options.at_patch_resolution(&edited.base);
             fit_track(track, edited, images, &frame, &options, None, progress)
         }
@@ -436,7 +436,7 @@ pub fn fit(
 /// Render the stored bitmap of a track-stage track where it stands, and move
 /// nothing.
 ///
-/// "In place" is the patch's: the bitmap is rendered through the placement
+/// "In place" is the patch's: the bitmap is rendered through the patch frame
 /// the track already has. The track itself is not changed; the rendered track
 /// is returned.
 ///
@@ -444,7 +444,7 @@ pub fn fit(
 /// moved the patch and so left no bitmap: `build_track_at_pixel` ends on a
 /// slide of the patch onto the queried pixel, and renders with this before it
 /// returns, and the viewer's live evaluation renders with it after a patch
-/// step. The placement, the position, the verdicts and every keypoint come
+/// step. The patch frame, the position, the verdicts and every keypoint come
 /// back as they were; what is written is the tile of the track's reference
 /// observation ([`TrackPayload::reference`]) where its row holds it, `in`,
 /// with a keypoint and pinned ([`EditableTrack::held_reference`]), and
@@ -459,7 +459,7 @@ pub fn fit(
 /// [`evaluate_rendering_bitmap`](super::evaluate::evaluate_rendering_bitmap),
 /// which reads, renders and scores in one call.
 ///
-/// A cluster, a track with no placement, and one with fewer than two `in`
+/// A cluster, a track with no patch frame, and one with fewer than two `in`
 /// sightings that carry a keypoint come back unchanged, since there is
 /// nothing to render a bitmap from.
 ///
@@ -503,7 +503,7 @@ fn rendered_in_place(
     let Stage::Track(payload) = &track.stage else {
         return track.clone();
     };
-    let Some(placement) = &payload.placement else {
+    let Some(patch_frame) = &payload.patch_frame else {
         return track.clone();
     };
     let ins = track.in_observations();
@@ -511,7 +511,7 @@ fn rendered_in_place(
         track,
         edited,
         images,
-        placement,
+        patch_frame,
         &ins,
         options,
         from,
@@ -529,7 +529,7 @@ fn rendered_in_place(
 /// ([`TrackPayload::bitmap_for_judging`]) rendered where its patch stands: the
 /// render of the reference-view rule's pick among every row that carries a
 /// keypoint, `in` or `out`. It names no reference and leaves the track's
-/// colour alone. The track comes back unchanged where it has no placement or
+/// colour alone. The track comes back unchanged where it has no patch frame or
 /// the render gives no bitmap: fewer than two rows carry a keypoint, or the
 /// rule finds no eligible row.
 pub(super) fn render_bitmap_for_judging(
@@ -541,7 +541,7 @@ pub(super) fn render_bitmap_for_judging(
     let Stage::Track(payload) = &track.stage else {
         return track.clone();
     };
-    let Some(placement) = &payload.placement else {
+    let Some(patch_frame) = &payload.patch_frame else {
         return track.clone();
     };
     let keyed: Vec<usize> = (0..track.observations.len()).collect();
@@ -549,7 +549,7 @@ pub(super) fn render_bitmap_for_judging(
         track,
         edited,
         images,
-        placement,
+        patch_frame,
         &keyed,
         options,
         None,
@@ -653,7 +653,7 @@ pub fn fit_preconditions(track: &EditableTrack) -> Result<(), FitError> {
     let Stage::Track(payload) = &track.stage else {
         return Ok(());
     };
-    if payload.placement.is_none() {
+    if payload.patch_frame.is_none() {
         return Err(FitError::NoFrame);
     }
     let ins = track.in_observations().len();
@@ -1024,7 +1024,7 @@ pub(super) fn fit_track(
     next.stage = Stage::Track(TrackPayload {
         position: Some(position),
         at_infinity,
-        placement: Some(placed),
+        patch_frame: Some(placed),
         color: color
             .or_else(|| previous.map(|p| p.color))
             .unwrap_or([0; 3]),

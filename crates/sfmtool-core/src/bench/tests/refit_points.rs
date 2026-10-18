@@ -658,7 +658,7 @@ fn a_point_ranged_from_an_image_with_no_pose_that_becomes_a_direction_is_release
 #[test]
 fn a_point_with_one_observation_is_left_as_it_was() {
     let scene = Scene::new();
-    let patch = placement_of_fixture(&scene);
+    let patch = patch_frame_of_fixture(&scene);
     let recon = with_columns(fixture_of(&scene, WORLD, 1.0, &[0], &patch), BITMAP_R);
     let (out, report) = refit_over(&scene, &recon);
     assert_eq!(
@@ -761,10 +761,10 @@ fn a_track_stored_out_of_image_order_is_written_back_at_its_own_rows() {
 }
 
 /// The patch the scene's fixture stands its point on.
-fn placement_of_fixture(scene: &Scene) -> OrientedPatch {
+fn patch_frame_of_fixture(scene: &Scene) -> OrientedPatch {
     EditedReconstruction::new(Arc::new(fixture_with_columns(scene, WORLD, BITMAP_R)))
         .point(0)
-        .and_then(|p| p.placement())
+        .and_then(|p| p.patch_frame())
         .expect("the fixture's frame")
 }
 

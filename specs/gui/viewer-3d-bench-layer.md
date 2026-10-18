@@ -481,7 +481,7 @@ View show.
 
 ### Which patch, and which node
 
-The square is the placement of the focused item on the bench of
+The square is the patch frame of the focused item on the bench of
 `AppState::selected_recon`, at the track stage, and the viewport draws no other,
 so the patch a menu opens on is singular and so is the node it acts on. A
 cluster-stage item, a track with no patch and an empty bench draw no square and
@@ -516,12 +516,12 @@ handles still answer.
 ### What each entry computes
 
 Every entry reads the patch **in world coordinates**, after the transform the
-node already carries. With that transform `T0 = (R0, t0, s0)` and the placement
+node already carries. With that transform `T0 = (R0, t0, s0)` and the patch frame
 in the node's own coordinates, `c = T0(c_own)`, `u = R0 u_own`,
 `v = R0 v_own` and `n = u × v`. The scale is dropped from the axes: `Se3Transform`
 carries a uniform scale, which stretches no direction relative to another, so
-the three stay orthonormal and right-handed. `PatchFrame::of` squares them up
-besides, keeping `u` and rebuilding `v` from the normal, because a stored frame
+the three stay orthonormal and right-handed. `PatchAxes::of` squares them up
+besides, keeping `u` and rebuilding `v` from the normal, because a stored patch frame
 is orthonormal only to the `f32` it was read from and a matrix that is not quite
 a rotation makes a quaternion that is not quite unit.
 
@@ -554,7 +554,7 @@ not a special case: the answer's axis swings, and the patch still ends up facing
 
 **The map composes after the transform the node already carries**, since that
 transform takes the node's coordinates into the world `A` acts on:
-`next = T0.compose(A)`, the shape `Align to…` writes. Applied to the placement's
+`next = T0.compose(A)`, the shape `Align to…` writes. Applied to the patch frame's
 own centre it gives `Mᵀ(s0 R0 c_own + t0) − Mᵀc = 0`, and its rotation takes
 `u_own` to `Mᵀu = e_x`. The node keeps the scale it had, which is what "reframe,
 do not resize" means for a node that arrived under a similarity. A reversed

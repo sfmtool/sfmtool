@@ -242,8 +242,8 @@ def photo_normal(ctx, track, init, to_cam, opts, **kw):
 def _photo_normal_at(ctx, track, init, to_cam, opts, **kw):
     from sfmtool import patches
 
-    placement = track.placement
-    half = float(np.linalg.norm(placement["u_halfvec"])) * opts["photo_scale"]
+    patch_frame = track.patch_frame
+    half = float(np.linalg.norm(patch_frame["u_halfvec"])) * opts["photo_scale"]
     images = [
         int(o["image"])
         for o in track.observations
@@ -254,7 +254,7 @@ def _photo_normal_at(ctx, track, init, to_cam, opts, **kw):
         # track's sightings: more views constrain the normal better.
         seen = visible_views(
             ctx,
-            placement["center"],
+            patch_frame["center"],
             None,
             max_view_angle_deg=opts["photo_max_view_angle_deg"],
         )
@@ -267,7 +267,7 @@ def _photo_normal_at(ctx, track, init, to_cam, opts, **kw):
         cloud = patches.PatchCloud.from_halfvec_arrays(
             np.asarray([e1 * half], np.float32),
             np.asarray([e2 * half], np.float32),
-            np.asarray([placement["center"]], np.float64),
+            np.asarray([patch_frame["center"]], np.float64),
         )
         try:
             res = cloud.refine_normals(
@@ -301,7 +301,7 @@ def estimate(ctx, track, image, pixel, opts):
             if o["verdict"] == "in"
         ]
         current = _face(_unit(sum(dirs)), to_cam)
-    half = float(np.linalg.norm(track.placement["u_halfvec"]))
+    half = float(np.linalg.norm(track.patch_frame["u_halfvec"]))
     # A chain "a+b+c": the first source that gives a normal wins, except that
     # "photo_from_nb" starts the photometric search from the neighbours' normal.
     for src in opts["source"].split("+"):
@@ -348,9 +348,9 @@ def depth_probe(ctx, track, q, pixel, opts, info):
     tried = []
     for factor in opts["probe_scales"]:
         try:
-            placement = track.placement
-            u = _unit(np.asarray(placement["u_halfvec"], float))
-            v = _unit(np.asarray(placement["v_halfvec"], float))
+            patch_frame = track.patch_frame
+            u = _unit(np.asarray(patch_frame["u_halfvec"], float))
+            v = _unit(np.asarray(patch_frame["v_halfvec"], float))
             n = _unit(np.cross(u, v))
             d = (factor - 1.0) * (np.asarray(track.position, float) - cam.center)
             moved, _ = B.translate_patch(

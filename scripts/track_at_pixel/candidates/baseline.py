@@ -134,7 +134,7 @@ def _size_by_sampling_ratio(ctx, track, opts: dict, diag: dict):
     }.get(opts["size_policy"])
     if pick is None:
         raise ValueError(f"unknown size_policy {opts['size_policy']!r}")
-    half = float(np.linalg.norm(track.placement["u_halfvec"]))
+    half = float(np.linalg.norm(track.patch_frame["u_halfvec"]))
     new_half = half * opts["texel_scale_target"] / float(pick)
     record = {
         "policy": opts["size_policy"],

@@ -730,7 +730,7 @@ the step has anything to do. `sampler` takes the values and default of the
 `sampler` key of `--refine-keypoints`. Those are the only two keys: the other
 sub-pixel parameters tune a solve this step does not run.
 
-The render is the stored bitmap of a patch whose placement and keypoints are
+The render is the stored bitmap of a patch whose patch frame and keypoints are
 settled. A point whose `tracks/reference_observations` entry names an
 observation (one the file kept when its bitmaps were dropped) gets that
 observation's tile at its keypoint and keeps the entry, so
@@ -863,7 +863,7 @@ What it clears and what it keeps:
 | `images/thumbnails_y_x_rgb` | **dropped** | The shorthand. |
 | `points3d/patch_bitmaps_y_x_rgba` | **dropped** | The shorthand. |
 | `tracks/reference_observations` | kept | It names the observation each bitmap is to be rendered from, so `--add-patch-bitmaps` renders the same bitmaps back; the column is required with the patch frame. |
-| `points3d/patch_u_halfvec_xyz`, `patch_v_halfvec_xyz`, `normals_xyz` | kept | Geometry: the patches keep their placement, so bitmaps can be rendered back onto them. |
+| `points3d/patch_u_halfvec_xyz`, `patch_v_halfvec_xyz`, `normals_xyz` | kept | Geometry: the patches keep their patch frames, so bitmaps can be rendered back onto them. |
 | positions, colours, reprojection errors, tracks, keypoints, poses, cameras, image names | kept | The reconstruction itself. |
 
 The other optional columns (`normal_confidence`, `observation_confidence`, the

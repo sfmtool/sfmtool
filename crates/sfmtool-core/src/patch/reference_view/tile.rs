@@ -27,10 +27,10 @@ pub struct ViewTile {
     /// Per sample, row-major: whether the warp places it on the photograph,
     /// so that it carries image data.
     pub valid: Vec<bool>,
-    /// The placement the tile is rendered through: the patch re-anchored on
+    /// The patch frame the tile is rendered through: the patch re-anchored on
     /// the keypoint ([`OrientedPatch::anchored_at_keypoint`]), or the patch
     /// itself where there is no keypoint or its ray misses the patch's plane.
-    pub placement: OrientedPatch,
+    pub patch_frame: OrientedPatch,
     /// The Jacobian of the warp at the tile's centre, in image px per grid px
     /// ([`patch_grid_jacobian`]), where the centre projects.
     pub jacobian: Option<[[f64; 2]; 2]>,
@@ -41,7 +41,7 @@ pub struct ViewTile {
     /// The share of the photograph's pixels under the tile that are clipped
     /// ([`clipped_share`]), or `None` where no sample lands on the photograph.
     pub clipped_share: Option<f64>,
-    /// The angle the view sees the placement at, at its centre
+    /// The angle the view sees the patch frame at, at its centre
     /// ([`viewing_angle`]), so at the keypoint where there is one.
     pub viewing_angle: Option<ViewingAngle>,
 }
@@ -74,12 +74,12 @@ impl ViewTile {
 }
 
 /// Render `patch` in `view` at `resolution`, anchored on `keypoint` where
-/// there is one, with the sampler `sampler` picks from the placement's
+/// there is one, with the sampler `sampler` picks from the patch frame's
 /// Jacobian, and read its coverage, the clipped share of the photograph under
 /// it and the viewing angle.
 ///
 /// The tile is the one the bench's self-similarity reading takes and the one
-/// every stored patch bitmap is rendered as: the keypoint-anchored placement,
+/// every stored patch bitmap is rendered as: the keypoint-anchored patch frame,
 /// the sampler rule's choice at the patch resolution, and black where the warp
 /// leaves the photograph. The render is timed in its sampler's detail phase of
 /// `progress` ([`render_phase`]).
@@ -111,14 +111,14 @@ pub fn render_view_tile(
     progress: &Progress<'_>,
 ) -> ViewTile {
     let resolution = resolution.max(2);
-    let placement = keypoint
+    let patch_frame = keypoint
         .and_then(|kp| patch.anchored_at_keypoint(view.camera, view.cam_from_world, kp))
         .unwrap_or_else(|| patch.clone());
-    let jacobian = patch_grid_jacobian(&placement, view.camera, view.cam_from_world, resolution);
+    let jacobian = patch_grid_jacobian(&patch_frame, view.camera, view.cam_from_world, resolution);
     let sampler = sampler.for_jacobian(jacobian);
     let channels = view.pyramid.level(0).channels() as usize;
     let mut map = WarpMap::from_patch(
-        &placement,
+        &patch_frame,
         view.camera,
         view.cam_from_world,
         resolution as u32,
@@ -150,8 +150,8 @@ pub fn render_view_tile(
         samples,
         valid,
         clipped_share: clipped_share(view.pyramid, &outline),
-        viewing_angle: viewing_angle(&placement, view.cam_from_world),
-        placement,
+        viewing_angle: viewing_angle(&patch_frame, view.cam_from_world),
+        patch_frame,
         jacobian,
         sampler,
         coverage,

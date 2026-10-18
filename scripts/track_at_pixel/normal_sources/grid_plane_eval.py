@@ -93,13 +93,13 @@ from normal_diag import angle, face, unit  # noqa: E402
 
 
 def patch_normal(track):
-    frame = track.placement
+    frame = track.patch_frame
     return unit(np.cross(frame["u_halfvec"], frame["v_halfvec"]))
 
 
 def frame(track):
     """The track's patch as plain lists, for a later render of the point."""
-    f = track.placement
+    f = track.patch_frame
     return {
         "center": np.asarray(f["center"], float).tolist(),
         "u_halfvec": np.asarray(f["u_halfvec"], float).tolist(),

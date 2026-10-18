@@ -78,7 +78,7 @@ pub struct SelfSimilarityEllipseUnits {
     /// Jacobian.
     pub image_px: Option<SelfSimilarityEllipse>,
     /// Along the patch's `u` and `v` ([`SelfSimilarityEllipse::on_patch`]);
-    /// `None` without a placement.
+    /// `None` without a patch frame.
     pub patch: Option<PatchEllipse>,
 }
 
@@ -86,8 +86,8 @@ impl SelfSimilarityEllipseUnits {
     /// Measure `reading`'s ellipse: in grid px always, in image px through
     /// `jacobian` (image px per grid px,
     /// [`crate::camera::warp_map::patch_grid_jacobian`]) where there is one,
-    /// and along `placement`'s axes where there is one. `placement` and
-    /// `resolution` describe the `R × R` bitmap read: the placement it was
+    /// and along `patch_frame`'s axes where there is one. `patch_frame` and
+    /// `resolution` describe the `R × R` bitmap read: the patch frame it was
     /// rendered through, and `R`. `None` for a reading with no data.
     ///
     /// ```
@@ -98,12 +98,12 @@ impl SelfSimilarityEllipseUnits {
     /// use sfmtool_core::patch::self_similarity::{
     ///     PatchEllipse, SelfSimilarity, SelfSimilarityEllipseUnits,
     /// };
-    /// # fn bounds(reading: &SelfSimilarity, placement: &OrientedPatch,
+    /// # fn bounds(reading: &SelfSimilarity, patch frame: &OrientedPatch,
     /// #           camera: &CameraIntrinsics, pose: &RigidTransform) {
     /// // `reading` is the whole of a 24 × 24 bitmap rendered through
-    /// // `placement`.
-    /// let jacobian = patch_grid_jacobian(placement, camera, pose, 24);
-    /// if let Some(units) = SelfSimilarityEllipseUnits::read(reading, jacobian, Some(placement), 24) {
+    /// // `patch_frame`.
+    /// let jacobian = patch_grid_jacobian(patch frame, camera, pose, 24);
+    /// if let Some(units) = SelfSimilarityEllipseUnits::read(reading, jacobian, Some(patch frame), 24) {
     ///     if let Some(PatchEllipse::Length(on_patch)) = units.patch {
     ///         // A match could land up to on_patch.axes[0] from the point
     ///         // along the patch, in the scene's world-space unit, in the
@@ -116,7 +116,7 @@ impl SelfSimilarityEllipseUnits {
     pub fn read(
         reading: &super::SelfSimilarity,
         jacobian: Option<[[f64; 2]; 2]>,
-        placement: Option<&OrientedPatch>,
+        patch_frame: Option<&OrientedPatch>,
         resolution: usize,
     ) -> Option<Self> {
         let grid_px = reading.ellipse;
@@ -126,7 +126,7 @@ impl SelfSimilarityEllipseUnits {
         Some(Self {
             grid_px,
             image_px: jacobian.and_then(|j| grid_px.mapped(j)),
-            patch: placement.and_then(|p| grid_px.on_patch(p, resolution)),
+            patch: patch_frame.and_then(|p| grid_px.on_patch(p, resolution)),
         })
     }
 }
@@ -241,8 +241,8 @@ impl SelfSimilarityEllipse {
         })
     }
 
-    /// The ellipse along `placement`'s `u` and `v` axes, for a reading of a
-    /// `resolution × resolution` bitmap rendered through `placement`: one grid
+    /// The ellipse along `patch_frame`'s `u` and `v` axes, for a reading of a
+    /// `resolution × resolution` bitmap rendered through `patch_frame`: one grid
     /// px along `x` is `2·half_extent[0] / resolution` along `u`, and along
     /// `y` is `2·half_extent[1] / resolution` along `−v`
     /// (`WarpMap::from_patch` steps the rows down `v`), so it is
@@ -257,14 +257,14 @@ impl SelfSimilarityEllipse {
     ///
     /// `None` for a `resolution` of 0, a half-extent that is not positive and
     /// finite, or an ellipse with no data.
-    pub fn on_patch(&self, placement: &OrientedPatch, resolution: usize) -> Option<PatchEllipse> {
-        let half = placement.half_extent;
+    pub fn on_patch(&self, patch_frame: &OrientedPatch, resolution: usize) -> Option<PatchEllipse> {
+        let half = patch_frame.half_extent;
         if resolution == 0 || !half.iter().all(|h| h.is_finite() && *h > 0.0) {
             return None;
         }
         let r = resolution as f64;
         let along = self.mapped([[2.0 * half[0] / r, 0.0], [0.0, -2.0 * half[1] / r]])?;
-        Some(if placement.w == 0.0 {
+        Some(if patch_frame.w == 0.0 {
             let axes = along.axes.map(|a| a.atan().to_degrees());
             PatchEllipse::Angle(SelfSimilarityEllipse {
                 axes,

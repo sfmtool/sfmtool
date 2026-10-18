@@ -64,7 +64,7 @@ A **bulk edit**, in the shape `AppState::move_camera` has:
 2. Fold the overlay in when there is one, taking its `PointMap`; read the base
    directly when there is not.
 3. Run `SfmrReconstruction::apply_se3_transform` with the node's transform, and
-   put the bench's placements through the same transform
+   put the bench's patch frames through the same transform
    (`display_transform::bake_bench`).
 4. Push one version stating all three halves through `History::push_pair`: the
    transformed value, the transformed bench, and `Se3Transform::identity()` as
@@ -86,8 +86,8 @@ point constraints' distances and the per-image depth statistics. It is what
 `--scale-by-measurements` reach through `Se3Transform @ recon`, so the viewer
 and the command line are one implementation.
 
-**The bench's placements go through the same transform**, because the bench is
-the version's second half and its placement is world geometry the value does
+**The bench's patch frames go through the same transform**, because the bench is
+the version's second half and its patch frame is world geometry the value does
 not hold. A bake that transformed the value alone would leave the focused item's
 square standing in the old frame, and the figure would jump. For every
 track-stage item the centre and the track's position go through the whole
@@ -163,7 +163,7 @@ none can be satisfied by an implementation with a column or a direction wrong.
   camera centres and the bench figure to what they were, and a redo returns them
   to what they were after.
 - **The bench figure does not move** across the bake, to the `f32` it is stored
-  in, and the placement's half-extent has been scaled by the transform's scale.
+  in, and the patch frame's half-extent has been scaled by the transform's scale.
 - **An overlay is folded**: a bake after a point deletion keeps every live point
   and leaves an empty overlay, and still moves nothing on screen.
 - **The row** is one `Edit` naming the node, the degrees, the scene units and

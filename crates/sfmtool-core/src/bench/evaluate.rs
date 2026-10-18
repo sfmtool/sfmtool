@@ -600,7 +600,7 @@ fn evaluate_keeping_tiles(
 /// The track is read, and then, in turn:
 ///
 /// 1. **Render.** The bitmap is rendered where the patch stands, moving
-///    nothing, when the track has a placement and either has no bitmap, or
+///    nothing, when the track has a patch frame and either has no bitmap, or
 ///    holds a reference observation ([`TrackPayload::reference`]) whose row is
 ///    not pinned and is not the row the reference-view rule picks. The row
 ///    rendered from is the reference the track holds
@@ -664,7 +664,7 @@ pub fn evaluate_rendering_bitmap(
     progress: &Progress<'_>,
 ) -> Result<(EditableTrack, EvaluateReport), EvaluateError> {
     let (read, mut report, kept) = read_keeping_tiles(track, edited, images, options, progress)?;
-    let placed = read.track().is_some_and(|p| p.placement.is_some());
+    let placed = read.track().is_some_and(|p| p.patch_frame.is_some());
     let Some(kept) = kept.filter(|_| placed) else {
         let painted = repaint(track, read, &mut report);
         report.scored = judged_count(&painted);
@@ -774,7 +774,7 @@ pub(super) fn settle(
 /// render's own rule (its pick, or no bitmap where it finds no eligible row),
 /// and `None` when the bitmap stands.
 ///
-/// A track with no placement has nothing to render. One with no bitmap is
+/// A track with no patch frame has nothing to render. One with no bitmap is
 /// rendered, from the reference it holds or the rule's pick, and so is one
 /// whose bitmap is for judging only
 /// ([`TrackPayload::bitmap_for_judging`]) once a row is `in`; while none is,
@@ -796,7 +796,7 @@ pub(super) fn settle(
 /// none, since no render would replace it.
 pub fn bitmap_target(track: &EditableTrack) -> Option<Option<usize>> {
     let payload = track.track()?;
-    payload.placement.as_ref()?;
+    payload.patch_frame.as_ref()?;
     let held = track.held_reference();
     let stored = track.reference_view_pick();
     if payload.bitmap.is_none() || track.bitmap_pending() {
@@ -1019,7 +1019,7 @@ fn judged_count(track: &EditableTrack) -> usize {
 pub fn evaluate_preconditions(track: &EditableTrack) -> Result<(), EvaluateError> {
     match &track.stage {
         Stage::Cluster(_) => Ok(()),
-        Stage::Track(payload) if payload.placement.is_none() => Err(EvaluateError::NoFrame),
+        Stage::Track(payload) if payload.patch_frame.is_none() => Err(EvaluateError::NoFrame),
         Stage::Track(_) => Ok(()),
     }
 }
@@ -1305,11 +1305,11 @@ struct TileSelfSimilarity {
 }
 
 /// What a tile's grid is, for converting its self-similarity readings out of
-/// grid px: the image px per grid px at the tile's centre, and the placement
+/// grid px: the image px per grid px at the tile's centre, and the patch frame
 /// the `R×R` tile was rendered through, where there is one.
 struct TileGeometry<'a> {
     jacobian: Option<[[f64; 2]; 2]>,
-    placement: Option<&'a OrientedPatch>,
+    patch_frame: Option<&'a OrientedPatch>,
 }
 
 /// Read an interleaved `R × R × C` tile's self-similarity the overlap way,
@@ -1340,7 +1340,12 @@ fn score_self_similarity(
     };
     let parts = zncc_self_similarity_parts(&tile, data, &SelfSimilarityParams::default());
     let units = |reading| {
-        SelfSimilarityEllipseUnits::read(reading, geometry.jacobian, geometry.placement, resolution)
+        SelfSimilarityEllipseUnits::read(
+            reading,
+            geometry.jacobian,
+            geometry.patch_frame,
+            resolution,
+        )
     };
     TileSelfSimilarity {
         ellipse: units(&parts.whole),
@@ -1386,7 +1391,7 @@ fn tile_self_similarity(
     let step = 2.0 * params.radius / resolution as f64;
     let geometry = TileGeometry {
         jacobian: Some(shape.map(|row| row.map(|v| v * step))),
-        placement: None,
+        patch_frame: None,
     };
     score_self_similarity(&tile, channels, resolution, None, &geometry)
 }
@@ -1563,7 +1568,7 @@ fn evaluate_track(
     options: &EvaluateOptions,
     progress: &Progress<'_>,
 ) -> Result<(EditableTrack, EvaluateReport, KeptTiles), EvaluateError> {
-    let frame = payload.placement.clone().ok_or(EvaluateError::NoFrame)?;
+    let frame = payload.patch_frame.clone().ok_or(EvaluateError::NoFrame)?;
     check_observation_views(track, images)?;
 
     let plan = plan_rounds(
@@ -2031,14 +2036,14 @@ pub(super) fn observation_metrics(
 /// stored patch bitmap is rendered on), the overlap way, with no pixels from
 /// outside it and only its samples on the photograph as data, so a sample the
 /// warp could not place, black in the tile, is not read as texture. The
-/// ellipses are measured through the placement the tile was
+/// ellipses are measured through the patch frame the tile was
 /// rendered through at resolution `R`: the image px per grid px at its centre
 /// and its half-extents.
 fn view_tile_self_similarity(tile: &ViewTile) -> TileSelfSimilarity {
     let samples: Vec<f32> = tile.samples.iter().map(|&v| f32::from(v)).collect();
     let geometry = TileGeometry {
         jacobian: tile.jacobian,
-        placement: Some(&tile.placement),
+        patch_frame: Some(&tile.patch_frame),
     };
     score_self_similarity(
         &samples,
@@ -2264,7 +2269,7 @@ fn settle_reason(measurement: &mut super::track::TrackMeasurement, missing: Opti
 }
 
 /// Score `track`'s observations against the stored bitmap it holds, rendering
-/// each observation's tile at its keypoint over the track's placement, and
+/// each observation's tile at its keypoint over the track's patch frame, and
 /// return the track with those bitmap scores written into its rows.
 ///
 /// [`evaluate`] scores against the bitmap a track holds when it is read. A
@@ -2275,7 +2280,7 @@ fn settle_reason(measurement: &mut super::track::TrackMeasurement, missing: Opti
 /// [`evaluate_rendering_bitmap`] does both after an evaluation. The scores are
 /// the ones [`evaluate`] writes, at the same resolution
 /// ([`EvaluateOptions::patch_resolution`]) and sampler; nothing else in the
-/// rows changes. A track that is not at the track stage, or has no placement
+/// rows changes. A track that is not at the track stage, or has no patch frame
 /// or no bitmap, comes back unchanged, and so does every row of one whose
 /// bitmap is on another grid than that resolution -- a bitmap rendered under
 /// a [`FitOptions`](super::fit::FitOptions) whose resolution differs from the
@@ -2317,7 +2322,7 @@ pub fn score_bitmap(
     let Stage::Track(payload) = &track.stage else {
         return Ok(next);
     };
-    let (Some(frame), Some(_)) = (payload.placement.as_ref(), payload.bitmap.as_ref()) else {
+    let (Some(frame), Some(_)) = (payload.patch_frame.as_ref(), payload.bitmap.as_ref()) else {
         return Ok(next);
     };
     check_observation_views(track, images)?;

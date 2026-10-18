@@ -53,7 +53,7 @@ fn fit_normal_turns_a_tilted_patch_back_toward_the_plane() {
     let scene = Scene::new();
     let edited = three_view_edited(&scene);
     let track = tilted_track(&edited, 20.0);
-    let before = degrees(placement_of(&track).normal(), truth());
+    let before = degrees(patch_frame_of(&track).normal(), truth());
 
     let (turned, report) = fit_normal(
         &track,
@@ -63,7 +63,7 @@ fn fit_normal_turns_a_tilted_patch_back_toward_the_plane() {
         &Progress::none(),
     )
     .expect("three views score a normal");
-    let after = degrees(placement_of(&turned).normal(), truth());
+    let after = degrees(patch_frame_of(&turned).normal(), truth());
     assert!(after < before / 2.0, "{before:.1} -> {after:.1}: {report}");
     let NormalEstimate::Photometric {
         before: z0,
@@ -77,7 +77,7 @@ fn fit_normal_turns_a_tilted_patch_back_toward_the_plane() {
     assert_eq!(views, 3);
     // The centre does not move, and the result is read back, its bitmap
     // rendered, and every row scored against that bitmap.
-    assert!((placement_of(&turned).center - WORLD).norm() < 1e-9);
+    assert!((patch_frame_of(&turned).center - WORLD).norm() < 1e-9);
     assert!(turned.track().expect("track stage").bitmap.is_some());
     assert_eq!(report.evaluate.measured, 3);
     assert_rows_scored_against_the_bitmap(&turned);
@@ -103,7 +103,7 @@ fn finite_difference_normal_turns_a_tilted_patch_back_toward_the_plane() {
     let scene = Scene::new();
     let edited = three_view_edited(&scene);
     let track = tilted_track(&edited, 20.0);
-    let before = degrees(placement_of(&track).normal(), truth());
+    let before = degrees(patch_frame_of(&track).normal(), truth());
 
     for (pieces, overlap) in [(2, 0.0), (3, 0.5)] {
         let options = FiniteDifferenceOptions {
@@ -114,7 +114,7 @@ fn finite_difference_normal_turns_a_tilted_patch_back_toward_the_plane() {
         let (turned, report) =
             finite_difference_normal(&track, &edited, &scene.views(), &options, &Progress::none())
                 .expect("the pieces fit");
-        let after = degrees(placement_of(&turned).normal(), truth());
+        let after = degrees(patch_frame_of(&turned).normal(), truth());
         assert!(
             after < before / 2.0,
             "{pieces} pieces, {overlap}: {before:.1} -> {after:.1}: {report}"
@@ -128,7 +128,7 @@ fn finite_difference_normal_turns_a_tilted_patch_back_toward_the_plane() {
                 both_axes: true,
             }
         );
-        assert!((placement_of(&turned).center - WORLD).norm() < 1e-9);
+        assert!((patch_frame_of(&turned).center - WORLD).norm() < 1e-9);
         assert_rows_scored_against_the_bitmap(&turned);
     }
 }
@@ -138,7 +138,7 @@ fn a_grid_of_pieces_turns_a_tilted_patch_back_toward_the_plane() {
     let scene = Scene::new();
     let edited = three_view_edited(&scene);
     let track = tilted_track(&edited, 20.0);
-    let before = degrees(placement_of(&track).normal(), truth());
+    let before = degrees(patch_frame_of(&track).normal(), truth());
 
     for (pieces, overlap) in [(2, 0.0), (3, 0.5)] {
         let options = FiniteDifferenceOptions {
@@ -150,7 +150,7 @@ fn a_grid_of_pieces_turns_a_tilted_patch_back_toward_the_plane() {
         let (turned, report) =
             finite_difference_normal(&track, &edited, &scene.views(), &options, &Progress::none())
                 .expect("the pieces fit");
-        let after = degrees(placement_of(&turned).normal(), truth());
+        let after = degrees(patch_frame_of(&turned).normal(), truth());
         assert!(
             after < before / 2.0,
             "{pieces}x{pieces}, {overlap}: {before:.1} -> {after:.1}: {report}"
@@ -170,7 +170,7 @@ fn a_grid_of_pieces_turns_a_tilted_patch_back_toward_the_plane() {
         assert!(report
             .to_string()
             .starts_with(&format!("{pieces}x{pieces} pieces")));
-        assert!((placement_of(&turned).center - WORLD).norm() < 1e-9);
+        assert!((patch_frame_of(&turned).center - WORLD).norm() < 1e-9);
     }
 }
 

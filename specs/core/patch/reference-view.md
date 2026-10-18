@@ -51,7 +51,7 @@ writes the readings into each row's `TrackMeasurement`
 pub struct ViewTile {
     pub samples: Array3<u8>,             // (R, R, C), black off the photograph
     pub valid: Vec<bool>,                // per sample: on the photograph
-    pub placement: OrientedPatch,        // anchored on the keypoint where it can be
+    pub patch_frame: OrientedPatch,        // anchored on the keypoint where it can be
     pub jacobian: Option<[[f64; 2]; 2]>, // image px per grid px at the centre
     pub sampler: Sampler,                // the sampler rule's choice
     pub coverage: f64,                   // share of valid samples
@@ -202,8 +202,8 @@ and the cell check reads each cell's to tell whether the view holds texture
 there.
 
 `render_view_tile` returns the tile and its readings together because they
-share the render's placement and warp map: the outline the clipped share reads
-is the warp map's border, and the angle is read at the anchored placement's
+share the render's patch frame and warp map: the outline the clipped share reads
+is the warp map's border, and the angle is read at the anchored patch frame's
 centre. The bench, the stored bitmap and the Python binding all call it, so a
 tile rendered from Python is the tile the bench measured, and the stored bitmap
 is the tile the rule read.
@@ -1264,7 +1264,7 @@ which a test checks on concave, self-crossing and off-photograph outlines.
 **A keypoint whose ray misses the patch's plane.** Anchoring fails when the
 keypoint's ray does not meet the patch's plane in front of the camera, and the
 tile is then rendered through the patch where it stands; the viewing angle is
-read at the same placement, so it is the angle at the patch's centre rather
+read at the same patch frame, so it is the angle at the patch's centre rather
 than at the keypoint. On the review cases this happens to one view of one track
 (a 360° rig), whose angle reads 10° at the patch's centre where the keypoint's
 ray reads 111°.
@@ -1377,7 +1377,7 @@ view's tile (`render_view_tile`) from a numpy photograph or from an
 `ImagePyramidSet` with `image_index`, and returns a dict: `samples` `(R, R, C)`
 uint8, `valid` `(R, R)` bool, `sampler`, `coverage`, `clipped_share`,
 `viewing_angle_deg`, `tilt_direction_deg`, `jacobian` `(2, 2)` or `None`, and
-`placement`, the `OrientedPatch` the tile was rendered through. It raises
+`patch_frame`, the `OrientedPatch` the tile was rendered through. It raises
 `ValueError` for a `resolution` outside 2 to 1024, a keypoint that is not
 finite, an `ImagePyramidSet` without `image_index`, or an `image_index` given
 with a plain array, which holds one photograph.

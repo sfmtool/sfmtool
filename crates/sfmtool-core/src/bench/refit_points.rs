@@ -651,7 +651,7 @@ fn refit_one(
         return (status(RefitOutcome::NotFitted(e)), None);
     }
     let frame = match &track.stage {
-        Stage::Track(payload) => payload.placement.clone(),
+        Stage::Track(payload) => payload.patch_frame.clone(),
         Stage::Cluster(_) => None,
     }
     .expect("fit_preconditions refuses a track-stage track with no frame");

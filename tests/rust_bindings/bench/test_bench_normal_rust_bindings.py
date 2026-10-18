@@ -84,7 +84,7 @@ def fitted(embedded, edited, images):
 
 
 def _normal(track):
-    frame = track.placement
+    frame = track.patch_frame
     cross = np.cross(frame["u_halfvec"], frame["v_halfvec"])
     return cross / np.linalg.norm(cross)
 
@@ -96,7 +96,7 @@ def _check_common(report, before, after):
     assert report["evaluate"]["stage"] == "track"
     assert isinstance(report["text"], str) and report["text"]
     # A normal step turns the patch about its centre.
-    np.testing.assert_allclose(before.placement["center"], after.placement["center"])
+    np.testing.assert_allclose(before.patch_frame["center"], after.patch_frame["center"])
 
 
 class TestGridPlaneNormal:

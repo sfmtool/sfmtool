@@ -565,7 +565,7 @@ pub(super) fn vector(v: &Vector3<f64>) -> Value {
     json!([v.x, v.y, v.z])
 }
 
-/// A patch's placement, as `get_point` and `get_bench_track` both report it,
+/// A patch frame, as `get_point` and `get_bench_track` both report it,
 /// or null where there is none.
 ///
 /// The axes are unit and `half_extent` is the world half-size along each, so a
@@ -574,7 +574,7 @@ pub(super) fn vector(v: &Vector3<f64>) -> Value {
 /// outward normal `tilt_bench_patch` takes, and a caller can hand it straight
 /// back. For a point at infinity `center` is a bearing and the patch is tangent
 /// to the direction sphere; the `at_infinity` beside the block says which.
-pub(super) fn placement(patch: Option<&OrientedPatch>) -> Value {
+pub(super) fn patch_frame(patch: Option<&OrientedPatch>) -> Value {
     let Some(patch) = patch else {
         return Value::Null;
     };

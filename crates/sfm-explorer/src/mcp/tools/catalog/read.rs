@@ -100,7 +100,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
         ToolSpec {
             name: "get_point",
             description: "One 3D point: position, colour, RMS error, whether it is a point at \
-                          infinity, its patch placement (centre, unit u and v axes, outward \
+                          infinity, its patch frame (centre, unit u and v axes, outward \
                           normal and half_extent; null with no patch frame) with its \
                           normal_confidence, and its full track — every observing camera image \
                           with the pixel it was seen at and that observation's reprojection \
@@ -288,7 +288,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
         ToolSpec {
             name: "get_bench_track",
             description: "One track on the bench, as its Track View table: the stage and its \
-                          data (at the track stage, the patch placement in get_point's shape, \
+                          data (at the track stage, the patch frame in get_point's shape, \
                           whose normal is the one tilt_bench_patch takes, and \
                           stage_data.bitmap_pending, true while the bitmap waits to be \
                           rendered again after its reference row was unpinned), the point \
@@ -389,7 +389,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           two singular directions, the numbers the Zoom column prints; neither \
                           depends on the resolution Track View draws its tiles at. Both are \
                           read from the patch re-anchored where the observation sits, the \
-                          placement the tile is rendered through. Both are null at the \
+                          patch frame the tile is rendered through. Both are null at the \
                           cluster stage, on a track with no patch yet, for an observation with \
                           nothing saying where it sits, and for a patch whose centre is behind \
                           the camera or outside the camera model's domain; a tile whose middle \

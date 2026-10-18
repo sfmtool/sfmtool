@@ -51,7 +51,7 @@ def test_a_patch_facing_the_camera_renders_a_whole_tile():
     assert tile["tilt_direction_deg"] is None
     assert tile["sampler"] in {"bilinear_mip", "anisotropic"}
     assert tile["jacobian"].shape == (2, 2)
-    np.testing.assert_allclose(tile["placement"].center, [0, 0, -4])
+    np.testing.assert_allclose(tile["patch_frame"].center, [0, 0, -4])
 
 
 def test_anchoring_on_a_keypoint_moves_the_tile_and_reads_the_angle_there():
@@ -61,7 +61,7 @@ def test_anchoring_on_a_keypoint_moves_the_tile_and_reads_the_angle_there():
     )
     # The anchored patch stays in its plane and its centre projects onto the
     # keypoint, 10 px right of the principal point: 10 / 60 of the depth.
-    center = tile["placement"].center
+    center = tile["patch_frame"].center
     assert center[2] == pytest.approx(-4.0)
     assert abs(center[0]) == pytest.approx(4.0 * 10.0 / 60.0)
     # The ray to it leans off the normal by atan(10 / 60).

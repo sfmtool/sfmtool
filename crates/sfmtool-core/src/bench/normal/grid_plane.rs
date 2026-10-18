@@ -638,7 +638,7 @@ impl Measurement {
 struct Render {
     /// The patch re-anchored on the view's keypoint, at the working grid's
     /// size: what the cell positions are read on.
-    placement: OrientedPatch,
+    patch_frame: OrientedPatch,
     /// `side × side × channels`, interleaved, `NaN` off the photograph.
     samples: Vec<f32>,
     side: usize,
@@ -698,12 +698,17 @@ impl<'a, 'v> Cells<'a, 'v> {
                 let jacobian = reference.and_then(|r| {
                     let observation = &track.observations[r];
                     let view = &images[observation.image as usize];
-                    let placement = seed_of(observation)
+                    let patch_frame = seed_of(observation)
                         .and_then(|kp| {
                             frame.anchored_at_keypoint(view.camera, view.cam_from_world, kp)
                         })
                         .unwrap_or_else(|| frame.clone());
-                    patch_grid_jacobian(&placement, view.camera, view.cam_from_world, base as usize)
+                    patch_grid_jacobian(
+                        &patch_frame,
+                        view.camera,
+                        view.cam_from_world,
+                        base as usize,
+                    )
                 });
                 working_side(jacobian, base)
             }
@@ -795,7 +800,7 @@ impl<'a, 'v> Cells<'a, 'v> {
             view_cells[reference][k] = status;
             if status == CellStatus::Fitted {
                 if let Some((ray, pixel)) = cell_ray(
-                    &ref_render.placement,
+                    &ref_render.patch_frame,
                     ref_view,
                     &ref_posed,
                     *centre,
@@ -867,7 +872,7 @@ impl<'a, 'v> Cells<'a, 'v> {
                 let c = self.layout.centres[k / 3][k % 3];
                 let at = [c[0] + reading.shift[0], c[1] + reading.shift[1]];
                 if let Some((ray, pixel)) =
-                    cell_ray(&render.placement, view, &posed, at, wpp, params)
+                    cell_ray(&render.patch_frame, view, &posed, at, wpp, params)
                 {
                     if let Some(record) = record.as_deref_mut() {
                         record.cells[k]
@@ -956,17 +961,17 @@ impl<'a, 'v> Cells<'a, 'v> {
         margin: usize,
     ) -> Option<Render> {
         let r = self.layout.resolution;
-        let placement = keypoint
+        let patch_frame = keypoint
             .and_then(|kp| frame.anchored_at_keypoint(view.camera, view.cam_from_world, kp))
             .unwrap_or_else(|| frame.clone());
-        let jacobian = patch_grid_jacobian(&placement, view.camera, view.cam_from_world, r);
+        let jacobian = patch_grid_jacobian(&patch_frame, view.camera, view.cam_from_world, r);
         let sampler = self.options.fit.refine.sampler.for_jacobian(jacobian);
         let side = r + 2 * margin;
         let scale = side as f64 / r as f64;
-        let mut context = placement.clone();
+        let mut context = patch_frame.clone();
         context.half_extent = [
-            placement.half_extent[0] * scale,
-            placement.half_extent[1] * scale,
+            patch_frame.half_extent[0] * scale,
+            patch_frame.half_extent[1] * scale,
         ];
         let mut map = WarpMap::from_patch(&context, view.camera, view.cam_from_world, side as u32);
         let tile = {
@@ -991,7 +996,7 @@ impl<'a, 'v> Cells<'a, 'v> {
             }
         }
         any.then_some(Render {
-            placement,
+            patch_frame,
             samples,
             side,
             channels,
@@ -1101,13 +1106,13 @@ fn gated(
 }
 
 /// The ray through the photograph's pixel under grid position `at` of a
-/// render through `placement`, in grid px centred on the grid. Its noise floor
+/// render through `patch_frame`, in grid px centred on the grid. Its noise floor
 /// is a measured shift's precision carried into the view's pixels by the
 /// render map's local Jacobian, floored at the kernel's absolute floor.
 /// Returns the ray with the pixel it passes through; `None` where the
 /// position does not project.
 fn cell_ray(
-    placement: &OrientedPatch,
+    patch_frame: &OrientedPatch,
     view: &ProjectedImage<'_>,
     posed: &PosedView<'_>,
     at: [f64; 2],
@@ -1115,9 +1120,9 @@ fn cell_ray(
     params: &CellPlaneParams,
 ) -> Option<(CellRay, [f64; 2])> {
     let pixel = |gx: f64, gy: f64| {
-        let world = shifted_center(placement, gx, gy, wpp, wpp);
+        let world = shifted_center(patch_frame, gx, gy, wpp, wpp);
         view.camera
-            .project_homogeneous(view.cam_from_world, world.coords, placement.w)
+            .project_homogeneous(view.cam_from_world, world.coords, patch_frame.w)
     };
     let centre = pixel(at[0], at[1])?;
     let (right, left) = (pixel(at[0] + 0.5, at[1])?, pixel(at[0] - 0.5, at[1])?);

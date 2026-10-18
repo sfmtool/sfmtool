@@ -792,9 +792,9 @@ pub fn grown_plane_normal(
     let side = match options.working_resolution {
         Some(side) => side.max(floor),
         None => {
-            let placement = anchored(&frame, ref_view, ref_keypoint);
+            let patch_frame = anchored(&frame, ref_view, ref_keypoint);
             let jacobian = crate::camera::warp_map::patch_grid_jacobian(
-                &placement,
+                &patch_frame,
                 ref_view.camera,
                 ref_view.cam_from_world,
                 base as usize,
@@ -803,7 +803,7 @@ pub fn grown_plane_normal(
         }
     } as usize;
     let grid = Grid::new(&frame, ref_view, ref_keypoint, side);
-    let ref_image = ViewImage::new(ref_view, &grid.placement, side);
+    let ref_image = ViewImage::new(ref_view, &grid.patch_frame, side);
     let reference_samples =
         ViewRender::new(&grid, &ref_image).render([0.0; 2], [0.0; 2], &grid.all());
     let live = live_cells(&grid.cells, &reference_samples);
@@ -820,7 +820,7 @@ pub fn grown_plane_normal(
         .map(|&row| {
             let observation = &track.observations[row];
             let view = &images[observation.image as usize];
-            let image = ViewImage::new(view, &grid.placement, side);
+            let image = ViewImage::new(view, &grid.patch_frame, side);
             let keypoint = seed_of(observation);
             let direction = (view.cam_from_world.inverse_translation_origin().coords - centre)
                 .try_normalize(1e-12);

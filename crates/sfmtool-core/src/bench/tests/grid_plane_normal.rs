@@ -141,7 +141,7 @@ fn run_with(
 
 /// Whether `turned` holds exactly the frame `track` started with.
 fn frame_unchanged(track: &EditableTrack, turned: &EditableTrack) -> bool {
-    let (a, b) = (placement_of(track), placement_of(turned));
+    let (a, b) = (patch_frame_of(track), patch_frame_of(turned));
     a.u_axis == b.u_axis && a.v_axis == b.v_axis && a.center == b.center
 }
 
@@ -167,7 +167,7 @@ fn a_textured_plane_started_off_its_normal_is_turned_onto_it() {
             let track = tilted_track(&edited, axis, by);
             let (turned, report) = run_at(&scene, &edited, &track, working_resolution);
             let cells = cells_of(&report);
-            let after = degrees(placement_of(&turned).normal(), truth());
+            let after = degrees(patch_frame_of(&turned).normal(), truth());
             let case = format!("{working_resolution:?}, {by} deg about {axis:?}");
             assert!(after < within, "{case}: {after:.3} deg off, {report}");
             match working_resolution {
@@ -185,7 +185,7 @@ fn a_textured_plane_started_off_its_normal_is_turned_onto_it() {
             assert!(cells.score_after >= cells.score_before, "{case}: {report}");
             assert!(cells.plane_rms.is_finite() && cells.plane_offset.is_finite());
             // The centre does not move, and the track is read back.
-            assert!((placement_of(&turned).center - WORLD).norm() < 1e-9);
+            assert!((patch_frame_of(&turned).center - WORLD).norm() < 1e-9);
             assert!(turned.track().expect("track stage").bitmap.is_some());
             assert!(
                 report.to_string().starts_with("9 of 9 cells in the plane"),
@@ -270,7 +270,7 @@ fn a_flat_third_is_refused_for_curvature_and_the_rest_fix_the_normal() {
     }
     assert_eq!(cells.determinacy, NormalDeterminacy::BothAxes, "{report}");
     assert_eq!(cells.outcome, GridPlaneOutcome::Turned, "{report}");
-    let after = degrees(placement_of(&turned).normal(), truth());
+    let after = degrees(patch_frame_of(&turned).normal(), truth());
     assert!(after < 1.0, "{after:.3} deg off: {report}");
 }
 
@@ -343,7 +343,7 @@ fn a_depth_step_leaves_one_column_and_one_axis() {
         * truth();
     let (bench, label) = bench_with_point(&edited, 0);
     let (track, _) = tilt_patch(&track_of(&bench, &label), &edited, start).expect("a finite track");
-    let was = placement_of(&track).normal();
+    let was = patch_frame_of(&track).normal();
 
     // At the default bar of 0.6 one far-plane cell, the middle column's top,
     // registers in one view between 0.6 and 0.8 and joins the plane with a
@@ -382,7 +382,7 @@ fn a_depth_step_leaves_one_column_and_one_axis() {
 
     // The fixed axis agrees with the near plane: the normal has no part along
     // the column. The free one is where the patch had it.
-    let after = placement_of(&turned).normal();
+    let after = patch_frame_of(&turned).normal();
     assert!(
         after.dot(&Vector3::y()).abs() < 1f64.to_radians().sin(),
         "{after:?}: {report}"
@@ -399,7 +399,7 @@ fn flat_texture_throughout_fixes_no_axis_and_turns_nothing() {
     let scene = Scene::from_surface(&CENTERS, |_, _| 127.5);
     let edited = three_view_edited(&scene);
     let track = tilted_track(&edited, Vector3::x(), 15.0);
-    let was = placement_of(&track).normal();
+    let was = patch_frame_of(&track).normal();
 
     let (turned, report) = run(&scene, &edited, &track);
     let cells = cells_of(&report);
@@ -413,7 +413,7 @@ fn flat_texture_throughout_fixes_no_axis_and_turns_nothing() {
     assert_eq!(cells.stop, LoopStop::NotRun);
     assert_eq!(cells.outcome, GridPlaneOutcome::Undetermined);
     assert!(frame_unchanged(&track, &turned));
-    assert!(degrees(placement_of(&turned).normal(), was) < 1e-9);
+    assert!(degrees(patch_frame_of(&turned).normal(), was) < 1e-9);
     let sentence = report.to_string();
     assert!(sentence.starts_with("0 of 9 cells in the plane, no axis fixed"));
     assert!(
@@ -643,7 +643,10 @@ fn the_detail_record_follows_the_trace() {
         cells_of(&plain),
         "the record changes nothing else"
     );
-    assert_eq!(placement_of(&recorded_track), placement_of(&plain_track));
+    assert_eq!(
+        patch_frame_of(&recorded_track),
+        patch_frame_of(&plain_track)
+    );
     assert_eq!(cells.outcome, GridPlaneOutcome::Turned, "{recorded}");
 
     let layout = detail.layout;
@@ -716,7 +719,7 @@ fn the_detail_record_follows_the_trace() {
         assert_eq!(statuses, cells.view_cells[view.tile.observation]);
     }
     let first = &detail.renders[0].frame;
-    let start = placement_of(&track);
+    let start = patch_frame_of(&track);
     assert_eq!(first.center, <[f64; 3]>::from(start.center.coords));
     assert_eq!(first.normal, <[f64; 3]>::from(start.normal()));
 }

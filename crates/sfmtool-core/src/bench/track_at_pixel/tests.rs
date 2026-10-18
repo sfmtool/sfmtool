@@ -611,7 +611,7 @@ fn the_returned_track_carries_a_bitmap_on_the_reconstructions_grid() {
     );
     let after = again.track().expect("the track stage");
     assert_eq!(after.position, payload.position);
-    assert_eq!(after.placement, payload.placement);
+    assert_eq!(after.patch_frame, payload.patch_frame);
     for (a, b) in again.observations.iter().zip(&track.observations) {
         assert_eq!(a.verdict, b.verdict);
         assert_eq!(

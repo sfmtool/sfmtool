@@ -1594,27 +1594,27 @@ fn the_lower_bounds_carry_through_a_map() {
 fn the_ellipse_on_the_patch_scales_by_each_half_extent() {
     let s = paraboloid(16, 10.0, 4.0, 0.0);
     let e = s.ellipse;
-    let mut placement = crate::patch::cloud::OrientedPatch::new(
+    let mut patch_frame = crate::patch::cloud::OrientedPatch::new(
         nalgebra::Point3::origin(),
         nalgebra::Vector3::x(),
         nalgebra::Vector3::y(),
         [0.5, 2.0],
     );
-    let Some(PatchEllipse::Length(on)) = e.on_patch(&placement, 24) else {
+    let Some(PatchEllipse::Length(on)) = e.on_patch(&patch_frame, 24) else {
         panic!("a finite patch reads a length");
     };
     // 10 × 1/24 along u against 4 × 4/24 along v: the long axis is now v.
     assert!((on.axes[0] - 4.0 * e.axes[1] / 24.0).abs() < 1e-9, "{on:?}");
     assert!((on.axes[1] - e.axes[0] / 24.0).abs() < 1e-9, "{on:?}");
     assert!(axis_angle_gap(on.major_angle, std::f64::consts::FRAC_PI_2) < 1e-9);
-    assert_eq!(e.on_patch(&placement, 0), None);
+    assert_eq!(e.on_patch(&patch_frame, 0), None);
 
     // A turned ellipse turns the other way along v, which runs up the rows.
     let turned = paraboloid(16, 10.0, 4.0, 0.5).ellipse;
-    placement.half_extent = [1.2, 1.2];
+    patch_frame.half_extent = [1.2, 1.2];
     let on = *turned
-        .on_patch(&placement, 24)
-        .expect("a placement")
+        .on_patch(&patch_frame, 24)
+        .expect("a patch frame")
         .ellipse();
     assert!(
         axis_angle_gap(on.major_angle, -turned.major_angle) < 1e-9,
@@ -1622,15 +1622,15 @@ fn the_ellipse_on_the_patch_scales_by_each_half_extent() {
     );
     assert!((on.axes[0] - turned.axes[0] * 0.1).abs() < 1e-9);
 
-    placement.w = 0.0;
-    let Some(PatchEllipse::Angle(bearing)) = turned.on_patch(&placement, 24) else {
+    patch_frame.w = 0.0;
+    let Some(PatchEllipse::Angle(bearing)) = turned.on_patch(&patch_frame, 24) else {
         panic!("a patch at infinity reads an angle");
     };
     let tangent = turned.axes[0] * 0.1;
     assert!((bearing.axes[0] - tangent.atan().to_degrees()).abs() < 1e-9);
     // On a small patch the angle is the offset in radians, to first order.
-    placement.half_extent = [0.012, 0.012];
-    let small = turned.on_patch(&placement, 24).expect("a placement");
+    patch_frame.half_extent = [0.012, 0.012];
+    let small = turned.on_patch(&patch_frame, 24).expect("a patch frame");
     let tangent = turned.axes[0] * 0.001;
     assert!((small.ellipse().axes[0] - tangent.to_degrees()).abs() < 1e-4 * tangent.to_degrees());
 }
@@ -1643,14 +1643,14 @@ fn the_units_read_what_they_are_given() {
     assert_eq!(bare.grid_px, s.ellipse);
     assert_eq!(bare.image_px, None);
     assert_eq!(bare.patch, None);
-    let placement = crate::patch::cloud::OrientedPatch::new(
+    let patch_frame = crate::patch::cloud::OrientedPatch::new(
         nalgebra::Point3::origin(),
         nalgebra::Vector3::x(),
         nalgebra::Vector3::y(),
         [1.2, 1.2],
     );
     let jacobian = [[2.0, 0.0], [0.0, 1.0]];
-    let full = SelfSimilarityEllipseUnits::read(&s, Some(jacobian), Some(&placement), 24)
+    let full = SelfSimilarityEllipseUnits::read(&s, Some(jacobian), Some(&patch_frame), 24)
         .expect("a reading");
     assert_eq!(full.image_px, s.ellipse.mapped(jacobian));
     assert!(matches!(full.patch, Some(PatchEllipse::Length(_))));

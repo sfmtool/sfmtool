@@ -182,7 +182,7 @@ def run(args, sfmr: Path, tolerance: float, out_dir: Path) -> None:
                 point=point,
                 case=case["id"] if case else None,
                 resolution=resolution,
-                placement=_placement(track.placement),
+                patch_frame=_patch_frame(track.patch_frame),
                 rows=_rows(track, names, centres),
             )
             _cell_readings(record, track, recon, pyramids, resolution)
@@ -238,12 +238,12 @@ def _align_rows(B, track, edited, case, image_of):
     return track
 
 
-def _placement(placement):
-    if placement is None:
+def _patch_frame(patch_frame):
+    if patch_frame is None:
         return None
     return {
         k: (np.asarray(v, float).tolist() if k != "w" else float(v))
-        for k, v in placement.items()
+        for k, v in patch_frame.items()
     }
 
 
@@ -254,21 +254,21 @@ def _camera_centres(recon):
     return np.array([-_rotation(qi).T @ ti for qi, ti in zip(q, t)])
 
 
-def _ray(placement, centre):
+def _ray(patch_frame, centre):
     """The unit direction from the patch's centre to a camera centre. For a
     patch at infinity (``w = 0``) it is minus the patch's bearing, the same
     for every camera."""
-    if placement is None:
+    if patch_frame is None:
         return None
-    c = np.asarray(placement["center"], float)
-    d = -c if placement["w"] == 0.0 else centre - c
+    c = np.asarray(patch_frame["center"], float)
+    d = -c if patch_frame["w"] == 0.0 else centre - c
     n = np.linalg.norm(d)
     return None if n == 0.0 else (d / n).tolist()
 
 
 def _rows(track, names, centres):
     rows = []
-    placement = _placement(track.placement)
+    patch_frame = _patch_frame(track.patch_frame)
     for row, obs in enumerate(track.observations):
         m = obs.get("track") or {}
         ellipse = (m.get("zncc_self_similarity_ellipse") or {}).get("grid_px")
@@ -283,7 +283,7 @@ def _rows(track, names, centres):
                 image_name=names[obs["image"]],
                 verdict=obs["verdict"],
                 keypoint=None if keypoint is None else [float(v) for v in keypoint],
-                ray=_ray(placement, centres[int(obs["image"])]),
+                ray=_ray(patch_frame, centres[int(obs["image"])]),
                 semi_major=None if axes is None else axes[0],
                 semi_minor=None if axes is None else axes[1],
                 # The surface spans the (2r + 1)² square of shifts searched.
@@ -312,7 +312,7 @@ def _cell_readings(record, track, recon, pyramids, resolution):
     ``cell_off_photo`` (how many of each cell's samples the warp places off
     the photograph, read from the row's tile rendered again with
     ``OrientedPatch.render_view_tile``)."""
-    patch = _oriented_patch(record["placement"]) if record["placement"] else None
+    patch = _oriented_patch(record["patch_frame"]) if record["patch_frame"] else None
     cut = [0, resolution // 3, resolution - resolution // 3, resolution]
     for r in record["rows"]:
         m = track.observations[r["row"]].get("track") or {}
@@ -348,21 +348,21 @@ def _nan_to_none(a):
     return [_nan_to_none(x) for x in a]
 
 
-def _oriented_patch(placement):
+def _oriented_patch(patch_frame):
     from sfmtool.patches import OrientedPatch
 
-    u = np.asarray(placement["u_halfvec"], float)
-    v = np.asarray(placement["v_halfvec"], float)
+    u = np.asarray(patch_frame["u_halfvec"], float)
+    v = np.asarray(patch_frame["v_halfvec"], float)
     half = [float(np.linalg.norm(u)), float(np.linalg.norm(v))]
-    if placement["w"] == 0.0:
+    if patch_frame["w"] == 0.0:
         patch = OrientedPatch.from_infinity_direction(
-            placement["center"], (v / half[1]).tolist(), half
+            patch_frame["center"], (v / half[1]).tolist(), half
         )
         if not np.allclose(patch.u_axis, u / half[0], atol=1e-9):
             return None
         return patch
     return OrientedPatch(
-        placement["center"], (u / half[0]).tolist(), (v / half[1]).tolist(), half
+        patch_frame["center"], (u / half[0]).tolist(), (v / half[1]).tolist(), half
     )
 
 
@@ -390,7 +390,7 @@ def _blur_matched_pairs(record, recon, pyramids, resolution):
     rows = [
         r for r in record["rows"] if r["rule"] is not None and r["keypoint"] is not None
     ]
-    patch = _oriented_patch(record["placement"]) if record["placement"] else None
+    patch = _oriented_patch(record["patch_frame"]) if record["patch_frame"] else None
     if patch is None or len(rows) < 2:
         return
     tiles, valid = [], []

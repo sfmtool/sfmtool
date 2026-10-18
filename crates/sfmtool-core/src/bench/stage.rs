@@ -276,7 +276,7 @@ pub fn set_stage_preconditions(track: &EditableTrack, stage: StageKind) -> Resul
             let payload = track
                 .track()
                 .expect("the stages differ, so this one is the track stage");
-            if payload.placement.is_none() {
+            if payload.patch_frame.is_none() {
                 return Err(StageError::NoFrame);
             }
             if payload.position.is_none() {
@@ -482,7 +482,7 @@ fn downgrade(
     // The frame and the position are [`set_stage_preconditions`]'s, checked
     // before the caller spent anything on the views.
     let payload = track.track().expect("the caller checked the stage");
-    let frame = payload.placement.as_ref().ok_or(StageError::NoFrame)?;
+    let frame = payload.patch_frame.as_ref().ok_or(StageError::NoFrame)?;
     let position = payload.position.ok_or(StageError::NoPosition)?;
     let point = Point3D {
         position,

@@ -622,7 +622,7 @@ pub fn fit(
 // Render the stored bitmap (the tile of `TrackPayload::reference` where it is
 // defined; otherwise the reference-view rule's pick among the `in` rows, named
 // in `TrackPayload::reference`) and colour where the track-stage patch stands,
-// and move nothing. A cluster, a track with no placement, one with fewer than
+// and move nothing. A cluster, a track with no patch frame, one with fewer than
 // two `in` sightings that carry a keypoint, and one whose `in` rows the rule
 // finds none eligible among come back unchanged. The rows' bitmap scores still read the old bitmap, so a
 // caller scores them against the new one with `score_bitmap` afterwards.
@@ -635,7 +635,7 @@ pub fn render_bitmap_in_place(
 
 // Score every row of a track-stage track against the bitmap it holds, writing
 // the bitmap scores `evaluate` writes and changing nothing else. A track with no
-// placement or no bitmap comes back unchanged.
+// patch frame or no bitmap comes back unchanged.
 pub fn score_bitmap(
     track: &EditableTrack,
     edited: &EditedReconstruction,
@@ -644,7 +644,7 @@ pub fn score_bitmap(
     progress: &Progress<'_>,
 ) -> Result<EditableTrack, EvaluateError>;
 
-// `evaluate`'s reading, then, for a track-stage track with a placement and
+// `evaluate`'s reading, then, for a track-stage track with a patch frame and
 // either no bitmap, a bitmap an unpin left pending its render, or an unpinned
 // reference row the rule does not pick, a render from the held reference or the rule's pick (none where the
 // rule picks none), `score_bitmap`, and the
@@ -1609,7 +1609,7 @@ whole tile's and the middle's ellipses, each its two semi-axes, whether each may
 be longer, the major axis's angle and its 2×2 matrix, in grid px, in
 source-image px, and along the patch's `u` and `v` in the scene's world-space
 unit, or degrees for a patch at infinity, through the keypoint-anchored
-placement the tile is rendered through (§ "The ellipse in other units" of
+patch frame the tile is rendered through (§ "The ellipse in other units" of
 [`../patch/zncc-self-similarity-radius.md`](../patch/zncc-self-similarity-radius.md));
 at the cluster stage, through the seed shape, with none along the patch.
 `zncc_self_similarity_ellipse_grid` is each cell's ellipse in grid px, whose
@@ -2250,7 +2250,7 @@ enclosing namespace carrying the rest; nothing is called `bench_track_frame`,
 and `frame` is not a third noun the gestures need. It
 stays only where the geometry alone is meant, which is the
 [`OrientedPatch`](../../../crates/sfmtool-core/src/patch/cloud.rs) type and
-`TrackPayload::placement`.
+`TrackPayload::patch_frame`.
 
 **At the track stage a track has one patch and every observation is a view of
 it**, so the gestures over the outline are gestures over *the patch*: it slides,
@@ -2931,7 +2931,7 @@ distance rule
 free first, so a ranged track is refused for too few rays exactly as a free one
 is, and the report keeps that solve's condition number.
 
-A fit writes the placement it finds whether or not the observations can be
+A fit writes the patch frame it finds whether or not the observations can be
 measured against it, so observations that disagree with the camera poses come
 back unmeasured at a moved point. A fit that refuses and reports instead is
 proposed in
@@ -3032,7 +3032,7 @@ flat or the peak is flatter than `min_cell_curvature`), for ZNCC (below
 affine fit, which refuses a cell it gives no weight as an outlier and every
 cell of a view whose fit fails. A cell that survives in a view lies at its
 centre plus its shift on that view's grid. That grid position is carried onto
-the plane by the render's own placement (`shifted_center`), projected into the
+the plane by the render's own patch frame (`shifted_center`), projected into the
 photograph, and turned into a ray whose noise floor is
 `plane.cell_shift_precision_grid_px` grid px carried into the photograph by
 the largest singular value of the render map's local Jacobian there, floored
@@ -3922,7 +3922,7 @@ result is the same either way.
 observation's camera to unproject a pixel or to carry a sighting, and the two
 that name an edge name it as the word `"+u"`, `"-u"`, `"+v"` or `"-v"`.
 Their reports are dicts of the fields above, with `shape` as a 2x2 array.
-`EditableTrack.placement` is what the patch steps are read back through: the
+`EditableTrack.patch_frame` is what the patch steps are read back through: the
 patch as `center`, `u_halfvec`, `v_halfvec` and `w`, the half-vectors being the
 axes scaled by the half-extents the way a `.sfmr` stores them, and `None` at the
 cluster stage or before anything has fitted one.

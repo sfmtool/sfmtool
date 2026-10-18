@@ -277,17 +277,17 @@ fn undo_the_reconstruction_under_the_track_and_the_search_radius_are_inputs() {
 fn a_track_that_cannot_be_evaluated_says_why_and_starts_nothing() {
     let (mut state, id) = state();
     let label = put_on_bench(&mut state, id);
-    let mut without_placement = (*track(&state, id, &label)).clone();
-    match &mut without_placement.stage {
-        Stage::Track(payload) => payload.placement = None,
+    let mut without_patch_frame = (*track(&state, id, &label)).clone();
+    match &mut without_patch_frame.stage {
+        Stage::Track(payload) => payload.patch_frame = None,
         Stage::Cluster(_) => panic!("a point goes on the bench at the track stage"),
     }
     let history = &mut state.scene[0].history;
     let bench = history
         .current_bench()
-        .replace(&label, BenchItem::Track(Arc::new(without_placement)))
+        .replace(&label, BenchItem::Track(Arc::new(without_patch_frame)))
         .expect("on the bench");
-    history.push_bench(Arc::new(bench), "Dropped the placement");
+    history.push_bench(Arc::new(bench), "Dropped the patch frame");
 
     let evaluation = state.bench_evaluation(id, &label).expect("a track");
     match &evaluation {
@@ -343,7 +343,7 @@ fn a_tilt_drops_the_bitmap_and_the_evaluation_fuses_it_again_where_the_patch_now
         Stage::Cluster(_) => panic!("the point came onto the bench as a cluster"),
     };
     let before = payload(&track(&state, id, &label));
-    let was = before.placement.clone().expect("the point has a patch");
+    let was = before.patch_frame.clone().expect("the point has a patch");
     assert!(before.bitmap.is_some(), "the point came with no bitmap");
 
     let (sin, cos) = 10f64.to_radians().sin_cos();
@@ -373,10 +373,10 @@ fn a_tilt_drops_the_bitmap_and_the_evaluation_fuses_it_again_where_the_patch_now
     let fused = payload(&track(&state, id, &label));
     assert!(fused.bitmap.is_some(), "the evaluation rendered no bitmap");
     assert_eq!(
-        fused.placement, tilted.placement,
+        fused.patch_frame, tilted.patch_frame,
         "rendering the bitmap moved the patch"
     );
-    assert!((fused.placement.expect("placed").normal() - normal).norm() < 1e-9);
+    assert!((fused.patch_frame.expect("placed").normal() - normal).norm() < 1e-9);
     assert_eq!(
         versions(&state, id),
         versions_after_tilt,

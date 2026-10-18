@@ -415,7 +415,7 @@ fn tile_of(value: impl Fn(usize, usize) -> u8) -> ViewTile {
     ViewTile {
         samples,
         valid: vec![true; r * r],
-        placement: OrientedPatch::new(Point3::origin(), Vector3::x(), Vector3::y(), [1.0, 1.0]),
+        patch_frame: OrientedPatch::new(Point3::origin(), Vector3::x(), Vector3::y(), [1.0, 1.0]),
         jacobian: None,
         sampler: Sampler::BilinearMip,
         coverage: 1.0,

@@ -644,7 +644,7 @@ impl Default for SamplerChoice { /* PerView at DEFAULT_ANISOTROPIC_THRESHOLD = 1
 impl SamplerChoice {
     pub fn for_observation(self, patch: &OrientedPatch, camera: &CameraIntrinsics,
         cam_from_world: &RigidTransform, keypoint: Option<[f64; 2]>, resolution: u32) -> Sampler;
-    pub fn for_placement(self, placement: &OrientedPatch, /* camera, pose, resolution */) -> Sampler;
+    pub fn for_patch_frame(self, patch_frame: &OrientedPatch, /* camera, pose, resolution */) -> Sampler;
     pub fn for_jacobian(self, jacobian: Option<[[f64; 2]; 2]>) -> Sampler;
     pub fn for_singular_values(self, singular_values: Option<[f64; 2]>) -> Sampler;
 }
@@ -675,7 +675,7 @@ let tile = render_tile(view.pyramid, &mut map, sampler);
   runs and for a caller that needs one; `Sampler::X.into()` gives it. The
   bindings and the command line spell the rule `per_view` beside the three
   sampler names.
-- **Why one placement.** `for_observation` reads the rule from the patch
+- **Why one patch frame.** `for_observation` reads the rule from the patch
   re-anchored on the observation's keypoint
   (`OrientedPatch::anchored_at_keypoint`), at the patch resolution `R`, as the
   stored frame has it. The kernels render through frames of their own: the

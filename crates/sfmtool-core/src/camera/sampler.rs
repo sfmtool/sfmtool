@@ -22,7 +22,7 @@
 //! for comparison runs and for callers that need one.
 //!
 //! The rule reads only the Jacobian, which is computed before the render, so
-//! every kernel that renders the same view at the same placement chooses the
+//! every kernel that renders the same view at the same patch frame chooses the
 //! same sampler, and a reader that knows a render's zoom and `a` can tell which
 //! sampler it used. See `specs/core/camera/image-warping.md` § "Choosing the
 //! sampler per view".
@@ -283,16 +283,16 @@ impl SamplerChoice {
         }
     }
 
-    /// The sampler for the tile rendered through `placement` at `resolution`
+    /// The sampler for the tile rendered through `patch_frame` at `resolution`
     /// texels a side ([`WarpMap::from_patch`] with the same arguments).
     ///
     /// The rule reads the Jacobian at the tile's centre in photograph px per
     /// tile texel, so a wider tile at the same texel size (a localizer's
     /// context tile) chooses as the core tile at its centre does. A fixed
     /// choice computes nothing.
-    pub fn for_placement(
+    pub fn for_patch_frame(
         self,
-        placement: &OrientedPatch,
+        patch_frame: &OrientedPatch,
         camera: &CameraIntrinsics,
         cam_from_world: &RigidTransform,
         resolution: u32,
@@ -300,7 +300,7 @@ impl SamplerChoice {
         match self {
             Self::Fixed(sampler) => sampler,
             Self::PerView { .. } => self.for_jacobian(patch_grid_jacobian(
-                placement,
+                patch_frame,
                 camera,
                 cam_from_world,
                 resolution as usize,
@@ -308,13 +308,13 @@ impl SamplerChoice {
         }
     }
 
-    /// The sampler for one observation of `patch`: [`Self::for_placement`]
+    /// The sampler for one observation of `patch`: [`Self::for_patch_frame`]
     /// on `patch` re-anchored on the observation's `keypoint`
     /// ([`OrientedPatch::anchored_at_keypoint`]) at the patch resolution
     /// `resolution`, or on `patch` itself where there is no keypoint or its
     /// ray does not meet the patch.
     ///
-    /// The one placement every kernel reads the rule from, whatever frame it
+    /// The one patch frame every kernel reads the rule from, whatever frame it
     /// then renders through: the bench's tiles, the stored bitmap's render, the localizer's and
     /// the refiner's search tiles, the gates and Track View all choose a
     /// view's sampler here, once per view, so they choose the same one for
@@ -343,8 +343,8 @@ impl SamplerChoice {
             Self::PerView { .. } => {
                 let anchored =
                     keypoint.and_then(|kp| patch.anchored_at_keypoint(camera, cam_from_world, kp));
-                let placement = anchored.as_ref().unwrap_or(patch);
-                self.for_placement(placement, camera, cam_from_world, resolution)
+                let patch_frame = anchored.as_ref().unwrap_or(patch);
+                self.for_patch_frame(patch_frame, camera, cam_from_world, resolution)
             }
         }
     }

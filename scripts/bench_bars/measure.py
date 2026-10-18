@@ -219,7 +219,7 @@ def run(name: str, sfmr: Path, n_tracks: int, seed: int, out_dir: Path) -> None:
             write(dict(base, kind=kind, row=i, image=o["image"], **_readings(o)))
         if ref is None:
             continue
-        pl = t1.placement
+        pl = t1.patch_frame
         x = np.r_[np.asarray(pl["center"], float), float(pl.get("w", 1.0))]
         observed = {o["image"] for o in obs}
         obs_rows = [

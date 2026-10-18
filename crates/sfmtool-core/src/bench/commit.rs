@@ -109,7 +109,7 @@ pub enum CommitError {
     TooFewObservations(usize),
     /// The track carries no position, so nothing has triangulated it yet.
     NoPosition,
-    /// The reconstruction carries a patch placement per point and the track
+    /// The reconstruction carries a patch frame per point and the track
     /// has none.
     NoFrame,
     /// The reconstruction carries a patch bitmap per point and the track has
@@ -158,7 +158,7 @@ impl std::fmt::Display for CommitError {
             }
             CommitError::NoFrame => write!(
                 f,
-                "the reconstruction stores a patch placement per point and the track has none"
+                "the reconstruction stores a patch frame per point and the track has none"
             ),
             CommitError::NoBitmap => write!(
                 f,
@@ -381,7 +381,7 @@ pub(crate) fn point_record(
         return Err(CommitError::TooFewObservations(kept.len()));
     }
     let position = payload.position.ok_or(CommitError::NoPosition)?;
-    if edited.has_patch_frames() && payload.placement.is_none() {
+    if edited.has_patch_frames() && payload.patch_frame.is_none() {
         return Err(CommitError::NoFrame);
     }
     if edited.has_patch_bitmaps() && payload.committable_bitmap().is_none() {
@@ -448,7 +448,7 @@ pub(crate) fn point_record(
     }
 
     // ---- The point the record stands on ----
-    let frame = payload.placement.as_ref();
+    let frame = payload.patch_frame.as_ref();
     // The track's own flag rather than the frame's `w`. A track put on the bench
     // from a `sift_files` reconstruction has no patch frame at all, and a bearing
     // it came from is still a bearing: reading the frame would commit it back as

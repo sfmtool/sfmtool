@@ -921,7 +921,7 @@ fn insert_viewpoint(reply: &mut Value, viewpoint: Viewpoint) {
 /// its normal is its own bearing.
 ///
 /// The reply's `normal` is the unit normal the patch faces after the step, read
-/// back off the placement, not the one named: the cap can stop the turn short
+/// back off the patch frame, not the one named: the cap can stop the turn short
 /// of it, and a caller that sends the reply's normal back gets no further turn.
 pub(super) fn tilt_bench_patch(
     state: &mut AppState,
@@ -934,9 +934,13 @@ pub(super) fn tilt_bench_patch(
     let (reply, _) = patched(state, id, &item, &edit)?;
     let applied = state
         .bench_track(id, &item)
-        .and_then(|track| track.track().and_then(|payload| payload.placement.as_ref()))
-        .map(|placement| {
-            let n = placement.normal();
+        .and_then(|track| {
+            track
+                .track()
+                .and_then(|payload| payload.patch_frame.as_ref())
+        })
+        .map(|patch_frame| {
+            let n = patch_frame.normal();
             [n.x, n.y, n.z]
         });
     let mut reply = with_item(reply, &item);
@@ -1655,7 +1659,7 @@ fn stage_data(track: &EditableTrack, recon: Option<&sfmtool_core::SfmrReconstruc
                 "condition_number": payload.condition_number,
                 "color": payload.color,
                 "normal_confidence": payload.normal_confidence,
-                "placement": super::render::placement(payload.placement.as_ref()),
+                "patch_frame": super::render::patch_frame(payload.patch_frame.as_ref()),
                 "has_bitmap": payload.bitmap.is_some(),
                 // Whether that bitmap is one for judging only: rendered from
                 // every row with a keypoint because the `in` rows give no
