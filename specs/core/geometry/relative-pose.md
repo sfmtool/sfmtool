@@ -51,7 +51,7 @@ rays through its camera model) and an options struct:
 | Option | Both | Meaning |
 |---|---|---|
 | `max_angle_rad` | ✓ | Consensus bound, radians. Derive from a keypoint localization tolerance through the camera map's local `dr/dθ` (equidistant: `tol_px / f`) |
-| `min_inliers` | ✓ | Reject a consensus below this many correspondences (defaults: 12 for the essential estimator, 20 for the rotation) |
+| `min_inliers` | ✓ | Reject a consensus below this many correspondences (defaults: 12 for the essential estimator, 20 for the rotation estimator) |
 | `samples` | ✓ | Seeded minimal samples drawn (8-ray epipolar / 3-ray rotation) |
 | `seed` | ✓ | SplitMix64 seed; identical input and seed give a bit-identical answer |
 | `side` | essential only | Which epipolar residual the consensus scores (below) |

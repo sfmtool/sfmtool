@@ -77,6 +77,8 @@ prose; the rotation estimator's default is 20 (`RayRotationOptions::default`,
 column. That is a third blind spot for this check, after the two the skill
 already names.
 
+> _Status (2026-10-17): **Done** — `relative-pose.md`'s Inputs table now gives `min_inliers` defaults of 12 for the essential estimator and 20 for the rotation estimator, branch `fix-round-07-relative-pose-min-inliers`._
+
 ### 2. Prose duplicated between a spec and its code
 
 Method as before: lines of 60 or more characters after normalization, from
@@ -275,7 +277,7 @@ Non-goals/deferrals checked: 5; no longer hold: 0
   - Failure 2: no Rust signatures and no example call; `RayEssentialOptions`, `RayRotationOptions`, `EpipolarSide` are never named. The rationale is present.
   - Mannered prose: "gets the projection for free" → "the SVD a caller computes to decompose E also yields its projection onto the essential manifold"; "starved consensus" → "a consensus smaller than `min_inliers`".
 
-> _Status (2026-10-17): **Partially done** — the "Wrong documented default" bullet: the Inputs table now gives `min_inliers` defaults of 12 for the essential estimator and 20 for the rotation, matching `RayEssentialOptions::default`, `RayRotationOptions::default` and both bindings; the section's other bullets are still open, branch `fix-round-07-relative-pose-min-inliers`._
+> _Status (2026-10-17): **Partially done** — the "Wrong documented default" bullet: the Inputs table now gives `min_inliers` defaults of 12 for the essential estimator and 20 for the rotation estimator, matching `RayEssentialOptions::default`, `RayRotationOptions::default` and both bindings; the section's other bullets are still open, branch `fix-round-07-relative-pose-min-inliers`._
 
 **Third copies:** The core module doc (:4-31, 28 lines) restates the spec's overview nearly word for word and does not link the spec; the binding module doc (:4-13) restates it again. Cut the core doc to the contract plus a link.
 **Recommendation:** update spec — 12 / 20, the type names, one call, the Python `side` strings; soften or test the platform claim.
@@ -643,6 +645,9 @@ path `formats/cluster-selection.md`.
    - **`relative-pose.md` documents `fit_ray_rotation`'s `min_inliers` as 8;**
      the code's default is 20 in Rust and Python. The check-1 scan missed it
      because the value sits in prose inside a table cell. (relative-pose)
+
+     > _Status (2026-10-17): **Done** — the Inputs table now gives 20 for `fit_ray_rotation`'s `min_inliers`, branch `fix-round-07-relative-pose-min-inliers`; only this item of the list is covered._
+
    - **`rotation-init` assumes a distortion-free pinhole with a centred
      principal point**, which no doc states; fisheye input fails without an
      error. (rotation-init)
