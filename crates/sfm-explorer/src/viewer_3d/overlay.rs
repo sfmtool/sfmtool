@@ -365,7 +365,7 @@ pub(crate) fn hover_overlay_text(
 const BANNER_COLOUR: Color32 = Color32::from_rgb(235, 215, 150);
 
 /// How far below the 3D view's top edge its stats line is drawn.
-pub(crate) const STATS_TOP: f32 = 10.0;
+const STATS_TOP: f32 = 10.0;
 
 /// How far below the 3D view's top edge its status line is drawn, under the
 /// stats line.
@@ -396,11 +396,7 @@ const POSITION_GAP: f32 = 12.0;
 /// right edge is at `status_right`, also leaves that gap; otherwise it takes a
 /// row of its own under the status line. All three are x coordinates on the
 /// screen.
-pub(crate) fn camera_position_top(
-    stats_right: f32,
-    status_right: Option<f32>,
-    position_left: f32,
-) -> f32 {
+fn camera_position_top(stats_right: f32, status_right: Option<f32>, position_left: f32) -> f32 {
     let clears = |right: f32| right + POSITION_GAP <= position_left;
     if clears(stats_right) {
         STATS_TOP
