@@ -677,6 +677,7 @@ path `formats/cluster-selection.md`.
    example's version and delete its "must be regenerated" sentence.
 
    > _Status (2026-10-17): camrig part **Done** — branch `fix-round-09-camrig-example-version`._
+
 5. **Openings, one spec per PR:** `keypoint-localization-consensus-basis.md`,
    `relative-pose.md` and `adjacency-surfel-normals.md` fail, and
    `cell-plane-normals.md` and `refine-normals-command.md` are borderline
