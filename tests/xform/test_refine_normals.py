@@ -36,6 +36,47 @@ def test_parse_empty_runs_defaults():
     assert t.objective == "robust"
 
 
+# Each RefineNormalsTransform parameter forwarded to PatchCloud.refine_normals,
+# mapped to the binding parameter it is passed as.
+_FORWARDED = {
+    "angular_range_deg": "angular_range_deg",
+    "init_steps": "init_steps",
+    "refine_levels": "refine_levels",
+    "resolution": "resolution",
+    "objective": "objective",
+    "robust_iters": "robust_iters",
+    "search_robust_iters": "search_robust_iters",
+    "window": "window",
+    "window_sigma": "window_sigma",
+    "sampler": "sampler",
+    "min_valid_fraction": "min_valid_fraction",
+    "min_views": "min_views",
+    "cache": "cache",
+    "cache_supersample": "cache_supersample",
+    "confidence": "compute_confidence",
+}
+
+
+def test_forwarded_defaults_match_the_binding():
+    """The transform restates the binding's defaults; they must stay equal.
+
+    ``quality`` is a preset the binding does not take, and ``bitmaps``
+    deliberately defaults to True where ``render_bitmaps`` defaults to False.
+    """
+    import inspect
+
+    from sfmtool.patches import PatchCloud
+
+    ours = inspect.signature(RefineNormalsTransform.__init__).parameters
+    binding = inspect.signature(PatchCloud.refine_normals).parameters
+
+    assert set(ours) - {"self"} == set(_FORWARDED) | {"quality", "bitmaps"}
+    for name, binding_name in _FORWARDED.items():
+        assert ours[name].default == binding[binding_name].default, name
+    assert ours["bitmaps"].default is True
+    assert binding["render_bitmaps"].default is False
+
+
 def test_parse_key_value_overrides():
     """Each key=value token overrides the matching default with the right type."""
     t = parse_refine_normals_params(

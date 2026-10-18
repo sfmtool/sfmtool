@@ -60,8 +60,12 @@ _QUALITY_PRESETS = {
 class RefineNormalsTransform:
     """Refine per-point surface normals by photometric cross-view consensus.
 
-    All knobs default to the ``PatchCloud.refine_normals`` binding defaults, so
-    the two layers cannot drift. The point count, positions, poses, and cameras
+    Each knob forwarded to ``PatchCloud.refine_normals`` restates that binding's
+    default and is passed explicitly, since the transform reads ``resolution``,
+    ``sampler`` and ``confidence`` itself; ``bitmaps`` (passed as
+    ``render_bitmaps``) defaults to True where the binding's default is False.
+    ``tests/xform/test_refine_normals.py`` checks the restated defaults against
+    the binding's signature. The point count, positions, poses, and cameras
     are unchanged; only ``normals`` is rewritten (finite points only — points at
     infinity have no surface element and pass through). The refined patch
     geometry is always re-persisted alongside the normals (the stored frame must

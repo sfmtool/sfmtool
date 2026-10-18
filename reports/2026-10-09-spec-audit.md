@@ -291,8 +291,14 @@ Non-goals/deferrals checked: 0 (none present); no longer hold: 0
   - Work-order residue: "(decided)", "used to recompute … now preserves" (:313-316), "The transform should print…" (:336, :381), "recommended v1 defaults", "Not surfaced in v1", "v1 does not gate".
   - Mannered prose: "slots in naturally" → "fits the reconstruction-in, reconstruction-out pattern"; "reaching back into the workspace" → "reading files from the workspace"; "cannot fall out of step with" → "always matches"; "deferred until a user hits it" → "not implemented; no user has asked for it".
   - Opening: see check 4, row 5.
+
+> _Status (2026-10-17): **Partially done** — the "False claim" bullet: took the report's second option. The spec's `key=value` section and the `RefineNormalsTransform` class docstring now say the transform restates each forwarded binding default and passes it explicitly (it reads `resolution`, `sampler` and `confidence` itself, and `quality` sets the cache knobs), and the new `test_forwarded_defaults_match_the_binding` compares those defaults with the `PatchCloud.refine_normals` signature, branch `fix-round-10-refine-normals-defaults`. Still open: the section's other bullets._
+
 **Third copies:** `_refine_normals.py` module docstring (~22 lines) and class docstring (~16 lines) both re-derive "Why this fits `xform`". Shrink to contract plus link and drop the false "cannot drift" claim.
 **Recommendation:** update spec; discuss whether the transform should stop restating the binding's defaults.
+
+> _Status (2026-10-17): **Partially done** — the class docstring no longer makes the "cannot drift" claim, and the transform keeps restating the defaults (it uses some of the values itself), now pinned by a test, branch `fix-round-10-refine-normals-defaults`. Still open: shrinking both docstrings to the contract plus a link._
+
 **Unclear / incorrect / suspicious:** none beyond the above.
 Non-goals/deferrals checked: 5; no longer hold: 0
 
@@ -646,6 +652,7 @@ path `formats/cluster-selection.md`.
 2. **Spec statements that would make a caller act wrongly:**
    - `refine-normals-command.md:108-110` says the CLI "re-specifies nothing"
      and "cannot drift"; the transform restates all 16 defaults.
+     > _Status (2026-10-17): **Done** — the spec and class docstring now say the defaults are restated, and a test pins them to the binding's signature, branch `fix-round-10-refine-normals-defaults`._
    - `editable-track.md`'s Python section says the bindings mirror the Rust
      names and shapes; two names differ, eight steps are unbound, and
      `reference_observation` is `None` after `set_reference`. Two of its
