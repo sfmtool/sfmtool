@@ -14,7 +14,9 @@ one, on one node (or, for an open, on none), with an id of its own. Tasks run
 from two **queues**, slow and fast; each queue runs one task at a time, and the
 two run at the same time (§ "Two queues"), so a bundle adjustment of one
 reconstruction does not stop a person opening another file or fitting a track
-on another reconstruction's bench. The eighteen operations are `Open`, which reads files and
+on another reconstruction's bench. A task started while its queue is busy
+**waits** behind the tasks already waiting there, and starts when they have
+landed. The eighteen operations are `Open`, which reads files and
 makes them nodes (§ "Opening a file"); the six whole-value edits, `Bundle
 adjust`, `Convert to embedded patches`, `Retriangulate all points`, `Refit all
 points`, `Switch camera model` and `Prune covered observations`; `Add image to
@@ -131,8 +133,8 @@ pub(crate) struct Operation {
     pub(crate) kind: Kind,
     /// The queue it runs from. Fixed per operation.
     pub(crate) queue: Queue,
-    /// Whether it locks its node while it runs. Every operation that pushes
-    /// a version locks.
+    /// Whether it locks its node from the moment it is queued until it
+    /// lands. Every operation that pushes a version locks.
     pub(crate) locks: bool,
 }
 ```
@@ -162,27 +164,40 @@ machine, so two at once would finish no sooner than one after the other; a fit
 of one track is short beside them, and running it in its own queue costs the
 slow task some competition for the cores while it runs and saves the person a
 wait of minutes. The two queues are independent: a fast task never waits for a
-slow one, except through the node lock. Starting a task while its own queue
-runs another is refused with *"The {slow | fast} queue is busy: {operation} is
-still running on {label}."*; the other queue does not refuse it.
+slow one, except through the node lock. **A task started while its own queue
+runs another waits** behind the tasks already waiting there, in the order they
+were started, and is not refused; the other queue does not hold it up. When a
+queue's running task lands, its next waiting task starts in the same poll
+(`AppState::poll_background_tasks`), after the landed task's row is written.
 
-**A locking task locks its node while it runs**, in either queue. Every edit,
-undo, redo, history jump, save and close of a busy node is refused with
-*"{label} is busy: {operation} is still running."* (§ "What the rest of the
-viewer does meanwhile"), and so is starting a second locking task on it, from
-either queue. So a node has at most one locking task at any time, and nothing
-moves its cursor between the moment the task starts and the moment it lands.
+**A locking task locks its node from the moment it is queued**, in either
+queue, until it lands. A node is busy while a locking task is running on it or
+waiting to. Every edit, undo, redo, history jump, save and close of a busy node
+is refused with *"{label} is busy: {operation} is still running."*, or, for a
+task that is waiting, *"{label} is busy: {operation} is waiting to run."*
+(§ "What the rest of the viewer does meanwhile"), and so is starting a second
+locking task on it, from either queue. So a node has at most one locking task
+at any time, and nothing moves its cursor between the moment the task is queued
+and the moment it lands.
 
-**A task's job is built when it starts.** The job builders check the node's lock
-themselves (`resolve_switch`, `retriangulate_refusal` and the others check
-`busy_refusal`), and the job captures the value at the cursor then.
+**A task's job is built when it is queued.** The job builders check the node's
+lock themselves (`resolve_switch`, `retriangulate_refusal` and the others check
+`busy_refusal`), so they run before the task is queued and its lock is taken,
+and a builder that refuses refuses the start. The job captures the value at
+the cursor then, and because the node is locked from that moment, that value
+is still the one at the cursor when the task starts. A task's own lock never
+refuses it: it is taken after the checks, and the task starts from its queue
+without asking again.
 
-**Quitting** abandons every running task.
+**A task that locks nothing runs beside a locking one.** Open makes a new node,
+so it locks none and an open waits only for its queue.
 
-A task started while its queue is busy is refused rather than queued to wait,
-and the bench's live evaluation and the camera model proposal's job run on
-threads of their own rather than as quiet tasks in the fast queue; both are
-proposed in [../drafts/background-task-queues.md](../drafts/background-task-queues.md).
+**Quitting** abandons every running and waiting task.
+
+The bench's live evaluation and the camera model proposal's job run on threads
+of their own rather than as quiet tasks in the fast queue that give way to the
+tasks someone asked for; that is proposed in
+[../drafts/background-task-queues.md](../drafts/background-task-queues.md).
 
 ## What the user sees
 
@@ -214,6 +229,7 @@ it is refused with the unknown-panel message, which lists `background_tasks`
 ```
 ┌ Background Tasks ──────────────────┐
 │ Slow Bundle adjust dino ▓░ 42.7 s x│
+│ waiting Retriangulate a… bull +2  x│
 │ Fast Fit track bull         0.4 s  │
 │ ────────────────────────────────── │
 │ dino_dog_toy-embedded    round 2/3 │
@@ -234,12 +250,16 @@ first, and the operation's name and then the node's are cut to what they leave,
 each giving its whole self on hover, so a long name is shortened rather than
 drawn under the elapsed.
 
+A queue with tasks waiting has **one waiting line** under its own (§ "Waiting"),
+for the next of them, however many wait.
+
 One line rather than a block per queue, because the panel sits at the bottom of
 the left column, about 170 px tall in a 1280 × 720 window at the default split,
 and the phase table below the lines is what a reader watches. A block of four
 rows per queue left the table one row there, and not the row that is running;
 two lines, a separator and the title line leave it the newest stages, which a
-test holds at 170 px and 190 px with a task in each queue.
+test holds at 170 px and 190 px with a task in each queue, and again with a
+task waiting in each queue as well, which is two lines more.
 
 Below the lines is **one phase list**, for one task, under a **title line**
 naming it and its node (`Bundle adjust on dino_dog_toy-embedded`): the task whose
@@ -272,6 +292,29 @@ are the transcript the panel drew while it ran, not the entry's folded
 breakdown: an operation that collapsed into a summary at the instant it finished
 would be a panel that changed its mind about what the reader had just watched.
 A queue that has run nothing says `Nothing running` and no more.
+
+### Waiting
+
+A waiting task's line is led by the weak word `waiting` where a queue's line
+has the queue's name, then the operation and its node, cut as a running line
+cuts them, and a cancel button at the end, *"Take it out of the queue before it
+starts."* on hover, which is live whatever the operation: taking a task out of
+its queue stops it, whether or not its kernels poll the flag. Cancelling it
+removes it from its queue at once and writes the Action Log row
+*"{operation} of {label} cancelled before it started"* (§ "When it finishes").
+A waiting task has no phases, so its name does not pick the phase list.
+
+**One waiting line per queue, however many wait.** The line names the queue's
+next task; when `k` more wait behind it the line carries `+{k}` before the
+cancel button, whose tooltip names them in order (`Also waiting, in order:
+Refit all points on bull; Prune covered observations on kerry_park.`). A line
+per waiting task would push the phase table out of a 170 px panel after two or
+three of them, and the table is what the panel is read for; with one line per
+queue the worst case is two lines more than an idle queue's, which a test holds
+at 170 px with four tasks waiting. The tasks behind the next one reach the
+line one at a time, as each ahead of them starts or is cancelled, and every
+one of them can be cancelled from the wire meanwhile
+(`cancel_background_tasks`).
 
 ### Running
 
@@ -397,20 +440,22 @@ exactly as they do when nothing is running. Opening a file is itself an
 operation, and runs from the fast queue (below).
 
 What is refused is anything that would change a node a locking task is running
-on. An edit, an undo, a redo, a history jump, a save or a close of that node is
-refused with *"{label} is busy: {operation} is still running."* Other nodes are
-untouched and remain fully editable, and a task in the other queue starts on
-them. The busy node's Edit menu items are greyed with the same sentence as their
-tooltip, so the refusal is visible before it is provoked.
+on or waiting to run on. An edit, an undo, a redo, a history jump, a save or a
+close of that node is refused with *"{label} is busy: {operation} is still
+running."*, or *"{label} is busy: {operation} is waiting to run."* while the
+task waits. Other nodes are untouched and remain fully editable, and a task in
+either queue can be started on them. The busy node's Edit menu items are
+greyed with the same sentence as their tooltip, so the refusal is visible
+before it is provoked, and the Scene tree marks every node a running or
+waiting task holds.
 
-**Each queue runs one task at a time** (§ "Two queues"). Starting a second in
-the same queue is refused with *"The {slow | fast} queue is busy: {operation}
-is still running on {label}."* An open runs from the fast queue, so
-`File > Open...` is greyed while the fast queue runs another task, with that
-sentence as its tooltip, and stays live while a slow task such as a bundle
-adjustment runs.
+**Each queue runs one task at a time** (§ "Two queues"), and a second started
+in the same queue waits. An open runs from the fast queue, so `File > Open...`
+is never greyed: an open started while the fast queue runs another task waits
+behind it, and one started while a slow task such as a bundle adjustment runs
+starts at once.
 
-Quitting while operations run abandons them. The result would have nowhere to
+Quitting while operations run or wait abandons them. The result would have nowhere to
 land, and a viewer that refuses to close is worse than a solve that has to be
 run again. Refusing a *node* close is a different matter and does happen, which
 means `close_node` and `close_all` return a `Result` where they used to return
@@ -431,7 +476,8 @@ edit would have recorded. On the next frame the GUI thread pushes the version,
 moves the selection forward through the map, and writes exactly the Action Log
 entry the synchronous edit writes today, with the worker's phases attached to
 it. Its queue's line in the panel drops back to its idle form showing that same
-operation.
+operation, or, when a task was waiting in that queue, shows the next one
+running: it starts in the same poll, after the landed task's row is written.
 
 The entry's actor is whoever asked for the operation, not the viewer: an agent
 that started a solve is the actor of the version it produced, however many
@@ -449,7 +495,19 @@ column.
 
 A **cancelled** operation writes a failed entry, *"{operation} of {label}
 cancelled"*, and pushes no version. A **failed** one writes the refusal the
-kernel returned, as the synchronous edit does.
+kernel returned, as the synchronous edit does. A task **cancelled while it
+waits** never runs: it is taken out of its queue at once, writes the failed
+entry *"{operation} of {label} cancelled before it started"* under the actor
+who asked for it, costing nothing, and goes into the ring of finished tasks
+(§ "Rust API") with that sentence as its outcome, so a call holding its id is
+answered. A waiting task whose worker thread cannot be spawned when its turn
+comes ends the same way, with the spawn's refusal as its row, and the one
+behind it is started.
+
+**The cost runs from when the task started, not from when it was queued.** A
+task that waited a minute behind a bundle adjustment and then ran for a second
+costs a second in its row: the row is the cost of the work, and the wait was
+the other task's.
 
 Both are timed from `started` like a successful one, and both keep what the
 operation reported before it stopped. A solve cancelled seventeen seconds in
@@ -461,9 +519,9 @@ one number can only disagree. Keeping the breakdown is what makes a cancelled
 solve informative rather than merely abandoned, since it shows the round it
 reached and the median it had got to by then.
 
-Nothing is logged when an operation *starts*. The log records outcomes, not
-intentions ([action-log.md](action-log.md)), and what is running is
-what the panel is for.
+Nothing is logged when an operation is queued or *starts*. The log records
+outcomes, not intentions ([action-log.md](action-log.md)), and what is running
+or waiting is what the panel is for.
 
 ## Which operations go to the background
 
@@ -503,14 +561,15 @@ menu and the command line, which write a failed row of their own for each path
 that is not a file and open the rest). Both live in
 [state/open.rs](../../crates/sfm-explorer/src/state/open.rs). A path that is not
 a file is refused before the task starts, since that is the one failure knowable
-without the read; so is a start while the fast queue runs another task.
+without the read. An open started while the fast queue runs another task waits
+behind it.
 
 **An open locks no node.** The node it makes does not exist until it finishes,
 so `BackgroundTask::node` is `None` for it and every loaded node stays editable
 while it runs. Its label, for the panel, the refusals and the handle, is the
 file's stem, or `{n} files` for several paths. It runs from the fast queue, so
-a file can be opened while a bundle adjustment runs, and an open is refused
-while a bench step runs.
+a file can be opened while a bundle adjustment runs, and an open started while
+a bench step runs waits for it.
 
 Several paths are one task, read in the order given, each under an equal share
 of the bar. Each file's stages sit under a phase `open` of its own:
@@ -645,9 +704,31 @@ that would need it already is.
 
 ```rust
 /// What one queue is doing. `AppState` holds two, `slow_queue` and
-/// `fast_queue`.
+/// `fast_queue`. A queue with tasks waiting always has one running: the next
+/// starts in the poll that lands the one ahead of it.
 pub(crate) struct QueueState {
     pub(crate) running: Option<BackgroundTask>,
+    /// The tasks waiting to run from this queue, the next one first.
+    pub(crate) waiting: VecDeque<WaitingTask>,
+}
+
+/// A task queued behind its queue's running task and not yet started. Its
+/// job is built and its node locked from the moment it is queued.
+pub(crate) struct WaitingTask {
+    /// The id it keeps when it starts, and in the ring once it is over.
+    pub id: u64,
+    pub operation: Operation,
+    pub node: Option<ReconId>,
+    /// The node's label as it read when the task was queued.
+    pub label: String,
+    /// When it was queued: what a tool call's window for a direct answer is
+    /// measured from (§ "On the wire"). The row's cost is measured from
+    /// `BackgroundTask::started`, set when it starts.
+    pub queued: std::time::Instant,
+    /// Who asked, whose row it writes.
+    pub actor: Actor,
+    /// The work, built from the value at the cursor when it was queued.
+    job: Job,
 }
 
 /// A long operation running off the GUI thread.
@@ -770,38 +851,42 @@ and on `AppState`:
 
 ```rust
 impl AppState {
-    /// One queue's state, and every running task, the slow queue's first.
+    /// One queue's state, every running task, the slow queue's first, and
+    /// every waiting task, the slow queue's first and each queue's next first.
     pub fn queue(&self, queue: Queue) -> &QueueState;
     pub fn running_tasks(&self) -> impl Iterator<Item = &BackgroundTask>;
+    pub fn waiting_tasks(&self) -> impl Iterator<Item = &WaitingTask>;
 
-    /// The task with this id, running or finished, or `None` when no task has
-    /// had it or its record has been pushed out of the ring.
-    pub fn task(&self, id: u64) -> Option<TaskState<'_>>;  // Running(&BackgroundTask) | Finished(&FinishedTask)
+    /// The task with this id, waiting, running or finished, or `None` when no
+    /// task has had it or its record has been pushed out of the ring.
+    pub fn task(&self, id: u64) -> Option<TaskState<'_>>;
+    // Waiting(&WaitingTask) | Running(&BackgroundTask) | Finished(&FinishedTask)
     pub fn running_task(&self, id: u64) -> Option<&BackgroundTask>;
+    pub fn waiting_task(&self, id: u64) -> Option<&WaitingTask>;
     pub fn finished_task(&self, id: u64) -> Option<&FinishedTask>;
     /// The last task to finish, from either queue or from one.
     pub fn last_finished_task(&self) -> Option<&FinishedTask>;
     pub fn last_finished_in(&self, queue: Queue) -> Option<&FinishedTask>;
 
     /// Why an edit of `id` is refused right now, or `None`: a locking task of
-    /// either queue running on it.
+    /// either queue running on it, or waiting to.
     ///
     /// Every method that gives a node a new version calls this first, so one
     /// sentence covers the menu's greying, the method's refusal and the wire's.
     pub fn busy_refusal(&self, id: ReconId) -> Option<String>;
+    /// Every node a running or waiting task locks, with that sentence: what
+    /// the Scene tree marks and `close_all` refuses over.
+    pub fn locked_nodes(&self) -> Vec<(ReconId, String)>;
 
-    /// Start `operation` on `id`, and answer with the task's id.
+    /// Start `operation` on `id`, or queue it behind its queue's running
+    /// task, and answer with the task's id either way.
     pub fn start_background_task(&mut self, operation: Operation, id: ReconId, job: Job)
         -> Result<u64, String>;
 
     /// Why starting `operation` on `node` is refused right now, or `None`: the
-    /// node's lock for a locking operation, then the operation's queue.
+    /// node's lock, for a locking operation. A busy queue refuses nothing.
     pub fn start_refusal(&self, operation: Operation, node: Option<ReconId>)
         -> Option<String>;
-
-    /// Why `queue` refuses a start right now, or `None` while it is idle. What
-    /// greys `File > Open...` for the fast queue.
-    pub fn queue_refusal(&self, queue: Queue) -> Option<String>;
 
     /// The body both starters share: `node` is `None` for an open.
     pub fn start_task(&mut self, operation: Operation, node: Option<ReconId>,
@@ -820,10 +905,12 @@ impl AppState {
     /// solve is a thousand flushes for one renumbering.
     pub fn poll_background_tasks(&mut self) -> Polled;
 
-    /// Ask the task `id` to stop.
+    /// Ask the running task `id` to stop, or take the waiting task `id` out of
+    /// its queue, writing its *cancelled before it started* row.
     pub fn cancel_background_task(&mut self, id: u64);
 
-    /// Why cancelling the task `id` is refused right now, or `None`.
+    /// Why cancelling the task `id` is refused right now, or `None`. Never
+    /// refused for a waiting task.
     ///
     /// The sentence has to exist somewhere readable, because the button carries
     /// it as a tooltip and the wire carries it as a refusal.
@@ -835,13 +922,16 @@ impl AppState {
 task for a caller (`start_bundle_adjust`, `start_bench_fit`,
 `start_build_index_files` and the rest) returns `Result<Option<u64>, String>`:
 the id it gave the task, or `None` when it started nothing, as
-`start_bench_stage_at` does for a stage change with no effect. A caller reads the
-task it started by that id, never by asking which task is running, because with
-two queues the running task may be another caller's. `start_open`, which always
-starts a task when it does not refuse, answers with the id itself.
+`start_bench_stage_at` does for a stage change with no effect. The id is the
+task's whether it runs at once or waits, and it keeps it when it starts. A
+caller reads the task it started by that id, never by asking which task is
+running, because with two queues the running task may be another caller's.
+`start_open`, which always starts or queues a task when it does not refuse,
+answers with the id itself.
 
 **Finished tasks are kept in a ring** of the last `FINISHED_KEPT` (16),
-`AppState::finished_tasks`, oldest first. Each is a `FinishedTask` holding its
+`AppState::finished_tasks`, oldest first, and so are the tasks cancelled before
+they started, with no cost and no transcript. Each is a `FinishedTask` holding its
 id, operation, label, cost, transcript and outcome, and `changed`, whether it
 pushed a version of its node: false for a run that ended in `NoChange` as well
 as for one that was refused or cancelled, which is how an edit's reply answers
@@ -876,17 +966,24 @@ how long the operation takes**, not by which tool it is.
 An operation that finishes within `REPLY_DIRECTLY_WITHIN` replies exactly as it
 does today, with its normal result. An agent adjusting a small reconstruction
 sees no change at all, and the wire break is paid only by the calls that were
-already broken. One still running at the threshold replies with a handle:
+already broken. One still running or waiting at the threshold replies with a
+handle:
 
 ```jsonc
 {
   "running": true,                          // present and true only in this case
+  "waiting": true,                          // present only while it has not started
   "operation": "Bundle adjust",
   "queue": "slow",                          // the queue it runs from
   "reconstruction_label": "dino_dog_toy-embedded",
   "operation_id": 2                         // names this run, not merely "one is running"
 }
 ```
+
+The window is measured from when the task was queued
+(`BackgroundReply::queued`), not from when it started, so a call whose task
+waits past the threshold gets the handle, with `waiting: true`, rather than an
+answer that takes longer than the threshold to arrive.
 
 `open_reconstruction` is one of these. Its normal result is the reconstruction
 entry of the node the open made, with `already_open` saying whether the path was
@@ -937,9 +1034,12 @@ because the GUI thread did not answer, so it reads a small shared notice,
 `background::BusyNotice`, one entry per running task, written where a queue's
 running task is set or taken and nowhere else.
 
-A read tool, **`get_background_tasks`**, reports what each queue is running and
-the last task that finished from each, or, given an `operation_id`, that one
-task whether it is running or finished. A running task's reply carries the
+A read tool, **`get_background_tasks`**, reports what each queue is running,
+the tasks waiting in it and the last task that finished from each, or, given an
+`operation_id`, that one task whether it is waiting, running or finished. A
+waiting task is reported with `running: true`, since it has not finished, and
+`waiting: true`, its operation, queue, label and id, and no elapsed, fraction
+or phases, since it has done no work. A running task's reply carries the
 operation, its queue, the label, the seconds elapsed, `fraction` of the whole where
 anything reported one, whether it can be cancelled, the progress as `done`,
 `total` and `unit` where there is one, the status, the open phase, and the
@@ -970,17 +1070,21 @@ agent that already polls `get_scene` learns that the viewer is busy without a
 second call, and knows not to send an edit that would be refused. Each entry is
 a running task in the same shape with everything unbounded left out:
 `running`, `operation`, `queue`, `reconstruction_label`, `operation_id`,
-`elapsed_s` and `fraction`, and the list is empty with nothing running.
+`elapsed_s` and `fraction`. The waiting tasks follow the running ones, each
+in the waiting shape above, and the list is empty with nothing running.
 The phase table belongs to the tool an agent asks when it wants it, because
 `get_scene` is the most-polled call on the surface and an entry that grew with
 the solve would be paid for on every poll; the open phase and the status line go
-with it, being narrative rather than something a caller acts on. Running tasks
-only rather than the last ones too, for a second reason as well: an entry that
+with it, being narrative rather than something a caller acts on. Running and
+waiting tasks only rather than the last ones too, for a second reason as well:
+an entry that
 outlived its operation would make a non-empty list stop meaning "the viewer is
 busy", which is the one thing it is read for.
 
 A **`cancel_background_tasks`** tool cancels the tasks its `operation_ids` name,
-or every running task without them, and lists under `refused` each one that
+or every running and waiting task without them. It lists the running tasks it
+asked to stop under `cancelling`, the waiting tasks it took out of their
+queues under `removed`, and under `refused` each one that
 cannot be cancelled, with the same sentence the button's tooltip carries
 ([mcp-server.md](mcp-server.md) § "cancel_background_tasks"). The singular
 names `get_background_task` and `cancel_background_task` are not aliases for
@@ -1002,9 +1106,22 @@ over the real channel so the tests are about the seam and not about a solver:
   the same sentence in each case; the same operations on another node are
   allowed.
 - Each operation's declared queue and lock match the table in § "Two queues".
-- Starting a second operation in the same queue is refused with the busy-queue
-  sentence; two operations in different queues run at the same time, and the
-  fast one lands while the slow one is still running.
+- Two operations in different queues run at the same time, and the fast one
+  lands while the slow one is still running.
+- Three operations started in the same queue run one after the other, in the
+  order they were started, each starting in the poll that lands the one ahead.
+- A locking task makes its node busy from the moment it is queued: an edit, a
+  close and a second locking task in either queue are each refused with the
+  waiting sentence, then with the running sentence once it starts, and
+  accepted again once it lands. The task itself starts and lands.
+- A start function's id names its task while it waits: an adjustment queued
+  behind another node's task is found by that id, then starts and installs its
+  answer.
+- Cancelling a waiting task removes it before its job runs, writes its
+  *cancelled before it started* row as whoever asked, puts it in the ring with
+  no cost, frees its node and leaves the running task alone.
+- A waiting task's row and record are timed from when it started, not from
+  when it was queued.
 - A locking task in the other queue is refused on the busy node with the busy
   sentence and starts on another node, which it then locks.
 - The record of finished tasks keeps the last `FINISHED_KEPT`, and a task pushed
@@ -1023,6 +1140,11 @@ Panel, through `test_support::run_frame_headless`:
 - With a task in each queue, at 170 px and 190 px tall, both lines and the
   chosen task's newest stage are painted; the running table's newest stage is
   painted at 190 px and an idle table opens at its first stage at 200 px.
+- With a task running and one waiting in each queue, at 170 px and 190 px,
+  each waiting task has its line with its cancel button and the newest stage is
+  still painted; with two more waiting in the slow queue there is still one
+  waiting line a queue, carrying `+2`, and the newest stage is still painted at
+  170 px.
 - A running task's line in the default panel width cuts a long operation name
   rather than drawing anything over anything else.
 - With a long node name, a count and a status at the default width, the title
@@ -1057,9 +1179,9 @@ Panel, through `test_support::run_frame_headless`:
   plain Save writes the file's own columns back with the same hash, and a Save
   that folds an edit mints a version whose hash is the written file's.
 - A path that is not a file is refused before anything starts and logs nothing;
-  an open is refused while another fast task runs and starts while a slow one
-  runs; several files open in order as one task, a missing one a failed row of
-  its own.
+  an open started while another fast task runs waits and then lands, and one
+  started while a slow one runs starts at once; several files open in order as
+  one task, a missing one a failed row of its own.
 - Save As Minimal writes the minimal file and leaves the node where it was, and
   is refused over the node's own file ([saving.md](saving.md)).
 
@@ -1070,7 +1192,14 @@ editing fixture's node, so the wire is read at an instant the test chose:
   `operation`, `queue`, `reconstruction_label` and `operation_id` either way, a
   cost no shorter than the elapsed it was read at, and `running` telling the two
   apart. A session that has run nothing answers both queues with `running` and
-  `last_finished` null.
+  `last_finished` null and `waiting` empty.
+- A task waiting behind another reaches the wire as waiting: its handle, past
+  the window measured from when it was queued, carries `waiting: true`;
+  `get_background_tasks` lists it under its queue's `waiting` and answers about
+  it by id in the waiting shape; `get_scene` lists it after the running task;
+  and `cancel_background_tasks` with no argument lists it under `removed`,
+  after which its id answers `finished` with the *cancelled before it started*
+  row and the deferred reply is that refusal.
 - A deferred reply finds its task by id after a task from the other queue has
   landed behind it, which is the case a single slot of the last finished task
   got wrong.
@@ -1130,7 +1259,7 @@ covered with every other panel's ([panel-layout.md](panel-layout.md) §
 - **Editing a node while an operation runs on it.** The operation is a function
   of the value it was handed, and an edit underneath it would produce a version
   whose parent is not the version it was computed from.
-- **Persisting a running operation.** Quitting abandons every one.
+- **Persisting a running or waiting operation.** Quitting abandons every one.
 - **Progress from a kernel that does not report it.** The panel shows a spinner
   and the open phase's name, and says nothing it cannot measure.
 - **One task per node rather than per queue.** Per node is the natural

@@ -373,8 +373,9 @@ impl AppState {
     /// finishes; on one whose observations carry none it is the direct switch
     /// alone, on the GUI thread, with `retriangulate_points`' refusal sentence
     /// added to its row. Refused, with the proposal left open: no proposal, a
-    /// fit that was refused, a node or a viewer that is busy, and a switch the
-    /// core refuses on the GUI thread (a `.sift` file that cannot be read).
+    /// fit that was refused, a node that is busy, and a switch the core
+    /// refuses on the GUI thread (a `.sift` file that cannot be read). A start
+    /// while the slow queue runs another task waits behind it.
     pub(crate) fn apply_camera_model_proposal(
         &mut self,
         id: ReconId,

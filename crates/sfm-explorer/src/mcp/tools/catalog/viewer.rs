@@ -17,9 +17,10 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           display only. One that finishes within 200 ms replies with the \
                           reconstruction; one still going replies with running: true and an \
                           operation_id to poll with get_background_tasks, and the node appears \
-                          when it lands. The open runs from the fast queue, so it is refused \
-                          while the fast queue runs another task and not while a slow task, such \
-                          as a bundle adjustment, runs. \
+                          when it lands. The open runs from the fast queue, so it waits while \
+                          the fast queue runs another task (a handle given while it waits \
+                          carries waiting: true) and runs at once beside a slow task such as \
+                          a bundle adjustment. \
                           Read the returned `label` back rather than assuming it: a colliding \
                           file stem is disambiguated as \"name (2)\".",
             kind: Write,

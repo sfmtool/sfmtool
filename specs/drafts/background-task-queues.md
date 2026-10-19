@@ -8,17 +8,20 @@
 [Track Table](track-table.md) puts its column job and its reference picks on
 the fast queue.
 
-**Step 1 is built** (§ "Steps"): the two queues, each running one task with
-none waiting; each operation's `queue` and `locks`; the node lock and the
-busy-queue refusal; start functions that return the task's id, the lookup by id
-and the ring of finished tasks; the panel's line per queue, its title
-**Background Tasks** and wire name `background_tasks`; and the renamed tools
-`get_background_tasks` and `cancel_background_tasks` with the `queue` field on
-the handle and `get_scene`'s `background_tasks` list. Those are described in
-the standing specs above, and this draft keeps them only as the ground the
-remaining steps build on. What is still proposed is **waiting** (Step 2),
-**quiet tasks** and the live evaluation in the fast queue (Step 3), and the
-camera model proposal in the fast queue (Step 4).
+**Steps 1 and 2 are built** (§ "Steps"). Step 1: the two queues; each
+operation's `queue` and `locks`; the node lock; start functions that return the
+task's id, the lookup by id and the ring of finished tasks; the panel's line
+per queue, its title **Background Tasks** and wire name `background_tasks`; and
+the renamed tools `get_background_tasks` and `cancel_background_tasks` with the
+`queue` field on the handle and `get_scene`'s `background_tasks` list. Step 2:
+**waiting**, with `WaitingTask` in each queue's state, the next task started in
+the poll that lands the one ahead, the node lock from the moment a task is
+queued with its waiting sentence, the end of the busy-queue refusal, cancelling
+a waiting task, the panel's waiting line per queue, and `waiting` on the wire.
+Those are described in the standing specs above, and this draft keeps them only
+as the ground the remaining steps build on. What is still proposed is **quiet
+tasks** and the live evaluation in the fast queue (Step 3), and the camera
+model proposal in the fast queue (Step 4).
 
 Decided:
 
@@ -56,9 +59,8 @@ two queues, of which Step 1 is built:
   Step 3) the quiet work the viewer does by itself to keep its panels current.
 
 A long solve then holds up only other slow operations, and the rest of the
-viewer keeps working beside it. What Step 1 leaves is that a start while its
-queue is busy is refused rather than waiting, and the live evaluation and the
-proposal's job keep threads of their own.
+viewer keeps working beside it. What Steps 1 and 2 leave is that the live
+evaluation and the proposal's job keep threads of their own.
 
 The reason the standing spec gives for running one task at a time still holds
 for the slow queue. Those operations saturate the machine, so two at once
@@ -116,6 +118,10 @@ and nothing has to be measured before the queue is known.
 
 ## The rules
 
+Built in Step 2 for the tasks someone asks for, and described in
+[gui/background-tasks.md](../gui/background-tasks.md) § "Two queues"; what
+remains here is how quiet tasks fit them (Step 3).
+
 **Each queue runs one task at a time.** A task started while its queue is
 running another waits behind any tasks already waiting there, in the order
 they were started, with the exceptions for quiet tasks below. The two queues
@@ -151,11 +157,10 @@ is not in this group in practice: an open proposal refuses every task start on
 its node (`proposal_refusal`), and a proposal cannot be opened on a busy node
 (`switch_model_refusal`), so the two never meet.
 
-**What stops being refused.** Since Step 1, starting a task is refused by its
-node's lock and by its own queue being busy (*"The {slow | fast} queue is busy:
-{operation} is still running on {label}."*), and `File > Open...`
-(`app/menu.rs`) is greyed while the fast queue refuses starts. Once tasks can
-wait, the busy-queue refusal goes and `File > Open...` is not greyed at all.
+**What stops being refused** (built in Step 2). Step 1 refused a start while
+its own queue was busy, and greyed `File > Open...` (`app/menu.rs`) while the
+fast queue refused starts. Since Step 2 a start is refused only by its node's
+lock, and `File > Open...` is not greyed at all.
 
 **Quitting** abandons every running and waiting task, as it abandons the running
 tasks today.
@@ -263,8 +268,9 @@ The panel's title is **Background Tasks** and its wire name `background_tasks`
 (`Tab::BackgroundTasks`), with no alias for the old name; its queue lines, its
 idle and running forms and its one phase list are built (Step 1,
 [gui/background-tasks.md](../gui/background-tasks.md) § "A line per queue,
-and one phase list"). What the remaining steps add is the waiting lines and the
-quiet line:
+and one phase list"), and so is the waiting line (Step 2, § "Waiting" there):
+one line per queue for its next waiting task, with `+{k}` for the rest. What
+Step 3 adds is the quiet line:
 
 ```
 ┌ Background Tasks ──────────────────────────────┐
@@ -281,9 +287,9 @@ quiet line:
 
 - **One line per queue**, as built: the queue's running task in its running
   form (name, label, small bar or spinner, elapsed time, Cancel), and below
-  it its waiting tasks, one line each with a cancel button. An idle queue's
-  line shows the last task that finished from it, read from the record of
-  finished tasks, in today's idle form.
+  it one line for its next waiting task with a cancel button and `+{k}` for
+  the others. An idle queue's line shows the last task that finished from it,
+  read from the record of finished tasks, in today's idle form.
 - **Quiet tasks** show as one dim line under the fast queue's: the running
   quiet task's operation and subject, with no bar and no Cancel. A quiet task
   runs only while no asked-for task runs in the fast queue, so the fast line
@@ -298,8 +304,9 @@ quiet line:
 ## What a task remembers
 
 `AppState` holds one state per queue, `slow_queue` and `fast_queue`, and a ring
-of finished tasks, `finished_tasks` (Step 1). `QueueState` gains `waiting` in
-Step 2:
+of finished tasks, `finished_tasks` (Step 1). `QueueState` has `waiting` since
+Step 2, whose `WaitingTask` holds a plain `job: Job`; Step 3 turns that field
+into a `WaitingJob`:
 
 ```rust
 pub(crate) struct QueueState {
@@ -329,13 +336,13 @@ pub(crate) enum WaitingJob {
 ```
 
 - **The start functions return the task's id** (built in Step 1:
-  `Result<Option<u64>, String>`, `None` when nothing started). Once tasks can
-  wait, the id is the task's whether it waits or runs.
+  `Result<Option<u64>, String>`, `None` when nothing started). Since Step 2
+  the id is the task's whether it waits or runs.
 - **Tasks are found by id** (built in Step 1: `AppState::task(id)`, used by the
   deferred MCP reply, Surface Tiling's wait, the Scene tree's busy marks and the
-  index-files status). Step 2 adds a waiting state to what it answers.
+  index-files status). Step 2 added a waiting state to what it answers.
 - **Finished tasks are kept in a ring** of the last `FINISHED_KEPT` (16)
-  (built in Step 1). Step 2 puts tasks cancelled before they started in it, and
+  (built in Step 1). Step 2 put tasks cancelled before they started in it, and
   Step 3 keeps quiet tasks out of it (§ "Quiet tasks").
 - **`BusyNotice`** holds every running task (built in Step 1); Step 3 leaves
   quiet tasks out of it.
@@ -350,8 +357,8 @@ pub(crate) enum WaitingJob {
 The renamed tools, the handle's `queue`, `get_background_tasks`'s two forms,
 `cancel_background_tasks`'s `operation_ids`, `cancelling` and `refused`, and
 `get_scene`'s `background_tasks` list are built (Step 1,
-[gui/mcp-server.md](../gui/mcp-server.md)). What follows is what waiting and
-quiet tasks add to them.
+[gui/mcp-server.md](../gui/mcp-server.md)), and so is what waiting adds to
+them below (Step 2). What remains is what quiet tasks add.
 
 - **The handle** gains `waiting: true` when the task has not started yet. `REPLY_DIRECTLY_WITHIN` is measured from
   when the task was queued, so a call whose task waits past the 200 ms
@@ -382,15 +389,16 @@ quiet tasks add to them.
 - **`get_scene`'s `background_tasks`** lists the waiting tasks too, each with
   `waiting`, and leaves out quiet tasks, so it is empty when nothing a person
   or an agent asked for is running or waiting.
-- **Texts and tests that change with waiting:** the tool descriptions and
-  [mcp-server.md](../gui/mcp-server.md) sentences that say a start is refused
-  while its queue is busy (`open_reconstruction`'s among them), and the tests
-  that pin the busy-queue refusal (`a_second_operation_in_the_same_queue_is_refused_while_one_runs`
-  in `background/tests.rs` and the refused open in `state/open/tests.rs`).
+- **Texts and tests that changed with waiting** (Step 2): the tool
+  descriptions and [mcp-server.md](../gui/mcp-server.md) sentences that said a
+  start is refused while its queue is busy (`open_reconstruction`'s among
+  them), and the tests that pinned the busy-queue refusal, which became tests
+  of waiting.
 
 ## Action Log
 
-Queueing a task writes no row, as starting one writes none today. A task that
+Built in Step 2 for the tasks someone asks for. Queueing a task writes no row,
+as starting one writes none. A task that
 is not quiet writes its row when it lands, as today, and the time in that row
 runs from when the task started, not from when it was queued, so it is the
 cost of the work and not of the wait. A waiting task that is
@@ -415,7 +423,7 @@ Each step is one PR through `implement-change`:
    - The panel's line per queue, its title and its wire name
      (`background_tasks`).
    - The wire changes for two running tasks, with the two tools renamed.
-2. **Waiting.**
+2. **Waiting.** Built.
    - `WaitingTask`.
    - Starting the next task when a queue's task lands.
    - The node lock from the moment a task is queued.
@@ -434,6 +442,10 @@ The Track Table's two quiet tasks come with its own steps (Steps 2, 4 and 5 of
 [track-table.md](track-table.md)), after Step 3 here.
 
 ## Testing
+
+The tests of waiting, its order, the lock from queueing, ids, cancelling and
+the wire, are built with Step 2 ([gui/background-tasks.md](../gui/background-tasks.md)
+§ "Testing"); the quiet-task tests come with Steps 3 and 4.
 
 - The declared quiet value of every operation matches the table in § "What a
   task declares", as the queue and lock already do.

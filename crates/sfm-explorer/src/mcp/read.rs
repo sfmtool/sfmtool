@@ -25,7 +25,7 @@ use super::{
     JsonReply, ToolError,
 };
 use crate::action_log::{ActionLog, Actor, Breakdown};
-use crate::background::{BackgroundTask, FinishedTask, Queue, TaskState};
+use crate::background::{BackgroundTask, FinishedTask, Queue, TaskState, WaitingTask};
 use crate::progress::{Count, Detail};
 use crate::scene::{point_id, ImageRef};
 use crate::state::{ensure_sift_cached, AppState};
@@ -195,11 +195,12 @@ fn milliseconds(duration: Duration) -> f64 {
     duration.as_secs_f64() * 1000.0
 }
 
-/// `get_background_tasks`: what each queue is running and what each ran
-/// last, or, with an `operation_id`, what became of that one task.
+/// `get_background_tasks`: what each queue is running, what waits in it and
+/// what each ran last, or, with an `operation_id`, what became of that one
+/// task.
 ///
 /// One shape for a task whether it is running or finished, discriminated by
-/// `running`, because the question an agent brings here is a single one asked
+/// `running`, with `waiting` marking one that has not started, because the question an agent brings here is a single one asked
 /// at an unknown moment: "the solve I started -- is it still going, and what
 /// has it cost?" A tool that answered only about a live operation would have
 /// to be paired with a second one for the answer, and the agent would have to
@@ -216,6 +217,12 @@ pub(super) fn get_background_tasks(state: &AppState, operation_id: Option<u64>) 
                         .running
                         .as_ref()
                         .map_or(Value::Null, running_task),
+                    "waiting": state
+                        .queue(queue)
+                        .waiting
+                        .iter()
+                        .map(waiting_task)
+                        .collect::<Vec<_>>(),
                     "last_finished": state
                         .last_finished_in(queue)
                         .map_or(Value::Null, finished_task),
@@ -225,6 +232,7 @@ pub(super) fn get_background_tasks(state: &AppState, operation_id: Option<u64>) 
         return Ok(Value::Object(queues));
     };
     match state.task(id) {
+        Some(TaskState::Waiting(task)) => Ok(waiting_task(task)),
         Some(TaskState::Running(task)) => Ok(running_task(task)),
         Some(TaskState::Finished(task)) => Ok(finished_task(task)),
         // Ids are handed out in order and never reused, so one below the next
@@ -300,7 +308,8 @@ fn finished_task(task: &FinishedTask) -> Value {
 }
 
 /// The `background_tasks` list `get_scene` carries: every running task, the
-/// slow queue's first, empty with nothing running.
+/// slow queue's first, then every waiting task in the order each queue will
+/// start them, empty when nothing runs.
 ///
 /// **Deliberately not the whole of `get_background_tasks`.** `get_scene` is
 /// the most-polled tool on this surface, and the reason this list is here at
@@ -312,13 +321,36 @@ fn finished_task(task: &FinishedTask) -> Value {
 /// and the status line go with it because they are narrative rather than
 /// something a caller acts on.
 ///
-/// Running tasks only, rather than the last ones too, for the same reason: a
-/// list that went on describing a solve that ended half an hour ago would be
-/// carried by every poll for the rest of the session, and a non-empty list
-/// would stop meaning "the viewer is busy", which is the one thing it is read
-/// for.
+/// Running and waiting tasks only, rather than the last ones too, for the
+/// same reason: a list that went on describing a solve that ended half an
+/// hour ago would be carried by every poll for the rest of the session, and a
+/// non-empty list would stop meaning "the viewer is busy", which is the one
+/// thing it is read for.
 pub(super) fn background_summary(state: &AppState) -> Value {
-    Value::Array(state.running_tasks().map(task_summary).collect())
+    Value::Array(
+        state
+            .running_tasks()
+            .map(task_summary)
+            .chain(state.waiting_tasks().map(waiting_task))
+            .collect(),
+    )
+}
+
+/// One waiting task: its entry in `get_scene`'s list and in its queue's
+/// `waiting` list, and the whole of `get_background_tasks`'s answer about it.
+///
+/// `running` is true, as on every task that has not finished, and `waiting`
+/// says it has not started. No elapsed, no fraction and no phases: it has
+/// done no work yet.
+fn waiting_task(task: &WaitingTask) -> Value {
+    json!({
+        "running": true,
+        "waiting": true,
+        "operation": task.operation.name,
+        "queue": task.operation.queue.name(),
+        "reconstruction_label": task.label,
+        "operation_id": task.id,
+    })
 }
 
 /// One running task's summary, which is its entry in `get_scene`'s list and

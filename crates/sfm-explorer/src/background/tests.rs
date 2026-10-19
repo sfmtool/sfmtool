@@ -5,8 +5,10 @@
 //! what it writes when it does not, and what the rest of the viewer is allowed
 //! to do while it runs.
 //!
-//! Headless, and deterministic without a sleep anywhere. Two seams make that
-//! possible, and both are the mechanism rather than a fake of it:
+//! Headless, and deterministic without waiting on a clock: the one sleep, in
+//! the test of a waiting task's row, only makes the wait long enough to tell
+//! apart from the work. Two seams make that possible, and both are the
+//! mechanism rather than a fake of it:
 //!
 //! - [`AppState::start_background_task`] takes the work as a [`Job`], so a test can
 //!   hand it one that waits on a gate the test opens. Everything about the
@@ -272,30 +274,301 @@ fn the_busy_node_refuses_and_another_node_does_not() {
     state.finish_background_tasks();
 }
 
-/// Each queue runs one task at a time: a second start in the same queue is
-/// refused with the busy-queue sentence, on another node as on the same one.
+/// A third node beside the first two, for a queue with two tasks waiting.
+fn third_node(state: &mut AppState) -> ReconId {
+    state.append_node(SceneNode::demo(SfmrReconstruction::demo(24)));
+    state.scene.last().expect("just appended").id
+}
+
+/// A job that waits at `gate`, counts that it ran, and produces nothing.
+fn noted_job(gate: mpsc::Receiver<()>, ran: Arc<AtomicUsize>) -> Job {
+    Box::new(move |_progress| {
+        let _ = gate.recv();
+        ran.fetch_add(1, Ordering::SeqCst);
+        Finished::Failed("the fake worker produced nothing".to_string())
+    })
+}
+
+/// The ids of the tasks waiting in the slow queue, the next one first.
+fn slow_waiting(state: &AppState) -> Vec<u64> {
+    state
+        .queue(super::Queue::Slow)
+        .waiting
+        .iter()
+        .map(|task| task.id)
+        .collect()
+}
+
+/// Each queue runs one task at a time: a second and a third start in the same
+/// queue wait, in the order they were started, each under the id its start
+/// returned, and each starts in the poll that lands the one ahead of it.
 #[test]
-fn a_second_operation_in_the_same_queue_is_refused_while_one_runs() {
+fn two_operations_in_the_same_queue_run_one_after_the_other() {
     let (mut state, id) = adjustable();
     let other = second_node(&mut state);
-    let mut gate = Gate::new();
-    let task = state
-        .start_background_task(Operation::BUNDLE_ADJUST, id, waiting_job(gate.held()))
+    let third = third_node(&mut state);
+    let mut gates = [Gate::new(), Gate::new(), Gate::new()];
+    let first = state
+        .start_background_task(Operation::BUNDLE_ADJUST, id, waiting_job(gates[0].held()))
         .expect("nothing else is running");
-
-    let mut second = Gate::new();
-    assert_eq!(
-        state.start_background_task(
+    let second = state
+        .start_background_task(
             Operation::RETRIANGULATE_ALL_POINTS,
             other,
-            waiting_job(second.held())
-        ),
-        Err("The slow queue is busy: Bundle adjust is still running on run_a.".to_string()),
-        "a second slow operation started on another node",
+            waiting_job(gates[1].held()),
+        )
+        .expect("a busy queue queues the task");
+    let last = state
+        .start_background_task(
+            Operation::REFIT_ALL_POINTS,
+            third,
+            waiting_job(gates[2].held()),
+        )
+        .expect("a busy queue queues the task");
+    assert_eq!(slow_waiting(&state), [second, last]);
+    assert!(matches!(
+        state.task(second),
+        Some(super::TaskState::Waiting(task)) if task.operation.name == "Retriangulate all points"
+    ));
+    assert!(
+        state.running_task(first).is_some(),
+        "the first is not running"
     );
 
-    gate.open();
+    gates[0].open();
+    state.finish_background_task(first);
+    // Started in the poll that landed the first, with the third still behind.
+    assert!(
+        state.running_task(second).is_some(),
+        "the second did not start"
+    );
+    assert_eq!(slow_waiting(&state), [last]);
+
+    gates[1].open();
+    state.finish_background_task(second);
+    assert!(
+        state.running_task(last).is_some(),
+        "the third did not start"
+    );
+    assert_eq!(slow_waiting(&state), Vec::<u64>::new());
+    gates[2].open();
+    state.finish_background_task(last);
+
+    // The records are in the order the tasks ran.
+    let order: Vec<u64> = state.finished_tasks.iter().map(|task| task.id).collect();
+    assert_eq!(order, [first, second, last]);
+    assert_eq!(state.action_log.entries().count(), 3, "one row each");
+}
+
+/// A locking task locks its node from the moment it is queued: an edit, a
+/// close and a second locking task in either queue are refused with the
+/// waiting sentence, and with the running sentence once it starts. The task
+/// itself is not refused by its own lock: it starts and lands, and the node is
+/// free again after.
+#[test]
+fn a_waiting_task_locks_its_node_from_the_moment_it_is_queued() {
+    let (mut state, id) = adjustable();
+    let other = second_node(&mut state);
+    let mut ahead = Gate::new();
+    let first = state
+        .start_background_task(Operation::BUNDLE_ADJUST, id, waiting_job(ahead.held()))
+        .expect("nothing else is running");
+    let mut queued = Gate::new();
+    let ran = Arc::new(AtomicUsize::new(0));
+    let task = state
+        .start_background_task(
+            Operation::RETRIANGULATE_ALL_POINTS,
+            other,
+            noted_job(queued.held(), Arc::clone(&ran)),
+        )
+        .expect("a busy queue queues the task");
+    let waiting = "demo is busy: Retriangulate all points is waiting to run.";
+
+    assert_eq!(state.busy_refusal(other), Some(waiting.to_string()));
+    assert_eq!(
+        state.delete_point(PointRef::new(other, 3)),
+        Err(waiting.to_string())
+    );
+    assert_eq!(state.close_node(other), Err(waiting.to_string()));
+    assert_eq!(state.scene.len(), 2, "a refused close closed something");
+    let mut refused = Gate::new();
+    assert_eq!(
+        state.start_background_task(Operation::BENCH_FIT, other, waiting_job(refused.held())),
+        Err(waiting.to_string()),
+        "a locking task in the other queue",
+    );
+    let mut refused = Gate::new();
+    assert_eq!(
+        state.start_background_task(
+            Operation::PRUNE_COVERED_OBSERVATIONS,
+            other,
+            waiting_job(refused.held())
+        ),
+        Err(waiting.to_string()),
+        "a locking task in the same queue",
+    );
+
+    ahead.open();
+    state.finish_background_task(first);
+    assert_eq!(
+        state.busy_refusal(other),
+        Some("demo is busy: Retriangulate all points is still running.".to_string())
+    );
+    queued.open();
     state.finish_background_task(task);
+    assert_eq!(ran.load(Ordering::SeqCst), 1, "the queued job ran once");
+    assert_eq!(state.busy_refusal(other), None);
+    state
+        .delete_point(PointRef::new(other, 3))
+        .expect("an edit of a free node");
+}
+
+/// The id a start function returns names the task when it waits: an
+/// adjustment queued behind another node's task is found by that id while it
+/// waits, then starts and installs the kernel's answer.
+#[test]
+fn a_start_function_s_id_names_its_task_while_it_waits() {
+    let (mut state, id) = adjustable();
+    let other = second_node(&mut state);
+    let mut ahead = Gate::new();
+    let first = state
+        .start_background_task(
+            Operation::RETRIANGULATE_ALL_POINTS,
+            other,
+            waiting_job(ahead.held()),
+        )
+        .expect("nothing else is running");
+    let task = state
+        .start_bundle_adjust(id, &BundleAdjustOptions::default())
+        .expect("queued rather than refused")
+        .expect("a task");
+    match state.task(task) {
+        Some(super::TaskState::Waiting(waiting)) => {
+            assert_eq!(waiting.operation.name, "Bundle adjust");
+            assert_eq!(waiting.label, "run_a");
+            assert_eq!(waiting.node, Some(id));
+        }
+        _ => panic!("the adjustment is not waiting"),
+    }
+
+    ahead.open();
+    state.finish_background_task(first);
+    state.finish_background_task(task);
+    assert_eq!(
+        state.scene[0].history.versions().len(),
+        2,
+        "it did not land"
+    );
+    let landed = state.finished_task(task).expect("its record");
+    assert!(landed.outcome.is_ok(), "{:?}", landed.outcome);
+    assert!(landed.changed);
+}
+
+/// Cancelling a waiting task takes it out of its queue before its job runs,
+/// writes its own failed row as whoever asked, keeps its record in the ring
+/// and leaves the running task alone.
+#[test]
+fn cancelling_a_waiting_task_removes_it_and_leaves_the_running_one() {
+    let (mut state, id) = adjustable();
+    let other = second_node(&mut state);
+    let mut ahead = Gate::new();
+    let first = state
+        .start_background_task(Operation::BUNDLE_ADJUST, id, waiting_job(ahead.held()))
+        .expect("nothing else is running");
+    let ran = Arc::new(AtomicUsize::new(0));
+    let (_never, gate) = mpsc::channel();
+    state.action_log.set_actor(Actor::Mcp);
+    let task = state
+        .start_background_task(
+            Operation::RETRIANGULATE_ALL_POINTS,
+            other,
+            noted_job(gate, Arc::clone(&ran)),
+        )
+        .expect("a busy queue queues the task");
+    state.action_log.set_actor(Actor::User);
+    assert_eq!(
+        state.cancel_refusal(task),
+        None,
+        "a waiting task is refused"
+    );
+
+    state.cancel_background_task(task);
+    assert!(state.queue(super::Queue::Slow).waiting.is_empty());
+    let row = newest(&state);
+    assert!(row.failed);
+    assert_eq!(
+        row.text,
+        "Retriangulate all points of demo cancelled before it started"
+    );
+    assert_eq!(row.actor, Actor::Mcp, "the row is not the asker's");
+    let record = state.finished_task(task).expect("kept in the ring");
+    assert_eq!(
+        record.outcome,
+        Err("Retriangulate all points of demo cancelled before it started".to_string())
+    );
+    assert_eq!(record.took, std::time::Duration::ZERO);
+    assert!(!record.changed);
+    assert_eq!(state.busy_refusal(other), None, "the node is still locked");
+    let running = state.running_task(first).expect("the running task");
+    assert!(
+        !running.cancel.load(std::sync::atomic::Ordering::Relaxed),
+        "the running task was asked to stop"
+    );
+
+    ahead.open();
+    state.finish_background_task(first);
+    assert_eq!(ran.load(Ordering::SeqCst), 0, "the cancelled job ran");
+    assert!(state.running_tasks().next().is_none());
+}
+
+/// A waiting task's row is timed from when it started rather than from when
+/// it was queued, so its cost is the work's and not the wait's.
+///
+/// The one sleep in this module: the task ahead is held long enough that the
+/// wait is measurable, and nothing is asserted about how long anything took
+/// beyond that floor.
+#[test]
+fn a_waiting_task_s_row_is_timed_from_when_it_started() {
+    const WAIT: std::time::Duration = std::time::Duration::from_millis(50);
+    let (mut state, id) = adjustable();
+    let other = second_node(&mut state);
+    let mut ahead = Gate::new();
+    let first = state
+        .start_background_task(Operation::BUNDLE_ADJUST, id, waiting_job(ahead.held()))
+        .expect("nothing else is running");
+    let task = state
+        .start_background_task(
+            Operation::RETRIANGULATE_ALL_POINTS,
+            other,
+            Box::new(|_progress| Finished::Failed("quick".to_string())),
+        )
+        .expect("a busy queue queues the task");
+    let queued = state.waiting_task(task).expect("waiting").queued;
+    std::thread::sleep(WAIT);
+
+    ahead.open();
+    state.finish_background_task(first);
+    let started = state.running_task(task).expect("started").started;
+    assert!(
+        started >= queued + WAIT,
+        "it started before the task ahead landed"
+    );
+    state.finish_background_task(task);
+    state
+        .action_log
+        .settle(std::time::Instant::now(), Vec::new());
+    // Read after the settle, so it is no earlier than the instant the settle
+    // stamped the row at.
+    let now = std::time::Instant::now();
+    let took = newest(&state).took.expect("settled");
+    assert!(
+        took <= now.duration_since(started),
+        "the row's {took:?} runs from before the task started"
+    );
+    assert!(
+        state.finished_task(task).expect("kept").took <= now.duration_since(started),
+        "the record's cost runs from before the task started"
+    );
 }
 
 /// The two queues are independent: a fast task starts and lands while a slow
@@ -1570,6 +1843,118 @@ fn with_both_queues_running_the_newest_stage_is_still_shown() {
         );
     }
 
+    fast.open();
+    gate.open();
+    state.finish_background_tasks();
+}
+
+/// With a task running and one waiting in each queue, the panel at the height
+/// it has at the bottom of the left column still shows the chosen task's
+/// newest stage: each queue's waiting tasks take one line under its own,
+/// however many there are, with `+{k}` for the ones behind the next.
+#[test]
+fn waiting_tasks_take_one_line_a_queue_and_leave_the_newest_stage_shown() {
+    let (mut state, id) = adjustable();
+    let other = second_node(&mut state);
+    let mut gate = Gate::new();
+    let (said, heard) = mpsc::channel();
+    state
+        .start_background_task(
+            Operation::BUNDLE_ADJUST,
+            id,
+            many_phases_job(gate.held(), said),
+        )
+        .expect("nothing else is running");
+    heard.recv().expect("the worker reported");
+    let fast = running(&mut state, other, Operation::BENCH_FIT);
+    let mut held = Vec::new();
+    let mut queue = |state: &mut AppState, operation: Operation| {
+        let node = third_node(state);
+        let mut gate = Gate::new();
+        state
+            .start_background_task(operation, node, waiting_job(gate.held()))
+            .expect("a busy queue queues the task");
+        held.push(gate);
+    };
+    queue(&mut state, Operation::RETRIANGULATE_ALL_POINTS);
+    queue(&mut state, Operation::BENCH_FIT_NORMAL);
+    state.poll_background_tasks();
+
+    let frame = |state: &mut AppState, height: f32| {
+        let mut short = input();
+        short.screen_rect = Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(260.0, height),
+        ));
+        let ctx = egui::Context::default();
+        crate::test_support::painted_texts(&ctx, short.clone(), |ui| super::panel::show(ui, state));
+        crate::test_support::painted_texts(&ctx, short, |ui| super::panel::show(ui, state))
+    };
+    for height in [170.0, 190.0] {
+        let texts = frame(&mut state, height);
+        for line in [
+            "Slow",
+            "Bundle adjust",
+            "Retriangulate all points",
+            "Fast",
+            "Fit track",
+            "Fit normal",
+        ] {
+            assert!(
+                texts.iter().any(|text| text == line),
+                "{line:?} at {height}: {texts:?}"
+            );
+        }
+        assert_eq!(
+            texts
+                .iter()
+                .filter(|text| *text == super::panel::WAITING)
+                .count(),
+            2,
+            "a waiting line a queue at {height}: {texts:?}"
+        );
+        // A Cancel on each running line and on each waiting line.
+        assert_eq!(
+            texts
+                .iter()
+                .filter(|text| *text == super::panel::CANCEL)
+                .count(),
+            4,
+            "{texts:?}"
+        );
+        let last = PHASES.last().expect("a stage");
+        assert!(
+            texts.iter().any(|text| text == last),
+            "{last:?} was below the fold at {height} px: {texts:?}",
+        );
+    }
+
+    // Two more behind the slow queue's next: still one line, counting them.
+    queue(&mut state, Operation::REFIT_ALL_POINTS);
+    queue(&mut state, Operation::PRUNE_COVERED_OBSERVATIONS);
+    let texts = frame(&mut state, 170.0);
+    assert!(texts.iter().any(|text| text == "+2"), "{texts:?}");
+    assert!(
+        !texts.iter().any(|text| text == "Refit all points"),
+        "a task behind the next has a line of its own: {texts:?}"
+    );
+    assert_eq!(
+        texts
+            .iter()
+            .filter(|text| *text == super::panel::WAITING)
+            .count(),
+        2,
+        "{texts:?}"
+    );
+    let last = PHASES.last().expect("a stage");
+    assert!(
+        texts.iter().any(|text| text == last),
+        "{last:?} was below the fold with four waiting: {texts:?}",
+    );
+
+    for gate in &held {
+        gate.open();
+    }
     fast.open();
     gate.open();
     state.finish_background_tasks();

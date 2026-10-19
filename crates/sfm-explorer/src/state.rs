@@ -1108,8 +1108,7 @@ impl AppState {
     /// that node is one of the ones this would close. An open locks no node,
     /// and the files it lands are appended to the empty scene.
     pub fn close_all(&mut self) -> Result<(), String> {
-        let locked: Vec<ReconId> = self.running_tasks().filter_map(|task| task.node).collect();
-        if let Some(why) = locked.into_iter().find_map(|node| self.busy_refusal(node)) {
+        if let Some((_, why)) = self.locked_nodes().into_iter().next() {
             return Err(why);
         }
         let closed = self.scene.len();

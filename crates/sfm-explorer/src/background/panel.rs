@@ -17,7 +17,9 @@
 //! task that finished from that queue greyed, with its node and its cost,
 //! because the question a reader brings here after a long solve is "what did
 //! that cost" and the answer is still in reach. A queue that has run nothing
-//! says `Nothing running` and no more. Below the lines is one phase table, for
+//! says `Nothing running` and no more. A queue with tasks waiting has one line
+//! more, under its own, for the next of them, with a cancel button and a count
+//! of the rest. Below the lines is one phase table, for
 //! the task a person last clicked the name of, or else the slow queue's running
 //! task, the fast queue's, or the last task to finish, under a title line that
 //! carries a running task's count and status.
@@ -61,6 +63,9 @@ const LINE_SPACING: f32 = 4.0;
 /// tooltip says what it does.
 pub(super) const CANCEL: &str = "\u{1f5d9}";
 
+/// What leads a waiting task's line, where a queue's line has its name.
+pub(super) const WAITING: &str = "waiting";
+
 /// Width of the cost column: [`ActionLog::format_took`]'s widest ordinary
 /// output, `999.9 s`, and a gap before the panel's edge.
 const COST_WIDTH: f32 = 56.0;
@@ -94,6 +99,12 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut AppState) {
                 None => show_idle(ui, state, queue, &mut asked),
             }
         });
+        if !state.queue(queue).waiting.is_empty() {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = LINE_SPACING;
+                show_waiting(ui, state, queue, &mut asked);
+            });
+        }
     }
     if state.running_tasks().next().is_some() {
         ui.ctx().request_repaint_after(TICK);
@@ -128,7 +139,12 @@ struct Asked {
 pub(crate) fn chosen_task(state: &AppState) -> Option<u64> {
     state
         .background_phases_of
-        .filter(|&id| state.task(id).is_some())
+        .filter(|&id| {
+            matches!(
+                state.task(id),
+                Some(TaskState::Running(_) | TaskState::Finished(_))
+            )
+        })
         .or_else(|| state.running_tasks().next().map(|task| task.id))
         .or_else(|| state.last_finished_task().map(|task| task.id))
 }
@@ -313,6 +329,56 @@ fn elide_to(ui: &egui::Ui, text: &str, room: f32) -> String {
                 .width()
         })
     })
+}
+
+// -- Waiting ---------------------------------------------------------------
+
+/// The line under a busy queue's that names the task it runs next: the word
+/// `waiting`, the operation, its node and a cancel button, and `+{k}` before
+/// the button when `k` more wait behind it.
+///
+/// One line per queue however many wait, because the panel is about 170 px
+/// tall and a line per waiting task would push the phase table out of it: the
+/// table is what a reader watches, and the tasks behind the next one are
+/// named in the `+{k}`'s tooltip, in order, and reach the front of the line
+/// one at a time. A waiting task has no phases, so its name is not a button
+/// that picks them.
+fn show_waiting(ui: &mut egui::Ui, state: &AppState, queue: Queue, asked: &mut Asked) {
+    let waiting = &state.queue(queue).waiting;
+    let Some(next) = waiting.front() else {
+        return;
+    };
+    let id = next.id;
+    let name = next.operation.name;
+    let label = next.label.clone();
+    let behind: Vec<String> = waiting
+        .iter()
+        .skip(1)
+        .map(|task| format!("{} on {}", task.operation.name, task.label))
+        .collect();
+
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        if ui
+            .add(egui::Button::new(CANCEL).small())
+            .on_hover_text("Take it out of the queue before it starts.")
+            .clicked()
+        {
+            asked.cancel = Some(id);
+        }
+        if !behind.is_empty() {
+            ui.label(egui::RichText::new(format!("+{}", behind.len())).weak())
+                .on_hover_text(format!("Also waiting, in order: {}.", behind.join("; ")));
+        }
+        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            ui.label(egui::RichText::new(WAITING).weak());
+            ui.add(
+                egui::Label::new(egui::RichText::new(name))
+                    .truncate()
+                    .selectable(false),
+            );
+            show_node(ui, &label);
+        });
+    });
 }
 
 // -- Idle ------------------------------------------------------------------

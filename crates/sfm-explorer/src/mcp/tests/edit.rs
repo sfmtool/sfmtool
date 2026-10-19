@@ -964,7 +964,7 @@ fn a_slow_adjustment_answers_with_a_handle_naming_it() {
         queue: task.operation.queue,
         answer: super::super::Answer::Version(id),
         label: task.label.clone(),
-        started: std::time::Instant::now() - super::super::REPLY_DIRECTLY_WITHIN,
+        queued: std::time::Instant::now() - super::super::REPLY_DIRECTLY_WITHIN,
     };
 
     let reply =
@@ -985,7 +985,7 @@ fn a_slow_adjustment_answers_with_a_handle_naming_it() {
     // Inside the window and still running, there is no answer yet: the frame
     // moves on and asks again.
     let fresh = super::super::BackgroundReply {
-        started: std::time::Instant::now(),
+        queued: std::time::Instant::now(),
         ..pending
     };
     assert!(
@@ -1022,7 +1022,7 @@ fn a_background_edit_that_changes_nothing_answers_changed_false() {
         queue: task.operation.queue,
         answer: super::super::Answer::Version(id),
         label: task.label.clone(),
-        started: std::time::Instant::now(),
+        queued: std::time::Instant::now(),
     };
     state.finish_background_tasks();
     assert_eq!(version_count(&state), 1);
@@ -1194,7 +1194,7 @@ fn a_deferred_reply_finds_its_task_after_another_has_landed() {
         queue: task.operation.queue,
         answer: super::super::Answer::Version(first),
         label: task.label.clone(),
-        started: task.started,
+        queued: task.started,
     };
     let fast = state
         .start_background_task(
@@ -1251,6 +1251,7 @@ fn cancel_background_tasks_stops_what_is_running_and_refuses_when_nothing_is() {
                 "reconstruction_label": "run_a",
                 "operation_id": task,
             }],
+            "removed": [],
             "refused": [],
         }),
         "{reply}"
@@ -1452,8 +1453,8 @@ fn get_background_tasks_reads_one_shape_running_and_finished() {
     assert_eq!(
         idle,
         json!({
-            "slow": { "running": null, "last_finished": null },
-            "fast": { "running": null, "last_finished": null },
+            "slow": { "running": null, "waiting": [], "last_finished": null },
+            "fast": { "running": null, "waiting": [], "last_finished": null },
         }),
         "{idle}"
     );
@@ -1694,6 +1695,130 @@ fn get_scene_says_the_viewer_is_busy_without_carrying_the_solve() {
     // would be carried by every poll for the rest of the session.
     let after = ok(&mut state, &mut viewer, Command::GetScene);
     assert_eq!(after["background_tasks"], json!([]), "{after}");
+}
+
+/// A task that waits reaches the wire as one that has not started: its handle
+/// carries `waiting: true`, with the window for a direct answer measured from
+/// when it was queued; `get_background_tasks` lists it under its queue's
+/// `waiting` and answers about it by id without phases; `get_scene` lists it
+/// with `waiting`; and `cancel_background_tasks` with no argument removes it,
+/// after which the deferred reply answers with its cancelled row.
+#[test]
+fn a_waiting_task_is_reported_waiting_and_removed_by_a_cancel() {
+    let (mut state, mut viewer) = editable();
+    state.append_node(crate::scene_graph::tests::resectable_node(
+        "/runs/run_b.sfmr",
+    ));
+    let open = running_operation(&mut state, reporting_job);
+    let ahead = state.running_tasks().next().expect("running").id;
+    let map = json!({ "reconstruction_label": "run_b" })
+        .as_object()
+        .cloned()
+        .expect("an object");
+    let command = tools::parse("bundle_adjust", Some(&map)).expect("a well-formed call");
+    let pending = match agent(&mut state, &mut viewer, command) {
+        Outcome::Deferred(super::super::Deferred::Background(pending)) => pending,
+        Outcome::Done(Err(e)) => panic!("a busy queue refused the call: {e}"),
+        _ => panic!("bundle_adjust must defer"),
+    };
+    let queued = pending.operation_id;
+    assert!(state.waiting_task(queued).is_some(), "it did not wait");
+
+    // Inside the window from when it was queued there is no answer yet; past
+    // it, the handle says the task has not started.
+    assert!(super::super::edit::background_reply(&state, &pending).is_none());
+    let past = super::super::BackgroundReply {
+        queued: std::time::Instant::now() - super::super::REPLY_DIRECTLY_WITHIN,
+        ..pending
+    };
+    let handle = match super::super::edit::background_reply(&state, &past).expect("past the window")
+    {
+        Ok(ToolOutput::Json(value)) => value,
+        _ => panic!("a handle is JSON"),
+    };
+    assert_eq!(
+        handle,
+        json!({
+            "running": true,
+            "waiting": true,
+            "operation": "Bundle adjust",
+            "queue": "slow",
+            "reconstruction_label": "run_b",
+            "operation_id": queued,
+        }),
+        "{handle}"
+    );
+
+    let waiting = json!({
+        "running": true,
+        "waiting": true,
+        "operation": "Bundle adjust",
+        "queue": "slow",
+        "reconstruction_label": "run_b",
+        "operation_id": queued,
+    });
+    let queues = call(&mut state, &mut viewer, "get_background_tasks", json!({}));
+    assert_eq!(queues["slow"]["waiting"], json!([waiting]), "{queues}");
+    assert_eq!(
+        queues["slow"]["running"]["operation_id"],
+        json!(ahead),
+        "{queues}"
+    );
+    assert_eq!(queues["fast"]["waiting"], json!([]), "{queues}");
+    let by_id = call(
+        &mut state,
+        &mut viewer,
+        "get_background_tasks",
+        json!({ "operation_id": queued }),
+    );
+    assert_eq!(by_id, waiting, "{by_id}");
+    let scene = ok(&mut state, &mut viewer, Command::GetScene);
+    let tasks = scene["background_tasks"].as_array().expect("a list");
+    assert_eq!(tasks.len(), 2, "{tasks:?}");
+    assert_eq!(tasks[0]["operation_id"], json!(ahead), "{tasks:?}");
+    assert_eq!(tasks[1], waiting, "{tasks:?}");
+
+    let reply = call(
+        &mut state,
+        &mut viewer,
+        "cancel_background_tasks",
+        json!({}),
+    );
+    assert_eq!(
+        reply,
+        json!({
+            "cancelling": [{
+                "operation": "Bundle adjust",
+                "reconstruction_label": "run_a",
+                "operation_id": ahead,
+            }],
+            "removed": [{
+                "operation": "Bundle adjust",
+                "reconstruction_label": "run_b",
+                "operation_id": queued,
+            }],
+            "refused": [],
+        }),
+        "{reply}"
+    );
+    let removed = "Bundle adjust of run_b cancelled before it started";
+    let over = call(
+        &mut state,
+        &mut viewer,
+        "get_background_tasks",
+        json!({ "operation_id": queued }),
+    );
+    assert_eq!(over["finished"], json!(true), "{over}");
+    assert_eq!(over["failed"], json!(true), "{over}");
+    assert_eq!(over["text"], json!(removed), "{over}");
+    match super::super::edit::background_reply(&state, &past).expect("it is over") {
+        Err(error) => assert_eq!(error.0, removed),
+        Ok(_) => panic!("a removed task was answered with a version"),
+    }
+
+    open.send(()).expect("the worker is waiting");
+    state.finish_background_tasks();
+    assert!(state.waiting_tasks().next().is_none());
 }
 
 /// The apply timeout names what is running, and keeps its old guesses when

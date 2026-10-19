@@ -89,17 +89,15 @@ impl From<Cancelled> for Stop {
 impl AppState {
     /// Start opening `paths`, in order, as one background task.
     ///
-    /// Answers with the task's id. Refused without starting anything when the
-    /// fast queue, which an open runs from, is already running a task, or when
-    /// a path is not a file, which is the one failure knowable before the
-    /// read. **Nothing is logged here**: the caller phrases a refusal in its
-    /// own vocabulary, and the task's own row is written when it lands.
+    /// Answers with the task's id. An open runs from the fast queue, and one
+    /// started while that queue runs another task waits behind it. Refused
+    /// without starting anything when a path is not a file, which is the one
+    /// failure knowable before the read. **Nothing is logged here**: the
+    /// caller phrases a refusal in its own vocabulary, and the task's own row
+    /// is written when it lands.
     pub fn start_open(&mut self, paths: Vec<PathBuf>) -> Result<u64, String> {
         if paths.is_empty() {
             return Err("There is no file to open.".to_string());
-        }
-        if let Some(why) = self.start_refusal(Operation::OPEN, None) {
-            return Err(why);
         }
         if let Some(missing) = paths.iter().find_map(|path| not_a_file(path)) {
             return Err(missing);

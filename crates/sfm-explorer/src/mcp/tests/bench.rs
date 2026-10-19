@@ -3197,7 +3197,7 @@ fn a_slow_fit_answers_with_a_handle_naming_it() {
     // drained its reports -- which is the handle case.
     let operation_id = pending.operation_id;
     let past = super::super::BackgroundReply {
-        started: std::time::Instant::now() - super::super::REPLY_DIRECTLY_WITHIN,
+        queued: std::time::Instant::now() - super::super::REPLY_DIRECTLY_WITHIN,
         ..pending
     };
     let reply = match super::super::edit::background_reply(&state, &past).expect("past the window")

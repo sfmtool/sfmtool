@@ -524,11 +524,14 @@ closing the proposal's node (by its context menu, Close All, or the wire), and
 an MCP edit tool naming the node apply the proposal when its fit succeeded,
 since an edit has a history and undo reverses it, and drop it, with a `View`
 row, when the fit was refused (`…: its fit was refused`). Where the Apply itself
-is refused, for instance because a task is running on another node, its
-refusal is the failed row and the proposal is dropped with a `View` row after
-it, `Dropped the camera model proposal for camera 0 of kerry_park: its Apply
-was refused`. A close applies first, before the close is
-asked about; where that starts the background task the node is busy, and the
+is refused, for instance because the `.sift` files the switch reads its pixels
+from are gone, its refusal is the failed row and the proposal is dropped with
+a `View` row after it, `Dropped the camera model proposal for camera 0 of
+kerry_park: its Apply was refused`. An Apply while the slow queue runs a task
+on another node is not refused: the `Switch camera model` task waits behind it,
+and the proposal's node is busy with the waiting sentence from then on
+([../background-tasks.md](../background-tasks.md) § "Two queues"). A close
+applies first, before the close is asked about; where that starts the background task the node is busy, and the
 close is refused with the busy sentence, as any close of a busy node is. An MCP
 edit tool that set off the task is refused the same way. The frame checks the
 selection once per frame (`AppState::tend_camera_model_proposal`), after the
@@ -654,7 +657,8 @@ Explorer (`sfm-explorer` lib tests, headless):
   to both; Apply on a `sift_files` node being the switch alone with the refusal
   sentence in its row, and refused with the proposal left open once the `.sift`
   files are gone; Cancel; an implicit ending whose Apply is refused dropping the
-  proposal with its own `View` row; a refused fit shown and not applied;
+  proposal with its own `View` row, and one behind a busy slow queue waiting to
+  apply and then landing; a refused fit shown and not applied;
   selecting another node applying the proposal and dropping a refused one;
   closing applying first and the close then refused while busy; undo, redo and a
   jump each dropping it with one `View` row; a value changed under it

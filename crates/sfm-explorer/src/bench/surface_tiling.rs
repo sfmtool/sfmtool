@@ -441,7 +441,7 @@ impl AppState {
 
         if let Some(task) = sequence.waiting_on {
             let outcome = match self.task(task) {
-                Some(TaskState::Running(_)) => return driven,
+                Some(TaskState::Waiting(_) | TaskState::Running(_)) => return driven,
                 Some(TaskState::Finished(finished)) => Some(finished.outcome.clone()),
                 None => None,
             };

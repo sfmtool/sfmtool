@@ -381,23 +381,27 @@ fn a_path_that_is_not_a_file_is_refused_before_anything_starts() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// An open runs from the fast queue: refused while another fast task runs,
-/// and started beside a slow one.
+/// An open runs from the fast queue: one started while another fast task runs
+/// waits behind it and then lands, and one started beside a slow task runs at
+/// once.
 #[test]
-fn an_open_is_refused_while_the_fast_queue_runs_and_not_the_slow_one() {
+fn an_open_waits_while_the_fast_queue_runs_and_not_the_slow_one() {
     let dir = temp_dir("busy");
     let recon = workspace_with_photographs(&dir, &[]);
     let path = save_into(&dir, &recon, "recon.sfmr");
     let mut state = AppState::new();
     let first = state.start_open(vec![path.clone()]).expect("nothing runs");
-    let error = state
+    let queued = state
         .start_open(vec![path.clone()])
-        .expect_err("one at a time in the fast queue");
-    assert_eq!(
-        error,
-        "The fast queue is busy: Open is still running on recon."
+        .expect("queued behind the first");
+    assert!(
+        state.waiting_task(queued).is_some(),
+        "the second open did not wait"
     );
     state.finish_background_task(first);
+    state.finish_background_task(queued);
+    assert_eq!(state.scene.len(), 2, "both opens landed");
+    state.close_node(state.scene[1].id).expect("a free node");
     assert_eq!(state.scene.len(), 1);
 
     // A slow task held open on the node the first open made.

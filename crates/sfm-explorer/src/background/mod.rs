@@ -22,12 +22,14 @@
 //!   itself; [`Job`] is the work, as a function of the [`Progress`] it reports
 //!   through.
 //! - [`Queue`] is where an operation runs from, slow or fast. Each queue runs
-//!   one task at a time and the two run at the same time; [`QueueState`] is
-//!   one queue's, held by [`AppState`] so the busy check is where every method
-//!   that needs it already is.
-//! - [`BackgroundTask`] is one that is running, and [`FinishedTask`] the record
-//!   of one that has finished, kept in a ring of the last [`FINISHED_KEPT`].
-//!   Both are found by id ([`AppState::task`]).
+//!   one task at a time and the two run at the same time; a task started while
+//!   its queue is busy waits behind the ones already waiting there.
+//!   [`QueueState`] is one queue's, held by [`AppState`] so the busy check is
+//!   where every method that needs it already is.
+//! - [`WaitingTask`] is one queued and not yet started, [`BackgroundTask`] one
+//!   that is running, and [`FinishedTask`] the record of one that has finished
+//!   or was cancelled before it started, kept in a ring of the last
+//!   [`FINISHED_KEPT`]. All three are found by id ([`AppState::task`]).
 //! - [`Report`] is what crosses the channel, and carries no progress: phases,
 //!   messages and counts are in the collector both threads hold.
 //!
@@ -39,6 +41,7 @@
 //! remains of the freeze is the upload the next phase does, which for an
 //! adjustment is single-digit milliseconds.
 
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, TryRecvError};
 use std::sync::{Arc, Mutex};
@@ -83,8 +86,9 @@ pub(crate) struct Operation {
     /// the reconstruction's size, so the same operation always waits behind
     /// the same work and nothing has to be measured before the queue is known.
     pub(crate) queue: Queue,
-    /// Whether it locks its node while it runs. Every operation that pushes a
-    /// version of its node locks it; an open makes a new node and locks none.
+    /// Whether it locks its node from the moment it is queued until it lands.
+    /// Every operation that pushes a version of its node locks it; an open
+    /// makes a new node and locks none.
     pub(crate) locks: bool,
 }
 
@@ -107,7 +111,8 @@ impl Queue {
     /// Both queues, in the order the panel and the wire list them.
     pub(crate) const ALL: [Queue; 2] = [Queue::Slow, Queue::Fast];
 
-    /// The queue's name on the wire and in the busy-queue refusal.
+    /// The queue's name on the wire.
+    #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
     pub(crate) fn name(self) -> &'static str {
         match self {
             Queue::Slow => "slow",
@@ -124,11 +129,44 @@ impl Queue {
     }
 }
 
-/// What one queue is doing: the task it runs, if any.
+/// What one queue is doing: the task it runs, if any, and the tasks waiting
+/// behind it, in the order they were started.
+///
+/// A queue with tasks waiting always has one running: a task waits only while
+/// its queue runs another, and the next one starts in the poll that lands it.
 #[derive(Default)]
 pub(crate) struct QueueState {
     /// The task running from this queue, or `None` while the queue is idle.
     pub(crate) running: Option<BackgroundTask>,
+    /// The tasks waiting to run from this queue, the next one first.
+    pub(crate) waiting: VecDeque<WaitingTask>,
+}
+
+/// A task queued behind its queue's running task and not yet started.
+///
+/// Its job is already built, from the value at the cursor when it was queued,
+/// and its node, when it locks one, is busy from that moment: nothing can move
+/// the cursor before the job starts, so the value it captured is still the one
+/// at the cursor then.
+pub(crate) struct WaitingTask {
+    /// The id it keeps when it starts, and in the ring once it is over.
+    pub(crate) id: u64,
+    /// What it is.
+    pub(crate) operation: Operation,
+    /// The node it will install into and, when the operation locks, the node
+    /// it already locks. `None` for an open.
+    pub(crate) node: Option<ReconId>,
+    /// That node's label as it read when the task was queued.
+    pub(crate) label: String,
+    /// When it was queued, which is what a tool call's wait for a direct
+    /// answer is measured from. Not the Action Log row's start, which is the
+    /// moment the task starts.
+    #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
+    pub(crate) queued: Instant,
+    /// Who asked for it, whose row the task writes.
+    pub(crate) actor: Actor,
+    /// The work, built when the task was queued.
+    job: Job,
 }
 
 /// How many finished tasks [`AppState`] keeps, newest last.
@@ -139,9 +177,12 @@ pub(crate) struct QueueState {
 /// between its landing and the poll that reads it.
 pub(crate) const FINISHED_KEPT: usize = 16;
 
-/// What [`AppState::task`] found for an id: a task still running, or the
-/// record of one that has finished.
+/// What [`AppState::task`] found for an id: a task waiting to start, one
+/// running, or the record of one that has finished.
 pub(crate) enum TaskState<'a> {
+    /// The task is queued behind its queue's running task.
+    #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
+    Waiting(&'a WaitingTask),
     /// The task is running.
     Running(&'a BackgroundTask),
     /// The task has finished, and this is what it came to.
@@ -719,7 +760,9 @@ pub(crate) struct FinishedTask {
     /// run that succeeded without changing anything.
     #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
     pub(crate) changed: bool,
-    /// What the whole operation cost, measured from the instant it started.
+    /// What the whole operation cost, measured from the instant it started,
+    /// not from when it was queued. Zero for a task cancelled before it
+    /// started.
     ///
     /// Not the entry's `took`, which the frame stamps on settling and which
     /// therefore also carries the upload that put the answer on screen.
@@ -818,23 +861,57 @@ impl AppState {
         self.running_tasks().find(|task| task.id == id)
     }
 
+    /// Every task waiting to start, the slow queue's first and each queue's
+    /// in the order they will start.
+    pub(crate) fn waiting_tasks(&self) -> impl Iterator<Item = &WaitingTask> {
+        Queue::ALL
+            .into_iter()
+            .flat_map(|queue| self.queue(queue).waiting.iter())
+    }
+
+    /// The waiting task with this id, or `None` when no waiting task has it.
+    pub(crate) fn waiting_task(&self, id: u64) -> Option<&WaitingTask> {
+        self.waiting_tasks().find(|task| task.id == id)
+    }
+
+    /// The nodes a task holds locked, running or waiting, each with the
+    /// sentence that refuses an edit of it.
+    ///
+    /// A node appears at most once, since a second locking task on a locked
+    /// node is refused.
+    pub(crate) fn locked_nodes(&self) -> Vec<(ReconId, String)> {
+        self.running_tasks()
+            .filter(|task| task.operation.locks)
+            .filter_map(|task| task.node)
+            .chain(
+                self.waiting_tasks()
+                    .filter(|task| task.operation.locks)
+                    .filter_map(|task| task.node),
+            )
+            .filter_map(|node| self.busy_refusal(node).map(|why| (node, why)))
+            .collect()
+    }
+
     /// The record of the finished task with this id, or `None` when it is
     /// still running, never ran, or has been pushed out of the ring.
     pub(crate) fn finished_task(&self, id: u64) -> Option<&FinishedTask> {
         self.finished_tasks.iter().rev().find(|task| task.id == id)
     }
 
-    /// The task with this id, running or finished, or `None` when no task has
-    /// it or its record is no longer kept.
+    /// The task with this id, waiting, running or finished, or `None` when no
+    /// task has it or its record is no longer kept.
     ///
     /// What a caller that was handed an id asks, rather than whether "the"
     /// running task is its own: with two queues, the task that is running may
     /// be another caller's, and the task that finished last may be too.
     pub(crate) fn task(&self, id: u64) -> Option<TaskState<'_>> {
-        match self.running_task(id) {
-            Some(task) => Some(TaskState::Running(task)),
-            None => self.finished_task(id).map(TaskState::Finished),
+        if let Some(task) = self.running_task(id) {
+            return Some(TaskState::Running(task));
         }
+        if let Some(task) = self.waiting_task(id) {
+            return Some(TaskState::Waiting(task));
+        }
+        self.finished_task(id).map(TaskState::Finished)
     }
 
     /// The task that finished most recently, from either queue.
@@ -852,19 +929,31 @@ impl AppState {
 
     /// Why an edit of `id` is refused right now, or `None`.
     ///
-    /// A node is busy while a task that locks it runs, in either queue. Every
-    /// method that gives a node a new version, moves its cursor, writes it out
-    /// or closes it calls this first, so one sentence covers the method's
-    /// refusal, the menu's greying and the wire's. Other nodes are untouched
-    /// and stay fully editable: the operation is a function of the value it was
-    /// handed, and an edit underneath it would produce a version whose parent
-    /// is not the version it was computed from.
+    /// A node is busy while a task that locks it runs or waits to run, in
+    /// either queue. Every method that gives a node a new version, moves its
+    /// cursor, writes it out or closes it calls this first, so one sentence
+    /// covers the method's refusal, the menu's greying and the wire's. Other
+    /// nodes are untouched and stay fully editable: the operation is a function
+    /// of the value it was handed when it was queued, and an edit underneath it
+    /// would produce a version whose parent is not the version it was computed
+    /// from.
     pub(crate) fn busy_refusal(&self, id: ReconId) -> Option<String> {
-        let task = self
+        let locks =
+            |operation: Operation, node: Option<ReconId>| operation.locks && node == Some(id);
+        if let Some(task) = self
             .running_tasks()
-            .find(|task| task.operation.locks && task.node == Some(id))?;
+            .find(|task| locks(task.operation, task.node))
+        {
+            return Some(format!(
+                "{} is busy: {} is still running.",
+                task.label, task.operation.name
+            ));
+        }
+        let task = self
+            .waiting_tasks()
+            .find(|task| locks(task.operation, task.node))?;
         Some(format!(
-            "{} is busy: {} is still running.",
+            "{} is busy: {} is waiting to run.",
             task.label, task.operation.name
         ))
     }
@@ -874,8 +963,12 @@ impl AppState {
     ///
     /// The sentence a Cancel button's tooltip carries and the wire's refusal
     /// are the same sentence, for the same reason every other refusal here has
-    /// one spelling.
+    /// one spelling. A waiting task is never refused: whatever its operation,
+    /// taking it out of its queue stops it.
     pub(crate) fn cancel_refusal(&self, id: u64) -> Option<String> {
+        if self.waiting_task(id).is_some() {
+            return None;
+        }
         match self.running_task(id) {
             Some(task) if !task.operation.cancellable => Some(format!(
                 "{} cannot be cancelled: it never asks whether it should stop.",
@@ -892,12 +985,16 @@ impl AppState {
         }
     }
 
-    /// Start `operation` on `id`, running `job` on a worker thread, and answer
-    /// with the task's id.
+    /// Start `operation` on `id`, running `job` on a worker thread, or queue it
+    /// behind its queue's running task, and answer with the task's id.
     ///
-    /// Refused when `operation` locks its node and the node is busy, and when
-    /// the operation's queue is already running a task
-    /// ([`Self::start_refusal`]).
+    /// Refused when `operation` locks its node and the node is busy
+    /// ([`Self::start_refusal`]), or while a camera model proposal is open on
+    /// it. A start while the operation's queue runs another task is not
+    /// refused: the task waits, its node locked from now, and starts when the
+    /// tasks ahead of it have landed. `job` was built by the caller from the
+    /// value at the cursor, after the caller's own busy checks, which is why a
+    /// queued task's own lock never refuses it.
     ///
     /// **Nothing is logged here.** The log records outcomes, not intentions
     /// (`specs/gui/action-log.md`), so the entry is written when the operation
@@ -925,42 +1022,28 @@ impl AppState {
 
     /// Why starting `operation` on `node` is refused right now, or `None`.
     ///
-    /// Two rules. A task that locks its node is refused while a locking task
-    /// of either queue holds that node, with the busy sentence, so a node has
-    /// at most one locking task at any time. And each queue runs one task at a
-    /// time, so a start is refused while its own queue runs another; the other
-    /// queue does not refuse it.
+    /// A task that locks its node is refused while a locking task of either
+    /// queue runs on that node or waits to, with the busy sentence, so a node
+    /// has at most one locking task at any time. A busy queue refuses nothing:
+    /// the task waits in it.
     pub(crate) fn start_refusal(
         &self,
         operation: Operation,
         node: Option<ReconId>,
     ) -> Option<String> {
-        if operation.locks {
-            if let Some(why) = node.and_then(|node| self.busy_refusal(node)) {
-                return Some(why);
-            }
+        if !operation.locks {
+            return None;
         }
-        self.queue_refusal(operation.queue)
+        node.and_then(|node| self.busy_refusal(node))
     }
 
-    /// Why `queue` refuses a start right now, or `None` while it is idle.
-    pub(crate) fn queue_refusal(&self, queue: Queue) -> Option<String> {
-        self.queue(queue).running.as_ref().map(|running| {
-            format!(
-                "The {} queue is busy: {} is still running on {}.",
-                queue.name(),
-                running.operation.name,
-                running.label
-            )
-        })
-    }
-
-    /// Start `operation`, named `label`, running `job` on a worker thread, and
-    /// answer with the task's id.
+    /// Start `operation`, named `label`, running `job` on a worker thread, or
+    /// queue it behind its queue's running task, and answer with the task's
+    /// id either way.
     ///
-    /// `node` is the node it installs into, and locks when the operation says
-    /// it does, or `None` for an open, whose node does not exist yet. The body
-    /// [`Self::start_background_task`] and
+    /// `node` is the node it installs into, and locks from now when the
+    /// operation says it does, or `None` for an open, whose node does not
+    /// exist yet. The body [`Self::start_background_task`] and
     /// [`Self::start_open`](crate::state::AppState::start_open) share.
     pub(crate) fn start_task(
         &mut self,
@@ -972,7 +1055,43 @@ impl AppState {
         if let Some(why) = self.start_refusal(operation, node) {
             return Err(why);
         }
+        let task = WaitingTask {
+            id: self.next_operation_id,
+            operation,
+            node,
+            label,
+            queued: Instant::now(),
+            actor: self.action_log.actor(),
+            job,
+        };
+        let id = task.id;
+        if self.queue(operation.queue).running.is_some() {
+            self.next_operation_id += 1;
+            self.queue_mut(operation.queue).waiting.push_back(task);
+            return Ok(id);
+        }
+        // A thread that could not be spawned is the caller's refusal, so the
+        // id is not spent on a task that never existed.
+        self.run_task(task)?;
+        self.next_operation_id += 1;
+        Ok(id)
+    }
 
+    /// Spawn the worker for `task` and make it its queue's running task.
+    ///
+    /// The queue must be idle. `started`, which the Action Log row's cost is
+    /// measured from, is now, however long the task waited.
+    fn run_task(&mut self, task: WaitingTask) -> Result<(), String> {
+        let WaitingTask {
+            id,
+            operation,
+            node,
+            label,
+            actor,
+            job,
+            ..
+        } = task;
+        debug_assert!(self.queue(operation.queue).running.is_none());
         let (reports, rx) = std::sync::mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
         let queued = Arc::new(AtomicBool::new(false));
@@ -1001,15 +1120,13 @@ impl AppState {
                 )
             })?;
 
-        let operation_id = self.next_operation_id;
-        self.next_operation_id += 1;
         self.queue_mut(operation.queue).running = Some(BackgroundTask {
-            id: operation_id,
+            id,
             operation,
             node,
             label,
             started: Instant::now(),
-            actor: self.action_log.actor(),
+            actor,
             collector,
             cancel,
             reports: rx,
@@ -1019,7 +1136,94 @@ impl AppState {
         // answer changes at. Anything reading it is off the GUI thread and
         // cannot ask the state.
         self.publish_busy();
-        Ok(operation_id)
+        Ok(())
+    }
+
+    /// Start `queue`'s next waiting task, if it is idle and one waits.
+    ///
+    /// Called in the poll that lands the queue's running task, so the next one
+    /// starts in that same poll. A task whose thread cannot be spawned ends
+    /// there, with a failed row and a record in the ring, and the one behind
+    /// it is tried.
+    fn start_next(&mut self, queue: Queue) {
+        while self.queue(queue).running.is_none() {
+            let Some(task) = self.queue_mut(queue).waiting.pop_front() else {
+                return;
+            };
+            let (id, operation, label, actor) =
+                (task.id, task.operation, task.label.clone(), task.actor);
+            if let Err(message) = self.run_task(task) {
+                self.end_before_start(id, operation, label, actor, message);
+            }
+        }
+    }
+
+    /// Take the waiting task `id` out of its queue, writing its *cancelled
+    /// before it started* row and keeping its record. False when no task with
+    /// that id is waiting.
+    fn cancel_waiting(&mut self, id: u64) -> bool {
+        for queue in Queue::ALL {
+            let waiting = &mut self.queue_mut(queue).waiting;
+            let Some(index) = waiting.iter().position(|task| task.id == id) else {
+                continue;
+            };
+            let task = waiting.remove(index).expect("just found");
+            let message = format!(
+                "{} of {} cancelled before it started",
+                task.operation.name, task.label
+            );
+            // The job is dropped here, unrun, with whatever value it captured.
+            let WaitingTask {
+                operation,
+                label,
+                actor,
+                ..
+            } = task;
+            self.end_before_start(id, operation, label, actor, message);
+            return true;
+        }
+        false
+    }
+
+    /// Record a task that ended without starting: a failed row as whoever
+    /// asked for it, costing nothing, and its record in the ring.
+    fn end_before_start(
+        &mut self,
+        id: u64,
+        operation: Operation,
+        label: String,
+        actor: Actor,
+        message: String,
+    ) {
+        self.action_log.fail_done_as(
+            actor,
+            operation.kind,
+            Instant::now(),
+            message.clone(),
+            Vec::new(),
+        );
+        self.keep_finished(FinishedTask {
+            id,
+            operation,
+            label,
+            opened: None,
+            created_track: None,
+            found_nearby: None,
+            switched_camera: None,
+            changed: false,
+            took: Duration::ZERO,
+            detail: Vec::new(),
+            outcome: Err(message),
+        });
+    }
+
+    /// Put `task` in the ring of finished tasks, letting the oldest go when it
+    /// is full.
+    fn keep_finished(&mut self, task: FinishedTask) {
+        if self.finished_tasks.len() == FINISHED_KEPT {
+            self.finished_tasks.pop_front();
+        }
+        self.finished_tasks.push_back(task);
     }
 
     /// Write every running task into the notice the MCP server reads.
@@ -1104,18 +1308,29 @@ impl AppState {
             let task = self.queue_mut(queue).running.take().expect("just borrowed");
             self.publish_busy();
             polled.installed.extend(self.finish(task, finished));
+            // After the landed task's row, so the log reads in the order the
+            // two happened. The task that starts locks its own node, which is
+            // never the one that just landed.
+            self.start_next(queue);
         }
         polled
     }
 
-    /// Ask the task `id` to stop. Silently does nothing when it cannot, which
-    /// is what [`AppState::cancel_refusal`] is for saying out loud.
+    /// Ask the task `id` to stop, or, for a task still waiting, take it out of
+    /// its queue at once. Silently does nothing when it cannot, which is what
+    /// [`AppState::cancel_refusal`] is for saying out loud.
+    ///
+    /// A waiting task that is cancelled writes *"{operation} of {label}
+    /// cancelled before it started"*, as whoever asked for it, and its record
+    /// goes in the ring, so a call holding its id is answered.
     pub(crate) fn cancel_background_task(&mut self, id: u64) {
         if let Some(task) = self.running_task(id) {
             if task.operation.cancellable {
                 task.cancel.store(true, Ordering::Relaxed);
             }
+            return;
         }
+        self.cancel_waiting(id);
     }
 
     /// Install what the operation produced, or record why it produced nothing.
@@ -1387,10 +1602,7 @@ impl AppState {
             self.select_point(point);
             self.action_log.set_actor(standing);
         }
-        if self.finished_tasks.len() == FINISHED_KEPT {
-            self.finished_tasks.pop_front();
-        }
-        self.finished_tasks.push_back(FinishedTask {
+        self.keep_finished(FinishedTask {
             id,
             operation,
             label,
@@ -1413,6 +1625,8 @@ impl AppState {
     /// `try_recv`. Waiting on the worker's own messages is what makes a test
     /// deterministic without a sleep or a poll loop. Only `id`'s queue is
     /// drained; a task in the other queue lands when it is driven or polled.
+    /// A task that is waiting is driven through the tasks ahead of it, which
+    /// land first.
     #[cfg(test)]
     pub(crate) fn finish_background_task(&mut self, id: u64) -> Polled {
         use std::time::Duration;
@@ -1422,9 +1636,18 @@ impl AppState {
         const PATIENCE: Duration = Duration::from_secs(120);
 
         let mut polled = Polled::default();
-        while let Some(queue) = self.running_task(id).map(|task| task.operation.queue) {
+        loop {
+            let queue = match self.task(id) {
+                Some(TaskState::Running(task)) => task.operation.queue,
+                Some(TaskState::Waiting(task)) => task.operation.queue,
+                Some(TaskState::Finished(_)) | None => break,
+            };
             let waited = {
-                let task = self.queue(queue).running.as_ref().expect("just found");
+                let task = self
+                    .queue(queue)
+                    .running
+                    .as_ref()
+                    .expect("a queue with a task waiting runs one");
                 task.reports.recv_timeout(PATIENCE)
             };
             let first = match waited {

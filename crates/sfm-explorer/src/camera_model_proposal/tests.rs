@@ -653,30 +653,23 @@ fn opening_a_proposal_ends_a_held_lock() {
     assert_eq!(versions(&state), 1);
 }
 
-/// An implicit ending whose Apply is refused, here because a task is running
-/// on another node, drops the proposal with a `View` row of its own after the
-/// refusal's failed row.
+/// An implicit ending whose Apply is refused, here because the `.sift` files
+/// the switch reads its pixels from are gone, drops the proposal with a `View`
+/// row of its own after the refusal's failed row.
 #[test]
 fn an_implicit_ending_whose_apply_is_refused_drops_with_a_row() {
-    let (mut state, id) = spline_state();
+    let workspace = tempfile::tempdir().expect("a temporary directory");
+    let (mut state, id) = crate::state::edits::tests::convertible_state(workspace.path());
     state.append_node(crate::scene_graph::tests::resectable_node(
         "/runs/run_b.sfmr",
     ));
     let other = state.scene[1].id;
+    std::fs::remove_dir_all(workspace.path().join("features")).expect("the features");
+    state.select_recon(id);
     state
-        .open_camera_model_proposal(CameraRef::new(id, 1), None)
+        .open_camera_model_proposal(CameraRef::new(id, 0), None)
         .expect("opens");
-    let (release, held) = std::sync::mpsc::channel::<()>();
-    state
-        .start_background_task(
-            crate::background::Operation::RETRIANGULATE_ALL_POINTS,
-            other,
-            Box::new(move |_progress| {
-                let _ = held.recv();
-                crate::background::Finished::Failed("nothing".to_string())
-            }),
-        )
-        .expect("nothing else is running");
+    let label = state.scene[0].label.clone();
     let before = state.action_log.revision();
     state.select_recon(other);
     state.tend_camera_model_proposal();
@@ -695,15 +688,60 @@ fn an_implicit_ending_whose_apply_is_refused_drops_with_a_row() {
         .position(|(failed, kind, text)| {
             !failed
                 && *kind == Kind::View
-                && text
-                    == "Dropped the camera model proposal for camera 1 of run_a: its \
-                            Apply was refused"
+                && *text
+                    == format!(
+                        "Dropped the camera model proposal for camera 0 of {label}: its \
+                         Apply was refused"
+                    )
         })
         .expect("the drop's row");
     assert!(refused < dropped, "{rows:?}");
     assert_eq!(versions(&state), 1);
+}
+
+/// An implicit ending while the slow queue runs a task on another node is not
+/// refused: its Apply waits behind that task, the proposal's node busy with
+/// the waiting sentence, and the switch starts and lands once the task ahead
+/// of it has.
+#[test]
+fn an_implicit_ending_behind_a_busy_queue_waits_to_apply() {
+    let (mut state, id) = spline_state();
+    state.append_node(crate::scene_graph::tests::resectable_node(
+        "/runs/run_b.sfmr",
+    ));
+    let other = state.scene[1].id;
+    state
+        .open_camera_model_proposal(CameraRef::new(id, 1), None)
+        .expect("opens");
+    let (release, held) = std::sync::mpsc::channel::<()>();
+    let ahead = state
+        .start_background_task(
+            crate::background::Operation::RETRIANGULATE_ALL_POINTS,
+            other,
+            Box::new(move |_progress| {
+                let _ = held.recv();
+                crate::background::Finished::Failed("nothing".to_string())
+            }),
+        )
+        .expect("nothing else is running");
+    state.select_recon(other);
+    state.tend_camera_model_proposal();
+    assert!(state.camera_model_proposal.is_none());
+    let switch = state
+        .waiting_tasks()
+        .next()
+        .map(|task| (task.id, task.operation.name))
+        .expect("the Apply waits");
+    assert_eq!(switch.1, "Switch camera model");
+    assert_eq!(
+        state.busy_refusal(id),
+        Some("run_a is busy: Switch camera model is waiting to run.".to_string())
+    );
     release.send(()).expect("the worker is waiting");
-    state.finish_background_tasks();
+    state.finish_background_task(ahead);
+    assert!(state.running_task(switch.0).is_some(), "the switch started");
+    state.finish_background_task(switch.0);
+    assert_eq!(versions(&state), 2);
 }
 
 // ── The comparison's observations ───────────────────────────────────────

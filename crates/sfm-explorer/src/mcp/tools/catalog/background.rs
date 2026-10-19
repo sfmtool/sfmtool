@@ -11,17 +11,20 @@ pub(super) fn specs() -> Vec<ToolSpec> {
             description: "What the viewer is busy with. Background tasks run from two queues, \
                           slow (the whole-reconstruction edits and Build index files) and fast \
                           (opening files and the other bench steps); each runs one task at a \
-                          time and the two run at the same time. With no argument, for each \
-                          queue (slow, fast): running, \
-                          the task it runs or null, and last_finished, the last task that \
-                          finished from it or null. A running task carries the operation, its \
-                          queue, the reconstruction it runs on, how long it has been going, how \
-                          far along it is, the stage it is in, and the stages it has finished, in \
-                          the shape get_action_log's detail returns them in; a finished one \
-                          carries running: false, finished: true, what it cost and how it ended. \
-                          With operation_id, that one task in the same shape, running or \
-                          finished, so one call answers both whether the solve is done and what \
-                          it cost. Test running to tell the two apart.",
+                          time and the two run at the same time, and a task started while its \
+                          queue is busy waits behind the ones already waiting there. With no \
+                          argument, for each queue (slow, fast): running, the task it runs or \
+                          null; waiting, the tasks waiting in it, next first; and \
+                          last_finished, the last task that finished from it or null. A \
+                          running task carries the operation, its queue, the reconstruction it \
+                          runs on, how long it has been going, how far along it is, the stage \
+                          it is in, and the stages it has finished, in the shape \
+                          get_action_log's detail returns them in; a waiting one carries \
+                          running: true, waiting: true and no stages; a finished one carries \
+                          running: false, finished: true, what it cost and how it ended. With \
+                          operation_id, that one task in the same shape, waiting, running or \
+                          finished, so one call answers both whether the solve is done and \
+                          what it cost. Test running to tell the two apart.",
             kind: Read,
             schema: object(
                 &[(
@@ -39,13 +42,16 @@ pub(super) fn specs() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "cancel_background_tasks",
-            description: "Ask running background tasks to stop: the ones operation_ids names, \
-                          or every running task. Each stops at its next safe point, pushes no \
-                          version, and writes a cancelled row to the Action Log. The reply lists \
-                          cancelling, the tasks asked to stop, and refused, each task that \
-                          cannot be stopped (one whose operation never asks whether it should, \
-                          or one that is not running) with the reason. Refused as a whole when \
-                          it names nothing and nothing is running.",
+            description: "Ask background tasks to stop: the ones operation_ids names, or every \
+                          running and waiting task. A running task stops at its next safe \
+                          point, pushes no version, and writes a cancelled row to the Action \
+                          Log; a waiting one is taken out of its queue at once and writes a \
+                          cancelled-before-it-started row. The reply lists cancelling, the \
+                          running tasks asked to stop, removed, the waiting tasks taken out, \
+                          and refused, each task that cannot be stopped (one whose operation \
+                          never asks whether it should, or one that is not running or waiting) \
+                          with the reason. Refused as a whole when it names nothing and \
+                          nothing is running.",
             kind: Write,
             schema: object(
                 &[(
@@ -56,7 +62,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                         "minItems": 1,
                         "description":
                             "The tasks to stop, by the operation_id their handles carry. Omit \
-                             to stop every running task.",
+                             to stop every running and waiting task.",
                     }),
                 )],
                 &[],

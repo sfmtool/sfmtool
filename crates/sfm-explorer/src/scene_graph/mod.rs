@@ -302,14 +302,10 @@ impl SceneGraphPanel {
         // What every *other* node offers as an alignment target, taken before
         // the mutable walk below: the tree holds one node at a time, and the
         // `Align to ▸` submenu on that node has to name all the rest.
-        // The nodes running tasks lock, and the sentence that refuses an edit
-        // of each: taken here for the same reason `targets` is, since the walk
-        // below borrows the scene mutably.
-        let busy: Vec<(ReconId, String)> = state
-            .running_tasks()
-            .filter_map(|task| task.node)
-            .filter_map(|node| state.busy_refusal(node).map(|why| (node, why)))
-            .collect();
+        // The nodes running or waiting tasks lock, and the sentence that
+        // refuses an edit of each: taken here for the same reason `targets`
+        // is, since the walk below borrows the scene mutably.
+        let busy: Vec<(ReconId, String)> = state.locked_nodes();
         // The camera an open proposal is on, which greys the node's other
         // edits and the other cameras' `Switch Camera Model…`.
         let proposal = state

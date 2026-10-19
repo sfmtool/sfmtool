@@ -663,57 +663,76 @@ pub(super) fn convert_to_embedded_patches(state: &mut AppState, label: &str) -> 
 /// The task is the one the start function named, rather than whichever task
 /// is running: with two queues, another caller's task may be running beside
 /// it, and a step that found nothing to do must not read that task as its own.
+/// A task that waits is deferred as one that runs, and the window for a
+/// direct answer is measured from when it was queued.
 pub(super) fn started_or(
     state: &AppState,
     started: Option<u64>,
     answer: super::Answer,
     fallback: impl FnOnce(&AppState) -> JsonReply,
 ) -> super::Outcome {
-    let Some(task) = started.and_then(|id| state.running_task(id)) else {
-        return super::done(fallback(state));
+    let (operation, label, queued) = match started.and_then(|id| state.task(id)) {
+        Some(TaskState::Running(task)) => (task.operation, &task.label, task.started),
+        Some(TaskState::Waiting(task)) => (task.operation, &task.label, task.queued),
+        Some(TaskState::Finished(_)) | None => return super::done(fallback(state)),
     };
     super::Outcome::Deferred(Deferred::Background(BackgroundReply {
-        operation_id: task.id,
-        operation_name: task.operation.name,
-        queue: task.operation.queue,
+        operation_id: started.expect("a task was found"),
+        operation_name: operation.name,
+        queue: operation.queue,
         answer,
-        label: task.label.clone(),
-        started: task.started,
+        label: label.clone(),
+        queued,
     }))
 }
 
 /// `cancel_background_tasks`: ask the tasks named, or every running task, to
-/// stop.
+/// stop, and take the waiting ones named, or every waiting task, out of their
+/// queues.
 ///
 /// A task that cannot be stopped -- one whose operation never asks whether it
-/// should, or one that is not running -- is listed under `refused` in the
-/// sentence the panel's Cancel tooltip carries, so the window and the wire give
-/// one answer, and the others are still asked. Refused as a whole only when
-/// the call names nothing and nothing is running.
+/// should, or one that is not running or waiting -- is listed under `refused`
+/// in the sentence the panel's Cancel tooltip carries, so the window and the
+/// wire give one answer, and the others are still asked. A waiting task is
+/// listed under `removed`, since it is gone by the time the reply is written.
+/// Refused as a whole only when the call names nothing and nothing is running.
 pub(super) fn cancel_background_tasks(state: &mut AppState, named: Option<&[u64]>) -> JsonReply {
     let ids: Vec<u64> = match named {
         Some(ids) => ids.to_vec(),
-        None => state.running_tasks().map(|task| task.id).collect(),
+        None => state
+            .running_tasks()
+            .map(|task| task.id)
+            .chain(state.waiting_tasks().map(|task| task.id))
+            .collect(),
     };
     if ids.is_empty() {
         return Err(ToolError::new("Nothing is running in the background."));
     }
     let mut cancelling = Vec::new();
+    let mut removed = Vec::new();
     let mut refused = Vec::new();
     for id in ids {
-        let entry = |state: &AppState| match state.task(id) {
-            Some(TaskState::Running(task)) => json!({
-                "operation": task.operation.name,
-                "reconstruction_label": task.label,
-                "operation_id": id,
-            }),
-            Some(TaskState::Finished(task)) => json!({
-                "operation": task.operation.name,
-                "reconstruction_label": task.label,
-                "operation_id": id,
-            }),
-            None => json!({ "operation_id": id }),
+        let entry = |state: &AppState| {
+            let named = match state.task(id) {
+                Some(TaskState::Waiting(task)) => Some((task.operation.name, &task.label)),
+                Some(TaskState::Running(task)) => Some((task.operation.name, &task.label)),
+                Some(TaskState::Finished(task)) => Some((task.operation.name, &task.label)),
+                None => None,
+            };
+            match named {
+                Some((operation, label)) => json!({
+                    "operation": operation,
+                    "reconstruction_label": label,
+                    "operation_id": id,
+                }),
+                None => json!({ "operation_id": id }),
+            }
         };
+        if state.waiting_task(id).is_some() {
+            removed.push(entry(state));
+            state.cancel_background_task(id);
+            continue;
+        }
         match state.cancel_refusal(id) {
             Some(why) => {
                 let mut row = entry(state);
@@ -728,7 +747,7 @@ pub(super) fn cancel_background_tasks(state: &mut AppState, named: Option<&[u64]
             }
         }
     }
-    Ok(json!({ "cancelling": cancelling, "refused": refused }))
+    Ok(json!({ "cancelling": cancelling, "removed": removed, "refused": refused }))
 }
 
 /// Whether a deferred `bundle_adjust` can be answered yet, and with what.
@@ -737,14 +756,20 @@ pub(super) fn cancel_background_tasks(state: &mut AppState, named: Option<&[u64]
 /// the frame moves on, the window redraws, and the operation goes on running.
 ///
 /// Three cases, in the order they are asked. The operation has finished, and
-/// the answer is its result. It is still running and has been for longer than
-/// [`REPLY_DIRECTLY_WITHIN`], and the answer is the handle. It is still running
-/// and has not, and there is no answer yet.
+/// the answer is its result. It is still running or waiting, queued longer
+/// than [`REPLY_DIRECTLY_WITHIN`] ago, and the answer is the handle, with
+/// `waiting: true` when it has not started. It is still running or waiting
+/// and was queued more recently, and there is no answer yet.
 pub(super) fn background_reply(
     state: &AppState,
     pending: &BackgroundReply,
 ) -> Option<super::Reply> {
+    let mut waiting = false;
     let finished = match state.task(pending.operation_id) {
+        Some(TaskState::Waiting(_)) => {
+            waiting = true;
+            None
+        }
         Some(TaskState::Running(_)) => None,
         Some(TaskState::Finished(outcome)) => Some(outcome),
         // The operation finished and later ones pushed its record out of the
@@ -816,10 +841,10 @@ pub(super) fn background_reply(
             (_, Err(message)) => Err(ToolError::new(message.clone())),
         });
     }
-    if pending.started.elapsed() < REPLY_DIRECTLY_WITHIN {
+    if pending.queued.elapsed() < REPLY_DIRECTLY_WITHIN {
         return None;
     }
-    Some(Ok(super::ToolOutput::Json(json!({
+    let mut handle = json!({
         // The discriminator: present and true only where the operation
         // outlived the window, so a reader tests one field rather than
         // inspecting the shape.
@@ -828,7 +853,16 @@ pub(super) fn background_reply(
         "queue": pending.queue.name(),
         "reconstruction_label": pending.label,
         "operation_id": pending.operation_id,
-    }))))
+    });
+    // Absent rather than false once it has started, as on every other reply
+    // that names a task.
+    if waiting {
+        handle
+            .as_object_mut()
+            .expect("the handle is an object")
+            .insert("waiting".into(), json!(true));
+    }
+    Some(Ok(super::ToolOutput::Json(handle)))
 }
 
 // ── The display transform ───────────────────────────────────────────────

@@ -34,14 +34,9 @@ pub(super) fn show(
     egui::Panel::top("menu_bar").show(root_ui, |ui| {
         egui::MenuBar::new().ui(ui, |ui| {
             ui.menu_button("File", |ui| {
-                // An open is a fast-queue task, and each queue runs one task at
-                // a time: greyed while the fast queue is running another, with
-                // the refusal as its tooltip.
-                let running = app_state.queue_refusal(crate::background::Queue::Fast);
-                let open = ui
-                    .add_enabled(running.is_none(), egui::Button::new("Open..."))
-                    .on_disabled_hover_text(running.unwrap_or_default());
-                if open.clicked() {
+                // Never greyed: an open is a fast-queue task, and one started
+                // while that queue runs another waits behind it.
+                if ui.button("Open...").clicked() {
                     // Multi-select, and every chosen file *appends* a
                     // node, a path that is already open included: that
                     // opens it a second time, as a second node with a

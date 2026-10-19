@@ -1225,8 +1225,9 @@ pub(crate) struct BackgroundReply {
     /// The label of the node it runs on, or the one an open's file suggests,
     /// for the handle.
     pub(crate) label: String,
-    /// When the call started it, which the window below is measured from.
-    pub(crate) started: std::time::Instant,
+    /// When the task was queued, which the window below is measured from: the
+    /// moment the call started it, whether it ran at once or waited.
+    pub(crate) queued: std::time::Instant,
 }
 
 /// What a call that started a background operation answers with once the
