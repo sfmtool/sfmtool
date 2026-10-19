@@ -161,8 +161,7 @@ in `press_key`.
 > position the viewer tracks on Windows, so the 3D Viewer, Image Detail and
 > Image Browser take the scroll (and Image Detail's `Z`). Verified live in
 > every panel; it fixed Ctrl+wheel zooming twice in the 3D Viewer and Image
-> Detail and Image Detail's trackpad pan running the wrong way in x, branch
-> `mcp-scroll-input`._
+> Detail and Image Detail's trackpad pan running the wrong way in x, PR #992._
 
 The MCP input tools are `click`, `hover`, `press_key` and `type_text`. Every
 navigation gesture the tutorial teaches (drag to orbit, Shift+drag to pan,
@@ -205,6 +204,12 @@ All six screenshots were rebuilt for comparison. Five reproduce in substance;
 the visible-target one cannot be (finding 3).
 
 ## 6. No way to find points by image, track length or error (low)
+
+> _Status (2026-10-19): **Partially done** — specified, not built: a
+> `find_points` read over a core point-column query, shared with a new Track
+> Table panel, is drafted in `specs/drafts/track-table.md` (with the background
+> queues it depends on in `specs/drafts/background-task-queues.md`), branch
+> `draft-track-table`._
 
 To reproduce the tutorial's screenshots an agent needs "a track of about 18
 observations seen in image 3", "a 4-observation track through image 57" and
