@@ -92,7 +92,7 @@ pub(super) fn worked(
         Outcome::Done(Err(e)) => panic!("expected a deferral, got refusal: {e}"),
         _ => panic!("{name} must defer to a worker"),
     };
-    state.finish_background_task();
+    state.finish_background_tasks();
     match super::super::edit::background_reply(state, &pending).expect("the operation finished") {
         Ok(ToolOutput::Json(value)) => value,
         Ok(ToolOutput::Png { .. }) => panic!("expected JSON, got an image"),
@@ -1960,7 +1960,7 @@ fn focus_pushes_no_version_and_get_bench_reports_the_focused_item() {
         json!({ "reconstruction_label": "run_a", "item": item }),
     );
     assert_eq!(again["changed"], json!(false), "{again}");
-    state.finish_background_task();
+    state.finish_background_tasks();
 
     let bench = call(
         &mut state,
@@ -2403,7 +2403,9 @@ fn fit_and_set_stage_run_as_background_tasks_and_the_evaluation_follows_them() {
 
     // The operation is the one an agent polls for, under the name the panel
     // shows it as.
-    let task = call(&mut state, &mut viewer, "get_background_task", json!({}));
+    let task = call(&mut state, &mut viewer, "get_background_tasks", json!({}))["fast"]
+        ["last_finished"]
+        .clone();
     assert_eq!(task["running"], json!(false), "{task}");
     assert_eq!(task["operation"], json!("Set track stage"), "{task}");
     assert_eq!(task["reconstruction_label"], json!("run_a"), "{task}");
@@ -2523,7 +2525,9 @@ fn fit_and_set_stage_run_as_background_tasks_and_the_evaluation_follows_them() {
             .starts_with(&format!("Fitted {item}")),
         "{fitted}"
     );
-    let task = call(&mut state, &mut viewer, "get_background_task", json!({}));
+    let task = call(&mut state, &mut viewer, "get_background_tasks", json!({}))["fast"]
+        ["last_finished"]
+        .clone();
     assert_eq!(task["operation"], json!("Fit track"), "{task}");
 
     let track = call(
@@ -2985,7 +2989,7 @@ fn an_observation_far_from_the_projection_is_named_rather_than_searched_for() {
 #[test]
 fn setting_the_stage_a_track_is_already_at_starts_nothing() {
     let (mut state, mut viewer) = benchable();
-    on_the_bench(&mut state, &mut viewer);
+    let item = on_the_bench(&mut state, &mut viewer);
     let before = version_count(&state);
 
     let reply = call(
@@ -2995,7 +2999,7 @@ fn setting_the_stage_a_track_is_already_at_starts_nothing() {
         json!({ "reconstruction_label": "run_a", "stage": "track" }),
     );
     assert_eq!(version_count(&state), before, "{reply}");
-    assert!(state.background_task().is_none());
+    assert!(state.running_tasks().next().is_none());
     assert_eq!(reply["changed"], json!(false), "{reply}");
     let report = reply["report"].as_str().expect("the step's own sentence");
     assert!(report.contains("no effect"), "{reply}");
@@ -3005,6 +3009,34 @@ fn setting_the_stage_a_track_is_already_at_starts_nothing() {
         reply["label"].as_str().expect("a version label"),
         "the reply echoed the previous step's label: {reply}"
     );
+
+    // With another node's task running in the other queue, the step still
+    // answers at once: it started nothing, and the running task is not its own.
+    state.append_node(crate::scene::SceneNode::demo(
+        sfmtool_core::SfmrReconstruction::demo(8),
+    ));
+    let other = state.scene[1].id;
+    let (open, held) = std::sync::mpsc::channel::<()>();
+    let slow = state
+        .start_background_task(
+            crate::background::Operation::BUNDLE_ADJUST,
+            other,
+            Box::new(move |_progress| {
+                let _ = held.recv();
+                crate::background::Finished::Failed("the fake solve produced nothing".into())
+            }),
+        )
+        .expect("the slow queue is idle");
+    let reply = call(
+        &mut state,
+        &mut viewer,
+        "set_bench_track_stage",
+        json!({ "reconstruction_label": "run_a", "track": item, "stage": "track" }),
+    );
+    assert_eq!(reply["changed"], json!(false), "{reply}");
+    assert_eq!(reply.get("running"), None, "{reply}");
+    open.send(()).expect("the solve is waiting");
+    state.finish_background_task(slow);
 }
 
 /// A commit that replaces a point hands the replacement an index one past the
@@ -3180,7 +3212,7 @@ fn a_slow_fit_answers_with_a_handle_naming_it() {
 
     // The photographs the worker could not read are its refusal and not the
     // gesture's: the step began either way.
-    state.finish_background_task();
+    state.finish_background_tasks();
     match super::super::edit::background_reply(&state, &past).expect("the operation finished") {
         Err(e) => assert!(e.0.contains(&format!("Cannot fit {item}")), "{e}"),
         Ok(_) => panic!("the fixture's photographs are not on disk"),
@@ -3348,7 +3380,7 @@ fn create_track_at_pixel_refuses_with_every_members_stage() {
         Outcome::Deferred(super::super::Deferred::Background(pending)) => pending,
         _ => panic!("create_track_at_pixel must defer to a worker"),
     };
-    state.finish_background_task();
+    state.finish_background_tasks();
     let error = match super::super::edit::background_reply(&state, &pending)
         .expect("the operation finished")
     {
@@ -3383,7 +3415,7 @@ fn create_track_at_pixel_refuses_with_every_members_stage() {
         off.to_string().contains("not on the 128x128 photograph"),
         "{off}"
     );
-    assert!(state.background_task().is_none());
+    assert!(state.running_tasks().next().is_none());
 }
 
 // ── Find Nearby Tracks ──────────────────────────────────────────────────
@@ -3597,7 +3629,7 @@ fn find_nearby_tracks_answers_an_empty_find_and_refuses_what_cannot_run() {
         off.to_string().contains("not on the 128x128 photograph"),
         "{off}"
     );
-    assert!(state.background_task().is_none());
+    assert!(state.running_tasks().next().is_none());
 }
 
 // ── The selected observations ───────────────────────────────────────────
@@ -4393,7 +4425,7 @@ fn a_sift_files_bench_is_view_only_until_converted_and_rebenched() {
     state
         .start_convert_to_embedded_patches(id)
         .expect("well posed");
-    state.finish_background_task();
+    state.finish_background_tasks();
     assert!(state.bench_edit_refusal(id).is_none());
     assert!(
         lacks_patch_frame(&state),
@@ -4458,7 +4490,7 @@ fn edits_made_between_the_conversion_and_the_rebench_survive_it() {
     state
         .start_convert_to_embedded_patches(id)
         .expect("well posed");
-    state.finish_background_task();
+    state.finish_background_tasks();
     assert!(state.bench_edit_refusal(id).is_none());
 
     // A copy now would drop the origin and never get a patch frame.
@@ -4554,7 +4586,7 @@ fn an_unedited_item_rebuilt_on_the_rebench_is_the_fresh_track() {
     state
         .start_convert_to_embedded_patches(id)
         .expect("well posed");
-    state.finish_background_task();
+    state.finish_background_tasks();
     let serial = state.scene[0].history.current_version().serial.as_u64();
     let (fresh, report) = sfmtool_core::bench::create_track(
         &sfmtool_core::bench::Bench::new(),

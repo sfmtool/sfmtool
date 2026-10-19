@@ -180,7 +180,7 @@ pub(crate) enum Home {
 /// anyway, because a Background panel re-opened beside the tree is the thing
 /// asked for and a third left column would not be.
 const GROUPS: [&[Tab]; 4] = [
-    &[Tab::SceneGraph, Tab::BackgroundTask],
+    &[Tab::SceneGraph, Tab::BackgroundTasks],
     &[Tab::Viewer3D, Tab::ImageDetail],
     &[Tab::TrackView, Tab::IntrinsicsDetail],
     &[Tab::ImageBrowser, Tab::ActionLog, Tab::EditHistory],
@@ -190,7 +190,7 @@ impl Tab {
     /// Every panel, in default-layout order — which is the Panels menu's order.
     pub(crate) const ALL: [Tab; 9] = [
         Tab::SceneGraph,
-        Tab::BackgroundTask,
+        Tab::BackgroundTasks,
         Tab::Viewer3D,
         Tab::ImageBrowser,
         Tab::ImageDetail,
@@ -202,12 +202,13 @@ impl Tab {
 
     /// The panel's name on the wire: its title, lower-cased and joined with
     /// underscores, except `viewer_3d` for the "3D Viewer" title. These
-    /// strings are stored in saved layouts, so they stay fixed when a title
-    /// changes.
+    /// strings are stored in saved layouts, so changing one is a rename: a
+    /// saved layout naming the old one is refused whole, with no alias
+    /// (`specs/gui/panel-layout.md` § "Vocabulary").
     pub(crate) fn wire_name(self) -> &'static str {
         match self {
             Tab::SceneGraph => "scene",
-            Tab::BackgroundTask => "background_task",
+            Tab::BackgroundTasks => "background_tasks",
             Tab::Viewer3D => "viewer_3d",
             Tab::ImageBrowser => "image_browser",
             Tab::ImageDetail => "image_detail",
@@ -240,7 +241,7 @@ impl Tab {
             // The same edge and share as Scene, whose group-mate it is: with
             // the tree gone too, the panel that replaces it belongs where the
             // tree was.
-            Tab::SceneGraph | Tab::BackgroundTask => Home::Edge {
+            Tab::SceneGraph | Tab::BackgroundTasks => Home::Edge {
                 edge: Split::Left,
                 share: 0.18,
             },
@@ -312,7 +313,7 @@ impl Default for Layout {
                     split: SplitDirection::TopBottom,
                     fraction: LEFT_COLUMN_SPLIT,
                     first: Box::new(LayoutNode::leaf(&[Tab::SceneGraph])),
-                    second: Box::new(LayoutNode::leaf(&[Tab::BackgroundTask])),
+                    second: Box::new(LayoutNode::leaf(&[Tab::BackgroundTasks])),
                 }),
                 second: Box::new(LayoutNode::Split {
                     split: SplitDirection::TopBottom,

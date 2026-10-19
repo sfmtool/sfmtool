@@ -1996,7 +1996,11 @@ impl AppState {
     /// refused in the caller's own hand -- a greyed button, a status line, a
     /// tool error -- rather than starting a task whose only act is to decode a
     /// dozen images and then fail.
-    pub(crate) fn start_bench_fit(&mut self, id: ReconId, label: &str) -> Result<(), String> {
+    pub(crate) fn start_bench_fit(
+        &mut self,
+        id: ReconId,
+        label: &str,
+    ) -> Result<Option<u64>, String> {
         self.start_bench_fit_at(id, label, None)
     }
 
@@ -2009,7 +2013,7 @@ impl AppState {
         id: ReconId,
         label: &str,
         sigma_px: Option<f64>,
-    ) -> Result<(), String> {
+    ) -> Result<Option<u64>, String> {
         let outcome = self.begin_bench_fit(id, label, sigma_px);
         if let Err(message) = &outcome {
             self.action_log.fail(Kind::Bench, message.clone());
@@ -2024,11 +2028,12 @@ impl AppState {
         id: ReconId,
         label: &str,
         sigma_px: Option<f64>,
-    ) -> Result<(), String> {
+    ) -> Result<Option<u64>, String> {
         let (_, _, track) = self.bench_step_target(id, label)?;
         bench::fit_preconditions(&track).map_err(|e| format!("Cannot fit {label}: {e}"))?;
         let job = self.bench_fit_job(id, label, sigma_px)?;
         self.start_background_task(Operation::BENCH_FIT, id, job)
+            .map(Some)
     }
 
     /// Put the track called `label` into `stage`, on a worker thread.
@@ -2047,7 +2052,7 @@ impl AppState {
         id: ReconId,
         label: &str,
         stage: StageKind,
-    ) -> Result<(), String> {
+    ) -> Result<Option<u64>, String> {
         self.start_bench_stage_at(id, label, stage, None)
     }
 
@@ -2059,7 +2064,7 @@ impl AppState {
         label: &str,
         stage: StageKind,
         sigma_px: Option<f64>,
-    ) -> Result<(), String> {
+    ) -> Result<Option<u64>, String> {
         // Before the no-effect answer: on a view-only bench no stage step is
         // offered, so none is reported as one that happened to change nothing.
         if let Some(why) = self.bench_view_only_refusal(id) {
@@ -2073,7 +2078,7 @@ impl AppState {
             self.no_effect(format!(
                 "Set {label} to the {stage} stage: no effect, it is at that stage already"
             ));
-            return Ok(());
+            return Ok(None);
         }
         let outcome = self.begin_bench_stage(id, label, stage, sigma_px);
         if let Err(message) = &outcome {
@@ -2090,12 +2095,13 @@ impl AppState {
         label: &str,
         stage: StageKind,
         sigma_px: Option<f64>,
-    ) -> Result<(), String> {
+    ) -> Result<Option<u64>, String> {
         let (_, _, track) = self.bench_step_target(id, label)?;
         bench::set_stage_preconditions(&track, stage)
             .map_err(|e| format!("Cannot set the stage of {label}: {e}"))?;
         let job = self.bench_stage_job(id, label, stage, sigma_px)?;
         self.start_background_task(Operation::BENCH_SET_STAGE, id, job)
+            .map(Some)
     }
 
     /// Estimate the normal of the track called `label` by `step` and turn its
@@ -2116,7 +2122,7 @@ impl AppState {
         id: ReconId,
         label: &str,
         step: NormalStep,
-    ) -> Result<(), String> {
+    ) -> Result<Option<u64>, String> {
         let outcome = self.begin_bench_normal(id, label, step);
         if let Err(message) = &outcome {
             self.action_log.fail(Kind::Bench, message.clone());
@@ -2131,13 +2137,14 @@ impl AppState {
         id: ReconId,
         label: &str,
         step: NormalStep,
-    ) -> Result<(), String> {
+    ) -> Result<Option<u64>, String> {
         let (_, _, track) = self.bench_step_target(id, label)?;
         bench::normal_preconditions(&track)
             .and_then(|()| step.check())
             .map_err(|e| format!("Cannot {} {label}: {e}", step.verb()))?;
         let job = self.bench_normal_job(id, label, step)?;
         self.start_background_task(step.operation(), id, job)
+            .map(Some)
     }
 
     /// Search the node's SIFT index from one observation of the track
@@ -2167,7 +2174,7 @@ impl AppState {
         observation: usize,
         radius_px: Option<f64>,
         min_inliers: Option<usize>,
-    ) -> Result<(), String> {
+    ) -> Result<Option<u64>, String> {
         let outcome = self.begin_bench_search(id, label, observation, radius_px, min_inliers);
         if let Err(message) = &outcome {
             self.action_log.fail(Kind::Bench, message.clone());
@@ -2182,7 +2189,7 @@ impl AppState {
         id: ReconId,
         label: &str,
         observation: usize,
-    ) -> Result<(), String> {
+    ) -> Result<Option<u64>, String> {
         let outcome = self.begin_bench_geometry_search(id, label, observation);
         if let Err(message) = &outcome {
             self.action_log.fail(Kind::Bench, message.clone());
@@ -2195,9 +2202,10 @@ impl AppState {
         id: ReconId,
         label: &str,
         observation: usize,
-    ) -> Result<(), String> {
+    ) -> Result<Option<u64>, String> {
         let job = self.bench_geometry_search_job(id, label, observation)?;
         self.start_background_task(Operation::BENCH_GEOMETRY_SEARCH, id, job)
+            .map(Some)
     }
 
     /// Why geometry search cannot run from this row, or `None` when it can.
@@ -2288,9 +2296,10 @@ impl AppState {
         observation: usize,
         radius_px: Option<f64>,
         min_inliers: Option<usize>,
-    ) -> Result<(), String> {
+    ) -> Result<Option<u64>, String> {
         let job = self.bench_search_job(id, label, observation, radius_px, min_inliers)?;
         self.start_background_task(Operation::BENCH_SEARCH, id, job)
+            .map(Some)
     }
 
     /// Why the search cannot run from `observation` of `label`, or `None`.

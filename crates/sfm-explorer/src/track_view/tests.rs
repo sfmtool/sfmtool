@@ -542,7 +542,7 @@ fn a_busy_node_greys_the_box_only_for_a_put() {
     let response = click_text(&mut panel, &ctx, &mut state, EDIT_LABEL);
     assert_eq!(response.set_edit, Some(true), "going back was greyed");
 
-    state.finish_background_task();
+    state.finish_background_tasks();
 }
 
 /// With no reconstruction there is no box, only the one sentence.
@@ -697,7 +697,7 @@ fn clicking_a_chip_focuses_its_item_and_selects_its_origin() {
     );
     assert_eq!(focused(&state, id).as_deref(), Some(first.as_str()));
     assert_eq!(state.selected_point, Some(PointRef::new(id, 0)));
-    state.finish_background_task();
+    state.finish_background_tasks();
 }
 
 /// A rename keeps the chip, under the item's new label.
@@ -811,7 +811,7 @@ fn a_chip_draws_the_items_patch_or_an_empty_frame() {
     state
         .start_bench_fit(id, &track)
         .expect("a framed track with three sightings fits");
-    state.finish_background_task();
+    state.finish_background_tasks();
     let cluster = state
         .start_bench_cluster(
             ImageRef::new(id, 0),

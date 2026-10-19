@@ -323,7 +323,7 @@ fn get_window_layout_returns_the_file_the_window_and_the_panels() {
         active,
         [
             "scene",
-            "background_task",
+            "background_tasks",
             "viewer_3d",
             "image_browser",
             "track_view"

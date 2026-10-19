@@ -214,12 +214,14 @@ impl AppState {
     ///
     /// Returns as soon as the worker is running, and **nothing is logged
     /// here**: the entry is the outcome's, written by
-    /// [`AppState::poll_background_task`] on the frame the answer lands. An
+    /// [`AppState::poll_background_tasks`] on the frame the answer lands. An
     /// `Err` is a refusal to *begin*, logged the way the synchronous edits log
     /// theirs.
-    pub(crate) fn start_refit_all_points(&mut self, id: ReconId) -> Result<(), String> {
+    pub(crate) fn start_refit_all_points(&mut self, id: ReconId) -> Result<Option<u64>, String> {
         let outcome = match self.refit_all_points_job(id) {
-            Ok(job) => self.start_background_task(Operation::REFIT_ALL_POINTS, id, job),
+            Ok(job) => self
+                .start_background_task(Operation::REFIT_ALL_POINTS, id, job)
+                .map(Some),
             Err(message) => Err(message),
         };
         if let Err(message) = &outcome {

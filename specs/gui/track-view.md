@@ -236,7 +236,7 @@ ticked in the Panels menu, and saved in the layout file.
 Those are unknown panel names like any other, and the refusal is the ordinary
 one from [`panel-layout.md`](panel-layout.md) § "Validation", prefixed with the
 path to the leaf and listing the nine names that exist: `unknown panel
-"point_track"; the panels are scene, background_task, viewer_3d, image_browser,
+"point_track"; the panels are scene, background_tasks, viewer_3d, image_browser,
 image_detail, track_view, camera_intrinsics, action_log, edit_history`. The
 reader carries no alias for either, and the at-most-once rule applies to
 `track_view` as to every other name. Reset Layout is the way back, and saving the

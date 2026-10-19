@@ -66,7 +66,7 @@ fn the_job_sends_the_comparison_without_the_preview() {
     ));
     assert_eq!(versions(&state), 1);
     assert_eq!(state.action_log.entries().count(), rows);
-    assert!(state.background_task().is_none());
+    assert!(state.running_tasks().next().is_none());
 }
 
 /// Apply with the job's answer in hand installs it on the GUI thread, with no
@@ -86,18 +86,18 @@ fn apply_with_the_answer_installs_the_version_the_task_would_push() {
         matches!(applied, ProposalApplied::Pushed(node, _) if node == id),
         "{applied:?}"
     );
-    assert!(held.background_task().is_none(), "it solved again");
+    assert!(held.running_tasks().next().is_none(), "it solved again");
     assert!(held.camera_model_proposal.is_none());
     assert_eq!(versions(&held), 2);
 
     let (mut solved, solved_id) = proposed();
-    assert_eq!(
+    assert!(matches!(
         solved
             .apply_camera_model_proposal(solved_id)
             .expect("applies"),
-        ProposalApplied::Started
-    );
-    solved.finish_background_task();
+        ProposalApplied::Started(_)
+    ));
+    solved.finish_background_tasks();
 
     let (a, b) = (held.scene[0].recon(), solved.scene[0].recon());
     assert_eq!(a.image_table.cameras, b.image_table.cameras);
@@ -136,11 +136,11 @@ fn an_answer_for_an_older_generation_is_not_installed() {
         TriangulationState::Pending
     ));
     assert!(proposal.current_comparison().is_none());
-    assert_eq!(
+    assert!(matches!(
         state.apply_camera_model_proposal(id).expect("applies"),
-        ProposalApplied::Started
-    );
-    state.finish_background_task();
+        ProposalApplied::Started(_)
+    ));
+    state.finish_background_tasks();
     assert_eq!(versions(&state), 2);
     let camera = &state.scene[0].recon().image_table.cameras[1];
     assert_eq!(camera.model.radial_spline().expect("a spline").0.len(), 8);
@@ -249,7 +249,7 @@ fn every_ending_drops_the_preview_and_hiding_the_node_leaves_it() {
     // An implicit ending applies the proposal, installing its answer.
     assert_eq!(state.end_camera_model_proposal_implicitly(), Some(id));
     assert!(state.camera_model_preview_draw().is_none());
-    assert!(state.background_task().is_none());
+    assert!(state.running_tasks().next().is_none());
 }
 
 /// On a version with an overlay the job reads one materialisation, and its

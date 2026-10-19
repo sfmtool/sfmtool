@@ -5,7 +5,7 @@
     python mcp.py --port P get_scene
     python mcp.py --port P get_point '{"point": 12}' --print "d['track']"
     python mcp.py --port P screenshot '{"panel_name": "track_view"}' --name tv1
-    python mcp.py --port P wait            # until the background task is done
+    python mcp.py --port P wait            # until neither queue is running a task
     python mcp.py --port P tools           # names and first lines
     python mcp.py --port P tools --schema resize_bench_patch
 
@@ -90,14 +90,17 @@ class Client:
         return self.rpc("tools/list")["tools"]
 
     def wait(self, poll_s: float = 1.0, timeout_s: float = 3600) -> dict:
-        """Poll get_background_task until nothing is running; return its reply."""
+        """Poll get_background_tasks until neither queue is running anything;
+        return its last reply, which carries each queue's last finished task."""
         deadline = time.time() + timeout_s
         while True:
-            task = self.call("get_background_task")
-            if not task or not task.get("running"):
-                return task
+            tasks = self.call("get_background_tasks")
+            if not isinstance(tasks, dict) or not any(
+                (queue or {}).get("running") for queue in tasks.values()
+            ):
+                return tasks
             if time.time() > deadline:
-                raise TimeoutError(f"still running after {timeout_s}s: {task}")
+                raise TimeoutError(f"still running after {timeout_s}s: {tasks}")
             time.sleep(poll_s)
 
 

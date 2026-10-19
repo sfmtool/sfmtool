@@ -376,22 +376,54 @@ fn a_path_that_is_not_a_file_is_refused_before_anything_starts() {
         .start_open(vec![dir.join("there-is-no-such-file.sfmr")])
         .expect_err("refused");
     assert!(error.starts_with("Failed to load "), "{error}");
-    assert!(state.background_task().is_none());
+    assert!(state.running_tasks().next().is_none());
     assert_eq!(state.action_log.entries().count(), 0, "nothing is logged");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// An open runs from the fast queue: refused while another fast task runs,
+/// and started beside a slow one.
 #[test]
-fn an_open_is_refused_while_another_operation_runs() {
+fn an_open_waits_for_the_fast_queue_and_not_for_the_slow_one() {
     let dir = temp_dir("busy");
     let recon = workspace_with_photographs(&dir, &[]);
     let path = save_into(&dir, &recon, "recon.sfmr");
     let mut state = AppState::new();
-    state.start_open(vec![path.clone()]).expect("nothing runs");
-    let error = state.start_open(vec![path]).expect_err("one at a time");
-    assert_eq!(error, "Open is still running on recon.");
-    state.finish_background_task();
+    let first = state.start_open(vec![path.clone()]).expect("nothing runs");
+    let error = state
+        .start_open(vec![path.clone()])
+        .expect_err("one at a time in the fast queue");
+    assert_eq!(
+        error,
+        "The fast queue is busy: Open is still running on recon."
+    );
+    state.finish_background_task(first);
     assert_eq!(state.scene.len(), 1);
+
+    // A slow task held open on the node the first open made.
+    let node = state.scene[0].id;
+    let (gate, held) = std::sync::mpsc::channel::<()>();
+    let slow = state
+        .start_background_task(
+            crate::background::Operation::BUNDLE_ADJUST,
+            node,
+            Box::new(move |_progress| {
+                let _ = held.recv();
+                crate::background::Finished::Failed("the fake solve produced nothing".into())
+            }),
+        )
+        .expect("the slow queue is idle");
+    let second = state
+        .start_open(vec![path])
+        .expect("the fast queue is idle while the slow one runs");
+    state.finish_background_task(second);
+    assert_eq!(state.scene.len(), 2, "the open landed beside the solve");
+    assert!(
+        state.running_task(slow).is_some(),
+        "the solve is still running"
+    );
+    gate.send(()).expect("the solve is waiting");
+    state.finish_background_task(slow);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -403,7 +435,7 @@ fn several_files_open_in_order_as_one_task() {
     let second = save_into(&dir, &recon, "second.sfmr");
     let mut state = AppState::new();
     state.open_files(vec![first.clone(), dir.join("gone.sfmr"), second.clone()]);
-    state.finish_background_task();
+    state.finish_background_tasks();
 
     let labels: Vec<&str> = state.scene.iter().map(|n| n.label.as_str()).collect();
     assert_eq!(labels, ["first", "second"]);

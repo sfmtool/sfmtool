@@ -37,12 +37,13 @@ pub(super) fn scene(state: &AppState, viewer: &Viewer3D) -> Value {
         "solo": state.solo.and_then(|id| label_of(state, id)),
         "view": view(state, viewer),
         "status_message": state.status_message(),
-        // What the viewer is busy with, or `null`. Beside `status_message` for
-        // the reason the revision is: an agent already polling this should not
-        // need a second call to learn that an edit it is about to send would be
-        // refused. Deliberately the short form -- the phase table is
-        // `get_background_task`'s (§ "get_background_task").
-        "background_task": super::read::background_summary(state),
+        // What the viewer is busy with: every running task, empty when
+        // nothing is. Beside `status_message` for the reason the revision is:
+        // an agent already polling this should not need a second call to learn
+        // that an edit it is about to send would be refused. Deliberately the
+        // short form -- the phase table is `get_background_tasks`'s
+        // (§ "get_background_tasks").
+        "background_tasks": super::read::background_summary(state),
         // The Action Log's clock, so an agent that already reads `get_scene`
         // knows whether anything has happened since its last `get_action_log`
         // without a second call. `status_message` stays beside it: the status

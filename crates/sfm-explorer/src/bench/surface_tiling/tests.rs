@@ -53,8 +53,8 @@ fn run_sequence(state: &mut AppState) -> Vec<TilingStep> {
             }
             None => {}
         }
-        if state.background_task().is_some() {
-            state.finish_background_task();
+        if state.running_tasks().next().is_some() {
+            state.finish_background_tasks();
         }
     }
     panic!("the sequence did not end: {:?}", rows(state));
@@ -396,7 +396,10 @@ fn unfocusing_the_item_stops_the_sequence_with_a_row() {
     state.settle_bench_evaluation();
     state.start_surface_tiling(id, &label, SplitSettings::default());
     state.drive_surface_tiling();
-    assert!(state.background_task().is_some(), "the first fit started");
+    assert!(
+        state.running_tasks().next().is_some(),
+        "the first fit started"
+    );
 
     state.unfocus_bench_item();
     state.drive_surface_tiling();
@@ -409,7 +412,7 @@ fn unfocusing_the_item_stops_the_sequence_with_a_row() {
         format!("Surface tiling of {label} stopped at Fit (step 1 of 6): {label} is no longer the focused item")
     );
     // The fit it started still lands, as a pressed Fit does.
-    state.finish_background_task();
+    state.finish_background_tasks();
 }
 
 #[test]
@@ -427,7 +430,10 @@ fn a_version_the_sequence_did_not_push_stops_it() {
     state.drive_surface_tiling();
 
     assert!(state.surface_tiling.is_none());
-    assert!(state.background_task().is_none(), "a step started anyway");
+    assert!(
+        state.running_tasks().next().is_none(),
+        "a step started anyway"
+    );
     let last = rows(&state).pop().expect("a row");
     assert!(
         last.2
@@ -443,10 +449,10 @@ fn a_second_move_starts_the_sequence_again_from_the_first_fit() {
     state.settle_bench_evaluation();
     state.start_surface_tiling(id, &label, SplitSettings::default());
     state.drive_surface_tiling();
-    state.finish_background_task();
+    state.finish_background_tasks();
     state.settle_bench_evaluation();
     state.drive_surface_tiling();
-    state.finish_background_task();
+    state.finish_background_tasks();
     assert_eq!(
         state.surface_tiling.as_ref().map(|s| s.step()),
         Some(TilingStep::SearchGeometry)
@@ -474,7 +480,7 @@ fn the_search_starts_from_the_row_the_fit_rendered_the_patch_from() {
     state
         .start_bench_fit(id, &label)
         .expect("a framed track fits");
-    state.finish_background_task();
+    state.finish_background_tasks();
     let track = state.bench_track(id, &label).expect("on the bench");
     let reference = crate::bench::reference_in_use(track).expect("the fit rendered a bitmap");
     assert_eq!(search_row(track), Some(reference));
@@ -565,8 +571,11 @@ fn a_step_whose_task_fails_stops_the_sequence() {
     // With no photograph to read, the fit's worker fails.
     state.photographs.clear();
     state.drive_surface_tiling();
-    assert!(state.background_task().is_some(), "the first fit started");
-    state.finish_background_task();
+    assert!(
+        state.running_tasks().next().is_some(),
+        "the first fit started"
+    );
+    state.finish_background_tasks();
 
     state.drive_surface_tiling();
 
@@ -598,7 +607,7 @@ fn a_step_its_starter_refuses_stops_the_sequence() {
     state.drive_surface_tiling();
 
     assert!(state.surface_tiling.is_none());
-    assert!(state.background_task().is_none(), "a task started");
+    assert!(state.running_tasks().next().is_none(), "a task started");
     let text = stop_row(&state);
     assert!(
         text.starts_with(&format!(
@@ -673,7 +682,10 @@ fn a_step_waits_until_the_evaluation_has_caught_up() {
     );
 
     state.drive_surface_tiling();
-    assert!(state.background_task().is_none(), "the fit did not wait");
+    assert!(
+        state.running_tasks().next().is_none(),
+        "the fit did not wait"
+    );
     let sequence = state.surface_tiling.as_ref().expect("still under way");
     assert_eq!(
         (sequence.step(), sequence.waiting_on),
@@ -682,8 +694,11 @@ fn a_step_waits_until_the_evaluation_has_caught_up() {
 
     state.settle_bench_evaluation();
     state.drive_surface_tiling();
-    assert!(state.background_task().is_some(), "the fit did not start");
+    assert!(
+        state.running_tasks().next().is_some(),
+        "the fit did not start"
+    );
     let sequence = state.surface_tiling.as_ref().expect("still under way");
     assert!(sequence.waiting_on.is_some());
-    state.finish_background_task();
+    state.finish_background_tasks();
 }

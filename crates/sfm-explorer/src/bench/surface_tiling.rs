@@ -40,6 +40,7 @@ mod tests;
 use sfmtool_core::bench::{EditableTrack, ItemId, StageKind, Verdict};
 
 use crate::action_log::Kind;
+use crate::background::TaskState;
 use crate::bench::live::Evaluation;
 use crate::bench::{FocusedItem, NormalStep, PatchEdit, SplitSettings};
 use crate::document::VersionSerial;
@@ -439,17 +440,11 @@ impl AppState {
             .expect("checked by the label");
 
         if let Some(task) = sequence.waiting_on {
-            if self
-                .background_task()
-                .is_some_and(|running| running.id == task)
-            {
-                return driven;
-            }
-            let outcome = self
-                .last_background_task
-                .as_ref()
-                .filter(|last| last.id == task)
-                .map(|last| last.outcome.clone());
+            let outcome = match self.task(task) {
+                Some(TaskState::Running(_)) => return driven,
+                Some(TaskState::Finished(finished)) => Some(finished.outcome.clone()),
+                None => None,
+            };
             match outcome {
                 Some(Ok(_)) => {}
                 Some(Err(why)) => {
@@ -540,7 +535,7 @@ impl AppState {
         };
         match started {
             Err(why) => self.stop_surface_tiling(&why),
-            Ok(()) => match self.background_task().map(|task| task.id) {
+            Ok(started) => match started {
                 Some(task) => {
                     self.surface_tiling
                         .as_mut()

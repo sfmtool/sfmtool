@@ -186,7 +186,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           points moved, crossed to or from infinity, refused by each rule, \
                           kept and held. One version, and it runs on a worker thread, so a \
                           retriangulation still going after 200 ms replies with running: true \
-                          and an operation_id instead of the version; cancel_background_task \
+                          and an operation_id instead of the version; cancel_background_tasks \
                           stops it. Needs a pixel per observation and at least one posed image.",
             kind: Write,
             schema: object(&[], &[("reconstruction_label", edited_label_schema())]),
@@ -212,7 +212,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           infinity, left as they were and why, and held. One version, and it \
                           runs on a worker thread, so a refit still going after 200 ms replies \
                           with running: true and an operation_id instead of the version; \
-                          cancel_background_task stops it. Needs inline keypoints, a patch \
+                          cancel_background_tasks stops it. Needs inline keypoints, a patch \
                           frame per point and at least one posed image.",
             kind: Write,
             schema: object(&[], &[("reconstruction_label", edited_label_schema())]),
@@ -233,7 +233,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           indexes read before the call no longer mean what they meant. A prune \
                           that retires nothing pushes no version and says so. Runs on a worker \
                           thread, so one still going after 200 ms replies with running: true and \
-                          an operation_id instead of the version; cancel_background_task stops \
+                          an operation_id instead of the version; cancel_background_tasks stops \
                           it. Needs a patch frame per point and a pixel per observation.",
             kind: Write,
             schema: object(
@@ -375,7 +375,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           describes. The step to take after \
                           resect_camera_image. Runs on a worker thread, so one still going \
                           after 200 ms replies with running: true and an operation_id instead \
-                          of the version; cancel_background_task stops it. A call that adds \
+                          of the version; cancel_background_tasks stops it. A call that adds \
                           nothing pushes no version. The Action Log row names how many tracks \
                           were joined and why the other candidates were refused. Needs a posed \
                           image whose photograph can be read, and a reconstruction with \
@@ -398,7 +398,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           carrying the counts and the median residual before and after; one that \
                           is still going after 200 ms replies instead with running: true and an \
                           operation_id, and the outcome is then read out of get_action_log or \
-                          stopped with cancel_background_task. Needs inline keypoints. Each \
+                          stopped with cancel_background_tasks. Needs inline keypoints. Each \
                           camera the posed images use is solved through its own lens, and what \
                           each camera releases is decided camera by camera: release_focal and \
                           release_distortion are the defaults every camera takes, and cameras \

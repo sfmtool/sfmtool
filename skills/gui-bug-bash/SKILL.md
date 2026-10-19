@@ -166,8 +166,9 @@ Each of these found at least one real bug in the first run.
   arrangement.
 - **Concurrency**: start a background operation (`bundle_adjust`,
   `build_index_files`, `find_nearby_tracks`), then close the node, edit it,
-  undo, or `cancel_background_task`, and check what is left on disk and on
-  the bench.
+  undo, or `cancel_background_tasks`, and check what is left on disk and on
+  the bench. A bench step or an open runs beside a slow task such as a bundle
+  adjustment, so try one on another node while it runs.
 - **Sample instead of guessing.** For "how often" questions (patch sizes,
   missing patch frames, error spread) use `probes/sample.py` over a few hundred
   indexes and look at the distribution.
@@ -181,9 +182,10 @@ Each of these cost the first run a wrong conclusion or a repeated step.
   `pt3d_<hash>_<index>` ids or `select_reconstruction` first. A run of "no live
   point" errors from `sample.py` usually means this.
 - **Long operations return `{"running": true}`.** Run `mcp.py wait` before
-  reading the result. `get_background_task`'s `text` is the *last* task's,
-  which may be an older one when the new call was refused or ran
-  synchronously.
+  reading the result. Read a task's own outcome with
+  `get_background_tasks {"operation_id": <id from the handle>}`: each queue's
+  `last_finished` is the last task of that queue, which may be an older one
+  when the new call was refused or ran synchronously.
 - **Version serials are global across nodes**, so a node's history can jump
   from v13 to v18. An edit after an undo discards the versions ahead of the
   cursor. Read `get_reconstruction_history` rather than remembering serials.

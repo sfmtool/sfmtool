@@ -62,11 +62,8 @@ fn find(
     state
         .start_find_nearby_tracks(ImageRef::new(id, 0), pixel, commit, label)
         .expect("a posed image of an embedded_patches node");
-    state.finish_background_task();
-    let last = state
-        .last_background_task
-        .as_ref()
-        .expect("the run finished");
+    state.finish_background_tasks();
+    let last = state.last_finished_task().expect("the run finished");
     assert_eq!(last.operation.name, "Find nearby tracks");
     match last.found_nearby.as_deref() {
         Some(found) => found.clone(),
@@ -304,7 +301,7 @@ fn find_nearby_tracks_is_refused_where_create_track_here_is() {
     assert!(state
         .start_find_nearby_tracks(image, [-5.0, 10.0], true, None)
         .is_err());
-    assert!(state.background_task().is_none());
+    assert!(state.running_tasks().next().is_none());
     let rows = rows_after(&state, rows_before);
     assert_eq!(rows.len(), 1, "{rows:?}");
     assert!(
@@ -317,8 +314,8 @@ fn find_nearby_tracks_is_refused_where_create_track_here_is() {
         .expect("starts");
     let why = state.find_nearby_tracks_refusal(image, true).expect("busy");
     assert!(why.contains("is busy"), "{why}");
-    state.cancel_background_task();
-    state.finish_background_task();
+    state.cancel_background_tasks();
+    state.finish_background_tasks();
 
     let mut sift = AppState::new();
     sift.append_node(SceneNode::demo(sfmtool_core::SfmrReconstruction::demo(4)));

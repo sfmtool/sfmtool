@@ -100,9 +100,9 @@ impl AppState {
         self.refresh_cluster_patches(id);
     }
 
-    /// Whether the operation running on `id` is the index-files build.
+    /// Whether a task running on `id` is the index-files build.
     pub(crate) fn building_index_files(&self, id: ReconId) -> bool {
-        self.background_task().is_some_and(|task| {
+        self.running_tasks().any(|task| {
             task.node == Some(id) && task.operation.name == Operation::BUILD_INDEX_FILES.name
         })
     }
@@ -145,10 +145,11 @@ impl AppState {
     /// build skips the index and makes the cluster patches from the index that
     /// is open. Every other build writes both, so a node whose two files are
     /// current rebuilds both.
-    pub(crate) fn start_build_index_files(&mut self, id: ReconId) -> Result<(), String> {
-        let outcome = self
-            .build_index_files_job(id)
-            .and_then(|job| self.start_background_task(Operation::BUILD_INDEX_FILES, id, job));
+    pub(crate) fn start_build_index_files(&mut self, id: ReconId) -> Result<Option<u64>, String> {
+        let outcome = self.build_index_files_job(id).and_then(|job| {
+            self.start_background_task(Operation::BUILD_INDEX_FILES, id, job)
+                .map(Some)
+        });
         if let Err(message) = &outcome {
             self.action_log
                 .fail(crate::action_log::Kind::Bench, message.clone());

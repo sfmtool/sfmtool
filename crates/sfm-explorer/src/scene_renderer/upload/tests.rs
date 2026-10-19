@@ -1470,7 +1470,7 @@ fn track_ray_edges_follow_the_version_under_the_selection() {
     state
         .start_bundle_adjust(id, &sfmtool_core::BundleAdjustOptions::default())
         .expect("the fixture is well posed");
-    state.finish_background_task();
+    state.finish_background_tasks();
     let after = built(&state);
     assert_ne!(
         before, after,

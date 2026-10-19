@@ -207,8 +207,8 @@ impl App {
         // Before the MCP drain, so a completed operation's version is on screen
         // in the frame it landed and an agent's call in that same frame reads
         // the new value rather than the one the worker was handed.
-        let polled = self.state.poll_background_task();
-        if let Some(id) = polled.installed {
+        let polled = self.state.poll_background_tasks();
+        for &id in &polled.installed {
             // A bulk edit gives the node a whole new base, so what the panels
             // cached about the geometry describes a value it no longer holds.
             forget_selected(

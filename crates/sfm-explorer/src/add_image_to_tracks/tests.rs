@@ -86,11 +86,11 @@ fn the_image_is_added_back_to_the_tracks_it_sees_and_undo_takes_it_out() {
         .start_add_image_to_tracks(ImageRef::new(id, 0))
         .expect("a posed image of an embedded_patches node with frames");
     assert_eq!(
-        state.background_task().map(|task| task.operation.name),
+        state.running_tasks().next().map(|task| task.operation.name),
         Some(Operation::ADD_IMAGE_TO_TRACKS.name),
         "the step runs on a worker"
     );
-    state.finish_background_task();
+    state.finish_background_tasks();
 
     let node = state.node(id).unwrap();
     assert_eq!(node.history.versions().len(), versions + 1, "one version");
@@ -130,7 +130,7 @@ fn an_image_already_in_every_track_adds_nothing_and_pushes_no_version() {
     state
         .start_add_image_to_tracks(ImageRef::new(id, 0))
         .expect("the step can run");
-    state.finish_background_task();
+    state.finish_background_tasks();
     assert_eq!(state.node(id).unwrap().history.versions().len(), versions);
     let entry = newest(&state);
     assert!(!entry.failed, "{}", entry.text);
@@ -228,7 +228,7 @@ fn a_node_with_an_operation_running_refuses_with_the_busy_sentence() {
         state.add_image_to_tracks_refusal(ImageRef::new(id, 1)),
         Some(busy)
     );
-    state.finish_background_task();
+    state.finish_background_tasks();
 }
 
 #[test]

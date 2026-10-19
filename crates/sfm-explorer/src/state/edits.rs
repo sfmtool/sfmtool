@@ -867,13 +867,18 @@ impl AppState {
     ///
     /// Returns as soon as the worker is running, and **nothing is logged
     /// here**: the entry is the outcome's, written by
-    /// [`AppState::poll_background_task`] on the frame the answer lands, from
+    /// [`AppState::poll_background_tasks`] on the frame the answer lands, from
     /// the instant the operation started and in the name of whoever asked for
     /// it. An `Err` is a refusal to *begin*, logged the way the synchronous
     /// edits log theirs.
-    pub(crate) fn start_retriangulate_all_points(&mut self, id: ReconId) -> Result<(), String> {
+    pub(crate) fn start_retriangulate_all_points(
+        &mut self,
+        id: ReconId,
+    ) -> Result<Option<u64>, String> {
         let outcome = match self.retriangulate_all_points_job(id) {
-            Ok(job) => self.start_background_task(Operation::RETRIANGULATE_ALL_POINTS, id, job),
+            Ok(job) => self
+                .start_background_task(Operation::RETRIANGULATE_ALL_POINTS, id, job)
+                .map(Some),
             Err(message) => Err(message),
         };
         if let Err(message) = &outcome {
@@ -963,7 +968,7 @@ impl AppState {
     ///
     /// Returns as soon as the worker is running, and **nothing is logged
     /// here**: the entry is the outcome's, written by
-    /// [`AppState::poll_background_task`] on the frame the answer lands, from
+    /// [`AppState::poll_background_tasks`] on the frame the answer lands, from
     /// the instant the operation started and in the name of whoever asked for
     /// it. An `Err` is a refusal to *begin*, logged the way the synchronous
     /// edits log theirs.
@@ -971,9 +976,11 @@ impl AppState {
         &mut self,
         id: ReconId,
         options: &PruneCoveredOptions,
-    ) -> Result<(), String> {
+    ) -> Result<Option<u64>, String> {
         let outcome = match self.prune_covered_observations_job(id, options) {
-            Ok(job) => self.start_background_task(Operation::PRUNE_COVERED_OBSERVATIONS, id, job),
+            Ok(job) => self
+                .start_background_task(Operation::PRUNE_COVERED_OBSERVATIONS, id, job)
+                .map(Some),
             Err(message) => Err(message),
         };
         if let Err(message) = &outcome {
@@ -1517,7 +1524,7 @@ impl AppState {
     ///
     /// Returns as soon as the worker is running, and **nothing is logged
     /// here**: the entry is the outcome's, written by
-    /// [`AppState::poll_background_task`] on the frame the answer lands, from the
+    /// [`AppState::poll_background_tasks`] on the frame the answer lands, from the
     /// instant the operation started and in the name of whoever asked for it.
     /// What this returns an `Err` for is a refusal to *begin*, which is logged
     /// like the refusals the edit used to write itself.
@@ -1528,14 +1535,16 @@ impl AppState {
         &mut self,
         id: ReconId,
         options: &sfmtool_core::BundleAdjustOptions,
-    ) -> Result<(), String> {
+    ) -> Result<Option<u64>, String> {
         let outcome = match self.bundle_adjust_job(id, options) {
-            Ok(job) => self.start_background_task(Operation::BUNDLE_ADJUST, id, job),
+            Ok(job) => self
+                .start_background_task(Operation::BUNDLE_ADJUST, id, job)
+                .map(Some),
             Err(message) => Err(message),
         };
         match &outcome {
             // The dialog opens on this node with the schedule last run on it.
-            Ok(()) => self
+            Ok(_) => self
                 .bundle_adjust_prompt
                 .remember_schedule(id, &options.schedule),
             Err(message) => self.action_log.fail(Kind::Edit, message.clone()),
@@ -1671,12 +1680,17 @@ impl AppState {
     ///
     /// Returns as soon as the worker is running, and **nothing is logged
     /// here**: the entry is the outcome's, written by
-    /// [`AppState::poll_background_task`] on the frame the answer lands. An
+    /// [`AppState::poll_background_tasks`] on the frame the answer lands. An
     /// `Err` is a refusal to *begin*, logged the way the synchronous edits log
     /// theirs.
-    pub(crate) fn start_convert_to_embedded_patches(&mut self, id: ReconId) -> Result<(), String> {
+    pub(crate) fn start_convert_to_embedded_patches(
+        &mut self,
+        id: ReconId,
+    ) -> Result<Option<u64>, String> {
         let outcome = match self.convert_to_embedded_patches_job(id) {
-            Ok(job) => self.start_background_task(Operation::TO_EMBEDDED_PATCHES, id, job),
+            Ok(job) => self
+                .start_background_task(Operation::TO_EMBEDDED_PATCHES, id, job)
+                .map(Some),
             Err(message) => Err(message),
         };
         if let Err(message) = &outcome {

@@ -199,6 +199,17 @@ The tools on the 3D viewport's tool strip, in
 |------|-------|-----|-----|
 | **eraser brush** | the paint tool that deletes the visible points of the selected reconstruction a stroke passes over: `Tool::EraserBrush`, the `tool` value `"eraser_brush"` on `get_viewer_3d_display` / `set_viewer_3d_display`, the tool strip's **Eraser brush** button and the Action Log's `Eraser brush tool` | `delete brush`, `delete_brush` | the tool's name and its icon, an eraser, say the same thing, and the name no longer reads as the verb for the edit. *Delete* stays the word for the edit the stroke commits (`delete_points`, the `Deleted N points in <label>` version), so the tool is an eraser and what it does is delete |
 
+## Background work
+
+The viewer's long operations off the GUI thread, in
+`crates/sfm-explorer/src/background/` and
+[gui/background-tasks.md](gui/background-tasks.md).
+
+| Word | Means | Not | Why |
+|------|-------|-----|-----|
+| **slow queue** / **fast queue** | the two queues a background task runs from, `background::Queue::{Slow, Fast}`, `"slow"` and `"fast"` on the wire, *Slow* and *Fast* as the Background Tasks panel's section headings; each runs one task at a time and the two run at the same time. The slow queue holds the whole-reconstruction edits, the fast queue opening files and the bench's steps | *the queue* where it matters which | a task's queue decides what refuses its start, so a sentence about a refusal names the queue; naming a queue after what it holds (*edit*, *bench*) would be wrong for Open, which runs from the fast queue too |
+| **Background Tasks** | the panel under the Scene tree that shows each queue's running or last task and one task's phases: `Tab::BackgroundTasks`, wire name `background_tasks`, and the tools that report on and stop its tasks, `get_background_tasks` and `cancel_background_tasks` | `Background Task`, `background_task`, `get_background_task`, `cancel_background_task` | plural because the panel shows a task per queue; the singular names are refused rather than kept as aliases, as `point_track` was when the panel became Track View |
+
 ## Per-patch view lists
 
 The words for the lists of images a patch kernel reads for each patch of a

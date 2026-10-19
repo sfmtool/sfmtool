@@ -40,9 +40,9 @@ use sfmtool_core::patch::self_similarity::{
 };
 
 use super::{
-    edit, resolve_camera_image, resolve_point_in, resolve_reconstruction, BackgroundReply,
-    CameraImageSel, Deferred, JsonReply, Outcome, PinRows, ResizeTarget, ThresholdChange,
-    ToolError, TranslateTarget, ViewpointSel,
+    edit, resolve_camera_image, resolve_point_in, resolve_reconstruction, CameraImageSel,
+    JsonReply, Outcome, PinRows, ResizeTarget, ThresholdChange, ToolError, TranslateTarget,
+    ViewpointSel,
 };
 use crate::bench::{PatchEdit, Seed};
 use crate::scene::ReconId;
@@ -324,19 +324,13 @@ pub(super) fn create_track_at_pixel(
         Ok(image) => image,
         Err(error) => return Outcome::Done(Err(error)),
     };
-    if let Err(message) = state.start_create_track_at_pixel(image, pixel, named) {
-        return Outcome::Done(Err(ToolError::new(message)));
+    let since = state.action_log.revision();
+    match state.start_create_track_at_pixel(image, pixel, named) {
+        Err(message) => Outcome::Done(Err(ToolError::new(message))),
+        Ok(started) => edit::started_or(state, started, super::Answer::CreatedTrack(id), |state| {
+            edit::unchanged_reply(state, id, since)
+        }),
     }
-    let task = state
-        .background_task()
-        .expect("the step started a background task");
-    Outcome::Deferred(Deferred::Background(BackgroundReply {
-        operation_id: task.id,
-        operation_name: task.operation.name,
-        answer: super::Answer::CreatedTrack(id),
-        label: task.label.clone(),
-        started: task.started,
-    }))
 }
 
 /// What `create_track_at_pixel` answers once its run has landed.
@@ -414,19 +408,13 @@ pub(super) fn find_nearby_tracks(
         Ok(image) => image,
         Err(error) => return Outcome::Done(Err(error)),
     };
-    if let Err(message) = state.start_find_nearby_tracks(image, pixel, commit, named) {
-        return Outcome::Done(Err(ToolError::new(message)));
+    let since = state.action_log.revision();
+    match state.start_find_nearby_tracks(image, pixel, commit, named) {
+        Err(message) => Outcome::Done(Err(ToolError::new(message))),
+        Ok(started) => edit::started_or(state, started, super::Answer::FoundNearby(id), |state| {
+            edit::unchanged_reply(state, id, since)
+        }),
     }
-    let task = state
-        .background_task()
-        .expect("the step started a background task");
-    Outcome::Deferred(Deferred::Background(BackgroundReply {
-        operation_id: task.id,
-        operation_name: task.operation.name,
-        answer: super::Answer::FoundNearby(id),
-        label: task.label.clone(),
-        started: task.started,
-    }))
 }
 
 /// What `find_nearby_tracks` answers once its run has landed.
@@ -1316,7 +1304,7 @@ pub(super) fn fit_bench_track(
     let since = state.action_log.revision();
     match state.start_bench_fit_at(id, &item, sigma_px) {
         Err(message) => Outcome::Done(Err(ToolError::new(message))),
-        Ok(()) => started(state, id, since),
+        Ok(task) => started(state, id, task, since),
     }
 }
 
@@ -1335,7 +1323,7 @@ pub(super) fn fit_bench_track_normal(
     let since = state.action_log.revision();
     match state.start_bench_normal(id, &item, step) {
         Err(message) => Outcome::Done(Err(ToolError::new(message))),
-        Ok(()) => started(state, id, since),
+        Ok(task) => started(state, id, task, since),
     }
 }
 
@@ -1359,7 +1347,7 @@ pub(super) fn set_bench_track_stage(
     let since = state.action_log.revision();
     match state.start_bench_stage_at(id, &item, stage, sigma_px) {
         Err(message) => Outcome::Done(Err(ToolError::new(message))),
-        Ok(()) => started(state, id, since),
+        Ok(task) => started(state, id, task, since),
     }
 }
 
@@ -1380,7 +1368,7 @@ pub(super) fn search_bench_track_descriptors(
     let since = state.action_log.revision();
     match state.start_bench_descriptor_search(id, &item, observation, radius_px, min_inliers) {
         Err(message) => Outcome::Done(Err(ToolError::new(message))),
-        Ok(()) => started(state, id, since),
+        Ok(task) => started(state, id, task, since),
     }
 }
 
@@ -1399,7 +1387,7 @@ pub(super) fn search_bench_track_geometry(
     let since = state.action_log.revision();
     match state.start_bench_geometry_search(id, &item, observation) {
         Err(message) => Outcome::Done(Err(ToolError::new(message))),
-        Ok(()) => started(state, id, since),
+        Ok(task) => started(state, id, task, since),
     }
 }
 
@@ -1450,7 +1438,7 @@ pub(super) fn build_index_files(state: &mut AppState, label: &str) -> Outcome {
     };
     match state.start_build_index_files(id) {
         Err(message) => Outcome::Done(Err(ToolError::new(message))),
-        Ok(()) => started_or(state, id, |state| {
+        Ok(task) => edit::started_or(state, task, super::Answer::Version(id), |state| {
             Ok(json!({
                 "reconstruction_label": node_label(state, id),
                 "index_files": index_files(state, id),
@@ -1460,37 +1448,18 @@ pub(super) fn build_index_files(state: &mut AppState, label: &str) -> Outcome {
 }
 
 /// The answer of a step that may have gone to a worker: the deferral that the
-/// frame turns into a result or a handle, or the standing version where the
-/// step found nothing to do and started nothing.
+/// frame turns into a result or a handle when `task` names the task it
+/// started, or the standing version where the step found nothing to do and
+/// started nothing.
 ///
 /// `since` is the Action Log revision from before the step, so the second case
 /// answers with the step's own no-effect sentence rather than with nothing --
 /// setting the stage a track is already at is the one step here that can find
 /// nothing to do (`specs/gui/bench.md` section "The wire").
-fn started(state: &AppState, id: ReconId, since: u64) -> Outcome {
-    started_or(state, id, |state| edit::unchanged_reply(state, id, since))
-}
-
-/// [`started`] with the answer a step that started nothing gives.
-///
-/// The fallback differs by step: a bench step that found nothing to do answers
-/// with the version the node stands at, and a step that touches no version
-/// answers with what it is about.
-fn started_or(
-    state: &AppState,
-    id: ReconId,
-    fallback: impl FnOnce(&AppState) -> JsonReply,
-) -> Outcome {
-    let Some(task) = state.background_task() else {
-        return super::done(fallback(state));
-    };
-    Outcome::Deferred(Deferred::Background(BackgroundReply {
-        operation_id: task.id,
-        operation_name: task.operation.name,
-        answer: super::Answer::Version(id),
-        label: task.label.clone(),
-        started: task.started,
-    }))
+fn started(state: &AppState, id: ReconId, task: Option<u64>, since: u64) -> Outcome {
+    edit::started_or(state, task, super::Answer::Version(id), |state| {
+        edit::unchanged_reply(state, id, since)
+    })
 }
 
 /// Where one observation of a bench track sits: the camera image it is a

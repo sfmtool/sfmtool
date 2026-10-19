@@ -7,27 +7,59 @@ use ToolKind::{Read, Write};
 pub(super) fn specs() -> Vec<ToolSpec> {
     vec![
         ToolSpec {
-            name: "get_background_task",
-            description: "What the viewer is busy with: the operation, the reconstruction it is \
-                          running on, how long it has been going, how far along it is, the stage \
-                          it is in, and the stages it has finished, in the shape get_action_log's \
-                          detail returns them in. One operation runs at a time, viewer-wide, so \
-                          this names none. With nothing running it reports the last operation of \
-                          the session instead, with running: false and finished: true, so one \
-                          call answers both whether the solve is done and what it cost. Test \
-                          running to tell the two apart.",
+            name: "get_background_tasks",
+            description: "What the viewer is busy with. Background tasks run from two queues, \
+                          slow (the whole-reconstruction edits) and fast (opening files and the \
+                          bench's steps); each runs one task at a time and the two run at the \
+                          same time. With no argument, for each queue (slow, fast): running, \
+                          the task it runs or null, and last_finished, the last task that \
+                          finished from it or null. A running task carries the operation, its \
+                          queue, the reconstruction it runs on, how long it has been going, how \
+                          far along it is, the stage it is in, and the stages it has finished, in \
+                          the shape get_action_log's detail returns them in; a finished one \
+                          carries running: false, finished: true, what it cost and how it ended. \
+                          With operation_id, that one task in the same shape, running or \
+                          finished, so one call answers both whether the solve is done and what \
+                          it cost. Test running to tell the two apart.",
             kind: Read,
-            schema: object(&[], &[]),
+            schema: object(
+                &[(
+                    "operation_id",
+                    json!({
+                        "type": "integer",
+                        "minimum": 0,
+                        "description":
+                            "The task to report on, from the handle the call that started it \
+                             returned. Omit for both queues.",
+                    }),
+                )],
+                &[],
+            ),
         },
         ToolSpec {
-            name: "cancel_background_task",
-            description: "Ask the background operation that is running to stop. One runs at a \
-                          time, viewer-wide, so this names none. The operation stops at its next \
-                          safe point, pushes no version, and writes a cancelled row to the Action \
-                          Log. Refused when nothing is running, and when the operation never asks \
-                          whether it should stop.",
+            name: "cancel_background_tasks",
+            description: "Ask running background tasks to stop: the ones operation_ids names, \
+                          or every running task. Each stops at its next safe point, pushes no \
+                          version, and writes a cancelled row to the Action Log. The reply lists \
+                          cancelling, the tasks asked to stop, and refused, each task that \
+                          cannot be stopped (one whose operation never asks whether it should, \
+                          or one that is not running) with the reason. Refused as a whole when \
+                          it names nothing and nothing is running.",
             kind: Write,
-            schema: object(&[], &[]),
+            schema: object(
+                &[(
+                    "operation_ids",
+                    json!({
+                        "type": "array",
+                        "items": { "type": "integer", "minimum": 0 },
+                        "minItems": 1,
+                        "description":
+                            "The tasks to stop, by the operation_id their handles carry. Omit \
+                             to stop every running task.",
+                    }),
+                )],
+                &[],
+            ),
         },
         ToolSpec {
             name: "screenshot",

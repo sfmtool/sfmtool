@@ -39,7 +39,7 @@ struct Clicks {
     triple_clicked: u32,
 }
 
-/// What the test drag pad in the Background Task panel saw.
+/// What the test drag pad in the Background Tasks panel saw.
 #[derive(Default, Debug, Clone, PartialEq)]
 struct Drags {
     started: u32,
@@ -53,7 +53,7 @@ struct Drags {
     moved: egui::Vec2,
 }
 
-/// Where the test list in the Background Task panel is, and how far it has
+/// Where the test list in the Background Tasks panel is, and how far it has
 /// been scrolled, both in points.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct List {
@@ -176,7 +176,7 @@ impl TabViewer for Tabs<'_> {
                 );
                 crate::state::record_image_detail_changes(&mut state.action_log, &before, &after);
             }
-            Tab::BackgroundTask => {
+            Tab::BackgroundTasks => {
                 let response = ui.button("Count");
                 self.clicks.clicked += u32::from(response.clicked());
                 self.clicks.double_clicked += u32::from(response.double_clicked());
@@ -228,7 +228,7 @@ impl Harness {
         let demo = state.scene[0].id;
         state.select_recon(demo);
         state.show_panel(Tab::SceneGraph);
-        state.show_panel(Tab::BackgroundTask);
+        state.show_panel(Tab::BackgroundTasks);
         state.show_panel(Tab::ImageDetail);
         let photograph = Photograph::of(&state.scene[0]);
         let ctx = egui::Context::default();
@@ -549,9 +549,9 @@ fn a_click_opens_a_menu_bar_menu_and_a_click_on_an_item_runs_it() {
 
 // ── drag ────────────────────────────────────────────────────────────────
 
-/// The test pad in a Background Task listing.
+/// The test pad in a Background Tasks listing.
 fn the_pad(harness: &mut Harness) -> Value {
-    let panel = harness.listing(Some(Tab::BackgroundTask));
+    let panel = harness.listing(Some(Tab::BackgroundTasks));
     the(&panel["widgets"], "Pad").clone()
 }
 
@@ -582,7 +582,7 @@ fn a_drag_presses_at_the_first_point_and_releases_at_the_last() {
 
     let reply = harness.ok(
         "drag",
-        json!({ "panel_name": Tab::BackgroundTask.wire_name(), "path_px": path }),
+        json!({ "panel_name": Tab::BackgroundTasks.wire_name(), "path_px": path }),
     );
     let [first, last] = [path[0], path[path.len() - 1]];
     assert_eq!(reply["at_px"], json!([last[0] as i64, last[1] as i64]));
@@ -612,7 +612,7 @@ fn a_drag_presses_at_the_first_point_and_releases_at_the_last() {
         rows[0].text,
         format!(
             "drag {} {},{} on \"Pad\" to {},{} through 4 points",
-            Tab::BackgroundTask.wire_name(),
+            Tab::BackgroundTasks.wire_name(),
             first[0] as i64,
             first[1] as i64,
             last[0] as i64,
@@ -635,7 +635,7 @@ fn a_drag_holds_its_button_and_modifiers_throughout() {
     harness.ok(
         "drag",
         json!({
-            "panel_name": Tab::BackgroundTask.wire_name(),
+            "panel_name": Tab::BackgroundTasks.wire_name(),
             "path_px": path,
             "mouse_button": "right",
             "modifiers": ["shift"],
@@ -653,7 +653,7 @@ fn a_drag_holds_its_button_and_modifiers_throughout() {
     assert!(
         rows[0]
             .text
-            .starts_with(&format!("drag right {} ", Tab::BackgroundTask.wire_name()))
+            .starts_with(&format!("drag right {} ", Tab::BackgroundTasks.wire_name()))
             && rows[0].text.ends_with(" through 4 points with Shift"),
         "{}",
         rows[0].text
@@ -672,9 +672,9 @@ fn a_drag_with_a_point_outside_its_target_is_refused_before_the_press() {
 
     let error = harness.refused(
         "drag",
-        json!({ "panel_name": Tab::BackgroundTask.wire_name(), "path_px": path }),
+        json!({ "panel_name": Tab::BackgroundTasks.wire_name(), "path_px": path }),
     );
-    assert!(error.0.contains("Background Task panel's body"), "{error}");
+    assert!(error.0.contains("Background Tasks panel's body"), "{error}");
     assert_eq!(harness.drags, Drags::default());
     let rows = harness.rows_since(since);
     assert_eq!(rows.len(), 1, "{rows:#?}");
@@ -822,7 +822,7 @@ fn a_scroll_outside_its_target_is_refused_before_it_is_delivered() {
 #[test]
 fn count_two_is_one_double_click() {
     let mut harness = Harness::new();
-    let panel = harness.listing(Some(Tab::BackgroundTask));
+    let panel = harness.listing(Some(Tab::BackgroundTasks));
     let count = the(&panel["widgets"], "Count").clone();
 
     harness.ok("click", json!({ "widget": count["widget"] }));
@@ -1000,7 +1000,7 @@ fn i_over_image_detail_toggles_the_intrinsics_layer_and_elsewhere_does_not() {
 #[test]
 fn modifiers_are_released_after_the_command() {
     let mut harness = Harness::new();
-    let panel = harness.listing(Some(Tab::BackgroundTask));
+    let panel = harness.listing(Some(Tab::BackgroundTasks));
     let count = the(&panel["widgets"], "Count").clone();
     harness.ok(
         "click",

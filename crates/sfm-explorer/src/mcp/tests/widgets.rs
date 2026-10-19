@@ -59,7 +59,7 @@ impl TabViewer for Tabs<'_> {
                 self.scene_graph.show(ui, self.state);
             }
             // A combo box inside a panel, as Image Detail's toolbar has.
-            Tab::BackgroundTask => {
+            Tab::BackgroundTasks => {
                 egui::ComboBox::from_id_salt("test_combo")
                     .selected_text("One")
                     .show_ui(ui, |ui| {
@@ -543,7 +543,7 @@ fn a_menu_bar_menu_is_owned_by_its_button_and_names_its_items() {
 fn a_combo_box_in_a_panel_opens_a_dropdown() {
     let mut harness = Harness::new();
     let frame = harness.settle();
-    let panel = listing(&frame, Some(Tab::BackgroundTask));
+    let panel = listing(&frame, Some(Tab::BackgroundTasks));
     let combo = panel["widgets"]
         .as_array()
         .unwrap()
@@ -553,7 +553,7 @@ fn a_combo_box_in_a_panel_opens_a_dropdown() {
         .clone();
     let body = super::super::panel_rect::panel_crop(
         &harness.state.dock,
-        Tab::BackgroundTask,
+        Tab::BackgroundTasks,
         PIXELS_PER_POINT,
         harness.window_px(),
     )
@@ -568,7 +568,7 @@ fn a_combo_box_in_a_panel_opens_a_dropdown() {
     assert_eq!(menus.len(), 1, "{window:#}");
     assert_eq!(menus[0]["kind"], json!("dropdown"));
     assert_eq!(menus[0]["owner"]["widget"], combo["widget"]);
-    assert_eq!(menus[0]["owner"]["panel_name"], json!("background_task"));
+    assert_eq!(menus[0]["owner"]["panel_name"], json!("background_tasks"));
     assert_eq!(named(&menus[0]["widgets"], "Two").len(), 1, "{window:#}");
 }
 

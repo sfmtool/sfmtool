@@ -116,8 +116,8 @@ impl Command {
             Command::OpenIndexFiles { .. } => "open_index_files",
             Command::BuildIndexFiles { .. } => "build_index_files",
             Command::CloseIndexFiles { .. } => "close_index_files",
-            Command::GetBackgroundTask => "get_background_task",
-            Command::CancelBackgroundTask => "cancel_background_task",
+            Command::GetBackgroundTasks { .. } => "get_background_tasks",
+            Command::CancelBackgroundTasks { .. } => "cancel_background_tasks",
             Command::Screenshot { .. } => "screenshot",
             Command::GetWidgets { .. } => "get_widgets",
             Command::Input(input) => input.tool_name(),
@@ -356,7 +356,7 @@ impl Command {
             | Command::GetViewer3dDisplay
             | Command::GetTimingDetail
             | Command::GetReconstructionHistory { .. }
-            | Command::GetBackgroundTask
+            | Command::GetBackgroundTasks { .. }
             | Command::GetBench { .. }
             | Command::GetBenchTrack { .. }
             | Command::GetWidgets { .. }
@@ -387,7 +387,7 @@ impl Command {
             // The one bench step whose row is an `Edit`, because it is one
             // (`specs/gui/edits/commit-track.md`).
             | Command::CommitBenchTrack { .. }
-            | Command::CancelBackgroundTask => Kind::Edit,
+            | Command::CancelBackgroundTasks { .. } => Kind::Edit,
             // Every other bench step writes the bench beside the
             // reconstruction, which is the kind the panel's own refusals carry.
             Command::CreateBenchCluster { .. }
@@ -524,7 +524,10 @@ pub(crate) fn query_text(state: &AppState, viewer: &Viewer3D, command: &Command)
             format!("get_action_log since {since_revision}")
         }
         Command::GetWindowLayout => "get_window_layout".to_string(),
-        Command::GetBackgroundTask => "get_background_task".to_string(),
+        Command::GetBackgroundTasks { operation_id } => match operation_id {
+            Some(id) => format!("get_background_tasks #{id}"),
+            None => "get_background_tasks".to_string(),
+        },
         Command::GetImageDetailDisplay => "get_image_detail_display".to_string(),
         Command::GetImageDetailView => "get_image_detail_view".to_string(),
         Command::GetViewer3dDisplay => "get_viewer_3d_display".to_string(),

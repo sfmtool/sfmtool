@@ -74,7 +74,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           and a reconstruction whose observations are .sift feature indexes. \
                           It runs on a worker thread and decodes every photograph, so a run \
                           still going after 200 ms replies with running: true and an \
-                          operation_id to poll with get_background_task.",
+                          operation_id to poll with get_background_tasks.",
             kind: Write,
             schema: object(
                 &[("label", new_item_label_schema())],
@@ -118,7 +118,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           reconstruction whose observations are .sift feature indexes. It runs \
                           on a worker thread and decodes every photograph, so a run still going \
                           after 200 ms replies with running: true and an operation_id to poll \
-                          with get_background_task.",
+                          with get_background_tasks.",
             kind: Write,
             schema: object(
                 &[
@@ -842,7 +842,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           track is then evaluated again like after any other change. Refused for a track stage with fewer than two \
                           in observations, which an evaluation permits. It runs on a worker \
                           thread, so a fit still going after 200 ms replies with running: true \
-                          and an operation_id to poll with get_background_task instead of the \
+                          and an operation_id to poll with get_background_tasks instead of the \
                           version it pushed. Needs the photographs, which are decoded on \
                           demand. Whether the track is a point or a bearing is decided by \
                           the point-or-bearing test at the reconstruction's measured \

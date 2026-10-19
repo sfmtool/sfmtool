@@ -64,7 +64,7 @@ fn a_refit_pushes_one_version_with_a_new_base_and_undo_restores_the_old_one() {
     state
         .start_refit_all_points(id)
         .expect("the fixture carries keypoints, frames and poses");
-    state.finish_background_task();
+    state.finish_background_tasks();
 
     let node = &state.scene[0];
     assert_eq!(versions(&state), 2);
@@ -112,7 +112,7 @@ fn a_pending_point_edit_is_folded_in_and_the_selection_follows_it() {
     state
         .start_refit_all_points(id)
         .expect("the fixture carries keypoints, frames and poses");
-    state.finish_background_task();
+    state.finish_background_tasks();
 
     let node = &state.scene[0];
     assert_eq!(versions(&state), 3);
@@ -133,8 +133,8 @@ fn a_cancelled_refit_pushes_no_version_and_writes_a_failed_entry() {
     state
         .start_refit_all_points(id)
         .expect("the fixture carries keypoints, frames and poses");
-    state.cancel_background_task();
-    state.finish_background_task();
+    state.cancel_background_tasks();
+    state.finish_background_tasks();
 
     assert_eq!(versions(&state), 1);
     assert!(Arc::ptr_eq(&before, &state.scene[0].edited().base));
@@ -154,7 +154,7 @@ fn a_photograph_that_cannot_be_read_fails_the_run_and_names_the_image() {
     state
         .start_refit_all_points(id)
         .expect("the gate reads no photograph");
-    state.finish_background_task();
+    state.finish_background_tasks();
 
     assert_eq!(versions(&state), 1);
     let entry = newest(&state);

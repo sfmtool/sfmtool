@@ -272,16 +272,19 @@ fn apply_pushes_the_switch_and_the_retriangulation_as_one_version() {
     assert_eq!(newest(&state).kind, Kind::View);
 
     let applied = state.apply_camera_model_proposal(id).expect("applies");
-    assert_eq!(applied, ProposalApplied::Started);
+    assert!(
+        matches!(applied, ProposalApplied::Started(_)),
+        "{applied:?}"
+    );
     assert!(
         state.camera_model_proposal.is_none(),
         "the proposal outlived Apply"
     );
     assert_eq!(
-        state.background_task().map(|task| task.operation.name),
+        state.running_tasks().next().map(|task| task.operation.name),
         Some("Switch camera model")
     );
-    state.finish_background_task();
+    state.finish_background_tasks();
 
     assert_eq!(versions(&state), 2);
     let label = &state.scene[0].history.current_version().label;
@@ -437,7 +440,7 @@ fn selecting_another_node_applies_the_proposal_and_drops_a_refused_one() {
     state.select_recon(other);
     assert_eq!(state.tend_camera_model_proposal(), None);
     assert!(state.camera_model_proposal.is_none());
-    state.finish_background_task();
+    state.finish_background_tasks();
     assert_eq!(versions(&state), 2, "the step away did not apply");
 
     let inputs = ProposalInputs {
@@ -473,7 +476,7 @@ fn closing_applies_first_and_is_then_refused_while_busy() {
         why.contains("Switch camera model is still running"),
         "{why}"
     );
-    state.finish_background_task();
+    state.finish_background_tasks();
     assert_eq!(versions(&state), 2);
     state
         .close_node(id)
@@ -606,7 +609,7 @@ fn switch_model_is_greyed_for_the_three_reasons() {
         .switch_model_refusal(CameraRef::new(id, 1))
         .expect("busy");
     assert!(why.contains("is still running"), "{why}");
-    state.finish_background_task();
+    state.finish_background_tasks();
 
     state
         .open_camera_model_proposal(CameraRef::new(id, 1), None)
@@ -700,7 +703,7 @@ fn an_implicit_ending_whose_apply_is_refused_drops_with_a_row() {
     assert!(refused < dropped, "{rows:?}");
     assert_eq!(versions(&state), 1);
     release.send(()).expect("the worker is waiting");
-    state.finish_background_task();
+    state.finish_background_tasks();
 }
 
 // ── The comparison's observations ───────────────────────────────────────
@@ -941,7 +944,7 @@ fn the_change_field_is_selected_while_a_proposal_is_open() {
         .open_camera_model_proposal(CameraRef::new(id, 0), None)
         .expect("opens");
     state.apply_camera_model_proposal(id).expect("applies");
-    state.finish_background_task();
+    state.finish_background_tasks();
     state.tend_camera_model_proposal();
     assert!(state.camera_model_proposal.is_none());
     assert_eq!(state.intrinsics_display.field, FieldMode::Distortion);

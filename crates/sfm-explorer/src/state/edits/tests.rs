@@ -1112,7 +1112,7 @@ fn bundle_adjusting_pushes_a_version_with_a_new_base_and_keeps_the_images() {
     state
         .start_bundle_adjust(id, &sfmtool_core::BundleAdjustOptions::default())
         .expect("the fixture is well posed");
-    state.finish_background_task();
+    state.finish_background_tasks();
 
     let node = &state.scene[0];
     assert_eq!(node.history.versions().len(), 2);
@@ -1142,7 +1142,7 @@ fn the_log_entry_carries_the_counts_and_the_residuals() {
     state
         .start_bundle_adjust(id, &sfmtool_core::BundleAdjustOptions::default())
         .expect("well posed");
-    state.finish_background_task();
+    state.finish_background_tasks();
 
     let logged = texts(&state);
     assert_eq!(logged.len(), entries + 1, "{logged:?}");
@@ -1188,7 +1188,7 @@ fn a_schedule_other_than_the_default_is_named_and_the_dialog_opens_with_it() {
         ..sfmtool_core::BundleAdjustOptions::default()
     };
     state.start_bundle_adjust(id, &options).expect("well posed");
-    state.finish_background_task();
+    state.finish_background_tasks();
 
     let last = texts(&state).last().expect("one entry").clone();
     assert!(
@@ -1211,7 +1211,7 @@ fn the_log_entry_says_nothing_of_free_points_with_the_crossing_off() {
         ..sfmtool_core::BundleAdjustOptions::default()
     };
     state.start_bundle_adjust(id, &options).expect("well posed");
-    state.finish_background_task();
+    state.finish_background_tasks();
 
     let logged = texts(&state);
     let last = logged.last().expect("one entry");
@@ -1240,7 +1240,7 @@ fn a_released_focal_is_named_in_the_label_and_the_entry() {
     );
 
     state.start_bundle_adjust(id, &options).expect("well posed");
-    state.finish_background_task();
+    state.finish_background_tasks();
 
     assert_eq!(
         state.scene[0].history.current_version().label,
@@ -1264,7 +1264,7 @@ fn an_undo_puts_every_pose_back() {
     state
         .start_bundle_adjust(id, &sfmtool_core::BundleAdjustOptions::default())
         .expect("well posed");
-    state.finish_background_task();
+    state.finish_background_tasks();
     state.undo(id).expect("one version to undo");
 
     let after: Vec<nalgebra::Point3<f64>> = state.scene[0]
@@ -1328,7 +1328,7 @@ fn a_node_whose_images_are_taken_through_two_cameras_is_adjusted() {
     state
         .start_bundle_adjust(id, &sfmtool_core::BundleAdjustOptions::default())
         .expect("two cameras are adjusted, not refused");
-    state.finish_background_task();
+    state.finish_background_tasks();
 
     assert_eq!(state.scene[0].history.versions().len(), 2);
     assert_eq!(
@@ -1358,7 +1358,7 @@ fn each_released_camera_is_named_in_the_entry() {
     );
 
     state.start_bundle_adjust(id, &options).expect("well posed");
-    state.finish_background_task();
+    state.finish_background_tasks();
 
     assert_eq!(
         state.scene[0].history.current_version().label,
@@ -1401,7 +1401,7 @@ fn the_distortion_gate_opens_on_a_camera_with_a_spline() {
         ..sfmtool_core::BundleAdjustOptions::default()
     };
     state.start_bundle_adjust(id, &options).expect("well posed");
-    state.finish_background_task();
+    state.finish_background_tasks();
     assert_eq!(
         state.scene[0].history.current_version().label,
         "Bundle adjusted run_a, camera 0 focal released, camera 1 focal and lens distortion \
@@ -1434,7 +1434,7 @@ fn the_distortion_gate_opens_on_a_simple_radial_fisheye() {
         ..sfmtool_core::BundleAdjustOptions::default()
     };
     state.start_bundle_adjust(id, &options).expect("well posed");
-    state.finish_background_task();
+    state.finish_background_tasks();
     assert_eq!(
         state.scene[0].history.current_version().label,
         "Bundle adjusted run_a, camera 0 focal and lens distortion released, camera 1 held"
@@ -1723,7 +1723,7 @@ fn converting_pushes_one_embedded_patches_version_over_the_same_rows() {
     state
         .start_convert_to_embedded_patches(id)
         .expect("the fixture has a .sift file per image");
-    state.finish_background_task();
+    state.finish_background_tasks();
 
     let node = &state.scene[0];
     assert_eq!(node.history.versions().len(), 2);
@@ -1809,7 +1809,7 @@ fn converting_renders_and_persists_patch_bitmaps_when_photographs_are_available(
     }
 
     state.start_convert_to_embedded_patches(id).unwrap();
-    state.finish_background_task();
+    state.finish_background_tasks();
 
     let recon = state.scene[0].recon();
     let bitmaps = recon
@@ -1865,7 +1865,7 @@ fn the_conversions_entry_carries_the_counts() {
     state
         .start_convert_to_embedded_patches(id)
         .expect("well posed");
-    state.finish_background_task();
+    state.finish_background_tasks();
 
     let logged = texts(&state);
     assert_eq!(logged.len(), entries + 1, "{logged:?}");
@@ -1894,7 +1894,7 @@ fn an_undo_restores_the_sift_files_version() {
     state
         .start_convert_to_embedded_patches(id)
         .expect("well posed");
-    state.finish_background_task();
+    state.finish_background_tasks();
     state.undo(id).expect("one version to undo");
 
     let recon = state.scene[0].recon();
@@ -1937,7 +1937,7 @@ fn a_missing_sift_file_fails_the_operation() {
     state
         .start_convert_to_embedded_patches(id)
         .expect("nothing refused it before it ran");
-    state.finish_background_task();
+    state.finish_background_tasks();
 
     let entry = newest(&state);
     assert!(entry.failed, "{}", entry.text);
@@ -2133,7 +2133,7 @@ fn retriangulating_every_point_pushes_one_version_with_a_new_base() {
     state
         .start_retriangulate_all_points(id)
         .expect("the fixture is well posed");
-    state.finish_background_task();
+    state.finish_background_tasks();
 
     let node = &state.scene[0];
     assert_eq!(node.history.versions().len(), 2);
@@ -2220,7 +2220,7 @@ fn a_node_whose_images_are_taken_through_two_cameras_is_retriangulated() {
     state
         .start_retriangulate_all_points(id)
         .expect("two cameras are retriangulated, not refused");
-    state.finish_background_task();
+    state.finish_background_tasks();
 
     let node = &state.scene[0];
     assert_eq!(node.history.versions().len(), 2);
@@ -2237,8 +2237,8 @@ fn a_cancelled_whole_value_retriangulation_pushes_no_version() {
     state
         .start_retriangulate_all_points(id)
         .expect("the fixture is well posed");
-    state.cancel_background_task();
-    state.finish_background_task();
+    state.cancel_background_tasks();
+    state.finish_background_tasks();
 
     assert_eq!(state.scene[0].history.versions().len(), 1);
     assert_eq!(live_position(&state, 11), before);
@@ -2295,7 +2295,7 @@ fn pruning_covered_observations_pushes_one_version_with_a_new_base() {
     state
         .start_prune_covered_observations(id, &prune_options())
         .expect("the fixture carries frames, pixels and poses");
-    state.finish_background_task();
+    state.finish_background_tasks();
 
     let node = &state.scene[0];
     assert_eq!(node.history.versions().len(), 2);
@@ -2340,7 +2340,7 @@ fn a_prune_that_retires_nothing_pushes_no_version() {
     state
         .start_prune_covered_observations(id, &options)
         .expect("the fixture carries frames, pixels and poses");
-    state.finish_background_task();
+    state.finish_background_tasks();
 
     assert_eq!(state.scene[0].history.versions().len(), 1);
     let entry = newest(&state);
@@ -2359,8 +2359,8 @@ fn a_cancelled_prune_pushes_no_version() {
     state
         .start_prune_covered_observations(id, &prune_options())
         .expect("the fixture carries frames, pixels and poses");
-    state.cancel_background_task();
-    state.finish_background_task();
+    state.cancel_background_tasks();
+    state.finish_background_tasks();
 
     assert_eq!(state.scene[0].history.versions().len(), 1);
     assert_eq!(state.scene[0].edited().observation_count(), observations);

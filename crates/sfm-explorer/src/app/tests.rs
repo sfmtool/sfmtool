@@ -14,7 +14,7 @@ fn adjust(state: &mut AppState, id: crate::scene::ReconId) {
     state
         .start_bundle_adjust(id, &sfmtool_core::BundleAdjustOptions::default())
         .expect("the fixture is well posed");
-    state.finish_background_task();
+    state.finish_background_tasks();
 }
 
 /// A node with a point worth selecting, and its id.

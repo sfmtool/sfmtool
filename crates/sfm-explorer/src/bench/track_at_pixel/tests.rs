@@ -302,11 +302,11 @@ fn a_track_built_at_a_pixel_is_put_on_the_bench_and_committed() {
         .start_create_track_at_pixel(image, textured_pixel(), None)
         .expect("a posed image of an embedded_patches node");
     assert_eq!(
-        state.background_task().map(|task| task.operation.name),
+        state.running_tasks().next().map(|task| task.operation.name),
         Some(Operation::CREATE_TRACK_AT_PIXEL.name),
         "the run is on a worker"
     );
-    state.finish_background_task();
+    state.finish_background_tasks();
 
     assert_eq!(
         versions(&state, id) - versions_before,
@@ -324,13 +324,12 @@ fn a_track_built_at_a_pixel_is_put_on_the_bench_and_committed() {
         member,
         point,
     }) = state
-        .last_background_task
-        .as_ref()
+        .last_finished_task()
         .and_then(|task| task.created_track.clone())
     else {
         panic!(
             "expected a committed track, got {:?}",
-            state.last_background_task.as_ref().map(|t| &t.outcome)
+            state.last_finished_task().map(|t| &t.outcome)
         );
     };
     // No index files beside this node, so the clusters member has nothing to
@@ -405,7 +404,7 @@ fn a_refused_run_commits_nothing_and_logs_each_member() {
     state
         .start_create_track_at_pixel(image, lonely, None)
         .expect("the run starts; the cascade is what refuses");
-    state.finish_background_task();
+    state.finish_background_tasks();
 
     assert_eq!(versions(&state, id), versions_before, "nothing pushed");
     assert!(Arc::ptr_eq(
@@ -459,8 +458,7 @@ fn a_refused_run_commits_nothing_and_logs_each_member() {
         );
     }
     let Some(CreatedTrack::Refused { refusals }) = state
-        .last_background_task
-        .as_ref()
+        .last_finished_task()
         .and_then(|task| task.created_track.clone())
     else {
         panic!("expected a refusal");
@@ -493,7 +491,7 @@ fn create_track_here_is_greyed_where_it_cannot_run() {
     assert!(state
         .start_create_track_at_pixel(image, [-5.0, 10.0], None)
         .is_err());
-    assert!(state.background_task().is_none());
+    assert!(state.running_tasks().next().is_none());
     let rows = rows_after(&state, rows_before);
     assert_eq!(rows.len(), 1, "{rows:?}");
     assert!(
@@ -507,8 +505,8 @@ fn create_track_here_is_greyed_where_it_cannot_run() {
         .expect("starts");
     let why = state.create_track_here_refusal(image).expect("busy");
     assert!(why.contains("is busy"), "{why}");
-    state.cancel_background_task();
-    state.finish_background_task();
+    state.cancel_background_tasks();
+    state.finish_background_tasks();
 
     // A node whose observations are `.sift` features cannot take the commit.
     let mut sift = AppState::new();

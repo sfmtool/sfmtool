@@ -972,8 +972,8 @@ them `stage_data.reference_observation` and
 
 **The node is not locked by it.** Every step stays available while an
 evaluation runs, and taking one is what cancels it. It is not a background task
-either: it does not appear in the Background panel, is not what
-`get_background_task` reports, and does not refuse another operation.
+either: it does not appear in the Background Tasks panel, is not what
+`get_background_tasks` reports, and does not refuse another operation.
 
 **Four states**, which Track View's toolbar shows and the wire reports under
 `evaluation`:
@@ -1080,6 +1080,10 @@ the `.sift` files and then the photographs ([`index-files.md`](index-files.md)),
 and `Create track at pixel`, which reads the photographs and the index files
 (§ "Create Track Here"), and `Find nearby tracks`, which reads the photographs,
 the index files and the `.sift` files (§ "Find Nearby Tracks").
+All but `Build index files` run from the fast queue, and it from the slow one
+([`background-tasks.md`](background-tasks.md) § "Two queues"), so a bench step
+starts while a whole-reconstruction edit runs on another node, and each locks
+its own node while it runs.
 All of them are
 **cancellable**: the kernels they run take the `Progress` for their phases and
 poll its flag as well -- between the fit's rounds, between the views the
@@ -1698,7 +1702,7 @@ and answers as one.
 **The steps that read a file answer in two levels**, as the bundle
 adjustment does: with the version they pushed when they finish inside the reply
 window, and with `running: true` and an `operation_id` to poll
-`get_background_task` with when they do not. The deferral is taken before a
+`get_background_tasks` with when they do not. The deferral is taken before a
 single photograph has been read (§ "The two steps that read photographs"), so
 the window is measured against the operation rather than spent on the decode in
 front of it. A step that finds nothing to do starts no task and answers with the

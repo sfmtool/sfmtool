@@ -39,7 +39,7 @@ on the image strip:
 │      Scene      │                             │                                │
 │                 │                             │                                │
 ├─────────────────┼─────────────────────────────┴────────────────────────────────┤
-│ Background Task │ Image Browser │ Action Log │ Edit History                    │  ← tab group, Image Browser active
+│ Background Tasks│ Image Browser │ Action Log │ Edit History                    │  ← tab group, Image Browser active
 └─────────────────┴──────────────────────────────────────────────────────────────┘
 ```
 
@@ -417,7 +417,7 @@ The reader's units are milliseconds up to a second and seconds past it, and
 `<1 ms` below a millisecond rather than `0 ms`: the action did happen, and a
 rounded zero reads like a measurement that failed. Seconds carry **one**
 decimal, because this is the spelling a running operation is read in as well:
-the Background panel
+the Background Tasks panel
 ([background-tasks.md](background-tasks.md))
 redraws ten times a second, and a hundredths digit there is a digit that only
 ever spins. The column is right-aligned

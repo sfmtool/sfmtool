@@ -60,7 +60,7 @@ Between **Go** and the right-hand end of the menu bar:
 ```
 Panels
   ✓ Scene
-  ✓ Background Task
+  ✓ Background Tasks
   ✓ 3D Viewer
   ✓ Image Browser
   ✓ Image Detail
@@ -117,16 +117,16 @@ as nearly as the current arrangement allows. Three rules, tried in order:
    current tabs, then make it active. There are four groups. Three of them are
    the multi-tab nodes of the default layout (3D Viewer / Image Detail, Track
    View / Camera Intrinsics, and Image Browser / Action Log / Edit History), and a panel from any of them goes home to whichever of its
-   group-mates is still there. The fourth, Scene / Background Task, is a
+   group-mates is still there. The fourth, Scene / Background Tasks, is a
    top-bottom split rather than one node, and is a group anyway: a Background
-   Task panel re-opened belongs beside the tree, where rule 3 would give it a
+   Tasks panel re-opened belongs beside the tree, where rule 3 would give it a
    second left column of its own.
 3. **Otherwise, split the main surface's root** along the panel's home edge,
    at its home fraction, and put the panel in the new node:
 
    | Panel | Home edge | New node's share |
    |-------|-----------|------------------|
-   | Scene, Background Task | left | 0.18 |
+   | Scene, Background Tasks | left | 0.18 |
    | 3D Viewer | *(takes the root)* | — |
    | Image Browser, Action Log, Edit History | below | 0.20 |
    | Image Detail, Track View, Camera Intrinsics | right | 0.33 |
@@ -226,8 +226,8 @@ observed a window (a headless `AppState`):
           "active": "scene"
         },
         "second": {
-          "tabs": ["background_task"],
-          "active": "background_task"
+          "tabs": ["background_tasks"],
+          "active": "background_tasks"
         }
       },
       "second": {
@@ -414,7 +414,7 @@ which makes them greppable against the `Tab` enum and readable in a diff:
 | Name | Tab | Title |
 |------|-----|-------|
 | `scene` | `SceneGraph` | Scene |
-| `background_task` | `BackgroundTask` | Background Task |
+| `background_tasks` | `BackgroundTasks` | Background Tasks |
 | `viewer_3d` | `Viewer3D` | 3D Viewer |
 | `image_browser` | `ImageBrowser` | Image Browser |
 | `image_detail` | `ImageDetail` | Image Detail |
@@ -422,6 +422,10 @@ which makes them greppable against the `Tab` enum and readable in a diff:
 | `camera_intrinsics` | `IntrinsicsDetail` | Camera Intrinsics |
 | `action_log` | `ActionLog` | Action Log |
 | `edit_history` | `EditHistory` | Edit History |
+
+A name follows its panel's title, and a name no panel carries is not an alias
+for one: `background_task`, the singular of Background Tasks' name, is refused
+like any unknown name, as `point_track` and `track_edit` are (§ "Validation").
 
 The word is **panel**, on the wire as in the specs, which use it several hundred
 times against a handful of "pane". `Tab` stays the Rust name: it is
@@ -484,7 +488,7 @@ each with its message:
   `layout: the only named layout is "default"`, and anything else `layout: must
   be an arrangement, null, or "default"`.
 - Inside `layout`: every panel name is one of the nine (`unknown panel
-  "viewer3d"; the panels are scene, background_task, viewer_3d, image_browser,
+  "viewer3d"; the panels are scene, background_tasks, viewer_3d, image_browser,
   image_detail, track_view, camera_intrinsics, action_log, edit_history`); **every panel appears at most
   once** across `main` and every window (`panel "scene" appears more than once`),
   because a `Tab` is a singleton — one struct draws it — and two tabs with one
@@ -993,8 +997,8 @@ nothing to raise.
 | Parameter | Default | Meaning |
 |-----------|---------|---------|
 | `layout::LAYOUT_VERSION` | `2` | The `sfm_explorer_layout` value written and the only one read. Unchanged by a new panel: the version tags the document's *shape*, and a panel is a new value in an existing enum rather than a new key or node kind. A file written before a panel existed still loads, and arrives with that panel closed, which is indistinguishable from a user having closed it. **Renaming** one is the case this does not cover: a file naming a panel by a name no longer in the table is refused whole, by § "Validation", and Reset Layout is the way back. |
-| Scene / Background Task home | left, `0.18` | § "Home positions" rule 3 (`Tab::home`). |
-| `layout::LEFT_COLUMN_SPLIT` | `0.72` | The Scene tree's share of the left column, the Background Task panel taking the rest. |
+| Scene / Background Tasks home | left, `0.18` | § "Home positions" rule 3 (`Tab::home`). |
+| `layout::LEFT_COLUMN_SPLIT` | `0.72` | The Scene tree's share of the left column, the Background Tasks panel taking the rest. |
 | Image Browser / Action Log / Edit History home | below, `0.20` | Same. |
 | Image Detail / Track View / Camera Intrinsics home | right, `0.33` | Same. |
 | `layout::DEFAULT_LAYOUT_FILE_NAME` | `.sfm-explorer-default-layout.json` | The file the viewer reads at startup, and the name the save dialog offers. |
@@ -1016,8 +1020,8 @@ default-layout test lives here too, beside the layout it checks.
 - **Every panel appears exactly once in the default**, and `Tab::ALL` is in
   the menu's order.
 - **Wire names round-trip** for all nine, and `from_wire_name` refuses
-  `"Scene"`, `"viewer3d"`, `""`, and the two names no panel carries,
-  `"point_track"` and `"track_edit"`.
+  `"Scene"`, `"viewer3d"`, `""`, and the three names no panel carries,
+  `"point_track"`, `"track_edit"` and `"background_task"`.
 - **Home positions:** for each panel, close it from the default layout and
   `show_panel` it back — it lands in its group-mate's node when one exists
   (rule 2), and in a root split along its home edge at its home fraction when
@@ -1038,7 +1042,8 @@ default-layout test lives here too, beside the layout it checks.
 - **A refused load leaves the dock untouched.**
 - **A renamed panel's old name refuses the whole file:** a file naming
   `point_track`, and one naming `track_edit`, is refused with the unknown-panel
-  message listing `track_view`; the stock layout an earlier viewer wrote, with
+  message listing `track_view`, and one naming `background_task` with the
+  message listing `background_tasks`; the stock layout an earlier viewer wrote, with
   both names in one leaf, is refused at the first of them with the leaf's path;
   and `track_view` in two leaves is refused by the at-most-once rule like any
   other panel.

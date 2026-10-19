@@ -826,7 +826,7 @@ fn a_fitted_track_marks_the_one_row_its_bitmap_is_rendered_from() {
     state
         .start_bench_fit(id, &label)
         .expect("a framed track with three sightings fits");
-    state.finish_background_task();
+    state.finish_background_tasks();
     state.settle_bench_evaluation();
     let track = state.bench_track(id, &label).expect("on the bench").clone();
     let payload = track.track().expect("the track stage");
@@ -1116,7 +1116,7 @@ fn every_row_draws_a_tile_at_either_stage() {
     state
         .start_bench_stage(id, &label, StageKind::Cluster)
         .expect("a track with a patch frame downgrades");
-    state.finish_background_task();
+    state.finish_background_tasks();
     run_frame(&mut panel, &ctx, &state);
     assert!(
         panel.rows().iter().all(|row| row.tile),
@@ -1169,7 +1169,7 @@ fn a_search_candidate_draws_its_tile_where_the_seed_put_it() {
     state
         .start_bench_descriptor_search(id, &label, 0, None, None)
         .expect("an index is open and the image has keypoints");
-    state.finish_background_task();
+    state.finish_background_tasks();
 
     let track = state
         .bench_track(id, &label)
@@ -1246,7 +1246,7 @@ fn the_cells_follow_the_stage_the_track_is_in() {
     state
         .start_bench_stage(id, &label, StageKind::Cluster)
         .expect("a track with a patch frame downgrades");
-    state.finish_background_task();
+    state.finish_background_tasks();
     state.settle_bench_evaluation();
     run_frame(&mut panel, &ctx, &state);
 
@@ -1905,7 +1905,7 @@ fn a_fit_after_a_release_uses_the_new_bar_and_accept_walk_moves_the_keypoint() {
     state
         .start_bench_fit(id, &label)
         .expect("a framed track with three sightings fits");
-    state.finish_background_task();
+    state.finish_background_tasks();
     let track = state.bench_track(id, &label).expect("on the bench").clone();
     let walked: Vec<usize> = (0..track.observations.len())
         .filter(|&i| {
@@ -2172,7 +2172,7 @@ fn geometry_search_is_track_stage_only_and_routes_its_own_response() {
     state
         .start_bench_stage(id, &label, StageKind::Cluster)
         .expect("the framed track downgrades");
-    state.finish_background_task();
+    state.finish_background_tasks();
     let (mut panel, ctx) = settled(&state);
     let texts = row_menu(&mut panel, &ctx, &state);
     assert!(
@@ -2438,7 +2438,7 @@ fn the_track_s_patch_sits_left_of_the_toolbar() {
     state
         .start_bench_fit(id, &label)
         .expect("a framed track with three sightings fits");
-    state.finish_background_task();
+    state.finish_background_tasks();
     assert!(bitmap(&state), "the fit rendered no bitmap");
     let painted = crate::test_support::painted_text_rects(&ctx, input(Vec::new()), |ui| {
         panel.show(ui, &state);
@@ -2478,7 +2478,7 @@ fn the_cluster_stage_shows_its_template_in_the_slot() {
     state
         .start_bench_stage(id, &label, StageKind::Cluster)
         .expect("a track with a patch frame downgrades");
-    state.finish_background_task();
+    state.finish_background_tasks();
     run_frame(&mut panel, &ctx, &state);
     let track = state.bench_track(id, &label).expect("on the bench");
     let Stage::Cluster(payload) = &track.stage else {
@@ -3560,7 +3560,7 @@ fn a_tile_s_hover_view_holds_the_tile_in_its_middle_at_either_stage() {
     state
         .start_bench_stage(id, &label, StageKind::Cluster)
         .expect("a track with a patch frame downgrades");
-    state.finish_background_task();
+    state.finish_background_tasks();
     check(&state, "cluster stage");
 }
 
@@ -3691,7 +3691,7 @@ fn a_cluster_stage_hover_view_has_no_projection() {
     state
         .start_bench_stage(id, &label, StageKind::Cluster)
         .expect("a track with a patch frame downgrades");
-    state.finish_background_task();
+    state.finish_background_tasks();
     let (_, context) = tile_and_context(&state, id, &label, 0);
     assert_eq!(context.projection, None);
     assert_eq!(context.projection_px, None);
@@ -4312,7 +4312,7 @@ fn every_row_draws_a_crop_at_either_stage() {
     state
         .start_bench_stage(id, &label, StageKind::Cluster)
         .expect("a track with a patch frame downgrades");
-    state.finish_background_task();
+    state.finish_background_tasks();
     run_frame(&mut panel, &ctx, &state);
     assert!(
         panel.rows().iter().all(|row| row.crop),
@@ -4421,7 +4421,7 @@ fn a_crop_holds_the_whole_outline_with_a_pixel_to_spare() {
     state
         .start_bench_stage(id, &label, StageKind::Cluster)
         .expect("a track with a patch frame downgrades");
-    state.finish_background_task();
+    state.finish_background_tasks();
     check(&state, "cluster stage");
 }
 
@@ -4510,7 +4510,7 @@ fn a_crop_s_hover_view_gives_the_axes_in_photograph_pixels() {
     state
         .start_bench_stage(id, &label, StageKind::Cluster)
         .expect("a track with a patch frame downgrades");
-    state.finish_background_task();
+    state.finish_background_tasks();
     let track = state.bench_track(id, &label).expect("on the bench").clone();
     let Stage::Cluster(payload) = &track.stage else {
         panic!("the track moved to the cluster stage");
@@ -4652,7 +4652,7 @@ fn a_crop_s_hover_view_marks_the_keypoint_and_the_projection() {
     state
         .start_bench_stage(id, &label, StageKind::Cluster)
         .expect("a track with a patch frame downgrades");
-    state.finish_background_task();
+    state.finish_background_tasks();
     let (_, _, context) = crop_and_context(&state, id, &label, 0);
     assert_eq!(context.projection, None);
     assert_eq!(context.projection_of, None);
@@ -5859,7 +5859,7 @@ fn the_hover_bitmap_is_none_at_the_cluster_stage() {
     state
         .start_bench_stage(id, &label, StageKind::Cluster)
         .expect("a track with a patch frame downgrades");
-    state.finish_background_task();
+    state.finish_background_tasks();
     let track = state.bench_track(id, &label).expect("on the bench").clone();
     assert_eq!(track.stage_kind(), StageKind::Cluster);
     panel.hover_bitmap = None;
@@ -6227,7 +6227,7 @@ fn an_evaluated_row_hovers_the_ellipses_its_measurement_carries_at_both_stages()
     state
         .start_bench_stage(id, &label, StageKind::Cluster)
         .expect("a track with a patch frame downgrades");
-    state.finish_background_task();
+    state.finish_background_tasks();
     state.settle_bench_evaluation();
     run_frame(&mut panel, &ctx, &state);
     let [whole, middle] = panel.rows()[0].self_similarity_ellipse;

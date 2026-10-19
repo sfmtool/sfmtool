@@ -379,8 +379,8 @@ fn representative_tool_calls() -> Vec<(&'static str, Value)> {
             "close_index_files",
             json!({ "reconstruction_label": "alpha" }),
         ),
-        ("get_background_task", json!({})),
-        ("cancel_background_task", json!({})),
+        ("get_background_tasks", json!({})),
+        ("cancel_background_tasks", json!({})),
         ("screenshot", json!({})),
         (
             "get_widgets",
@@ -1042,10 +1042,17 @@ fn argument_names(schema: &Value, out: &mut Vec<String>) {
 /// The wire names retired by a clean break are refused rather than kept as
 /// aliases: `set_solo` is now `solo_reconstruction`, `set_bench_track_verdict`
 /// is split into `set_bench_observation_verdict`, `pin_bench_observations` and
-/// `unpin_bench_observations`, and the spins' `degrees` is now `angle_deg`.
+/// `unpin_bench_observations`, `get_background_task` and
+/// `cancel_background_task` are now `get_background_tasks` and
+/// `cancel_background_tasks`, and the spins' `degrees` is now `angle_deg`.
 #[test]
 fn the_retired_wire_names_are_refused() {
-    for retired in ["set_solo", "set_bench_track_verdict"] {
+    for retired in [
+        "set_solo",
+        "set_bench_track_verdict",
+        "get_background_task",
+        "cancel_background_task",
+    ] {
         assert!(
             tools::catalog().iter().all(|spec| spec.name != retired),
             "{retired} is still advertised"
@@ -1077,6 +1084,13 @@ fn the_retired_wire_names_are_refused() {
         map.insert("angle_deg".into(), angle);
         tools::parse(name, Some(map)).expect("angle_deg is the argument");
     }
+
+    // The renamed panel's old wire name is an unknown panel, and the refusal
+    // lists the new one.
+    let arguments = json!({ "panel_name": "background_task" });
+    let error = tools::parse("show_panel", arguments.as_object()).expect_err("an unknown panel");
+    assert!(error.0.contains("\"background_task\""), "{error}");
+    assert!(error.0.contains("background_tasks"), "{error}");
 }
 
 /// The tool that hands back a picture advertises what it can photograph.
@@ -1145,7 +1159,7 @@ fn only_the_reads_are_annotated_read_only() {
             "get_reconstruction_history",
             "get_bench",
             "get_bench_track",
-            "get_background_task",
+            "get_background_tasks",
             "screenshot",
             "get_widgets",
         ]

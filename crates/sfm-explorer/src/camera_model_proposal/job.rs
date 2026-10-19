@@ -7,7 +7,7 @@
 //!
 //! See `specs/gui/edits/switch-camera-model.md` § "The proposal's job". It is
 //! not a background task: it locks nothing, pushes no version, writes no
-//! Action Log row and is not shown in the Background Task panel, so it neither
+//! Action Log row and is not shown in the Background Tasks panel, so it neither
 //! holds off an operation on another node nor is held off by one. It follows
 //! the bench's live evaluation (`crate::bench::live`) instead:
 //!

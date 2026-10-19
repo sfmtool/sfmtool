@@ -306,7 +306,7 @@ fn open_reconstruction_defers_and_answers_with_the_reconstruction() {
             _ => panic!("the open must defer"),
         };
         assert_eq!(pending.operation_name, "Open");
-        state.finish_background_task();
+        state.finish_background_tasks();
         match super::super::edit::background_reply(state, &pending).expect("it finished") {
             Ok(ToolOutput::Json(value)) => value,
             Ok(ToolOutput::Png { .. }) => panic!("expected JSON, got an image"),

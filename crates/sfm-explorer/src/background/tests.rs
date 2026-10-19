@@ -115,7 +115,7 @@ fn a_backgrounded_adjustment_installs_the_kernel_s_own_answer() {
         .expect("the fixture is well posed");
 
     state.start_bundle_adjust(id, &options).expect("well posed");
-    state.finish_background_task();
+    state.finish_background_tasks();
 
     let installed = state.scene[0].recon();
     assert_eq!(installed.image_count(), expected.image_count());
@@ -166,7 +166,7 @@ fn the_entry_is_the_operation_s_cost_and_the_asker_s() {
         .expect("well posed");
     state.action_log.set_actor(Actor::User);
 
-    state.finish_background_task();
+    state.finish_background_tasks();
 
     let entry = newest(&state);
     assert_eq!(entry.actor, Actor::Mcp, "{}", entry.text);
@@ -208,7 +208,7 @@ fn nothing_is_logged_when_an_operation_starts() {
         newest(&state).text,
     );
     gate.open();
-    state.finish_background_task();
+    state.finish_background_tasks();
     // And the row that does arrive is the outcome's.
     assert_eq!(state.action_log.revision(), before + 1);
 }
@@ -269,28 +269,189 @@ fn the_busy_node_refuses_and_another_node_does_not() {
     state.close_node(other).expect("a close of a free node");
 
     gate.open();
-    state.finish_background_task();
+    state.finish_background_tasks();
 }
 
-/// One at a time, viewer-wide.
+/// Each queue runs one task at a time: a second start in the same queue is
+/// refused with the busy-queue sentence, on another node as on the same one.
 #[test]
-fn a_second_operation_is_refused_while_one_runs() {
+fn a_second_operation_in_the_same_queue_is_refused_while_one_runs() {
     let (mut state, id) = adjustable();
     let other = second_node(&mut state);
     let mut gate = Gate::new();
-    state
+    let task = state
         .start_background_task(Operation::BUNDLE_ADJUST, id, waiting_job(gate.held()))
         .expect("nothing else is running");
 
     let mut second = Gate::new();
     assert_eq!(
-        state.start_background_task(Operation::BUNDLE_ADJUST, other, waiting_job(second.held())),
-        Err("Bundle adjust is still running on run_a.".to_string()),
-        "a second operation started on another node",
+        state.start_background_task(
+            Operation::RETRIANGULATE_ALL_POINTS,
+            other,
+            waiting_job(second.held())
+        ),
+        Err("The slow queue is busy: Bundle adjust is still running on run_a.".to_string()),
+        "a second slow operation started on another node",
     );
 
     gate.open();
-    state.finish_background_task();
+    state.finish_background_task(task);
+}
+
+/// The two queues are independent: a fast task starts and lands while a slow
+/// one runs, and the slow one is still running after it.
+#[test]
+fn two_operations_in_different_queues_run_at_the_same_time() {
+    let (mut state, id) = adjustable();
+    let other = second_node(&mut state);
+    let mut slow_gate = Gate::new();
+    let slow = state
+        .start_background_task(Operation::BUNDLE_ADJUST, id, waiting_job(slow_gate.held()))
+        .expect("nothing else is running");
+    let mut fast_gate = Gate::new();
+    let fast = state
+        .start_background_task(Operation::BENCH_FIT, other, waiting_job(fast_gate.held()))
+        .expect("the fast queue is idle");
+    assert_ne!(slow, fast);
+    assert_eq!(
+        state
+            .running_tasks()
+            .map(|task| task.id)
+            .collect::<Vec<_>>(),
+        [slow, fast],
+        "both run, the slow queue's first",
+    );
+
+    fast_gate.open();
+    state.finish_background_task(fast);
+    assert!(state.running_task(slow).is_some(), "the slow task stopped");
+    assert_eq!(
+        state.finished_task(fast).map(|task| task.operation.name),
+        Some("Fit track")
+    );
+
+    slow_gate.open();
+    state.finish_background_task(slow);
+    // Both records are kept, and each queue's last finished task is its own.
+    assert_eq!(
+        state
+            .last_finished_in(super::Queue::Slow)
+            .map(|task| task.id),
+        Some(slow)
+    );
+    assert_eq!(
+        state
+            .last_finished_in(super::Queue::Fast)
+            .map(|task| task.id),
+        Some(fast)
+    );
+}
+
+/// A node has at most one locking task: a locking task in the other queue is
+/// refused on the busy node with the busy sentence, and accepted on another.
+#[test]
+fn a_locking_task_in_the_other_queue_is_refused_on_the_busy_node() {
+    let (mut state, id) = adjustable();
+    let other = second_node(&mut state);
+    let mut gate = Gate::new();
+    let task = state
+        .start_background_task(Operation::BUNDLE_ADJUST, id, waiting_job(gate.held()))
+        .expect("nothing else is running");
+
+    let mut refused = Gate::new();
+    assert_eq!(
+        state.start_background_task(Operation::BENCH_FIT, id, waiting_job(refused.held())),
+        Err("run_a is busy: Bundle adjust is still running.".to_string()),
+    );
+    let mut beside = Gate::new();
+    let fit = state
+        .start_background_task(Operation::BENCH_FIT, other, waiting_job(beside.held()))
+        .expect("another node is free");
+    // A fast task locks its node as a slow one does.
+    assert_eq!(
+        state.busy_refusal(other),
+        Some("demo is busy: Fit track is still running.".to_string())
+    );
+
+    beside.open();
+    state.finish_background_task(fit);
+    gate.open();
+    state.finish_background_task(task);
+    assert_eq!(state.busy_refusal(id), None);
+}
+
+/// The record of finished tasks keeps the last `FINISHED_KEPT`, newest last,
+/// and a task pushed out of it is found by nothing.
+#[test]
+fn the_finished_tasks_are_kept_in_a_ring() {
+    let (mut state, id) = adjustable();
+    let mut ids = Vec::new();
+    for _ in 0..super::FINISHED_KEPT + 2 {
+        let task = state
+            .start_background_task(
+                Operation::BUNDLE_ADJUST,
+                id,
+                Box::new(|_progress| Finished::Failed("nothing".to_string())),
+            )
+            .expect("the last one is over");
+        state.finish_background_task(task);
+        ids.push(task);
+    }
+    assert_eq!(state.finished_tasks.len(), super::FINISHED_KEPT);
+    assert!(state.task(ids[0]).is_none(), "the oldest was kept");
+    assert!(state.task(ids[1]).is_none(), "the second oldest was kept");
+    assert!(matches!(
+        state.task(ids[2]),
+        Some(super::TaskState::Finished(_))
+    ));
+    assert_eq!(
+        state.last_finished_task().map(|task| task.id),
+        ids.last().copied()
+    );
+}
+
+/// Each operation's declared queue and lock are the ones the spec's table
+/// gives (`specs/gui/background-tasks.md` § "Two queues").
+#[test]
+fn each_operation_declares_the_spec_s_queue_and_lock() {
+    use super::Queue::{Fast, Slow};
+    let table = [
+        ("Bundle adjust", Slow, true),
+        ("Convert to embedded patches", Slow, true),
+        ("Retriangulate all points", Slow, true),
+        ("Refit all points", Slow, true),
+        ("Switch camera model", Slow, true),
+        ("Prune covered observations", Slow, true),
+        ("Add image to tracks", Slow, true),
+        ("Build index files", Slow, true),
+        ("Open", Fast, false),
+        ("Fit track", Fast, true),
+        ("Set track stage", Fast, true),
+        ("Fit normal", Fast, true),
+        ("Finite difference normal", Fast, true),
+        ("Grid plane normal", Fast, true),
+        ("Search descriptors", Fast, true),
+        ("Geometry search", Fast, true),
+        ("Create track at pixel", Fast, true),
+        ("Find nearby tracks", Fast, true),
+    ];
+    assert_eq!(
+        table.len(),
+        Operation::ALL.len(),
+        "the table names every operation"
+    );
+    for operation in Operation::ALL {
+        let row = table
+            .iter()
+            .find(|(name, _, _)| *name == operation.name)
+            .unwrap_or_else(|| panic!("{} is not in the table", operation.name));
+        assert_eq!(
+            (operation.queue, operation.locks),
+            (row.1, row.2),
+            "{}",
+            operation.name
+        );
+    }
 }
 
 // -- Cancellation ----------------------------------------------------------
@@ -399,9 +560,9 @@ fn cancel_before_it_runs(state: &mut AppState, id: ReconId, operation: Operation
             }),
         )
         .expect("nothing else is running");
-    state.cancel_background_task();
+    state.cancel_background_tasks();
     gate.open();
-    state.finish_background_task();
+    state.finish_background_tasks();
 }
 
 /// One operation's real work, with everything it needs to run: a test of the
@@ -705,18 +866,19 @@ fn many_reports_in_one_frame_are_one_drain() {
     heard.recv().expect("the worker reported");
     assert_eq!(reported.load(Ordering::Relaxed), 1000);
 
-    let polled = state.poll_background_task();
+    let polled = state.poll_background_tasks();
     assert!(polled.changed, "a thousand reports moved nothing");
-    assert_eq!(polled.installed, None, "nothing has finished");
+    assert!(polled.installed.is_empty(), "nothing has finished");
     // One drain took all of them: the queue is empty, and the collector holds
     // the newest count rather than a thousand of them.
     assert_eq!(
-        state.poll_background_task(),
+        state.poll_background_tasks(),
         super::Polled::default(),
         "reports were left in the queue",
     );
     let count = state
-        .background_task()
+        .running_tasks()
+        .next()
         .expect("still running")
         .collector
         .count()
@@ -727,7 +889,7 @@ fn many_reports_in_one_frame_are_one_drain() {
     );
 
     gate.open();
-    state.finish_background_task();
+    state.finish_background_tasks();
 }
 
 /// A job that panics frees the node rather than wedging it.
@@ -746,10 +908,10 @@ fn a_worker_that_panics_frees_the_node() {
         )
         .expect("nothing else is running");
 
-    state.finish_background_task();
+    state.finish_background_tasks();
 
     assert!(
-        state.background_task().is_none(),
+        state.running_tasks().next().is_none(),
         "the node is still locked"
     );
     assert!(newest(&state).failed);
@@ -770,11 +932,11 @@ fn an_operation_id_outlives_the_operation() {
     state
         .start_background_task(Operation::BUNDLE_ADJUST, id, waiting_job(gate.held()))
         .expect("nothing else is running");
-    let first = state.background_task().expect("running").id;
+    let first = state.running_tasks().next().expect("running").id;
     gate.open();
-    state.finish_background_task();
+    state.finish_background_tasks();
 
-    let last = state.last_background_task.as_ref().expect("it finished");
+    let last = state.last_finished_task().expect("it finished");
     assert_eq!(last.id, first, "the answer is about another operation");
 
     // The next one is a different operation, and says so.
@@ -782,9 +944,9 @@ fn an_operation_id_outlives_the_operation() {
     state
         .start_background_task(Operation::BUNDLE_ADJUST, id, waiting_job(gate.held()))
         .expect("the first one is over");
-    assert_ne!(state.background_task().expect("running").id, first);
+    assert_ne!(state.running_tasks().next().expect("running").id, first);
     gate.open();
-    state.finish_background_task();
+    state.finish_background_tasks();
 }
 
 // -- The value the worker was handed --------------------------------------
@@ -813,7 +975,7 @@ fn the_worker_reads_the_arc_the_node_is_still_drawing() {
     // And the node is still drawing it while the worker reads it.
     assert!(Arc::ptr_eq(&drawn, &state.scene[0].edited().base));
 
-    state.finish_background_task();
+    state.finish_background_tasks();
     // The next version is a new base, as every bulk edit's is.
     assert!(!Arc::ptr_eq(&drawn, &state.scene[0].edited().base));
 }
@@ -834,7 +996,7 @@ fn a_bulk_edit_of_the_busy_node_is_refused_too() {
     );
 
     gate.open();
-    state.finish_background_task();
+    state.finish_background_tasks();
 }
 
 // -- The panel -------------------------------------------------------------
@@ -937,7 +1099,7 @@ fn running(state: &mut AppState, id: ReconId, operation: Operation) -> Gate {
         .start_background_task(operation, id, job)
         .expect("nothing else is running");
     heard.recv().expect("the worker reported");
-    state.poll_background_task();
+    state.poll_background_tasks();
     gate
 }
 
@@ -947,15 +1109,83 @@ const NOT_CANCELLABLE: Operation = Operation {
     name: "Fake solve",
     cancellable: false,
     kind: crate::action_log::Kind::Edit,
+    queue: super::Queue::Slow,
+    locks: true,
 };
 
-/// A session that has run nothing says so and says nothing else: one greyed
-/// line is a panel a reader can skip, where a blank one is a panel that looks
-/// broken.
+/// A session that has run nothing says so for each queue and says nothing
+/// else: one greyed line a queue is a panel a reader can skip, where a blank
+/// one is a panel that looks broken.
 #[test]
 fn an_idle_panel_with_nothing_run_says_only_that() {
     let (mut state, _) = adjustable();
-    assert_eq!(painted(&mut state), ["Nothing running"]);
+    assert_eq!(
+        painted(&mut state),
+        ["Slow", "Nothing running", "Fast", "Nothing running"]
+    );
+}
+
+/// A section per queue: each queue's running task in the running form, and
+/// one phase list below them, the slow task's until a person clicks the fast
+/// task's name. An idle queue shows the last task that finished from it.
+#[test]
+fn each_queue_has_a_section_and_one_task_s_phases_show_below() {
+    let (mut state, id) = adjustable();
+    let other = second_node(&mut state);
+    let slow = running(&mut state, id, Operation::BUNDLE_ADJUST);
+    let mut fast_gate = Gate::new();
+    let (said, heard) = mpsc::channel();
+    let held = fast_gate.held();
+    let fast = state
+        .start_background_task(
+            Operation::BENCH_FIT,
+            other,
+            Box::new(move |progress| {
+                drop(progress.phase("decode images"));
+                said.send(()).expect("the test is listening");
+                let _ = held.recv();
+                Finished::Failed("the fake fit produced nothing".to_string())
+            }),
+        )
+        .expect("the fast queue is idle");
+    heard.recv().expect("the fit reported");
+    state.poll_background_tasks();
+
+    let texts = painted(&mut state);
+    let at = |text: &str| texts.iter().position(|t| t == text);
+    let order = [
+        at("Slow"),
+        at("Bundle adjust"),
+        at("Fast"),
+        at("Fit track"),
+        at("Bundle adjust: phases"),
+        at("gather arrays"),
+    ];
+    assert!(order.iter().all(Option::is_some), "{texts:?}");
+    assert!(order.is_sorted(), "{texts:?}");
+    assert!(!texts.iter().any(|t| t == "decode images"), "{texts:?}");
+
+    // Clicking the fit's name is what this stands for.
+    state.background_phases_of = Some(fast);
+    let texts = painted(&mut state);
+    assert!(texts.iter().any(|t| t == "Fit track: phases"), "{texts:?}");
+    assert!(texts.iter().any(|t| t == "decode images"), "{texts:?}");
+    assert!(!texts.iter().any(|t| t == "gather arrays"), "{texts:?}");
+
+    // Finished, the fit is the fast section's idle form, and still the task
+    // whose phases are shown.
+    fast_gate.open();
+    state.finish_background_task(fast);
+    let texts = painted(&mut state);
+    assert!(texts.iter().any(|t| t == "Fit track: phases"), "{texts:?}");
+    assert!(texts.iter().any(|t| t == "demo"), "{texts:?}");
+    assert!(
+        !texts.iter().any(|t| t == "Nothing running"),
+        "a queue that ran a task said it had run nothing: {texts:?}"
+    );
+
+    slow.open();
+    state.finish_background_tasks();
 }
 
 /// Idle after an operation: the name, the node, the cost and the phases, all
@@ -968,7 +1198,7 @@ fn an_idle_panel_with_nothing_run_says_only_that() {
 fn an_idle_panel_shows_the_last_operation_and_its_phases_at_once() {
     let (mut state, id) = adjustable();
     running(&mut state, id, Operation::BUNDLE_ADJUST).open();
-    state.finish_background_task();
+    state.finish_background_tasks();
 
     let drawn = painted(&mut state);
     assert!(
@@ -977,13 +1207,7 @@ fn an_idle_panel_shows_the_last_operation_and_its_phases_at_once() {
     );
     assert!(drawn.iter().any(|text| text == "run_a"), "{drawn:?}");
     // What it cost, in the Action Log's spelling of a duration.
-    let took = ActionLog::format_took(
-        state
-            .last_background_task
-            .as_ref()
-            .expect("it finished")
-            .took,
-    );
+    let took = ActionLog::format_took(state.last_finished_task().expect("it finished").took);
     assert!(drawn.contains(&took), "{took:?} is missing from {drawn:?}");
 
     // The phases, with nothing asked for first.
@@ -1020,7 +1244,8 @@ fn the_entry_is_the_summary_of_what_the_running_panel_showed() {
     let gate = running(&mut state, id, Operation::BUNDLE_ADJUST);
 
     let live = state
-        .background_task()
+        .running_tasks()
+        .next()
         .expect("running")
         .collector
         .live()
@@ -1037,7 +1262,7 @@ fn the_entry_is_the_summary_of_what_the_running_panel_showed() {
     );
 
     gate.open();
-    state.finish_background_task();
+    state.finish_background_tasks();
 
     let entry = newest(&state);
     // Every phase the entry folded, against the runs of it the panel drew.
@@ -1103,7 +1328,7 @@ fn a_running_phase_table_keeps_every_run_and_every_note_apart() {
     );
 
     gate.open();
-    state.finish_background_task();
+    state.finish_background_tasks();
 
     // The entry, of the same two runs, folds them and joins the ends.
     let drawn = ActionLog::drawn_detail(newest(&state));
@@ -1123,7 +1348,7 @@ fn a_running_phase_table_keeps_every_run_and_every_note_apart() {
 fn the_bar_is_drawn_only_where_a_count_was_reported() {
     let (mut state, id) = adjustable();
     let gate = running(&mut state, id, Operation::BUNDLE_ADJUST);
-    let task = state.background_task().expect("running");
+    let task = state.running_tasks().next().expect("running");
     let live = task.collector.live();
     assert_eq!(
         super::panel::bar(&task.collector, &live),
@@ -1135,10 +1360,10 @@ fn the_bar_is_drawn_only_where_a_count_was_reported() {
     let texts = painted(&mut state);
     assert!(texts.iter().any(|text| text == "round 2/2"), "{texts:?}");
     gate.open();
-    state.finish_background_task();
+    state.finish_background_tasks();
 
     let gate = running(&mut state, id, NOT_CANCELLABLE);
-    let task = state.background_task().expect("running");
+    let task = state.running_tasks().next().expect("running");
     let live = task.collector.live();
     assert_eq!(
         super::panel::bar(&task.collector, &live),
@@ -1158,7 +1383,7 @@ fn the_bar_is_drawn_only_where_a_count_was_reported() {
         "the open phase is not marked: {texts:?}"
     );
     gate.open();
-    state.finish_background_task();
+    state.finish_background_tasks();
 }
 
 /// Cancel is there either way, and says why when it would do nothing. Hiding it
@@ -1168,7 +1393,8 @@ fn cancel_is_live_for_one_operation_and_explained_for_the_other() {
     for operation in [Operation::BUNDLE_ADJUST, NOT_CANCELLABLE] {
         let (mut state, id) = adjustable();
         let gate = running(&mut state, id, operation);
-        let refusal = state.cancel_refusal();
+        let task = state.running_tasks().next().expect("running").id;
+        let refusal = state.cancel_refusal(task);
         assert_eq!(refusal.is_some(), !operation.cancellable, "{refusal:?}");
 
         let ctx = egui::Context::default();
@@ -1209,7 +1435,7 @@ fn cancel_is_live_for_one_operation_and_explained_for_the_other() {
         );
 
         gate.open();
-        state.finish_background_task();
+        state.finish_background_tasks();
     }
 }
 
@@ -1262,14 +1488,14 @@ fn a_running_phase_table_shows_the_newest_stage_not_the_first() {
         )
         .expect("nothing else is running");
     heard.recv().expect("the worker reported");
-    state.poll_background_task();
+    state.poll_background_tasks();
 
     // Short enough that the table cannot hold all twelve, which is the shape of
     // the panel at the bottom of the left column.
     let mut short = input();
     short.screen_rect = Some(egui::Rect::from_min_size(
         egui::Pos2::ZERO,
-        egui::vec2(260.0, 190.0),
+        egui::vec2(260.0, 300.0),
     ));
     let ctx = egui::Context::default();
     // The first frame lays the table out; the scroll offset it computes from
@@ -1290,7 +1516,7 @@ fn a_running_phase_table_shows_the_newest_stage_not_the_first() {
     );
 
     gate.open();
-    state.finish_background_task();
+    state.finish_background_tasks();
 }
 
 /// Where a painted string actually lies: left edge, right edge, and the top
@@ -1342,8 +1568,8 @@ fn painted_spans(state: &mut AppState, width: f32) -> Vec<(String, f32, f32, f32
 fn an_idle_panel_keeps_the_cost_clear_of_a_long_label() {
     let (mut state, id) = adjustable();
     running(&mut state, id, Operation::BUNDLE_ADJUST).open();
-    state.finish_background_task();
-    let last = state.last_background_task.as_mut().expect("it finished");
+    state.finish_background_tasks();
+    let last = state.finished_tasks.back_mut().expect("it finished");
     last.label = "a_reconstruction_with_a_name_nobody_would_shorten".to_string();
     let took = ActionLog::format_took(last.took);
 
@@ -1437,9 +1663,14 @@ fn the_phase_table_keeps_every_row_of_a_long_operation() {
         )
         .expect("nothing else is running");
     heard.recv().expect("the worker reported");
-    state.poll_background_task();
+    state.poll_background_tasks();
 
-    let live = state.background_task().expect("running").collector.live();
+    let live = state
+        .running_tasks()
+        .next()
+        .expect("running")
+        .collector
+        .live();
     assert_eq!(
         live.rows.len(),
         reported,
@@ -1447,10 +1678,10 @@ fn the_phase_table_keeps_every_row_of_a_long_operation() {
     );
 
     gate.open();
-    state.finish_background_task();
+    state.finish_background_tasks();
 
     // And the idle form keeps them too, where the entry it wrote did not.
-    let last = state.last_background_task.as_ref().expect("it finished");
+    let last = state.last_finished_task().expect("it finished");
     assert_eq!(
         last.detail.len(),
         reported,
@@ -1516,7 +1747,7 @@ fn scrolling_up_holds_the_table_while_the_operation_keeps_reporting() {
             )
             .expect("nothing else is running");
         heard.recv().expect("the worker reported");
-        state.poll_background_task();
+        state.poll_background_tasks();
 
         let ctx = egui::Context::default();
         let frame = |state: &mut AppState, input: egui::RawInput| {
@@ -1562,7 +1793,7 @@ fn scrolling_up_holds_the_table_while_the_operation_keeps_reporting() {
         );
 
         gate.open();
-        state.finish_background_task();
+        state.finish_background_tasks();
     }
 }
 
@@ -1597,13 +1828,13 @@ fn an_idle_panel_opens_at_the_first_stage_not_the_last() {
         )
         .expect("nothing else is running");
     heard.recv().expect("the worker reported");
-    state.poll_background_task();
+    state.poll_background_tasks();
 
     // Short enough that the forty rows cannot all be on screen at once.
     let mut short = input();
     short.screen_rect = Some(egui::Rect::from_min_size(
         egui::Pos2::ZERO,
-        egui::vec2(260.0, 200.0),
+        egui::vec2(260.0, 310.0),
     ));
     let ctx = egui::Context::default();
     let frame = |state: &mut AppState| {
@@ -1617,7 +1848,7 @@ fn an_idle_panel_opens_at_the_first_stage_not_the_last() {
     assert!(shows(&live, "event 39"), "{live:?}");
 
     gate.open();
-    state.finish_background_task();
+    state.finish_background_tasks();
 
     // Finished, it is at the head, whatever the live one had scrolled to.
     frame(&mut state);
@@ -1660,7 +1891,7 @@ fn a_truncated_row_shows_one_tooltip_rather_than_two() {
         )
         .expect("nothing else is running");
     heard.recv().expect("the worker reported");
-    state.poll_background_task();
+    state.poll_background_tasks();
 
     let ctx = egui::Context::default();
     ctx.all_styles_mut(|style| {
@@ -1694,7 +1925,7 @@ fn a_truncated_row_shows_one_tooltip_rather_than_two() {
     );
 
     gate.open();
-    state.finish_background_task();
+    state.finish_background_tasks();
 }
 
 /// The node's whole name is one hover away, once.
@@ -1707,11 +1938,11 @@ fn a_truncated_row_shows_one_tooltip_rather_than_two() {
 fn the_idle_node_says_its_whole_name_on_hover_once() {
     let (mut state, id) = adjustable();
     running(&mut state, id, Operation::BUNDLE_ADJUST).open();
-    state.finish_background_task();
+    state.finish_background_tasks();
     let whole = "a_reconstruction_with_a_name_nobody_would_shorten".to_string();
     state
-        .last_background_task
-        .as_mut()
+        .finished_tasks
+        .back_mut()
         .expect("it finished")
         .label
         .clone_from(&whole);

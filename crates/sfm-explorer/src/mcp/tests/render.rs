@@ -788,7 +788,7 @@ fn a_stage_change_the_track_rules_out_is_refused_before_the_worker() {
         )
     );
     assert!(
-        state.background_task().is_none(),
+        state.running_tasks().next().is_none(),
         "a refusal started a task"
     );
     assert_eq!(version_count(&state), before, "a refusal pushed a version");
@@ -816,7 +816,7 @@ fn a_fit_the_track_rules_out_is_refused_before_the_worker() {
         format!("Cannot fit {item}: 1 observations are in, and the track stage needs two or more")
     );
     assert!(
-        state.background_task().is_none(),
+        state.running_tasks().next().is_none(),
         "a refusal started a task"
     );
     assert_eq!(version_count(&state), before, "a refusal pushed a version");
@@ -1166,7 +1166,9 @@ fn the_index_files_and_the_search_are_on_the_wire() {
     );
 
     // The operation an agent polls for, under the name the panel shows.
-    let task = call(&mut state, &mut viewer, "get_background_task", json!({}));
+    let task = call(&mut state, &mut viewer, "get_background_tasks", json!({}))["fast"]
+        ["last_finished"]
+        .clone();
     assert_eq!(task["operation"], json!("Search descriptors"), "{task}");
 
     // And the candidate it added is on the wire under the search's provenance.
@@ -1294,7 +1296,9 @@ fn build_index_files_makes_the_missing_cluster_patches_on_the_wire() {
         "build_index_files",
         json!({ "reconstruction_label": label }),
     );
-    let task = call(&mut state, &mut viewer, "get_background_task", json!({}));
+    let task = call(&mut state, &mut viewer, "get_background_tasks", json!({}))["slow"]
+        ["last_finished"]
+        .clone();
     assert_eq!(task["operation"], json!("Build index files"), "{task}");
     let bench = call(
         &mut state,
@@ -1412,7 +1416,9 @@ fn search_bench_track_geometry_needs_no_index_and_reports_as_itself() {
         "the reply carries some other step's sentence: {searched}"
     );
     assert_eq!(version_count(&state), versions + 1, "{searched}");
-    let task = call(&mut state, &mut viewer, "get_background_task", json!({}));
+    let task = call(&mut state, &mut viewer, "get_background_tasks", json!({}))["fast"]
+        ["last_finished"]
+        .clone();
     assert_eq!(task["operation"], json!("Geometry search"), "{task}");
 
     // Nothing this fixture offers clears the gates, and a search that admits
@@ -1649,7 +1655,7 @@ fn a_fit_over_a_bearing_only_reconstruction_takes_sigma_px() {
         Outcome::Deferred(super::super::Deferred::Background(pending)) => pending,
         _ => panic!("a fit defers to a worker"),
     };
-    state.finish_background_task();
+    state.finish_background_tasks();
     match super::super::edit::background_reply(&state, &pending).expect("finished") {
         Err(e) => assert!(
             e.0.contains("no observation of a finite point"),
@@ -1688,7 +1694,10 @@ fn a_sigma_px_that_is_not_a_positive_number_is_refused_up_front() {
             }
             let refusal = refused_call(&mut state, &mut viewer, tool, arguments);
             assert!(refusal.0.contains("sigma_px"), "{tool}: {refusal}");
-            assert!(state.background_task().is_none(), "{tool} started a task");
+            assert!(
+                state.running_tasks().next().is_none(),
+                "{tool} started a task"
+            );
         }
     }
     assert_eq!(version_count(&state), before, "a refusal pushed a version");

@@ -25,6 +25,7 @@ use super::{
     JsonReply, ToolError,
 };
 use crate::action_log::{ActionLog, Actor, Breakdown};
+use crate::background::{BackgroundTask, FinishedTask, Queue, TaskState};
 use crate::progress::{Count, Detail};
 use crate::scene::{point_id, ImageRef};
 use crate::state::{ensure_sift_cached, AppState};
@@ -194,21 +195,56 @@ fn milliseconds(duration: Duration) -> f64 {
     duration.as_secs_f64() * 1000.0
 }
 
-/// `get_background_task`: what the viewer is busy with, or what it was busy
-/// with last.
+/// `get_background_tasks`: what each queue is running and what each ran
+/// last, or, with an `operation_id`, what became of that one task.
 ///
-/// One shape for both, discriminated by `running`, because the question an
-/// agent brings here is a single one asked at an unknown moment: "the solve I
-/// started -- is it still going, and what has it cost?" A tool that answered
-/// only about a live operation would have to be paired with a second one for
-/// the answer, and the agent would have to know which to call before knowing
-/// whether it had finished.
-pub(super) fn get_background_task(state: &AppState) -> JsonReply {
-    let Some(task) = state.background_task() else {
-        return Ok(finished_operation(state));
+/// One shape for a task whether it is running or finished, discriminated by
+/// `running`, because the question an agent brings here is a single one asked
+/// at an unknown moment: "the solve I started -- is it still going, and what
+/// has it cost?" A tool that answered only about a live operation would have
+/// to be paired with a second one for the answer, and the agent would have to
+/// know which to call before knowing whether it had finished.
+pub(super) fn get_background_tasks(state: &AppState, operation_id: Option<u64>) -> JsonReply {
+    let Some(id) = operation_id else {
+        let mut queues = serde_json::Map::new();
+        for queue in Queue::ALL {
+            queues.insert(
+                queue.name().into(),
+                json!({
+                    "running": state
+                        .queue(queue)
+                        .running
+                        .as_ref()
+                        .map_or(Value::Null, running_task),
+                    "last_finished": state
+                        .last_finished_in(queue)
+                        .map_or(Value::Null, finished_task),
+                }),
+            );
+        }
+        return Ok(Value::Object(queues));
     };
+    match state.task(id) {
+        Some(TaskState::Running(task)) => Ok(running_task(task)),
+        Some(TaskState::Finished(task)) => Ok(finished_task(task)),
+        // Ids are handed out in order and never reused, so one below the next
+        // was a task whose record the ring has since let go of.
+        None if id < state.next_operation_id => Err(ToolError::new(format!(
+            "Background task {id} has finished, and its record is no longer kept; \
+             get_action_log carries its row."
+        ))),
+        None => Err(ToolError::new(format!(
+            "No background task has operation_id {id}."
+        ))),
+    }
+}
+
+/// One running task, in full: the summary `get_scene` carries, and then what
+/// can be cancelled, the count, the status, the open phase and the phases so
+/// far.
+fn running_task(task: &BackgroundTask) -> Value {
     let live = task.collector.live();
-    let mut reply = background_summary(state).expect("something is running");
+    let mut reply = task_summary(task);
     let fields = reply.as_object_mut().expect("the block is an object");
     fields.insert("cancellable".into(), json!(task.operation.cancellable));
     // Absent rather than null, as every optional field on this surface is: a
@@ -230,66 +266,70 @@ pub(super) fn get_background_task(state: &AppState) -> JsonReply {
         "phases".into(),
         breakdown(&Breakdown::running(&ActionLog::capped_recent(live.rows))),
     );
-    Ok(reply)
+    reply
 }
 
-/// The same reply, for a session with nothing running.
+/// One finished task, from the ring of finished tasks.
 ///
-/// The last operation rather than nothing at all, for the reason the Background
+/// The record rather than nothing at all, for the reason the Background Tasks
 /// panel's idle form shows it: the agent that took a handle comes back for the
 /// answer after the operation is gone, and "what did it cost" is the question
 /// it brings.
-fn finished_operation(state: &AppState) -> Value {
-    let Some(last) = state.last_background_task.as_ref() else {
-        // Both discriminators present, so a reader never has to tell a missing
-        // key from a false one: this session has run nothing at all.
-        return json!({ "running": false, "finished": false });
-    };
-    let (failed, text) = match &last.outcome {
+fn finished_task(task: &FinishedTask) -> Value {
+    let (failed, text) = match &task.outcome {
         Ok(text) => (false, text),
         Err(message) => (true, message),
     };
     json!({
         "running": false,
         "finished": true,
-        "operation": last.operation.name,
-        "reconstruction_label": last.label,
-        "operation_id": last.id,
+        "operation": task.operation.name,
+        "queue": task.operation.queue.name(),
+        "reconstruction_label": task.label,
+        "operation_id": task.id,
         // The same field as a running operation's, which is what makes one
         // shape out of two: seconds so far while it runs, seconds in total
         // once it is over.
-        "elapsed_s": last.took.as_secs_f64(),
+        "elapsed_s": task.took.as_secs_f64(),
         // The Action Log's own two fields for how a row ended, in its words,
         // so the sentence here and the sentence there are one sentence.
         "failed": failed,
         "text": text,
-        "phases": breakdown(&Breakdown::running(&ActionLog::capped_recent(last.detail.clone()))),
+        "phases": breakdown(&Breakdown::running(&ActionLog::capped_recent(task.detail.clone()))),
     })
 }
 
-/// The `background` block `get_scene` carries, or `None` with nothing running.
+/// The `background_tasks` list `get_scene` carries: every running task, the
+/// slow queue's first, empty with nothing running.
 ///
-/// **Deliberately not the whole of `get_background_task`.** `get_scene` is
-/// the most-polled tool on this surface, and the reason this block is here at
+/// **Deliberately not the whole of `get_background_tasks`.** `get_scene` is
+/// the most-polled tool on this surface, and the reason this list is here at
 /// all is that an agent polling it should learn the viewer is busy without a
-/// second call. That question is answered by a handful of scalars whose size
-/// does not depend on the operation. The phase table does depend on it -- a
-/// three-round, sixty-iteration adjustment reports hundreds of rows -- so it
-/// belongs to the tool an agent asks when it wants it, and the open phase and
-/// the status line go with it because they are narrative rather than something
-/// a caller acts on.
+/// second call. That question is answered by a handful of scalars per task
+/// whose size does not depend on the operation. The phase table does depend on
+/// it -- a three-round, sixty-iteration adjustment reports hundreds of rows --
+/// so it belongs to the tool an agent asks when it wants it, and the open phase
+/// and the status line go with it because they are narrative rather than
+/// something a caller acts on.
 ///
-/// `None` rather than the last operation, for the same reason: a block that
-/// went on describing a solve that ended half an hour ago would be carried by
-/// every poll for the rest of the session, and `background != null` would stop
-/// meaning "the viewer is busy", which is the one thing this block is read for.
-pub(super) fn background_summary(state: &AppState) -> Option<Value> {
-    let task = state.background_task()?;
+/// Running tasks only, rather than the last ones too, for the same reason: a
+/// list that went on describing a solve that ended half an hour ago would be
+/// carried by every poll for the rest of the session, and a non-empty list
+/// would stop meaning "the viewer is busy", which is the one thing it is read
+/// for.
+pub(super) fn background_summary(state: &AppState) -> Value {
+    Value::Array(state.running_tasks().map(task_summary).collect())
+}
+
+/// One running task's summary, which is its entry in `get_scene`'s list and
+/// the start of its `get_background_tasks` reply.
+fn task_summary(task: &BackgroundTask) -> Value {
     let mut block = json!({
         // The discriminator `bundle_adjust`'s handle uses, so the two replies
         // an agent sees about one operation are read the same way.
         "running": true,
         "operation": task.operation.name,
+        "queue": task.operation.queue.name(),
         "reconstruction_label": task.label,
         "operation_id": task.id,
         "elapsed_s": task.started.elapsed().as_secs_f64(),
@@ -304,7 +344,7 @@ pub(super) fn background_summary(state: &AppState) -> Option<Value> {
             .expect("the block is an object")
             .insert("fraction".into(), json!(fraction));
     }
-    Some(block)
+    block
 }
 
 /// A kernel's own count of what it is through: `{ done, total, unit }`, with

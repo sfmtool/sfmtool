@@ -302,7 +302,7 @@ pub fn run_with_args(args: impl IntoIterator<Item = String>) -> Result<(), RunEr
     // the endpoint has been brought up, so the Action Log reads in the order
     // the session happened and a file named on the command line sits under the
     // session lines that explain where it came from. The window comes up while
-    // the files are read, and the Background Task panel shows how far along
+    // the files are read, and the Background Tasks panel shows how far along
     // the open is.
     if !args.paths.is_empty() {
         state.open_files(args.paths.clone());

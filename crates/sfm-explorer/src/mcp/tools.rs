@@ -650,8 +650,12 @@ pub(crate) fn parse(
         "close_index_files" => Command::CloseIndexFiles {
             reconstruction_label: args.required_string("reconstruction_label")?,
         },
-        "get_background_task" => Command::GetBackgroundTask,
-        "cancel_background_task" => Command::CancelBackgroundTask,
+        "get_background_tasks" => Command::GetBackgroundTasks {
+            operation_id: args.optional_u64("operation_id")?,
+        },
+        "cancel_background_tasks" => Command::CancelBackgroundTasks {
+            operation_ids: args.operation_ids("operation_ids")?,
+        },
         "screenshot" => {
             let panel = match args.map.get("panel_name") {
                 None | Some(Value::Null) => None,
@@ -1315,6 +1319,34 @@ impl Args<'_> {
                 .map(Some)
                 .ok_or_else(|| self.wrong_type(key, "a whole number, zero or more", value)),
         }
+    }
+
+    /// The background tasks a call named, or `None` where it named none.
+    ///
+    /// An empty array is refused for the reason [`Self::actors`] refuses one:
+    /// a call that names no task has not asked for anything to stop.
+    fn operation_ids(&self, key: &str) -> Result<Option<Vec<u64>>, ToolError> {
+        let value = match self.map.get(key) {
+            None | Some(Value::Null) => return Ok(None),
+            Some(value) => value,
+        };
+        let array = value
+            .as_array()
+            .ok_or_else(|| self.wrong_type(key, "an array of operation ids", value))?;
+        if array.is_empty() {
+            return Err(self.error(format!(
+                "was given an empty {key}, which names nothing to cancel — omit it to cancel \
+                 every running task."
+            )));
+        }
+        array
+            .iter()
+            .map(|id| {
+                id.as_u64()
+                    .ok_or_else(|| self.wrong_type(key, "an array of operation ids", value))
+            })
+            .collect::<Result<Vec<u64>, ToolError>>()
+            .map(Some)
     }
 
     /// The actors a call named, or every actor where it named none.

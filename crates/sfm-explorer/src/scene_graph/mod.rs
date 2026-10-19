@@ -302,13 +302,14 @@ impl SceneGraphPanel {
         // What every *other* node offers as an alignment target, taken before
         // the mutable walk below: the tree holds one node at a time, and the
         // `Align to ▸` submenu on that node has to name all the rest.
-        // The one node an operation locks, and the sentence that refuses an
-        // edit of it: taken here for the same reason `targets` is, since the
-        // walk below borrows the scene mutably.
-        let busy = state
-            .background_task()
-            .and_then(|task| task.node)
-            .and_then(|node| state.busy_refusal(node).map(|why| (node, why)));
+        // The nodes running tasks lock, and the sentence that refuses an edit
+        // of each: taken here for the same reason `targets` is, since the walk
+        // below borrows the scene mutably.
+        let busy: Vec<(ReconId, String)> = state
+            .running_tasks()
+            .filter_map(|task| task.node)
+            .filter_map(|node| state.busy_refusal(node).map(|why| (node, why)))
+            .collect();
         // The camera an open proposal is on, which greys the node's other
         // edits and the other cameras' `Switch Camera Model…`.
         let proposal = state
@@ -477,11 +478,11 @@ struct TreeOutput<'a> {
     /// Every loaded node, including the one being drawn (filtered out where the
     /// menu is built).
     targets: &'a [AlignTarget],
-    /// The node a background operation is running on and the sentence that
-    /// refuses an edit of it, or `None` when nothing is running. Read out
+    /// The nodes running background operations lock and the sentence that
+    /// refuses an edit of each, empty when nothing locks a node. Read out
     /// before the walk, because the walk holds the scene and `AppState` is one
     /// borrow.
-    busy: Option<(ReconId, String)>,
+    busy: Vec<(ReconId, String)>,
     /// The camera an open camera model proposal is on, read out before the
     /// walk for the same reason.
     proposal: Option<CameraRef>,
@@ -503,8 +504,8 @@ impl TreeOutput<'_> {
     /// `AppState::busy_refusal`'s answer, carried in.
     fn busy_refusal(&self, id: ReconId) -> Option<&str> {
         self.busy
-            .as_ref()
-            .filter(|(busy, _)| *busy == id)
+            .iter()
+            .find(|(busy, _)| *busy == id)
             .map(|(_, why)| why.as_str())
     }
 

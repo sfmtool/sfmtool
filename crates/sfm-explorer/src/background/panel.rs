@@ -1,22 +1,25 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! The Background panel: what is running, on which node, and what it has spent
-//! its time on so far.
+//! The Background Tasks panel: what each queue is running, on which node, and
+//! what one task has spent its time on so far.
 //!
 //! See `specs/gui/background-tasks.md`, "What the user sees". The
-//! panel decides nothing: it reads [`AppState::background_task`] and the collector
-//! that task shares with its worker, and the one button it has calls
+//! panel decides nothing: it reads each queue's running task
+//! ([`AppState::queue`]), the record of finished tasks and the collector a
+//! running task shares with its worker, and its Cancel buttons call
 //! [`AppState::cancel_background_task`].
 //!
-//! ## Two forms, and neither of them is blank
+//! ## A section per queue, and neither form is blank
 //!
-//! Running, it draws the operation, the node, a bar or a spinner, the elapsed,
-//! a Cancel button and the live phase table. Idle, it draws the last operation
-//! of the session greyed, with its phases under a toggle, because the question
-//! a reader brings here after a long solve is "what did that cost" and the
-//! answer is still in reach. A session that has run nothing says
-//! `Nothing running` and no more.
+//! Each queue has a section. Running, it draws the operation, the node, a bar
+//! or a spinner, the elapsed and a Cancel button. Idle, it draws the last task
+//! that finished from that queue greyed, because the question a reader brings
+//! here after a long solve is "what did that cost" and the answer is still in
+//! reach. A queue that has run nothing says `Nothing running` and no more.
+//! Below the sections is one phase table, for the task a person last clicked
+//! the name of, or else the slow queue's running task, the fast queue's, or the
+//! last task to finish.
 //!
 //! ## The phase table is the Action Log's rows
 //!
@@ -29,6 +32,7 @@
 use std::time::Duration;
 
 use crate::action_log::{detail_row, detail_text, ActionLog, Breakdown};
+use crate::background::{Queue, TaskState};
 use crate::progress::{Collector, Count, Detail, Live};
 use crate::state::AppState;
 
@@ -53,12 +57,70 @@ const COST_WIDTH: f32 = 56.0;
 /// is asked for only where there is a live task.
 const TICK: Duration = Duration::from_millis(100);
 
-/// The panel body.
+/// The panel body: a section per queue, then the phases of one task.
 pub(crate) fn show(ui: &mut egui::Ui, state: &mut AppState) {
-    if state.background_task().is_some() {
-        show_running(ui, state);
-    } else {
-        show_idle(ui, state);
+    let mut asked = Asked::default();
+    for queue in Queue::ALL {
+        ui.label(egui::RichText::new(queue.title()).strong());
+        ui.indent(("background_tasks_queue", queue.name()), |ui| {
+            match state.queue(queue).running.as_ref().map(|task| task.id) {
+                Some(id) => show_running(ui, state, id, &mut asked),
+                None => show_idle(ui, state, queue, &mut asked),
+            }
+        });
+    }
+    if state.running_tasks().next().is_some() {
+        ui.ctx().request_repaint_after(TICK);
+    }
+    ui.separator();
+    show_chosen_phases(ui, state);
+
+    if let Some(id) = asked.shown {
+        state.background_phases_of = Some(id);
+    }
+    if let Some(id) = asked.cancel {
+        state.cancel_background_task(id);
+    }
+}
+
+/// What a click in the sections asked for, acted on once the sections are
+/// drawn: both need `&mut AppState`, which the drawing borrows.
+#[derive(Default)]
+struct Asked {
+    /// The task whose name was clicked, whose phases the panel shows next.
+    shown: Option<u64>,
+    /// The task whose Cancel was clicked.
+    cancel: Option<u64>,
+}
+
+/// The task whose phases the panel shows: the one a person last clicked while
+/// it is still running or kept, and otherwise the slow queue's running task,
+/// the fast queue's, or the last task to finish, in that order.
+///
+/// One phase list for one task, so the panel stays the height it was with one
+/// queue.
+pub(crate) fn chosen_task(state: &AppState) -> Option<u64> {
+    state
+        .background_phases_of
+        .filter(|&id| state.task(id).is_some())
+        .or_else(|| state.running_tasks().next().map(|task| task.id))
+        .or_else(|| state.last_finished_task().map(|task| task.id))
+}
+
+/// The task's name, as a label that picks its phases when clicked.
+fn name_button(
+    ui: &mut egui::Ui,
+    text: egui::RichText,
+    id: u64,
+    chosen: Option<u64>,
+    asked: &mut Asked,
+) {
+    if ui
+        .selectable_label(chosen == Some(id), text)
+        .on_hover_text("Show this task's phases below.")
+        .clicked()
+    {
+        asked.shown = Some(id);
     }
 }
 
@@ -125,13 +187,12 @@ fn phase_name(live: &Live, row: usize) -> Option<&'static str> {
     }
 }
 
-/// The running form: the operation, the node, the progress, the elapsed, the
-/// Cancel button and the live phase table.
-fn show_running(ui: &mut egui::Ui, state: &mut AppState) {
-    // Everything is read off the task first: the Cancel below needs
-    // `&mut AppState`, and these reads borrow it.
-    let refusal = state.cancel_refusal();
-    let task = state.background_task().expect("just checked");
+/// A queue's running task: the operation, the node, the progress, the elapsed
+/// and the Cancel button. Its phases are in the list below the sections.
+fn show_running(ui: &mut egui::Ui, state: &AppState, id: u64, asked: &mut Asked) {
+    let refusal = state.cancel_refusal(id);
+    let chosen = chosen_task(state);
+    let task = state.running_task(id).expect("the queue's running task");
     let name = task.operation.name;
     let label = task.label.clone();
     let elapsed = task.started.elapsed();
@@ -139,7 +200,7 @@ fn show_running(ui: &mut egui::Ui, state: &mut AppState) {
     let status = task.collector.status();
     let bar = bar(&task.collector, &live);
 
-    ui.label(egui::RichText::new(name).strong());
+    name_button(ui, egui::RichText::new(name).strong(), id, chosen, asked);
     ui.label(egui::RichText::new(label).weak());
     show_bar(ui, &bar);
 
@@ -150,7 +211,6 @@ fn show_running(ui: &mut egui::Ui, state: &mut AppState) {
         ui.label(egui::RichText::new(status).weak());
     }
 
-    let mut cancel = false;
     ui.horizontal(|ui| {
         ui.label(
             egui::RichText::new(format!("{} elapsed", ActionLog::format_took(elapsed))).weak(),
@@ -164,17 +224,10 @@ fn show_running(ui: &mut egui::Ui, state: &mut AppState) {
                 None => button.on_hover_text("Ask the operation to stop."),
             };
             if button.clicked() {
-                cancel = true;
+                asked.cancel = Some(id);
             }
         });
     });
-    ui.separator();
-    show_phases(ui, &live.rows, &live.open, true);
-    ui.ctx().request_repaint_after(TICK);
-
-    if cancel {
-        state.cancel_background_task();
-    }
 }
 
 /// The bar, or the spinner that stands in for one.
@@ -219,19 +272,15 @@ fn elide_to_fit(ui: &egui::Ui, text: &str) -> String {
 
 // -- Idle ------------------------------------------------------------------
 
-/// The idle form: the last operation of the session, greyed, with its phases
-/// below it.
-///
-/// The phases are always showing. The Action Log hides a breakdown behind a
-/// toggle because it has a row for every action of the session and expanding
-/// them all would bury the list; this panel has one operation in it, and the
-/// breakdown is the only thing it has to say. A toggle there would be a click
-/// between a reader and the thing they opened the panel for.
-fn show_idle(ui: &mut egui::Ui, state: &AppState) {
-    let Some(last) = state.last_background_task.as_ref() else {
+/// An idle queue: the last task that finished from it, greyed, or `Nothing
+/// running` when it has run nothing this session.
+fn show_idle(ui: &mut egui::Ui, state: &AppState, queue: Queue, asked: &mut Asked) {
+    let Some(last) = state.last_finished_in(queue) else {
         ui.label(egui::RichText::new("Nothing running").weak());
         return;
     };
+    let chosen = chosen_task(state);
+    let id = last.id;
     let name = last.operation.name;
     let label = last.label.clone();
     let took = ActionLog::format_took(last.took);
@@ -245,7 +294,7 @@ fn show_idle(ui: &mut egui::Ui, state: &AppState) {
             egui::vec2(width, ui.text_style_height(&egui::TextStyle::Body)),
             egui::Layout::left_to_right(egui::Align::Center),
             |ui| {
-                ui.label(egui::RichText::new(name).weak());
+                name_button(ui, egui::RichText::new(name).weak(), id, chosen, asked);
             },
         );
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -272,11 +321,33 @@ fn show_idle(ui: &mut egui::Ui, state: &AppState) {
         )
         .on_hover_text(label);
     });
-    if !last.detail.is_empty() {
-        ui.separator();
-        // Nothing is open: the operation is over, so every row is a run that
-        // closed.
-        show_phases(ui, &last.detail, &[], false);
+}
+
+/// The phases of the task [`chosen_task`] names, under a line naming it.
+///
+/// Always showing, for a finished task as for a running one. The Action Log
+/// hides a breakdown behind a toggle because it has a row for every action of
+/// the session and expanding them all would bury the list; this panel shows
+/// one task's, and the breakdown is the main thing it has to say. A toggle
+/// there would be a click between a reader and the thing they opened the panel
+/// for.
+fn show_chosen_phases(ui: &mut egui::Ui, state: &AppState) {
+    let Some(id) = chosen_task(state) else {
+        return;
+    };
+    match state.task(id) {
+        Some(TaskState::Running(task)) => {
+            let live = task.collector.live();
+            ui.label(egui::RichText::new(format!("{}: phases", task.operation.name)).weak());
+            show_phases(ui, id, &live.rows, &live.open, true);
+        }
+        Some(TaskState::Finished(task)) if !task.detail.is_empty() => {
+            ui.label(egui::RichText::new(format!("{}: phases", task.operation.name)).weak());
+            // Nothing is open: the operation is over, so every row is a run
+            // that closed.
+            show_phases(ui, id, &task.detail, &[], false);
+        }
+        _ => {}
     }
 }
 
@@ -299,18 +370,15 @@ fn show_idle(ui: &mut egui::Ui, state: &AppState) {
 /// timing on opens `linearise` and its two siblings five hundred and forty
 /// times, and every one of those is a row. Drawing only the range in view is
 /// what keeps that affordable at ten frames a second.
-fn show_phases(ui: &mut egui::Ui, rows: &[Detail], open: &[usize], follow: bool) {
+fn show_phases(ui: &mut egui::Ui, id: u64, rows: &[Detail], open: &[usize], follow: bool) {
     let breakdown = Breakdown::running(rows);
     let row_height = ui.text_style_height(&egui::TextStyle::Monospace);
     egui::ScrollArea::vertical()
-        // A scroll position of its own for each form. They share this function
-        // and nothing else: one offset between them would open a finished task
-        // wherever the live one had got to, which is its last row.
-        .id_salt(if follow {
-            "background_task_running"
-        } else {
-            "background_task_finished"
-        })
+        // A scroll position of its own for each task and each form. They share
+        // this function and nothing else: one offset between them would open a
+        // finished task wherever the live one had got to, which is its last
+        // row, and another task's table wherever this one was left.
+        .id_salt(("background_tasks_phases", id, follow))
         .auto_shrink([false, false])
         .stick_to_bottom(follow)
         .show_rows(ui, row_height, rows.len(), |ui, range| {

@@ -548,7 +548,7 @@ fn a_busy_node_does_not_refuse_focusing_or_unfocusing() {
     state.set_editing(id, false).expect("an unfocus");
     assert!(state.focused_item().is_none());
 
-    state.finish_background_task();
+    state.finish_background_tasks();
 }
 
 /// A selected point the version at the cursor no longer holds is no selection
@@ -895,7 +895,7 @@ fn a_verdict_and_a_stage_change_are_two_versions_and_the_evaluations_after_them_
     state
         .start_bench_stage(id, &label, StageKind::Cluster)
         .expect("a track with a patch frame downgrades");
-    state.finish_background_task();
+    state.finish_background_tasks();
     state.settle_bench_evaluation();
 
     assert_eq!(versions(&state, id) - before, 2);
@@ -1338,10 +1338,10 @@ fn a_photometric_step_decodes_on_the_worker() {
 
     state.start_bench_fit(id, &label).expect("the task started");
     assert!(
-        state.background_task().is_some(),
+        state.running_tasks().next().is_some(),
         "the step read the photographs here instead of deferring"
     );
-    state.finish_background_task();
+    state.finish_background_tasks();
 
     assert_eq!(
         versions(&state, id),
@@ -1380,7 +1380,7 @@ fn a_report_lands_on_the_item_it_measured() {
             }),
         )
         .expect("nothing else is running");
-    state.finish_background_task();
+    state.finish_background_tasks();
 
     assert_eq!(versions(&state, id) - before, 1);
     assert_eq!(
@@ -1415,7 +1415,7 @@ fn a_report_for_an_item_that_is_gone_is_discarded_with_one_row() {
             }),
         )
         .expect("nothing else is running");
-    state.finish_background_task();
+    state.finish_background_tasks();
 
     assert_eq!(
         versions(&state, id),
@@ -1448,7 +1448,7 @@ fn a_photometric_step_refuses_what_the_track_alone_decides() {
     state
         .start_bench_stage(id, &label, StageKind::Cluster)
         .expect("the task started");
-    state.finish_background_task();
+    state.finish_background_tasks();
     for observation in 1..3 {
         state
             .set_bench_verdict(id, &label, observation, Verdict::Out)
@@ -1468,7 +1468,7 @@ fn a_photometric_step_refuses_what_the_track_alone_decides() {
         )
     );
     assert!(
-        state.background_task().is_none(),
+        state.running_tasks().next().is_none(),
         "a refusal started a task"
     );
     assert_eq!(versions(&state, id), before, "a refusal pushed a version");
@@ -1507,8 +1507,11 @@ fn a_descriptor_search_seeds_a_candidate_at_the_warped_pixel_and_shape() {
     state
         .start_bench_descriptor_search(id, &label, 0, None, None)
         .expect("an index is open and the image has keypoints");
-    assert!(state.background_task().is_some(), "the search ran inline");
-    state.finish_background_task();
+    assert!(
+        state.running_tasks().next().is_some(),
+        "the search ran inline"
+    );
+    state.finish_background_tasks();
 
     assert_eq!(versions(&state, id), before + 1, "one version for the step");
     let track = state.bench_track(id, &label).expect("still on the bench");
@@ -1587,8 +1590,11 @@ fn a_geometry_search_needs_no_sift_index_and_routes_its_report() {
     state
         .start_bench_geometry_search(id, &label, 0)
         .expect("a framed track and decoded photographs are enough");
-    assert!(state.background_task().is_some(), "the search ran inline");
-    state.finish_background_task();
+    assert!(
+        state.running_tasks().next().is_some(),
+        "the search ran inline"
+    );
+    state.finish_background_tasks();
 
     assert_eq!(versions(&state, id), before + 1, "one report, one version");
     let rows = rows(&state);
@@ -1624,7 +1630,7 @@ fn a_descriptor_search_with_no_index_is_refused_before_the_worker() {
         .expect_err("the step asks the same question the menu does");
     assert_eq!(refusal, why);
     assert!(
-        state.background_task().is_none(),
+        state.running_tasks().next().is_none(),
         "a refusal started a task"
     );
     assert_eq!(versions(&state, id), before, "a refusal pushed a version");
@@ -1651,8 +1657,11 @@ fn a_normal_step_runs_on_the_worker_and_is_named_for_what_it_did() {
     state
         .start_bench_normal(id, &label, NormalStep::Photometric)
         .expect("a framed finite track with three sightings");
-    assert!(state.background_task().is_some(), "it runs on the worker");
-    state.finish_background_task();
+    assert!(
+        state.running_tasks().next().is_some(),
+        "it runs on the worker"
+    );
+    state.finish_background_tasks();
     let logged = rows(&state);
     let pushed = versions(&state, id) - before;
     let named = format!("Fitted the normal of {label}");
@@ -1682,7 +1691,7 @@ fn a_normal_step_runs_on_the_worker_and_is_named_for_what_it_did() {
         state
             .start_bench_normal(id, &label, step)
             .expect("a framed finite track with three sightings");
-        state.finish_background_task();
+        state.finish_background_tasks();
         let logged = rows(&state);
         assert_eq!(versions(&state, id), before + 1, "{logged:?}");
         let node = state.node(id).expect("loaded");
@@ -1712,7 +1721,7 @@ fn a_normal_step_runs_on_the_worker_and_is_named_for_what_it_did() {
         "{refused:?}"
     );
     assert!(
-        state.background_task().is_none(),
+        state.running_tasks().next().is_none(),
         "a refusal started a task"
     );
     assert_eq!(versions(&state, id), before);
@@ -1732,7 +1741,7 @@ fn a_fit_s_version_label_carries_the_classification_and_the_log_the_whole_report
     state
         .start_bench_fit(id, &label)
         .expect("a framed track with three sightings fits");
-    state.finish_background_task();
+    state.finish_background_tasks();
 
     let version = state
         .node(id)
@@ -1909,7 +1918,7 @@ fn a_geometry_search_reads_only_the_images_that_could_see_the_patch() {
     state
         .start_bench_geometry_search(id, &label, 0)
         .expect("a framed track and decoded photographs are enough");
-    state.finish_background_task();
+    state.finish_background_tasks();
     let rows = rows(&state);
     assert_eq!(rows.len(), 1, "{rows:?}");
     assert!(
@@ -1936,7 +1945,7 @@ fn a_rebench_drops_a_bitmap_its_kept_reference_row_no_longer_matches() {
     state
         .start_convert_to_embedded_patches(id)
         .expect("well posed");
-    state.finish_background_task();
+    state.finish_background_tasks();
     let (made, report) = create_track(
         &Bench::new(),
         state.scene[0].edited(),

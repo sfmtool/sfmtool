@@ -64,27 +64,35 @@ const APPLY_TIMEOUT: Duration = Duration::from_secs(10);
 ///
 /// Two sentences rather than one, because the second half of a timeout message
 /// is a guess at the cause and a guess that names something measurable beats
-/// one that lists possibilities. With an operation on a worker the viewer can
-/// say which operation and on what, and point at the tool that reports on it;
-/// with nothing running the original guesses are all there is, and they are
-/// then the right ones.
+/// one that lists possibilities. With operations on workers the viewer can say
+/// which operations and on what, each of them, and point at the tool that
+/// reports on them; with nothing running the original guesses are all there
+/// is, and they are then the right ones.
 ///
-/// It does not promise that `get_background_task` will answer, because it
+/// It does not promise that `get_background_tasks` will answer, because it
 /// cannot: every tool on this surface goes through the same GUI thread, and a
 /// thread that missed this call may miss that one too.
-pub(super) fn timeout_message(busy: Option<crate::background::Busy>) -> String {
+pub(super) fn timeout_message(busy: &[crate::background::Busy]) -> String {
     let seconds = APPLY_TIMEOUT.as_secs();
-    match busy {
-        Some(busy) => format!(
-            "The viewer did not answer within {seconds} seconds. {} is running in the background \
-             on {}; get_background_task says how far along it has got.",
-            busy.operation, busy.label
-        ),
-        None => format!(
+    if busy.is_empty() {
+        return format!(
             "The viewer did not answer within {seconds} seconds. It may be showing a modal \
              dialog, or be mid-drag."
-        ),
+        );
     }
+    let running = busy
+        .iter()
+        .map(|busy| format!("{} on {}", busy.operation, busy.label))
+        .collect::<Vec<_>>()
+        .join(" and ");
+    let (verb, how_far) = match busy.len() {
+        1 => ("is", "it has"),
+        _ => ("are", "each has"),
+    };
+    format!(
+        "The viewer did not answer within {seconds} seconds. {running} {verb} running in the \
+         background; get_background_tasks says how far along {how_far} got."
+    )
 }
 
 /// Why the endpoint could not be brought up.
@@ -220,7 +228,7 @@ impl Viewer {
                 None,
             )),
             Err(_) => Err(ErrorData::internal_error(
-                timeout_message(crate::background::busy(&self.busy)),
+                timeout_message(&crate::background::busy(&self.busy)),
                 None,
             )),
         }

@@ -193,11 +193,12 @@ impl AppState {
         pixel: [f64; 2],
         commit: bool,
         label: Option<&str>,
-    ) -> Result<(), String> {
+    ) -> Result<Option<u64>, String> {
         let outcome = self
             .find_nearby_tracks_job(image, pixel, commit, label)
             .and_then(|job| {
                 self.start_background_task(Operation::FIND_NEARBY_TRACKS, image.recon, job)
+                    .map(Some)
             });
         if let Err(message) = &outcome {
             self.action_log.fail(Kind::Bench, message.clone());

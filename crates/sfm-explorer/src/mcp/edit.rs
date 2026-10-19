@@ -43,6 +43,7 @@ use super::{
     CameraImageSel, Deferred, JsonReply, ToolError, REPLY_DIRECTLY_WITHIN,
 };
 use crate::action_log::{Actor, Kind};
+use crate::background::TaskState;
 use crate::document::VersionSerial;
 use crate::goto_point::PointQuery;
 use crate::scene::{ReconId, SceneNode};
@@ -226,17 +227,13 @@ pub(super) fn retriangulate_all_points(state: &mut AppState, label: &str) -> sup
         Ok(id) => id,
         Err(error) => return super::Outcome::Done(Err(error)),
     };
-    if let Err(message) = state.start_retriangulate_all_points(id) {
-        return super::Outcome::Done(Err(ToolError::new(message)));
+    let since = state.action_log.revision();
+    match state.start_retriangulate_all_points(id) {
+        Err(message) => super::Outcome::Done(Err(ToolError::new(message))),
+        Ok(started) => started_or(state, started, super::Answer::Version(id), |state| {
+            unchanged_reply(state, id, since)
+        }),
     }
-    let task = state.background_task().expect("the operation just started");
-    super::Outcome::Deferred(Deferred::Background(BackgroundReply {
-        operation_id: task.id,
-        operation_name: task.operation.name,
-        answer: super::Answer::Version(id),
-        label: task.label.clone(),
-        started: task.started,
-    }))
 }
 
 /// `refit_all_points`: start the refit of every point, and answer with its
@@ -251,17 +248,13 @@ pub(super) fn refit_all_points(state: &mut AppState, label: &str) -> super::Outc
         Ok(id) => id,
         Err(error) => return super::Outcome::Done(Err(error)),
     };
-    if let Err(message) = state.start_refit_all_points(id) {
-        return super::Outcome::Done(Err(ToolError::new(message)));
+    let since = state.action_log.revision();
+    match state.start_refit_all_points(id) {
+        Err(message) => super::Outcome::Done(Err(ToolError::new(message))),
+        Ok(started) => started_or(state, started, super::Answer::Version(id), |state| {
+            unchanged_reply(state, id, since)
+        }),
     }
-    let task = state.background_task().expect("the operation just started");
-    super::Outcome::Deferred(Deferred::Background(BackgroundReply {
-        operation_id: task.id,
-        operation_name: task.operation.name,
-        answer: super::Answer::Version(id),
-        label: task.label.clone(),
-        started: task.started,
-    }))
 }
 
 /// `prune_covered_observations`: start the prune, and answer with its version
@@ -281,17 +274,13 @@ pub(super) fn prune_covered_observations(
         Ok(id) => id,
         Err(error) => return super::Outcome::Done(Err(error)),
     };
-    if let Err(message) = state.start_prune_covered_observations(id, options) {
-        return super::Outcome::Done(Err(ToolError::new(message)));
+    let since = state.action_log.revision();
+    match state.start_prune_covered_observations(id, options) {
+        Err(message) => super::Outcome::Done(Err(ToolError::new(message))),
+        Ok(started) => started_or(state, started, super::Answer::Version(id), |state| {
+            unchanged_reply(state, id, since)
+        }),
     }
-    let task = state.background_task().expect("the operation just started");
-    super::Outcome::Deferred(Deferred::Background(BackgroundReply {
-        operation_id: task.id,
-        operation_name: task.operation.name,
-        answer: super::Answer::Version(id),
-        label: task.label.clone(),
-        started: task.started,
-    }))
 }
 
 pub(super) fn delete_camera_image(
@@ -370,17 +359,13 @@ pub(super) fn add_camera_image_to_tracks(
         Ok(found) => found,
         Err(error) => return super::Outcome::Done(Err(error)),
     };
-    if let Err(message) = state.start_add_image_to_tracks(image) {
-        return super::Outcome::Done(Err(ToolError::new(message)));
+    let since = state.action_log.revision();
+    match state.start_add_image_to_tracks(image) {
+        Err(message) => super::Outcome::Done(Err(ToolError::new(message))),
+        Ok(started) => started_or(state, started, super::Answer::Version(id), |state| {
+            unchanged_reply(state, id, since)
+        }),
     }
-    let task = state.background_task().expect("the operation just started");
-    super::Outcome::Deferred(Deferred::Background(BackgroundReply {
-        operation_id: task.id,
-        operation_name: task.operation.name,
-        answer: super::Answer::Version(id),
-        label: task.label.clone(),
-        started: task.started,
-    }))
 }
 
 /// `bundle_adjust`: start the solve, and answer with its result or with a
@@ -438,17 +423,13 @@ pub(super) fn bundle_adjust(
         };
     }
     options.releases = releases;
-    if let Err(message) = state.start_bundle_adjust(id, &options) {
-        return super::Outcome::Done(Err(ToolError::new(message)));
+    let since = state.action_log.revision();
+    match state.start_bundle_adjust(id, &options) {
+        Err(message) => super::Outcome::Done(Err(ToolError::new(message))),
+        Ok(started) => started_or(state, started, super::Answer::Version(id), |state| {
+            unchanged_reply(state, id, since)
+        }),
     }
-    let task = state.background_task().expect("the operation just started");
-    super::Outcome::Deferred(Deferred::Background(BackgroundReply {
-        operation_id: task.id,
-        operation_name: task.operation.name,
-        answer: super::Answer::Version(id),
-        label: task.label.clone(),
-        started: task.started,
-    }))
 }
 
 /// `switch_camera_model` in its direct form: one camera switched to a model
@@ -632,17 +613,14 @@ pub(super) fn apply_camera_model_proposal(
             super::ToolOutput::Json(reply)
         }));
     }
-    if applied.is_none() {
-        return super::Outcome::Done(reply.map(super::ToolOutput::Json));
+    match applied {
+        Some(crate::state::edits::ProposalApplied::Started(task)) => {
+            started_or(state, Some(task), super::Answer::SwitchedCamera(id), |_| {
+                unreachable!("a task started")
+            })
+        }
+        _ => super::Outcome::Done(reply.map(super::ToolOutput::Json)),
     }
-    let task = state.background_task().expect("the operation just started");
-    super::Outcome::Deferred(Deferred::Background(BackgroundReply {
-        operation_id: task.id,
-        operation_name: task.operation.name,
-        answer: super::Answer::SwitchedCamera(id),
-        label: task.label.clone(),
-        started: task.started,
-    }))
 }
 
 /// A number the wire can carry: `null` where it is not finite.
@@ -669,36 +647,88 @@ pub(super) fn convert_to_embedded_patches(state: &mut AppState, label: &str) -> 
         Ok(id) => id,
         Err(error) => return super::Outcome::Done(Err(error)),
     };
-    if let Err(message) = state.start_convert_to_embedded_patches(id) {
-        return super::Outcome::Done(Err(ToolError::new(message)));
+    let since = state.action_log.revision();
+    match state.start_convert_to_embedded_patches(id) {
+        Err(message) => super::Outcome::Done(Err(ToolError::new(message))),
+        Ok(started) => started_or(state, started, super::Answer::Version(id), |state| {
+            unchanged_reply(state, id, since)
+        }),
     }
-    let task = state.background_task().expect("the operation just started");
+}
+
+/// The answer of a call that asked for a background task: the deferral the
+/// frame turns into a result or a handle when `started` names the task it
+/// started, or `fallback`'s answer when the step started nothing.
+///
+/// The task is the one the start function named, rather than whichever task
+/// is running: with two queues, another caller's task may be running beside
+/// it, and a step that found nothing to do must not read that task as its own.
+pub(super) fn started_or(
+    state: &AppState,
+    started: Option<u64>,
+    answer: super::Answer,
+    fallback: impl FnOnce(&AppState) -> JsonReply,
+) -> super::Outcome {
+    let Some(task) = started.and_then(|id| state.running_task(id)) else {
+        return super::done(fallback(state));
+    };
     super::Outcome::Deferred(Deferred::Background(BackgroundReply {
         operation_id: task.id,
         operation_name: task.operation.name,
-        answer: super::Answer::Version(id),
+        queue: task.operation.queue,
+        answer,
         label: task.label.clone(),
         started: task.started,
     }))
 }
 
-/// `cancel_background_task`: ask the running operation to stop.
+/// `cancel_background_tasks`: ask the tasks named, or every running task, to
+/// stop.
 ///
-/// Refuses when there is nothing to stop, and when the operation never asks
-/// whether it should -- in the sentence the button's tooltip carries, so the
-/// window and the wire give one answer.
-pub(super) fn cancel_background_task(state: &mut AppState) -> JsonReply {
-    if let Some(why) = state.cancel_refusal() {
-        return Err(ToolError::new(why));
+/// A task that cannot be stopped -- one whose operation never asks whether it
+/// should, or one that is not running -- is listed under `refused` in the
+/// sentence the panel's Cancel tooltip carries, so the window and the wire give
+/// one answer, and the others are still asked. Refused as a whole only when
+/// the call names nothing and nothing is running.
+pub(super) fn cancel_background_tasks(state: &mut AppState, named: Option<&[u64]>) -> JsonReply {
+    let ids: Vec<u64> = match named {
+        Some(ids) => ids.to_vec(),
+        None => state.running_tasks().map(|task| task.id).collect(),
+    };
+    if ids.is_empty() {
+        return Err(ToolError::new("Nothing is running in the background."));
     }
-    let task = state.background_task().expect("a cancellable operation");
-    let reply = json!({
-        "cancelling": task.operation.name,
-        "reconstruction_label": task.label,
-        "operation_id": task.id,
-    });
-    state.cancel_background_task();
-    Ok(reply)
+    let mut cancelling = Vec::new();
+    let mut refused = Vec::new();
+    for id in ids {
+        let entry = |state: &AppState| match state.task(id) {
+            Some(TaskState::Running(task)) => json!({
+                "operation": task.operation.name,
+                "reconstruction_label": task.label,
+                "operation_id": id,
+            }),
+            Some(TaskState::Finished(task)) => json!({
+                "operation": task.operation.name,
+                "reconstruction_label": task.label,
+                "operation_id": id,
+            }),
+            None => json!({ "operation_id": id }),
+        };
+        match state.cancel_refusal(id) {
+            Some(why) => {
+                let mut row = entry(state);
+                row.as_object_mut()
+                    .expect("the row is an object")
+                    .insert("reason".into(), json!(why));
+                refused.push(row);
+            }
+            None => {
+                cancelling.push(entry(state));
+                state.cancel_background_task(id);
+            }
+        }
+    }
+    Ok(json!({ "cancelling": cancelling, "refused": refused }))
 }
 
 /// Whether a deferred `bundle_adjust` can be answered yet, and with what.
@@ -714,26 +744,24 @@ pub(super) fn background_reply(
     state: &AppState,
     pending: &BackgroundReply,
 ) -> Option<super::Reply> {
-    let running = state
-        .background_task()
-        .is_some_and(|task| task.id == pending.operation_id);
-    if !running {
-        let Some(outcome) = state
-            .last_background_task
-            .as_ref()
-            .filter(|last| last.id == pending.operation_id)
-        else {
-            // The operation finished and a later one displaced the record of
-            // it, which takes a frame between the two and so should not be
-            // reachable from here. Answered anyway rather than left pending:
-            // a call nothing ever replies to is a client waiting out its own
-            // timeout, which is the failure this whole path exists to end.
+    let finished = match state.task(pending.operation_id) {
+        Some(TaskState::Running(_)) => None,
+        Some(TaskState::Finished(outcome)) => Some(outcome),
+        // The operation finished and later ones pushed its record out of the
+        // ring, which takes more tasks landing between two frames than the ring
+        // holds and so should not be reachable from here. Answered anyway
+        // rather than left pending: a call nothing ever replies to is a client
+        // waiting out its own timeout, which is the failure this whole path
+        // exists to end.
+        None => {
             return Some(Err(ToolError::new(format!(
-                "{} of {} has finished, and a later operation has displaced its outcome. \
+                "{} of {} has finished, and later operations have displaced its outcome. \
                  get_action_log carries it.",
                 pending.operation_name, pending.label
-            ))));
-        };
+            ))))
+        }
+    };
+    if let Some(outcome) = finished {
         return Some(match (pending.answer, &outcome.outcome) {
             // A Create Track Here answers with the point it committed or the
             // cascade's refusal, which the record carries beside the row's
@@ -797,6 +825,7 @@ pub(super) fn background_reply(
         // inspecting the shape.
         "running": true,
         "operation": pending.operation_name,
+        "queue": pending.queue.name(),
         "reconstruction_label": pending.label,
         "operation_id": pending.operation_id,
     }))))
@@ -885,7 +914,7 @@ fn moved(
 /// The sentence is handed in rather than looked up here, because the two
 /// callers find it in different places: an edit that ran inside the call reads
 /// the newest entry it wrote, and a background operation kept its own
-/// ([`AppState::last_background_task`]) rather than trusting that nothing was
+/// ([`AppState::finished_task`]) rather than trusting that nothing was
 /// recorded in the minutes it was running.
 pub(super) fn version_reply(state: &AppState, id: ReconId, report: Option<String>) -> JsonReply {
     let node = state

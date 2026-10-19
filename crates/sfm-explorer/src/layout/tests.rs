@@ -32,8 +32,8 @@ const DEFAULT_JSON: &str = r#"{
           "active": "scene"
         },
         "second": {
-          "tabs": ["background_task"],
-          "active": "background_task"
+          "tabs": ["background_tasks"],
+          "active": "background_tasks"
         }
       },
       "second": {
@@ -200,7 +200,7 @@ fn the_left_column_splits_the_tree_over_the_background_panel() {
         "the tree's share is {fraction}, not 0.72"
     );
     assert_eq!(*top, LayoutNode::leaf(&[Tab::SceneGraph]));
-    assert_eq!(*bottom, LayoutNode::leaf(&[Tab::BackgroundTask]));
+    assert_eq!(*bottom, LayoutNode::leaf(&[Tab::BackgroundTasks]));
 }
 
 #[test]
@@ -304,7 +304,7 @@ fn tab_all_is_in_the_menus_order() {
         Tab::ALL,
         [
             Tab::SceneGraph,
-            Tab::BackgroundTask,
+            Tab::BackgroundTasks,
             Tab::Viewer3D,
             Tab::ImageBrowser,
             Tab::ImageDetail,
@@ -378,8 +378,8 @@ fn a_panel_goes_home_to_a_group_mate() {
         (Tab::ImageBrowser, Tab::ActionLog),
         // Not a multi-tab node of the default layout, and a group-mate anyway:
         // re-opening the Background panel puts it back beside the tree.
-        (Tab::BackgroundTask, Tab::SceneGraph),
-        (Tab::SceneGraph, Tab::BackgroundTask),
+        (Tab::BackgroundTasks, Tab::SceneGraph),
+        (Tab::SceneGraph, Tab::BackgroundTasks),
     ] {
         let mut state = state();
         state.hide_panel(tab);
@@ -404,7 +404,7 @@ fn a_panel_goes_home_to_a_group_mate() {
 fn a_panel_with_no_group_mate_splits_the_root() {
     for (tab, split, fraction, first_is_new) in [
         (Tab::SceneGraph, SplitDirection::LeftRight, 0.18, true),
-        (Tab::BackgroundTask, SplitDirection::LeftRight, 0.18, true),
+        (Tab::BackgroundTasks, SplitDirection::LeftRight, 0.18, true),
         (Tab::ImageBrowser, SplitDirection::TopBottom, 0.80, false),
         (Tab::ImageDetail, SplitDirection::LeftRight, 0.67, false),
     ] {
@@ -638,17 +638,22 @@ fn an_unknown_panel_name_lists_them_all() {
     let message = layout_refusal(r#"{"main": {"tabs": ["viewer3d"], "active": "viewer3d"}}"#);
     assert_eq!(
         message,
-        "layout.main: unknown panel \"viewer3d\"; the panels are scene, background_task, viewer_3d, \
+        "layout.main: unknown panel \"viewer3d\"; the panels are scene, background_tasks, viewer_3d, \
          image_browser, image_detail, track_view, camera_intrinsics, action_log, edit_history"
     );
 }
 
-/// The two panels Track View took the place of are unknown names like any
-/// other: a file naming either is refused whole, with no alias for the old
-/// spelling and no rule for a file that names both.
+/// The two panels Track View took the place of, and the Background Task panel
+/// renamed Background Tasks, are unknown names like any other: a file naming
+/// one is refused whole, with no alias for the old spelling and no rule for a
+/// file that names both.
 #[test]
 fn a_retired_panel_name_is_refused_whole() {
-    for retired in ["point_track", "track_edit"] {
+    for (retired, current) in [
+        ("point_track", "track_view"),
+        ("track_edit", "track_view"),
+        ("background_task", "background_tasks"),
+    ] {
         let message = layout_refusal(&format!(
             r#"{{"main": {{"tabs": ["{retired}"], "active": "{retired}"}}}}"#
         ));
@@ -656,10 +661,9 @@ fn a_retired_panel_name_is_refused_whole() {
             message.starts_with(&format!("layout.main: unknown panel \"{retired}\"")),
             "{message}"
         );
-        assert!(message.contains("track_view"), "{message}");
+        assert!(message.contains(current), "{message}");
+        assert_eq!(Tab::from_wire_name(retired), None);
     }
-    assert_eq!(Tab::from_wire_name("point_track"), None);
-    assert_eq!(Tab::from_wire_name("track_edit"), None);
 }
 
 /// The stock layout every earlier viewer wrote, with both retired names in one
@@ -677,7 +681,7 @@ fn the_earlier_stock_layout_is_refused_and_leaves_the_dock_alone() {
     assert_eq!(
         message,
         "layout.main.second.first.second: unknown panel \"point_track\"; the panels are scene, \
-         background_task, viewer_3d, image_browser, image_detail, track_view, camera_intrinsics, \
+         background_tasks, viewer_3d, image_browser, image_detail, track_view, camera_intrinsics, \
          action_log, edit_history"
     );
 }

@@ -221,11 +221,12 @@ impl AppState {
         image: ImageRef,
         pixel: [f64; 2],
         label: Option<&str>,
-    ) -> Result<(), String> {
+    ) -> Result<Option<u64>, String> {
         let outcome = self
             .create_track_at_pixel_job(image, pixel, label)
             .and_then(|job| {
                 self.start_background_task(Operation::CREATE_TRACK_AT_PIXEL, image.recon, job)
+                    .map(Some)
             });
         if let Err(message) = &outcome {
             self.action_log.fail(Kind::Bench, message.clone());

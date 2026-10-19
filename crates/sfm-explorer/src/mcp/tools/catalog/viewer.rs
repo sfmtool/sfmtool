@@ -16,8 +16,10 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           photograph) and renders every patch bitmap it does not carry, for \
                           display only. One that finishes within 200 ms replies with the \
                           reconstruction; one still going replies with running: true and an \
-                          operation_id to poll with get_background_task, and the node appears \
-                          when it lands. Refused while another background operation runs. \
+                          operation_id to poll with get_background_tasks, and the node appears \
+                          when it lands. The open runs from the fast queue, so it is refused \
+                          while the fast queue runs another task and not while a slow task, such \
+                          as a bundle adjustment, runs. \
                           Read the returned `label` back rather than assuming it: a colliding \
                           file stem is disambiguated as \"name (2)\".",
             kind: Write,

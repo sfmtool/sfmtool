@@ -115,9 +115,14 @@ impl AppState {
     /// soon as the worker is running, and **nothing is logged here**: the entry
     /// is the outcome's, written on the frame the answer lands. An `Err` is a
     /// refusal to begin, logged the way the synchronous edits log theirs.
-    pub(crate) fn start_add_image_to_tracks(&mut self, image: ImageRef) -> Result<(), String> {
+    pub(crate) fn start_add_image_to_tracks(
+        &mut self,
+        image: ImageRef,
+    ) -> Result<Option<u64>, String> {
         let outcome = match self.add_image_to_tracks_job(image) {
-            Ok(job) => self.start_background_task(Operation::ADD_IMAGE_TO_TRACKS, image.recon, job),
+            Ok(job) => self
+                .start_background_task(Operation::ADD_IMAGE_TO_TRACKS, image.recon, job)
+                .map(Some),
             Err(message) => Err(message),
         };
         if let Err(message) = &outcome {

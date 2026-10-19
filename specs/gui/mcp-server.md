@@ -136,7 +136,7 @@ and press the viewer's widgets the way a person's eyes, mouse and keyboard do
 | `get_image_detail_view` | read | Where that panel is looking: the photograph, the zoom, and the rectangle of it on screen |
 | `get_viewer_3d_display` | read | The 3D viewport's display controls — the HUD's layer toggles, sizes, Maintain Z-up and the rest of its checkboxes and sliders — as one flat document |
 | `get_reconstruction_history` | read | One reconstruction's versions, its cursor, and what a save would find |
-| `get_background_task` | read | What the viewer is busy with, how far along it is and what it has spent its time on, or what the last operation cost |
+| `get_background_tasks` | read | What each background queue is running, how far along it is and what it has spent its time on, and what each queue's last task cost; or one task by its id |
 | `open_reconstruction` | write | Load an `.sfmr` into the scene as a new node, always appending, filling in the thumbnails and patch bitmaps the file lacks, on a worker thread |
 | `close_reconstruction` | write | Close one reconstruction, or all of them |
 | `select_reconstruction` | write | Make one the reconstruction the file- and sequence-shaped panels follow |
@@ -173,7 +173,7 @@ and press the viewer's widgets the way a person's eyes, mouse and keyboard do
 | `propose_camera_model` | write | Open or refit a camera model proposal on one camera, as the Camera Intrinsics panel's *Switch Model…* does; no version |
 | `cancel_camera_model_proposal` | write | Drop the camera model proposal open on one reconstruction; no version |
 | `convert_to_embedded_patches` | write | Change one reconstruction's observations from `.sift` feature indexes to inline keypoints against a patch frame, on a worker thread |
-| `cancel_background_task` | write | Stop the operation running on a worker, when it can be stopped |
+| `cancel_background_tasks` | write | Stop the tasks named, or every task running on a worker, when they can be stopped |
 | `get_bench` | read | One reconstruction's bench: every item on it, and the focused item when it is on that bench |
 | `get_bench_track` | read | One track on the bench: its stage, thresholds and every observation |
 | `create_bench_cluster` | write | Start a cluster-stage track from a place in one camera image |
@@ -315,12 +315,12 @@ both: **`panel_name`**, by the rule below that makes a reconstruction's
 argument `reconstruction_label`.
 
 The nine names are the layout file's, and there is no second spelling of them
-anywhere: `scene`, `background_task`, `viewer_3d`, `image_browser`,
+anywhere: `scene`, `background_tasks`, `viewer_3d`, `image_browser`,
 `image_detail`, `track_view`, `camera_intrinsics`, `action_log`,
 `edit_history` (`Tab::wire_name`). An unknown name is refused with a message
 listing all nine (`Tab::all_wire_names`), and that includes a name no panel
-carries any more: `point_track` and `track_edit` are refused like any other
-unknown name, with no alias. `Tab` stays the Rust name — it is
+carries any more: `point_track`, `track_edit` and `background_task` are refused
+like any other unknown name, with no alias. `Tab` stays the Rust name — it is
 `egui_dock`'s word for the thing in a node, and the code is not the wire.
 
 **`window_layout`** is the whole document — the window's placement and the panel
@@ -534,7 +534,7 @@ addressable. No arguments.
     "looking_through": null               // a camera image, in camera-view mode
   },
   "status_message": null,
-  "background_task": null,                // or the block below; see § "get_background_task"
+  "background_tasks": [],                 // the running tasks; see below and § "get_background_tasks"
   "action_log_revision": 530,             // the Action Log's clock — see § "get_action_log"
   "window_title": "SfM Explorer - seoul_bull.sfmr [MCP :8787]",
   "window": { "state": "normal", … }      // see § "The window block"
@@ -559,35 +559,39 @@ a screenshot is worth taking at all, and a second call for it every time is a
 call too many. It is `null` only before the window exists, which no tool call
 can be answered ahead of.
 
-**`background_task` says whether the viewer is busy, and stops there.** It is
-`null` whenever nothing is running, and otherwise the first six fields of
-`get_background_task`'s running reply and no more:
+**`background_tasks` says whether the viewer is busy, and stops there.** It
+lists every running task, the slow queue's first, and is empty whenever nothing
+is running. Each entry is the first seven fields of `get_background_tasks`'s
+running reply and no more:
 
 ```jsonc
-"background_task": {
-  "running": true,
-  "operation": "Bundle adjust",
-  "reconstruction_label": "dino_dog_toy-embedded",
-  "operation_id": 2,
-  "elapsed_s": 42.7,
-  "fraction": 0.61                        // absent where nothing has reported one
-}
+"background_tasks": [
+  {
+    "running": true,
+    "operation": "Bundle adjust",
+    "queue": "slow",
+    "reconstruction_label": "dino_dog_toy-embedded",
+    "operation_id": 2,
+    "elapsed_s": 42.7,
+    "fraction": 0.61                      // absent where nothing has reported one
+  }
+]
 ```
 
 An agent that already polls `get_scene` learns from this that an edit of that
-label would be refused, without a second call. What it does **not** carry is
-anything whose size depends on the operation: the phase table, which a
-three-round, sixty-iteration adjustment reports hundreds of rows of, is
-`get_background_task`'s, and the open phase and the status line go with it
-because they are narrative rather than something a caller acts on. This is the
-most-polled tool on the surface, and a block that grew with the solve would be
-paid for on every poll by every agent.
+label would be refused, and that a start in that queue would be, without a
+second call. What it does **not** carry is anything whose size depends on the
+operation: the phase table, which a three-round, sixty-iteration adjustment
+reports hundreds of rows of, is `get_background_tasks`'s, and the open phase and
+the status line go with it because they are narrative rather than something a
+caller acts on. This is the most-polled tool on the surface, and an entry that
+grew with the solve would be paid for on every poll by every agent.
 
-It is `null` rather than the last operation for the same reason, and for a
-second one: a block that went on describing a solve that ended half an hour ago
-would make `background != null` stop meaning "the viewer is busy", which is the
-one thing it is read for. What the last operation cost is
-`get_background_task`'s answer and the Action Log's.
+It lists running tasks only, rather than the last ones too, for the same reason
+and for a second one: an entry that went on describing a solve that ended half
+an hour ago would make a non-empty list stop meaning "the viewer is busy",
+which is the one thing it is read for. What the last tasks cost is
+`get_background_tasks`'s answer and the Action Log's.
 
 **`display` reports `visible` and `drawn` both.** `visible` is the node's own
 master eye; `drawn` is the composition `visible && (no solo, or the solo is me)`
@@ -849,16 +853,18 @@ read, and the thumbnails and patch bitmaps it does not carry are built for
 display, on a worker, before the node appears. It replies the way every
 background tool does. An open that lands within `REPLY_DIRECTLY_WITHIN` answers
 with the entry above; one still running answers with the handle, `running: true`,
-`operation: "Open"`, the file's stem as `reconstruction_label` and an
-`operation_id` for `get_background_task`, and the node appears when the open
-lands. It **always appends**: opening a path that is already open opens it a
+`operation: "Open"`, `queue: "fast"`, the file's stem as
+`reconstruction_label` and an `operation_id` for `get_background_tasks`, and the
+node appears when the open lands. An open runs from the fast queue, so it is
+refused while another fast task runs and starts while a slow one, such as a
+bundle adjustment, runs. It **always appends**: opening a path that is already open opens it a
 second time, as a second node with a history of its own, and `already_open:
 true`, decided when the call is made, says that happened. The returned `label`
 may differ from the file stem, since `unique_label` disambiguates a collision as
 `global (2)`, so the agent must read the label back rather than assume it.
 
 A refusal to begin is a tool error, not a silent status line (§ "Errors"), and
-immediate: a path that is not a file, or another background operation running.
+immediate: a path that is not a file, or the fast queue running another task.
 `start_open` returns it and writes no Action Log entry, so the caller words it:
 the File menu records `Failed to load …`, the drain records
 `open_reconstruction failed: …`, and either way one failure produces one entry.
@@ -1928,21 +1934,38 @@ anything happened since its last `get_action_log` without a second call.
 `status_message` stays: it is the status line, which is a different thing from
 the log.
 
-### `get_background_task`
+### `get_background_tasks`
 
-What the viewer is busy with. One operation runs at a time, viewer-wide
-([background-tasks.md](background-tasks.md)),
-so this names none and takes no arguments.
+What the viewer is busy with. Background tasks run from two queues, `slow` and
+`fast`; each runs one task at a time and the two run at the same time
+([background-tasks.md](background-tasks.md) § "Two queues"). With no argument it
+answers about both queues:
 
 ```jsonc
+// get_background_tasks {}
+{
+  "slow": {
+    "running": { … },                         // the task below, or null
+    "last_finished": { … }                    // the finished shape below, or null
+  },
+  "fast": { "running": null, "last_finished": null }
+}
+```
+
+With `operation_id`, the id a handle carried, it answers about that one task,
+running or finished. A running task:
+
+```jsonc
+// get_background_tasks { "operation_id": 2 }
 {
   "running": true,
   "operation": "Bundle adjust",
+  "queue": "slow",                            // the queue it runs from
   "reconstruction_label": "dino_dog_toy-embedded",
   "operation_id": 2,                          // the id bundle_adjust's handle carried
   "elapsed_s": 42.7,                          // how long it has been going
   "fraction": 0.61,                           // of the whole, where anything reported one
-  "cancellable": true,                        // whether cancel_background_task would do anything
+  "cancellable": true,                        // whether cancel_background_tasks would do anything
   "progress": { "done": 2, "total": 3, "unit": "round" },   // the kernel's own count
   "status": "refining images/IMG_0042.jpg",   // what it says it is doing right now
   "phase": "damping ladder",                  // the stage it is inside
@@ -1956,13 +1979,15 @@ so this names none and takes no arguments.
 }
 ```
 
-With nothing running it reports the last operation of the session instead:
+A finished one, from the record of the last 16 finished tasks the viewer keeps
+(`FINISHED_KEPT`):
 
 ```jsonc
 {
   "running": false,
   "finished": true,
   "operation": "Bundle adjust",
+  "queue": "slow",
   "reconstruction_label": "dino_dog_toy-embedded",
   "operation_id": 2,
   "elapsed_s": 95.3,                          // what the whole operation cost
@@ -1972,25 +1997,27 @@ With nothing running it reports the last operation of the session instead:
 }
 ```
 
-A session that has run nothing answers `{ "running": false, "finished": false }`
-and no more.
+An `operation_id` no task has had is refused with *"No background task has
+operation_id {id}."*, and one whose record has been pushed out of the 16 with a
+refusal that points at `get_action_log`, which holds its row.
 
 **One call answers both "is it done" and "what did it cost".** The question an
 agent brings here is a single one asked at an unknown moment (the solve it
 started, is it still going, and what has it spent), and a surface that answered
 only about a live operation would need a second tool for the other half, which a
 caller would have to choose between before knowing which it had. So the two
-replies are one shape: `running` tells them apart, `operation`,
+replies are one shape: `running` tells them apart, `operation`, `queue`,
 `reconstruction_label` and `operation_id` mean the same thing in both, and
 `elapsed_s` is the seconds so far while it runs and the seconds in total once it
-is over. `finished` is absent from a running reply and present in both idle
-ones, so a reader never has to tell a missing key from a false one.
+is over. `finished` is absent from a running reply and present in a finished
+one. The two-queue form puts the same shapes under `running` and
+`last_finished`, so one parser reads every reply this tool gives.
 
 **`phases` carries `get_action_log`'s `detail` rows**, field for field and in
 the same order (§ "get_action_log"), built by the same function from the same
 collector, so one parser reads both. What it carries is the **transcript**: one
 row per run of a stage and one per message, unfolded, which is what the
-Background Task panel draws. The entry the operation leaves behind is the folded
+Background Tasks panel draws. The entry the operation leaves behind is the folded
 summary of that transcript, so the two are one account of one solve presented
 for two questions, and every run reported here is counted in the row the entry
 folds it into. A reader that wants the shape of a finished operation rather than
@@ -2002,15 +2029,17 @@ construction, where `ms` is a per-stage cost that is usually sub-second.
 **The list is capped at the size an entry's is**, 128 rows
 (`ActionLog::DETAIL_EVENTS`), with a `{ "kind": "message" }` row reading
 `"{n} earlier events dropped"`. The size is not a limit picked for the wire: it
-is the number the Action Log already applies to these rows.
+is the number the Action Log already applies to these rows. Each running task
+in the two-queue form carries its own capped list.
 
 It keeps the **last** rows rather than the first, which is the opposite of what
 an entry's cap does, because these are not an entry's rows. `phases` is the
-transcript the Background Task panel draws, unfolded, so nothing has collapsed the
-repetition in it: the first 128 rows of a long solve are its first few seconds
-and say nothing about where it has got to. An entry's first 128 rows are its
-shape, because folding has already collapsed the repetition underneath them. The
-panel has the same problem and answers it the same way, by following its tail.
+transcript the Background Tasks panel draws, unfolded, so nothing has collapsed
+the repetition in it: the first 128 rows of a long solve are its first few
+seconds and say nothing about where it has got to. An entry's first 128 rows are
+its shape, because folding has already collapsed the repetition underneath
+them. The panel has the same problem and answers it the same way, by following
+its tail.
 
 `operation_id` is the id a `bundle_adjust` handle carried, so an agent holding
 one can tell an answer about its own run from an answer about a later one.
@@ -2022,31 +2051,40 @@ know how many there are, and the whole block absent where it reports no count.
 `status`, `phase` and `progress` are all absent rather than null where the
 operation has said nothing.
 
-### `cancel_background_task`
+### `cancel_background_tasks`
 
-The Background Task panel's Cancel button. It takes no arguments, because one
-operation runs at a time.
+The Background Tasks panel's Cancel buttons. `operation_ids` names the tasks to
+stop; without it, every running task is asked to stop.
 
 ```jsonc
-// cancel_background_task {}
+// cancel_background_tasks { "operation_ids": [2, 5] }
 {
-  "cancelling": "Bundle adjust",                  // the operation asked to stop
-  "reconstruction_label": "dino_dog_toy-embedded",
-  "operation_id": 2                               // the id its handle carried
+  "cancelling": [                                 // the tasks asked to stop
+    { "operation": "Bundle adjust", "reconstruction_label": "dino_dog_toy-embedded",
+      "operation_id": 2 }
+  ],
+  "refused": [                                    // the tasks that cannot be
+    { "operation": "Fit track", "reconstruction_label": "bull",
+      "operation_id": 5, "reason": "Fit track of bull has already finished." }
+  ]
 }
 ```
 
-The reply says the request was made, not that the operation has stopped: the
+The reply says the request was made, not that the operation has stopped: each
 operation stops at its next poll of the cancel flag, writes a failed Action Log
-entry and pushes no version, and `get_background_task` reports it as finished
+entry and pushes no version, and `get_background_tasks` reports it as finished
 with `failed: true` once it has. A run that finishes before it next polls the
-flag lands as it would have without the request. With nothing running it
-refuses with *"Nothing is running in the background."*, and for an operation
-that never polls the flag with *"{operation} cannot be cancelled: it never asks
-whether it should stop."*, the sentence the button's tooltip carries
-(`AppState::cancel_refusal` in
-[background/mod.rs](../../crates/sfm-explorer/src/background/mod.rs)).
-`get_background_task`'s `cancellable` says beforehand whether the running
+flag lands as it would have without the request. A task named that has
+finished is refused with *"{operation} of {label} has already finished."*, an id
+no running task has with *"No background task with operation_id {id} is
+running."*, and an operation that never polls the flag with *"{operation} cannot
+be cancelled: it never asks whether it should stop."*, the sentence the
+button's tooltip carries (`AppState::cancel_refusal` in
+[background/mod.rs](../../crates/sfm-explorer/src/background/mod.rs)); the
+other tasks named are still asked to stop. With no `operation_ids` and nothing
+running the call is refused as a whole with *"Nothing is running in the
+background."*, and an empty `operation_ids` is refused at the parse.
+`get_background_tasks`'s `cancellable` says beforehand whether a running
 operation can be cancelled.
 
 ### `get_timing_detail`, `set_timing_detail`
@@ -2885,7 +2923,7 @@ Where the window is, and which panels are where. No arguments.
   "window": { /* the window block, live, with `monitors` — null with no window */ },
   "panels": {                       // one entry per panel, always all nine
     "scene":             { "open": true,  "active": true },
-    "background_task":   { "open": true,  "active": true },
+    "background_tasks":  { "open": true,  "active": true },
     "viewer_3d":         { "open": true,  "active": true },
     "image_browser":     { "open": true,  "active": true },
     "image_detail":      { "open": true,  "active": false },
@@ -3571,8 +3609,9 @@ One still running at 200 ms replies with a handle instead:
 {
   "running": true,                          // present and true only in this case
   "operation": "Bundle adjust",
+  "queue": "slow",                          // the queue it runs from
   "reconstruction_label": "dino_dog_toy-embedded",
-  "operation_id": 2                         // names this run, for cancel_background_task
+  "operation_id": 2                         // names this run, for cancel_background_tasks
 }
 ```
 
@@ -3582,11 +3621,12 @@ reconstruction costs: under roughly 100 ms a reply reads as instantaneous, and a
 second is where a caller starts wondering, so 200 ms answers normally inside the
 window where nobody had begun to.
 
-An agent that took a handle asks `get_background_task` how the run is going
-and, once it is over, what it cost (§ "get_background_task"); the same answer
+An agent that took a handle asks `get_background_tasks { "operation_id": … }`
+how the run is going and, once it is over, what it cost
+(§ "get_background_tasks"); the same answer
 reaches the Action Log, with the whole operation's cost and the stages it
 reported ([operation-progress.md](operation-progress.md)), whichever way the
-call answered. `cancel_background_task` stops it;
+call answered. `cancel_background_tasks` stops it;
 the adjustment polls between rounds and between iterations, and the bench's
 photometric steps poll on either side of their decode and inside their kernels,
 and a cancelled one
@@ -3846,7 +3886,7 @@ and an image whose photograph cannot be found.
 **It runs on a worker thread** and replies the way `bundle_adjust` does
 (§ "`resect_camera_image` / `bundle_adjust`"): with the version and the Action
 Log sentence when it finishes within 200 ms, with a `running: true` handle
-otherwise, and `cancel_background_task` stops it.
+otherwise, and `cancel_background_tasks` stops it.
 A call that adds nothing pushes no version and answers `changed: false` at the
 version the node still stands at. The Action Log row reads *"Added
 frame_23.jpg to 12 tracks (361 candidates refused: 306 not in frame, 32 peak at
@@ -3893,7 +3933,7 @@ is the frame builder's refusal, worded by the state and recorded once.
 version and its report inside 200 ms, a `running: true` handle after it, with
 `"operation": "Convert to embedded patches"`. It polls the cancel flag between
 its three stages and between the images of its `.sift` read, so
-`cancel_background_task` stops it, and a cancelled conversion pushes no version.
+`cancel_background_tasks` stops it, and a cancelled conversion pushes no version.
 
 It is refused on a reconstruction that already carries embedded patches -- there
 is no `.sift` left to copy a keypoint from -- in the same sentence the greyed
@@ -3953,7 +3993,7 @@ answers the two ways `bundle_adjust` does, with `"operation": "Retriangulate all
 points"`. It deletes no point and creates none, so every index still means what
 it meant, unless a point edit was pending, whose deleted slots close up first
 (§ "The editing family"); no cache is dropped for it until the version lands.
-It polls the cancel flag between its stages, so `cancel_background_task` stops
+It polls the cancel flag between its stages, so `cancel_background_tasks` stops
 it and a
 cancelled retriangulation pushes no version. Its `report` counts the per-point
 statuses: points moved, crossed to or from infinity, turned into directions by
@@ -3989,7 +4029,7 @@ family"). It reads every photograph some point observes through the photograph
 cache, and a photograph that cannot be read fails the run with *"Cannot read
 <image>."* and pushes no version. It polls the cancel flag between the
 photographs, in front of each stage and in front of each point's fit, so
-`cancel_background_task` stops it and a cancelled refit pushes no version.
+`cancel_background_tasks` stops it and a cancelled refit pushes no version.
 
 Its `report` is the Action Log sentence, which counts the per-point statuses:
 the points refit out of those read, how many of them agree with what was stored,
@@ -4247,7 +4287,7 @@ tool error whose first line is the Action Log row's sentence, the last member's
 stage and reason followed by what the index files lacked, and whose next lines
 are each member's stage and reason in the order tried. Nothing is pushed then.
 It answers in two levels like the other steps that run on a worker, and a
-handle's `get_background_task` reports `Create track at pixel`.
+handle's `get_background_tasks` reports `Create track at pixel`.
 
 **`find_nearby_tracks` is Image Detail's *Find Nearby Tracks*.** It takes a
 `camera_image` and a `pixel`, and two arguments the menu entry does not offer:
@@ -4290,7 +4330,7 @@ them. A range's far end is `null` when it is infinite. A find with nothing
 usable pushes no version and answers `changed: false` with no tracks. Its
 refusals in the call are *Create Track Here*'s (a busy node, an image with no
 pose, a pixel off the photograph, and with `commit` a node whose observations
-are `.sift` features), and a handle's `get_background_task` reports `Find
+are `.sift` features), and a handle's `get_background_tasks` reports `Find
 nearby tracks`.
 
 **Evaluation is live, and fitting is a tool.** There is no call that evaluates a
@@ -4916,16 +4956,17 @@ rather than a hung connection.
 
 **The message says what is running when something is.** A timeout's second
 sentence is a guess at the cause, and a guess that names something measurable
-beats one that lists possibilities: with an operation on a worker the viewer
-names it and the node it is on, and points at `get_background_task`; with
-nothing running the two guesses above are all there is, and they are then the
-right ones. The fact is read off a small shared notice
-(`background::BusyNotice`) written where `AppState::background` is written,
-because the thread composing this message is the one thread that cannot ask the
-state, being the one composing it precisely because the GUI thread did not
-answer. The
-message does not promise that `get_background_task` will answer either: every
-tool on this surface goes through the same GUI thread.
+beats one that lists possibilities: with operations on workers the viewer
+names each one and the node it is on, *"Bundle adjust on dino and Fit track on
+bull are running in the background"*, and points at `get_background_tasks`;
+with nothing running the two guesses above are all there is, and they are then
+the right ones. The fact is read off a small shared notice
+(`background::BusyNotice`, one entry per running task) written where a queue's
+running task is set or taken, because the thread composing this message is the
+one thread that cannot ask the state, being the one composing it precisely
+because the GUI thread did not answer. The message does not promise that
+`get_background_tasks` will answer either: every tool on this surface goes
+through the same GUI thread.
 
 **Every applied command records an Action Log entry as actor `MCP`**, and the
 viewport status line shows the most recent entry that is not a successful
@@ -5043,7 +5084,7 @@ controls record under, since the Image Detail toolbar is the same sort of thing
 on a different panel — and `GetImageDetailDisplay` a `Kind::Query` like every
 other read. `SetViewer3dDisplay` is `Kind::Display` too, being the HUD's own
 controls, and `GetViewer3dDisplay` a `Kind::Query`. Every edit command, the three
-cursor moves, `CommitBenchTrack` and `CancelBackgroundTask` are `Kind::Edit`
+cursor moves, `CommitBenchTrack` and `CancelBackgroundTasks` are `Kind::Edit`
 and `SaveReconstruction` is `Kind::File`, which is where the GUI's own rows for
 them go, so a refusal is filed where its success would have been.
 Everything the window portion is made of — `WindowChange`, `WindowState`,
@@ -5609,31 +5650,42 @@ where a test hands no host over.
   optional ones default to what the schemas say.
 - **A window portion through plain `apply`** — no host — is refused with "no
   window", so a caller that forgets the host fails loudly.
-- **`get_background_task` reads one shape running and finished**: a session
-  that has run nothing answers `running: false, finished: false` and nothing
-  else; a held fake operation answers with the operation, the label, the id, the
-  elapsed, `cancellable`, the kernel's count, the open phase and the stages so
-  far; once it is over the same call answers `finished: true` about the same
-  `operation_id` with a cost no shorter than the elapsed it was read at, and
-  with how it ended in the Action Log's own `failed` and `text`. Its `phases` is
+- **`get_background_tasks` reads one shape running and finished**: a session
+  that has run nothing answers both queues with `running` and `last_finished`
+  null; a held fake operation answers, by its `operation_id`, with the
+  operation, its queue, the label, the id, the elapsed, `cancellable`, the
+  kernel's count, the open phase and the stages so far, and is the slow queue's
+  `running`; once it is over the same call answers `finished: true` about the
+  same `operation_id` with a cost no shorter than the elapsed it was read at,
+  and with how it ended in the Action Log's own `failed` and `text`, and is the
+  slow queue's `last_finished`. An id no task has had is refused. Its `phases` is
   the transcript and that operation's `get_action_log` `detail` is the summary
   of it: every run the wire reported is counted in the row the entry folds it
   into, and the entry is then held to the panel's own rows through the agreement
   assertion every other breakdown test ends on. A breakdown longer than
   `DETAIL_EVENTS` keeps the last 128 rows after the dropped line, and reads the
   same after the operation ends as during it.
-- **`get_scene` says the viewer is busy and stops there**: `background_task` is
-  `null` before an operation and again after it, and while one runs it carries
-  exactly `running`, `operation`, `reconstruction_label`, `operation_id`,
-  `elapsed_s` and `fraction`. The whole key set is asserted, so a field added to
-  it later is a deliberate act rather than a drift in the most-polled reply on
-  the surface.
+- **`get_scene` says the viewer is busy and stops there**: `background_tasks`
+  is empty before an operation and again after it, and while one runs its entry
+  carries exactly `running`, `operation`, `queue`, `reconstruction_label`,
+  `operation_id`, `elapsed_s` and `fraction`. The whole key set is asserted, so
+  a field added to it later is a deliberate act rather than a drift in the
+  most-polled reply on the surface.
+- **`cancel_background_tasks`** with no argument asks every running task to
+  stop and lists each under `cancelling`; naming one task of two running in the
+  two queues stops that one alone; and a named task that has finished, or an id
+  no task has had, is listed under `refused` with its reason. The old names
+  `get_background_task` and `cancel_background_task` are refused as unknown
+  tools.
+- **A deferred reply finds its task by id** when a task from the other queue
+  landed after it and before the reply was resolved, and answers with its own
+  task's outcome.
 - **The apply timeout's message follows what is running**: with nothing running
-  it is the sentence it always was, and with an operation running it names the
-  operation and the node and points at `get_background_task` instead of
-  guessing at a dialog. The notice it reads is written where the process is
-  written, so it is empty before an operation, says what is running during it,
-  and is empty again afterwards.
+  it is the sentence it always was, and with operations running it names each
+  operation and its node and points at `get_background_tasks` instead of
+  guessing at a dialog. The notice it reads is written where a queue's running
+  task is written, so it is empty before an operation, says what is running
+  during it, and is empty again afterwards.
 - **The bench family, over a node whose keypoints are each point's exact
   projection with a textured photograph cached for every image**: a cluster
   started at a pixel, an observation added at another and a verdict on it are
@@ -5662,7 +5714,7 @@ where a test hands no host over.
   rename answers with the new label and the old one then names nothing; each
   refusal is the bench's own sentence and pushes no version; and the two steps
   that read photographs defer to a worker, land their version, and are what
-  `get_background_task` reports afterwards, with the reads reporting
+  `get_background_tasks` reports afterwards, with the reads reporting
   `evaluation.state` as `evaluating` until the evaluation that follows lands and
   `current` after it, and the measurements reaching the wire under the
   observation indexes they were computed for. Moving `max_shift_px` with
@@ -5798,7 +5850,7 @@ where a test hands no host over.
   two targets, `panel_name` beside `widget`, a third click, an unknown button or
   modifier, a malformed id and empty text; and every field a listing or an
   input reply carries is a spelled-out wire name. A `drag` across a drag-sensing
-  pad in the Background Task panel starts one drag and stops one, its deltas sum
+  pad in the Background Tasks panel starts one drag and stops one, its deltas sum
   to the path's span, and it writes one row naming both ends; `mouse_button` and
   `modifiers` are held in every frame of it and the modifiers are released
   afterwards; a path with one point outside the target is refused before the
@@ -6022,7 +6074,7 @@ Other candidates, in rough order of value:
 | `screenshot` `max_dimension` | none — the native size of whatever was photographed | Longest side of the returned PNG. Below `16` (`frame::MIN_MAX_DIMENSION`, the schema's `"minimum"`) is refused. |
 | `get_action_log` `limit` | `200` (`read::ACTION_LOG_DEFAULT_LIMIT`) | Entries per call. `0` is refused, as the schema's `"minimum": 1` says. |
 | `get_action_log` `limit` cap | `1000` (`read::ACTION_LOG_MAX_LIMIT`) | The most one call will return, whatever it asked for. |
-| Breakdown rows per operation | `128` (`ActionLog::DETAIL_EVENTS`) | Rows `detail` and `get_background_task`'s `phases` carry, plus a line saying how many were dropped: the first of them for `detail`, which is folded, and the last for `phases`, which is a transcript. |
+| Breakdown rows per operation | `128` (`ActionLog::DETAIL_EVENTS`) | Rows `detail` and `get_background_tasks`'s `phases` carry, plus a line saying how many were dropped: the first of them for `detail`, which is folded, and the last for `phases`, which is a transcript. |
 | Apply timeout | `10 s` (`server::APPLY_TIMEOUT`) | How long a tool call waits for the GUI thread. |
 | `set_view` `fov_short_axis_deg` | `5`–`160` degrees (`view::MIN_FOV_DEG`, `view::MAX_FOV_DEG`) | Accepted range, matching what interactive FOV zoom clamps to. |
 | `set_view` `turn` / `orbit` pitch limit | `0.01` rad from `world_up` and its opposite (`camera::POLE_MARGIN`) | Where a pitch stops, as a drag's does, so the roll stays defined. |

@@ -37,9 +37,9 @@ root, and everything below describes the arrangement to its right.
 
 - **Scene**: left, ~18% width, upper ~72% of that column. The tree of loaded
   reconstructions.
-- **Background Task**: under the tree, the rest of the left column. What a long
-  operation running off the GUI thread is doing, and what the last one cost
-  ([background-tasks.md](background-tasks.md)).
+- **Background Tasks**: under the tree, the rest of the left column. What the
+  long operations running off the GUI thread, one per queue, are doing, and what
+  the last ones cost ([background-tasks.md](background-tasks.md)).
 - **3D Viewer**: top-left of the rest, ~2/3 of its width. Point cloud,
   frustums, navigation. It is the active member of its tab group.
 - **Image Detail**: behind the 3D Viewer in that same group, one click away.
@@ -256,7 +256,7 @@ the cross-panel selection state they share is `AppState` in
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Tab {
     SceneGraph,
-    BackgroundTask,
+    BackgroundTasks,
     Viewer3D,
     ImageBrowser,
     ImageDetail,
@@ -274,7 +274,7 @@ specified on its own:
 | Tab | Title | Spec |
 |---|---|---|
 | `SceneGraph` | Scene | [scene-graph.md](scene-graph.md) |
-| `BackgroundTask` | Background Task | [background-tasks.md](background-tasks.md) |
+| `BackgroundTasks` | Background Tasks | [background-tasks.md](background-tasks.md) |
 | `TrackView` | Track View | [track-view.md](track-view.md) |
 | `IntrinsicsDetail` | Camera Intrinsics | [camera-intrinsics.md](camera-intrinsics.md) |
 | `ActionLog` | Action Log | [action-log.md](action-log.md) |
@@ -313,7 +313,7 @@ Written as a tree of panel names rather than as a sequence of splits, it is:
 Split { split: LeftRight, fraction: 0.18,
     first:  Split { split: TopBottom, fraction: 0.72,
         first:  Leaf { tabs: [SceneGraph] },
-        second: Leaf { tabs: [BackgroundTask] } },
+        second: Leaf { tabs: [BackgroundTasks] } },
     second: Split { split: TopBottom, fraction: 0.8,
         first:  Split { split: LeftRight, fraction: 0.67,
             first:  Leaf { tabs: [Viewer3D, ImageDetail] },

@@ -625,7 +625,7 @@ fn an_item_changes_group_when_its_stage_changes() {
     state
         .start_bench_stage(id, &point, sfmtool_core::bench::StageKind::Cluster)
         .expect("a track with a frame downgrades");
-    state.finish_background_task();
+    state.finish_background_tasks();
 
     assert_eq!(
         bench_titles(&mut panel, &ctx, &mut state),
@@ -3294,7 +3294,7 @@ fn the_convert_entry_is_greyed_while_the_node_is_busy() {
     );
 
     open.send(()).expect("the worker is waiting");
-    state.finish_background_task();
+    state.finish_background_tasks();
 }
 
 /// `Bundle Adjust...` is live on a node with a pixel per observation and a
@@ -3380,7 +3380,7 @@ fn the_bundle_adjust_entry_is_greyed_while_the_node_is_busy() {
     );
 
     open.send(()).expect("the worker is waiting");
-    state.finish_background_task();
+    state.finish_background_tasks();
 }
 
 /// `Retriangulate All Points` is live on a node whose observations carry a
@@ -3467,7 +3467,7 @@ fn the_retriangulate_entry_is_greyed_while_the_node_is_busy() {
     );
 
     open.send(()).expect("the worker is waiting");
-    state.finish_background_task();
+    state.finish_background_tasks();
 }
 
 /// `Refit All Points` is live on an embedded_patches node with a patch frame
@@ -3570,7 +3570,7 @@ fn the_refit_entry_is_greyed_while_the_node_is_busy() {
     assert_refit_entry_dead(&mut state, id, "is busy");
 
     open.send(()).expect("the worker is waiting");
-    state.finish_background_task();
+    state.finish_background_tasks();
 }
 
 /// `Prune Covered Observations` is live on a node that carries a patch frame
@@ -3668,7 +3668,7 @@ fn the_prune_entry_is_greyed_while_the_node_is_busy() {
     );
 
     open.send(()).expect("the worker is waiting");
-    state.finish_background_task();
+    state.finish_background_tasks();
 }
 
 // ── The Index Files rows ───────────────────────────────────────────────

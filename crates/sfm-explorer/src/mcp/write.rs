@@ -29,24 +29,22 @@ use crate::state::AppState;
 /// with its reconstruction entry, and one that is still being read, or whose
 /// thumbnails and patch bitmaps are still being built, answers with a
 /// [`super::BackgroundReply`] handle. A refusal to begin, a path that is not a
-/// file or another operation running, is immediate, and the drain records it
+/// file or the fast queue busy with another task, is immediate, and the drain records it
 /// once as `open_reconstruction failed: ...`.
 pub(super) fn open_reconstruction(state: &mut AppState, path: &std::path::Path) -> super::Outcome {
     let already_open = state
         .scene
         .iter()
         .any(|node| node.path.as_deref() == Some(path));
-    if let Err(message) = state.start_open(vec![path.to_path_buf()]) {
-        return super::Outcome::Done(Err(ToolError::new(message)));
+    match state.start_open(vec![path.to_path_buf()]) {
+        Err(message) => super::Outcome::Done(Err(ToolError::new(message))),
+        Ok(task) => super::edit::started_or(
+            state,
+            Some(task),
+            super::Answer::Opened { already_open },
+            |_| unreachable!("the open just started"),
+        ),
     }
-    let task = state.background_task().expect("the open just started");
-    super::Outcome::Deferred(super::Deferred::Background(super::BackgroundReply {
-        operation_id: task.id,
-        operation_name: task.operation.name,
-        answer: super::Answer::Opened { already_open },
-        label: task.label.clone(),
-        started: task.started,
-    }))
 }
 
 /// What a landed open answers with: the reconstruction entry of the node it

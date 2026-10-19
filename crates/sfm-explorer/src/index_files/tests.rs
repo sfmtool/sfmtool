@@ -31,7 +31,7 @@ fn the_build_entry_reads_build_then_rebuild() {
     state.refresh_index_files(id);
     assert_eq!(state.index_files_build_label(id), BUILD_INDEX_FILES);
     state.start_build_index_files(id).expect("it starts");
-    state.finish_background_task();
+    state.finish_background_tasks();
     assert_eq!(state.index_files_build_label(id), REBUILD_INDEX_FILES);
 }
 
@@ -110,7 +110,7 @@ fn a_build_with_a_stale_index_rebuilds_both() {
     assert_eq!(state.cluster_patches_state(id), IndexFileState::Stale);
 
     state.start_build_index_files(id).expect("it starts");
-    state.finish_background_task();
+    state.finish_background_tasks();
     assert_eq!(state.sift_index_state(id), IndexFileState::Current);
     assert_eq!(state.cluster_patches_state(id), IndexFileState::Current);
 }
@@ -217,7 +217,7 @@ fn a_missing_photograph_fails_the_cluster_half_naming_it() {
     };
     std::fs::remove_file(&missing).unwrap();
     state.start_build_index_files(id).expect("it starts");
-    state.finish_background_task();
+    state.finish_background_tasks();
     assert_eq!(state.sift_index_state(id), IndexFileState::Current);
     assert_eq!(state.cluster_patches_state(id), IndexFileState::None);
     let failed = state

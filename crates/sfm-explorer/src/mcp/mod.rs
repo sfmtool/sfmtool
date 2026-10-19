@@ -641,16 +641,18 @@ pub(crate) enum Command {
     CloseIndexFiles {
         reconstruction_label: String,
     },
-    /// What the background operation is doing, or what the last one did.
-    ///
-    /// Names no operation, for the reason [`Command::CancelBackgroundTask`] does
-    /// not: one runs at a time, viewer-wide.
-    GetBackgroundTask,
-    /// Ask the running background operation to stop.
-    ///
-    /// Names no operation: one runs at a time, viewer-wide, so "the one that is
-    /// running" is unambiguous.
-    CancelBackgroundTask,
+    /// What each queue is running and what each ran last, or, with an
+    /// `operation_id`, what became of that one task.
+    GetBackgroundTasks {
+        /// The task asked after, running or finished, or `None` for both
+        /// queues.
+        operation_id: Option<u64>,
+    },
+    /// Ask running background tasks to stop: the ones named, or every one.
+    CancelBackgroundTasks {
+        /// The tasks to stop, or `None` for every running task.
+        operation_ids: Option<Vec<u64>>,
+    },
     /// A picture of the presented window, or of one panel's body cropped from
     /// it.
     ///
@@ -1216,6 +1218,8 @@ pub(crate) struct BackgroundReply {
     pub(crate) operation_id: u64,
     /// What it is called, for the handle.
     pub(crate) operation_name: &'static str,
+    /// The queue it runs from, for the handle.
+    pub(crate) queue: crate::background::Queue,
     /// What the call answers with once the operation has landed.
     pub(crate) answer: Answer,
     /// The label of the node it runs on, or the one an open's file suggests,
@@ -1921,8 +1925,13 @@ pub(crate) fn apply_with_window(
         Command::CloseIndexFiles {
             reconstruction_label,
         } => done(bench::close_index_files(state, &reconstruction_label)),
-        Command::GetBackgroundTask => done(read::get_background_task(state)),
-        Command::CancelBackgroundTask => done(edit::cancel_background_task(state)),
+        Command::GetBackgroundTasks { operation_id } => {
+            done(read::get_background_tasks(state, operation_id))
+        }
+        Command::CancelBackgroundTasks { operation_ids } => done(edit::cancel_background_tasks(
+            state,
+            operation_ids.as_deref(),
+        )),
         Command::Screenshot {
             panel,
             hud,

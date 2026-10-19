@@ -31,9 +31,9 @@ mod tests;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum Tab {
     SceneGraph,
-    /// The long operation running off the GUI thread, and what the last one
-    /// cost. See [`crate::background::panel`].
-    BackgroundTask,
+    /// The long operations each queue is running off the GUI thread, and what
+    /// each queue's last one cost. See [`crate::background::panel`].
+    BackgroundTasks,
     Viewer3D,
     ImageBrowser,
     ImageDetail,
@@ -49,7 +49,7 @@ impl Tab {
     pub(crate) fn title(self) -> &'static str {
         match self {
             Tab::SceneGraph => "Scene",
-            Tab::BackgroundTask => "Background Task",
+            Tab::BackgroundTasks => "Background Tasks",
             Tab::Viewer3D => "3D Viewer",
             Tab::ImageBrowser => "Image Browser",
             Tab::ImageDetail => "Image Detail",
@@ -127,7 +127,7 @@ impl TabViewer for TabContext<'_> {
             }
             // The other one: a session that has run nothing in the background
             // is a thing this panel says out loud rather than showing blank.
-            Tab::BackgroundTask => crate::background::panel::show(ui, self.state),
+            Tab::BackgroundTasks => crate::background::panel::show(ui, self.state),
             Tab::Viewer3D => self.show_viewer_3d(ui),
             Tab::ImageBrowser => self.show_image_browser(ui),
             Tab::ImageDetail => self.show_image_detail(ui),

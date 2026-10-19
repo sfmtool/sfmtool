@@ -1,7 +1,7 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! One long operation, running off the GUI thread.
+//! Long operations, running off the GUI thread from two queues.
 //!
 //! See `specs/gui/background-tasks.md`. A bulk edit is already a
 //! pure function from the value at a node's cursor to the next value, so a
@@ -21,15 +21,20 @@
 //! - [`Operation`] is what a background operation is and what it claims about
 //!   itself; [`Job`] is the work, as a function of the [`Progress`] it reports
 //!   through.
-//! - [`BackgroundTask`] is the one that is running: a field of [`AppState`],
-//!   so the busy check is where every method that needs it already is.
+//! - [`Queue`] is where an operation runs from, slow or fast. Each queue runs
+//!   one task at a time and the two run at the same time; [`QueueState`] is
+//!   one queue's, held by [`AppState`] so the busy check is where every method
+//!   that needs it already is.
+//! - [`BackgroundTask`] is one that is running, and [`FinishedTask`] the record
+//!   of one that has finished, kept in a ring of the last [`FINISHED_KEPT`].
+//!   Both are found by id ([`AppState::task`]).
 //! - [`Report`] is what crosses the channel, and carries no progress: phases,
 //!   messages and counts are in the collector both threads hold.
 //!
 //! ## What the GUI thread does with it
 //!
-//! [`AppState::poll_background_task`] runs in phase 0 of the frame, before the MCP
-//! drain, so a completed operation's version is on screen in the frame it
+//! [`AppState::poll_background_tasks`] runs in phase 0 of the frame, before the
+//! MCP drain, so a completed operation's version is on screen in the frame it
 //! landed and an agent's call in that same frame reads the new value. What
 //! remains of the freeze is the upload the next phase does, which for an
 //! adjustment is single-digit milliseconds.
@@ -74,6 +79,72 @@ pub(crate) struct Operation {
     /// touches: an adjustment writes the reconstruction and is an `Edit`, and a
     /// bench fit writes an item beside it and is a [`Kind::Bench`].
     pub(crate) kind: Kind,
+    /// The queue it runs from. Fixed per operation rather than estimated from
+    /// the reconstruction's size, so the same operation always waits behind
+    /// the same work and nothing has to be measured before the queue is known.
+    pub(crate) queue: Queue,
+    /// Whether it locks its node while it runs. Every operation that pushes a
+    /// version of its node locks it; an open makes a new node and locks none.
+    pub(crate) locks: bool,
+}
+
+/// One of the two queues a background task runs from.
+///
+/// Each queue runs one task at a time, and the two run at the same time
+/// (`specs/gui/background-tasks.md` § "Two queues"). The slow queue holds the
+/// operations whose cost grows with the whole reconstruction and that use
+/// every core; the fast queue holds opening files and the bench's steps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Queue {
+    /// The whole-reconstruction edits.
+    Slow,
+    /// Opening files and the bench's steps.
+    Fast,
+}
+
+impl Queue {
+    /// Both queues, in the order the panel and the wire list them.
+    pub(crate) const ALL: [Queue; 2] = [Queue::Slow, Queue::Fast];
+
+    /// The queue's name on the wire and in the busy-queue refusal.
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Queue::Slow => "slow",
+            Queue::Fast => "fast",
+        }
+    }
+
+    /// The queue's heading in the Background Tasks panel.
+    pub(crate) fn title(self) -> &'static str {
+        match self {
+            Queue::Slow => "Slow",
+            Queue::Fast => "Fast",
+        }
+    }
+}
+
+/// What one queue is doing: the task it runs, if any.
+#[derive(Default)]
+pub(crate) struct QueueState {
+    /// The task running from this queue, or `None` while the queue is idle.
+    pub(crate) running: Option<BackgroundTask>,
+}
+
+/// How many finished tasks [`AppState`] keeps, newest last.
+///
+/// A deferred reply and Surface Tiling's wait find their task here by id once
+/// it has landed, and two tasks can land in one frame now that two run at a
+/// time, so one slot would let a fast task push a slow task's record out
+/// between its landing and the poll that reads it.
+pub(crate) const FINISHED_KEPT: usize = 16;
+
+/// What [`AppState::task`] found for an id: a task still running, or the
+/// record of one that has finished.
+pub(crate) enum TaskState<'a> {
+    /// The task is running.
+    Running(&'a BackgroundTask),
+    /// The task has finished, and this is what it came to.
+    Finished(&'a FinishedTask),
 }
 
 impl Operation {
@@ -87,6 +158,8 @@ impl Operation {
         name: "Bundle adjust",
         cancellable: true,
         kind: Kind::Edit,
+        queue: Queue::Slow,
+        locks: true,
     };
 
     /// One node converted from `sift_files` to `embedded_patches`, the minimal
@@ -104,6 +177,8 @@ impl Operation {
         name: "Convert to embedded patches",
         cancellable: true,
         kind: Kind::Edit,
+        queue: Queue::Slow,
+        locks: true,
     };
 
     /// Every point of one node re-solved from its own observations, at the
@@ -118,6 +193,8 @@ impl Operation {
         name: "Retriangulate all points",
         cancellable: true,
         kind: Kind::Edit,
+        queue: Queue::Slow,
+        locks: true,
     };
 
     /// Every point of one node fitted to the render of its reference
@@ -133,6 +210,8 @@ impl Operation {
         name: "Refit all points",
         cancellable: true,
         kind: Kind::Edit,
+        queue: Queue::Slow,
+        locks: true,
     };
 
     /// One camera of one node switched to the camera model its proposal was
@@ -149,6 +228,8 @@ impl Operation {
         name: "Switch camera model",
         cancellable: true,
         kind: Kind::Edit,
+        queue: Queue::Slow,
+        locks: true,
     };
 
     /// One node's coarse observations retired where a finer tracked one covers
@@ -162,6 +243,8 @@ impl Operation {
         name: "Prune covered observations",
         cancellable: true,
         kind: Kind::Edit,
+        queue: Queue::Slow,
+        locks: true,
     };
 
     /// One image added to the tracks of its node it can see
@@ -176,6 +259,8 @@ impl Operation {
         name: "Add image to tracks",
         cancellable: true,
         kind: Kind::Edit,
+        queue: Queue::Slow,
+        locks: true,
     };
 
     /// One bench track fitted: localized, re-triangulated, its reference
@@ -191,6 +276,8 @@ impl Operation {
         name: "Fit track",
         cancellable: true,
         kind: Kind::Bench,
+        queue: Queue::Fast,
+        locks: true,
     };
 
     /// One bench track moved between the cluster and the track stage.
@@ -201,6 +288,8 @@ impl Operation {
         name: "Set track stage",
         cancellable: true,
         kind: Kind::Bench,
+        queue: Queue::Fast,
+        locks: true,
     };
 
     /// One bench track's patch turned to the normal the photographs agree on
@@ -214,6 +303,8 @@ impl Operation {
         name: "Fit normal",
         cancellable: true,
         kind: Kind::Bench,
+        queue: Queue::Fast,
+        locks: true,
     };
 
     /// One bench track's patch turned to the plane its pieces fit on
@@ -226,6 +317,8 @@ impl Operation {
         name: "Finite difference normal",
         cancellable: true,
         kind: Kind::Bench,
+        queue: Queue::Fast,
+        locks: true,
     };
 
     /// One bench track's patch turned to the plane through a grid of its
@@ -236,6 +329,8 @@ impl Operation {
         name: "Grid plane normal",
         cancellable: true,
         kind: Kind::Bench,
+        queue: Queue::Fast,
+        locks: true,
     };
 
     /// One bench track searched from, in the node's SIFT index
@@ -251,6 +346,8 @@ impl Operation {
         name: "Search descriptors",
         cancellable: true,
         kind: Kind::Bench,
+        queue: Queue::Fast,
+        locks: true,
     };
 
     /// One track-stage bench patch projected and photometrically vetted in
@@ -264,6 +361,8 @@ impl Operation {
         name: "Geometry search",
         cancellable: true,
         kind: Kind::Bench,
+        queue: Queue::Fast,
+        locks: true,
     };
 
     /// A node's index files built and written beside its `.sfmr`: the SIFT
@@ -283,6 +382,8 @@ impl Operation {
         name: "Build index files",
         cancellable: true,
         kind: Kind::Bench,
+        queue: Queue::Slow,
+        locks: true,
     };
 
     /// A track built at one pixel of a posed photograph by the track-at-pixel
@@ -299,6 +400,8 @@ impl Operation {
         name: "Create track at pixel",
         cancellable: true,
         kind: Kind::Bench,
+        queue: Queue::Fast,
+        locks: true,
     };
 
     /// The tracks near one pixel of a posed photograph found, put on the
@@ -319,6 +422,8 @@ impl Operation {
         name: "Find nearby tracks",
         cancellable: true,
         kind: Kind::Bench,
+        queue: Queue::Fast,
+        locks: true,
     };
 
     /// One or more `.sfmr` files read and made nodes, with the columns a file
@@ -335,14 +440,17 @@ impl Operation {
         name: "Open",
         cancellable: true,
         kind: Kind::File,
+        queue: Queue::Fast,
+        locks: false,
     };
 
     /// Every operation that can go to the background.
     ///
-    /// A list rather than a set of constants used one at a time, so the test
-    /// that holds each `cancellable: true` to its claim has something to walk:
-    /// a declaration nothing checks is a declaration that rots.
-    // Read by that test alone, which is what it is for.
+    /// A list rather than a set of constants used one at a time, so the tests
+    /// that hold each `cancellable: true` to its claim, and each queue and lock
+    /// to the spec's table, have something to walk: a declaration nothing
+    /// checks is a declaration that rots.
+    // Read by those tests alone, which is what it is for.
     #[cfg(test)]
     pub(crate) const ALL: [Operation; 18] = [
         Operation::OPEN,
@@ -382,14 +490,14 @@ pub(crate) struct BackgroundTask {
     ///
     /// A caller that was handed this id while the operation was running comes
     /// back for the answer after it has finished, by which time the task is
-    /// gone and another may have taken its place: the id is what says whether
-    /// [`AppState::last_background_task`] is about the operation being asked after
-    /// or about a later one.
+    /// gone and others may have taken its place: the id is what
+    /// [`AppState::task`] finds it by, running or finished.
     pub(crate) id: u64,
     /// What it is, for the refusals, and what it claims about itself.
     pub(crate) operation: Operation,
-    /// The node it will install its answer into, and the node it locks: `None`
-    /// for an open, whose node does not exist until it finishes.
+    /// The node it will install its answer into, and the node it locks when
+    /// [`Operation::locks`] says it does: `None` for an open, whose node does
+    /// not exist until it finishes.
     pub(crate) node: Option<ReconId>,
     /// That node's label, for the sentences that name it, or for an open the
     /// label the file suggests. Kept here rather
@@ -411,7 +519,7 @@ pub(crate) struct BackgroundTask {
     /// `Progress` built over `collector`; one that never polls is not
     /// cancellable, and [`Operation::cancellable`] says so.
     pub(crate) cancel: Arc<AtomicBool>,
-    /// What the worker sends, drained by [`AppState::poll_background_task`].
+    /// What the worker sends, drained by [`AppState::poll_background_tasks`].
     reports: Receiver<Report>,
     /// Whether a [`Report::Progressed`] the GUI thread has not drained yet is
     /// already in the queue.
@@ -566,18 +674,17 @@ pub(crate) enum IndexFilesEnd {
     Failed(String),
 }
 
-/// What became of the operation that ran most recently.
+/// What became of one task that has finished.
 ///
-/// Kept after the task is gone because the question outlives it: a tool call
-/// that was handed a handle while the operation was running comes back for the
-/// answer, and by then there is no task to ask. The Background panel asks
-/// the same question with nothing running, which is why what it cost and what
-/// it spent the time on are here rather than only in the Action Log: the panel
-/// would otherwise have to find its own entry in a buffer that drops and
-/// clears.
+/// Kept after the task is gone, in a ring of the last [`FINISHED_KEPT`],
+/// because the question outlives it: a tool call that was handed a handle while
+/// the operation was running comes back for the answer, and by then there is no
+/// task to ask. The Background Tasks panel asks the same question of an idle
+/// queue, which is why what it cost and what it spent the time on are here
+/// rather than only in the Action Log: the panel would otherwise have to find
+/// its own entry in a buffer that drops and clears.
 pub(crate) struct FinishedTask {
-    /// Which operation this is about.
-    #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
+    /// Which task this is about.
     pub(crate) id: u64,
     /// What it was, by the name the panel and the refusals call it.
     pub(crate) operation: Operation,
@@ -628,13 +735,12 @@ pub(crate) struct FinishedTask {
     pub(crate) outcome: Result<String, String>,
 }
 
-/// What is running, for a reader that cannot reach [`AppState`].
+/// One running task, for a reader that cannot reach [`AppState`].
 ///
 /// The MCP server answers a timed-out call on its own thread, where the GUI
 /// thread is by definition not answering, so the one fact that message needs is
-/// the one fact it cannot ask for. Two fields written twice per operation and
-/// read once per timeout, which is why a `Mutex` is the whole of the
-/// machinery.
+/// the one fact it cannot ask for. A list written twice per task and read once
+/// per timeout, which is why a `Mutex` is the whole of the machinery.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Busy {
     /// What the operation is called, as the panel and the refusals call it.
@@ -644,21 +750,22 @@ pub(crate) struct Busy {
 }
 
 /// Where [`Busy`] is kept: shared with whoever has to read it off the GUI
-/// thread, and `None` whenever nothing is running.
-pub(crate) type BusyNotice = Arc<Mutex<Option<Busy>>>;
+/// thread, one entry per running task, slow queue first, and empty whenever
+/// nothing is running.
+pub(crate) type BusyNotice = Arc<Mutex<Vec<Busy>>>;
 
-/// What is running, or `None`. Poisoned or not, because a stale sentence in an
-/// error message is a smaller failure than a panic inside one.
+/// What is running, empty when nothing is. Poisoned or not, because a stale
+/// sentence in an error message is a smaller failure than a panic inside one.
 #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
-pub(crate) fn busy(notice: &BusyNotice) -> Option<Busy> {
+pub(crate) fn busy(notice: &BusyNotice) -> Vec<Busy> {
     notice
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .clone()
 }
 
-/// Say what is running, or that nothing is.
-fn set_busy(notice: &BusyNotice, running: Option<Busy>) {
+/// Say what is running.
+fn set_busy(notice: &BusyNotice, running: Vec<Busy>) {
     *notice
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner()) = running;
@@ -672,71 +779,135 @@ fn set_busy(notice: &BusyNotice, running: Option<Busy>) {
 /// node no longer holds, which is true only of a completed operation. A frame
 /// that dropped those caches per report would throw away its textures a
 /// thousand times during one solve.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub(crate) struct Polled {
     /// Whether anything arrived, so the frame knows to redraw.
     pub(crate) changed: bool,
-    /// The node a finished operation gave a new version to, whose panel caches
-    /// are now about a value it no longer holds.
-    pub(crate) installed: Option<ReconId>,
+    /// The nodes finished operations gave a new version to, whose panel caches
+    /// are now about a value they no longer hold. Two at most, since each
+    /// queue lands at most one task per poll.
+    pub(crate) installed: Vec<ReconId>,
 }
 
 impl AppState {
-    /// The operation running off the GUI thread, if there is one.
-    pub(crate) fn background_task(&self) -> Option<&BackgroundTask> {
-        self.background_task.as_ref()
+    /// One queue's state.
+    pub(crate) fn queue(&self, queue: Queue) -> &QueueState {
+        match queue {
+            Queue::Slow => &self.slow_queue,
+            Queue::Fast => &self.fast_queue,
+        }
+    }
+
+    fn queue_mut(&mut self, queue: Queue) -> &mut QueueState {
+        match queue {
+            Queue::Slow => &mut self.slow_queue,
+            Queue::Fast => &mut self.fast_queue,
+        }
+    }
+
+    /// Every task running off the GUI thread, the slow queue's first.
+    pub(crate) fn running_tasks(&self) -> impl Iterator<Item = &BackgroundTask> {
+        Queue::ALL
+            .into_iter()
+            .filter_map(|queue| self.queue(queue).running.as_ref())
+    }
+
+    /// The running task with this id, or `None` when no running task has it.
+    pub(crate) fn running_task(&self, id: u64) -> Option<&BackgroundTask> {
+        self.running_tasks().find(|task| task.id == id)
+    }
+
+    /// The record of the finished task with this id, or `None` when it is
+    /// still running, never ran, or has been pushed out of the ring.
+    pub(crate) fn finished_task(&self, id: u64) -> Option<&FinishedTask> {
+        self.finished_tasks.iter().rev().find(|task| task.id == id)
+    }
+
+    /// The task with this id, running or finished, or `None` when no task has
+    /// it or its record is no longer kept.
+    ///
+    /// What a caller that was handed an id asks, rather than whether "the"
+    /// running task is its own: with two queues, the task that is running may
+    /// be another caller's, and the task that finished last may be too.
+    pub(crate) fn task(&self, id: u64) -> Option<TaskState<'_>> {
+        match self.running_task(id) {
+            Some(task) => Some(TaskState::Running(task)),
+            None => self.finished_task(id).map(TaskState::Finished),
+        }
+    }
+
+    /// The task that finished most recently, from either queue.
+    pub(crate) fn last_finished_task(&self) -> Option<&FinishedTask> {
+        self.finished_tasks.back()
+    }
+
+    /// The task that finished most recently from `queue`.
+    pub(crate) fn last_finished_in(&self, queue: Queue) -> Option<&FinishedTask> {
+        self.finished_tasks
+            .iter()
+            .rev()
+            .find(|task| task.operation.queue == queue)
     }
 
     /// Why an edit of `id` is refused right now, or `None`.
     ///
-    /// Every method that gives a node a new version, moves its cursor, writes
-    /// it out or closes it calls this first, so one sentence covers the
-    /// method's refusal, the menu's greying and the wire's. Other nodes are
-    /// untouched and stay fully editable: the operation is a function of the
-    /// value it was handed, and an edit underneath it would produce a version
-    /// whose parent is not the version it was computed from.
+    /// A node is busy while a task that locks it runs, in either queue. Every
+    /// method that gives a node a new version, moves its cursor, writes it out
+    /// or closes it calls this first, so one sentence covers the method's
+    /// refusal, the menu's greying and the wire's. Other nodes are untouched
+    /// and stay fully editable: the operation is a function of the value it was
+    /// handed, and an edit underneath it would produce a version whose parent
+    /// is not the version it was computed from.
     pub(crate) fn busy_refusal(&self, id: ReconId) -> Option<String> {
-        let task = self.background_task.as_ref()?;
-        (task.node == Some(id)).then(|| {
-            format!(
-                "{} is busy: {} is still running.",
-                task.label, task.operation.name
-            )
-        })
+        let task = self
+            .running_tasks()
+            .find(|task| task.operation.locks && task.node == Some(id))?;
+        Some(format!(
+            "{} is busy: {} is still running.",
+            task.label, task.operation.name
+        ))
     }
 
-    /// Why cancelling would do nothing, or `None` when it would stop something.
+    /// Why cancelling the task `id` would do nothing, or `None` when it would
+    /// stop it.
     ///
     /// The sentence a Cancel button's tooltip carries and the wire's refusal
     /// are the same sentence, for the same reason every other refusal here has
     /// one spelling.
-    pub(crate) fn cancel_refusal(&self) -> Option<String> {
-        match self.background_task.as_ref() {
-            None => Some("Nothing is running in the background.".to_string()),
+    pub(crate) fn cancel_refusal(&self, id: u64) -> Option<String> {
+        match self.running_task(id) {
             Some(task) if !task.operation.cancellable => Some(format!(
                 "{} cannot be cancelled: it never asks whether it should stop.",
                 task.operation.name
             )),
             Some(_) => None,
+            None => Some(match self.finished_task(id) {
+                Some(task) => format!(
+                    "{} of {} has already finished.",
+                    task.operation.name, task.label
+                ),
+                None => format!("No background task with operation_id {id} is running."),
+            }),
         }
     }
 
-    /// Start `operation` on `id`, running `job` on a worker thread.
+    /// Start `operation` on `id`, running `job` on a worker thread, and answer
+    /// with the task's id.
     ///
-    /// Refuses when anything is already running, anywhere in the viewer: these
-    /// operations saturate the machine, so two at once would make both slower
-    /// and neither would finish sooner.
+    /// Refused when `operation` locks its node and the node is busy, and when
+    /// the operation's queue is already running a task
+    /// ([`Self::start_refusal`]).
     ///
     /// **Nothing is logged here.** The log records outcomes, not intentions
     /// (`specs/gui/action-log.md`), so the entry is written when the operation
-    /// ends, by [`AppState::poll_background_task`].
+    /// ends, by [`AppState::poll_background_tasks`].
     pub(crate) fn start_background_task(
         &mut self,
         operation: Operation,
         id: ReconId,
         job: Job,
-    ) -> Result<(), String> {
-        if let Some(why) = self.running_refusal() {
+    ) -> Result<u64, String> {
+        if let Some(why) = self.start_refusal(operation, Some(id)) {
             return Err(why);
         }
         // The one task that can start on a node with a proposal open is the
@@ -751,24 +922,44 @@ impl AppState {
         self.start_task(operation, Some(id), label, job)
     }
 
-    /// Why starting anything is refused right now, or `None`.
+    /// Why starting `operation` on `node` is refused right now, or `None`.
     ///
-    /// One operation at a time, viewer-wide, whatever it runs on: an open
-    /// waits for an adjustment as an adjustment waits for an open.
-    pub(crate) fn running_refusal(&self) -> Option<String> {
-        self.background_task.as_ref().map(|running| {
+    /// Two rules. A task that locks its node is refused while a locking task
+    /// of either queue holds that node, with the busy sentence, so a node has
+    /// at most one locking task at any time. And each queue runs one task at a
+    /// time, so a start is refused while its own queue runs another; the other
+    /// queue does not refuse it.
+    pub(crate) fn start_refusal(
+        &self,
+        operation: Operation,
+        node: Option<ReconId>,
+    ) -> Option<String> {
+        if operation.locks {
+            if let Some(why) = node.and_then(|node| self.busy_refusal(node)) {
+                return Some(why);
+            }
+        }
+        self.queue_refusal(operation.queue)
+    }
+
+    /// Why `queue` refuses a start right now, or `None` while it is idle.
+    pub(crate) fn queue_refusal(&self, queue: Queue) -> Option<String> {
+        self.queue(queue).running.as_ref().map(|running| {
             format!(
-                "{} is still running on {}.",
-                running.operation.name, running.label
+                "The {} queue is busy: {} is still running on {}.",
+                queue.name(),
+                running.operation.name,
+                running.label
             )
         })
     }
 
-    /// Start `operation`, named `label`, running `job` on a worker thread.
+    /// Start `operation`, named `label`, running `job` on a worker thread, and
+    /// answer with the task's id.
     ///
-    /// `node` is the node it locks and installs into, or `None` for an open,
-    /// which locks nothing because the node it makes does not exist yet. The
-    /// body [`Self::start_background_task`] and
+    /// `node` is the node it installs into, and locks when the operation says
+    /// it does, or `None` for an open, whose node does not exist yet. The body
+    /// [`Self::start_background_task`] and
     /// [`Self::start_open`](crate::state::AppState::start_open) share.
     pub(crate) fn start_task(
         &mut self,
@@ -776,8 +967,8 @@ impl AppState {
         node: Option<ReconId>,
         label: String,
         job: Job,
-    ) -> Result<(), String> {
-        if let Some(why) = self.running_refusal() {
+    ) -> Result<u64, String> {
+        if let Some(why) = self.start_refusal(operation, node) {
             return Err(why);
         }
 
@@ -811,17 +1002,7 @@ impl AppState {
 
         let operation_id = self.next_operation_id;
         self.next_operation_id += 1;
-        // Said here and unsaid in `finish`, which are the two instants the
-        // answer changes at. Anything reading it is off the GUI thread and
-        // cannot ask the state.
-        set_busy(
-            &self.busy_notice,
-            Some(Busy {
-                operation: operation.name,
-                label: label.clone(),
-            }),
-        );
-        self.background_task = Some(BackgroundTask {
+        self.queue_mut(operation.queue).running = Some(BackgroundTask {
             id: operation_id,
             operation,
             node,
@@ -833,28 +1014,52 @@ impl AppState {
             reports: rx,
             queued,
         });
-        Ok(())
+        // Said here and in `apply_reports`, which are the two instants the
+        // answer changes at. Anything reading it is off the GUI thread and
+        // cannot ask the state.
+        self.publish_busy();
+        Ok(operation_id)
     }
 
-    /// Apply every report the worker has sent.
+    /// Write every running task into the notice the MCP server reads.
+    fn publish_busy(&self) {
+        set_busy(
+            &self.busy_notice,
+            self.running_tasks()
+                .map(|task| Busy {
+                    operation: task.operation.name,
+                    label: task.label.clone(),
+                })
+                .collect(),
+        );
+    }
+
+    /// Apply every report the workers of both queues have sent.
     ///
     /// Runs in phase 0 of the frame, before the MCP drain: a completed
     /// operation's version is then on screen in the frame it landed, and an
     /// agent's call in that same frame reads the new value rather than the old
-    /// one.
-    pub(crate) fn poll_background_task(&mut self) -> Polled {
-        self.apply_reports(None)
+    /// one. Both queues are polled here, so two tasks can land in one frame.
+    pub(crate) fn poll_background_tasks(&mut self) -> Polled {
+        let mut polled = Polled::default();
+        for queue in Queue::ALL {
+            let step = self.apply_reports(queue, None);
+            polled.changed |= step.changed;
+            polled.installed.extend(step.installed);
+        }
+        polled
     }
 
-    /// The drain both readers share: `first` is a report already taken off the
-    /// channel, and the rest are whatever is waiting behind it.
+    /// The drain both readers share, for one queue: `first` is a report
+    /// already taken off that queue's channel, and the rest are whatever is
+    /// waiting behind it.
     ///
     /// The parameter is there because a blocking read consumes the message it
     /// waited for, and a message consumed outside this loop would be a message
     /// nothing acted on.
-    fn apply_reports(&mut self, first: Option<Report>) -> Polled {
+    fn apply_reports(&mut self, queue: Queue, first: Option<Report>) -> Polled {
         let mut polled = Polled::default();
-        let Some(task) = self.background_task.as_ref() else {
+        let Some(task) = self.queue(queue).running.as_ref() else {
             return polled;
         };
         // Cleared before the drain rather than after it, so a report made
@@ -895,17 +1100,17 @@ impl AppState {
             }
         }
         if let Some(finished) = done {
-            let task = self.background_task.take().expect("just borrowed");
-            set_busy(&self.busy_notice, None);
-            polled.installed = self.finish(task, finished);
+            let task = self.queue_mut(queue).running.take().expect("just borrowed");
+            self.publish_busy();
+            polled.installed.extend(self.finish(task, finished));
         }
         polled
     }
 
-    /// Ask the operation to stop. Silently does nothing when it cannot, which
+    /// Ask the task `id` to stop. Silently does nothing when it cannot, which
     /// is what [`AppState::cancel_refusal`] is for saying out loud.
-    pub(crate) fn cancel_background_task(&mut self) {
-        if let Some(task) = self.background_task.as_ref() {
+    pub(crate) fn cancel_background_task(&mut self, id: u64) {
+        if let Some(task) = self.running_task(id) {
             if task.operation.cancellable {
                 task.cancel.store(true, Ordering::Relaxed);
             }
@@ -1181,7 +1386,10 @@ impl AppState {
             self.select_point(point);
             self.action_log.set_actor(standing);
         }
-        self.last_background_task = Some(FinishedTask {
+        if self.finished_tasks.len() == FINISHED_KEPT {
+            self.finished_tasks.pop_front();
+        }
+        self.finished_tasks.push_back(FinishedTask {
             id,
             operation,
             label,
@@ -1197,14 +1405,15 @@ impl AppState {
         installed
     }
 
-    /// Drive the running operation to its end, applying what it reports.
+    /// Drive the task `id` to its end, applying what it reports.
     ///
-    /// The test seam, and the only blocking read of the channel: a frame never
-    /// waits, so the production drain is [`AppState::poll_background_task`]'s
+    /// The test seam, and the only blocking read of a channel: a frame never
+    /// waits, so the production drain is [`AppState::poll_background_tasks`]'s
     /// `try_recv`. Waiting on the worker's own messages is what makes a test
-    /// deterministic without a sleep or a poll loop.
+    /// deterministic without a sleep or a poll loop. Only `id`'s queue is
+    /// drained; a task in the other queue lands when it is driven or polled.
     #[cfg(test)]
-    pub(crate) fn finish_background_task(&mut self) -> Polled {
+    pub(crate) fn finish_background_task(&mut self, id: u64) -> Polled {
         use std::time::Duration;
 
         /// Long enough that a loaded machine does not fail a passing test,
@@ -1212,9 +1421,9 @@ impl AppState {
         const PATIENCE: Duration = Duration::from_secs(120);
 
         let mut polled = Polled::default();
-        while self.background_task.is_some() {
+        while let Some(queue) = self.running_task(id).map(|task| task.operation.queue) {
             let waited = {
-                let task = self.background_task.as_ref().expect("just checked");
+                let task = self.queue(queue).running.as_ref().expect("just found");
                 task.reports.recv_timeout(PATIENCE)
             };
             let first = match waited {
@@ -1226,9 +1435,36 @@ impl AppState {
                     panic!("the background operation said nothing for {PATIENCE:?}")
                 }
             };
-            let step = self.apply_reports(first);
+            let step = self.apply_reports(queue, first);
             polled.changed |= step.changed;
-            polled.installed = polled.installed.or(step.installed);
+            polled.installed.extend(step.installed);
+        }
+        polled
+    }
+
+    /// Ask every running task that can stop to stop.
+    #[cfg(test)]
+    pub(crate) fn cancel_background_tasks(&mut self) {
+        let ids: Vec<u64> = self.running_tasks().map(|task| task.id).collect();
+        for id in ids {
+            self.cancel_background_task(id);
+        }
+    }
+
+    /// Drive every running task to its end, the slow queue's first.
+    ///
+    /// The seam for a test that started its work through a call that does not
+    /// hand back the id, such as a wire tool or a menu entry.
+    #[cfg(test)]
+    pub(crate) fn finish_background_tasks(&mut self) -> Polled {
+        let mut polled = Polled::default();
+        loop {
+            let Some(id) = self.running_tasks().next().map(|task| task.id) else {
+                break;
+            };
+            let step = self.finish_background_task(id);
+            polled.changed |= step.changed;
+            polled.installed.extend(step.installed);
         }
         polled
     }

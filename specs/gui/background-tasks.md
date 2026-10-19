@@ -1,17 +1,20 @@
 # Background tasks: work that outlives a frame
 
 A long operation runs on a worker thread as a **background task**, rather than
-inside the frame that asked for it, and a **Background Task** panel under the
+inside the frame that asked for it, and a **Background Tasks** panel under the
 Scene tree says what is running, on which node, how far along it is, and what it
 has spent its time on so far. The window keeps drawing, the scene keeps
 answering, and an agent's call is answered while the work goes on. A tool that
 starts one gets its result directly if the work is quick and a handle to poll if
-it is not, and `get_background_task` answers about the task from either side of
+it is not, and `get_background_tasks` answers about the task from either side of
 that line.
 
 An **operation** is the kind of work, `Bundle adjust`; a **task** is one run of
-one, on one node (or, for an open, on none), with an id of its own. One task
-runs at a time. The eighteen operations are `Open`, which reads files and
+one, on one node (or, for an open, on none), with an id of its own. Tasks run
+from two **queues**, slow and fast; each queue runs one task at a time, and the
+two run at the same time (§ "Two queues"), so a bundle adjustment of one
+reconstruction does not stop a person opening another file or fitting a track
+on another reconstruction's bench. The eighteen operations are `Open`, which reads files and
 makes them nodes (§ "Opening a file"); the six whole-value edits, `Bundle
 adjust`, `Convert to embedded patches`, `Retriangulate all points`, `Refit all
 points`, `Switch camera model` and `Prune covered observations`; `Add image to
@@ -24,7 +27,7 @@ its images observe, as one version
 ([edits/switch-camera-model.md](edits/switch-camera-model.md)); it polls the
 flag on either side of the switch and inside the retriangulation. Every one of them is **cancellable**. The bench's live
 evaluation is not one of them: it locks no node, writes no row and is not what
-the Background panel shows ([bench.md](bench.md) § "Live evaluation"). Nor is a camera model
+the Background Tasks panel shows ([bench.md](bench.md) § "Live evaluation"). Nor is a camera model
 proposal's job, which switches the camera and, for its preview, retriangulates
 the tracks while the proposal is open, and whose answer Apply installs instead
 of starting `Switch camera model` when it holds one for the proposal's
@@ -113,14 +116,81 @@ shortening and is not shortened here. The Action Log says which of the two any
 given row was ([operation-progress.md](operation-progress.md)), so the question
 is answerable before anybody writes code for it.
 
+## Two queues
+
+Each operation declares the queue it runs from and whether it locks its node,
+as fields of `background::Operation` beside `name`, `cancellable` and `kind`:
+
+```rust
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Queue { Slow, Fast }
+
+pub(crate) struct Operation {
+    pub(crate) name: &'static str,
+    pub(crate) cancellable: bool,
+    pub(crate) kind: Kind,
+    /// The queue it runs from. Fixed per operation.
+    pub(crate) queue: Queue,
+    /// Whether it locks its node while it runs. Every operation that pushes
+    /// a version locks.
+    pub(crate) locks: bool,
+}
+```
+
+| Operation | Queue | Locks its node |
+|---|---|---|
+| Bundle adjust | slow | yes |
+| Convert to embedded patches | slow | yes |
+| Retriangulate all points | slow | yes |
+| Refit all points | slow | yes |
+| Switch camera model | slow | yes |
+| Prune covered observations | slow | yes |
+| Add image to tracks | slow | yes |
+| Build index files | slow | yes |
+| Open | fast | no (it makes a new node) |
+| Fit track, Set track stage, Fit normal, Finite difference normal, Grid plane normal, Search descriptors, Geometry search, Create track at pixel, Find nearby tracks | fast | yes |
+
+The **slow queue** holds the operations whose cost grows with the whole
+reconstruction and that use every core; the **fast queue** holds opening files
+and the bench's steps. The queue is fixed rather than estimated from the
+reconstruction's size, so the same operation always waits behind the same work,
+a test can name the queue, and nothing has to be measured before the queue is
+known. A test holds each operation's declared values to the table above.
+
+**Each queue runs one task at a time.** The slow queue's operations saturate the
+machine, so two at once would finish no sooner than one after the other; a fit
+of one track is short beside them, and running it in its own queue costs the
+slow task some competition for the cores while it runs and saves the person a
+wait of minutes. The two queues are independent: a fast task never waits for a
+slow one, except through the node lock. Starting a task while its own queue
+runs another is refused with *"The {slow | fast} queue is busy: {operation} is
+still running on {label}."*; the other queue does not refuse it.
+
+**A locking task locks its node while it runs**, in either queue. Every edit,
+undo, redo, history jump, save and close of a busy node is refused with
+*"{label} is busy: {operation} is still running."* (§ "What the rest of the
+viewer does meanwhile"), and so is starting a second locking task on it, from
+either queue. So a node has at most one locking task at any time, and nothing
+moves its cursor between the moment the task starts and the moment it lands.
+
+**A task's job is built when it starts.** The job builders check the node's lock
+themselves (`resolve_switch`, `retriangulate_refusal` and the others check
+`busy_refusal`), and the job captures the value at the cursor then.
+
+**Quitting** abandons every running task.
+
+A task started while its queue is busy is refused rather than queued to wait,
+and the bench's live evaluation and the camera model proposal's job run on
+threads of their own rather than as quiet tasks in the fast queue; both are
+proposed in [../drafts/background-task-queues.md](../drafts/background-task-queues.md).
+
 ## What the user sees
 
 ### Placement
 
 The left column splits top to bottom. Scene keeps the top of it and a ninth tab,
-`Tab::BackgroundTask`, titled **Background Task**, takes the bottom at a
-default share of
-0.28:
+`Tab::BackgroundTasks`, titled **Background Tasks** (wire name
+`background_tasks`), takes the bottom at a default share of 0.28:
 
 ```
 ┌────────┬──────────────────┬───────────────┐
@@ -131,35 +201,78 @@ default share of
 ```
 
 It is a panel like any other: draggable, closeable, ticked in **Panels ▸
-Background Task**, and given a home position of the left edge at 0.18 with
+Background Tasks**, and given a home position of the left edge at 0.18 with
 Scene as
 its default group-mate, so re-opening it from the menu puts it back beside the
-tree ([panel-layout.md](panel-layout.md) § "Home positions").
+tree ([panel-layout.md](panel-layout.md) § "Home positions"). The singular
+`background_task` is not an alias for it: a layout file or a wire call naming
+it is refused with the unknown-panel message, which lists `background_tasks`
+([panel-layout.md](panel-layout.md) § "Vocabulary").
+
+### A section per queue, and one phase list
+
+```
+┌ Background Tasks ────────────┐
+│ Slow                         │
+│   Bundle adjust              │
+│   dino_dog_toy-embedded      │
+│   █████░░░░░░░░░  round 2/3  │
+│   42.7 s elapsed     [Cancel]│
+│ Fast                         │
+│   Fit track           0.4 s  │
+│   bull                       │
+│ ──────────────────────────── │
+│ Bundle adjust: phases        │
+│     damping ladder    2.0 s  │
+│     linearise         51 ms  │
+│     normal equations  46 ms  │
+│     damping ladder   ▶ 4.7 s │
+└──────────────────────────────┘
+```
+
+The panel has a section for each queue, slow first. A queue that is running a
+task shows it in the **running form** (§ "Running"): the operation, its node,
+the bar or spinner, the status line, the elapsed and Cancel. An idle queue shows
+the last task that finished from it in the **idle form** (§ "Idle"), read from
+the record of finished tasks, or `Nothing running` when it has run nothing this
+session.
+
+Below the sections is **one phase list**, for one task, under a line naming it
+(`Bundle adjust: phases`): the task whose name a person last clicked, while it is
+running or still kept, and otherwise the slow queue's running task, the fast
+queue's, or the last task to finish, in that order (`panel::chosen_task`). One
+list rather than one per section keeps the panel the height it was with one
+queue, and the click is a choice the panel remembers
+(`AppState::background_phases_of`) rather than a mode.
 
 ### Idle
 
-The panel is not blank when nothing is running. It shows the last operation of
-the session, greyed: its name and what it cost on one line, its node on the
-next as it is while the operation runs, and its phases below that. They are
-**always showing**: the Action Log hides a breakdown behind a toggle because it
-has a row for every action of the session and expanding them all would bury the
-list, where this panel holds one operation and the breakdown is the only thing
-it has to say. A toggle here would be a click between a reader and the thing
-they opened the panel for. Those phases are the transcript the panel drew while
-it ran, not the entry's folded breakdown: an
-operation that collapsed into a summary at the instant it finished would be a
-panel that changed its mind about what the reader had just watched. A session
-that has run nothing says `Nothing running` and no more.
+An idle queue's section is not blank. It shows the last task that finished from
+that queue, greyed: its name and what it cost on one line, and its node on the
+next as it is while the operation runs. Its phases are the list below when it is
+the chosen task, and they are **always showing**: the Action Log hides a
+breakdown behind a toggle because it has a row for every action of the session
+and expanding them all would bury the list, where this panel shows one task's
+and the breakdown is the main thing it has to say. A toggle here would be a
+click between a reader and the thing they opened the panel for. Those phases
+are the transcript the panel drew while it ran, not the entry's folded
+breakdown: an operation that collapsed into a summary at the instant it finished
+would be a panel that changed its mind about what the reader had just watched.
+A queue that has run nothing says `Nothing running` and no more.
 
 ### Running
 
 ```
-┌ Background Task ─────────────┐
-│ Bundle adjust                │
-│ dino_dog_toy-embedded        │
-│ ██████░░░░░░░░░░░  round 2/3 │
-│ 42.7 s elapsed       [Cancel]│
-│                              │
+┌ Background Tasks ────────────┐
+│ Slow                         │
+│   Bundle adjust              │
+│   dino_dog_toy-embedded      │
+│   █████░░░░░░░░░  round 2/3  │
+│   42.7 s elapsed     [Cancel]│
+│ Fast                         │
+│   Nothing running            │
+│ ──────────────────────────── │
+│ Bundle adjust: phases        │
 │     damping ladder    2.0 s  │
 │     linearise         51 ms  │
 │     normal equations  46 ms  │
@@ -209,8 +322,8 @@ Earlier rows are above it, and none of them is a summary of another:
 - **Elapsed** counts up from the instant the operation started, which is the
   number the person is actually watching. A frame is asked for every 100 ms so
   that it keeps counting through a stage that reports nothing.
-- **Cancel** is present always and enabled only when the operation can be
-  cancelled, with a tooltip saying so when it cannot. The alternative, hiding
+- **Cancel** is present always, one per running task, and enabled only when the
+  operation can be cancelled, with a tooltip saying so when it cannot. The alternative, hiding
   the button, leaves the reader wondering whether they missed it.
 - **The phase table** is the live form of what the Action Log entry will hold.
   Completed phases show their cost, the open one is marked and shows the time it
@@ -268,21 +381,21 @@ so orbiting, selecting, opening Track View and taking a screenshot all behave
 exactly as they do when nothing is running. Opening a file is itself an
 operation, and waits its turn (below).
 
-What is refused is anything that would change the node the operation is running
+What is refused is anything that would change a node a locking task is running
 on. An edit, an undo, a redo, a history jump, a save or a close of that node is
 refused with *"{label} is busy: {operation} is still running."* Other nodes are
-untouched and remain fully editable. The busy node's Edit menu items are greyed
-with the same sentence as their tooltip, so the refusal is visible before it is
-provoked.
+untouched and remain fully editable, and a task in the other queue starts on
+them. The busy node's Edit menu items are greyed with the same sentence as their
+tooltip, so the refusal is visible before it is provoked.
 
-**One operation at a time, viewer-wide.** Starting a second is refused with
-*"{operation} is still running on {label}."* These operations saturate the
-machine, so running two would make both slower and neither would finish sooner;
-a queue is state with no demand behind it, and is a non-goal below. An open is
-held to the same rule, so `File > Open...` is greyed while another operation runs,
-with that sentence as its tooltip.
+**Each queue runs one task at a time** (§ "Two queues"). Starting a second in
+the same queue is refused with *"The {slow | fast} queue is busy: {operation}
+is still running on {label}."* An open runs from the fast queue, so
+`File > Open...` is greyed while the fast queue runs another task, with that
+sentence as its tooltip, and stays live while a slow task such as a bundle
+adjustment runs.
 
-Quitting while an operation runs abandons it. The result would have nowhere to
+Quitting while operations run abandons them. The result would have nowhere to
 land, and a viewer that refuses to close is worse than a solve that has to be
 run again. Refusing a *node* close is a different matter and does happen, which
 means `close_node` and `close_all` return a `Result` where they used to return
@@ -302,7 +415,8 @@ The finished value arrives on the channel with its row map and the sentence the
 edit would have recorded. On the next frame the GUI thread pushes the version,
 moves the selection forward through the map, and writes exactly the Action Log
 entry the synchronous edit writes today, with the worker's phases attached to
-it. The panel drops back to its idle form showing that same operation.
+it. Its queue's section in the panel drops back to its idle form showing that same
+operation.
 
 The entry's actor is whoever asked for the operation, not the viewer: an agent
 that started a solve is the actor of the version it produced, however many
@@ -374,13 +488,14 @@ menu and the command line, which write a failed row of their own for each path
 that is not a file and open the rest). Both live in
 [state/open.rs](../../crates/sfm-explorer/src/state/open.rs). A path that is not
 a file is refused before the task starts, since that is the one failure knowable
-without the read; so is a start while another operation runs.
+without the read; so is a start while the fast queue runs another task.
 
 **An open locks no node.** The node it makes does not exist until it finishes,
 so `BackgroundTask::node` is `None` for it and every loaded node stays editable
 while it runs. Its label, for the panel, the refusals and the handle, is the
-file's stem, or `{n} files` for several paths. The one-at-a-time rule still
-holds, so an open waits for an adjustment as an adjustment waits for an open.
+file's stem, or `{n} files` for several paths. It runs from the fast queue, so
+a file can be opened while a bundle adjustment runs, and an open is refused
+while a bench step runs.
 
 Several paths are one task, read in the order given, each under an equal share
 of the bar. Each file's stages sit under a phase `open` of its own:
@@ -509,11 +624,17 @@ rest are placeholders the selection never samples.
 [`mod.rs`](../../crates/sfm-explorer/src/background/mod.rs) owns the process and
 the channel,
 [`panel.rs`](../../crates/sfm-explorer/src/background/panel.rs) the egui view,
-[`tests.rs`](../../crates/sfm-explorer/src/background/tests.rs) the tests. The
-process is a field of `AppState`, so the busy check is where every method that
-would need it already is.
+[`tests.rs`](../../crates/sfm-explorer/src/background/tests.rs) the tests. Each
+queue's state is a field of `AppState`, so the busy check is where every method
+that would need it already is.
 
 ```rust
+/// What one queue is doing. `AppState` holds two, `slow_queue` and
+/// `fast_queue`.
+pub(crate) struct QueueState {
+    pub(crate) running: Option<BackgroundTask>,
+}
+
 /// A long operation running off the GUI thread.
 pub(crate) struct BackgroundTask {
     /// What it is, for the panel and the refusals, and what it claims about
@@ -557,6 +678,9 @@ pub(crate) struct Operation {
     /// an item beside it. Stated per operation because only the wrapper knows
     /// what its answer touches.
     pub kind: Kind,
+    /// The queue it runs from, and whether it locks its node (§ "Two queues").
+    pub queue: Queue,
+    pub locks: bool,
 }
 
 /// What crosses the channel, worker to GUI thread. Phases, messages and counts
@@ -631,29 +755,47 @@ and on `AppState`:
 
 ```rust
 impl AppState {
-    pub fn background_task(&self) -> Option<&BackgroundTask>;
+    /// One queue's state, and every running task, the slow queue's first.
+    pub fn queue(&self, queue: Queue) -> &QueueState;
+    pub fn running_tasks(&self) -> impl Iterator<Item = &BackgroundTask>;
 
-    /// Why an edit of `id` is refused right now, or `None`.
+    /// The task with this id, running or finished, or `None` when no task has
+    /// had it or its record has been pushed out of the ring.
+    pub fn task(&self, id: u64) -> Option<TaskState<'_>>;  // Running(&BackgroundTask) | Finished(&FinishedTask)
+    pub fn running_task(&self, id: u64) -> Option<&BackgroundTask>;
+    pub fn finished_task(&self, id: u64) -> Option<&FinishedTask>;
+    /// The last task to finish, from either queue or from one.
+    pub fn last_finished_task(&self) -> Option<&FinishedTask>;
+    pub fn last_finished_in(&self, queue: Queue) -> Option<&FinishedTask>;
+
+    /// Why an edit of `id` is refused right now, or `None`: a locking task of
+    /// either queue running on it.
     ///
     /// Every method that gives a node a new version calls this first, so one
     /// sentence covers the menu's greying, the method's refusal and the wire's.
     pub fn busy_refusal(&self, id: ReconId) -> Option<String>;
 
-    /// Start `operation` on `id`. Refuses when anything is already running.
+    /// Start `operation` on `id`, and answer with the task's id.
     pub fn start_background_task(&mut self, operation: Operation, id: ReconId, job: Job)
-        -> Result<(), String>;
+        -> Result<u64, String>;
 
-    /// Why starting anything is refused right now, or `None`.
-    pub fn running_refusal(&self) -> Option<String>;
+    /// Why starting `operation` on `node` is refused right now, or `None`: the
+    /// node's lock for a locking operation, then the operation's queue.
+    pub fn start_refusal(&self, operation: Operation, node: Option<ReconId>)
+        -> Option<String>;
+
+    /// Why `queue` refuses a start right now, or `None` while it is idle. What
+    /// greys `File > Open...` for the fast queue.
+    pub fn queue_refusal(&self, queue: Queue) -> Option<String>;
 
     /// The body both starters share: `node` is `None` for an open.
     pub fn start_task(&mut self, operation: Operation, node: Option<ReconId>,
-        label: String, job: Job) -> Result<(), String>;
+        label: String, job: Job) -> Result<u64, String>;
 
     /// Start opening `paths`, in order, as one `Operation::OPEN` task.
-    pub fn start_open(&mut self, paths: Vec<PathBuf>) -> Result<(), String>;
+    pub fn start_open(&mut self, paths: Vec<PathBuf>) -> Result<u64, String>;
 
-    /// Apply every report the worker has sent.
+    /// Apply every report the workers of both queues have sent.
     ///
     /// The frame asks two questions of this, not one: whether to repaint, which
     /// is true of every report, and whether a version landed, which is true
@@ -661,29 +803,43 @@ impl AppState {
     /// keep about a table that has just been renumbered. Answering with one
     /// bool would flush every texture on every report, which during a long
     /// solve is a thousand flushes for one renumbering.
-    pub fn poll_background_task(&mut self) -> Polled;
+    pub fn poll_background_tasks(&mut self) -> Polled;
 
-    /// Ask the operation to stop.
-    pub fn cancel_background_task(&mut self);
+    /// Ask the task `id` to stop.
+    pub fn cancel_background_task(&mut self, id: u64);
 
-    /// Why a cancel is refused right now, or `None`.
+    /// Why cancelling the task `id` is refused right now, or `None`.
     ///
     /// The sentence has to exist somewhere readable, because the button carries
     /// it as a tooltip and the wire carries it as a refusal.
-    pub fn cancel_refusal(&self) -> Option<String>;
+    pub fn cancel_refusal(&self, id: u64) -> Option<String>;
 }
 ```
 
-What the operation that ran most recently came to is kept after its task is
-gone, as `AppState::last_background_task`, a `FinishedTask` holding its id, name,
-label, cost, transcript and outcome, and `changed`, whether it pushed a version
-of its node: false for a run that ended in `NoChange` as well as for one that
-was refused or cancelled, which is how an edit's reply answers `changed: false`
-for a run that succeeded without changing anything. For an open it also holds
-`opened`, the first node the open made, which is what `open_reconstruction`
-answers with once the open lands.
+**The start functions answer with the task's id.** Each function that starts a
+task for a caller (`start_bundle_adjust`, `start_bench_fit`,
+`start_build_index_files` and the rest) returns `Result<Option<u64>, String>`:
+the id it gave the task, or `None` when it started nothing, as
+`start_bench_stage_at` does for a stage change with no effect. A caller reads the
+task it started by that id, never by asking which task is running, because with
+two queues the running task may be another caller's. `start_open`, which always
+starts a task when it does not refuse, answers with the id itself.
 
-`poll_background_task` runs **in phase 0, before the MCP drain**. A completed
+**Finished tasks are kept in a ring** of the last `FINISHED_KEPT` (16),
+`AppState::finished_tasks`, oldest first. Each is a `FinishedTask` holding its
+id, operation, label, cost, transcript and outcome, and `changed`, whether it
+pushed a version of its node: false for a run that ended in `NoChange` as well
+as for one that was refused or cancelled, which is how an edit's reply answers
+`changed: false` for a run that succeeded without changing anything. For an open
+it also holds `opened`, the first node the open made, which is what
+`open_reconstruction` answers with once the open lands. A ring rather than one
+slot, because the two queues finish independently and both are polled in the
+same step of the frame: a fast task could land between a slow task's landing and
+the poll that reads it, and push the slow task out of a single slot. The
+deferred MCP reply, Surface Tiling's wait, the Scene tree's busy marks and the
+index-files status all find their task by id through `task`.
+
+`poll_background_tasks` runs **in phase 0, before the MCP drain**. A completed
 operation's version is then on screen in the frame it landed, and an agent's
 call in that same frame reads the new value rather than the old one. The worker
 wakes an idle event loop the way the MCP server does, with
@@ -711,6 +867,7 @@ already broken. One still running at the threshold replies with a handle:
 {
   "running": true,                          // present and true only in this case
   "operation": "Bundle adjust",
+  "queue": "slow",                          // the queue it runs from
   "reconstruction_label": "dino_dog_toy-embedded",
   "operation_id": 2                         // names this run, not merely "one is running"
 }
@@ -727,7 +884,9 @@ arrives with unless another node already holds it.
 
 `running` is the discriminator, so a reader tests one field rather than sniffing
 the shape. `operation_id` names *which* run, so a poll still answers about an
-operation that has since finished and been replaced.
+operation that has since finished and been replaced, and the deferred reply finds
+its task by it (`AppState::task`) rather than reading whichever task is running
+or finished last.
 
 The alternative, replying with a handle always, would change the shape for every
 caller including one whose solve was over before the reply was written. The
@@ -754,17 +913,19 @@ it.
 
 **The timeout's own message follows what is running.** It used to read "It may
 be showing a modal dialog, or be mid-drag", which names two things that are not
-what happened and omits the one that did. A call that times out while an
-operation is running now names the operation and the node it is on and points at
-`get_background_task`; a call that times out with nothing running keeps the
+what happened and omits the one that did. A call that times out while
+operations are running now names each operation and the node it is on and points
+at `get_background_tasks`; a call that times out with nothing running keeps the
 message it had, which is then true. The thread composing that sentence is the
 one thread that cannot ask `AppState`, since it is composing it precisely
 because the GUI thread did not answer, so it reads a small shared notice,
-`background::BusyNotice`, written where `AppState::background` is written and
-nowhere else.
+`background::BusyNotice`, one entry per running task, written where a queue's
+running task is set or taken and nowhere else.
 
-A read tool, **`get_background_task`**, reports what is running: the
-operation, the label, the seconds elapsed, `fraction` of the whole where
+A read tool, **`get_background_tasks`**, reports what each queue is running and
+the last task that finished from each, or, given an `operation_id`, that one
+task whether it is running or finished. A running task's reply carries the
+operation, its queue, the label, the seconds elapsed, `fraction` of the whole where
 anything reported one, whether it can be cancelled, the progress as `done`,
 `total` and `unit` where there is one, the status, the open phase, and the
 stages so far in the shape `get_action_log { "detail": true }` returns them in
@@ -773,10 +934,10 @@ that reads a finished operation and a running one parses one shape. The rows are
 the panel's transcript rather than the entry's folded summary, for the reason
 the panel does not fold (§ "Running"): this tool answers about an operation
 being watched. `get_action_log { "detail": true }` is where the summary is.
-With nothing
-running it reports the last operation of the session, marked `finished`, so one
-call answers both "is it done" and "what did it cost". `elapsed_s` carries both
-halves of that: seconds so far while it runs, seconds in total once it is over.
+A finished task is reported from the ring, marked `finished`, in the same shape,
+so one call answers both "is it done" and "what did it cost". `elapsed_s`
+carries both halves of that: seconds so far while it runs, seconds in total once
+it is over.
 
 **The phase list on the wire is capped** at the size an entry's is,
 `ActionLog::DETAIL_EVENTS`, with a `"{n} earlier events dropped"` row. The cap
@@ -789,23 +950,26 @@ collapsed the repetition in it: the first 128 rows of a long solve are its first
 few seconds. An entry's first 128 rows are its shape, because the fold got there
 first.
 
-`get_scene` gains a `background_task` block beside `status_message`, so an
+`get_scene` carries a `background_tasks` list beside `status_message`, so an
 agent that already polls `get_scene` learns that the viewer is busy without a
-second call, and knows not to send an edit that would be refused. It is the
-same shape with everything unbounded left out: `running`, `operation`,
-`reconstruction_label`, `operation_id`, `elapsed_s` and `fraction`, and `null`
-with nothing running.
+second call, and knows not to send an edit that would be refused. Each entry is
+a running task in the same shape with everything unbounded left out:
+`running`, `operation`, `queue`, `reconstruction_label`, `operation_id`,
+`elapsed_s` and `fraction`, and the list is empty with nothing running.
 The phase table belongs to the tool an agent asks when it wants it, because
-`get_scene` is the most-polled call on the surface and a block that grew with
+`get_scene` is the most-polled call on the surface and an entry that grew with
 the solve would be paid for on every poll; the open phase and the status line go
-with it, being narrative rather than something a caller acts on. `null` rather
-than the last operation for a second reason as well: a block that outlived its
-operation would make `background != null` stop meaning "the viewer is busy",
-which is the one thing it is read for.
+with it, being narrative rather than something a caller acts on. Running tasks
+only rather than the last ones too, for a second reason as well: an entry that
+outlived its operation would make a non-empty list stop meaning "the viewer is
+busy", which is the one thing it is read for.
 
-A **`cancel_background_task`** tool cancels what is running, and refuses when
-the operation cannot be cancelled, with the same sentence the button's tooltip
-carries.
+A **`cancel_background_tasks`** tool cancels the tasks its `operation_ids` name,
+or every running task without them, and lists under `refused` each one that
+cannot be cancelled, with the same sentence the button's tooltip carries
+([mcp-server.md](mcp-server.md) § "cancel_background_tasks"). The singular
+names `get_background_task` and `cancel_background_task` are not aliases for
+them: a call to either is refused as an unknown tool.
 
 ## Testing
 
@@ -822,14 +986,25 @@ over the real channel so the tests are about the seam and not about a solver:
 - Every edit, undo, redo, jump, save and close of the busy node is refused, with
   the same sentence in each case; the same operations on another node are
   allowed.
-- Starting a second operation is refused while one runs.
+- Each operation's declared queue and lock match the table in § "Two queues".
+- Starting a second operation in the same queue is refused with the busy-queue
+  sentence; two operations in different queues run at the same time, and the
+  fast one lands while the slow one is still running.
+- A locking task in the other queue is refused on the busy node with the busy
+  sentence and starts on another node, which it then locks.
+- The record of finished tasks keeps the last `FINISHED_KEPT`, and a task pushed
+  out of it is found by nothing.
 - **The value was not copied to run in the background**: the base `Arc` the
   worker was handed is pointer-equal to the one the node is still drawing.
 
 Panel, through `test_support::run_frame_headless`:
 
-- The three states paint what they should: idle with nothing run, idle with a
-  finished operation, and running with a bar and with a spinner.
+- The three states paint what they should: idle with nothing run (`Nothing
+  running` under each queue), idle with a finished operation, and running with a
+  bar and with a spinner.
+- With a task in each queue, each section shows its own, and the phase list is
+  the slow task's until the fast one is chosen, and stays the fast one's once it
+  has finished.
 - Cancel is disabled, with its tooltip, for an operation whose kernels do not
   poll the flag, and live for one that does.
 - A status replaces the previous one rather than adding a line, and the panel
@@ -859,53 +1034,69 @@ Panel, through `test_support::run_frame_headless`:
   plain Save writes the file's own columns back with the same hash, and a Save
   that folds an edit mints a version whose hash is the written file's.
 - A path that is not a file is refused before anything starts and logs nothing;
-  an open is refused while another operation runs; several files open in order
-  as one task, a missing one a failed row of its own.
+  an open is refused while another fast task runs and starts while a slow one
+  runs; several files open in order as one task, a missing one a failed row of
+  its own.
 - Save As Minimal writes the minimal file and leaves the node where it was, and
   is refused over the node's own file ([saving.md](saving.md)).
 
 `crates/sfm-explorer/src/mcp/tests.rs`, over a fake operation held open on the
 editing fixture's node, so the wire is read at an instant the test chose:
 
-- `get_background_task` answers one shape running and finished: the same
-  `operation`, `reconstruction_label` and `operation_id` either way, a cost no
-  shorter than the elapsed it was read at, and `running` telling the two apart.
-  A session that has run nothing answers `running: false, finished: false` and
-  no more.
+- `get_background_tasks` answers one shape running and finished: the same
+  `operation`, `queue`, `reconstruction_label` and `operation_id` either way, a
+  cost no shorter than the elapsed it was read at, and `running` telling the two
+  apart. A session that has run nothing answers both queues with `running` and
+  `last_finished` null.
+- A deferred reply finds its task by id after a task from the other queue has
+  landed behind it, which is the case a single slot of the last finished task
+  got wrong.
+- `cancel_background_tasks` with no argument asks every running task to stop;
+  naming one of two stops that one alone; a named task that has finished is
+  listed under `refused`. The old tool names are refused as unknown.
+- A step that starts nothing answers at once, with the version its node stands
+  at, while another node's task runs in the other queue.
 - **Its `phases` is the transcript and the entry is the summary of it**: every
   run the wire reported is counted in the row the entry folds it into, and the
   entry is then held to the panel's own rows through the agreement assertion
   every other breakdown test ends on.
 - A breakdown longer than `DETAIL_EVENTS` is the dropped line and the last 128
   rows, and reads the same after the operation ends as it did during it.
-- **`get_scene`'s `background_task` block does not grow with the solve**: its
-  whole key set is asserted, so a field added to the most-polled reply on the
-  surface is a deliberate act. It is `null` before an operation and again
-  after it.
+- **`get_scene`'s `background_tasks` entries do not grow with the solve**: an
+  entry's whole key set is asserted, so a field added to the most-polled reply
+  on the surface is a deliberate act. The list is empty before an operation and
+  again after it.
 - The apply timeout's message names the operation only while one is running, and
   the notice it reads is empty before the operation, set during it, and empty
   again afterwards.
 
 `crates/sfm-explorer/src/layout/tests.rs` and `dock/tests.rs`: the default
-layout's left column is a top-bottom split of Scene over Background Task at
-0.72, and its home position is the left edge with Scene as its group-mate. The
-Panels menu's Background Task item is covered with every other panel's
-([panel-layout.md](panel-layout.md) § "Testing").
+layout's left column is a top-bottom split of Scene over Background Tasks at
+0.72, and its home position is the left edge with Scene as its group-mate. A
+layout file naming the old `background_task` is refused with the unknown-panel
+message naming `background_tasks`. The Panels menu's Background Tasks item is
+covered with every other panel's ([panel-layout.md](panel-layout.md) §
+"Testing").
 
 ## Parameters
 
 | Parameter | Default | Meaning |
 |-----------|---------|---------|
-| left column split (`Layout::default`) | `0.72` | Scene's share of the left column; Background Task takes the rest |
-| Background Task home edge / share | left / `0.18` | Same edge and share as Scene, whose group-mate it is |
+| left column split (`Layout::default`) | `0.72` | Scene's share of the left column; Background Tasks takes the rest |
+| Background Tasks home edge / share | left / `0.18` | Same edge and share as Scene, whose group-mate it is |
+| `FINISHED_KEPT` | `16` | How many finished tasks the ring keeps for the deferred reply, Surface Tiling's wait, the panel's idle sections and `get_background_tasks` (§ "Rust API") |
 | `REPLY_DIRECTLY_WITHIN` | `200 ms` | How long a tool waits before answering with a handle instead of a result (§ "On the wire") |
 | repaint tick while running | `100 ms` | The elapsed counts up between reports, and a worker deep in a silent stage sends none for a frame to ride on |
 | seconds shown to | one decimal | The cost column is read here while it moves, and at ten frames a second a hundredths digit only spins ([action-log.md](action-log.md)) |
 
 ## Non-goals
 
-- **A queue.** One operation at a time, and a second is refused rather than
-  queued. These saturate the machine; two at once finish no sooner.
+- **More than one task per queue at a time.** The slow queue's operations
+  saturate the machine, and running the fast queue's one after another is
+  simpler to reason about than scheduling several at once.
+- **Two locking tasks on one node.** A node has one cursor, and two tasks
+  computed from it would make two versions with the same parent.
+- **Moving a task between queues.** A queue is fixed per operation.
 - **Backgrounding point edits.** They cost microseconds, and a frame of latency
   is a worse deal than the freeze it avoids.
 - **Moving GPU uploads off the frame.** They run against the device and the
@@ -916,14 +1107,14 @@ Panels menu's Background Task item is covered with every other panel's
 - **Editing a node while an operation runs on it.** The operation is a function
   of the value it was handed, and an edit underneath it would produce a version
   whose parent is not the version it was computed from.
-- **Persisting a running operation.** Quitting abandons it.
+- **Persisting a running operation.** Quitting abandons every one.
 - **Progress from a kernel that does not report it.** The panel shows a spinner
   and the open phase's name, and says nothing it cannot measure.
-
-- **One operation per viewer rather than per node.** Per node is the natural
+- **One task per node rather than per queue.** Per node is the natural
   generalisation and would cost little in the state. It is not done because two
-  solves at once is a slower way to do one thing, for the reason a queue is a
-  non-goal.
-- **A history in the idle panel.** It keeps the last operation and no more. What
-  was run and what it cost is the Action Log's job, and a second short list of
-  it in the panel would be a second thing to keep in step.
+  solves at once is a slower way to do one thing, for the reason each queue runs
+  one task at a time.
+- **A history in the idle panel.** Each queue's section keeps the last task that
+  finished from it and no more. What was run and what it cost is the Action
+  Log's job, and a second short list of it in the panel would be a second thing
+  to keep in step.

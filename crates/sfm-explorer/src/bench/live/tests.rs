@@ -328,7 +328,7 @@ fn an_evaluation_waits_while_an_operation_holds_the_node() {
         Some(Evaluation::Evaluating)
     );
 
-    state.finish_background_task();
+    state.finish_background_tasks();
     state.drive_bench_evaluation();
     assert!(state.bench_evaluation_running(id, &label));
 }

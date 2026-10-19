@@ -1,18 +1,24 @@
 # Background task queues
 
 **Status:** Draft. Amends [gui/background-tasks.md](../gui/background-tasks.md)
-(the rule "one operation at a time, viewer-wide", the non-goals "A queue" and
-"One operation per viewer rather than per node", the panel and the wire),
-[gui/bench.md](../gui/bench.md) § "Live evaluation",
+§ "Two queues", [gui/bench.md](../gui/bench.md) § "Live evaluation",
 [gui/edits/switch-camera-model.md](../gui/edits/switch-camera-model.md)
-§ "The proposal's job", [gui/mcp-server.md](../gui/mcp-server.md)
-(`get_background_task` and `cancel_background_task`, which become
-`get_background_tasks` and `cancel_background_tasks`, `get_scene`'s
-`background_task` block and the handle) and
-[gui/panel-layout.md](../gui/panel-layout.md) (the panel's title and wire
-name). The
+§ "The proposal's job" and [gui/mcp-server.md](../gui/mcp-server.md)
+(§ "get_background_tasks" and § "cancel_background_tasks"). The
 [Track Table](track-table.md) puts its column job and its reference picks on
-the fast queue that this draft adds.
+the fast queue.
+
+**Step 1 is built** (§ "Steps"): the two queues, each running one task with
+none waiting; each operation's `queue` and `locks`; the node lock and the
+busy-queue refusal; start functions that return the task's id, the lookup by id
+and the ring of finished tasks; the panel's two sections, its title
+**Background Tasks** and wire name `background_tasks`; and the renamed tools
+`get_background_tasks` and `cancel_background_tasks` with the `queue` field on
+the handle and `get_scene`'s `background_tasks` list. Those are described in
+the standing specs above, and this draft keeps them only as the ground the
+remaining steps build on. What is still proposed is **waiting** (Step 2),
+**quiet tasks** and the live evaluation in the fast queue (Step 3), and the
+camera model proposal in the fast queue (Step 4).
 
 Decided:
 
@@ -28,9 +34,9 @@ Decided:
   fast-queue tasks. They are **quiet** tasks: they write no Action Log row for
   running, and they are cancelled and queued again when someone asks for a
   task. Their dedicated threads are retired.
-- The panel's wire name becomes `background_tasks`, and the two tools become
+- The panel's wire name is `background_tasks`, and the two tools are
   `get_background_tasks` and `cancel_background_tasks`. None of the old names
-  is kept as an alias.
+  is kept as an alias. (Built in Step 1.)
 
 Not decided: see § "Open questions".
 
@@ -38,19 +44,21 @@ Not decided: see § "Open questions".
 
 SfM Explorer runs long operations, such as a bundle adjustment or a
 retriangulation of every point, on a worker thread, so the window keeps drawing
-while they run. Today only one such operation can run at a time, across the
-whole viewer, so a 95-second bundle adjustment of one reconstruction also stops
-a person from opening another file, fitting a track on the bench of another
-reconstruction, or sorting the Track Table. This draft gives the viewer two
-queues:
+while they run. Before the queues only one such operation could run at a time,
+across the whole viewer, so a 95-second bundle adjustment of one reconstruction
+also stopped a person from opening another file, fitting a track on the bench of
+another reconstruction, or sorting the Track Table. This draft gives the viewer
+two queues, of which Step 1 is built:
 
 - The **slow queue** holds the operations whose cost grows with the whole
   reconstruction and that use every core: the whole-reconstruction edits.
-- The **fast queue** holds the rest: opening files, bench steps, and the quiet
-  work the viewer does by itself to keep its panels current.
+- The **fast queue** holds the rest: opening files, bench steps, and (from
+  Step 3) the quiet work the viewer does by itself to keep its panels current.
 
 A long solve then holds up only other slow operations, and the rest of the
-viewer keeps working beside it.
+viewer keeps working beside it. What Step 1 leaves is that a start while its
+queue is busy is refused rather than waiting, and the live evaluation and the
+proposal's job keep threads of their own.
 
 The reason the standing spec gives for running one task at a time still holds
 for the slow queue. Those operations saturate the machine, so two at once
@@ -61,8 +69,9 @@ person a wait of minutes.
 
 ## What a task declares
 
-`background::Operation` gains three fields beside `name`, `cancellable` and
-`kind`:
+`background::Operation` carries `queue` and `locks` beside `name`, `cancellable`
+and `kind` (built in Step 1, [gui/background-tasks.md](../gui/background-tasks.md)
+§ "Two queues"), and gains a third, `quiet`, in Step 3:
 
 ```rust
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -99,8 +108,8 @@ pub(crate) struct Operation {
 | Camera model proposal | fast | no; it pushes no version (Apply installs its answer), and an open proposal already refuses every task on its node | yes |
 | Track Table columns, Track Table reference picks | fast | no | yes |
 
-`Operation::ALL` gains the four quiet operations, and a test checks the table
-above against each operation's declared values. The queue is fixed rather
+`Operation::ALL` gains the four quiet operations, and the test that checks each
+operation's declared queue and lock against this table checks `quiet` too. The queue is fixed rather
 than estimated from the reconstruction's size. That keeps it predictable: the
 same operation always waits behind the same work, a test can name the queue,
 and nothing has to be measured before the queue is known.
@@ -142,14 +151,14 @@ is not in this group in practice: an open proposal refuses every task start on
 its node (`proposal_refusal`), and a proposal cannot be opened on a busy node
 (`switch_model_refusal`), so the two never meet.
 
-**What stops being refused.** `running_refusal` goes. Starting a task is
-refused by its node's lock, and in Step 1, before tasks can wait, by its own
-queue being busy (*"The {slow | fast} queue is busy: {operation} is still
-running on {label}."*). `File > Open...` (`app/menu.rs`) is greyed only while
-the fast queue refuses starts in Step 1, and not at all once tasks can wait.
+**What stops being refused.** Since Step 1, starting a task is refused by its
+node's lock and by its own queue being busy (*"The {slow | fast} queue is busy:
+{operation} is still running on {label}."*), and `File > Open...`
+(`app/menu.rs`) is greyed while the fast queue refuses starts. Once tasks can
+wait, the busy-queue refusal goes and `File > Open...` is not greyed at all.
 
-**Quitting** abandons every running and waiting task, as it abandons the one
-task today.
+**Quitting** abandons every running and waiting task, as it abandons the running
+tasks today.
 
 ## Quiet tasks
 
@@ -250,24 +259,12 @@ rewritten.
 
 ## The panel
 
-The panel's title becomes **Background Tasks**, and its wire name becomes
-`background_tasks` (`Tab::BackgroundTask` becomes `Tab::BackgroundTasks`).
-The old name is not kept as an alias. This is the rule
-[panel-layout.md](../gui/panel-layout.md) already states for a renamed panel,
-as when `point_track` became `track_view`:
-
-- **A layout file** that names `background_task` is refused as a whole with
-  the unknown-panel message, which lists the new name. Reset Layout is the way
-  back.
-- **A default layout file** that names it starts the viewer on the stock grid,
-  as any default layout file the viewer cannot read does.
-- **On the wire**, `panel_name: "background_task"` is refused by every tool
-  that takes a panel name, with the same message.
-
-`panel-layout.md`'s list of panel names, its default-layout JSON and its
-validation examples, the `DEFAULT_JSON` test in `layout/tests.rs`, and the
-backticked panel names that `mcp/tests/catalog.rs` checks in
-[mcp-server.md](../gui/mcp-server.md) all change with it.
+The panel's title is **Background Tasks** and its wire name `background_tasks`
+(`Tab::BackgroundTasks`), with no alias for the old name; its sections, its
+idle and running forms and its one phase list are built (Step 1,
+[gui/background-tasks.md](../gui/background-tasks.md) § "A section per queue,
+and one phase list"). What the remaining steps add is the waiting lines and the
+quiet line:
 
 ```
 ┌ Background Tasks ──────────────────────────────┐
@@ -285,8 +282,8 @@ backticked panel names that `mcp/tests/catalog.rs` checks in
 ```
 
 - **One section per queue.** Each section shows the queue's running task in
-  today's running form (name, label, bar or spinner, status line, elapsed
-  time, Cancel), then its waiting tasks, one line each with a cancel button.
+  its running form (name, label, bar or spinner, status line, elapsed time,
+  Cancel), then its waiting tasks, one line each with a cancel button.
   An idle queue shows the last task that finished from it, read from the
   record of finished tasks, in today's idle form.
 - **Quiet tasks** show as one dim line in the fast section: the running quiet
@@ -299,20 +296,12 @@ backticked panel names that `mcp/tests/catalog.rs` checks in
   or the last task to finish, in that order. The panel still shows one phase
   list, so it stays the height it is.
 
-The title is written in `Tab::title` (`dock.rs`), which the MCP input tools
-read through `panel.title()`. It is also written in
-[panel-layout.md](../gui/panel-layout.md),
-[background-tasks.md](../gui/background-tasks.md),
-[mcp-server.md](../gui/mcp-server.md), [action-log.md](../gui/action-log.md),
-[multi-panel-image-browser.md](../gui/multi-panel-image-browser.md), a comment
-in `lib.rs` and the module doc of `camera_model_proposal/job.rs`. All of them
-change with it.
 
 ## What a task remembers
 
-`AppState::background_task: Option<BackgroundTask>` and
-`last_background_task: Option<FinishedTask>` become one state per queue and a
-record of finished tasks:
+`AppState` holds one state per queue, `slow_queue` and `fast_queue`, and a ring
+of finished tasks, `finished_tasks` (Step 1). `QueueState` gains `waiting` in
+Step 2:
 
 ```rust
 pub(crate) struct QueueState {
@@ -341,35 +330,17 @@ pub(crate) enum WaitingJob {
 }
 ```
 
-- **The start functions return the task's id.** Today a caller reads the task
-  it has just started with `state.background_task().expect(…)`, in the MCP
-  edit and bench tools, in `mcp/write.rs` and in Surface Tiling. Two readers,
-  `started_or` in `mcp/bench.rs` and Surface Tiling, also test whether
-  `background_task()` is set to tell a started task from a step that had
-  nothing to do (`start_bench_stage_at` returns `Ok(())` for a stage change
-  with no effect, and starts nothing). Both read an unrelated task once a task
-  can wait or run in the other queue. So every start function returns
-  `Result<Option<u64>, String>`: the id it gave the task, waiting or running,
-  or `None` when it started nothing.
-- **Tasks are found by id.** `AppState::task(id)` answers whether a task is
-  running, waiting or finished, and with its record. It replaces the readers
-  that decide "running" from `background_task()` alone and "finished" from
-  the single `last_background_task` slot:
-  - the deferred MCP reply (`mcp::edit::background_reply`);
-  - Surface Tiling's wait (`bench/surface_tiling.rs`);
-  - the Scene tree's busy marks (`scene_graph/mod.rs`) and the index-files
-    status (`index_files.rs`), which read the one running task.
-
-  With two queues finishing independently, a fast task could land between a
-  slow task's landing and the poll that reads it, and push the slow task out
-  of the single slot. Both queues are polled in the same step of the frame,
-  before the MCP replies are resolved, so two tasks can land in one frame.
-- **Finished tasks are kept in a ring** of the last `FINISHED_KEPT` (16) tasks
-  that were not quiet, including tasks cancelled before they started. Quiet
-  tasks are not kept (§ "Quiet tasks").
-- **`BusyNotice`** holds every running task that is not quiet, so the MCP
-  timeout message names each running task and its node, as it names the one
-  today.
+- **The start functions return the task's id** (built in Step 1:
+  `Result<Option<u64>, String>`, `None` when nothing started). Once tasks can
+  wait, the id is the task's whether it waits or runs.
+- **Tasks are found by id** (built in Step 1: `AppState::task(id)`, used by the
+  deferred MCP reply, Surface Tiling's wait, the Scene tree's busy marks and the
+  index-files status). Step 2 adds a waiting state to what it answers.
+- **Finished tasks are kept in a ring** of the last `FINISHED_KEPT` (16)
+  (built in Step 1). Step 2 puts tasks cancelled before they started in it, and
+  Step 3 keeps quiet tasks out of it (§ "Quiet tasks").
+- **`BusyNotice`** holds every running task (built in Step 1); Step 3 leaves
+  quiet tasks out of it.
 - **Threads are unchanged in kind.** A task still runs on a named
   `std::thread` of its own, spawned when it starts, and its kernels still use
   rayon's global pool. The queue only decides when a task starts. A fast task
@@ -378,63 +349,46 @@ pub(crate) enum WaitingJob {
 
 ## The wire
 
-- **The handle** gains `queue` (`"slow"` or `"fast"`) and `waiting: true`
-  when the task has not started yet. `REPLY_DIRECTLY_WITHIN` is measured from
+The renamed tools, the handle's `queue`, `get_background_tasks`'s two forms,
+`cancel_background_tasks`'s `operation_ids`, `cancelling` and `refused`, and
+`get_scene`'s `background_tasks` list are built (Step 1,
+[gui/mcp-server.md](../gui/mcp-server.md)). What follows is what waiting and
+quiet tasks add to them.
+
+- **The handle** gains `waiting: true` when the task has not started yet. `REPLY_DIRECTLY_WITHIN` is measured from
   when the task was queued, so a call whose task waits past the 200 ms
   threshold gets the handle, with `waiting: true`, rather than an answer that
   takes longer than 200 ms to arrive.
-- **The two tools are renamed** to `get_background_tasks` and
-  `cancel_background_tasks`, matching the panel's new wire name. The old names
-  are not kept as aliases: a call to either is refused as an unknown tool.
-- **`get_background_tasks`** takes an optional `operation_id`. With one, it
-  answers about that task in today's `get_background_task` shape, whether it
-  is running, waiting (`waiting: true`, no phases) or finished (from the
-  ring). Without one, it answers about both queues:
+- **`get_background_tasks`** with an `operation_id` also answers about a
+  waiting task (`waiting: true`, no phases). Without one, each queue gains a
+  `waiting` list beside `running` and `last_finished`:
 
   ```jsonc
   {
     "slow": {
-      "running": { /* today's running shape, plus "queue" */ },  // or null
+      "running": { … },                                           // or null
       "waiting": [ { "operation": "Retriangulate all points",
                      "reconstruction_label": "bull", "operation_id": 9 } ],
-      "last_finished": { /* today's finished shape */ }           // or null
+      "last_finished": { … }                                      // or null
     },
     "fast": { /* the same three fields */ }
   }
   ```
 
-  Quiet tasks are not reported. Each running task carries its phases, capped
-  as today, so one call answers what both queues are doing.
-- **`cancel_background_tasks`** takes an optional `operation_ids` list, naming
-  running or waiting tasks. Without it, it cancels every running and waiting
-  task that is not quiet. A task that cannot be cancelled is listed in the
-  reply's `refused` with the sentence the panel's tooltip carries, and the
-  others are cancelled. Cancelling a waiting task removes it from its queue and
-  writes *"{operation} of {label} cancelled before it started"*. The reply
-  lists `cancelling` (running tasks whose flag was set), `removed` (waiting
-  tasks) and `refused`, each by `operation_id` and `reconstruction_label`.
-- **`get_scene`'s block** becomes `background_tasks`, a list of the running and
-  waiting tasks that are not quiet, each in today's summary shape plus `queue`
-  and `waiting`. It is empty when nothing a person or an agent asked for is
-  running. The key is renamed because the value changes from an object or
-  `null` to a list. A reader that tested `background_task != null` now tests
-  that the list is not empty.
-- **Texts and tests that change with it:**
-  - the tool descriptions that say "one operation runs at a time, viewer-wide"
-    or "Refused while another background operation runs"
-    (`mcp/tools/catalog/background.rs`, `mcp/tools/catalog/viewer.rs`,
-    `mcp/mod.rs`);
-  - [mcp-server.md](../gui/mcp-server.md) § "get_background_task" and
-    § "cancel_background_task", renamed for the new tools, the tool table, the
-    `get_scene` example, every mention of the old tool names (the handle's
-    "poll with", the timeout message's pointer) and the sentences that say a
-    start is refused while another operation runs;
-  - the tool counts and read-tool list in `mcp/tests/catalog.rs` and the
-    tool names in `mcp/logged.rs`;
-  - the tests that pin today's shapes and refusals: the `get_scene` key set
-    and the handle, cancel and timeout tests in `mcp/tests/edit.rs`,
-    `a_second_operation_is_refused_while_one_runs` in `background/tests.rs`,
-    and the refused open in `state/open/tests.rs`.
+  Quiet tasks are not reported.
+- **`cancel_background_tasks`** also names waiting tasks, and without
+  `operation_ids` cancels every running and waiting task that is not quiet.
+  Cancelling a waiting task removes it from its queue and writes
+  *"{operation} of {label} cancelled before it started"*. The reply gains
+  `removed` (waiting tasks) beside `cancelling` and `refused`.
+- **`get_scene`'s `background_tasks`** lists the waiting tasks too, each with
+  `waiting`, and leaves out quiet tasks, so it is empty when nothing a person
+  or an agent asked for is running or waiting.
+- **Texts and tests that change with waiting:** the tool descriptions and
+  [mcp-server.md](../gui/mcp-server.md) sentences that say a start is refused
+  while its queue is busy (`open_reconstruction`'s among them), and the tests
+  that pin the busy-queue refusal (`a_second_operation_in_the_same_queue_is_refused_while_one_runs`
+  in `background/tests.rs` and the refused open in `state/open/tests.rs`).
 
 ## Action Log
 
@@ -449,7 +403,7 @@ writes what its caller writes today.
 
 Each step is one PR through `implement-change`:
 
-1. **Two queues with no waiting.**
+1. **Two queues with no waiting.** Built.
    - `Queue` and `locks` on `Operation`.
    - Two `QueueState`s in `AppState`.
    - `running_refusal` replaced by the node lock and the busy-queue refusal.
@@ -483,10 +437,10 @@ The Track Table's two quiet tasks come with its own steps (Steps 2, 4 and 5 of
 
 ## Testing
 
-- The declared queue, lock and quiet values of every operation match the
-  table in § "What a task declares".
-- Two operations in different queues run at the same time, and two in the
-  same queue run one after the other, in the order they were started.
+- The declared quiet value of every operation matches the table in § "What a
+  task declares", as the queue and lock already do.
+- Two operations in the same queue run one after the other, in the order they
+  were started.
 - A locking task in either queue makes its node busy from the moment it is
   queued: an edit, a second locking task and a close are each refused with the
   waiting sentence, and accepted again once the task lands. The task itself
@@ -501,25 +455,15 @@ The Track Table's two quiet tasks come with its own steps (Steps 2, 4 and 5 of
   read the flag.
 - A waiting evaluation that is dropped at start or replaced is not recorded as
   failed, and is evaluated once its node is free.
-- A start that starts nothing returns `None`, and its caller does not read
-  another task as its own.
-- A deferred MCP reply finds its task by id after another task has landed in
-  the same frame. This is the case the single slot gets wrong.
-- A start function's id names the task it started, whether that task waits or
-  runs.
+- A start function's id names the task it started when that task waits.
 - Cancelling a waiting task removes it, writes its row, puts it in the ring and
   leaves the running task alone.
 - `get_scene`'s `background_tasks` is empty while only quiet tasks run, and
   lists a column job while a `find_points` call waits on it.
-- `get_background_tasks` with no argument reports both queues' running,
-  waiting and last finished tasks and no quiet task; with an `operation_id` it
-  reports that task whether it is running, waiting or finished.
-- `cancel_background_tasks` with no argument cancels every running and waiting
-  task that is not quiet, lists one that cannot be cancelled under `refused`,
-  and leaves quiet tasks alone. The old tool names are refused as unknown.
-- A layout file, a default layout file and a wire call that name
-  `background_task` are refused with the unknown-panel message naming
-  `background_tasks`.
+- `get_background_tasks` with no argument reports both queues' waiting tasks
+  and no quiet task; with an `operation_id` it reports a waiting task.
+- `cancel_background_tasks` with no argument cancels every waiting task too,
+  and leaves quiet tasks alone.
 
 ## Non-goals
 

@@ -270,7 +270,7 @@ pub(crate) fn searchable(dir: &Path) -> (AppState, ReconId, String) {
     state
         .start_build_index_files(id)
         .expect("a node with .sift files can be indexed");
-    state.finish_background_task();
+    state.finish_background_tasks();
     (state, id, label)
 }
 
@@ -441,7 +441,7 @@ fn a_built_index_is_current_over_a_sift_files_node() {
     state
         .start_build_index_files(id)
         .expect("the fixture has a .sift file per image");
-    state.finish_background_task();
+    state.finish_background_tasks();
     assert_eq!(state.sift_index_state(id), IndexFileState::Current);
     assert_eq!(
         state.sift_index(id).expect("open").path,

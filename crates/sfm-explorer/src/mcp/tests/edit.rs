@@ -214,7 +214,7 @@ fn retriangulate_all_points_defers_and_comes_back_with_a_version() {
         _ => panic!("the retriangulation must defer"),
     };
     assert_eq!(pending.operation_name, "Retriangulate all points");
-    state.finish_background_task();
+    state.finish_background_tasks();
 
     let reply = match super::super::edit::background_reply(&state, &pending).expect("it finished") {
         Ok(ToolOutput::Json(value)) => value,
@@ -243,7 +243,7 @@ fn retriangulate_all_points_accepts_two_cameras() {
         Outcome::Done(Err(e)) => panic!("expected a deferral, got refusal: {e}"),
         _ => panic!("the retriangulation must defer"),
     };
-    state.finish_background_task();
+    state.finish_background_tasks();
 
     match super::super::edit::background_reply(&state, &pending).expect("it finished") {
         Ok(ToolOutput::Json(reply)) => {
@@ -275,7 +275,7 @@ fn refit_all_points_defers_and_comes_back_with_a_version() {
         _ => panic!("the refit must defer"),
     };
     assert_eq!(pending.operation_name, "Refit all points");
-    state.finish_background_task();
+    state.finish_background_tasks();
 
     let reply = match super::super::edit::background_reply(&state, &pending).expect("it finished") {
         Ok(ToolOutput::Json(value)) => value,
@@ -304,7 +304,7 @@ fn refit_all_points_is_refused_without_patch_frames() {
         }
         _ => panic!("a node with no patch frames must be refused"),
     }
-    assert!(state.background_task().is_none());
+    assert!(state.running_tasks().next().is_none());
     assert_eq!(version_count(&state), 1);
 }
 
@@ -332,7 +332,7 @@ fn prune_covered_observations_defers_and_comes_back_with_a_version() {
         _ => panic!("the prune must defer"),
     };
     assert_eq!(pending.operation_name, "Prune covered observations");
-    state.finish_background_task();
+    state.finish_background_tasks();
 
     let reply = match super::super::edit::background_reply(&state, &pending).expect("it finished") {
         Ok(ToolOutput::Json(value)) => value,
@@ -494,7 +494,7 @@ pub(super) fn adjusted(state: &mut AppState, viewer: &mut Viewer3D, arguments: V
         Outcome::Done(Err(e)) => panic!("expected a deferral, got refusal: {e}"),
         _ => panic!("bundle_adjust must defer"),
     };
-    state.finish_background_task();
+    state.finish_background_tasks();
     match super::super::edit::background_reply(state, &pending).expect("the operation finished") {
         Ok(ToolOutput::Json(value)) => value,
         Ok(ToolOutput::Png { .. }) => panic!("expected JSON, got an image"),
@@ -559,7 +559,7 @@ fn bundle_adjust_releases_each_camera_as_its_entry_says() {
         Outcome::Deferred(super::super::Deferred::Background(pending)) => pending,
         _ => panic!("bundle_adjust must defer"),
     };
-    state.finish_background_task();
+    state.finish_background_tasks();
     let Err(error) =
         super::super::edit::background_reply(&state, &pending).expect("the operation finished")
     else {
@@ -620,7 +620,7 @@ fn bundle_adjust_refuses_a_camera_entry_it_cannot_apply() {
     );
     assert!(error.0.contains("twice"), "{error}");
     assert_eq!(version_count(&state), 1);
-    assert!(state.background_task().is_none());
+    assert!(state.running_tasks().next().is_none());
 }
 
 /// The `cameras` entries parse to overrides whose left-out fields stay open
@@ -957,10 +957,11 @@ fn a_slow_adjustment_answers_with_a_handle_naming_it() {
             }),
         )
         .expect("nothing else is running");
-    let task = state.background_task().expect("running");
+    let task = state.running_tasks().next().expect("running");
     let pending = super::super::BackgroundReply {
         operation_id: task.id,
         operation_name: task.operation.name,
+        queue: task.operation.queue,
         answer: super::super::Answer::Version(id),
         label: task.label.clone(),
         started: std::time::Instant::now() - super::super::REPLY_DIRECTLY_WITHIN,
@@ -973,6 +974,7 @@ fn a_slow_adjustment_answers_with_a_handle_naming_it() {
         };
     assert_eq!(reply["running"], json!(true), "{reply}");
     assert_eq!(reply["operation"], json!("Bundle adjust"), "{reply}");
+    assert_eq!(reply["queue"], json!("slow"), "{reply}");
     assert_eq!(reply["reconstruction_label"], json!("run_a"), "{reply}");
     assert_eq!(
         reply["operation_id"],
@@ -992,7 +994,7 @@ fn a_slow_adjustment_answers_with_a_handle_naming_it() {
     );
 
     open.send(()).expect("the worker is waiting");
-    state.finish_background_task();
+    state.finish_background_tasks();
 }
 
 /// A background edit that ran to its end and found nothing to change pushes no
@@ -1013,15 +1015,16 @@ fn a_background_edit_that_changes_nothing_answers_changed_false() {
             }),
         )
         .expect("nothing else is running");
-    let task = state.background_task().expect("running");
+    let task = state.running_tasks().next().expect("running");
     let pending = super::super::BackgroundReply {
         operation_id: task.id,
         operation_name: task.operation.name,
+        queue: task.operation.queue,
         answer: super::super::Answer::Version(id),
         label: task.label.clone(),
         started: std::time::Instant::now(),
     };
-    state.finish_background_task();
+    state.finish_background_tasks();
     assert_eq!(version_count(&state), 1);
 
     let reply = match super::super::edit::background_reply(&state, &pending)
@@ -1066,7 +1069,7 @@ fn convert_to_embedded_patches_defers_and_flips_the_feature_source() {
         _ => panic!("the conversion must defer"),
     };
     assert_eq!(pending.operation_name, "Convert to embedded patches");
-    state.finish_background_task();
+    state.finish_background_tasks();
 
     let reply = match super::super::edit::background_reply(&state, &pending).expect("it finished") {
         Ok(ToolOutput::Json(value)) => value,
@@ -1088,7 +1091,9 @@ fn convert_to_embedded_patches_defers_and_flips_the_feature_source() {
 
     // The same operation, read back through the tool an agent polls, under the
     // same name and id the handle carried.
-    let over = call(&mut state, &mut viewer, "get_background_task", json!({}));
+    let over = call(&mut state, &mut viewer, "get_background_tasks", json!({}))["slow"]
+        ["last_finished"]
+        .clone();
     assert_eq!(over["running"], json!(false), "{over}");
     assert_eq!(over["finished"], json!(true), "{over}");
     assert_eq!(
@@ -1120,7 +1125,7 @@ fn convert_to_embedded_patches_is_refused_on_an_embedded_node() {
     );
     assert!(error.0.contains("already an embedded_patches"), "{error}");
     assert_eq!(version_count(&state), 1);
-    assert!(state.background_task().is_none());
+    assert!(state.running_tasks().next().is_none());
 }
 
 /// The id in a handle goes on naming its operation after that operation has
@@ -1138,8 +1143,8 @@ fn a_handle_s_id_still_names_the_operation_once_it_has_finished() {
         Outcome::Deferred(super::super::Deferred::Background(pending)) => pending,
         _ => panic!("bundle_adjust must defer"),
     };
-    state.finish_background_task();
-    assert!(state.background_task().is_none());
+    state.finish_background_tasks();
+    assert!(state.running_tasks().next().is_none());
 
     let reply = match super::super::edit::background_reply(&state, &pending).expect("it finished") {
         Ok(ToolOutput::Json(value)) => value,
@@ -1164,12 +1169,61 @@ fn a_handle_s_id_still_names_the_operation_once_it_has_finished() {
     }
 }
 
+/// A deferred reply finds its own task by id when another task, from the other
+/// queue, landed after it and before the reply was resolved: the case one slot
+/// of "the last finished task" answered with the other task's outcome.
+#[test]
+fn a_deferred_reply_finds_its_task_after_another_has_landed() {
+    let (mut state, _viewer) = editable();
+    let first = state.scene[0].id;
+    state.append_node(crate::scene::SceneNode::demo(
+        sfmtool_core::SfmrReconstruction::demo(8),
+    ));
+    let second = state.scene[1].id;
+    let slow = state
+        .start_background_task(
+            crate::background::Operation::BUNDLE_ADJUST,
+            first,
+            Box::new(|_progress| crate::background::Finished::Failed("the solve's own".into())),
+        )
+        .expect("the slow queue is idle");
+    let task = state.running_task(slow).expect("running");
+    let pending = super::super::BackgroundReply {
+        operation_id: slow,
+        operation_name: task.operation.name,
+        queue: task.operation.queue,
+        answer: super::super::Answer::Version(first),
+        label: task.label.clone(),
+        started: task.started,
+    };
+    let fast = state
+        .start_background_task(
+            crate::background::Operation::BENCH_FIT,
+            second,
+            Box::new(|_progress| crate::background::Finished::Failed("the fit's own".into())),
+        )
+        .expect("the fast queue is idle");
+    state.finish_background_task(slow);
+    state.finish_background_task(fast);
+    assert_eq!(state.last_finished_task().map(|task| task.id), Some(fast));
+
+    match super::super::edit::background_reply(&state, &pending).expect("it finished") {
+        Err(error) => assert_eq!(error.0, "the solve's own", "{error}"),
+        Ok(_) => panic!("a failed solve was answered with a version"),
+    }
+}
+
 /// Cancelling is refused when there is nothing to cancel, and stops the
 /// operation when there is.
 #[test]
-fn cancel_background_stops_what_is_running_and_refuses_when_nothing_is() {
+fn cancel_background_tasks_stops_what_is_running_and_refuses_when_nothing_is() {
     let (mut state, mut viewer) = editable();
-    let error = refused_call(&mut state, &mut viewer, "cancel_background_task", json!({}));
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "cancel_background_tasks",
+        json!({}),
+    );
     assert!(error.0.contains("Nothing is running"), "{error}");
 
     perturb(&mut state, 0.02);
@@ -1182,16 +1236,139 @@ fn cancel_background_stops_what_is_running_and_refuses_when_nothing_is() {
         Outcome::Deferred(super::super::Deferred::Background(_)) => {}
         _ => panic!("bundle_adjust must defer"),
     }
-    let reply = call(&mut state, &mut viewer, "cancel_background_task", json!({}));
-    assert_eq!(reply["cancelling"], json!("Bundle adjust"), "{reply}");
-    assert_eq!(reply["reconstruction_label"], json!("run_a"), "{reply}");
+    let task = state.running_tasks().next().expect("running").id;
+    let reply = call(
+        &mut state,
+        &mut viewer,
+        "cancel_background_tasks",
+        json!({}),
+    );
+    assert_eq!(
+        reply,
+        json!({
+            "cancelling": [{
+                "operation": "Bundle adjust",
+                "reconstruction_label": "run_a",
+                "operation_id": task,
+            }],
+            "refused": [],
+        }),
+        "{reply}"
+    );
 
-    state.finish_background_task();
+    state.finish_background_tasks();
     // Whether the solve reached a poll before finishing is a race, so what is
     // asserted is the flag's effect on the state machine rather than which of
     // the two rows landed: either way the operation is over and the node free.
-    assert!(state.background_task().is_none());
+    assert!(state.running_tasks().next().is_none());
     assert_eq!(state.busy_refusal(state.scene[0].id), None);
+
+    // A task named after it has finished is refused by name, with the
+    // sentence the panel's tooltip would carry, and so is one never started.
+    let reply = call(
+        &mut state,
+        &mut viewer,
+        "cancel_background_tasks",
+        json!({ "operation_ids": [task, task + 1] }),
+    );
+    assert_eq!(reply["cancelling"], json!([]), "{reply}");
+    assert_eq!(
+        reply["refused"],
+        json!([
+            {
+                "operation": "Bundle adjust",
+                "reconstruction_label": "run_a",
+                "operation_id": task,
+                "reason": "Bundle adjust of run_a has already finished.",
+            },
+            {
+                "operation_id": task + 1,
+                "reason": format!("No background task with operation_id {} is running.", task + 1),
+            },
+        ]),
+        "{reply}"
+    );
+}
+
+/// With a task in each queue, cancelling with no argument asks both to stop,
+/// and naming one asks that one alone.
+#[test]
+fn cancel_background_tasks_names_one_or_stops_every_running_task() {
+    let (mut state, mut viewer) = editable();
+    let first = state.scene[0].id;
+    state.append_node(crate::scene::SceneNode::demo(
+        sfmtool_core::SfmrReconstruction::demo(8),
+    ));
+    let second = state.scene[1].id;
+    let held = |state: &mut AppState, operation, node| {
+        let (open, wait) = std::sync::mpsc::channel::<()>();
+        let task = state
+            .start_background_task(
+                operation,
+                node,
+                Box::new(move |progress| {
+                    let _ = wait.recv();
+                    if progress.is_cancelled() {
+                        crate::background::Finished::Cancelled
+                    } else {
+                        crate::background::Finished::Failed("not cancelled".to_string())
+                    }
+                }),
+            )
+            .expect("its queue is idle");
+        (task, open)
+    };
+    let (slow, open_slow) = held(
+        &mut state,
+        crate::background::Operation::BUNDLE_ADJUST,
+        first,
+    );
+    let (fast, open_fast) = held(&mut state, crate::background::Operation::BENCH_FIT, second);
+
+    let reply = call(
+        &mut state,
+        &mut viewer,
+        "cancel_background_tasks",
+        json!({ "operation_ids": [fast] }),
+    );
+    let named: Vec<&Value> = reply["cancelling"]
+        .as_array()
+        .expect("a list")
+        .iter()
+        .map(|task| &task["operation_id"])
+        .collect();
+    assert_eq!(named, [&json!(fast)], "{reply}");
+    open_fast.send(()).expect("the fit is waiting");
+    state.finish_background_task(fast);
+    assert_eq!(
+        state.finished_task(fast).map(|task| task.outcome.is_err()),
+        Some(true)
+    );
+    assert!(
+        state.running_task(slow).is_some(),
+        "the solve was cancelled too"
+    );
+
+    let reply = call(
+        &mut state,
+        &mut viewer,
+        "cancel_background_tasks",
+        json!({}),
+    );
+    let named: Vec<&Value> = reply["cancelling"]
+        .as_array()
+        .expect("a list")
+        .iter()
+        .map(|task| &task["operation_id"])
+        .collect();
+    assert_eq!(named, [&json!(slow)], "{reply}");
+    open_slow.send(()).expect("the solve is waiting");
+    state.finish_background_task(slow);
+    let ended = state.finished_task(slow).expect("it finished");
+    assert_eq!(
+        ended.outcome,
+        Err("Bundle adjust of run_a cancelled".to_string())
+    );
 }
 
 // ── What an agent reads about a background operation ────────────────────
@@ -1229,7 +1406,7 @@ fn running_operation(
         )
         .expect("nothing else is running");
     heard.recv().expect("the worker reported");
-    state.poll_background_task();
+    state.poll_background_tasks();
     open
 }
 
@@ -1266,20 +1443,39 @@ pub(super) fn keys(value: &Value) -> Vec<String> {
 /// One call answers both "is it still going" and "what did it cost", and the
 /// two answers are the same shape with `running` telling them apart.
 #[test]
-fn get_background_task_reads_one_shape_running_and_finished() {
+fn get_background_tasks_reads_one_shape_running_and_finished() {
     let (mut state, mut viewer) = editable();
 
-    // Nothing has run: both discriminators are there and both are false, so a
-    // reader never has to tell a missing key from a false one.
-    let idle = call(&mut state, &mut viewer, "get_background_task", json!({}));
-    assert_eq!(keys(&idle), ["finished", "running"], "{idle}");
-    assert_eq!(idle["running"], json!(false), "{idle}");
-    assert_eq!(idle["finished"], json!(false), "{idle}");
+    // Nothing has run: each queue is there, running nothing and having
+    // finished nothing.
+    let idle = call(&mut state, &mut viewer, "get_background_tasks", json!({}));
+    assert_eq!(
+        idle,
+        json!({
+            "slow": { "running": null, "last_finished": null },
+            "fast": { "running": null, "last_finished": null },
+        }),
+        "{idle}"
+    );
 
     let open = running_operation(&mut state, reporting_job);
-    let operation_id = state.background_task().expect("running").id;
-    let live = call(&mut state, &mut viewer, "get_background_task", json!({}));
+    let operation_id = state.running_tasks().next().expect("running").id;
+    let by_id = json!({ "operation_id": operation_id });
+    let live = call(
+        &mut state,
+        &mut viewer,
+        "get_background_tasks",
+        by_id.clone(),
+    );
+    // The queue's view and the task's own are one answer.
+    let queues = call(&mut state, &mut viewer, "get_background_tasks", json!({}));
+    assert_eq!(
+        queues["slow"]["running"]["operation_id"],
+        live["operation_id"]
+    );
+    assert_eq!(queues["fast"]["running"], Value::Null, "{queues}");
     assert_eq!(live["running"], json!(true), "{live}");
+    assert_eq!(live["queue"], json!("slow"), "{live}");
     assert_eq!(live.get("finished"), None, "{live}");
     assert_eq!(live["operation"], json!("Bundle adjust"), "{live}");
     assert_eq!(live["reconstruction_label"], json!("run_a"), "{live}");
@@ -1313,13 +1509,16 @@ fn get_background_task_reads_one_shape_running_and_finished() {
     );
 
     open.send(()).expect("the worker is waiting");
-    state.finish_background_task();
+    state.finish_background_tasks();
 
-    let over = call(&mut state, &mut viewer, "get_background_task", json!({}));
+    let over = call(&mut state, &mut viewer, "get_background_tasks", by_id);
+    let queues = call(&mut state, &mut viewer, "get_background_tasks", json!({}));
+    assert_eq!(queues["slow"]["running"], Value::Null, "{queues}");
+    assert_eq!(queues["slow"]["last_finished"], over, "{queues}");
     assert_eq!(over["running"], json!(false), "{over}");
     assert_eq!(over["finished"], json!(true), "{over}");
     // The same operation, under the same names: an agent parses one shape.
-    for field in ["operation", "reconstruction_label", "operation_id"] {
+    for field in ["operation", "queue", "reconstruction_label", "operation_id"] {
         assert_eq!(over[field], live[field], "{field} moved: {over}");
     }
     assert!(
@@ -1332,6 +1531,21 @@ fn get_background_task_reads_one_shape_running_and_finished() {
         over["text"],
         json!("the fake worker produced nothing"),
         "{over}"
+    );
+
+    // An id no task has had is refused rather than answered with another's.
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "get_background_tasks",
+        json!({ "operation_id": operation_id + 1 }),
+    );
+    assert!(
+        error.0.contains(&format!(
+            "No background task has operation_id {}",
+            operation_id + 1
+        )),
+        "{error}"
     );
 }
 
@@ -1348,10 +1562,16 @@ fn the_entry_is_the_summary_of_the_breakdown_the_wire_reported() {
     let (mut state, mut viewer) = editable();
     let open = running_operation(&mut state, reporting_job);
     let since = state.action_log.revision();
+    let task = state.running_tasks().next().expect("running").id;
     open.send(()).expect("the worker is waiting");
-    state.finish_background_task();
+    state.finish_background_task(task);
 
-    let reply = call(&mut state, &mut viewer, "get_background_task", json!({}));
+    let reply = call(
+        &mut state,
+        &mut viewer,
+        "get_background_tasks",
+        json!({ "operation_id": task }),
+    );
     let log = ok(&mut state, &mut viewer, action_log_detail(since));
     let row = row_starting(&log, "the fake worker produced nothing");
     let wire = reply["phases"].as_array().expect("an array");
@@ -1394,7 +1614,13 @@ fn a_long_breakdown_is_capped_and_says_how_many_it_dropped() {
         }
     });
 
-    let live = call(&mut state, &mut viewer, "get_background_task", json!({}));
+    let task = json!({ "operation_id": state.running_tasks().next().expect("running").id });
+    let live = call(
+        &mut state,
+        &mut viewer,
+        "get_background_tasks",
+        task.clone(),
+    );
     let rows = live["phases"].as_array().expect("an array").clone();
     assert_eq!(rows.len(), ActionLog::DETAIL_EVENTS + 1, "{live}");
     // What it left out is said first, and what it kept is the recent end.
@@ -1411,25 +1637,25 @@ fn a_long_breakdown_is_capped_and_says_how_many_it_dropped() {
     );
 
     open.send(()).expect("the worker is waiting");
-    state.finish_background_task();
-    let over = call(&mut state, &mut viewer, "get_background_task", json!({}));
+    state.finish_background_tasks();
+    let over = call(&mut state, &mut viewer, "get_background_tasks", task);
     assert_eq!(over["phases"], live["phases"], "{over}");
 }
 
 /// `get_scene` says the viewer is busy and stops there.
 ///
-/// The most-polled tool on the surface carries a block whose size does not
-/// depend on the operation: no phase table, no open phase, no status line, and
-/// nothing at all once the operation is over.
+/// The most-polled tool on the surface carries a list whose entries' size does
+/// not depend on the operation: no phase table, no open phase, no status line,
+/// and nothing at all once the operation is over.
 #[test]
 fn get_scene_says_the_viewer_is_busy_without_carrying_the_solve() {
     let (mut state, mut viewer) = editable();
     let idle = ok(&mut state, &mut viewer, Command::GetScene);
     assert_eq!(
-        idle["background_task"],
-        Value::Null,
+        idle["background_tasks"],
+        json!([]),
         "{}",
-        idle["background_task"]
+        idle["background_tasks"]
     );
 
     let open = running_operation(&mut state, |progress| {
@@ -1437,7 +1663,9 @@ fn get_scene_says_the_viewer_is_busy_without_carrying_the_solve() {
         progress.set_status_message(format_args!("refining images/IMG_0007.jpg"));
     });
     let scene = ok(&mut state, &mut viewer, Command::GetScene);
-    let block = &scene["background_task"];
+    let tasks = scene["background_tasks"].as_array().expect("a list");
+    assert_eq!(tasks.len(), 1, "{tasks:?}");
+    let block = &tasks[0];
     assert_eq!(
         keys(block),
         [
@@ -1445,49 +1673,70 @@ fn get_scene_says_the_viewer_is_busy_without_carrying_the_solve() {
             "fraction",
             "operation",
             "operation_id",
+            "queue",
             "reconstruction_label",
             "running",
         ],
-        "the get_scene block has grown: {block}"
+        "the get_scene entry has grown: {block}"
     );
+    assert_eq!(block["queue"], json!("slow"), "{block}");
     assert_eq!(block["running"], json!(true), "{block}");
     assert_eq!(block["operation"], json!("Bundle adjust"), "{block}");
     assert_eq!(block["reconstruction_label"], json!("run_a"), "{block}");
     // The one field a caller polls for movement, and the whole of what
-    // `get_background_task` would add is absent here.
+    // `get_background_tasks` would add is absent here.
     assert!(block["fraction"].is_number(), "{block}");
 
     open.send(()).expect("the worker is waiting");
-    state.finish_background_task();
-    // Null again, rather than the operation that just ended: `background` is
-    // read as "may I edit", and a block that outlived the operation would be
-    // carried by every poll for the rest of the session.
+    state.finish_background_tasks();
+    // Empty again, rather than the operation that just ended: the list is
+    // read as "is the viewer busy", and an entry that outlived the operation
+    // would be carried by every poll for the rest of the session.
     let after = ok(&mut state, &mut viewer, Command::GetScene);
-    assert_eq!(after["background_task"], Value::Null, "{after}");
+    assert_eq!(after["background_tasks"], json!([]), "{after}");
 }
 
 /// The apply timeout names what is running, and keeps its old guesses when
 /// nothing is.
 #[test]
 fn the_timeout_message_names_an_operation_only_while_one_is_running() {
-    let idle = super::super::server::timeout_message(None);
+    let idle = super::super::server::timeout_message(&[]);
     assert!(idle.contains("did not answer within 10 seconds"), "{idle}");
     assert!(idle.contains("modal dialog"), "{idle}");
-    assert!(!idle.contains("get_background_task"), "{idle}");
+    assert!(!idle.contains("get_background_tasks"), "{idle}");
 
-    let busy = super::super::server::timeout_message(Some(crate::background::Busy {
+    let adjusting = crate::background::Busy {
         operation: "Bundle adjust",
         label: "dino_dog_toy-embedded".to_string(),
-    }));
+    };
+    let busy = super::super::server::timeout_message(std::slice::from_ref(&adjusting));
     assert!(busy.contains("did not answer within 10 seconds"), "{busy}");
     assert!(
-        busy.contains("Bundle adjust is running in the background on dino_dog_toy-embedded"),
+        busy.contains(
+            "Bundle adjust on dino_dog_toy-embedded is running in the background; \
+             get_background_tasks says how far along it has got."
+        ),
         "{busy}"
     );
-    assert!(busy.contains("get_background_task"), "{busy}");
     // The two guesses are gone: they name things that did not happen.
     assert!(!busy.contains("modal dialog"), "{busy}");
     assert!(!busy.contains("mid-drag"), "{busy}");
+
+    // With a task in each queue, it names both.
+    let both = super::super::server::timeout_message(&[
+        adjusting,
+        crate::background::Busy {
+            operation: "Fit track",
+            label: "bull".to_string(),
+        },
+    ]);
+    assert!(
+        both.contains(
+            "Bundle adjust on dino_dog_toy-embedded and Fit track on bull are running in the \
+             background; get_background_tasks says how far along each has got."
+        ),
+        "{both}"
+    );
 }
 
 /// The notice the message reads is written where the task is written, so the
@@ -1495,20 +1744,20 @@ fn the_timeout_message_names_an_operation_only_while_one_is_running() {
 #[test]
 fn the_busy_notice_tracks_the_operation() {
     let (mut state, _viewer) = editable();
-    assert_eq!(crate::background::busy(&state.busy_notice), None);
+    assert_eq!(crate::background::busy(&state.busy_notice), []);
 
     let open = running_operation(&mut state, |_| {});
     assert_eq!(
         crate::background::busy(&state.busy_notice),
-        Some(crate::background::Busy {
+        [crate::background::Busy {
             operation: "Bundle adjust",
             label: "run_a".to_string(),
-        })
+        }]
     );
 
     open.send(()).expect("the worker is waiting");
-    state.finish_background_task();
-    assert_eq!(crate::background::busy(&state.busy_notice), None);
+    state.finish_background_tasks();
+    assert_eq!(crate::background::busy(&state.busy_notice), []);
 }
 
 /// Undo, redo and the jump answer with the version now showing, and refuse at
@@ -1662,7 +1911,7 @@ fn the_cursor_moves_refuse_a_busy_node_on_the_wire() {
     assert_eq!(state.scene[0].history.cursor(), 1, "a refusal moved");
 
     open.send(()).expect("the worker is waiting");
-    state.finish_background_task();
+    state.finish_background_tasks();
 }
 
 /// `get_reconstruction_history` is the Edit History panel's reading of the same
@@ -2787,7 +3036,7 @@ fn switch_camera_model_with_proposal_applies_it_and_moves_the_tracks() {
     };
     assert_eq!(pending.operation_name, "Switch camera model");
     assert!(state.camera_model_proposal.is_none());
-    state.finish_background_task();
+    state.finish_background_tasks();
     let reply = match super::super::edit::background_reply(&state, &pending).expect("it finished") {
         Ok(ToolOutput::Json(value)) => value,
         Ok(ToolOutput::Png { .. }) => panic!("expected JSON, got an image"),
@@ -2858,7 +3107,7 @@ fn a_direct_switch_applies_an_open_proposal_first() {
         "{error}"
     );
     assert!(state.camera_model_proposal.is_none());
-    state.finish_background_task();
+    state.finish_background_tasks();
     assert_eq!(version_count(&state), 2);
 
     let before = point_positions(&state);
@@ -3031,7 +3280,7 @@ fn the_preview_is_reported_and_its_answer_applied_at_once() {
         json!({ "reconstruction_label": "run_a", "proposal": true }),
     );
     assert!(applied.get("running").is_none(), "{applied}");
-    assert!(state.background_task().is_none(), "it solved again");
+    assert!(state.running_tasks().next().is_none(), "it solved again");
     assert!(
         applied["label"]
             .as_str()
