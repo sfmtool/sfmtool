@@ -10,8 +10,8 @@
 //! the reference whose pairs sharpen the plane, a selection that matches a
 //! few of many views, a flat wall, and large turns on weak and on strong
 //! evidence, and the ladder's selection near to far: its order, a refused
-//! rung retried from the starting plane, and its end at the widest view that
-//! passes.
+//! rung retried from the starting plane, its end at the widest view that
+//! passes, and a view at the reference's centre.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -1336,4 +1336,19 @@ fn the_ladder_ends_at_the_widest_view_that_passes() {
     );
     let after = degrees(patch_frame_of(&turned).normal(), truth());
     assert!(after < 1.0, "{after:.3}: {report}");
+}
+
+/// A view at the reference's own centre, 0 degrees from it, is the first
+/// rung's pick when the only other view is far wider; once it is kept the
+/// ladder's aim is zero, and the selection goes on to the wider view rather
+/// than aiming at zero again.
+#[test]
+fn a_view_at_the_references_centre_ends_the_ladder() {
+    let scene = ladder_scene(&[(0.0, 0.0), (35.0, 30.0)], &[]);
+    let (_, _, report) = run_ladder(&scene);
+    let sequence = sequence_of(&report);
+    let angles: Vec<f64> = sequence.picks.iter().map(|p| p.angle_deg).collect();
+    assert_eq!(angles.len(), 2, "{:#?}", sequence.picks);
+    assert!(angles[0].abs() < 0.5, "{angles:?}");
+    assert!((angles[1] - 35.0).abs() < 0.5, "{angles:?}");
 }
