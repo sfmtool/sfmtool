@@ -740,14 +740,14 @@ A wide view fails mainly when the start is far off: with a start within 15° of 
 
 **Question.** The selection stopped once the combined weakest σ was at most 0.5°. Does a looser target keep the bar while growing fewer views?
 
-**Setup.** The near-to-far selection of § [The selection](#the-selection) was run on all 1609 points of the three ground truths, from the mean viewing direction, with `target_sigma_deg` at 0.5°, 1.0° and 1.5° and every other setting at its default. The three forms ran at once on one machine, so only the ratios between their times hold. "Within 0.1°", "better" and "worse" compare each point's error against its stored normal with its error under the 0.5° target.
+**Setup.** The near-to-far selection of § [The selection](#the-selection) was run on all 1609 points of the three ground truths, from the mean viewing direction, with `target_sigma_deg` at 0.5°, 1.0° and 1.5° and every other setting at its default. The three runs ran at once on one machine, so only the ratios between their times hold. "Within 0.1°", "better" and "worse" compare each point's error against its stored normal with its error under the 0.5° target.
 
 **Results.**
 
 - **Judged points.** The points of § [Judged by eye](#judged-by-eye-2026-10-18) judged right stay at 55 of 63 under all three targets.
 - **Time.** The step takes 423 s at 0.5°, 357 s at 1.0° and 303 s at 1.5°: 28% less at 1.5° than at 0.5°.
 - **`seoul_bull_sculpture`.** Every quantile is the same at 1.5° as at 0.5°, and 95% of the points are within 0.1° of their error at 0.5°.
-- **`kerry_park`.** The quartiles and the 90th percentile are the same. 82% of the points are within 0.1°; 4% are better by more than 0.5° and 5% worse by more than 0.5°.
+- **`kerry_park`.** The quartiles and the 90th percentile are within 0.08° of those at 0.5°. 82% of the points are within 0.1°; 4% are better by more than 0.5° and 5% worse by more than 0.5°.
 - **`dino_dog_toy`.**
 
   | Target | 25th percentile | Median | 75th percentile | 90th percentile | Under 1° |
@@ -762,7 +762,7 @@ A wide view fails mainly when the start is far off: with a start within 15° of 
 - **An oracle.** About half of the points are already within 0.5° of their final plane after their first join. A stop that knew when each point had reached its final plane would grow only 32% to 44% of the views the selection grew.
 - **A small move of the combined plane.** Stopping once a join moves the combined plane by less than a given angle, set to save as many growths as the σ target does, costs about as much error as the σ target on `dino_dog_toy` and more on `kerry_park`.
 
-**Reading.** At 1.5° the step takes 28% less time and keeps the judged points and the bull's and Kerry Park's quantiles. The views the 0.5° target grows past 1.5° mostly refine points that are already within a degree or two of their stored normal, not the points that are far off: on `dino_dog_toy` the low quantiles move most, the 25th percentile from 0.75° to 0.86°. The dino's stored normals come from a candidate ground truth, and a shift of about 0.1° at the 25th percentile may lie within their own error. `target_sigma_deg` is 1.5° since this measurement.
+**Reading.** At 1.5° the step takes 28% less time, keeps the judged points and the bull's quantiles, and moves Kerry Park's by less than 0.1°. On `dino_dog_toy` each quantile shown is 0.08° to 0.33° higher, and more points are worse by over 0.5° than better. The dino's stored normals come from a candidate ground truth, so its shifts of 0.1° to 0.3° may lie within the stored normals' own error. `target_sigma_deg` is 1.5° since this measurement.
 
 ## Non-goals
 
