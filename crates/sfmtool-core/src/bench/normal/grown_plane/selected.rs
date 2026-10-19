@@ -4,11 +4,15 @@
 //! The selection, the pairs and the shift-only fits of
 //! [`grown_plane_normal`](super::grown_plane_normal).
 //!
-//! The selection predicts each view's information about the tilt from its
-//! geometry and matches views greedily until the combined plane is precise
-//! enough. Every view matched grows from the starting plane, from its
-//! keypoint-implied shift first and from the stage-1 search where that growth
-//! is under the floor, and counts when a growth passes the floor on its own.
+//! The selection matches views near to far by their angle from the
+//! reference, in rungs, until the combined plane is precise enough, picking
+//! within a rung by each view's information about the tilt predicted from its
+//! geometry. The first rung grows from the starting plane, and every later
+//! pick from the combined plane of the views kept so far and, where that
+//! growth is under the floor, from the starting plane again; from the
+//! starting plane a view grows from its keypoint-implied shift first and from
+//! the stage-1 search where that growth is under the floor. A pick counts
+//! when a growth passes the floor on its own.
 //! The robust combination (`combine`) then keeps the planes that agree. A
 //! view the combination leaves out whose kept growth had no search is grown
 //! once more from the search, as the growth with no search is followed by
@@ -25,8 +29,8 @@ use super::combine::{sigmas_deg, Combined, Estimate, PairEstimate};
 use super::solve::{maximise, tilt_information, PairFit};
 use super::{
     same_shift, start_word, verdict_words, Fate, GrownPlaneAttempt, GrownPlanePair, GrownPlanePick,
-    GrownPlaneRefusal, GrownPlaneSelection, GrownPlaneStart, GrownPlaneTiltStart, GrownPlaneTry,
-    GrownPlaneTryOutcome, Judged, NormalError, Outcome, Sequence,
+    GrownPlaneRefusal, GrownPlaneStart, GrownPlaneTiltStart, GrownPlaneTry, GrownPlaneTryOutcome,
+    Judged, NormalError, Outcome, Sequence,
 };
 use crate::progress::Progress;
 use crate::progress_note;
@@ -314,10 +318,48 @@ impl Sequence<'_, '_, '_> {
         Ok((pair_estimates, pairs))
     }
 
-    /// The selection, by `GrownPlaneNormalOptions::selection`: views picked
-    /// one at a time and matched against the reference until the combined
-    /// plane's weakest `σ` reaches `target_sigma_deg` or `max_selected_views`
-    /// views have passed the floor, or no candidate is left.
+    /// The selection: views picked one at a time near to far by angle from
+    /// the reference, in rungs, and matched against the reference until the
+    /// combined plane's weakest `σ` reaches `target_sigma_deg` or
+    /// `max_selected_views` views have passed the floor, or no candidate is
+    /// left.
+    ///
+    /// The first rung, grown from the starting plane, takes the view nearest
+    /// `first_rung_deg` within `first_rung_min_deg ..= first_rung_max_deg`,
+    /// nearest first, ties by the earlier view; while none in that range has
+    /// passed the floor and none is left there, the view nearest
+    /// `first_rung_deg` among all those left, so the widest view under the
+    /// range where nothing is wider. Each later rung aims at `rung_ratio`
+    /// times the widest angle the combination keeps, and takes the views
+    /// within a factor `√rung_ratio` of that aim; a rung with no view left in
+    /// its range aims `rung_ratio` times further out. The rung whose range
+    /// reaches the widest candidate is the last: it takes every view from
+    /// the smaller of its aim and the widest candidate's angle, over
+    /// `√rung_ratio`, out, and the selection stays on it. Once no view is
+    /// left there, one more rung takes every view left, narrower ones among
+    /// them.
+    ///
+    /// Within a later rung the pick is the view whose predicted information
+    /// most raises the weakest information measured so far, which spreads
+    /// the picks' offset directions, ties by the larger eigenvalue, then by
+    /// the view nearer the aim and then by the earlier one. A view's
+    /// predicted information is `P = g · (α·d dᵀ + β·e eᵀ)`, with `d` the
+    /// unit direction of its offset from the reference in the starting patch
+    /// frame, `e` the direction across it, and the geometric gain
+    /// `g = (s / ρ)² · sin²θ`: `θ` its angle from the reference, `s` its
+    /// photograph px per world unit at the anchor capped at the working
+    /// grid's samples per world unit `ρ` (the grid samples no finer). `α` and
+    /// `β` are read from the views matched so far, each the median over them
+    /// of their measured information along `d` or across it divided by `g`;
+    /// a model with `β` zero is the rank-one prediction along the offset.
+    ///
+    /// Every pick of a later rung is grown from the combined plane of the
+    /// views kept so far, from its keypoint-implied shift (or the search at
+    /// that plane, with no keypoint), and where that is refused, from the
+    /// starting plane as the first rung grows it. A rung stays until one of
+    /// its views is kept, so a refused pick is followed by another view in
+    /// the same range. A candidate whose angle is not finite is never
+    /// picked.
     fn select(
         &self,
         progress: &Progress<'_>,
@@ -334,107 +376,7 @@ impl Sequence<'_, '_, '_> {
             passed: 0,
             tried: vec![false; self.candidates.len()],
         };
-        match self.options.selection {
-            GrownPlaneSelection::Information => {
-                self.select_by_information(&mut state, progress, matched, trace, picks)
-            }
-            GrownPlaneSelection::Ladder => {
-                self.select_by_ladder(&mut state, progress, matched, trace, picks)
-            }
-        }
-    }
-
-    /// The selection by predicted information: every pick grown from the
-    /// starting plane, and a pick under the floor replaced by the next pick.
-    ///
-    /// A view's predicted information is `P = g · (α·d dᵀ + β·e eᵀ)`, with
-    /// `d` the unit direction of its offset from the reference in the
-    /// starting patch frame, `e` the direction across it, and the geometric gain
-    /// `g = (s / ρ)² · sin²θ`: `θ` its angle from the reference, `s` its
-    /// photograph px per world unit at the anchor capped at the working
-    /// grid's samples per world unit `ρ` (the grid samples no finer). `α` and
-    /// `β` are read from the views matched so far, each the median over them
-    /// of their measured information along `d` or across it divided by `g`;
-    /// a model with `β` zero is the rank-one prediction along the offset. The
-    /// first pick, and every pick while no view has been matched, is the
-    /// widest view left; every later one maximises the smallest eigenvalue of
-    /// the measured information of the kept views plus the view's
-    /// prediction, ties by the larger eigenvalue, then by the wider view and
-    /// then by the earlier one.
-    fn select_by_information(
-        &self,
-        state: &mut Selection,
-        progress: &Progress<'_>,
-        matched: &mut [Option<Matched>],
-        trace: &mut Vec<GrownPlaneTry>,
-        picks: &mut Vec<GrownPlanePick>,
-    ) -> Result<(), NormalError> {
-        let n = self.candidates.len();
-        while state.passed < self.options.max_selected_views {
-            progress.check_cancel()?;
-            let model = state.prediction.model(&state.estimates);
-            let pick = match model {
-                None => (0..n)
-                    .filter(|&i| !state.tried[i])
-                    .max_by(|&a, &b| self.wider(a, b).then(b.cmp(&a))),
-                Some(m) => state.best_predicted(self, m, (0..n).filter(|&i| !state.tried[i])),
-            };
-            let Some(i) = pick else {
-                break;
-            };
-            let predicted_weak = model.map_or(f64::NAN, |m| state.weakest_with(i, m).0);
-            if self.take(
-                state,
-                i,
-                None,
-                predicted_weak,
-                progress,
-                matched,
-                trace,
-                picks,
-            )? {
-                break;
-            }
-        }
-        Ok(())
-    }
-
-    /// The selection near to far by angle from the reference, in rungs.
-    ///
-    /// The first rung, grown from the starting plane, takes the view nearest
-    /// `first_rung_deg` within `first_rung_min_deg ..= first_rung_max_deg`,
-    /// nearest first, ties by the earlier view; while none in that range has
-    /// passed the floor and none is left there, the view nearest
-    /// `first_rung_deg` among all those left, so the widest view under the
-    /// range where nothing is wider. Each later rung aims at `rung_ratio`
-    /// times the widest angle the combination keeps, and takes the views
-    /// within a factor `√rung_ratio` of that aim; a rung with no view left in
-    /// its range aims `rung_ratio` times further out. The rung whose range
-    /// reaches the widest candidate is the last: it takes every view from
-    /// the smaller of its aim and the widest candidate's angle, over
-    /// `√rung_ratio`, out, and the ladder stays on it. Once no view is left
-    /// there, one more rung takes every view left, narrower ones among them.
-    /// Within a later rung the pick is the view whose predicted information
-    /// most raises the weakest information measured so far, as
-    /// [`Self::select_by_information`] predicts it, which spreads the picks'
-    /// offset directions, ties by the view nearer the aim and then by the
-    /// earlier one.
-    ///
-    /// Every pick of a later rung is grown from the combined plane of the
-    /// views kept so far, from its keypoint-implied shift (or the search at
-    /// that plane, with no keypoint), and where that is refused, from the
-    /// starting plane as the first rung grows it. A rung stays until one of
-    /// its views is kept, so a refused pick is followed by another view in
-    /// the same range. A candidate whose angle is not finite is never
-    /// picked.
-    fn select_by_ladder(
-        &self,
-        state: &mut Selection,
-        progress: &Progress<'_>,
-        matched: &mut [Option<Matched>],
-        trace: &mut Vec<GrownPlaneTry>,
-        picks: &mut Vec<GrownPlanePick>,
-    ) -> Result<(), NormalError> {
+        let state = &mut state;
         let options = self.options;
         let n = self.candidates.len();
         let angle = |i: usize| self.candidates[i].angle_deg;
@@ -518,7 +460,7 @@ impl Sequence<'_, '_, '_> {
             if self.take(
                 state,
                 i,
-                Some(rung),
+                rung,
                 predicted_weak,
                 progress,
                 matched,
@@ -539,16 +481,9 @@ impl Sequence<'_, '_, '_> {
         Ok(())
     }
 
-    /// Whether candidate `a` is wider than `b`, by angle from the reference.
-    fn wider(&self, a: usize, b: usize) -> std::cmp::Ordering {
-        self.candidates[a]
-            .angle_deg
-            .total_cmp(&self.candidates[b].angle_deg)
-    }
-
-    /// Match pick `i` against the reference, in a `selection` phase, and
-    /// record it: from the combined plane of the views kept so far first
-    /// where `rung` is a later rung of the ladder, from the starting plane
+    /// Match pick `i`, of rung `rung`, against the reference, in a
+    /// `selection` phase, and record it: from the combined plane of the views
+    /// kept so far first where a view has been kept, from the starting plane
     /// otherwise or where that is refused. A pick that passes the floor is
     /// combined with the picks before it. Whether the combined plane's
     /// weakest `σ` has reached `target_sigma_deg`.
@@ -557,7 +492,7 @@ impl Sequence<'_, '_, '_> {
         &self,
         state: &mut Selection,
         i: usize,
-        rung: Option<u32>,
+        rung: u32,
         predicted_weak: f64,
         progress: &Progress<'_>,
         matched: &mut [Option<Matched>],
@@ -567,24 +502,16 @@ impl Sequence<'_, '_, '_> {
         let options = self.options;
         state.tried[i] = true;
         let candidate = &self.candidates[i];
-        let combined_from = match rung {
-            Some(_) => state.kept_tilt,
-            None => None,
-        };
         let mut phase = progress.detail_phase("selection");
         progress_note!(
             phase,
-            "image {}, {:.1}\u{b0} from the reference, {:.2} px per unit{}: predicted weakest information {predicted_weak:.3}",
+            "image {}, {:.1}\u{b0} from the reference, {:.2} px per unit, rung {rung}: predicted weakest information {predicted_weak:.3}",
             candidate.image_index,
             candidate.angle_deg,
-            candidate.scale_px,
-            match rung {
-                Some(r) => format!(", rung {r}"),
-                None => String::new(),
-            }
+            candidate.scale_px
         );
         drop(phase);
-        let Some(result) = self.match_view(i, true, combined_from, progress, trace)? else {
+        let Some(result) = self.match_view(i, true, state.kept_tilt, progress, trace)? else {
             return Ok(false);
         };
         let ok = result.is_ok();
@@ -705,29 +632,6 @@ impl Selection {
         (e.min(), e.max())
     }
 
-    /// Among `candidates`, the one whose prediction most raises the weakest
-    /// kept information, ties by the larger eigenvalue, then by the wider
-    /// view and then by the earlier one.
-    fn best_predicted(
-        &self,
-        sequence: &Sequence<'_, '_, '_>,
-        m: (f64, f64),
-        candidates: impl Iterator<Item = usize>,
-    ) -> Option<usize> {
-        candidates
-            .map(|i| {
-                let (lo, hi) = self.weakest_with(i, m);
-                (i, lo, hi)
-            })
-            .max_by(|a, b| {
-                a.1.total_cmp(&b.1)
-                    .then(a.2.total_cmp(&b.2))
-                    .then(sequence.wider(a.0, b.0))
-                    .then(b.0.cmp(&a.0))
-            })
-            .map(|(i, _, _)| i)
-    }
-
     /// Among `candidates`, the one whose prediction under `m` most raises
     /// the weakest kept information, ties by the larger eigenvalue, then by
     /// the view nearer `aim` degrees and then by the earlier one; with no
@@ -756,8 +660,7 @@ impl Selection {
 }
 
 /// Each candidate's information about the tilt, predicted from its
-/// geometry: `g · (α·d dᵀ + β·e eᵀ)` (see
-/// [`Sequence::select_by_information`]).
+/// geometry: `g · (α·d dᵀ + β·e eᵀ)` (see [`Sequence::select`]).
 struct Prediction {
     /// Each candidate's geometric gain `g = (s/ρ)²·sin²θ`.
     gain: Vec<f64>,

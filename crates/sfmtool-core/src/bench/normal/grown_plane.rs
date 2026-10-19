@@ -16,9 +16,10 @@
 //! ends with a fit of the whole grid on the robust cell score. Each growth
 //! gives the view's own plane and its information about the tilt.
 //!
-//! A selection of views, picked from their geometry, is grown against the
-//! reference from the starting plane, and their planes are combined by a
-//! robust information-weighted mean, with no fit of the views together
+//! A selection of views, picked near to far by their angle from the
+//! reference, is grown against the reference, the first from the starting
+//! plane and each later one from the plane of the views kept before it, and
+//! their planes are combined by a robust information-weighted mean, with no fit of the views together
 //! (`combine`); the widest pairs of kept views are then matched against each
 //! other and their planes added to the mean (`selected`). The patch is turned
 //! to the combined plane whenever a view joined, unless the turn is large and
@@ -126,18 +127,15 @@ pub struct GrownPlaneNormalOptions {
     /// The selection stops matching views once this many have passed the
     /// floor. 6.
     pub max_selected_views: usize,
-    /// How the selection picks its views and which plane it grows each
-    /// from. [`GrownPlaneSelection::Information`].
-    pub selection: GrownPlaneSelection,
-    /// The ladder's first rung, degrees from the reference: its first pick is
-    /// the view nearest this angle within [`Self::first_rung_min_deg`] to
-    /// [`Self::first_rung_max_deg`]. 12.
+    /// The selection's first rung, degrees from the reference: its first
+    /// pick is the view nearest this angle within [`Self::first_rung_min_deg`]
+    /// to [`Self::first_rung_max_deg`]. 15.
     pub first_rung_deg: f64,
-    /// The narrowest angle of the ladder's first rung, degrees. 10.
+    /// The narrowest angle of the selection's first rung, degrees. 10.
     pub first_rung_min_deg: f64,
-    /// The widest angle of the ladder's first rung, degrees. 20.
+    /// The widest angle of the selection's first rung, degrees. 20.
     pub first_rung_max_deg: f64,
-    /// Each later rung of the ladder aims at this many times the widest
+    /// Each later rung of the selection aims at this many times the widest
     /// angle kept so far, and takes views within a factor of its square root
     /// of that aim. 1.6.
     pub rung_ratio: f64,
@@ -181,8 +179,7 @@ impl Default for GrownPlaneNormalOptions {
             max_pairs: 3,
             target_sigma_deg: 0.5,
             max_selected_views: 6,
-            selection: GrownPlaneSelection::Information,
-            first_rung_deg: 12.0,
+            first_rung_deg: 15.0,
             first_rung_min_deg: 10.0,
             first_rung_max_deg: 20.0,
             rung_ratio: 1.6,
@@ -293,23 +290,6 @@ pub enum GrownPlaneOutcome {
     WeakTurn,
 }
 
-/// How the selection of [`grown_plane_normal`] picks the views it grows,
-/// and which plane it grows each from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GrownPlaneSelection {
-    /// The widest view first, then the view whose predicted information most
-    /// raises the weakest information measured so far; every view grown from
-    /// the starting plane.
-    Information,
-    /// Near to far by angle from the reference: a first rung near
-    /// [`GrownPlaneNormalOptions::first_rung_deg`] grown from the starting
-    /// plane, then rungs each [`GrownPlaneNormalOptions::rung_ratio`] times
-    /// wider than the widest view kept, each grown from the combined plane
-    /// of the views kept so far and, where that is refused, from the starting
-    /// plane, ending with the widest views.
-    Ladder,
-}
-
 /// Which plane a growth's windows started from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GrownPlaneTiltStart {
@@ -357,7 +337,7 @@ pub enum GrownPlaneRefusal {
     ViewLeftOut,
 }
 
-/// One growth of one view from the starting plane, and how it was judged.
+/// One growth of one view against the reference, and how it was judged.
 #[derive(Debug, Clone, PartialEq)]
 pub struct GrownPlaneAttempt {
     /// How the first window found its shift.
@@ -403,8 +383,10 @@ pub struct GrownPlaneTry {
     pub image: u32,
     /// Its angle from the reference as seen from the patch centre, degrees.
     pub angle_deg: f64,
-    /// Its growths, in the order made, up to the first that was taken: at
-    /// the keypoint-implied shift first and from the stage-1 search after. A
+    /// Its growths, in the order made, up to the first that was taken: from
+    /// the combined plane first where a view had been kept before it, then
+    /// from the starting plane at the keypoint-implied shift and from the
+    /// stage-1 search after. A
     /// search that lands on the keypoint-implied shift itself is not grown
     /// again, since that growth was the one just refused, and a view with no
     /// implied shift is grown from the search alone. A try made because the
@@ -462,14 +444,13 @@ pub struct GrownPlanePick {
     pub scale_px: f64,
     /// The smallest eigenvalue of the information predicted with it added to
     /// that measured so far, in the measured information's units; `NaN` for
-    /// a pick made by angle alone, while no view had been matched.
+    /// a pick of the first rung, made by angle alone.
     pub predicted_weak: f64,
     /// Whether its growth passed the floor.
     pub matched: bool,
-    /// The ladder's rung it was picked for, the first `0`, counting every
-    /// rung the ladder aimed at, those with no view in range among them;
-    /// `None` under [`GrownPlaneSelection::Information`].
-    pub rung: Option<u32>,
+    /// The selection's rung it was picked for, the first `0`, counting every
+    /// rung the selection aimed at, those with no view in range among them.
+    pub rung: u32,
     /// The combined plane's weakest `σ` after it, degrees; `NaN` when it was
     /// not matched.
     pub sigma_after_deg: f64,
@@ -700,8 +681,8 @@ impl std::fmt::Display for GrownPlaneSequence {
 /// side. The plane is the starting normal tilted by `(a, b)` along the patch frame's
 /// axes through that anchor; each view adds an image shift.
 ///
-/// A view is grown from the starting plane: a 7×7 window at the grid's
-/// centre starts from the shift the view's keypoint implies, the window grows
+/// A view is grown from a plane, the starting plane or the combined plane
+/// of the views kept before it: a 7×7 window at the grid's centre starts from the shift the view's keypoint implies, the window grows
 /// by [`GrownPlaneNormalOptions::window_fractions`] with tilt and shift fitted
 /// at each size, and a last fit takes the whole grid on the robust cell
 /// score. A growth under [`GrownPlaneNormalOptions::min_held_zncc`] is made
@@ -710,10 +691,19 @@ impl std::fmt::Display for GrownPlaneSequence {
 /// growth gives the view's own plane and its information about the tilt, the
 /// Schur complement of its normal matrix.
 ///
-/// The views grown are a selection, picked one at a time from their
-/// geometry: the widest view first, then the view whose predicted
-/// information most raises the weakest information measured so far, until
-/// the combined plane's weakest `σ` reaches
+/// The views grown are a selection, picked one at a time near to far in
+/// rungs of angle from the reference: the view nearest
+/// [`GrownPlaneNormalOptions::first_rung_deg`] within
+/// [`GrownPlaneNormalOptions::first_rung_min_deg`] to
+/// [`GrownPlaneNormalOptions::first_rung_max_deg`], grown from the starting
+/// plane, then rungs each aiming at
+/// [`GrownPlaneNormalOptions::rung_ratio`] times the widest angle kept, out
+/// to the widest views, within a rung the view whose predicted information
+/// most raises the weakest information measured so far. Each later pick is
+/// grown from the combined plane of the views kept so far and, where that is
+/// refused, from the starting plane, and a rung waits until one of its views
+/// is kept. The selection stops when the combined plane's weakest `σ`
+/// reaches
 /// [`GrownPlaneNormalOptions::target_sigma_deg`] or
 /// [`GrownPlaneNormalOptions::max_selected_views`] views have passed the
 /// floor. Their planes are combined by a robust information-weighted mean,
