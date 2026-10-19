@@ -30,6 +30,16 @@
 //!   that is running, and [`FinishedTask`] the record of one that has finished
 //!   or was cancelled before it started, kept in a ring of the last
 //!   [`FINISHED_KEPT`]. All three are found by id ([`AppState::task`]).
+//! - A **quiet task** ([`Operation::quiet`]) is work the viewer starts by
+//!   itself to keep a panel current, such as the bench's live evaluation. It is
+//!   queued by its source with [`AppState::start_quiet_task`] as a [`QuietJob`]
+//!   that answers on the source's own channel. It gives way to every task
+//!   someone asks for: a task queued in its queue, or a locking task queued on
+//!   its node, asks it to stop and starts once it has; it waits behind every
+//!   such task; a source has at most one waiting entry; and it is dropped
+//!   rather than started on a locked node. It writes no row, leaves no record
+//!   and is left out of [`AppState::running_tasks`], [`AppState::waiting_tasks`],
+//!   [`AppState::task`] and the [`BusyNotice`].
 //! - [`Report`] is what crosses the channel, and carries no progress: phases,
 //!   messages and counts are in the collector both threads hold.
 //!
@@ -90,6 +100,14 @@ pub(crate) struct Operation {
     /// Every operation that pushes a version of its node locks it; an open
     /// makes a new node and locks none.
     pub(crate) locks: bool,
+    /// Whether it is work the viewer starts by itself to keep a panel
+    /// current, rather than work someone asked for: a **quiet task**
+    /// (`specs/gui/background-tasks.md` § "Quiet tasks"). A quiet task gives
+    /// way to every task someone asks for, writes no Action Log row for
+    /// running, leaves no record in the ring and is not reported on the wire.
+    /// It is started with [`AppState::start_quiet_task`], never with
+    /// [`AppState::start_task`].
+    pub(crate) quiet: bool,
 }
 
 /// One of the two queues a background task runs from.
@@ -98,12 +116,12 @@ pub(crate) struct Operation {
 /// (`specs/gui/background-tasks.md` § "Two queues"). The slow queue holds the
 /// operations whose cost grows with the whole reconstruction and that use
 /// every core: the whole-reconstruction edits and Build index files. The fast
-/// queue holds opening files and the other bench steps.
+/// queue holds opening files, the other bench steps and the quiet tasks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Queue {
     /// The whole-reconstruction edits and Build index files.
     Slow,
-    /// Opening files and the other bench steps.
+    /// Opening files, the other bench steps and the quiet tasks.
     Fast,
 }
 
@@ -166,7 +184,99 @@ pub(crate) struct WaitingTask {
     /// Who asked for it, whose row the task writes.
     pub(crate) actor: Actor,
     /// The work, built when the task was queued.
-    job: Job,
+    job: WaitingJob,
+}
+
+/// The work a waiting task will do: a task someone asked for, which lands
+/// through the queue, or a quiet one, which answers its source itself.
+enum WaitingJob {
+    /// A task someone asked for, which lands through [`AppState::finish`].
+    Asked(Job),
+    /// A quiet task, which answers on its source's channel.
+    Quiet {
+        /// Which producer of quiet work queued it. A source has at most one
+        /// waiting entry.
+        source: QuietSource,
+        /// Its place in the fixed order among waiting quiet tasks.
+        rank: QuietRank,
+        /// The work.
+        job: QuietJob,
+    },
+}
+
+/// One producer of quiet work.
+///
+/// A source keeps at most one waiting entry: a new request replaces the one it
+/// has waiting, because a quiet task's input is the state of a panel and only
+/// the latest state matters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum QuietSource {
+    /// The bench's live evaluation ([`crate::bench::live`]).
+    LiveEvaluation,
+}
+
+/// A quiet task's place in the fixed order among waiting quiet tasks, the
+/// first first (`specs/gui/background-tasks.md` § "Quiet tasks").
+///
+/// The live evaluation's place depends on its subject: the viewed track and
+/// the focused item are what Track View shows, so they go ahead of the other
+/// bench items, in the order the evaluation driver picks them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum QuietRank {
+    /// The live evaluation of the viewed track.
+    ViewedTrack,
+    /// The live evaluation of the focused bench item.
+    FocusedItem,
+    /// The live evaluation of any other bench item.
+    BenchItem,
+}
+
+/// The work one quiet task does, and what it says when it never runs.
+///
+/// A quiet task's answer goes to its source on the source's own channel, not
+/// through the queue, so a job with more than one answer sends each when it
+/// has it and the queue carries only that the task has finished. `dropped` is
+/// called instead of `run`, on the GUI thread, when the task is dropped before
+/// it starts (its node became locked) or replaced by a newer request from its
+/// source; it sends the source's *dropped* message, so the source does not read
+/// the end of its channel as a failure.
+pub(crate) struct QuietJob {
+    /// The work, run on the worker.
+    run: Box<dyn for<'a> FnOnce(&Progress<'a>) + Send>,
+    /// What tells the source the work will not run.
+    dropped: Box<dyn FnOnce() + Send>,
+}
+
+impl QuietJob {
+    /// A quiet job that does `run` on its worker, or calls `dropped` when it
+    /// never starts.
+    pub(crate) fn new(
+        run: impl for<'a> FnOnce(&Progress<'a>) + Send + 'static,
+        dropped: impl FnOnce() + Send + 'static,
+    ) -> Self {
+        QuietJob {
+            run: Box::new(run),
+            dropped: Box::new(dropped),
+        }
+    }
+}
+
+impl WaitingTask {
+    /// Drop a quiet task that will never run, telling its source so. A task
+    /// someone asked for is dropped with its job, unrun.
+    fn drop_unrun(self) {
+        if let WaitingJob::Quiet { job, .. } = self.job {
+            (job.dropped)();
+        }
+    }
+
+    /// The source that queued it, when it is quiet.
+    fn quiet_source(&self) -> Option<QuietSource> {
+        match &self.job {
+            WaitingJob::Quiet { source, .. } => Some(*source),
+            WaitingJob::Asked(_) => None,
+        }
+    }
 }
 
 /// How many finished tasks [`AppState`] keeps, newest last.
@@ -202,6 +312,7 @@ impl Operation {
         kind: Kind::Edit,
         queue: Queue::Slow,
         locks: true,
+        quiet: false,
     };
 
     /// One node converted from `sift_files` to `embedded_patches`, the minimal
@@ -221,6 +332,7 @@ impl Operation {
         kind: Kind::Edit,
         queue: Queue::Slow,
         locks: true,
+        quiet: false,
     };
 
     /// Every point of one node re-solved from its own observations, at the
@@ -237,6 +349,7 @@ impl Operation {
         kind: Kind::Edit,
         queue: Queue::Slow,
         locks: true,
+        quiet: false,
     };
 
     /// Every point of one node fitted to the render of its reference
@@ -254,6 +367,7 @@ impl Operation {
         kind: Kind::Edit,
         queue: Queue::Slow,
         locks: true,
+        quiet: false,
     };
 
     /// One camera of one node switched to the camera model its proposal was
@@ -272,6 +386,7 @@ impl Operation {
         kind: Kind::Edit,
         queue: Queue::Slow,
         locks: true,
+        quiet: false,
     };
 
     /// One node's coarse observations retired where a finer tracked one covers
@@ -287,6 +402,7 @@ impl Operation {
         kind: Kind::Edit,
         queue: Queue::Slow,
         locks: true,
+        quiet: false,
     };
 
     /// One image added to the tracks of its node it can see
@@ -303,6 +419,7 @@ impl Operation {
         kind: Kind::Edit,
         queue: Queue::Slow,
         locks: true,
+        quiet: false,
     };
 
     /// One bench track fitted: localized, re-triangulated, its reference
@@ -320,6 +437,7 @@ impl Operation {
         kind: Kind::Bench,
         queue: Queue::Fast,
         locks: true,
+        quiet: false,
     };
 
     /// One bench track moved between the cluster and the track stage.
@@ -332,6 +450,7 @@ impl Operation {
         kind: Kind::Bench,
         queue: Queue::Fast,
         locks: true,
+        quiet: false,
     };
 
     /// One bench track's patch turned to the normal the photographs agree on
@@ -347,6 +466,7 @@ impl Operation {
         kind: Kind::Bench,
         queue: Queue::Fast,
         locks: true,
+        quiet: false,
     };
 
     /// One bench track's patch turned to the plane its pieces fit on
@@ -361,6 +481,7 @@ impl Operation {
         kind: Kind::Bench,
         queue: Queue::Fast,
         locks: true,
+        quiet: false,
     };
 
     /// One bench track's patch turned to the plane through a grid of its
@@ -373,6 +494,7 @@ impl Operation {
         kind: Kind::Bench,
         queue: Queue::Fast,
         locks: true,
+        quiet: false,
     };
 
     /// One bench track searched from, in the node's SIFT index
@@ -390,6 +512,7 @@ impl Operation {
         kind: Kind::Bench,
         queue: Queue::Fast,
         locks: true,
+        quiet: false,
     };
 
     /// One track-stage bench patch projected and photometrically vetted in
@@ -405,6 +528,7 @@ impl Operation {
         kind: Kind::Bench,
         queue: Queue::Fast,
         locks: true,
+        quiet: false,
     };
 
     /// A node's index files built and written beside its `.sfmr`: the SIFT
@@ -426,6 +550,7 @@ impl Operation {
         kind: Kind::Bench,
         queue: Queue::Slow,
         locks: true,
+        quiet: false,
     };
 
     /// A track built at one pixel of a posed photograph by the track-at-pixel
@@ -444,6 +569,7 @@ impl Operation {
         kind: Kind::Bench,
         queue: Queue::Fast,
         locks: true,
+        quiet: false,
     };
 
     /// The tracks near one pixel of a posed photograph found, put on the
@@ -466,6 +592,7 @@ impl Operation {
         kind: Kind::Bench,
         queue: Queue::Fast,
         locks: true,
+        quiet: false,
     };
 
     /// One or more `.sfmr` files read and made nodes, with the columns a file
@@ -484,17 +611,36 @@ impl Operation {
         kind: Kind::File,
         queue: Queue::Fast,
         locks: false,
+        quiet: false,
+    };
+
+    /// One track evaluated against its current inputs by the bench's live
+    /// evaluation ([`crate::bench::live`]): a quiet task.
+    ///
+    /// It locks nothing, since it pushes no version, and it does not start on
+    /// a locked node: a waiting one whose node has become locked is dropped
+    /// when it would start, and an answer that comes back to a locked node is
+    /// not installed. Cancellable because the evaluation polls the flag on
+    /// either side of the decode, between its rounds and between the views it
+    /// renders, and hands back `EvaluateError::Cancelled`.
+    pub(crate) const LIVE_EVALUATION: Operation = Operation {
+        name: "Live evaluation",
+        cancellable: true,
+        kind: Kind::Bench,
+        queue: Queue::Fast,
+        locks: false,
+        quiet: true,
     };
 
     /// Every operation that can go to the background.
     ///
     /// A list rather than a set of constants used one at a time, so the tests
-    /// that hold each `cancellable: true` to its claim, and each queue and lock
-    /// to the spec's table, have something to walk: a declaration nothing
-    /// checks is a declaration that rots.
+    /// that hold each `cancellable: true` to its claim, and each queue, lock
+    /// and quiet value to the spec's table, have something to walk: a
+    /// declaration nothing checks is a declaration that rots.
     // Read by those tests alone, which is what it is for.
     #[cfg(test)]
-    pub(crate) const ALL: [Operation; 18] = [
+    pub(crate) const ALL: [Operation; 19] = [
         Operation::OPEN,
         Operation::BUNDLE_ADJUST,
         Operation::TO_EMBEDDED_PATCHES,
@@ -513,6 +659,7 @@ impl Operation {
         Operation::BUILD_INDEX_FILES,
         Operation::CREATE_TRACK_AT_PIXEL,
         Operation::FIND_NEARBY_TRACKS,
+        Operation::LIVE_EVALUATION,
     ];
 }
 
@@ -686,6 +833,10 @@ pub(crate) enum Finished {
     Cancelled,
     /// The kernel refused, in its own words.
     Failed(String),
+    /// A quiet task's job returned. Its answers went to its source on the
+    /// source's own channel, so this carries nothing; it exists so the queue
+    /// knows the task has finished.
+    Quiet,
 }
 
 /// What a camera model proposal's Apply produced: the value, installed as
@@ -849,11 +1000,39 @@ impl AppState {
         }
     }
 
-    /// Every task running off the GUI thread, the slow queue's first.
+    /// The task someone asked for that `queue` is running, or `None` while it
+    /// is idle or runs a quiet task.
+    pub(crate) fn running_in(&self, queue: Queue) -> Option<&BackgroundTask> {
+        self.queue(queue)
+            .running
+            .as_ref()
+            .filter(|task| !task.operation.quiet)
+    }
+
+    /// The quiet task `queue` is running, if it runs one.
+    pub(crate) fn quiet_running_in(&self, queue: Queue) -> Option<&BackgroundTask> {
+        self.queue(queue)
+            .running
+            .as_ref()
+            .filter(|task| task.operation.quiet)
+    }
+
+    /// The tasks someone asked for that wait in `queue`, in the order they
+    /// will start. Quiet tasks waiting behind them are left out.
+    pub(crate) fn waiting_in(&self, queue: Queue) -> impl Iterator<Item = &WaitingTask> {
+        self.queue(queue)
+            .waiting
+            .iter()
+            .filter(|task| !task.operation.quiet)
+    }
+
+    /// Every task someone asked for running off the GUI thread, the slow
+    /// queue's first. Quiet tasks are left out: this is "someone's work is
+    /// running", which is what every reader of it asks.
     pub(crate) fn running_tasks(&self) -> impl Iterator<Item = &BackgroundTask> {
         Queue::ALL
             .into_iter()
-            .filter_map(|queue| self.queue(queue).running.as_ref())
+            .filter_map(|queue| self.running_in(queue))
     }
 
     /// The running task with this id, or `None` when no running task has it.
@@ -861,12 +1040,21 @@ impl AppState {
         self.running_tasks().find(|task| task.id == id)
     }
 
-    /// Every task waiting to start, the slow queue's first and each queue's
-    /// in the order they will start.
+    /// Every task someone asked for waiting to start, the slow queue's first
+    /// and each queue's in the order they will start. Quiet tasks are left
+    /// out.
     pub(crate) fn waiting_tasks(&self) -> impl Iterator<Item = &WaitingTask> {
         Queue::ALL
             .into_iter()
-            .flat_map(|queue| self.queue(queue).waiting.iter())
+            .flat_map(|queue| self.waiting_in(queue))
+    }
+
+    /// Whether the quiet task `id` is running, as against waiting or over.
+    pub(crate) fn quiet_task_running(&self, id: u64) -> bool {
+        Queue::ALL
+            .into_iter()
+            .filter_map(|queue| self.quiet_running_in(queue))
+            .any(|task| task.id == id)
     }
 
     /// The waiting task with this id, or `None` when no waiting task has it.
@@ -899,7 +1087,8 @@ impl AppState {
     }
 
     /// The task with this id, waiting, running or finished, or `None` when no
-    /// task has it or its record is no longer kept.
+    /// task has it or its record is no longer kept. Quiet tasks have ids of
+    /// their own ([`AppState::start_quiet_task`]) and are never found here.
     ///
     /// What a caller that was handed an id asks, rather than whether "the"
     /// running task is its own: with two queues, the task that is running may
@@ -1052,9 +1241,14 @@ impl AppState {
         label: String,
         job: Job,
     ) -> Result<u64, String> {
+        debug_assert!(
+            !operation.quiet,
+            "a quiet task starts through start_quiet_task"
+        );
         if let Some(why) = self.start_refusal(operation, node) {
             return Err(why);
         }
+        self.give_way_to(operation, node);
         let task = WaitingTask {
             id: self.next_operation_id,
             operation,
@@ -1062,12 +1256,18 @@ impl AppState {
             label,
             queued: Instant::now(),
             actor: self.action_log.actor(),
-            job,
+            job: WaitingJob::Asked(job),
         };
         let id = task.id;
         if self.queue(operation.queue).running.is_some() {
             self.next_operation_id += 1;
-            self.queue_mut(operation.queue).waiting.push_back(task);
+            // Behind the tasks someone asked for and ahead of every quiet one.
+            let waiting = &mut self.queue_mut(operation.queue).waiting;
+            let at = waiting
+                .iter()
+                .position(|task| task.operation.quiet)
+                .unwrap_or(waiting.len());
+            waiting.insert(at, task);
             return Ok(id);
         }
         // A thread that could not be spawned is the caller's refusal, so the
@@ -1075,6 +1275,128 @@ impl AppState {
         self.run_task(task)?;
         self.next_operation_id += 1;
         Ok(id)
+    }
+
+    /// Ask the quiet tasks a task someone asked for displaces to stop: the
+    /// quiet task running in its queue, which it would otherwise wait behind,
+    /// and, for a task that locks `node`, a quiet task running on that node in
+    /// either queue, whose answer would land into the bench the new task's
+    /// job has just captured.
+    ///
+    /// The quiet task is not taken off its queue: it runs until it reads the
+    /// flag, so a queue still runs one task at a time, and the task that
+    /// displaced it starts once it reports that it has stopped. Its source
+    /// queues it again, behind the task, when its cancelled answer comes back.
+    fn give_way_to(&self, operation: Operation, node: Option<ReconId>) {
+        for queue in Queue::ALL {
+            let Some(task) = self.quiet_running_in(queue) else {
+                continue;
+            };
+            let on_its_node = operation.locks && node.is_some() && task.node == node;
+            if queue == operation.queue || on_its_node {
+                task.cancel.store(true, Ordering::Relaxed);
+            }
+        }
+    }
+
+    /// Queue a quiet task for `source`, named `label`, running `job` on a
+    /// worker thread, and answer with its id.
+    ///
+    /// A quiet task waits behind every task someone asked for and behind the
+    /// quiet tasks ahead of it in `rank`, and the source's own waiting entry,
+    /// if it has one, is replaced, its job told it was dropped. It starts at
+    /// once only when its queue is idle, and then only when `node` is not
+    /// locked: a quiet task does not start on a locked node, and is dropped,
+    /// its source told so, rather than run. The id is from a count of its own
+    /// ([`AppState::next_quiet_id`]), so the ids the wire hands out stay
+    /// consecutive. An error is a worker thread that could not be spawned.
+    ///
+    /// Nothing is logged, here or when it finishes: a quiet task writes no row
+    /// for running and leaves no record in the ring of finished tasks.
+    pub(crate) fn start_quiet_task(
+        &mut self,
+        operation: Operation,
+        source: QuietSource,
+        rank: QuietRank,
+        node: ReconId,
+        label: String,
+        job: QuietJob,
+    ) -> Result<u64, String> {
+        debug_assert!(operation.quiet && !operation.locks);
+        let queue = operation.queue;
+        if let Some(at) = self
+            .queue(queue)
+            .waiting
+            .iter()
+            .position(|task| task.quiet_source() == Some(source))
+        {
+            let replaced = self
+                .queue_mut(queue)
+                .waiting
+                .remove(at)
+                .expect("just found");
+            replaced.drop_unrun();
+        }
+        let id = self.next_quiet_id;
+        self.next_quiet_id += 1;
+        let task = WaitingTask {
+            id,
+            operation,
+            node: Some(node),
+            label,
+            queued: Instant::now(),
+            actor: self.action_log.actor(),
+            job: WaitingJob::Quiet { source, rank, job },
+        };
+        if self.queue(queue).running.is_some() {
+            let waiting = &mut self.queue_mut(queue).waiting;
+            let at = waiting
+                .iter()
+                .position(|task| match &task.job {
+                    WaitingJob::Quiet { rank: ahead, .. } => *ahead > rank,
+                    WaitingJob::Asked(_) => false,
+                })
+                .unwrap_or(waiting.len());
+            waiting.insert(at, task);
+            return Ok(id);
+        }
+        self.begin(task)?;
+        Ok(id)
+    }
+
+    /// Ask the quiet task `id` to stop when it is running, or take it out of
+    /// its queue, telling its source it was dropped, when it is waiting. Does
+    /// nothing when no quiet task has that id.
+    pub(crate) fn cancel_quiet_task(&mut self, id: u64) {
+        for queue in Queue::ALL {
+            if let Some(task) = self.quiet_running_in(queue).filter(|task| task.id == id) {
+                task.cancel.store(true, Ordering::Relaxed);
+                return;
+            }
+            let waiting = &mut self.queue_mut(queue).waiting;
+            if let Some(at) = waiting
+                .iter()
+                .position(|task| task.operation.quiet && task.id == id)
+            {
+                let task = waiting.remove(at).expect("just found");
+                task.drop_unrun();
+                return;
+            }
+        }
+    }
+
+    /// Start `task` from its idle queue, or, for a quiet task whose node has
+    /// become locked since it was queued, drop it and tell its source.
+    fn begin(&mut self, task: WaitingTask) -> Result<(), String> {
+        if task.operation.quiet
+            && task
+                .node
+                .is_some_and(|node| self.busy_refusal(node).is_some())
+        {
+            task.drop_unrun();
+            return Ok(());
+        }
+        self.run_task(task)
     }
 
     /// Spawn the worker for `task` and make it its queue's running task.
@@ -1095,12 +1417,33 @@ impl AppState {
         let (reports, rx) = std::sync::mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
         let queued = Arc::new(AtomicBool::new(false));
-        // The level the Action Log toolbar's checkbox last left, read as the
-        // operation starts so that a change to it takes effect on the next one.
-        let collector = Arc::new(Collector::reporting(
-            self.action_log.detailed_timing(),
-            progressed(reports.clone(), Arc::clone(&queued), self.wake.clone()),
-        ));
+        let (job, collector): (Job, Collector) = match job {
+            // The level the Action Log toolbar's checkbox last left, read as
+            // the operation starts so that a change to it takes effect on the
+            // next one.
+            WaitingJob::Asked(job) => (
+                job,
+                Collector::reporting(
+                    self.action_log.detailed_timing(),
+                    progressed(reports.clone(), Arc::clone(&queued), self.wake.clone()),
+                ),
+            ),
+            // Nothing draws a quiet task's phases, so its collector wakes
+            // nobody: a burst of evaluations during a slider drag costs no
+            // frame per phase it opens.
+            WaitingJob::Quiet { job, .. } => {
+                let QuietJob { run, dropped } = job;
+                drop(dropped);
+                (
+                    Box::new(move |progress: &Progress<'_>| {
+                        run(progress);
+                        Finished::Quiet
+                    }),
+                    Collector::new(false),
+                )
+            }
+        };
+        let collector = Arc::new(collector);
 
         let worker = Worker {
             operation,
@@ -1144,7 +1487,10 @@ impl AppState {
     /// Called in the poll that lands the queue's running task, so the next one
     /// starts in that same poll. A task whose thread cannot be spawned ends
     /// there, with a failed row and a record in the ring, and the one behind
-    /// it is tried.
+    /// it is tried. A quiet task is checked again here: one whose node has
+    /// become locked since it was queued is dropped, its source told so, and
+    /// the one behind it is tried. A quiet task whose thread cannot be spawned
+    /// ends with no row, and its source reads its channel's end as a failure.
     fn start_next(&mut self, queue: Queue) {
         while self.queue(queue).running.is_none() {
             let Some(task) = self.queue_mut(queue).waiting.pop_front() else {
@@ -1152,8 +1498,10 @@ impl AppState {
             };
             let (id, operation, label, actor) =
                 (task.id, task.operation, task.label.clone(), task.actor);
-            if let Err(message) = self.run_task(task) {
-                self.end_before_start(id, operation, label, actor, message);
+            if let Err(message) = self.begin(task) {
+                if !operation.quiet {
+                    self.end_before_start(id, operation, label, actor, message);
+                }
             }
         }
     }
@@ -1164,7 +1512,10 @@ impl AppState {
     fn cancel_waiting(&mut self, id: u64) -> bool {
         for queue in Queue::ALL {
             let waiting = &mut self.queue_mut(queue).waiting;
-            let Some(index) = waiting.iter().position(|task| task.id == id) else {
+            let Some(index) = waiting
+                .iter()
+                .position(|task| !task.operation.quiet && task.id == id)
+            else {
                 continue;
             };
             let task = waiting.remove(index).expect("just found");
@@ -1307,7 +1658,12 @@ impl AppState {
         if let Some(finished) = done {
             let task = self.queue_mut(queue).running.take().expect("just borrowed");
             self.publish_busy();
-            polled.installed.extend(self.finish(task, finished));
+            // A quiet task's answers are on its source's channel already, sent
+            // before its worker reported this, so there is nothing to install,
+            // no row to write and no record to keep.
+            if !task.operation.quiet {
+                polled.installed.extend(self.finish(task, finished));
+            }
             // After the landed task's row, so the log reads in the order the
             // two happened. The task that starts locks its own node, which is
             // never the one that just landed.
@@ -1555,6 +1911,7 @@ impl AppState {
                 }
             }
             Finished::SwitchedCamera(_) => unreachable!("unwrapped into Produced above"),
+            Finished::Quiet => unreachable!("a quiet task does not land through finish"),
             // Nothing to install and nothing to push, so the row is the whole
             // of it: the node's caches still describe the value it holds.
             Finished::NoChange(text) => Ok(text),
@@ -1664,6 +2021,50 @@ impl AppState {
             polled.installed.extend(step.installed);
         }
         polled
+    }
+
+    /// Wait for the next report of `queue`'s running task, quiet or not, and
+    /// apply it with whatever follows it, as a frame would. False when the
+    /// queue is idle.
+    ///
+    /// The seam for a test that waits on a quiet task, which has no id the
+    /// asked-for seams can name.
+    #[cfg(test)]
+    pub(crate) fn step_queue(&mut self, queue: Queue) -> bool {
+        const PATIENCE: Duration = Duration::from_secs(120);
+        let Some(task) = self.queue(queue).running.as_ref() else {
+            return false;
+        };
+        let first = match task.reports.recv_timeout(PATIENCE) {
+            Ok(report) => Some(report),
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => None,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                panic!("the background operation said nothing for {PATIENCE:?}")
+            }
+        };
+        self.apply_reports(queue, first);
+        true
+    }
+
+    /// Drive every running quiet task to its end, so that a queue a test reads
+    /// next is not held by a quiet task its source has already heard from.
+    #[cfg(test)]
+    pub(crate) fn land_quiet_tasks(&mut self) {
+        while let Some(queue) = Queue::ALL
+            .into_iter()
+            .find(|&queue| self.quiet_running_in(queue).is_some())
+        {
+            self.step_queue(queue);
+        }
+    }
+
+    /// Whether the running quiet task `id` has been asked to stop.
+    #[cfg(test)]
+    pub(crate) fn quiet_task_cancelled(&self, id: u64) -> bool {
+        Queue::ALL
+            .into_iter()
+            .filter_map(|queue| self.quiet_running_in(queue))
+            .any(|task| task.id == id && task.cancel.load(Ordering::Relaxed))
     }
 
     /// Ask every running task that can stop to stop.

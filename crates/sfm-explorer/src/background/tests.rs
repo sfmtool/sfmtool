@@ -32,7 +32,7 @@ use crate::progress::Detail;
 use crate::scene::{ImageRef, PointRef, ReconId, SceneNode};
 use crate::state::AppState;
 
-use super::{Finished, Job, Operation};
+use super::{Finished, Job, Operation, Queue, QuietJob, QuietRank, QuietSource, TaskState};
 
 /// A state holding one node an adjustment can actually run on, and its id.
 ///
@@ -683,30 +683,31 @@ fn the_finished_tasks_are_kept_in_a_ring() {
     );
 }
 
-/// Each operation's declared queue and lock are the ones the spec's table
-/// gives (`specs/gui/background-tasks.md` § "Two queues").
+/// Each operation's declared queue, lock and quiet value are the ones the
+/// spec's table gives (`specs/gui/background-tasks.md` § "Two queues").
 #[test]
-fn each_operation_declares_the_spec_s_queue_and_lock() {
+fn each_operation_declares_the_spec_s_queue_lock_and_quiet_value() {
     use super::Queue::{Fast, Slow};
     let table = [
-        ("Bundle adjust", Slow, true),
-        ("Convert to embedded patches", Slow, true),
-        ("Retriangulate all points", Slow, true),
-        ("Refit all points", Slow, true),
-        ("Switch camera model", Slow, true),
-        ("Prune covered observations", Slow, true),
-        ("Add image to tracks", Slow, true),
-        ("Build index files", Slow, true),
-        ("Open", Fast, false),
-        ("Fit track", Fast, true),
-        ("Set track stage", Fast, true),
-        ("Fit normal", Fast, true),
-        ("Finite difference normal", Fast, true),
-        ("Grid plane normal", Fast, true),
-        ("Search descriptors", Fast, true),
-        ("Geometry search", Fast, true),
-        ("Create track at pixel", Fast, true),
-        ("Find nearby tracks", Fast, true),
+        ("Bundle adjust", Slow, true, false),
+        ("Convert to embedded patches", Slow, true, false),
+        ("Retriangulate all points", Slow, true, false),
+        ("Refit all points", Slow, true, false),
+        ("Switch camera model", Slow, true, false),
+        ("Prune covered observations", Slow, true, false),
+        ("Add image to tracks", Slow, true, false),
+        ("Build index files", Slow, true, false),
+        ("Open", Fast, false, false),
+        ("Fit track", Fast, true, false),
+        ("Set track stage", Fast, true, false),
+        ("Fit normal", Fast, true, false),
+        ("Finite difference normal", Fast, true, false),
+        ("Grid plane normal", Fast, true, false),
+        ("Search descriptors", Fast, true, false),
+        ("Geometry search", Fast, true, false),
+        ("Create track at pixel", Fast, true, false),
+        ("Find nearby tracks", Fast, true, false),
+        ("Live evaluation", Fast, false, true),
     ];
     assert_eq!(
         table.len(),
@@ -716,11 +717,11 @@ fn each_operation_declares_the_spec_s_queue_and_lock() {
     for operation in Operation::ALL {
         let row = table
             .iter()
-            .find(|(name, _, _)| *name == operation.name)
+            .find(|(name, ..)| *name == operation.name)
             .unwrap_or_else(|| panic!("{} is not in the table", operation.name));
         assert_eq!(
-            (operation.queue, operation.locks),
-            (row.1, row.2),
+            (operation.queue, operation.locks, operation.quiet),
+            (row.1, row.2, row.3),
             "{}",
             operation.name
         );
@@ -785,6 +786,15 @@ fn every_operation_that_says_it_is_cancellable_really_is() {
         if !operation.cancellable {
             continue;
         }
+        // A quiet task writes no row, so its claim is held on its answer.
+        if operation.quiet {
+            assert!(
+                quiet_job_stops(operation),
+                "{} claims to be cancellable and did not stop",
+                operation.name
+            );
+            continue;
+        }
         let mut task = real_task(operation);
         let versions = task.state.scene[0].history.versions().len();
         let nodes = task.state.scene.len();
@@ -809,6 +819,29 @@ fn every_operation_that_says_it_is_cancellable_really_is() {
             "{} appended a node after being cancelled",
             operation.name,
         );
+    }
+}
+
+/// Whether the quiet `operation`'s real work, run with the cancel flag already
+/// set, stops rather than answering.
+///
+/// Run through the job builder rather than the queue, since the queue hands a
+/// quiet task's answer to its source and keeps nothing of it.
+fn quiet_job_stops(operation: Operation) -> bool {
+    match operation.name {
+        // An evaluation of a track on the bench fixture, whose photographs it
+        // would otherwise decode and render.
+        "Live evaluation" => {
+            let (mut state, id) = crate::bench::tests::state();
+            let label = crate::bench::tests::put_on_bench(&mut state, id);
+            let job = state
+                .bench_evaluate_job(id, &label)
+                .expect("the fixture's track is readable");
+            let cancel = std::sync::atomic::AtomicBool::new(true);
+            let progress = Progress::none().cancelled_by(&cancel);
+            matches!(job(&progress), crate::bench::live::Measured::Cancelled)
+        }
+        other => panic!("{other} has no starter here; add one"),
     }
 }
 
@@ -1384,6 +1417,7 @@ const NOT_CANCELLABLE: Operation = Operation {
     kind: crate::action_log::Kind::Edit,
     queue: super::Queue::Slow,
     locks: true,
+    quiet: false,
 };
 
 /// A session that has run nothing says so for each queue and says nothing
@@ -2548,4 +2582,368 @@ fn the_idle_node_says_its_whole_name_on_hover_once() {
         1,
         "more than one tooltip carries it: {hovered:?}",
     );
+}
+
+// -- Quiet tasks -----------------------------------------------------------
+
+/// A quiet job that waits at `gate` and then says on `said` whether it was
+/// asked to stop, or says `dropped` when the queue drops it unrun: the source's
+/// channel, as the live evaluation's is.
+fn quiet_job(gate: mpsc::Receiver<()>, said: mpsc::Sender<&'static str>) -> QuietJob {
+    let dropped = said.clone();
+    QuietJob::new(
+        move |progress| {
+            let _ = gate.recv();
+            let _ = said.send(if progress.is_cancelled() {
+                "cancelled"
+            } else {
+                "ran"
+            });
+        },
+        move || {
+            let _ = dropped.send("dropped");
+        },
+    )
+}
+
+/// Queue a fake quiet task of the live evaluation's source on `node`.
+fn start_quiet(
+    state: &mut AppState,
+    node: ReconId,
+    gate: mpsc::Receiver<()>,
+    said: mpsc::Sender<&'static str>,
+) -> u64 {
+    state
+        .start_quiet_task(
+            Operation::LIVE_EVALUATION,
+            QuietSource::LiveEvaluation,
+            QuietRank::BenchItem,
+            node,
+            "fake subject".to_string(),
+            quiet_job(gate, said),
+        )
+        .expect("a worker thread")
+}
+
+/// The ids waiting in the fast queue, quiet ones included, in the order they
+/// will start, each with whether it is quiet.
+fn fast_waiting(state: &AppState) -> Vec<(u64, bool)> {
+    state
+        .queue(Queue::Fast)
+        .waiting
+        .iter()
+        .map(|task| (task.id, task.operation.quiet))
+        .collect()
+}
+
+/// A task someone asks for in the fast queue asks the running quiet task to
+/// stop and waits for it; it starts once the quiet task reports that it has
+/// stopped, and the quiet task queued again waits behind it.
+#[test]
+fn a_running_quiet_task_gives_way_to_an_asked_for_task_and_runs_after_it() {
+    let (mut state, id) = adjustable();
+    let other = second_node(&mut state);
+    let (said, heard) = mpsc::channel();
+    let mut quiet_gate = Gate::new();
+    let quiet = start_quiet(&mut state, other, quiet_gate.held(), said.clone());
+    assert!(state.quiet_task_running(quiet), "an idle queue ran nothing");
+    assert!(!state.quiet_task_cancelled(quiet));
+
+    let mut fit_gate = Gate::new();
+    let fit = state
+        .start_background_task(Operation::BENCH_FIT, id, waiting_job(fit_gate.held()))
+        .expect("a busy queue queues the task");
+    assert!(
+        state.quiet_task_cancelled(quiet),
+        "the asked-for task did not ask the quiet one to stop"
+    );
+    assert!(
+        matches!(state.task(fit), Some(TaskState::Waiting(_))),
+        "the asked-for task started beside the quiet one"
+    );
+
+    quiet_gate.open();
+    assert_eq!(heard.recv().expect("the quiet job answered"), "cancelled");
+    state.land_quiet_tasks();
+    assert!(
+        state.running_task(fit).is_some(),
+        "the asked-for task did not start once the quiet one stopped"
+    );
+
+    // Its source queues it again, and it waits behind the asked-for task.
+    let mut again_gate = Gate::new();
+    let again = start_quiet(&mut state, other, again_gate.held(), said);
+    assert_eq!(fast_waiting(&state), [(again, true)]);
+    fit_gate.open();
+    state.finish_background_task(fit);
+    assert!(
+        state.quiet_task_running(again),
+        "the quiet task did not run after the asked-for one"
+    );
+    again_gate.open();
+    assert_eq!(heard.recv().expect("the quiet job answered"), "ran");
+    state.land_quiet_tasks();
+}
+
+/// Waiting tasks someone asked for start ahead of a waiting quiet one, and a
+/// source's new request replaces the entry it has waiting, which is told it
+/// was dropped.
+#[test]
+fn asked_for_tasks_start_ahead_of_quiet_ones_and_a_source_keeps_one_entry() {
+    let (mut state, id) = adjustable();
+    let b = second_node(&mut state);
+    let c = third_node(&mut state);
+    let mut first_gate = Gate::new();
+    let first = state
+        .start_background_task(Operation::BENCH_FIT, id, waiting_job(first_gate.held()))
+        .expect("an idle queue");
+
+    let (said, heard) = mpsc::channel();
+    let mut replaced_gate = Gate::new();
+    let replaced = start_quiet(&mut state, b, replaced_gate.held(), said.clone());
+    assert_eq!(fast_waiting(&state), [(replaced, true)]);
+    let mut quiet_gate = Gate::new();
+    let quiet = start_quiet(&mut state, b, quiet_gate.held(), said);
+    assert_eq!(
+        fast_waiting(&state),
+        [(quiet, true)],
+        "the source has two entries waiting"
+    );
+    assert_eq!(
+        heard.try_recv(),
+        Ok("dropped"),
+        "the replaced entry did not tell its source"
+    );
+
+    let mut second_gate = Gate::new();
+    let second = state
+        .start_background_task(
+            Operation::BENCH_FIT_NORMAL,
+            c,
+            waiting_job(second_gate.held()),
+        )
+        .expect("a busy queue queues the task");
+    assert_eq!(
+        fast_waiting(&state),
+        [(second, false), (quiet, true)],
+        "the asked-for task waits behind the quiet one"
+    );
+
+    first_gate.open();
+    state.finish_background_task(first);
+    assert!(state.running_task(second).is_some());
+    second_gate.open();
+    state.finish_background_task(second);
+    assert!(state.quiet_task_running(quiet));
+    quiet_gate.open();
+    assert_eq!(heard.recv().expect("the quiet job answered"), "ran");
+    state.land_quiet_tasks();
+    drop(replaced_gate);
+}
+
+/// A waiting quiet task whose node has become locked since it was queued is
+/// dropped when it would start, and its source is told so; the queue is then
+/// idle rather than running work whose answer could not land.
+#[test]
+fn a_waiting_quiet_task_whose_node_became_locked_is_dropped_at_start() {
+    let (mut state, id) = adjustable();
+    let other = second_node(&mut state);
+    let mut fit_gate = Gate::new();
+    let fit = state
+        .start_background_task(Operation::BENCH_FIT, id, waiting_job(fit_gate.held()))
+        .expect("an idle queue");
+    let (said, heard) = mpsc::channel();
+    let mut quiet_gate = Gate::new();
+    start_quiet(&mut state, other, quiet_gate.held(), said);
+    let mut solve_gate = Gate::new();
+    let solve = state
+        .start_background_task(
+            Operation::BUNDLE_ADJUST,
+            other,
+            waiting_job(solve_gate.held()),
+        )
+        .expect("the slow queue is idle");
+
+    fit_gate.open();
+    state.finish_background_task(fit);
+    assert_eq!(heard.try_recv(), Ok("dropped"));
+    assert!(
+        state.queue(Queue::Fast).running.is_none() && fast_waiting(&state).is_empty(),
+        "the quiet task started on a locked node"
+    );
+
+    solve_gate.open();
+    state.finish_background_task(solve);
+    drop(quiet_gate);
+}
+
+/// A locking task queued on a node asks a quiet task running on that node to
+/// stop, from the other queue and while it only waits there. One on another
+/// node does not.
+#[test]
+fn a_locking_task_queued_on_its_node_cancels_a_running_quiet_task() {
+    let (mut state, id) = adjustable();
+    let other = second_node(&mut state);
+    let (said, heard) = mpsc::channel();
+    let mut quiet_gate = Gate::new();
+    let quiet = start_quiet(&mut state, other, quiet_gate.held(), said);
+
+    let mut first_gate = Gate::new();
+    state
+        .start_background_task(Operation::BUNDLE_ADJUST, id, waiting_job(first_gate.held()))
+        .expect("the slow queue is idle");
+    assert!(
+        !state.quiet_task_cancelled(quiet),
+        "a task on another node cancelled it"
+    );
+    let mut second_gate = Gate::new();
+    let second = state
+        .start_background_task(
+            Operation::RETRIANGULATE_ALL_POINTS,
+            other,
+            waiting_job(second_gate.held()),
+        )
+        .expect("a busy queue queues the task");
+    assert!(matches!(state.task(second), Some(TaskState::Waiting(_))));
+    assert!(
+        state.quiet_task_cancelled(quiet),
+        "a task queued on its node did not cancel it"
+    );
+
+    quiet_gate.open();
+    assert_eq!(heard.recv().expect("the quiet job answered"), "cancelled");
+    state.land_quiet_tasks();
+    first_gate.open();
+    second_gate.open();
+    state.finish_background_task(second);
+}
+
+/// A quiet task writes no Action Log row, leaves no record in the ring, and
+/// is not what `running_tasks`, `waiting_tasks`, the lookup by id or the busy
+/// notice report. The panel names it on a dim line under its queue's.
+#[test]
+fn a_quiet_task_writes_no_row_leaves_no_record_and_is_not_reported() {
+    let (mut state, id) = adjustable();
+    state.action_log.clear();
+    let (said, heard) = mpsc::channel();
+    let mut gate = Gate::new();
+    let quiet = start_quiet(&mut state, id, gate.held(), said);
+    assert!(state.quiet_task_running(quiet));
+    assert!(state.running_tasks().next().is_none());
+    assert!(state.waiting_tasks().next().is_none());
+    assert!(state.task(quiet).is_none());
+    assert!(super::busy(&state.busy_notice).is_empty());
+    assert!(
+        state.busy_refusal(id).is_none(),
+        "a quiet task locked its node"
+    );
+    assert_eq!(
+        painted(&mut state),
+        [
+            "Slow",
+            "Nothing running",
+            "Fast",
+            "Nothing running",
+            super::panel::QUIET,
+            "Live evaluation",
+            "fake subject",
+        ],
+        "no bar, no elapsed and no Cancel on the quiet line"
+    );
+
+    gate.open();
+    assert_eq!(heard.recv().expect("the quiet job answered"), "ran");
+    state.land_quiet_tasks();
+    assert_eq!(
+        state.action_log.entries().count(),
+        0,
+        "a quiet task wrote a row"
+    );
+    assert!(
+        state.finished_tasks.is_empty(),
+        "a quiet task left a record"
+    );
+    assert_eq!(
+        painted(&mut state),
+        ["Slow", "Nothing running", "Fast", "Nothing running"],
+        "the fast queue's line shows a quiet task as its last finished"
+    );
+}
+
+/// With a quiet task running and a task waiting in the fast queue beside a
+/// slow task's phases, the panel at the height it has at the bottom of the
+/// left column still shows the newest stage: the quiet line is one line.
+#[test]
+fn a_quiet_line_leaves_the_newest_stage_shown() {
+    let (mut state, id) = adjustable();
+    let other = second_node(&mut state);
+    let mut gate = Gate::new();
+    let (said_phases, heard_phases) = mpsc::channel();
+    state
+        .start_background_task(
+            Operation::BUNDLE_ADJUST,
+            id,
+            many_phases_job(gate.held(), said_phases),
+        )
+        .expect("nothing else is running");
+    heard_phases.recv().expect("the worker reported");
+    let (said, heard) = mpsc::channel();
+    let mut quiet_gate = Gate::new();
+    start_quiet(&mut state, other, quiet_gate.held(), said);
+    let third = third_node(&mut state);
+    let mut fit_gate = Gate::new();
+    state
+        .start_background_task(Operation::BENCH_FIT, third, waiting_job(fit_gate.held()))
+        .expect("a busy queue queues the task");
+    state.poll_background_tasks();
+
+    for height in [170.0, 190.0] {
+        let mut short = input();
+        short.screen_rect = Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(260.0, height),
+        ));
+        let ctx = egui::Context::default();
+        crate::test_support::painted_texts(&ctx, short.clone(), |ui| {
+            super::panel::show(ui, &mut state)
+        });
+        let texts = crate::test_support::painted_texts(&ctx, short, |ui| {
+            super::panel::show(ui, &mut state)
+        });
+        for line in [
+            "Slow",
+            "Bundle adjust",
+            "Fast",
+            super::panel::QUIET,
+            "Live evaluation",
+            super::panel::WAITING,
+            "Fit track",
+        ] {
+            assert!(
+                texts.iter().any(|text| text == line),
+                "{line:?} at {height}: {texts:?}"
+            );
+        }
+        // The slow task's Cancel and the waiting task's; none on the quiet line.
+        assert_eq!(
+            texts
+                .iter()
+                .filter(|text| *text == super::panel::CANCEL)
+                .count(),
+            2,
+            "{texts:?}"
+        );
+        let last = PHASES.last().expect("a stage");
+        assert!(
+            texts.iter().any(|text| text == last),
+            "{last:?} was below the fold at {height} px: {texts:?}",
+        );
+    }
+
+    quiet_gate.open();
+    assert_eq!(heard.recv().expect("the quiet job answered"), "cancelled");
+    fit_gate.open();
+    gate.open();
+    state.land_quiet_tasks();
+    state.finish_background_tasks();
 }

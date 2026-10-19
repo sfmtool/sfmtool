@@ -212,15 +212,13 @@ pub(super) fn get_background_tasks(state: &AppState, operation_id: Option<u64>) 
             queues.insert(
                 queue.name().into(),
                 json!({
+                    // Quiet tasks are the viewer's own work and are not
+                    // reported: `running` is null while one runs.
                     "running": state
-                        .queue(queue)
-                        .running
-                        .as_ref()
+                        .running_in(queue)
                         .map_or(Value::Null, running_task),
                     "waiting": state
-                        .queue(queue)
-                        .waiting
-                        .iter()
+                        .waiting_in(queue)
                         .map(waiting_task)
                         .collect::<Vec<_>>(),
                     "last_finished": state

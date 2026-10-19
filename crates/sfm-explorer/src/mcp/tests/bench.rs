@@ -4783,3 +4783,40 @@ fn deleting_the_only_image_a_bench_track_observes_discards_the_track() {
     );
     assert!(state.bench(id).expect("loaded").track(&gone).is_some());
 }
+
+/// The live evaluation runs as a quiet task, which the wire does not report:
+/// `get_scene`'s `background_tasks` stays empty while only it runs,
+/// `get_background_tasks` shows the fast queue running nothing, and
+/// `cancel_background_tasks` with no argument finds nothing to stop and leaves
+/// it running.
+#[test]
+fn a_running_live_evaluation_is_not_reported_or_cancelled_on_the_wire() {
+    let (mut state, mut viewer) = benchable();
+    let item = on_the_bench(&mut state, &mut viewer);
+    let id = state.scene[0].id;
+    state.drive_bench_evaluation();
+    assert!(state.bench_evaluation_running(id, &item));
+
+    let scene = call(&mut state, &mut viewer, "get_scene", json!({}));
+    assert_eq!(scene["background_tasks"], json!([]), "{scene}");
+    let tasks = call(&mut state, &mut viewer, "get_background_tasks", json!({}));
+    assert_eq!(tasks["fast"]["running"], json!(null), "{tasks}");
+    assert_eq!(tasks["fast"]["waiting"], json!([]), "{tasks}");
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "cancel_background_tasks",
+        json!({}),
+    );
+    assert!(error.0.contains("Nothing is running"), "{error}");
+    assert!(
+        !state.running_evaluation_cancelled(),
+        "a cancel of everything someone asked for stopped the evaluation"
+    );
+
+    state.settle_bench_evaluation();
+    assert_eq!(
+        state.bench_evaluation(id, &item),
+        Some(crate::bench::live::Evaluation::Current)
+    );
+}

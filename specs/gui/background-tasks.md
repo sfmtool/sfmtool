@@ -27,10 +27,13 @@ search`, `Build index files`, `Create track at pixel` and `Find nearby tracks`
 Apply: the switch of one camera followed by the retriangulation of the tracks
 its images observe, as one version
 ([edits/switch-camera-model.md](edits/switch-camera-model.md)); it polls the
-flag on either side of the switch and inside the retriangulation. Every one of them is **cancellable**. The bench's live
-evaluation is not one of them: it locks no node, writes no row and is not what
-the Background Tasks panel shows ([bench.md](bench.md) § "Live evaluation"). Nor is a camera model
-proposal's job, which switches the camera and, for its preview, retriangulates
+flag on either side of the switch and inside the retriangulation. Every one of them is **cancellable**. A
+nineteenth, `Live evaluation`, is a **quiet task**: work the viewer starts by
+itself to keep the bench's measurements current ([bench.md](bench.md) § "Live
+evaluation"), which runs from the fast queue, gives way to every task someone
+asks for, locks no node, writes no row for running and is not reported on the
+wire (§ "Quiet tasks"). A camera model proposal's job is not a background task
+at all: it switches the camera and, for its preview, retriangulates
 the tracks while the proposal is open, and whose answer Apply installs instead
 of starting `Switch camera model` when it holds one for the proposal's
 current generation ([edits/switch-camera-model.md](edits/switch-camera-model.md)
@@ -136,25 +139,30 @@ pub(crate) struct Operation {
     /// Whether it locks its node from the moment it is queued until it
     /// lands. Every operation that pushes a version locks.
     pub(crate) locks: bool,
+    /// Whether it is work the viewer starts by itself to keep a panel
+    /// current, rather than work someone asked for (§ "Quiet tasks").
+    pub(crate) quiet: bool,
 }
 ```
 
-| Operation | Queue | Locks its node |
-|---|---|---|
-| Bundle adjust | slow | yes |
-| Convert to embedded patches | slow | yes |
-| Retriangulate all points | slow | yes |
-| Refit all points | slow | yes |
-| Switch camera model | slow | yes |
-| Prune covered observations | slow | yes |
-| Add image to tracks | slow | yes |
-| Build index files | slow | yes |
-| Open | fast | no (it makes a new node) |
-| Fit track, Set track stage, Fit normal, Finite difference normal, Grid plane normal, Search descriptors, Geometry search, Create track at pixel, Find nearby tracks | fast | yes |
+| Operation | Queue | Locks its node | Quiet |
+|---|---|---|---|
+| Bundle adjust | slow | yes | no |
+| Convert to embedded patches | slow | yes | no |
+| Retriangulate all points | slow | yes | no |
+| Refit all points | slow | yes | no |
+| Switch camera model | slow | yes | no |
+| Prune covered observations | slow | yes | no |
+| Add image to tracks | slow | yes | no |
+| Build index files | slow | yes | no |
+| Open | fast | no (it makes a new node) | no |
+| Fit track, Set track stage, Fit normal, Finite difference normal, Grid plane normal, Search descriptors, Geometry search, Create track at pixel, Find nearby tracks | fast | yes | no |
+| Live evaluation | fast | no; it does not start on a locked node (§ "Quiet tasks") | yes |
 
 The **slow queue** holds the operations whose cost grows with the whole
 reconstruction and that use every core, Build index files among them; the
-**fast queue** holds opening files and the other bench steps. The queue is fixed rather than estimated from the
+**fast queue** holds opening files, the other bench steps and the quiet
+tasks. The queue is fixed rather than estimated from the
 reconstruction's size, so the same operation always waits behind the same work,
 a test can name the queue, and nothing has to be measured before the queue is
 known. A test holds each operation's declared values to the table above.
@@ -166,7 +174,8 @@ slow task some competition for the cores while it runs and saves the person a
 wait of minutes. The two queues are independent: a fast task never waits for a
 slow one, except through the node lock. **A task started while its own queue
 runs another waits** behind the tasks already waiting there, in the order they
-were started, and is not refused; the other queue does not hold it up. When a
+were started, and is not refused; the other queue does not hold it up. A task
+someone asked for waits ahead of every waiting quiet task (§ "Quiet tasks"). When a
 queue's running task lands, its next waiting task starts in the same poll
 (`AppState::poll_background_tasks`), after the landed task's row is written.
 
@@ -194,16 +203,73 @@ so it locks none and an open waits only for its queue.
 
 **Quitting** abandons every running and waiting task.
 
-The bench's live evaluation and the camera model proposal's job run on threads
-of their own rather than as quiet tasks in the fast queue that give way to the
-tasks someone asked for; that is proposed in
-[../drafts/background-task-queues.md](../drafts/background-task-queues.md).
-So an evaluation already running on a node when a task is queued on it still
-lands, writing its measurements into the bench at the cursor in place: it moves
-no cursor, but the bench a waiting task's job captured is then not the
-one at the cursor when the task starts, and a bench step that lands replaces
-those measurements with its own answer. The draft's rule that no evaluation
-lands into a locked node closes that.
+The camera model proposal's job still runs on a thread of its own rather than
+as a quiet task in the fast queue; that is proposed in
+[../drafts/background-task-queues.md](../drafts/background-task-queues.md)
+§ "The camera model proposal as a quiet task". An open proposal refuses every
+task start on its node, and a proposal cannot be opened on a busy node, so the
+job and a locking task never meet.
+
+## Quiet tasks
+
+A **quiet task** is work the viewer starts by itself to keep a panel current,
+rather than work a person or an agent asked for. The one quiet operation is
+`Live evaluation`, the bench's live evaluation of one track
+([bench.md](bench.md) § "Live evaluation"). Nobody asked for it, so nothing
+someone asked for waits behind it, and nothing reports it as the viewer being
+busy:
+
+- **It gives way to a task someone asks for.** When a task that is not quiet
+  is queued in the queue a quiet task is running in, or a locking task is
+  queued on the node a quiet task runs on, in either queue, the quiet task's
+  cancel flag is set (`background::give_way_to`). It is not taken off its
+  queue: the task that displaced it starts once the quiet task's worker
+  reports that it has stopped, because a queue still runs one task at a time.
+  How soon that is depends on how often its kernels poll the flag: an
+  evaluation polls on either side of its decode, between its rounds and
+  between the views it renders. Its source then queues it again, behind that
+  task, as it already does for a cancelled run, so this loses at most the work
+  the cancelled run had done.
+- **Waiting tasks someone asked for start ahead of waiting quiet ones.** A task
+  someone asked for is queued ahead of the first waiting quiet task; a quiet
+  task is queued behind every task someone asked for and behind the waiting
+  quiet tasks ahead of it in the fixed order among quiet tasks, its
+  `QuietRank`: the viewed track's evaluation, the focused item's, then any
+  other bench item's. With one source that order has nothing to order yet,
+  since a source keeps one waiting entry.
+- **Each source keeps at most one waiting entry.** A source is one producer of
+  quiet work (`QuietSource::LiveEvaluation`). A new request replaces the
+  source's waiting entry rather than adding a second, because a quiet task's
+  input is the state of a panel and only the latest state matters.
+- **It is checked again when it would start.** A waiting quiet task whose node
+  has become locked since it was queued is dropped rather than started, and
+  so is one queued into an idle queue on a locked node. The quiet task does
+  not lock its node itself.
+- **A dropped or replaced entry is not a failure.** A quiet task's job is a
+  `QuietJob`: the work, `FnOnce(&Progress) + Send`, which sends its answers to
+  its source on the source's own channel, and a second closure the queue calls
+  instead when it drops the entry unrun, which sends the source's *dropped*
+  message. The source reads that as "not run", not as the end of its channel:
+  the live evaluation records no failure and picks the subject again when its
+  node is free.
+- **It writes no Action Log row for running and leaves no record.** It is not
+  put in the ring of finished tasks, so a burst of evaluations during a slider
+  drag cannot push out the record of a task someone is waiting on, and it is
+  never an idle line's last finished task. The live evaluation keeps its own
+  *Evaluated {label}: the bars turned …* row, written when a verdict moves,
+  because that row reports a change to the bench and not that the task ran.
+- **It reports its answer through its source's own channel.** The queue
+  carries only that the task has finished (`Finished::Quiet`), so `Finished`
+  gains no variant per quiet task, and nothing is installed, logged or kept
+  when it lands. Its collector has no reporting hook: nothing draws its
+  phases, so a phase it opens wakes no frame.
+- **It is not reported as running.** `running_tasks`, `waiting_tasks`, `task`,
+  the busy notice, `get_scene`'s `background_tasks`, `get_background_tasks` and
+  `cancel_background_tasks` leave quiet tasks out, so a non-empty list still
+  means "someone's work is running". Quiet tasks take their ids from a count
+  of their own (`AppState::next_quiet_id`), so the ids the wire hands out stay
+  consecutive. The panel shows a running quiet task in one dim line (§ "Quiet
+  line").
 
 ## What the user sees
 
@@ -256,16 +322,18 @@ first, and the operation's name and then the node's are cut to what they leave,
 each giving its whole self on hover, so a long name is shortened rather than
 drawn under the elapsed.
 
-A queue with tasks waiting has **one waiting line** under its own (§ "Waiting"),
-for the next of them, however many wait.
+A queue running a quiet task has **one quiet line** under its own (§ "Quiet
+line"). A queue with tasks waiting has **one waiting line** under that
+(§ "Waiting"), for the next of them, however many wait.
 
 One line rather than a block per queue, because the panel sits at the bottom of
 the left column, about 170 px tall in a 1280 × 720 window at the default split,
 and the phase table below the lines is what a reader watches. A block of four
 rows per queue left the table one row there, and not the row that is running;
 two lines, a separator and the title line leave it the newest stages, which a
-test holds at 170 px and 190 px with a task in each queue, and again with a
-task waiting in each queue as well, which is two lines more.
+test holds at 170 px and 190 px with a task in each queue, again with a
+task waiting in each queue as well, which is two lines more, and again with a
+quiet task running and a task waiting in the fast queue.
 
 Below the lines is **one phase list**, for one task, under a **title line**
 naming it and its node (`Bundle adjust on dino_dog_toy-embedded`): the task whose
@@ -321,6 +389,26 @@ at 170 px with four tasks waiting. The tasks behind the next one reach the
 line one at a time, as each ahead of them starts or is cancelled, and every
 one of them can be cancelled from the wire meanwhile
 (`cancel_background_tasks`).
+
+### Quiet line
+
+```
+┌ Background Tasks ──────────────────┐
+│ Slow Bundle adjust dino ▓░ 42.7 s x│
+│ Fast Fit track bull         0.4 s  │
+│ quiet Live evaluation bull: pt3d_… │
+```
+
+A running quiet task's line is led by the weak word `quiet` where a queue's
+line has the queue's name, then its operation and its subject (the node and
+the item, or the node and `viewed` with the viewed point), all dim, with no
+bar, no elapsed and no Cancel: the viewer started it, and it stops by itself
+whenever someone asks for a task, so there is nothing to wait on or to stop. A
+quiet task runs only while its queue runs nothing someone asked for, so the
+queue's line above it is in its idle form, showing the last task someone asked
+for that finished from it. It has no phases the panel shows, so its name does
+not pick the phase list. Quiet tasks waiting are neither named nor counted on
+the waiting line.
 
 ### Running
 
@@ -484,6 +572,8 @@ entry the synchronous edit writes today, with the worker's phases attached to
 it. Its queue's line in the panel drops back to its idle form showing that same
 operation, or, when a task was waiting in that queue, shows the next one
 running: it starts in the same poll, after the landed task's row is written.
+A quiet task lands with none of this: its answer went to its source, and it
+writes no entry and leaves no record (§ "Quiet tasks").
 
 The entry's actor is whoever asked for the operation, not the viewer: an agent
 that started a solve is the actor of the version it produced, however many
@@ -734,7 +824,22 @@ pub(crate) struct WaitingTask {
     /// Who asked, whose row it writes.
     pub actor: Actor,
     /// The work, built from the value at the cursor when it was queued.
-    job: Job,
+    job: WaitingJob,
+}
+
+enum WaitingJob {
+    /// A task someone asked for, which lands through `finish`.
+    Asked(Job),
+    /// A quiet task, which answers on its source's channel (§ "Quiet tasks").
+    Quiet { source: QuietSource, rank: QuietRank, job: QuietJob },
+}
+
+/// A quiet task's work, `FnOnce(&Progress) + Send`, and what tells its source
+/// it was dropped unrun.
+pub(crate) struct QuietJob { /* run, dropped */ }
+impl QuietJob {
+    pub(crate) fn new(run: impl for<'a> FnOnce(&Progress<'a>) + Send + 'static,
+        dropped: impl FnOnce() + Send + 'static) -> Self;
 }
 
 /// A long operation running off the GUI thread.
@@ -780,9 +885,11 @@ pub(crate) struct Operation {
     /// an item beside it. Stated per operation because only the wrapper knows
     /// what its answer touches.
     pub kind: Kind,
-    /// The queue it runs from, and whether it locks its node (§ "Two queues").
+    /// The queue it runs from, whether it locks its node and whether it is
+    /// quiet (§ "Two queues", § "Quiet tasks").
     pub queue: Queue,
     pub locks: bool,
+    pub quiet: bool,
 }
 
 /// What crosses the channel, worker to GUI thread. Phases, messages and counts
@@ -850,6 +957,8 @@ pub(crate) enum Finished {
     NoChange(String),
     Cancelled,
     Failed(String),
+    /// A quiet task's job returned; its answers went on its source's channel.
+    Quiet,
 }
 ```
 
@@ -857,9 +966,15 @@ and on `AppState`:
 
 ```rust
 impl AppState {
-    /// One queue's state, every running task, the slow queue's first, and
+    /// One queue's state, quiet tasks included; the task someone asked for
+    /// that a queue runs, the quiet one it runs, and the tasks someone asked
+    /// for that wait in it; every running task, the slow queue's first, and
     /// every waiting task, the slow queue's first and each queue's next first.
+    /// All but `queue` and `quiet_running_in` leave quiet tasks out.
     pub fn queue(&self, queue: Queue) -> &QueueState;
+    pub fn running_in(&self, queue: Queue) -> Option<&BackgroundTask>;
+    pub fn quiet_running_in(&self, queue: Queue) -> Option<&BackgroundTask>;
+    pub fn waiting_in(&self, queue: Queue) -> impl Iterator<Item = &WaitingTask>;
     pub fn running_tasks(&self) -> impl Iterator<Item = &BackgroundTask>;
     pub fn waiting_tasks(&self) -> impl Iterator<Item = &WaitingTask>;
 
@@ -894,9 +1009,21 @@ impl AppState {
     pub fn start_refusal(&self, operation: Operation, node: Option<ReconId>)
         -> Option<String>;
 
-    /// The body both starters share: `node` is `None` for an open.
+    /// The body both starters share: `node` is `None` for an open. It asks
+    /// the quiet tasks the task displaces to stop (§ "Quiet tasks").
     pub fn start_task(&mut self, operation: Operation, node: Option<ReconId>,
         label: String, job: Job) -> Result<u64, String>;
+
+    /// Queue a quiet task for `source`, replacing its waiting entry, and
+    /// answer with its id, from the quiet tasks' own count. It starts at once
+    /// only in an idle queue and on a node that is not locked; otherwise it
+    /// waits, or is dropped. Nothing is logged.
+    pub fn start_quiet_task(&mut self, operation: Operation, source: QuietSource,
+        rank: QuietRank, node: ReconId, label: String, job: QuietJob)
+        -> Result<u64, String>;
+    /// Ask the running quiet task `id` to stop, or drop the waiting one.
+    pub fn cancel_quiet_task(&mut self, id: u64);
+    pub fn quiet_task_running(&self, id: u64) -> bool;
 
     /// Start opening `paths`, in order, as one `Operation::OPEN` task.
     pub fn start_open(&mut self, paths: Vec<PathBuf>) -> Result<u64, String>;
@@ -1037,8 +1164,8 @@ at `get_background_tasks`; a call that times out with nothing running keeps the
 message it had, which is then true. The thread composing that sentence is the
 one thread that cannot ask `AppState`, since it is composing it precisely
 because the GUI thread did not answer, so it reads a small shared notice,
-`background::BusyNotice`, one entry per running task, written where a queue's
-running task is set or taken and nowhere else.
+`background::BusyNotice`, one entry per running task someone asked for, written
+where a queue's running task is set or taken and nowhere else.
 
 A read tool, **`get_background_tasks`**, reports what each queue is running,
 the tasks waiting in it and the last task that finished from each, or, given an
@@ -1087,8 +1214,13 @@ an entry that
 outlived its operation would make a non-empty list stop meaning "the viewer is
 busy", which is the one thing it is read for.
 
+None of these reports a quiet task (§ "Quiet tasks"): a queue running one
+reports `running: null` in `get_background_tasks`, and `get_scene`'s
+`background_tasks` is empty while only quiet tasks run.
+
 A **`cancel_background_tasks`** tool cancels the tasks its `operation_ids` name,
-or every running and waiting task without them. It lists the running tasks it
+or every running and waiting task someone asked for without them, leaving
+quiet tasks alone. It lists the running tasks it
 asked to stop under `cancelling`, the waiting tasks it took out of their
 queues under `removed`, and under `refused` each one that
 cannot be cancelled, with the same sentence the button's tooltip carries
@@ -1111,7 +1243,23 @@ over the real channel so the tests are about the seam and not about a solver:
 - Every edit, undo, redo, jump, save and close of the busy node is refused, with
   the same sentence in each case; the same operations on another node are
   allowed.
-- Each operation's declared queue and lock match the table in § "Two queues".
+- Each operation's declared queue, lock and quiet value match the table in
+  § "Two queues".
+- A running quiet task is asked to stop when a task someone asked for is
+  queued in its queue; that task waits until the quiet one reports, then
+  starts, and the quiet task queued again waits behind it and runs after it.
+- Waiting tasks someone asked for are queued ahead of a waiting quiet one, and
+  a source's second request replaces its waiting entry, which is told it was
+  dropped.
+- A waiting quiet task whose node became locked is dropped when it would
+  start, its source told so, and the queue is left idle.
+- A locking task queued on a node, in the other queue and only waiting there,
+  asks a quiet task running on that node to stop; one on another node does
+  not.
+- A quiet task writes no row, leaves no record in the ring, is not found by
+  `running_tasks`, `waiting_tasks`, `task` or the busy notice, locks nothing,
+  and is painted as one `quiet` line with no Cancel; once it lands the fast
+  queue's line says `Nothing running`.
 - Two operations in different queues run at the same time, and the fast one
   lands while the slow one is still running.
 - Three operations started in the same queue run one after the other, in the
@@ -1151,6 +1299,9 @@ Panel, through `test_support::run_frame_headless`:
   still painted; with two more waiting in the slow queue there is still one
   waiting line a queue, carrying `+2`, and the newest stage is still painted at
   170 px.
+- With a slow task running, a quiet task running and a task waiting in the
+  fast queue, at 170 px and 190 px, the quiet line, the waiting line and the
+  newest stage are painted, and the quiet line has no Cancel.
 - A running task's line in the default panel width cuts a long operation name
   rather than drawing anything over anything else.
 - With a long node name, a count and a status at the default width, the title
@@ -1170,7 +1321,10 @@ Panel, through `test_support::run_frame_headless`:
   over a node with a point on its bench and a photograph per image, the
   descriptor search over a workspace with `.sift` files and a built `.kdf`, and
   the index-files build over the same workspace with a photograph per image.
-  What is held to the claim is the kernel rather than a stand-in for it.
+  What is held to the claim is the kernel rather than a stand-in for it. A
+  quiet operation writes no row, so its claim is held on its answer: the live
+  evaluation's job, run with the flag already set over the bench fixture,
+  answers `Cancelled`.
 
 `crates/sfm-explorer/src/state/open/tests.rs`, the open over real files:
 
@@ -1224,6 +1378,9 @@ editing fixture's node, so the wire is read at an instant the test chose:
   entry's whole key set is asserted, so a field added to the most-polled reply
   on the surface is a deliberate act. The list is empty before an operation and
   again after it.
+- A running live evaluation is not in `get_scene`'s `background_tasks` or in
+  `get_background_tasks`, and `cancel_background_tasks` with no argument
+  finds nothing to stop and leaves it running ([mcp/tests/bench.rs](../../crates/sfm-explorer/src/mcp/tests/bench.rs)).
 - The apply timeout's message names the operation only while one is running, and
   the notice it reads is empty before the operation, set during it, and empty
   again afterwards.

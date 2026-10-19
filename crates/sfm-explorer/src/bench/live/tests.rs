@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use sfmtool_core::bench::{BenchItem, Stage, Verdict};
 
-use crate::background::{Finished, Operation};
+use crate::background::{Finished, Operation, Queue, TaskState};
 use crate::bench::live::Evaluation;
 use crate::bench::tests::{put_on_bench, state};
 use crate::scene::{PointRef, ReconId};
@@ -430,5 +430,213 @@ fn an_evaluation_whose_repaint_moved_a_verdict_is_read_once_more_and_then_settle
         versions(&state, id),
         before,
         "no evaluation pushed a version"
+    );
+}
+
+// -- As a quiet task in the fast queue -------------------------------------
+
+/// A gated job a bench step's place in the fast queue is held by, which
+/// produces nothing.
+fn held_step(gate: std::sync::mpsc::Receiver<()>) -> crate::background::Job {
+    Box::new(move |_| {
+        let _ = gate.recv();
+        Finished::NoChange("Nothing to fit".to_string())
+    })
+}
+
+/// How many quiet tasks wait in the fast queue.
+fn quiet_waiting(state: &AppState) -> usize {
+    state
+        .queue(Queue::Fast)
+        .waiting
+        .iter()
+        .filter(|task| task.operation.quiet)
+        .count()
+}
+
+/// A bench step asked for while an evaluation runs waits for it to stop,
+/// starts once it has reported, and the evaluation it displaced is queued
+/// again behind it and lands once it has run.
+#[test]
+fn a_bench_step_displaces_a_running_evaluation_which_runs_after_it() {
+    let (mut state, a) = state();
+    put_on_bench(&mut state, a);
+    let b = state.append_node(crate::scene::SceneNode::demo(
+        crate::state::edits::tests::projected_embedded_demo(12),
+    ));
+    let on_b = put_on_bench(&mut state, b);
+    state.drive_bench_evaluation();
+    assert!(state.bench_evaluation_running(b, &on_b));
+
+    let queued = std::time::Instant::now();
+    let step = state
+        .start_background_task(
+            Operation::BENCH_FIT,
+            a,
+            Box::new(|_| Finished::NoChange("Nothing to fit".to_string())),
+        )
+        .expect("a busy fast queue queues the step");
+    assert!(
+        matches!(state.task(step), Some(TaskState::Waiting(_))),
+        "the step started beside the evaluation"
+    );
+    assert!(
+        state.running_evaluation_cancelled(),
+        "the step did not ask the evaluation to stop"
+    );
+    // The answer is read and the evaluation's task lands, which starts the
+    // step in the same poll.
+    state.land_running_evaluation();
+    let waited = match state.task(step) {
+        Some(TaskState::Running(task)) => task.started - queued,
+        _ => panic!("the step did not start once the evaluation had stopped"),
+    };
+    eprintln!("the step waited {waited:?} for the evaluation to stop");
+
+    // Unless it finished before it read the flag, the evaluation is
+    // unevaluated still, and queued again it waits behind the step.
+    if state.bench_evaluation(b, &on_b) == Some(Evaluation::Evaluating) {
+        state.drive_bench_evaluation();
+        assert!(
+            state.running_evaluation_track().is_some(),
+            "not queued again"
+        );
+        assert!(
+            !state.bench_evaluation_running(b, &on_b),
+            "the evaluation ran beside the step"
+        );
+    }
+    state.finish_background_task(step);
+    state.settle_bench_evaluation();
+    assert_eq!(state.bench_evaluation(b, &on_b), Some(Evaluation::Current));
+}
+
+/// A locking task queued on a node cancels a running evaluation of that node,
+/// and no evaluation lands into a locked node: not the cancelled one, and not
+/// one that had finished before the task was queued, whose answer comes back
+/// as one that finished before it read the flag would.
+#[test]
+fn no_evaluation_lands_into_a_locked_node() {
+    let (mut state, id) = state();
+    let label = put_on_bench(&mut state, id);
+    let arrived = track(&state, id, &label);
+
+    // An evaluation that has finished, its answer not yet read.
+    state.drive_bench_evaluation();
+    state.land_quiet_tasks();
+    let (open, gate) = std::sync::mpsc::channel();
+    let solve = state
+        .start_background_task(Operation::RETRIANGULATE_ALL_POINTS, id, held_step(gate))
+        .expect("the slow queue is idle");
+    state.action_log.clear();
+    state.drive_bench_evaluation();
+    assert!(
+        Arc::ptr_eq(&track(&state, id, &label), &arrived),
+        "an evaluation landed into a locked node"
+    );
+    assert_eq!(state.action_log.entries().count(), 0);
+    assert_eq!(
+        state.bench_evaluation(id, &label),
+        Some(Evaluation::Evaluating)
+    );
+    assert!(
+        state.running_evaluation_track().is_none(),
+        "an evaluation was queued on a locked node"
+    );
+    open.send(()).expect("the task is waiting");
+    state.finish_background_task(solve);
+
+    // A running evaluation, cancelled by the task queued on its node.
+    state.drive_bench_evaluation();
+    assert!(state.bench_evaluation_running(id, &label));
+    let (open, gate) = std::sync::mpsc::channel();
+    let solve = state
+        .start_background_task(Operation::RETRIANGULATE_ALL_POINTS, id, held_step(gate))
+        .expect("the slow queue is idle");
+    assert!(
+        state.running_evaluation_cancelled(),
+        "a task queued on the node did not cancel its evaluation"
+    );
+    state.land_running_evaluation();
+    assert!(Arc::ptr_eq(&track(&state, id, &label), &arrived));
+    assert_eq!(
+        state.bench_evaluation(id, &label),
+        Some(Evaluation::Evaluating)
+    );
+    open.send(()).expect("the task is waiting");
+    state.finish_background_task(solve);
+
+    state.settle_bench_evaluation();
+    assert_eq!(
+        state.bench_evaluation(id, &label),
+        Some(Evaluation::Current)
+    );
+}
+
+/// An evaluation that waits in the fast queue and is replaced by a newer
+/// request, or dropped when it would start because its node became locked,
+/// never ran: neither is recorded as failed, the driver keeps one entry
+/// waiting, and the track is evaluated once its node is free.
+#[test]
+fn a_replaced_or_dropped_evaluation_is_not_recorded_as_failed() {
+    let (mut state, id) = state();
+    let label = put_on_bench(&mut state, id);
+    let other = state.append_node(crate::scene::SceneNode::demo(
+        sfmtool_core::SfmrReconstruction::demo(8),
+    ));
+    let (open_step, gate) = std::sync::mpsc::channel();
+    let step = state
+        .start_background_task(Operation::BENCH_FIT, other, held_step(gate))
+        .expect("the fast queue is idle");
+    state.drive_bench_evaluation();
+    let first = state.queued_evaluation_task().expect("queued");
+    assert!(
+        !state.bench_evaluation_running(id, &label),
+        "it ran beside the step"
+    );
+
+    // Replaced: a step moves its input while it waits.
+    state
+        .set_bench_verdict(id, &label, 1, Verdict::Out)
+        .expect("observation 1 exists");
+    state.drive_bench_evaluation();
+    assert_ne!(state.queued_evaluation_task(), Some(first), "not replaced");
+    assert_eq!(
+        quiet_waiting(&state),
+        1,
+        "the source has two entries waiting"
+    );
+    state.drive_bench_evaluation();
+    assert_eq!(
+        state.bench_evaluation(id, &label),
+        Some(Evaluation::Evaluating)
+    );
+
+    // Dropped at start: its node is locked while it waits.
+    let (open_solve, gate) = std::sync::mpsc::channel();
+    let solve = state
+        .start_background_task(Operation::RETRIANGULATE_ALL_POINTS, id, held_step(gate))
+        .expect("the slow queue is idle");
+    open_step.send(()).expect("the step is waiting");
+    state.finish_background_task(step);
+    assert_eq!(quiet_waiting(&state), 0);
+    assert!(
+        state.queue(Queue::Fast).running.is_none(),
+        "it started on a locked node"
+    );
+    state.drive_bench_evaluation();
+    assert_eq!(
+        state.bench_evaluation(id, &label),
+        Some(Evaluation::Evaluating),
+        "a dropped evaluation was recorded as failed"
+    );
+    assert!(state.running_evaluation_track().is_none());
+
+    open_solve.send(()).expect("the task is waiting");
+    state.finish_background_task(solve);
+    state.settle_bench_evaluation();
+    assert_eq!(
+        state.bench_evaluation(id, &label),
+        Some(Evaluation::Current)
     );
 }

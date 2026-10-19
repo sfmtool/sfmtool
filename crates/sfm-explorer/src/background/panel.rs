@@ -17,9 +17,11 @@
 //! task that finished from that queue greyed, with its node and its cost,
 //! because the question a reader brings here after a long solve is "what did
 //! that cost" and the answer is still in reach. A queue that has run nothing
-//! says `Nothing running` and no more. A queue with tasks waiting has one line
-//! more, under its own, for the next of them, with a cancel button and a count
-//! of the rest. Below the lines is one phase table, for
+//! says `Nothing running` and no more. A queue running a quiet task has one
+//! dim line more, under its own, naming it, with no bar and no Cancel. A queue
+//! with tasks waiting has one line more for the next of them, with a cancel
+//! button and a count of the rest; quiet tasks waiting are not named or
+//! counted there. Below the lines is one phase table, for
 //! the task a person last clicked the name of, or else the slow queue's running
 //! task, the fast queue's, or the last task to finish, under a title line that
 //! carries a running task's count and status.
@@ -66,6 +68,9 @@ pub(super) const CANCEL: &str = "\u{1f5d9}";
 /// What leads a waiting task's line, where a queue's line has its name.
 pub(super) const WAITING: &str = "waiting";
 
+/// What leads a running quiet task's line.
+pub(super) const QUIET: &str = "quiet";
+
 /// Width of the cost column: [`ActionLog::format_took`]'s widest ordinary
 /// output, `999.9 s`, and a gap before the panel's edge.
 const COST_WIDTH: f32 = 56.0;
@@ -94,12 +99,19 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut AppState) {
             // elapsed and the Cancel button.
             ui.spacing_mut().item_spacing.x = LINE_SPACING;
             ui.label(egui::RichText::new(queue.title()).strong());
-            match state.queue(queue).running.as_ref().map(|task| task.id) {
+            match state.running_in(queue).map(|task| task.id) {
                 Some(id) => show_running(ui, state, id, &mut asked),
                 None => show_idle(ui, state, queue, &mut asked),
             }
         });
-        if !state.queue(queue).waiting.is_empty() {
+        if let Some(task) = state.quiet_running_in(queue) {
+            let (name, label) = (task.operation.name, task.label.clone());
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = LINE_SPACING;
+                show_quiet(ui, name, &label);
+            });
+        }
+        if state.waiting_in(queue).next().is_some() {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = LINE_SPACING;
                 show_waiting(ui, state, queue, &mut asked);
@@ -344,16 +356,14 @@ fn elide_to(ui: &egui::Ui, text: &str, room: f32) -> String {
 /// one at a time. A waiting task has no phases, so its name is not a button
 /// that picks them.
 fn show_waiting(ui: &mut egui::Ui, state: &AppState, queue: Queue, asked: &mut Asked) {
-    let waiting = &state.queue(queue).waiting;
-    let Some(next) = waiting.front() else {
+    let mut waiting = state.waiting_in(queue);
+    let Some(next) = waiting.next() else {
         return;
     };
     let id = next.id;
     let name = next.operation.name;
     let label = next.label.clone();
     let behind: Vec<String> = waiting
-        .iter()
-        .skip(1)
         .map(|task| format!("{} on {}", task.operation.name, task.label))
         .collect();
 
@@ -379,6 +389,27 @@ fn show_waiting(ui: &mut egui::Ui, state: &AppState, queue: Queue, asked: &mut A
             show_node(ui, &label);
         });
     });
+}
+
+// -- Quiet -----------------------------------------------------------------
+
+/// The line under a queue's that names the quiet task it runs: the word
+/// `quiet`, the operation and its subject, all dim, with no bar, no elapsed
+/// and no Cancel.
+///
+/// A quiet task is work the viewer started by itself, and it stops on its own
+/// whenever someone asks for a task, so there is nothing for a reader to wait
+/// on or to stop. It runs only while its queue runs nothing someone asked for,
+/// so the queue's line above it is in its idle form. It has no phases the
+/// panel shows, so its name is not a button that picks them.
+fn show_quiet(ui: &mut egui::Ui, name: &str, label: &str) {
+    ui.label(egui::RichText::new(QUIET).weak());
+    ui.add(
+        egui::Label::new(egui::RichText::new(name).weak())
+            .truncate()
+            .selectable(false),
+    );
+    show_node(ui, label);
 }
 
 // -- Idle ------------------------------------------------------------------

@@ -789,8 +789,8 @@ pub struct AppState {
     /// [`crate::background`].
     pub(crate) slow_queue: crate::background::QueueState,
 
-    /// The fast queue: opening files and the other bench steps, one at a time,
-    /// beside whatever the slow queue runs.
+    /// The fast queue: opening files, the other bench steps and the quiet
+    /// tasks, one at a time, beside whatever the slow queue runs.
     pub(crate) fast_queue: crate::background::QueueState,
 
     /// What became of the tasks that finished most recently, oldest first, at
@@ -826,6 +826,13 @@ pub struct AppState {
     /// has finished and been replaced can still tell the two apart.
     pub(crate) next_operation_id: u64,
 
+    /// The id the next quiet task takes ([`AppState::start_quiet_task`]).
+    ///
+    /// A count of its own rather than [`Self::next_operation_id`], because a
+    /// quiet task is never reported on the wire: sharing the count would leave
+    /// gaps in the ids an agent is handed, each naming a task no tool knows.
+    pub(crate) next_quiet_id: u64,
+
     /// How a worker tells the event loop there is something to look at.
     ///
     /// A closure rather than the `winit` proxy itself, for the reason
@@ -836,8 +843,8 @@ pub struct AppState {
     pub(crate) wake: Option<std::sync::Arc<dyn Fn() + Send + Sync>>,
 
     /// The live evaluation of the tracks on every node's bench: the one
-    /// running, and the inputs each track was last evaluated for. See
-    /// [`crate::bench::live`].
+    /// queued as a quiet task in the fast queue, and the inputs each track was
+    /// last evaluated for. See [`crate::bench::live`].
     pub(crate) bench_evaluations: crate::bench::live::Evaluations,
     /// The camera model proposal's job that is running, if any. What it found
     /// is kept on the proposal. See [`crate::camera_model_proposal::job`].
@@ -1018,6 +1025,7 @@ impl AppState {
             background_phases_of: None,
             busy_notice: Default::default(),
             next_operation_id: 1,
+            next_quiet_id: 1,
             wake: None,
             bench_evaluations: Default::default(),
             proposal_jobs: Default::default(),

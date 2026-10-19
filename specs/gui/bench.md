@@ -235,10 +235,12 @@ impl AppState {
     /// Where the evaluation of one track stands: `Current`, `Evaluating`,
     /// `Refused(why)` or `Failed(why)`. `None` when there is no such track.
     pub(crate) fn bench_evaluation(&self, id: ReconId, item: &str) -> Option<Evaluation>;
-    /// Whether an evaluation of that track's current inputs is on a worker now.
+    /// Whether an evaluation of that track's current inputs is on a worker
+    /// now, as against waiting in the fast queue.
     pub(crate) fn bench_evaluation_running(&self, id: ReconId, item: &str) -> bool;
     /// Once per frame: land a finished evaluation, cancel one whose inputs
-    /// have moved on, start the next. True when the next frame has to draw.
+    /// have moved on, queue the next as a quiet task. True when the next
+    /// frame has to draw.
     pub(crate) fn drive_bench_evaluation(&mut self) -> bool;
 }
 
@@ -801,23 +803,47 @@ So no step has to remember to ask for an evaluation, and none does. The item's
 value, leaves an evaluated track current. The thresholds are not an input on their own: the evaluation reads with
 its gates off, and the bars reach it only through the verdicts they paint.
 
-**One evaluation runs at a time, and a stale one is cancelled.** Once per frame,
-after the frame's steps, `drive_bench_evaluation` lands a finished evaluation,
-and then either cancels the running one when its inputs are no longer the
-track's, or, when nothing is running, starts the next track whose evaluation is
-`Evaluating`: the viewed track first (§ "The viewed track" below), then the
-focused item, whichever node it is on, then the rest in bench order, in scene
-order. The viewed track and the focused item do not exist together, since the
-viewed point is defined only while no item is focused on its node, so whichever
-of the two Track View shows goes first. It does not start the next until a cancelled one has
-reported back, so a box drag that moves an input on every frame has at most
-one worker behind it rather than a queue. It also waits while a background task
-holds the node, since that task's answer replaces the inputs it would read.
+**An evaluation is a quiet task in the fast queue.** It runs as a
+`Live evaluation` task, a quiet background task
+([background-tasks.md](background-tasks.md) § "Quiet tasks"): the driver owns
+no thread of its own, but queues the task for the subject it chose and reads
+the answer from a channel of its own.
 
-**An answer is installed only if its inputs are still the track's.** An
-evaluation that lands after a step has moved the track on -- cancelled, or
-measured before it saw the flag -- is dropped, and the track reads `Evaluating`
-until the evaluation of its new inputs lands. A result that matches is written
+**One evaluation is queued at a time, and a stale one is cancelled.** Once per
+frame, after the frame's steps, `drive_bench_evaluation` lands a finished
+evaluation, and then either cancels the running one when its inputs are no
+longer the track's, or, when nothing is queued, queues the next track whose
+evaluation is `Evaluating`: the viewed track first (§ "The viewed track"
+below), then the focused item, whichever node it is on, then the rest in bench
+order, in scene order. The viewed track and the focused item do not exist
+together, since the viewed point is defined only while no item is focused on
+its node, so whichever of the two Track View shows goes first. It does not
+queue the next until a cancelled one has reported back, so a box drag that
+moves an input on every frame has at most one worker behind it; an evaluation
+still waiting in the queue when its inputs move is replaced by the request for
+the next subject instead. It also waits while a background task holds the
+node, since that task's answer replaces the inputs it would read.
+
+**It gives way to the tasks someone asks for.** A task queued in the fast
+queue while an evaluation runs, a bench step or an open, asks it to stop and
+waits for it; the step starts once the evaluation has reported, and the
+evaluation, whose inputs have not moved, is queued again behind it. A locking
+task queued on the evaluation's node from the slow queue asks it to stop too.
+Waiting bench steps always start ahead of a waiting evaluation. A waiting
+evaluation the queue drops, because its node became locked while it waited or
+because the driver's next request replaced it, never ran: the driver records
+no failure for it, and picks the subject again once its node is free. On the
+seoul_bull and kerry_park ground truths, with the photographs in memory, an
+evaluation takes 1 to 18 ms and a bench step queued behind a running one
+waited at most 3.3 ms for it to stop, and usually under 0.2 ms.
+
+**An answer is installed only if its inputs are still the track's and its
+node is not locked.** An evaluation that lands after a step has moved the
+track on -- cancelled, or measured before it saw the flag -- is dropped, and
+the track reads `Evaluating` until the evaluation of its new inputs lands. One
+that comes back while a task running or waiting on its node holds it is
+dropped too, with no row: the task's job was built from the bench at the
+cursor when it was queued, and that is still the bench when it starts. A result that matches is written
 into the version at the cursor in place (`History::replace_current_bench`):
 **no version is pushed**, and no Action Log row is written unless the
 evaluation's repaint moved a verdict of a bench item: then one `Bench` row
@@ -971,16 +997,20 @@ them `stage_data.reference_observation` and
 `stage_data.reference_view_observation`.
 
 **The node is not locked by it.** Every step stays available while an
-evaluation runs, and taking one is what cancels it. It is not a background task
-either: it does not appear in the Background Tasks panel, is not what
-`get_background_tasks` reports, and does not refuse another operation.
+evaluation runs, and taking one is what cancels it. As a quiet task it writes no
+Action Log row for running and leaves no record of finishing; the
+Background Tasks panel shows the running one as a dim `quiet` line under the
+fast queue's, with no Cancel; and `get_scene`'s `background_tasks`,
+`get_background_tasks` and `cancel_background_tasks` leave it out. It does not
+refuse another operation.
 
 **Four states**, which Track View's toolbar shows and the wire reports under
 `evaluation`:
 
 - `Current` -- the numbers are the evaluation of the track as it stands.
 - `Evaluating` -- the inputs have changed since, and an evaluation of the
-  current ones is running or starts on the next frame. The numbers are the
+  current ones is running, waits in the fast queue, or is queued on the next
+  frame. The numbers are the
   previous evaluation's, and are presented as that.
 - `Refused(why)` -- core's `evaluate_preconditions` refuses the track as it
   stands, a track-stage track with no patch frame, in the sentence `Cannot
@@ -1872,7 +1902,14 @@ search radius each make it `Evaluating`; a track-stage track with no patch frame
 `Refused` with core's sentence and starts nothing; nothing starts while a
 background task holds the node; the focused item is evaluated first when it is
 on a node after another in the scene; and a rename keeps an evaluated track
-current.
+current. As a quiet task: a bench step queued while an evaluation runs waits
+for it to stop, starts once it has reported, and the evaluation runs again
+after it; a locking task queued on the node cancels its running evaluation,
+and neither that answer nor one that finished before the task was queued
+lands into the locked node; and a waiting evaluation replaced by a newer
+request or dropped at start because its node became locked is not recorded as
+failed, the driver keeps one entry waiting, and the track is evaluated once
+its node is free.
 
 Deleting an image under the bench is tested over the wire in
 [mcp/tests/bench.rs](../../crates/sfm-explorer/src/mcp/tests/bench.rs): a track

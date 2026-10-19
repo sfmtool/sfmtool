@@ -6,9 +6,10 @@
 //!
 //! See `specs/gui/bench.md` § "Live evaluation". The invariant is that the
 //! measurements a track shows are the evaluation of its current inputs, or an
-//! evaluation of those inputs is running or about to start. Nobody asks for an
-//! evaluation: [`AppState::drive_bench_evaluation`] runs once per frame, finds
-//! a track whose inputs have no evaluation, and starts one.
+//! evaluation of those inputs is running, waiting in the fast queue or about
+//! to be queued. Nobody asks for an evaluation:
+//! [`AppState::drive_bench_evaluation`] runs once per frame, finds a track
+//! whose inputs have no evaluation, and queues one.
 //!
 //! **What an evaluation reads** is exactly what
 //! [`AppState::bench_evaluate_job`] captures, and [`Inputs`] holds the same
@@ -21,19 +22,36 @@
 //! two and the next frame sees that no evaluation matches. Undo and redo land on another
 //! version, which is the same case.
 //!
-//! **One evaluation runs at a time.** When an input changes while one runs, it
-//! is cancelled, and the next starts only once the cancelled one has reported
-//! back. A slider drag that changes the inputs on every frame therefore has at
-//! most one worker behind it, and the result a worker brings back is installed
-//! only when its inputs are still the track's.
+//! **An evaluation is a quiet task in the fast queue**
+//! ([`Operation::LIVE_EVALUATION`], `specs/gui/background-tasks.md` § "Quiet
+//! tasks"). The driver owns no thread: it chooses the subject and queues a
+//! *Live evaluation* quiet task for it, which answers on a channel of the
+//! driver's. It gives way to every task someone asks for: a task queued in the
+//! fast queue, or a locking task queued on its node, asks it to stop, starts
+//! once it has, and the driver queues it again, behind that task, when its
+//! cancelled answer comes back. A request waiting in the queue that the queue
+//! drops -- its node became locked, or a newer request replaced it -- answers
+//! that it was dropped, which is not a failure: the subject is picked again
+//! once its node is free.
 //!
-//! **An evaluation pushes no version and writes no Action Log row.** It fills
-//! measurement slots and sets each unpinned verdict to what the bars propose,
-//! moving nothing a person put there, so it is installed
-//! into the version at the cursor with
-//! [`crate::document::History::replace_current_bench`]. The node is not made
-//! busy by it either: every step stays available while it runs, and a step
-//! taken during it is what cancels it.
+//! **One evaluation is queued at a time.** When an input changes while one
+//! runs, it is cancelled, and the next is queued only once the cancelled one
+//! has reported back; one that is still waiting is replaced by the request for
+//! the next subject. A slider drag that changes the inputs on every frame
+//! therefore has at most one worker behind it, and the result a worker brings
+//! back is installed only when its inputs are still the track's and its node
+//! is not locked: no evaluation lands into a locked node, so a step built from
+//! the bench when it was queued still finds that bench when it starts.
+//!
+//! **An evaluation pushes no version, and writes no Action Log row for
+//! running.** It fills measurement slots and sets each unpinned verdict to
+//! what the bars propose, moving nothing a person put there, so it is
+//! installed into the version at the cursor with
+//! [`crate::document::History::replace_current_bench`]. The one row it writes
+//! reports a change to the bench, not that it ran: when its repaint moved a
+//! verdict of a bench item, *Evaluated {label}: the bars turned {n} in and
+//! {m} out*. The node is not locked by it: every step stays available while
+//! it runs, and a step taken during it is what cancels it.
 //!
 //! **The viewed track is the second kind of subject** ([`Subject::Viewed`]):
 //! the selected point read as an editable track off every bench, which Track
@@ -53,13 +71,13 @@
 //! without repainting, so that second evaluation settles it.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::sync::Arc;
 
 use sfmtool_core::bench::{BenchItem, EditableTrack, ItemId};
 use sfmtool_core::progress::Progress;
 
+use crate::background::{Operation, QuietJob, QuietRank, QuietSource};
 use crate::document::VersionSerial;
 use crate::scene::ReconId;
 use crate::state::AppState;
@@ -116,9 +134,9 @@ pub(crate) enum Evaluation {
     /// inputs.
     Current,
     /// The track's inputs have changed since it was last evaluated, and an
-    /// evaluation of the current inputs is running or starts on the next frame.
-    /// It waits while an operation holds the node, since that operation's
-    /// answer would replace the inputs it read.
+    /// evaluation of the current inputs is running, waits in the fast queue,
+    /// or is queued on the next frame. It waits while an operation holds the
+    /// node, since that operation's answer would replace the inputs it read.
     Evaluating,
     /// The track cannot be evaluated as it stands, in
     /// `sfmtool_core::bench::evaluate_preconditions`'s words. Nothing runs
@@ -167,23 +185,35 @@ pub(crate) enum Measured {
 /// cancellation through.
 pub(crate) type EvaluationJob = Box<dyn for<'a> FnOnce(&Progress<'a>) -> Measured + Send>;
 
-/// The evaluation that is running.
-struct Running {
-    /// What it was started on.
-    inputs: Inputs,
-    /// Set to ask it to stop.
-    cancel: Arc<AtomicBool>,
-    /// Where the worker sends how it ended.
-    done: Receiver<Measured>,
+/// What comes back on an evaluation's channel.
+enum Answer {
+    /// The evaluation ran, and this is how it ended.
+    Measured(Measured),
+    /// The queue dropped the evaluation before it started, because its node
+    /// became locked while it waited or because a newer request replaced it.
+    /// It never ran, so it is not a failure.
+    Dropped,
 }
 
-/// The live evaluation's state: the one running, and how the last one of each
-/// bench track ended. How the viewed track's last evaluation ended is kept on
-/// the viewed track itself ([`crate::bench::viewed::ViewedTrack::evaluation`]).
+/// The evaluation the driver has queued: waiting in the fast queue or running
+/// from it.
+struct QueuedEvaluation {
+    /// What it was queued on.
+    inputs: Inputs,
+    /// The quiet task it runs as.
+    task: u64,
+    /// Where it answers.
+    answers: Receiver<Answer>,
+}
+
+/// The live evaluation's state: the evaluation queued, and how the last one of
+/// each bench track ended. How the viewed track's last evaluation ended is kept
+/// on the viewed track itself ([`crate::bench::viewed::ViewedTrack::evaluation`]).
 #[derive(Default)]
 pub(crate) struct Evaluations {
-    /// The evaluation on a worker, if there is one.
-    running: Option<Running>,
+    /// The evaluation queued as a quiet task, waiting or running, if there is
+    /// one.
+    queued: Option<QueuedEvaluation>,
     /// For each bench track, by node and item, the inputs its last evaluation
     /// was installed for and whether it failed. The inputs hold the track
     /// value that was installed, so a track that has not moved since compares
@@ -200,12 +230,21 @@ impl AppState {
         Some(self.evaluation_of(&inputs))
     }
 
+    /// The evaluation the driver has queued when it is running from the fast
+    /// queue, as against waiting there.
+    fn running_evaluation(&self) -> Option<&QueuedEvaluation> {
+        self.bench_evaluations
+            .queued
+            .as_ref()
+            .filter(|queued| self.quiet_task_running(queued.task))
+    }
+
     /// Whether an evaluation of `item`'s current inputs is on a worker right
-    /// now, as against waiting for the node or for another track's evaluation
-    /// to finish.
+    /// now, as against waiting in the fast queue, for the node or for another
+    /// track's evaluation to finish.
     #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
     pub(crate) fn bench_evaluation_running(&self, id: ReconId, item: &str) -> bool {
-        let Some(running) = self.bench_evaluations.running.as_ref() else {
+        let Some(running) = self.running_evaluation() else {
             return false;
         };
         self.bench(id)
@@ -218,7 +257,7 @@ impl AppState {
     /// worker right now.
     #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
     pub(crate) fn viewed_evaluation_running(&self) -> bool {
-        let Some(running) = self.bench_evaluations.running.as_ref() else {
+        let Some(running) = self.running_evaluation() else {
             return false;
         };
         self.viewed_track()
@@ -231,31 +270,98 @@ impl AppState {
             .is_some_and(|current| current.same(&running.inputs))
     }
 
-    /// Install a finished evaluation, and start or stop one so that the
-    /// evaluation running is of current inputs.
+    /// Install a finished evaluation, and queue or stop one so that the
+    /// evaluation queued is of current inputs.
     ///
     /// Called once per frame, after the steps the frame applied. Returns
     /// whether anything changed that the next frame has to draw.
     pub(crate) fn drive_bench_evaluation(&mut self) -> bool {
-        let landed = self.poll_bench_evaluation();
-        if let Some(running) = self.bench_evaluations.running.as_ref() {
-            let current = self.evaluation_inputs(running.inputs.subject);
-            if !current.is_some_and(|current| current.same(&running.inputs)) {
-                running.cancel.store(true, Ordering::Relaxed);
+        let mut changed = self.poll_bench_evaluation();
+        if let Some(queued) = self.bench_evaluations.queued.as_ref() {
+            let current = self.evaluation_inputs(queued.inputs.subject);
+            if current.is_some_and(|current| current.same(&queued.inputs)) {
+                return changed;
             }
-            return landed;
+            // A stale evaluation that is running is asked to stop, and the
+            // next is queued only once it has answered: one worker at a time,
+            // however many steps land. One still waiting is replaced below by
+            // the request for the next subject, or taken out when there is
+            // none.
+            if self.quiet_task_running(queued.task) {
+                let task = queued.task;
+                self.cancel_quiet_task(task);
+                return changed;
+            }
         }
         self.forget_settled_tracks();
-        let Some(inputs) = self.next_unevaluated() else {
-            return landed;
+        let stale = self.bench_evaluations.queued.take();
+        let Some((inputs, rank)) = self.next_unevaluated() else {
+            if let Some(stale) = stale {
+                self.cancel_quiet_task(stale.task);
+                changed = true;
+            }
+            return changed;
         };
-        let started = self
-            .evaluate_job(inputs.subject)
-            .and_then(|job| self.spawn_evaluation(inputs.clone(), job));
-        if let Err(message) = started {
+        if let Err(message) = self.queue_evaluation(inputs.clone(), rank) {
+            if let Some(stale) = stale {
+                self.cancel_quiet_task(stale.task);
+            }
             self.record_failure(inputs, message);
         }
         true
+    }
+
+    /// Queue the evaluation of `inputs` as a *Live evaluation* quiet task in
+    /// the fast queue, replacing the one the driver has waiting there, if any.
+    fn queue_evaluation(&mut self, inputs: Inputs, rank: QuietRank) -> Result<(), String> {
+        let job = self.evaluate_job(inputs.subject)?;
+        let label = self.subject_label(inputs.subject);
+        let (sender, answers) = std::sync::mpsc::channel();
+        let dropped = sender.clone();
+        let run = move |progress: &Progress<'_>| {
+            // A job that panics still answers, or the track would read
+            // "evaluating" for the rest of the session.
+            let measured = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| job(progress)))
+                .unwrap_or_else(|_| {
+                    Measured::Failed("The evaluation stopped without an answer.".to_string())
+                });
+            let _ = sender.send(Answer::Measured(measured));
+        };
+        let task = self.start_quiet_task(
+            Operation::LIVE_EVALUATION,
+            QuietSource::LiveEvaluation,
+            rank,
+            inputs.subject.node(),
+            label,
+            QuietJob::new(run, move || {
+                let _ = dropped.send(Answer::Dropped);
+            }),
+        )?;
+        self.bench_evaluations.queued = Some(QueuedEvaluation {
+            inputs,
+            task,
+            answers,
+        });
+        Ok(())
+    }
+
+    /// What the Background Tasks panel names an evaluation of `subject` by:
+    /// the node and the item, or the node and the viewed point.
+    fn subject_label(&self, subject: Subject) -> String {
+        let node = self
+            .node(subject.node())
+            .map(|node| node.label.as_str())
+            .unwrap_or_default();
+        match subject {
+            Subject::Item { node: id, item } => format!("{node}: {}", self.item_label(id, item)),
+            Subject::Viewed { .. } => {
+                let point = self
+                    .viewed_track()
+                    .map(|viewed| viewed.label.as_str())
+                    .unwrap_or_default();
+                format!("{node}: viewed {point}")
+            }
+        }
     }
 
     /// The work an evaluation of `subject` does, read from its current inputs.
@@ -284,32 +390,49 @@ impl AppState {
         }
     }
 
-    /// Take the running evaluation's answer if it has one, and install it.
+    /// Take the queued evaluation's answer if it has one, and install it.
     fn poll_bench_evaluation(&mut self) -> bool {
-        let Some(running) = self.bench_evaluations.running.as_ref() else {
+        let Some(queued) = self.bench_evaluations.queued.as_ref() else {
             return false;
         };
-        let measured = match running.done.try_recv() {
-            Ok(measured) => measured,
+        let answer = match queued.answers.try_recv() {
+            Ok(answer) => answer,
             Err(TryRecvError::Empty) => return false,
-            Err(TryRecvError::Disconnected) => {
-                Measured::Failed("The evaluation stopped without an answer.".to_string())
-            }
+            // The job was dropped without a word, which only a worker thread
+            // that could not be spawned does.
+            Err(TryRecvError::Disconnected) => Answer::Measured(Measured::Failed(
+                "The evaluation stopped without an answer.".to_string(),
+            )),
         };
-        let running = self
-            .bench_evaluations
-            .running
-            .take()
-            .expect("just borrowed");
-        self.land_evaluation(running.inputs, measured);
+        let queued = self.bench_evaluations.queued.take().expect("just borrowed");
+        self.land_answer(queued.inputs, answer);
         true
     }
 
+    /// Act on what came back for an evaluation of `inputs`. A dropped one is
+    /// not run and not a failure: the driver picks its subject again once its
+    /// node is free.
+    fn land_answer(&mut self, inputs: Inputs, answer: Answer) {
+        match answer {
+            Answer::Measured(measured) => self.land_evaluation(inputs, measured),
+            Answer::Dropped => {}
+        }
+    }
+
     /// Install what an evaluation brought back, if its inputs are still the
-    /// track's, and drop it otherwise.
+    /// track's and its node is not locked, and drop it otherwise.
     fn land_evaluation(&mut self, inputs: Inputs, measured: Measured) {
         let current = self.evaluation_inputs(inputs.subject);
         if !current.is_some_and(|current| current.same(&inputs)) {
+            return;
+        }
+        // No evaluation lands into a locked node. A task queued on it built
+        // its job from the bench as it stood, and cancelled this evaluation
+        // then; an evaluation that finished before it read the flag still
+        // answers, and installing that answer would change the bench under
+        // the job. The track stays unevaluated, and the driver picks it again
+        // once the node is free.
+        if self.busy_refusal(inputs.subject.node()).is_some() {
             return;
         }
         let item = match inputs.subject {
@@ -321,9 +444,9 @@ impl AppState {
         };
         let key = (inputs.subject.node(), item);
         match measured {
-            // Cancelled with the inputs current again -- an edit and its undo
-            // inside one evaluation -- leaves the track unevaluated, and the
-            // next frame starts it over.
+            // Cancelled with the inputs current -- an asked-for task displaced
+            // it, or an edit and its undo landed inside one evaluation --
+            // leaves the track unevaluated, and the driver queues it again.
             Measured::Cancelled => {}
             Measured::Failed(message) => self.record_failure(inputs, message),
             Measured::Track(track, turned) => {
@@ -389,39 +512,6 @@ impl AppState {
         }
     }
 
-    /// Run `job` on a worker thread as the evaluation of `inputs`.
-    fn spawn_evaluation(&mut self, inputs: Inputs, job: EvaluationJob) -> Result<(), String> {
-        let cancel = Arc::new(AtomicBool::new(false));
-        let (sender, done) = std::sync::mpsc::channel();
-        let flag = Arc::clone(&cancel);
-        let wake = self.wake.clone();
-        std::thread::Builder::new()
-            .name("sfm-explorer bench evaluation".to_string())
-            .spawn(move || {
-                let progress = Progress::none().cancelled_by(&flag);
-                // A job that panics still answers, or the track would read
-                // "evaluating" for the rest of the session.
-                let measured =
-                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| job(&progress)))
-                        .unwrap_or_else(|_| {
-                            Measured::Failed(
-                                "The evaluation stopped without an answer.".to_string(),
-                            )
-                        });
-                let _ = sender.send(measured);
-                if let Some(wake) = wake.as_ref() {
-                    wake();
-                }
-            })
-            .map_err(|e| format!("Could not start a worker thread for the evaluation: {e}"))?;
-        self.bench_evaluations.running = Some(Running {
-            inputs,
-            cancel,
-            done,
-        });
-        Ok(())
-    }
-
     /// What an evaluation of `subject` would read right now: for a bench item,
     /// the track at its node's cursor; for the viewed track, the current
     /// viewed track when it is of that point.
@@ -479,11 +569,17 @@ impl AppState {
     /// The next track to evaluate whose evaluation stands at
     /// [`Evaluation::Evaluating`]: the viewed track, then the focused item,
     /// since whichever of the two there is is what Track View shows, and then
-    /// every other item in scene order, skipping any node an operation holds.
-    fn next_unevaluated(&self) -> Option<Inputs> {
-        let viewed = self.viewed_track().map(|viewed| Subject::Viewed {
-            node: viewed.node,
-            point: viewed.point,
+    /// every other item in scene order, skipping any node an operation holds,
+    /// with the place among quiet tasks its evaluation takes.
+    fn next_unevaluated(&self) -> Option<(Inputs, QuietRank)> {
+        let viewed = self.viewed_track().map(|viewed| {
+            (
+                Subject::Viewed {
+                    node: viewed.node,
+                    point: viewed.point,
+                },
+                QuietRank::ViewedTrack,
+            )
         });
         let focused = self.focused_item().map(|f| (f.node, f.item));
         let others = self.scene.iter().flat_map(|node| {
@@ -494,15 +590,20 @@ impl AppState {
                 .map(move |entry| (node.id, entry.id))
         });
         let items = focused
+            .map(|key| (key, QuietRank::FocusedItem))
             .into_iter()
-            .chain(others.filter(|key| Some(*key) != focused))
-            .map(|(node, item)| Subject::Item { node, item });
+            .chain(
+                others
+                    .filter(|key| Some(*key) != focused)
+                    .map(|key| (key, QuietRank::BenchItem)),
+            )
+            .map(|((node, item), rank)| (Subject::Item { node, item }, rank));
         viewed
             .into_iter()
             .chain(items)
-            .filter(|subject| self.busy_refusal(subject.node()).is_none())
-            .filter_map(|subject| self.evaluation_inputs(subject))
-            .find(|inputs| self.evaluation_of(inputs) == Evaluation::Evaluating)
+            .filter(|(subject, _)| self.busy_refusal(subject.node()).is_none())
+            .filter_map(|(subject, rank)| Some((self.evaluation_inputs(subject)?, rank)))
+            .find(|(inputs, _)| self.evaluation_of(inputs) == Evaluation::Evaluating)
     }
 
     /// The label `item` carries on `id`'s bench at the cursor, or an empty
@@ -526,37 +627,62 @@ impl AppState {
     }
 
     /// Run the live evaluation until every track is current, refused or
-    /// failed, blocking on the worker: the test seam, as
+    /// failed, blocking on the fast queue: the test seam, as
     /// [`AppState::finish_background_task`] is for an operation.
+    ///
+    /// While an evaluation is queued, the fast queue's running task -- the
+    /// evaluation, or a task it waits behind -- is driven to its next report
+    /// and applied. Once nothing is queued, the quiet task whose answer was
+    /// read last is landed too, so the fast queue is idle for the test's next
+    /// start.
     #[cfg(test)]
     pub(crate) fn settle_bench_evaluation(&mut self) {
-        const PATIENCE: std::time::Duration = std::time::Duration::from_secs(120);
         loop {
             self.drive_bench_evaluation();
-            let Some(running) = self.bench_evaluations.running.as_ref() else {
+            if self.bench_evaluations.queued.is_none() {
+                self.land_quiet_tasks();
                 return;
-            };
-            let measured = running
-                .done
-                .recv_timeout(PATIENCE)
-                .expect("the evaluation answered");
-            let running = self
-                .bench_evaluations
-                .running
-                .take()
-                .expect("just borrowed");
-            self.land_evaluation(running.inputs, measured);
+            }
+            self.wait_for_evaluation();
         }
     }
 
-    /// The track the running evaluation read, if one is running: for the tests
+    /// Block until the queued evaluation has answered, driving the fast queue
+    /// meanwhile, and act on the answer.
+    #[cfg(test)]
+    fn wait_for_evaluation(&mut self) {
+        loop {
+            let Some(queued) = self.bench_evaluations.queued.as_ref() else {
+                return;
+            };
+            match queued.answers.try_recv() {
+                Ok(answer) => {
+                    let queued = self.bench_evaluations.queued.take().expect("just read");
+                    self.land_answer(queued.inputs, answer);
+                    return;
+                }
+                // The drive's own poll answers a channel's end, in its words.
+                Err(TryRecvError::Disconnected) => {
+                    self.poll_bench_evaluation();
+                    return;
+                }
+                Err(TryRecvError::Empty) => {}
+            }
+            assert!(
+                self.step_queue(crate::background::Queue::Fast),
+                "an evaluation is queued in an idle fast queue"
+            );
+        }
+    }
+
+    /// The track the queued evaluation read, if one is queued: for the tests
     /// that edit a track while an evaluation of it runs.
     #[cfg(test)]
     pub(crate) fn running_evaluation_track(&self) -> Option<Arc<EditableTrack>> {
         self.bench_evaluations
-            .running
+            .queued
             .as_ref()
-            .map(|running| Arc::clone(&running.inputs.track))
+            .map(|queued| Arc::clone(&queued.inputs.track))
     }
 
     /// Whether the running evaluation has been asked to stop, for the tests
@@ -564,22 +690,26 @@ impl AppState {
     #[cfg(test)]
     pub(crate) fn running_evaluation_cancelled(&self) -> bool {
         self.bench_evaluations
-            .running
+            .queued
             .as_ref()
-            .is_some_and(|running| running.cancel.load(Ordering::Relaxed))
+            .is_some_and(|queued| self.quiet_task_cancelled(queued.task))
     }
 
-    /// Wait for the running evaluation's answer and land it, as a frame would
-    /// once the worker has answered.
+    /// The id of the quiet task the queued evaluation runs as, if one is
+    /// queued.
+    #[cfg(test)]
+    pub(crate) fn queued_evaluation_task(&self) -> Option<u64> {
+        self.bench_evaluations
+            .queued
+            .as_ref()
+            .map(|queued| queued.task)
+    }
+
+    /// Wait for the queued evaluation's answer and land it, as a frame would
+    /// once the worker has answered, and land its quiet task in the queue.
     #[cfg(test)]
     pub(crate) fn land_running_evaluation(&mut self) {
-        let Some(running) = self.bench_evaluations.running.take() else {
-            return;
-        };
-        let measured = running
-            .done
-            .recv_timeout(std::time::Duration::from_secs(120))
-            .expect("the evaluation answered");
-        self.land_evaluation(running.inputs, measured);
+        self.wait_for_evaluation();
+        self.land_quiet_tasks();
     }
 }

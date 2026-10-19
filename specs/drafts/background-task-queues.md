@@ -8,7 +8,7 @@
 [Track Table](track-table.md) puts its column job and its reference picks on
 the fast queue.
 
-**Steps 1 and 2 are built** (§ "Steps"). Step 1: the two queues; each
+**Steps 1, 2 and 3 are built** (§ "Steps"). Step 1: the two queues; each
 operation's `queue` and `locks`; the node lock; start functions that return the
 task's id, the lookup by id and the ring of finished tasks; the panel's line
 per queue, its title **Background Tasks** and wire name `background_tasks`; and
@@ -18,10 +18,17 @@ the renamed tools `get_background_tasks` and `cancel_background_tasks` with the
 the poll that lands the one ahead, the node lock from the moment a task is
 queued with its waiting sentence, the end of the busy-queue refusal, cancelling
 a waiting task, the panel's waiting line per queue, and `waiting` on the wire.
+Step 3: **quiet tasks**, with `quiet` on `Operation`, `QuietJob`, `WaitingJob`,
+the rules by which a quiet task gives way to the tasks someone asks for, the
+panel's quiet line, and the bench's live evaluation as the *Live evaluation*
+quiet task in the fast queue, its own thread retired
+([gui/background-tasks.md](../gui/background-tasks.md) § "Quiet tasks",
+[gui/bench.md](../gui/bench.md) § "Live evaluation").
 Those are described in the standing specs above, and this draft keeps them only
-as the ground the remaining steps build on. What is still proposed is **quiet
-tasks** and the live evaluation in the fast queue (Step 3), and the camera
-model proposal in the fast queue (Step 4).
+as the ground the remaining steps build on. What is still proposed is the
+camera model proposal in the fast queue (Step 4), and the Track Table's two
+quiet tasks with the rule for a quiet task a wire call waits on, which come
+with the Track Table.
 
 Decided:
 
@@ -59,8 +66,8 @@ two queues, of which Step 1 is built:
   Step 3) the quiet work the viewer does by itself to keep its panels current.
 
 A long solve then holds up only other slow operations, and the rest of the
-viewer keeps working beside it. What Steps 1 and 2 leave is that the live
-evaluation and the proposal's job keep threads of their own.
+viewer keeps working beside it. What Steps 1 to 3 leave is that the proposal's
+job keeps a thread of its own.
 
 The reason the standing spec gives for running one task at a time still holds
 for the slow queue. Those operations saturate the machine, so two at once
@@ -73,7 +80,7 @@ person a wait of minutes.
 
 `background::Operation` carries `queue` and `locks` beside `name`, `cancellable`
 and `kind` (built in Step 1, [gui/background-tasks.md](../gui/background-tasks.md)
-§ "Two queues"), and gains a third, `quiet`, in Step 3:
+§ "Two queues"), and `quiet` (built in Step 3, § "Quiet tasks" there):
 
 ```rust
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -110,8 +117,9 @@ pub(crate) struct Operation {
 | Camera model proposal | fast | no; it pushes no version (Apply installs its answer), and an open proposal already refuses every task on its node | yes |
 | Track Table columns, Track Table reference picks | fast | no | yes |
 
-`Operation::ALL` gains the four quiet operations, and the test that checks each
-operation's declared queue and lock against this table checks `quiet` too. The queue is fixed rather
+`Operation::ALL` gained *Live evaluation* in Step 3, and the test that checks
+each operation's declared queue and lock against this table checks `quiet` too;
+the proposal and the Track Table's two operations join it with their steps. The queue is fixed rather
 than estimated from the reconstruction's size. That keeps it predictable: the
 same operation always waits behind the same work, a test can name the queue,
 and nothing has to be measured before the queue is known.
@@ -119,8 +127,8 @@ and nothing has to be measured before the queue is known.
 ## The rules
 
 Built in Step 2 for the tasks someone asks for, and described in
-[gui/background-tasks.md](../gui/background-tasks.md) § "Two queues"; what
-remains here is how quiet tasks fit them (Step 3).
+[gui/background-tasks.md](../gui/background-tasks.md) § "Two queues"; how
+quiet tasks fit them is built in Step 3 and described there in § "Quiet tasks".
 
 **Each queue runs one task at a time.** A task started while its queue is
 running another waits behind any tasks already waiting there, in the order
@@ -166,6 +174,15 @@ lock, and `File > Open...` is not greyed at all.
 tasks today.
 
 ## Quiet tasks
+
+Built in Step 3 for the live evaluation and described in
+[gui/background-tasks.md](../gui/background-tasks.md) § "Quiet tasks"; the
+rules below are kept as what the proposal (Step 4) and the Track Table's tasks
+join. Two things were settled differently in the code: the place among quiet
+tasks is an ordered enum, `QuietRank`, rather than a `u8`, and a quiet task's
+id comes from a count of its own (`AppState::next_quiet_id`), so the ids the
+wire hands out stay consecutive. The *dropped* message is sent by a second
+closure the `QuietJob` carries, which the queue calls instead of the work.
 
 A quiet task is work the viewer starts by itself to keep a panel current.
 Nobody asked for it, so nothing that someone asked for waits behind it:
@@ -243,7 +260,7 @@ Nobody asked for it, so nothing that someone asked for waits behind it:
   `get_scene`'s list or in the busy notice, except while a wire call waits on
   it, so a non-empty list still means "someone's work is running".
 
-**Live evaluation as a quiet task.** The evaluation driver
+**Live evaluation as a quiet task** (built in Step 3). The evaluation driver
 (`bench::live::drive_bench_evaluation`) keeps its choice of what to evaluate
 next and its rule that a result whose inputs have moved is dropped. It stops
 owning a thread: it queues a *Live evaluation* task for its next subject and
@@ -269,15 +286,15 @@ The panel's title is **Background Tasks** and its wire name `background_tasks`
 idle and running forms and its one phase list are built (Step 1,
 [gui/background-tasks.md](../gui/background-tasks.md) § "A line per queue,
 and one phase list"), and so is the waiting line (Step 2, § "Waiting" there):
-one line per queue for its next waiting task, with `+{k}` for the rest. What
-Step 3 adds is the quiet line:
+one line per queue for its next waiting task, with `+{k}` for the rest, and so
+is the quiet line (Step 3, § "Quiet line" there):
 
 ```
 ┌ Background Tasks ──────────────────────────────┐
 │ Slow Bundle adjust  dino          ▓░  41 s    ✕│
 │   waiting: Retriangulate all points  bull     ✕│
 │ Fast Fit track  bull: track_3          0.4 s   │
-│   quiet: Live evaluation (viewed pt3d_…_830)   │
+│   quiet Live evaluation  bull: viewed pt3d_…_830│
 ├────────────────────────────────────────────────┤
 │ Bundle adjust on dino                          │
 │   linearise              4.4 s                 │
@@ -305,8 +322,8 @@ Step 3 adds is the quiet line:
 
 `AppState` holds one state per queue, `slow_queue` and `fast_queue`, and a ring
 of finished tasks, `finished_tasks` (Step 1). `QueueState` has `waiting` since
-Step 2, whose `WaitingTask` holds a plain `job: Job`; Step 3 turns that field
-into a `WaitingJob`:
+Step 2, whose `WaitingTask` held a plain `job: Job`; Step 3 turned that field
+into a `WaitingJob` (built):
 
 ```rust
 pub(crate) struct QueueState {
@@ -331,7 +348,7 @@ pub(crate) enum WaitingJob {
     /// A quiet task, which answers on its source's channel. `rank` is its
     /// place in the fixed order among quiet tasks (§ "Quiet tasks"), which
     /// for the live evaluation depends on its subject.
-    Quiet { source: QuietSource, rank: u8, job: QuietJob },
+    Quiet { source: QuietSource, rank: QuietRank, job: QuietJob },
 }
 ```
 
@@ -344,8 +361,8 @@ pub(crate) enum WaitingJob {
 - **Finished tasks are kept in a ring** of the last `FINISHED_KEPT` (16)
   (built in Step 1). Step 2 put tasks cancelled before they started in it, and
   Step 3 keeps quiet tasks out of it (§ "Quiet tasks").
-- **`BusyNotice`** holds every running task (built in Step 1); Step 3 leaves
-  quiet tasks out of it.
+- **`BusyNotice`** holds every running task (built in Step 1); since Step 3 it
+  leaves quiet tasks out.
 - **Threads are unchanged in kind.** A task still runs on a named
   `std::thread` of its own, spawned when it starts, and its kernels still use
   rayon's global pool. The queue only decides when a task starts. A fast task
@@ -358,7 +375,9 @@ The renamed tools, the handle's `queue`, `get_background_tasks`'s two forms,
 `cancel_background_tasks`'s `operation_ids`, `cancelling` and `refused`, and
 `get_scene`'s `background_tasks` list are built (Step 1,
 [gui/mcp-server.md](../gui/mcp-server.md)), and so is what waiting adds to
-them below (Step 2). What remains is what quiet tasks add.
+them below (Step 2), and leaving quiet tasks out of all of them (Step 3). What
+remains is a quiet task a wire call waits on (§ "Quiet tasks"), which comes
+with the Track Table.
 
 - **The handle** gains `waiting: true` when the task has not started yet. `REPLY_DIRECTLY_WITHIN` is measured from
   when the task was queued, so a call whose task waits past the 200 ms
@@ -429,7 +448,7 @@ Each step is one PR through `implement-change`:
    - The node lock from the moment a task is queued.
    - Cancelling a waiting task.
    - `waiting` on the wire.
-3. **Quiet tasks, and the live evaluation moved onto the fast queue.**
+3. **Quiet tasks, and the live evaluation moved onto the fast queue.** Built.
    - The `quiet` flag and `QuietJob`.
    - Cancelling and requeueing for asked-for tasks, one waiting entry per
      source, the check at start, and the fixed order.
@@ -448,7 +467,9 @@ The Track Table's two quiet tasks come with its own steps (Steps 2, 4 and 5 of
 
 The tests of waiting, its order, the lock from queueing, ids, cancelling and
 the wire, are built with Step 2 ([gui/background-tasks.md](../gui/background-tasks.md)
-§ "Testing"); the quiet-task tests come with Steps 3 and 4.
+§ "Testing"), and so are Step 3's quiet-task tests, for the live evaluation
+(§ "Testing" there and in [gui/bench.md](../gui/bench.md)); the proposal's come
+with Step 4.
 
 - The declared quiet value of every operation matches the table in § "What a
   task declares", as the queue and lock already do.
@@ -509,6 +530,14 @@ the wire, are built with Step 2 ([gui/background-tasks.md](../gui/background-tas
   because their cost grows with the reconstruction. Both take about a second
   on `seoul_bull_sculpture`. If they are usually that short, the fast queue
   may suit them better.
+- **How long an asked-for task waits for a quiet one to stop.** Measured for
+  the live evaluation in Step 3: on the `seoul_bull_sculpture` and `kerry_park`
+  ground truths, with the photographs in memory, one evaluation takes 1 to
+  18 ms, and a bench step queued while one ran started 25 µs to 3.3 ms later
+  (under 0.2 ms in most of 24 trials), well inside `REPLY_DIRECTLY_WITHIN`. An
+  evaluation that has to decode its photographs from disk polls the flag only
+  on either side of the decode, so its wait is up to one decode; that was not
+  measured on a large fixture.
 - **The proposal's cancellation.** Its camera switch takes no `Progress`, so a
   cancel takes effect only after the switch, and the proposal starts over
   after every asked-for task. If that makes the preview slow to appear while
