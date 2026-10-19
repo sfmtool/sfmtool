@@ -122,7 +122,7 @@ pub struct GrownPlaneNormalOptions {
     /// The most pairs of kept views matched against each other. 3.
     pub max_pairs: usize,
     /// The selection stops matching views once the combined plane's weakest
-    /// `σ` is at most this, degrees. 0.5.
+    /// `σ` is at most this, degrees. 1.5.
     pub target_sigma_deg: f64,
     /// The selection stops matching views once this many have passed the
     /// floor. 6.
@@ -177,7 +177,7 @@ impl Default for GrownPlaneNormalOptions {
             weak_turn_deg: 70.0,
             min_turn_sigma_ratio: 3.0,
             max_pairs: 3,
-            target_sigma_deg: 0.5,
+            target_sigma_deg: 1.5,
             max_selected_views: 6,
             first_rung_deg: 15.0,
             first_rung_min_deg: 10.0,

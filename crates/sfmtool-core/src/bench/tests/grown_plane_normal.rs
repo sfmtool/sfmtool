@@ -171,6 +171,15 @@ fn distance_px(a: [f64; 2], b: [f64; 2]) -> f64 {
     (a[0] - b[0]).hypot(a[1] - b[1])
 }
 
+/// The defaults with a target `σ` of 0.5 degrees, which the scenes of up to
+/// six views below never reach, so that the selection matches every view.
+fn every_view() -> GrownPlaneNormalOptions {
+    GrownPlaneNormalOptions {
+        target_sigma_deg: 0.5,
+        ..Default::default()
+    }
+}
+
 /// Six views of the textured plane, from facing it to 50 degrees off.
 fn wide_centres() -> Vec<[f64; 3]> {
     vec![
@@ -195,7 +204,7 @@ fn a_textured_plane_started_far_off_is_turned_onto_it() {
     let scene = Scene::looking_at(&centres, WORLD, camera(), textured_plane);
     let edited = edited_of(&scene);
     let track = tilted_track(&edited, Vector3::new(1.0, 0.5, 0.0), 25.0);
-    let (turned, report) = run(&scene, &edited, &track, &GrownPlaneNormalOptions::default());
+    let (turned, report) = run(&scene, &edited, &track, &every_view());
     let sequence = sequence_of(&report);
 
     let after = degrees(patch_frame_of(&turned).normal(), truth());
@@ -278,7 +287,7 @@ fn a_view_whose_top_cells_see_other_texture_still_joins() {
     });
     let edited = edited_of(&scene);
     let track = tilted_track(&edited, Vector3::x(), 15.0);
-    let (turned, report) = run(&scene, &edited, &track, &GrownPlaneNormalOptions::default());
+    let (turned, report) = run(&scene, &edited, &track, &every_view());
     let sequence = sequence_of(&report);
     let after = degrees(patch_frame_of(&turned).normal(), truth());
     assert!(after < 1.0, "{after:.3} deg off: {report}");
@@ -447,7 +456,7 @@ fn a_view_whose_own_plane_disagrees_is_left_out() {
     let edited = edited_of(&scene);
     let track = tilted_track(&edited, Vector3::y(), 10.0);
     let row = row_of(&track, 4);
-    let (turned, report) = run(&scene, &edited, &track, &GrownPlaneNormalOptions::default());
+    let (turned, report) = run(&scene, &edited, &track, &every_view());
     let sequence = sequence_of(&report);
     let after = degrees(patch_frame_of(&turned).normal(), truth());
     assert!(after < 1.0, "{after:.3} deg off: {report}");
@@ -557,10 +566,10 @@ fn the_keypoint_implied_shift_takes_the_right_peak_on_repeating_texture() {
     // with no search comes first and does not use it.
     let widened = GrownPlaneNormalOptions {
         keypoint_search_px: 0.0,
-        ..Default::default()
+        ..every_view()
     };
     let mut sequence = None;
-    for options in [GrownPlaneNormalOptions::default(), widened] {
+    for options in [every_view(), widened] {
         let (run_sequence, worst) = written_off(&track, &options);
         assert_eq!(run_sequence.joined(), 3, "{run_sequence:#?}");
         for entry in &run_sequence.trace {
@@ -583,7 +592,7 @@ fn the_keypoint_implied_shift_takes_the_right_peak_on_repeating_texture() {
             observation.track = None;
         }
     }
-    let (sequence, worst) = written_off(&searched, &GrownPlaneNormalOptions::default());
+    let (sequence, worst) = written_off(&searched, &every_view());
     for view in &sequence.views {
         if let GrownPlaneView::Joined { start, .. } = view {
             assert_eq!(*start, GrownPlaneStart::NoKeypoint, "{sequence:#?}");
@@ -870,11 +879,11 @@ fn the_grown_plane_normals_detail_phases_change_nothing() {
     let views = scene.views();
 
     // Four picks, so that a view is fitted for its shift alone, and
-    // the default, under which every view is matched.
+    // the default six, under which every view is matched.
     for max_selected_views in [4, 6] {
         let options = GrownPlaneNormalOptions {
             max_selected_views,
-            ..Default::default()
+            ..every_view()
         };
         let quiet = grown_plane_normal(&track, &edited, &views, &options, &Progress::none())
             .expect("the step runs");

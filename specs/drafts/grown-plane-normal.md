@@ -330,7 +330,7 @@ P = g · (α · d dᵀ + β · e eᵀ)
 - **Each later rung** aims at `rung_ratio` (1.6) times the widest angle among the views the combination keeps, and takes the views within a factor √1.6 of that aim: from a first view at 15°, the aims are about 24°, 38° and 61° where each rung keeps a view near its aim. A rung with no view left in its range aims 1.6 times further out, and one with an aim of zero, where every view kept is 0° from the reference, aims at the widest candidate. The rung whose range reaches the widest candidate is the last: it takes every view from the smaller of its aim and the widest candidate's angle, over √1.6, outward, and the selection stays on it, so it ends with the widest views. Once no view is left there, one more rung takes every view left, the narrower ones among them.
 - **Within a later rung** the pick maximises the smallest eigenvalue of the measured information of the views the combination keeps plus the view's prediction, which spreads the picks' offset directions about the normal, ties by the larger eigenvalue, then by the view nearer the aim, then by the earlier view.
 - **Growth.** Each pick of a later rung is grown from the combined plane of the views kept so far, from its keypoint-implied shift; where that growth is refused, the view is grown from the starting plane as the first rung grows it, from its keypoint-implied shift and then from the search. A rung waits until one of its views is kept: a refused pick is followed by another view in the same range, and the ladder moves out only once the widest kept angle widens or no view is left in the range.
-- **Stopping.** After each pick that reaches the floor the picks are combined by the robust combination, and the selection stops when the combined weakest σ is at most `target_sigma_deg` (0.5°) or `max_selected_views` (6) picks have reached the floor, or no candidate is left. A candidate whose angle is not finite is never picked. The trace records each pick's try with the plane each growth started from (`tilt_start`) and the combined plane after it, and each pick its rung.
+- **Stopping.** After each pick that reaches the floor the picks are combined by the robust combination, and the selection stops when the combined weakest σ is at most `target_sigma_deg` (1.5°) or `max_selected_views` (6) picks have reached the floor, or no candidate is left. A candidate whose angle is not finite is never picked. The trace records each pick's try with the plane each growth started from (`tilt_start`) and the combined plane after it, and each pick its rung.
 
 **The views not picked.** Each candidate the selection did not pick has its shift alone fitted at the final plane: stage 1 reads the first window at its keypoint-implied shift, and the whole-grid stage fits the shift with the tilt held. Where that is under the floor, or the view has no keypoint, the stage-1 search runs at the final plane and the shift is fitted from its best, unless it lands on the implied shift. The view is reported `ShiftOnly`; its keypoint is written when its score reaches `min_held_zncc` and is on the photograph. It is not in the plane. When no pick joined there is no final plane, and the views not picked are reported `NotAttempted`.
 
@@ -434,7 +434,7 @@ Photograph samples are `f32`, read bilinearly from `u8` pyramid levels; the ZNCC
 | `weak_turn_deg` | `70.0` | Smallest turn from the starting normal, degrees, that the weak-turn rule judges: a turn of at least this under `min_turn_sigma_ratio` times σ (a) is not made; at least 0, infinite turns the rule off |
 | `min_turn_sigma_ratio` | `3.0` | Ratio of the turn to σ (a) that a turn of at least `weak_turn_deg` needs to be made; a σ that is not finite counts as a ratio of 0; finite and at least 0, 0 turns the rule off |
 | `max_pairs` | `3` | Pairs of views matched against each other, at most |
-| `target_sigma_deg` | `0.5` | The selection stops once the combined weakest σ is at most this, degrees |
+| `target_sigma_deg` | `1.5` | The selection stops once the combined weakest σ is at most this, degrees |
 | `max_selected_views` | `6` | The selection stops once this many picks have reached the floor |
 | `first_rung_deg` | `15.0` | The selection's first pick is the view nearest this angle from the reference within the first rung's range, degrees; within that range itself |
 | `first_rung_min_deg` | `10.0` | The narrowest angle of the first rung's range, degrees; finite, at least 0 |
@@ -447,11 +447,11 @@ Photograph samples are `f32`, read bilinearly from `u8` pyramid levels; the ZNCC
 | `jacobian_tilt_step` | `1e-3` | Forward-difference step along each tilt parameter, tilt units |
 | `jacobian_shift_step_px` | `0.05` | Forward-difference step along each shift, image px |
 
-The search and agreement defaults are the prototype's, set on one point in the first round and four in the second. The five optimiser settings are this implementation's and were chosen on the tests' synthetic scenes only. `max_pairs`, `target_sigma_deg` and `max_selected_views` are first values, with two other settings of the last two measured in § [Measurement without the joint fit](#measurement-without-the-joint-fit-2026-10-17). The ladder's settings were proposed from the angle evidence of § [A near-to-far selection](#a-near-to-far-selection-2026-10-18) and swept there, which moved `first_rung_deg` from 12° to 15°.
+The search and agreement defaults are the prototype's, set on one point in the first round and four in the second. The five optimiser settings are this implementation's and were chosen on the tests' synthetic scenes only. `max_pairs` and `max_selected_views` are first values, with two other settings of `max_selected_views` measured in § [Measurement without the joint fit](#measurement-without-the-joint-fit-2026-10-17). `target_sigma_deg` was 0.5° at first and is 1.5° since the sweep of § [A looser σ target](#a-looser-σ-target-2026-10-18). The ladder's settings were proposed from the angle evidence of § [A near-to-far selection](#a-near-to-far-selection-2026-10-18) and swept there, which moved `first_rung_deg` from 12° to 15°.
 
 ## Testing
 
-The tests in [bench/tests/grown_plane_normal.rs](../../crates/sfmtool-core/src/bench/tests/grown_plane_normal.rs) build synthetic planes seen by 128-px pinholes that look at the point from around it, 4 units away, through `Scene::looking_at`, with the patch spanning 32 px in a facing view; [grown_plane/tests.rs](../../crates/sfmtool-core/src/bench/normal/grown_plane/tests.rs) tests the parts that need no photograph. Every test runs the defaults unless it names a setting. On the scenes with up to six views the combined σ stays over the 0.5° target, so the selection picks every view. Built and passing:
+The tests in [bench/tests/grown_plane_normal.rs](../../crates/sfmtool-core/src/bench/tests/grown_plane_normal.rs) build synthetic planes seen by 128-px pinholes that look at the point from around it, 4 units away, through `Scene::looking_at`, with the patch spanning 32 px in a facing view; [grown_plane/tests.rs](../../crates/sfmtool-core/src/bench/normal/grown_plane/tests.rs) tests the parts that need no photograph. Every test runs the defaults unless it names a setting. The tests on the scenes with up to six views that need every view picked set a target σ of 0.5°, which the combined σ there stays over. Built and passing:
 
 - A textured plane started 25° off its normal, seen from six views out to 50°: every view is picked and joins on its first growth, from its keypoint-implied shift with no search, the first from the starting plane and every later one from the combined plane; the normal ends within 0.02° of the plane, every written keypoint is within 0.5 px of the point's projection (within 0.01 px here), the reference keeps its keypoint, and 6 keypoints are written. Both pairs are kept, and σ is 0.56° weakest and 0.48° strongest, 0.67° with each pair's information halved.
 - One view at 25° whose top cells see black and white blocks the reference never sees there: it joins under the robust cell score, and the normal ends 0.03° from the plane.
@@ -735,6 +735,34 @@ A wide view fails mainly when the start is far off: with a start within 15° of 
 **The judged point lost.** At 12° the ladder is wrong on dino 10, whose judged-right and alternative normals are 3.8° apart: the old selection's first pick, a 13.7° view grown from the starting plane, was refused, where the ladder grows it from the plane of an 11.8° view and keeps it, and the plane ends 2.3° from the judged-right normal and 1.5° from the stored one, with σ 1.7°. At 15° the 13.7° view is again picked first from the starting plane and refused, and the point is as before.
 
 **Reading.** The ladder holds the judged points at 15°, lowers every dataset's median, by 0.12° on the bull, 0.34° on Kerry Park and 0.09° on the dino, and raises every share within 5°; it refuses about 40% fewer picks and caps the worst points' picks at 17 rather than 29. It saves 2% to 4% of the time over the whole sweep, much less than on the slow points, because on most points both selections make about six picks. The ratio changes little between 1.4 and 2.0. The ladder at 15° and 1.6 replaced the old selection, which was removed, with the setting that chose between them.
+
+## A looser σ target (2026-10-18)
+
+**Question.** The selection stopped once the combined weakest σ was at most 0.5°. Does a looser target keep the bar while growing fewer views?
+
+**Setup.** The near-to-far selection of § [The selection](#the-selection) was run on all 1609 points of the three ground truths, from the mean viewing direction, with `target_sigma_deg` at 0.5°, 1.0° and 1.5° and every other setting at its default. The three forms ran at once on one machine, so only the ratios between their times hold. "Within 0.1°", "better" and "worse" compare each point's error against its stored normal with its error under the 0.5° target.
+
+**Results.**
+
+- **Judged points.** The points of § [Judged by eye](#judged-by-eye-2026-10-18) judged right stay at 55 of 63 under all three targets.
+- **Time.** The step takes 423 s at 0.5°, 357 s at 1.0° and 303 s at 1.5°: 28% less at 1.5° than at 0.5°.
+- **`seoul_bull_sculpture`.** Every quantile is the same at 1.5° as at 0.5°, and 95% of the points are within 0.1° of their error at 0.5°.
+- **`kerry_park`.** The quartiles and the 90th percentile are the same. 82% of the points are within 0.1°; 4% are better by more than 0.5° and 5% worse by more than 0.5°.
+- **`dino_dog_toy`.**
+
+  | Target | 25th percentile | Median | 75th percentile | 90th percentile | Under 1° |
+  |---|---|---|---|---|---|
+  | 0.5° | 0.75° | 1.37° | 2.81° | 6.4° | 35% |
+  | 1.5° | 0.86° | 1.55° | 2.90° | 6.7° | 30% |
+
+  Per point, 45% are within 0.1°; 7% are better by more than 0.5° and 13% worse by more than 0.5°.
+
+**Two other stops, simulated from the traces.** Each pick's combined plane in the sweep's traces gives where the selection would have ended had it stopped there.
+
+- **An oracle.** About half of the points are already within 0.5° of their final plane after their first join. A stop that knew when each point had reached its final plane would grow only 32% to 44% of the views the selection grew.
+- **A small move of the combined plane.** Stopping once a join moves the combined plane by less than a given angle, set to save as many growths as the σ target does, costs about as much error as the σ target on `dino_dog_toy` and more on `kerry_park`.
+
+**Reading.** At 1.5° the step takes 28% less time and keeps the judged points and the bull's and Kerry Park's quantiles. The views the 0.5° target grows past 1.5° mostly refine points that are already within a degree or two of their stored normal, not the points that are far off: on `dino_dog_toy` the low quantiles move most, the 25th percentile from 0.75° to 0.86°. The dino's stored normals come from a candidate ground truth, and a shift of about 0.1° at the 25th percentile may lie within their own error. `target_sigma_deg` is 1.5° since this measurement.
 
 ## Non-goals
 

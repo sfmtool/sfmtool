@@ -1100,7 +1100,7 @@ fn grid_plane_normal(
 ///
 /// The views grown are a selection, picked one at a time near to far by
 /// their angle from the reference, in rungs, until the combined weakest ``σ``
-/// is at most ``target_sigma_deg`` (default 0.5) or ``max_selected_views``
+/// is at most ``target_sigma_deg`` (default 1.5) or ``max_selected_views``
 /// (default 6) have passed the floor: a growth whose own score reaches
 /// ``min_held_zncc`` (default 0.5). The first rung is the view nearest
 /// ``first_rung_deg`` (default 15.0) within ``first_rung_min_deg`` (default

@@ -286,7 +286,7 @@ GROWN_DEFAULTS = {
     "weak_turn_deg": 70.0,
     "min_turn_sigma_ratio": 3.0,
     "max_pairs": 3,
-    "target_sigma_deg": 0.5,
+    "target_sigma_deg": 1.5,
     "max_selected_views": 6,
     "first_rung_deg": 15.0,
     "first_rung_min_deg": 10.0,
