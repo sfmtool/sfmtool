@@ -208,7 +208,7 @@ the visible-target one cannot be (finding 3).
 > _Status (2026-10-19): **Partially done** — specified, not built: a
 > `find_points` read over a core point-column query, shared with a new Track
 > Table panel, is drafted in `specs/drafts/track-table.md` (with the background
-> queues it depends on in `specs/drafts/background-task-queues.md`), branch
+> queues it depends on now built and described in `specs/gui/background-tasks.md`), branch
 > `draft-track-table`._
 
 To reproduce the tutorial's screenshots an agent needs "a track of about 18

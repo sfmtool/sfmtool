@@ -23,7 +23,8 @@ proposal), [retriangulate-point.md](retriangulate-point.md) (the
 retriangulation edits, whose options and counts Apply shares),
 [bundle-adjust.md](bundle-adjust.md) (the edit that then refines the new
 coefficients), [../background-tasks.md](../background-tasks.md) (the `Switch
-camera model` task), [../mcp-server.md](../mcp-server.md) (the tools),
+camera model` task, and the `Camera model proposal` quiet task the proposal's
+job runs as), [../mcp-server.md](../mcp-server.md) (the tools),
 [../point-cloud-rendering.md](../point-cloud-rendering.md) and
 [../patch-rendering.md](../patch-rendering.md) (the preview buffers),
 [../viewport-hud.md](../viewport-hud.md) (the proposal banner), and
@@ -252,25 +253,37 @@ the angle given.
 
 While a proposal is open a **job** runs off the GUI thread
 ([camera_model_proposal/job.rs](../../../crates/sfm-explorer/src/camera_model_proposal/job.rs)).
-It is not a background task ([../background-tasks.md](../background-tasks.md)):
-those run one at a time in each of two queues and lock their node, and a
-proposal pushes nothing, so it has nothing to lock, and its job must not hold off a
-bundle adjustment on another node or be held off by one. It locks nothing,
-pushes no version, writes no Action Log row and is not shown in the Background
-Tasks panel. It follows the bench's live evaluation
-([../bench.md](../bench.md) § "Live evaluation") instead:
+It is a **quiet task** in the fast queue, `Camera model proposal`
+([../background-tasks.md](../background-tasks.md) § "Quiet tasks"): a proposal
+pushes nothing, so its job locks nothing, and it writes no Action Log row, is
+not reported on the wire and is shown only on the Background Tasks panel's dim
+`quiet` line, as *Camera model proposal* with the node and the camera. It runs
+from the fast queue, so it never waits for a bundle adjustment in the slow
+queue. Its driver owns no thread, and follows the bench's live evaluation
+([../bench.md](../bench.md) § "Live evaluation"):
 
 - **Its inputs** are the proposal's generation, the document half of the
   version the proposal opened on, and whether the retriangulation is asked for.
   Nobody asks for a job: once per frame (`drive_camera_model_proposal_job`)
-  the viewer finds a proposal whose inputs have no answer, and starts one. It
-  waits while the node is busy.
-- **One job runs at a time.** When the proposal's generation or version moves
-  on while one runs, it is cancelled through its `Progress`, and the next
-  starts once the cancelled one has reported back. Clearing the preview lets a
-  running job finish, so ticking it again finds the answer. What a job sends is kept only when it is for the
-  proposal's current generation, so an answer for an older generation is
-  discarded rather than moved to.
+  the viewer finds a proposal whose inputs have no answer, and queues one,
+  which sends what it finds on a channel of the driver's. It waits while the
+  node is busy.
+- **One job is queued at a time.** When the proposal's generation or version
+  moves on while one runs, it is cancelled through its `Progress`, and the next
+  is queued once the cancelled one has reported back; one still waiting in the
+  queue is replaced by the request for the new inputs. Clearing the preview
+  lets a job finish, so ticking it again finds the answer. What a job sends is
+  kept only when it is for the proposal's current generation, so an answer for
+  an older generation is discarded rather than moved to.
+- **It gives way to every task someone asks for.** A task queued in the fast
+  queue, such as a bench step or an open, sets the job's cancel flag and starts
+  once the job has stopped. The driver then queues the job again, behind that
+  task, and it starts over; a comparison it had already sent is kept. Among the
+  quiet tasks it goes first, ahead of the viewed track's evaluation, because
+  its comparison and its preview are what the person is deciding on. A waiting
+  job that the queue replaces or drops sends *dropped*, which is neither a
+  comparison, an answer nor a failure: the driver queues it again when it next
+  wants it.
 
 One job runs, in order:
 
@@ -280,7 +293,8 @@ One job runs, in order:
    `SwitchCameraModelOptions::outermost_keypoint` off, since the proposal read
    the keypoint when it opened. Its report carries the observation comparison,
    which the job sends to the panel as soon as the switch returns, waking the
-   window. It takes no `Progress`, so a cancel is read when it returns. On a
+   window. It takes no `Progress`, so the job reads the flag before it and a
+   cancel that arrives during it is read when it returns. On a
    value with the inline keypoint column it is a fit and a pass over the
    camera's observations, which is milliseconds; on a `sift_files` value
    without it, it also reads the observations' pixels from the `.sift` files,
@@ -718,7 +732,9 @@ Explorer (`sfm-explorer` lib tests, headless):
   observation comparison once the job lands, `animate: false` leaving `s` at 0
   until the answer lands and setting it to 1 in that frame, a clear and a
   tick under it replying with `s` already at 0 and 1, and the proposal
-  form with the answer in hand replying with the version at once.
+  form with the answer in hand replying with the version at once; and a
+  running proposal's job absent from `get_scene`'s `background_tasks` and
+  `get_background_tasks`, and left running by `cancel_background_tasks`.
 - `camera_model_proposal/job/tests.rs`: without the preview the job sending
   the comparison alone, pushing nothing and writing no row; Apply with the
   answer in hand installing it with no background task, and pushing the
@@ -735,7 +751,14 @@ Explorer (`sfm-explorer` lib tests, headless):
   point; and for every point of a node with patch frames, a moving row's target
   equal to the installed position as an `f32`, its half-vectors times its size
   factor equal to the installed ones, a still row's point and frame unchanged,
-  and a lost point installed as a direction.
+  and a lost point installed as a direction. As a quiet task: it runs from the
+  fast queue reported by nothing that lists someone's work, writing no row and
+  leaving no record, and is named on the panel's quiet line; a bench step asked
+  for while it runs cancels it, starts once it has stopped, and the job queued
+  again behind the step still delivers its comparison and its answer; a
+  waiting job that is replaced or dropped is kept neither as an answer nor as a
+  failure, and is queued again; and queued behind a waiting live evaluation it
+  starts ahead of it.
 - `camera_model_proposal/preview/tests.rs`: every outcome against each kind of
   stored point (held, kept, a finite move with its surfel factor, a ranged and
   a pruned one, a finite point lost to `Behind`, a point at infinity turning to
@@ -777,6 +800,17 @@ Explorer (`sfm-explorer` lib tests, headless):
 ---
 
 ## Open questions
+
+- **Whether the proposal's job should give way once it has started.** Its
+  switch takes no `Progress` and its retriangulation polls only between its
+  three stages, so on `dino_dog_toy-embedded` a fast task queued while the job
+  runs waits up to the rest of the job, about 150 ms in the switch and 130 ms
+  in the retriangulation, and the job then starts over
+  ([../background-tasks.md](../background-tasks.md) § "Open questions"). A
+  cancel there saves the asked-for task little and costs the repeat. The job
+  could instead be let finish once its switch has started, or the switch and
+  the solve stage could take the `Progress`. If the preview is slow to appear
+  while bench work runs, one of those is the change.
 
 - **The dropped aspect.** `SFMTOOL_FISHEYE` has one focal. The Kerry Park fx/fy
   differences of 0.2 % and 0.7 % are most likely fitting noise on square

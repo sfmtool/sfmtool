@@ -31,7 +31,8 @@
 //!   or was cancelled before it started, kept in a ring of the last
 //!   [`FINISHED_KEPT`]. All three are found by id ([`AppState::task`]).
 //! - A **quiet task** ([`Operation::quiet`]) is work the viewer starts by
-//!   itself to keep a panel current, such as the bench's live evaluation. It is
+//!   itself to keep a panel current: the bench's live evaluation, or a camera
+//!   model proposal's job. It is
 //!   queued by its source with [`AppState::start_quiet_task`] as a [`QuietJob`]
 //!   that answers on the source's own channel. It gives way to every task
 //!   someone asks for: a task queued in its queue, or a locking task queued on
@@ -211,6 +212,8 @@ enum WaitingJob {
 /// the latest state matters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum QuietSource {
+    /// The camera model proposal's job ([`crate::camera_model_proposal::job`]).
+    CameraModelProposal,
     /// The bench's live evaluation ([`crate::bench::live`]).
     LiveEvaluation,
 }
@@ -218,11 +221,15 @@ pub(crate) enum QuietSource {
 /// A quiet task's place in the fixed order among waiting quiet tasks, the
 /// first first (`specs/gui/background-tasks.md` § "Quiet tasks").
 ///
-/// The live evaluation's place depends on its subject: the viewed track and
-/// the focused item are what Track View shows, so they go ahead of the other
-/// bench items, in the order the evaluation driver picks them.
+/// The camera model proposal's job goes first, because its comparison and its
+/// preview are on screen while a person decides whether to apply it. The live
+/// evaluation's place depends on its subject: the viewed track and the focused
+/// item are what Track View shows, so they go ahead of the other bench items,
+/// in the order the evaluation driver picks them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum QuietRank {
+    /// The camera model proposal's job.
+    CameraModelProposal,
     /// The live evaluation of the viewed track.
     ViewedTrack,
     /// The live evaluation of the focused bench item.
@@ -632,6 +639,26 @@ impl Operation {
         quiet: true,
     };
 
+    /// A camera model proposal's job ([`crate::camera_model_proposal::job`]):
+    /// the switch of the proposal's camera and, while the preview is asked
+    /// for, the retriangulation of its tracks. A quiet task.
+    ///
+    /// It locks nothing, since it pushes no version: Apply installs its answer
+    /// on the GUI thread. An open proposal refuses every task start on its
+    /// node, and a proposal cannot be opened on a busy node, so it and a
+    /// locking task on its node do not meet. Cancellable because the job
+    /// polls the flag before the switch and after it, and the retriangulation
+    /// polls it as it runs. The switch itself takes no `Progress`, so a cancel
+    /// that arrives during it is read when it returns.
+    pub(crate) const CAMERA_MODEL_PROPOSAL: Operation = Operation {
+        name: "Camera model proposal",
+        cancellable: true,
+        kind: Kind::Edit,
+        queue: Queue::Fast,
+        locks: false,
+        quiet: true,
+    };
+
     /// Every operation that can go to the background.
     ///
     /// A list rather than a set of constants used one at a time, so the tests
@@ -640,7 +667,7 @@ impl Operation {
     /// declaration nothing checks is a declaration that rots.
     // Read by those tests alone, which is what it is for.
     #[cfg(test)]
-    pub(crate) const ALL: [Operation; 19] = [
+    pub(crate) const ALL: [Operation; 20] = [
         Operation::OPEN,
         Operation::BUNDLE_ADJUST,
         Operation::TO_EMBEDDED_PATCHES,
@@ -660,6 +687,7 @@ impl Operation {
         Operation::CREATE_TRACK_AT_PIXEL,
         Operation::FIND_NEARBY_TRACKS,
         Operation::LIVE_EVALUATION,
+        Operation::CAMERA_MODEL_PROPOSAL,
     ];
 }
 

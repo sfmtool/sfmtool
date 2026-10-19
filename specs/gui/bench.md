@@ -829,7 +829,11 @@ queue while an evaluation runs, a bench step or an open, asks it to stop and
 waits for it; the step starts once the evaluation has reported, and the
 evaluation, whose inputs have not moved, is queued again behind it. A locking
 task queued on the evaluation's node from the slow queue asks it to stop too.
-Waiting bench steps always start ahead of a waiting evaluation. Because the
+Waiting bench steps always start ahead of a waiting evaluation, and so does a
+waiting camera model proposal's job, the first among the quiet tasks
+([edits/switch-camera-model.md](edits/switch-camera-model.md) § "The
+proposal's job"); a running evaluation is not asked to stop for it, and a
+running proposal's job holds the evaluations back until it lands. Because the
 fast queue runs one task at a time, no evaluation runs, on any node, while an
 open or a bench step runs from it: a long one, such as *Find nearby tracks*,
 holds every evaluation back until it lands. A waiting

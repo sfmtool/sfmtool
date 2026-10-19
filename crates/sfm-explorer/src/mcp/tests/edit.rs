@@ -3415,3 +3415,57 @@ fn the_preview_is_reported_and_its_answer_applied_at_once() {
     assert_eq!(applied["fit"]["camera_model_after"], "SFMTOOL_PINHOLE");
     assert_eq!(version_count(&state), 2);
 }
+
+/// The proposal's job runs as a quiet task, which the wire does not report:
+/// `get_scene`'s `background_tasks` stays empty while only it runs,
+/// `get_background_tasks` shows the fast queue running nothing, and
+/// `cancel_background_tasks` with no argument finds nothing to stop and leaves
+/// it running.
+#[test]
+fn a_running_proposal_job_is_not_reported_or_cancelled_on_the_wire() {
+    let (mut state, mut viewer) = editable();
+    call(
+        &mut state,
+        &mut viewer,
+        "propose_camera_model",
+        json!({
+            "reconstruction_label": "run_a",
+            "camera_intrinsics_index": 0,
+            "camera_model": "SFMTOOL_PINHOLE",
+            "preview_retriangulation": true
+        }),
+    );
+    let (release, hold) = std::sync::mpsc::channel();
+    state.proposal_jobs.hold_next = Some(hold);
+    assert!(state.drive_camera_model_proposal_job());
+    let task = state.proposal_jobs.queued_task().expect("queued");
+    assert!(state.quiet_task_running(task));
+
+    let scene = call(&mut state, &mut viewer, "get_scene", json!({}));
+    assert_eq!(scene["background_tasks"], json!([]), "{scene}");
+    let tasks = call(&mut state, &mut viewer, "get_background_tasks", json!({}));
+    assert_eq!(tasks["fast"]["running"], json!(null), "{tasks}");
+    assert_eq!(tasks["fast"]["waiting"], json!([]), "{tasks}");
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "cancel_background_tasks",
+        json!({}),
+    );
+    assert!(error.0.contains("Nothing is running"), "{error}");
+    assert!(
+        !state.quiet_task_cancelled(task),
+        "a cancel of everything someone asked for stopped the proposal's job"
+    );
+
+    release.send(()).expect("the job is held");
+    state.settle_camera_model_proposal_job();
+    let proposed = call(
+        &mut state,
+        &mut viewer,
+        "get_camera_intrinsics",
+        json!({ "reconstruction_label": "run_a", "camera_intrinsics_index": 0 }),
+    )["proposed"]
+        .clone();
+    assert_eq!(proposed["triangulation"]["state"], "ready", "{proposed}");
+}

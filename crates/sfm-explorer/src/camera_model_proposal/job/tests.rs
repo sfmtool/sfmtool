@@ -4,8 +4,11 @@
 //! The proposal's job: the comparison it sends, the answer it holds while the
 //! preview is asked for, which is the version Apply pushes, the generation
 //! that keeps an older answer from being used, and the preview ending with
-//! every ending of the proposal.
+//! every ending of the proposal; and the job as a quiet task in the fast
+//! queue, which gives way to asked-for tasks and goes ahead of the live
+//! evaluation.
 
+use crate::background::{Operation, Queue, TaskState};
 use crate::camera_model_proposal::preview::{FLAG_MOVES, FLAG_STILL};
 use crate::camera_model_proposal::tests::{newest, positions, spline_state, versions};
 use crate::camera_model_proposal::TriangulationState;
@@ -157,7 +160,7 @@ fn a_running_job_for_an_older_generation_is_cancelled() {
         .unwrap()
         .preview_retriangulation = true;
     assert!(state.drive_camera_model_proposal_job());
-    assert!(state.proposal_jobs.is_running());
+    assert!(state.proposal_jobs.is_queued());
     let proposal = state.camera_model_proposal.as_mut().unwrap();
     let mut inputs = proposal.inputs.clone();
     inputs.coeff_count = Some(7);
@@ -169,7 +172,7 @@ fn a_running_job_for_an_older_generation_is_cancelled() {
         &proposal.triangulation,
         Some((g, Ok(_))) if *g == generation
     ));
-    assert!(!state.proposal_jobs.is_running());
+    assert!(!state.proposal_jobs.is_queued());
 }
 
 /// On a node whose observations carry no pixel the preview is greyed with
@@ -400,4 +403,235 @@ fn the_preview_ends_exactly_where_apply_puts_every_point_and_surfel() {
         }
     }
     assert!(moving > 0);
+}
+
+// -- As a quiet task in the fast queue -------------------------------------
+
+/// A gated job a task's place in the fast queue is held by, which produces
+/// nothing.
+fn held_step(gate: std::sync::mpsc::Receiver<()>) -> crate::background::Job {
+    Box::new(move |_| {
+        let _ = gate.recv();
+        crate::background::Finished::NoChange("Nothing to fit".to_string())
+    })
+}
+
+/// A node beside the proposal's, which a fast task can lock while the
+/// proposal is open: an open proposal refuses every task on its own node.
+fn other_node(state: &mut AppState) -> ReconId {
+    state.append_node(crate::scene::SceneNode::demo(
+        sfmtool_core::SfmrReconstruction::demo(8),
+    ))
+}
+
+/// The quiet tasks waiting in the fast queue, by id, in the order they will
+/// start.
+fn quiet_waiting(state: &AppState) -> Vec<u64> {
+    state
+        .queue(Queue::Fast)
+        .waiting
+        .iter()
+        .filter(|task| task.operation.quiet)
+        .map(|task| task.id)
+        .collect()
+}
+
+/// The job runs as a *Camera model proposal* quiet task in the fast queue:
+/// nothing that reports someone's work lists it, it locks nothing, it writes
+/// no row and leaves no record, and the Background Tasks panel names it on its
+/// quiet line.
+#[test]
+fn the_job_runs_as_a_quiet_task_that_nothing_reports() {
+    let (mut state, id) = proposed();
+    state.action_log.clear();
+    assert!(state.drive_camera_model_proposal_job());
+    let task = state.proposal_jobs.queued_task().expect("queued");
+    assert!(
+        state.quiet_task_running(task),
+        "an idle fast queue ran nothing"
+    );
+    assert!(state.running_tasks().next().is_none());
+    assert!(state.waiting_tasks().next().is_none());
+    assert!(state.task(task).is_none());
+    assert!(crate::background::busy(&state.busy_notice).is_empty());
+    assert!(state.busy_refusal(id).is_none(), "the job locked its node");
+
+    let input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(600.0, 400.0),
+        )),
+        ..Default::default()
+    };
+    let texts = crate::test_support::painted_texts(&egui::Context::default(), input, |ui| {
+        crate::background::panel::show(ui, &mut state)
+    });
+    assert_eq!(
+        texts,
+        [
+            "Slow",
+            "Nothing running",
+            "Fast",
+            "Nothing running",
+            "quiet",
+            "Camera model proposal",
+            "run_a: camera 1",
+        ],
+        "the quiet line does not name the proposal"
+    );
+
+    state.settle_camera_model_proposal_job();
+    assert!(state
+        .camera_model_proposal_on(id)
+        .unwrap()
+        .current_comparison()
+        .is_some());
+    assert_eq!(state.action_log.entries().count(), 0, "the job wrote a row");
+    assert!(state.finished_tasks.is_empty(), "the job left a record");
+}
+
+/// A task someone asks for in the fast queue asks a running job to stop and
+/// starts once it has; the job, which kept nothing of the cancelled run, is
+/// queued again behind the task, and once that task has landed it still
+/// delivers its comparison and its answer.
+#[test]
+fn an_asked_for_fast_task_cancels_the_job_which_answers_after_it() {
+    let (mut state, id) = proposed();
+    let other = other_node(&mut state);
+    state
+        .camera_model_proposal
+        .as_mut()
+        .unwrap()
+        .preview_retriangulation = true;
+    let (release, hold) = std::sync::mpsc::channel();
+    state.proposal_jobs.hold_next = Some(hold);
+    assert!(state.drive_camera_model_proposal_job());
+    let first = state.proposal_jobs.queued_task().expect("queued");
+    assert!(state.quiet_task_running(first));
+
+    let (open, gate) = std::sync::mpsc::channel();
+    let fit = state
+        .start_background_task(Operation::BENCH_FIT, other, held_step(gate))
+        .expect("a busy fast queue queues the task");
+    assert!(
+        matches!(state.task(fit), Some(TaskState::Waiting(_))),
+        "the task started beside the job"
+    );
+    assert!(
+        state.quiet_task_cancelled(first),
+        "the task did not ask the job to stop"
+    );
+    release.send(()).expect("the job is held");
+    state.wait_for_proposal_job();
+    assert!(
+        matches!(state.task(fit), Some(TaskState::Running(_))),
+        "the task did not start once the job had stopped"
+    );
+    let proposal = state.camera_model_proposal_on(id).unwrap();
+    assert!(
+        proposal.comparison.is_none(),
+        "the cancelled run sent its switch"
+    );
+    assert!(proposal.triangulation.is_none());
+
+    // Queued again, it waits behind the task.
+    state.drive_camera_model_proposal_job();
+    let again = state.proposal_jobs.queued_task().expect("queued again");
+    assert_ne!(again, first);
+    assert_eq!(quiet_waiting(&state), [again]);
+
+    open.send(()).expect("the task is waiting");
+    state.finish_background_task(fit);
+    state.settle_camera_model_proposal_job();
+    let proposal = state.camera_model_proposal_on(id).unwrap();
+    assert!(matches!(proposal.current_comparison(), Some(Ok(_))));
+    assert!(matches!(
+        proposal.triangulation_state(),
+        TriangulationState::Ready(_)
+    ));
+}
+
+/// A job that waits in the fast queue and is replaced by a newer request, or
+/// dropped unrun, never ran: neither is kept on the proposal as an answer or a
+/// failure, the source keeps one entry waiting, and a dropped one is queued
+/// again on the driver's next frame and delivers once it runs.
+#[test]
+fn a_replaced_or_dropped_job_is_neither_an_answer_nor_a_failure() {
+    let (mut state, id) = proposed();
+    let other = other_node(&mut state);
+    let (open, gate) = std::sync::mpsc::channel();
+    let fit = state
+        .start_background_task(Operation::BENCH_FIT, other, held_step(gate))
+        .expect("the fast queue is idle");
+    assert!(state.drive_camera_model_proposal_job());
+    let first = state.proposal_jobs.queued_task().expect("queued");
+    assert!(!state.quiet_task_running(first), "it ran beside the task");
+
+    // Replaced: a change of a control while it waits.
+    let proposal = state.camera_model_proposal.as_mut().unwrap();
+    let mut inputs = proposal.inputs.clone();
+    inputs.coeff_count = Some(7);
+    assert!(proposal.set_inputs(inputs));
+    state.drive_camera_model_proposal_job();
+    let second = state.proposal_jobs.queued_task().expect("queued");
+    assert_ne!(second, first, "not replaced");
+    assert_eq!(quiet_waiting(&state), [second], "two entries wait");
+    state.drive_camera_model_proposal_job();
+    let proposal = state.camera_model_proposal_on(id).unwrap();
+    assert!(proposal.comparison.is_none() && proposal.triangulation.is_none());
+
+    // Dropped: the queue takes it out unrun, which its source hears of on the
+    // next frame and queues it again.
+    state.cancel_quiet_task(second);
+    assert!(quiet_waiting(&state).is_empty());
+    state.drive_camera_model_proposal_job();
+    let third = state.proposal_jobs.queued_task().expect("queued again");
+    assert_ne!(third, second);
+    assert_eq!(quiet_waiting(&state), [third]);
+    let proposal = state.camera_model_proposal_on(id).unwrap();
+    assert!(
+        proposal.comparison.is_none() && proposal.triangulation.is_none(),
+        "a dropped job was kept as an answer or a failure"
+    );
+
+    open.send(()).expect("the task is waiting");
+    state.finish_background_task(fit);
+    state.settle_camera_model_proposal_job();
+    assert!(matches!(
+        state
+            .camera_model_proposal_on(id)
+            .unwrap()
+            .current_comparison(),
+        Some(Ok(_))
+    ));
+}
+
+/// Among quiet tasks the proposal's job goes first: queued behind a live
+/// evaluation that waits in the fast queue, it starts ahead of it.
+#[test]
+fn the_job_goes_ahead_of_a_waiting_live_evaluation() {
+    let (mut state, _) = proposed();
+    let other = other_node(&mut state);
+    let bench = state.append_node(crate::scene::SceneNode::demo(
+        crate::state::edits::tests::projected_embedded_demo(12),
+    ));
+    crate::bench::tests::put_on_bench(&mut state, bench);
+    let (open, gate) = std::sync::mpsc::channel();
+    let fit = state
+        .start_background_task(Operation::BENCH_FIT, other, held_step(gate))
+        .expect("the fast queue is idle");
+    state.drive_bench_evaluation();
+    let evaluation = state.queued_evaluation_task().expect("an evaluation waits");
+    state.drive_camera_model_proposal_job();
+    let job = state.proposal_jobs.queued_task().expect("the job waits");
+    assert_eq!(quiet_waiting(&state), [job, evaluation]);
+
+    open.send(()).expect("the task is waiting");
+    state.finish_background_task(fit);
+    assert!(
+        state.quiet_task_running(job),
+        "the evaluation started ahead of the proposal's job"
+    );
+    state.settle_camera_model_proposal_job();
+    state.settle_bench_evaluation();
 }

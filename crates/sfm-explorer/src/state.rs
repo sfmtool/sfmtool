@@ -846,8 +846,9 @@ pub struct AppState {
     /// queued as a quiet task in the fast queue, and the inputs each track was
     /// last evaluated for. See [`crate::bench::live`].
     pub(crate) bench_evaluations: crate::bench::live::Evaluations,
-    /// The camera model proposal's job that is running, if any. What it found
-    /// is kept on the proposal. See [`crate::camera_model_proposal::job`].
+    /// The camera model proposal's job, queued as a quiet task in the fast
+    /// queue, if one is. What it found is kept on the proposal. See
+    /// [`crate::camera_model_proposal::job`].
     pub(crate) proposal_jobs: crate::camera_model_proposal::job::ProposalJobs,
 
     /// Which observations of the focused bench track are selected: Track

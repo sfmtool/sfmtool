@@ -563,7 +563,7 @@ can be answered ahead of.
 lists every running task, the slow queue's first, then every waiting task, in
 the order each queue will start them, and is empty whenever nothing is running.
 Quiet tasks, the work the viewer starts by itself such as the bench's live
-evaluation, are left out, so it is empty while only they run
+evaluation and a camera model proposal's job, are left out, so it is empty while only they run
 ([background-tasks.md](background-tasks.md) § "Quiet tasks").
 Each running entry is the first seven fields of `get_background_tasks`'s
 running reply and no more, and each waiting entry is its waiting reply, which
@@ -1956,7 +1956,7 @@ What the viewer is busy with. Background tasks run from two queues, `slow` and
 `fast`; each runs one task at a time, the two run at the same time, and a task
 started while its queue is busy waits behind the ones already waiting there
 ([background-tasks.md](background-tasks.md) § "Two queues"). Quiet tasks, such
-as the bench's live evaluation, are not reported: a queue running only a quiet
+as the bench's live evaluation and a camera model proposal's job, are not reported: a queue running only a quiet
 task answers `running: null`, and its waiting quiet tasks are not listed
 ([background-tasks.md](background-tasks.md) § "Quiet tasks"). With no argument it
 answers about both queues:

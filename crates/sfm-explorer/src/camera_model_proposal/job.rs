@@ -5,22 +5,33 @@
 //! retriangulation of the proposal's tracks, run off the GUI thread while a
 //! proposal is open.
 //!
-//! See `specs/gui/edits/switch-camera-model.md` § "The proposal's job". It is
-//! not a background task: it locks nothing, pushes no version, writes no
-//! Action Log row and is not shown in the Background Tasks panel, so it neither
-//! holds off an operation on another node nor is held off by one. It follows
-//! the bench's live evaluation (`crate::bench::live`) instead:
+//! See `specs/gui/edits/switch-camera-model.md` § "The proposal's job". A job
+//! is a **quiet task** in the fast queue ([`Operation::CAMERA_MODEL_PROPOSAL`],
+//! `specs/gui/background-tasks.md` § "Quiet tasks"): it locks nothing, pushes
+//! no version, writes no Action Log row and is not reported on the wire. The
+//! driver owns no thread, and follows the bench's live evaluation
+//! (`crate::bench::live`):
 //!
 //! - **Its inputs** are the proposal's generation and the document half of the
 //!   version it opened on, and whether the retriangulation is asked for.
 //!   Nobody asks for a job: once per frame
 //!   [`AppState::drive_camera_model_proposal_job`] finds a proposal whose
-//!   inputs have no answer, and starts one.
-//! - **One job runs at a time.** When the proposal's generation or version
+//!   inputs have no answer, and queues one, which answers on a channel of the
+//!   driver's.
+//! - **One job is queued at a time.** When the proposal's generation or version
 //!   moves on while one runs, it is cancelled through its `Progress`, and the
-//!   next starts once the cancelled one has reported back. Clearing the
-//!   preview lets a running job finish. An answer is kept only when it is for the
-//!   proposal's current generation.
+//!   next is queued once the cancelled one has reported back; one that is still
+//!   waiting is replaced by the request for the new inputs. Clearing the
+//!   preview lets a job finish, so ticking it again finds the answer rather
+//!   than starting over. A message is kept only when it is for the proposal's
+//!   current generation.
+//! - **It gives way to every task someone asks for.** A task queued in the fast
+//!   queue asks it to stop and starts once it has; the driver then queues it
+//!   again, behind that task, and it starts over. Among quiet tasks it goes
+//!   first ([`QuietRank::CameraModelProposal`]), ahead of the viewed track's
+//!   evaluation. A waiting job that the queue drops or replaces answers that it
+//!   was dropped, which is neither an answer nor a failure: the driver queues
+//!   it again when it next wants the job.
 //!
 //! One job runs [`switch_and_retriangulate`], the computation Apply's
 //! background task runs, so the version it holds is the version the task would
@@ -29,7 +40,6 @@
 //! retriangulation does. A job asked only for the comparison stops after the
 //! switch.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::sync::Arc;
 
@@ -39,7 +49,7 @@ use sfmtool_core::reconstruction::switch_camera_model::{switch_camera_model, Cam
 use sfmtool_core::{RowMap, SfmrReconstruction};
 
 use super::preview::{PreviewCounts, PreviewTargets};
-use crate::background::SwitchedCamera;
+use crate::background::{Operation, QuietJob, QuietRank, QuietSource, SwitchedCamera};
 use crate::document::VersionSerial;
 use crate::state::edits::{
     switch_and_retriangulate, switch_refusal_in_version_numbering, ResolvedSwitch, SwitchEnd,
@@ -58,19 +68,23 @@ pub(crate) struct ProposalAnswer {
     pub(crate) counts: PreviewCounts,
 }
 
-/// What a job sends back.
+/// What comes back on a job's channel.
 enum Message {
     /// The switch returned: its report for the camera, or its refusal.
     Switched(Result<Box<CameraSwitch>, String>),
     /// The retriangulation returned: the answer, or the refusal.
     Answered(Result<Box<ProposalAnswer>, String>),
+    /// The queue dropped the job before it started, because a newer request
+    /// replaced it or its node became locked while it waited. It never ran,
+    /// so it carries neither an answer nor a failure.
+    Dropped,
 }
 
 /// The work one job does, as a function of the `Progress` it polls its
 /// cancellation through and the channel it sends what it found on.
 type Work = Box<dyn FnOnce(&Progress<'_>, &dyn Fn(Message)) + Send>;
 
-/// What one job was started on.
+/// What one job was queued on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Inputs {
     /// The proposal's generation.
@@ -81,60 +95,88 @@ struct Inputs {
     triangulate: bool,
 }
 
-/// The job that is running.
-struct Running {
+/// The job the driver has queued: waiting in the fast queue or running from
+/// it.
+struct Queued {
+    /// What it was queued on.
     inputs: Inputs,
-    /// Set to ask it to stop.
-    cancel: Arc<AtomicBool>,
-    /// Where it sends what it found.
-    done: Receiver<Message>,
+    /// The quiet task it runs as.
+    task: u64,
+    /// Where it sends what it found. The channel ends when the task's work has
+    /// returned or been dropped, which is the job's end.
+    messages: Receiver<Message>,
 }
 
-/// The proposal job's state on [`AppState`]: the one running, if any. What it
+/// The proposal job's state on [`AppState`]: the one queued, if any. What it
 /// found is kept on the proposal itself, so it goes with the proposal.
 #[derive(Default)]
 pub(crate) struct ProposalJobs {
-    running: Option<Running>,
+    /// The job queued as a quiet task, waiting or running, if there is one.
+    queued: Option<Queued>,
+    /// A gate the next job's work waits at before it starts, so a test can
+    /// queue a task while the job is known to be running and unfinished.
+    #[cfg(test)]
+    pub(crate) hold_next: Option<Receiver<()>>,
 }
 
 impl ProposalJobs {
-    /// Whether a job is running, cancelled or not.
+    /// Whether a job is queued, waiting or running, cancelled or not.
     #[cfg(test)]
-    pub(crate) fn is_running(&self) -> bool {
-        self.running.is_some()
+    pub(crate) fn is_queued(&self) -> bool {
+        self.queued.is_some()
+    }
+
+    /// The id of the quiet task the queued job runs as, if one is queued.
+    #[cfg(test)]
+    pub(crate) fn queued_task(&self) -> Option<u64> {
+        self.queued.as_ref().map(|queued| queued.task)
     }
 }
 
 impl AppState {
-    /// Take what the running job has found, and start or stop one so that the
-    /// job running is of the open proposal's current inputs.
+    /// Take what the queued job has found, and queue or stop one so that the
+    /// job queued is of the open proposal's current inputs.
     ///
     /// Called once per frame. Returns whether anything changed that the next
     /// frame has to draw.
     pub(crate) fn drive_camera_model_proposal_job(&mut self) -> bool {
-        let landed = self.poll_camera_model_proposal_job();
+        let mut changed = self.poll_camera_model_proposal_job();
         let wanted = self.proposal_job_inputs();
-        if let Some(running) = self.proposal_jobs.running.as_ref() {
-            // Still the open proposal's inputs: let it finish, even where the
-            // preview was cleared meanwhile, so ticking it again finds the
-            // answer rather than starting over.
+        if let Some(queued) = self.proposal_jobs.queued.as_ref() {
             let current = self.camera_model_proposal.as_ref().is_some_and(|proposal| {
-                proposal.generation == running.inputs.generation
-                    && proposal.opened_on == running.inputs.document
+                proposal.generation == queued.inputs.generation
+                    && proposal.opened_on == queued.inputs.document
             });
-            if !current {
-                running.cancel.store(true, Ordering::Relaxed);
+            if self.quiet_task_running(queued.task) {
+                // Still the open proposal's inputs: let it finish, even where
+                // the preview was cleared meanwhile, so ticking it again finds
+                // the answer rather than starting over. Otherwise it is asked
+                // to stop, and the next is queued once it has reported back.
+                if !current {
+                    let task = queued.task;
+                    self.cancel_quiet_task(task);
+                }
+                return changed;
             }
-            return landed;
+            // A waiting job is kept while it is for the current inputs and
+            // does at least what is wanted. Otherwise it is replaced below by
+            // the request for the inputs wanted, or taken out when there are
+            // none.
+            let covers =
+                wanted.is_none_or(|wanted| queued.inputs.triangulate || !wanted.triangulate);
+            if current && covers {
+                return changed;
+            }
         }
-        let Some(inputs) = wanted else {
-            return landed;
-        };
-        let Some(job) = self.proposal_job(inputs) else {
-            return landed;
-        };
-        self.spawn_proposal_job(inputs, job);
-        true
+        let stale = self.proposal_jobs.queued.take();
+        if wanted.is_some_and(|inputs| self.queue_proposal_job(inputs)) {
+            return true;
+        }
+        if let Some(stale) = stale {
+            self.cancel_quiet_task(stale.task);
+            changed = true;
+        }
+        changed
     }
 
     /// The inputs of the job the open proposal needs, or `None` when it has
@@ -166,8 +208,10 @@ impl AppState {
         })
     }
 
-    /// The work a job of `inputs` does, read from the open proposal.
-    fn proposal_job(&self, inputs: Inputs) -> Option<Work> {
+    /// The work a job of `inputs` does, read from the open proposal, with the
+    /// node it reads and the label the Background Tasks panel's quiet line
+    /// names it by.
+    fn proposal_job(&self, inputs: Inputs) -> Option<(Work, crate::scene::ReconId, String)> {
         let proposal = self.camera_model_proposal.as_ref()?;
         let id = proposal.recon;
         let resolved = match self.resolve_switch(id, &proposal.request()) {
@@ -176,10 +220,11 @@ impl AppState {
             // waits for an operation holding its node.
             Err(_) => return None,
         };
+        let label = format!("{}: camera {}", proposal.label, proposal.camera);
         let value = Arc::clone(&proposal.value);
         let rows = proposal.rows.clone();
         let (base_count, addition_count) = (proposal.base_count, proposal.addition_count);
-        Some(Box::new(move |progress, send| {
+        let work: Work = Box::new(move |progress, send| {
             run_job(
                 &value,
                 rows,
@@ -189,67 +234,96 @@ impl AppState {
                 progress,
                 send,
             );
-        }))
+        });
+        Some((work, id, label))
     }
 
-    /// Run `job` on a worker thread as the job of `inputs`.
-    fn spawn_proposal_job(&mut self, inputs: Inputs, job: Work) {
-        let cancel = Arc::new(AtomicBool::new(false));
-        let (sender, done) = std::sync::mpsc::channel();
-        let flag = Arc::clone(&cancel);
+    /// Queue the job of `inputs` as a *Camera model proposal* quiet task in
+    /// the fast queue, replacing the one the driver has waiting there, if any.
+    /// False when there is no job to run, because the node is busy, or its
+    /// worker could not be spawned; the next frame tries again.
+    fn queue_proposal_job(&mut self, inputs: Inputs) -> bool {
+        let Some((work, node, label)) = self.proposal_job(inputs) else {
+            return false;
+        };
+        let (sender, messages) = std::sync::mpsc::channel();
+        let dropped = sender.clone();
         let wake = self.wake.clone();
-        let spawned = std::thread::Builder::new()
-            .name("sfm-explorer camera model proposal".to_string())
-            .spawn(move || {
-                let progress = Progress::none().cancelled_by(&flag);
-                // Each message wakes the window, so the comparison is shown as
-                // soon as the switch returns rather than when the job ends.
-                let send = |message: Message| {
-                    let _ = sender.send(message);
-                    if let Some(wake) = wake.as_ref() {
-                        wake();
-                    }
-                };
-                // A job that panics still ends, so the next one can start.
-                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    job(&progress, &send)
-                }));
-                drop(sender);
+        #[cfg(test)]
+        let hold = self.proposal_jobs.hold_next.take();
+        let run = move |progress: &Progress<'_>| {
+            #[cfg(test)]
+            if let Some(hold) = hold {
+                let _ = hold.recv();
+            }
+            // Each message wakes the window, so the comparison is shown as
+            // soon as the switch returns rather than when the job ends. The
+            // queue's worker wakes it once more when the work has returned.
+            let send = |message: Message| {
+                let _ = sender.send(message);
                 if let Some(wake) = wake.as_ref() {
                     wake();
                 }
-            });
-        if spawned.is_ok() {
-            self.proposal_jobs.running = Some(Running {
-                inputs,
-                cancel,
-                done,
-            });
-        }
+            };
+            work(progress, &send);
+        };
+        let started = self.start_quiet_task(
+            Operation::CAMERA_MODEL_PROPOSAL,
+            QuietSource::CameraModelProposal,
+            QuietRank::CameraModelProposal,
+            node,
+            label,
+            QuietJob::new(run, move || {
+                let _ = dropped.send(Message::Dropped);
+            }),
+        );
+        let Ok(task) = started else {
+            return false;
+        };
+        self.proposal_jobs.queued = Some(Queued {
+            inputs,
+            task,
+            messages,
+        });
+        true
     }
 
-    /// Take every message the running job has sent, keeping each that is for
+    /// Take every message the queued job has sent, keeping each that is for
     /// the open proposal's current generation, and forget the job once it has
-    /// ended.
+    /// ended or was dropped.
     fn poll_camera_model_proposal_job(&mut self) -> bool {
         let mut changed = false;
         loop {
-            let Some(running) = self.proposal_jobs.running.as_ref() else {
+            let Some(queued) = self.proposal_jobs.queued.as_ref() else {
                 return changed;
             };
-            let inputs = running.inputs;
-            match running.done.try_recv() {
+            let inputs = queued.inputs;
+            match queued.messages.try_recv() {
                 Ok(message) => {
-                    self.keep_proposal_message(inputs, message);
+                    self.take_proposal_message(inputs, message);
                     changed = true;
                 }
                 Err(TryRecvError::Empty) => return changed,
+                // The work returned, cancelled or not, or was dropped with its
+                // task: either way the job is over, and what it sent has been
+                // read.
                 Err(TryRecvError::Disconnected) => {
-                    self.proposal_jobs.running = None;
+                    self.proposal_jobs.queued = None;
                     return true;
                 }
             }
         }
+    }
+
+    /// Act on one message from the queued job of `inputs`. One that says the
+    /// job was dropped unrun forgets the job, keeping nothing on the proposal,
+    /// so the driver queues it again when it next wants it.
+    fn take_proposal_message(&mut self, inputs: Inputs, message: Message) {
+        if let Message::Dropped = message {
+            self.proposal_jobs.queued = None;
+            return;
+        }
+        self.keep_proposal_message(inputs, message);
     }
 
     /// Keep what a job of `inputs` sent on the open proposal, when it is still
@@ -266,30 +340,79 @@ impl AppState {
             Message::Answered(found) => {
                 proposal.triangulation = Some((inputs.generation, found));
             }
+            Message::Dropped => {}
         }
     }
 
     /// Run the open proposal's jobs until it has all it asks for, blocking on
-    /// the worker: the test seam, as `settle_bench_evaluation` is for the
+    /// the fast queue: the test seam, as `settle_bench_evaluation` is for the
     /// bench.
+    ///
+    /// While a job is queued, the fast queue's running task -- the job, or a
+    /// task it waits behind -- is driven to its next report and applied. Once
+    /// nothing is queued, the quiet task whose messages were read last is
+    /// landed too, so the fast queue is idle for the test's next start.
     #[cfg(test)]
     pub(crate) fn settle_camera_model_proposal_job(&mut self) {
-        const PATIENCE: std::time::Duration = std::time::Duration::from_secs(120);
         loop {
             self.drive_camera_model_proposal_job();
-            let Some(running) = self.proposal_jobs.running.as_ref() else {
+            if self.proposal_jobs.queued.is_none() {
+                self.land_quiet_tasks();
+                return;
+            }
+            self.wait_for_proposal_job();
+        }
+    }
+
+    /// Whether a proposal's job on camera 1 of `self`, run with the cancel
+    /// flag already set, stops without sending anything, with the preview and
+    /// without it: the test of [`Operation::CAMERA_MODEL_PROPOSAL`]'s claim to
+    /// be cancellable.
+    #[cfg(test)]
+    pub(crate) fn camera_model_proposal_job_stops_when_cancelled(mut self) -> bool {
+        let id = self.scene[0].id;
+        self.open_camera_model_proposal(crate::scene::CameraRef::new(id, 1), None)
+            .expect("opens");
+        let cancel = std::sync::atomic::AtomicBool::new(true);
+        let progress = Progress::none().cancelled_by(&cancel);
+        [false, true].into_iter().all(|triangulate| {
+            let proposal = self.camera_model_proposal.as_ref().expect("open");
+            let inputs = Inputs {
+                generation: proposal.generation,
+                document: proposal.opened_on,
+                triangulate,
+            };
+            let (work, ..) = self.proposal_job(inputs).expect("a job");
+            let sent = std::cell::Cell::new(0);
+            work(&progress, &|_| sent.set(sent.get() + 1));
+            sent.get() == 0
+        })
+    }
+
+    /// Block until the queued job has ended or was dropped, driving the fast
+    /// queue meanwhile and keeping what it sends.
+    #[cfg(test)]
+    pub(crate) fn wait_for_proposal_job(&mut self) {
+        loop {
+            let Some(queued) = self.proposal_jobs.queued.as_ref() else {
                 return;
             };
-            let inputs = running.inputs;
-            match running.done.recv_timeout(PATIENCE) {
-                Ok(message) => self.keep_proposal_message(inputs, message),
-                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                    self.proposal_jobs.running = None;
+            let inputs = queued.inputs;
+            match queued.messages.try_recv() {
+                Ok(message) => {
+                    self.take_proposal_message(inputs, message);
+                    continue;
                 }
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                    panic!("the proposal's job said nothing for {PATIENCE:?}")
+                Err(TryRecvError::Disconnected) => {
+                    self.proposal_jobs.queued = None;
+                    return;
                 }
+                Err(TryRecvError::Empty) => {}
             }
+            assert!(
+                self.step_queue(crate::background::Queue::Fast),
+                "a proposal's job is queued in an idle fast queue"
+            );
         }
     }
 }
@@ -307,7 +430,11 @@ fn run_job(
     send: &dyn Fn(Message),
 ) {
     if !inputs.triangulate {
-        // The comparison alone: the switch, and nothing after it.
+        // The comparison alone: the switch, and nothing after it. The switch
+        // takes no `Progress`, so the flag is read once, before it.
+        if progress.check_cancel().is_err() {
+            return;
+        }
         let found = switch_camera_model(
             value,
             &[resolved.camera],

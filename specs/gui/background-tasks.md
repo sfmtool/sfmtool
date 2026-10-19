@@ -27,17 +27,18 @@ search`, `Build index files`, `Create track at pixel` and `Find nearby tracks`
 Apply: the switch of one camera followed by the retriangulation of the tracks
 its images observe, as one version
 ([edits/switch-camera-model.md](edits/switch-camera-model.md)); it polls the
-flag on either side of the switch and inside the retriangulation. Every one of them is **cancellable**. A
-nineteenth, `Live evaluation`, is a **quiet task**: work the viewer starts by
-itself to keep the bench's measurements current ([bench.md](bench.md) § "Live
-evaluation"), which runs from the fast queue, gives way to every task someone
-asks for, locks no node, writes no row for running and is not reported on the
-wire (§ "Quiet tasks"). A camera model proposal's job is not a background task
-at all: it switches the camera and, for its preview, retriangulates
-the tracks while the proposal is open, and whose answer Apply installs instead
-of starting `Switch camera model` when it holds one for the proposal's
-current generation ([edits/switch-camera-model.md](edits/switch-camera-model.md)
-§ "The proposal's job"). The open polls the
+flag on either side of the switch and inside the retriangulation. Every one of them is **cancellable**. Two
+more are **quiet tasks**: work the viewer starts by itself to keep a panel
+current, which runs from the fast queue, gives way to every task someone asks
+for, locks no node, writes no row for running and is not reported on the wire
+(§ "Quiet tasks"). `Live evaluation` keeps the bench's measurements current
+([bench.md](bench.md) § "Live evaluation"). `Camera model proposal` is a
+camera model proposal's job: it switches the camera and, for its preview,
+retriangulates the tracks while the proposal is open, and Apply installs its
+answer instead of starting `Switch camera model` when it holds one for the
+proposal's current generation
+([edits/switch-camera-model.md](edits/switch-camera-model.md) § "The
+proposal's job"). The open polls the
 flag between files, between each file's stages, before every thumbnail it builds
 and every photograph it decodes, and before every patch it renders, and a
 cancelled open appends no node. The bench steps
@@ -158,6 +159,7 @@ pub(crate) struct Operation {
 | Open | fast | no (it makes a new node) | no |
 | Fit track, Set track stage, Fit normal, Finite difference normal, Grid plane normal, Search descriptors, Geometry search, Create track at pixel, Find nearby tracks | fast | yes | no |
 | Live evaluation | fast | no; it does not start on a locked node (§ "Quiet tasks") | yes |
+| Camera model proposal | fast | no; it pushes no version (Apply installs its answer), and an open proposal refuses every task on its node | yes |
 
 The **slow queue** holds the operations whose cost grows with the whole
 reconstruction and that use every core, Build index files among them; the
@@ -201,23 +203,29 @@ without asking again.
 **A task that locks nothing runs beside a locking one.** Open makes a new node,
 so it locks none and an open waits only for its queue.
 
-**Quitting** abandons every running and waiting task.
+The camera model proposal's job locks nothing either, but it does not meet a
+locking task on its node: an open proposal refuses every task start on its
+node (`proposal_refusal`), and a proposal cannot be opened on a busy node
+(`switch_model_refusal`).
 
-The camera model proposal's job still runs on a thread of its own rather than
-as a quiet task in the fast queue; that is proposed in
-[../drafts/background-task-queues.md](../drafts/background-task-queues.md)
-§ "The camera model proposal as a quiet task". An open proposal refuses every
-task start on its node, and a proposal cannot be opened on a busy node, so the
-job and a locking task never meet.
+**Each task runs on a thread of its own**, a named `std::thread` spawned when
+it starts, and its kernels use rayon's global pool. The queue decides only when
+a task starts. A fast task running beside a bundle adjustment therefore shares
+the pool with it, which slows the adjustment while the fast task runs
+(§ "Open questions").
+
+**Quitting** abandons every running and waiting task.
 
 ## Quiet tasks
 
 A **quiet task** is work the viewer starts by itself to keep a panel current,
-rather than work a person or an agent asked for. The one quiet operation is
-`Live evaluation`, the bench's live evaluation of one track
-([bench.md](bench.md) § "Live evaluation"). Nobody asked for it, so nothing
-someone asked for waits behind it, and nothing reports it as the viewer being
-busy:
+rather than work a person or an agent asked for. There are two quiet
+operations: `Live evaluation`, the bench's live evaluation of one track
+([bench.md](bench.md) § "Live evaluation"), and `Camera model proposal`, the
+job that switches an open proposal's camera and, for its preview,
+retriangulates its tracks ([edits/switch-camera-model.md](edits/switch-camera-model.md)
+§ "The proposal's job"). Nobody asked for either, so nothing someone asked for
+waits behind them, and nothing reports them as the viewer being busy:
 
 - **It gives way to a task someone asks for.** When a task that is not quiet
   is queued in the queue a quiet task is running in, or a locking task is
@@ -227,18 +235,22 @@ busy:
   reports that it has stopped, because a queue still runs one task at a time.
   How soon that is depends on how often its kernels poll the flag: an
   evaluation polls on either side of its decode, between its rounds and
-  between the views it renders. Its source then queues it again, behind that
-  task, as it already does for a cancelled run, so this loses at most the work
-  the cancelled run had done.
+  between the views it renders; the proposal's job polls before its switch and
+  after it, and its retriangulation between its three stages, but the switch
+  itself takes no `Progress`, so a cancel that arrives during it is read when
+  it returns (§ "Open questions" has what that costs). Its source then queues
+  it again, behind that task, as it already does for a cancelled run, so this
+  loses at most the work the cancelled run had done.
 - **Waiting tasks someone asked for start ahead of waiting quiet ones.** A task
   someone asked for is queued ahead of the first waiting quiet task; a quiet
   task is queued behind every task someone asked for and behind the waiting
   quiet tasks ahead of it in the fixed order among quiet tasks, its
-  `QuietRank`: the viewed track's evaluation, the focused item's, then any
-  other bench item's. With one source that order has nothing to order yet,
-  since a source keeps one waiting entry.
+  `QuietRank`: the camera model proposal's job, whose comparison and preview
+  are on screen while a person decides whether to apply it, then the viewed
+  track's evaluation, the focused item's, and then any other bench item's.
 - **Each source keeps at most one waiting entry.** A source is one producer of
-  quiet work (`QuietSource::LiveEvaluation`). A new request replaces the
+  quiet work (`QuietSource::CameraModelProposal`,
+  `QuietSource::LiveEvaluation`). A new request replaces the
   source's waiting entry rather than adding a second, because a quiet task's
   input is the state of a panel and only the latest state matters.
 - **It is checked again when it would start.** A waiting quiet task whose node
@@ -251,15 +263,18 @@ busy:
   instead when it drops the entry unrun, which sends the source's *dropped*
   message. The source reads that as "not run", not as the end of its channel:
   the live evaluation records no failure and picks the subject again when its
-  node is free.
+  node is free, and the proposal keeps neither a comparison nor an answer and
+  queues the job again when it next wants it.
 - **It writes no Action Log row for running and leaves no record.** It is not
   put in the ring of finished tasks, so a burst of evaluations during a slider
-  drag cannot push out the record of a task someone is waiting on, and it is
+  drag, or of proposal jobs while Fit to θ is dragged, cannot push out the record of a task someone is waiting on, and it is
   never an idle line's last finished task. The live evaluation keeps its own
   *Evaluated {label}: the bars turned …* row, written when a verdict moves,
   because that row reports a change to the bench and not that the task ran.
-- **It reports its answer through its source's own channel.** The queue
-  carries only that the task has finished (`Finished::Quiet`), so `Finished`
+- **It reports its answer through its source's own channel.** That covers a
+  task with more than one answer: the proposal's job sends its switch's
+  comparison as soon as the switch returns, and its answer after the
+  retriangulation. The queue carries only that the task has finished (`Finished::Quiet`), so `Finished`
   gains no variant per quiet task, and nothing is installed, logged or kept
   when it lands. Its collector has no reporting hook: nothing draws its
   phases, so a phase it opens wakes no frame.
@@ -270,6 +285,12 @@ busy:
   of their own (`AppState::next_quiet_id`), so the ids the wire hands out stay
   consecutive. The panel shows a running quiet task in one dim line (§ "Quiet
   line").
+
+No wire call waits on a quiet task. The Track Table draft
+([../drafts/track-table.md](../drafts/track-table.md) § "Computing the
+columns") proposes two more quiet tasks, its column job and its reference
+picks, and a rule under which a quiet task that a `find_points` call waits on
+is treated as asked for while the call waits.
 
 ## What the user sees
 
@@ -400,8 +421,10 @@ one of them can be cancelled from the wire meanwhile
 ```
 
 A running quiet task's line is led by the weak word `quiet` where a queue's
-line has the queue's name, then its operation and its subject (the node and
-the item, or the node and `viewed` with the viewed point), all dim, with no
+line has the queue's name, then its operation and its subject (for an
+evaluation the node and the item, or the node and `viewed` with the viewed
+point; for a proposal's job the node and the camera, `bull: camera 1`), all
+dim, with no
 bar, no elapsed and no Cancel: the viewer started it, and it stops by itself
 whenever someone asks for a task, so there is nothing to wait on or to stop. A
 quiet task runs only while its queue runs nothing someone asked for, so the
@@ -1260,6 +1283,15 @@ over the real channel so the tests are about the seam and not about a solver:
   `running_tasks`, `waiting_tasks`, `task` or the busy notice, locks nothing,
   and is painted as one `quiet` line with no Cancel; once it lands the fast
   queue's line says `Nothing running`.
+- The camera model proposal's job, in
+  [camera_model_proposal/job/tests.rs](../../crates/sfm-explorer/src/camera_model_proposal/job/tests.rs):
+  it runs as a quiet task that nothing reports, writes no row, leaves no
+  record and is named on the quiet line as `Camera model proposal` with its
+  node and camera; a fast task asked for while it runs cancels it, starts once
+  it has stopped, and the job, queued again behind the task, still delivers its
+  comparison and its answer; a waiting job that is replaced or dropped is kept
+  neither as an answer nor as a failure and is queued again; and queued behind
+  a waiting live evaluation, it starts ahead of it.
 - Two operations in different queues run at the same time, and the fast one
   lands while the slow one is still running.
 - Three operations started in the same queue run one after the other, in the
@@ -1324,7 +1356,8 @@ Panel, through `test_support::run_frame_headless`:
   What is held to the claim is the kernel rather than a stand-in for it. A
   quiet operation writes no row, so its claim is held on its answer: the live
   evaluation's job, run with the flag already set over the bench fixture,
-  answers `Cancelled`.
+  answers `Cancelled`, and a proposal's job on a spline camera, with the
+  preview and without it, sends nothing.
 
 `crates/sfm-explorer/src/state/open/tests.rs`, the open over real files:
 
@@ -1380,7 +1413,9 @@ editing fixture's node, so the wire is read at an instant the test chose:
   again after it.
 - A running live evaluation is not in `get_scene`'s `background_tasks` or in
   `get_background_tasks`, and `cancel_background_tasks` with no argument
-  finds nothing to stop and leaves it running ([mcp/tests/bench.rs](../../crates/sfm-explorer/src/mcp/tests/bench.rs)).
+  finds nothing to stop and leaves it running ([mcp/tests/bench.rs](../../crates/sfm-explorer/src/mcp/tests/bench.rs)),
+  and the same holds for a running proposal's job
+  ([mcp/tests/edit.rs](../../crates/sfm-explorer/src/mcp/tests/edit.rs)).
 - The apply timeout's message names the operation only while one is running, and
   the notice it reads is empty before the operation, set during it, and empty
   again afterwards.
@@ -1433,3 +1468,49 @@ covered with every other panel's ([panel-layout.md](panel-layout.md) §
   finished from it and no more. What was run and what it cost is the Action
   Log's job, and a second short list of it in the panel would be a second thing
   to keep in step.
+
+## Open questions
+
+- **Competition for the cores.** A fast task beside a bundle adjustment shares
+  rayon's global pool with it (§ "Two queues"). How much a Fit slows the
+  adjustment, and how much the adjustment slows the Fit, has not been measured
+  on `dino_dog_toy-embedded`. If the fast tasks wait too long for the pool, a
+  small dedicated rayon pool for the fast queue is the alternative. It costs a
+  second set of threads, and a fast task's kernels would have to be installed
+  into that pool with `ThreadPool::install`.
+- **Long tasks in the fast queue.** Some fast-queue operations are not reliably
+  short: Open renders display patch bitmaps by decoding every photograph,
+  Geometry search decodes every image that could see its patch, and Find nearby
+  tracks and Create track at pixel read every `.sift` file and the cluster
+  patches. An open can therefore wait behind one of them for seconds. They have
+  not been measured, and whether Open should go ahead of waiting bench steps, or
+  the longest of them belong in the slow queue, is not decided.
+- **Add image to tracks and Build index files** are in the slow queue because
+  their cost grows with the reconstruction. Both take about a second on
+  `seoul_bull_sculpture`. If they are usually that short, the fast queue may
+  suit them better.
+- **How long an asked-for task waits for a quiet one to stop.** For the live
+  evaluation, on the `seoul_bull_sculpture` and `kerry_park` ground truths with
+  the photographs in memory, one evaluation takes 1 to 18 ms, and a bench step
+  queued while one ran started 25 µs to 3.3 ms later (under 0.2 ms in most of
+  24 trials), well inside `REPLY_DIRECTLY_WITHIN`. An evaluation that has to
+  decode its photographs from disk polls the flag only on either side of the
+  decode, so its wait is up to one decode; that was not measured on a large
+  fixture. For the camera model proposal's job, on `dino_dog_toy-embedded`
+  (85 images, one `SIMPLE_RADIAL` camera, 20,407 points, 374,911
+  observations) proposing `SFMTOOL_PINHOLE`, the switch alone takes about
+  150 ms and the job with the preview about 300 ms. A fast task queued before
+  the switch began started 0.25 ms later; one queued during the switch waited
+  for the rest of it, up to 150 ms; and one queued during the retriangulation
+  waited up to 130 ms, because the retriangulation polls only between its three
+  stages and its solve stage is most of it. So the wait is up to the rest of
+  the job, which on this fixture can exceed `REPLY_DIRECTLY_WITHIN`, and a
+  tool that starts a fast task then answers with a handle. On the `kerry_park`
+  ground truth (48 images, 391 points) the whole job takes about 7 ms and no
+  wait exceeded 3 ms. Whether the proposal's job should be exempt from
+  cancellation once it has started is in
+  [edits/switch-camera-model.md](edits/switch-camera-model.md) § "Open
+  questions".
+- **A bench step on the node a slow task holds** is refused, because the bench
+  step pushes a version into the same history. The bench could be given a
+  history of its own, but that is a document-model change.

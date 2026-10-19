@@ -4,7 +4,9 @@
 "no tool returns bulk arrays" stance, and new tools),
 [gui/point-cloud-rendering.md](../gui/point-cloud-rendering.md) (the
 non-goal "Point colouring and filtering by quality") and
-[gui/panel-layout.md](../gui/panel-layout.md) (a tenth panel). It will file as
+[gui/panel-layout.md](../gui/panel-layout.md) (a tenth panel) and
+[gui/background-tasks.md](../gui/background-tasks.md) § "Quiet tasks" (two
+quiet tasks, and a quiet task a wire call waits on). It will file as
 two standing specs: `core/analysis/point-columns.md` (Part 1) and
 `gui/track-table.md` (Parts 2 to 4, with the wire tools also described in
 `gui/mcp-server.md`).
@@ -16,9 +18,9 @@ Decided:
 - The columns of the first version are the cheap ones read straight off the
   stored data, plus three computed ones: the maximum ray angle, the condition
   number and the inverse-depth z. The columns are computed by a read-only
-  task on the fast background queue, which
-  [background-task-queues.md](background-task-queues.md) proposes; the table
-  starts no thread of its own.
+  quiet task on the fast background queue
+  ([gui/background-tasks.md](../gui/background-tasks.md) § "Quiet tasks");
+  the table starts no thread of its own.
 - The table is a visual tool first. Its first two columns after the point id
   are pictures: **Crop**, the reference photograph cut around the patch, and
   **Patch**, the point's patch bitmap. Both are shown by default, so a
@@ -377,8 +379,8 @@ excluded them all), and the same rule would pick nothing again. Its cell says
 *no reference* straight away.
 
 The picks run as one quiet, read-only task on the fast queue
-([background-task-queues.md](background-task-queues.md)), *Track Table
-reference picks*, which works through the visible rows one pick at a time
+([gui/background-tasks.md](../gui/background-tasks.md) § "Quiet tasks"),
+*Track Table reference picks*, which works through the visible rows one pick at a time
 and is cancelled when the document serial changes. It locks no node, so it
 runs while a slow task such as a bundle adjustment holds the node, against
 the version at the cursor. Picks are queued only for rows that are visible
@@ -483,7 +485,7 @@ the column is selected again.
 
 The stored columns and the computed ones are produced by a **column job**, a
 quiet, read-only task on the fast queue
-([background-task-queues.md](background-task-queues.md)), *Track Table
+([gui/background-tasks.md](../gui/background-tasks.md) § "Quiet tasks"), *Track Table
 columns*. It locks no node and writes no Action Log row, so a person can sort
 and filter the version on screen while a slow task such as a bundle
 adjustment holds the node. When that task installs its version, the serial
@@ -492,6 +494,22 @@ changes and the columns are computed again. It is keyed by
 edit cancels the running job through its `Progress`. The job publishes the
 stored columns as soon as they are filled, and the computed ones after them,
 so the table is usable while the slow columns are still being computed.
+
+**The two quiet tasks.** *Track Table columns* and *Track Table reference
+picks* each declare the fast queue, no lock and `quiet`, so they join
+`Operation::ALL` and the test that holds each operation's declared values to
+the table in [gui/background-tasks.md](../gui/background-tasks.md) § "Two
+queues". Each is a source of its own (`QuietSource`), with one waiting entry.
+They lock nothing because they push no version: they read the version at the
+cursor and keep their answer in the table, so they run on a node a slow task
+holds, against the version on screen, which is the value the slow task was
+handed. When the slow task lands its version the document serial moves, and
+each drops its stale answer and is queued again, as each does after an edit.
+Among quiet tasks (`QuietRank`) they go after the focused item's evaluation,
+the columns ahead of the picks, and ahead of the evaluations of the other bench
+items, so the order is the camera model proposal's job, the viewed track's
+evaluation, the focused item's, the table's columns, the table's picks, and
+then the other bench items' evaluations.
 
 The job starts when the panel is visible, or when a `find_points` call needs a
 column (Part 3). Computed columns are computed only once a visible column, a
@@ -562,6 +580,18 @@ no bitmap to show. Both columns appear after Convert to Embedded Patches.
   in the same way a deferred screenshot replies on a later frame. The UI
   thread is not blocked while it waits. `limit` and the cache keep the cost of
   a repeat call down to a slice.
+- **A column job a call waits on is treated as asked for.** While a
+  `find_points` call waits on it, the column job is not cancelled for other
+  tasks and is reported in `get_scene`'s `background_tasks`. A waiting column
+  job moves to the end of the asked-for tasks waiting in the fast queue, as if
+  the call had just queued it. A running one whose cancel flag was already set
+  before the call arrived is let finish, its answer is kept, and its source
+  queues the next run as asked for. The call's reply carries the column
+  values, so nothing has to look the task up afterwards, and it is not kept in
+  the record of finished tasks. It is quiet again once the call has its
+  answer. Tests: `get_scene`'s `background_tasks` lists a column job while a
+  `find_points` call waits on it, and is empty again once the call has its
+  reply.
 - **The reply is paged scalars.** It carries no bulk arrays: at most 500 rows
   of a few numbers each. The mcp-server.md statement "no tool here returns bulk
   arrays" is narrowed to "no tool returns a whole column or a whole track
@@ -603,9 +633,8 @@ filtered view count, and the wording in the Action Log.
 ## Steps
 
 Each step is one PR through `implement-change`. Steps 2, 4 and 5 put quiet
-tasks on the fast background queue, so they come after Step 3 of
-[background-task-queues.md](background-task-queues.md). Step 1 does not
-depend on it.
+tasks on the fast background queue, which are built
+([gui/background-tasks.md](../gui/background-tasks.md) § "Quiet tasks").
 
 1. **Core point columns and query.** This step adds `point_columns.rs`, moves
    the max-angle and diagnostics definitions from `metrics.rs` into core (with
@@ -630,6 +659,8 @@ depend on it.
 
 ## Open questions
 
+- **The quiet order.** Whether the Track Table's columns should go ahead of
+  the focused item's evaluation when the table is the panel in view.
 - **`error_px`'s definition and name.** `Point3D::error` is documented as an
   "RMS reprojection error", but `recompute_point_errors` stores the mean. A
   file converted from COLMAP and never recomputed may hold COLMAP's value. The

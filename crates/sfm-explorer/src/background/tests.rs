@@ -708,6 +708,7 @@ fn each_operation_declares_the_spec_s_queue_lock_and_quiet_value() {
         ("Create track at pixel", Fast, true, false),
         ("Find nearby tracks", Fast, true, false),
         ("Live evaluation", Fast, false, true),
+        ("Camera model proposal", Fast, false, true),
     ];
     assert_eq!(
         table.len(),
@@ -840,6 +841,12 @@ fn quiet_job_stops(operation: Operation) -> bool {
             let cancel = std::sync::atomic::AtomicBool::new(true);
             let progress = Progress::none().cancelled_by(&cancel);
             matches!(job(&progress), crate::bench::live::Measured::Cancelled)
+        }
+        // A proposal's job on a spline camera, with and without the preview,
+        // which would otherwise switch the camera and retriangulate its tracks.
+        "Camera model proposal" => {
+            let (state, _) = crate::camera_model_proposal::tests::spline_state();
+            state.camera_model_proposal_job_stops_when_cancelled()
         }
         other => panic!("{other} has no starter here; add one"),
     }
