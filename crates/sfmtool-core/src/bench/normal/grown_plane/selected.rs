@@ -19,14 +19,14 @@
 //! held, and its plane joins the combination. When the step turns the patch,
 //! every view not picked has its shift alone fitted at the final plane.
 
-use nalgebra::Matrix2;
+use nalgebra::{Matrix2, Vector2};
 
 use super::combine::{sigmas_deg, Combined, Estimate, PairEstimate};
 use super::solve::{maximise, tilt_information, PairFit};
 use super::{
     same_shift, start_word, verdict_words, Fate, GrownPlaneAttempt, GrownPlanePair, GrownPlanePick,
-    GrownPlaneRefusal, GrownPlaneStart, GrownPlaneTry, GrownPlaneTryOutcome, NormalError, Outcome,
-    Sequence,
+    GrownPlaneRefusal, GrownPlaneSelection, GrownPlaneStart, GrownPlaneTiltStart, GrownPlaneTry,
+    GrownPlaneTryOutcome, Judged, NormalError, Outcome, Sequence,
 };
 use crate::progress::Progress;
 use crate::progress_note;
@@ -61,7 +61,7 @@ impl Sequence<'_, '_, '_> {
             if verdict.refusal.is_none() || e.attempt.start != GrownPlaneStart::NoSearch {
                 continue;
             }
-            if let Some(Ok(found)) = self.match_view(e.index, false, progress, &mut trace)? {
+            if let Some(Ok(found)) = self.match_view(e.index, false, None, progress, &mut trace)? {
                 *e = found;
                 retried = true;
             }
@@ -136,8 +136,11 @@ impl Sequence<'_, '_, '_> {
         Ok(())
     }
 
-    /// Grow candidate `i` from the starting plane against the reference
-    /// alone, in a `grown plane view` phase, and record the try: from its
+    /// Grow candidate `i` against the reference alone, in a `grown plane
+    /// view` phase, and record the try. Where `combined` gives a plane, the
+    /// view is grown from it first, from its keypoint-implied shift (from the
+    /// search at that plane, with no keypoint); then, where that is under the
+    /// floor or `combined` is `None`, from the starting plane: from its
     /// keypoint-implied shift first where `unsearched`, then from the search
     /// where that is under the floor. Its estimate when a growth passes the
     /// floor, else its last growth; `None` where no growth was made, which
@@ -147,13 +150,27 @@ impl Sequence<'_, '_, '_> {
         &self,
         i: usize,
         unsearched: bool,
+        combined: Option<[f64; 2]>,
         progress: &Progress<'_>,
         trace: &mut Vec<GrownPlaneTry>,
     ) -> Result<Option<Matched>, NormalError> {
         progress.check_cancel()?;
         let candidate = &self.candidates[i];
         let mut phase = progress.phase("grown plane view");
-        let judged = self.growths(i, unsearched, &phase)?;
+        let passes = |judged: &[Judged]| judged.iter().any(|j| j.grown.attempt.refusal.is_none());
+        let mut judged = Vec::new();
+        if let Some(tilt) = combined {
+            judged = self.growths(i, true, (GrownPlaneTiltStart::Combined, tilt), true, &phase)?;
+        }
+        if !passes(&judged) {
+            judged.extend(self.growths(
+                i,
+                unsearched,
+                (GrownPlaneTiltStart::Starting, [0.0; 2]),
+                false,
+                &phase,
+            )?);
+        }
         let taken = judged
             .iter()
             .find(|j| j.grown.attempt.refusal.is_none())
@@ -297,11 +314,38 @@ impl Sequence<'_, '_, '_> {
         Ok((pair_estimates, pairs))
     }
 
-    /// The selection: pick views one at a time by their predicted
-    /// information and match each against the
-    /// reference, until the combined plane's weakest `σ` reaches
-    /// `target_sigma_deg` or `max_selected_views` views have passed the
-    /// floor. A pick under the floor is replaced by the next pick.
+    /// The selection, by `GrownPlaneNormalOptions::selection`: views picked
+    /// one at a time and matched against the reference until the combined
+    /// plane's weakest `σ` reaches `target_sigma_deg` or `max_selected_views`
+    /// views have passed the floor, or no candidate is left.
+    fn select(
+        &self,
+        progress: &Progress<'_>,
+        matched: &mut [Option<Matched>],
+        trace: &mut Vec<GrownPlaneTry>,
+        picks: &mut Vec<GrownPlanePick>,
+    ) -> Result<(), NormalError> {
+        let mut state = Selection {
+            prediction: Prediction::new(self),
+            estimates: Vec::new(),
+            kept_information: Matrix2::zeros(),
+            kept_tilt: None,
+            widest_kept: None,
+            passed: 0,
+            tried: vec![false; self.candidates.len()],
+        };
+        match self.options.selection {
+            GrownPlaneSelection::Information => {
+                self.select_by_information(&mut state, progress, matched, trace, picks)
+            }
+            GrownPlaneSelection::Ladder => {
+                self.select_by_ladder(&mut state, progress, matched, trace, picks)
+            }
+        }
+    }
+
+    /// The selection by predicted information: every pick grown from the
+    /// starting plane, and a pick under the floor replaced by the next pick.
     ///
     /// A view's predicted information is `P = g · (α·d dᵀ + β·e eᵀ)`, with
     /// `d` the unit direction of its offset from the reference in the
@@ -317,156 +361,271 @@ impl Sequence<'_, '_, '_> {
     /// the measured information of the kept views plus the view's
     /// prediction, ties by the larger eigenvalue, then by the wider view and
     /// then by the earlier one.
-    fn select(
+    fn select_by_information(
         &self,
+        state: &mut Selection,
+        progress: &Progress<'_>,
+        matched: &mut [Option<Matched>],
+        trace: &mut Vec<GrownPlaneTry>,
+        picks: &mut Vec<GrownPlanePick>,
+    ) -> Result<(), NormalError> {
+        let n = self.candidates.len();
+        while state.passed < self.options.max_selected_views {
+            progress.check_cancel()?;
+            let model = state.prediction.model(&state.estimates);
+            let pick = match model {
+                None => (0..n)
+                    .filter(|&i| !state.tried[i])
+                    .max_by(|&a, &b| self.wider(a, b).then(b.cmp(&a))),
+                Some(m) => state.best_predicted(self, m, (0..n).filter(|&i| !state.tried[i])),
+            };
+            let Some(i) = pick else {
+                break;
+            };
+            let predicted_weak = model.map_or(f64::NAN, |m| state.weakest_with(i, m).0);
+            if self.take(
+                state,
+                i,
+                None,
+                predicted_weak,
+                progress,
+                matched,
+                trace,
+                picks,
+            )? {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    /// The selection near to far by angle from the reference, in rungs.
+    ///
+    /// The first rung, grown from the starting plane, takes the view nearest
+    /// `first_rung_deg` within `first_rung_min_deg ..= first_rung_max_deg`,
+    /// nearest first, ties by the earlier view; while none in that range has
+    /// passed the floor and none is left there, the view nearest
+    /// `first_rung_deg` among all those left, so the widest view under the
+    /// range where nothing is wider. Each later rung aims at `rung_ratio`
+    /// times the widest angle the combination keeps, and takes the views
+    /// within a factor `√rung_ratio` of that aim; a rung with no view left in
+    /// its range aims `rung_ratio` times further out. The rung whose range
+    /// reaches the widest candidate is the last: it takes every view from
+    /// the smaller of its aim and the widest candidate's angle, over
+    /// `√rung_ratio`, out, and the ladder stays on it. Once no view is left
+    /// there, one more rung takes every view left, narrower ones among them.
+    /// Within a later rung the pick is the view whose predicted information
+    /// most raises the weakest information measured so far, as
+    /// [`Self::select_by_information`] predicts it, which spreads the picks'
+    /// offset directions, ties by the view nearer the aim and then by the
+    /// earlier one.
+    ///
+    /// Every pick of a later rung is grown from the combined plane of the
+    /// views kept so far, from its keypoint-implied shift (or the search at
+    /// that plane, with no keypoint), and where that is refused, from the
+    /// starting plane as the first rung grows it. A rung stays until one of
+    /// its views is kept, so a refused pick is followed by another view in
+    /// the same range. A candidate whose angle is not finite is never
+    /// picked.
+    fn select_by_ladder(
+        &self,
+        state: &mut Selection,
         progress: &Progress<'_>,
         matched: &mut [Option<Matched>],
         trace: &mut Vec<GrownPlaneTry>,
         picks: &mut Vec<GrownPlanePick>,
     ) -> Result<(), NormalError> {
         let options = self.options;
-        let tau = options.zncc_tolerance;
         let n = self.candidates.len();
-        let density = self.grid.density();
-        // Each view's geometric gain `g = (s/ρ)²·sin²θ` and offset direction.
-        let gain: Vec<f64> = self
-            .candidates
-            .iter()
-            .map(|c| {
-                let s = if c.scale_px.is_finite() {
-                    c.scale_px.min(density) / density
-                } else {
-                    0.0
-                };
-                let sin = if c.angle_deg.is_finite() {
-                    c.angle_deg.to_radians().sin()
-                } else {
-                    0.0
-                };
-                s * s * sin * sin
-            })
-            .collect();
-        let along_of = |i: usize| {
-            let d = self.candidates[i].offset_direction;
-            nalgebra::Vector2::new(d[0], d[1])
-        };
-        let across_of = |i: usize| {
-            let d = along_of(i);
-            nalgebra::Vector2::new(-d[1], d[0])
-        };
-        let predicted = |i: usize, along: f64, across: f64| {
-            let (d, e) = (along_of(i), across_of(i));
-            if d.norm_squared() < 0.5 {
-                return Matrix2::identity() * (gain[i] * 0.5 * (along + across));
-            }
-            (d * d.transpose() * along + e * e.transpose() * across) * gain[i]
-        };
-        let mut estimates: Vec<Estimate> = Vec::new();
-        let mut kept_information = Matrix2::zeros();
-        let mut passed = 0;
-        let mut tried = vec![false; n];
-        while passed < options.max_selected_views {
+        let angle = |i: usize| self.candidates[i].angle_deg;
+        let widest_candidate = (0..n)
+            .map(angle)
+            .filter(|a| a.is_finite())
+            .fold(f64::NEG_INFINITY, f64::max);
+        let root = options.rung_ratio.sqrt();
+        let mut rung: u32 = 0;
+        let mut aim = options.first_rung_deg;
+        // The last rung's lower bound, once the ladder has reached it.
+        let mut last: Option<f64> = None;
+        // Whether the ladder is past its last rung, on the views left under it.
+        let mut rest = false;
+        while state.passed < options.max_selected_views {
             progress.check_cancel()?;
-            // The model's two coefficients, from the views matched so far.
-            let (mut along, mut across): (Vec<f64>, Vec<f64>) = estimates
-                .iter()
-                .filter(|e| gain[e.index] > 0.0)
-                .map(|e| {
-                    let (d, x) = (along_of(e.index), across_of(e.index));
-                    let g = gain[e.index];
-                    (
-                        (d.transpose() * e.information * d)[(0, 0)] / g,
-                        (x.transpose() * e.information * x)[(0, 0)] / g,
-                    )
-                })
-                .unzip();
-            let model = (!along.is_empty()).then(|| {
-                (
-                    crate::numeric::median_in_place(&mut along).max(0.0),
-                    crate::numeric::median_in_place(&mut across).max(0.0),
-                )
-            });
-            let wider = |a: usize, b: usize| {
-                self.candidates[a]
-                    .angle_deg
-                    .total_cmp(&self.candidates[b].angle_deg)
+            let left = |i: &usize| !state.tried[*i] && angle(*i).is_finite();
+            let nearer = |a: &usize, b: &usize| {
+                (angle(*a) - aim)
+                    .abs()
+                    .total_cmp(&(angle(*b) - aim).abs())
+                    .then(a.cmp(b))
             };
-            let weakest_with = |i: usize, (along, across): (f64, f64)| {
-                let e = (kept_information + predicted(i, along, across))
-                    .symmetric_eigen()
-                    .eigenvalues;
-                (e.min(), e.max())
-            };
-            let pick = match model {
-                None => (0..n)
-                    .filter(|&i| !tried[i])
-                    .max_by(|&a, &b| wider(a, b).then(b.cmp(&a))),
-                Some(m) => (0..n)
-                    .filter(|&i| !tried[i])
-                    .map(|i| {
-                        let (lo, hi) = weakest_with(i, m);
-                        (i, lo, hi)
-                    })
-                    .max_by(|a, b| {
-                        a.1.total_cmp(&b.1)
-                            .then(a.2.total_cmp(&b.2))
-                            .then(wider(a.0, b.0))
-                            .then(b.0.cmp(&a.0))
-                    })
-                    .map(|(i, _, _)| i),
+            let first_rung = state.widest_kept.is_none();
+            let (pick, predicted_weak) = if first_rung {
+                let range = options.first_rung_min_deg..=options.first_rung_max_deg;
+                let pick = (0..n)
+                    .filter(left)
+                    .filter(|&i| range.contains(&angle(i)))
+                    .min_by(nearer)
+                    .or_else(|| (0..n).filter(left).min_by(nearer));
+                (pick, f64::NAN)
+            } else {
+                let model = state.prediction.model(&state.estimates);
+                let pick = loop {
+                    let (lo, hi) = match last {
+                        Some(lo) => (lo, f64::INFINITY),
+                        None if aim * root >= widest_candidate => {
+                            let lo = aim.min(widest_candidate) / root;
+                            last = Some(lo);
+                            (lo, f64::INFINITY)
+                        }
+                        None => (aim / root, aim * root),
+                    };
+                    let pick = state.best_predicted_near(
+                        self,
+                        model,
+                        aim,
+                        (0..n)
+                            .filter(left)
+                            .filter(|&i| (lo..=hi).contains(&angle(i))),
+                    );
+                    if pick.is_some() {
+                        break pick;
+                    }
+                    match last {
+                        // Past the last rung, every view left, by predicted
+                        // information.
+                        Some(_) if !rest => {
+                            last = Some(f64::NEG_INFINITY);
+                            rest = true;
+                            rung += 1;
+                        }
+                        Some(_) => break None,
+                        None => {
+                            aim *= options.rung_ratio;
+                            rung += 1;
+                        }
+                    }
+                };
+                let weak = match (pick, model) {
+                    (Some(i), Some(m)) => state.weakest_with(i, m).0,
+                    _ => f64::NAN,
+                };
+                (pick, weak)
             };
             let Some(i) = pick else {
                 break;
             };
-            tried[i] = true;
-            let candidate = &self.candidates[i];
-            let predicted_weak = model.map_or(f64::NAN, |m| weakest_with(i, m).0);
-            let mut phase = progress.detail_phase("selection");
-            progress_note!(
-                phase,
-                "image {}, {:.1}\u{b0} from the reference, {:.2} px per unit: predicted weakest information {predicted_weak:.3}",
-                candidate.image_index,
-                candidate.angle_deg,
-                candidate.scale_px
-            );
-            drop(phase);
-            let Some(result) = self.match_view(i, true, progress, trace)? else {
-                continue;
-            };
-            let ok = result.is_ok();
-            let mut sigma_after = f64::NAN;
-            if let Ok(e) = &result {
-                estimates.push(e.clone());
-                passed += 1;
-                let combined = self.combine(&estimates, &[], progress);
-                kept_information = estimates
-                    .iter()
-                    .zip(&combined.views)
-                    .filter(|(_, v)| v.refusal.is_none())
-                    .map(|(e, _)| e.information)
-                    .sum();
-                sigma_after = combined.sigma_weak_deg(tau);
-                if let (Some(t), Some(last)) = (combined.tilt, trace.last_mut()) {
-                    last.combined_normal = Some(self.grid.plane_normal(t).into());
-                    last.combined_sigma_deg = sigma_after;
-                }
-            }
-            matched[i] = Some(result);
-            picks.push(GrownPlanePick {
-                observation: candidate.row,
-                image: candidate.image_index,
-                angle_deg: candidate.angle_deg,
-                offset_direction: candidate.offset_direction,
-                scale_px: candidate.scale_px,
+            let widest_before = state.widest_kept;
+            if self.take(
+                state,
+                i,
+                Some(rung),
                 predicted_weak,
-                matched: ok,
-                sigma_after_deg: sigma_after,
-            });
-            if sigma_after <= options.target_sigma_deg {
+                progress,
+                matched,
+                trace,
+                picks,
+            )? {
                 break;
+            }
+            // The rung is passed once the widest kept view widens; the next
+            // aims `rung_ratio` times beyond it.
+            if let Some(widest) = state.widest_kept {
+                if widest_before.is_none_or(|w| widest > w) && last.is_none() {
+                    aim = options.rung_ratio * widest;
+                    rung += 1;
+                }
             }
         }
         Ok(())
+    }
+
+    /// Whether candidate `a` is wider than `b`, by angle from the reference.
+    fn wider(&self, a: usize, b: usize) -> std::cmp::Ordering {
+        self.candidates[a]
+            .angle_deg
+            .total_cmp(&self.candidates[b].angle_deg)
+    }
+
+    /// Match pick `i` against the reference, in a `selection` phase, and
+    /// record it: from the combined plane of the views kept so far first
+    /// where `rung` is a later rung of the ladder, from the starting plane
+    /// otherwise or where that is refused. A pick that passes the floor is
+    /// combined with the picks before it. Whether the combined plane's
+    /// weakest `σ` has reached `target_sigma_deg`.
+    #[allow(clippy::too_many_arguments)]
+    fn take(
+        &self,
+        state: &mut Selection,
+        i: usize,
+        rung: Option<u32>,
+        predicted_weak: f64,
+        progress: &Progress<'_>,
+        matched: &mut [Option<Matched>],
+        trace: &mut Vec<GrownPlaneTry>,
+        picks: &mut Vec<GrownPlanePick>,
+    ) -> Result<bool, NormalError> {
+        let options = self.options;
+        state.tried[i] = true;
+        let candidate = &self.candidates[i];
+        let combined_from = match rung {
+            Some(_) => state.kept_tilt,
+            None => None,
+        };
+        let mut phase = progress.detail_phase("selection");
+        progress_note!(
+            phase,
+            "image {}, {:.1}\u{b0} from the reference, {:.2} px per unit{}: predicted weakest information {predicted_weak:.3}",
+            candidate.image_index,
+            candidate.angle_deg,
+            candidate.scale_px,
+            match rung {
+                Some(r) => format!(", rung {r}"),
+                None => String::new(),
+            }
+        );
+        drop(phase);
+        let Some(result) = self.match_view(i, true, combined_from, progress, trace)? else {
+            return Ok(false);
+        };
+        let ok = result.is_ok();
+        let mut sigma_after = f64::NAN;
+        if let Ok(e) = &result {
+            state.estimates.push(e.clone());
+            state.passed += 1;
+            let combined = self.combine(&state.estimates, &[], progress);
+            let kept: Vec<&Estimate> = state
+                .estimates
+                .iter()
+                .zip(&combined.views)
+                .filter(|(_, v)| v.refusal.is_none())
+                .map(|(e, _)| e)
+                .collect();
+            state.kept_information = kept.iter().map(|e| e.information).sum();
+            state.widest_kept = kept
+                .iter()
+                .map(|e| self.candidates[e.index].angle_deg)
+                .filter(|a| a.is_finite())
+                .reduce(f64::max);
+            state.kept_tilt = combined.tilt;
+            sigma_after = combined.sigma_weak_deg(options.zncc_tolerance);
+            if let (Some(t), Some(last)) = (combined.tilt, trace.last_mut()) {
+                last.combined_normal = Some(self.grid.plane_normal(t).into());
+                last.combined_sigma_deg = sigma_after;
+            }
+        }
+        matched[i] = Some(result);
+        picks.push(GrownPlanePick {
+            observation: candidate.row,
+            image: candidate.image_index,
+            angle_deg: candidate.angle_deg,
+            offset_direction: candidate.offset_direction,
+            scale_px: candidate.scale_px,
+            predicted_weak,
+            matched: ok,
+            rung,
+            sigma_after_deg: sigma_after,
+        });
+        Ok(sigma_after <= options.target_sigma_deg)
     }
 
     /// Candidate `i`'s shift alone at the final plane `tilt`, in a
@@ -515,5 +674,161 @@ impl Sequence<'_, '_, '_> {
             shift,
             grid_zncc,
         }
+    }
+}
+
+/// What the selection has measured so far.
+struct Selection {
+    prediction: Prediction,
+    /// The estimates of every pick that passed the floor, in the order
+    /// picked.
+    estimates: Vec<Estimate>,
+    /// The information of those the combination keeps, summed.
+    kept_information: Matrix2<f64>,
+    /// Their combined plane; `None` before any pick passed.
+    kept_tilt: Option<[f64; 2]>,
+    /// The widest angle from the reference among them, degrees.
+    widest_kept: Option<f64>,
+    /// How many picks passed the floor.
+    passed: usize,
+    /// Whether each candidate was picked.
+    tried: Vec<bool>,
+}
+
+impl Selection {
+    /// The smallest and largest eigenvalue of the kept information with
+    /// candidate `i`'s prediction under the model `m` added.
+    fn weakest_with(&self, i: usize, m: (f64, f64)) -> (f64, f64) {
+        let e = (self.kept_information + self.prediction.predicted(i, m))
+            .symmetric_eigen()
+            .eigenvalues;
+        (e.min(), e.max())
+    }
+
+    /// Among `candidates`, the one whose prediction most raises the weakest
+    /// kept information, ties by the larger eigenvalue, then by the wider
+    /// view and then by the earlier one.
+    fn best_predicted(
+        &self,
+        sequence: &Sequence<'_, '_, '_>,
+        m: (f64, f64),
+        candidates: impl Iterator<Item = usize>,
+    ) -> Option<usize> {
+        candidates
+            .map(|i| {
+                let (lo, hi) = self.weakest_with(i, m);
+                (i, lo, hi)
+            })
+            .max_by(|a, b| {
+                a.1.total_cmp(&b.1)
+                    .then(a.2.total_cmp(&b.2))
+                    .then(sequence.wider(a.0, b.0))
+                    .then(b.0.cmp(&a.0))
+            })
+            .map(|(i, _, _)| i)
+    }
+
+    /// Among `candidates`, the one whose prediction under `m` most raises
+    /// the weakest kept information, ties by the larger eigenvalue, then by
+    /// the view nearer `aim` degrees and then by the earlier one; with no
+    /// model, the view nearest `aim`, ties by the earlier one.
+    fn best_predicted_near(
+        &self,
+        sequence: &Sequence<'_, '_, '_>,
+        m: Option<(f64, f64)>,
+        aim: f64,
+        candidates: impl Iterator<Item = usize>,
+    ) -> Option<usize> {
+        let off = |i: usize| (sequence.candidates[i].angle_deg - aim).abs();
+        candidates
+            .map(|i| {
+                let (lo, hi) = m.map_or((0.0, 0.0), |m| self.weakest_with(i, m));
+                (i, lo, hi)
+            })
+            .max_by(|a, b| {
+                a.1.total_cmp(&b.1)
+                    .then(a.2.total_cmp(&b.2))
+                    .then(off(b.0).total_cmp(&off(a.0)))
+                    .then(b.0.cmp(&a.0))
+            })
+            .map(|(i, _, _)| i)
+    }
+}
+
+/// Each candidate's information about the tilt, predicted from its
+/// geometry: `g · (α·d dᵀ + β·e eᵀ)` (see
+/// [`Sequence::select_by_information`]).
+struct Prediction {
+    /// Each candidate's geometric gain `g = (s/ρ)²·sin²θ`.
+    gain: Vec<f64>,
+    /// Each candidate's offset direction `d`; zero where it has none.
+    along: Vec<Vector2<f64>>,
+}
+
+impl Prediction {
+    fn new(sequence: &Sequence<'_, '_, '_>) -> Self {
+        let density = sequence.grid.density();
+        let gain = sequence
+            .candidates
+            .iter()
+            .map(|c| {
+                let s = if c.scale_px.is_finite() {
+                    c.scale_px.min(density) / density
+                } else {
+                    0.0
+                };
+                let sin = if c.angle_deg.is_finite() {
+                    c.angle_deg.to_radians().sin()
+                } else {
+                    0.0
+                };
+                s * s * sin * sin
+            })
+            .collect();
+        let along = sequence
+            .candidates
+            .iter()
+            .map(|c| Vector2::new(c.offset_direction[0], c.offset_direction[1]))
+            .collect();
+        Self { gain, along }
+    }
+
+    fn across(&self, i: usize) -> Vector2<f64> {
+        let d = self.along[i];
+        Vector2::new(-d[1], d[0])
+    }
+
+    /// Candidate `i`'s predicted information under the model's two
+    /// coefficients `(α, β)`.
+    fn predicted(&self, i: usize, (along, across): (f64, f64)) -> Matrix2<f64> {
+        let (d, e) = (self.along[i], self.across(i));
+        if d.norm_squared() < 0.5 {
+            return Matrix2::identity() * (self.gain[i] * 0.5 * (along + across));
+        }
+        (d * d.transpose() * along + e * e.transpose() * across) * self.gain[i]
+    }
+
+    /// The model's two coefficients `(α, β)` from `estimates`, each the
+    /// median of their measured information along or across their offset
+    /// over their gain; `None` with no estimate of positive gain.
+    fn model(&self, estimates: &[Estimate]) -> Option<(f64, f64)> {
+        let (mut along, mut across): (Vec<f64>, Vec<f64>) = estimates
+            .iter()
+            .filter(|e| self.gain[e.index] > 0.0)
+            .map(|e| {
+                let (d, x) = (self.along[e.index], self.across(e.index));
+                let g = self.gain[e.index];
+                (
+                    (d.transpose() * e.information * d)[(0, 0)] / g,
+                    (x.transpose() * e.information * x)[(0, 0)] / g,
+                )
+            })
+            .unzip();
+        (!along.is_empty()).then(|| {
+            (
+                crate::numeric::median_in_place(&mut along).max(0.0),
+                crate::numeric::median_in_place(&mut across).max(0.0),
+            )
+        })
     }
 }

@@ -3879,7 +3879,8 @@ and `ray_count`), `rays` (one row per ray: `cell`, `observation`, `image`,
 
 `grown_plane_normal` takes every `GrownPlaneNormalOptions` setting as a
 keyword of the same name, each defaulting to `GrownPlaneNormalOptions::default()`'s
-when `None` (`window_fractions` as a list of numbers), and refuses a setting
+when `None` (`window_fractions` as a list of numbers, `selection` as the
+word `"information"` or `"ladder"`), and refuses a setting
 `GrownPlaneNormalOptions::check` refuses before it reads a photograph. Its
 `estimate` has `kind` `"grown_plane"` and carries `reference` (an
 observation index, or `None`), `working_resolution`, `window_half_widths` (a
@@ -3901,9 +3902,12 @@ one dict per observation whose `kind` names the `GrownPlaneView`:
 `observation`, `image`, `angle_deg`, `outcome` (`"matched"` or
 `"left_out"`), `combined_normal`, `combined_sigma_deg` and `attempts`, each
 with `start`, `stage_zncc` (a float64 array), `shift`, `normal`,
-`grid_zncc`, `sigma_deg` and `refusal` (`None` or `"under_floor"`). `picks` holds one dict per pick of the selection, with
+`grid_zncc`, `sigma_deg`, `refusal` (`None` or `"under_floor"`) and
+`tilt_start` (`"starting"` or `"combined"`, the plane the growth started
+from). `picks` holds one dict per pick of the selection, with
 `observation`, `image`, `angle_deg`, `offset_direction`, `scale_px`,
-`predicted_weak` (`NaN` for a pick made by angle alone), `matched` and
+`predicted_weak` (`NaN` for a pick made by angle alone), `matched`, `rung`
+(the ladder's rung, from 0, or `None` under `"information"`) and
 `sigma_after_deg` (`NaN` when not matched); `pairs` one per pair of
 views matched against each other, with `observations`, `images`,
 `angle_deg`, `normal`, `relative_shift`, `zncc`, `sigma_deg`, `distance`,

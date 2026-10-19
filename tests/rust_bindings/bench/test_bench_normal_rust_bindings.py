@@ -288,6 +288,11 @@ GROWN_DEFAULTS = {
     "max_pairs": 3,
     "target_sigma_deg": 0.5,
     "max_selected_views": 6,
+    "selection": "information",
+    "first_rung_deg": 12.0,
+    "first_rung_min_deg": 10.0,
+    "first_rung_max_deg": 20.0,
+    "rung_ratio": 1.6,
     "min_coverage": 0.6,
     "max_iterations": 20,
     "initial_damping": 1e-3,
@@ -362,6 +367,7 @@ class TestGrownPlaneNormal:
                 assert attempt["shift"].shape == (2,)
                 assert np.linalg.norm(attempt["normal"]) == pytest.approx(1.0)
                 assert attempt["refusal"] in {None, "under_floor"}
+                assert attempt["tilt_start"] == "starting"
             if entry["combined_normal"] is not None:
                 assert np.linalg.norm(entry["combined_normal"]) == pytest.approx(1.0)
 
@@ -374,8 +380,10 @@ class TestGrownPlaneNormal:
                 "scale_px",
                 "predicted_weak",
                 "matched",
+                "rung",
                 "sigma_after_deg",
             }
+            assert pick["rung"] is None
             assert pick["offset_direction"].shape == (2,)
             assert isinstance(pick["matched"], bool)
         assert seq["pairs_kept"] == sum(p["kept"] for p in seq["pairs"])
@@ -446,6 +454,26 @@ class TestGrownPlaneNormal:
         assert seq["working_resolution"] == 30
         assert seq["window_half_widths"] == [3, 15]
 
+    def test_the_ladder_picks_near_to_far(self, fitted, edited, images):
+        _, report = grown_plane_normal(fitted, edited, images, selection="ladder")
+        seq = report["estimate"]
+        picks = seq["picks"]
+        assert picks
+        assert picks[0]["rung"] == 0
+        rungs = [p["rung"] for p in picks]
+        assert rungs == sorted(rungs)
+        # Every pick after the first that passed grows from the combined
+        # plane first; the first rung's picks from the starting plane.
+        for pick, entry in zip(picks, seq["trace"]):
+            first = entry["attempts"][0]["tilt_start"]
+            assert first == ("starting" if pick["rung"] == 0 else "combined")
+            starts = [a["tilt_start"] for a in entry["attempts"]]
+            assert starts == sorted(starts, key=lambda s: s != "combined")
+
+    def test_an_unknown_selection_is_refused(self, fitted, edited, images):
+        with pytest.raises(ValueError, match="selection"):
+            grown_plane_normal(fitted, edited, images, selection="widest")
+
     def test_a_large_turn_on_weak_evidence_keeps_the_start(
         self, fitted, edited, images, grown
     ):
@@ -482,6 +510,9 @@ class TestGrownPlaneNormal:
             ("weak_turn_deg", -1.0),
             ("min_turn_sigma_ratio", float("nan")),
             ("max_selected_views", 0),
+            ("first_rung_deg", 25.0),
+            ("first_rung_min_deg", float("nan")),
+            ("rung_ratio", 1.0),
         ]:
             with pytest.raises(ValueError, match=name):
                 grown_plane_normal(fitted, edited, images, **{name: value})

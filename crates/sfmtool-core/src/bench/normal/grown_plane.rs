@@ -126,6 +126,21 @@ pub struct GrownPlaneNormalOptions {
     /// The selection stops matching views once this many have passed the
     /// floor. 6.
     pub max_selected_views: usize,
+    /// How the selection picks its views and which plane it grows each
+    /// from. [`GrownPlaneSelection::Information`].
+    pub selection: GrownPlaneSelection,
+    /// The ladder's first rung, degrees from the reference: its first pick is
+    /// the view nearest this angle within [`Self::first_rung_min_deg`] to
+    /// [`Self::first_rung_max_deg`]. 12.
+    pub first_rung_deg: f64,
+    /// The narrowest angle of the ladder's first rung, degrees. 10.
+    pub first_rung_min_deg: f64,
+    /// The widest angle of the ladder's first rung, degrees. 20.
+    pub first_rung_max_deg: f64,
+    /// Each later rung of the ladder aims at this many times the widest
+    /// angle kept so far, and takes views within a factor of its square root
+    /// of that aim. 1.6.
+    pub rung_ratio: f64,
     /// A ZNCC is read only when at least this share of its samples lands on
     /// the photograph. 0.6.
     pub min_coverage: f64,
@@ -166,6 +181,11 @@ impl Default for GrownPlaneNormalOptions {
             max_pairs: 3,
             target_sigma_deg: 0.5,
             max_selected_views: 6,
+            selection: GrownPlaneSelection::Information,
+            first_rung_deg: 12.0,
+            first_rung_min_deg: 10.0,
+            first_rung_max_deg: 20.0,
+            rung_ratio: 1.6,
             min_coverage: 0.6,
             max_iterations: 20,
             initial_damping: 1e-3,
@@ -183,7 +203,8 @@ impl GrownPlaneNormalOptions {
     /// at least zero, a positive search step and Jacobian steps, a positive
     /// tolerance and target `σ`, a weak-turn bound of at least zero (infinite
     /// allowed) and a finite turn-to-`σ` ratio of at least zero, at least one
-    /// selected view, a coverage in `0 ..= 1` and a finite damping of at
+    /// selected view, a first rung of finite angles of at least zero with its
+    /// aim within its bounds, a finite rung ratio above 1, a coverage in `0 ..= 1` and a finite damping of at
     /// least zero. The error names the first setting that fails.
     pub fn check(&self) -> Result<(), NormalError> {
         let bad = |name| Err(NormalError::BadGrownPlaneOption(name));
@@ -217,6 +238,18 @@ impl GrownPlaneNormalOptions {
         }
         if self.max_selected_views == 0 {
             return bad("max_selected_views");
+        }
+        let angle = |v: f64| v.is_finite() && v >= 0.0;
+        if !(angle(self.first_rung_min_deg) && angle(self.first_rung_max_deg))
+            || self.first_rung_min_deg > self.first_rung_max_deg
+        {
+            return bad("first_rung_min_deg");
+        }
+        if !(self.first_rung_min_deg..=self.first_rung_max_deg).contains(&self.first_rung_deg) {
+            return bad("first_rung_deg");
+        }
+        if !(self.rung_ratio.is_finite() && self.rung_ratio > 1.0) {
+            return bad("rung_ratio");
         }
         if !(0.0..=1.0).contains(&self.min_coverage) {
             return bad("min_coverage");
@@ -258,6 +291,32 @@ pub enum GrownPlaneOutcome {
     /// `σ`: a large turn on weak evidence. The step keeps the starting normal
     /// and the keypoints as given, and reports the plane it found.
     WeakTurn,
+}
+
+/// How the selection of [`grown_plane_normal`] picks the views it grows,
+/// and which plane it grows each from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GrownPlaneSelection {
+    /// The widest view first, then the view whose predicted information most
+    /// raises the weakest information measured so far; every view grown from
+    /// the starting plane.
+    Information,
+    /// Near to far by angle from the reference: a first rung near
+    /// [`GrownPlaneNormalOptions::first_rung_deg`] grown from the starting
+    /// plane, then rungs each [`GrownPlaneNormalOptions::rung_ratio`] times
+    /// wider than the widest view kept, each grown from the combined plane
+    /// of the views kept so far and, where that is refused, from the starting
+    /// plane, ending with the widest views.
+    Ladder,
+}
+
+/// Which plane a growth's windows started from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GrownPlaneTiltStart {
+    /// The starting plane, `(a, b) = (0, 0)`.
+    Starting,
+    /// The combined plane of the views the selection kept before it.
+    Combined,
 }
 
 /// How a view's first window found its shift.
@@ -303,6 +362,8 @@ pub enum GrownPlaneRefusal {
 pub struct GrownPlaneAttempt {
     /// How the first window found its shift.
     pub start: GrownPlaneStart,
+    /// Which plane the windows started from.
+    pub tilt_start: GrownPlaneTiltStart,
     /// Each stage's score: the first window's ZNCC at its starting shift (the
     /// keypoint-implied one, or the search's best), each later window's ZNCC
     /// after its fit, and the whole grid's robust score after the last fit.
@@ -405,6 +466,10 @@ pub struct GrownPlanePick {
     pub predicted_weak: f64,
     /// Whether its growth passed the floor.
     pub matched: bool,
+    /// The ladder's rung it was picked for, the first `0`, counting every
+    /// rung the ladder aimed at, those with no view in range among them;
+    /// `None` under [`GrownPlaneSelection::Information`].
+    pub rung: Option<u32>,
     /// The combined plane's weakest `σ` after it, degrees; `NaN` when it was
     /// not matched.
     pub sigma_after_deg: f64,
@@ -1114,6 +1179,14 @@ fn weak_turn(turn_deg: f64, sigma_deg: f64, options: &GrownPlaneNormalOptions) -
         && turn_sigma_ratio(turn_deg, sigma_deg) < options.min_turn_sigma_ratio
 }
 
+/// Which plane a growth started from, in a detail phase's note.
+fn tilt_start_word(from: GrownPlaneTiltStart) -> &'static str {
+    match from {
+        GrownPlaneTiltStart::Starting => "from the starting plane",
+        GrownPlaneTiltStart::Combined => "from the combined plane",
+    }
+}
+
 /// How a growth's first window found its shift, in a detail phase's note.
 fn start_word(start: GrownPlaneStart) -> &'static str {
     match start {
@@ -1350,29 +1423,34 @@ impl Sequence<'_, '_, '_> {
             .collect()
     }
 
-    /// The growths of candidate `i` from the starting plane, each judged on
+    /// The growths of candidate `i` from the plane `from`, each judged on
     /// its own, up to the first that passes the floor: from the
     /// keypoint-implied shift with no search where `unsearched` and the view
-    /// has one, then from the stage-1 search, unless the search lands on the
-    /// implied shift. Each growth opens a `growth` phase on `phase`.
+    /// has one, then from the stage-1 search at that plane, unless the search
+    /// lands on the implied shift or `first_only` and a growth was made
+    /// already. Each growth opens a `growth` phase on `phase`.
     fn growths(
         &self,
         i: usize,
         unsearched: bool,
+        from: (GrownPlaneTiltStart, [f64; 2]),
+        first_only: bool,
         phase: &Progress<'_>,
     ) -> Result<Vec<Judged>, NormalError> {
         let candidate = &self.candidates[i];
         let rows = self.grid.window(self.radii[0]);
+        let tilt = from.1;
         let mut judged = Vec::new();
         let try_from = |first, judged: &mut Vec<Judged>, growth: &mut Phase<'_>| {
             let renders_before = self.renders[i].renders();
-            let grown = self.grow(i, first, growth)?;
+            let grown = self.grow(i, from, first, growth)?;
             let j = self.judge(i, grown, growth);
             let attempt = &j.grown.attempt;
             let taken = attempt.refusal.is_none();
             progress_note!(
                 *growth,
-                "{}: first window ZNCC {:.3}, grid ZNCC {:.3}, {}, {} renders",
+                "{}, {}: first window ZNCC {:.3}, grid ZNCC {:.3}, {}, {} renders",
+                tilt_start_word(attempt.tilt_start),
                 start_word(attempt.start),
                 attempt.stage_zncc[0],
                 attempt.grid_zncc,
@@ -1385,18 +1463,19 @@ impl Sequence<'_, '_, '_> {
         if unsearched {
             if let Some(shift) = candidate.kp_shift {
                 let mut growth = phase.detail_phase("growth");
-                let z = self.spot_zncc(i, [0.0; 2], &rows, shift);
+                let z = self.spot_zncc(i, tilt, &rows, shift);
                 if try_from(
                     (z, shift, GrownPlaneStart::NoSearch),
                     &mut judged,
                     &mut growth,
-                )? {
+                )? || first_only
+                {
                     return Ok(judged);
                 }
             }
         }
         let mut growth = phase.detail_phase("growth");
-        let first = self.search_first_window(i, [0.0; 2], &rows, &growth);
+        let first = self.search_first_window(i, tilt, &rows, &growth);
         // A search that lands on the implied shift would repeat the growth
         // with no search, refused or never wanted.
         if candidate.kp_shift.is_some_and(|s| same_shift(s, first.1)) {
@@ -1439,18 +1518,20 @@ impl Sequence<'_, '_, '_> {
         Judged { grown, estimate }
     }
 
-    /// Grow candidate `i` from the starting plane, from the first window's
+    /// Grow candidate `i` from the plane `from`, from the first window's
     /// ZNCC, shift and start in `first`: the growing windows, and the whole
     /// grid's robust fit.
     fn grow(
         &self,
         i: usize,
+        from: (GrownPlaneTiltStart, [f64; 2]),
         first: (f64, [f64; 2], GrownPlaneStart),
         progress: &Progress<'_>,
     ) -> Result<Grown, NormalError> {
         let render = &self.renders[i];
         let (z1, shift, start) = first;
-        let mut p = vec![0.0, 0.0, shift[0], shift[1]];
+        let (tilt_start, t0) = from;
+        let mut p = vec![t0[0], t0[1], shift[0], shift[1]];
         let mut stage_zncc = vec![z1];
         for &half in &self.radii[1..] {
             progress.check_cancel()?;
@@ -1490,6 +1571,7 @@ impl Sequence<'_, '_, '_> {
             tilt,
             attempt: GrownPlaneAttempt {
                 start,
+                tilt_start,
                 stage_zncc,
                 shift: [p[2], p[3]],
                 normal: self.grid.plane_normal(tilt).into(),

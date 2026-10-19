@@ -59,13 +59,14 @@ each ``None`` when no view joined, ``grown_low_confidence``,
 (views grown against the reference) and ``grown_candidates`` (the views
 beside the reference it could try), ``grown_pairs`` (each pair's images,
 angle, kept flag, refusal and own plane's error ``own_deg``),
-``grown_picks`` (the selection's picks), ``grown_view_kinds`` (a count of
+``grown_picks`` (the selection's picks, each with its ladder ``rung``), ``grown_view_kinds`` (a count of
 each per-view word),
 ``grown_left_out_reasons``, ``grown_written``, ``grown_working_resolution``,
 ``grown_window_half_widths``, ``grown_turned_deg``, ``grown_ms`` (the call's
 wall time), ``grown_text``, ``grown_frame`` and ``grown_trace``, one entry
 per try with the error of the combined plane after it (``combined_deg``) and
-each attempt's own plane's error (``own_deg``) to the ground truth. The summary adds the grown
+each attempt's own plane's error (``own_deg``) to the ground truth and the plane it
+started from (``tilt_start``). The summary adds the grown
 step's errors, outcomes, confidence, views joined, and on how many points it
 beats ``old``.
 
@@ -375,6 +376,7 @@ def run_grown(row, track, edited, ds, grown_options, to_cam, gt):
             "scale_px": pick["scale_px"],
             "predicted_weak": pick["predicted_weak"],
             "matched": pick["matched"],
+            "rung": pick["rung"],
             "sigma_after_deg": pick["sigma_after_deg"],
         }
         for pick in seq["picks"]
@@ -400,6 +402,7 @@ def run_grown(row, track, edited, ds, grown_options, to_cam, gt):
                 "attempts": [
                     {
                         "start": a["start"],
+                        "tilt_start": a["tilt_start"],
                         "stage_zncc": a["stage_zncc"].tolist(),
                         "shift": a["shift"].tolist(),
                         "own_deg": error(a["normal"]),
