@@ -313,11 +313,11 @@ def triangulate_new_tracks(
     # Step 4: Triangulate new points from matches using known poses
     options = pycolmap.IncrementalPipelineOptions()
     if ba_options:
-        options.ba_refine_focal_length = ba_options.get("refine_focal_length", False)
+        options.ba_refine_focal_length = ba_options.get("release_focal", False)
         options.ba_refine_principal_point = ba_options.get(
-            "refine_principal_point", False
+            "release_principal_point", False
         )
-        options.ba_refine_extra_params = ba_options.get("refine_extra_params", False)
+        options.ba_refine_extra_params = ba_options.get("release_distortion", False)
 
     click.echo(
         f"  Triangulating points (preserving {len(reconstruction.points3D)} existing)..."
@@ -369,11 +369,11 @@ def triangulate_new_tracks(
 
     ba_config = pycolmap.BundleAdjustmentOptions()
     if ba_options:
-        ba_config.refine_focal_length = ba_options.get("refine_focal_length", True)
+        ba_config.refine_focal_length = ba_options.get("release_focal", True)
         ba_config.refine_principal_point = ba_options.get(
-            "refine_principal_point", False
+            "release_principal_point", False
         )
-        ba_config.refine_extra_params = ba_options.get("refine_extra_params", True)
+        ba_config.refine_extra_params = ba_options.get("release_distortion", True)
     else:
         ba_config.refine_focal_length = True
         ba_config.refine_extra_params = True

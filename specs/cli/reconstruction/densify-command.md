@@ -40,9 +40,9 @@ sfm densify <INPUT.sfmr> <OUTPUT.sfmr> [OPTIONS...]
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `--ba-refine-focal-length` | flag | | Refine focal length |
-| `--ba-refine-principal-point` | flag | | Refine principal point |
-| `--ba-refine-extra-params` | flag | | Refine extra camera parameters |
+| `--ba-release-focal` | flag | | Release the focal length |
+| `--ba-release-principal-point` | flag | | Release the principal point |
+| `--ba-release-distortion` | flag | | Release the distortion parameters |
 
 ### Point Filtering
 

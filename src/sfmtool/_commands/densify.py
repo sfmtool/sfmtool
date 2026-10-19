@@ -36,19 +36,19 @@ from .._sfmtool.reconstruction import SfmrReconstruction
     help="Maximum descriptor distance for matches (default: None)",
 )
 @click.option(
-    "--ba-refine-focal-length",
+    "--ba-release-focal",
     is_flag=True,
-    help="Refine focal length in bundle adjustment",
+    help="Release the focal length in bundle adjustment",
 )
 @click.option(
-    "--ba-refine-principal-point",
+    "--ba-release-principal-point",
     is_flag=True,
-    help="Refine principal point in bundle adjustment",
+    help="Release the principal point in bundle adjustment",
 )
 @click.option(
-    "--ba-refine-extra-params",
+    "--ba-release-distortion",
     is_flag=True,
-    help="Refine extra camera parameters in bundle adjustment",
+    help="Release the distortion parameters in bundle adjustment",
 )
 @click.option(
     "--filter-max-reproj-error",
@@ -127,9 +127,9 @@ def densify(
     max_feature_count: int | None,
     sweep_window_size: int,
     distance_threshold: float | None,
-    ba_refine_focal_length: bool,
-    ba_refine_principal_point: bool,
-    ba_refine_extra_params: bool,
+    ba_release_focal: bool,
+    ba_release_principal_point: bool,
+    ba_release_distortion: bool,
     filter_max_reproj_error: float,
     filter_min_track_length: int,
     filter_min_tri_angle: float,
@@ -157,18 +157,18 @@ def densify(
 
         sfm densify input.sfmr output.sfmr --max-features 2048 --frustum
 
-        sfm densify input.sfmr output.sfmr --ba-refine-focal-length
+        sfm densify input.sfmr output.sfmr --ba-release-focal
     """
     input_path = check_sfmr_path(input_sfmr, "Input path")
     output_path = check_sfmr_path(output_sfmr, "Output path")
 
     # Build bundle adjustment options
     ba_options = None
-    if ba_refine_focal_length or ba_refine_principal_point or ba_refine_extra_params:
+    if ba_release_focal or ba_release_principal_point or ba_release_distortion:
         ba_options = {
-            "refine_focal_length": ba_refine_focal_length,
-            "refine_principal_point": ba_refine_principal_point,
-            "refine_extra_params": ba_refine_extra_params,
+            "release_focal": ba_release_focal,
+            "release_principal_point": ba_release_principal_point,
+            "release_distortion": ba_release_distortion,
         }
 
     # Build geometric filtering config if enabled
