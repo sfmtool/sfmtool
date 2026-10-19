@@ -648,8 +648,8 @@ impl Operation {
     /// node, and a proposal cannot be opened on a busy node, so it and a
     /// locking task on its node do not meet. Cancellable because the job
     /// polls the flag before the switch and after it, and the retriangulation
-    /// polls it as it runs. The switch itself takes no `Progress`, so a cancel
-    /// that arrives during it is read when it returns.
+    /// polls it between its stages. The switch itself takes no `Progress`, so
+    /// a cancel that arrives during it is read when it returns.
     pub(crate) const CAMERA_MODEL_PROPOSAL: Operation = Operation {
         name: "Camera model proposal",
         cancellable: true,

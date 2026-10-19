@@ -582,7 +582,8 @@ no bitmap to show. Both columns appear after Convert to Embedded Patches.
   a repeat call down to a slice.
 - **A column job a call waits on is treated as asked for.** While a
   `find_points` call waits on it, the column job is not cancelled for other
-  tasks and is reported in `get_scene`'s `background_tasks`. A waiting column
+  tasks and is reported in `get_scene`'s `background_tasks` and in the busy
+  notice, so a non-empty list still means someone's work is running. A waiting column
   job moves to the end of the asked-for tasks waiting in the fast queue, as if
   the call had just queued it. A running one whose cancel flag was already set
   before the call arrived is let finish, its answer is kept, and its source

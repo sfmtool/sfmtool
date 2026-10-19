@@ -804,8 +804,8 @@ Explorer (`sfm-explorer` lib tests, headless):
 - **Whether the proposal's job should give way once it has started.** Its
   switch takes no `Progress` and its retriangulation polls only between its
   three stages, so on `dino_dog_toy-embedded` a fast task queued while the job
-  runs waits up to the rest of the job, about 150 ms in the switch and 130 ms
-  in the retriangulation, and the job then starts over
+  runs waits up to the rest of the stage the job is in, about 150 ms in the
+  switch and 130 ms in the retriangulation, and the job then starts over
   ([../background-tasks.md](../background-tasks.md) § "Open questions"). A
   cancel there saves the asked-for task little and costs the repeat. The job
   could instead be let finish once its switch has started, or the switch and

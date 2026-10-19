@@ -1504,8 +1504,10 @@ covered with every other panel's ([panel-layout.md](panel-layout.md) §
   for the rest of it, up to 150 ms; and one queued during the retriangulation
   waited up to 130 ms, because the retriangulation polls only between its three
   stages and its solve stage is most of it. So the wait is up to the rest of
-  the job, which on this fixture can exceed `REPLY_DIRECTLY_WITHIN`, and a
-  tool that starts a fast task then answers with a handle. On the `kerry_park`
+  the stage the job is in, about 150 ms on this fixture. That is less than
+  `REPLY_DIRECTLY_WITHIN` on its own, but a tool whose fast task then takes
+  more than the remaining 50 ms or so answers with a handle where it would
+  otherwise have answered directly. On the `kerry_park`
   ground truth (48 images, 391 points) the whole job takes about 7 ms and no
   wait exceeded 3 ms. Whether the proposal's job should be exempt from
   cancellation once it has started is in
