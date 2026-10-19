@@ -222,7 +222,7 @@ busy:
 - **It gives way to a task someone asks for.** When a task that is not quiet
   is queued in the queue a quiet task is running in, or a locking task is
   queued on the node a quiet task runs on, in either queue, the quiet task's
-  cancel flag is set (`background::give_way_to`). It is not taken off its
+  cancel flag is set (`AppState::give_way_to`). It is not taken off its
   queue: the task that displaced it starts once the quiet task's worker
   reports that it has stopped, because a queue still runs one task at a time.
   How soon that is depends on how often its kernels poll the flag: an
