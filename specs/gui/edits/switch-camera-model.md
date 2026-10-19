@@ -253,11 +253,11 @@ the angle given.
 While a proposal is open a **job** runs off the GUI thread
 ([camera_model_proposal/job.rs](../../../crates/sfm-explorer/src/camera_model_proposal/job.rs)).
 It is not a background task ([../background-tasks.md](../background-tasks.md)):
-those run one at a time across the viewer and lock their node, and a proposal
-pushes nothing, so it has nothing to lock, and its job must not hold off a
+those run one at a time in each of two queues and lock their node, and a
+proposal pushes nothing, so it has nothing to lock, and its job must not hold off a
 bundle adjustment on another node or be held off by one. It locks nothing,
 pushes no version, writes no Action Log row and is not shown in the Background
-Task panel. It follows the bench's live evaluation
+Tasks panel. It follows the bench's live evaluation
 ([../bench.md](../bench.md) § "Live evaluation") instead:
 
 - **Its inputs** are the proposal's generation, the document half of the

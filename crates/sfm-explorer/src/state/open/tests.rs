@@ -384,7 +384,7 @@ fn a_path_that_is_not_a_file_is_refused_before_anything_starts() {
 /// An open runs from the fast queue: refused while another fast task runs,
 /// and started beside a slow one.
 #[test]
-fn an_open_waits_for_the_fast_queue_and_not_for_the_slow_one() {
+fn an_open_is_refused_while_the_fast_queue_runs_and_not_the_slow_one() {
     let dir = temp_dir("busy");
     let recon = workspace_with_photographs(&dir, &[]);
     let path = save_into(&dir, &recon, "recon.sfmr");

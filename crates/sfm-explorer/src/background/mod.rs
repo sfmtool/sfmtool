@@ -93,12 +93,13 @@ pub(crate) struct Operation {
 /// Each queue runs one task at a time, and the two run at the same time
 /// (`specs/gui/background-tasks.md` § "Two queues"). The slow queue holds the
 /// operations whose cost grows with the whole reconstruction and that use
-/// every core; the fast queue holds opening files and the bench's steps.
+/// every core: the whole-reconstruction edits and Build index files. The fast
+/// queue holds opening files and the other bench steps.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Queue {
-    /// The whole-reconstruction edits.
+    /// The whole-reconstruction edits and Build index files.
     Slow,
-    /// Opening files and the bench's steps.
+    /// Opening files and the other bench steps.
     Fast,
 }
 

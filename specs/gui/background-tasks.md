@@ -151,8 +151,8 @@ pub(crate) struct Operation {
 | Fit track, Set track stage, Fit normal, Finite difference normal, Grid plane normal, Search descriptors, Geometry search, Create track at pixel, Find nearby tracks | fast | yes |
 
 The **slow queue** holds the operations whose cost grows with the whole
-reconstruction and that use every core; the **fast queue** holds opening files
-and the bench's steps. The queue is fixed rather than estimated from the
+reconstruction and that use every core, Build index files among them; the
+**fast queue** holds opening files and the other bench steps. The queue is fixed rather than estimated from the
 reconstruction's size, so the same operation always waits behind the same work,
 a test can name the queue, and nothing has to be measured before the queue is
 known. A test holds each operation's declared values to the table above.
@@ -379,7 +379,7 @@ Everything that reads the scene keeps working. The node shows the version at its
 cursor, which is the value the worker was handed and which nothing is mutating,
 so orbiting, selecting, opening Track View and taking a screenshot all behave
 exactly as they do when nothing is running. Opening a file is itself an
-operation, and waits its turn (below).
+operation, and runs from the fast queue (below).
 
 What is refused is anything that would change a node a locking task is running
 on. An edit, an undo, a redo, a history jump, a save or a close of that node is

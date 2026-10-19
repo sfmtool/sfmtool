@@ -351,8 +351,8 @@ naming the phases: the decode of each image not yet in the full-resolution cache
 is a phase of its own, because on a sweep over hundreds of candidates it is the
 whole cost and the person watching should see that it is the photographs and not
 the kernels. The task is on the node whose images and poses it reads, and the
-Background Task panel shows it as it shows an adjustment. One task at a time is
-the existing rule and it is right here too: two evaluations of one track racing
+Background Tasks panel shows it as it shows an adjustment. One task at a time
+in each queue is the existing rule and it is right here too: two evaluations of one track racing
 each other would have two reports to install.
 
 What is measured, per stage:
@@ -827,7 +827,7 @@ specs list as non-goals is what this draft still proposes.
   wire show.
 - **Progress** through the one `Progress` parameter every long core function
   takes ([`../gui/operation-progress.md`](../gui/operation-progress.md)), so an
-  evaluation names its phases the same way whether the Background Task panel or
+  evaluation names its phases the same way whether the Background Tasks panel or
   a script is watching. `evaluate` and `set_stage` name the phases the batch
   kernels carry -- `refine` and `self-similarity` at the cluster stage,
   `localize`, `refine`, `bitmap`, `self-similarity`, `reference view` and

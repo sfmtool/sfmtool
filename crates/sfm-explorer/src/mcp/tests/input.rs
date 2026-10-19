@@ -117,7 +117,7 @@ struct Harness {
 }
 
 /// The tab bodies: the real Scene and Image Detail panels; a button that
-/// counts its clicks and a pad that records its drags in the Background Task
+/// counts its clicks and a pad that records its drags in the Background Tasks
 /// panel; a label for every other panel.
 struct Tabs<'a> {
     state: &'a mut AppState,
