@@ -333,7 +333,7 @@ impl Sequence<'_, '_, '_> {
     /// times the widest angle the combination keeps, and takes the views
     /// within a factor `√rung_ratio` of that aim; a rung with no view left in
     /// its range aims `rung_ratio` times further out, and one with an aim of
-    /// zero, where every view kept is at the reference's centre, aims at the
+    /// zero, where every view kept is 0° from the reference, aims at the
     /// widest candidate. The rung whose range
     /// reaches the widest candidate is the last: it takes every view from
     /// the smaller of its aim and the widest candidate's angle, over
@@ -443,8 +443,8 @@ impl Sequence<'_, '_, '_> {
                             rung += 1;
                         }
                         Some(_) => break None,
-                        // An aim of zero, where every kept view is at the
-                        // reference's own centre, never widens; it goes
+                        // An aim of zero, where every kept view is 0°
+                        // from the reference, never widens; it goes
                         // to the last rung.
                         None if aim <= 0.0 => {
                             aim = widest_candidate;
