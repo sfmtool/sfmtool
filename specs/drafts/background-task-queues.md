@@ -433,6 +433,9 @@ Each step is one PR through `implement-change`:
    - The `quiet` flag and `QuietJob`.
    - Cancelling and requeueing for asked-for tasks, one waiting entry per
      source, the check at start, and the fixed order.
+   - No evaluation lands into a locked node, which Step 2 leaves to this
+     step: an evaluation already running when a task is queued on its node
+     still lands.
    - The panel's quiet line.
    - The evaluation's own thread is retired.
 4. **The camera model proposal moved onto the fast queue.** Its own thread is

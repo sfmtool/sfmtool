@@ -1082,8 +1082,9 @@ and `Create track at pixel`, which reads the photographs and the index files
 the index files and the `.sift` files (§ "Find Nearby Tracks").
 All but `Build index files` run from the fast queue, and it from the slow one
 ([`background-tasks.md`](background-tasks.md) § "Two queues"), so a bench step
-starts while a whole-reconstruction edit runs on another node, and each locks
-its own node while it runs.
+starts while a whole-reconstruction edit runs on another node, one started
+while another fast task runs waits behind it, and each locks its own node from
+the moment it is queued until it lands.
 All of them are
 **cancellable**: the kernels they run take the `Progress` for their phases and
 poll its flag as well -- between the fit's rounds, between the views the

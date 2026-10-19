@@ -198,6 +198,12 @@ The bench's live evaluation and the camera model proposal's job run on threads
 of their own rather than as quiet tasks in the fast queue that give way to the
 tasks someone asked for; that is proposed in
 [../drafts/background-task-queues.md](../drafts/background-task-queues.md).
+So an evaluation already running on a node when a task is queued on it still
+lands, writing its measurements into the bench at the cursor in place: it moves
+no cursor, but the bench a waiting task's job captured is then not the
+one at the cursor when the task starts, and a bench step that lands replaces
+those measurements with its own answer. The draft's rule that no evaluation
+lands into a locked node closes that.
 
 ## What the user sees
 
@@ -306,7 +312,7 @@ A waiting task has no phases, so its name does not pick the phase list.
 
 **One waiting line per queue, however many wait.** The line names the queue's
 next task; when `k` more wait behind it the line carries `+{k}` before the
-cancel button, whose tooltip names them in order (`Also waiting, in order:
+cancel button, and the `+{k}`'s tooltip names them in order (`Also waiting, in order:
 Refit all points on bull; Prune covered observations on kerry_park.`). A line
 per waiting task would push the phase table out of a 170 px panel after two or
 three of them, and the table is what the panel is read for; with one line per
