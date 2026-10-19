@@ -216,7 +216,7 @@ it is refused with the unknown-panel message, which lists `background_tasks`
 │ Slow Bundle adjust dino ▓░ 42.7 s x│
 │ Fast Fit track bull         0.4 s  │
 │ ────────────────────────────────── │
-│ dino_do…embedded         round 2/3 │
+│ dino_dog_toy-embedded    round 2/3 │
 │     damping ladder          2.0 s  │
 │     linearise               51 ms  │
 │     normal equations        46 ms  │
@@ -280,7 +280,7 @@ A queue that has run nothing says `Nothing running` and no more.
 │ Slow Bundle adjust dino ▓░ 42.7 s x│
 │ Fast Nothing running               │
 │ ────────────────────────────────── │
-│ dino_do…embedded         round 2/3 │
+│ dino_dog_toy-embedded    round 2/3 │
 │     damping ladder          2.0 s  │
 │     linearise               51 ms  │
 │     normal equations        46 ms  │
