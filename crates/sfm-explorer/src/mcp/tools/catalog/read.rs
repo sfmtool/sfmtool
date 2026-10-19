@@ -366,7 +366,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           not project); and patch, along the patch's u and v, as {kind, unit, \
                           ellipse} with kind length and unit the reconstruction's \
                           world_space_unit (null for scene units, where the file names none), \
-                          or kind angle and unit degrees for a patch at infinity; patch is null \
+                          or kind angle and unit deg for a patch at infinity; patch is null \
                           at the cluster stage. Each ellipse is {axes, axes_is_at_least, \
                           major_angle, matrix}: axes [semi-major, semi-minor], each capped at 3 \
                           in grid_px, which the other units map; axes_is_at_least true per axis where the true length may be \

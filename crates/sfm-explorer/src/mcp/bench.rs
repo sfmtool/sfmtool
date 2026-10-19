@@ -1980,9 +1980,12 @@ fn ellipse(value: &SelfSimilarityEllipse) -> Value {
 /// `v` (angle from `u` towards `v`), as `{ "kind", "unit", "ellipse" }` with
 /// `kind` `"length"` and `unit` the reconstruction's `world_space_unit`
 /// (`world_unit`; null for scene units), or `kind` `"angle"` and `unit`
-/// `"degrees"` for a patch at infinity. `patch` is null at the cluster stage,
+/// `"deg"` for a patch at infinity. `patch` is null at the cluster stage,
 /// which has no patch.
-fn ellipse_units(value: Option<SelfSimilarityEllipseUnits>, world_unit: Option<&str>) -> Value {
+pub(super) fn ellipse_units(
+    value: Option<SelfSimilarityEllipseUnits>,
+    world_unit: Option<&str>,
+) -> Value {
     let Some(units) = value else {
         return Value::Null;
     };
@@ -1991,7 +1994,7 @@ fn ellipse_units(value: Option<SelfSimilarityEllipseUnits>, world_unit: Option<&
         Some(on_patch) => {
             let (kind, unit) = match on_patch {
                 PatchEllipse::Length(_) => ("length", world_unit),
-                PatchEllipse::Angle(_) => ("angle", Some("degrees")),
+                PatchEllipse::Angle(_) => ("angle", Some("deg")),
             };
             json!({
                 "kind": kind,

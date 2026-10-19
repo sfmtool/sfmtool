@@ -4397,7 +4397,7 @@ radius; `image_px` in the photograph's px, null where the tile's centre does not
 project; and `patch`, `{"kind", "unit", "ellipse"}` along the patch's `u` and
 `v`, with either `kind` `"length"` and `unit` the reconstruction's
 `world_space_unit` (null for scene units, where the file names none) or `kind`
-`"angle"` and `unit` `"degrees"` for a patch at infinity; `patch` is null at
+`"angle"` and `unit` `"deg"` for a patch at infinity; `patch` is null at
 the cluster stage, which has no patch. Each ellipse is `{"axes",
 "axes_is_at_least", "major_angle", "matrix"}`: `axes` `[semi-major,
 semi-minor]`, each capped at the largest radius searched in `grid_px`, which the

@@ -2716,6 +2716,37 @@ fn fit_and_set_stage_run_as_background_tasks_and_the_evaluation_follows_them() {
     );
 }
 
+/// The ellipse along a patch names its unit the way the wire's `_deg` and
+/// `_px` suffixes and the `world_space_unit` values do: a finite patch in the
+/// reconstruction's own unit, a patch at infinity in `"deg"`.
+#[test]
+fn the_patch_ellipse_names_its_unit_in_the_wire_spelling() {
+    use sfmtool_core::patch::self_similarity::{
+        PatchEllipse, SelfSimilarityEllipse, SelfSimilarityEllipseUnits,
+    };
+    let circle = SelfSimilarityEllipse {
+        axes: [2.0, 2.0],
+        axes_is_at_least: [false, false],
+        major_angle: f64::NAN,
+        matrix: [[4.0, 0.0], [0.0, 4.0]],
+    };
+    let units = |patch| {
+        Some(SelfSimilarityEllipseUnits {
+            grid_px: circle,
+            image_px: None,
+            patch: Some(patch),
+        })
+    };
+    let finite = crate::mcp::bench::ellipse_units(units(PatchEllipse::Length(circle)), Some("m"));
+    assert_eq!(finite["patch"]["kind"], json!("length"));
+    assert_eq!(finite["patch"]["unit"], json!("m"));
+    let at_infinity =
+        crate::mcp::bench::ellipse_units(units(PatchEllipse::Angle(circle)), Some("m"));
+    assert_eq!(at_infinity["patch"]["kind"], json!("angle"));
+    assert_eq!(at_infinity["patch"]["unit"], json!("deg"));
+    assert_eq!(at_infinity["patch"]["ellipse"]["axes"], json!([2.0, 2.0]));
+}
+
 /// A tilt drops the bitmap, and the evaluation that follows renders it again
 /// over the turned patch; the rows are scored against that new bitmap, not
 /// left without a score until a fit.
