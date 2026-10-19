@@ -1494,28 +1494,31 @@ fn a_running_phase_table_shows_the_newest_stage_not_the_first() {
 
     // Short enough that the table cannot hold all twelve, which is the shape of
     // the panel at the bottom of the left column.
-    let mut short = input();
-    short.screen_rect = Some(egui::Rect::from_min_size(
-        egui::Pos2::ZERO,
-        egui::vec2(260.0, 190.0),
-    ));
-    let ctx = egui::Context::default();
-    // The first frame lays the table out; the scroll offset it computes from
-    // that is applied to the next one.
-    crate::test_support::painted_texts(&ctx, short.clone(), |ui| {
-        super::panel::show(ui, &mut state)
-    });
-    let texts =
-        crate::test_support::painted_texts(&ctx, short, |ui| super::panel::show(ui, &mut state));
-    let last = PHASES.last().expect("a stage");
-    assert!(
-        texts.iter().any(|text| text == last),
-        "{last:?} was below the fold: {texts:?}",
-    );
-    assert!(
-        !texts.iter().any(|text| text == PHASES[0]),
-        "the table did not scroll at all: {texts:?}",
-    );
+    for height in [170.0, 190.0] {
+        let mut short = input();
+        short.screen_rect = Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(260.0, height),
+        ));
+        let ctx = egui::Context::default();
+        // The first frame lays the table out; the scroll offset it computes
+        // from that is applied to the next one.
+        crate::test_support::painted_texts(&ctx, short.clone(), |ui| {
+            super::panel::show(ui, &mut state)
+        });
+        let texts = crate::test_support::painted_texts(&ctx, short, |ui| {
+            super::panel::show(ui, &mut state)
+        });
+        let last = PHASES.last().expect("a stage");
+        assert!(
+            texts.iter().any(|text| text == last),
+            "{last:?} was below the fold at {height} px: {texts:?}",
+        );
+        assert!(
+            !texts.iter().any(|text| text == PHASES[0]),
+            "the table did not scroll at all at {height} px: {texts:?}",
+        );
+    }
 
     gate.open();
     state.finish_background_tasks();

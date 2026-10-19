@@ -268,14 +268,12 @@ quiet line:
 
 ```
 ┌ Background Tasks ──────────────────────────────┐
-│ Slow                                           │
-│ Bundle adjust   dino            ▓▓▓▓░░  41 s  ✕│
+│ Slow Bundle adjust  dino          ▓░  41 s    ✕│
 │   waiting: Retriangulate all points  bull     ✕│
-│ Fast                                           │
-│ Fit track       bull: track_3       done 0.4 s │
+│ Fast Fit track  bull: track_3          0.4 s   │
 │   quiet: Live evaluation (viewed pt3d_…_830)   │
 ├────────────────────────────────────────────────┤
-│ Bundle adjust: phases                          │
+│ Bundle adjust on dino                          │
 │   linearise              4.4 s                 │
 │ ▶ damping ladder        36.1 s                 │
 └────────────────────────────────────────────────┘
