@@ -10,16 +10,17 @@
 //! running task shares with its worker, and its Cancel buttons call
 //! [`AppState::cancel_background_task`].
 //!
-//! ## A section per queue, and neither form is blank
+//! ## A line per queue, and neither form is blank
 //!
-//! Each queue has a section. Running, it draws the operation, the node, a bar
-//! or a spinner, the elapsed and a Cancel button. Idle, it draws the last task
-//! that finished from that queue greyed, because the question a reader brings
-//! here after a long solve is "what did that cost" and the answer is still in
-//! reach. A queue that has run nothing says `Nothing running` and no more.
-//! Below the sections is one phase table, for the task a person last clicked
-//! the name of, or else the slow queue's running task, the fast queue's, or the
-//! last task to finish.
+//! Each queue has one line. Running, it draws the operation, the node, a small
+//! bar or a spinner, the elapsed and a Cancel button. Idle, it draws the last
+//! task that finished from that queue greyed, with its node and its cost,
+//! because the question a reader brings here after a long solve is "what did
+//! that cost" and the answer is still in reach. A queue that has run nothing
+//! says `Nothing running` and no more. Below the lines is one phase table, for
+//! the task a person last clicked the name of, or else the slow queue's running
+//! task, the fast queue's, or the last task to finish, under a title line that
+//! carries a running task's count and status.
 //!
 //! ## The phase table is the Action Log's rows
 //!
@@ -44,6 +45,18 @@ use crate::state::AppState;
 /// empty box.
 pub(super) const OPEN_MARK: &str = "\u{25b6}";
 
+/// Width of a running task's bar on its queue's line: enough to read how far
+/// along it is, little enough to leave the node's name some of the line.
+const BAR_WIDTH: f32 = 28.0;
+
+/// The gap between the items of a queue's line.
+const LINE_SPACING: f32 = 4.0;
+
+/// A running task's Cancel button: egui's own close glyph, since the word
+/// would take a quarter of a line the panel's width has no room for. Its
+/// tooltip says what it does.
+pub(super) const CANCEL: &str = "\u{1f5d9}";
+
 /// Width of the cost column: [`ActionLog::format_took`]'s widest ordinary
 /// output, `999.9 s`, and a gap before the panel's edge.
 const COST_WIDTH: f32 = 56.0;
@@ -57,12 +70,21 @@ const COST_WIDTH: f32 = 56.0;
 /// is asked for only where there is a live task.
 const TICK: Duration = Duration::from_millis(100);
 
-/// The panel body: a section per queue, then the phases of one task.
+/// The panel body: one line per queue, then the phases of one task.
+///
+/// A line rather than a block per queue, because the panel sits at the bottom
+/// of the left column, about 170 px tall in a 720 px window, and the phase
+/// table under the lines is what a reader watches: two blocks of four rows each
+/// would leave it one row, and not the row that is running.
 pub(crate) fn show(ui: &mut egui::Ui, state: &mut AppState) {
     let mut asked = Asked::default();
     for queue in Queue::ALL {
-        ui.label(egui::RichText::new(queue.title()).strong());
-        ui.indent(("background_tasks_queue", queue.name()), |ui| {
+        ui.horizontal(|ui| {
+            // Closer than egui's default, so the node's name keeps some of a
+            // line that also holds the queue, the operation, the bar, the
+            // elapsed and the Cancel button.
+            ui.spacing_mut().item_spacing.x = LINE_SPACING;
+            ui.label(egui::RichText::new(queue.title()).strong());
             match state.queue(queue).running.as_ref().map(|task| task.id) {
                 Some(id) => show_running(ui, state, id, &mut asked),
                 None => show_idle(ui, state, queue, &mut asked),
@@ -107,7 +129,8 @@ pub(crate) fn chosen_task(state: &AppState) -> Option<u64> {
         .or_else(|| state.last_finished_task().map(|task| task.id))
 }
 
-/// The task's name, as a label that picks its phases when clicked.
+/// The task's name, as a label that picks its phases when clicked, cut to the
+/// room left on its line.
 fn name_button(
     ui: &mut egui::Ui,
     text: egui::RichText,
@@ -115,9 +138,10 @@ fn name_button(
     chosen: Option<u64>,
     asked: &mut Asked,
 ) {
+    let name = text.text().to_string();
     if ui
-        .selectable_label(chosen == Some(id), text)
-        .on_hover_text("Show this task's phases below.")
+        .add(egui::Button::selectable(chosen == Some(id), text).truncate())
+        .on_hover_text(format!("{name}: show its phases below."))
         .clicked()
     {
         asked.shown = Some(id);
@@ -187,8 +211,12 @@ fn phase_name(live: &Live, row: usize) -> Option<&'static str> {
     }
 }
 
-/// A queue's running task: the operation, the node, the progress, the elapsed
-/// and the Cancel button. Its phases are in the list below the sections.
+/// A queue's running task, on its queue's line: the operation, the node, a
+/// small bar or a spinner, the elapsed and the Cancel button.
+///
+/// The count and the status line are the phase list's title's, for the task
+/// whose phases are shown ([`show_chosen_phases`]), so the line stays one
+/// line.
 fn show_running(ui: &mut egui::Ui, state: &AppState, id: u64, asked: &mut Asked) {
     let refusal = state.cancel_refusal(id);
     let chosen = chosen_task(state);
@@ -197,58 +225,67 @@ fn show_running(ui: &mut egui::Ui, state: &AppState, id: u64, asked: &mut Asked)
     let label = task.label.clone();
     let elapsed = task.started.elapsed();
     let live = task.collector.live();
-    let status = task.collector.status();
     let bar = bar(&task.collector, &live);
 
-    name_button(ui, egui::RichText::new(name).strong(), id, chosen, asked);
-    ui.label(egui::RichText::new(label).weak());
-    show_bar(ui, &bar);
-
-    // Absent rather than blank: an operation that says nothing about what it is
-    // doing right now leaves no row, where an empty one would read as a stage
-    // that had failed to name itself.
-    if let Some(status) = status {
-        ui.label(egui::RichText::new(status).weak());
-    }
-
-    ui.horizontal(|ui| {
-        ui.label(
-            egui::RichText::new(format!("{} elapsed", ActionLog::format_took(elapsed))).weak(),
-        );
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            // Present always, so a reader never wonders whether they missed it,
-            // and live only where asking would do something.
-            let button = ui.add_enabled(refusal.is_none(), egui::Button::new("Cancel"));
-            let button = match refusal.as_deref() {
-                Some(refusal) => button.on_disabled_hover_text(refusal),
-                None => button.on_hover_text("Ask the operation to stop."),
-            };
-            if button.clicked() {
-                asked.cancel = Some(id);
-            }
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        // Present always, so a reader never wonders whether they missed it,
+        // and live only where asking would do something.
+        let button = ui.add_enabled(refusal.is_none(), egui::Button::new(CANCEL).small());
+        let button = match refusal.as_deref() {
+            Some(refusal) => button.on_disabled_hover_text(refusal),
+            None => button.on_hover_text("Ask the operation to stop."),
+        };
+        if button.clicked() {
+            asked.cancel = Some(id);
+        }
+        // The elapsed is reserved before the node's name is drawn, as an idle
+        // line's cost is: it is the number a reader is watching.
+        ui.label(egui::RichText::new(ActionLog::format_took(elapsed)).weak())
+            .on_hover_text("elapsed");
+        show_bar(ui, &bar);
+        // The operation and its node from the left, in what the right-hand
+        // items leave, so a long operation name is cut rather than drawn
+        // under the bar.
+        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            name_button(ui, egui::RichText::new(name).strong(), id, chosen, asked);
+            show_node(ui, &label);
         });
     });
 }
 
-/// The bar, or the spinner that stands in for one.
+/// The bar, or the spinner that stands in for one, small enough for a line.
+///
+/// The count beside a measured bar is the phase list's title's
+/// ([`show_chosen_phases`]) and the bar's tooltip; the open phase a spinner
+/// stands for is the marked row of the phase table.
 fn show_bar(ui: &mut egui::Ui, bar: &Bar) {
     match bar {
         Bar::Measured { fraction, count } => {
-            let mut widget = egui::ProgressBar::new(*fraction);
+            let response = ui.add(egui::ProgressBar::new(*fraction).desired_width(BAR_WIDTH));
             if let Some(count) = count {
-                widget = widget.text(count.clone());
+                response.on_hover_text(count.clone());
             }
-            ui.add(widget);
         }
-        Bar::Spinner { phase } => {
-            ui.horizontal(|ui| {
-                ui.add(egui::Spinner::new());
-                if let Some(phase) = phase {
-                    ui.label(egui::RichText::new(*phase).weak());
-                }
-            });
+        Bar::Spinner { .. } => {
+            ui.add(egui::Spinner::new());
         }
     }
+}
+
+/// The node's label, cut out of the middle to the room left on the line, with
+/// the whole of it on hover.
+fn show_node(ui: &mut egui::Ui, label: &str) {
+    // The cut here is ours, out of the middle, so `Label` is handed a string
+    // that already fits and would tooltip nothing: its own elision tooltip is
+    // turned off and the full name given directly. That is the one tooltip,
+    // rather than the two a `Label` that elided for itself would stack.
+    ui.add(
+        egui::Label::new(egui::RichText::new(elide_to_fit(ui, label)).weak())
+            .show_tooltip_when_elided(false)
+            .truncate()
+            .selectable(false),
+    )
+    .on_hover_text(label);
 }
 
 /// `text` cut to the width left in `ui`, out of the middle.
@@ -272,8 +309,8 @@ fn elide_to_fit(ui: &egui::Ui, text: &str) -> String {
 
 // -- Idle ------------------------------------------------------------------
 
-/// An idle queue: the last task that finished from it, greyed, or `Nothing
-/// running` when it has run nothing this session.
+/// An idle queue's line: the last task that finished from it, greyed, with
+/// its node and what it cost, or `Nothing running` when it has run nothing.
 fn show_idle(ui: &mut egui::Ui, state: &AppState, queue: Queue, asked: &mut Asked) {
     let Some(last) = state.last_finished_in(queue) else {
         ui.label(egui::RichText::new("Nothing running").weak());
@@ -284,46 +321,30 @@ fn show_idle(ui: &mut egui::Ui, state: &AppState, queue: Queue, asked: &mut Aske
     let name = last.operation.name;
     let label = last.label.clone();
     let took = ActionLog::format_took(last.took);
-
-    ui.horizontal(|ui| {
-        // The cost is reserved before the name is drawn: a long one would
-        // otherwise push the number off the panel, and the number is what a
-        // reader came back to this panel to find.
-        let width = (ui.available_width() - COST_WIDTH).max(0.0);
-        ui.allocate_ui_with_layout(
-            egui::vec2(width, ui.text_style_height(&egui::TextStyle::Body)),
-            egui::Layout::left_to_right(egui::Align::Center),
-            |ui| {
-                name_button(ui, egui::RichText::new(name).weak(), id, chosen, asked);
-            },
-        );
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.label(egui::RichText::new(took).weak());
+    // The cost is drawn before the node, from the right: a long name would
+    // otherwise push the number off the panel, and the number is what a
+    // reader came back to this panel to find. The node takes what is left.
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.label(egui::RichText::new(took).weak());
+        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            name_button(ui, egui::RichText::new(name).weak(), id, chosen, asked);
+            show_node(ui, &label);
         });
-    });
-    // The node goes on a line of its own, as it does while the operation runs.
-    // Sharing the row with the operation and the cost left it a third of a
-    // narrow panel, which is not enough of a name to tell one run from
-    // another: `20260628-01-solve-seattle_backyard_1-26-embedded` came out as
-    // `202\u{2026}ed`. A line of its own is the width of the panel, and the
-    // same two lines a reader was watching a minute ago.
-    ui.horizontal(|ui| {
-        // The cut here is ours, out of the middle, so `Label` is handed a
-        // string that already fits and would tooltip nothing: its own elision
-        // tooltip is turned off and the full name given directly. That is the
-        // one tooltip, rather than the two a `Label` that elided for itself
-        // would stack.
-        ui.add(
-            egui::Label::new(egui::RichText::new(elide_to_fit(ui, &label)).weak())
-                .show_tooltip_when_elided(false)
-                .truncate()
-                .selectable(false),
-        )
-        .on_hover_text(label);
     });
 }
 
+/// The phase list's title: the task and its node, whose whole name the queue
+/// line may have had to cut.
+pub(crate) fn phases_title(operation: &str, label: &str) -> String {
+    format!("{operation} on {label}")
+}
+
 /// The phases of the task [`chosen_task`] names, under a line naming it.
+///
+/// For a running task the title line also carries the kernel's count, `round
+/// 2/3`, and the status line, the one thing the operation says it is doing
+/// right now, cut to the panel's width: the queue lines have no room for
+/// either.
 ///
 /// Always showing, for a finished task as for a running one. The Action Log
 /// hides a breakdown behind a toggle because it has a row for every action of
@@ -338,11 +359,36 @@ fn show_chosen_phases(ui: &mut egui::Ui, state: &AppState) {
     match state.task(id) {
         Some(TaskState::Running(task)) => {
             let live = task.collector.live();
-            ui.label(egui::RichText::new(format!("{}: phases", task.operation.name)).weak());
+            let count = task.collector.count().map(count_text);
+            let status = task.collector.status();
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(phases_title(task.operation.name, &task.label)).weak(),
+                );
+                if let Some(count) = count {
+                    ui.label(egui::RichText::new(count).weak());
+                }
+                // Absent rather than blank: an operation that says nothing
+                // about what it is doing right now leaves nothing here, where
+                // an empty label would read as a stage that had failed to name
+                // itself.
+                if let Some(status) = status {
+                    ui.add(
+                        egui::Label::new(egui::RichText::new(status).weak())
+                            .truncate()
+                            .selectable(false),
+                    );
+                }
+            });
             show_phases(ui, id, &live.rows, &live.open, true);
         }
         Some(TaskState::Finished(task)) if !task.detail.is_empty() => {
-            ui.label(egui::RichText::new(format!("{}: phases", task.operation.name)).weak());
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(phases_title(task.operation.name, &task.label)).weak(),
+                )
+                .truncate(),
+            );
             // Nothing is open: the operation is over, so every row is a run
             // that closed.
             show_phases(ui, id, &task.detail, &[], false);

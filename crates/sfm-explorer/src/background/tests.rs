@@ -1158,7 +1158,7 @@ fn each_queue_has_a_section_and_one_task_s_phases_show_below() {
         at("Bundle adjust"),
         at("Fast"),
         at("Fit track"),
-        at("Bundle adjust: phases"),
+        at("Bundle adjust on run_a"),
         at("gather arrays"),
     ];
     assert!(order.iter().all(Option::is_some), "{texts:?}");
@@ -1168,7 +1168,7 @@ fn each_queue_has_a_section_and_one_task_s_phases_show_below() {
     // Clicking the fit's name is what this stands for.
     state.background_phases_of = Some(fast);
     let texts = painted(&mut state);
-    assert!(texts.iter().any(|t| t == "Fit track: phases"), "{texts:?}");
+    assert!(texts.iter().any(|t| t == "Fit track on demo"), "{texts:?}");
     assert!(texts.iter().any(|t| t == "decode images"), "{texts:?}");
     assert!(!texts.iter().any(|t| t == "gather arrays"), "{texts:?}");
 
@@ -1177,7 +1177,7 @@ fn each_queue_has_a_section_and_one_task_s_phases_show_below() {
     fast_gate.open();
     state.finish_background_task(fast);
     let texts = painted(&mut state);
-    assert!(texts.iter().any(|t| t == "Fit track: phases"), "{texts:?}");
+    assert!(texts.iter().any(|t| t == "Fit track on demo"), "{texts:?}");
     assert!(texts.iter().any(|t| t == "demo"), "{texts:?}");
     assert!(
         !texts.iter().any(|t| t == "Nothing running"),
@@ -1257,7 +1257,9 @@ fn the_entry_is_the_summary_of_what_the_running_panel_showed() {
     );
     assert!(while_running.iter().any(|text| text == "run_a"));
     assert!(
-        while_running.iter().any(|text| text.ends_with(" elapsed")),
+        while_running
+            .iter()
+            .any(|text| text.ends_with(" s") || text.ends_with(" ms")),
         "the elapsed is missing from {while_running:?}"
     );
 
@@ -1408,7 +1410,7 @@ fn cancel_is_live_for_one_operation_and_explained_for_the_other() {
         let first = painted_at(&ctx, &mut state, input());
         let at = first
             .iter()
-            .find(|(text, _)| text == "Cancel")
+            .find(|(text, _)| text == super::panel::CANCEL)
             .unwrap_or_else(|| panic!("no Cancel button: {first:?}"))
             .1;
         // Into the middle of the glyphs rather than at their corner, which is
@@ -1495,7 +1497,7 @@ fn a_running_phase_table_shows_the_newest_stage_not_the_first() {
     let mut short = input();
     short.screen_rect = Some(egui::Rect::from_min_size(
         egui::Pos2::ZERO,
-        egui::vec2(260.0, 300.0),
+        egui::vec2(260.0, 190.0),
     ));
     let ctx = egui::Context::default();
     // The first frame lays the table out; the scroll offset it computes from
@@ -1515,6 +1517,57 @@ fn a_running_phase_table_shows_the_newest_stage_not_the_first() {
         "the table did not scroll at all: {texts:?}",
     );
 
+    gate.open();
+    state.finish_background_tasks();
+}
+
+/// With a task in each queue, the panel at the height it has at the bottom
+/// of the left column still shows the chosen task's newest stage: the queue
+/// lines are one line each, so the phase table keeps the room.
+#[test]
+fn with_both_queues_running_the_newest_stage_is_still_shown() {
+    let (mut state, id) = adjustable();
+    let other = second_node(&mut state);
+    let mut gate = Gate::new();
+    let (said, heard) = mpsc::channel();
+    state
+        .start_background_task(
+            Operation::BUNDLE_ADJUST,
+            id,
+            many_phases_job(gate.held(), said),
+        )
+        .expect("nothing else is running");
+    heard.recv().expect("the worker reported");
+    let fast = running(&mut state, other, Operation::BENCH_FIT);
+    state.poll_background_tasks();
+
+    for height in [170.0, 190.0] {
+        let mut short = input();
+        short.screen_rect = Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(260.0, height),
+        ));
+        let ctx = egui::Context::default();
+        crate::test_support::painted_texts(&ctx, short.clone(), |ui| {
+            super::panel::show(ui, &mut state)
+        });
+        let texts = crate::test_support::painted_texts(&ctx, short, |ui| {
+            super::panel::show(ui, &mut state)
+        });
+        for line in ["Slow", "Bundle adjust", "Fast", "Fit track"] {
+            assert!(
+                texts.iter().any(|text| text == line),
+                "{line:?} at {height}: {texts:?}"
+            );
+        }
+        let last = PHASES.last().expect("a stage");
+        assert!(
+            texts.iter().any(|text| text == last),
+            "{last:?} was below the fold at {height} px: {texts:?}",
+        );
+    }
+
+    fast.open();
     gate.open();
     state.finish_background_tasks();
 }
@@ -1595,16 +1648,44 @@ fn an_idle_panel_keeps_the_cost_clear_of_a_long_label() {
             "{text:?} ran to {right}, under a cost starting at {cost_left}",
         );
     }
-    // The node is still there to be read, shortened, and on a line of its own
-    // below the operation rather than squeezed beside it.
-    let (_, _, _, label_row) = *spans
+    // The node is still there to be read, shortened out of the middle on the
+    // queue's line, in the room the cost leaves it.
+    spans
         .iter()
-        .find(|(text, _, _, _)| text.starts_with("a_recon") && text.ends_with("horten"))
+        .find(|(text, _, _, _)| text.starts_with("a_rec") && text.ends_with("en"))
         .unwrap_or_else(|| panic!("the node was not drawn: {spans:?}"));
-    assert!(
-        label_row > cost_row,
-        "the node shared the operation's line: {spans:?}",
-    );
+}
+
+/// A running task's line holds a long operation name in the default panel
+/// width by cutting it: nothing on the line is drawn over anything else.
+#[test]
+fn a_running_line_cuts_a_long_name_rather_than_overlapping() {
+    let (mut state, id) = adjustable();
+    let gate = running(&mut state, id, Operation::PRUNE_COVERED_OBSERVATIONS);
+    // The left column's width in a 1280 px window.
+    let spans = painted_spans(&mut state, 230.0);
+    let row = spans
+        .iter()
+        .find(|(text, _, _, _)| text == "Slow")
+        .unwrap_or_else(|| panic!("no slow line: {spans:?}"))
+        .3;
+    let mut line: Vec<(f32, f32, &str)> = spans
+        .iter()
+        .filter(|(text, _, _, y)| (*y - row).abs() <= 2.0 && !text.is_empty())
+        .map(|(text, left, right, _)| (*left, *right, text.as_str()))
+        .collect();
+    line.sort_by(|a, b| a.0.total_cmp(&b.0));
+    for pair in line.windows(2) {
+        assert!(
+            pair[0].1 <= pair[1].0 + 0.5,
+            "{:?} runs under {:?}: {line:?}",
+            pair[0].2,
+            pair[1].2,
+        );
+    }
+    assert!(line.iter().all(|(_, right, _)| *right <= 230.5), "{line:?}");
+    gate.open();
+    state.finish_background_tasks();
 }
 
 /// A scroll wheel event over the phase table.
@@ -1834,7 +1915,7 @@ fn an_idle_panel_opens_at_the_first_stage_not_the_last() {
     let mut short = input();
     short.screen_rect = Some(egui::Rect::from_min_size(
         egui::Pos2::ZERO,
-        egui::vec2(260.0, 310.0),
+        egui::vec2(260.0, 200.0),
     ));
     let ctx = egui::Context::default();
     let frame = |state: &mut AppState| {

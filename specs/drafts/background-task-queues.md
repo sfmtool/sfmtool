@@ -11,7 +11,7 @@ the fast queue.
 **Step 1 is built** (§ "Steps"): the two queues, each running one task with
 none waiting; each operation's `queue` and `locks`; the node lock and the
 busy-queue refusal; start functions that return the task's id, the lookup by id
-and the ring of finished tasks; the panel's two sections, its title
+and the ring of finished tasks; the panel's line per queue, its title
 **Background Tasks** and wire name `background_tasks`; and the renamed tools
 `get_background_tasks` and `cancel_background_tasks` with the `queue` field on
 the handle and `get_scene`'s `background_tasks` list. Those are described in
@@ -260,9 +260,9 @@ rewritten.
 ## The panel
 
 The panel's title is **Background Tasks** and its wire name `background_tasks`
-(`Tab::BackgroundTasks`), with no alias for the old name; its sections, its
+(`Tab::BackgroundTasks`), with no alias for the old name; its queue lines, its
 idle and running forms and its one phase list are built (Step 1,
-[gui/background-tasks.md](../gui/background-tasks.md) § "A section per queue,
+[gui/background-tasks.md](../gui/background-tasks.md) § "A line per queue,
 and one phase list"). What the remaining steps add is the waiting lines and the
 quiet line:
 
@@ -281,17 +281,17 @@ quiet line:
 └────────────────────────────────────────────────┘
 ```
 
-- **One section per queue.** Each section shows the queue's running task in
-  its running form (name, label, bar or spinner, status line, elapsed time,
-  Cancel), then its waiting tasks, one line each with a cancel button.
-  An idle queue shows the last task that finished from it, read from the
-  record of finished tasks, in today's idle form.
-- **Quiet tasks** show as one dim line in the fast section: the running quiet
-  task's operation and subject, with no bar and no Cancel. A quiet task runs
-  only while no asked-for task runs in the fast queue, so the section then
-  shows the fast queue's last finished task above the quiet line, as in the
-  picture.
-- **The phases** below the sections are those of one task: the one a person
+- **One line per queue**, as built: the queue's running task in its running
+  form (name, label, small bar or spinner, elapsed time, Cancel), and below
+  it its waiting tasks, one line each with a cancel button. An idle queue's
+  line shows the last task that finished from it, read from the record of
+  finished tasks, in today's idle form.
+- **Quiet tasks** show as one dim line under the fast queue's: the running
+  quiet task's operation and subject, with no bar and no Cancel. A quiet task
+  runs only while no asked-for task runs in the fast queue, so the fast line
+  then shows the fast queue's last finished task above the quiet line, as in
+  the picture.
+- **The phases** below the queue lines are those of one task: the one a person
   last clicked, and otherwise the slow queue's running task, the fast queue's,
   or the last task to finish, in that order. The panel still shows one phase
   list, so it stays the height it is.
@@ -414,7 +414,7 @@ Each step is one PR through `implement-change`:
      one running task, takes the id it waits for, and `open_now`
      (`state/open.rs`) reads its open's record by id rather than from
      `last_background_task`.
-   - The panel's two sections, its title and its wire name
+   - The panel's line per queue, its title and its wire name
      (`background_tasks`).
    - The wire changes for two running tasks, with the two tools renamed.
 2. **Waiting.**

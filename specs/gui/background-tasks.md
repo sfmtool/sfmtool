@@ -209,48 +209,55 @@ tree ([panel-layout.md](panel-layout.md) § "Home positions"). The singular
 it is refused with the unknown-panel message, which lists `background_tasks`
 ([panel-layout.md](panel-layout.md) § "Vocabulary").
 
-### A section per queue, and one phase list
+### A line per queue, and one phase list
 
 ```
-┌ Background Tasks ────────────┐
-│ Slow                         │
-│   Bundle adjust              │
-│   dino_dog_toy-embedded      │
-│   █████░░░░░░░░░  round 2/3  │
-│   42.7 s elapsed     [Cancel]│
-│ Fast                         │
-│   Fit track           0.4 s  │
-│   bull                       │
-│ ──────────────────────────── │
-│ Bundle adjust: phases        │
-│     damping ladder    2.0 s  │
-│     linearise         51 ms  │
-│     normal equations  46 ms  │
-│     damping ladder   ▶ 4.7 s │
-└──────────────────────────────┘
+┌ Background Tasks ──────────────────┐
+│ Slow Bundle adjust dino ▓░ 42.7 s x│
+│ Fast Fit track bull         0.4 s  │
+│ ────────────────────────────────── │
+│ Bundle adjust on dino… round 2/3   │
+│     damping ladder          2.0 s  │
+│     linearise               51 ms  │
+│     normal equations        46 ms  │
+│     damping ladder         ▶ 4.7 s │
+└────────────────────────────────────┘
 ```
 
-The panel has a section for each queue, slow first. A queue that is running a
-task shows it in the **running form** (§ "Running"): the operation, its node,
-the bar or spinner, the status line, the elapsed and Cancel. An idle queue shows
-the last task that finished from it in the **idle form** (§ "Idle"), read from
-the record of finished tasks, or `Nothing running` when it has run nothing this
-session.
+The panel has **one line for each queue**, slow first, led by the queue's name.
+A queue that is running a task shows it in the **running form** (§ "Running"):
+the operation, its node, a small bar or a spinner, the elapsed and Cancel. An
+idle queue shows the last task that finished from it in the **idle form**
+(§ "Idle"), read from the record of finished tasks, or `Nothing running` when it
+has run nothing this session. The items on the right of a line are laid out
+first, and the operation's name and then the node's are cut to what they leave,
+each giving its whole self on hover, so a long name is shortened rather than
+drawn under the elapsed.
 
-Below the sections is **one phase list**, for one task, under a line naming it
-(`Bundle adjust: phases`): the task whose name a person last clicked, while it is
-running or still kept, and otherwise the slow queue's running task, the fast
-queue's, or the last task to finish, in that order (`panel::chosen_task`). One
-list rather than one per section keeps the panel the height it was with one
-queue, and the click is a choice the panel remembers
-(`AppState::background_phases_of`) rather than a mode.
+One line rather than a block per queue, because the panel sits at the bottom of
+the left column, about 170 px tall in a 1280 × 720 window at the default split,
+and the phase table below the lines is what a reader watches. A block of four
+rows per queue left the table one row there, and not the row that is running;
+two lines, a separator and the title line leave it the newest stages, which a
+test holds at 170 px and 190 px with a task in each queue.
+
+Below the lines is **one phase list**, for one task, under a **title line**
+naming it and its node (`Bundle adjust on dino_dog_toy-embedded`): the task whose
+name a person last clicked, while it is running or still kept, and otherwise the
+slow queue's running task, the fast queue's, or the last task to finish, in that
+order (`panel::chosen_task`). For a running task the title line also carries the
+kernel's count (`round 2/3`) and the status line, cut to the panel's width,
+since a queue's line has no room for either. One list rather than one per queue
+keeps the panel no taller than it was with one queue, and the click is a choice
+the panel remembers (`AppState::background_phases_of`) rather than a mode.
 
 ### Idle
 
-An idle queue's section is not blank. It shows the last task that finished from
-that queue, greyed: its name and what it cost on one line, and its node on the
-next as it is while the operation runs. Its phases are the list below when it is
-the chosen task, and they are **always showing**: the Action Log hides a
+An idle queue's line is not blank. It shows the last task that finished from
+that queue, greyed: its name, its node and what it cost, the cost on the right
+and drawn first, so a long node name is cut rather than run under the number a
+reader came back for. Its phases are the list below when it is the chosen task,
+and they are **always showing**: the Action Log hides a
 breakdown behind a toggle because it has a row for every action of the session
 and expanding them all would bury the list, where this panel shows one task's
 and the breakdown is the main thing it has to say. A toggle here would be a
@@ -263,22 +270,19 @@ A queue that has run nothing says `Nothing running` and no more.
 ### Running
 
 ```
-┌ Background Tasks ────────────┐
-│ Slow                         │
-│   Bundle adjust              │
-│   dino_dog_toy-embedded      │
-│   █████░░░░░░░░░  round 2/3  │
-│   42.7 s elapsed     [Cancel]│
-│ Fast                         │
-│   Nothing running            │
-│ ──────────────────────────── │
-│ Bundle adjust: phases        │
-│     damping ladder    2.0 s  │
-│     linearise         51 ms  │
-│     normal equations  46 ms  │
-│     damping ladder   ▶ 4.7 s │
-└──────────────────────────────┘
+┌ Background Tasks ──────────────────┐
+│ Slow Bundle adjust dino ▓░ 42.7 s x│
+│ Fast Nothing running               │
+│ ────────────────────────────────── │
+│ Bundle adjust on dino… round 2/3   │
+│     damping ladder          2.0 s  │
+│     linearise               51 ms  │
+│     normal equations        46 ms  │
+│     damping ladder         ▶ 4.7 s │
+└────────────────────────────────────┘
 ```
+
+`x` stands for the close glyph Cancel is drawn as.
 
 The table is scrolled to its end, because that is where the operation is.
 Earlier rows are above it, and none of them is a summary of another:
@@ -299,10 +303,13 @@ Earlier rows are above it, and none of them is a summary of another:
 ```
 
 - **The name and the node** are the operation and the label it runs on, so a
-  glance says what the window is busy with.
-- **Progress** is a bar with the kernel's own count and unit when anything
-  underneath reports one, and a spinner with the open phase's name when nothing
-  does. The bar is a statement about how much of the work is behind you, never a
+  glance says what the window is busy with. The title line above the phases
+  repeats both for the chosen task, where there is room for more of the node's
+  name.
+- **Progress** is a small bar on the task's line when anything underneath
+  reports a count, with the kernel's own count and unit (`round 2/3`) on the
+  title line and as the bar's tooltip, and a spinner when nothing does, the
+  open phase being the marked row of the table. The bar is a statement about how much of the work is behind you, never a
   prediction of when it will end: it moves only where a stage reports a count,
   and a stage that reports none moves it not at all. The step at a boundary is
   the next stage's range beginning rather than anything the panel adds
@@ -315,15 +322,17 @@ Earlier rows are above it, and none of them is a summary of another:
   member being refined. It is live state and is never kept in the Action Log
   entry, because once the entry exists the answer is "finished"
   ([operation-progress.md](operation-progress.md) § "Status is not a message").
-  It sits under the bar, because it is the words for the same thing the numbers
-  beside the bar count. The collector already keeps one and nothing draws it;
-  the sketch above has no status row because the bundle adjustment sets none,
-  and the row is absent rather than blank when an operation says nothing.
+  It sits on the title line after the count, because it is the words for the
+  same thing the count counts, cut to the panel's width with the whole of it on
+  hover. The sketch above has none because the bundle adjustment sets none, and
+  it is absent rather than blank when an operation says nothing.
 - **Elapsed** counts up from the instant the operation started, which is the
   number the person is actually watching. A frame is asked for every 100 ms so
   that it keeps counting through a stage that reports nothing.
-- **Cancel** is present always, one per running task, and enabled only when the
-  operation can be cancelled, with a tooltip saying so when it cannot. The alternative, hiding
+- **Cancel** is present always, one per running task, drawn as egui's close
+  glyph (🗙) at the end of the task's line with *"Ask the operation to stop."* as
+  its tooltip, and enabled only when the operation can be cancelled, with a
+  tooltip saying so when it cannot. The alternative, hiding
   the button, leaves the reader wondering whether they missed it.
 - **The phase table** is the live form of what the Action Log entry will hold.
   Completed phases show their cost, the open one is marked and shows the time it
@@ -415,7 +424,7 @@ The finished value arrives on the channel with its row map and the sentence the
 edit would have recorded. On the next frame the GUI thread pushes the version,
 moves the selection forward through the map, and writes exactly the Action Log
 entry the synchronous edit writes today, with the worker's phases attached to
-it. Its queue's section in the panel drops back to its idle form showing that same
+it. Its queue's line in the panel drops back to its idle form showing that same
 operation.
 
 The entry's actor is whoever asked for the operation, not the viewer: an agent
@@ -1002,9 +1011,14 @@ Panel, through `test_support::run_frame_headless`:
 - The three states paint what they should: idle with nothing run (`Nothing
   running` under each queue), idle with a finished operation, and running with a
   bar and with a spinner.
-- With a task in each queue, each section shows its own, and the phase list is
+- With a task in each queue, each line shows its own, and the phase list is
   the slow task's until the fast one is chosen, and stays the fast one's once it
   has finished.
+- With a task in each queue, at 170 px and 190 px tall, both lines and the
+  chosen task's newest stage are painted; the running table's newest stage is
+  painted at 190 px and an idle table opens at its first stage at 200 px.
+- A running task's line in the default panel width cuts a long operation name
+  rather than drawing anything over anything else.
 - Cancel is disabled, with its tooltip, for an operation whose kernels do not
   poll the flag, and live for one that does.
 - A status replaces the previous one rather than adding a line, and the panel
@@ -1084,7 +1098,7 @@ covered with every other panel's ([panel-layout.md](panel-layout.md) §
 |-----------|---------|---------|
 | left column split (`Layout::default`) | `0.72` | Scene's share of the left column; Background Tasks takes the rest |
 | Background Tasks home edge / share | left / `0.18` | Same edge and share as Scene, whose group-mate it is |
-| `FINISHED_KEPT` | `16` | How many finished tasks the ring keeps for the deferred reply, Surface Tiling's wait, the panel's idle sections and `get_background_tasks` (§ "Rust API") |
+| `FINISHED_KEPT` | `16` | How many finished tasks the ring keeps for the deferred reply, Surface Tiling's wait, the panel's idle lines and `get_background_tasks` (§ "Rust API") |
 | `REPLY_DIRECTLY_WITHIN` | `200 ms` | How long a tool waits before answering with a handle instead of a result (§ "On the wire") |
 | repaint tick while running | `100 ms` | The elapsed counts up between reports, and a worker deep in a silent stage sends none for a frame to ride on |
 | seconds shown to | one decimal | The cost column is read here while it moves, and at ten frames a second a hundredths digit only spins ([action-log.md](action-log.md)) |
@@ -1114,7 +1128,7 @@ covered with every other panel's ([panel-layout.md](panel-layout.md) §
   generalisation and would cost little in the state. It is not done because two
   solves at once is a slower way to do one thing, for the reason each queue runs
   one task at a time.
-- **A history in the idle panel.** Each queue's section keeps the last task that
+- **A history in the idle panel.** Each queue's line keeps the last task that
   finished from it and no more. What was run and what it cost is the Action
   Log's job, and a second short list of it in the panel would be a second thing
   to keep in step.
