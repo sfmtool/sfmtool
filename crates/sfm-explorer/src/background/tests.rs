@@ -1691,6 +1691,109 @@ fn a_running_line_cuts_a_long_name_rather_than_overlapping() {
     state.finish_background_tasks();
 }
 
+/// The phase list's title line keeps the count on screen however long the
+/// node's name is, and cuts the title to the room left, with the whole of it on
+/// hover: the queue line has cut the same name to almost nothing, so this line
+/// is where the run is named.
+#[test]
+fn a_long_node_name_leaves_the_count_on_the_title_line() {
+    let (mut state, id) = adjustable();
+    let mut gate = Gate::new();
+    let (said, heard) = mpsc::channel();
+    let held = gate.held();
+    state
+        .start_background_task(
+            Operation::BUNDLE_ADJUST,
+            id,
+            Box::new(move |progress| {
+                let solve = progress.phase("solve");
+                solve.count(1, Some(3), "round");
+                progress.set_status_message(format_args!("refining member 4"));
+                said.send(()).expect("the test is listening");
+                let _ = held.recv();
+                Finished::Failed("the fake worker produced nothing".to_string())
+            }),
+        )
+        .expect("nothing else is running");
+    heard.recv().expect("the worker reported");
+    state.poll_background_tasks();
+    let whole = "20260628-01-solve-seattle_backyard_1-26-embedded";
+    state.slow_queue.running.as_mut().expect("running").label = whole.to_string();
+    let title = super::panel::phases_title("Bundle adjust", whole);
+
+    let width = 230.0;
+    let spans = painted_spans(&mut state, width);
+    let (_, count_left, _, row) = *spans
+        .iter()
+        .find(|(text, _, _, _)| text == "round 1/3")
+        .unwrap_or_else(|| panic!("the count was not painted: {spans:?}"));
+    // Nothing leaves the panel, and nothing on the title line runs under
+    // anything else.
+    for (text, _, right, _) in &spans {
+        assert!(*right <= width + 0.5, "{text:?} ran to {right}: {spans:?}");
+    }
+    let mut line: Vec<(f32, f32, &str)> = spans
+        .iter()
+        .filter(|(text, _, _, y)| (*y - row).abs() <= 2.0 && !text.is_empty())
+        .map(|(text, left, right, _)| (*left, *right, text.as_str()))
+        .collect();
+    line.sort_by(|a, b| a.0.total_cmp(&b.0));
+    for pair in line.windows(2) {
+        assert!(
+            pair[0].1 <= pair[1].0 + 0.5,
+            "{:?} runs under {:?}: {line:?}",
+            pair[0].2,
+            pair[1].2,
+        );
+    }
+    // Where the whole title does not fit, it is the node's name, cut out of
+    // the middle so its start and its end both stay, left of the count.
+    let (title_left, _, _) = *line
+        .iter()
+        .find(|(_, _, text)| text.starts_with("2026") && text.ends_with("dded") && *text != whole)
+        .unwrap_or_else(|| panic!("the cut node was not the title: {line:?}"));
+    assert!(title_left < count_left);
+    // The status keeps the rest of the line, and shows.
+    assert!(
+        line.iter().any(|(_, _, text)| text.starts_with("refin")),
+        "{line:?}"
+    );
+
+    // Its whole is one hover away.
+    let ctx = egui::Context::default();
+    ctx.all_styles_mut(|style| {
+        style.interaction.tooltip_delay = 0.0;
+        style.interaction.tooltip_grace_time = 0.0;
+    });
+    let narrow = || egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(width, 400.0),
+        )),
+        ..Default::default()
+    };
+    let first = painted_at(&ctx, &mut state, narrow());
+    let at = first
+        .iter()
+        .find(|(text, _)| text.starts_with("2026") && text.ends_with("dded") && *text != whole)
+        .unwrap_or_else(|| panic!("the title was not painted: {first:?}"))
+        .1;
+    let mut hovering = narrow();
+    hovering.events = vec![egui::Event::PointerMoved(at + egui::vec2(8.0, 4.0))];
+    painted_at(&ctx, &mut state, hovering);
+    let hovered: Vec<String> = painted_at(&ctx, &mut state, narrow())
+        .into_iter()
+        .map(|(text, _)| text)
+        .collect();
+    assert!(
+        hovered.contains(&title),
+        "{title:?} is not on hover: {hovered:?}"
+    );
+
+    gate.open();
+    state.finish_background_tasks();
+}
+
 /// A scroll wheel event over the phase table.
 ///
 /// Positive `delta.y` moves the content down, which is what a reader does to

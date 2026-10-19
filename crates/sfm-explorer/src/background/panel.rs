@@ -49,6 +49,10 @@ pub(super) const OPEN_MARK: &str = "\u{25b6}";
 /// along it is, little enough to leave the node's name some of the line.
 const BAR_WIDTH: f32 = 28.0;
 
+/// The least share of the title line's room, after the count, that the title
+/// keeps when a status follows it.
+const TITLE_SHARE: f32 = 0.6;
+
 /// The gap between the items of a queue's line.
 const LINE_SPACING: f32 = 4.0;
 
@@ -294,9 +298,13 @@ fn show_node(ui: &mut egui::Ui, label: &str) {
 /// is the date every run of that day shares, and the back is the range and the
 /// `-embedded` suffix. See [`crate::elide`].
 fn elide_to_fit(ui: &egui::Ui, text: &str) -> String {
+    elide_to(ui, text, ui.available_width())
+}
+
+/// `text` cut out of the middle to `room` points.
+fn elide_to(ui: &egui::Ui, text: &str, room: f32) -> String {
     let font = egui::TextStyle::Body.resolve(ui.style());
     let color = ui.visuals().weak_text_color();
-    let room = ui.available_width();
     crate::elide::middle(text, room, |candidate| {
         ui.ctx().fonts_mut(|fonts| {
             fonts
@@ -339,12 +347,47 @@ pub(crate) fn phases_title(operation: &str, label: &str) -> String {
     format!("{operation} on {label}")
 }
 
+/// The phase list's title in `room`, with the whole of it on hover.
+///
+/// `{operation} on {node}` where that fits. Where it does not, the node's name
+/// alone, cut out of the middle as a queue line cuts it, so its start and its
+/// end both stay: the operation is named on its queue's line, which may have
+/// cut the node's name to a letter, and this line is where a reader finds which
+/// run it is.
+fn show_title(ui: &mut egui::Ui, operation: &str, label: &str, room: f32) {
+    let title = phases_title(operation, label);
+    let shown = if text_width(ui, &title) <= room {
+        title.clone()
+    } else {
+        elide_to(ui, label, room)
+    };
+    ui.add(
+        egui::Label::new(egui::RichText::new(shown).weak())
+            .show_tooltip_when_elided(false)
+            .truncate()
+            .selectable(false),
+    )
+    .on_hover_text(title);
+}
+
+/// How wide `text` is drawn in the panel's body font.
+fn text_width(ui: &egui::Ui, text: &str) -> f32 {
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    let color = ui.visuals().weak_text_color();
+    ui.ctx().fonts_mut(|fonts| {
+        fonts
+            .layout_no_wrap(text.to_owned(), font, color)
+            .rect
+            .width()
+    })
+}
+
 /// The phases of the task [`chosen_task`] names, under a line naming it.
 ///
 /// For a running task the title line also carries the kernel's count, `round
-/// 2/3`, and the status line, the one thing the operation says it is doing
-/// right now, cut to the panel's width: the queue lines have no room for
-/// either.
+/// 2/3`, which is laid out first from the right so it always shows, and the
+/// status line, the one thing the operation says it is doing right now, cut to
+/// what the title leaves: the queue lines have no room for either.
 ///
 /// Always showing, for a finished task as for a running one. The Action Log
 /// hides a breakdown behind a toggle because it has a row for every action of
@@ -362,33 +405,44 @@ fn show_chosen_phases(ui: &mut egui::Ui, state: &AppState) {
             let count = task.collector.count().map(count_text);
             let status = task.collector.status();
             ui.horizontal(|ui| {
-                ui.label(
-                    egui::RichText::new(phases_title(task.operation.name, &task.label)).weak(),
-                );
-                if let Some(count) = count {
-                    ui.label(egui::RichText::new(count).weak());
-                }
-                // Absent rather than blank: an operation that says nothing
-                // about what it is doing right now leaves nothing here, where
-                // an empty label would read as a stage that had failed to name
-                // itself.
-                if let Some(status) = status {
-                    ui.add(
-                        egui::Label::new(egui::RichText::new(status).weak())
-                            .truncate()
-                            .selectable(false),
-                    );
-                }
+                // The count from the right and first, so it is on screen
+                // whatever the node is called: it is the one number on this
+                // line a reader watches move.
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if let Some(count) = count {
+                        ui.label(egui::RichText::new(count).weak());
+                    }
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        // The title before the status: what the status needs,
+                        // but never less than a share of the line.
+                        let room = ui.available_width();
+                        let room = match status.as_deref() {
+                            Some(status) => (room - text_width(ui, status) - LINE_SPACING)
+                                .max(room * TITLE_SHARE),
+                            None => room,
+                        };
+                        show_title(ui, task.operation.name, &task.label, room);
+                        // Absent rather than blank: an operation that says
+                        // nothing about what it is doing right now leaves
+                        // nothing here, where an empty label would read as a
+                        // stage that had failed to name itself.
+                        if let Some(status) = status {
+                            ui.add(
+                                egui::Label::new(egui::RichText::new(status).weak())
+                                    .truncate()
+                                    .selectable(false),
+                            );
+                        }
+                    });
+                });
             });
             show_phases(ui, id, &live.rows, &live.open, true);
         }
         Some(TaskState::Finished(task)) if !task.detail.is_empty() => {
-            ui.add(
-                egui::Label::new(
-                    egui::RichText::new(phases_title(task.operation.name, &task.label)).weak(),
-                )
-                .truncate(),
-            );
+            ui.horizontal(|ui| {
+                let room = ui.available_width();
+                show_title(ui, task.operation.name, &task.label, room);
+            });
             // Nothing is open: the operation is over, so every row is a run
             // that closed.
             show_phases(ui, id, &task.detail, &[], false);

@@ -216,7 +216,7 @@ it is refused with the unknown-panel message, which lists `background_tasks`
 │ Slow Bundle adjust dino ▓░ 42.7 s x│
 │ Fast Fit track bull         0.4 s  │
 │ ────────────────────────────────── │
-│ Bundle adjust on dino… round 2/3   │
+│ dino_do…embedded         round 2/3 │
 │     damping ladder          2.0 s  │
 │     linearise               51 ms  │
 │     normal equations        46 ms  │
@@ -246,8 +246,14 @@ naming it and its node (`Bundle adjust on dino_dog_toy-embedded`): the task whos
 name a person last clicked, while it is running or still kept, and otherwise the
 slow queue's running task, the fast queue's, or the last task to finish, in that
 order (`panel::chosen_task`). For a running task the title line also carries the
-kernel's count (`round 2/3`) and the status line, cut to the panel's width,
-since a queue's line has no room for either. One list rather than one per queue
+kernel's count (`round 2/3`) and the status line, since a queue's line has no
+room for either. The count is laid out first, from the right, so it always
+shows; the title takes what the status needs, but never less than 60 % of what
+the count leaves, and the status takes the rest. A title that does not fit as a
+whole is the node's name alone, cut out of the middle so its start and its end
+both stay (`dino_do…embedded`), because the operation is named on its queue's
+line, which may have cut the node's name to a letter; the whole title is on
+hover, as the whole node's name is on the queue line's. One list rather than one per queue
 keeps the panel no taller than it was with one queue, and the click is a choice
 the panel remembers (`AppState::background_phases_of`) rather than a mode.
 
@@ -274,7 +280,7 @@ A queue that has run nothing says `Nothing running` and no more.
 │ Slow Bundle adjust dino ▓░ 42.7 s x│
 │ Fast Nothing running               │
 │ ────────────────────────────────── │
-│ Bundle adjust on dino… round 2/3   │
+│ dino_do…embedded         round 2/3 │
 │     damping ladder          2.0 s  │
 │     linearise               51 ms  │
 │     normal equations        46 ms  │
@@ -322,9 +328,9 @@ Earlier rows are above it, and none of them is a summary of another:
   member being refined. It is live state and is never kept in the Action Log
   entry, because once the entry exists the answer is "finished"
   ([operation-progress.md](operation-progress.md) § "Status is not a message").
-  It sits on the title line after the count, because it is the words for the
-  same thing the count counts, cut to the panel's width with the whole of it on
-  hover. The sketch above has none because the bundle adjustment sets none, and
+  It sits on the title line between the title and the count, because it is the
+  words for the same thing the count counts, cut to what the title leaves with
+  the whole of it on hover. The sketch above has none because the bundle adjustment sets none, and
   it is absent rather than blank when an operation says nothing.
 - **Elapsed** counts up from the instant the operation started, which is the
   number the person is actually watching. A frame is asked for every 100 ms so
@@ -1019,6 +1025,9 @@ Panel, through `test_support::run_frame_headless`:
   painted at 190 px and an idle table opens at its first stage at 200 px.
 - A running task's line in the default panel width cuts a long operation name
   rather than drawing anything over anything else.
+- With a long node name, a count and a status at the default width, the title
+  line paints the count, the node's name cut out of the middle and the status,
+  with nothing overlapping or leaving the panel, and the whole title on hover.
 - Cancel is disabled, with its tooltip, for an operation whose kernels do not
   poll the flag, and live for one that does.
 - A status replaces the previous one rather than adding a line, and the panel
