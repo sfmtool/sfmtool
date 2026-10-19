@@ -1428,7 +1428,7 @@ fn a_build_names_its_passes_and_climbs_to_the_end() {
     // those two passes leave no row at all.
     assert_eq!(
         left,
-        ["read feature scales", "patch sizes", "finite frames"]
+        ["read feature scales", "patch sizes", "finite patch frames"]
     );
 
     assert!(!fractions.is_empty(), "a build that said nothing");

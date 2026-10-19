@@ -96,7 +96,7 @@ impl PyPatchCloud {
 
     /// Build a patch cloud from in-memory arrays instead of a reconstruction — the
     /// array counterpart of :meth:`from_reconstruction` (same normal / extent
-    /// policies, up-hint, infinity frames, and errors). See
+    /// policies, up-hint, patch frames at infinity, and errors). See
     /// ``specs/core/patch/patch-cloud.md``, "Patch operations without a reconstruction".
     ///
     /// Args:

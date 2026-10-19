@@ -104,7 +104,7 @@ fn the_conversion_names_its_stages() {
         [
             "read feature scales",
             "patch sizes",
-            "finite frames",
+            "finite patch frames",
             "patch frames",
             "read keypoints",
             "assemble",

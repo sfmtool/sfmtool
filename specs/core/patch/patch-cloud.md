@@ -364,8 +364,8 @@ that is not there:
 | `read feature scales` | `FeatureSize` only, and only from `from_reconstruction` | the `.sift` walk, one file per image, and the per-observation scale lookup that follows it | the image count, plus one `Count` per image |
 | `patch spatial index` | `Geometric` normals or `RelativeToSpacing` extent | the `PointCloud` build, the nearest-neighbour spacing and the k-nearest-neighbour lists | |
 | `patch sizes` | `FeatureSize` only | the per-finite-point world half-size, reduced across the observing views | the finite point count |
-| `finite frames` | always | one surfel frame per finite point | the finite point count |
-| `infinity frames` | any point at infinity, with `exclude_points_at_infinity = false` | one tangent-sphere frame per point at infinity | the infinity point count |
+| `finite patch frames` | always | one surfel frame per finite point | the finite point count |
+| `infinity patch frames` | any point at infinity, with `exclude_points_at_infinity = false` | one tangent-sphere frame per point at infinity | the infinity point count |
 
 The shares follow what each pass costs when it runs. The `.sift` walk dominates
 wherever it happens at all: on a 4054-image, 1.07M-point, 16.3M-observation
@@ -674,10 +674,10 @@ the shared `build_patch_cloud` (with `push_infinity_patches` for the `w = 0`
 rows). The only thing that differs is where the scales come from:
 `from_reconstruction` reads the workspace `.sift` files, `from_tracks` takes the
 caller's array with `NaN` meaning unreadable. So the sizing policies, the
-infinity frames and the error taxonomy exist once. `patch/cloud/tests.rs` pins
+patch frames at infinity and the error taxonomy exist once. `patch/cloud/tests.rs` pins
 that down patch-for-patch: `from_tracks` ≡ `from_reconstruction` under
 `FeatureSize` (against written `.sift` files) and under `PixelRadius` + `Stored`,
-plus NaN-scale-as-unreadable and the infinity frames.
+plus NaN-scale-as-unreadable and the patch frames at infinity.
 
 On the Python side `sfmtool-py/src/patches/views.rs` holds the frozen
 `CameraViews` (which validates array shapes, camera-index range and unit

@@ -881,7 +881,7 @@ impl PatchCloud {
     /// `progress` covers the passes this makes over the arrays: `patch spatial
     /// index` (built only for [`PatchNormal::Geometric`] and
     /// [`PatchExtent::RelativeToSpacing`]), `patch sizes` (only for
-    /// [`PatchExtent::FeatureSize`]), `finite frames`, and `infinity frames`
+    /// [`PatchExtent::FeatureSize`]), `finite patch frames`, and `infinity patch frames`
     /// where any point is at infinity. Each reports within a share
     /// proportional to what it costs when it runs. The cancel flag is polled at
     /// intervals through each pass, and a build that is asked to stop returns
@@ -1029,7 +1029,7 @@ impl PatchCloud {
 /// [`PatchCloud::from_reconstruction`] and [`PatchCloud::from_tracks`]: per-point
 /// geometry, grouped observations, per-image poses/focal lengths, and a
 /// per-observation keypoint-scale source. One routine ([`build_patch_cloud`])
-/// implements the sizing policies, up-hint, infinity frames, and error taxonomy
+/// implements the sizing policies, up-hint, patch frames at infinity, and error taxonomy
 /// over it, so both entry points share a single implementation.
 struct PatchScene<'a> {
     /// Per-point position (finite) or direction (at infinity). `P` entries.
@@ -1249,7 +1249,7 @@ fn build_patch_cloud(
     let mut patches = Vec::with_capacity(finite.len());
     let mut point_indexes = Vec::with_capacity(finite.len());
 
-    let mut phase = finite_framing.phase("finite frames");
+    let mut phase = finite_framing.phase("finite patch frames");
     progress_note!(phase, "{} points", finite.len());
     let pass = PassProgress::new(&finite_framing, finite.len());
     for (fi, &p) in finite.iter().enumerate() {
@@ -1385,7 +1385,7 @@ fn push_infinity_patches(
     if infinity.is_empty() {
         return Ok(());
     }
-    let mut phase = progress.phase("infinity frames");
+    let mut phase = progress.phase("infinity patch frames");
     progress_note!(phase, "{} points", infinity.len());
     let pass = PassProgress::new(progress, infinity.len());
     cloud.patches.reserve(infinity.len());
