@@ -23,7 +23,7 @@ def test_print_tool_options_renders_transforms_and_keys(capsys):
         {
             "transforms": [
                 "Find points at infinity (eps=0.1, min_views=2)",
-                "Bundle adjustment (refine: focal)",
+                "Bundle adjustment (release: focal)",
             ],
             "algorithm": "global",
             "rig_aware": True,
@@ -33,7 +33,7 @@ def test_print_tool_options_renders_transforms_and_keys(capsys):
     assert "Tool options:" in out
     assert "transforms:" in out
     assert "Find points at infinity (eps=0.1, min_views=2)" in out
-    assert "Bundle adjustment (refine: focal)" in out
+    assert "Bundle adjustment (release: focal)" in out
     assert "algorithm: global" in out
     assert "rig_aware: True" in out
 

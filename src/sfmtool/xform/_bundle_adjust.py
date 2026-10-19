@@ -417,13 +417,13 @@ class BundleAdjustTransform:
         if self.release_focal:
             opts.append("focal")
         if self.release_principal_point:
-            opts.append("pp")
+            opts.append("principal_point")
         if self.release_distortion:
-            opts.append("extra")
+            opts.append("distortion")
         opt_str = ",".join(opts) if opts else "none"
         params = ""
         if self.cameras is not None:
             params += ", cameras=" + "+".join(str(c) for c in self.cameras)
         if not self.cross:
             params += ", cross=off"
-        return f"Bundle adjustment (refine: {opt_str}{params})"
+        return f"Bundle adjustment (release: {opt_str}{params})"

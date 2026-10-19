@@ -276,7 +276,7 @@ def test_bundle_adjust_option_parses_bare_and_with_keys():
 
     (bare,) = parse_transform_args(["--bundle-adjust"])
     assert isinstance(bare, BundleAdjustTransform)
-    assert bare.description() == "Bundle adjustment (refine: focal,extra)"
+    assert bare.description() == "Bundle adjustment (release: focal,distortion)"
     # A following option is not taken as the value.
     bare, scale = parse_transform_args(["--bundle-adjust", "--scale", "2"])
     assert bare.cameras is None and scale.scale == 2.0

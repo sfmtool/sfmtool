@@ -310,7 +310,7 @@ def test_bundle_adjust_release_keywords():
     assert ba.release_focal is False
     assert ba.release_principal_point is True
     assert ba.release_distortion is False
-    assert ba.description() == "Bundle adjustment (refine: pp)"
+    assert ba.description() == "Bundle adjustment (release: principal_point)"
 
     default = BundleAdjustTransform()
     assert default.release_focal and default.release_distortion
