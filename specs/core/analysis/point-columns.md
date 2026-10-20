@@ -314,8 +314,8 @@ build small reconstructions from the demo reconstruction and check each column
 against the stored data or the per-point function it is defined by: a point
 at infinity (no position, distance or diagnostics, a ray angle of 0), an image
 holding two observations of one point, absent optional columns, unmeasured
-`observation_confidence` bytes and unmeasured readings, and deleted points.
-They check the query's inclusive bounds, NaN against a bound, a bound with
+`observation_confidence` bytes and unmeasured readings, and deleted and added
+points. They check the query's inclusive bounds, NaN against a bound, a bound with
 neither end, `seen_in_image`, ties in both sort orders, no-value rows last in
 both orders and both refusals; that a cancelled `compute` returns `Cancelled`;
 that progress runs to the end through both passes; and that the values are

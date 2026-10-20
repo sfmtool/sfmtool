@@ -301,6 +301,37 @@ fn deleted_points_have_no_row() {
 }
 
 #[test]
+fn an_added_point_is_read_through_its_view() {
+    let mut recon = edited(demo(5));
+    recon.delete_point(2).unwrap();
+    let added = recon
+        .add_point(recon.point(0).expect("a live point").to_record())
+        .unwrap();
+    let columns = compute(&recon, &PointColumn::ALL);
+    assert_eq!(columns.point_indexes(), [0, 1, 3, 4, added]);
+    // The added point is a copy of point 0, so every value is point 0's.
+    for c in PointColumn::ALL {
+        if let Some(v) = columns.values(c) {
+            assert_eq!(v[4].to_bits(), v[0].to_bits(), "{c:?}");
+        }
+        if let Some(v) = columns.values_f64(c) {
+            assert_eq!(v[4].to_bits(), v[0].to_bits(), "{c:?}");
+        }
+    }
+    let image = recon.point(0).unwrap().observations()[0].image_index;
+    let seen = query_points(
+        &recon,
+        &columns,
+        &PointQueryOptions {
+            seen_in_image: Some(image),
+            ..PointQueryOptions::default()
+        },
+    )
+    .unwrap();
+    assert!(seen.contains(&0) && seen.contains(&added), "{seen:?}");
+}
+
+#[test]
 fn a_cancelled_compute_returns_cancelled() {
     let recon = edited(demo(10));
     let flag = AtomicBool::new(true);
