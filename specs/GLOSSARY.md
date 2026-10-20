@@ -175,6 +175,17 @@ well the point fits its observations, in Rust, Python and on the wire.
 |------|-------|-----|-----|
 | **RMS reprojection error** | the root mean square, in pixels, of a point's observations' reprojection errors: the square root of the mean of the squared distances between each observation's keypoint and the point's projection into that image ([sfmr-file-format.md](formats/sfmr-file-format.md#points3dreprojection_errorsnfloat32zst)). `Point3D::rms_reprojection_error` in Rust; `SfmrReconstruction.rms_reprojection_errors`, the `clone_with_changes(rms_reprojection_errors=...)` keyword and the `rms_reprojection_error` key of an `EditedReconstruction` point record in Python; `rms_error_px` in the MCP `get_point` reply. The `.sfmr` entry `points3d/reprojection_errors`, and the `reprojection_errors` keys that copy it (`SfmrData`, the `read_sfmr` / `write_sfmr` dict, `SfmrReconstruction.from_data`), keep the generic name, and `PointInspection::error` and the `error` key of `inspect_point`'s dict keep the bare name | `error`, `errors`, `reprojection_error` alone, `"error"` on the wire | a bare `error` could be the mean, the RMS, the largest or COLMAP's own value, and sfmtool stored the mean under it until its writers changed to the RMS, so the name now says which statistic it is. `rms_` is the part that does that. The wire name carries the unit, `_px`, so a reader of the reply needs no other page to learn it, and leaves out `reprojection`, since nothing else in `get_point`'s top level is an error for it to be confused with. The format entry is not renamed, since the format spec defines the statistic and renaming it would change the format version |
 
+## Point columns
+
+The named per-point values of `sfmtool_core::analysis::point_columns`, the
+`sfmtool.analysis.point_columns` binding and
+[core/analysis/point-columns.md](core/analysis/point-columns.md).
+
+| Word | Means | Not | Why |
+|------|-------|-----|-----|
+| **point column** / **absent** / **no value** | a point column is one value per live point of a reconstruction under a fixed wire name (`PointColumn`, `PointColumn::wire_name`); a column is **absent** when the reconstruction cannot supply it for any point (`PointColumn::is_available` false, `normal_confidence` with no such stored column), and a point has **no value** in a column it lacks for itself (NaN: a point at infinity's `x`) | `field`, `metric`, `attribute`; `missing` or `null` for either case | *column* says one value per row across every point, which is how the values are stored and shown. The two empty cases are kept apart because they are handled apart: an absent column is not offered at all, while a no-value row is kept and fails any bound on its column |
+| **`lowest_zncc`** / **`largest_zncc_self_similarity_radius`** | the lowest measured per-observation ZNCC in a track, read from `observation_confidence`, and the largest ZNCC self-similarity radius among its measured observation readings | `min_zncc`, `max_zncc_self_similarity_radius` | the `min_` and `max_` names are the bench's bars on the wire (`min_zncc`, `max_zncc_self_similarity_radius`), thresholds a row is judged against. A column is a reading of the track, so it takes *lowest* and *largest*, which say which observation's value it reports and cannot be read as a bar |
+
 ## Camera intrinsics
 
 Fitting and replacing a camera's lens model, in `sfmtool-core`'s `camera` and

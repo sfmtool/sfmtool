@@ -11,6 +11,7 @@ backbone. Implemented in `crates/sfmtool-core/src/analysis/`.
 | [covered-by-finer.md](covered-by-finer.md) | Retiring a coarse observation a finer one, on another owner, covers in the same image, and dropping the owners left with too few. |
 | [observation-coverage.md](observation-coverage.md) | Which image pixels existing tracks already claim, so new candidates can be spawned where nothing is. |
 | [adjacency-surfel-normals.md](adjacency-surfel-normals.md) | Surfel normals from a robust plane fit over each point's image-space neighbours, with no photometric refinement. |
+| [point-columns.md](point-columns.md) | Named per-point values (track length, error, ray angle, triangulation diagnostics, …) for every point of a reconstruction, and the query that filters and sorts points by them. |
 | [cluster-census.md](cluster-census.md) | Match census over a cluster backbone: per-pair statistics, viewpoint groups, global satisfaction, and the score that ranks them. |
 | [reconstruction-alignment.md](reconstruction-alignment.md) | Least-squares similarity fit between two reconstructions, with RANSAC outlier rejection. |
 | [source-clusters.md](source-clusters.md) | Which clusters of a selection a member's admission never held, joined by feature identity and banded by radius; the per-cluster radius reading and the coarsest-N cut over it. |
