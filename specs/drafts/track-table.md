@@ -5,8 +5,10 @@
 [gui/point-cloud-rendering.md](../gui/point-cloud-rendering.md) (the
 non-goal "Point colouring and filtering by quality") and
 [gui/panel-layout.md](../gui/panel-layout.md) (a tenth panel) and
-[gui/background-tasks.md](../gui/background-tasks.md) § "Quiet tasks" (two
-quiet tasks, and a quiet task a wire call waits on). It will file as
+[gui/background-tasks.md](../gui/background-tasks.md) § "Two queues" and
+§ "Quiet tasks" (two quiet tasks and one asked-for fast-queue operation). It
+also changes `Point3D::error` to the RMS its doc comment states, and renames
+`analysis::inspect_point`'s angle field (Steps 0a and 0b). It will file as
 two standing specs: `core/analysis/point-columns.md` (Part 1) and
 `gui/track-table.md` (Parts 2 to 4, with the wire tools also described in
 `gui/mcp-server.md`).
@@ -32,6 +34,17 @@ Decided:
   is shaped so that it can feed `delete_points`.
 - One core query backs the panel and the MCP `find_points` read, so a person
   and an agent filtering by the same bounds see the same points.
+- The panel's home is the centre group, as a tab beside the 3D Viewer and
+  Image Detail, where it has the height for rows of pictures (§ "Placement").
+- A `find_points` call that needs a computed column the cache does not hold
+  queues an asked-for fast-queue task of its own, *Find points*, rather than
+  promoting the panel's quiet job (§ "`find_points`").
+- `Point3D::error` is made the root-mean-square reprojection error its doc
+  comment already states; `recompute_point_errors` computes the mean today
+  (Step 0a).
+- `max_ray_angle_deg` keeps the largest-pairwise-angle meaning the bench, the
+  viewer and this table use; `analysis::inspect_point`'s field of that name,
+  which is the largest angle from the mean direction, is renamed (Step 0b).
 
 Not decided: see § "Open questions".
 
@@ -101,7 +114,7 @@ columns"). It makes no difference to what a column means.
 |---|---|---|---|---|---|
 | `track_length` | Track | stored | number of observations in the track | defined | never |
 | `image_count` | Images | stored | number of distinct images among those observations. It is less than `track_length` when one image holds several observations of the point, which a GLOMAP solve produces (bug bash finding 12) | defined | never |
-| `error_px` | Error (px) | stored | `Point3D::error`, the stored per-point reprojection error, which `get_point` reports as `error` | defined | never |
+| `error_px` | Error (px) | stored | `Point3D::error`, the root-mean-square reprojection error over the point's observations, in pixels, which `get_point` reports as `error`. `recompute_point_errors` writes it (Step 0a); a file whose errors were never recomputed holds what its writer stored | defined | never |
 | `at_infinity` | ∞ | stored | 1 for a point at infinity (`w = 0`), 0 for a finite one | defined | never |
 | `x`, `y`, `z` | X, Y, Z | stored | the point's position in the stored frame, not the display frame, in the reconstruction's world-space unit (scene units where none is declared) | no value | never |
 | `centroid_distance` | Distance | stored | distance from the posed cameras' centroid, the same number `ImageTable::placement_scale` gives, in the stored frame and the same unit as `x` | no value | the reconstruction has no posed image |
@@ -287,10 +300,24 @@ numbers the viewer shows.
 ### Placement
 
 `Tab::TrackTable`, titled **Track Table**, wire name `track_table`. Its home is
-the bottom group, beside Image Browser, Action Log and Edit History, because
-that group is wider than it is tall and the table has many columns. It is in
-`Layout::default()` but is not the raised tab there, so the default layout
-opens showing the same panels as it does now.
+the centre group, as a third tab beside the 3D Viewer and Image Detail
+(`Home::Root`'s group). That is the largest area of the window: at 1280 × 720
+with the stock layout it is about 690 × 470 px, enough for six or seven rows of
+64 pt pictures under the heading and bounds rows. The bottom group, the first
+choice, gives the table body about 100 px at that size, which is one picture
+row. In `Layout::default()` it is the last tab of that group, after the 3D
+Viewer and Image Detail, and the 3D Viewer stays the raised tab, so the default
+layout opens showing the same panels as it does now and the table sits behind
+both until its tab is clicked, or until `show_panel {"panel_name":
+"track_table"}` raises it over MCP. Its Panels menu entry is ticked from the
+start, since the panel is open; clicking it closes the table, as for any open
+panel.
+
+Sharing a group with the 3D Viewer means the two are not both visible until a
+person drags the table out beside it. That matters for § "Filtering the 3D
+view", whose effect is in the 3D Viewer: turning the filter on while the table
+covers the 3D Viewer raises nothing, and the HUD's *(N shown)* says the filter
+is on when the 3D Viewer is raised again.
 
 ### What it shows
 
@@ -511,10 +538,22 @@ items, so the order is the camera model proposal's job, the viewed track's
 evaluation, the focused item's, the table's columns, the table's picks, and
 then the other bench items' evaluations.
 
-The job starts when the panel is visible, or when a `find_points` call needs a
-column (Part 3). Computed columns are computed only once a visible column, a
-bound or the sort needs them. A hidden panel with no wire caller costs
-nothing.
+The job starts when the panel is visible. Computed columns are computed only
+once a visible column, a bound or the sort needs them. A hidden panel costs
+nothing. A `find_points` call does not start the quiet job; it queues *Find
+points* (Part 3), which fills the same cache.
+
+**Progress.** The column job reports two stages, the stored columns and then
+the computed ones, each with its own share of the job's range, so its fraction
+follows the work. The reference picks decode photographs, so each pick gives
+the decode a share of its range and the rule the rest (`DECODE_AND_STEP`, as
+the bench steps do). Handing a decode the whole range is what made Refit all
+points show a full bar from its first second.
+
+**Waiting behind fast work.** Both are quiet, so they wait behind any asked-for
+fast-queue task: an Open that renders display bitmaps, a Find nearby tracks,
+a bench Fit. While one runs, a column or a crop that is not ready yet stays
+`…` or an empty frame, as the live evaluation does in Track View.
 
 A sort or a bound on a computed column that is not ready yet leaves the row
 order as it is, and says *sorting when Ray angle is ready* in the header,
@@ -576,23 +615,21 @@ no bitmap to show. Both columns appear after Convert to Embedded Patches.
   `find_points` call and the panel with the same bounds agree. The returned
   value columns default to the bound and sorted columns plus `track_length`
   and `error_px`.
-- **A computed column defers the reply** until the column job has filled it,
-  in the same way a deferred screenshot replies on a later frame. The UI
-  thread is not blocked while it waits. `limit` and the cache keep the cost of
-  a repeat call down to a slice.
-- **A column job a call waits on is treated as asked for.** While a
-  `find_points` call waits on it, the column job is not cancelled for other
-  tasks and is reported in `get_scene`'s `background_tasks` and in the busy
-  notice, so a non-empty list still means someone's work is running. A waiting column
-  job moves to the end of the asked-for tasks waiting in the fast queue, as if
-  the call had just queued it. A running one whose cancel flag was already set
-  before the call arrived is let finish, its answer is kept, and its source
-  queues the next run as asked for. The call's reply carries the column
-  values, so nothing has to look the task up afterwards, and it is not kept in
-  the record of finished tasks. It is quiet again once the call has its
-  answer. Tests: `get_scene`'s `background_tasks` lists a column job while a
-  `find_points` call waits on it, and is empty again once the call has its
-  reply.
+- **Columns the cache does not hold are computed by a task of the call's
+  own.** When every column the call names (in `bounds`, `order_by` and
+  `columns`) is in the cache for the version at the cursor, `find_points`
+  answers in the frame it is drained. Otherwise it queues *Find points*, an
+  asked-for fast-queue operation that locks nothing (it pushes no version),
+  computes the missing columns into the same cache, and answers the call when
+  it lands. Like any asked-for task, it replies directly when it lands within
+  `REPLY_DIRECTLY_WITHIN` and with a handle otherwise, is listed in
+  `get_scene`'s `background_tasks`, can be cancelled, and writes an Action Log
+  row when it lands (for example *Found 1,204 of 38,888 points in dino*). It needs no new
+  rule in the queue machinery: a running quiet column job is cancelled for it
+  and queued again behind it, as for any asked-for task. If the panel's quiet
+  job is computing the same columns at that moment, the work is done twice;
+  the cache keeps whichever lands for the current serial. `limit` and the cache
+  keep the cost of a repeat call down to a slice.
 - **The reply is paged scalars.** It carries no bulk arrays: at most 500 rows
   of a few numbers each. The mcp-server.md statement "no tool here returns bulk
   arrays" is narrowed to "no tool returns a whole column or a whole track
@@ -633,28 +670,44 @@ filtered view count, and the wording in the Action Log.
 
 ## Steps
 
-Each step is one PR through `implement-change`. Steps 2, 4 and 5 put quiet
-tasks on the fast background queue, which are built
-([gui/background-tasks.md](../gui/background-tasks.md) § "Quiet tasks").
+Each step is one PR through `implement-change`. Every step that changes the
+panel ends with a capture run: a release build driven over MCP
+(`skills/gui-bug-bash`) on real reconstructions, with screenshots of the
+panel at its default size checked before the step is done. In the background
+queue work, those captures found nine problems that the tests had passed:
+layout, contrast, a wrong progress fraction and a missing title line.
 
+0a. **`Point3D::error` as an RMS.** `recompute_point_errors` (both its
+   `.sift` path and `inline_point_reprojection_errors`) computes the
+   root-mean-square of the point's observation errors in pixels, as the field's
+   doc comment says, rather than the mean. Every place that describes the value
+   as a mean is corrected (`sfm inspect` labels, specs, Python docstrings), and
+   the tests that pin error values are updated. A file written before this
+   holds the mean until its errors are recomputed; the format spec says which
+   writer stores which.
+0b. **Rename `inspect_point`'s angle.** `analysis::inspect_point`'s
+   `max_ray_angle_deg`, the largest angle from the mean direction, becomes
+   `max_angle_from_mean_deg`, in core, the Python binding and the `sfm inspect`
+   output, with a glossary entry that names both angles. `max_ray_angle_deg`
+   then has one meaning across the tree.
 1. **Core point columns and query.** This step adds `point_columns.rs`, moves
    the max-angle and diagnostics definitions from `metrics.rs` into core (with
    `metrics.rs` calling them), adds the Python binding and tests, and files
    `core/analysis/point-columns.md`.
-2. **`find_points`**, which brings the column cache and the column job into the
-   viewer. Only the wire uses them at this step, and the mcp-server.md stance
-   is revised.
+2. **`find_points`**, which brings the column cache and the *Find points*
+   operation into the viewer, for the stored and the computed columns. Only
+   the wire uses them at this step, and the mcp-server.md stance is revised.
 3. **The Track Table panel** with the stored columns, the Patch column, the
-   Size slider, sorting, bounds, selection and hover. This step adds the
-   tenth panel to the layout, its tests and its specs, and moves
+   Size slider, sorting, bounds, selection and hover, and the quiet *Track
+   Table columns* job for the stored columns. This step adds the
+   tenth panel to the layout, in the centre group, its tests and its specs, and moves
    `stored_patch_image` out of Track View's private `patch` module into the
    module both panels use.
 4. **The Crop column**, moving Track View's tile and crop helpers into a shared
    module and rewriting them to take values rather than a track, with
    requests that wait for the scroll to stop and reference picks for the
    visible rows that store none.
-5. **The computed columns in the panel**, and the deferred `find_points` reply
-   for them.
+5. **The computed columns in the panel**, filled by the quiet column job.
 6. **Filter the 3D view** (dim and hide).
 7. **`get_track_table_query` / `set_track_table_query`.**
 
@@ -662,19 +715,14 @@ tasks on the fast background queue, which are built
 
 - **The quiet order.** Whether the Track Table's columns should go ahead of
   the focused item's evaluation when the table is the panel in view.
-- **`error_px`'s definition and name.** `Point3D::error` is documented as an
-  "RMS reprojection error", but `recompute_point_errors` stores the mean. A
-  file converted from COLMAP and never recomputed may hold COLMAP's value. The
-  heading has to name one definition. Settle which, and fix the doc comment.
-  `get_point` calls the same number `error`. Decide whether the column takes
-  that name or `get_point` gains the unit suffix.
-- **Two "max ray angle" definitions.** The viewer's is the largest angle
-  between two rays, and core already uses `max_ray_angle_deg` in that sense
-  (`bench/nearby/candidate.rs`, `far_field.rs`, `layers.rs`).
-  `analysis::inspect_point`'s `max_ray_angle_deg` is the exception: it is the
-  largest angle from the mean direction. This draft keeps the pairwise
-  meaning. Renaming `inspect_point`'s field, and the `sfm inspect` output that
-  prints it, is the likely fix, with a glossary entry for the result.
+- **The error column's name on the wire.** The column is `error_px`, and
+  `get_point` reports the same number as `error`. They can stay different
+  names for one value, or `get_point` can take the unit suffix too (a breaking
+  change with no alias, as #998's renames were).
+- **Errors in files written before Step 0a** hold the mean (or, for a file
+  converted from COLMAP and never recomputed, COLMAP's value). Whether the
+  open should recompute them, or the table should say when a file's errors
+  predate the change, is undecided.
 - **Does Image Detail follow the 3D filter?** Dimming the tracked features of
   rejected points in Image Detail would extend the same toggle to a second
   panel. This draft limits the toggle to the 3D viewer.
