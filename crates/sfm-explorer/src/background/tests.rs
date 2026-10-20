@@ -2161,7 +2161,7 @@ fn a_task_with_no_stages_has_its_title_line_and_its_sentence() {
 
     let texts = painted(&mut state);
     let title = super::panel::phases_title("Bundle adjust", "run_a");
-    assert!(texts.iter().any(|t| *t == title), "{texts:?}");
+    assert!(texts.contains(&title), "{texts:?}");
     // On the idle line and on the title line.
     assert_eq!(
         texts.iter().filter(|t| *t == FAILED).count(),
