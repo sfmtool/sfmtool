@@ -487,15 +487,6 @@ impl State {
         }
     }
 
-    /// The transcript so far, copied, with every open phase carrying the time
-    /// it has been open.
-    ///
-    /// Unfolded, which is the difference between this and what
-    /// [`State::take`] hands the entry: a reader watching an operation is
-    /// watching it *happen*, so each round is its own row with the cost that
-    /// round took and the note that round gave. Nothing is summed and no note
-    /// is merged, because a summary of something the reader is watching
-    /// unfold is a summary of something they can already see.
     /// See [`Collector::counts`].
     fn counts(&self) -> Vec<Count> {
         let open: Vec<Count> = self
@@ -512,6 +503,15 @@ impl State {
         }
     }
 
+    /// The transcript so far, copied, with every open phase carrying the time
+    /// it has been open.
+    ///
+    /// Unfolded, which is the difference between this and what
+    /// [`State::take`] hands the entry: a reader watching an operation is
+    /// watching it *happen*, so each round is its own row with the cost that
+    /// round took and the note that round gave. Nothing is summed and no note
+    /// is merged, because a summary of something the reader is watching
+    /// unfold is a summary of something they can already see.
     fn live(&self) -> Live {
         let mut rows = self.transcript.clone();
         for open in &self.open {
