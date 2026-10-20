@@ -956,6 +956,33 @@ pub(crate) struct FinishedTask {
     /// ended it.
     #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
     pub(crate) outcome: Result<String, String>,
+    /// Whether it ended because it was cancelled, while it ran or while it
+    /// waited. A cancellation is an `Err` in [`Self::outcome`] as a refusal
+    /// is, and the panel marks the two apart.
+    pub(crate) cancelled: bool,
+}
+
+/// How a finished task ended, as the Background Tasks panel marks it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Ended {
+    /// It ran to its end: a version, a row saying there was nothing to
+    /// change, or the files it wrote.
+    Done,
+    /// It was asked to stop and did, or was taken out of its queue.
+    Cancelled,
+    /// Its kernel refused, or what it produced could not be installed.
+    Failed,
+}
+
+impl FinishedTask {
+    /// How it ended.
+    pub(crate) fn ended(&self) -> Ended {
+        match (&self.outcome, self.cancelled) {
+            (Ok(_), _) => Ended::Done,
+            (Err(_), true) => Ended::Cancelled,
+            (Err(_), false) => Ended::Failed,
+        }
+    }
 }
 
 /// One running task, for a reader that cannot reach [`AppState`].
@@ -1528,7 +1555,7 @@ impl AppState {
                 (task.id, task.operation, task.label.clone(), task.actor);
             if let Err(message) = self.begin(task) {
                 if !operation.quiet {
-                    self.end_before_start(id, operation, label, actor, message);
+                    self.end_before_start(id, operation, label, actor, message, false);
                 }
             }
         }
@@ -1558,14 +1585,15 @@ impl AppState {
                 actor,
                 ..
             } = task;
-            self.end_before_start(id, operation, label, actor, message);
+            self.end_before_start(id, operation, label, actor, message, true);
             return true;
         }
         false
     }
 
     /// Record a task that ended without starting: a failed row as whoever
-    /// asked for it, costing nothing, and its record in the ring.
+    /// asked for it, costing nothing, and its record in the ring, marked
+    /// `cancelled` when that is why it never started.
     fn end_before_start(
         &mut self,
         id: u64,
@@ -1573,6 +1601,7 @@ impl AppState {
         label: String,
         actor: Actor,
         message: String,
+        cancelled: bool,
     ) {
         self.action_log.fail_done_as(
             actor,
@@ -1593,6 +1622,7 @@ impl AppState {
             took: Duration::ZERO,
             detail: Vec::new(),
             outcome: Err(message),
+            cancelled,
         });
     }
 
@@ -1751,6 +1781,9 @@ impl AppState {
         // A proposal's Apply installs as any produced value does; its switch
         // report is kept for the reply.
         let mut switched_camera = None;
+        // Whether the kernel met the cancel flag and stopped, which the record
+        // keeps beside the sentence so the panel can say so.
+        let mut cancelled = false;
         let finished = match finished {
             Finished::SwitchedCamera(run) => {
                 let SwitchedCamera {
@@ -1864,13 +1897,16 @@ impl AppState {
                     match end {
                         IndexFilesEnd::Built(text) => Ok(text),
                         IndexFilesEnd::Failed(message) => Err(message),
-                        IndexFilesEnd::Cancelled => Err(match wrote_index {
-                            None => format!("{} of {label} cancelled", operation.name),
-                            Some(path) => format!(
-                                "{} of {label} cancelled after it wrote the SIFT index {path}",
-                                operation.name
-                            ),
-                        }),
+                        IndexFilesEnd::Cancelled => {
+                            cancelled = true;
+                            Err(match wrote_index {
+                                None => format!("{} of {label} cancelled", operation.name),
+                                Some(path) => format!(
+                                    "{} of {label} cancelled after it wrote the SIFT index {path}",
+                                    operation.name
+                                ),
+                            })
+                        }
                     }
                 }
             },
@@ -1946,7 +1982,10 @@ impl AppState {
             // No elapsed in the sentence: the entry is timed from `started`
             // like the successful one, so the cost column already says how
             // long it ran, and two spellings of one number can only disagree.
-            Finished::Cancelled => Err(format!("{} of {label} cancelled", operation.name)),
+            Finished::Cancelled => {
+                cancelled = true;
+                Err(format!("{} of {label} cancelled", operation.name))
+            }
             Finished::Failed(message) => Err(message),
         };
         // Timed from `started` whichever way it went. A cancelled solve spent
@@ -1999,6 +2038,7 @@ impl AppState {
             took,
             detail: kept,
             outcome,
+            cancelled,
         });
         installed
     }

@@ -384,7 +384,15 @@ the panel remembers (`AppState::background_phases_of`) rather than a mode.
 An idle queue's line is not blank. It shows the last task that finished from
 that queue, greyed: its name, its node and what it cost, the cost on the right
 and drawn first, so a long node name is cut rather than run under the number a
-reader came back for. Its phases are the list below when it is the chosen task,
+reader came back for. A task that did not run to its end says how it ended
+just left of the cost: the weak word `cancelled` for one that was cancelled,
+running or waiting, and `failed` in the error colour for one whose kernel
+refused or whose answer could not be installed, each with the Action Log's
+sentence on hover (`Bundle adjust dino cancelled 26.9 s`). Greyed and without
+it, a cancelled adjustment read exactly as a finished one. The same word is
+at the right of the title line when that task's phases are shown, laid out
+first as a running task's count is. A word rather than a mark, because the
+panel's two glyphs already mean Cancel and the open stage. Its phases are the list below when it is the chosen task,
 and they are **always showing**: the Action Log hides a
 breakdown behind a toggle because it has a row for every action of the session
 and expanding them all would bury the list, where this panel shows one task's
@@ -1104,7 +1112,11 @@ they started, with no cost and no transcript. Each is a `FinishedTask` holding i
 id, operation, label, cost, transcript and outcome, and `changed`, whether it
 pushed a version of its node: false for a run that ended in `NoChange` as well
 as for one that was refused or cancelled, which is how an edit's reply answers
-`changed: false` for a run that succeeded without changing anything. For an open
+`changed: false` for a run that succeeded without changing anything. It also
+holds `cancelled`, whether it ended because it was cancelled, while it ran or
+while it waited, since the outcome is an `Err` for a cancellation and a refusal
+alike; `FinishedTask::ended` reads the two as one `Ended` (`Done`, `Cancelled`
+or `Failed`), which is what the panel marks a finished task with. For an open
 it also holds `opened`, the first node the open made, which is what
 `open_reconstruction` answers with once the open lands. A ring rather than one
 slot, because the two queues finish independently and both are polled in the
@@ -1358,6 +1370,11 @@ Panel, through `test_support::run_frame_headless`:
 - With a long node name, a count and a status at the default width, the title
   line paints the count, the node's name cut out of the middle and the status,
   with nothing overlapping or leaving the panel, and the whole title on hover.
+- A task that finished paints neither `cancelled` nor `failed`; one that was
+  cancelled paints `cancelled` on its idle line and its title line, and one that
+  failed paints `failed` on both; a task taken out of its queue is recorded as
+  cancelled; and at 227 px a cancelled task's idle line holds the word, the
+  node and the cost without overlapping.
 - Cancel is disabled, with its tooltip, for an operation whose kernels do not
   poll the flag, and live for one that does.
 - A status replaces the previous one rather than adding a line, and the panel

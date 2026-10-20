@@ -37,7 +37,7 @@
 use std::time::Duration;
 
 use crate::action_log::{detail_row, detail_text, ActionLog, Breakdown};
-use crate::background::{Queue, TaskState};
+use crate::background::{Ended, FinishedTask, Queue, TaskState};
 use crate::progress::{Collector, Count, Detail, Live};
 use crate::state::AppState;
 
@@ -71,6 +71,14 @@ pub(super) const CANCEL: &str = "\u{1f5d9}";
 
 /// What leads a waiting task's line, where a queue's line has its name.
 pub(super) const WAITING: &str = "waiting";
+
+/// What an idle line and a finished task's title line say of a task that was
+/// cancelled, running or waiting.
+pub(super) const CANCELLED: &str = "cancelled";
+
+/// What they say of a task whose kernel refused, or whose answer could not be
+/// installed.
+pub(super) const FAILED: &str = "failed";
 
 /// What leads a running quiet task's line.
 pub(super) const QUIET: &str = "quiet";
@@ -480,9 +488,11 @@ fn show_idle(ui: &mut egui::Ui, state: &AppState, queue: Queue, asked: &mut Aske
     let took = ActionLog::format_took(last.took);
     // The cost is drawn before the node, from the right: a long name would
     // otherwise push the number off the panel, and the number is what a
-    // reader came back to this panel to find. The node takes what is left.
+    // reader came back to this panel to find. How it ended, where it did not
+    // finish, is next, for the same reason. The node takes what is left.
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
         ui.label(egui::RichText::new(took).weak());
+        show_ending(ui, last);
         ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
             let text = egui::RichText::new(name).weak();
             name_and_node(ui, name, Name::Button, &label, |ui| {
@@ -490,6 +500,27 @@ fn show_idle(ui: &mut egui::Ui, state: &AppState, queue: Queue, asked: &mut Aske
             });
         });
     });
+}
+
+/// How a finished task ended, where it did not run to its end: the weak word
+/// `cancelled`, or `failed` in the error colour, with the Action Log's
+/// sentence on hover. Nothing for a task that finished.
+///
+/// A word rather than a mark, because the panel's other marks are a close
+/// glyph that cancels and a triangle that points at the open stage, and a
+/// third glyph would be one more thing to learn; the word is short enough to
+/// leave the node its share of the line.
+fn show_ending(ui: &mut egui::Ui, task: &FinishedTask) {
+    let (word, color) = match task.ended() {
+        Ended::Done => return,
+        Ended::Cancelled => (CANCELLED, ui.visuals().weak_text_color()),
+        Ended::Failed => (FAILED, ui.visuals().error_fg_color),
+    };
+    let sentence = match &task.outcome {
+        Ok(text) | Err(text) => text.clone(),
+    };
+    ui.add(egui::Label::new(egui::RichText::new(word).color(color)).selectable(false))
+        .on_hover_text(sentence);
 }
 
 /// The phase list's title: the task and its node, whose whole name the queue
@@ -591,8 +622,15 @@ fn show_chosen_phases(ui: &mut egui::Ui, state: &AppState) {
         }
         Some(TaskState::Finished(task)) if !task.detail.is_empty() => {
             ui.horizontal(|ui| {
-                let room = ui.available_width();
-                show_title(ui, task.operation.name, &task.label, room);
+                // How it ended from the right and first, where the running
+                // form has its count, so it shows whatever the node is called.
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    show_ending(ui, task);
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        let room = ui.available_width();
+                        show_title(ui, task.operation.name, &task.label, room);
+                    });
+                });
             });
             // Nothing is open: the operation is over, so every row is a run
             // that closed.

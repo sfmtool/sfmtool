@@ -2117,6 +2117,95 @@ fn a_running_line_cuts_a_long_name_rather_than_overlapping() {
     state.finish_background_tasks();
 }
 
+/// Run `operation` on `id` to its end with a job that opens one phase and
+/// ends as `ended` says.
+fn ended_as(state: &mut AppState, id: ReconId, operation: Operation, ended: fn() -> Finished) {
+    let task = state
+        .start_background_task(
+            operation,
+            id,
+            Box::new(move |progress| {
+                drop(progress.phase("solve"));
+                ended()
+            }),
+        )
+        .expect("nothing else is running");
+    state.finish_background_task(task);
+}
+
+/// An idle line says when its task was cancelled or failed, and the title line
+/// says it again when that task's phases are shown: greyed, a cancelled task
+/// looked exactly like one that had finished, and only the Action Log said
+/// otherwise.
+#[test]
+fn an_idle_line_says_whether_its_task_was_cancelled_or_failed() {
+    use super::panel::{CANCELLED, FAILED};
+    let (mut state, id) = adjustable();
+    let count = |texts: &[String], word: &str| texts.iter().filter(|t| *t == word).count();
+
+    ended_as(&mut state, id, Operation::BUNDLE_ADJUST, || {
+        Finished::NoChange("nothing to adjust".to_string())
+    });
+    let texts = painted(&mut state);
+    assert_eq!(
+        count(&texts, CANCELLED) + count(&texts, FAILED),
+        0,
+        "{texts:?}"
+    );
+
+    ended_as(&mut state, id, Operation::BUNDLE_ADJUST, || {
+        Finished::Cancelled
+    });
+    assert_eq!(
+        state.last_finished_task().map(|task| task.ended()),
+        Some(super::Ended::Cancelled)
+    );
+    let texts = painted(&mut state);
+    // Once on the idle line and once on the title line above its phases.
+    assert_eq!(count(&texts, CANCELLED), 2, "{texts:?}");
+    assert_eq!(count(&texts, FAILED), 0, "{texts:?}");
+
+    ended_as(&mut state, id, Operation::BUNDLE_ADJUST, || {
+        Finished::Failed("the kernel refused".to_string())
+    });
+    let texts = painted(&mut state);
+    assert_eq!(count(&texts, FAILED), 2, "{texts:?}");
+    assert_eq!(count(&texts, CANCELLED), 0, "{texts:?}");
+
+    // A task taken out of its queue is cancelled too. It has no phases, so it
+    // has no title line, and the word is on its queue's idle line alone.
+    let mut gate = Gate::new();
+    let other = second_node(&mut state);
+    state
+        .start_background_task(Operation::BUNDLE_ADJUST, other, waiting_job(gate.held()))
+        .expect("the slow queue is idle");
+    let waiting = state
+        .start_background_task(
+            Operation::RETRIANGULATE_ALL_POINTS,
+            id,
+            waiting_job(Gate::new().held()),
+        )
+        .expect("a busy queue queues the task");
+    state.cancel_background_task(waiting);
+    assert_eq!(
+        state.finished_task(waiting).map(|task| task.ended()),
+        Some(super::Ended::Cancelled)
+    );
+    gate.open();
+    state.finish_background_tasks();
+
+    // At the default width the word, the cost and the node all fit.
+    ended_as(&mut state, id, Operation::BUNDLE_ADJUST, || {
+        Finished::Cancelled
+    });
+    state.finished_tasks.back_mut().expect("it finished").label = "dino".to_string();
+    let width = 227.0;
+    let spans = painted_spans(&mut state, width);
+    let line = line_led_by(&spans, "Slow", width);
+    assert!(line.iter().any(|t| t == CANCELLED), "{line:?}");
+    assert!(line.iter().any(|t| t == "dino"), "{line:?}");
+}
+
 /// The texts painted on the line `lead` is painted on, left to right, after
 /// asserting that none of them runs under the next or past `width`.
 fn line_led_by(spans: &[(String, f32, f32, f32)], lead: &str, width: f32) -> Vec<String> {
@@ -2695,9 +2784,10 @@ fn the_idle_node_says_its_whole_name_on_hover_once() {
         style.interaction.tooltip_grace_time = 0.0;
     });
     let first = painted_at(&ctx, &mut state, input());
+    // The idle line's, which is painted before the title line's.
     let at = first
         .iter()
-        .find(|(text, _)| text.starts_with("a_recon"))
+        .find(|(text, _)| text.starts_with("a_re"))
         .unwrap_or_else(|| panic!("the node was not painted: {first:?}"))
         .1;
     let over = at + egui::vec2(8.0, 4.0);
