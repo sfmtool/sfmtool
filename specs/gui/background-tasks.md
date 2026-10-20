@@ -382,7 +382,11 @@ reads one more than it reported, capped at its total: `round 5/9`. With nothing
 open inside it, as between rounds, it reads what it reported, `round 4/9`. The
 innermost count reads as reported in every case (`panel::in_progress`), so its
 number does not step between the stages of one iteration when **Detailed
-timing** opens phases inside it. The first round shows the iteration count
+timing** opens phases inside it. That holds for a lone count too, since the
+collector cannot tell a detail phase from a stage: at the start of a later
+round, while it retriangulates and before it reports its first iteration, the
+round count is the only count and reads `round 4/9`, then `round 5/9` once the
+iteration count arrives. The first round shows the iteration count
 alone: the adjustment reports its round count only when a round ends, so
 nothing in the viewer knows there are nine rounds until the first has
 finished, and the viewer does not change what the kernel reports. The counts
