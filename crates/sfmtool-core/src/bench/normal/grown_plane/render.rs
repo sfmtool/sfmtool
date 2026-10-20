@@ -13,12 +13,12 @@
 //! rendered the same way at no tilt and no shift; its rays meet every plane at
 //! the reference pixels, so its tile is the same at every tilt.
 
-use std::cell::{Cell, RefCell};
+use std::cell::{Cell, RefCell, RefMut};
 
-use nalgebra::Vector3;
+use nalgebra::{DMatrix, Vector3};
 
 use crate::camera::image::ImageU8;
-use crate::camera::remap::sample_bilinear_u8;
+use crate::camera::remap::{sample_bilinear_u8, sample_bilinear_with_grad_u8};
 use crate::camera::sampler::bilinear_mip_level;
 use crate::camera::warp_map::{patch_grid_jacobian, singular_values_2x2};
 use crate::camera::CameraIntrinsics;
@@ -162,6 +162,63 @@ impl Grid {
             .collect()
     }
 
+    /// How each of `rows`' pixels in `view`'s photograph moves with the tilt
+    /// at `tilt`: `[[∂x/∂a, ∂x/∂b], [∂y/∂a, ∂y/∂b]]`, full-resolution px per
+    /// tilt unit, indexed by sample over the whole grid. The sample's ray is
+    /// fixed and the plane turns about the anchor, so its world point
+    /// `o + λ·d` moves along the ray with `λ = ((A − o)·n) / (d·n)`; the pixel
+    /// follows through the view's pose and its lens model's Jacobian
+    /// (`pixel_jacobian`, analytic where the model has one). Zero for every
+    /// sample [`Self::project`] gives no pixel, and for every sample not in
+    /// `rows`.
+    pub(super) fn pixel_tilt_derivatives(
+        &self,
+        view: &ViewImage<'_>,
+        tilt: [f64; 2],
+        rows: &[usize],
+    ) -> Vec<[[f64; 2]; 2]> {
+        let mut out = vec![[[0.0; 2]; 2]; self.rays.len()];
+        let m = self.normal + self.u * tilt[0] + self.v * tilt[1];
+        let length = m.norm();
+        let n = m / length;
+        // ∂n/∂a and ∂n/∂b: each tilt axis less its part along n, over |m|.
+        let dn = [
+            (self.u - n * n.dot(&self.u)) / length,
+            (self.v - n * n.dot(&self.v)) / length,
+        ];
+        let offset = self.anchor - self.origin;
+        let reach = offset.dot(&n);
+        let rotation = view.cam_from_world.to_rotation_matrix();
+        for &k in rows {
+            let d = self.rays[k];
+            let along = d.dot(&n);
+            if along.abs() < 1e-12 {
+                continue;
+            }
+            let lambda = reach / along;
+            if !(lambda > 0.0 && lambda.is_finite()) {
+                continue;
+            }
+            let p_cam = view
+                .cam_from_world
+                .transform_point_homogeneous(self.origin + d * lambda, 1.0);
+            if !view.camera.model.needs_ray_path() && p_cam.z >= 0.0 {
+                continue;
+            }
+            let Some(jacobian) = view.camera.pixel_jacobian([p_cam.x, p_cam.y, p_cam.z]) else {
+                continue;
+            };
+            for (i, dn) in dn.iter().enumerate() {
+                let dlambda = (offset.dot(dn) - lambda * d.dot(dn)) / along;
+                let moved = rotation * (d * dlambda);
+                for (axis, row) in jacobian.iter().enumerate() {
+                    out[k][axis][i] = row[0] * moved.x + row[1] * moved.y + row[2] * moved.z;
+                }
+            }
+        }
+        out
+    }
+
     /// `view`'s photograph px per world unit at the anchor: the square root
     /// of the area scale of the projection of the starting patch frame there, read
     /// by a central difference of a hundredth of the patch frame's half-extent
@@ -244,6 +301,19 @@ impl<'a> ViewImage<'a> {
         }
     }
 
+    /// `view` read at pyramid level `level`.
+    #[cfg(test)]
+    pub(super) fn at_level(view: &ProjectedImage<'a>, level: usize) -> Self {
+        let image = view.pyramid.level(level);
+        ViewImage {
+            camera: view.camera,
+            cam_from_world: view.cam_from_world,
+            level: image,
+            scale: (1u64 << level) as f64,
+            channels: (image.channels() as usize).clamp(1, 3),
+        }
+    }
+
     /// Sample `pixels` (full-resolution px, one per row of `rows`) moved by
     /// `shift` into `out`. A sample is valid where its pixel exists and all
     /// four bilinear taps lie on the photograph; an invalid sample still
@@ -269,12 +339,109 @@ impl<'a> ViewImage<'a> {
             let x = (p[0] + shift[0]) / self.scale;
             let y = (p[1] + shift[1]) / self.scale;
             out.valid[k] = (0.5..=w - 0.5).contains(&x) && (0.5..=h - 0.5).contains(&y);
-            let (xf, yf) = (x as f32, y as f32);
             for c in 0..ch {
-                out.values[k * ch + c] = sample_bilinear_u8(self.level, xf, yf, c as u32);
+                out.values[k * ch + c] =
+                    sample_bilinear_u8(self.level, x as f32, y as f32, c as u32);
             }
         }
     }
+
+    /// The image gradient at each of `pixels` moved by `shift`, read as
+    /// `read` says, into `out`, per full-resolution px: the level's gradient
+    /// divided by the level's scale. The position is the one [`Self::sample`]
+    /// reads its value at, cast to `f32` the same way. A sample with no pixel
+    /// has zero gradient.
+    pub(super) fn gradients(
+        &self,
+        pixels: &[Option<[f64; 2]>],
+        rows: &[usize],
+        shift: [f64; 2],
+        read: GradientRead,
+        out: &mut Gradients,
+    ) {
+        let ch = out.channels;
+        for (&k, pixel) in rows.iter().zip(pixels) {
+            let Some(p) = pixel else {
+                out.values[k * ch..(k + 1) * ch].fill([0.0; 2]);
+                continue;
+            };
+            let x = ((p[0] + shift[0]) / self.scale) as f32;
+            let y = ((p[1] + shift[1]) / self.scale) as f32;
+            for c in 0..ch {
+                let (dx, dy) = match read {
+                    GradientRead::Bilinear => {
+                        let (_, dx, dy) = sample_bilinear_with_grad_u8(self.level, x, y, c as u32);
+                        (dx, dy)
+                    }
+                    GradientRead::Sobel => sobel_gradient(self.level, x, y, c as u32),
+                };
+                out.values[k * ch + c] = [f64::from(dx) / self.scale, f64::from(dy) / self.scale];
+            }
+        }
+    }
+}
+
+/// How a sample's image gradient is read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum GradientRead {
+    /// The derivative of the bilinear read itself, from its four taps: the
+    /// exact slope of the value, which jumps where the position crosses a
+    /// pixel centre. Where an axis's two taps are clamped to one edge pixel
+    /// the value does not move along it, and the gradient along it is zero.
+    Bilinear,
+    /// The bilinear read, at the same position and with the same weights as
+    /// the value, of the level's Sobel gradient images: at each pixel, the
+    /// difference of its two neighbours along the axis, halved, averaged
+    /// across the other axis with weights `[1, 2, 1] / 4`. It is continuous
+    /// across pixel edges. It is computed from the 4×4 pixels about the read,
+    /// edge-clamped, which give the four taps' Sobel values, so no gradient
+    /// image is stored.
+    Sobel,
+}
+
+/// The bilinear read at level position `(x, y)` of the image's Sobel
+/// gradient images in `channel`, grey levels per level px
+/// ([`GradientRead::Sobel`]): `(∂I/∂x, ∂I/∂y)`.
+pub(super) fn sobel_gradient(img: &ImageU8, x: f32, y: f32, channel: u32) -> (f32, f32) {
+    // The same half-pixel convention, floor and in-cell fractions as the
+    // bilinear read of the value.
+    let (gx, gy) = (x - 0.5, y - 0.5);
+    let (x0, y0) = (gx.floor() as i32, gy.floor() as i32);
+    let (fx, fy) = (gx - x0 as f32, gy - y0 as f32);
+    let (w, h) = (img.width() as i32, img.height() as i32);
+    let c = img.channels() as usize;
+    let stride = img.width() as usize * c;
+    let data = img.data();
+    // p[r][q]: the pixel at row y0 − 1 + r, column x0 − 1 + q, edge-clamped.
+    let mut p = [[0.0f32; 4]; 4];
+    for (r, row) in p.iter_mut().enumerate() {
+        let yy = (y0 - 1 + r as i32).clamp(0, h - 1) as usize;
+        for (q, value) in row.iter_mut().enumerate() {
+            let xx = (x0 - 1 + q as i32).clamp(0, w - 1) as usize;
+            *value = f32::from(data[yy * stride + xx * c + channel as usize]);
+        }
+    }
+    const SMOOTH: [f32; 3] = [0.25, 0.5, 0.25];
+    // The Sobel gradient at the tap at row y0 + i, column x0 + j.
+    let tap = |i: usize, j: usize| {
+        let (mut dx, mut dy) = (0.0, 0.0);
+        for (d, weight) in SMOOTH.iter().enumerate() {
+            dx += weight * (p[i + d][j + 2] - p[i + d][j]);
+            dy += weight * (p[i + 2][j + d] - p[i][j + d]);
+        }
+        (0.5 * dx, 0.5 * dy)
+    };
+    let (g00, g10, g01, g11) = (tap(0, 0), tap(0, 1), tap(1, 0), tap(1, 1));
+    let blend = |v00: f32, v10: f32, v01: f32, v11: f32| {
+        (1.0 - fx) * (1.0 - fy) * v00
+            + fx * (1.0 - fy) * v10
+            + (1.0 - fx) * fy * v01
+            + fx * fy * v11
+    };
+    (
+        blend(g00.0, g10.0, g01.0, g11.0),
+        blend(g00.1, g10.1, g01.1, g11.1),
+    )
 }
 
 /// A render of every sample of the grid: values interleaved by channel, and
@@ -298,6 +465,29 @@ impl Samples {
 
     fn at(&self, k: usize, c: usize) -> f64 {
         f64::from(self.values[k * self.channels + c])
+    }
+}
+
+/// The image gradient of every sample of a render, per channel, grey levels
+/// per full-resolution px: how the sample's value moves as its pixel moves,
+/// and so how it moves with the view's image shift. Only the rows it was
+/// read for are written.
+pub(super) struct Gradients {
+    channels: usize,
+    values: Vec<[f64; 2]>,
+}
+
+impl Gradients {
+    pub(super) fn new(n: usize, channels: usize) -> Gradients {
+        Gradients {
+            channels,
+            values: vec![[0.0; 2]; n * channels],
+        }
+    }
+
+    /// Sample `k`'s gradient in channel `c`.
+    pub(super) fn at(&self, k: usize, c: usize) -> [f64; 2] {
+        self.values[k * self.channels + c]
     }
 }
 
@@ -336,8 +526,50 @@ impl<'g, 'a> ViewRender<'g, 'a> {
     /// The view's samples over `rows` through the plane at `tilt`, shifted by
     /// `shift`.
     pub(super) fn render(&self, tilt: [f64; 2], shift: [f64; 2], rows: &[usize]) -> Samples {
-        self.renders.set(self.renders.get() + 1);
         let mut out = Samples::new(self.grid.side * self.grid.side, self.view.channels);
+        self.render_into(tilt, shift, rows, &mut out);
+        out
+    }
+
+    /// The image gradient of the samples over `rows` through the plane at
+    /// `tilt`, shifted by `shift`, read as `read` says
+    /// ([`ViewImage::gradients`]). It reads the projection of the last tilt
+    /// where that is `tilt`, and is not counted as a render.
+    pub(super) fn gradients(
+        &self,
+        tilt: [f64; 2],
+        shift: [f64; 2],
+        rows: &[usize],
+        read: GradientRead,
+    ) -> Gradients {
+        let n = self.grid.side * self.grid.side;
+        let mut out = Gradients::new(n, self.view.channels);
+        let projected = self.projected(tilt, rows);
+        let projected = projected.as_ref().expect("filled by projected");
+        self.view
+            .gradients(&projected.pixels, rows, shift, read, &mut out);
+        out
+    }
+
+    /// How `rows`' pixels in this view move with the tilt at `tilt`
+    /// ([`Grid::pixel_tilt_derivatives`]).
+    pub(super) fn pixel_tilt_derivatives(
+        &self,
+        tilt: [f64; 2],
+        rows: &[usize],
+    ) -> Vec<[[f64; 2]; 2]> {
+        self.grid.pixel_tilt_derivatives(self.view, tilt, rows)
+    }
+
+    fn render_into(&self, tilt: [f64; 2], shift: [f64; 2], rows: &[usize], out: &mut Samples) {
+        self.renders.set(self.renders.get() + 1);
+        let projected = self.projected(tilt, rows);
+        let projected = projected.as_ref().expect("filled by projected");
+        self.view.sample(&projected.pixels, rows, shift, out);
+    }
+
+    /// The projection cache, holding the projection of `rows` at `tilt`.
+    fn projected(&self, tilt: [f64; 2], rows: &[usize]) -> RefMut<'_, Option<Projected>> {
         let mut cache = self.cache.borrow_mut();
         let hit = cache
             .as_ref()
@@ -349,9 +581,7 @@ impl<'g, 'a> ViewRender<'g, 'a> {
                 pixels: self.grid.project(self.view, tilt, rows),
             });
         }
-        let projected = cache.as_ref().expect("filled above");
-        self.view.sample(&projected.pixels, rows, shift, &mut out);
-        out
+        cache
     }
 }
 
@@ -565,6 +795,58 @@ impl Block {
 }
 
 impl Block {
+    /// Add to `j`, from row `row0`, the derivative of `sign` times the
+    /// block's scale times `view`'s samples normalised over the block, given
+    /// `derivative(k, c, out)`, which writes into `out` how sample `k`'s value
+    /// in channel `c` moves with each of `j`'s columns. Returns the rows the
+    /// block spans. A view's residual is the reference less the view, so the
+    /// view enters at sign `−1`; a pair's adds the first view's at `+1` and
+    /// the second's at `−1` over the same rows.
+    ///
+    /// For one channel with centred samples `c = v − mean v` and `û = c/‖c‖`,
+    /// `dû = (dc − û (û·dc)) / ‖c‖` with `dc = dv − mean dv`: the chain rule
+    /// through [`unit_centred`]. A channel whose centred length is under the
+    /// floor that function zeroes at adds nothing.
+    pub(super) fn add_derivative(
+        &self,
+        view: &Samples,
+        sign: f64,
+        derivative: impl Fn(usize, usize, &mut [f64]),
+        j: &mut DMatrix<f64>,
+        row0: usize,
+    ) -> usize {
+        let n = self.rows.len();
+        let cols = j.ncols();
+        let mut d = vec![0.0; n * cols];
+        for (index, &c) in self.channels.iter().enumerate() {
+            let values: Vec<f64> = self.rows.iter().map(|&k| view.at(k, c)).collect();
+            let mean = values.iter().sum::<f64>() / n.max(1) as f64;
+            let centred: Vec<f64> = values.iter().map(|v| v - mean).collect();
+            let norm = centred.iter().map(|v| v * v).sum::<f64>().sqrt();
+            if norm < TINY_NORM {
+                continue;
+            }
+            d.fill(0.0);
+            for (t, &k) in self.rows.iter().enumerate() {
+                derivative(k, c, &mut d[t * cols..(t + 1) * cols]);
+            }
+            let base = row0 + index * n;
+            let factor = sign * self.scale / norm;
+            for i in 0..cols {
+                let mean_d = (0..n).map(|t| d[t * cols + i]).sum::<f64>() / n as f64;
+                let along = (0..n)
+                    .map(|t| centred[t] * (d[t * cols + i] - mean_d))
+                    .sum::<f64>()
+                    / norm;
+                for t in 0..n {
+                    let unit = centred[t] / norm;
+                    j[(base + t, i)] += factor * ((d[t * cols + i] - mean_d) - unit * along);
+                }
+            }
+        }
+        self.channels.len() * n
+    }
+
     /// Append the block's residuals between two views' renders to `out`:
     /// `first` normalised afresh over the block's samples and channels in
     /// place of the frozen reference, less `second` normalised the same way.

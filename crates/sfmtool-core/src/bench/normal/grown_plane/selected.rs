@@ -282,7 +282,7 @@ impl Sequence<'_, '_, '_> {
             };
             let (p, zncc, taken) = maximise(&fit, &[tilt[0], tilt[1], 0.0, 0.0], &self.iteration);
             let own = [p[0], p[1]];
-            let information = tilt_information(&fit, &p, &self.iteration);
+            let information = tilt_information(&fit, &p);
             let sigma = sigmas_deg(&information, options.zncc_tolerance)[0];
             let refused = (zncc.is_nan() || zncc < options.min_held_zncc)
                 .then_some(GrownPlaneRefusal::UnderFloor);

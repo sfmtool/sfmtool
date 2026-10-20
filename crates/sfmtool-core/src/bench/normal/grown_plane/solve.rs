@@ -10,8 +10,16 @@
 //! is `2 · (1 − score)` there ([`Block`]): the samples, the channels and the
 //! cells' robust weights are fixed at the linearisation point, and only the
 //! view's samples move with the parameters (both views' in the pair fit, which
-//! normalises both again at every evaluation). The Jacobian is a forward
-//! difference of that residual. A step is kept only when the true score, read
+//! normalises both again at every evaluation). The Jacobian is analytic, read
+//! at the render the residual was frozen at: a sample's value moves with an
+//! image shift by its image gradient, and with the tilt by that gradient
+//! times how its pixel moves as the plane turns, and both go through the
+//! block's normalisation by the chain rule ([`Block::add_derivative`]), so a
+//! Jacobian costs no render. The fit's steps read the gradient from the
+//! level's Sobel gradient images ([`GradientRead::Sobel`]), which is
+//! continuous across pixel edges; the information about the tilt reads the
+//! derivative of the bilinear read itself ([`GradientRead::Bilinear`]), the
+//! local slope of the score the fit maximises. A step is kept only when the true score, read
 //! again from a fresh render, rises; otherwise the damping grows and the step
 //! is tried again, and a stage that cannot rise keeps the parameters it was
 //! given. The render that scores a kept step also gives the residual the next
@@ -21,7 +29,9 @@
 
 use nalgebra::{DMatrix, DVector, Matrix2};
 
-use super::render::{robust_score, textured, zncc, Block, Samples, ViewRender};
+use super::render::{
+    robust_score, textured, zncc, Block, GradientRead, Gradients, Samples, ViewRender,
+};
 
 /// The largest change of the tilt one step may make, tilt units: a step
 /// past it is scaled back, so that the fit moves the plane in steps no larger
@@ -52,8 +62,6 @@ pub(super) struct Iteration {
     pub(super) max_iterations: u32,
     pub(super) damping: f64,
     pub(super) min_improvement: f64,
-    pub(super) tilt_step: f64,
-    pub(super) shift_step: f64,
 }
 
 /// A residual frozen at a point, and its value there.
@@ -67,41 +75,74 @@ pub(super) trait Objective {
     /// The score at `p`, higher better, the residual frozen there and that
     /// residual's value at `p`, read from the same render as the score; no
     /// frozen residual where nothing can be read. The value is the one
-    /// [`Self::residuals`] gives at `p`, bit for bit.
+    /// `residuals`, a test-only method, gives at `p`, bit for bit.
     fn freeze(&self, p: &[f64]) -> (f64, Option<Linearised<Self::Frozen>>);
 
-    /// The frozen residual read at `p`.
+    /// The frozen residual read at `p`, from a render of its own. The fit
+    /// itself never calls it; it is what [`forward_difference`] differences.
+    #[cfg(test)]
     fn residuals(&self, frozen: &Self::Frozen, p: &[f64], out: &mut Vec<f64>);
 
-    /// The forward-difference Jacobian of the frozen residual at `p`, whose
-    /// residual is `r0`, with step `steps[i]` for parameter `i`.
+    /// The Jacobian of the frozen residual at `p`, the point it was frozen
+    /// at, whose residual is `r0`, with each sample's image gradient read as
+    /// `read` says: one row per entry of `r0`, one column per parameter.
     fn jacobian(
         &self,
         frozen: &Self::Frozen,
         p: &[f64],
         r0: &[f64],
-        steps: &[f64],
-    ) -> DMatrix<f64> {
-        let mut j = DMatrix::zeros(r0.len(), p.len());
-        let mut r = Vec::with_capacity(r0.len());
-        for (i, &h) in steps.iter().enumerate() {
-            let mut q = p.to_vec();
-            q[i] += h;
-            r.clear();
-            self.residuals(frozen, &q, &mut r);
-            for (row, (a, b)) in r.iter().zip(r0).enumerate() {
-                j[(row, i)] = (a - b) / h;
-            }
-        }
-        j
-    }
+        read: GradientRead,
+    ) -> DMatrix<f64>;
 }
 
-/// The Jacobian steps for `n` parameters, tilt first.
-fn steps_for(n: usize, it: &Iteration) -> Vec<f64> {
-    (0..n)
-        .map(|i| if i < 2 { it.tilt_step } else { it.shift_step })
-        .collect()
+/// The forward-difference Jacobian of `objective`'s frozen residual at `p`,
+/// whose residual is `r0`, with step `steps[i]` for parameter `i`: one render
+/// per parameter. The check the analytic Jacobians are tested against.
+#[cfg(test)]
+pub(super) fn forward_difference<O: Objective>(
+    objective: &O,
+    frozen: &O::Frozen,
+    p: &[f64],
+    r0: &[f64],
+    steps: &[f64],
+) -> DMatrix<f64> {
+    let mut j = DMatrix::zeros(r0.len(), p.len());
+    let mut r = Vec::with_capacity(r0.len());
+    for (i, &h) in steps.iter().enumerate() {
+        let mut q = p.to_vec();
+        q[i] += h;
+        r.clear();
+        objective.residuals(frozen, &q, &mut r);
+        for (row, (a, b)) in r.iter().zip(r0).enumerate() {
+            j[(row, i)] = (a - b) / h;
+        }
+    }
+    j
+}
+
+/// How sample `k`'s value in channel `c` of a view moves with the fit's
+/// parameters, written to `out`: through `pixel`, how its pixel moves with
+/// the tilt, into the first two entries when the tilt is free, then through
+/// its gradient alone into the next two when the view's shift is free, since
+/// a shift moves the pixel by itself.
+fn value_derivative(
+    gradients: &Gradients,
+    pixel: Option<&[[[f64; 2]; 2]]>,
+    shift_from: Option<usize>,
+    k: usize,
+    c: usize,
+    out: &mut [f64],
+) {
+    let g = gradients.at(k, c);
+    if let Some(pixel) = pixel {
+        let m = pixel[k];
+        out[0] = g[0] * m[0][0] + g[1] * m[1][0];
+        out[1] = g[0] * m[0][1] + g[1] * m[1][1];
+    }
+    if let Some(i) = shift_from {
+        out[i] = g[0];
+        out[i + 1] = g[1];
+    }
 }
 
 /// Fit `objective` from `p0`; the parameters reached, their score and how
@@ -115,7 +156,6 @@ pub(super) fn maximise<O: Objective>(
 ) -> (Vec<f64>, f64, u32) {
     let mut p = p0.to_vec();
     let (mut score, mut frozen) = objective.freeze(&p);
-    let steps = steps_for(p.len(), it);
     let mut damping = it.damping;
     let mut taken = 0;
     let mut first_gain = None;
@@ -126,7 +166,7 @@ pub(super) fn maximise<O: Objective>(
         if r0.is_empty() {
             break;
         }
-        let j = objective.jacobian(fz, &p, r0, &steps);
+        let j = objective.jacobian(fz, &p, r0, GradientRead::Sobel);
         let a = j.transpose() * &j;
         let g = j.transpose() * DVector::from_column_slice(r0);
         let mut accepted = None;
@@ -198,12 +238,8 @@ fn capped(delta: DVector<f64>) -> DVector<f64> {
 /// matrix `JᵀJ` of its frozen residual with every shift eliminated (the
 /// Schur complement), which is minus the Hessian of the score in the tilt
 /// with the shifts fitted again; zero where nothing can be read.
-pub(super) fn tilt_information<O: Objective>(
-    objective: &O,
-    p: &[f64],
-    it: &Iteration,
-) -> Matrix2<f64> {
-    normal_matrix(objective, p, it).map_or_else(Matrix2::zeros, |n| schur_tilt(&n))
+pub(super) fn tilt_information<O: Objective>(objective: &O, p: &[f64]) -> Matrix2<f64> {
+    normal_matrix(objective, p).map_or_else(Matrix2::zeros, |n| schur_tilt(&n))
 }
 
 /// The tilt block of `n` with the other parameters eliminated:
@@ -324,10 +360,17 @@ pub(super) fn live_cells(render_cells: &[Vec<usize>; 9], reference: &Samples) ->
     std::array::from_fn(|k| textured(reference, &render_cells[k]))
 }
 
-impl Objective for ViewFit<'_, '_, '_> {
-    type Frozen = Vec<Block>;
+/// A view's residual frozen at one render: its blocks, and the render's
+/// samples, which the Jacobian there normalises through.
+pub(super) struct ViewFrozen {
+    blocks: Vec<Block>,
+    samples: Samples,
+}
 
-    fn freeze(&self, p: &[f64]) -> (f64, Option<Linearised<Vec<Block>>>) {
+impl Objective for ViewFit<'_, '_, '_> {
+    type Frozen = ViewFrozen;
+
+    fn freeze(&self, p: &[f64]) -> (f64, Option<Linearised<ViewFrozen>>) {
         let (tilt, shift) = self.split(p);
         let samples = self.render.render(tilt, shift, &self.rows());
         let (score, weights) = self.score_of(&samples);
@@ -364,15 +407,49 @@ impl Objective for ViewFit<'_, '_, '_> {
         for block in &blocks {
             block.residuals(&samples, &mut r0);
         }
-        (score, Some((blocks, r0)))
+        let frozen = ViewFrozen { blocks, samples };
+        (score, Some((frozen, r0)))
     }
 
-    fn residuals(&self, frozen: &Vec<Block>, p: &[f64], out: &mut Vec<f64>) {
+    #[cfg(test)]
+    fn residuals(&self, frozen: &ViewFrozen, p: &[f64], out: &mut Vec<f64>) {
         let (tilt, shift) = self.split(p);
         let samples = self.render.render(tilt, shift, &self.rows());
-        for block in frozen {
+        for block in &frozen.blocks {
             block.residuals(&samples, out);
         }
+    }
+
+    /// The view's samples move with the shift by their gradient and, when
+    /// the tilt is free, with the tilt by their gradient through how their
+    /// pixels move; the reference is fixed, so the residual moves as minus
+    /// the view's normalised samples.
+    fn jacobian(
+        &self,
+        frozen: &ViewFrozen,
+        p: &[f64],
+        r0: &[f64],
+        read: GradientRead,
+    ) -> DMatrix<f64> {
+        let (tilt, shift) = self.split(p);
+        let gradients = self.render.gradients(tilt, shift, &self.rows(), read);
+        let pixel = self
+            .held
+            .is_none()
+            .then(|| self.render.pixel_tilt_derivatives(tilt, &self.rows()));
+        let shift_from = Some(if self.held.is_some() { 0 } else { 2 });
+        let mut j = DMatrix::zeros(r0.len(), p.len());
+        let mut row = 0;
+        for block in &frozen.blocks {
+            row += block.add_derivative(
+                &frozen.samples,
+                -1.0,
+                |k, c, out| value_derivative(&gradients, pixel.as_deref(), shift_from, k, c, out),
+                &mut j,
+                row,
+            );
+        }
+        j
     }
 }
 
@@ -393,13 +470,18 @@ pub(super) struct PairFit<'r, 'g, 'a> {
 }
 
 impl PairFit<'_, '_, '_> {
+    /// The second view's shift at `p`: its held shift plus the relative
+    /// shift.
+    fn second_shift(&self, p: &[f64]) -> [f64; 2] {
+        [self.shifts[1][0] + p[2], self.shifts[1][1] + p[3]]
+    }
+
     /// Both views' renders over the whole grid at `p`.
     fn renders(&self, p: &[f64]) -> (Samples, Samples) {
         let tilt = [p[0], p[1]];
         let rows = self.first.grid.all();
         let a = self.first.render(tilt, self.shifts[0], &rows);
-        let second = [self.shifts[1][0] + p[2], self.shifts[1][1] + p[3]];
-        let b = self.second.render(tilt, second, &rows);
+        let b = self.second.render(tilt, self.second_shift(p), &rows);
         (a, b)
     }
 
@@ -412,12 +494,21 @@ impl PairFit<'_, '_, '_> {
     }
 }
 
-impl Objective for PairFit<'_, '_, '_> {
-    type Frozen = Vec<Block>;
+/// A pair's residual frozen at one render of each view: its blocks, and each
+/// render's samples.
+pub(super) struct PairFrozen {
+    blocks: Vec<Block>,
+    first: Samples,
+    second: Samples,
+}
 
-    fn freeze(&self, p: &[f64]) -> (f64, Option<Linearised<Vec<Block>>>) {
-        let (a, b) = self.renders(p);
-        let (score, weights) = self.score_of(&a, &b);
+impl Objective for PairFit<'_, '_, '_> {
+    type Frozen = PairFrozen;
+
+    fn freeze(&self, p: &[f64]) -> (f64, Option<Linearised<PairFrozen>>) {
+        let (first, second) = self.renders(p);
+        let (a, b) = (&first, &second);
+        let (score, weights) = self.score_of(a, b);
         let total: f64 = weights.iter().sum();
         let blocks: Vec<Block> = if total <= 0.0 {
             Vec::new()
@@ -426,8 +517,8 @@ impl Objective for PairFit<'_, '_, '_> {
                 .filter(|&k| weights[k] > 0.0)
                 .filter_map(|k| {
                     Block::freeze(
-                        &a,
-                        &b,
+                        a,
+                        b,
                         &self.first.grid.cells[k],
                         weights[k] / total,
                         self.min_coverage,
@@ -440,32 +531,76 @@ impl Objective for PairFit<'_, '_, '_> {
         }
         let mut r0 = Vec::new();
         for block in &blocks {
-            block.pair_residuals(&a, &b, &mut r0);
+            block.pair_residuals(a, b, &mut r0);
         }
-        (score, Some((blocks, r0)))
+        let frozen = PairFrozen {
+            blocks,
+            first,
+            second,
+        };
+        (score, Some((frozen, r0)))
     }
 
-    fn residuals(&self, frozen: &Vec<Block>, p: &[f64], out: &mut Vec<f64>) {
+    #[cfg(test)]
+    fn residuals(&self, frozen: &PairFrozen, p: &[f64], out: &mut Vec<f64>) {
         let (a, b) = self.renders(p);
-        for block in frozen {
+        for block in &frozen.blocks {
             block.pair_residuals(&a, &b, out);
         }
+    }
+
+    /// Both renders move with the tilt and only the second with the
+    /// relative shift; the residual is the first's normalised samples less
+    /// the second's, each normalised over the block afresh.
+    fn jacobian(
+        &self,
+        frozen: &PairFrozen,
+        p: &[f64],
+        r0: &[f64],
+        read: GradientRead,
+    ) -> DMatrix<f64> {
+        let tilt = [p[0], p[1]];
+        let rows = self.first.grid.all();
+        let first_gradients = self.first.gradients(tilt, self.shifts[0], &rows, read);
+        let second_gradients = self
+            .second
+            .gradients(tilt, self.second_shift(p), &rows, read);
+        let first_pixel = self.first.pixel_tilt_derivatives(tilt, &rows);
+        let second_pixel = self.second.pixel_tilt_derivatives(tilt, &rows);
+        let mut j = DMatrix::zeros(r0.len(), p.len());
+        let mut row = 0;
+        for block in &frozen.blocks {
+            block.add_derivative(
+                &frozen.first,
+                1.0,
+                |k, c, out| value_derivative(&first_gradients, Some(&first_pixel), None, k, c, out),
+                &mut j,
+                row,
+            );
+            row += block.add_derivative(
+                &frozen.second,
+                -1.0,
+                |k, c, out| {
+                    value_derivative(&second_gradients, Some(&second_pixel), Some(2), k, c, out)
+                },
+                &mut j,
+                row,
+            );
+        }
+        j
     }
 }
 
 /// The normal matrix `JᵀJ` of `objective`'s frozen residual at `p`, over every
-/// parameter; `None` where nothing can be read.
-pub(super) fn normal_matrix<O: Objective>(
-    objective: &O,
-    p: &[f64],
-    it: &Iteration,
-) -> Option<DMatrix<f64>> {
+/// parameter, with the derivative of the bilinear read as each sample's
+/// gradient; `None` where nothing can be read.
+pub(super) fn normal_matrix<O: Objective>(objective: &O, p: &[f64]) -> Option<DMatrix<f64>> {
     let (_, frozen) = objective.freeze(p);
     let (fz, r0) = frozen?;
     if r0.is_empty() {
         return None;
     }
-    let j = objective.jacobian(&fz, p, &r0, &steps_for(p.len(), it));
+    let j = objective.jacobian(&fz, p, &r0, GradientRead::Bilinear);
     Some(j.transpose() * &j)
 }
 

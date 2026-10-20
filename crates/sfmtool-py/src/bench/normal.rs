@@ -1093,10 +1093,10 @@ fn grid_plane_normal(
 /// half-widths of ``window_fractions`` of the grid's side (default
 /// ``[1/8, 1/5, 1/3, 1/2]``, ``1/2`` covering the whole grid), with tilt and
 /// shift fitted by Levenberg-Marquardt at each size (``max_iterations``,
-/// default 20, ``initial_damping``, default 1e-3, ``min_improvement``,
-/// default 1e-6, and the Jacobian steps ``jacobian_tilt_step``, default 1e-3,
-/// and ``jacobian_shift_step_px``, default 0.05). Each growth gives the
-/// view's own plane and its information about the tilt.
+/// default 20, ``initial_damping``, default 1e-3, and ``min_improvement``,
+/// default 1e-6), on a Jacobian read from the image gradients of the render
+/// it is linearised at. Each growth gives the view's own plane and its
+/// information about the tilt.
 ///
 /// The views grown are a selection, picked one at a time near to far by
 /// their angle from the reference, in rungs, until the combined weakest ``σ``
@@ -1238,8 +1238,6 @@ fn grid_plane_normal(
     max_iterations = None,
     initial_damping = None,
     min_improvement = None,
-    jacobian_tilt_step = None,
-    jacobian_shift_step_px = None,
     max_seed_offset_px = None,
     max_cache_bytes = None,
     sigma_px = None,
@@ -1276,8 +1274,6 @@ fn grown_plane_normal(
     max_iterations: Option<u32>,
     initial_damping: Option<f64>,
     min_improvement: Option<f64>,
-    jacobian_tilt_step: Option<f64>,
-    jacobian_shift_step_px: Option<f64>,
     max_seed_offset_px: Option<f64>,
     max_cache_bytes: Option<usize>,
     sigma_px: Option<f64>,
@@ -1311,8 +1307,6 @@ fn grown_plane_normal(
         max_iterations: max_iterations.unwrap_or(defaults.max_iterations),
         initial_damping: initial_damping.unwrap_or(defaults.initial_damping),
         min_improvement: min_improvement.unwrap_or(defaults.min_improvement),
-        jacobian_tilt_step: jacobian_tilt_step.unwrap_or(defaults.jacobian_tilt_step),
-        jacobian_shift_step_px: jacobian_shift_step_px.unwrap_or(defaults.jacobian_shift_step_px),
         fit: fit_options(
             max_seed_offset_px,
             max_cache_bytes,

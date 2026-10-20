@@ -11,10 +11,10 @@ use std::cell::RefCell;
 use nalgebra::{DMatrix, Matrix2};
 
 use super::combine::{covariance, distance, weighted_mean};
-use super::render::{robust_score, zncc, Block, Samples};
+use super::render::{robust_score, zncc, Block, GradientRead, Samples};
 use super::solve::{
-    maximise, schur_tilt, tilt_information, Iteration, Linearised, Objective, DAMPING_TRIES,
-    MIN_RELATIVE_GAIN,
+    forward_difference, maximise, schur_tilt, tilt_information, Iteration, Linearised, Objective,
+    DAMPING_TRIES, MIN_RELATIVE_GAIN,
 };
 use super::{sigmas_deg, window_radii, GrownPlaneNormalOptions};
 
@@ -214,7 +214,14 @@ impl Objective for Quadratic {
     fn residuals(&self, _: &(), p: &[f64], out: &mut Vec<f64>) {
         out.extend(p.iter().zip(&self.target).map(|(a, b)| a - b));
     }
+
+    fn jacobian(&self, frozen: &(), p: &[f64], r0: &[f64], _: GradientRead) -> DMatrix<f64> {
+        forward_difference(self, frozen, p, r0, &STEPS)
+    }
 }
+
+/// Forward-difference steps for a residual the test writes, tilt then shift.
+const STEPS: [f64; 4] = [1e-3, 1e-3, 0.05, 0.05];
 
 fn iteration() -> Iteration {
     let o = GrownPlaneNormalOptions::default();
@@ -222,8 +229,6 @@ fn iteration() -> Iteration {
         max_iterations: o.max_iterations,
         damping: o.initial_damping,
         min_improvement: o.min_improvement,
-        tilt_step: o.jacobian_tilt_step,
-        shift_step: o.jacobian_shift_step_px,
     }
 }
 
@@ -242,7 +247,7 @@ fn the_fit_reaches_the_optimum_of_a_quadratic() {
     assert!((score - 1.0).abs() < 1e-9);
     // r = p − target has J = I, so the shifts are independent of the tilt
     // and the tilt's information is the identity.
-    let info = tilt_information(&objective, &p, &iteration());
+    let info = tilt_information(&objective, &p);
     assert!((info - Matrix2::identity()).norm() < 1e-6, "{info}");
 }
 
@@ -265,6 +270,10 @@ impl Objective for Logged {
     fn residuals(&self, frozen: &(), p: &[f64], out: &mut Vec<f64>) {
         self.read_at.borrow_mut().push(p.to_vec());
         self.inner.residuals(frozen, p, out);
+    }
+
+    fn jacobian(&self, frozen: &(), p: &[f64], r0: &[f64], _: GradientRead) -> DMatrix<f64> {
+        forward_difference(self, frozen, p, r0, &STEPS)
     }
 }
 

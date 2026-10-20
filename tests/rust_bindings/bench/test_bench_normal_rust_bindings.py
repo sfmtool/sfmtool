@@ -296,8 +296,6 @@ GROWN_DEFAULTS = {
     "max_iterations": 20,
     "initial_damping": 1e-3,
     "min_improvement": 1e-6,
-    "jacobian_tilt_step": 1e-3,
-    "jacobian_shift_step_px": 0.05,
 }
 
 

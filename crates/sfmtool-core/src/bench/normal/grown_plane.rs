@@ -149,12 +149,6 @@ pub struct GrownPlaneNormalOptions {
     /// A stage stops once an iteration raises its score by less than this.
     /// 1e-6.
     pub min_improvement: f64,
-    /// The forward-difference step of the Jacobian along each tilt
-    /// parameter, tilt units. 1e-3.
-    pub jacobian_tilt_step: f64,
-    /// The forward-difference step of the Jacobian along each shift
-    /// parameter, image px. 0.05.
-    pub jacobian_shift_step_px: f64,
     /// The reading the step ends with, and the reference-view rule's grazing
     /// gate and sampler (`localize`).
     pub fit: FitOptions,
@@ -187,8 +181,6 @@ impl Default for GrownPlaneNormalOptions {
             max_iterations: 20,
             initial_damping: 1e-3,
             min_improvement: 1e-6,
-            jacobian_tilt_step: 1e-3,
-            jacobian_shift_step_px: 0.05,
             fit: FitOptions::default(),
         }
     }
@@ -197,7 +189,7 @@ impl Default for GrownPlaneNormalOptions {
 impl GrownPlaneNormalOptions {
     /// Whether the settings are ones the step takes: a first window of at
     /// least one sample, finite fractions above zero, finite search bounds of
-    /// at least zero, a positive search step and Jacobian steps, a positive
+    /// at least zero, a positive search step, a positive
     /// tolerance and target `σ`, a weak-turn bound of at least zero (infinite
     /// allowed) and a finite turn-to-`σ` ratio of at least zero, at least one
     /// selected view, a first rung of finite angles of at least zero with its
@@ -251,12 +243,6 @@ impl GrownPlaneNormalOptions {
         if !(0.0..=1.0).contains(&self.min_coverage) {
             return bad("min_coverage");
         }
-        if !positive(self.jacobian_tilt_step) {
-            return bad("jacobian_tilt_step");
-        }
-        if !positive(self.jacobian_shift_step_px) {
-            return bad("jacobian_shift_step_px");
-        }
         if !(self.initial_damping.is_finite() && self.initial_damping >= 0.0) {
             return bad("initial_damping");
         }
@@ -268,8 +254,6 @@ impl GrownPlaneNormalOptions {
             max_iterations: self.max_iterations,
             damping: self.initial_damping,
             min_improvement: self.min_improvement,
-            tilt_step: self.jacobian_tilt_step,
-            shift_step: self.jacobian_shift_step_px,
         }
     }
 }
@@ -1343,7 +1327,7 @@ impl Sequence<'_, '_, '_> {
             grown.attempt.shift[0],
             grown.attempt.shift[1],
         ];
-        let normal = normal_matrix(&self.grid_fit(i, None), &p, &self.iteration);
+        let normal = normal_matrix(&self.grid_fit(i, None), &p);
         let information = normal.as_ref().map_or_else(Matrix2::zeros, schur_tilt);
         Estimate {
             index: i,
@@ -1643,5 +1627,7 @@ impl Sequence<'_, '_, '_> {
     }
 }
 
+#[cfg(test)]
+mod jacobian_tests;
 #[cfg(test)]
 mod tests;
