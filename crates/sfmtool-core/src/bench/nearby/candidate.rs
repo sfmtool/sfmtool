@@ -8,6 +8,7 @@
 
 use nalgebra::Vector3;
 
+use crate::analysis::point_columns::compute_max_pairwise_angle;
 use crate::bench::track_at_pixel::ViewCamera;
 use crate::patch::normal_refine::ProjectedImage;
 
@@ -259,22 +260,20 @@ pub(super) fn pixel_distance(a: [f64; 2], b: [f64; 2]) -> f64 {
 }
 
 /// The widest angle between the rays from two of `images`' camera centres to
-/// `x`, in degrees.
+/// `x`, in degrees: the pairwise angle the `max_ray_angle_deg` point column
+/// is read with ([`compute_max_pairwise_angle`]).
 pub(super) fn ray_angle(
     cameras: &[ViewCamera<'_>],
     x: &Vector3<f64>,
     images: impl Iterator<Item = u32>,
 ) -> f64 {
-    let dirs: Vec<Vector3<f64>> = images
-        .map(|i| (cameras[i as usize].center - x).normalize())
+    let rays: Vec<[f64; 3]> = images
+        .map(|i| {
+            let d = (cameras[i as usize].center - x).normalize();
+            [d.x, d.y, d.z]
+        })
         .collect();
-    let mut best = 0.0f64;
-    for (a, da) in dirs.iter().enumerate() {
-        for db in &dirs[a + 1..] {
-            best = best.max(da.dot(db).clamp(-1.0, 1.0).acos().to_degrees());
-        }
-    }
-    best
+    compute_max_pairwise_angle(&rays)
 }
 
 /// A candidate from its sightings, the queried image's first, and their

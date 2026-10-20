@@ -4,20 +4,24 @@
 //! Triangulation numerics: per-observation reprojection error and ray angle,
 //! and whole-track diagnostics for one 3D point.
 //!
-//! Nothing here touches egui state — every function is a pure computation over
+//! Nothing here touches egui state: every function is a pure computation over
 //! the point and image table handed to it, which is what lets the display code
-//! that quotes them stay thin. A point arrives as a [`PointView`], so the
-//! numbers describe the version on screen rather than the base under it.
-//! They live at the crate root rather than under a panel
-//! because three different surfaces read the same numbers: Track View's
-//! header quotes them, the Image Detail overlay colours features by
-//! them, and the MCP `get_point` tool reports them to an agent. A figure an
+//! that quotes them stay thin. A point arrives as a
+//! [`PointView`](sfmtool_core::PointView), so the numbers describe the version
+//! on screen rather than the base under it. They live at the crate root rather
+//! than under a panel because three different surfaces read the same numbers:
+//! Track View's header quotes them, the Image Detail overlay colours features
+//! by them, and the MCP `get_point` tool reports them to an agent. A figure an
 //! agent is told and a figure the human beside it reads off a panel have to be
 //! the same figure, and that is easier to keep true when there is one
 //! definition and no panel owns it.
+//!
+//! The whole-track numbers (the observation rays, the widest angle between
+//! them, the condition number and the inverse-depth z) are point columns, so
+//! their one definition is core's `analysis::point_columns`, re-exported here.
 
-use nalgebra::{Point3, Vector3};
-use sfmtool_core::{ImageTable, Point3D, PointView};
+use nalgebra::Vector3;
+use sfmtool_core::Point3D;
 
 #[cfg(test)]
 mod tests;
@@ -78,113 +82,9 @@ pub(crate) fn compute_observation_metrics(
     (reproj_error, ray_angle_deg)
 }
 
-/// Triangulation observability diagnostics for a 3D point, computed from the
-/// rays from each observing camera to the *stored* point (no `.sift` reads):
-/// `(condition_number, inverse_depth_z)`. Returns `(NaN, NaN)` for points at
-/// infinity, missing points, or fewer than two usable rays. The per-ray angular
-/// noise is `max(reproj_error, 1px) / f`, matching the classifier's policy.
-pub(crate) fn compute_point_diagnostics(
-    image_table: &ImageTable,
-    view: &PointView<'_>,
-) -> (f32, f32) {
-    let pt = view.point();
-    if pt.is_at_infinity() {
-        return (f32::NAN, f32::NAN);
-    }
-    let images = view
-        .observations()
-        .iter()
-        .map(|obs| obs.image_index as usize);
-    compute_position_diagnostics(
-        image_table,
-        &pt.position,
-        f64::from(pt.rms_reprojection_error),
-        images,
-    )
-}
-
-/// [`compute_point_diagnostics`] for a finite `position` seen from `images`,
-/// with `error_px` the reprojection error the per-ray noise is scaled by
-/// (floored at one pixel): what Track View's header reads a bench track's own
-/// position and kept observations by, where there is no stored point to hand
-/// in. Returns `(NaN, NaN)` with fewer than two usable rays.
-pub(crate) fn compute_position_diagnostics(
-    image_table: &ImageTable,
-    position: &Point3<f64>,
-    error_px: f64,
-    images: impl IntoIterator<Item = usize>,
-) -> (f32, f32) {
-    use sfmtool_core::reconstruction::triangulation::{depth_uncertainty_batch, triangulate_batch};
-
-    let noise = if error_px.is_finite() {
-        error_px.max(1.0)
-    } else {
-        1.0
-    };
-    let mut dirs = Vec::new();
-    let mut centers = Vec::new();
-    let mut sigma = Vec::new();
-    for img_idx in images {
-        let Some(image) = image_table.images.get(img_idx) else {
-            continue;
-        };
-        let center = image.camera_center();
-        let dir = position - center;
-        let len = dir.norm();
-        if len > 1e-12 {
-            dirs.push(dir / len);
-            centers.push(center);
-            let (fx, fy) = image_table.cameras[image.camera_index as usize].focal_lengths();
-            sigma.push(noise / fx.max(fy));
-        }
-    }
-    if dirs.len() < 2 {
-        return (f32::NAN, f32::NAN);
-    }
-    let offsets = [0usize, dirs.len()];
-    let tris = triangulate_batch(&dirs, &centers, &offsets);
-    let dus = depth_uncertainty_batch(&tris, &dirs, &centers, &offsets, &sigma);
-    (
-        tris[0].condition_number as f32,
-        dus[0].inverse_depth_z as f32,
-    )
-}
-
-/// The unit rays from each of `images`' camera centres to `position`, in
-/// world space, which [`compute_max_pairwise_angle`] reads. A point at
-/// infinity is seen along the same stored direction from every camera, so its
-/// rays are that direction each time and the angle between them is zero.
-pub(crate) fn observation_rays(
-    image_table: &ImageTable,
-    position: &Point3<f64>,
-    at_infinity: bool,
-    images: impl IntoIterator<Item = usize>,
-) -> Vec<[f64; 3]> {
-    images
-        .into_iter()
-        .filter_map(|img_idx| {
-            if at_infinity {
-                let d = position.coords;
-                return Some([d.x, d.y, d.z]);
-            }
-            let image = image_table.images.get(img_idx)?;
-            let dir = position - image.camera_center();
-            let len = dir.norm();
-            (len > 1e-12).then(|| [dir.x / len, dir.y / len, dir.z / len])
-        })
-        .collect()
-}
-
-/// Compute the maximum angle (in degrees) between any pair of world-space rays.
-pub(crate) fn compute_max_pairwise_angle(rays: &[[f64; 3]]) -> f32 {
-    let mut min_dot = 1.0f64;
-    for i in 0..rays.len() {
-        for j in (i + 1)..rays.len() {
-            let dot = rays[i][0] * rays[j][0] + rays[i][1] * rays[j][1] + rays[i][2] * rays[j][2];
-            if dot < min_dot {
-                min_dot = dot;
-            }
-        }
-    }
-    min_dot.clamp(-1.0, 1.0).acos().to_degrees() as f32
-}
+// The whole-track numbers, defined in core as point columns so that the
+// panels and the Python `point_columns` binding read one figure.
+pub(crate) use sfmtool_core::analysis::point_columns::{
+    compute_max_pairwise_angle, compute_max_ray_angle_deg, compute_point_diagnostics,
+    compute_position_diagnostics, observation_rays,
+};

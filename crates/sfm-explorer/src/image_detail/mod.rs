@@ -1397,27 +1397,5 @@ fn compute_max_track_angle_deg(edited: &EditedReconstruction, point_idx: u32) ->
     let Some(view) = edited.point(point_idx) else {
         return f32::NAN;
     };
-    let point = view.point();
-    let observations = view.observations();
-    if point.is_at_infinity() {
-        return 0.0;
-    }
-    let point_pos = point.position;
-    let mut world_rays: Vec<[f64; 3]> = Vec::with_capacity(observations.len());
-    for obs in observations {
-        let img_idx = obs.image_index as usize;
-        let Some(image) = edited.base.image_table.images.get(img_idx) else {
-            continue;
-        };
-        let cam_center = image.camera_center();
-        let dir = point_pos - cam_center;
-        let len = (dir.x * dir.x + dir.y * dir.y + dir.z * dir.z).sqrt();
-        if len > 1e-12 {
-            world_rays.push([dir.x / len, dir.y / len, dir.z / len]);
-        }
-    }
-    if world_rays.len() < 2 {
-        return 0.0;
-    }
-    crate::metrics::compute_max_pairwise_angle(&world_rays)
+    crate::metrics::compute_max_ray_angle_deg(&edited.base.image_table, &view)
 }

@@ -26,6 +26,7 @@ _EXPECTED_FUNCTIONS = (
     "cluster_census",
     "keypoint_pairs_within_reach",
     "covered_by_finer",
+    "point_columns",
 )
 
 _EXPECTED_CLASSES = ("ObservationCoverage",)

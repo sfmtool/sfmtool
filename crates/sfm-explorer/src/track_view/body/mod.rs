@@ -2315,7 +2315,7 @@ fn point_summary(edited: &EditedReconstruction, point: u32) -> Option<HeaderSumm
         error_px: Some(f64::from(stored.rms_reprojection_error)),
         track_length: images.len(),
         at_infinity: stored.is_at_infinity(),
-        max_angle_deg: crate::metrics::compute_max_pairwise_angle(&rays),
+        max_angle_deg: crate::metrics::compute_max_pairwise_angle(&rays) as f32,
         depth_z,
         condition,
     })
@@ -2362,7 +2362,7 @@ fn track_summary(recon: &SfmrReconstruction, track: &EditableTrack) -> Option<He
                 )
             };
             (
-                crate::metrics::compute_max_pairwise_angle(&rays),
+                crate::metrics::compute_max_pairwise_angle(&rays) as f32,
                 condition,
                 depth_z,
             )

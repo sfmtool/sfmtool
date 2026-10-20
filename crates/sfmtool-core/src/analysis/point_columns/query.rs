@@ -1,0 +1,158 @@
+// Copyright The SfM Tool Authors
+// SPDX-License-Identifier: Apache-2.0
+
+//! The point query: which points pass a set of bounds on their columns, and
+//! in which order.
+
+use std::cmp::Ordering;
+use std::fmt;
+
+use super::{PointColumn, PointColumns};
+use crate::reconstruction::EditedReconstruction;
+
+/// A minimum and a maximum on one column, either of which may be left open.
+/// A row passes when its value is at least `min` and at most `max`; a row
+/// with no value (NaN) fails a bound that sets either. A bound that sets
+/// neither filters nothing.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ColumnBounds {
+    pub column: PointColumn,
+    pub min: Option<f64>,
+    pub max: Option<f64>,
+}
+
+/// The direction of a sort.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum SortOrder {
+    Ascending,
+    Descending,
+}
+
+/// What to match and in which order.
+///
+/// Settings chosen by the caller, so `*Options` by the type-name rule. (The
+/// viewer's Go to Point dialog has an unrelated `PointQuery`, the parse of
+/// what was typed; this type is named apart from it.)
+#[derive(Clone, Debug, Default)]
+pub struct PointQueryOptions {
+    /// Every bound must pass.
+    pub bounds: Vec<ColumnBounds>,
+    /// Keep only points with an observation in this image.
+    pub seen_in_image: Option<u32>,
+    /// The column and direction to sort by; `None` keeps
+    /// [`EditedReconstruction::live_indexes`] order.
+    pub order_by: Option<(PointColumn, SortOrder)>,
+}
+
+/// Why a query was refused.
+#[derive(Clone, Debug, PartialEq)]
+pub enum PointQueryError {
+    /// A bound or the sort names a column the [`PointColumns`] do not hold.
+    ColumnNotComputed(PointColumn),
+    /// `seen_in_image` names an image the reconstruction does not hold.
+    ImageOutOfRange { image: u32, image_count: usize },
+}
+
+impl fmt::Display for PointQueryError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            PointQueryError::ColumnNotComputed(column) => {
+                write!(f, "the column {} was not computed", column.wire_name())
+            }
+            PointQueryError::ImageOutOfRange { image, image_count } => write!(
+                f,
+                "image {image} is out of range: the reconstruction has {image_count} images"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for PointQueryError {}
+
+/// The point indexes that match `options`, in order.
+///
+/// The full list, not a page: a point index is what selecting, reading and
+/// deleting a point take, so the result passes to any of them unchanged.
+/// `columns` must have been computed from `recon` as it stands.
+///
+/// The sort is stable and breaks ties by ascending point index, whichever way
+/// it runs, and rows with no value sort after every row that has one, in
+/// either direction.
+///
+/// # Errors
+///
+/// [`PointQueryError::ColumnNotComputed`] when a bound or the sort names a
+/// column `columns` does not hold, and [`PointQueryError::ImageOutOfRange`]
+/// when `seen_in_image` is not an image of `recon`.
+pub fn query_points(
+    recon: &EditedReconstruction,
+    columns: &PointColumns,
+    options: &PointQueryOptions,
+) -> Result<Vec<u32>, PointQueryError> {
+    let named = options
+        .bounds
+        .iter()
+        .map(|b| b.column)
+        .chain(options.order_by.map(|(c, _)| c));
+    for column in named {
+        if !columns.has(column) {
+            return Err(PointQueryError::ColumnNotComputed(column));
+        }
+    }
+    if let Some(image) = options.seen_in_image {
+        let image_count = recon.image_count();
+        if image as usize >= image_count {
+            return Err(PointQueryError::ImageOutOfRange { image, image_count });
+        }
+    }
+
+    let passes = |row: usize| -> bool {
+        options.bounds.iter().all(|b| {
+            if b.min.is_none() && b.max.is_none() {
+                return true;
+            }
+            let v = columns.value(b.column, row);
+            !v.is_nan() && b.min.is_none_or(|m| v >= m) && b.max.is_none_or(|m| v <= m)
+        })
+    };
+    let seen = |index: u32| -> bool {
+        options.seen_in_image.is_none_or(|image| {
+            recon.point(index).is_some_and(|view| {
+                view.observations()
+                    .iter()
+                    .any(|obs| obs.image_index == image)
+            })
+        })
+    };
+    let mut rows: Vec<usize> = columns
+        .point_indexes()
+        .iter()
+        .enumerate()
+        .filter(|&(row, &index)| passes(row) && seen(index))
+        .map(|(row, _)| row)
+        .collect();
+
+    if let Some((column, order)) = options.order_by {
+        // The rows are in ascending point index, so a stable sort on the
+        // value alone leaves ties in that order.
+        rows.sort_by(|&a, &b| {
+            let (va, vb) = (columns.value(column, a), columns.value(column, b));
+            match (va.is_nan(), vb.is_nan()) {
+                (true, true) => Ordering::Equal,
+                (true, false) => Ordering::Greater,
+                (false, true) => Ordering::Less,
+                // Neither is NaN, so the comparison is total; `-0` and `0`
+                // compare equal and keep their point-index order.
+                (false, false) => {
+                    let ascending = va.partial_cmp(&vb).unwrap_or(Ordering::Equal);
+                    match order {
+                        SortOrder::Ascending => ascending,
+                        SortOrder::Descending => ascending.reverse(),
+                    }
+                }
+            }
+        });
+    }
+    let indexes = columns.point_indexes();
+    Ok(rows.into_iter().map(|row| indexes[row]).collect())
+}
