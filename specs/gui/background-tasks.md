@@ -347,8 +347,13 @@ first, down to what leaves the node its whole name or 40 % of that room
 middle. The node is what says which reconstruction is busy, and the operation
 is named again on the title line when it is the chosen task: at the default
 227 px a running line once read `Slow Bundle adjust`, the bar, the elapsed and
-Cancel, with no room left for `dino`. The rule is the same on running, idle,
-waiting and quiet lines.
+Cancel, with no room left for `dino`. The operation's name is never cut below
+its first four letters and an ellipsis (`Bund…`, `NAME_KEEPS`), however little
+the node leaves it, so a narrow line still says what is running; the node
+takes what is left after that, down to an ellipsis of its own, with its whole
+name on hover. A stopping adjustment at 227 px once read `Slow … dino
+stopping… 13.1 s`, which named nothing that was stopping. The rule is the same
+on running, idle, waiting and quiet lines.
 
 A queue running a quiet task has **one quiet line** under its own (§ "Quiet
 line"). A queue with tasks waiting has **one waiting line** under that
@@ -563,10 +568,16 @@ Earlier rows are above it, and none of them is a summary of another:
 - **Stopping.** A cancel asks; the operation stops at its next check of the
   flag, which is about half a second into a check on dino's bundle adjustment
   and longer for a kernel that checks rarely. From the request until the task
-  lands (`BackgroundTask::stopping`), its line shows the weak word `stopping…`
-  where the bar or spinner was, its Cancel button is disabled with *"Asked to
-  stop: it stops the next time it checks whether it should."* as its tooltip,
-  and its title line shows `stopping…` where the status was, keeping the count.
+  lands (`BackgroundTask::stopping`), its title line shows `stopping…` where
+  the status was, keeping the count, and its Cancel button is disabled with
+  *"Asked to stop: it stops the next time it checks whether it should."* as
+  its tooltip. Its own line shows the weak word `stopping…` where the bar was
+  when another task is the chosen one, so the title line does not say it, and
+  the line has room for the word beside the operation's first letters; it
+  shows a spinner there, with the same tooltip, when the title line already
+  says it or the word would cut the operation's name below `Bund…`. The
+  operation's name is what says which task is stopping, so it is the word that
+  gives way.
   Without it the line looked as it had before the click, and a reader could not
   tell the click had registered. On the wire the same state is `cancelling:
   true` (§ "On the wire").
@@ -1441,9 +1452,15 @@ Panel, through `test_support::run_frame_headless`:
   `round 4/9`. In the collector a closed round's iteration count goes with it,
   a count is `under_way` exactly while a stage is open inside its own, and with
   no counting stage open the newest count is what is left.
-- Once a running task is asked to stop, `stopping…` is painted on its line and
-  its title line, the count stays, and Cancel is disabled with the stopping
-  tooltip; none of it is painted before the request or after the task lands.
+- Once a running task is asked to stop, `stopping…` is painted on its title
+  line while it is the chosen task, and on its queue's line instead while
+  another task is chosen; the count stays, and Cancel is disabled with the
+  stopping tooltip; none of it is painted before the request or after the task
+  lands.
+- A stopping Bundle adjust on a long node name keeps at least `Bund…` of the
+  operation's name on its line at 227 px and at 180 px, with the title line
+  saying `stopping…` and with another task chosen, with nothing overlapping or
+  leaving the panel.
 - A status replaces the previous one rather than adding a line, and the panel
   shows nothing there for an operation that has never set one.
 - **Every `Operation` that declares `cancellable` really is**: cancelling each

@@ -2283,9 +2283,10 @@ fn an_idle_line_says_whether_its_task_was_cancelled_or_failed() {
 }
 
 /// Once a cancel is asked for, a running task says it is stopping until it
-/// lands: its line shows `stopping…` where its bar was, its title line shows it
-/// where the status was, and its Cancel button is disabled with a tooltip
-/// saying why.
+/// lands: its title line shows `stopping…` where the status was, its line shows
+/// it where its bar was when another task is chosen and a spinner when the
+/// title line already says it, and its Cancel button is disabled with a
+/// tooltip saying why.
 ///
 /// Found on dino's bundle adjustment, which reaches its next check of the flag
 /// about half a second after the click: until then the line looked exactly as
@@ -2304,14 +2305,30 @@ fn a_task_asked_to_stop_says_it_is_stopping_until_it_lands() {
     state.cancel_background_task(task);
     assert!(state.running_task(task).expect("still running").stopping());
     let texts = painted(&mut state);
-    // On its queue's line and on its title line.
+    // It is the chosen task, so its title line says it, and its queue's line
+    // has a spinner where the bar was rather than the word again.
     assert_eq!(
         texts.iter().filter(|t| *t == STOPPING).count(),
-        2,
+        1,
         "{texts:?}"
     );
-    // The count is still on the title line; the bar is gone from the queue's.
+    // The count is still on the title line.
     assert!(texts.iter().any(|t| t == "round 2/2"), "{texts:?}");
+
+    // With another task's phases shown, its queue's line says it in words.
+    let other = second_node(&mut state);
+    ended_as(&mut state, other, Operation::BENCH_FIT, || {
+        Finished::NoChange("nothing to fit".to_string())
+    });
+    state.background_phases_of = state.last_finished_task().map(|task| task.id);
+    let texts = painted(&mut state);
+    assert_eq!(
+        texts.iter().filter(|t| *t == STOPPING).count(),
+        1,
+        "{texts:?}"
+    );
+    assert!(texts.iter().any(|t| t == "Fit track on demo"), "{texts:?}");
+    state.background_phases_of = None;
 
     // Cancel is disabled, and says why on hover.
     let ctx = egui::Context::default();
@@ -2343,6 +2360,52 @@ fn a_task_asked_to_stop_says_it_is_stopping_until_it_lands() {
         !painted(&mut state).iter().any(|t| t == STOPPING),
         "a task that landed still said it was stopping"
     );
+}
+
+/// A stopping task's line still says what is stopping on a narrow panel: the
+/// operation's name keeps its first letters however long the node's name is,
+/// and nothing on the line overlaps or leaves the panel.
+///
+/// Found at 227 px, where a stopping adjustment on dino read `Slow … dino
+/// stopping… 13.1 s`, the operation cut to a bare ellipsis.
+#[test]
+fn a_stopping_line_keeps_the_operation_s_first_letters() {
+    for chosen_elsewhere in [false, true] {
+        let (mut state, id) = adjustable();
+        let gate = running(&mut state, id, Operation::BUNDLE_ADJUST);
+        let task = state.running_tasks().next().expect("running").id;
+        state.cancel_background_task(task);
+        state.slow_queue.running.as_mut().expect("running").label =
+            "20260628-01-solve-seattle_backyard_1-26-embedded".to_string();
+        if chosen_elsewhere {
+            // The word `stopping…` on the line rather than a spinner, which is
+            // the narrower case for the names.
+            let other = second_node(&mut state);
+            ended_as(&mut state, other, Operation::BENCH_FIT, || {
+                Finished::NoChange("nothing to fit".to_string())
+            });
+            state.background_phases_of = state.last_finished_task().map(|task| task.id);
+        }
+        for width in [227.0, 180.0] {
+            let spans = painted_spans(&mut state, width);
+            let line = line_led_by(&spans, "Slow", width);
+            // An elided label's galley keeps its whole text, so what it was
+            // cut to is read off how wide it is drawn: a bare ellipsis is
+            // about 13 px wide in this font, and `Bund…` about 40.
+            let (_, left, right, _) = spans
+                .iter()
+                .find(|(t, ..)| t == "Bundle adjust")
+                .unwrap_or_else(|| panic!("no operation at {width} px: {line:?}"));
+            assert!(
+                right - left >= 30.0,
+                "the operation was cut past its first letters at {width} px: \
+                 {} px wide, {spans:?}",
+                right - left
+            );
+        }
+        gate.open();
+        state.finish_background_tasks();
+    }
 }
 
 /// The title line shows each open stage's count, outermost first: a bundle

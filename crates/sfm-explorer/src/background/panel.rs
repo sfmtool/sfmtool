@@ -70,6 +70,10 @@ const COUNT_SHARE: f32 = 0.5;
 /// node's name keeps when the operation's name does not fit beside it whole.
 const NODE_SHARE: f32 = 0.4;
 
+/// How many of the operation's letters a queue line keeps, before an
+/// ellipsis, however little room the node leaves it: `Bund…`.
+const NAME_KEEPS: usize = 4;
+
 /// The gap between the items of a queue's line.
 const LINE_SPACING: f32 = 4.0;
 
@@ -81,8 +85,10 @@ pub(super) const CANCEL: &str = "\u{1f5d9}";
 /// What leads a waiting task's line, where a queue's line has its name.
 pub(super) const WAITING: &str = "waiting";
 
-/// What a running task's line shows in place of its bar, and its title line in
-/// place of its status, once it has been asked to stop and until it lands.
+/// What a running task's title line shows in place of its status once it has
+/// been asked to stop and until it lands, and its queue's line in place of its
+/// bar where the title line is another task's and the word leaves the
+/// operation's first letters room.
 pub(super) const STOPPING: &str = "stopping\u{2026}";
 
 /// The tooltip of [`STOPPING`] and of the Cancel button it disables.
@@ -375,8 +381,17 @@ fn show_running(ui: &mut egui::Ui, state: &AppState, id: u64, asked: &mut Asked)
         ui.label(egui::RichText::new(ActionLog::format_took(elapsed)).weak())
             .on_hover_text("elapsed");
         // Asked to stop, the work left is not the work the bar measured, so
-        // the line says what is happening instead.
-        if stopping {
+        // the line says what is happening instead: in words where nothing else
+        // on screen says it and the operation's first letters still fit
+        // beside them, and otherwise as a spinner, the title line saying it
+        // in words when it is the chosen task and the button's tooltip when
+        // it is not. The operation's name is what says what is stopping.
+        let gap = ui.spacing().item_spacing.x;
+        let word_fits = ui.available_width() - text_width(ui, STOPPING) - gap
+            >= name_widths(ui, name, Name::Button).1 + gap;
+        if stopping && (chosen == Some(id) || !word_fits) {
+            ui.add(egui::Spinner::new()).on_hover_text(STOPPING_HOVER);
+        } else if stopping {
             ui.add(egui::Label::new(egui::RichText::new(STOPPING).weak()).selectable(false))
                 .on_hover_text(STOPPING_HOVER);
         } else {
@@ -447,6 +462,9 @@ enum Name {
 /// The node is what says which reconstruction is busy, and the operation's name
 /// is repeated in full on its tooltip and, for the chosen task, on the title
 /// line; a long operation name taking the whole line left the node none of it.
+/// The operation's name is never cut below its first [`NAME_KEEPS`] letters
+/// and an ellipsis, though, so a narrow line still says what is running: a
+/// stopping adjustment at 227 px once read `Slow … dino`.
 fn name_and_node(
     ui: &mut egui::Ui,
     name: &str,
@@ -456,14 +474,13 @@ fn name_and_node(
 ) {
     let room = ui.available_width();
     let gap = ui.spacing().item_spacing.x;
-    let padding = match drawn_as {
-        Name::Button => 2.0 * ui.spacing().button_padding.x,
-        Name::Label => 0.0,
-    };
-    // A point of slack, so a name that fits is not cut by a rounding.
-    let wanted = text_width(ui, name) + padding + 1.0;
+    let (wanted, least) = name_widths(ui, name, drawn_as);
     let node_keeps = text_width(ui, label).min(room * NODE_SHARE);
-    let name_room = wanted.min((room - gap - node_keeps).max(0.0));
+    // The operation keeps its first few letters before the node takes its
+    // share: a name cut to a bare ellipsis says nothing about what is running.
+    let name_room = wanted
+        .min((room - gap - node_keeps).max(least))
+        .min(room.max(0.0));
     let height = ui.spacing().interact_size.y;
     ui.allocate_ui_with_layout(
         egui::vec2(name_room, height),
@@ -471,6 +488,21 @@ fn name_and_node(
         draw_name,
     );
     show_node(ui, label);
+}
+
+/// How wide the operation's name is drawn whole, and the least it is drawn
+/// at: its first [`NAME_KEEPS`] letters and an ellipsis, or the whole of it
+/// where that is narrower.
+fn name_widths(ui: &egui::Ui, name: &str, drawn_as: Name) -> (f32, f32) {
+    let padding = match drawn_as {
+        Name::Button => 2.0 * ui.spacing().button_padding.x,
+        Name::Label => 0.0,
+    };
+    // A point of slack, so a name that fits is not cut by a rounding.
+    let wanted = text_width(ui, name) + padding + 1.0;
+    let prefix: String = name.chars().take(NAME_KEEPS).collect();
+    let least = wanted.min(text_width(ui, &format!("{prefix}\u{2026}")) + padding + 1.0);
+    (wanted, least)
 }
 
 /// `text` cut to the width left in `ui`, out of the middle.
