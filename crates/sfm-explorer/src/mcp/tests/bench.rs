@@ -3616,7 +3616,10 @@ fn find_nearby_tracks_answers_an_empty_find_and_refuses_what_cannot_run() {
     );
     assert_eq!(
         unposed.to_string(),
-        crate::bench::track_at_pixel::NOT_POSED,
+        format!(
+            "Cannot find nearby tracks in image_1.jpg: {}",
+            crate::bench::track_at_pixel::NOT_POSED
+        ),
         "{unposed}"
     );
     let off = refused_call(
@@ -4819,4 +4822,30 @@ fn a_running_live_evaluation_is_not_reported_or_cancelled_on_the_wire() {
         state.bench_evaluation(id, &item),
         Some(crate::bench::live::Evaluation::Current)
     );
+}
+
+/// A fit refused because its node is busy writes one failed row, the fit's
+/// own: the busy sentence led by the fit's opening, so the row names the step
+/// that was refused as well as the node, and the drain writes no second
+/// `fit_bench_track failed: …` row beside it.
+#[test]
+fn a_fit_refused_on_a_busy_node_writes_one_row_that_names_the_fit() {
+    let (mut state, mut viewer) = benchable();
+    let item = on_the_bench(&mut state, &mut viewer);
+    let open = super::edit::running_operation(&mut state, |_| {});
+    let before = super::edit::failures(&state).len();
+
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "fit_bench_track",
+        json!({ "reconstruction_label": "run_a", "track": item }),
+    );
+    let text = format!("Cannot fit {item}: run_a is busy: Bundle adjust is still running.");
+    assert_eq!(error.0, text);
+    let failed = super::edit::failures(&state).split_off(before);
+    assert_eq!(failed, [(Actor::Mcp, true, text)]);
+
+    open.send(()).expect("the worker is waiting");
+    state.finish_background_tasks();
 }

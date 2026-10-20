@@ -95,6 +95,25 @@ pub(crate) fn view_only_sentence(label: &str) -> String {
     )
 }
 
+/// The refusal `why` of a step that logs its own refusals, as the step's
+/// failed row says it: led by `lead`, the step's opening (`"Cannot fit pt3d_7: "`),
+/// unless it already opens with `stem`, the start every sentence of that step
+/// shares.
+///
+/// Such a step's row is written by the step, so the MCP drain writes none, and
+/// it is the one row that says what was refused. A refusal it hands on from a
+/// gate it shares with every edit -- the busy sentence, a view-only bench, no
+/// item of that label -- names the node or the item but not the step, so it
+/// is led here. A refusal the step worded itself already opens with `stem`
+/// and is kept as it is.
+fn led(lead: &str, stem: &str, why: String) -> String {
+    if why.starts_with(stem) {
+        why
+    } else {
+        format!("{lead}{why}")
+    }
+}
+
 /// The distance from `pos` to the segment `a`-`b`, in panel px.
 ///
 /// Here rather than in either panel because both bench layers measure an edge's
@@ -2014,7 +2033,10 @@ impl AppState {
         label: &str,
         sigma_px: Option<f64>,
     ) -> Result<Option<u64>, String> {
-        let outcome = self.begin_bench_fit(id, label, sigma_px);
+        let lead = format!("Cannot fit {label}: ");
+        let outcome = self
+            .begin_bench_fit(id, label, sigma_px)
+            .map_err(|why| led(&lead, &lead, why));
         if let Err(message) = &outcome {
             self.action_log.fail(Kind::Bench, message.clone());
         }
@@ -2067,7 +2089,9 @@ impl AppState {
     ) -> Result<Option<u64>, String> {
         // Before the no-effect answer: on a view-only bench no stage step is
         // offered, so none is reported as one that happened to change nothing.
+        let lead = format!("Cannot set the stage of {label}: ");
         if let Some(why) = self.bench_view_only_refusal(id) {
+            let why = led(&lead, &lead, why);
             self.action_log.fail(Kind::Bench, why.clone());
             return Err(why);
         }
@@ -2080,7 +2104,9 @@ impl AppState {
             ));
             return Ok(None);
         }
-        let outcome = self.begin_bench_stage(id, label, stage, sigma_px);
+        let outcome = self
+            .begin_bench_stage(id, label, stage, sigma_px)
+            .map_err(|why| led(&lead, &lead, why));
         if let Err(message) = &outcome {
             self.action_log.fail(Kind::Bench, message.clone());
         }
@@ -2123,7 +2149,10 @@ impl AppState {
         label: &str,
         step: NormalStep,
     ) -> Result<Option<u64>, String> {
-        let outcome = self.begin_bench_normal(id, label, step);
+        let lead = format!("Cannot {} {label}: ", step.verb());
+        let outcome = self
+            .begin_bench_normal(id, label, step)
+            .map_err(|why| led(&lead, &lead, why));
         if let Err(message) = &outcome {
             self.action_log.fail(Kind::Bench, message.clone());
         }
@@ -2175,7 +2204,10 @@ impl AppState {
         radius_px: Option<f64>,
         min_inliers: Option<usize>,
     ) -> Result<Option<u64>, String> {
-        let outcome = self.begin_bench_search(id, label, observation, radius_px, min_inliers);
+        let lead = format!("Cannot search {label}: ");
+        let outcome = self
+            .begin_bench_search(id, label, observation, radius_px, min_inliers)
+            .map_err(|why| led(&lead, &lead, why));
         if let Err(message) = &outcome {
             self.action_log.fail(Kind::Bench, message.clone());
         }
@@ -2190,7 +2222,10 @@ impl AppState {
         label: &str,
         observation: usize,
     ) -> Result<Option<u64>, String> {
-        let outcome = self.begin_bench_geometry_search(id, label, observation);
+        let lead = format!("Cannot find geometry matches for {label}: ");
+        let outcome = self
+            .begin_bench_geometry_search(id, label, observation)
+            .map_err(|why| led(&lead, &lead, why));
         if let Err(message) = &outcome {
             self.action_log.fail(Kind::Bench, message.clone());
         }

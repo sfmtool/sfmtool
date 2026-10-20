@@ -1628,7 +1628,9 @@ fn a_descriptor_search_with_no_index_is_refused_before_the_worker() {
     let refusal = state
         .start_bench_descriptor_search(id, &label, 0, None, None)
         .expect_err("the step asks the same question the menu does");
-    assert_eq!(refusal, why);
+    // The menu greys with the sentence alone; the step's row leads it with
+    // the step it refused, since the row is the only one written.
+    assert_eq!(refusal, format!("Cannot search {label}: {why}"));
     assert!(
         state.running_tasks().next().is_none(),
         "a refusal started a task"

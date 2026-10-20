@@ -520,6 +520,21 @@ The Action Log row is that sentence plus the version serials, exactly as an
 edit's is: `Turned image_012.jpg out of pt3d_a1b2c3d4_1207 (v7 → v8)`. A
 refusal is one failed row carrying the refusal's sentence.
 
+**A step that runs on a worker writes its own refusal row, and leads it with
+the step.** *Fit*, *Set stage*, the normal steps, the two searches, *Create
+Track Here* and *Find Nearby Tracks* log their refusal themselves, so the row
+is the same whoever asked and the MCP drain writes no second one. A sentence
+such a step hands on from a gate every edit shares -- the busy sentence, a
+view-only bench, no item of that label, an image with no pose -- names the node
+or the item but not the step, so the step leads it with its own opening:
+*"Cannot fit pt3d_a1b2c3d4_1207: seoul_bull is busy: Bundle adjust is still
+running."*, and likewise `Cannot set the stage of {label}: `, `Cannot {verb}
+{label}: ` for a normal step, `Cannot search {label}: `, `Cannot find geometry
+matches for {label}: `, `Cannot create a track in {image}: ` and `Cannot find
+nearby tracks in {image}: `. A sentence the step worded itself already opens
+that way and is kept as it is. The menu entries that grey with the same gate
+show its sentence alone, since the entry already says which step it is.
+
 **A step that changes nothing pushes no version.** Setting the verdict an
 observation already has, setting the stage a track is already at, renaming an
 item to the label it holds, and a drag of a handle that

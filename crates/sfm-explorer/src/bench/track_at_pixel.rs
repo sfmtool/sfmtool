@@ -223,12 +223,14 @@ impl AppState {
         pixel: [f64; 2],
         label: Option<&str>,
     ) -> Result<Option<u64>, String> {
+        let lead = format!("Cannot create a track in {}: ", self.image_name(image));
         let outcome = self
             .create_track_at_pixel_job(image, pixel, label)
             .and_then(|job| {
                 self.start_background_task(Operation::CREATE_TRACK_AT_PIXEL, image.recon, job)
                     .map(Some)
-            });
+            })
+            .map_err(|why| super::led(&lead, "Cannot create a track", why));
         if let Err(message) = &outcome {
             self.action_log.fail(Kind::Bench, message.clone());
         }

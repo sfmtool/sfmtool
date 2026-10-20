@@ -1387,7 +1387,7 @@ fn cancel_background_tasks_names_one_or_stops_every_running_task() {
 /// adjustment because what is under test is the reply: a solve fast enough to
 /// be deterministic reports nothing worth reading, and one slow enough to read
 /// is a test that takes a minute.
-fn running_operation(
+pub(super) fn running_operation(
     state: &mut AppState,
     work: impl FnOnce(&sfmtool_core::progress::Progress<'_>) + Send + 'static,
 ) -> std::sync::mpsc::Sender<()> {

@@ -195,12 +195,14 @@ impl AppState {
         commit: bool,
         label: Option<&str>,
     ) -> Result<Option<u64>, String> {
+        let lead = format!("Cannot find nearby tracks in {}: ", self.image_name(image));
         let outcome = self
             .find_nearby_tracks_job(image, pixel, commit, label)
             .and_then(|job| {
                 self.start_background_task(Operation::FIND_NEARBY_TRACKS, image.recon, job)
                     .map(Some)
-            });
+            })
+            .map_err(|why| super::led(&lead, "Cannot find nearby tracks", why));
         if let Err(message) = &outcome {
             self.action_log.fail(Kind::Bench, message.clone());
         }

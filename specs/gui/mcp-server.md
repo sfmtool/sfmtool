@@ -5053,7 +5053,11 @@ same words the agent receives.
 methods word their own — `resect_image`, `start_bundle_adjust` and
 `move_camera` among them, with several other edits and bench steps —
 because their refusals belong to the operation's vocabulary rather than
-to the tool that asked for it. So the drain writes its row only where the
+to the tool that asked for it. A bench step of that kind leads a sentence it
+hands on from a gate every edit shares with its own opening, so a refused
+`fit_bench_track` on a busy node leaves *"Cannot fit {item}: {label} is busy:
+… is still running."* rather than the busy sentence alone
+([bench.md](bench.md) § "What a step writes"). So the drain writes its row only where the
 application of that command recorded no failed entry of its own. The test is the
 Action Log's revision before and after, which needs no list of which methods
 those are and cannot fall out of step with one.
