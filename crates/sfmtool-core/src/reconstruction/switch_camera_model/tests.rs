@@ -177,8 +177,20 @@ fn poses_points_and_keypoints_are_unchanged() {
     for (a, b) in out.point_set.points.iter().zip(&recon.point_set.points) {
         assert_eq!(a.position, b.position);
         assert_eq!(a.w, b.w);
-        // The planted 0.25 is replaced by the recomputed mean error.
+        // The planted 0.25 is replaced by the recomputed RMS error.
         assert_ne!(a.error, 0.25);
+    }
+    // Every point here is seen by the switched camera, so each stored error is
+    // the root mean square `recompute_point_errors` writes.
+    let mut rescored = out.clone();
+    rescored.recompute_point_errors().unwrap();
+    for (a, b) in out.point_set.points.iter().zip(&rescored.point_set.points) {
+        assert!(
+            (a.error - b.error).abs() < 1e-5,
+            "{} against {}",
+            a.error,
+            b.error
+        );
     }
     assert_eq!(out.image_table.cameras[0].model_name(), "SFMTOOL_FISHEYE");
     assert_eq!(out.image_table.cameras[0], report.cameras[0].refit.camera);

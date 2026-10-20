@@ -93,6 +93,14 @@ def test_find_assigns_finite_reprojection_errors(seoul_bull_workspace):
     assert np.any(inf_errors > 0.0)
     assert float(np.median(inf_errors)) < 10.0
 
+    # Each is the root mean square of the point's observation errors, the
+    # statistic recompute_point_errors writes.
+    rescored = result.clone_with_changes()
+    rescored.recompute_point_errors()
+    np.testing.assert_allclose(
+        new_errors, np.asarray(rescored.errors)[n0:], rtol=1e-4, atol=1e-4
+    )
+
 
 def test_find_decides_on_the_point_or_bearing_test(seoul_bull_workspace):
     """Discovery scores its candidates at the measured noise, appends the

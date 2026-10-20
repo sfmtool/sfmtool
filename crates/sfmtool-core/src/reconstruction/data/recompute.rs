@@ -216,11 +216,11 @@ impl SfmrReconstruction {
             .collect()
     }
 
-    /// Mean reprojection error (px) per point from the reconstruction's inline
-    /// `keypoints_xy` -- one entry per point, parallel to `points`. Each
-    /// observation reprojects its point through the observing camera and
-    /// measures pixel distance to the inline keypoint; points at infinity
-    /// project their bearing (translation-free). A point with no valid
+    /// Root-mean-square reprojection error (px) per point from the
+    /// reconstruction's inline `keypoints_xy` -- one entry per point, parallel
+    /// to `points`. Each observation reprojects its point through the observing
+    /// camera and measures pixel distance to the inline keypoint; points at
+    /// infinity project their bearing (translation-free). A point with no valid
     /// (in-front) observation gets `0.0`.
     ///
     /// Returns `None` when the reconstruction carries no inline column -- a
@@ -253,24 +253,26 @@ impl SfmrReconstruction {
                     at_infinity,
                     observed,
                 ) {
-                    sum += e;
+                    sum += e * e;
                     count += 1;
                 }
             }
             if count > 0 {
-                *slot = (sum / count as f64) as f32;
+                *slot = (sum / count as f64).sqrt() as f32;
             }
         }
         Some(out)
     }
 
-    /// Recompute per-point mean reprojection errors from scratch.
+    /// Recompute per-point root-mean-square reprojection errors from scratch.
     ///
     /// For each image, loads feature positions from the `.sift` file and
     /// reprojects all observed 3D points through the camera model. Each
-    /// point's `error` is set to the mean pixel-space reprojection error
-    /// across all its observations. Points with no valid observations
-    /// (e.g., all behind camera) get `error = 0.0`.
+    /// point's `error` is set to the root mean square of the pixel-space
+    /// reprojection errors of all its observations: the square root of the
+    /// mean of their squares. Points with no valid observations (e.g., all
+    /// behind camera) get `error = 0.0`. Points at infinity are scored like
+    /// finite ones, through their bearing.
     ///
     /// This replaces any errors read from COLMAP/GLOMAP binary files,
     /// which may use different coordinate conventions (GLOMAP stores
@@ -299,7 +301,7 @@ impl SfmrReconstruction {
                     continue;
                 }
                 if let Some(&point_idx) = feat_to_point.get(&feat_idx) {
-                    error_sums[point_idx as usize] += error as f64;
+                    error_sums[point_idx as usize] += (error as f64).powi(2);
                     error_counts[point_idx as usize] += 1;
                 }
             }
@@ -307,7 +309,7 @@ impl SfmrReconstruction {
 
         for i in 0..num_points {
             self.point_set.points[i].error = if error_counts[i] > 0 {
-                (error_sums[i] / error_counts[i] as f64) as f32
+                (error_sums[i] / error_counts[i] as f64).sqrt() as f32
             } else {
                 0.0
             };
@@ -316,8 +318,8 @@ impl SfmrReconstruction {
         Ok(())
     }
 
-    /// Recompute mean reprojection errors for points at infinity only, leaving
-    /// finite points' errors untouched.
+    /// Recompute root-mean-square reprojection errors for points at infinity
+    /// only, leaving finite points' errors untouched.
     ///
     /// For a reconstruction whose points at infinity carry errors that describe
     /// something else (set by hand, or by a pass that changes `w` without
@@ -367,7 +369,7 @@ impl SfmrReconstruction {
                 }
                 if let Some(&point_idx) = feat_to_point.get(&feat_idx) {
                     if is_infinity[point_idx as usize] {
-                        error_sums[point_idx as usize] += error as f64;
+                        error_sums[point_idx as usize] += (error as f64).powi(2);
                         error_counts[point_idx as usize] += 1;
                     }
                 }
@@ -377,7 +379,7 @@ impl SfmrReconstruction {
         for i in 0..num_points {
             if is_infinity[i] {
                 self.point_set.points[i].error = if error_counts[i] > 0 {
-                    (error_sums[i] / error_counts[i] as f64) as f32
+                    (error_sums[i] / error_counts[i] as f64).sqrt() as f32
                 } else {
                     0.0
                 };
@@ -478,7 +480,7 @@ impl SfmrReconstruction {
 /// equidistant map. This function used to re-implement the perspective
 /// decision as a hard-coded `z ≥ 0` rejection and gnomonic projection for
 /// every model, so every observation past 90° off axis returned `None` and
-/// dropped out of the point's mean — silently biasing the stored error that
+/// dropped out of the point's stored error — silently biasing the stored error that
 /// the points-at-infinity classifier calibrates its angular noise from — and
 /// a distorted perspective ray beyond the polynomial's principal branch
 /// scored a residual against its ghost projection instead of being rejected.

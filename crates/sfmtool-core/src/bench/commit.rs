@@ -470,7 +470,7 @@ pub(crate) fn point_record(
             position,
             w: if at_infinity { 0.0 } else { 1.0 },
             color: bitmap_color(payload),
-            error: mean_reprojection_error(track, &kept),
+            error: rms_reprojection_error(track, &kept),
             normal,
         },
         observations,
@@ -545,16 +545,17 @@ fn bitmap_color(payload: &TrackPayload) -> [u8; 3] {
     color
 }
 
-/// The `error` column of the committed point: the mean of what the last
-/// evaluation measured at each `in` observation.
+/// The `error` column of the committed point: the root mean square of what the
+/// last evaluation measured at each `in` observation.
 ///
-/// The column is a mean pixel reprojection error and the track stage has
-/// measured exactly that, against the position the commit is about to write, so
-/// the number is there to be carried across rather than left at zero. Zero is
-/// what a point with nothing measured gets, which is the same thing
-/// `recompute_point_errors` leaves on a point no observation could be scored
-/// for.
-fn mean_reprojection_error(track: &EditableTrack, kept: &[usize]) -> f32 {
+/// The column is a root-mean-square pixel reprojection error, and the track
+/// stage has measured each observation's error against the position the commit
+/// is about to write, so the number is there to be carried across rather than
+/// left at zero. It is the same number Track View's header shows for the
+/// track. Zero is what a point with nothing measured gets, which is the same
+/// thing `recompute_point_errors` leaves on a point no observation could be
+/// scored for.
+fn rms_reprojection_error(track: &EditableTrack, kept: &[usize]) -> f32 {
     let measured: Vec<f64> = kept
         .iter()
         .filter_map(|&i| track.observations[i].track.as_ref())
@@ -564,7 +565,7 @@ fn mean_reprojection_error(track: &EditableTrack, kept: &[usize]) -> f32 {
     if measured.is_empty() {
         return 0.0;
     }
-    (measured.iter().sum::<f64>() / measured.len() as f64) as f32
+    (measured.iter().map(|e| e * e).sum::<f64>() / measured.len() as f64).sqrt() as f32
 }
 
 /// A world half-vector as the column's `f32` triple.

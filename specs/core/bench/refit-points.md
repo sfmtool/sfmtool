@@ -223,7 +223,7 @@ bench, *Fit* is pressed and *Commit* is pressed, and nothing else:
    commit writes for the fitted track ([`editable-track.md`](editable-track.md)
    § "The commit"): the fitted position with the classification's `w`, the
    placed frame, the new bitmap and its reference observation, the colour at
-   the bitmap's centre, the mean of the evaluated reprojection errors in
+   the bitmap's centre, the root mean square of the evaluated reprojection errors in
    `error`, the normal the frame states (zero for a direction), and per
    observation, in image order, the new keypoint, its blur-matched score as
    `observation_confidence` and its readings. The record's constraint is free,
@@ -448,8 +448,8 @@ count, and the same value and photographs give the same output bit for bit.
 A refit is not idempotent: a second run fits against the patches and bitmaps the
 first wrote, and can move keypoints again by small amounts. The first refit of a
 point the fit does not move is in general still a change, because the commit's
-colour is read from the bitmap's centre and its `error` is the evaluated
-reprojection error, neither carried from the stored point
+colour is read from the bitmap's centre and its `error` is the root mean square of the
+evaluated reprojection errors, neither carried from the stored point
 ([`editable-track.md`](editable-track.md) § "The commit").
 
 ### Run time

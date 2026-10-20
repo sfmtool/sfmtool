@@ -627,7 +627,7 @@ impl SfmrReconstruction {
                 .map(|du| du.resolvable_distance)
                 .collect();
 
-        // Mean reprojection error (pixels) of a discovered bearing against the
+        // Root-mean-square reprojection error (pixels) of a discovered bearing against the
         // features it was built from, via the shared single-observation helper.
         // A point with no in-front observation scores 0.0.
         let reprojection_error = |bearing: &Point3<f64>, members: &[(u32, u32)]| -> f32 {
@@ -647,12 +647,12 @@ impl SfmrReconstruction {
                     true,
                     observed,
                 ) {
-                    sum += e;
+                    sum += e * e;
                     count += 1;
                 }
             }
             if count > 0 {
-                (sum / count as f64) as f32
+                (sum / count as f64).sqrt() as f32
             } else {
                 0.0
             }

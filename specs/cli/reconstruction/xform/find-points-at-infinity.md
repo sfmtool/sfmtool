@@ -157,7 +157,7 @@ unrelated keypoints into runaway mega-clusters — measured below.
    are dropped.
 7. **Emit.** Each kept track becomes a new `w = 0` point at the score's
    closed-form bearing, plus its observations, appended to the reconstruction.
-   Each new point is assigned its mean reprojection error, measured inline
+   Each new point is assigned its root-mean-square reprojection error, measured inline
    against the member keypoints it was built from: the bearing projects
    through rotation + intrinsics only, so downstream filters (e.g.
    `--filter-by-reprojection-error`) score discovered points like any other.

@@ -208,7 +208,7 @@ pub(crate) fn points3d_colors_rgb(point_count: impl std::fmt::Display) -> String
     format!("points3d/colors_rgb.{point_count}.3.uint8.zst")
 }
 
-/// `points3d/reprojection_errors` — mean reprojection error per point.
+/// `points3d/reprojection_errors` — root-mean-square reprojection error per point, in pixels.
 pub(crate) fn points3d_reprojection_errors(point_count: impl std::fmt::Display) -> String {
     format!("points3d/reprojection_errors.{point_count}.float32.zst")
 }

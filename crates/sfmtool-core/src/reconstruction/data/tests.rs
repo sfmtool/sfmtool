@@ -1817,7 +1817,7 @@ fn test_recompute_point_errors_fisheye_keeps_past_ninety_observations() {
     );
 
     // Plant each observation's keypoint 2 px along +u from the exact
-    // projection, so the recomputed mean error must be exactly 2 px.
+    // projection, so the recomputed RMS error must be exactly 2 px.
     let projected: Vec<[f32; 2]> = (0..recon.point_set.tracks.len())
         .map(|k| {
             let obs = &recon.point_set.tracks[k];
@@ -2067,4 +2067,185 @@ fn the_camera_centroid_leaves_out_unposed_images() {
         image.translation_xyz = nalgebra::Vector3::new(f64::NAN, f64::NAN, f64::NAN);
     }
     assert_eq!(none_posed.camera_centroid(), nalgebra::Point3::origin());
+}
+
+/// The keypoint row by row that lands `offset(row)` px along +u from the
+/// observation's exact projection. Panics on an observation that does not
+/// project.
+fn keypoints_off_projection(
+    recon: &SfmrReconstruction,
+    offset: impl Fn(usize) -> f64,
+) -> Array2<f32> {
+    let tracks = &recon.point_set.tracks;
+    Array2::from_shape_fn((tracks.len(), 2), |(row, c)| {
+        let obs = &tracks[row];
+        let image = &recon.image_table.images[obs.image_index as usize];
+        let point = &recon.point_set.points[obs.point_index as usize];
+        // The residual against the origin is the projection itself.
+        let [u, v] = observation_reprojection_residual(
+            &image.quaternion_wxyz,
+            &image.translation_xyz,
+            &recon.image_table.cameras[image.camera_index as usize],
+            &point.position,
+            point.is_at_infinity(),
+            [0.0, 0.0],
+        )
+        .expect("every fixture observation projects");
+        if c == 0 {
+            (u + offset(row)) as f32
+        } else {
+            v as f32
+        }
+    })
+}
+
+/// Replace the inline keypoint column of a `sift_files` reconstruction.
+fn set_sift_files_keypoints(recon: &mut SfmrReconstruction, keypoints: Option<Array2<f32>>) {
+    let ObservationSource::SiftFiles { keypoints_xy, .. } = &mut recon.point_set.observations
+    else {
+        panic!("a sift_files fixture");
+    };
+    *keypoints_xy = keypoints;
+}
+
+/// The demo's points each have two observations, rows `2p` and `2p + 1`; the
+/// first is planted 1 px from its projection and the second 3 px.
+fn one_and_three_px(row: usize) -> f64 {
+    if row.is_multiple_of(2) {
+        1.0
+    } else {
+        3.0
+    }
+}
+
+/// The stored error is the root mean square of the observation errors, not
+/// their mean: observations 1 px and 3 px off store sqrt(5) px, not 2 px.
+#[test]
+fn test_recompute_point_errors_is_the_rms_of_the_observation_errors() {
+    let mut recon = demo_sift_files_inline(10);
+    assert!(recon.point_set.points.iter().all(|p| p.error != 0.0));
+    let keypoints = keypoints_off_projection(&recon, one_and_three_px);
+    set_sift_files_keypoints(&mut recon, Some(keypoints));
+    recon.recompute_point_errors().unwrap();
+    for (p, point) in recon.point_set.points.iter().enumerate() {
+        assert_eq!(recon.observations_for_point(p).len(), 2);
+        assert!(
+            (point.error - 5f32.sqrt()).abs() < 1e-3,
+            "point {p} stored {}",
+            point.error
+        );
+    }
+}
+
+/// The same statistic when the pixels come from the `.sift` files rather than
+/// an inline column.
+#[test]
+fn test_recompute_point_errors_from_sift_files_is_the_rms() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut recon = SfmrReconstruction::demo(10);
+    recon.workspace_dir = dir.path().to_path_buf();
+    recon.metadata.workspace.contents.feature_prefix_dir = "features".into();
+    let keypoints = keypoints_off_projection(&recon, one_and_three_px);
+    let features = recon.point_set.feature_indexes().unwrap().to_vec();
+    for image in 0..recon.image_table.images.len() {
+        let count = recon.point_set.max_track_feature_index[image] as usize + 1;
+        let mut positions = Array2::<f32>::zeros((count, 2));
+        for (row, obs) in recon.point_set.tracks.iter().enumerate() {
+            if obs.image_index as usize == image {
+                let f = features[row] as usize;
+                positions[[f, 0]] = keypoints[[row, 0]];
+                positions[[f, 1]] = keypoints[[row, 1]];
+            }
+        }
+        let data = sfmtool_sift_format::SiftData {
+            feature_tool_metadata: sfmtool_sift_format::FeatureToolMetadata {
+                feature_tool: "test".into(),
+                feature_type: "sift".into(),
+                feature_options: serde_json::json!({}),
+            },
+            metadata: sfmtool_sift_format::SiftMetadata {
+                version: sfmtool_sift_format::SIFT_FORMAT_VERSION,
+                image_name: recon.image_table.images[image].name.clone(),
+                image_file_xxh128: "0".repeat(32),
+                image_file_size: 1,
+                image_width: recon.image_table.cameras[0].width,
+                image_height: recon.image_table.cameras[0].height,
+                feature_count: count as u32,
+            },
+            content_hash: sfmtool_sift_format::SiftContentHash::default(),
+            positions_xy: positions,
+            affine_shapes: ndarray::Array3::<f32>::zeros((count, 2, 2)),
+            descriptors: Array2::<u8>::zeros((count, 128)),
+            thumbnail_y_x_rgb: ndarray::Array3::<u8>::zeros((128, 128, 3)),
+        };
+        let path = recon.sift_path_for_image(image);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        sfmtool_sift_format::write_sift(&path, &data, 3).unwrap();
+    }
+    assert!(recon.keypoints_xy().is_none());
+    recon.recompute_point_errors().unwrap();
+    for (p, point) in recon.point_set.points.iter().enumerate() {
+        assert!(
+            (point.error - 5f32.sqrt()).abs() < 1e-3,
+            "point {p} stored {}",
+            point.error
+        );
+    }
+}
+
+/// A point at infinity is scored through its bearing with the same statistic,
+/// and the infinity-only recompute leaves the finite points' errors alone.
+#[test]
+fn test_recompute_infinity_point_errors_is_the_rms() {
+    let mut recon = demo_sift_files_inline(10);
+    // Point 0 becomes a bearing along the direction its first camera sees it.
+    let first = recon.observations_for_point(0)[0].image_index as usize;
+    let center = recon.image_table.images[first].camera_center();
+    let dir = (recon.point_set.points[0].position - center).normalize();
+    recon.point_set.points[0].position = nalgebra::Point3::from(dir);
+    recon.point_set.points[0].w = 0.0;
+    let keypoints = keypoints_off_projection(&recon, one_and_three_px);
+    set_sift_files_keypoints(&mut recon, Some(keypoints));
+    let finite_before = recon.point_set.points[1].error;
+
+    let mut whole = recon.clone();
+    whole.recompute_point_errors().unwrap();
+    recon.recompute_infinity_point_errors().unwrap();
+
+    for r in [&recon, &whole] {
+        let error = r.point_set.points[0].error;
+        assert!((error - 5f32.sqrt()).abs() < 1e-3, "stored {error}");
+    }
+    assert_eq!(recon.point_set.points[1].error, finite_before);
+}
+
+/// A point none of whose observations projects keeps the 0.0 it always got.
+#[test]
+fn test_recompute_point_errors_with_nothing_projecting_is_zero() {
+    let mut recon = demo_sift_files_inline(10);
+    let keypoints = keypoints_off_projection(&recon, one_and_three_px);
+    set_sift_files_keypoints(&mut recon, Some(keypoints));
+    // Point 0 moves behind both of its cameras.
+    let obs = recon.observations_for_point(0).to_vec();
+    let behind = obs
+        .iter()
+        .map(|o| {
+            recon.image_table.images[o.image_index as usize]
+                .camera_center()
+                .coords
+        })
+        .sum::<nalgebra::Vector3<f64>>()
+        * 2.0;
+    recon.point_set.points[0].position = nalgebra::Point3::from(behind);
+    for o in &obs {
+        let image = &recon.image_table.images[o.image_index as usize];
+        let p_cam = image.quaternion_wxyz * behind + image.translation_xyz;
+        assert!(
+            p_cam.z > 0.0,
+            "the fixture puts the point behind the camera"
+        );
+    }
+    recon.recompute_point_errors().unwrap();
+    assert_eq!(recon.point_set.points[0].error, 0.0);
+    assert!((recon.point_set.points[1].error - 5f32.sqrt()).abs() < 1e-3);
 }

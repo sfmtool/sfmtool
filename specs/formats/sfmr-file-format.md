@@ -1098,10 +1098,35 @@ Reprojection errors:
 
 - **Shape**: `(N,)` where N = point_count
 - **Data type**: `float32` (little-endian)
-- **Format**: RMS reprojection error in pixels. A `w = 0` point still projects
+- **Format**: RMS reprojection error in pixels: the square root of the mean of
+  the squared pixel distances between each observation's keypoint and the
+  point's projection into that image. A point with no observation that
+  projects stores `0.0`. A `w = 0` point still projects
   (rotation + intrinsics only), so its reprojection error stays well-defined —
   consumers (e.g. the reprojection-error point filter) score points at infinity
   by it like any finite point.
+
+Which writer stores which value:
+
+- **The RMS, computed from the observations.**
+  `SfmrReconstruction::recompute_point_errors`, which the Python
+  `SfmrReconstruction.from_data` runs, so every `sfm solve` and COLMAP import
+  stores the RMS, and `recompute_infinity_point_errors`; the points that
+  `classify_points_at_infinity` changes and the bearings `find_points_at_infinity`
+  adds; the bench's commit and Refit All Points; Switch Camera Model, for the
+  points its cameras see; Move Camera, for the points it re-triangulates when
+  the reconstruction carries inline keypoints; and sfmtool's own bundle
+  adjustment, for the points it solves.
+- **A value carried from elsewhere.** `sfm xform --bundle-adjust` through
+  pycolmap stores COLMAP's per-point error, which is the mean, not the RMS.
+  `sfm merge` stores the average of the merged points' stored errors. An edit
+  that moves a point or its keypoints without scoring it again, such as
+  Retriangulate or `--refine-keypoints`, keeps the error the point had.
+
+Before sfmtool's writers stored the RMS, they stored the mean of the
+per-observation errors, so a file written by an earlier sfmtool holds the mean
+in this column until its errors are recomputed. A reader does not recompute
+them on open.
 
 #### `points3d/normals_xyz.{N}.3.float32.zst` (Optional)
 

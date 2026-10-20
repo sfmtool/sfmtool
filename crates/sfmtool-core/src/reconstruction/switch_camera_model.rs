@@ -211,7 +211,7 @@ pub struct SwitchCameraModelReport {
 ///
 /// Poses, points, keypoints, patches and tracks are carried over unchanged. The
 /// stored error of every point observed in an image that uses a switched
-/// camera is recomputed as the mean of its reprojection errors, the convention
+/// camera is recomputed as the root mean square of its reprojection errors, the convention
 /// [`SfmrReconstruction::recompute_point_errors`] writes.
 ///
 /// The observations' pixels come from the inline keypoint column where the
@@ -314,14 +314,14 @@ pub fn switch_camera_model(
     for &row in &touched_rows {
         if let Some(e) = row_error(&out, row, pixels[row]) {
             let p = tracks[row].point_index as usize;
-            sums[p] += e;
+            sums[p] += e * e;
             counts[p] += 1;
         }
     }
     for p in 0..n_pt {
         if touched[p] {
             out.point_set.points[p].error = if counts[p] > 0 {
-                (sums[p] / f64::from(counts[p])) as f32
+                (sums[p] / f64::from(counts[p])).sqrt() as f32
             } else {
                 0.0
             };

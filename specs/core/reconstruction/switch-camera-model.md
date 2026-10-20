@@ -221,7 +221,7 @@ models, and is fitted like any other source too.
 Each switched camera is replaced by its fitted camera. Nothing else in the image
 table, the point set or the observation columns changes. The stored error of
 every point observed in an image that uses a switched camera is recomputed as
-the mean of its reprojection errors over all its observations, the convention
+the root mean square of its reprojection errors over all its observations, the convention
 `SfmrReconstruction::recompute_point_errors` writes; a point with none that
 project gets `0.0`. Points only other cameras see keep their stored error.
 

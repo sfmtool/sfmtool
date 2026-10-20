@@ -51,6 +51,27 @@ fn far_point(recon: &SfmrReconstruction, p: usize, dist: f64) -> Point3<f64> {
     Point3::from(mid + dist * (-mid).normalize())
 }
 
+/// The root mean square, and the mean, of point `p`'s per-observation errors
+/// as `compute_observation_reprojection_errors` measures them.
+fn rms_and_mean_of_observation_errors(recon: &SfmrReconstruction, p: usize) -> (f32, f32) {
+    let mut errors = Vec::new();
+    for image in 0..recon.image_table.images.len() {
+        let feat_to_point = &recon.point_set.image_feature_to_point[image];
+        for (feature, error) in recon
+            .compute_observation_reprojection_errors(image)
+            .unwrap()
+        {
+            if feat_to_point.get(&feature) == Some(&(p as u32)) {
+                errors.push(f64::from(error));
+            }
+        }
+    }
+    let n = errors.len() as f64;
+    let rms = (errors.iter().map(|e| e * e).sum::<f64>() / n).sqrt();
+    let mean = errors.iter().sum::<f64>() / n;
+    (rms as f32, mean as f32)
+}
+
 /// Store point `p` as a point at infinity along `dir`.
 fn store_as_bearing(recon: &mut SfmrReconstruction, p: usize, dir: Vector3<f64>) {
     let point = &mut recon.point_set.points[p];
@@ -118,6 +139,10 @@ fn classify_demotes_a_far_point_to_its_scored_bearing() {
         "{}",
         pt.error
     );
+    // It is the root mean square of the bearing's observation errors (the
+    // fitted bearing splits its two residuals evenly, so here it is the mean too).
+    let (rms, _) = rms_and_mean_of_observation_errors(&classified, 0);
+    assert!((pt.error - rms).abs() < 1e-5, "{} against {rms}", pt.error);
 }
 
 #[test]
@@ -185,6 +210,10 @@ fn classify_promotes_a_bearing_whose_rays_ask_for_a_depth() {
     // The error is recomputed at the placed point: of the order of the noise,
     // where the bearing's residuals were the full parallax.
     assert!(pt.error < 4.0 * NOISE_PX as f32, "{}", pt.error);
+    // It is the root mean square of the placed point's observation errors.
+    let (rms, mean) = rms_and_mean_of_observation_errors(&classified, 0);
+    assert!((pt.error - rms).abs() < 1e-5, "{} against {rms}", pt.error);
+    assert!((rms - mean).abs() > 1e-4, "the fixture tells the two apart");
 }
 
 #[test]

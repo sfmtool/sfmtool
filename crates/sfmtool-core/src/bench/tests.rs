@@ -2699,15 +2699,16 @@ fn a_kept_observation_with_no_keypoint_refuses_by_name() {
     );
 }
 
-/// The `error` column is the mean of what the last evaluation measured, not a
-/// zero standing in for "a bench track has no error".
+/// The `error` column is the root mean square of what the last evaluation
+/// measured, not their mean and not a zero standing in for "a bench track has
+/// no error": errors of 1 and 3 px store sqrt(5) px, not 2.
 #[test]
-fn the_committed_error_is_the_mean_of_the_measured_reprojections() {
+fn the_committed_error_is_the_rms_of_the_measured_reprojections() {
     let scene = Scene::new();
     let edited = edited_with_columns(&scene, WORLD);
     let (bench, label) = bench_with_point(&edited, 0);
     let mut track = track_of(&bench, &label);
-    for (i, expected) in track.in_observations().into_iter().zip([0.2, 0.6]) {
+    for (i, expected) in track.in_observations().into_iter().zip([1.0, 3.0]) {
         track.observations[i]
             .track
             .as_mut()
@@ -2717,7 +2718,7 @@ fn the_committed_error_is_the_mean_of_the_measured_reprojections() {
     let (next, report) = commit(&edited, &track).expect("two observations in, with a position");
     let written = next.point(report.point).expect("just written");
     assert!(
-        (written.point().error - 0.4).abs() < 1e-6,
+        (written.point().error - 5f32.sqrt()).abs() < 1e-6,
         "wrote {}",
         written.point().error
     );

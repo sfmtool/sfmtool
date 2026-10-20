@@ -3259,7 +3259,7 @@ ordinary point edit. It builds a `PointRecord` from the track-stage payload and
 the `in` observations: the coordinate the track carries with the frame's own `w`
 (§ "Finite points and bearings"), the frame it stands on,
 the patch bitmap, the colour read from that bitmap's centre, the normal the
-frame states, the mean of what the last evaluation measured as each `in`
+frame states, the root mean square of what the last evaluation measured as each `in`
 sighting's reprojection error in the point's `error` column (zero where nothing
 was measured, which is what a point no observation could be scored for carries
 anywhere else), and one observation per `in` sighting with its keypoint and, in
@@ -3343,7 +3343,7 @@ then writes the reference rather than `-1`.
 Two columns the commit writes are not carried across from the point, so the
 *first* commit of a point put on the bench and left alone is in general a change:
 the colour, which is read from the patch bitmap's centre rather than from the
-stored byte, and the `error`, which is the mean of what the last evaluation
+stored byte, and the `error`, which is the root mean square of what the last evaluation
 measured and is zero for a track nothing has read. Everything else round-trips
 exactly, and after that first write the two agree.
 
@@ -4050,7 +4050,7 @@ bench versions are listed in [`bench.md`](bench.md) § "Testing".
   pulled-from point, and the map each of those reports. An origin that names a
   deleted point creates instead, and an `out` row pulled from a point leaves
   that point alone.
-- The `error` column is the mean of the measured reprojections and the colour is
+- The `error` column is the root mean square of the measured reprojections and the colour is
   the patch bitmap's centre.
 - Each refusal names why: a cluster-stage track, a `sift_files` reconstruction,
   one `in` observation, no position, no bitmap when the base carries the column,
