@@ -2362,7 +2362,7 @@ fn a_task_asked_to_stop_says_it_is_stopping_until_it_lands() {
 }
 
 /// The span a running line's fill covers: a measured fill from the left edge
-/// to its fraction of the line, a band of about a third of the line that moves
+/// to its fraction of the line, a band of 30 % of the line that moves
 /// with time where nothing is measured and stands at the middle when egui's
 /// animations are off, and a stopping task with nothing measured filled
 /// across the whole line, held.

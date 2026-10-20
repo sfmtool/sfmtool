@@ -557,7 +557,7 @@ Earlier rows are above it, and none of them is a summary of another:
   system's dark or light theme, and 35 % keeps the light text of the dark
   theme and the dark text of the light one readable over it. It replaced a
   28 px bar inline on the line, which was too small to read a fraction from
-  and took 28 px from the names. When nothing reports a count, a band a third
+  and took 28 px from the names. When nothing reports a count, a band 30 %
   of the line wide slides across it once every 2.4 s in the same tint,
   repainted with the elapsed, the open phase being the marked row of the
   table; with egui's animations off (`animation_time` 0) it stands at the
