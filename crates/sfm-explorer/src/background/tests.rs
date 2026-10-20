@@ -1683,7 +1683,7 @@ fn the_bar_is_drawn_only_where_a_count_was_reported() {
     let live = task.collector.live();
     assert_eq!(
         super::panel::bar(&task.collector, &live),
-        super::panel::Bar::Spinner {
+        super::panel::Bar::Unmeasured {
             phase: Some("gather arrays"),
         },
     );
@@ -2284,9 +2284,8 @@ fn an_idle_line_says_whether_its_task_was_cancelled_or_failed() {
 
 /// Once a cancel is asked for, a running task says it is stopping until it
 /// lands: its title line shows `stopping…` where the status was, its line shows
-/// it where its bar was when another task is chosen and a spinner when the
-/// title line already says it, and its Cancel button is disabled with a
-/// tooltip saying why.
+/// it too where the word leaves the operation's first letters room, and its
+/// Cancel button is disabled with a tooltip saying why.
 ///
 /// Found on dino's bundle adjustment, which reaches its next check of the flag
 /// about half a second after the click: until then the line looked exactly as
@@ -2305,11 +2304,11 @@ fn a_task_asked_to_stop_says_it_is_stopping_until_it_lands() {
     state.cancel_background_task(task);
     assert!(state.running_task(task).expect("still running").stopping());
     let texts = painted(&mut state);
-    // It is the chosen task, so its title line says it, and its queue's line
-    // has a spinner where the bar was rather than the word again.
+    // On its queue's line, which has the room with no bar on it, and on its
+    // title line, since it is the chosen task.
     assert_eq!(
         texts.iter().filter(|t| *t == STOPPING).count(),
-        1,
+        2,
         "{texts:?}"
     );
     // The count is still on the title line.
@@ -2362,6 +2361,173 @@ fn a_task_asked_to_stop_says_it_is_stopping_until_it_lands() {
     );
 }
 
+/// The span a running line's fill covers: a measured fill from the left edge
+/// to its fraction of the line, a band of about a third of the line that moves
+/// with time where nothing is measured and stands at the middle when egui's
+/// animations are off, and a stopping task with nothing measured filled
+/// across the whole line, held.
+#[test]
+fn the_fill_covers_the_fraction_of_the_line_or_a_moving_band() {
+    use super::panel::{fill_span, Bar, Fill};
+    let line = egui::Rect::from_min_size(egui::pos2(10.0, 0.0), egui::vec2(200.0, 18.0));
+    let measured = |fraction: f32, stopping: bool| Fill {
+        bar: Bar::Measured {
+            fraction,
+            count: None,
+        },
+        stopping,
+        chosen: false,
+    };
+    for (fraction, width) in [(0.25, 50.0), (0.75, 150.0)] {
+        for stopping in [false, true] {
+            let span = fill_span(&measured(fraction, stopping), line, 0.0, true);
+            assert_eq!(span.left(), line.left());
+            assert!((span.width() - width).abs() < 1e-3, "{span:?}");
+            assert_eq!(span.y_range(), line.y_range());
+        }
+    }
+
+    let unmeasured = |stopping: bool| Fill {
+        bar: Bar::Unmeasured { phase: None },
+        stopping,
+        chosen: false,
+    };
+    let at = |time: f64| fill_span(&unmeasured(false), line, time, true);
+    assert_ne!(at(0.6).left(), at(1.2).left(), "the band does not move");
+    for time in [0.6, 1.2] {
+        assert!(at(time).width() <= 60.0 + 1e-3, "{:?}", at(time));
+        assert!(line.contains_rect(at(time)), "{:?}", at(time));
+    }
+    let still = fill_span(&unmeasured(false), line, 0.6, false);
+    assert_eq!(still, fill_span(&unmeasured(false), line, 1.2, false));
+    assert!(
+        (still.center().x - line.center().x).abs() < 1e-3,
+        "{still:?}"
+    );
+    let held = fill_span(&unmeasured(true), line, 0.6, true);
+    assert_eq!(held, line);
+    assert_eq!(held, fill_span(&unmeasured(true), line, 1.2, true));
+}
+
+/// Every shape one frame of the panel painted, in paint order, with nested
+/// lists flattened.
+fn painted_shapes(state: &mut AppState, width: f32) -> (Vec<egui::Shape>, egui::Visuals) {
+    fn walk(shape: &egui::Shape, out: &mut Vec<egui::Shape>) {
+        match shape {
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| walk(shape, out)),
+            other => out.push(other.clone()),
+        }
+    }
+    let ctx = egui::Context::default();
+    let input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(width, 400.0),
+        )),
+        ..Default::default()
+    };
+    let mut visuals = None;
+    let mut output = ctx.run_ui(input, |ui| {
+        visuals = Some(ui.visuals().clone());
+        super::panel::show(ui, state)
+    });
+    output.textures_delta.clear();
+    let mut out = Vec::new();
+    for clipped in &output.shapes {
+        walk(&clipped.shape, &mut out);
+    }
+    (out, visuals.expect("the frame ran"))
+}
+
+/// A running line's fill is painted behind its text and covers the fraction
+/// of the line the task has reported, in the selection's tint, turning grey
+/// once the task is asked to stop; the chosen line is outlined.
+#[test]
+fn a_running_line_s_fill_is_behind_its_text_and_follows_the_fraction() {
+    use super::panel::fill_color;
+    for fraction in [0.25f32, 0.75] {
+        let (mut state, id) = adjustable();
+        let mut gate = Gate::new();
+        let (said, heard) = mpsc::channel();
+        let held = gate.held();
+        let task = state
+            .start_background_task(
+                Operation::BUNDLE_ADJUST,
+                id,
+                Box::new(move |progress| {
+                    progress.set_fraction(fraction);
+                    said.send(()).expect("the test is listening");
+                    let _ = held.recv();
+                    Finished::Failed("the fake worker produced nothing".to_string())
+                }),
+            )
+            .expect("nothing else is running");
+        heard.recv().expect("the worker reported");
+        state.poll_background_tasks();
+
+        let width = 227.0;
+        for stopping in [false, true] {
+            if stopping {
+                state.cancel_background_task(task);
+            }
+            let (shapes, visuals) = painted_shapes(&mut state, width);
+            let tint = fill_color(&visuals, stopping);
+            let (at, fill) = shapes
+                .iter()
+                .enumerate()
+                .find_map(|(at, shape)| match shape {
+                    egui::Shape::Rect(rect) if rect.fill == tint => Some((at, rect.rect)),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("no fill in {tint:?}: {shapes:?}"));
+            // The whole line is the panel's width, so the fill covers that
+            // fraction of it, within a pixel.
+            assert!(
+                (fill.width() - fraction * width).abs() <= 1.0,
+                "{fraction}: the fill is {} wide of {width}",
+                fill.width()
+            );
+            // Behind the line's text: painted before it, and the text is
+            // still there to read.
+            let text_at = |needle: &str| {
+                shapes.iter().position(|shape| {
+                    matches!(shape, egui::Shape::Text(text) if text.galley.text().starts_with(needle))
+                })
+            };
+            for needle in ["Slow", "Bundle", "ru"] {
+                let text = text_at(needle).unwrap_or_else(|| panic!("no {needle:?}"));
+                assert!(at < text, "{needle:?} is painted under the fill");
+            }
+            // The chosen task's line is outlined, in the selection's stroke.
+            assert!(
+                shapes.iter().any(|shape| matches!(
+                    shape,
+                    egui::Shape::Rect(rect)
+                        if rect.stroke.color == visuals.selection.stroke.color
+                            && (rect.rect.width() - width).abs() <= 1.0
+                )),
+                "the chosen line is not outlined"
+            );
+        }
+        // Nothing overlaps on the line.
+        line_led_by(&painted_spans(&mut state, width), "Slow", width);
+
+        gate.open();
+        state.finish_background_tasks();
+        // Landed, its queue's line is idle and has no fill.
+        let (shapes, visuals) = painted_shapes(&mut state, width);
+        for stopping in [false, true] {
+            let tint = fill_color(&visuals, stopping);
+            assert!(
+                !shapes
+                    .iter()
+                    .any(|shape| matches!(shape, egui::Shape::Rect(rect) if rect.fill == tint)),
+                "an idle line has a fill"
+            );
+        }
+    }
+}
+
 /// A stopping task's line still says what is stopping on a narrow panel: the
 /// operation's name keeps its first letters however long the node's name is,
 /// and nothing on the line overlaps or leaves the panel.
@@ -2378,8 +2544,8 @@ fn a_stopping_line_keeps_the_operation_s_first_letters() {
         state.slow_queue.running.as_mut().expect("running").label =
             "20260628-01-solve-seattle_backyard_1-26-embedded".to_string();
         if chosen_elsewhere {
-            // The word `stopping…` on the line rather than a spinner, which is
-            // the narrower case for the names.
+            // Not outlined as the chosen task, and with another task's title
+            // line, so the queue's line is the one place the word could be.
             let other = second_node(&mut state);
             ended_as(&mut state, other, Operation::BENCH_FIT, || {
                 Finished::NoChange("nothing to fit".to_string())
@@ -2402,6 +2568,15 @@ fn a_stopping_line_keeps_the_operation_s_first_letters() {
                  {} px wide, {spans:?}",
                 right - left
             );
+            // At the default width the node keeps its share too: the word
+            // gives way rather than cut it to an ellipsis, and the grey fill
+            // says the task is stopping.
+            if width == 227.0 {
+                assert!(
+                    line.iter().any(|t| t.starts_with("20") && t.ends_with('d')),
+                    "{line:?}"
+                );
+            }
         }
         gate.open();
         state.finish_background_tasks();

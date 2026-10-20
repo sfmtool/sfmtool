@@ -321,7 +321,7 @@ it is refused with the unknown-panel message, which lists `background_tasks`
 
 ```
 ┌ Background Tasks ──────────────────┐
-│ Slow Bundle adjust dino ▓░ 42.7 s x│
+│ Slow Bundle adjust dino    42.7 s x│
 │ waiting Retriangulate a… bull +2  x│
 │ Fast Fit track bull         0.4 s  │
 │ ────────────────────────────────── │
@@ -335,7 +335,8 @@ it is refused with the unknown-panel message, which lists `background_tasks`
 
 The panel has **one line for each queue**, slow first, led by the queue's name.
 A queue that is running a task shows it in the **running form** (§ "Running"):
-the operation, its node, a small bar or a spinner, the elapsed and Cancel. An
+the operation, its node, the elapsed and Cancel, over a fill behind the whole
+line that shows how far along it is (the sketches leave the fill out). An
 idle queue shows the last task that finished from it in the **idle form**
 (§ "Idle"), read from the record of finished tasks, or `Nothing running` when it
 has run nothing this session. The items on the right of a line are laid out
@@ -346,8 +347,9 @@ first, down to what leaves the node its whole name or 40 % of that room
 (`NODE_SHARE`), whichever is less, and the node takes the rest, cut out of the
 middle. The node is what says which reconstruction is busy, and the operation
 is named again on the title line when it is the chosen task: at the default
-227 px a running line once read `Slow Bundle adjust`, the bar, the elapsed and
-Cancel, with no room left for `dino`. The operation's name is never cut below
+227 px a running line once read `Slow Bundle adjust`, a 28 px bar, the elapsed
+and Cancel, with no room left for `dino`; the bar has since moved behind the
+line, and its 28 px are the names'. The operation's name is never cut below
 its first four letters and an ellipsis (`Bund…`, `NAME_KEEPS`), however little
 the node leaves it, so a narrow line still says what is running; the node
 takes what is left after that, down to an ellipsis of its own, with its whole
@@ -479,7 +481,7 @@ one of them can be cancelled from the wire meanwhile
 
 ```
 ┌ Background Tasks ──────────────────┐
-│ Slow Bundle adjust dino ▓░ 42.7 s x│
+│ Slow Bundle adjust dino    42.7 s x│
 │ Fast Fit track bull         0.4 s  │
 │ quiet Live evaluation bull: pt3d_… │
 ```
@@ -489,7 +491,7 @@ line has the queue's name, then its operation and its subject (for an
 evaluation the node and the item, or the node and `viewed` with the viewed
 point; for a proposal's job the node and the camera, `bull: camera 1`), all
 dim, with no
-bar, no elapsed and no Cancel: the viewer started it, and it stops by itself
+fill, no elapsed and no Cancel: the viewer started it, and it stops by itself
 whenever someone asks for a task, so there is nothing to wait on or to stop. A
 quiet task runs only while its queue runs nothing someone asked for, so the
 queue's line above it is in its idle form, showing the last task someone asked
@@ -501,7 +503,7 @@ the waiting line.
 
 ```
 ┌ Background Tasks ──────────────────┐
-│ Slow Bundle adjust dino ▓░ 42.7 s x│
+│ Slow Bundle adjust dino    42.7 s x│
 │ Fast Nothing running               │
 │ ────────────────────────────────── │
 │ dino_dog_toy-embedded    round 2/3 │
@@ -512,7 +514,13 @@ the waiting line.
 └────────────────────────────────────┘
 ```
 
-`x` stands for the close glyph Cancel is drawn as.
+`x` stands for the close glyph Cancel is drawn as. The fill behind the running
+line, which the sketches leave out, lies under the text, here at 61 %:
+
+```
+│ Slow Bundle adjust dino    42.7 s x│   the line's text, on top
+│▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▏             │   the fill behind it, and its edge
+```
 
 The table is scrolled to its end, because that is where the operation is.
 Earlier rows are above it, and none of them is a summary of another:
@@ -536,11 +544,27 @@ Earlier rows are above it, and none of them is a summary of another:
   glance says what the window is busy with. The title line above the phases
   repeats both for the chosen task, where there is room for more of the node's
   name.
-- **Progress** is a small bar on the task's line when anything underneath
-  reports a count, with the kernel's own counts and units (`round 2/3`, or
-  `round 2/3 · iteration 4/60` while a round is open) on the title line and
-  as the bar's tooltip, and a spinner when nothing does, the
-  open phase being the marked row of the table. The bar is a statement about how much of the work is behind you, never a
+- **Progress** is a fill behind the task's whole line (`panel::fill_shape`),
+  from its left edge to the reported fraction of its width, when anything
+  underneath reports a count, with the kernel's own counts and units
+  (`round 2/3`, or `round 2/3 · iteration 4/60` while a round is open) on the
+  title line and on the elapsed's tooltip. It is drawn first, into a place in
+  the paint order kept before the line's widgets, so the queue's name, the
+  operation, the node, the elapsed and Cancel lie on top of it. The fill is
+  the theme's selection colour at 35 % (`fill_color`), with a 1.5 px line of
+  the full colour at its leading edge so the end reads against text of about
+  the same brightness; both come from the frame's `Visuals`, which follow the
+  system's dark or light theme, and 35 % keeps the light text of the dark
+  theme and the dark text of the light one readable over it. It replaced a
+  28 px bar inline on the line, which was too small to read a fraction from
+  and took 28 px from the names. When nothing reports a count, a band a third
+  of the line wide slides across it once every 2.4 s in the same tint,
+  repainted with the elapsed, the open phase being the marked row of the
+  table; with egui's animations off (`animation_time` 0) it stands at the
+  middle. The chosen task's line is outlined in the selection's stroke colour
+  rather than having its name drawn selected, as an idle line's is, because
+  its fill is the selection's colour already and the two would run together.
+  Waiting, idle and quiet lines have no fill. The fill is a statement about how much of the work is behind you, never a
   prediction of when it will end: it moves only where a stage reports a count,
   and a stage that reports none moves it not at all. The step at a boundary is
   the next stage's range beginning rather than anything the panel adds
@@ -571,12 +595,13 @@ Earlier rows are above it, and none of them is a summary of another:
   lands (`BackgroundTask::stopping`), its title line shows `stopping…` where
   the status was, keeping the count, and its Cancel button is disabled with
   *"Asked to stop: it stops the next time it checks whether it should."* as
-  its tooltip. Its own line shows the weak word `stopping…` where the bar was
-  when another task is the chosen one, so the title line does not say it, and
-  the line has room for the word beside the operation's first letters; it
-  shows a spinner there, with the same tooltip, when the title line already
-  says it or the word would cut the operation's name below `Bund…`. The
-  operation's name is what says which task is stopping, so it is the word that
+  its tooltip. Its line's fill turns grey (the weak text colour at 20 %) and
+  stops: a measured fill holds at the fraction it reached, with no leading
+  edge, and a band covers the whole line, still. The line also shows the weak
+  word `stopping…` before the elapsed where the word leaves the names what
+  they would have without it, the operation's first letters and the node's
+  share; where it does not, the grey fill, the title line and the tooltip say
+  it. The names are what say which task is stopping, so it is the word that
   gives way.
   Without it the line looked as it had before the click, and a reader could not
   tell the click had registered. On the wire the same state is `cancelling:
@@ -831,13 +856,14 @@ receiving it. Nothing about a phase or a message crosses the channel below; the
 channel carries only the fact that something changed, and at the end the value.
 
 **How much a given kernel reports is its own business**, and a kernel that
-reports nothing still works: it is one phase, named by the caller, with a
-spinner under it. The panel is finished when it can draw phases, messages, a
-count and a spinner; each kernel then decides how much of that it fills in.
+reports nothing still works: it is one phase, named by the caller, with the
+sliding band behind its line. The panel is finished when it can draw phases,
+messages, a count and the band; each kernel then decides how much of that it
+fills in.
 
 `bundle_adjust` fills in most of it. It counts its rounds against the schedule
-and its LM iterations against the budget, so the bar is measured rather than a
-spinner, and it polls the cancel flag between rounds and between iterations, so
+and its LM iterations against the budget, so its line's fill is measured rather
+than the band, and it polls the cancel flag between rounds and between iterations, so
 Cancel is live ([operation-progress.md](operation-progress.md)).
 
 `to_embedded_patches` fills in the phases, the count and the fraction: `patch
@@ -1407,7 +1433,15 @@ Panel, through `test_support::run_frame_headless`:
 
 - The three states paint what they should: idle with nothing run (`Nothing
   running` under each queue), idle with a finished operation, and running with a
-  bar and with a spinner.
+  measured fill and with nothing measured.
+- A running line's fill at a fraction of 0.25 and 0.75 covers that fraction of
+  the 227 px line within a pixel, in the selection's tint and in grey once the
+  task is asked to stop, and is painted before the line's texts, which are all
+  still painted with nothing overlapping; the chosen line is outlined in the
+  selection's stroke; the line has no fill once the task has landed. The span
+  of an unmeasured fill is a band of at most 30 % of the line that moves with
+  time, stands at the middle with animations off, and covers the whole line,
+  held, once the task is stopping.
 - With a task in each queue, each line shows its own, and the phase list is
   the slow task's until the fast one is chosen, and stays the fast one's once it
   has finished.
@@ -1453,14 +1487,14 @@ Panel, through `test_support::run_frame_headless`:
   a count is `under_way` exactly while a stage is open inside its own, and with
   no counting stage open the newest count is what is left.
 - Once a running task is asked to stop, `stopping…` is painted on its title
-  line while it is the chosen task, and on its queue's line instead while
-  another task is chosen; the count stays, and Cancel is disabled with the
-  stopping tooltip; none of it is painted before the request or after the task
-  lands.
+  line while it is the chosen task, and on its queue's line too where the word
+  fits beside the names, at 260 px both while it is chosen and while another
+  task is; the count stays, and Cancel is disabled with the stopping tooltip;
+  none of it is painted before the request or after the task lands.
 - A stopping Bundle adjust on a long node name keeps at least `Bund…` of the
-  operation's name on its line at 227 px and at 180 px, with the title line
-  saying `stopping…` and with another task chosen, with nothing overlapping or
-  leaving the panel.
+  operation's name on its line at 227 px and at 180 px, chosen and with
+  another task chosen, and at 227 px the node keeps its share rather than give
+  it to the word, with nothing overlapping or leaving the panel.
 - A status replaces the previous one rather than adding a line, and the panel
   shows nothing there for an operation that has never set one.
 - **Every `Operation` that declares `cancellable` really is**: cancelling each
@@ -1578,8 +1612,8 @@ covered with every other panel's ([panel-layout.md](panel-layout.md) §
   of the value it was handed, and an edit underneath it would produce a version
   whose parent is not the version it was computed from.
 - **Persisting a running or waiting operation.** Quitting abandons every one.
-- **Progress from a kernel that does not report it.** The panel shows a spinner
-  and the open phase's name, and says nothing it cannot measure.
+- **Progress from a kernel that does not report it.** The panel shows the
+  sliding band and the open phase's name, and says nothing it cannot measure.
 - **One task per node rather than per queue.** Per node is the natural
   generalisation and would cost little in the state. It is not done because two
   solves at once is a slower way to do one thing, for the reason each queue runs

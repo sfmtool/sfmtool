@@ -360,7 +360,8 @@ to what it can honestly claim:
   steps at every phase boundary, because something did finish.
 - **Smooth movement happens only where a call actually reports counts.** Nothing
   interpolates across a stage that is silent.
-- **If nothing underneath reports at all, there is no bar**, only a spinner and
+- **If nothing underneath reports at all, nothing is measured**, and there is only a band that
+  slides along the task's line in the Background Tasks panel and
   the name of the open phase.
 
 So the bar is a statement about how much of the work is behind you, never a

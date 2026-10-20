@@ -262,7 +262,7 @@ fn running_task(task: &BackgroundTask) -> Value {
         fields.insert("status".into(), json!(status));
     }
     // The innermost stage that has been entered and not left, which is what
-    // the panel's spinner names. A message row is not a phase, so a `live.open`
+    // the panel's phase table marks. A message row is not a phase, so a `live.open`
     // index landing on one leaves this out rather than reporting its text as a
     // stage.
     if let Some(Detail::Phase { name, .. }) = live.open.last().and_then(|&row| live.rows.get(row)) {

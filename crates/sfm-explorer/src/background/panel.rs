@@ -12,13 +12,14 @@
 //!
 //! ## A line per queue, and neither form is blank
 //!
-//! Each queue has one line. Running, it draws the operation, the node, a small
-//! bar or a spinner, the elapsed and a Cancel button. Idle, it draws the last
+//! Each queue has one line. Running, it draws the operation, the node, the
+//! elapsed and a Cancel button over a fill showing how far along the task is,
+//! or a sliding band where nothing is measured. Idle, it draws the last
 //! task that finished from that queue greyed, with its node and its cost,
 //! because the question a reader brings here after a long solve is "what did
 //! that cost" and the answer is still in reach. A queue that has run nothing
 //! says `Nothing running` and no more. A queue running a quiet task has one
-//! dim line more, under its own, naming it, with no bar and no Cancel. A queue
+//! dim line more, under its own, naming it, with no fill and no Cancel. A queue
 //! with tasks waiting has one line more for the next of them, with a cancel
 //! button and a count of the rest; quiet tasks waiting are not named or
 //! counted there. Below the lines is one phase table, for
@@ -48,10 +49,6 @@ use crate::state::AppState;
 /// better at this size and is not in the fonts egui bundles, so it draws as an
 /// empty box.
 pub(super) const OPEN_MARK: &str = "\u{25b6}";
-
-/// Width of a running task's bar on its queue's line: enough to read how far
-/// along it is, little enough to leave the node's name some of the line.
-const BAR_WIDTH: f32 = 28.0;
 
 /// The least share of the title line's room, after the count, that the title
 /// keeps when a status follows it.
@@ -128,17 +125,37 @@ const TICK: Duration = Duration::from_millis(100);
 pub(crate) fn show(ui: &mut egui::Ui, state: &mut AppState) {
     let mut asked = Asked::default();
     for queue in Queue::ALL {
-        ui.horizontal(|ui| {
-            // Closer than egui's default, so the node's name keeps some of a
-            // line that also holds the queue, the operation, the bar, the
-            // elapsed and the Cancel button.
-            ui.spacing_mut().item_spacing.x = LINE_SPACING;
-            ui.label(egui::RichText::new(queue.title()).strong());
-            match state.running_in(queue).map(|task| task.id) {
-                Some(id) => show_running(ui, state, id, &mut asked),
-                None => show_idle(ui, state, queue, &mut asked),
-            }
-        });
+        let running = state.running_in(queue).map(|task| task.id);
+        // A place in the paint order before the line's widgets, so the fill
+        // drawn into it once the line's height is known lies behind them.
+        let behind = ui.painter().add(egui::Shape::Noop);
+        let row = ui
+            .horizontal(|ui| {
+                // Closer than egui's default, so the node's name keeps some of
+                // a line that also holds the queue, the operation, the
+                // elapsed and the Cancel button.
+                ui.spacing_mut().item_spacing.x = LINE_SPACING;
+                ui.label(egui::RichText::new(queue.title()).strong());
+                match running {
+                    Some(id) => show_running(ui, state, id, &mut asked),
+                    None => show_idle(ui, state, queue, &mut asked),
+                }
+            })
+            .response
+            .rect;
+        if let Some(task) = running.and_then(|id| state.running_task(id)) {
+            let line = egui::Rect::from_x_y_ranges(ui.max_rect().x_range(), row.y_range());
+            let live = task.collector.live();
+            let form = Fill {
+                bar: bar(&task.collector, &live),
+                stopping: task.stopping(),
+                chosen: chosen_task(state) == Some(task.id),
+            };
+            let time = ui.input(|input| input.time);
+            let moving = ui.style().animation_time > 0.0;
+            ui.painter()
+                .set(behind, fill_shape(ui.visuals(), &form, line, time, moving));
+        }
         if let Some(task) = state.quiet_running_in(queue) {
             let (name, label) = (task.operation.name, task.label.clone());
             ui.horizontal(|ui| {
@@ -198,16 +215,20 @@ pub(crate) fn chosen_task(state: &AppState) -> Option<u64> {
 
 /// The task's name, as a label that picks its phases when clicked, cut to the
 /// room left on its line.
+///
+/// `selected` draws it as egui draws a selected button. A running line passes
+/// false and is outlined whole instead ([`fill_shape`]), because its fill is
+/// the selection's colour too and the two would run together.
 fn name_button(
     ui: &mut egui::Ui,
     text: egui::RichText,
     id: u64,
-    chosen: Option<u64>,
+    selected: bool,
     asked: &mut Asked,
 ) {
     let name = text.text().to_string();
     if ui
-        .add(egui::Button::selectable(chosen == Some(id), text).truncate())
+        .add(egui::Button::selectable(selected, text).truncate())
         .on_hover_text(format!("{name}: show its phases below."))
         .clicked()
     {
@@ -217,11 +238,12 @@ fn name_button(
 
 // -- Running ---------------------------------------------------------------
 
-/// What the panel draws where the progress goes.
+/// What a running line's fill measures ([`fill_shape`]).
 ///
 /// Two cases, and no third that invents a number: a bar moving at a rate nobody
 /// measured makes a promise about the finish. A stage that reports nothing gets
-/// a spinner and its own name rather than a bar creeping across it.
+/// a band sliding along the line, and its own name as the marked row of the
+/// phase table, rather than a fill creeping across it.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Bar {
     /// Something underneath reported a count, so there is a real fraction of
@@ -235,7 +257,7 @@ pub(crate) enum Bar {
     },
     /// Nothing underneath has reported a number, so the open phase's name is
     /// all the panel can honestly say.
-    Spinner {
+    Unmeasured {
         /// The innermost open phase, or `None` before anything has opened one.
         phase: Option<&'static str>,
     },
@@ -254,7 +276,7 @@ pub(crate) fn bar(collector: &Collector, live: &Live) -> Bar {
             fraction,
             count: counts_text(&in_progress(&collector.counts()), true),
         },
-        None => Bar::Spinner {
+        None => Bar::Unmeasured {
             phase: live.open.last().and_then(|&row| phase_name(live, row)),
         },
     }
@@ -343,21 +365,24 @@ fn phase_name(live: &Live, row: usize) -> Option<&'static str> {
     }
 }
 
-/// A queue's running task, on its queue's line: the operation, the node, a
-/// small bar or a spinner, the elapsed and the Cancel button.
+/// A queue's running task, on its queue's line: the operation, the node, the
+/// elapsed and the Cancel button, over the fill that shows how far along it is
+/// ([`fill_shape`], drawn by [`show`] once the line's height is known).
 ///
 /// The count and the status line are the phase list's title's, for the task
 /// whose phases are shown ([`show_chosen_phases`]), so the line stays one
 /// line.
 fn show_running(ui: &mut egui::Ui, state: &AppState, id: u64, asked: &mut Asked) {
     let refusal = state.cancel_refusal(id);
-    let chosen = chosen_task(state);
     let task = state.running_task(id).expect("the queue's running task");
     let name = task.operation.name;
     let label = task.label.clone();
     let elapsed = task.started.elapsed();
     let live = task.collector.live();
-    let bar = bar(&task.collector, &live);
+    let count = match bar(&task.collector, &live) {
+        Bar::Measured { count, .. } => count,
+        Bar::Unmeasured { .. } => None,
+    };
     let stopping = task.stopping();
 
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -377,55 +402,135 @@ fn show_running(ui: &mut egui::Ui, state: &AppState, id: u64, asked: &mut Asked)
             asked.cancel = Some(id);
         }
         // The elapsed is reserved before the node's name is drawn, as an idle
-        // line's cost is: it is the number a reader is watching.
-        ui.label(egui::RichText::new(ActionLog::format_took(elapsed)).weak())
-            .on_hover_text("elapsed");
-        // Asked to stop, the work left is not the work the bar measured, so
-        // the line says what is happening instead: in words where nothing else
-        // on screen says it and the operation's first letters still fit
-        // beside them, and otherwise as a spinner, the title line saying it
-        // in words when it is the chosen task and the button's tooltip when
-        // it is not. The operation's name is what says what is stopping.
+        // line's cost is: it is the number a reader is watching. The counts
+        // the fill measures are on its hover, as on the title line.
+        let elapsed = ui.label(egui::RichText::new(ActionLog::format_took(elapsed)).weak());
+        match count {
+            Some(count) => elapsed.on_hover_text(format!("elapsed; {count}")),
+            None => elapsed.on_hover_text("elapsed"),
+        };
+        // Asked to stop, the line says so in words where they leave the names
+        // what they would have beside the word anyway: the operation's first
+        // letters and the node's share. Where they do not, the grey fill, the
+        // title line when it is the chosen task and the disabled button's
+        // tooltip say it. The names say what is stopping, so it is the word
+        // that gives way.
         let gap = ui.spacing().item_spacing.x;
-        let word_fits = ui.available_width() - text_width(ui, STOPPING) - gap
-            >= name_widths(ui, name, Name::Button).1 + gap;
-        if stopping && (chosen == Some(id) || !word_fits) {
-            ui.add(egui::Spinner::new()).on_hover_text(STOPPING_HOVER);
-        } else if stopping {
+        let room = ui.available_width();
+        let node_keeps = text_width(ui, &label).min(room * NODE_SHARE);
+        let word_fits = room - text_width(ui, STOPPING) - gap
+            >= name_widths(ui, name, Name::Button).1 + gap + node_keeps;
+        if stopping && word_fits {
             ui.add(egui::Label::new(egui::RichText::new(STOPPING).weak()).selectable(false))
                 .on_hover_text(STOPPING_HOVER);
-        } else {
-            show_bar(ui, &bar);
         }
         // The operation and its node from the left, in what the right-hand
         // items leave, so a long operation name is cut rather than drawn
-        // under the bar.
+        // under the elapsed.
         ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
             let text = egui::RichText::new(name).strong();
             name_and_node(ui, name, Name::Button, &label, |ui| {
-                name_button(ui, text, id, chosen, asked)
+                name_button(ui, text, id, false, asked)
             });
         });
     });
 }
 
-/// The bar, or the spinner that stands in for one, small enough for a line.
+/// What a running line's fill draws: how far along the task is, whether it
+/// has been asked to stop, and whether it is the chosen task.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Fill {
+    /// The measured fraction, or nothing measured.
+    pub(crate) bar: Bar,
+    /// Asked to stop and not yet landed.
+    pub(crate) stopping: bool,
+    /// The task whose phases are shown below.
+    pub(crate) chosen: bool,
+}
+
+/// The share of the line the band of the indeterminate fill covers.
+const BAND_SHARE: f32 = 0.3;
+
+/// How long the band takes to cross the line, in seconds: slow enough to read
+/// as "working" rather than as a measure of anything.
+const BAND_PERIOD: f64 = 2.4;
+
+/// The tint a running line's fill is drawn in: the selection's colour, faint
+/// enough that the line's text keeps its contrast over it in the dark theme
+/// and in the light one.
+pub(crate) fn fill_color(visuals: &egui::Visuals, stopping: bool) -> egui::Color32 {
+    match stopping {
+        // Grey rather than the selection's hue: the work it measured is no
+        // longer what the task is doing.
+        true => visuals.weak_text_color().gamma_multiply(0.2),
+        false => visuals.selection.bg_fill.gamma_multiply(0.35),
+    }
+}
+
+/// The span of `line` the fill covers.
 ///
-/// The count beside a measured bar is the phase list's title's
-/// ([`show_chosen_phases`]) and the bar's tooltip; the open phase a spinner
-/// stands for is the marked row of the phase table.
-fn show_bar(ui: &mut egui::Ui, bar: &Bar) {
-    match bar {
-        Bar::Measured { fraction, count } => {
-            let response = ui.add(egui::ProgressBar::new(*fraction).desired_width(BAR_WIDTH));
-            if let Some(count) = count {
-                response.on_hover_text(count.clone());
-            }
+/// Measured, from the line's left edge to `fraction` of its width. With
+/// nothing measured, a band of [`BAND_SHARE`] of the width that slides across
+/// the line once every [`BAND_PERIOD`] seconds, or stands at its middle where
+/// `moving` is false (egui's animations turned off) or the task is stopping;
+/// a stopping task with nothing measured is filled across the whole line, so
+/// it reads as held rather than working.
+pub(crate) fn fill_span(form: &Fill, line: egui::Rect, time: f64, moving: bool) -> egui::Rect {
+    let width = line.width();
+    let (left, right) = match (&form.bar, form.stopping) {
+        (Bar::Measured { fraction, .. }, _) => (0.0, fraction.clamp(0.0, 1.0) * width),
+        (Bar::Unmeasured { .. }, true) => (0.0, width),
+        (Bar::Unmeasured { .. }, false) => {
+            let band = BAND_SHARE * width;
+            let at = match moving {
+                true => ((time / BAND_PERIOD).fract() as f32) * (width + band) - band,
+                false => (width - band) / 2.0,
+            };
+            (at.max(0.0), (at + band).min(width))
         }
-        Bar::Spinner { .. } => {
-            ui.add(egui::Spinner::new());
+    };
+    egui::Rect::from_x_y_ranges(line.left() + left..=line.left() + right, line.y_range())
+}
+
+/// The fill behind a running line, its leading edge and, for the chosen task,
+/// an outline round the whole line.
+///
+/// Behind rather than beside the text, so the 28 px a bar once took on the
+/// line is the names' again and the measure is the line's whole width. The
+/// chosen task is outlined rather than filled, as an idle line's selected name
+/// is, because its fill is already the selection's colour.
+pub(crate) fn fill_shape(
+    visuals: &egui::Visuals,
+    form: &Fill,
+    line: egui::Rect,
+    time: f64,
+    moving: bool,
+) -> egui::Shape {
+    let span = fill_span(form, line, time, moving);
+    let mut shapes = vec![egui::Shape::rect_filled(
+        span,
+        0.0,
+        fill_color(visuals, form.stopping),
+    )];
+    // Where a measured fill ends, a thin stronger line, so the end can be read
+    // against text of about the same brightness.
+    if let (Bar::Measured { fraction, .. }, false) = (&form.bar, form.stopping) {
+        if *fraction > 0.0 && *fraction < 1.0 {
+            shapes.push(egui::Shape::line_segment(
+                [span.right_top(), span.right_bottom()],
+                egui::Stroke::new(1.5, visuals.selection.bg_fill),
+            ));
         }
     }
+    if form.chosen {
+        shapes.push(egui::Shape::rect_stroke(
+            line.shrink(0.5),
+            2.0,
+            egui::Stroke::new(1.0, visuals.selection.stroke.color),
+            egui::StrokeKind::Inside,
+        ));
+    }
+    egui::Shape::Vec(shapes)
 }
 
 /// The node's label, cut out of the middle to the room left on the line, with
@@ -623,7 +728,7 @@ fn show_idle(ui: &mut egui::Ui, state: &AppState, queue: Queue, asked: &mut Aske
         ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
             let text = egui::RichText::new(name).weak();
             name_and_node(ui, name, Name::Button, &label, |ui| {
-                name_button(ui, text, id, chosen, asked)
+                name_button(ui, text, id, chosen == Some(id), asked)
             });
         });
     });

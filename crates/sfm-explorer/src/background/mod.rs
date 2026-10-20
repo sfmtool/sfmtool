@@ -331,8 +331,9 @@ impl Operation {
     /// walks, and at intervals through each pass over the points and the
     /// observations, and hands back `ReconstructionError::Cancelled` rather
     /// than a half-converted value. Each of those stages reports a fraction
-    /// too, so the panel draws a bar for the whole of it rather than the
-    /// spinner it falls back to for an operation that has reported no number.
+    /// too, so the panel draws a measured fill for the whole of it rather than
+    /// the sliding band it falls back to for an operation that has reported no
+    /// number.
     pub(crate) const TO_EMBEDDED_PATCHES: Operation = Operation {
         name: "Convert to embedded patches",
         cancellable: true,
