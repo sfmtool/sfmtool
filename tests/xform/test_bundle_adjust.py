@@ -36,6 +36,19 @@ def test_bundle_adjust_transform(seoul_bull_workspace, tmp_path):
     assert len(adjusted["quaternions_wxyz"]) > 0
 
 
+def test_bundle_adjust_stores_the_rms_error(seoul_bull_workspace):
+    """The pycolmap path stores each point's RMS reprojection error, the value
+    recompute_point_errors writes, not COLMAP's mean."""
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    adjusted = BundleAdjustTransform().apply(recon)
+
+    rescored = adjusted.clone_with_changes()
+    rescored.recompute_point_errors()
+    np.testing.assert_allclose(
+        np.asarray(adjusted.errors), np.asarray(rescored.errors), rtol=1e-5, atol=1e-5
+    )
+
+
 def test_bundle_adjust_with_filter(seoul_bull_workspace, tmp_path):
     """Test bundle adjustment combined with filtering."""
     output_path = tmp_path / "filtered_and_adjusted.sfmr"

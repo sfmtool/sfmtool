@@ -1115,11 +1115,11 @@ Which writer stores which value:
   `classify_points_at_infinity` changes and the bearings `find_points_at_infinity`
   adds; the bench's commit and Refit All Points; Switch Camera Model, for the
   points its cameras see; Move Camera, for the points it re-triangulates when
-  the reconstruction carries inline keypoints; and sfmtool's own bundle
-  adjustment, for the points it solves.
-- **A value carried from elsewhere.** `sfm xform --bundle-adjust` through
-  pycolmap stores COLMAP's per-point error, which is the mean, not the RMS.
-  `sfm merge` stores the average of the merged points' stored errors. An edit
+  the reconstruction carries inline keypoints; sfmtool's own bundle
+  adjustment, for the points it solves; and `sfm xform --bundle-adjust`
+  through pycolmap, which recomputes every point's error after the solve
+  rather than keeping COLMAP's, which is the mean.
+- **A value carried from elsewhere.** `sfm merge` stores the average of the merged points' stored errors. An edit
   that moves a point or its keypoints without scoring it again, such as
   Retriangulate or `--refine-keypoints`, keeps the error the point had.
 

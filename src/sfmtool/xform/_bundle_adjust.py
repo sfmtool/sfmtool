@@ -235,10 +235,16 @@ class BundleAdjustTransform:
 
             refined = self._reconstruction_to_data(reconstruction, ba_input)
 
+        # COLMAP's per-point error is the mean of the observation errors; the
+        # stored column is their root mean square, so score every point again.
+        # The `.sift` files were already read for the export, and an
+        # embedded_patches result carries its keypoints inline.
+        refined.recompute_point_errors()
+
         # Every point comes back from the solve finite. The reclassification
         # demotes those whose rays ask for no depth, at the noise the adjusted
         # reconstruction measures, and recomputes their errors as bearings;
-        # the others keep the errors the solve produced.
+        # the others keep the errors just recomputed.
         result, summary = refined.classify_points_at_infinity()
         if summary["demoted"]:
             print(f"    Reclassified {summary['demoted']} point(s) as at infinity")
