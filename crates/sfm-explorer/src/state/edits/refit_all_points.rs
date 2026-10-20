@@ -262,10 +262,16 @@ impl AppState {
             if progress.is_cancelled() {
                 return Finished::Cancelled;
             }
+            // The decode counts its images to the end of the range it is
+            // handed, so it gets a share of the bar and the refit the rest: on
+            // the whole range it would fill the bar before the first point is
+            // fitted. Reading the photographs takes seconds; fitting every
+            // point is most of the run.
+            let [p_decode, p_refit] = progress.split([1.0, 9.0]);
             // Every photograph, or the run does not go ahead: a refit of most
             // points with those of one image silently skipped is harder to read
             // than a refusal that names the file.
-            let decoded = match sources.decode(progress) {
+            let decoded = match sources.decode(&p_decode) {
                 Ok(decoded) => decoded,
                 Err(_) if progress.is_cancelled() => return Finished::Cancelled,
                 Err(e) => return Finished::Failed(refuse(e)),
@@ -280,7 +286,7 @@ impl AppState {
                 if edited.deleted_points.is_empty() && edited.added.points.is_empty() {
                     (None, None)
                 } else {
-                    let _phase = progress.phase("materialise");
+                    let _phase = p_refit.phase("materialise");
                     let (value, map) = edited.materialize();
                     (Some(value), Some(PointMap::Rows(map)))
                 };
@@ -291,7 +297,7 @@ impl AppState {
 
             let views = decoded.views();
             let (next, report) =
-                match refit_points(source, &views, &RefitPointsOptions::default(), progress) {
+                match refit_points(source, &views, &RefitPointsOptions::default(), &p_refit) {
                     Ok(refit) => refit,
                     // The one error that is not a refusal: the run was asked to
                     // stop and did, which the log words as a cancellation.

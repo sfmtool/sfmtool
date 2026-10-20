@@ -942,6 +942,18 @@ reads only the photographs of the track's own images and of the images that
 could see the track's patch by geometry alone (`view_could_see_patch`); the
 rest are placeholders the selection never samples.
 
+**The decode has a share of the bar, not all of it.** It counts its images to
+the end of the range it is handed, and the collector never lets the fraction go
+back, so a step that handed it the whole range would show a full bar from the
+moment the photographs were read until the step ended. Each step splits its
+range first and hands the decode one part: `Refit all points` gives it 1 part in
+10 and the fit the other 9, since fitting every point is most of the run; the
+bench's photometric steps, the geometry search, `Create track at pixel`, `Find
+nearby tracks` and `Add image to tracks` split it evenly (`DECODE_AND_STEP` in
+[state/edits.rs](../../crates/sfm-explorer/src/state/edits.rs)), because a
+decode the cache answers takes milliseconds and one that reads every file takes
+seconds, so either half can be the longer.
+
 ## Rust API
 
 [`crates/sfm-explorer/src/background/`](../../crates/sfm-explorer/src/background):

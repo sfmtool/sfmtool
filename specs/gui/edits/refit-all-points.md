@@ -104,6 +104,11 @@ every image some live point observes. Nothing is read there. On the worker it:
    with `RefitPointsOptions::default()`, whose stages (`measure noise`, `fit
    points`, `write back`) nest under the operation's.
 
+The bar splits 1 : 9 between the decode and the rest (the fold and the core
+refit), so the fraction follows the points the fit counts rather than standing
+at the end of the decode's count of images
+([../background-tasks.md](../background-tasks.md) § "Reporting progress").
+
 It answers with `Finished::Produced`, whose `value` is the refit value and whose
 `map` is `PointMap::Chain` of the fold's `PointMap::Rows` (where there was a
 fold) and `PointMap::Removed(Vec::new())`, the identity, since the refit moves

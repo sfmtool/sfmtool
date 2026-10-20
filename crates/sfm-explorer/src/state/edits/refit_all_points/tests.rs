@@ -258,3 +258,67 @@ fn the_photographs_read_are_the_images_some_live_point_observes() {
         .expect("a live point");
     assert_eq!(super::observed_images(state.scene[0].edited()), every);
 }
+
+#[test]
+fn the_reported_fraction_follows_the_points_fitted() {
+    use std::sync::{Mutex, OnceLock, Weak};
+
+    use crate::progress::Collector;
+
+    // What the Background Tasks panel and the wire read, sampled every time
+    // the run reports: the collector's newest count and its fraction, which
+    // never goes back. The decode counts its images to the end of the range
+    // it is handed, so before the job split its range the fraction stood at
+    // 1.0 from the first point the fit counted.
+    let (state, id) = refit_state(None);
+    let job = state
+        .refit_all_points_job(id)
+        .expect("the fixture carries keypoints, frames and poses");
+    let collector_cell: Arc<OnceLock<Weak<Collector>>> = Arc::new(OnceLock::new());
+    let samples: Arc<Mutex<Vec<(u64, u64, f32)>>> = Arc::new(Mutex::new(Vec::new()));
+    let collector = Arc::new(Collector::reporting(false, {
+        let cell = Arc::clone(&collector_cell);
+        let samples = Arc::clone(&samples);
+        Box::new(move || {
+            let Some(collector) = cell.get().and_then(Weak::upgrade) else {
+                return;
+            };
+            if let (Some(count), Some(fraction)) = (collector.count(), collector.fraction()) {
+                if count.unit == "points" {
+                    let total = count.total.expect("the fit counts against its total");
+                    samples.lock().unwrap().push((count.done, total, fraction));
+                }
+            }
+        })
+    }));
+    collector_cell
+        .set(Arc::downgrade(&collector))
+        .expect("set once");
+
+    let finished = job(&collector.progress());
+    assert!(
+        matches!(finished, crate::background::Finished::Produced { .. }),
+        "the refit did not produce a version"
+    );
+
+    let samples = samples.lock().unwrap().clone();
+    assert!(!samples.is_empty(), "the fit counted no points");
+    // The earliest half of the fit leaves most of the bar to come. The samples
+    // are taken from a parallel loop, so a count and the fraction beside it may
+    // be a point or two apart; the bound leaves room for that.
+    let first_half = samples
+        .iter()
+        .filter(|(done, total, _)| done * 2 <= *total)
+        .map(|&(_, _, fraction)| fraction)
+        .fold(f32::INFINITY, f32::min);
+    assert!(
+        first_half < 0.75,
+        "the fraction stood at {first_half} with half the points or fewer fitted: {samples:?}"
+    );
+    let last = samples.last().expect("a sample").2;
+    let first = samples.first().expect("a sample").2;
+    assert!(
+        last > first,
+        "the fraction did not rise as points were fitted: {samples:?}"
+    );
+}

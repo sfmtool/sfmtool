@@ -458,6 +458,17 @@ pub(crate) struct ViewSources {
 /// file that cannot be read).
 type Fetched = Vec<Option<Option<Arc<ImageU8Pyramid>>>>;
 
+/// How a step that reads photographs divides its bar between the decode
+/// ([`ViewSources::decode`] or [`ViewSources::decode_available`]) and the work
+/// that reads them, as weights for
+/// [`Progress::split`](sfmtool_core::progress::Progress::split).
+///
+/// The decode counts its images to the end of the range it is handed, so a
+/// step that handed it its whole range would show a full bar before its kernel
+/// had begun. Even, because either half can be the longer: a decode the cache
+/// answers takes milliseconds, and one that reads every file takes seconds.
+pub(crate) const DECODE_AND_STEP: [f32; 2] = [1.0, 1.0];
+
 /// Bytes in a GiB, for the cache occupancy in the `decode images` note.
 const GIB: f64 = (1u64 << 30) as f64;
 

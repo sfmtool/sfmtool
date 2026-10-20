@@ -162,7 +162,7 @@ impl AppState {
         let index = image.index();
         Ok(Box::new(move |progress| {
             let refuse = |why: String| format!("Add {name} to tracks in {label} refused: {why}");
-            let [decode, work] = progress.split([1.0, 1.0]);
+            let [decode, work] = progress.split(crate::state::edits::DECODE_AND_STEP);
             let Ok(views) = sources.decode_available(&decode) else {
                 return Finished::Cancelled;
             };

@@ -49,7 +49,7 @@ use sfmtool_core::EditedReconstruction;
 use crate::action_log::{version_step_text, Kind};
 use crate::background::{Finished, Job, Operation};
 use crate::scene::{ImageRef, PointRef, ReconId, SceneNode};
-use crate::state::edits::version_before;
+use crate::state::edits::{version_before, DECODE_AND_STEP};
 use crate::state::AppState;
 
 pub(crate) mod geometry;
@@ -2254,7 +2254,8 @@ impl AppState {
             if progress.is_cancelled() {
                 return Finished::Cancelled;
             }
-            let decoded = match sources.decode(progress) {
+            let [p_decode, p_work] = progress.split(DECODE_AND_STEP);
+            let decoded = match sources.decode(&p_decode) {
                 Ok(decoded) => decoded,
                 Err(_) if progress.is_cancelled() => return Finished::Cancelled,
                 Err(e) => {
@@ -2272,7 +2273,7 @@ impl AppState {
                 observation,
                 &views,
                 &GeometrySearchOptions::default(),
-                progress,
+                &p_work,
             ) {
                 Err(sfmtool_core::bench::GeometrySearchError::Cancelled) => Finished::Cancelled,
                 Err(e) => {
@@ -2661,7 +2662,8 @@ pub(crate) fn evaluate_job(
         if progress.is_cancelled() {
             return live::Measured::Cancelled;
         }
-        let decoded = match sources.decode(progress) {
+        let [p_decode, p_work] = progress.split(DECODE_AND_STEP);
+        let decoded = match sources.decode(&p_decode) {
             Ok(decoded) => decoded,
             Err(_) if progress.is_cancelled() => return live::Measured::Cancelled,
             Err(e) => return live::Measured::Failed(format!("Cannot evaluate {label}: {e}")),
@@ -2682,7 +2684,7 @@ pub(crate) fn evaluate_job(
             &views,
             &options,
             &FitOptions::default(),
-            progress,
+            &p_work,
         ) {
             Ok((measured, report)) => {
                 live::Measured::Track(Box::new(measured), (report.turned_in, report.turned_out))
@@ -2715,7 +2717,8 @@ impl AppState {
             if progress.is_cancelled() {
                 return Finished::Cancelled;
             }
-            let decoded = match sources.decode(progress) {
+            let [p_decode, p_work] = progress.split(DECODE_AND_STEP);
+            let decoded = match sources.decode(&p_decode) {
                 Ok(decoded) => decoded,
                 Err(_) if progress.is_cancelled() => return Finished::Cancelled,
                 Err(e) => return Finished::Failed(format!("Cannot fit {label}: {e}")),
@@ -2724,7 +2727,7 @@ impl AppState {
                 return Finished::Cancelled;
             }
             let views = decoded.views();
-            match bench::fit(&track, &edited, &views, &options, progress) {
+            match bench::fit(&track, &edited, &views, &options, &p_work) {
                 Err(sfmtool_core::bench::FitError::Cancelled) => Finished::Cancelled,
                 Err(e) => Finished::Failed(format!("Cannot fit {label}: {e}")),
                 Ok((fitted, report)) => Finished::BenchTrack {
@@ -2762,7 +2765,8 @@ impl AppState {
             if progress.is_cancelled() {
                 return Finished::Cancelled;
             }
-            let decoded = match sources.decode(progress) {
+            let [p_decode, p_work] = progress.split(DECODE_AND_STEP);
+            let decoded = match sources.decode(&p_decode) {
                 Ok(decoded) => decoded,
                 Err(_) if progress.is_cancelled() => return Finished::Cancelled,
                 Err(e) => return Finished::Failed(format!("Cannot set the stage of {label}: {e}")),
@@ -2780,7 +2784,7 @@ impl AppState {
                     sigma_px,
                     ..FitOptions::default()
                 },
-                progress,
+                &p_work,
             ) {
                 Err(sfmtool_core::bench::StageError::Fit(
                     sfmtool_core::bench::FitError::Cancelled,
@@ -2819,7 +2823,8 @@ impl AppState {
             if progress.is_cancelled() {
                 return Finished::Cancelled;
             }
-            let decoded = match sources.decode(progress) {
+            let [p_decode, p_work] = progress.split(DECODE_AND_STEP);
+            let decoded = match sources.decode(&p_decode) {
                 Ok(decoded) => decoded,
                 Err(_) if progress.is_cancelled() => return Finished::Cancelled,
                 Err(e) => return failed(&e),
@@ -2834,21 +2839,21 @@ impl AppState {
                     &edited,
                     &views,
                     &FitNormalOptions::default(),
-                    progress,
+                    &p_work,
                 ),
                 NormalStep::FiniteDifference(split) => bench::finite_difference_normal(
                     &track,
                     &edited,
                     &views,
                     &split.options(PieceLayout::Cross),
-                    progress,
+                    &p_work,
                 ),
                 NormalStep::GridPlane(split) => bench::finite_difference_normal(
                     &track,
                     &edited,
                     &views,
                     &split.options(PieceLayout::Grid),
-                    progress,
+                    &p_work,
                 ),
             };
             match outcome {

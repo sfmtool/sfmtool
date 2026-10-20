@@ -38,6 +38,7 @@ use crate::background::{Finished, Job, Operation};
 use crate::document::{CreatedPoints, PointMap};
 use crate::index_files::IndexFileState;
 use crate::scene::{ImageRef, PointRef};
+use crate::state::edits::DECODE_AND_STEP;
 use crate::state::AppState;
 
 #[cfg(test)]
@@ -283,7 +284,8 @@ impl AppState {
             if progress.is_cancelled() {
                 return Finished::Cancelled;
             }
-            let decoded = match views.decode(progress) {
+            let [p_decode, p_work] = progress.split(DECODE_AND_STEP);
+            let decoded = match views.decode(&p_decode) {
                 Ok(decoded) => decoded,
                 Err(_) if progress.is_cancelled() => return Finished::Cancelled,
                 Err(e) => {
@@ -296,7 +298,7 @@ impl AppState {
             if progress.is_cancelled() {
                 return Finished::Cancelled;
             }
-            run(plan, &edited, &decoded.views(), progress)
+            run(plan, &edited, &decoded.views(), &p_work)
         }))
     }
 
