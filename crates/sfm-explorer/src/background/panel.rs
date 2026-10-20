@@ -57,6 +57,10 @@ const BAR_WIDTH: f32 = 28.0;
 /// keeps when a status follows it.
 const TITLE_SHARE: f32 = 0.6;
 
+/// The share of a queue line's room, after its right-hand items, that the
+/// node's name keeps when the operation's name does not fit beside it whole.
+const NODE_SHARE: f32 = 0.4;
+
 /// The gap between the items of a queue's line.
 const LINE_SPACING: f32 = 4.0;
 
@@ -279,8 +283,10 @@ fn show_running(ui: &mut egui::Ui, state: &AppState, id: u64, asked: &mut Asked)
         // items leave, so a long operation name is cut rather than drawn
         // under the bar.
         ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-            name_button(ui, egui::RichText::new(name).strong(), id, chosen, asked);
-            show_node(ui, &label);
+            let text = egui::RichText::new(name).strong();
+            name_and_node(ui, name, Name::Button, &label, |ui| {
+                name_button(ui, text, id, chosen, asked)
+            });
         });
     });
 }
@@ -318,6 +324,50 @@ fn show_node(ui: &mut egui::Ui, label: &str) {
             .selectable(false),
     )
     .on_hover_text(label);
+}
+
+/// How a line draws the operation's name, which decides how wide it is drawn.
+#[derive(Clone, Copy)]
+enum Name {
+    /// A button that picks the task's phases, with a button's padding.
+    Button,
+    /// A plain label.
+    Label,
+}
+
+/// The operation's name and then the node's, in the room left on the line,
+/// the node keeping some of it whatever the operation is called.
+///
+/// Both whole where they fit. Where they do not, the operation's name is cut
+/// first, down to what leaves the node its whole name or [`NODE_SHARE`] of the
+/// room, whichever is less, and the node takes the rest, cut out of the middle.
+/// The node is what says which reconstruction is busy, and the operation's name
+/// is repeated in full on its tooltip and, for the chosen task, on the title
+/// line; a long operation name taking the whole line left the node none of it.
+fn name_and_node(
+    ui: &mut egui::Ui,
+    name: &str,
+    drawn_as: Name,
+    label: &str,
+    draw_name: impl FnOnce(&mut egui::Ui),
+) {
+    let room = ui.available_width();
+    let gap = ui.spacing().item_spacing.x;
+    let padding = match drawn_as {
+        Name::Button => 2.0 * ui.spacing().button_padding.x,
+        Name::Label => 0.0,
+    };
+    // A point of slack, so a name that fits is not cut by a rounding.
+    let wanted = text_width(ui, name) + padding + 1.0;
+    let node_keeps = text_width(ui, label).min(room * NODE_SHARE);
+    let name_room = wanted.min((room - gap - node_keeps).max(0.0));
+    let height = ui.spacing().interact_size.y;
+    ui.allocate_ui_with_layout(
+        egui::vec2(name_room, height),
+        egui::Layout::left_to_right(egui::Align::Center),
+        draw_name,
+    );
+    show_node(ui, label);
 }
 
 /// `text` cut to the width left in `ui`, out of the middle.
@@ -381,12 +431,13 @@ fn show_waiting(ui: &mut egui::Ui, state: &AppState, queue: Queue, asked: &mut A
         }
         ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
             ui.label(egui::RichText::new(WAITING).weak());
-            ui.add(
-                egui::Label::new(egui::RichText::new(name))
-                    .truncate()
-                    .selectable(false),
-            );
-            show_node(ui, &label);
+            name_and_node(ui, name, Name::Label, &label, |ui| {
+                ui.add(
+                    egui::Label::new(egui::RichText::new(name))
+                        .truncate()
+                        .selectable(false),
+                );
+            });
         });
     });
 }
@@ -404,12 +455,13 @@ fn show_waiting(ui: &mut egui::Ui, state: &AppState, queue: Queue, asked: &mut A
 /// panel shows, so its name is not a button that picks them.
 fn show_quiet(ui: &mut egui::Ui, name: &str, label: &str) {
     ui.label(egui::RichText::new(QUIET).weak());
-    ui.add(
-        egui::Label::new(egui::RichText::new(name).weak())
-            .truncate()
-            .selectable(false),
-    );
-    show_node(ui, label);
+    name_and_node(ui, name, Name::Label, label, |ui| {
+        ui.add(
+            egui::Label::new(egui::RichText::new(name).weak())
+                .truncate()
+                .selectable(false),
+        );
+    });
 }
 
 // -- Idle ------------------------------------------------------------------
@@ -432,8 +484,10 @@ fn show_idle(ui: &mut egui::Ui, state: &AppState, queue: Queue, asked: &mut Aske
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
         ui.label(egui::RichText::new(took).weak());
         ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-            name_button(ui, egui::RichText::new(name).weak(), id, chosen, asked);
-            show_node(ui, &label);
+            let text = egui::RichText::new(name).weak();
+            name_and_node(ui, name, Name::Button, &label, |ui| {
+                name_button(ui, text, id, chosen, asked)
+            });
         });
     });
 }

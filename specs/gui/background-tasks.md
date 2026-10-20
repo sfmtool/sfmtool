@@ -339,9 +339,16 @@ the operation, its node, a small bar or a spinner, the elapsed and Cancel. An
 idle queue shows the last task that finished from it in the **idle form**
 (§ "Idle"), read from the record of finished tasks, or `Nothing running` when it
 has run nothing this session. The items on the right of a line are laid out
-first, and the operation's name and then the node's are cut to what they leave,
-each giving its whole self on hover, so a long name is shortened rather than
-drawn under the elapsed.
+first, and the operation's name and then the node's share what they leave, each
+giving its whole self on hover, so a long name is shortened rather than drawn
+under the elapsed. Where the two do not fit whole, the operation's name is cut
+first, down to what leaves the node its whole name or 40 % of that room
+(`NODE_SHARE`), whichever is less, and the node takes the rest, cut out of the
+middle. The node is what says which reconstruction is busy, and the operation
+is named again on the title line when it is the chosen task: at the default
+227 px a running line once read `Slow Bundle adjust`, the bar, the elapsed and
+Cancel, with no room left for `dino`. The rule is the same on running, idle,
+waiting and quiet lines.
 
 A queue running a quiet task has **one quiet line** under its own (§ "Quiet
 line"). A queue with tasks waiting has **one waiting line** under that
@@ -1344,6 +1351,10 @@ Panel, through `test_support::run_frame_headless`:
   newest stage are painted, and the quiet line has no Cancel.
 - A running task's line in the default panel width cuts a long operation name
   rather than drawing anything over anything else.
+- At 227 px a running line and a waiting line each keep the node's whole short
+  name (`dino`, `bull`) beside a cut operation name, and a long node name beside
+  an operation name that fits is cut out of the middle, with nothing
+  overlapping or leaving the panel.
 - With a long node name, a count and a status at the default width, the title
   line paints the count, the node's name cut out of the middle and the status,
   with nothing overlapping or leaving the panel, and the whole title on hover.

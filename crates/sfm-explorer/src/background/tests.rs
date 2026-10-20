@@ -2117,6 +2117,99 @@ fn a_running_line_cuts_a_long_name_rather_than_overlapping() {
     state.finish_background_tasks();
 }
 
+/// The texts painted on the line `lead` is painted on, left to right, after
+/// asserting that none of them runs under the next or past `width`.
+fn line_led_by(spans: &[(String, f32, f32, f32)], lead: &str, width: f32) -> Vec<String> {
+    let row = spans
+        .iter()
+        .find(|(text, _, _, _)| text == lead)
+        .unwrap_or_else(|| panic!("no {lead:?} line: {spans:?}"))
+        .3;
+    let mut line: Vec<(f32, f32, &str)> = spans
+        .iter()
+        .filter(|(text, _, _, y)| (*y - row).abs() <= 2.0 && !text.is_empty())
+        .map(|(text, left, right, _)| (*left, *right, text.as_str()))
+        .collect();
+    line.sort_by(|a, b| a.0.total_cmp(&b.0));
+    for pair in line.windows(2) {
+        assert!(
+            pair[0].1 <= pair[1].0 + 0.5,
+            "{:?} runs under {:?}: {line:?}",
+            pair[0].2,
+            pair[1].2,
+        );
+    }
+    assert!(
+        line.iter().all(|(_, right, _)| *right <= width + 0.5),
+        "{line:?}"
+    );
+    line.into_iter()
+        .map(|(_, _, text)| text.to_string())
+        .collect()
+}
+
+/// At the panel's default width the node stays on a running line and on a
+/// waiting line, however long the operation's name: it is the node that says
+/// which reconstruction is busy, and the operation's name is cut first.
+///
+/// Found on a 227 px panel, where a running line read `Slow Bundle adjust`,
+/// the bar, the elapsed and Cancel with no `dino`, and a waiting line
+/// `waiting Retriangulate all points` and Cancel with no `bull`.
+#[test]
+fn the_node_keeps_its_place_on_running_and_waiting_lines() {
+    let (mut state, id) = adjustable();
+    let other = second_node(&mut state);
+    let mut fast = Gate::new();
+    state
+        .start_background_task(Operation::BENCH_FIT, other, waiting_job(fast.held()))
+        .expect("the fast queue is idle");
+    let slow = running(&mut state, id, Operation::BUNDLE_ADJUST);
+    let mut waiting = Gate::new();
+    let node = third_node(&mut state);
+    state
+        .start_background_task(
+            Operation::RETRIANGULATE_ALL_POINTS,
+            node,
+            waiting_job(waiting.held()),
+        )
+        .expect("a busy queue queues the task");
+    state.poll_background_tasks();
+    state.slow_queue.running.as_mut().expect("running").label = "dino".to_string();
+    state.slow_queue.waiting[0].label = "bull".to_string();
+    state.fast_queue.running.as_mut().expect("running").label =
+        "20260628-01-solve-seattle_backyard_1-26-embedded".to_string();
+
+    let width = 227.0;
+    let spans = painted_spans(&mut state, width);
+    let running_line = line_led_by(&spans, "Slow", width);
+    assert!(running_line.iter().any(|t| t == "dino"), "{running_line:?}");
+    assert!(
+        running_line.iter().any(|t| t.starts_with("Bundle")),
+        "{running_line:?}"
+    );
+    let waiting_line = line_led_by(&spans, super::panel::WAITING, width);
+    assert!(waiting_line.iter().any(|t| t == "bull"), "{waiting_line:?}");
+    assert!(
+        waiting_line.iter().any(|t| t.starts_with("Retri")),
+        "{waiting_line:?}"
+    );
+    // A long node name beside an operation name that fits whole is cut out of
+    // the middle, so both its ends stay, to what the operation leaves.
+    let fast_line = line_led_by(&spans, "Fast", width);
+    assert!(fast_line.iter().any(|t| t == "Fit track"), "{fast_line:?}");
+    assert!(
+        fast_line
+            .iter()
+            .any(|t| t.starts_with("20") && t.contains('\u{2026}') && t.ends_with('d')),
+        "{fast_line:?}"
+    );
+
+    waiting.open();
+    slow.open();
+    fast.open();
+    state.finish_background_tasks();
+}
+
 /// The phase list's title line keeps the count on screen however long the
 /// node's name is, and cuts the title to the room left, with the whole of it on
 /// hover: the queue line has cut the same name to almost nothing, so this line
