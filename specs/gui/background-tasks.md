@@ -407,6 +407,16 @@ hover, as the whole node's name is on the queue line's. One list rather than one
 keeps the panel no taller than it was with one queue, and the click is a choice
 the panel remembers (`AppState::background_phases_of`) rather than a mode.
 
+The title line is drawn whenever a task is chosen, whether or not it reported
+any stages. A finished task that reported none, such as an adjustment the
+kernel refused before it began or a task cancelled while it waited, has no
+table, so its Action Log sentence goes under the title line instead, wrapped to
+the panel's width, in the error colour for a task that failed and weak
+otherwise (*"Bundle adjust of dino refused: the focal cannot be released on
+camera 0, …"*). For a refusal that sentence is the reason, and an empty space
+under a missing title, which is what a refused adjustment once left, said
+nothing about the task its queue's line marked `failed`.
+
 ### Idle
 
 An idle queue's line is not blank. It shows the last task that finished from
@@ -1417,6 +1427,10 @@ Panel, through `test_support::run_frame_headless`:
   failed paints `failed` on both; a task taken out of its queue is recorded as
   cancelled; and at 227 px a cancelled task's idle line holds the word, the
   node and the cost without overlapping.
+- A chosen task that was refused before it reported a stage paints its title
+  line, `failed` on it and on its idle line, and its refusal under the title;
+  a task cancelled while it waited, once chosen, paints its title line,
+  `cancelled` and its *cancelled before it started* sentence.
 - Cancel is disabled, with its tooltip, for an operation whose kernels do not
   poll the flag, and live for one that does.
 - With a reported `round 4/9` from the solve and `iteration 4/60` from the

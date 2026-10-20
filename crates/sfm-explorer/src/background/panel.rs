@@ -618,6 +618,24 @@ fn show_ending(ui: &mut egui::Ui, task: &FinishedTask) {
         .on_hover_text(sentence);
 }
 
+/// The Action Log sentence a finished task wrote, wrapped to the panel's
+/// width, in the error colour for a task that failed and weak otherwise: what
+/// is shown under the title line of a task that reported no stages.
+fn show_sentence(ui: &mut egui::Ui, task: &FinishedTask) {
+    let sentence = match &task.outcome {
+        Ok(text) | Err(text) => text.as_str(),
+    };
+    let color = match task.ended() {
+        Ended::Failed => ui.visuals().error_fg_color,
+        Ended::Done | Ended::Cancelled => ui.visuals().weak_text_color(),
+    };
+    ui.add(
+        egui::Label::new(egui::RichText::new(sentence).color(color))
+            .wrap()
+            .selectable(false),
+    );
+}
+
 /// The phase list's title: the task and its node, whose whole name the queue
 /// line may have had to cut.
 pub(crate) fn phases_title(operation: &str, label: &str) -> String {
@@ -734,7 +752,7 @@ fn show_chosen_phases(ui: &mut egui::Ui, state: &AppState) {
             });
             show_phases(ui, id, &live.rows, &live.open, true);
         }
-        Some(TaskState::Finished(task)) if !task.detail.is_empty() => {
+        Some(TaskState::Finished(task)) => {
             ui.horizontal(|ui| {
                 // How it ended from the right and first, where the running
                 // form has its count, so it shows whatever the node is called.
@@ -746,9 +764,18 @@ fn show_chosen_phases(ui: &mut egui::Ui, state: &AppState) {
                     });
                 });
             });
-            // Nothing is open: the operation is over, so every row is a run
-            // that closed.
-            show_phases(ui, id, &task.detail, &[], false);
+            if task.detail.is_empty() {
+                // A task that reported no stages, such as a refusal before the
+                // kernel began or a task cancelled while it waited, has no
+                // table. Its Action Log sentence goes where the table would,
+                // because for a refusal it is the reason, and an empty space
+                // under the title would say nothing at all.
+                show_sentence(ui, task);
+            } else {
+                // Nothing is open: the operation is over, so every row is a
+                // run that closed.
+                show_phases(ui, id, &task.detail, &[], false);
+            }
         }
         _ => {}
     }

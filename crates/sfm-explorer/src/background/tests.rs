@@ -2133,6 +2133,83 @@ fn ended_as(state: &mut AppState, id: ReconId, operation: Operation, ended: fn()
     state.finish_background_task(task);
 }
 
+/// A chosen task that reported no stages still has its title line, naming it
+/// and saying how it ended, with its Action Log sentence under it where its
+/// phases would be.
+///
+/// Found on dino, whose adjustment with the focal released was refused before
+/// the kernel began: the slow line read `failed`, and under the separator,
+/// although it was the chosen task, nothing was drawn at all.
+#[test]
+fn a_task_with_no_stages_has_its_title_line_and_its_sentence() {
+    use super::panel::{CANCELLED, FAILED};
+    let (mut state, id) = adjustable();
+    let refusal = "Bundle adjust of run_a refused: the focal cannot be released on camera 0.";
+    let task = state
+        .start_background_task(
+            Operation::BUNDLE_ADJUST,
+            id,
+            Box::new(move |_progress| Finished::Failed(refusal.to_string())),
+        )
+        .expect("nothing else is running");
+    state.finish_background_task(task);
+    assert!(state
+        .last_finished_task()
+        .expect("finished")
+        .detail
+        .is_empty());
+
+    let texts = painted(&mut state);
+    let title = super::panel::phases_title("Bundle adjust", "run_a");
+    assert!(texts.iter().any(|t| *t == title), "{texts:?}");
+    // On the idle line and on the title line.
+    assert_eq!(
+        texts.iter().filter(|t| *t == FAILED).count(),
+        2,
+        "{texts:?}"
+    );
+    // The sentence wraps, so it may be one text across several rows.
+    assert!(
+        texts.iter().any(|t| t.contains("refused: the focal")),
+        "{texts:?}"
+    );
+    let at = |text: &str| texts.iter().position(|t| t.contains(text));
+    assert!(at(&title) < at("refused: the focal"), "{texts:?}");
+
+    // A task cancelled while it waited has the same, with its own word.
+    let mut gate = Gate::new();
+    let other = second_node(&mut state);
+    state
+        .start_background_task(Operation::BUNDLE_ADJUST, other, waiting_job(gate.held()))
+        .expect("the slow queue is idle");
+    let waiting = state
+        .start_background_task(
+            Operation::RETRIANGULATE_ALL_POINTS,
+            id,
+            waiting_job(Gate::new().held()),
+        )
+        .expect("a busy queue queues the task");
+    state.cancel_background_task(waiting);
+    state.background_phases_of = Some(waiting);
+    let texts = painted(&mut state);
+    // The whole title, or the node alone where it does not fit: no other line
+    // names `run_a` while the slow queue runs on the other node.
+    let title = super::panel::phases_title("Retriangulate all points", "run_a");
+    assert!(
+        texts.iter().any(|t| *t == title || t == "run_a"),
+        "{texts:?}"
+    );
+    assert!(texts.iter().any(|t| t == CANCELLED), "{texts:?}");
+    assert!(
+        texts
+            .iter()
+            .any(|t| t.contains("cancelled before it started")),
+        "{texts:?}"
+    );
+    gate.open();
+    state.finish_background_tasks();
+}
+
 /// An idle line says when its task was cancelled or failed, and the title line
 /// says it again when that task's phases are shown: greyed, a cancelled task
 /// looked exactly like one that had finished, and only the Action Log said
@@ -2172,8 +2249,7 @@ fn an_idle_line_says_whether_its_task_was_cancelled_or_failed() {
     assert_eq!(count(&texts, FAILED), 2, "{texts:?}");
     assert_eq!(count(&texts, CANCELLED), 0, "{texts:?}");
 
-    // A task taken out of its queue is cancelled too. It has no phases, so it
-    // has no title line, and the word is on its queue's idle line alone.
+    // A task taken out of its queue is cancelled too.
     let mut gate = Gate::new();
     let other = second_node(&mut state);
     state
