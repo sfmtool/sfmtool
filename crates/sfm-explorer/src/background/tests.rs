@@ -2410,16 +2410,9 @@ fn scrolling_up_holds_the_table_while_the_operation_keeps_reporting() {
     }
 }
 
-/// A finished task is read from the top, where it started.
-///
-/// The running form follows its tail, and the two share one drawing function.
-/// Until they stopped sharing a scroll position, an idle panel opened wherever
-/// the live one had left off, which is its last row: a real adjustment
-/// reported thirteen rows and the panel drew twelve, silently missing
-/// `gather arrays`.
-#[test]
-fn an_idle_panel_opens_at_the_first_stage_not_the_last() {
-    let (mut state, id) = adjustable();
+/// Start a task that reports forty messages, `event 0` to `event 39`, and
+/// waits at the gate: more rows than a short panel holds.
+fn forty_events(state: &mut AppState, id: ReconId) -> Gate {
     let mut gate = Gate::new();
     let (said, heard) = mpsc::channel();
     let held = gate.held();
@@ -2442,16 +2435,32 @@ fn an_idle_panel_opens_at_the_first_stage_not_the_last() {
         .expect("nothing else is running");
     heard.recv().expect("the worker reported");
     state.poll_background_tasks();
+    gate
+}
 
-    // Short enough that the forty rows cannot all be on screen at once.
+/// A panel 200 px tall, too short for forty rows.
+fn short_input() -> egui::RawInput {
     let mut short = input();
     short.screen_rect = Some(egui::Rect::from_min_size(
         egui::Pos2::ZERO,
         egui::vec2(260.0, 200.0),
     ));
+    short
+}
+
+/// A task that lands while its table is watched leaves the table where it was,
+/// at the stage it ended on, rather than jumping back to its first row.
+///
+/// Found by watching a bundle adjustment of dino land: the table had followed
+/// its tail for the whole solve, and on the frame it landed it showed `gather
+/// arrays` and the rows after it, which nobody had scrolled to.
+#[test]
+fn a_watched_task_that_lands_keeps_its_last_stage_shown() {
+    let (mut state, id) = adjustable();
+    let gate = forty_events(&mut state, id);
     let ctx = egui::Context::default();
     let frame = |state: &mut AppState| {
-        crate::test_support::painted_texts(&ctx, short.clone(), |ui| super::panel::show(ui, state))
+        crate::test_support::painted_texts(&ctx, short_input(), |ui| super::panel::show(ui, state))
     };
     let shows = |rows: &[String], needle: &str| rows.iter().any(|row| row.ends_with(needle));
 
@@ -2463,7 +2472,34 @@ fn an_idle_panel_opens_at_the_first_stage_not_the_last() {
     gate.open();
     state.finish_background_tasks();
 
-    // Finished, it is at the head, whatever the live one had scrolled to.
+    // Finished, it is still at the tail, on the first frame and after it.
+    for _ in 0..2 {
+        let idle = frame(&mut state);
+        assert!(
+            shows(&idle, "event 39"),
+            "the finished task jumped away from its last stage: {idle:?}",
+        );
+        assert!(
+            !shows(&idle, "event 0"),
+            "the finished task jumped to its first stage: {idle:?}",
+        );
+    }
+}
+
+/// A finished task the panel never drew while it ran is read from the top,
+/// where it started: there is no tail a reader was following, and the first
+/// stage is where its account begins.
+#[test]
+fn an_unwatched_finished_task_opens_at_its_first_stage() {
+    let (mut state, id) = adjustable();
+    forty_events(&mut state, id).open();
+    state.finish_background_tasks();
+
+    let ctx = egui::Context::default();
+    let frame = |state: &mut AppState| {
+        crate::test_support::painted_texts(&ctx, short_input(), |ui| super::panel::show(ui, state))
+    };
+    let shows = |rows: &[String], needle: &str| rows.iter().any(|row| row.ends_with(needle));
     frame(&mut state);
     let idle = frame(&mut state);
     assert!(

@@ -553,29 +553,41 @@ fn show_chosen_phases(ui: &mut egui::Ui, state: &AppState) {
 /// The transcript, one row per run of a stage and one per message, with `open`
 /// naming the runs that have not closed.
 ///
-/// `follow` is whether the table belongs to a task that is still reporting.
+/// `running` is whether the table belongs to a task that is still reporting.
 /// A live one is read at its tail, because the stage that is running is the
 /// newest row and this panel is narrow enough that the stages which finished
 /// early fill it: without that, a reader watching a long solve sees the
-/// prologue for the whole of it. A finished one has no tail to follow and is
-/// read from the top, where the task started. The Action Log follows its own
-/// tail for the live reason and this holds still the moment the reader scrolls
-/// up, so an early stage can be read while the task keeps going.
+/// prologue for the whole of it. The Action Log follows its own tail for the
+/// same reason, and this holds still the moment the reader scrolls up, so an
+/// early stage can be read while the task keeps going.
+///
+/// A finished task keeps the scroll position its live table had, and goes on
+/// following its tail where the reader had left it there, so a task that lands
+/// or stops while it is watched leaves the reader at the stage it ended on
+/// rather than jumping back to its first row. A finished task whose table this
+/// panel never drew while it ran has no position to keep, and is read from the
+/// top, where it started.
 ///
 /// Virtualized on a uniform row height, as the Action Log's list is, because
 /// nothing folds here: a three-round, sixty-iteration adjustment with detailed
 /// timing on opens `linearise` and its two siblings five hundred and forty
 /// times, and every one of those is a row. Drawing only the range in view is
 /// what keeps that affordable at ten frames a second.
-fn show_phases(ui: &mut egui::Ui, id: u64, rows: &[Detail], open: &[usize], follow: bool) {
+fn show_phases(ui: &mut egui::Ui, id: u64, rows: &[Detail], open: &[usize], running: bool) {
     let breakdown = Breakdown::running(rows);
     let row_height = ui.text_style_height(&egui::TextStyle::Monospace);
+    // Whether this task's table was drawn while it ran, which is what decides
+    // whether its finished table follows the tail or opens at the top.
+    let watched = egui::Id::new(("background_tasks_watched", id));
+    let follow = running || ui.data(|data| data.get_temp::<bool>(watched).unwrap_or(false));
+    if running {
+        ui.data_mut(|data| data.insert_temp(watched, true));
+    }
     egui::ScrollArea::vertical()
-        // A scroll position of its own for each task and each form. They share
-        // this function and nothing else: one offset between them would open a
-        // finished task wherever the live one had got to, which is its last
-        // row, and another task's table wherever this one was left.
-        .id_salt(("background_tasks_phases", id, follow))
+        // A scroll position of its own for each task, one for both of its
+        // forms: another task's table opens wherever that task's was left, and
+        // a task that finishes stays where its live table was.
+        .id_salt(("background_tasks_phases", id))
         .auto_shrink([false, false])
         .stick_to_bottom(follow)
         .show_rows(ui, row_height, rows.len(), |ui, range| {

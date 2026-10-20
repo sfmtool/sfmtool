@@ -386,6 +386,12 @@ click between a reader and the thing they opened the panel for. Those phases
 are the transcript the panel drew while it ran, not the entry's folded
 breakdown: an operation that collapsed into a summary at the instant it finished
 would be a panel that changed its mind about what the reader had just watched.
+For the same reason a task whose table the panel drew while it ran keeps that
+table's scroll position when it lands or stops, and goes on following its tail
+if the reader had left it there, so the reader is left at the stage it ended on
+rather than taken back to its first row. A finished task the panel never drew
+while it ran, such as one picked by a click after it ended unseen, opens at its
+first stage, where its account begins.
 A queue that has run nothing says `Nothing running` and no more.
 
 ### Waiting
@@ -1325,7 +1331,9 @@ Panel, through `test_support::run_frame_headless`:
   has finished.
 - With a task in each queue, at 170 px and 190 px tall, both lines and the
   chosen task's newest stage are painted; the running table's newest stage is
-  painted at 190 px and an idle table opens at its first stage at 200 px.
+  painted at 190 px. At 200 px a table watched at its tail is still at its tail
+  on the first frame after its task lands and after it, and a finished task the
+  panel never drew while it ran opens at its first stage.
 - With a task running and one waiting in each queue, at 170 px and 190 px,
   each waiting task has its line with its cancel button and the newest stage is
   still painted; with two more waiting in the slow queue there is still one
