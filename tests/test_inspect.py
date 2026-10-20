@@ -278,6 +278,7 @@ def test_inspect_point_verbose(seoul_bull_workspace):
     assert "Triangulation analysis:" in result.output
     assert "Point or bearing: " in result.output
     assert "Inverse-depth z" in result.output
+    assert "Ray spread (max angle to mean): " in result.output
     assert "incidence" in result.output
 
 

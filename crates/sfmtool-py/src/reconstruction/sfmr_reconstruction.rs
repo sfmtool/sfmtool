@@ -1303,7 +1303,7 @@ impl PySfmrReconstruction {
     /// ``triangulated_point`` (3,), ``eigenvalues`` (3,), ``condition_number``,
     /// ``in_front``, ``depth``, ``sigma``, ``inverse_depth_z``,
     /// ``resolvable_distance``, ``finite_horizon``, ``baseline_span``,
-    /// ``max_ray_angle_deg``, and ``observations`` (list of dicts with
+    /// ``max_angle_from_mean_deg``, and ``observations`` (list of dicts with
     /// ``image_index``, ``image_name``, ``feature_index``, ``incidence_deg``;
     /// ``feature_index`` is ``None`` for an ``embedded_patches``
     /// reconstruction, and ``incidence_deg`` NaN for an observation whose
@@ -1379,7 +1379,7 @@ impl PySfmrReconstruction {
         dict.set_item("resolvable_distance", rep.resolvable_distance)?;
         dict.set_item("finite_horizon", rep.finite_horizon)?;
         dict.set_item("baseline_span", rep.baseline_span)?;
-        dict.set_item("max_ray_angle_deg", rep.max_ray_angle_deg)?;
+        dict.set_item("max_angle_from_mean_deg", rep.max_angle_from_mean_deg)?;
 
         let obs_list = PyList::empty(py);
         for o in &rep.observations {

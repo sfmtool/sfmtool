@@ -60,8 +60,10 @@ pub struct PointInspection {
     pub finite_horizon: f64,
     /// Bounding-box diagonal of the *observing* camera centers.
     pub baseline_span: f64,
-    /// Largest angle (degrees) of any observation ray to the mean direction.
-    pub max_ray_angle_deg: f64,
+    /// Largest angle (degrees) of any observation ray from the mean viewing
+    /// direction. Not the largest angle between two rays, which is
+    /// `max_ray_angle_deg` elsewhere in core.
+    pub max_angle_from_mean_deg: f64,
 }
 
 /// The point-or-bearing test's reading of one point.
@@ -183,7 +185,7 @@ impl SfmrReconstruction {
         for d in &dirs {
             mean += d;
         }
-        let max_ray_angle_deg = if mean.norm() > 0.0 {
+        let max_angle_from_mean_deg = if mean.norm() > 0.0 {
             let m = mean.normalize();
             dirs.iter()
                 .map(|d| d.dot(&m).clamp(-1.0, 1.0).acos().to_degrees())
@@ -209,7 +211,7 @@ impl SfmrReconstruction {
             resolvable_distance: du.resolvable_distance,
             finite_horizon,
             baseline_span: camera_extents(&centers),
-            max_ray_angle_deg,
+            max_angle_from_mean_deg,
         })
     }
 }

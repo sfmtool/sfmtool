@@ -71,8 +71,9 @@ A missing match, or an index beyond the file's point count, is a clear error.
   fewer than two usable rays); then the diagnostics: triangulated point and
   depth, condition number and eigenvalues, in-front flag, inverse-depth z-score
   (and σ), `resolvable_distance` against the camera extents, observing-camera
-  baseline span, ray spread, and a per-observation list with each ray's
-  incidence angle off the optical axis (flagging the near-fisheye-edge
+  baseline span, ray spread (the largest angle of a ray from the mean viewing
+  direction, `max_angle_from_mean_deg`), and a per-observation list with each
+  ray's incidence angle off the optical axis (flagging the near-fisheye-edge
   observations) and, for a `sift_files` file, its feature index.
 
   The analysis is `SfmrReconstruction::inspect_point` in

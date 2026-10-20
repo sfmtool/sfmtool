@@ -714,7 +714,9 @@ def print_point_summary(
         f"  Resolvable distance: {resolvable:.1f}  vs the camera extents {fh:.1f}"
     )
     click.echo(f"  Observing-camera baseline span: {diag['baseline_span']:.2f}")
-    click.echo(f"  Ray spread (max angle to mean): {diag['max_ray_angle_deg']:.3f} deg")
+    click.echo(
+        f"  Ray spread (max angle to mean): {diag['max_angle_from_mean_deg']:.3f} deg"
+    )
 
     click.echo("\n  Observations (incidence = ray angle off optical axis):")
 
