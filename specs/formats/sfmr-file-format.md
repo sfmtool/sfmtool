@@ -1119,9 +1119,10 @@ Which writer stores which value:
   adjustment, for the points it solves; and `sfm xform --bundle-adjust`
   through pycolmap, which recomputes every point's error after the solve
   rather than keeping COLMAP's, which is the mean.
-- **A value carried from elsewhere.** `sfm merge` stores the average of the merged points' stored errors. An edit
-  that moves a point or its keypoints without scoring it again, such as
-  Retriangulate or `--refine-keypoints`, keeps the error the point had.
+- **A value carried from elsewhere.** `sfm merge` stores the average of the
+  merged points' stored errors. An edit that moves a point or its keypoints
+  without scoring it again, such as Retriangulate or `--refine-keypoints`,
+  keeps the error the point had.
 
 Before sfmtool's writers stored the RMS, they stored the mean of the
 per-observation errors, so a file written by an earlier sfmtool holds the mean
