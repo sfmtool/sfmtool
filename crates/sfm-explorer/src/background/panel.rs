@@ -135,6 +135,15 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut AppState) {
                 // a line that also holds the queue, the operation, the
                 // elapsed and the Cancel button.
                 ui.spacing_mut().item_spacing.x = LINE_SPACING;
+                // Over the fill, the line's dim texts (the node, the elapsed,
+                // `stopping…`) are drawn in the ordinary text colour: egui's
+                // weak text is 2.35 : 1 to the bare dark panel and 2.17 : 1 to
+                // the light one, and over a fill that can be seen it would be
+                // less still.
+                if running.is_some() {
+                    let ordinary = ui.visuals().text_color();
+                    ui.visuals_mut().weak_text_color = Some(ordinary);
+                }
                 ui.label(egui::RichText::new(queue.title()).strong());
                 match running {
                     Some(id) => show_running(ui, state, id, &mut asked),
@@ -455,15 +464,22 @@ const BAND_SHARE: f32 = 0.3;
 /// as "working" rather than as a measure of anything.
 const BAND_PERIOD: f64 = 2.4;
 
-/// The tint a running line's fill is drawn in: the selection's colour, faint
-/// enough that the line's text keeps its contrast over it in the dark theme
-/// and in the light one.
+/// The tint a running line's fill is drawn in: the selection's colour, or a
+/// neutral grey for a task that is stopping.
+///
+/// The opacity depends on the theme, because the selection colour is dark in
+/// the dark theme and pale in the light one: each is the least that makes the
+/// fill stand at a luminance contrast of at least 1.6 : 1 to the bare panel,
+/// so it reads at a glance, while text over it keeps its contrast (see
+/// `specs/gui/background-tasks.md` § "Running" for the numbers).
 pub(crate) fn fill_color(visuals: &egui::Visuals, stopping: bool) -> egui::Color32 {
-    match stopping {
-        // Grey rather than the selection's hue: the work it measured is no
-        // longer what the task is doing.
-        true => visuals.weak_text_color().gamma_multiply(0.2),
-        false => visuals.selection.bg_fill.gamma_multiply(0.35),
+    match (stopping, visuals.dark_mode) {
+        // Grey rather than the selection's hue, at about the running fill's
+        // contrast: the work it measured is no longer what the task is doing.
+        (true, true) => visuals.text_color().gamma_multiply(0.42),
+        (true, false) => visuals.text_color().gamma_multiply(0.45),
+        (false, true) => visuals.selection.bg_fill.gamma_multiply(0.72),
+        (false, false) => visuals.selection.bg_fill.gamma_multiply(0.7),
     }
 }
 
@@ -512,13 +528,14 @@ pub(crate) fn fill_shape(
         0.0,
         fill_color(visuals, form.stopping),
     )];
-    // Where a measured fill ends, a thin stronger line, so the end can be read
-    // against text of about the same brightness.
+    // Where a measured fill ends, a thin line in the selection's stroke, which
+    // is light in the dark theme and dark in the light one, so the end stands
+    // out from the fill and from the panel past it in both.
     if let (Bar::Measured { fraction, .. }, false) = (&form.bar, form.stopping) {
         if *fraction > 0.0 && *fraction < 1.0 {
             shapes.push(egui::Shape::line_segment(
                 [span.right_top(), span.right_bottom()],
-                egui::Stroke::new(1.5, visuals.selection.bg_fill),
+                egui::Stroke::new(1.5, visuals.selection.stroke.color),
             ));
         }
     }

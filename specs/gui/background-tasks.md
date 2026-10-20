@@ -551,11 +551,29 @@ Earlier rows are above it, and none of them is a summary of another:
   title line and on the elapsed's tooltip. It is drawn first, into a place in
   the paint order kept before the line's widgets, so the queue's name, the
   operation, the node, the elapsed and Cancel lie on top of it. The fill is
-  the theme's selection colour at 35 % (`fill_color`), with a 1.5 px line of
-  the full colour at its leading edge so the end reads against text of about
-  the same brightness; both come from the frame's `Visuals`, which follow the
-  system's dark or light theme, and 35 % keeps the light text of the dark
-  theme and the dark text of the light one readable over it. It replaced a
+  the theme's selection colour (`fill_color`) at 72 % in the dark theme and
+  70 % in the light one, with a 1.5 px line of the selection's stroke colour
+  at its leading edge, light in the dark theme and dark in the light one, so
+  the end stands out from both sides of it. Both come from the frame's
+  `Visuals`, which follow the system's dark or light theme. **The opacities
+  are set by contrast**, computed as the renderer composites, in linear light
+  over the panel, and compared by WCAG relative luminance: each is about the
+  least that puts the fill at 1.6 : 1 or more to the bare panel, which is what
+  reading a fraction at a glance takes, while strong text over it stays above
+  7 : 1. In egui's default visuals the running fill is 1.64 : 1 to the dark
+  panel (about (9, 67, 93) on (27, 27, 27)) and 1.66 : 1 to the light one
+  (about (171, 198, 222) on (248, 248, 248)); strong text over it is 10.5 : 1
+  and 11.9 : 1, and the edge 7.6 : 1 and 4.7 : 1 to the fill. The selection
+  colour is pale in the light theme, so no opacity of it reaches much past
+  1.66 : 1 there. A first tuning at 35 % drew (20, 41, 51) on the dark panel,
+  1.14 : 1, from which a fraction could not be read. **The line's dim texts
+  are drawn in the ordinary text colour while it runs**, the node, the
+  elapsed and `stopping…`: egui's weak text is only 2.35 : 1 to the bare dark
+  panel and 2.17 : 1 to the light one, so no visible fill could leave it at
+  3 : 1, while the ordinary colour stays at 3.1 : 1 over the dark fill and
+  4.6 : 1 over the light one. A test computes all of these from
+  `Visuals::dark()` and `Visuals::light()` and holds them to those minimums.
+  It replaced a
   28 px bar inline on the line, which was too small to read a fraction from
   and took 28 px from the names. When nothing reports a count, a band 30 %
   of the line wide slides across it once every 2.4 s in the same tint,
@@ -595,9 +613,15 @@ Earlier rows are above it, and none of them is a summary of another:
   lands (`BackgroundTask::stopping`), its title line shows `stopping…` where
   the status was, keeping the count, and its Cancel button is disabled with
   *"Asked to stop: it stops the next time it checks whether it should."* as
-  its tooltip. Its line's fill turns grey (the weak text colour at 20 %) and
+  its tooltip. Its line's fill turns grey, the ordinary text colour at 42 % in
+  the dark theme and 45 % in the light one, which is 1.64 : 1 and 1.70 : 1 to
+  the panel (about (62, 62, 62) and (192, 192, 192)), with strong text over it
+  at 10.5 : 1 and 11.7 : 1 and the line's other text at 3.1 : 1 and 4.5 : 1:
+  as easily seen as the running fill and told from it by its hue. A first
+  tuning at 20 % of the weak colour drew (33, 33, 33) on the dark panel, which
+  could not be seen. It
   stops: a measured fill holds at the fraction it reached, with no leading
-  edge, and a band covers the whole line, still. The line also shows the weak
+  edge, and a band covers the whole line, still. The line also shows the
   word `stopping…` before the elapsed where the word leaves the names what
   they would have without it, the operation's first letters and the node's
   share; where it does not, the grey fill, the title line and the tooltip say
@@ -1442,6 +1466,12 @@ Panel, through `test_support::run_frame_headless`:
   of an unmeasured fill is a band of at most 30 % of the line that moves with
   time, stands at the middle with animations off, and covers the whole line,
   held, once the task is stopping.
+- Computed from `Visuals::dark()` and `Visuals::light()`, composited in linear
+  light over the panel, the running and the stopping fills are each at least
+  1.6 : 1 to the panel, strong text over them at least 7 : 1 and the ordinary
+  text colour the line's dim texts are drawn in at least 3 : 1, the leading
+  edge at least 2 : 1 to the running fill, and the stopping fill is grey where
+  the running fill has the selection's blue.
 - With a task in each queue, each line shows its own, and the phase list is
   the slow task's until the fast one is chosen, and stays the fast one's once it
   has finished.

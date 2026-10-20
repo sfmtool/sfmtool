@@ -3682,3 +3682,83 @@ fn a_quiet_line_leaves_the_newest_stage_shown() {
     state.land_quiet_tasks();
     state.finish_background_tasks();
 }
+
+/// The fill can be seen, and the line can be read over it, in egui's dark
+/// theme and in its light one: computed from the visuals themselves, so a later
+/// change to the colours or to egui's palette that made the fill invisible
+/// again, or the text unreadable, fails here.
+///
+/// Composited as the renderer does, in linear light over the panel's colour,
+/// and compared by WCAG relative luminance. Found when a release build's
+/// running fill drew as (20, 41, 51) on the dark panel's (27, 27, 27), 1.14 : 1,
+/// and its stopping fill as (33, 33, 33), which could not be seen at all.
+#[test]
+fn the_fill_stands_out_from_the_panel_and_its_text_stays_readable() {
+    use super::panel::fill_color;
+    fn linear(channel: u8) -> f32 {
+        let c = channel as f32 / 255.0;
+        if c <= 0.04045 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    }
+    // `top` is premultiplied, as egui's colours are.
+    fn over(top: egui::Color32, under: [f32; 3]) -> [f32; 3] {
+        let rest = 1.0 - top.a() as f32 / 255.0;
+        [
+            linear(top.r()) + under[0] * rest,
+            linear(top.g()) + under[1] * rest,
+            linear(top.b()) + under[2] * rest,
+        ]
+    }
+    fn luminance(c: [f32; 3]) -> f32 {
+        0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
+    }
+    fn contrast(a: [f32; 3], b: [f32; 3]) -> f32 {
+        let (a, b) = (luminance(a), luminance(b));
+        (a.max(b) + 0.05) / (a.min(b) + 0.05)
+    }
+    for visuals in [egui::Visuals::dark(), egui::Visuals::light()] {
+        let theme = if visuals.dark_mode { "dark" } else { "light" };
+        let panel = over(visuals.panel_fill, [0.0; 3]);
+        for stopping in [false, true] {
+            let tint = fill_color(&visuals, stopping);
+            let fill = over(tint, panel);
+            let seen = contrast(fill, panel);
+            let strong = contrast(over(visuals.strong_text_color(), fill), fill);
+            // The running line's dim texts are drawn in the ordinary colour.
+            let ordinary = contrast(over(visuals.text_color(), fill), fill);
+            println!(
+                "{theme} stopping={stopping} {tint:?}: fill to panel {seen:.2}, \
+                 strong text {strong:.2}, the line's other text {ordinary:.2}"
+            );
+            assert!(
+                seen >= 1.6,
+                "{theme} {stopping}: the fill is {seen:.2} : 1 to the panel"
+            );
+            assert!(
+                strong >= 7.0,
+                "{theme} {stopping}: strong text is {strong:.2} : 1"
+            );
+            assert!(
+                ordinary >= 3.0,
+                "{theme} {stopping}: text is {ordinary:.2} : 1"
+            );
+            if !stopping {
+                let edge = contrast(over(visuals.selection.stroke.color, panel), fill);
+                println!("{theme} edge to fill {edge:.2}");
+                assert!(
+                    edge >= 2.0,
+                    "{theme}: the edge is {edge:.2} : 1 to the fill"
+                );
+            }
+        }
+        // Stopping is grey and running is the selection's hue, so the two are
+        // told apart by colour as well as by the edge and the band's motion.
+        let grey = fill_color(&visuals, true);
+        assert!(grey.r() == grey.g() && grey.g() == grey.b(), "{grey:?}");
+        let tint = fill_color(&visuals, false);
+        assert!(tint.b() > tint.r(), "{tint:?}");
+    }
+}
