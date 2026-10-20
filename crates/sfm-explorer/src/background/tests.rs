@@ -2270,8 +2270,11 @@ fn a_task_asked_to_stop_says_it_is_stopping_until_it_lands() {
 }
 
 /// The title line shows each open stage's count, outermost first: a bundle
-/// adjustment's round and the iteration within it. Where the line is narrow
-/// the inner counts lose their units, the whole of it on hover.
+/// adjustment's round and the iteration within it. The round is the one in
+/// progress, one more than the four the solve has counted done, and the
+/// iteration is the count as reported. Where the line is narrow the inner
+/// counts lose their units, and the whole of it, with how to read it, is on
+/// hover.
 ///
 /// Found on dino's nine-round adjustment, whose title line read `iteration
 /// 4/60` with the round nowhere on it.
@@ -2301,7 +2304,7 @@ fn the_title_line_shows_the_round_beside_the_iteration() {
     heard.recv().expect("the worker reported");
     state.poll_background_tasks();
     state.slow_queue.running.as_mut().expect("running").label = "dino".to_string();
-    let whole = "round 4/9 \u{b7} iteration 4/60";
+    let whole = "round 5/9 \u{b7} iteration 4/60";
 
     // Wide, the whole of it.
     let spans = painted_spans(&mut state, 520.0);
@@ -2314,14 +2317,14 @@ fn the_title_line_shows_the_round_beside_the_iteration() {
     let shown = spans
         .iter()
         .map(|(t, ..)| t.as_str())
-        .find(|t| t.starts_with("round 4/9 \u{b7} "))
+        .find(|t| t.starts_with("round 5/9 \u{b7} "))
         .unwrap_or_else(|| panic!("the round was not on the title line: {spans:?}"))
         .to_string();
     assert!(shown.ends_with("4/60"), "{shown:?}");
     let line = line_led_by(&spans, &shown, width);
     assert!(line.iter().any(|t| t.contains("dino")), "{line:?}");
 
-    if shown != whole {
+    {
         let ctx = egui::Context::default();
         ctx.all_styles_mut(|style| {
             style.interaction.tooltip_delay = 0.0;
@@ -2349,8 +2352,50 @@ fn the_title_line_shows_the_round_beside_the_iteration() {
             .into_iter()
             .map(|(text, _)| text)
             .collect();
-        assert!(hovered.iter().any(|t| t == whole), "{hovered:?}");
+        assert!(
+            hovered
+                .iter()
+                .any(|t| t.contains(whole) && t.contains(super::panel::COUNTS_HOVER)),
+            "{hovered:?}"
+        );
     }
+
+    gate.open();
+    state.finish_background_tasks();
+}
+
+/// Between rounds, with nothing open inside the solve, the round count reads
+/// the rounds done as the kernel reported them: no round is in progress.
+#[test]
+fn between_rounds_the_title_line_reads_the_rounds_done() {
+    let (mut state, id) = adjustable();
+    let mut gate = Gate::new();
+    let (said, heard) = mpsc::channel();
+    let held = gate.held();
+    state
+        .start_background_task(
+            Operation::BUNDLE_ADJUST,
+            id,
+            Box::new(move |progress| {
+                let solve = progress.phase("solve");
+                {
+                    let round = solve.phase("round");
+                    round.count(59, Some(60), "iteration");
+                }
+                solve.count(4, Some(9), "round");
+                said.send(()).expect("the test is listening");
+                let _ = held.recv();
+                drop(solve);
+                Finished::Failed("the fake worker produced nothing".to_string())
+            }),
+        )
+        .expect("nothing else is running");
+    heard.recv().expect("the worker reported");
+    state.poll_background_tasks();
+
+    let texts = painted(&mut state);
+    assert!(texts.iter().any(|t| t == "round 4/9"), "{texts:?}");
+    assert!(!texts.iter().any(|t| t.contains("round 5/9")), "{texts:?}");
 
     gate.open();
     state.finish_background_tasks();

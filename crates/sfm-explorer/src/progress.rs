@@ -117,6 +117,18 @@ pub(crate) struct Count {
     pub unit: &'static str,
 }
 
+/// One stage's newest count, as [`Collector::counts`] lists it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct StageCount {
+    /// The count as the stage reported it.
+    pub count: Count,
+    /// Whether a stage is open inside the one that reported it: a solve
+    /// that has counted four rounds done and has its fifth round open is
+    /// under way on the fifth. False between rounds, and for the newest count
+    /// standing in for a stage that has closed.
+    pub under_way: bool,
+}
+
 /// What an operation has reported so far, as a panel draws it mid-flight.
 ///
 /// Two things separate this from what [`Collector::take`] hands an Action Log
@@ -235,8 +247,10 @@ impl Collector {
     /// count alone is the iteration, which says nothing about which round it
     /// is in. A count belongs to the stage that was innermost when it arrived
     /// and goes when that stage closes, so a finished round's iteration count
-    /// does not stay beside the next round's.
-    pub(crate) fn counts(&self) -> Vec<Count> {
+    /// does not stay beside the next round's. Each says whether a stage is
+    /// open inside the one that reported it, which is how a reader of the
+    /// counts tells that work on the next unit has started.
+    pub(crate) fn counts(&self) -> Vec<StageCount> {
         lock(&self.state).counts()
     }
 
@@ -488,17 +502,28 @@ impl State {
     }
 
     /// See [`Collector::counts`].
-    fn counts(&self) -> Vec<Count> {
-        let open: Vec<Count> = self
+    fn counts(&self) -> Vec<StageCount> {
+        let open: Vec<StageCount> = self
             .staged
             .iter()
             .filter(|(stage, _)| {
                 stage.is_none_or(|line| self.open.iter().any(|open| open.line == line))
             })
-            .map(|&(_, count)| count)
+            .map(|&(stage, count)| StageCount {
+                count,
+                // A stage opened after this one's run and still open is inside
+                // it, since the open stack nests and lines grow along it.
+                under_way: self
+                    .open
+                    .iter()
+                    .any(|open| stage.is_none_or(|line| open.line > line)),
+            })
             .collect();
         match (open.is_empty(), self.count) {
-            (true, Some(newest)) => vec![newest],
+            (true, Some(newest)) => vec![StageCount {
+                count: newest,
+                under_way: false,
+            }],
             _ => open,
         }
     }

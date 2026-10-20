@@ -38,7 +38,7 @@ use std::time::Duration;
 
 use crate::action_log::{detail_row, detail_text, ActionLog, Breakdown};
 use crate::background::{Ended, FinishedTask, Queue, TaskState};
-use crate::progress::{Collector, Count, Detail, Live};
+use crate::progress::{Collector, Count, Detail, Live, StageCount};
 use crate::state::AppState;
 
 /// Marks the phase that has not closed yet, beside the time it has been open.
@@ -56,6 +56,11 @@ const BAR_WIDTH: f32 = 28.0;
 /// The least share of the title line's room, after the count, that the title
 /// keeps when a status follows it.
 const TITLE_SHARE: f32 = 0.6;
+
+/// How to read nested counts, under the whole of them on the title line's
+/// hover: see [`in_progress`].
+pub(super) const COUNTS_HOVER: &str =
+    "The outer counts name the unit in progress; the last counts the units done.";
 
 /// The most of the title line's width the counts take before they are written
 /// shorter, so the title keeps the rest.
@@ -241,7 +246,7 @@ pub(crate) fn bar(collector: &Collector, live: &Live) -> Bar {
     match collector.fraction() {
         Some(fraction) => Bar::Measured {
             fraction,
-            count: counts_text(&collector.counts(), true),
+            count: counts_text(&in_progress(&collector.counts()), true),
         },
         None => Bar::Spinner {
             phase: live.open.last().and_then(|&row| phase_name(live, row)),
@@ -258,6 +263,35 @@ fn count_text(count: Count) -> String {
         Some(total) => format!("{} {}/{total}", count.unit, count.done),
         None => format!("{} {}", count.unit, count.done),
     }
+}
+
+/// The counts as the title line reads them: each outer count names the unit
+/// in progress, the innermost the units done.
+///
+/// A kernel counts what is behind it, so a solve in its fifth round has
+/// reported `round 4/9`. Read beside `iteration 4/60`, that says the fourth
+/// round is running. So an outer count whose stage has a stage open inside it,
+/// which is work on the next unit begun, reads one more than it reported,
+/// capped at its total: `round 5/9`. With nothing open inside it, between
+/// rounds, it reads what it reported. The innermost count is left as reported
+/// in every case, so its number does not step between a unit's stages when
+/// detailed timing opens phases inside it.
+fn in_progress(counts: &[StageCount]) -> Vec<Count> {
+    let innermost = counts.len().saturating_sub(1);
+    counts
+        .iter()
+        .enumerate()
+        .map(|(at, staged)| {
+            let mut count = staged.count;
+            if at < innermost && staged.under_way {
+                count.done = match count.total {
+                    Some(total) => (count.done + 1).min(total),
+                    None => count.done + 1,
+                };
+            }
+            count
+        })
+        .collect()
 }
 
 /// The counts of the stages still open, outermost first, joined by ` · `:
@@ -647,7 +681,7 @@ fn show_chosen_phases(ui: &mut egui::Ui, state: &AppState) {
     match state.task(id) {
         Some(TaskState::Running(task)) => {
             let live = task.collector.live();
-            let counts = task.collector.counts();
+            let counts = in_progress(&task.collector.counts());
             // Asked to stop, what it last said it was doing is no longer the
             // news: that it is stopping is.
             let status = match task.stopping() {
@@ -657,8 +691,9 @@ fn show_chosen_phases(ui: &mut egui::Ui, state: &AppState) {
             ui.horizontal(|ui| {
                 // The counts from the right and first, so they are on screen
                 // whatever the node is called: they are the numbers on this
-                // line a reader watches move. All of them on hover where the
-                // line has room for fewer.
+                // line a reader watches move. All of them on hover, where the
+                // line may have room for fewer, with how to read them where
+                // there is more than one.
                 let room = ui.available_width();
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if let Some(shown) = counts_in(ui, &counts, room) {
@@ -667,7 +702,9 @@ fn show_chosen_phases(ui: &mut egui::Ui, state: &AppState) {
                             egui::Label::new(egui::RichText::new(shown.clone()).weak())
                                 .selectable(false),
                         );
-                        if shown != whole {
+                        if counts.len() > 1 {
+                            label.on_hover_text(format!("{whole}\n{COUNTS_HOVER}"));
+                        } else if shown != whole {
                             label.on_hover_text(whole);
                         }
                     }

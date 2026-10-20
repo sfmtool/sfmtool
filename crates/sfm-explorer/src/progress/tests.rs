@@ -134,36 +134,46 @@ fn a_count_and_a_fraction_are_the_newest_only_and_never_part_of_the_detail() {
 /// open, outermost first, the shape of a bundle adjustment that counts rounds
 /// in its solve and iterations in each round. A closed stage's count goes, and
 /// with no stage that counted still open the newest count is all there is.
+/// Each says whether a stage is open inside the one that reported it.
 #[test]
 fn the_counts_of_the_open_stages_are_kept_outermost_first() {
     let collector = collector();
     let progress = collector.progress();
-    let shown = |collector: &Collector| -> Vec<(&'static str, u64)> {
+    let shown = |collector: &Collector| -> Vec<(&'static str, u64, bool)> {
         collector
             .counts()
             .iter()
-            .map(|count| (count.unit, count.done))
+            .map(|staged| (staged.count.unit, staged.count.done, staged.under_way))
             .collect()
     };
     let solve = progress.phase("solve");
     {
         let round = solve.phase("round");
         round.count(3, Some(60), "iteration");
-        assert_eq!(shown(&collector), [("iteration", 3)]);
+        assert_eq!(shown(&collector), [("iteration", 3, false)]);
     }
     solve.count(1, Some(9), "round");
-    // The first round's iterations went with it.
-    assert_eq!(shown(&collector), [("round", 1)]);
+    // The first round's iterations went with it, and between rounds nothing
+    // is open inside the solve.
+    assert_eq!(shown(&collector), [("round", 1, false)]);
     {
         let round = solve.phase("round");
+        // The next round is open inside the solve: work on it has begun.
+        assert_eq!(shown(&collector), [("round", 1, true)]);
         round.count(4, Some(60), "iteration");
-        assert_eq!(shown(&collector), [("round", 1), ("iteration", 4)]);
+        assert_eq!(
+            shown(&collector),
+            [("round", 1, true), ("iteration", 4, false)]
+        );
         round.count(5, Some(60), "iteration");
-        assert_eq!(shown(&collector), [("round", 1), ("iteration", 5)]);
+        assert_eq!(
+            shown(&collector),
+            [("round", 1, true), ("iteration", 5, false)]
+        );
     }
     drop(solve);
     // Nothing that counted is open: the newest count, as `count` says.
-    assert_eq!(shown(&collector), [("iteration", 5)]);
+    assert_eq!(shown(&collector), [("iteration", 5, false)]);
     assert_eq!(collector.count().map(|count| count.done), Some(5));
 }
 

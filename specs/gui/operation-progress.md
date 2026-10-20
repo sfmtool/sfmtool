@@ -621,8 +621,10 @@ impl Collector {
     pub(crate) fn count(&self) -> Option<Count>;
     pub(crate) fn fraction(&self) -> Option<f32>;
     /// The newest count of each stage still open that reported one,
-    /// outermost first; the newest count alone where none is open.
-    pub(crate) fn counts(&self) -> Vec<Count>;
+    /// outermost first; the newest count alone where none is open. Each
+    /// with `under_way`, whether a stage is open inside the one that
+    /// reported it.
+    pub(crate) fn counts(&self) -> Vec<StageCount>;
 }
 ```
 
@@ -639,6 +641,14 @@ places it. Where no stage that counted is still open, `counts` is the newest
 count, which is what `count` returns and what the wire's `progress` carries.
 Nothing in the kernels changes for this: each loop already reports its own count
 through the `Progress` it was handed.
+
+The counts stay as reported, the units done. `under_way` is true while a stage
+opened after the counting stage's run is still open, which on the nested stack
+means one open inside it: during the fifth round the solve's `round 4/9` is
+under way, and between rounds it is not. The Background Tasks title line reads
+an outer count that is under way as the unit in progress, `round 5/9`, and the
+innermost as reported ([background-tasks.md](background-tasks.md) § "A line per
+queue, and one phase list"); the collector itself does not add the one.
 
 `live` differs from `take` in two ways, and both are about watching rather than
 reading afterwards.

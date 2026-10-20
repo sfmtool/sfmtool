@@ -370,15 +370,30 @@ slow queue's running task, the fast queue's, or the last task to finish, in that
 order (`panel::chosen_task`). For a running task the title line also carries the
 kernel's counts and the status line, since a queue's line has no room for
 either. The counts are those of every stage still open that reported one,
-outermost first and joined by ` · ` (`round 4/9 · iteration 4/60`,
+outermost first and joined by ` · ` (`round 5/9 · iteration 4/60`,
 `Collector::counts`), because a bundle adjustment counts its iterations within
-a round and the iteration alone said nothing of which of nine rounds it was in;
-each count is its kernel's `done` of `total`, so during the fifth round the
-round count reads `4/9`, the rounds behind it. The counts are laid out first,
+a round and the iteration alone said nothing of which of nine rounds it was in.
+**An outer count names the unit in progress, the innermost the units done.** A
+kernel counts what is behind it, so a solve in its fifth round has reported
+`round 4/9`; read beside `iteration 4/60` that says the fourth round is
+running. So a count that is not the innermost, and whose stage has a stage open
+inside it (`StageCount::under_way`, which is work on the next unit begun),
+reads one more than it reported, capped at its total: `round 5/9`. With nothing
+open inside it, as between rounds, it reads what it reported, `round 4/9`. The
+innermost count reads as reported in every case (`panel::in_progress`), so its
+number does not step between the stages of one iteration when **Detailed
+timing** opens phases inside it. The first round shows the iteration count
+alone: the adjustment reports its round count only when a round ends, so
+nothing in the viewer knows there are nine rounds until the first has
+finished, and the viewer does not change what the kernel reports. The counts
+are laid out first,
 from the right, so they always show: whole where that takes no more than half
 the line (`COUNT_SHARE`), else with every count after the first reduced to its
-numbers (`round 4/9 · 4/60`), else the innermost count alone, the whole of them
-on hover whenever they are shortened. The title takes what the status needs,
+numbers (`round 5/9 · 4/60`), else the innermost count alone. Their hover
+carries the whole of them, and where there is more than one, how to read them:
+*"The outer counts name the unit in progress; the last counts the units
+done."* A single count is on hover only when it is shortened. The wire's
+`progress` is unchanged: the newest count, as the kernel reported it. The title takes what the status needs,
 but never less than 60 % of what the counts leave, and the status takes the
 rest. A title that does not fit as a
 whole is the node's name alone, cut out of the middle so its start and its end
@@ -1400,12 +1415,14 @@ Panel, through `test_support::run_frame_headless`:
   node and the cost without overlapping.
 - Cancel is disabled, with its tooltip, for an operation whose kernels do not
   poll the flag, and live for one that does.
-- With a round count from the solve and an iteration count from the open
-  round, the title line paints `round 4/9 · iteration 4/60` at 520 px; at
-  227 px it paints the round and the iteration's numbers at least, beside the
-  node, with nothing overlapping, and the whole on hover where it is shortened.
-  In the collector a closed round's iteration count goes with it, and with no
-  counting stage open the newest count is what is left.
+- With a reported `round 4/9` from the solve and `iteration 4/60` from the
+  open fifth round, the title line paints `round 5/9 · iteration 4/60` at
+  520 px; at 227 px it paints the round and the iteration's numbers at least,
+  beside the node, with nothing overlapping, and the whole with the reading
+  rule on hover. Between rounds, with nothing open inside the solve, it paints
+  `round 4/9`. In the collector a closed round's iteration count goes with it,
+  a count is `under_way` exactly while a stage is open inside its own, and with
+  no counting stage open the newest count is what is left.
 - Once a running task is asked to stop, `stopping…` is painted on its line and
   its title line, the count stays, and Cancel is disabled with the stopping
   tooltip; none of it is painted before the request or after the task lands.
