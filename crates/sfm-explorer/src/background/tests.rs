@@ -2206,6 +2206,69 @@ fn an_idle_line_says_whether_its_task_was_cancelled_or_failed() {
     assert!(line.iter().any(|t| t == "dino"), "{line:?}");
 }
 
+/// Once a cancel is asked for, a running task says it is stopping until it
+/// lands: its line shows `stopping…` where its bar was, its title line shows it
+/// where the status was, and its Cancel button is disabled with a tooltip
+/// saying why.
+///
+/// Found on dino's bundle adjustment, which reaches its next check of the flag
+/// about half a second after the click: until then the line looked exactly as
+/// it had before it, and a reader could not tell the click had registered.
+#[test]
+fn a_task_asked_to_stop_says_it_is_stopping_until_it_lands() {
+    use super::panel::{STOPPING, STOPPING_HOVER};
+    let (mut state, id) = adjustable();
+    let gate = running(&mut state, id, Operation::BUNDLE_ADJUST);
+    let task = state.running_tasks().next().expect("running").id;
+    assert!(
+        !painted(&mut state).iter().any(|t| t == STOPPING),
+        "a task nobody asked to stop said it was stopping"
+    );
+
+    state.cancel_background_task(task);
+    assert!(state.running_task(task).expect("still running").stopping());
+    let texts = painted(&mut state);
+    // On its queue's line and on its title line.
+    assert_eq!(
+        texts.iter().filter(|t| *t == STOPPING).count(),
+        2,
+        "{texts:?}"
+    );
+    // The count is still on the title line; the bar is gone from the queue's.
+    assert!(texts.iter().any(|t| t == "round 2/2"), "{texts:?}");
+
+    // Cancel is disabled, and says why on hover.
+    let ctx = egui::Context::default();
+    ctx.all_styles_mut(|style| {
+        style.interaction.tooltip_delay = 0.0;
+        style.interaction.tooltip_grace_time = 0.0;
+    });
+    let first = painted_at(&ctx, &mut state, input());
+    let at = first
+        .iter()
+        .find(|(text, _)| text == super::panel::CANCEL)
+        .unwrap_or_else(|| panic!("no Cancel button: {first:?}"))
+        .1;
+    let mut hovering = input();
+    hovering.events = vec![egui::Event::PointerMoved(at + egui::vec2(8.0, 4.0))];
+    painted_at(&ctx, &mut state, hovering);
+    let hovered: Vec<String> = painted_at(&ctx, &mut state, input())
+        .into_iter()
+        .map(|(text, _)| text)
+        .collect();
+    assert!(
+        hovered.iter().any(|t| t == STOPPING_HOVER),
+        "{STOPPING_HOVER:?} was not the tooltip: {hovered:?}"
+    );
+
+    gate.open();
+    state.finish_background_tasks();
+    assert!(
+        !painted(&mut state).iter().any(|t| t == STOPPING),
+        "a task that landed still said it was stopping"
+    );
+}
+
 /// The texts painted on the line `lead` is painted on, left to right, after
 /// asserting that none of them runs under the next or past `width`.
 fn line_led_by(spans: &[(String, f32, f32, f32)], lead: &str, width: f32) -> Vec<String> {

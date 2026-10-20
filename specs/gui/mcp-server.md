@@ -565,7 +565,7 @@ the order each queue will start them, and is empty whenever nothing is running.
 Quiet tasks, the work the viewer starts by itself such as the bench's live
 evaluation and a camera model proposal's job, are left out, so it is empty while only they run
 ([background-tasks.md](background-tasks.md) § "Quiet tasks").
-Each running entry is the first seven fields of `get_background_tasks`'s
+Each running entry is the first eight fields of `get_background_tasks`'s
 running reply and no more, and each waiting entry is its waiting reply, which
 is six fields:
 
@@ -578,7 +578,8 @@ is six fields:
     "reconstruction_label": "dino_dog_toy-embedded",
     "operation_id": 2,
     "elapsed_s": 42.7,
-    "fraction": 0.61                      // absent where nothing has reported one
+    "fraction": 0.61,                     // absent where nothing has reported one
+    "cancelling": true                    // present only once a cancel was asked for
   },
   {
     "running": true,                      // not finished
@@ -2001,6 +2002,7 @@ A running task:
   "operation_id": 2,                          // the id bundle_adjust's handle carried
   "elapsed_s": 42.7,                          // how long it has been going
   "fraction": 0.61,                           // of the whole, where anything reported one
+  "cancelling": true,                         // asked to stop and not stopped yet; absent otherwise
   "cancellable": true,                        // whether cancel_background_tasks would do anything
   "progress": { "done": 2, "total": 3, "unit": "round" },   // the kernel's own count
   "status": "refining images/IMG_0042.jpg",   // what it says it is doing right now
@@ -2089,7 +2091,10 @@ not move it, and nothing interpolates across one. `progress` is the innermost
 count in the kernel's own unit, with `total` absent where the operation does not
 know how many there are, and the whole block absent where it reports no count.
 `status`, `phase` and `progress` are all absent rather than null where the
-operation has said nothing.
+operation has said nothing. `cancelling` is `true` from the moment a cancel is
+asked for, by `cancel_background_tasks` or the panel's button, until the task
+lands, and absent otherwise; `get_scene`'s entry carries it too. It is the
+panel's `stopping…`, and says the request was made and the stop is on its way.
 
 ### `cancel_background_tasks`
 
@@ -2119,7 +2124,8 @@ someone asks for by themselves, and no reply names one.
 For a running task the reply says the request was made, not that the operation
 has stopped: each operation stops at its next poll of the cancel flag, writes a
 failed Action Log entry and pushes no version, and `get_background_tasks`
-reports it as finished with `failed: true` once it has. A run that finishes
+reports it with `cancelling: true` until then and as finished with
+`failed: true` once it has. A run that finishes
 before it next polls the flag lands as it would have without the request. A
 waiting task is gone by the time the reply is written: it is taken out of its
 queue whatever its operation, its job never runs, it writes the failed entry
@@ -5729,6 +5735,9 @@ where a test hands no host over.
   `operation_id`, `elapsed_s` and `fraction`. The whole key set is asserted, so
   a field added to it later is a deliberate act rather than a drift in the
   most-polled reply on the surface.
+- **A task asked to stop says `cancelling: true`** in `get_background_tasks`
+  and in `get_scene`'s entry from the request until it lands, and neither
+  carries the field before the request or after the task has finished.
 - **`cancel_background_tasks`** with no argument asks every running task to
   stop and lists each under `cancelling`; naming one task of two running in the
   two queues stops that one alone; and a named task that has finished, or an id

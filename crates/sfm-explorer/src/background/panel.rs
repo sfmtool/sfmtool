@@ -72,6 +72,14 @@ pub(super) const CANCEL: &str = "\u{1f5d9}";
 /// What leads a waiting task's line, where a queue's line has its name.
 pub(super) const WAITING: &str = "waiting";
 
+/// What a running task's line shows in place of its bar, and its title line in
+/// place of its status, once it has been asked to stop and until it lands.
+pub(super) const STOPPING: &str = "stopping\u{2026}";
+
+/// The tooltip of [`STOPPING`] and of the Cancel button it disables.
+pub(super) const STOPPING_HOVER: &str =
+    "Asked to stop: it stops the next time it checks whether it should.";
+
 /// What an idle line and a finished task's title line say of a task that was
 /// cancelled, running or waiting.
 pub(super) const CANCELLED: &str = "cancelled";
@@ -270,14 +278,20 @@ fn show_running(ui: &mut egui::Ui, state: &AppState, id: u64, asked: &mut Asked)
     let elapsed = task.started.elapsed();
     let live = task.collector.live();
     let bar = bar(&task.collector, &live);
+    let stopping = task.stopping();
 
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
         // Present always, so a reader never wonders whether they missed it,
-        // and live only where asking would do something.
-        let button = ui.add_enabled(refusal.is_none(), egui::Button::new(CANCEL).small());
-        let button = match refusal.as_deref() {
-            Some(refusal) => button.on_disabled_hover_text(refusal),
-            None => button.on_hover_text("Ask the operation to stop."),
+        // and live only where asking would do something: not where the
+        // operation never asks, and not once it has been asked.
+        let button = ui.add_enabled(
+            refusal.is_none() && !stopping,
+            egui::Button::new(CANCEL).small(),
+        );
+        let button = match (refusal.as_deref(), stopping) {
+            (Some(refusal), _) => button.on_disabled_hover_text(refusal),
+            (None, true) => button.on_disabled_hover_text(STOPPING_HOVER),
+            (None, false) => button.on_hover_text("Ask the operation to stop."),
         };
         if button.clicked() {
             asked.cancel = Some(id);
@@ -286,7 +300,14 @@ fn show_running(ui: &mut egui::Ui, state: &AppState, id: u64, asked: &mut Asked)
         // line's cost is: it is the number a reader is watching.
         ui.label(egui::RichText::new(ActionLog::format_took(elapsed)).weak())
             .on_hover_text("elapsed");
-        show_bar(ui, &bar);
+        // Asked to stop, the work left is not the work the bar measured, so
+        // the line says what is happening instead.
+        if stopping {
+            ui.add(egui::Label::new(egui::RichText::new(STOPPING).weak()).selectable(false))
+                .on_hover_text(STOPPING_HOVER);
+        } else {
+            show_bar(ui, &bar);
+        }
         // The operation and its node from the left, in what the right-hand
         // items leave, so a long operation name is cut rather than drawn
         // under the bar.
@@ -585,7 +606,12 @@ fn show_chosen_phases(ui: &mut egui::Ui, state: &AppState) {
         Some(TaskState::Running(task)) => {
             let live = task.collector.live();
             let count = task.collector.count().map(count_text);
-            let status = task.collector.status();
+            // Asked to stop, what it last said it was doing is no longer the
+            // news: that it is stopping is.
+            let status = match task.stopping() {
+                true => Some(STOPPING.to_string()),
+                false => task.collector.status(),
+            };
             ui.horizontal(|ui| {
                 // The count from the right and first, so it is on screen
                 // whatever the node is called: it is the one number on this

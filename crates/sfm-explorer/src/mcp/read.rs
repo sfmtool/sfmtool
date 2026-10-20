@@ -368,11 +368,15 @@ fn task_summary(task: &BackgroundTask) -> Value {
     // which needs three fields and a unit only that kernel defines. It is the
     // mapped sum of what the stages reported and is therefore measured: a
     // silent stage does not move it, and nothing here interpolates across one.
+    let fields = block.as_object_mut().expect("the block is an object");
     if let Some(fraction) = task.collector.fraction() {
-        block
-            .as_object_mut()
-            .expect("the block is an object")
-            .insert("fraction".into(), json!(fraction));
+        fields.insert("fraction".into(), json!(fraction));
+    }
+    // Present only once a cancel has been asked for, until the task lands: a
+    // poll that sees it knows the request was made and the stop is on its way,
+    // which a second cancel would not hurry.
+    if task.stopping() {
+        fields.insert("cancelling".into(), json!(true));
     }
     block
 }

@@ -521,6 +521,16 @@ Earlier rows are above it, and none of them is a summary of another:
   its tooltip, and enabled only when the operation can be cancelled, with a
   tooltip saying so when it cannot. The alternative, hiding
   the button, leaves the reader wondering whether they missed it.
+- **Stopping.** A cancel asks; the operation stops at its next check of the
+  flag, which is about half a second into a check on dino's bundle adjustment
+  and longer for a kernel that checks rarely. From the request until the task
+  lands (`BackgroundTask::stopping`), its line shows the weak word `stopping…`
+  where the bar or spinner was, its Cancel button is disabled with *"Asked to
+  stop: it stops the next time it checks whether it should."* as its tooltip,
+  and its title line shows `stopping…` where the status was, keeping the count.
+  Without it the line looked as it had before the click, and a reader could not
+  tell the click had registered. On the wire the same state is `cancelling:
+  true` (§ "On the wire").
 - **The phase table** is the live form of what the Action Log entry will hold.
   Completed phases show their cost, the open one is marked and shows the time it
   has been open so far, and phases that have not started are not shown, because
@@ -1222,7 +1232,8 @@ waiting task is reported with `running: true`, since it has not finished, and
 `waiting: true`, its operation, queue, label and id, and no elapsed, fraction
 or phases, since it has done no work. A running task's reply carries the
 operation, its queue, the label, the seconds elapsed, `fraction` of the whole where
-anything reported one, whether it can be cancelled, the progress as `done`,
+anything reported one, `cancelling: true` once a cancel has been asked for and
+until the task lands (absent otherwise), whether it can be cancelled, the progress as `done`,
 `total` and `unit` where there is one, the status, the open phase, and the
 stages so far in the shape `get_action_log { "detail": true }` returns them in
 ([mcp-server.md](mcp-server.md) § "get_action_log"), so an agent
@@ -1251,7 +1262,9 @@ agent that already polls `get_scene` learns that the viewer is busy without a
 second call, and knows not to send an edit that would be refused. Each entry is
 a running task in the same shape with everything unbounded left out:
 `running`, `operation`, `queue`, `reconstruction_label`, `operation_id`,
-`elapsed_s` and `fraction`. The waiting tasks follow the running ones, each
+`elapsed_s` and `fraction`, and `cancelling` while a task asked to stop has
+not yet stopped: a scalar a caller acts on, since a second cancel would not
+hurry it. The waiting tasks follow the running ones, each
 in the waiting shape above, and the list is empty with nothing running.
 The phase table belongs to the tool an agent asks when it wants it, because
 `get_scene` is the most-polled call on the surface and an entry that grew with
@@ -1377,6 +1390,9 @@ Panel, through `test_support::run_frame_headless`:
   node and the cost without overlapping.
 - Cancel is disabled, with its tooltip, for an operation whose kernels do not
   poll the flag, and live for one that does.
+- Once a running task is asked to stop, `stopping…` is painted on its line and
+  its title line, the count stays, and Cancel is disabled with the stopping
+  tooltip; none of it is painted before the request or after the task lands.
 - A status replaces the previous one rather than adding a line, and the panel
   shows nothing there for an operation that has never set one.
 - **Every `Operation` that declares `cancellable` really is**: cancelling each

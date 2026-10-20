@@ -749,6 +749,17 @@ pub(crate) struct BackgroundTask {
     queued: Arc<AtomicBool>,
 }
 
+impl BackgroundTask {
+    /// Whether it has been asked to stop and is still running, on its way to
+    /// the next point where its kernel reads the flag.
+    ///
+    /// The flag is set once and never cleared, so this is true from the
+    /// request until the task lands, however it lands.
+    pub(crate) fn stopping(&self) -> bool {
+        self.cancel.load(Ordering::Relaxed)
+    }
+}
+
 /// What crosses the channel, worker to GUI thread.
 ///
 /// Phases, messages and counts do not: they are in the collector both sides

@@ -1697,6 +1697,50 @@ fn get_scene_says_the_viewer_is_busy_without_carrying_the_solve() {
     assert_eq!(after["background_tasks"], json!([]), "{after}");
 }
 
+/// A running task that has been asked to stop says `cancelling: true` in
+/// `get_scene`'s entry and in `get_background_tasks`, from the request until it
+/// lands, and carries no such field before it.
+#[test]
+fn a_task_asked_to_stop_says_cancelling_until_it_lands() {
+    let (mut state, mut viewer) = editable();
+    let open = running_operation(&mut state, reporting_job);
+    let id = state.running_tasks().next().expect("running").id;
+    let task = json!({ "operation_id": id });
+
+    let before = call(
+        &mut state,
+        &mut viewer,
+        "get_background_tasks",
+        task.clone(),
+    );
+    assert!(before.get("cancelling").is_none(), "{before}");
+
+    call(
+        &mut state,
+        &mut viewer,
+        "cancel_background_tasks",
+        json!({ "operation_ids": [id] }),
+    );
+    let asked = call(
+        &mut state,
+        &mut viewer,
+        "get_background_tasks",
+        task.clone(),
+    );
+    assert_eq!(asked["cancelling"], json!(true), "{asked}");
+    let scene = ok(&mut state, &mut viewer, Command::GetScene);
+    assert_eq!(
+        scene["background_tasks"][0]["cancelling"],
+        json!(true),
+        "{scene}"
+    );
+
+    open.send(()).expect("the worker is waiting");
+    state.finish_background_tasks();
+    let over = call(&mut state, &mut viewer, "get_background_tasks", task);
+    assert!(over.get("cancelling").is_none(), "{over}");
+}
+
 /// A task that waits reaches the wire as one that has not started: its handle
 /// carries `waiting: true`, with the window for a direct answer measured from
 /// when it was queued; `get_background_tasks` lists it under its queue's
