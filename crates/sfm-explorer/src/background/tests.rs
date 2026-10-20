@@ -2269,6 +2269,93 @@ fn a_task_asked_to_stop_says_it_is_stopping_until_it_lands() {
     );
 }
 
+/// The title line shows each open stage's count, outermost first: a bundle
+/// adjustment's round and the iteration within it. Where the line is narrow
+/// the inner counts lose their units, the whole of it on hover.
+///
+/// Found on dino's nine-round adjustment, whose title line read `iteration
+/// 4/60` with the round nowhere on it.
+#[test]
+fn the_title_line_shows_the_round_beside_the_iteration() {
+    let (mut state, id) = adjustable();
+    let mut gate = Gate::new();
+    let (said, heard) = mpsc::channel();
+    let held = gate.held();
+    state
+        .start_background_task(
+            Operation::BUNDLE_ADJUST,
+            id,
+            Box::new(move |progress| {
+                let solve = progress.phase("solve");
+                drop(solve.phase("round"));
+                solve.count(4, Some(9), "round");
+                let round = solve.phase("round");
+                round.count(4, Some(60), "iteration");
+                said.send(()).expect("the test is listening");
+                let _ = held.recv();
+                drop(round);
+                Finished::Failed("the fake worker produced nothing".to_string())
+            }),
+        )
+        .expect("nothing else is running");
+    heard.recv().expect("the worker reported");
+    state.poll_background_tasks();
+    state.slow_queue.running.as_mut().expect("running").label = "dino".to_string();
+    let whole = "round 4/9 \u{b7} iteration 4/60";
+
+    // Wide, the whole of it.
+    let spans = painted_spans(&mut state, 520.0);
+    assert!(spans.iter().any(|(t, ..)| t == whole), "{spans:?}");
+
+    // At the default width, the round and the iteration's numbers at least,
+    // with nothing on the title line overlapping or leaving the panel.
+    let width = 227.0;
+    let spans = painted_spans(&mut state, width);
+    let shown = spans
+        .iter()
+        .map(|(t, ..)| t.as_str())
+        .find(|t| t.starts_with("round 4/9 \u{b7} "))
+        .unwrap_or_else(|| panic!("the round was not on the title line: {spans:?}"))
+        .to_string();
+    assert!(shown.ends_with("4/60"), "{shown:?}");
+    let line = line_led_by(&spans, &shown, width);
+    assert!(line.iter().any(|t| t.contains("dino")), "{line:?}");
+
+    if shown != whole {
+        let ctx = egui::Context::default();
+        ctx.all_styles_mut(|style| {
+            style.interaction.tooltip_delay = 0.0;
+            style.interaction.tooltip_grace_time = 0.0;
+        });
+        let narrow = || egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(width, 400.0),
+            )),
+            ..Default::default()
+        };
+        // Over the glyphs' left end: a label laid out from the right reports
+        // where it is anchored rather than where its glyphs start.
+        let (_, left, _, top) = spans
+            .iter()
+            .find(|(text, ..)| *text == shown)
+            .expect("the counts were painted")
+            .clone();
+        painted_at(&ctx, &mut state, narrow());
+        let mut hovering = narrow();
+        hovering.events = vec![egui::Event::PointerMoved(egui::pos2(left + 8.0, top + 4.0))];
+        painted_at(&ctx, &mut state, hovering);
+        let hovered: Vec<String> = painted_at(&ctx, &mut state, narrow())
+            .into_iter()
+            .map(|(text, _)| text)
+            .collect();
+        assert!(hovered.iter().any(|t| t == whole), "{hovered:?}");
+    }
+
+    gate.open();
+    state.finish_background_tasks();
+}
+
 /// The texts painted on the line `lead` is painted on, left to right, after
 /// asserting that none of them runs under the next or past `width`.
 fn line_led_by(spans: &[(String, f32, f32, f32)], lead: &str, width: f32) -> Vec<String> {

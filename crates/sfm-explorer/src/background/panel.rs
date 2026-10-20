@@ -24,7 +24,7 @@
 //! counted there. Below the lines is one phase table, for
 //! the task a person last clicked the name of, or else the slow queue's running
 //! task, the fast queue's, or the last task to finish, under a title line that
-//! carries a running task's count and status.
+//! carries a running task's counts and status, or a finished one's ending.
 //!
 //! ## The phase table is the Action Log's rows
 //!
@@ -56,6 +56,10 @@ const BAR_WIDTH: f32 = 28.0;
 /// The least share of the title line's room, after the count, that the title
 /// keeps when a status follows it.
 const TITLE_SHARE: f32 = 0.6;
+
+/// The most of the title line's width the counts take before they are written
+/// shorter, so the title keeps the rest.
+const COUNT_SHARE: f32 = 0.5;
 
 /// The share of a queue line's room, after its right-hand items, that the
 /// node's name keeps when the operation's name does not fit beside it whole.
@@ -214,7 +218,8 @@ pub(crate) enum Bar {
     Measured {
         /// How much of the whole operation is behind, in `0.0..=1.0`.
         fraction: f32,
-        /// The count in the kernel's own unit, `round 2/3`, where it gave one.
+        /// The counts in the kernel's own units, outermost first, `round 2/3`
+        /// or `round 2/3 · iteration 4/60`, where it gave any.
         count: Option<String>,
     },
     /// Nothing underneath has reported a number, so the open phase's name is
@@ -236,7 +241,7 @@ pub(crate) fn bar(collector: &Collector, live: &Live) -> Bar {
     match collector.fraction() {
         Some(fraction) => Bar::Measured {
             fraction,
-            count: collector.count().map(count_text),
+            count: counts_text(&collector.counts(), true),
         },
         None => Bar::Spinner {
             phase: live.open.last().and_then(|&row| phase_name(live, row)),
@@ -253,6 +258,41 @@ fn count_text(count: Count) -> String {
         Some(total) => format!("{} {}/{total}", count.unit, count.done),
         None => format!("{} {}", count.unit, count.done),
     }
+}
+
+/// The counts of the stages still open, outermost first, joined by ` · `:
+/// `round 4/9 · iteration 4/60`. With `units` false every count after the
+/// first is its numbers alone, `round 4/9 · 4/60`, which is the short form the
+/// title line falls back to. `None` where nothing has reported a count.
+fn counts_text(counts: &[Count], units: bool) -> Option<String> {
+    let mut parts = counts.iter().enumerate().map(|(at, &count)| {
+        if units || at == 0 {
+            count_text(count)
+        } else {
+            match count.total {
+                Some(total) => format!("{}/{total}", count.done),
+                None => count.done.to_string(),
+            }
+        }
+    });
+    let first = parts.next()?;
+    Some(parts.fold(first, |line, part| format!("{line} \u{b7} {part}")))
+}
+
+/// What the title line shows of the counts in `room`, the whole line's width.
+///
+/// The whole of them where that takes no more than [`COUNT_SHARE`] of the
+/// line, then the short form, and otherwise the innermost count alone, which
+/// always shows, as the one count did before nested counts were drawn: it is
+/// the number a reader watches move.
+fn counts_in(ui: &egui::Ui, counts: &[Count], room: f32) -> Option<String> {
+    let innermost = count_text(*counts.last()?);
+    let fits = |text: &String| text_width(ui, text) <= room * COUNT_SHARE;
+    [counts_text(counts, true), counts_text(counts, false)]
+        .into_iter()
+        .flatten()
+        .find(fits)
+        .or(Some(innermost))
 }
 
 /// The name of the phase at `row`, or `None` where that row is a message.
@@ -587,10 +627,12 @@ fn text_width(ui: &egui::Ui, text: &str) -> f32 {
 
 /// The phases of the task [`chosen_task`] names, under a line naming it.
 ///
-/// For a running task the title line also carries the kernel's count, `round
-/// 2/3`, which is laid out first from the right so it always shows, and the
-/// status line, the one thing the operation says it is doing right now, cut to
-/// what the title leaves: the queue lines have no room for either.
+/// For a running task the title line also carries the kernel's counts, `round
+/// 2/3 · iteration 4/60`, which are laid out first from the right so they
+/// always show ([`counts_in`]), and the status line, the one thing the
+/// operation says it is doing right now, cut to what the title leaves: the
+/// queue lines have no room for either. A finished task's title line carries
+/// how it ended, where it did not finish.
 ///
 /// Always showing, for a finished task as for a running one. The Action Log
 /// hides a breakdown behind a toggle because it has a row for every action of
@@ -605,7 +647,7 @@ fn show_chosen_phases(ui: &mut egui::Ui, state: &AppState) {
     match state.task(id) {
         Some(TaskState::Running(task)) => {
             let live = task.collector.live();
-            let count = task.collector.count().map(count_text);
+            let counts = task.collector.counts();
             // Asked to stop, what it last said it was doing is no longer the
             // news: that it is stopping is.
             let status = match task.stopping() {
@@ -613,12 +655,21 @@ fn show_chosen_phases(ui: &mut egui::Ui, state: &AppState) {
                 false => task.collector.status(),
             };
             ui.horizontal(|ui| {
-                // The count from the right and first, so it is on screen
-                // whatever the node is called: it is the one number on this
-                // line a reader watches move.
+                // The counts from the right and first, so they are on screen
+                // whatever the node is called: they are the numbers on this
+                // line a reader watches move. All of them on hover where the
+                // line has room for fewer.
+                let room = ui.available_width();
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if let Some(count) = count {
-                        ui.label(egui::RichText::new(count).weak());
+                    if let Some(shown) = counts_in(ui, &counts, room) {
+                        let whole = counts_text(&counts, true).unwrap_or_default();
+                        let label = ui.add(
+                            egui::Label::new(egui::RichText::new(shown.clone()).weak())
+                                .selectable(false),
+                        );
+                        if shown != whole {
+                            label.on_hover_text(whole);
+                        }
                     }
                     ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                         // The title before the status: what the status needs,
