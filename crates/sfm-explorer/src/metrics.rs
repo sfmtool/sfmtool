@@ -95,7 +95,12 @@ pub(crate) fn compute_point_diagnostics(
         .observations()
         .iter()
         .map(|obs| obs.image_index as usize);
-    compute_position_diagnostics(image_table, &pt.position, f64::from(pt.error), images)
+    compute_position_diagnostics(
+        image_table,
+        &pt.position,
+        f64::from(pt.rms_reprojection_error),
+        images,
+    )
 }
 
 /// [`compute_point_diagnostics`] for a finite `position` seen from `images`,

@@ -149,7 +149,7 @@ fn truth(observed_by: &[Vec<usize>], at_infinity: &[usize]) -> SfmrReconstructio
             position: Point3::from(Vector3::from_row_slice(&WORLD[p])),
             w: 1.0,
             color: [120, 130, 140],
-            error: 0.5,
+            rms_reprojection_error: 0.5,
             normal: Vector3::new(0.0, 0.0, -1.0),
         })
         .collect();
@@ -467,7 +467,7 @@ fn a_re_triangulated_points_frame_is_rescaled_by_its_depth_ratio() {
 fn the_error_column_is_rewritten_at_the_new_geometry() {
     let truth_recon = truth(&all_seen(WORLD.len()), &[]);
     let wrong = displaced(&truth_recon);
-    assert_eq!(wrong.point_set.points[0].error, 0.5);
+    assert_eq!(wrong.point_set.points[0].rms_reprojection_error, 0.5);
 
     let (moved, _report) =
         move_camera(&wrong, 0, &pose(&truth_recon, 0)).expect("a finite pose on image 0");
@@ -475,9 +475,9 @@ fn the_error_column_is_rewritten_at_the_new_geometry() {
     // Every keypoint is the truth projection, so the truth pose reconciles them
     // all and the RMS falls to the quantisation of the stored f32 pixels.
     assert!(
-        moved.point_set.points[0].error < 1e-2,
+        moved.point_set.points[0].rms_reprojection_error < 1e-2,
         "the error column is {}",
-        moved.point_set.points[0].error
+        moved.point_set.points[0].rms_reprojection_error
     );
 }
 

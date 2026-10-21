@@ -59,13 +59,15 @@ def test_reprojection_filter_scores_infinity_points(
     # by the filter like any finite point. Give the injected infinity points a
     # huge error (filtered) and a tiny error (kept) to prove both outcomes.
     positions = recon.positions_xyzw.copy()
-    errors = recon.errors.copy()
+    errors = recon.rms_reprojection_errors.copy()
     bearing = _canonical_infinity_bearing(recon)
     for i in indices:
         positions[i] = [bearing[0], bearing[1], bearing[2], 0.0]
     errors[indices[0]] = 1000.0  # fails the criterion -> removed
     errors[indices[1:]] = 0.1  # passes the criterion -> kept
-    recon = recon.clone_with_changes(positions=positions, errors=errors)
+    recon = recon.clone_with_changes(
+        positions=positions, rms_reprojection_errors=errors
+    )
     assert recon.point_is_at_infinity[indices].all()
     n_infinity_before = int(recon.point_is_at_infinity.sum())
 

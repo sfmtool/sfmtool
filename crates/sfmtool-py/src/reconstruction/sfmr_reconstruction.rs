@@ -554,13 +554,13 @@ impl PySfmrReconstruction {
 
     /// Root-mean-square reprojection error of each 3D point in pixels, shape `(M,)`.
     #[getter]
-    fn errors<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray1<f32>> {
+    fn rms_reprojection_errors<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray1<f32>> {
         let vec: Vec<f32> = self
             .inner
             .point_set
             .points
             .iter()
-            .map(|pt| pt.error)
+            .map(|pt| pt.rms_reprojection_error)
             .collect();
         PyArray1::from_vec(py, vec)
     }
@@ -1078,7 +1078,7 @@ impl PySfmrReconstruction {
     /// conditioning and the noise-calibrated depth uncertainty. Points at
     /// infinity and points with fewer than two observations get ``NaN`` (their
     /// depth is undefined). Arrays are length ``M = point_count`` and align with
-    /// ``positions`` / ``errors`` for masking.
+    /// ``positions`` / ``rms_reprojection_errors`` for masking.
     ///
     /// Args:
     ///     noise_px: Per-ray pixel localisation noise; the per-point noise is
@@ -1136,7 +1136,7 @@ impl PySfmrReconstruction {
             if rays.len() < 2 {
                 continue;
             }
-            let noise = (pt.error as f64).max(noise_px);
+            let noise = (pt.rms_reprojection_error as f64).max(noise_px);
             for (img, r) in &rays {
                 dirs.push(*r);
                 ray_centers.push(centers[*img]);
@@ -1524,7 +1524,7 @@ impl PySfmrReconstruction {
     /// or ``(N, 4)`` homogeneous coordinates (``w = 0`` marks a point at
     /// infinity).
     ///
-    /// Supported fields: ``positions``, ``colors``, ``errors``,
+    /// Supported fields: ``positions``, ``colors``, ``rms_reprojection_errors``,
     /// ``quaternions_wxyz``, ``translations``, ``track_image_indexes``,
     /// ``track_feature_indexes``, ``track_point_indexes``, ``observation_counts``,
     /// ``normals``, ``normal_confidence`` (an ``(N,)`` uint8 array or ``None``

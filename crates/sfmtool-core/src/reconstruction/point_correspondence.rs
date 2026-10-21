@@ -207,7 +207,7 @@ pub fn merge_points_and_tracks(
             sum_color[0] += point.color[0] as f64;
             sum_color[1] += point.color[1] as f64;
             sum_color[2] += point.color[2] as f64;
-            sum_error += point.error as f64;
+            sum_error += point.rms_reprojection_error as f64;
             count += 1;
             in_group.insert((recon_idx, point_id));
             observations.extend(collect_observations(recon_idx, point_id));
@@ -247,7 +247,7 @@ pub fn merge_points_and_tracks(
                     point.color[1] as f64,
                     point.color[2] as f64,
                 ],
-                error: point.error as f64,
+                error: point.rms_reprojection_error as f64,
                 observations,
             });
         }

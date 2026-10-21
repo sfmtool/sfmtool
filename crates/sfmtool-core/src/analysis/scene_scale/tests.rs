@@ -10,7 +10,7 @@ fn make_point(x: f64, y: f64, z: f64) -> Point3D {
         position: NPoint3::new(x, y, z),
         w: 1.0,
         color: [255, 255, 255],
-        error: 0.0,
+        rms_reprojection_error: 0.0,
         normal: nalgebra::Vector3::new(0.0, 0.0, 1.0),
     }
 }
@@ -22,7 +22,7 @@ fn make_infinity_point(dx: f64, dy: f64, dz: f64) -> Point3D {
         position: NPoint3::from(dir),
         w: 0.0,
         color: [255, 255, 255],
-        error: 0.0,
+        rms_reprojection_error: 0.0,
         normal: nalgebra::Vector3::zeros(),
     }
 }

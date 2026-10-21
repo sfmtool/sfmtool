@@ -682,7 +682,7 @@ impl SfmrReconstruction {
                 position,
                 w: 0.0,
                 color: [200, 200, 200],
-                error,
+                rms_reprojection_error: error,
                 normal: Vector3::zeros(),
             });
             for (img, _feat) in members {

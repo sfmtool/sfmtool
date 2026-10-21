@@ -217,7 +217,7 @@ def heatmap(
             for m in metrics:
                 # Get metric values for tracked points
                 if m == "reproj":
-                    values = recon.errors[point_indices]
+                    values = recon.rms_reprojection_errors[point_indices]
                     metric_label = "Reproj Error (px)"
                 elif m == "tracks":
                     values = recon.observation_counts[point_indices].astype(np.float64)

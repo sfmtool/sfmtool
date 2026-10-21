@@ -103,7 +103,7 @@ fn record_from_dict(d: &Bound<'_, PyDict>) -> PyResult<PointRecord> {
             .transpose()?
             .unwrap_or(1.0),
         color,
-        error: get(d, "error")?
+        rms_reprojection_error: get(d, "rms_reprojection_error")?
             .map(|v| v.extract())
             .transpose()?
             .unwrap_or(0.0),
@@ -204,7 +204,7 @@ fn record_to_dict<'py>(py: Python<'py>, r: &PointRecord) -> PyResult<Bound<'py, 
     )?;
     d.set_item("w", p.w)?;
     d.set_item("color", PyArray1::from_vec(py, p.color.to_vec()))?;
-    d.set_item("error", p.error)?;
+    d.set_item("rms_reprojection_error", p.rms_reprojection_error)?;
     d.set_item(
         "normal",
         PyArray1::from_vec(py, vec![p.normal.x, p.normal.y, p.normal.z]),

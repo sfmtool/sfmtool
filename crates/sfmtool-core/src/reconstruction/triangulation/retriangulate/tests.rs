@@ -114,7 +114,7 @@ fn scene(
             position: Point3::new(1.5 * jitter(p, 1), 1.5 * jitter(p, 2), 1.0 * jitter(p, 3)),
             w: 1.0,
             color: [10, 20, 30],
-            error: 0.25,
+            rms_reprojection_error: 0.25,
             normal: Vector3::new(0.0, 0.0, -1.0),
         })
         .collect();

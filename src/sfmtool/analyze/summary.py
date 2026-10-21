@@ -551,7 +551,7 @@ def print_reconstruction_summary(
     # 3D point statistics
     if recon.point_count > 0:
         positions = recon.positions
-        errors = recon.errors
+        errors = recon.rms_reprojection_errors
 
         click.echo("\n3D Point statistics:")
         click.echo("  Position range:")
@@ -660,7 +660,7 @@ def print_point_summary(
     """
     xyzw = np.asarray(recon.positions_xyzw)[point_index]
     color = np.asarray(recon.colors)[point_index]
-    error = float(np.asarray(recon.errors)[point_index])
+    error = float(np.asarray(recon.rms_reprojection_errors)[point_index])
     at_infinity = xyzw[3] == 0.0
 
     point_ids = np.asarray(recon.track_point_indexes)

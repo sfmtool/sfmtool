@@ -165,7 +165,7 @@ def metrics(r) -> dict | None:
     """Summary metrics for one reconstruction, or None if it is empty."""
     if r is None:
         return None
-    err = np.asarray(r.errors, dtype=np.float64)
+    err = np.asarray(r.rms_reprojection_errors, dtype=np.float64)
     err = err[np.isfinite(err)]
     obs = np.asarray(r.observation_counts, dtype=np.float64)
     return {

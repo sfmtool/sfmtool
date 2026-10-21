@@ -2312,7 +2312,7 @@ fn point_summary(edited: &EditedReconstruction, point: u32) -> Option<HeaderSumm
     let (condition, depth_z) = crate::metrics::compute_point_diagnostics(table, &view);
     Some(HeaderSummary {
         point: Some(stored.clone()),
-        error_px: Some(f64::from(stored.error)),
+        error_px: Some(f64::from(stored.rms_reprojection_error)),
         track_length: images.len(),
         at_infinity: stored.is_at_infinity(),
         max_angle_deg: crate::metrics::compute_max_pairwise_angle(&rays),

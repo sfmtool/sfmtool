@@ -59,7 +59,7 @@ def test_filter_then_transform_chain(seoul_bull_sfmr_only, tmp_path):
 
     assert result["point_count"] < original["point_count"]
     assert np.all(result["observation_counts"] > 3)
-    assert np.all(result["errors"] <= 5.0)
+    assert np.all(result["rms_reprojection_errors"] <= 5.0)
 
 
 def test_range_filter_chain_with_other_transforms(seoul_bull_sfmr_only, tmp_path):
@@ -199,4 +199,4 @@ def test_all_filters_combined(seoul_bull_sfmr_only, tmp_path):
     assert result["image_count"] == 15  # 2-16 inclusive
     assert result["point_count"] <= original["point_count"]
     assert np.all(result["observation_counts"] > 2)
-    assert np.all(result["errors"] <= 5.0)
+    assert np.all(result["rms_reprojection_errors"] <= 5.0)

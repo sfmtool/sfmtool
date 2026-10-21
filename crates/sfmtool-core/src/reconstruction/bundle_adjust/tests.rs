@@ -108,7 +108,7 @@ fn truth_through(
             position: Point3::new(2.0 * jitter(p, 1), 2.0 * jitter(p, 2), 1.5 * jitter(p, 3)),
             w: 1.0,
             color: [10, 20, 30],
-            error: 0.25,
+            rms_reprojection_error: 0.25,
             normal: Vector3::new(0.0, 0.0, -1.0),
         })
         .collect();
@@ -424,9 +424,9 @@ fn a_bearing_whose_rays_have_a_depth_crosses_to_finite() {
         spread(&truth)
     );
     assert!(
-        point.error.is_finite() && point.error < 0.1,
+        point.rms_reprojection_error.is_finite() && point.rms_reprojection_error < 0.1,
         "{}",
-        point.error
+        point.rms_reprojection_error
     );
 }
 
@@ -1023,7 +1023,7 @@ fn value_bits(recon: &SfmrReconstruction) -> Vec<u64> {
     for point in &recon.point_set.points {
         bits.extend(point.position.coords.iter().map(|c| c.to_bits()));
         bits.push(point.w.to_bits());
-        bits.push(u64::from(point.error.to_bits()));
+        bits.push(u64::from(point.rms_reprojection_error.to_bits()));
     }
     for column in [
         &recon.point_set.patch_u_halfvec_xyz,

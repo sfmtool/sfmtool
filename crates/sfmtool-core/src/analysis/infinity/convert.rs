@@ -461,7 +461,8 @@ impl SfmrReconstruction {
                 }
             }
             point.normal = Vector3::zeros();
-            point.error = self.observed_error(p, &point.position, point.w == 0.0, &pixels);
+            point.rms_reprojection_error =
+                self.observed_error(p, &point.position, point.w == 0.0, &pixels);
         }
 
         // A changed point's normal was just zeroed, so its confidence drops to

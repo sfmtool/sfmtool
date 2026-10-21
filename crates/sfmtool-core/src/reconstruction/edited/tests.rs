@@ -68,7 +68,7 @@ pub(super) fn new_record(seed: u32, image_count: u32) -> PointRecord {
             position: nalgebra::Point3::new(seed as f64, 1.0, 2.0),
             w: 1.0,
             color: [seed as u8, 2, 3],
-            error: 0.25,
+            rms_reprojection_error: 0.25,
             normal: nalgebra::Vector3::new(0.0, 0.0, 1.0),
         },
         observations: vec![
@@ -162,7 +162,8 @@ fn a_record_agrees_with_itself_and_with_nothing_that_moved() {
     moved.point.position.z = f64::from_bits(record.point.position.z.to_bits() + 1);
     assert!(!moved.agrees_with(&record), "the position");
     let mut moved = record.clone();
-    moved.point.error = f32::from_bits(record.point.error.to_bits() + 1);
+    moved.point.rms_reprojection_error =
+        f32::from_bits(record.point.rms_reprojection_error.to_bits() + 1);
     assert!(!moved.agrees_with(&record), "the error");
     let mut moved = record.clone();
     moved.point.w = 0.0;

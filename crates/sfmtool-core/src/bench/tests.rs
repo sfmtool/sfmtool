@@ -2306,13 +2306,13 @@ fn an_untouched_point_committed_back_rewrites_its_colour_and_its_error() {
         now.point.color,
         [bitmap[[c, c, 0]], bitmap[[c, c, 1]], bitmap[[c, c, 2]]]
     );
-    assert_eq!(was.point.error, 0.5);
-    assert_eq!(now.point.error, 0.0);
+    assert_eq!(was.point.rms_reprojection_error, 0.5);
+    assert_eq!(now.point.rms_reprojection_error, 0.0);
     // Everything else, column for column.
     let restated = PointRecord {
         point: Point3D {
             color: now.point.color,
-            error: now.point.error,
+            rms_reprojection_error: now.point.rms_reprojection_error,
             ..was.point.clone()
         },
         ..was
@@ -2699,9 +2699,9 @@ fn a_kept_observation_with_no_keypoint_refuses_by_name() {
     );
 }
 
-/// The `error` column is the root mean square of what the last evaluation
-/// measured, not their mean and not a zero standing in for "a bench track has
-/// no error": errors of 1 and 3 px store sqrt(5) px, not 2.
+/// The committed `rms_reprojection_error` is the root mean square of what the
+/// last evaluation measured, not their mean and not a zero standing in for "a
+/// bench track has no error": errors of 1 and 3 px store sqrt(5) px, not 2.
 #[test]
 fn the_committed_error_is_the_rms_of_the_measured_reprojections() {
     let scene = Scene::new();
@@ -2718,9 +2718,9 @@ fn the_committed_error_is_the_rms_of_the_measured_reprojections() {
     let (next, report) = commit(&edited, &track).expect("two observations in, with a position");
     let written = next.point(report.point).expect("just written");
     assert!(
-        (written.point().error - 5f32.sqrt()).abs() < 1e-6,
+        (written.point().rms_reprojection_error - 5f32.sqrt()).abs() < 1e-6,
         "wrote {}",
-        written.point().error
+        written.point().rms_reprojection_error
     );
 }
 

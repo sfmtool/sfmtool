@@ -119,7 +119,8 @@ pub struct ReprojectionSample {
 ///   re-triangulated from the value's own poses and lenses, the moved one
 ///   included, by [`triangulate_track`]. Its patch frame is rescaled by its
 ///   placement-distance ratio so the patch keeps its angular size, and its
-///   stored `error` becomes the RMS of its own residuals at the new geometry;
+///   stored `rms_reprojection_error` becomes the RMS of its own residuals at
+///   the new geometry;
 /// - a **bearing whose only observation is this image** rotates with the
 ///   camera: its direction becomes the moved camera's ray through its keypoint;
 /// - everything else **keeps its position**: a track whose triangulation
@@ -275,7 +276,7 @@ pub fn move_camera(
             Some(&tri.point),
         );
         out.point_set.points[p].position = tri.point;
-        out.point_set.points[p].error = track_rms_px(&out, p) as f32;
+        out.point_set.points[p].rms_reprojection_error = track_rms_px(&out, p) as f32;
         report.retriangulated += 1;
     }
 
@@ -402,7 +403,7 @@ pub fn pose_of(recon: &SfmrReconstruction, image: usize) -> Se3Transform {
 /// its stored error when nothing about it projects.
 fn track_rms_px(recon: &SfmrReconstruction, p: usize) -> f64 {
     let Some(xy) = recon.point_set.keypoints_xy() else {
-        return f64::from(recon.point_set.points[p].error);
+        return f64::from(recon.point_set.points[p].rms_reprojection_error);
     };
     let point = &recon.point_set.points[p];
     let start = recon.point_set.observation_offsets[p];
@@ -428,7 +429,7 @@ fn track_rms_px(recon: &SfmrReconstruction, p: usize) -> f64 {
         }
     }
     if count == 0 {
-        return f64::from(point.error);
+        return f64::from(point.rms_reprojection_error);
     }
     (sum / count as f64).sqrt()
 }

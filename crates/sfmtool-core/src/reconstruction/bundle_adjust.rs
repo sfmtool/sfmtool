@@ -773,7 +773,7 @@ pub fn bundle_adjust(
         let point = &mut out.point_set.points[p];
         point.position = after_position;
         point.w = if now_at_infinity { 0.0 } else { 1.0 };
-        point.error = (squares[p] / counts[p] as f64).sqrt() as f32;
+        point.rms_reprojection_error = (squares[p] / counts[p] as f64).sqrt() as f32;
     }
 
     let mut out = if points_deleted > 0 {

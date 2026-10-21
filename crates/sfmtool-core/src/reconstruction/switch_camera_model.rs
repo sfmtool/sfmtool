@@ -320,7 +320,7 @@ pub fn switch_camera_model(
     }
     for p in 0..n_pt {
         if touched[p] {
-            out.point_set.points[p].error = if counts[p] > 0 {
+            out.point_set.points[p].rms_reprojection_error = if counts[p] > 0 {
                 (sums[p] / f64::from(counts[p])).sqrt() as f32
             } else {
                 0.0

@@ -163,7 +163,7 @@ fn plane_recon_with(points: &[Point3<f64>], depth: f64) -> SfmrReconstruction {
             position,
             w: 1.0,
             color: [120, 130, 140],
-            error: 0.5,
+            rms_reprojection_error: 0.5,
             normal: Vector3::new(0.0, 0.0, -1.0),
         })
         .collect();

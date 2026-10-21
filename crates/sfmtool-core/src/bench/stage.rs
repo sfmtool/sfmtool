@@ -499,7 +499,7 @@ fn downgrade(
         position,
         w: if payload.at_infinity { 0.0 } else { 1.0 },
         color: payload.color,
-        error: 0.0,
+        rms_reprojection_error: 0.0,
         normal: Vector3::zeros(),
     };
     let u = patch_frame.u_axis * patch_frame.half_extent[0];

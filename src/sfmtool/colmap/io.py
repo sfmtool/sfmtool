@@ -811,7 +811,7 @@ def save_colmap_binary(
         track_feature_indexes = recon.track_feature_indexes
     positions_xyz = recon.positions
     colors_rgb = recon.colors
-    reprojection_errors = recon.errors
+    reprojection_errors = recon.rms_reprojection_errors
 
     if max_features is not None:
         keypoint_counts = np.array(

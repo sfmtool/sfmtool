@@ -81,7 +81,7 @@ def test_find_assigns_finite_reprojection_errors(seoul_bull_workspace):
     assert result.point_count > n0
 
     # The appended (discovered) points: every error is finite.
-    new_errors = np.asarray(result.errors)[n0:]
+    new_errors = np.asarray(result.rms_reprojection_errors)[n0:]
     assert np.all(np.isfinite(new_errors))
 
     # The discovered points at infinity are scored, not left at the 0.0
@@ -98,7 +98,10 @@ def test_find_assigns_finite_reprojection_errors(seoul_bull_workspace):
     rescored = result.clone_with_changes()
     rescored.recompute_point_errors()
     np.testing.assert_allclose(
-        new_errors, np.asarray(rescored.errors)[n0:], rtol=1e-4, atol=1e-4
+        new_errors,
+        np.asarray(rescored.rms_reprojection_errors)[n0:],
+        rtol=1e-4,
+        atol=1e-4,
     )
 
 
@@ -319,7 +322,7 @@ def test_classify_cli_promotes_at_a_given_noise_level(seoul_bull_ground_truth_sf
     assert not promoted.point_is_at_infinity[188]
     assert promoted.infinity_point_count == original.infinity_point_count - 1
     # Its error is recomputed at the placed point, far under the bearing's.
-    assert promoted.errors[188] < original.errors[188]
+    assert promoted.rms_reprojection_errors[188] < original.rms_reprojection_errors[188]
 
 
 def test_classify_cli_rejects_a_bad_noise_level(seoul_bull_ground_truth_sfmr):

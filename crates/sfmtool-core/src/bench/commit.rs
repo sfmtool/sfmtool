@@ -470,7 +470,7 @@ pub(crate) fn point_record(
             position,
             w: if at_infinity { 0.0 } else { 1.0 },
             color: bitmap_color(payload),
-            error: rms_reprojection_error(track, &kept),
+            rms_reprojection_error: rms_reprojection_error(track, &kept),
             normal,
         },
         observations,
@@ -545,10 +545,10 @@ fn bitmap_color(payload: &TrackPayload) -> [u8; 3] {
     color
 }
 
-/// The `error` column of the committed point: the root mean square of what the
-/// last evaluation measured at each `in` observation.
+/// The `rms_reprojection_error` of the committed point: the root mean square
+/// of what the last evaluation measured at each `in` observation.
 ///
-/// The column is a root-mean-square pixel reprojection error, and the track
+/// The value is a root-mean-square pixel reprojection error, and the track
 /// stage has measured each observation's error against the position the commit
 /// is about to write, so the number is there to be carried across rather than
 /// left at zero. It is the same number Track View's header shows for the

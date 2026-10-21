@@ -108,7 +108,7 @@ impl SfmrReconstruction {
                 position: Point3::new(x, y, z + 1.0),
                 w: 1.0,
                 color: [r, g, b],
-                error: 0.5 + (i as f64 / num_points.max(1) as f64) as f32 * 0.5,
+                rms_reprojection_error: 0.5 + (i as f64 / num_points.max(1) as f64) as f32 * 0.5,
                 normal: Vector3::new(x as f32, y as f32, z as f32).normalize(),
             });
         }

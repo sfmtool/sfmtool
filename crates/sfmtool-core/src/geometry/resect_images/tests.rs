@@ -225,7 +225,7 @@ fn build_points(
             position,
             w: if at_infinity { 0.0 } else { 1.0 },
             color: [128, 128, 128],
-            error: 0.0,
+            rms_reprojection_error: 0.0,
             normal: Vector3::zeros(),
         });
     }

@@ -1200,7 +1200,7 @@ fn project_shape_back(
         position: patch.center,
         w: patch.w,
         color: [0, 0, 0],
-        error: 0.0,
+        rms_reprojection_error: 0.0,
         normal: Vector3::zeros(),
     };
     let table = one_image_table(camera, pose);

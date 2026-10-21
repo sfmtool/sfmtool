@@ -106,7 +106,7 @@ def load_points(path: Path) -> dict:
     if cloud is None:
         raise SystemExit(f"{path} carries no patch frames")
     pos = np.asarray(recon.positions_xyzw, dtype=np.float64)
-    errors = np.asarray(recon.errors, dtype=np.float64)
+    errors = np.asarray(recon.rms_reprojection_errors, dtype=np.float64)
     by_pos = {}
     for i, pid in enumerate(np.asarray(cloud.point_indexes)):
         key = tuple(np.round(pos[int(pid)], 9))

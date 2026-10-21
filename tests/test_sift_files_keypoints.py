@@ -86,7 +86,7 @@ def test_a_track_replacement_keeps_pixels_the_source_stated(seoul_bull_workspace
     out = recon.clone_with_changes(
         positions=positions,
         colors=np.asarray(recon.colors)[:-1],
-        errors=np.asarray(recon.errors)[:-1],
+        rms_reprojection_errors=np.asarray(recon.rms_reprojection_errors)[:-1],
         track_image_indexes=np.asarray(recon.track_image_indexes)[keep],
         track_feature_indexes=np.asarray(recon.track_feature_indexes)[keep],
         track_point_indexes=points[keep],

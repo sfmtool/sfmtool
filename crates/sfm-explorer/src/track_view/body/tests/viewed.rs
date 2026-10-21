@@ -398,13 +398,16 @@ fn the_viewed_header_carries_the_point_s_summary() {
     let node = state.node(id).expect("loaded");
     let stored = node.edited().point(POINT).expect("live").point().clone();
     assert_eq!(summary.point.as_ref(), Some(&stored));
-    assert_eq!(summary.error_px, Some(f64::from(stored.error)));
+    assert_eq!(
+        summary.error_px,
+        Some(f64::from(stored.rms_reprojection_error))
+    );
     assert_eq!(summary.track_length, 3);
     assert!(summary.max_angle_deg > 0.0, "{summary:?}");
 
     let texts = painted(&mut panel, &ctx, &state);
     for expected in [
-        format!("error: {:.2}px", stored.error),
+        format!("error: {:.2}px", stored.rms_reprojection_error),
         "track: 3 obs".to_string(),
         format!("max pair angle: {:.1}°", summary.max_angle_deg),
     ] {
@@ -600,7 +603,7 @@ fn the_viewed_header_marks_a_point_at_infinity() {
                 position: nalgebra::Point3::new(0.0, 0.0, 1.0),
                 w,
                 color: [128, 128, 128],
-                error: 0.5,
+                rms_reprojection_error: 0.5,
                 normal: nalgebra::Vector3::zeros(),
             }),
             error_px: Some(0.5),

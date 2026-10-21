@@ -32,7 +32,7 @@ def load_reconstruction_data(reconstruction_path: Path) -> dict:
         "image_names": recon.image_names,
         "positions": recon.positions,
         "colors": recon.colors,
-        "errors": recon.errors,
+        "rms_reprojection_errors": recon.rms_reprojection_errors,
         "quaternions_wxyz": recon.quaternions_wxyz,
         "translations": recon.translations,
         "observation_counts": recon.observation_counts,
@@ -78,8 +78,8 @@ def inject_reprojection_outliers(
 
     moved = recon.clone_with_changes(positions=positions)
     moved.recompute_point_errors()
-    errors_before = np.asarray(recon.errors)
-    errors_after = np.asarray(moved.errors)
+    errors_before = np.asarray(recon.rms_reprojection_errors)
+    errors_after = np.asarray(moved.rms_reprojection_errors)
     untouched = np.ones(recon.point_count, dtype=bool)
     untouched[indexes] = False
     assert np.all(errors_after[indexes] > min_error_px)

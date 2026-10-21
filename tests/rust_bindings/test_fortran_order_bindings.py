@@ -258,16 +258,17 @@ class TestNegativeStride:
         from sfmtool.reconstruction import SfmrReconstruction
 
         recon = SfmrReconstruction.load(seoul_bull_workspace)
-        errors = np.asarray(recon.errors)
+        errors = np.asarray(recon.rms_reprojection_errors)
         reversed_view = errors[::-1]
         assert not reversed_view.flags["C_CONTIGUOUS"]
 
         out = tmp_path / "rev1d.sfmr"
-        recon.clone_with_changes(errors=np.ascontiguousarray(reversed_view)).save(
-            out, operation="t"
-        )
+        recon.clone_with_changes(
+            rms_reprojection_errors=np.ascontiguousarray(reversed_view)
+        ).save(out, operation="t")
         np.testing.assert_array_equal(
-            np.asarray(SfmrReconstruction.load(out).errors), reversed_view
+            np.asarray(SfmrReconstruction.load(out).rms_reprojection_errors),
+            reversed_view,
         )
 
     def test_reversed_2d_thumbnails_round_trip(self, seoul_bull_workspace, tmp_path):

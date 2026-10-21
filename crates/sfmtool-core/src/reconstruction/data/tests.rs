@@ -396,7 +396,11 @@ fn test_recompute_point_errors_embedded_uses_inline_keypoints() {
     recon
         .recompute_point_errors()
         .expect("embedded recompute must not read .sift");
-    assert!(recon.point_set.points.iter().all(|p| p.error.is_finite()));
+    assert!(recon
+        .point_set
+        .points
+        .iter()
+        .all(|p| p.rms_reprojection_error.is_finite()));
 }
 
 #[test]
@@ -409,7 +413,7 @@ fn test_recompute_infinity_point_errors_embedded() {
     recon
         .recompute_infinity_point_errors()
         .expect("embedded infinity recompute must not read .sift");
-    assert!(recon.point_set.points[0].error.is_finite());
+    assert!(recon.point_set.points[0].rms_reprojection_error.is_finite());
 }
 
 #[test]
@@ -734,8 +738,14 @@ fn test_recompute_point_errors_sift_files_prefers_inline_keypoints() {
         .zip(&embedded.point_set.points)
         .enumerate()
     {
-        assert!(a.error.is_finite(), "point {i} error must be finite");
-        assert_eq!(a.error, b.error, "point {i} error differs from embedded");
+        assert!(
+            a.rms_reprojection_error.is_finite(),
+            "point {i} error must be finite"
+        );
+        assert_eq!(
+            a.rms_reprojection_error, b.rms_reprojection_error,
+            "point {i} error differs from embedded"
+        );
     }
 }
 
@@ -1385,13 +1395,23 @@ fn test_canonical_version_file_loads_without_convention_upgrade() {
 
         // ...so recomputing the errors reproduces the stored ones rather than
         // collapsing to the "no observation in front of the camera" zero.
-        let stored: Vec<f32> = loaded.point_set.points.iter().map(|p| p.error).collect();
+        let stored: Vec<f32> = loaded
+            .point_set
+            .points
+            .iter()
+            .map(|p| p.rms_reprojection_error)
+            .collect();
         assert!(
             stored.iter().all(|e| e.is_finite()),
             "{ctx}: stored errors must be finite"
         );
         loaded.recompute_point_errors().unwrap();
-        let recomputed: Vec<f32> = loaded.point_set.points.iter().map(|p| p.error).collect();
+        let recomputed: Vec<f32> = loaded
+            .point_set
+            .points
+            .iter()
+            .map(|p| p.rms_reprojection_error)
+            .collect();
         assert_eq!(stored, recomputed, "{ctx}: recomputed errors differ");
     }
 
@@ -1457,9 +1477,19 @@ fn test_canonical_version_file_round_trips_through_load_and_save() {
         assert_eq!(lp.w, rp.w);
     }
     assert_projects_onto_keypoints(&reloaded, 1e-3, "resaved");
-    let stored: Vec<f32> = reloaded.point_set.points.iter().map(|p| p.error).collect();
+    let stored: Vec<f32> = reloaded
+        .point_set
+        .points
+        .iter()
+        .map(|p| p.rms_reprojection_error)
+        .collect();
     reloaded.recompute_point_errors().unwrap();
-    let recomputed: Vec<f32> = reloaded.point_set.points.iter().map(|p| p.error).collect();
+    let recomputed: Vec<f32> = reloaded
+        .point_set
+        .points
+        .iter()
+        .map(|p| p.rms_reprojection_error)
+        .collect();
     assert_eq!(stored, recomputed, "resaved: recomputed errors differ");
 
     std::fs::remove_dir_all(&dir).ok();
@@ -1495,7 +1525,7 @@ fn load_bits(recon: &SfmrReconstruction) -> Vec<u64> {
     for point in &recon.point_set.points {
         bits.extend(point.position.coords.iter().map(|c| c.to_bits()));
         bits.push(point.w.to_bits());
-        bits.push(u64::from(point.error.to_bits()));
+        bits.push(u64::from(point.rms_reprojection_error.to_bits()));
         bits.extend(point.normal.iter().map(|c| u64::from(c.to_bits())));
         bits.extend(point.color.iter().map(|c| u64::from(*c)));
     }
@@ -1847,9 +1877,9 @@ fn test_recompute_point_errors_fisheye_keeps_past_ninety_observations() {
     recon.recompute_point_errors().unwrap();
     for (i, p) in recon.point_set.points.iter().enumerate() {
         assert!(
-            (p.error - 2.0).abs() < 1e-2,
+            (p.rms_reprojection_error - 2.0).abs() < 1e-2,
             "point {i} error {} — a past-90-degree observation was dropped",
-            p.error
+            p.rms_reprojection_error
         );
     }
 }
@@ -2123,16 +2153,20 @@ fn one_and_three_px(row: usize) -> f64 {
 #[test]
 fn test_recompute_point_errors_is_the_rms_of_the_observation_errors() {
     let mut recon = demo_sift_files_inline(10);
-    assert!(recon.point_set.points.iter().all(|p| p.error != 0.0));
+    assert!(recon
+        .point_set
+        .points
+        .iter()
+        .all(|p| p.rms_reprojection_error != 0.0));
     let keypoints = keypoints_off_projection(&recon, one_and_three_px);
     set_sift_files_keypoints(&mut recon, Some(keypoints));
     recon.recompute_point_errors().unwrap();
     for (p, point) in recon.point_set.points.iter().enumerate() {
         assert_eq!(recon.observations_for_point(p).len(), 2);
         assert!(
-            (point.error - 5f32.sqrt()).abs() < 1e-3,
+            (point.rms_reprojection_error - 5f32.sqrt()).abs() < 1e-3,
             "point {p} stored {}",
-            point.error
+            point.rms_reprojection_error
         );
     }
 }
@@ -2186,9 +2220,9 @@ fn test_recompute_point_errors_from_sift_files_is_the_rms() {
     recon.recompute_point_errors().unwrap();
     for (p, point) in recon.point_set.points.iter().enumerate() {
         assert!(
-            (point.error - 5f32.sqrt()).abs() < 1e-3,
+            (point.rms_reprojection_error - 5f32.sqrt()).abs() < 1e-3,
             "point {p} stored {}",
-            point.error
+            point.rms_reprojection_error
         );
     }
 }
@@ -2206,17 +2240,20 @@ fn test_recompute_infinity_point_errors_is_the_rms() {
     recon.point_set.points[0].w = 0.0;
     let keypoints = keypoints_off_projection(&recon, one_and_three_px);
     set_sift_files_keypoints(&mut recon, Some(keypoints));
-    let finite_before = recon.point_set.points[1].error;
+    let finite_before = recon.point_set.points[1].rms_reprojection_error;
 
     let mut whole = recon.clone();
     whole.recompute_point_errors().unwrap();
     recon.recompute_infinity_point_errors().unwrap();
 
     for r in [&recon, &whole] {
-        let error = r.point_set.points[0].error;
+        let error = r.point_set.points[0].rms_reprojection_error;
         assert!((error - 5f32.sqrt()).abs() < 1e-3, "stored {error}");
     }
-    assert_eq!(recon.point_set.points[1].error, finite_before);
+    assert_eq!(
+        recon.point_set.points[1].rms_reprojection_error,
+        finite_before
+    );
 }
 
 /// A point none of whose observations projects keeps the 0.0 it always got.
@@ -2246,6 +2283,6 @@ fn test_recompute_point_errors_with_nothing_projecting_is_zero() {
         );
     }
     recon.recompute_point_errors().unwrap();
-    assert_eq!(recon.point_set.points[0].error, 0.0);
-    assert!((recon.point_set.points[1].error - 5f32.sqrt()).abs() < 1e-3);
+    assert_eq!(recon.point_set.points[0].rms_reprojection_error, 0.0);
+    assert!((recon.point_set.points[1].rms_reprojection_error - 5f32.sqrt()).abs() < 1e-3);
 }

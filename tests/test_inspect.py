@@ -95,7 +95,7 @@ def test_inspect_sfmr_verbose_with_points_at_infinity(
 
     # recompute_point_errors must yield a finite error for the w=0 point.
     modified.recompute_point_errors()
-    assert np.all(np.isfinite(modified.errors))
+    assert np.all(np.isfinite(modified.rms_reprojection_errors))
 
     out_path = tmp_path / "with_infinity.sfmr"
     modified.save(str(out_path))

@@ -22,7 +22,7 @@ fn finite(x: f64, y: f64, z: f64) -> Point3D {
         position: Point3::new(x, y, z),
         w: 1.0,
         color: [10, 20, 30],
-        error: 0.5,
+        rms_reprojection_error: 0.5,
         normal: Vector3::zeros(),
     }
 }

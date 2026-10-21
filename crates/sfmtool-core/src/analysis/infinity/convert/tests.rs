@@ -135,14 +135,18 @@ fn classify_demotes_a_far_point_to_its_scored_bearing() {
     // which is of the order of the noise.
     assert_eq!(pt.normal, Vector3::zeros());
     assert!(
-        pt.error > 0.0 && pt.error < 4.0 * NOISE_PX as f32,
+        pt.rms_reprojection_error > 0.0 && pt.rms_reprojection_error < 4.0 * NOISE_PX as f32,
         "{}",
-        pt.error
+        pt.rms_reprojection_error
     );
     // It is the root mean square of the bearing's observation errors (the
     // fitted bearing splits its two residuals evenly, so here it is the mean too).
     let (rms, _) = rms_and_mean_of_observation_errors(&classified, 0);
-    assert!((pt.error - rms).abs() < 1e-5, "{} against {rms}", pt.error);
+    assert!(
+        (pt.rms_reprojection_error - rms).abs() < 1e-5,
+        "{} against {rms}",
+        pt.rms_reprojection_error
+    );
 }
 
 #[test]
@@ -209,10 +213,18 @@ fn classify_promotes_a_bearing_whose_rays_ask_for_a_depth() {
     assert_eq!(pt.normal, Vector3::zeros());
     // The error is recomputed at the placed point: of the order of the noise,
     // where the bearing's residuals were the full parallax.
-    assert!(pt.error < 4.0 * NOISE_PX as f32, "{}", pt.error);
+    assert!(
+        pt.rms_reprojection_error < 4.0 * NOISE_PX as f32,
+        "{}",
+        pt.rms_reprojection_error
+    );
     // It is the root mean square of the placed point's observation errors.
     let (rms, mean) = rms_and_mean_of_observation_errors(&classified, 0);
-    assert!((pt.error - rms).abs() < 1e-5, "{} against {rms}", pt.error);
+    assert!(
+        (pt.rms_reprojection_error - rms).abs() < 1e-5,
+        "{} against {rms}",
+        pt.rms_reprojection_error
+    );
     assert!((rms - mean).abs() > 1e-4, "the fixture tells the two apart");
 }
 
@@ -356,7 +368,7 @@ fn classify_leaves_a_point_neither_a_point_nor_a_bearing_describes() {
     let after = &classified.point_set.points[0];
     assert_eq!(after.position, before.position);
     assert_eq!(after.w, before.w);
-    assert_eq!(after.error, before.error);
+    assert_eq!(after.rms_reprojection_error, before.rms_reprojection_error);
 }
 
 #[test]

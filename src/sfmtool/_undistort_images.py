@@ -197,7 +197,7 @@ def _remap_tracks(
     # Filter point data
     positions_xyz = np.asarray(recon.positions)[surviving_mask]
     colors_rgb = np.asarray(recon.colors)[surviving_mask]
-    reprojection_errors = np.asarray(recon.errors)[surviving_mask]
+    reprojection_errors = np.asarray(recon.rms_reprojection_errors)[surviving_mask]
 
     # Sort tracks by (point3d_index, image_index)
     sort_order = np.lexsort((new_img_idxs, final_pt3d_idxs))

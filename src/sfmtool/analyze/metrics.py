@@ -112,7 +112,7 @@ def print_metrics_analysis(
 
     per_image = _compute_per_image_metrics(rust_recon, range_numbers=range_numbers)
 
-    errors = rust_recon.errors
+    errors = rust_recon.rms_reprojection_errors
     recon_median_error = float(np.median(errors))
     flag_threshold_warn = recon_median_error * 1.5
     flag_threshold_alert = recon_median_error * 2.0

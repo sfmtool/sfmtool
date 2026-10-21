@@ -45,7 +45,10 @@ def test_bundle_adjust_stores_the_rms_error(seoul_bull_workspace):
     rescored = adjusted.clone_with_changes()
     rescored.recompute_point_errors()
     np.testing.assert_allclose(
-        np.asarray(adjusted.errors), np.asarray(rescored.errors), rtol=1e-5, atol=1e-5
+        np.asarray(adjusted.rms_reprojection_errors),
+        np.asarray(rescored.rms_reprojection_errors),
+        rtol=1e-5,
+        atol=1e-5,
     )
 
 

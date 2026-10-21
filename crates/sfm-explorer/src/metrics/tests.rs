@@ -34,7 +34,7 @@ fn bearing(direction: [f64; 3]) -> Point3D {
         position: Point3::new(direction[0], direction[1], direction[2]),
         w: 0.0,
         color: [0, 0, 0],
-        error: 0.0,
+        rms_reprojection_error: 0.0,
         normal: Vector3::zeros(),
     }
 }

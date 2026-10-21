@@ -332,7 +332,7 @@ impl ImageDetail {
                             edited
                                 .point(feature.point_index)
                                 .map(|v| {
-                                    let e = v.point().error;
+                                    let e = v.point().rms_reprojection_error;
                                     if e.is_finite() {
                                         e
                                     } else {
@@ -597,7 +597,7 @@ impl ImageDetail {
                         let condition_number = feat.map(|f| f.condition_number).unwrap_or(f32::NAN);
                         let mut text = format!(
                             "Point3D #{point_idx} | err: {:.3}px | tracklen: {obs_count}",
-                            pt.error
+                            pt.rms_reprojection_error
                         );
                         if max_track_angle.is_finite() {
                             text.push_str(&format!(" | max angle: {max_track_angle:.2}°"));
@@ -880,7 +880,7 @@ fn compute_error_range(features: &[DisplayFeature], edited: &EditedReconstructio
             continue;
         }
         if let Some(view) = edited.point(feature.point_index) {
-            let error = view.point().error;
+            let error = view.point().rms_reprojection_error;
             if error.is_finite() {
                 vmin = vmin.min(error);
                 vmax = vmax.max(error);

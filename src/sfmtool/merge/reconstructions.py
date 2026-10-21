@@ -359,7 +359,9 @@ def _create_merged_reconstruction(
         ),
         positions=np.ascontiguousarray(points["positions"], dtype=np.float64),
         colors=np.ascontiguousarray(points["colors"], dtype=np.uint8),
-        errors=np.ascontiguousarray(points["errors"], dtype=np.float32),
+        rms_reprojection_errors=np.ascontiguousarray(
+            points["errors"], dtype=np.float32
+        ),
         track_image_indexes=np.ascontiguousarray(
             tracks["image_indexes"], dtype=np.uint32
         ),

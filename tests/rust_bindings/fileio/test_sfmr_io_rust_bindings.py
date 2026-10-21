@@ -300,7 +300,9 @@ class TestReferenceObservations:
         columns = dict(
             positions=np.ascontiguousarray(np.asarray(small.positions_xyzw)),
             colors=np.ascontiguousarray(np.asarray(small.colors)),
-            errors=np.ascontiguousarray(np.asarray(small.errors)),
+            rms_reprojection_errors=np.ascontiguousarray(
+                np.asarray(small.rms_reprojection_errors)
+            ),
             normals=np.ascontiguousarray(np.asarray(small.normals)),
             track_image_indexes=np.ascontiguousarray(small.track_image_indexes),
             track_feature_indexes=np.zeros(
@@ -414,7 +416,9 @@ class TestReferenceObservations:
             patches=small.patches,
             positions=np.ascontiguousarray(np.asarray(small.positions_xyzw)),
             colors=np.ascontiguousarray(np.asarray(small.colors)),
-            errors=np.ascontiguousarray(np.asarray(small.errors)),
+            rms_reprojection_errors=np.ascontiguousarray(
+                np.asarray(small.rms_reprojection_errors)
+            ),
             normals=np.ascontiguousarray(np.asarray(small.normals)),
             track_image_indexes=np.ascontiguousarray(small.track_image_indexes),
             track_feature_indexes=np.zeros(

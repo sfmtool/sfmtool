@@ -399,7 +399,7 @@ class BundleAdjustTransform:
             translations=translations,
             positions=positions,
             colors=colors,
-            errors=errors,
+            rms_reprojection_errors=errors,
             track_image_indexes=track_image_indexes,
             track_feature_indexes=track_feature_indexes,
             track_point_indexes=track_point_indexes,

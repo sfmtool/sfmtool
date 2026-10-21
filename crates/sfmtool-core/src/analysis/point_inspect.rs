@@ -98,7 +98,7 @@ impl SfmrReconstruction {
         let pt = &self.point_set.points[point_idx];
         let start = self.point_set.observation_offsets[point_idx];
         let observations = self.observations_for_point(point_idx);
-        let noise = (pt.error as f64).max(noise_floor_px);
+        let noise = (pt.rms_reprojection_error as f64).max(noise_floor_px);
         let feature_indexes = self.feature_indexes();
         let mut wanted = vec![false; self.image_table.images.len()];
         for obs in observations {
@@ -195,7 +195,7 @@ impl SfmrReconstruction {
         Ok(PointInspection {
             w: pt.w,
             position: pt.position,
-            error: pt.error,
+            error: pt.rms_reprojection_error,
             color: pt.color,
             observations: obs_out,
             point_or_bearing,

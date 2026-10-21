@@ -20,7 +20,9 @@ class FilterByReprojectionErrorTransform:
         # Reprojection error is well-defined for every point: a point at
         # infinity (w = 0) projects its bearing through rotation + intrinsics
         # (no translation), so score finite and infinity points alike.
-        points_to_keep_mask = np.asarray(recon.errors <= self.threshold, dtype=bool)
+        points_to_keep_mask = np.asarray(
+            recon.rms_reprojection_errors <= self.threshold, dtype=bool
+        )
 
         if not np.any(points_to_keep_mask):
             raise ValueError(

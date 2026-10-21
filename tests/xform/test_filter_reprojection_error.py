@@ -31,7 +31,9 @@ def _with_outliers(seoul_bull_workspace, tmp_path):
         seoul_bull_workspace, input_path, OUTLIER_COUNT
     )
     original = load_reconstruction_data(input_path)
-    np.testing.assert_array_equal(np.flatnonzero(original["errors"] > 2.0), outliers)
+    np.testing.assert_array_equal(
+        np.flatnonzero(original["rms_reprojection_errors"] > 2.0), outliers
+    )
     return input_path, original, outliers
 
 
@@ -49,7 +51,7 @@ def test_filter_by_reprojection_error_basic(seoul_bull_workspace, tmp_path):
     keep[outliers] = False
     assert filtered["point_count"] == original["point_count"] - OUTLIER_COUNT
     np.testing.assert_array_equal(filtered["positions"], original["positions"][keep])
-    assert np.all(filtered["errors"] <= 2.0)
+    assert np.all(filtered["rms_reprojection_errors"] <= 2.0)
 
 
 def test_filter_by_reprojection_error_strict(seoul_bull_sfmr_only, tmp_path):
@@ -62,7 +64,7 @@ def test_filter_by_reprojection_error_strict(seoul_bull_sfmr_only, tmp_path):
     filtered = load_reconstruction_data(output_path)
 
     assert filtered["point_count"] <= original["point_count"]
-    assert np.all(filtered["errors"] <= 0.5)
+    assert np.all(filtered["rms_reprojection_errors"] <= 0.5)
 
 
 def test_filter_by_reprojection_error_lenient(seoul_bull_sfmr_only, tmp_path):
@@ -140,7 +142,7 @@ def test_filter_by_reprojection_error_combined(seoul_bull_workspace, tmp_path):
         filtered["positions"], original["positions"][expected_keep]
     )
     assert np.all(filtered["observation_counts"] > 2)
-    assert np.all(filtered["errors"] <= 2.0)
+    assert np.all(filtered["rms_reprojection_errors"] <= 2.0)
 
 
 def test_filter_by_reprojection_error_tiny_threshold(seoul_bull_sfmr_only, tmp_path):
@@ -150,6 +152,6 @@ def test_filter_by_reprojection_error_tiny_threshold(seoul_bull_sfmr_only, tmp_p
     try:
         apply_transforms_to_file(seoul_bull_sfmr_only, output_path, transforms)
         filtered = load_reconstruction_data(output_path)
-        assert np.all(filtered["errors"] <= 0.1)
+        assert np.all(filtered["rms_reprojection_errors"] <= 0.1)
     except ValueError as e:
         assert "No points remain" in str(e)

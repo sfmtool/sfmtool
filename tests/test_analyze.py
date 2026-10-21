@@ -223,14 +223,16 @@ def test_analyze_depth_reliability_z_at_fitted_point(
     recon = SfmrReconstruction.load(str(seoul_bull_ground_truth_sfmr))
     stored_z = np.asarray(recon.triangulation_diagnostics()["inverse_depth_z"])
     xyzw = np.asarray(recon.positions_xyzw, dtype=np.float64).copy()
-    errors = np.asarray(recon.errors, dtype=np.float32).copy()
+    errors = np.asarray(recon.rms_reprojection_errors, dtype=np.float32).copy()
     # Stored as bearings with a 5 px error: at a 5 px noise the rule's z would
     # be about a fifth of the finite point's.
     xyzw[:2, :3] /= np.linalg.norm(xyzw[:2, :3], axis=1)[:, None]
     xyzw[:2, 3] = 0.0
     errors[:2] = 5.0
     path = seoul_bull_ground_truth_sfmr.parent / "two_bearings.sfmr"
-    recon.clone_with_changes(positions=xyzw, errors=errors).save(str(path))
+    recon.clone_with_changes(positions=xyzw, rms_reprojection_errors=errors).save(
+        str(path)
+    )
 
     result = CliRunner().invoke(main, ["analyze", "--depth-reliability", str(path)])
     assert result.exit_code == 0, result.output

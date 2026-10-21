@@ -95,7 +95,7 @@ fn scene(cameras: Vec<CameraIntrinsics>, camera_of: impl Fn(usize) -> u32) -> Sf
             position,
             w: 1.0,
             color: [10, 20, 30],
-            error: 0.25,
+            rms_reprojection_error: 0.25,
             normal: Vector3::new(0.0, 0.0, -1.0),
         })
         .collect();
@@ -178,7 +178,7 @@ fn poses_points_and_keypoints_are_unchanged() {
         assert_eq!(a.position, b.position);
         assert_eq!(a.w, b.w);
         // The planted 0.25 is replaced by the recomputed RMS error.
-        assert_ne!(a.error, 0.25);
+        assert_ne!(a.rms_reprojection_error, 0.25);
     }
     // Every point here is seen by the switched camera, so each stored error is
     // the root mean square `recompute_point_errors` writes.
@@ -186,10 +186,10 @@ fn poses_points_and_keypoints_are_unchanged() {
     rescored.recompute_point_errors().unwrap();
     for (a, b) in out.point_set.points.iter().zip(&rescored.point_set.points) {
         assert!(
-            (a.error - b.error).abs() < 1e-5,
+            (a.rms_reprojection_error - b.rms_reprojection_error).abs() < 1e-5,
             "{} against {}",
-            a.error,
-            b.error
+            a.rms_reprojection_error,
+            b.rms_reprojection_error
         );
     }
     assert_eq!(out.image_table.cameras[0].model_name(), "SFMTOOL_FISHEYE");
@@ -525,7 +525,7 @@ fn the_outermost_keypoint_can_be_left_out_of_the_report() {
     assert_eq!(entry.observations, asked.observations);
     assert_eq!(without.image_table.cameras, with.image_table.cameras);
     for (a, b) in without.point_set.points.iter().zip(&with.point_set.points) {
-        assert_eq!(a.error, b.error);
+        assert_eq!(a.rms_reprojection_error, b.rms_reprojection_error);
     }
 
     // And it reads no `.sift` file for it: with every file gone, the switch

@@ -169,8 +169,9 @@ struct DeferredChanges {
     observation_readings: Option<Option<sfmtool_core::reconstruction::ObservationReadings>>,
 }
 
-/// Apply one per-point keyword argument (positions, colors, errors, normals,
-/// their confidence, the constraint triple and the patch columns).
+/// Apply one per-point keyword argument (positions, colors,
+/// rms_reprojection_errors, normals, their confidence, the constraint triple
+/// and the patch columns).
 ///
 /// Returns `Ok(false)` when `key` is not a per-point key.
 fn apply_point_field(
@@ -200,7 +201,7 @@ fn apply_point_field(
                     position: nalgebra::Point3::origin(),
                     w: 1.0,
                     color: [0, 0, 0],
-                    error: 0.0,
+                    rms_reprojection_error: 0.0,
                     normal: Vector3::zeros(),
                 },
             );
@@ -255,23 +256,23 @@ fn apply_point_field(
                 pt.color = [s[off], s[off + 1], s[off + 2]];
             }
         }
-        "errors" => {
-            let arr = extract_array1!(value, "errors", f32)?;
+        "rms_reprojection_errors" => {
+            let arr = extract_array1!(value, "rms_reprojection_errors", f32)?;
             let s = arr.as_slice().map_err(|e| {
                 pyo3::exceptions::PyValueError::new_err(format!(
-                    "clone_with_changes(): 'errors' must be C-contiguous: {e}"
+                    "clone_with_changes(): 'rms_reprojection_errors' must be C-contiguous: {e}"
                 ))
             })?;
             if s.len() != recon.point_set.points.len() {
                 return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                    "clone_with_changes(): 'errors' length ({}) must match point count ({}). \
-                     Hint: pass 'positions' first if changing point count.",
+                    "clone_with_changes(): 'rms_reprojection_errors' length ({}) must match \
+                     point count ({}). Hint: pass 'positions' first if changing point count.",
                     s.len(),
                     recon.point_set.points.len()
                 )));
             }
             for (i, pt) in recon.point_set.points.iter_mut().enumerate() {
-                pt.error = s[i];
+                pt.rms_reprojection_error = s[i];
             }
         }
         "normals" => {

@@ -117,7 +117,7 @@ pub struct Point3D {
     /// RGB color (0-255 each).
     pub color: [u8; 3],
     /// RMS reprojection error in pixels.
-    pub error: f32,
+    pub rms_reprojection_error: f32,
     /// Surface normal (unit vector in world coordinates). The default
     /// mean-viewing estimate leaves this `(0, 0, 0)` for a point at infinity.
     pub normal: Vector3<f32>,

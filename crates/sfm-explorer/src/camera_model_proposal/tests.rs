@@ -791,7 +791,7 @@ pub(crate) fn fisheye_node(path: &str) -> crate::scene::SceneNode {
                 position: nalgebra::Point3::from(world),
                 w: 1.0,
                 color: [200, 40, 40],
-                error: 0.5,
+                rms_reprojection_error: 0.5,
                 normal: nalgebra::Vector3::zeros(),
             }
         })

@@ -198,7 +198,7 @@ def test_kerry_park_solve_registers_all_frames(
     assert recon.camera_count == 2  # one camera per sensor
     assert recon.point_count >= 150
     # Median reprojection error should be small for a well-conditioned solve.
-    errors = recon.errors
+    errors = recon.rms_reprojection_errors
     assert errors.size > 0
     assert float(np.median(errors)) < 1.5
 
@@ -327,6 +327,6 @@ def test_kerry_park_camrig_solve_registers_all_frames(
     assert recon.image_count == 16
     assert recon.camera_count == 2  # one camera per sensor
     assert recon.point_count >= 150
-    errors = recon.errors
+    errors = recon.rms_reprojection_errors
     assert errors.size > 0
     assert float(np.median(errors)) < 1.5

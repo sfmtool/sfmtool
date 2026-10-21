@@ -615,7 +615,7 @@ pub(super) fn get_point(state: &mut AppState, query: &crate::goto_point::PointQu
         "index": point_index,
         "position": render::point(&point.position),
         "color": point.color,
-        "error": point.error,
+        "rms_error_px": point.rms_reprojection_error,
         "at_infinity": point.is_at_infinity(),
         "patch_frame": render::patch_frame(view.patch_frame().as_ref()),
         "normal_confidence": view.normal_confidence(),

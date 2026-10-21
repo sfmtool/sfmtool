@@ -300,7 +300,7 @@ impl SfmrReconstruction {
                     data.colors_rgb[[i, 1]],
                     data.colors_rgb[[i, 2]],
                 ],
-                error: data.reprojection_errors[i],
+                rms_reprojection_error: data.reprojection_errors[i],
                 normal,
             });
         }
@@ -521,7 +521,7 @@ impl SfmrReconstruction {
             colors_rgb[[i, 0]] = pt.color[0];
             colors_rgb[[i, 1]] = pt.color[1];
             colors_rgb[[i, 2]] = pt.color[2];
-            reprojection_errors[i] = pt.error;
+            reprojection_errors[i] = pt.rms_reprojection_error;
             if let Some(normals) = &mut normals_xyz {
                 normals[[i, 0]] = pt.normal.x;
                 normals[[i, 1]] = pt.normal.y;

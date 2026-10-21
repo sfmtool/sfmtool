@@ -344,7 +344,7 @@ pub(in crate::bench) fn fixture_of(
         position: coordinate,
         w,
         color: [120, 130, 140],
-        error: 0.5,
+        rms_reprojection_error: 0.5,
         // A `w = 0` row carries a zero normal, which is what the format states
         // and what the demotion pass leaves.
         normal: if w == 0.0 {
@@ -489,7 +489,7 @@ pub(in crate::bench) fn fixture_points(
             position,
             w: 1.0,
             color: [120, 130, 140],
-            error: 0.5,
+            rms_reprojection_error: 0.5,
             normal: Vector3::new(0.0, 0.0, -1.0),
         })
         .collect();

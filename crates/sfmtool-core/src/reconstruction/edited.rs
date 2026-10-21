@@ -284,7 +284,10 @@ fn floats_agree(a: f64, b: f64) -> bool {
 fn points_agree(a: &Point3D, b: &Point3D) -> bool {
     a.color == b.color
         && floats_agree(a.w, b.w)
-        && floats_agree(f64::from(a.error), f64::from(b.error))
+        && floats_agree(
+            f64::from(a.rms_reprojection_error),
+            f64::from(b.rms_reprojection_error),
+        )
         && a.position
             .coords
             .iter()

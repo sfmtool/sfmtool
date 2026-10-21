@@ -268,11 +268,11 @@ impl SfmrReconstruction {
     ///
     /// For each image, loads feature positions from the `.sift` file and
     /// reprojects all observed 3D points through the camera model. Each
-    /// point's `error` is set to the root mean square of the pixel-space
-    /// reprojection errors of all its observations: the square root of the
-    /// mean of their squares. Points with no valid observations (e.g., all
-    /// behind camera) get `error = 0.0`. Points at infinity are scored like
-    /// finite ones, through their bearing.
+    /// point's `rms_reprojection_error` is set to the root mean square of the
+    /// pixel-space reprojection errors of all its observations: the square
+    /// root of the mean of their squares. Points with no valid observations
+    /// (e.g., all behind camera) get `rms_reprojection_error = 0.0`. Points
+    /// at infinity are scored like finite ones, through their bearing.
     ///
     /// This replaces any errors read from COLMAP/GLOMAP binary files,
     /// which may use different coordinate conventions (GLOMAP stores
@@ -284,7 +284,7 @@ impl SfmrReconstruction {
     pub fn recompute_point_errors(&mut self) -> Result<(), ReconstructionError> {
         if let Some(errors) = self.inline_point_reprojection_errors() {
             for (pt, error) in self.point_set.points.iter_mut().zip(errors) {
-                pt.error = error;
+                pt.rms_reprojection_error = error;
             }
             return Ok(());
         }
@@ -308,7 +308,7 @@ impl SfmrReconstruction {
         }
 
         for i in 0..num_points {
-            self.point_set.points[i].error = if error_counts[i] > 0 {
+            self.point_set.points[i].rms_reprojection_error = if error_counts[i] > 0 {
                 (error_sums[i] / error_counts[i] as f64).sqrt() as f32
             } else {
                 0.0
@@ -345,7 +345,7 @@ impl SfmrReconstruction {
         if let Some(errors) = self.inline_point_reprojection_errors() {
             for (i, &inf) in is_infinity.iter().enumerate() {
                 if inf {
-                    self.point_set.points[i].error = errors[i];
+                    self.point_set.points[i].rms_reprojection_error = errors[i];
                 }
             }
             return Ok(());
@@ -378,7 +378,7 @@ impl SfmrReconstruction {
 
         for i in 0..num_points {
             if is_infinity[i] {
-                self.point_set.points[i].error = if error_counts[i] > 0 {
+                self.point_set.points[i].rms_reprojection_error = if error_counts[i] > 0 {
                     (error_sums[i] / error_counts[i] as f64).sqrt() as f32
                 } else {
                     0.0

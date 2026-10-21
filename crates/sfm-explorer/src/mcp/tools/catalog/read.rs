@@ -99,7 +99,9 @@ pub(super) fn specs() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "get_point",
-            description: "One 3D point: position, colour, RMS error, whether it is a point at \
+            description: "One 3D point: position, colour, rms_error_px (the root mean square \
+                          of its observations' reprojection errors, in pixels), whether it is \
+                          a point at \
                           infinity, its patch frame (centre, unit u and v axes, outward \
                           normal and half_extent; null with no patch frame) with its \
                           normal_confidence, and its full track — every observing camera image \

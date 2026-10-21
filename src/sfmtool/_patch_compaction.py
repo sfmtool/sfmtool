@@ -271,7 +271,7 @@ def compact_to_embedded_patches(
     positions_xyzw = np.asarray(recon.positions_xyzw, dtype=np.float64)[survivors]
     centers = np.asarray(recon.positions, dtype=np.float64)[survivors]
     colors = np.asarray(recon.colors, dtype=np.uint8)[survivors]
-    errors = np.asarray(recon.errors, dtype=np.float32)[survivors]
+    errors = np.asarray(recon.rms_reprojection_errors, dtype=np.float32)[survivors]
     normals = (
         np.asarray(recon.normals, dtype=np.float32)[survivors]
         if recon.has_normals
@@ -391,7 +391,7 @@ def compact_to_embedded_patches(
     kwargs: dict[str, Any] = {
         "positions": positions_xyzw,
         "colors": colors,
-        "errors": errors,
+        "rms_reprojection_errors": errors,
     }
     if normals is not None:
         kwargs["normals"] = normals
