@@ -522,6 +522,15 @@ fn an_asked_for_fast_task_cancels_the_job_which_answers_after_it() {
         "the task did not ask the job to stop"
     );
     release.send(()).expect("the job is held");
+    // Block until the cancelled job's work has returned, which ends its
+    // channel before the worker reports the task done. The seam is then
+    // called after the work has ended but possibly before the queue has heard
+    // of it, which is the order a fast worker gives by chance.
+    let ended = state.proposal_jobs.queued.as_ref().expect("queued");
+    assert!(
+        ended.messages.recv().is_err(),
+        "the cancelled run sent a message"
+    );
     state.wait_for_proposal_job();
     assert!(
         matches!(state.task(fit), Some(TaskState::Running(_))),

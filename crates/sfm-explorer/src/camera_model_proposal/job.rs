@@ -391,6 +391,11 @@ impl AppState {
 
     /// Block until the queued job has ended or was dropped, driving the fast
     /// queue meanwhile and keeping what it sends.
+    ///
+    /// A job that has ended has also left the fast queue when this returns:
+    /// its channel ends when its work returns, before the worker reports the
+    /// task done, so the queue is stepped until that report has landed and
+    /// the task waiting behind the job has started.
     #[cfg(test)]
     pub(crate) fn wait_for_proposal_job(&mut self) {
         loop {
@@ -404,7 +409,11 @@ impl AppState {
                     continue;
                 }
                 Err(TryRecvError::Disconnected) => {
+                    let task = queued.task;
                     self.proposal_jobs.queued = None;
+                    while self.quiet_task_running(task) {
+                        self.step_queue(crate::background::Queue::Fast);
+                    }
                     return;
                 }
                 Err(TryRecvError::Empty) => {}
