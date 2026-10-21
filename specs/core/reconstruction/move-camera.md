@@ -154,7 +154,7 @@ projection is repeated.
      re-triangulated from the value's own poses and lenses, the moved one
      included, by this module's own batch solve. Its patch frame is
      rescaled by the ratio of its placement distances, so the patch keeps the
-     angular size it had, and its stored `error` becomes the RMS of its own
+     angular size it had, and its stored `rms_reprojection_error` becomes the RMS of its own
      residuals at the new geometry, because the column would otherwise describe
      a geometry the value no longer holds;
    - a **bearing whose only observation is this image** rotates with the camera:

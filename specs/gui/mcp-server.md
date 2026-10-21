@@ -127,7 +127,7 @@ and press the viewer's widgets the way a person's eyes, mouse and keyboard do
 | `list_camera_images` | read | One reconstruction's camera images, paginated |
 | `get_camera_image` | read | One camera image: pose, intrinsics, observation stats |
 | `get_camera_intrinsics` | read | One intrinsics record and the camera images that use it |
-| `get_point` | read | One 3D point: position, colour, error, patch frame, full track, and the viewed track's evaluation for the viewed point |
+| `get_point` | read | One 3D point: position, colour, RMS reprojection error (`rms_error_px`), patch frame, full track, and the viewed track's evaluation for the viewed point |
 | `get_action_log` | read | What has happened in the viewer, from a revision onward, filtered by who did it, optionally with each row's stages |
 | `get_timing_detail` | read | Whether the detailed stages of an operation are being recorded |
 | `set_timing_detail` | write | Record the detailed stages of an operation, or stop |
@@ -677,7 +677,8 @@ looking at is the one at the cursor, and this block reports it.
 // get_point { "point": "pt3d_a1b2c3d4_1207" }
 { "id": "pt3d_a1b2c3d4_1207", "reconstruction_label": "seoul_bull",
   "index": 1207,
-  "position": [0.02, 0.41, 0.88], "color": [173, 141, 96], "error": 0.53,
+  "position": [0.02, 0.41, 0.88], "color": [173, 141, 96],
+  "rms_error_px": 0.53,   // RMS of the track's reprojection errors, px
   "at_infinity": false,
   "patch_frame": { "center": [0.02, 0.41, 0.88],
                    "u_axis": [1.0, 0.0, 0.0], "v_axis": [0.0, 0.6, 0.8],

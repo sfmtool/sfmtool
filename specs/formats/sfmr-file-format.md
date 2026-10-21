@@ -1129,6 +1129,22 @@ per-observation errors, so a file written by an earlier sfmtool holds the mean
 in this column until its errors are recomputed. A reader does not recompute
 them on open.
 
+The names this column goes by outside the file. The entry's name, and the
+keys that copy it field for field, stay `reprojection_errors`, because the
+format above already says which statistic the column holds. The names a caller
+reads one point's value by carry `rms_`, because nothing beside them does:
+
+- `reprojection_errors`: `SfmrData::reprojection_errors` in
+  `sfmtool-sfmr-format`, the key of the dict `read_sfmr` returns and
+  `write_sfmr` takes, and the key of the dict `SfmrReconstruction.from_data`
+  takes.
+- `Point3D::rms_reprojection_error`, one per entry of `PointSet::points` in
+  `sfmtool-core`.
+- In Python, `SfmrReconstruction.rms_reprojection_errors`, the
+  `clone_with_changes(rms_reprojection_errors=...)` keyword, and the
+  `rms_reprojection_error` key of an `EditedReconstruction` point record.
+- `rms_error_px` in the viewer's MCP `get_point` reply.
+
 #### `points3d/normals_xyz.{N}.3.float32.zst` (Optional)
 
 Per-point surface normals.

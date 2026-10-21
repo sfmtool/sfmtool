@@ -7,8 +7,9 @@ non-goal "Point colouring and filtering by quality") and
 [gui/panel-layout.md](../gui/panel-layout.md) (a tenth panel) and
 [gui/background-tasks.md](../gui/background-tasks.md) § "Two queues" and
 § "Quiet tasks" (two quiet tasks and one asked-for fast-queue operation). It
-also changes `Point3D::error` to the RMS its doc comment states, and renames
-`analysis::inspect_point`'s angle field (Steps 0a and 0b). It will file as
+also makes `Point3D::error` the RMS its doc comment states and renames it
+`rms_reprojection_error`, and renames `analysis::inspect_point`'s angle field
+(Steps 0a and 0b). It will file as
 two standing specs: `core/analysis/point-columns.md` (Part 1) and
 `gui/track-table.md` (Parts 2 to 4, with the wire tools also described in
 `gui/mcp-server.md`).
@@ -41,7 +42,8 @@ Decided:
   promoting the panel's quiet job (§ "`find_points`").
 - `Point3D::error` is made the root-mean-square reprojection error its doc
   comment already states; `recompute_point_errors` computes the mean today
-  (Step 0a).
+  (Step 0a). The field becomes `Point3D::rms_reprojection_error`, and
+  `get_point` reports it as `rms_error_px`.
 - `max_ray_angle_deg` keeps the largest-pairwise-angle meaning the bench, the
   viewer and this table use; `analysis::inspect_point`'s field of that name,
   which is the largest angle from the mean direction, is renamed (Step 0b).
@@ -114,7 +116,7 @@ columns"). It makes no difference to what a column means.
 |---|---|---|---|---|---|
 | `track_length` | Track | stored | number of observations in the track | defined | never |
 | `image_count` | Images | stored | number of distinct images among those observations. It is less than `track_length` when one image holds several observations of the point, which a GLOMAP solve produces (bug bash finding 12) | defined | never |
-| `error_px` | Error (px) | stored | `Point3D::error`, the root-mean-square reprojection error over the point's observations, in pixels, which `get_point` reports as `error`. `recompute_point_errors` writes it (Step 0a); a file whose errors were never recomputed holds what its writer stored | defined | never |
+| `error_px` | Error (px) | stored | `Point3D::rms_reprojection_error`, the root-mean-square reprojection error over the point's observations, in pixels, which `get_point` reports as `rms_error_px`. `recompute_point_errors` writes it (Step 0a); a file whose errors were never recomputed holds what its writer stored | defined | never |
 | `at_infinity` | ∞ | stored | 1 for a point at infinity (`w = 0`), 0 for a finite one | defined | never |
 | `x`, `y`, `z` | X, Y, Z | stored | the point's position in the stored frame, not the display frame, in the reconstruction's world-space unit (scene units where none is declared) | no value | never |
 | `centroid_distance` | Distance | stored | distance from the posed cameras' centroid, the same number `ImageTable::placement_scale` gives, in the stored frame and the same unit as `x` | no value | the reconstruction has no posed image |
@@ -682,9 +684,11 @@ layout, contrast, a wrong progress fraction and a missing title line.
    root-mean-square of the point's observation errors in pixels, as the field's
    doc comment says, rather than the mean. Every place that describes the value
    as a mean is corrected (`sfm inspect` labels, specs, Python docstrings), and
-   the tests that pin error values are updated. A file written before this
-   holds the mean until its errors are recomputed; the format spec says which
-   writer stores which.
+   the tests that pin error values are updated. The field is renamed
+   `Point3D::rms_reprojection_error`, the Python getter
+   `rms_reprojection_errors`, and `get_point`'s field `rms_error_px`. A file
+   written before this holds the mean until its errors are recomputed; the
+   format spec says which writer stores which.
 0b. **Rename `inspect_point`'s angle.** `analysis::inspect_point`'s
    `max_ray_angle_deg`, the largest angle from the mean direction, becomes
    `max_angle_from_mean_deg`, in core, the Python binding and the `sfm inspect`
@@ -716,9 +720,9 @@ layout, contrast, a wrong progress fraction and a missing title line.
 - **The quiet order.** Whether the Track Table's columns should go ahead of
   the focused item's evaluation when the table is the panel in view.
 - **The error column's name on the wire.** The column is `error_px`, and
-  `get_point` reports the same number as `error`. They can stay different
-  names for one value, or `get_point` can take the unit suffix too (a breaking
-  change with no alias, as #998's renames were).
+  `get_point` reports the same number as `rms_error_px`. They can stay
+  different names for one value, or the column can take the `rms_` prefix
+  too.
 - **Errors in files written before Step 0a** hold the mean (or, for a file
   converted from COLMAP and never recomputed, COLMAP's value). Whether the
   open should recompute them, or the table should say when a file's errors

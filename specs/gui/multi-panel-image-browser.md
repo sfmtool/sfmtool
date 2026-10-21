@@ -906,7 +906,7 @@ When an overlay mode is active and `selected_image` changes, load:
    - Features not in any track are untracked (drawn differently or omitted depending on mode)
 
 3. **Per-point metrics** looked up by `point_idx`:
-   - Reprojection error: `PointSet::points[point_idx].error`
+   - Reprojection error: `PointSet::points[point_idx].rms_reprojection_error`
    - Track length: `PointSet::observation_counts[point_idx]`
    - Max track angle (triangulation angle): max pairwise angle (degrees) between
      world-space rays from observing cameras to the 3D point. Computed on
