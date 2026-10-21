@@ -751,7 +751,7 @@ reachable from `SfmrReconstruction`, which supplies the count the point set
 cannot see, and both are what the `.sfmr` conversion and the kwargs-driven
 Python editor run before handing back a value. Both run the track image check
 before `rebuild_derived_fields`, because the rebuild indexes the per-image maps
-by each row's image and would panic on a row past the table. A record added
+by each row's image and would panic on a row past the image set. A record added
 through `EditedReconstruction` is checked against the base's image count when it
 is pushed (`EditError::ImageOutOfRange`), and the whole-value edits remap tracks
 of a value that already passed, so neither runs the check again.

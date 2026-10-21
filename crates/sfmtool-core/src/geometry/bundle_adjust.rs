@@ -291,7 +291,7 @@ pub enum PointConstraintsError {
         /// The distance stated for it.
         distance: f64,
     },
-    /// A reference names an image the table does not hold.
+    /// A reference names an image past the solve's `n_img` images.
     ReferenceOutOfRange {
         /// The point.
         point: usize,

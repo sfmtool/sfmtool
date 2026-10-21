@@ -790,7 +790,7 @@ pub struct RayBatch {
     pub offsets: Vec<usize>,
 }
 
-/// None for an index past the table, a non-finite pixel, or what observed_ray declines.
+/// None for an index past the image set, a non-finite pixel, or what observed_ray declines.
 pub fn observation_ray(image_set: &ImageSet, image_index: usize, pixel: [f64; 2],
     sigma_px: f64) -> Option<ObservationRay>;
 /// One output track per input track (CSR over observations), holding the

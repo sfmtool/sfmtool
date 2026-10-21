@@ -22,7 +22,7 @@ use crate::reconstruction::{ImageSet, PointView};
 ///
 /// A point at infinity is seen along the same stored direction from every
 /// camera, so its rays are that direction each time and the angle between
-/// them is zero. An image index past the table, or a camera centre on the
+/// them is zero. An image index past the image set, or a camera centre on the
 /// point itself, gives no ray.
 pub fn observation_rays(
     image_set: &ImageSet,

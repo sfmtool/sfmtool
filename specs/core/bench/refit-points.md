@@ -538,13 +538,13 @@ and `reason`, its sentence. There is no point map, since no index moves.
   leaves the input untouched.
 - **One thread and the default pool** give the same value.
 - **The refusals**: `sift_files`, no frames, no posed image, too few views, a
-  track naming an image past the table, no noise level.
+  track naming an image past the image set, no noise level.
 
 [`tests/rust_bindings/bench/test_refit_points_rust_bindings.py`](../../../tests/rust_bindings/bench/test_refit_points_rust_bindings.py)
 checks the binding on the seoul_bull ground truth: no index moves and the input
 is unchanged, the report's statuses and counts, a held point, the refusals, a
 refused point's `error` and `reason`, and a track stored out of image order.
-From Python a track naming an image past the table cannot reach the run:
+From Python a track naming an image past the image set cannot reach the run:
 `clone_with_changes` refuses to build the value.
 
 ## Non-goals

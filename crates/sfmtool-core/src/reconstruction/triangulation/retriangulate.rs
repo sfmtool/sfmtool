@@ -709,9 +709,10 @@ fn gather(
     // observation's ray, and reads its reprojection, through that camera.
     let image_camera: Vec<u32> = image_set.images.iter().map(|i| i.camera_index).collect();
 
-    // Every image gets a row, so an observation indexes the image set directly. An
-    // unposed image's row is not a pose, and the array form drops the rays it
-    // would have cast rather than casting them through a placeholder.
+    // Every image gets a row, so an observation's image index indexes these
+    // pose arrays directly. An unposed image's row is not a pose, and the array
+    // form drops the rays it would have cast rather than casting them through a
+    // placeholder.
     let mut quats_wxyz = Vec::with_capacity(image_set.images.len() * 4);
     let mut translations = Vec::with_capacity(image_set.images.len() * 3);
     for (i, image) in image_set.images.iter().enumerate() {

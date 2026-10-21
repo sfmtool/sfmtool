@@ -34,7 +34,7 @@ class SwitchCameraModelTransform:
             the camera's trusted bound, or its observations' extent).
         spline_domain_deg: Where a spline target's domain ends (default: the
             far image corner).
-        cameras: Camera-table indexes to switch (default: every camera).
+        cameras: Camera indexes to switch (default: every camera).
 
     A spline camera switched to its own spline model, with no
     ``theta_fit_deg``, is refitted over its whole spline domain: that is how a

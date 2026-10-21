@@ -79,7 +79,7 @@ class BundleAdjustTransform:
         release_distortion: Whether a released camera's lens distortion may
             move. sfmtool's adjustment releases it only together with the
             focal, and only where the camera model has distortion it can free.
-        cameras: Camera-table indexes whose lens is released
+        cameras: Camera indexes whose lens is released
             (``--bundle-adjust cameras=0+1``); every other camera is held, its
             intrinsics unchanged. ``None``, the default, releases every camera.
         cross: Whether sfmtool's adjustment lets free points cross between a
@@ -266,7 +266,7 @@ class BundleAdjustTransform:
         for image_id in reconstruction.reg_image_ids():
             config.add_image(image_id)
         config.fix_gauge(pycolmap.BundleAdjustmentGauge.TWO_CAMS_FROM_WORLD)
-        # The export numbers the cameras in table order, which is how the
+        # The export numbers the cameras in camera index order, which is how the
         # readback maps them to indexes too.
         for camera_id, free in zip(sorted(reconstruction.cameras.keys()), released):
             if not free:
