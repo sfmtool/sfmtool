@@ -400,3 +400,69 @@ fn a_read_locks_nothing_and_runs_beside_an_edit() {
 
 /// A job that reports nothing.
 fn nothing(_: &sfmtool_core::progress::Progress<'_>) {}
+
+/// Hold the fast queue with a fake open until the returned sender fires.
+fn hold_fast_queue(state: &mut AppState) -> std::sync::mpsc::Sender<()> {
+    let (open, held) = std::sync::mpsc::channel::<()>();
+    state
+        .start_task(
+            crate::background::Operation::OPEN,
+            None,
+            "held".to_string(),
+            Box::new(move |_| {
+                let _ = held.recv();
+                crate::background::Finished::Failed("held".to_string())
+            }),
+        )
+        .expect("the queue takes it");
+    open
+}
+
+#[test]
+fn a_run_whose_cached_columns_were_replaced_meanwhile_is_refused_not_a_panic() {
+    let (mut state, mut viewer) = editable();
+    let id = state.scene[0].id;
+    // The cache holds track_length for the first version.
+    answered(
+        &mut state,
+        &mut viewer,
+        json!({ "columns": ["track_length"] }),
+    );
+    // A second version, and a run for it queued behind a held queue.
+    state
+        .delete_point(crate::scene::PointRef {
+            recon: id,
+            point: 0,
+        })
+        .expect("deletable");
+    let first = hold_fast_queue(&mut state);
+    let other = state
+        .start_find_points(id, vec![TrackTableColumn::RmsErrorPx], Default::default())
+        .unwrap();
+    let second = hold_fast_queue(&mut state);
+    // Back on the first version, a call that needs track_length (cached) and
+    // max_ray_angle_deg (not), so its run computes only the latter.
+    state.undo(id).unwrap();
+    let pending = match find(
+        &mut state,
+        &mut viewer,
+        json!({ "columns": ["track_length", "max_ray_angle_deg"] }),
+    ) {
+        Outcome::Deferred(super::super::Deferred::Background(pending)) => pending,
+        _ => panic!("a partly cold cache must defer"),
+    };
+    // The other version's run lands while that version is at the cursor and
+    // replaces the cached table.
+    state.redo(id).unwrap();
+    first.send(()).unwrap();
+    state.finish_background_task(other);
+    // Back again, and the call's run lands over a table that lacks
+    // track_length.
+    state.undo(id).unwrap();
+    second.send(()).unwrap();
+    state.finish_background_tasks();
+    match super::super::edit::background_reply(&state, &pending).expect("landed") {
+        Err(error) => assert!(error.0.contains("call find_points again"), "{}", error.0),
+        Ok(_) => panic!("the table lacks track_length, so the call is refused"),
+    }
+}

@@ -190,6 +190,7 @@ fn answer_now(
         .ok_or_else(|| ToolError::new(crate::state::NOT_LOADED))?;
     let table = state
         .track_table(page.node)
+        .filter(|table| holds(table, page))
         .ok_or_else(|| changed_since(node))?;
     let matched = query_points(node.edited(), table, options)
         .map_err(|error| ToolError::new(format!("find_points: {error}")))?;
@@ -210,6 +211,7 @@ pub(super) fn found_points_reply(
     let table = state
         .track_table(page.node)
         .filter(|_| node.history.current_version().document_serial == found.document)
+        .filter(|table| holds(table, page))
         .ok_or_else(|| changed_since(node))?;
     Ok(ToolOutput::Json(points_reply(
         node,
@@ -217,6 +219,14 @@ pub(super) fn found_points_reply(
         &found.matched,
         page,
     )))
+}
+
+/// Whether `table` holds every value the page returns. A cached table can
+/// lack one the call found cached when it queued *Find points*: a run for
+/// another version landed while that version was at the cursor and replaced
+/// the entry, and the cursor came back before this call's run landed.
+fn holds(table: &TrackTable, page: &FindPointsPage) -> bool {
+    page.columns.iter().all(|&column| table.has(column))
 }
 
 /// The refusal for a node whose version moved between the query and the

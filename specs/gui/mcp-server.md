@@ -935,7 +935,11 @@ cache and the operation it starts are in
   because an edit or an undo came in while it ran, is dropped with the failed
   row *"Find points of {label} finished, but {label} has changed since it
   started, so its answer was dropped."*, and the call is refused with it; the
-  caller calls again. Like every asked-for task it replies directly when it
+  caller calls again. A call whose run lands at its own serial but finds the
+  cached table without a value it returns, because a run for another version
+  replaced the entry while that version was at the cursor, is refused with
+  *"{label} changed before its points could be read back; call find_points
+  again."*. Like every asked-for task it replies directly when it
   lands within `REPLY_DIRECTLY_WITHIN` and with a handle otherwise
   ([background-tasks.md](background-tasks.md) § "On the wire"), is listed in
   `get_scene`'s `background_tasks` and by `get_background_tasks`, and is
@@ -5643,8 +5647,10 @@ where a test hands no host over.
   reconstruction cannot supply with the ones it can, a `min` above a `max` and
   an image out of range; a waiting *Find points* is listed by `get_scene`,
   handed back as a handle past the window and removed by
-  `cancel_background_tasks`; and a call runs beside a slow task that holds the
-  node. The cache's keying, its merge of a second run, its replacement after
+  `cancel_background_tasks`; a call runs beside a slow task that holds the
+  node; and a call whose run lands after a run for another version replaced
+  the cached table, so the table lacks a column the call found cached, is
+  refused with "call find_points again". The cache's keying, its merge of a second run, its replacement after
   an edit, the dropped run that lands after one, and the close that drops it
   are in `track_table::tests`.
 - **Solo**: it moves rather than accumulating, leaves the selection alone, and
