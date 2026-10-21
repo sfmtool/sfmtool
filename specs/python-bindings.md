@@ -229,7 +229,7 @@ Paths in the *Source* column are relative to
 | [analysis/adjacency_surfel_normals.rs](../crates/sfmtool-py/src/analysis/adjacency_surfel_normals.rs) | `estimate_adjacency_surfel_normals` | [adjacency-surfel-normals.md](core/analysis/adjacency-surfel-normals.md) |
 | [analysis/cell_plane_normals.rs](../crates/sfmtool-py/src/analysis/cell_plane_normals.rs) | `cell_plane_normals` | [cell-plane-normals.md](core/patch/cell-plane-normals.md) |
 | [analysis/cluster_census.rs](../crates/sfmtool-py/src/analysis/cluster_census.rs) | `cluster_census` | [cluster-census.md](core/analysis/cluster-census.md) |
-| [analysis/point_columns.rs](../crates/sfmtool-py/src/analysis/point_columns.rs) | `point_columns` | [point-columns.md](core/analysis/point-columns.md) |
+| [analysis/track_table.rs](../crates/sfmtool-py/src/analysis/track_table.rs) | `track_table` | [track-table.md](core/analysis/track-table.md) |
 
 ### `flow`
 

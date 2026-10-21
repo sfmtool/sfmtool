@@ -8,7 +8,7 @@
 
 use nalgebra::Vector3;
 
-use crate::analysis::point_columns::compute_max_pairwise_angle;
+use crate::analysis::track_table::compute_max_pairwise_angle;
 use crate::bench::track_at_pixel::ViewCamera;
 use crate::patch::normal_refine::ProjectedImage;
 
@@ -260,7 +260,7 @@ pub(super) fn pixel_distance(a: [f64; 2], b: [f64; 2]) -> f64 {
 }
 
 /// The widest angle between the rays from two of `images`' camera centres to
-/// `x`, in degrees: the pairwise angle the `max_ray_angle_deg` point column
+/// `x`, in degrees: the pairwise angle the `max_ray_angle_deg` track table column
 /// is read with ([`compute_max_pairwise_angle`]).
 pub(super) fn ray_angle(
     cameras: &[ViewCamera<'_>],

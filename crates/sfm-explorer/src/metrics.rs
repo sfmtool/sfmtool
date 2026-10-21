@@ -17,8 +17,9 @@
 //! definition and no panel owns it.
 //!
 //! The whole-track numbers (the observation rays, the widest angle between
-//! them, the condition number and the inverse-depth z) are point columns, so
-//! their one definition is core's `analysis::point_columns`, re-exported here.
+//! them, the condition number and the inverse-depth z) are track table
+//! columns, so their one definition is core's `analysis::track_table`,
+//! re-exported here.
 
 use nalgebra::Vector3;
 use sfmtool_core::Point3D;
@@ -82,9 +83,9 @@ pub(crate) fn compute_observation_metrics(
     (reproj_error, ray_angle_deg)
 }
 
-// The whole-track numbers, defined in core as point columns so that the
-// panels and the Python `point_columns` binding read one figure.
-pub(crate) use sfmtool_core::analysis::point_columns::{
+// The whole-track numbers, defined in core as track table columns so that
+// the panels and the Python `track_table` binding read one figure.
+pub(crate) use sfmtool_core::analysis::track_table::{
     compute_max_pairwise_angle, compute_max_ray_angle_deg, compute_point_diagnostics,
     compute_position_diagnostics, observation_rays,
 };

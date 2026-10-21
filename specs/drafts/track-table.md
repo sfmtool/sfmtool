@@ -7,8 +7,8 @@ non-goal "Point colouring and filtering by quality") and
 [gui/panel-layout.md](../gui/panel-layout.md) (a tenth panel) and
 [gui/background-tasks.md](../gui/background-tasks.md) § "Two queues" and
 § "Quiet tasks" (two quiet tasks and one asked-for fast-queue operation).
-Part 1, the point columns and the point query, is built and
-filed as [core/analysis/point-columns.md](../core/analysis/point-columns.md).
+Part 1, the track table and its query in core, is built and
+filed as [core/analysis/track-table.md](../core/analysis/track-table.md).
 Parts 2 to 4 will file as `gui/track-table.md`, with the wire tools also
 described in `gui/mcp-server.md`.
 
@@ -72,20 +72,21 @@ finding 6).
 
 The design has three layers, and each is useful without the ones above it:
 
-1. **Point columns** in `sfmtool-core`: named per-point values computed for
-   every live point of a reconstruction, and a query that filters, sorts and
-   pages them.
+1. **The track table** in `sfmtool-core`: named per-point values computed on
+   demand for every live point of a reconstruction, one row per track keyed
+   by point index and never stored, and a query that filters, sorts and pages
+   them.
 2. **The Track Table panel**, which shows the columns, edits a query and
    follows the selection.
 3. **The wire**: `find_points`, which runs a query and returns the matched
    points, and a read/write pair for the panel's own query.
 
-## Part 1: point columns and the point query (core)
+## Part 1: the track table and its query (core)
 
-Built. The columns, their definitions, `PointColumns::compute`, `query_points`
-and the `sfmtool.analysis.point_columns` binding are specified in
-[core/analysis/point-columns.md](../core/analysis/point-columns.md), and the
-column words are in [GLOSSARY.md](../GLOSSARY.md) § "Point columns". Parts 2
+Built. The columns, their definitions, `TrackTable::compute`, `query_points`
+and the `sfmtool.analysis.track_table` binding are specified in
+[core/analysis/track-table.md](../core/analysis/track-table.md), and the
+column words are in [GLOSSARY.md](../GLOSSARY.md) § "Track table". Parts 2
 and 3 below use its wire names (`track_length`, `rms_error_px`,
 `max_ray_angle_deg`, …), its "absent" and "no value" rules, and its sort rule
 that rows with no value go last in either order. The error column is

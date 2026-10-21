@@ -1,38 +1,40 @@
-# Point Columns
+# Track Table
 
 A reconstruction can hold anywhere from a few hundred to a few million 3D
 points, and each point comes with numbers that say how well it is supported:
 how many photographs see it, how far its observations land from where it
 projects, how wide the angle between its viewing rays is, and how well its
-patch matches across views. Point columns give each of those numbers a fixed
-name and compute it for every point of a reconstruction at once, as one array
-per name. A query over the arrays then answers questions such as "which are
-the worst points?" or "which points does this image see, and which of them are
-badly triangulated?" by returning the matching point indexes in a chosen
-order.
+patch matches across views. The track table gives each of those numbers a
+fixed name and computes it for every point of a reconstruction at once, as one
+array per name. Its rows are tracks, keyed by point index, and its columns are
+those named values. The table is computed on demand from one version of a
+reconstruction and never stored: no file format holds it. A query over the
+table then answers questions such as "which are the worst points?" or "which
+points does this image see, and which of them are badly triangulated?" by
+returning the matching point indexes in a chosen order.
 
 The definitions live in one place so that every surface that quotes a number
 quotes the same one. The viewer's Track View header and its Image Detail heat
-maps call the same functions for one point that the columns call for every
-point, and the Python binding returns the arrays the columns hold. The draft
+maps call the same functions for one point that the table calls for every
+point, and the Python binding returns the arrays the table holds. The draft
 [track-table.md](../../drafts/track-table.md) proposes a Track Table panel and
-a `find_points` wire tool that run this query.
+a `find_points` wire tool that show the table and run this query.
 
 ## Rust API
 
-The columns and the query live in
-[point_columns.rs](../../../crates/sfmtool-core/src/analysis/point_columns.rs),
+The table and the query live in
+[track_table.rs](../../../crates/sfmtool-core/src/analysis/track_table.rs),
 with the query in
-[point_columns/query.rs](../../../crates/sfmtool-core/src/analysis/point_columns/query.rs)
+[track_table/query.rs](../../../crates/sfmtool-core/src/analysis/track_table/query.rs)
 and the per-point triangulation numbers in
-[point_columns/track_geometry.rs](../../../crates/sfmtool-core/src/analysis/point_columns/track_geometry.rs),
-all re-exported from `sfmtool_core::analysis::point_columns`. The columns are
-bound as `sfmtool.analysis.point_columns`.
+[track_table/track_geometry.rs](../../../crates/sfmtool-core/src/analysis/track_table/track_geometry.rs),
+all re-exported from `sfmtool_core::analysis::track_table`. The table is
+bound as `sfmtool.analysis.track_table`.
 
 ```rust
 /// One named per-point value. The wire name is the stable identifier.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-pub enum PointColumn {
+pub enum TrackTableColumn {
     TrackLength, ImageCount, RmsErrorPx, AtInfinity, X, Y, Z, CentroidDistance,
     NormalConfidence, LowestZncc, LargestZnccSelfSimilarityRadius,
     MaxRayAngleDeg, ConditionNumber, InverseDepthZ,
@@ -41,8 +43,8 @@ pub enum PointColumn {
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum ColumnCost { Stored, Computed }
 
-impl PointColumn {
-    pub const ALL: [PointColumn; 14];
+impl TrackTableColumn {
+    pub const ALL: [TrackTableColumn; 14];
     pub fn wire_name(self) -> &'static str;
     pub fn from_wire_name(name: &str) -> Option<Self>;
     pub fn cost(self) -> ColumnCost;
@@ -52,25 +54,26 @@ impl PointColumn {
     pub fn is_available(self, recon: &EditedReconstruction) -> bool;
 }
 
-/// Column values for every live point of one version, in `live_indexes()`
-/// order. Holds only the columns it was asked for.
-pub struct PointColumns { /* … */ }
+/// Column values for every live point of one version, one row per track keyed
+/// by point index, in `live_indexes()` order. Holds only the columns it was
+/// asked for; computed on demand and never stored.
+pub struct TrackTable { /* … */ }
 
-impl PointColumns {
+impl TrackTable {
     pub fn compute(
         recon: &EditedReconstruction,
-        columns: &[PointColumn],
+        columns: &[TrackTableColumn],
         progress: &Progress<'_>,
-    ) -> Result<PointColumns, Cancelled>;
+    ) -> Result<TrackTable, Cancelled>;
 
     pub fn point_indexes(&self) -> &[u32];
-    pub fn has(&self, column: PointColumn) -> bool;
-    pub fn values(&self, column: PointColumn) -> Option<&[f32]>;
-    pub fn values_f64(&self, column: PointColumn) -> Option<&[f64]>;
+    pub fn has(&self, column: TrackTableColumn) -> bool;
+    pub fn values(&self, column: TrackTableColumn) -> Option<&[f32]>;
+    pub fn values_f64(&self, column: TrackTableColumn) -> Option<&[f64]>;
 }
 
 pub struct ColumnBounds {
-    pub column: PointColumn,
+    pub column: TrackTableColumn,
     pub min: Option<f64>,
     pub max: Option<f64>,
 }
@@ -78,25 +81,25 @@ pub struct ColumnBounds {
 pub enum SortOrder { Ascending, Descending }
 
 #[derive(Clone, Debug, Default)]
-pub struct PointQueryOptions {
+pub struct TrackTableQueryOptions {
     pub bounds: Vec<ColumnBounds>,
     /// Keep only points with an observation in this image.
     pub seen_in_image: Option<u32>,
     /// `None` keeps `live_indexes()` order.
-    pub order_by: Option<(PointColumn, SortOrder)>,
+    pub order_by: Option<(TrackTableColumn, SortOrder)>,
 }
 
-pub enum PointQueryError {
-    /// A bound or the sort names a column `columns` does not hold.
-    ColumnNotComputed(PointColumn),
+pub enum TrackTableQueryError {
+    /// A bound or the sort names a column `table` does not hold.
+    ColumnNotComputed(TrackTableColumn),
     ImageOutOfRange { image: u32, image_count: usize },
 }
 
 pub fn query_points(
     recon: &EditedReconstruction,
-    columns: &PointColumns,
-    options: &PointQueryOptions,
-) -> Result<Vec<u32>, PointQueryError>;
+    table: &TrackTable,
+    options: &TrackTableQueryOptions,
+) -> Result<Vec<u32>, TrackTableQueryError>;
 ```
 
 The per-point functions the columns are defined by are public too, because
@@ -127,8 +130,8 @@ widest-pair angle, so there is one pairwise loop in the tree.
 
 **Why it is shaped this way:**
 
-- **Compute and query are separate calls.** A caller that shows the columns
-  computes them once per version and then runs a new query each time a bound
+- **Compute and query are separate calls.** A caller that shows the table
+  computes it once per version and then runs a new query each time a bound
   changes. A single call taking a query would recompute the maximum ray angle
   for every point each time a bound changed.
 - **Columns are computed by name.** A caller asks only for what it shows or
@@ -154,21 +157,21 @@ widest-pair angle, so there is one pairwise loop in the tree.
 Example:
 
 ```rust
-use sfmtool_core::analysis::point_columns::{
-    query_points, ColumnBounds, PointColumn, PointColumns, PointQueryOptions, SortOrder,
+use sfmtool_core::analysis::track_table::{
+    query_points, ColumnBounds, SortOrder, TrackTable, TrackTableColumn, TrackTableQueryOptions,
 };
 use sfmtool_core::progress::Progress;
 
-let columns = PointColumns::compute(
+let table = TrackTable::compute(
     &edited,
-    &[PointColumn::TrackLength, PointColumn::RmsErrorPx],
+    &[TrackTableColumn::TrackLength, TrackTableColumn::RmsErrorPx],
     &Progress::none(),
 )?;
 // The 20 worst-error points with a track of at least 3, seen in image 2.
-let worst = query_points(&edited, &columns, &PointQueryOptions {
-    bounds: vec![ColumnBounds { column: PointColumn::TrackLength, min: Some(3.0), max: None }],
+let worst = query_points(&edited, &table, &TrackTableQueryOptions {
+    bounds: vec![ColumnBounds { column: TrackTableColumn::TrackLength, min: Some(3.0), max: None }],
     seen_in_image: Some(2),
-    order_by: Some((PointColumn::RmsErrorPx, SortOrder::Descending)),
+    order_by: Some((TrackTableColumn::RmsErrorPx, SortOrder::Descending)),
 })?;
 let page = &worst[..worst.len().min(20)];
 ```
@@ -197,7 +200,7 @@ it makes no difference to what a column means.
 | `inverse_depth_z` | computed | inverse-depth z-score from the same triangulation, with per-ray angular noise `max(rms_error_px, 1) / f` | no value | never |
 
 A column that is **absent** for a whole reconstruction is reported by
-`PointColumn::is_available`, and `compute` skips it rather than failing, so
+`TrackTableColumn::is_available`, and `compute` skips it rather than failing, so
 `has` is false for it. **No value** for a single point is a NaN in its
 column.
 
@@ -239,12 +242,12 @@ indexes:
   value sort after every row with one, in either direction, which is Track
   View's rule for empty cells. `-0` and `0` compare equal. Without `order_by`
   the rows keep `live_indexes()` order, which is ascending point index.
-- A bound or a sort on a column the `PointColumns` do not hold is refused with
+- A bound or a sort on a column the `TrackTable` does not hold is refused with
   `ColumnNotComputed`, which covers both a column the caller did not ask for
   and one the reconstruction could not supply. A `seen_in_image` past the
   image table is refused with `ImageOutOfRange`.
 
-The `PointColumns` must have been computed from the same version the query is
+The `TrackTable` must have been computed from the same version the query is
 run against: the query reads the reconstruction only for `seen_in_image` and
 the image count, and it does not check that the rows still describe it.
 
@@ -282,7 +285,7 @@ order, and a test can compare whole results exactly.
 
 ## Python bindings
 
-`sfmtool.analysis.point_columns(recon, columns=None)` returns a dict that maps
+`sfmtool.analysis.track_table(recon, columns=None)` returns a dict that maps
 each computed column's wire name to an `(n,)` NumPy array, `float32`, or
 `float64` for `x`, `y` and `z`, plus `"point_index"`, the `(n,)` `uint32`
 point index of each row. `recon` is an `SfmrReconstruction` (wrapped as an
@@ -295,21 +298,21 @@ silently.
 
 ```python
 import numpy as np
-from sfmtool.analysis import point_columns
+from sfmtool.analysis import track_table
 
-cols = point_columns(recon, ["track_length", "rms_error_px"])
-worst = cols["point_index"][np.argsort(-cols["rms_error_px"], kind="stable")][:20]
+table = track_table(recon, ["track_length", "rms_error_px"])
+worst = table["point_index"][np.argsort(-table["rms_error_px"], kind="stable")][:20]
 ```
 
 The query is not bound: a NumPy mask and an `argsort` over the arrays do the
 same work, so a Python query function would add nothing. The binding exists so
 that scripts and tests read exactly the numbers the viewer shows. It lives in
-[analysis/point_columns.rs](../../../crates/sfmtool-py/src/analysis/point_columns.rs).
+[analysis/track_table.rs](../../../crates/sfmtool-py/src/analysis/track_table.rs).
 
 ## Testing
 
 The Rust tests in
-[point_columns/tests.rs](../../../crates/sfmtool-core/src/analysis/point_columns/tests.rs)
+[track_table/tests.rs](../../../crates/sfmtool-core/src/analysis/track_table/tests.rs)
 build small reconstructions from the demo reconstruction and check each column
 against the stored data or the per-point function it is defined by: a point
 at infinity (no position, distance or diagnostics, a ray angle of 0), an image
@@ -324,7 +327,7 @@ per-point functions in `crates/sfm-explorer/src/metrics/tests.rs` run against
 these definitions through its re-exports.
 
 The binding's tests in
-[test_point_columns_rust_bindings.py](../../../tests/rust_bindings/analysis/test_point_columns_rust_bindings.py)
+[test_track_table_rust_bindings.py](../../../tests/rust_bindings/analysis/test_track_table_rust_bindings.py)
 check the names, dtypes and rows against the seoul_bull ground truth's own
 arrays, the column selection and its refusals, and an edited reconstruction.
 
@@ -335,5 +338,5 @@ not a column: for a `sift_files` reconstruction without inline keypoints it
 needs every image's `.sift` file read. It can be added as a computed column
 that is absent when the reconstruction has no keypoints.
 
-The columns hold no cache. A caller that computes them for one version keeps
-them for as long as that version is current.
+The table is not cached or stored. A caller that computes it for one version
+keeps it for as long as that version is current.

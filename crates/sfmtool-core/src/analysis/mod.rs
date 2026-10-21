@@ -5,9 +5,9 @@
 //! discovery, covisibility / frustum-intersection image-pair graphs, image-space
 //! observation adjacency between points and the surfel normals fitted over it,
 //! per-image occupancy grids over the observations' footprints, the retirement
-//! of a coarse observation a finer one covers, the named per-point columns and
-//! the query over them, per-point triangulation inspection, the
-//! reconstruction's measured reprojection noise and the point-or-bearing test
+//! of a coarse observation a finer one covers, the track table of named
+//! per-point values and the query over it, per-point triangulation inspection,
+//! the reconstruction's measured reprojection noise and the point-or-bearing test
 //! over its points, the cluster match census, the
 //! per-cluster feature radius and the coarsest-N cut over it, and the join that
 //! names the selection clusters a member left behind.
@@ -21,9 +21,9 @@ pub mod image_pair_graph;
 pub mod infinity;
 pub mod observation_adjacency;
 pub mod observation_coverage;
-pub mod point_columns;
 pub mod point_inspect;
 pub mod point_or_bearing;
 pub mod reprojection_noise;
 pub mod scene_scale;
 pub mod source_clusters;
+pub mod track_table;

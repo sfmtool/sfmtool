@@ -1,13 +1,13 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! The point query: which points pass a set of bounds on their columns, and
-//! in which order.
+//! The query over the track table: which points pass a set of bounds on its
+//! columns, and in which order.
 
 use std::cmp::Ordering;
 use std::fmt;
 
-use super::{PointColumn, PointColumns};
+use super::{TrackTable, TrackTableColumn};
 use crate::reconstruction::EditedReconstruction;
 
 /// A minimum and a maximum on one column, either of which may be left open.
@@ -16,7 +16,7 @@ use crate::reconstruction::EditedReconstruction;
 /// neither filters nothing.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ColumnBounds {
-    pub column: PointColumn,
+    pub column: TrackTableColumn,
     pub min: Option<f64>,
     pub max: Option<f64>,
 }
@@ -34,32 +34,32 @@ pub enum SortOrder {
 /// viewer's Go to Point dialog has an unrelated `PointQuery`, the parse of
 /// what was typed; this type is named apart from it.)
 #[derive(Clone, Debug, Default)]
-pub struct PointQueryOptions {
+pub struct TrackTableQueryOptions {
     /// Every bound must pass.
     pub bounds: Vec<ColumnBounds>,
     /// Keep only points with an observation in this image.
     pub seen_in_image: Option<u32>,
     /// The column and direction to sort by; `None` keeps
     /// [`EditedReconstruction::live_indexes`] order.
-    pub order_by: Option<(PointColumn, SortOrder)>,
+    pub order_by: Option<(TrackTableColumn, SortOrder)>,
 }
 
 /// Why a query was refused.
 #[derive(Clone, Debug, PartialEq)]
-pub enum PointQueryError {
-    /// A bound or the sort names a column the [`PointColumns`] do not hold.
-    ColumnNotComputed(PointColumn),
+pub enum TrackTableQueryError {
+    /// A bound or the sort names a column the [`TrackTable`] does not hold.
+    ColumnNotComputed(TrackTableColumn),
     /// `seen_in_image` names an image the reconstruction does not hold.
     ImageOutOfRange { image: u32, image_count: usize },
 }
 
-impl fmt::Display for PointQueryError {
+impl fmt::Display for TrackTableQueryError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            PointQueryError::ColumnNotComputed(column) => {
+            TrackTableQueryError::ColumnNotComputed(column) => {
                 write!(f, "the column {} was not computed", column.wire_name())
             }
-            PointQueryError::ImageOutOfRange { image, image_count } => write!(
+            TrackTableQueryError::ImageOutOfRange { image, image_count } => write!(
                 f,
                 "image {image} is out of range: the reconstruction has {image_count} images"
             ),
@@ -67,13 +67,13 @@ impl fmt::Display for PointQueryError {
     }
 }
 
-impl std::error::Error for PointQueryError {}
+impl std::error::Error for TrackTableQueryError {}
 
 /// The point indexes that match `options`, in order.
 ///
 /// The full list, not a page: a point index is what selecting, reading and
 /// deleting a point take, so the result passes to any of them unchanged.
-/// `columns` must have been computed from `recon` as it stands.
+/// `table` must have been computed from `recon` as it stands.
 ///
 /// The sort is stable and breaks ties by ascending point index, whichever way
 /// it runs, and rows with no value sort after every row that has one, in
@@ -81,28 +81,28 @@ impl std::error::Error for PointQueryError {}
 ///
 /// # Errors
 ///
-/// [`PointQueryError::ColumnNotComputed`] when a bound or the sort names a
-/// column `columns` does not hold, and [`PointQueryError::ImageOutOfRange`]
+/// [`TrackTableQueryError::ColumnNotComputed`] when a bound or the sort names a
+/// column `table` does not hold, and [`TrackTableQueryError::ImageOutOfRange`]
 /// when `seen_in_image` is not an image of `recon`.
 pub fn query_points(
     recon: &EditedReconstruction,
-    columns: &PointColumns,
-    options: &PointQueryOptions,
-) -> Result<Vec<u32>, PointQueryError> {
+    table: &TrackTable,
+    options: &TrackTableQueryOptions,
+) -> Result<Vec<u32>, TrackTableQueryError> {
     let named = options
         .bounds
         .iter()
         .map(|b| b.column)
         .chain(options.order_by.map(|(c, _)| c));
     for column in named {
-        if !columns.has(column) {
-            return Err(PointQueryError::ColumnNotComputed(column));
+        if !table.has(column) {
+            return Err(TrackTableQueryError::ColumnNotComputed(column));
         }
     }
     if let Some(image) = options.seen_in_image {
         let image_count = recon.image_count();
         if image as usize >= image_count {
-            return Err(PointQueryError::ImageOutOfRange { image, image_count });
+            return Err(TrackTableQueryError::ImageOutOfRange { image, image_count });
         }
     }
 
@@ -111,7 +111,7 @@ pub fn query_points(
             if b.min.is_none() && b.max.is_none() {
                 return true;
             }
-            let v = columns.value(b.column, row);
+            let v = table.value(b.column, row);
             !v.is_nan() && b.min.is_none_or(|m| v >= m) && b.max.is_none_or(|m| v <= m)
         })
     };
@@ -124,7 +124,7 @@ pub fn query_points(
             })
         })
     };
-    let mut rows: Vec<usize> = columns
+    let mut rows: Vec<usize> = table
         .point_indexes()
         .iter()
         .enumerate()
@@ -136,7 +136,7 @@ pub fn query_points(
         // The rows are in ascending point index, so a stable sort on the
         // value alone leaves ties in that order.
         rows.sort_by(|&a, &b| {
-            let (va, vb) = (columns.value(column, a), columns.value(column, b));
+            let (va, vb) = (table.value(column, a), table.value(column, b));
             match (va.is_nan(), vb.is_nan()) {
                 (true, true) => Ordering::Equal,
                 (true, false) => Ordering::Greater,
@@ -153,6 +153,6 @@ pub fn query_points(
             }
         });
     }
-    let indexes = columns.point_indexes();
+    let indexes = table.point_indexes();
     Ok(rows.into_iter().map(|row| indexes[row]).collect())
 }

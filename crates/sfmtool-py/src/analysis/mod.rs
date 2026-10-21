@@ -10,8 +10,8 @@
 //! per-image keypoint reach enumeration and the rule that retires a coarse
 //! observation a finer one covers, the cluster match census, the per-cluster
 //! feature radius and the coarsest-N cut over it, the join that names the
-//! selection clusters a member left behind, and the named per-point columns of
-//! a reconstruction.
+//! selection clusters a member left behind, and the track table of a
+//! reconstruction.
 
 use pyo3::prelude::*;
 
@@ -26,16 +26,16 @@ pub mod image_pair_graph;
 pub mod keypoint_reach;
 pub mod observation_adjacency;
 pub mod observation_coverage;
-pub mod point_columns;
 pub mod point_or_bearing;
 pub mod source_clusters;
+pub mod track_table;
 pub mod triangulation;
 
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     core::register(m)?;
     triangulation::register(m)?;
     point_or_bearing::register(m)?;
-    point_columns::register(m)?;
+    track_table::register(m)?;
     epipolar::register(m)?;
     image_pair_graph::register(m)?;
     keypoint_reach::register(m)?;

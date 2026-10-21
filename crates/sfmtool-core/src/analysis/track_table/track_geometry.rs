@@ -6,7 +6,7 @@
 //! them, and the condition number and inverse-depth z of its triangulation.
 //!
 //! These are the definitions of the `max_ray_angle_deg`, `condition_number`
-//! and `inverse_depth_z` point columns, and the viewer's Track View header and
+//! and `inverse_depth_z` track table columns, and the viewer's Track View header and
 //! Image Detail heat maps call them too, so every surface reads one number
 //! for one point. The bench's nearby-track finder
 //! measures its candidates' ray angle with [`compute_max_pairwise_angle`] as
@@ -62,7 +62,7 @@ pub fn compute_max_pairwise_angle(rays: &[[f64; 3]]) -> f64 {
 }
 
 /// The largest angle between two of the viewing rays of the point `view`, in
-/// degrees: the `max_ray_angle_deg` point column.
+/// degrees: the `max_ray_angle_deg` track table column.
 ///
 /// **A point at infinity is a bearing and every sighting of it casts the same
 /// ray**, so its widest pair is zero degrees whatever the baseline. The three
