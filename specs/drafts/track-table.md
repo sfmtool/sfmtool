@@ -53,7 +53,7 @@ points. Each point comes with numbers that say how well it is supported: how
 many photographs see it, how far its observations land from where it
 projects, how wide the angle between its viewing rays is, and how well its
 patch matches across views. The Track Table lists every point of a
-reconstruction as one row, with two pictures of the point first (its
+reconstruction as one row, a track keyed by its point index, with two pictures of the point first (its
 reference photograph cut around it, and its patch) and those numbers as the
 columns after them. A person can sort by
 any column, set a minimum and a maximum on each, and read off how many points
@@ -98,7 +98,9 @@ and `get_point` use one name for it.
 
 ### Placement
 
-`Tab::TrackTable`, titled **Track Table**, wire name `track_table`. Its home is
+`Tab::TrackTable`, titled **Track Table**, wire name `track_table`. Its state
+is `track_table_panel::TrackTablePanel`, after `edit_history_panel`, since
+`TrackTable` is the core table it shows. Its home is
 the centre group, as a third tab beside the 3D Viewer and Image Detail
 (`Home::Root`'s group). That is the largest area of the window: at 1280 × 720
 with the stock layout it is about 690 × 470 px, enough for six or seven rows of
@@ -309,17 +311,24 @@ the column is selected again.
 
 ### Computing the columns
 
-The stored columns and the computed ones are produced by a **column job**, a
-quiet, read-only task on the fast queue
-([gui/background-tasks.md](../gui/background-tasks.md) § "Quiet tasks"), *Track Table
-columns*. It locks no node and writes no Action Log row, so a person can sort
-and filter the version on screen while a slow task such as a bundle
-adjustment holds the node. When that task installs its version, the serial
-changes and the columns are computed again. It is keyed by
-`(ReconId, document_serial)`. A result for an older serial is dropped, and an
-edit cancels the running job through its `Progress`. The job publishes the
-stored columns as soon as they are filled, and the computed ones after them,
-so the table is usable while the slow columns are still being computed.
+The panel reads a **track table cache**: one core `TrackTable` per node,
+for the version at its cursor, keyed by `(ReconId, document_serial)`. The
+columns are computed by the **table job**, a quiet, read-only task on the fast
+queue ([gui/background-tasks.md](../gui/background-tasks.md) § "Quiet tasks"),
+*Track Table columns*. It locks no node and writes no Action Log row, so a
+person can sort and filter the version on screen while a slow task such as a
+bundle adjustment holds the node. When that task installs its version, the
+serial changes and the table is computed again. A result for an older serial
+is dropped, and an edit cancels the running job through its `Progress`.
+
+Each run of the job computes a `TrackTable` of only the columns the cache does
+not hold yet, with `TrackTable::compute`, and the UI thread merges it into the
+cached table when it lands, with `TrackTable::merge` (Step 2). The two tables
+are of the same version, so their rows are the same `live_indexes()` in the
+same order, and the merge moves column arrays without copying values; a table
+of another version is refused. The job runs the stored columns first and the
+computed ones as a second run, so the table is usable while the slow columns
+are still being computed.
 
 **The two quiet tasks.** *Track Table columns* and *Track Table reference
 picks* each declare the fast queue, no lock and `quiet`, so they join
@@ -342,8 +351,8 @@ once a visible column, a bound or the sort needs them. A hidden panel costs
 nothing. A `find_points` call does not start the quiet job; it queues *Find
 points* (Part 3), which fills the same cache.
 
-**Progress.** The column job reports two stages, the stored columns and then
-the computed ones, each with its own share of the job's range, so its fraction
+**Progress.** `TrackTable::compute` reports the stored columns and then the
+computed ones, each with its own share of the job's range, so its fraction
 follows the work. The reference picks decode photographs, so each pick gives
 the decode a share of its range and the rule the rest (`DECODE_AND_STEP`, as
 the bench steps do). Handing a decode the whole range is what made Refit all
@@ -410,7 +419,7 @@ no bitmap to show. Both columns appear after Convert to Embedded Patches.
 }
 ```
 
-- **It runs `query_points`** over the same column cache the panel uses, so a
+- **It runs `query_points`** over the same track table cache the panel uses, so a
   `find_points` call and the panel with the same bounds agree. The returned
   value columns default to the bound and sorted columns plus `track_length`
   and `rms_error_px`.
@@ -419,15 +428,15 @@ no bitmap to show. Both columns appear after Convert to Embedded Patches.
   `columns`) is in the cache for the version at the cursor, `find_points`
   answers in the frame it is drained. Otherwise it queues *Find points*, an
   asked-for fast-queue operation that locks nothing (it pushes no version),
-  computes the missing columns into the same cache, and answers the call when
-  it lands. Like any asked-for task, it replies directly when it lands within
+  computes a `TrackTable` of the missing columns, which the UI thread merges
+  into the cache when it lands, and answers the call then. Like any asked-for task, it replies directly when it lands within
   `REPLY_DIRECTLY_WITHIN` and with a handle otherwise, is listed in
   `get_scene`'s `background_tasks`, can be cancelled, and writes an Action Log
   row when it lands (for example *Found 1,204 of 38,888 points in dino*). It needs no new
-  rule in the queue machinery: a running quiet column job is cancelled for it
+  rule in the queue machinery: a running quiet table job is cancelled for it
   and queued again behind it, as for any asked-for task. If the panel's quiet
-  job is computing the same columns at that moment, the work is done twice;
-  the cache keeps whichever lands for the current serial. `limit` and the cache
+  job is computing the same columns at that moment, the work is done twice,
+  and the merge keeps the column already in the cache. `limit` and the cache
   keep the cost of a repeat call down to a slice.
 - **The reply is paged scalars.** It carries no bulk arrays: at most 500 rows
   of a few numbers each. The mcp-server.md statement "no tool here returns bulk
@@ -476,12 +485,15 @@ panel at its default size checked before the step is done. In the background
 queue work, those captures found nine problems that the tests had passed:
 layout, contrast, a wrong progress fraction and a missing title line.
 
-2. **`find_points`**, which brings the column cache and the *Find points*
-   operation into the viewer, for the stored and the computed columns. Only
-   the wire uses them at this step, and the mcp-server.md stance is revised.
+2. **`find_points`**, which adds `TrackTable::merge` to core (with its test and
+   its section in [core/analysis/track-table.md](../core/analysis/track-table.md))
+   and brings the track table cache and the *Find points* operation into the
+   viewer, for the stored and the computed columns. Only the wire uses them at
+   this step, and the mcp-server.md stance is revised.
 3. **The Track Table panel** with the stored columns, the Patch column, the
-   Size slider, sorting, bounds, selection and hover, and the quiet *Track
-   Table columns* job for the stored columns. This step adds the
+   Size slider, sorting, bounds, selection and hover, and the quiet table job
+   (*Track Table columns*) for the stored columns. The panel's state is
+   `track_table_panel::TrackTablePanel`. This step adds the
    tenth panel to the layout, in the centre group, its tests and its specs, and moves
    `stored_patch_image` out of Track View's private `patch` module into the
    module both panels use.
@@ -489,7 +501,7 @@ layout, contrast, a wrong progress fraction and a missing title line.
    module and rewriting them to take values rather than a track, with
    requests that wait for the scroll to stop and reference picks for the
    visible rows that store none.
-5. **The computed columns in the panel**, filled by the quiet column job.
+5. **The computed columns in the panel**, filled by the quiet table job.
 6. **Filter the 3D view** (dim and hide).
 7. **`get_track_table_query` / `set_track_table_query`.**
 
