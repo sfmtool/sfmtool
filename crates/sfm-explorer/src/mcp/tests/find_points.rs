@@ -466,3 +466,51 @@ fn a_run_whose_cached_columns_were_replaced_meanwhile_is_refused_not_a_panic() {
         Ok(_) => panic!("the table lacks track_length, so the call is refused"),
     }
 }
+
+#[test]
+fn a_run_whose_cached_sort_column_was_replaced_meanwhile_is_refused_not_a_panic() {
+    let (mut state, mut viewer) = editable();
+    let id = state.scene[0].id;
+    answered(
+        &mut state,
+        &mut viewer,
+        json!({ "columns": ["track_length"] }),
+    );
+    state
+        .delete_point(crate::scene::PointRef {
+            recon: id,
+            point: 0,
+        })
+        .expect("deletable");
+    let first = hold_fast_queue(&mut state);
+    let other = state
+        .start_find_points(id, vec![TrackTableColumn::RmsErrorPx], Default::default())
+        .unwrap();
+    let second = hold_fast_queue(&mut state);
+    // Back on the first version, a call that sorts by track_length (cached)
+    // and returns max_ray_angle_deg (not), so its run computes only the latter.
+    state.undo(id).unwrap();
+    let pending = match find(
+        &mut state,
+        &mut viewer,
+        json!({
+            "order_by": { "column": "track_length" },
+            "columns": ["max_ray_angle_deg"],
+        }),
+    ) {
+        Outcome::Deferred(super::super::Deferred::Background(pending)) => pending,
+        _ => panic!("a partly cold cache must defer"),
+    };
+    state.redo(id).unwrap();
+    first.send(()).unwrap();
+    state.finish_background_task(other);
+    // Back again, and the call's run lands over a table that lacks the sort
+    // column its query needs.
+    state.undo(id).unwrap();
+    second.send(()).unwrap();
+    state.finish_background_tasks();
+    match super::super::edit::background_reply(&state, &pending).expect("landed") {
+        Err(error) => assert!(error.0.contains("call find_points again"), "{}", error.0),
+        Ok(_) => panic!("the table lacks track_length, so the call is refused"),
+    }
+}

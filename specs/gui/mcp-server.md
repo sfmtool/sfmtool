@@ -934,14 +934,21 @@ cache and the operation it starts are in
   and answers the call. A run that lands after the document serial has moved,
   because an edit or an undo came in while it ran, is dropped with the failed
   row *"Find points of {label} finished, but {label} has changed since it
-  started, so its answer was dropped."*, and the call is refused with it; the
-  caller calls again. A call whose run lands at its own serial but finds the
-  cached table without a value it returns, because a run for another version
-  replaced the entry while that version was at the cursor, is refused with
+  started, so its answer was dropped; call find_points again."*, and the call
+  is refused with it. A run can also land at its own serial over a cached
+  table that lacks a column the call found cached when it queued the run,
+  because a run for another version replaced the entry while that version was
+  at the cursor and the cursor came back. The run's own columns are merged
+  into that table, but the lost ones are not recomputed: a lost bound or sort
+  column fails the row *"Find points of {label} finished, but a run for another
+  version of {label} replaced the values it needed, so its answer was dropped;
+  call find_points again."*, and a lost returned column refuses the call with
   *"{label} changed before its points could be read back; call find_points
   again."*. Like every asked-for task it replies directly when it
   lands within `REPLY_DIRECTLY_WITHIN` and with a handle otherwise
-  ([background-tasks.md](background-tasks.md) § "On the wire"), is listed in
+  ([background-tasks.md](background-tasks.md) § "On the wire"); after a handle
+  the caller polls `get_background_tasks` until the task has finished and then
+  calls `find_points` again, which is answered from the cache. It is listed in
   `get_scene`'s `background_tasks` and by `get_background_tasks`, and is
   cancelled by `cancel_background_tasks`. A cancelled run caches nothing.
 - **It runs beside a slow task.** Because it locks nothing, a busy node does
@@ -5649,9 +5656,9 @@ where a test hands no host over.
   handed back as a handle past the window and removed by
   `cancel_background_tasks`; a call runs beside a slow task that holds the
   node; and a call whose run lands after a run for another version replaced
-  the cached table, so the table lacks a column the call found cached, is
-  refused with "call find_points again". The cache's keying, its merge of a second run, its replacement after
-  an edit, the dropped run that lands after one, and the close that drops it
+  the cached table, so the table lacks a returned or a sort column the call
+  found cached, is refused with "call find_points again". The cache's keying,
+  its merge of a second run, its replacement after an edit, the dropped run that lands after one, and the close that drops it
   are in `track_table::tests`.
 - **Solo**: it moves rather than accumulating, leaves the selection alone, and
   keeps `visible` and `drawn` distinguishable.

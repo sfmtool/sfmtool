@@ -151,10 +151,13 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           points, and matched, the number that passed. The columns are \
                           computed for the version at the cursor and cached; a call whose \
                           columns are not cached yet starts Find points, a background task, \
-                          and answers when it lands, or with a handle to poll through \
-                          get_background_tasks when it outlives 200 ms. A refusal names a \
-                          column that does not exist or that the reconstruction cannot \
-                          supply, with the ones it can.",
+                          and answers when it lands, or with a handle when it outlives \
+                          200 ms: poll get_background_tasks until the task has finished, \
+                          then call find_points again, which is answered from the cache. A \
+                          refusal names a column that does not exist or that the \
+                          reconstruction cannot supply, with the ones it can; one that says \
+                          to call find_points again means the version moved while the task \
+                          ran.",
             kind: Read,
             schema: object(
                 &[

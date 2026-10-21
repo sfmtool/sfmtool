@@ -20,7 +20,8 @@
 //! serial the node has since left is dropped with a failed row.
 
 use sfmtool_core::analysis::track_table::{
-    query_points, TrackTable, TrackTableColumn, TrackTableMergeError, TrackTableQueryOptions,
+    query_points, TrackTable, TrackTableColumn, TrackTableMergeError, TrackTableQueryError,
+    TrackTableQueryOptions,
 };
 
 use sfmtool_core::progress::Progress;
@@ -204,7 +205,7 @@ impl AppState {
             return (
                 Err(format!(
                     "Find points of {label} finished, but {label} has changed since it \
-                     started, so its answer was dropped."
+                     started, so its answer was dropped; call find_points again."
                 )),
                 None,
             );
@@ -214,6 +215,17 @@ impl AppState {
         }
         let table = self.track_tables.get(id, document).expect("just merged");
         match query_points(self.scene[index].edited(), table, &options) {
+            // The call found this bound or sort column cached when it queued
+            // the run, so the entry was replaced since: a run for another
+            // version landed while that version was at the cursor.
+            Err(TrackTableQueryError::ColumnNotComputed(_)) => (
+                Err(format!(
+                    "Find points of {label} finished, but a run for another version of \
+                     {label} replaced the values it needed, so its answer was dropped; \
+                     call find_points again."
+                )),
+                None,
+            ),
             Err(error) => (Err(format!("Find points of {label}: {error}")), None),
             Ok(matched) => (
                 Ok(found_sentence(
