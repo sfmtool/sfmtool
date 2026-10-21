@@ -172,7 +172,7 @@ projection is repeated.
 3. **The derived indexes are rebuilt**, so the value that comes back is
    complete.
 
-**Refusals.** The image index is past the table; the image carries no pose, its
+**Refusals.** The image index is past the image set; the image carries no pose, its
 stored rotation or translation being a non-finite placeholder rather than a
 registration; or the pose is not a finite rigid placement.
 

@@ -58,7 +58,7 @@ pub struct SwitchCameraModelOptions {
 }
 
 pub struct SwitchCameraModelReport {
-    pub cameras: Vec<CameraSwitch>, // one per switched camera, in table order
+    pub cameras: Vec<CameraSwitch>, // one per switched camera, in camera index order
 }
 
 pub struct CameraSwitch {

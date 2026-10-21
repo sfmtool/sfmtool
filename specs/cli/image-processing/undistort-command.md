@@ -113,8 +113,8 @@ best-fit pinhole with the source image's width and height:
 - `--fit inside` uses `CameraIntrinsics.best_fit_inside_pinhole(w, h)`.
 - `--fit outside` uses `CameraIntrinsics.best_fit_outside_pinhole(w, h)`.
 
-Output images keep the source resolution. The camera table in the output
-`.sfmr` is contiguous — only the cameras actually used by images are emitted —
+Output images keep the source resolution. The cameras in the output
+`.sfmr` are contiguous — only the cameras actually used by images are emitted —
 and `camera_indexes` and `rig_frame_data.sensor_camera_indexes` are remapped
 accordingly.
 

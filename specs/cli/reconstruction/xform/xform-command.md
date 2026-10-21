@@ -352,7 +352,7 @@ The other fields are `key=value`:
 | `coeffs` | `8` | Spline coefficients, for `SFMTOOL_FISHEYE` and `SFMTOOL_PINHOLE` only. |
 | `fit_to` | the camera's trusted bound, else its observations' largest incidence angle; the whole spline domain for a spline refitted as its own model | The largest incidence angle, in degrees, the fit samples. A value past the trusted bound is refused. |
 | `spline_domain` | the far image corner; the camera's own domain end for a spline refitted as its own model | Where a spline target's domain ends, as an incidence angle in degrees. |
-| `cameras` | every camera | Camera-table indexes to switch, separated by `+`. |
+| `cameras` | every camera | Camera indexes to switch, separated by `+`. |
 
 A target that contains the source's model fits to the copied parameters: the
 same focal and coefficients, the new terms at zero, so `SIMPLE_RADIAL` to
@@ -456,14 +456,14 @@ cameras are all COLMAP models `cross=off` is a usage error rather than a
 setting that would be ignored. A reconstruction whose cameras are all COLMAP
 models goes through pycolmap as described below, unchanged.
 
-`cameras=0+1` releases the lens of the named cameras (camera-table indexes,
+`cameras=0+1` releases the lens of the named cameras (camera indexes,
 joined by `+`) and holds every other camera's intrinsics exactly as they are,
 while the poses and points of every image are still refined. On the sfmtool path
 each named camera releases what the bare option would release on it. On the
 pycolmap path each other camera's intrinsics are held constant in the solve,
 which otherwise runs as pycolmap's own bundle adjustment does: every registered
 image, with the gauge fixed by two camera poses; it prints which cameras were
-released and which held. An index past the camera table is a usage error.
+released and which held. An index past the reconstruction's cameras is a usage error.
 
 ```bash
 --camera-model SFMTOOL_FISHEYE,coeffs=8 --bundle-adjust

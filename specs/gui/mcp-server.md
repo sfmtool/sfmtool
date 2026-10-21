@@ -3614,7 +3614,7 @@ the wire: its four entries are the tools `resect_camera_image`,
 dialog collects, camera by camera: whether each camera's focal is released, and
 whether its lens distortion (`k1` on `SIMPLE_RADIAL_FISHEYE`, the spline on
 `SFMTOOL_FISHEYE` and `SFMTOOL_PINHOLE`) is released with it. `release_focal`
-and `release_distortion` are the defaults every camera of the node's table
+and `release_distortion` are the defaults every camera of the node's image set
 takes, and `cameras` overrides them: a list of `{ camera_intrinsics_index,
 release_focal?, release_distortion? }`, one entry per camera that differs, each
 naming its camera by the index `get_camera_intrinsics` and `get_camera_image`
@@ -5662,7 +5662,7 @@ where a test hands no host over.
 - **`move_camera_image` pushes a version the reply names**, with the camera
   standing where the call put it in the node's own frame, the `report` the
   sentence the edit recorded, and that one sentence in the log as `Mcp`; an
-  image index past the table is refused, pushes nothing and leaves one failed
+  image index past the image set is refused, pushes nothing and leaves one failed
   row.
 - **A held Move Camera lock is committed before an edit lands on its node**,
   which is the wire's rule rather than the pose edit's: `move_camera_image`

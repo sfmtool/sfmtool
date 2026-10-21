@@ -42,11 +42,11 @@ Two forms, both CSR over tracks in the order the caller supplies:
   The camera comes in one of two shapes.
   `triangulate_points_from_observations` takes one camera that every image was
   taken through. `triangulate_points_through_cameras` (crate-internal) takes a
-  camera table and, per image, the index of the camera that took it, so each
+  list of cameras and, per image, the index of the camera that took it, so each
   observation's ray is cast, its reprojection read by the `bar` and
   `distance` rules, and its `likelihood` noise weight taken, through its own
-  image's camera. Both are one body: the one-camera form is the table form
-  with a table of one and every image on it, so the arithmetic, and the
+  image's camera. Both are one body: the one-camera form is the list form
+  with a list of one and every image on it, so the arithmetic, and the
   bytes, are the same.
 
 Per track the caller may also pass an incoming state: a position and a flag
@@ -329,7 +329,7 @@ of its points to re-solve, and hands back the value that holds the answers, the
 map from its indexes to that value's, and a report that says what happened to
 each point. It gathers the pixels, the poses, the camera each image was taken
 through and the constraint columns the observation form takes, runs the
-camera-table form once, and writes each point's answer back. Each observation is read through its own image's camera, so a value
+list-of-cameras form once, and writes each point's answer back. Each observation is read through its own image's camera, so a value
 whose images are taken through several cameras -- a rig with one camera per
 sensor -- is solved in one call, and a track seen through two of them is
 solved from rays cast through both. It is pure, and it moves no camera and no
@@ -649,10 +649,10 @@ The in-front flag comes back beside the verdicts, which is what makes
   pinhole and an equidistant fisheye of a different focal and principal point,
   tracks seen through one camera only, and a track seen through both, land on
   the truth under a reprojection bar of a hundredth of a pixel. The same pixels
-  with the table saying every image is the pinhole still put the pinhole-only
+  with the image set saying every image is the pinhole still put the pinhole-only
   tracks on the truth and every track with a fisheye observation off it.
   A ranged point seen through the fisheye keeps its distance and lands on the
-  truth, and under the all-pinhole table it keeps its distance and misses.
+  truth, and under the all-pinhole image set it keeps its distance and misses.
   Under the `likelihood` rule at a fifth of a pixel, a track seen through both
   cameras from far beyond the arc has no depth and becomes a bearing within
   `1e-5` rad of its true direction, while the near tracks stay finite on the
@@ -660,10 +660,10 @@ The in-front flag comes back beside the verdicts, which is what makes
   near ones' are `finite` and `Moved`, and the census and the counts agree with
   them. Named alone under `These`, the far track is rewritten to the same
   bearing, takes a new index, and reports the same status. Under the
-  all-pinhole table that bearing is lost. A track seen
+  all-pinhole image set that bearing is lost. A track seen
   through the fisheye alone, far enough out that its verdict changes between
   0.15 and 0.25 px, is finite at the first and a direction at the second,
   which holds only when each ray's noise weight is taken through the fisheye
   that took it: weighted through the pinhole's larger focal, its rays claim
-  about 2.8 times the depth evidence and it stays finite. A camera the table
+  about 2.8 times the depth evidence and it stays finite. A camera the image set
   holds but no image names changes no point and no field of the report.

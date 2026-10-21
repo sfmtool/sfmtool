@@ -55,7 +55,7 @@ pub fn bundle_adjust(
 ) -> Result<(SfmrReconstruction, BundleAdjustReport), BundleAdjustError>;
 
 pub struct BundleAdjustOptions {
-    /// One per camera in the camera table, or empty for every camera held.
+    /// One per camera of the image set, or empty for every camera held.
     pub releases: Vec<CameraRelease>,
     pub schedule: Vec<BaSchedule>,
     pub max_iters: usize,
@@ -95,7 +95,7 @@ pub struct BundleAdjustReport {
 }
 
 pub struct CameraAdjustment {
-    pub camera: usize,        // its index in the reconstruction's camera table
+    pub camera: usize,        // its index among the reconstruction's cameras
     pub images: usize,        // posed images taken through it in the solve
     pub focal_before: f64,
     pub focal_after: f64,
@@ -152,10 +152,10 @@ can.
 decides what can be released at all, so the choice is made camera by camera: a
 rig that mixes an `OPENCV_FISHEYE` camera with spline cameras releases the
 spline cameras and holds the other. `releases` holds one `CameraRelease` per
-camera-table entry, in table order, because the table index is the name every
+camera of the image set, in camera index order, because the camera index is the name every
 other surface gives a camera; an entry for a camera no posed image uses is
 ignored, since that camera is not in the solve. An empty list holds every
-camera, which is what `Default` gives, and any other length than the table's is
+camera, which is what `Default` gives, and any other length than the camera count is
 refused (`ReleaseCount`) rather than read as a prefix, because a list one entry
 short would otherwise hold the last camera without saying so.
 `BundleAdjustOptions::uniform(n, release)` builds the case where every camera
@@ -174,7 +174,7 @@ holds a parameter its model is not exact for and releases the rest. That is
 right for a kernel with a parity requirement and wrong for a caller who asked a
 question: a report saying the focal was released when it was held would be
 false. So each camera's release is checked against its own model, and the first
-camera that fails refuses the call with its table index and its model:
+camera that fails refuses the call with its camera index and its model:
 `FocalNotReleasable` for a focal release on a model the kernel's analytic focal
 column is not exact for, and `DistortionNotReleasable` for a distortion release
 on a model with no distortion the kernel can free.
@@ -310,15 +310,15 @@ without solving anything:
   a sighting, and the residual has nothing to be measured against. The other
   observation mode always carries one.
 - No image with a finite pose (`NoPosedImages`).
-- A release list whose length is neither zero nor the camera table's
+- A release list whose length is neither zero nor the camera count
   (`ReleaseCount`).
-- Then, for each camera the posed images use, in table order, the first of: a
+- Then, for each camera the posed images use, in camera index order, the first of: a
   distortion release without the focal (`DistortionWithoutFocal`); a focal
   release on a model the kernel's focal column is not exact for
   (`FocalNotReleasable`); and a distortion release on a camera that is neither a
   `SIMPLE_RADIAL_FISHEYE` nor a spline model whose spline is defined, at least
   two coefficients on a positive finite domain end (`DistortionNotReleasable`).
-  Each names the camera by its table index, and the last two its model.
+  Each names the camera by its camera index, and the last two its model.
 - No observation of any point in a posed image (`NoObservations`).
 - Constraint columns stating something the adjustment cannot honour
   (`Constraints`), by the rules of
@@ -328,14 +328,14 @@ The last refusal is the solve's own, in step 5.
 
 ### 2. What goes into the solve
 
-Every image with a finite pose, in table order, and every observation whose image
+Every image with a finite pose, in image index order, and every observation whose image
 is one of them. An unposed image is not a camera a residual can be written
 against, so it sits the solve out and its observations do not enter; a point left
 with no observation in the solve is not in the solve either, and comes back
 exactly as it went in.
 
-The cameras of the solve are the camera-table entries the posed images use, in
-table order, and each posed image's index into that list goes to the kernel as
+The cameras of the solve are the image set's cameras the posed images use, in
+camera index order, and each posed image's index into that list goes to the kernel as
 its image-to-camera column. The posed images may use any number of cameras; each
 keeps its own lens in the solve. A camera only unposed images use, or none, is
 not in the solve and comes back exactly as it went in.
@@ -453,8 +453,8 @@ destroying it.
 
 The centroid is the mean of the posed images' camera centres. An unposed image
 (a non-finite rotation or translation) has no centre, so it is left out rather
-than turning every distance into `NaN`, and a table with no posed image measures
-from the origin. It is taken once per table, not once per point:
+than turning every distance into `NaN`, and an image set with no posed image measures
+from the origin. It is taken once per image set, not once per point:
 `ImageSet::camera_centroid` gives it and `ImageSet::placement_scale_from`
 measures a position from it, so a write-back over every point costs one pass
 over the images. `placement_scale` is the same two steps for a caller with one
@@ -466,7 +466,7 @@ and wants the size the edit will write:
 
 ```rust
 pub fn patch_frame_factor(
-    centroid: &Point3<f64>,      // of the table the point now stands in
+    centroid: &Point3<f64>,      // of the image set the point now stands in
     before: Option<f64>,         // its placement distance, None for a bearing
     after: Option<&Point3<f64>>, // its new position, None for a bearing
 ) -> Option<f32>;                // None: leave the frame as it is
@@ -491,14 +491,14 @@ of an unposed corner of the capture rather than leaving it alone.
 
 **The frame rescale reads two different image sets.** The "before" distance is
 measured against the input's poses and the "after" against the output's, because
-the centroid itself moves when the cameras do. Measuring both against one table
+the centroid itself moves when the cameras do. Measuring both against one image set
 would leave the frame carrying the gauge drift of the solve.
 
 ## Parameters
 
 | Parameter | Default | Meaning |
 |-----------|---------|---------|
-| `releases` | empty: every camera held | One `CameraRelease` per camera-table entry: `focal` releases that camera's focal, `distortion` its `k1` or spline and needs `focal`. |
+| `releases` | empty: every camera held | One `CameraRelease` per camera of the image set: `focal` releases that camera's focal, `distortion` its `k1` or spline and needs `focal`. |
 | `schedule` | `DEFAULT_SCHEDULE`, `[(50, 5), (12, 2), (4, 1)]` | The staged trim schedule, `(trim_px, loss_scale)` per round; `trim_px` may be `f64::INFINITY`. |
 | `max_iters` | `60` | LM iteration budget per round. |
 | `min_track` | `2` | Trim survivors a point needs to stay in a round's solve. |
@@ -515,9 +515,9 @@ here so a caller sees what it is getting.
 releases=None, schedule=None, max_iters=60, min_track=2, min_obs=12,
 free_points_cross=True)` returns `(EditedReconstruction, report)`.
 `free_points_cross=False` is `FreePointPolicy::NO_CROSS`. `opt_f` and
-`opt_distortion` are the release given to every camera of the table.
-`releases`, when given, replaces them: a list with one dict per camera in the
-table, in table order, each `{"focal": bool, "distortion": bool}`, a missing
+`opt_distortion` are the release given to every camera of the image set.
+`releases`, when given, replaces them: a list with one dict per camera in the image
+set, in camera index order, each `{"focal": bool, "distortion": bool}`, a missing
 key meaning `False`; an unknown key or a value that is not a bool is a
 `ValueError`. It materialises the version's value when its
 overlay is not empty, runs the function over it, and wraps the answer as a new

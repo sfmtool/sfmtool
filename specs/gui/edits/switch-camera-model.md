@@ -602,7 +602,7 @@ not empty. The direct switch moves no pose, point, keypoint or track and
 deletes nothing, so the `RowMap::by_scan` read off its input and output is the
 identity, and the selection stays where it is. Apply's retriangulation rewrites
 the proposal's tracks in place, at their own rows, so its map renumbers nothing
-either. The camera table changes and the stored errors of the points the
+either. The image set's cameras change and the stored errors of the points the
 camera's images observe are recomputed, so the panels drop what they cached
 about the node, the Camera Intrinsics panel's derived report and the Image
 Detail overlay among it.
@@ -637,7 +637,7 @@ run (`3020 of 3020 points moved, …, median shift 0.0123`), read off the
 retriangulation's report.
 
 A refusal is one **failed** entry, `Switch camera model of <node> refused:
-camera 0: <reason>`, carrying the core function's sentence: a camera the table
+camera 0: <reason>`, carrying the core function's sentence: a camera the image set
 does not have, a count on a model without a spline, a domain end the model
 cannot have. Nothing is pushed. A perspective target refused because a point
 lies 90° or more off the camera's axis names that point, by the index the
@@ -829,7 +829,7 @@ Explorer (`sfm-explorer` lib tests, headless):
   judged in the viewer.
 - **Whether two whole-value copies per job is fast enough** (§ "The proposal's
   job"). If not, on a large node, `retriangulate_points` could solve through a
-  camera table the caller states and return its statuses and positions without
+  list of cameras the caller states and return its statuses and positions without
   building a value, as a mode of the same function with the same rules. Apply
   would then solve again to build the version rather than install the job's
   answer, so the saving is in the jobs a proposal's changes start, not in

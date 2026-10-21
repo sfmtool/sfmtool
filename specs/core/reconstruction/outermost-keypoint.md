@@ -31,7 +31,7 @@ as `sfmtool_core::reconstruction::outermost_keypoint`, and is bound as
 pub struct KeypointReach {
     pub radius_px: f64, // distance from the camera's principal point
     pub theta_deg: f64, // incidence angle the camera's model gives the pixel
-    pub image: usize,   // the image it is in, by table index
+    pub image: usize,   // the image it is in, by image index
     pub xy: [f64; 2],
 }
 
@@ -128,7 +128,7 @@ line out from the principal point and one feature per image further out than any
 observation uses: the detected keypoint is that one, the observed is the largest
 observed index, and the angle is the model's for the pixel. Without readable
 files (not asked to read, or moved away) nothing is detected; inline keypoints
-are observed without reading a file; a camera past the table is ignored. The
+are observed without reading a file; a camera index past the image set's cameras is ignored. The
 switch and the bundle adjustment test their report entries in their own suites,
 and the bindings in
 `tests/rust_bindings/reconstruction/test_edited_reconstruction_rust_bindings.py`.

@@ -1199,7 +1199,7 @@ impl AppState {
     /// The frame asks two questions of this, not one: whether to repaint, which
     /// is true of every report, and whether a version landed, which is true
     /// only at the end and is what tells the panels to drop the caches they
-    /// keep about a table that has just been renumbered. Answering with one
+    /// keep about an image set that has just been renumbered. Answering with one
     /// bool would flush every texture on every report, which during a long
     /// solve is a thousand flushes for one renumbering.
     pub fn poll_background_tasks(&mut self) -> Polled;

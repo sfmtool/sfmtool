@@ -28,7 +28,7 @@ model (otherwise that command uses pycolmap).
 
 - `n_cam` **cameras**, each a `CameraIntrinsics` with its own model,
   parameters and initial focal. A camera here is what the `.sfmr` calls one:
-  an entry of the camera table, which images reference by index. Rigs are not
+  one of the reconstruction's cameras, which images reference by index. Rigs are not
   modelled: every image keeps its own free pose.
 - `n_img` **images**, each taken through one of the cameras (`image_camera[i]`)
   and each with a
@@ -145,7 +145,7 @@ where its model admits it. A list whose length is not `n_cam` is a caller error
 and panics with the other shape checks.
 
 **Why the result returns cameras.** A caller wants each solved camera back to
-write into its own table. The result carries the whole `CameraIntrinsics` per
+write into its own image set. The result carries the whole `CameraIntrinsics` per
 input camera, in order: the input camera with its released parameters replaced
 by the solved ones (the focal under `opt_f`, `k1` under `opt_k1`, the spline
 under `opt_bspline`, where its model admits the release), and equal to the input

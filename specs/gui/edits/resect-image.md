@@ -519,7 +519,7 @@ file, the totals' split, a cluster with a moved member counted in
 in `clusters_untracked` and giving no pair, and a file without the cluster sections
 (`ValueError`) or that cannot be read (`OSError`). The installing variant is in
 `test_edited_reconstruction_rust_bindings.py`, on the real reconstruction the
-other edit bindings use: an image past the table raising, and an accepted
+other edit bindings use: an image past the image set raising, and an accepted
 estimate moving that image alone while the value it came from stands.
 
 Explorer (`sfm-explorer` lib tests, headless egui):

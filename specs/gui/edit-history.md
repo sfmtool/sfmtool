@@ -181,7 +181,7 @@ screen stays on screen: the move reads the selected image's `.sfmr` name before
 it steps, and puts the selection back on the image of that name in the version
 it lands on. For every edit that leaves the image set alone -- a point edit, a
 bench step, an adjustment -- that is the same index it started at; across an
-edit that renumbered the table it is the index the same photograph now holds;
+edit that renumbered the image set it is the index the same photograph now holds;
 and where the version it lands on has no image of that name, which only a
 `delete_camera_image` can produce, the selection clears because there is nothing
 left to show. The camera selection is re-derived from the image that was kept,

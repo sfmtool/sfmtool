@@ -273,7 +273,7 @@ only where the version arrived at has no such photograph
 its `ReconId` through all of it, which is what makes an edit different from
 closing and re-opening: the tint, the transform, the solo and the MCP addressing
 carry over untouched. The bench is not a cache and is not dropped either: it is
-half of the version, and `delete_image` renumbers it with the table, as above;
+half of the version, and `delete_image` renumbers it with the image set, as above;
 the focused item's selected observations follow that renumbering.
 
 ### What a point edit owes it

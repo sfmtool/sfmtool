@@ -70,14 +70,14 @@ there is one decision to take, camera by camera: how much of each lens may move,
 and in what form. One more is about the points, and one about which
 observations the solve keeps.
 
-- **One row per camera** the posed images use, in table order: `Camera 0
+- **One row per camera** the posed images use, in camera index order: `Camera 0
   SFMTOOL_FISHEYE  24 images`, then two checkboxes, both clear by default. A
   camera only unposed images use is not in the solve and has no row. A lens that
   moves is a different claim about the capture than a pose that does, so the
   smaller claim is the default, and a camera left clear is held.
   - **Release focal length** releases that camera's focal. It is **disabled**
     when the camera's model is not one the adjustment's focal column is exact
-    for, with a hover explanation naming the camera by its table index and its
+    for, with a hover explanation naming the camera by its camera index and its
     model.
   - **Release lens distortion** releases that camera's lens distortion: `k1` on
     `SIMPLE_RADIAL_FISHEYE`, the radial spline on `SFMTOOL_FISHEYE` and
@@ -154,7 +154,7 @@ version and the history entry, in
 [state/edits.rs](../../../crates/sfm-explorer/src/state/edits.rs).
 
 The dialog sets three options. The camera rows are `releases`, which holds one
-`CameraRelease` per camera of the node's table: each row's two checkboxes for
+`CameraRelease` per camera of the node's image set: each row's two checkboxes for
 its camera, less anything its model cannot take, and held for a camera with no
 row. The crossing checkbox is `free_points`, and the Schedule box is
 `schedule`. The iteration budget and the two floors are the core function's
@@ -195,7 +195,7 @@ followed by what each camera of the solve released, read off the report:
 - one phrase when every camera released the same thing: `, focal released` or
   `, focal and lens distortion released` over one camera, with ` on every
   camera` appended over several;
-- otherwise each camera by its table index, `, camera 0 focal and lens
+- otherwise each camera by its camera index, `, camera 0 focal and lens
   distortion released, camera 1 held`, because the label is the line in the
   Edit History that says which lens moved.
 
@@ -218,7 +218,7 @@ the final round kept too few observations of some free points to score them,
 crossing off), and `, 12 points deleted`
 when the solve left points unsupported. A solve over one
 camera reads `, focal 2803.5 → 2794.1`; one over several names each camera by
-its table index, `, camera 0 focal 2803.5 → 2794.1, camera 1 focal 1401.2 →
+its camera index, `, camera 0 focal 2803.5 → 2794.1, camera 1 focal 1401.2 →
 1399.8`, because a list of numbers alone would not say which lens moved. The
 three counts
 are what went **into** the solve, which is not always the whole node: an unposed
