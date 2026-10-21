@@ -19,7 +19,7 @@ use super::SfmrImage;
 /// belongs to.
 ///
 /// Everything here is addressed by image index, so an operation that adds,
-/// drops or reorders images works on this table and an operation that only
+/// drops or reorders images works on this set and an operation that only
 /// moves points leaves it alone. The columns are parallel to `images`, except
 /// `cameras`, which `SfmrImage::camera_index` indexes into, and
 /// `rig_frame_data`, which groups images into rig frames.
@@ -65,10 +65,10 @@ impl ImageSet {
     }
 
     /// The unit world-space ray `pixel` states in image `image_index`, or
-    /// `None` when the index is past the table or the camera model has no ray
+    /// `None` when the index is past the set or the camera model has no ray
     /// there.
     ///
-    /// The pose and the lens are both this table's, so every edit that
+    /// The pose and the lens are both this set's, so every edit that
     /// triangulates a track -- a shortened one, or one whose camera moved --
     /// assembles its rays here rather than each spelling the pixel-to-world
     /// chain out again.
@@ -87,7 +87,7 @@ impl ImageSet {
     /// frame's angular extent is multiplied by to become a world one there, and
     /// what a world extent is divided by to become an angular one.
     ///
-    /// The reference is the mean of **every** posed camera centre in the table
+    /// The reference is the mean of **every** posed camera centre in the set
     /// rather than of the ones that see any particular point, because that is
     /// the reference
     /// [`SfmrReconstruction::materialize_points_at_infinity`](super::SfmrReconstruction::materialize_points_at_infinity)
@@ -96,15 +96,15 @@ impl ImageSet {
     /// images happen to be in a track.
     ///
     /// Each call sums the camera centres again. A caller measuring many points
-    /// against one table takes [`Self::camera_centroid`] once and measures each
+    /// against one set takes [`Self::camera_centroid`] once and measures each
     /// point with [`Self::placement_scale_from`], which gives the same number.
     pub fn placement_scale(&self, position: &nalgebra::Point3<f64>) -> f64 {
         Self::placement_scale_from(&self.camera_centroid(), position)
     }
 
-    /// The mean of the camera centres of the table's posed images, the
+    /// The mean of the camera centres of the set's posed images, the
     /// reference [`Self::placement_scale`] measures from; the origin for a
-    /// table with no posed image.
+    /// set with no posed image.
     ///
     /// An unposed image, one whose stored rotation or translation is not
     /// finite, has no centre. Counting its placeholder would make the centroid

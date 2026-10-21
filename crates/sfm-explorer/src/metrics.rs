@@ -5,7 +5,7 @@
 //! and whole-track diagnostics for one 3D point.
 //!
 //! Nothing here touches egui state: every function is a pure computation over
-//! the point set and image set handed to it, which is what lets the display code
+//! the point, image and camera handed to it, which is what lets the display code
 //! that quotes them stay thin. A point arrives as a
 //! [`PointView`](sfmtool_core::PointView), so the numbers describe the version
 //! on screen rather than the base under it. They live at the crate root rather

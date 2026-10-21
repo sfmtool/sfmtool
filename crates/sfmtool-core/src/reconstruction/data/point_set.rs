@@ -549,7 +549,7 @@ impl PointSet {
     /// [`Self::validate_observation_columns`] runs this first. It is separate
     /// so that a builder can run it before
     /// [`Self::rebuild_derived_fields`], which indexes the per-image maps by
-    /// each row's image and so panics on a row past the table.
+    /// each row's image and so panics on a row past the image set.
     pub fn validate_track_image_indexes(&self, image_count: usize) -> Result<(), String> {
         match self
             .tracks
@@ -564,7 +564,7 @@ impl PointSet {
         }
     }
 
-    /// Check that every track row names an image of the table and that the
+    /// Check that every track row names an image of the image set and that the
     /// observation-source columns are parallel to the structures they
     /// annotate: per-observation columns (`feature_indexes` / `keypoints_xy`)
     /// must match the track count, and per-image columns (the hashes) must match

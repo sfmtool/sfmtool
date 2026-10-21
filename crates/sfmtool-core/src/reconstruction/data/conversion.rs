@@ -433,7 +433,7 @@ impl SfmrReconstruction {
                 display_only_references: None,
                 observations,
                 // Filled by `rebuild_derived_fields` below, once every track
-                // row is known to name an image of the table.
+                // row is known to name an image of the image set.
                 image_feature_to_point: Vec::new(),
                 max_track_feature_index: Vec::new(),
                 infinity_point_count,
@@ -443,7 +443,7 @@ impl SfmrReconstruction {
         // The format reader checks a track row's image only where it reads a
         // keypoint column, and `from_sfmr_data` is also reached from the raw
         // PyO3 `from_data` builder, so confirm that every row names an image
-        // of the table and that the observation columns are parallel before
+        // of the image set and that the observation columns are parallel before
         // the per-image maps are built from the rows.
         recon
             .validate_observation_columns()
