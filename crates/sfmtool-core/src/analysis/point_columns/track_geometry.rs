@@ -89,7 +89,7 @@ pub fn compute_max_ray_angle_deg(image_table: &ImageTable, view: &PointView<'_>)
 /// Returns `(NaN, NaN)` for a point at infinity, which has no depth to be
 /// uncertain about, and for fewer than two usable rays. The per-ray angular
 /// noise is `max(error, 1 px) / f`, with `error` the point's stored
-/// reprojection error ([`Point3D::error`](crate::reconstruction::Point3D::error)).
+/// reprojection error ([`Point3D::rms_reprojection_error`](crate::reconstruction::Point3D::rms_reprojection_error)).
 pub fn compute_point_diagnostics(image_table: &ImageTable, view: &PointView<'_>) -> (f32, f32) {
     let pt = view.point();
     if pt.is_at_infinity() {
@@ -99,7 +99,12 @@ pub fn compute_point_diagnostics(image_table: &ImageTable, view: &PointView<'_>)
         .observations()
         .iter()
         .map(|obs| obs.image_index as usize);
-    compute_position_diagnostics(image_table, &pt.position, f64::from(pt.error), images)
+    compute_position_diagnostics(
+        image_table,
+        &pt.position,
+        f64::from(pt.rms_reprojection_error),
+        images,
+    )
 }
 
 /// [`compute_point_diagnostics`] for a finite `position` seen from `images`,

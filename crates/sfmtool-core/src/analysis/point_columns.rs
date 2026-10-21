@@ -39,7 +39,7 @@ pub enum PointColumn {
     /// the track length where one image holds several observations.
     ImageCount,
     /// The point's stored RMS reprojection error in pixels,
-    /// [`Point3D::error`](crate::reconstruction::Point3D::error).
+    /// [`Point3D::rms_reprojection_error`](crate::reconstruction::Point3D::rms_reprojection_error).
     RmsErrorPx,
     /// `1` for a point at infinity (`w = 0`), `0` for a finite one.
     AtInfinity,
@@ -363,7 +363,7 @@ fn point_values(
                 images.dedup();
                 images.len() as f64
             }
-            PointColumn::RmsErrorPx => f64::from(point.error),
+            PointColumn::RmsErrorPx => f64::from(point.rms_reprojection_error),
             PointColumn::AtInfinity => {
                 if at_infinity {
                     1.0

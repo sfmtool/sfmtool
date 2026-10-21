@@ -185,7 +185,7 @@ it makes no difference to what a column means.
 |---|---|---|---|---|
 | `track_length` | stored | number of observations in the track | defined | never |
 | `image_count` | stored | number of distinct images among those observations; less than `track_length` where one image holds several observations of the point, which a GLOMAP solve produces | defined | never |
-| `rms_error_px` | stored | `Point3D::error`, the stored per-point RMS reprojection error in pixels, as its doc comment defines it; the viewer's `get_point` reports the same number. A file holds what its writer stored | defined | never |
+| `rms_error_px` | stored | `Point3D::rms_reprojection_error`, the stored per-point RMS reprojection error in pixels, as its doc comment defines it; the viewer's `get_point` reports the same number as `rms_error_px`. A file holds what its writer stored | defined | never |
 | `at_infinity` | stored | 1 for a point at infinity (`w = 0`), 0 for a finite one | defined | never |
 | `x`, `y`, `z` | stored | the point's position in the stored frame, in the reconstruction's world-space unit (scene units where none is declared) | no value | never |
 | `centroid_distance` | stored | distance from the posed cameras' centroid, the number `ImageTable::placement_scale` gives, in the unit of `x` | no value | the reconstruction has no posed image |

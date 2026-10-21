@@ -102,7 +102,7 @@ fn stored_columns_read_the_stored_point() {
         let v64 = |c| columns.values_f64(c).unwrap()[row];
         assert_eq!(v(PointColumn::TrackLength), 2.0);
         assert_eq!(v(PointColumn::ImageCount), 2.0);
-        assert_eq!(v(PointColumn::RmsErrorPx), point.error);
+        assert_eq!(v(PointColumn::RmsErrorPx), point.rms_reprojection_error);
         assert_eq!(v(PointColumn::AtInfinity), 0.0);
         assert_eq!(v64(PointColumn::X), point.position.x);
         assert_eq!(v64(PointColumn::Y), point.position.y);
@@ -186,7 +186,7 @@ fn a_point_at_infinity_has_no_position_and_no_triangulation() {
     assert_eq!(v(PointColumn::ImageCount, 4), 2.0);
     assert_eq!(
         v(PointColumn::RmsErrorPx, 4),
-        recon.point(4).unwrap().point().error
+        recon.point(4).unwrap().point().rms_reprojection_error
     );
     for c in [PointColumn::X, PointColumn::Y, PointColumn::Z] {
         assert!(v64(c, 4).is_nan(), "{c:?}");

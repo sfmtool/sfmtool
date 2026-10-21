@@ -6,10 +6,8 @@
 non-goal "Point colouring and filtering by quality") and
 [gui/panel-layout.md](../gui/panel-layout.md) (a tenth panel) and
 [gui/background-tasks.md](../gui/background-tasks.md) § "Two queues" and
-§ "Quiet tasks" (two quiet tasks and one asked-for fast-queue operation). It
-also makes `Point3D::error` the RMS its doc comment states and renames it
-`rms_reprojection_error`, and renames `analysis::inspect_point`'s angle field
-(Steps 0a and 0b). Part 1, the point columns and the point query, is built and
+§ "Quiet tasks" (two quiet tasks and one asked-for fast-queue operation).
+Part 1, the point columns and the point query, is built and
 filed as [core/analysis/point-columns.md](../core/analysis/point-columns.md).
 Parts 2 to 4 will file as `gui/track-table.md`, with the wire tools also
 described in `gui/mcp-server.md`.
@@ -40,13 +38,11 @@ Decided:
 - A `find_points` call that needs a computed column the cache does not hold
   queues an asked-for fast-queue task of its own, *Find points*, rather than
   promoting the panel's quiet job (§ "`find_points`").
-- `Point3D::error` is made the root-mean-square reprojection error its doc
-  comment already states; `recompute_point_errors` computes the mean today
-  (Step 0a). The field becomes `Point3D::rms_reprojection_error`, and
-  `get_point` reports it as `rms_error_px`.
-- `max_ray_angle_deg` keeps the largest-pairwise-angle meaning the bench, the
-  viewer and this table use; `analysis::inspect_point`'s field of that name,
-  which is the largest angle from the mean direction, is renamed (Step 0b).
+- The error column is `rms_error_px`, the stored
+  `Point3D::rms_reprojection_error` (an RMS since #1000), which `get_point`
+  also reports as `rms_error_px`. `max_ray_angle_deg` is the largest pairwise
+  ray angle everywhere, since `inspect_point`'s angle from the mean direction
+  was renamed `max_angle_from_mean_deg` (#1001).
 
 Not decided: see § "Open questions".
 
@@ -479,21 +475,6 @@ panel at its default size checked before the step is done. In the background
 queue work, those captures found nine problems that the tests had passed:
 layout, contrast, a wrong progress fraction and a missing title line.
 
-0a. **`Point3D::error` as an RMS.** `recompute_point_errors` (both its
-   `.sift` path and `inline_point_reprojection_errors`) computes the
-   root-mean-square of the point's observation errors in pixels, as the field's
-   doc comment says, rather than the mean. Every place that describes the value
-   as a mean is corrected (`sfm inspect` labels, specs, Python docstrings), and
-   the tests that pin error values are updated. The field is renamed
-   `Point3D::rms_reprojection_error`, the Python getter
-   `rms_reprojection_errors`, and `get_point`'s field `rms_error_px`. A file
-   written before this holds the mean until its errors are recomputed; the
-   format spec says which writer stores which.
-0b. **Rename `inspect_point`'s angle.** `analysis::inspect_point`'s
-   `max_ray_angle_deg`, the largest angle from the mean direction, becomes
-   `max_angle_from_mean_deg`, in core, the Python binding and the `sfm inspect`
-   output, with a glossary entry that names both angles. `max_ray_angle_deg`
-   then has one meaning across the tree.
 2. **`find_points`**, which brings the column cache and the *Find points*
    operation into the viewer, for the stored and the computed columns. Only
    the wire uses them at this step, and the mcp-server.md stance is revised.
@@ -515,7 +496,7 @@ layout, contrast, a wrong progress fraction and a missing title line.
 
 - **The quiet order.** Whether the Track Table's columns should go ahead of
   the focused item's evaluation when the table is the panel in view.
-- **Errors in files written before Step 0a** hold the mean (or, for a file
+- **Errors in files written before #1000** hold the mean (or, for a file
   converted from COLMAP and never recomputed, COLMAP's value). Whether the
   open should recompute them, or the table should say when a file's errors
   predate the change, is undecided.

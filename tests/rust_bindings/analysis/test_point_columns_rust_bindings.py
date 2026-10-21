@@ -60,7 +60,7 @@ def test_stored_columns_match_the_reconstruction(recon):
     np.testing.assert_array_equal(
         cols["track_length"], np.bincount(track_points, minlength=recon.point_count)
     )
-    np.testing.assert_array_equal(cols["rms_error_px"], recon.errors)
+    np.testing.assert_array_equal(cols["rms_error_px"], recon.rms_reprojection_errors)
     xyzw = recon.positions_xyzw
     at_infinity = xyzw[:, 3] == 0.0
     assert at_infinity.any(), "the ground truth holds points at infinity"
