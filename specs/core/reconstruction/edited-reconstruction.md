@@ -738,7 +738,7 @@ constrains anything. `EditedReconstruction`'s `PartialEq` reads two `NaN`
 distances as agreeing, since both say the point is at no distance from anything.
 
 **Validation is split the same way.** `validate_observation_columns` checks that
-every track row names an image of the table (`validate_track_image_indexes`,
+every track row names an image of the image set (`validate_track_image_indexes`,
 which it runs first: `track row {j}: image index {i} out of range for {n}
 images`), the per-observation columns against the track count and the per-image
 hashes against the image count; `validate_point_columns` checks the constraint triple against

@@ -110,7 +110,7 @@ Why it is shaped this way:
 
 - **Keyed by path, not by image index.** An image index is a position in one
   version's image set, and an edit that deletes a camera image renumbers
-  the table although no file changed. A path does not change when the table is
+  the image set although no file changed. A path does not change when the image set is
   renumbered, and two reconstructions over the same workspace share their
   decodes. The key is the path as joined from the workspace directory and the
   image name. It is not canonicalized, since two spellings of one file cost a
