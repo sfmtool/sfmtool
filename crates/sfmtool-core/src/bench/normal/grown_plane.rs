@@ -20,8 +20,10 @@
 //!
 //! A selection of views, picked near to far by their angle from the
 //! reference, is grown against the reference, the first from the starting
-//! plane and each later one from the plane of the views kept before it
-//! alone, and their planes are combined by a robust information-weighted mean, with no fit of the views together
+//! plane and each later one from the plane of the views kept before it,
+//! and again from the starting plane where a second-rung pick is refused
+//! there; their planes are combined by a robust information-weighted mean,
+//! with no fit of the views together
 //! (`combine`); the widest pairs of kept views are then matched against each
 //! other and their planes added to the mean (`selected`). The patch is turned
 //! to the combined plane whenever a view joined, unless the turn is large and
@@ -401,8 +403,9 @@ pub struct GrownPlaneTry {
     /// Its angle from the reference as seen from the patch centre, degrees.
     pub angle_deg: f64,
     /// Its growths, in the order made, up to the first that was taken: from
-    /// the combined plane where a view had been kept before it, at the
-    /// keypoint-implied shift alone; else from the starting plane, at the
+    /// the combined plane first where a view had been kept before it, at the
+    /// keypoint-implied shift; then, where none had been kept or a pick of
+    /// the second rung was refused there, from the starting plane, at the
     /// keypoint-implied shift and from the stage-1 search after. A
     /// search that lands on the keypoint-implied shift itself is not grown
     /// again, since that growth was the one just refused, and a view with no
@@ -721,8 +724,9 @@ impl std::fmt::Display for GrownPlaneSequence {
 /// to the widest views, within a rung the view whose predicted information
 /// most raises the weakest information measured so far. Each later pick is
 /// grown from the combined plane of the views kept so far, from its
-/// keypoint-implied shift alone, and a rung waits until one of its views is
-/// kept. The selection stops when the combined plane's weakest `σ`
+/// keypoint-implied shift; a pick of the second rung refused there is grown
+/// again from the starting plane, and a pick of a later rung is not. A rung
+/// waits until one of its views is kept. The selection stops when the combined plane's weakest `σ`
 /// reaches
 /// [`GrownPlaneNormalOptions::target_sigma_deg`] or
 /// [`GrownPlaneNormalOptions::max_selected_views`] views have passed the

@@ -10,9 +10,11 @@
 //! the reference whose pairs sharpen the plane, a selection that matches a
 //! few of many views, a flat wall, and large turns on weak and on strong
 //! evidence, and the ladder's selection near to far: its order, a refused
-//! pick whose rung waits for its other view, its end at the widest view that
-//! passes, and a view at the reference's centre; a growth stopped early, and
-//! keypoints off the content in views fitted for their shift alone.
+//! pick on the second rung grown again from the starting plane while its rung
+//! waits for its other view, a refused pick past it grown once, its end at
+//! the widest view that passes, and a view at the reference's centre; a
+//! growth stopped early, and keypoints off the content in views fitted for
+//! their shift alone.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -606,11 +608,12 @@ fn the_keypoint_implied_shift_takes_the_right_peak_on_repeating_texture() {
 /// where the pose projects the point, past the widened search's 12 px about
 /// zero shift, and each keypoint 6 px off the content, past what the fit
 /// recovers and past the 3 px search about the keypoint, every view grown
-/// from its keypoint-implied shift with no search is refused. For the first
-/// pick, grown from the starting plane, the search then widens about that
-/// shift, finds the content, and the view joins and is written on it. A
-/// later pick is grown from the combined plane at its keypoint-implied shift
-/// alone, is refused, and is left out.
+/// from its keypoint-implied shift with no search is refused, from the
+/// combined plane and from the starting plane alike; the search from the
+/// starting plane then widens about that shift, finds the content, and the
+/// view joins and is written on it. The later picks are on the second rung,
+/// so a refusal from the combined plane is grown again from the starting
+/// plane.
 #[test]
 fn the_widened_search_is_centred_on_the_keypoint() {
     let centres = vec![
@@ -656,10 +659,10 @@ fn the_widened_search_is_centred_on_the_keypoint() {
 
     let (turned, report) = run(&scene, &edited, &track, &GrownPlaneNormalOptions::default());
     let sequence = sequence_of(&report);
-    assert_eq!(sequence.joined(), 1, "{sequence:#?}");
-    assert_eq!(sequence.left_out(), 2, "{sequence:#?}");
+    assert_eq!(sequence.joined(), 3, "{sequence:#?}");
+    assert!(sequence.picks[1..].iter().all(|p| p.rung == 1));
     // Grown from the keypoint-implied shift, 6 px off, a view is refused,
-    // from the starting plane and from the combined plane alike; the search
+    // from the combined plane and from the starting plane alike; the search
     // that follows from the starting plane is what joins.
     for (k, entry) in sequence.trace.iter().enumerate() {
         let starts: Vec<_> = entry
@@ -669,17 +672,16 @@ fn the_widened_search_is_centred_on_the_keypoint() {
             .collect();
         let searched = (GrownPlaneTiltStart::Starting, GrownPlaneStart::Widened);
         let unsearched = (GrownPlaneTiltStart::Starting, GrownPlaneStart::NoSearch);
-        if k == 0 {
-            assert_eq!(starts, [unsearched, searched], "{entry:#?}");
-            let (last, refused) = entry.attempts.split_last().expect("growths");
-            assert!(refused.iter().all(|a| a.refusal.is_some()));
-            assert!(last.refusal.is_none());
+        let expected = if k == 0 {
+            vec![unsearched, searched]
         } else {
             let combined = (GrownPlaneTiltStart::Combined, GrownPlaneStart::NoSearch);
-            assert_eq!(starts, [combined], "{entry:#?}");
-            assert!(entry.attempts[0].refusal.is_some(), "{entry:#?}");
-            assert_eq!(entry.outcome, GrownPlaneTryOutcome::LeftOut);
-        }
+            vec![combined, unsearched, searched]
+        };
+        assert_eq!(starts, expected, "{entry:#?}");
+        let (last, refused) = entry.attempts.split_last().expect("growths");
+        assert!(refused.iter().all(|a| a.refusal.is_some()));
+        assert!(last.refusal.is_none());
     }
     for (row, view) in sequence.views.iter().enumerate() {
         if let GrownPlaneView::Joined { start, .. } = view {
@@ -1264,11 +1266,11 @@ fn the_ladder_visits_views_near_to_far() {
 }
 
 /// A view in the second rung that sees unrelated texture is refused from
-/// the combined plane, its growth stopped at a window stage, and is not grown
-/// again from the starting plane; the rung waits, and its other view is
-/// picked next.
+/// the combined plane, its growth stopped at a window stage, and grown again
+/// from the starting plane, where it is refused too; the rung waits, and its
+/// other view is picked next.
 #[test]
-fn a_refused_pick_waits_for_its_rungs_other_view() {
+fn a_refused_second_rung_pick_is_retried_from_the_start() {
     // The unrelated view is across the first pick's offset and the wider of
     // the second rung's two, so the rung's prediction picks it first.
     let views = [(12.0, 0.0), (17.0, 20.0), (22.0, 90.0), (35.0, 200.0)];
@@ -1286,12 +1288,18 @@ fn a_refused_pick_waits_for_its_rungs_other_view() {
     assert_eq!(pick.rung, 1, "{:#?}", sequence.picks);
     let entry = &sequence.trace[bad];
     assert_eq!(entry.outcome, GrownPlaneTryOutcome::LeftOut);
-    assert_eq!(entry.attempts.len(), 1, "{entry:#?}");
-    let attempt = &entry.attempts[0];
-    assert_eq!(attempt.tilt_start, GrownPlaneTiltStart::Combined);
+    assert!(entry.attempts.len() >= 2, "{entry:#?}");
+    let (first, retries) = entry.attempts.split_first().expect("growths");
+    assert_eq!(first.tilt_start, GrownPlaneTiltStart::Combined);
     assert_eq!(
-        attempt.refusal,
+        first.refusal,
         Some(GrownPlaneRefusal::StoppedEarly),
+        "{entry:#?}"
+    );
+    assert!(
+        retries
+            .iter()
+            .all(|a| a.tilt_start == GrownPlaneTiltStart::Starting && a.refusal.is_some()),
         "{entry:#?}"
     );
     // The rung waits for its other view before the ladder moves out.
@@ -1304,6 +1312,36 @@ fn a_refused_pick_waits_for_its_rungs_other_view() {
         "{:#?}",
         sequence.picks
     );
+    let after = degrees(patch_frame_of(&turned).normal(), truth());
+    assert!(after < 1.0, "{after:.3}: {report}");
+}
+
+/// A view in the third rung that sees unrelated texture is refused from the
+/// combined plane and is not grown again from the starting plane: past the
+/// second rung a refused pick is left out after its one growth.
+#[test]
+fn a_refused_pick_past_the_second_rung_is_not_retried() {
+    let scene = ladder_scene(&spread(&[12.0, 20.0, 32.0]), &[32.0]);
+    let (track, turned, report) = run_ladder(&scene);
+    let sequence = sequence_of(&report);
+    let rungs: Vec<u32> = sequence.picks.iter().map(|p| p.rung).collect();
+    assert_eq!(rungs, [0, 1, 2], "{:#?}", sequence.picks);
+    assert_eq!(
+        sequence.picks.iter().map(|p| p.matched).collect::<Vec<_>>(),
+        [true, true, false],
+        "{:#?}",
+        sequence.picks
+    );
+    let row = row_of(&track, 3);
+    let entry = sequence
+        .trace
+        .iter()
+        .find(|t| t.observation == row)
+        .expect("the unrelated view is tried");
+    assert_eq!(entry.outcome, GrownPlaneTryOutcome::LeftOut, "{entry:#?}");
+    assert_eq!(entry.attempts.len(), 1, "{entry:#?}");
+    assert_eq!(entry.attempts[0].tilt_start, GrownPlaneTiltStart::Combined);
+    assert!(entry.attempts[0].refusal.is_some(), "{entry:#?}");
     let after = degrees(patch_frame_of(&turned).normal(), truth());
     assert!(after < 1.0, "{after:.3}: {report}");
 }

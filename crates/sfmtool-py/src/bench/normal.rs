@@ -1110,7 +1110,8 @@ fn grid_plane_normal(
 /// widest angle kept, out to the widest views, and within a rung the pick is
 /// the view whose information, predicted from its geometry, most raises the
 /// weakest measured so far. Each later pick is grown from the combined plane
-/// so far and, where that is refused, from the starting plane. Their planes are combined by a robust
+/// so far; a pick of the second rung refused there is grown again from the
+/// starting plane, and a pick of a later rung is not. Their planes are combined by a robust
 /// information-weighted mean, never by fitting the views together, leaving
 /// out the furthest estimate past ``max_agreement_distance`` (default 3.0)
 /// by the Mahalanobis distance until none is, and then any view under

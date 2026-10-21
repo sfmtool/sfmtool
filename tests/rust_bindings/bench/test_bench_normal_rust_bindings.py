@@ -354,11 +354,12 @@ class TestGrownPlaneNormal:
                 "combined_sigma_deg",
             }
             assert entry["outcome"] in {"matched", "left_out"}
-            # From the combined plane alone, or from the starting plane at
-            # the keypoint-implied shift and then from the search; a retry
-            # after the combination is the search alone, or nothing where it
-            # lands on the implied shift.
-            assert len(entry["attempts"]) <= 2
+            # From the combined plane, then (on the second rung, where that
+            # is refused) from the starting plane at the keypoint-implied
+            # shift and then from the search; a retry after the combination
+            # is the search alone, or nothing where it lands on the implied
+            # shift.
+            assert len(entry["attempts"]) <= 3
             for attempt in entry["attempts"]:
                 assert attempt["start"] in GROWN_STARTS
                 assert attempt["stage_zncc"].dtype == np.float64
@@ -467,6 +468,10 @@ class TestGrownPlaneNormal:
             assert first == ("starting" if pick["rung"] == 0 else "combined")
             starts = [a["tilt_start"] for a in entry["attempts"]]
             assert starts == sorted(starts, key=lambda s: s != "combined")
+            # Past the second rung, a pick is grown from the combined plane
+            # alone.
+            if pick["rung"] >= 2:
+                assert starts == ["combined"]
 
     def test_a_large_turn_on_weak_evidence_keeps_the_start(
         self, fitted, edited, images, grown
