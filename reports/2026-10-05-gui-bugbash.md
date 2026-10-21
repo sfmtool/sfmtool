@@ -216,7 +216,7 @@ the visible-target one cannot be (finding 3).
 > `seen_in_camera_image`, `order_by`, the values to return and a page, and
 > returns point ids with those values; each of the three searches is one call
 > (`specs/gui/mcp-server.md` § "`find_points`"). The Track Table panel is a
-> later step of `specs/drafts/track-table.md`. Branch `find-points`._
+> later step of `specs/drafts/track-table.md`. PR #1008._
 
 To reproduce the tutorial's screenshots an agent needs "a track of about 18
 observations seen in image 3", "a 4-observation track through image 57" and
