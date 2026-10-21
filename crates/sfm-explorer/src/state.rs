@@ -905,6 +905,12 @@ pub struct AppState {
     /// [`crate::bench::viewed`].
     pub(crate) viewed_tracks: crate::bench::viewed::ViewedTracks,
 
+    /// The track table cache: at most one track table per node, for the
+    /// version at its cursor, which `find_points` reads and *Find points*
+    /// fills. Session state, not part of any version. See
+    /// [`crate::track_table`].
+    pub(crate) track_tables: crate::track_table::TrackTableCache,
+
     /// The bars Track View's threshold boxes hold while it shows the viewed
     /// track. They judge the readings drawn and change no verdict; a put of
     /// the viewed point carries them onto the new track when they differ from
@@ -1035,6 +1041,7 @@ impl AppState {
             recent_items: Vec::new(),
             surface_tiling: None,
             viewed_tracks: Default::default(),
+            track_tables: Default::default(),
             viewed_thresholds: Default::default(),
         }
     }
@@ -1136,6 +1143,7 @@ impl AppState {
         self.focused_item = None;
         self.recent_items.clear();
         self.viewed_tracks.clear();
+        self.track_tables.clear();
         self.sift_cache.clear();
         self.sift_indexes.clear();
         self.cluster_patches.clear();
@@ -1168,6 +1176,7 @@ impl AppState {
         self.focused_item = self.focused_item.filter(|focused| focused.node != id);
         self.recent_items.retain(|recent| recent.node != id);
         self.viewed_tracks.forget_node(id);
+        self.track_tables.forget_node(id);
     }
 
     /// Take the panel's own reading of the view it drew, with the dock rectangle

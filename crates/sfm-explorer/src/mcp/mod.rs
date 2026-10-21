@@ -45,6 +45,7 @@ use crate::viewer_3d::Viewer3D;
 mod bench;
 mod display;
 mod edit;
+mod find_points;
 mod frame;
 mod input;
 mod layout;
@@ -108,6 +109,11 @@ pub(crate) enum Command {
     GetCameraIntrinsics {
         reconstruction_label: Option<String>,
         camera_intrinsics_index: usize,
+    },
+    /// The track table query: the points that pass the bounds, a page at a
+    /// time, with the values asked for.
+    FindPoints {
+        request: find_points::FindPointsRequest,
     },
     GetPoint {
         point: crate::goto_point::PointQuery,
@@ -1232,7 +1238,7 @@ pub(crate) struct BackgroundReply {
 
 /// What a call that started a background operation answers with once the
 /// operation has landed, the handle aside.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Answer {
     /// The version the operation left on this node, as every edit answers.
     Version(ReconId),
@@ -1246,6 +1252,9 @@ pub(crate) enum Answer {
     /// What a *Find Nearby Tracks* found on this node and what became of each
     /// track, with the version it left.
     FoundNearby(ReconId),
+    /// The page of points a `find_points` call asked for, read from the track
+    /// table cache its *Find points* filled.
+    FoundPoints(Box<find_points::FindPointsPage>),
     /// The reconstruction the open made, as `open_reconstruction` answers, with
     /// whether the path was already open when the call was made.
     Opened { already_open: bool },
@@ -1348,6 +1357,7 @@ pub(crate) fn apply_with_window(
             camera_intrinsics_index,
         )),
         Command::GetPoint { point } => done(read::get_point(state, &point)),
+        Command::FindPoints { request } => find_points::find_points(state, request),
         Command::GetActionLog {
             since_revision,
             limit,

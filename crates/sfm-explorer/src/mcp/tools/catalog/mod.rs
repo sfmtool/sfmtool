@@ -76,6 +76,18 @@ fn edited_label_schema() -> Value {
     })
 }
 
+/// One track table column, by its wire name.
+fn track_table_column_schema() -> Value {
+    json!({
+        "type": "string",
+        "enum": sfmtool_core::analysis::track_table::TrackTableColumn::ALL
+            .iter()
+            .map(|column| column.wire_name())
+            .collect::<Vec<_>>(),
+        "description": "A track table column, by its name.",
+    })
+}
+
 /// A pixel in one camera image's own pixel coordinates.
 fn pixel_schema() -> Value {
     json!({

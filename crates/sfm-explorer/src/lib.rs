@@ -56,6 +56,7 @@ mod state;
 #[cfg(test)]
 mod test_support;
 mod texture;
+mod track_table;
 mod track_view;
 mod viewer_3d;
 mod window;

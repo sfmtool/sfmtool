@@ -31,6 +31,7 @@ impl Command {
             Command::GetCameraImage { .. } => "get_camera_image",
             Command::GetCameraIntrinsics { .. } => "get_camera_intrinsics",
             Command::GetPoint { .. } => "get_point",
+            Command::FindPoints { .. } => "find_points",
             Command::GetActionLog { .. } => "get_action_log",
             Command::OpenReconstruction { .. } => "open_reconstruction",
             Command::CloseReconstruction { .. } => "close_reconstruction",
@@ -349,6 +350,7 @@ impl Command {
             | Command::GetCameraImage { .. }
             | Command::GetCameraIntrinsics { .. }
             | Command::GetPoint { .. }
+            | Command::FindPoints { .. }
             | Command::GetActionLog { .. }
             | Command::GetWindowLayout
             | Command::GetImageDetailDisplay
@@ -520,6 +522,12 @@ pub(crate) fn query_text(state: &AppState, viewer: &Viewer3D, command: &Command)
             named(reconstruction_label)
         ),
         Command::GetPoint { point } => format!("get_point {}", point_text(point)),
+        Command::FindPoints { request } => format!(
+            "find_points {} {}..{}",
+            named(&request.reconstruction_label),
+            request.offset,
+            request.offset + request.limit
+        ),
         Command::GetActionLog { since_revision, .. } => {
             format!("get_action_log since {since_revision}")
         }

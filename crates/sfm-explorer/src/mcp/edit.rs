@@ -787,11 +787,11 @@ pub(super) fn background_reply(
         }
     };
     if let Some(outcome) = finished {
-        return Some(match (pending.answer, &outcome.outcome) {
+        return Some(match (&pending.answer, &outcome.outcome) {
             // A Create Track Here answers with the point it committed or the
             // cascade's refusal, which the record carries beside the row's
             // sentence, whichever way the row went.
-            (super::Answer::CreatedTrack(node), result) => super::bench::created_track_reply(
+            (&super::Answer::CreatedTrack(node), result) => super::bench::created_track_reply(
                 state,
                 node,
                 result,
@@ -799,7 +799,7 @@ pub(super) fn background_reply(
             ),
             // A Find Nearby Tracks answers with what it found and what became
             // of each track, whether or not it pushed a version.
-            (super::Answer::FoundNearby(node), result) => super::bench::found_nearby_reply(
+            (&super::Answer::FoundNearby(node), result) => super::bench::found_nearby_reply(
                 state,
                 node,
                 result,
@@ -813,7 +813,7 @@ pub(super) fn background_reply(
             // one answer, whichever family the caller is in.
             // A proposal's Apply answers as a version, with the switch's
             // report beside it as `fit`, as the direct switch answers.
-            (super::Answer::SwitchedCamera(node), Ok(report)) => {
+            (&super::Answer::SwitchedCamera(node), Ok(report)) => {
                 version_reply(state, node, Some(report.clone())).map(|mut reply| {
                     reply
                         .as_object_mut()
@@ -825,7 +825,7 @@ pub(super) fn background_reply(
                     super::ToolOutput::Json(reply)
                 })
             }
-            (super::Answer::Version(node), Ok(report)) => {
+            (&super::Answer::Version(node), Ok(report)) => {
                 version_reply(state, node, Some(report.clone())).map(|mut reply| {
                     reply
                         .as_object_mut()
@@ -834,7 +834,12 @@ pub(super) fn background_reply(
                     super::ToolOutput::Json(reply)
                 })
             }
-            (super::Answer::Opened { already_open }, Ok(_)) => {
+            // A `find_points` answers with the page of what its run found, read
+            // from the track table cache the run filled.
+            (super::Answer::FoundPoints(page), Ok(_)) => {
+                super::find_points::found_points_reply(state, page, outcome.found_points.as_deref())
+            }
+            (&super::Answer::Opened { already_open }, Ok(_)) => {
                 super::write::opened_reply(state, outcome.opened, already_open)
                     .map(super::ToolOutput::Json)
             }

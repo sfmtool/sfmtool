@@ -258,6 +258,7 @@ mod bench;
 mod catalog;
 mod display;
 mod edit;
+mod find_points;
 mod input;
 mod layout;
 mod logged;

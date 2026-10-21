@@ -603,6 +603,25 @@ impl Operation {
         quiet: false,
     };
 
+    /// The track table columns a `find_points` call needs and the track table
+    /// cache does not hold, computed for every live point of the version at
+    /// the cursor ([`crate::track_table`]).
+    ///
+    /// It locks nothing, since it pushes no version: it reads the value at the
+    /// cursor when it was queued and keeps its answer in the cache, so it runs
+    /// beside a slow task that holds the node. Cancellable because
+    /// `TrackTable::compute` polls the flag between blocks of points and hands
+    /// back `Cancelled`. Its row is filed under the `find_points` read, the
+    /// tool that asks for it.
+    pub(crate) const FIND_POINTS: Operation = Operation {
+        name: "Find points",
+        cancellable: true,
+        kind: Kind::Query("find_points"),
+        queue: Queue::Fast,
+        locks: false,
+        quiet: false,
+    };
+
     /// One or more `.sfmr` files read and made nodes, with the columns a file
     /// does not carry filled in for display (`specs/gui/background-tasks.md`
     /// section "Opening a file").
@@ -668,7 +687,7 @@ impl Operation {
     /// declaration nothing checks is a declaration that rots.
     // Read by those tests alone, which is what it is for.
     #[cfg(test)]
-    pub(crate) const ALL: [Operation; 20] = [
+    pub(crate) const ALL: [Operation; 21] = [
         Operation::OPEN,
         Operation::BUNDLE_ADJUST,
         Operation::TO_EMBEDDED_PATCHES,
@@ -687,6 +706,7 @@ impl Operation {
         Operation::BUILD_INDEX_FILES,
         Operation::CREATE_TRACK_AT_PIXEL,
         Operation::FIND_NEARBY_TRACKS,
+        Operation::FIND_POINTS,
         Operation::LIVE_EVALUATION,
         Operation::CAMERA_MODEL_PROPOSAL,
     ];
@@ -854,6 +874,14 @@ pub(crate) enum Finished {
     /// ([`crate::bench::nearby_tracks`]). A find with nothing usable is its
     /// row alone.
     NearbyTracks(Box<crate::bench::nearby_tracks::NearbyTracksRun>),
+    /// A *Find points* run: the track table columns the cache lacked, for the
+    /// document serial the job read, and the query to run over them.
+    ///
+    /// Not a version: the GUI thread merges the columns into the track table
+    /// cache, runs the query and writes the row
+    /// ([`crate::track_table`]). A run for a serial the node has left is
+    /// dropped with a failed row.
+    FoundPoints(Box<crate::track_table::FindPointsRun>),
     /// The files an open read, each with what it filled in for display, and
     /// the ones it could not read.
     ///
@@ -937,6 +965,12 @@ pub(crate) struct FinishedTask {
     /// operation, and for a run that was refused or cancelled.
     #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
     pub(crate) found_nearby: Option<Box<crate::bench::nearby_tracks::FoundNearby>>,
+    /// What a *Find points* found: the matched point indexes and the document
+    /// serial whose cached track table holds their values. What `find_points`
+    /// answers with once it lands. `None` for every other operation, and for a
+    /// run that was refused or cancelled.
+    #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
+    pub(crate) found_points: Option<Box<crate::track_table::FoundPoints>>,
     /// What a camera model proposal's Apply switched: the switch's report for
     /// the camera, which `switch_camera_model { proposal: true }` answers with
     /// once it lands. `None` for every other operation, and for a run that was
@@ -1629,6 +1663,7 @@ impl AppState {
             opened: None,
             created_track: None,
             found_nearby: None,
+            found_points: None,
             switched_camera: None,
             changed: false,
             took: Duration::ZERO,
@@ -1788,6 +1823,8 @@ impl AppState {
         // What a *Find Nearby Tracks* found, the kind its row is written as,
         // and the point it selects once the row is written.
         let mut found_nearby = None;
+        // What a *Find points* found, for the reply that waits on it.
+        let mut found_points = None;
         let mut kind = operation.kind;
         let mut to_select = None;
         // A proposal's Apply installs as any produced value does; its switch
@@ -1972,6 +2009,24 @@ impl AppState {
                     }
                 }
             }
+            // The columns go into the track table cache and the query runs
+            // over it; nothing is pushed, so no panel cache is dropped.
+            Finished::FoundPoints(run) => {
+                match self.scene.iter().position(|n| Some(n.id) == locked) {
+                    None => Err(format!(
+                        "{} of {label} finished, but it is no longer loaded.",
+                        operation.name
+                    )),
+                    Some(index) => {
+                        let (outcome, found) = {
+                            let _phase = collector.phase("merge and query");
+                            self.land_found_points(index, *run)
+                        };
+                        found_points = found.map(Box::new);
+                        outcome
+                    }
+                }
+            }
             // Each file becomes a node in the order it was asked for, and the
             // row names every one; a file the worker could not read is a failed
             // row of its own under the same actor. Nothing is installed into
@@ -2045,6 +2100,7 @@ impl AppState {
             opened,
             created_track,
             found_nearby,
+            found_points,
             switched_camera: switched_camera.filter(|_| outcome.is_ok()),
             changed: installed.is_some(),
             took,

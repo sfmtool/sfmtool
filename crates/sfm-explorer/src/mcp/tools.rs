@@ -115,6 +115,23 @@ pub(crate) fn parse(
         "get_point" => Command::GetPoint {
             point: args.point("point")?,
         },
+        "find_points" => Command::FindPoints {
+            request: super::find_points::FindPointsRequest {
+                reconstruction_label: args.optional_string("reconstruction_label")?,
+                bounds: args.column_bounds("bounds")?,
+                seen_in_camera_image: match args.get("seen_in_camera_image") {
+                    None | Some(Value::Null) => None,
+                    Some(_) => Some(args.camera_image("seen_in_camera_image")?),
+                },
+                order_by: args.order_by("order_by")?,
+                columns: args.track_table_columns("columns")?,
+                offset: args.optional_usize("offset")?.unwrap_or(0),
+                limit: args
+                    .optional_usize_at_least("limit", 1)?
+                    .unwrap_or(super::read::DEFAULT_LIMIT)
+                    .min(super::read::MAX_LIMIT),
+            },
+        },
         "get_action_log" => Command::GetActionLog {
             since_revision: args.optional_u64("since_revision")?.unwrap_or(0),
             limit: args
@@ -1635,6 +1652,115 @@ impl Args<'_> {
                 })
             })
             .collect()
+    }
+
+    /// `find_points`' bounds: a list of `{column, min?, max?}`, each column a
+    /// track table column's wire name, and a `min` above its `max` refused.
+    fn column_bounds(
+        &self,
+        key: &str,
+    ) -> Result<Vec<sfmtool_core::analysis::track_table::ColumnBounds>, ToolError> {
+        let expected = "an array of objects, each with a column and optionally min and max";
+        let value = match self.map.get(key) {
+            None | Some(Value::Null) => return Ok(Vec::new()),
+            Some(value) => value,
+        };
+        let array = value
+            .as_array()
+            .ok_or_else(|| self.wrong_type(key, expected, value))?;
+        array
+            .iter()
+            .map(|element| {
+                let map = element
+                    .as_object()
+                    .ok_or_else(|| self.wrong_type(key, expected, value))?;
+                let inner = Args {
+                    tool: "find_points.bounds",
+                    map,
+                };
+                inner.reject_unknown_nested()?;
+                let column = inner
+                    .optional_string("column")?
+                    .ok_or_else(|| inner.error("needs column — a track table column's name."))?;
+                let column = super::find_points::parse_column(self.tool, &column)?;
+                let (min, max) = (inner.optional_f64("min")?, inner.optional_f64("max")?);
+                if let (Some(lo), Some(hi)) = (min, max) {
+                    if lo > hi {
+                        return Err(self.error(format!(
+                            "wants each bound's min to be at most its max — got min {lo} and \
+                             max {hi} for {}.",
+                            column.wire_name()
+                        )));
+                    }
+                }
+                Ok(sfmtool_core::analysis::track_table::ColumnBounds { column, min, max })
+            })
+            .collect()
+    }
+
+    /// `find_points`' sort: `{column, descending?}`, ascending by default.
+    fn order_by(
+        &self,
+        key: &str,
+    ) -> Result<
+        Option<(
+            sfmtool_core::analysis::track_table::TrackTableColumn,
+            sfmtool_core::analysis::track_table::SortOrder,
+        )>,
+        ToolError,
+    > {
+        use sfmtool_core::analysis::track_table::SortOrder;
+        let value = match self.map.get(key) {
+            None | Some(Value::Null) => return Ok(None),
+            Some(value) => value,
+        };
+        let map = value.as_object().ok_or_else(|| {
+            self.wrong_type(
+                key,
+                "an object with a column and optionally descending",
+                value,
+            )
+        })?;
+        let inner = Args {
+            tool: "find_points.order_by",
+            map,
+        };
+        inner.reject_unknown_nested()?;
+        let column = inner
+            .optional_string("column")?
+            .ok_or_else(|| inner.error("needs column — a track table column's name."))?;
+        let column = super::find_points::parse_column(self.tool, &column)?;
+        let order = if inner.optional_bool("descending")?.unwrap_or(false) {
+            SortOrder::Descending
+        } else {
+            SortOrder::Ascending
+        };
+        Ok(Some((column, order)))
+    }
+
+    /// A list of track table columns by wire name, or `None` when absent.
+    fn track_table_columns(
+        &self,
+        key: &str,
+    ) -> Result<Option<Vec<sfmtool_core::analysis::track_table::TrackTableColumn>>, ToolError> {
+        let expected = "an array of track table column names";
+        let value = match self.map.get(key) {
+            None | Some(Value::Null) => return Ok(None),
+            Some(value) => value,
+        };
+        let array = value
+            .as_array()
+            .ok_or_else(|| self.wrong_type(key, expected, value))?;
+        array
+            .iter()
+            .map(|element| {
+                let name = element
+                    .as_str()
+                    .ok_or_else(|| self.wrong_type(key, expected, value))?;
+                super::find_points::parse_column(self.tool, name)
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(Some)
     }
 
     /// Point indexes into the named reconstruction, as a list of whole

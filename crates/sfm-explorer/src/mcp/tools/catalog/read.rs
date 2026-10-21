@@ -19,7 +19,8 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           transform draws it: null with no selection, for a selection that \
                           declares none, or for a display scale that lands between the units. \
                           Counts only: \
-                          no tool here returns point arrays or track tables in bulk, so read the \
+                          no tool returns a whole column or a whole track table, and \
+                          find_points returns at most a page of summary values, so read the \
                           .sfmr file itself (or `sfm inspect`) for data and ask the viewer for \
                           state.",
             kind: Read,
@@ -130,6 +131,120 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           last ones landed. Any other point has no evaluation block.",
             kind: Read,
             schema: object(&[], &[("point", point_schema())]),
+        },
+        ToolSpec {
+            name: "find_points",
+            description: "The points of one reconstruction that pass a set of bounds on the \
+                          track table's columns, optionally only those one camera image sees, \
+                          sorted by a column, a page at a time, each with its point id, its \
+                          index and the values asked for. The columns are track_length, \
+                          image_count, rms_error_px, at_infinity, x, y, z, centroid_distance, \
+                          normal_confidence, lowest_zncc, largest_zncc_self_similarity_radius, \
+                          max_ray_angle_deg, condition_number and inverse_depth_z. A bound \
+                          keeps the points whose value is at least min and at most max, both \
+                          inclusive; a point with no value in a column fails any bound on it \
+                          and sorts last whichever way the sort runs. A value is null where the \
+                          point has none: x, y, z, centroid_distance, condition_number and \
+                          inverse_depth_z at infinity, for one. The values returned default \
+                          to the bound and sorted columns followed by track_length and \
+                          rms_error_px. The reply carries live_points, the number of live \
+                          points, and matched, the number that passed. The columns are \
+                          computed for the version at the cursor and cached; a call whose \
+                          columns are not cached yet starts Find points, a background task, \
+                          and answers when it lands, or with a handle to poll through \
+                          get_background_tasks when it outlives 200 ms. A refusal names a \
+                          column that does not exist or that the reconstruction cannot \
+                          supply, with the ones it can.",
+            kind: Read,
+            schema: object(
+                &[
+                    ("reconstruction_label", reconstruction_label_schema()),
+                    (
+                        "bounds",
+                        json!({
+                            "type": "array",
+                            "description":
+                                "Bounds every returned point passes, one per column.",
+                            "items": object(
+                                &[
+                                    (
+                                        "min",
+                                        json!({
+                                            "type": "number",
+                                            "description":
+                                                "The least value kept, inclusive. Omit for no \
+                                                 lower bound.",
+                                        }),
+                                    ),
+                                    (
+                                        "max",
+                                        json!({
+                                            "type": "number",
+                                            "description":
+                                                "The greatest value kept, inclusive. Omit for no \
+                                                 upper bound.",
+                                        }),
+                                    ),
+                                ],
+                                &[("column", track_table_column_schema())],
+                            ),
+                        }),
+                    ),
+                    (
+                        "seen_in_camera_image",
+                        json!({
+                            "description":
+                                "Keep only the points this camera image observes: its index in \
+                                 the reconstruction, or its name, the .sfmr relative path.",
+                            "anyOf": [
+                                { "type": "integer", "minimum": 0 },
+                                { "type": "string" },
+                            ],
+                        }),
+                    ),
+                    (
+                        "order_by",
+                        object(
+                            &[(
+                                "descending",
+                                flag("Sort the largest values first. Defaults to false."),
+                            )],
+                            &[("column", track_table_column_schema())],
+                        ),
+                    ),
+                    (
+                        "columns",
+                        json!({
+                            "type": "array",
+                            "items": track_table_column_schema(),
+                            "description":
+                                "The values to return for each point. Defaults to the bound and \
+                                 sorted columns followed by track_length and rms_error_px.",
+                        }),
+                    ),
+                    (
+                        "offset",
+                        json!({
+                            "type": "integer",
+                            "minimum": 0,
+                            "description":
+                                "The first matched point to return, counted in the sorted order. \
+                                 Defaults to 0.",
+                        }),
+                    ),
+                    (
+                        "limit",
+                        json!({
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": crate::mcp::read::MAX_LIMIT,
+                            "description":
+                                "How many points to return. Defaults to 50, capped at 500.",
+                        }),
+                    ),
+                ],
+                &[],
+            ),
         },
         ToolSpec {
             name: "get_action_log",

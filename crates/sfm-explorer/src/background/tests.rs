@@ -707,6 +707,7 @@ fn each_operation_declares_the_spec_s_queue_lock_and_quiet_value() {
         ("Geometry search", Fast, true, false),
         ("Create track at pixel", Fast, true, false),
         ("Find nearby tracks", Fast, true, false),
+        ("Find points", Fast, false, false),
         ("Live evaluation", Fast, false, true),
         ("Camera model proposal", Fast, false, true),
     ];
@@ -1134,6 +1135,23 @@ fn real_task(operation: Operation) -> RealTask {
                     None,
                 )
                 .expect("the fixture is a posed embedded_patches node");
+            RealTask {
+                state,
+                id,
+                job: Some(job),
+                _workspace: None,
+            }
+        }
+        // Every column of the track table, over the adjustment's fixture.
+        "Find points" => {
+            let (state, id) = adjustable();
+            let job = state
+                .find_points_job(
+                    id,
+                    sfmtool_core::analysis::track_table::TrackTableColumn::ALL.to_vec(),
+                    Default::default(),
+                )
+                .expect("the node is loaded");
             RealTask {
                 state,
                 id,
