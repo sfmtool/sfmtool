@@ -1145,6 +1145,10 @@ reads one point's value by carry `rms_`, because nothing beside them does:
   `rms_reprojection_error` key of an `EditedReconstruction` point record.
 - `rms_error_px` in the viewer's MCP `get_point` reply.
 
+`analysis::inspect_point` copies the value into `PointInspection::error`, and
+`SfmrReconstruction.inspect_point` returns it under the dict key `error`; those
+keep the bare name.
+
 #### `points3d/normals_xyz.{N}.3.float32.zst` (Optional)
 
 Per-point surface normals.
