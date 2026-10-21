@@ -412,6 +412,94 @@ fn values_do_not_depend_on_the_thread_count() {
     }
 }
 
+// ── Merging ──────────────────────────────────────────────────────────────
+
+#[test]
+fn merge_moves_the_missing_columns_without_copying() {
+    let recon = edited(with_bearing(demo(20), 3));
+    let mut table = compute(&recon, &[TrackTableColumn::TrackLength]);
+    let other = compute(
+        &recon,
+        &[TrackTableColumn::MaxRayAngleDeg, TrackTableColumn::X],
+    );
+    let angle_ptr = other
+        .values(TrackTableColumn::MaxRayAngleDeg)
+        .unwrap()
+        .as_ptr();
+    let x_ptr = other.values_f64(TrackTableColumn::X).unwrap().as_ptr();
+    table.merge(other).unwrap();
+
+    let whole = compute(
+        &recon,
+        &[
+            TrackTableColumn::TrackLength,
+            TrackTableColumn::MaxRayAngleDeg,
+            TrackTableColumn::X,
+        ],
+    );
+    for c in TrackTableColumn::ALL {
+        assert_eq!(table.has(c), whole.has(c), "{c:?}");
+    }
+    assert_same(
+        table.values(TrackTableColumn::MaxRayAngleDeg).unwrap(),
+        whole.values(TrackTableColumn::MaxRayAngleDeg).unwrap(),
+    );
+    // The arrays were moved: they are the ones `other` held.
+    assert_eq!(
+        table
+            .values(TrackTableColumn::MaxRayAngleDeg)
+            .unwrap()
+            .as_ptr(),
+        angle_ptr
+    );
+    assert_eq!(
+        table.values_f64(TrackTableColumn::X).unwrap().as_ptr(),
+        x_ptr
+    );
+    assert!(table.values_f64(TrackTableColumn::X).unwrap()[3].is_nan());
+}
+
+#[test]
+fn merge_keeps_a_column_already_held() {
+    let recon = edited(demo(10));
+    let mut table = compute(&recon, &[TrackTableColumn::TrackLength]);
+    let kept = table
+        .values(TrackTableColumn::TrackLength)
+        .unwrap()
+        .as_ptr();
+    let other = compute(
+        &recon,
+        &[TrackTableColumn::TrackLength, TrackTableColumn::RmsErrorPx],
+    );
+    table.merge(other).unwrap();
+    assert_eq!(
+        table
+            .values(TrackTableColumn::TrackLength)
+            .unwrap()
+            .as_ptr(),
+        kept
+    );
+    assert!(table.has(TrackTableColumn::RmsErrorPx));
+}
+
+#[test]
+fn merge_refuses_a_table_of_another_version() {
+    let mut recon = edited(demo(10));
+    let mut table = compute(&recon, &[TrackTableColumn::TrackLength]);
+    recon.delete_point(4).unwrap();
+    let other = compute(&recon, &[TrackTableColumn::RmsErrorPx]);
+    let err = table.merge(other).unwrap_err();
+    assert_eq!(
+        err,
+        TrackTableMergeError {
+            rows: 10,
+            other_rows: 9
+        }
+    );
+    assert!(!table.has(TrackTableColumn::RmsErrorPx));
+    assert_eq!(table.point_indexes().len(), 10);
+}
+
 // ── The query ────────────────────────────────────────────────────────────
 
 /// Ten points, point 7 at infinity (so no `x`), with `track_length` and `x`

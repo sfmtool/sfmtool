@@ -198,6 +198,29 @@ pub struct TrackTable {
     values_f64: [Option<Vec<f64>>; COLUMN_COUNT],
 }
 
+/// Why [`TrackTable::merge`] refused a table: its rows are not this table's,
+/// so it was computed from another version.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TrackTableMergeError {
+    /// The number of rows of the table merged into.
+    pub rows: usize,
+    /// The number of rows of the refused table.
+    pub other_rows: usize,
+}
+
+impl std::fmt::Display for TrackTableMergeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "the track tables were computed from different versions: \
+             their point indexes differ ({} rows and {} rows)",
+            self.rows, self.other_rows
+        )
+    }
+}
+
+impl std::error::Error for TrackTableMergeError {}
+
 /// Points per block between cancellation polls and progress counts.
 const BLOCK: usize = 8192;
 
@@ -337,6 +360,47 @@ impl TrackTable {
     /// when the column was not filled or is not a position column.
     pub fn values_f64(&self, column: TrackTableColumn) -> Option<&[f64]> {
         self.values_f64[column.ordinal()].as_deref()
+    }
+
+    /// Move `other`'s columns into the columns this table does not hold yet.
+    ///
+    /// The column arrays are moved, not copied. A column this table already
+    /// holds is kept and `other`'s copy of it is dropped, so merging a table
+    /// computed at the same time for the same columns changes nothing.
+    ///
+    /// The two tables must describe the same version of a reconstruction.
+    /// Their rows are compared, and a table with other rows is refused; that
+    /// catches a point added or deleted between the two computes but not an
+    /// edit that changed values and kept every point, which the caller rules
+    /// out by computing both from one version.
+    ///
+    /// # Errors
+    ///
+    /// [`TrackTableMergeError`] when `other`'s point indexes differ from this
+    /// table's. This table is then unchanged.
+    pub fn merge(&mut self, other: TrackTable) -> Result<(), TrackTableMergeError> {
+        if other.point_indexes != self.point_indexes {
+            return Err(TrackTableMergeError {
+                rows: self.point_indexes.len(),
+                other_rows: other.point_indexes.len(),
+            });
+        }
+        let TrackTable {
+            values_f32,
+            values_f64,
+            ..
+        } = other;
+        for (mine, theirs) in self.values_f32.iter_mut().zip(values_f32) {
+            if mine.is_none() {
+                *mine = theirs;
+            }
+        }
+        for (mine, theirs) in self.values_f64.iter_mut().zip(values_f64) {
+            if mine.is_none() {
+                *mine = theirs;
+            }
+        }
+        Ok(())
     }
 
     /// The value of `column` at `row` as `f64`, NaN for no value. The column

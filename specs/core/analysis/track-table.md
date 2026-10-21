@@ -70,7 +70,12 @@ impl TrackTable {
     pub fn has(&self, column: TrackTableColumn) -> bool;
     pub fn values(&self, column: TrackTableColumn) -> Option<&[f32]>;
     pub fn values_f64(&self, column: TrackTableColumn) -> Option<&[f64]>;
+    /// Move `other`'s columns into the ones this table does not hold.
+    pub fn merge(&mut self, other: TrackTable) -> Result<(), TrackTableMergeError>;
 }
+
+/// `merge` refused a table whose point indexes are not this table's.
+pub struct TrackTableMergeError { pub rows: usize, pub other_rows: usize }
 
 pub struct ColumnBounds {
     pub column: TrackTableColumn,
@@ -175,6 +180,29 @@ let worst = query_points(&edited, &table, &TrackTableQueryOptions {
 })?;
 let page = &worst[..worst.len().min(20)];
 ```
+
+## Merging tables
+
+`TrackTable::merge` fills the columns a table does not hold from another table
+of the same version. A caller that keeps a table for the version on screen
+computes only the columns it lacks, as a second table and off its own thread,
+and merges that table in when it lands, so the columns it already holds are
+not computed again. The viewer's track table cache does this
+([gui/mcp-server.md](../../gui/mcp-server.md) § "find_points").
+
+- **The arrays are moved, not copied.** `merge` takes `other` by value and
+  moves each of its column vectors into an empty slot, so a merge costs a
+  comparison of the rows and nothing per value.
+- **A column this table already holds is kept.** Two computes of one column
+  for one version give the same values, so when two jobs compute a column at
+  the same time, the first to land is kept and the second's copy is dropped.
+- **A table of another version is refused.** The two tables' `point_indexes`
+  must be equal; otherwise `merge` returns `TrackTableMergeError` with both
+  row counts and leaves this table unchanged. Equal rows rule out a point
+  added or deleted between the two computes, but not an edit that changed
+  values and kept every point. The caller rules that out by computing both
+  tables from one version, which the viewer does by keying its cache on the
+  document serial.
 
 ## The columns
 
@@ -320,7 +348,9 @@ holding two observations of one point, absent optional columns, unmeasured
 `observation_confidence` bytes and unmeasured readings, and deleted and added
 points. They check the query's inclusive bounds, NaN against a bound, a bound with
 neither end, `seen_in_image`, ties in both sort orders, no-value rows last in
-both orders and both refusals; that a cancelled `compute` returns `Cancelled`;
+both orders and both refusals; that `merge` moves the missing columns, keeps
+the ones already held and refuses a table of another version; that a
+cancelled `compute` returns `Cancelled`;
 that progress runs to the end through both passes; and that the values are
 bit-identical with one thread and with four. The viewer's own tests of the
 per-point functions in `crates/sfm-explorer/src/metrics/tests.rs` run against
@@ -338,5 +368,5 @@ not a column: for a `sift_files` reconstruction without inline keypoints it
 needs every image's `.sift` file read. It can be added as a computed column
 that is absent when the reconstruction has no keypoints.
 
-The table is not cached or stored. A caller that computes it for one version
+Core does not cache or store the table. A caller that computes it for one version
 keeps it for as long as that version is current.
