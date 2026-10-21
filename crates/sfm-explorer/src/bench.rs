@@ -984,7 +984,7 @@ impl AppState {
         let node = &self.scene[index];
         let name = node
             .recon()
-            .image_table
+            .image_set
             .images
             .get(image.index())
             .map(|im| im.name.clone())
@@ -1459,7 +1459,7 @@ impl AppState {
             let observation = track.observations.get(index)?;
             let image = observation.image as usize;
             let node = self.node(id)?;
-            let (camera, pose) = geometry::view_of(&node.edited().base.image_table, image)?;
+            let (camera, pose) = geometry::view_of(&node.edited().base.image_set, image)?;
             let half = match track.stage_kind() {
                 StageKind::Track => {
                     let patch_frame = track.track()?.patch_frame.as_ref()?;
@@ -2466,8 +2466,8 @@ impl AppState {
     fn default_search_radius_px(&self, image: ImageRef, keypoint_count: usize) -> f32 {
         let dimensions = self.node(image.recon).and_then(|node| {
             let recon = node.recon();
-            let entry = recon.image_table.images.get(image.index())?;
-            let camera = recon.image_table.cameras.get(entry.camera_index as usize)?;
+            let entry = recon.image_set.images.get(image.index())?;
+            let camera = recon.image_set.cameras.get(entry.camera_index as usize)?;
             Some((camera.width, camera.height))
         });
         match dimensions {
@@ -2964,7 +2964,7 @@ impl AppState {
             .track(label)
             .ok_or_else(|| format!("Nothing on the bench is called {label}."))?;
         let track = (**track).clone();
-        let table = &node.recon().image_table;
+        let table = &node.recon().image_set;
         let patch_frame = match &track.stage {
             Stage::Track(payload) => payload.patch_frame.as_ref(),
             Stage::Cluster(_) => None,
@@ -3116,7 +3116,7 @@ impl AppState {
     /// The lens of one camera image, for the clamp and for anything else that
     /// needs the photograph's own extent.
     fn image_camera(&self, image: ImageRef) -> Option<sfmtool_core::camera::CameraIntrinsics> {
-        let table = &self.node(image.recon)?.recon().image_table;
+        let table = &self.node(image.recon)?.recon().image_set;
         let row = table.images.get(image.index())?;
         table.cameras.get(row.camera_index as usize).cloned()
     }

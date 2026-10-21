@@ -74,7 +74,7 @@ const FREE: (u8, f64, u32) = (POINT_CONSTRAINT_FREE, f64::NAN, NO_REFERENCE_IMAG
 /// Take image `image`'s pose away in the value's table: its row is a
 /// placeholder, which is what an image with no pose stores.
 fn unpose(recon: &mut SfmrReconstruction, image: usize) {
-    let row = &mut recon.image_table.images[image];
+    let row = &mut recon.image_set.images[image];
     row.quaternion_wxyz =
         nalgebra::UnitQuaternion::new_unchecked(nalgebra::Quaternion::new(f64::NAN, 0.0, 0.0, 0.0));
     row.translation_xyz = Vector3::new(f64::NAN, f64::NAN, f64::NAN);
@@ -82,7 +82,7 @@ fn unpose(recon: &mut SfmrReconstruction, image: usize) {
 
 /// Image `image`'s camera centre at the value's pose.
 fn center_of(recon: &SfmrReconstruction, image: usize) -> Vector3<f64> {
-    let c = recon.image_table.images[image].camera_center();
+    let c = recon.image_set.images[image].camera_center();
     Vector3::new(c.x, c.y, c.z)
 }
 
@@ -486,7 +486,7 @@ fn a_ranged_point_is_read_at_its_distance_and_stays_ranged() {
         assert_eq!(keypoint_of(&out, 0, k), keypoint_of(&free_out, 0, k));
     }
     // The coordinate is the distance rule's over those keypoints.
-    let table = &out.image_table;
+    let table = &out.image_set;
     let uv: Vec<f64> = (0..2)
         .flat_map(|k| keypoint_of(&out, 0, k).map(f64::from))
         .collect();
@@ -566,7 +566,7 @@ fn a_point_ranged_at_infinity_stays_a_bearing_at_the_mean_of_its_rays() {
     let point = &out.point_set.points[0];
     assert_eq!(point.w, 0.0);
 
-    let table = &out.image_table;
+    let table = &out.image_set;
     let mut sum = Vector3::zeros();
     let observing = out.point_set.observations_for_point(0);
     for (k, observation) in observing.iter().enumerate() {

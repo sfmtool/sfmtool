@@ -1084,7 +1084,7 @@ fn ranged_coordinate(
     ins: &[usize],
     range: PointDistance,
 ) -> Result<(Point3<f64>, bool), FitError> {
-    let table = &edited.base.image_table;
+    let table = &edited.base.image_set;
     let mut quats_wxyz = Vec::with_capacity(table.images.len() * 4);
     let mut translations = Vec::with_capacity(table.images.len() * 3);
     for image in &table.images {

@@ -17,7 +17,7 @@ const INFINITY_RAY_SCENE_MULTIPLE: f64 = 2.0;
 /// characteristic scene scale, used to size rays toward points at infinity.
 fn camera_cloud_extent(recon: &sfmtool_core::SfmrReconstruction) -> f64 {
     let mut iter = recon
-        .image_table
+        .image_set
         .images
         .iter()
         .map(|im| im.camera_center().coords);
@@ -93,8 +93,8 @@ pub(super) fn track_ray_edges(
         .iter()
         .enumerate()
         .filter_map(|(k, obs)| {
-            let image = &recon.image_table.images[obs.image_index as usize];
-            let camera = &recon.image_table.cameras[image.camera_index as usize];
+            let image = &recon.image_set.images[obs.image_index as usize];
+            let camera = &recon.image_set.cameras[image.camera_index as usize];
             let center = image.camera_center();
             let endpoint_a = [center.x as f32, center.y as f32, center.z as f32];
 

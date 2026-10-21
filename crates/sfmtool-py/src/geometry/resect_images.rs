@@ -184,14 +184,14 @@ pub fn resect_images<'py>(
         .map(|name| {
             reconstruction
                 .inner
-                .image_table
+                .image_set
                 .images
                 .iter()
                 .position(|img| &img.name == name)
                 .ok_or_else(|| {
                     pyo3::exceptions::PyValueError::new_err(format!(
                         "no image named {name:?} in this reconstruction ({} images)",
-                        reconstruction.inner.image_table.images.len()
+                        reconstruction.inner.image_set.images.len()
                     ))
                 })
         })

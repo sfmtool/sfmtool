@@ -112,7 +112,7 @@ opened here; a build replaces it with one that records both.
 ### When the question is asked
 
 The cluster patches' state is derived when the file is opened or built, and
-again when either of two things has moved since: the node's image table (a
+again when either of two things has moved since: the node's image set (a
 version that adds, removes, renames or reorders an image), or the index open
 beside the node (a different path, a different content hash, or a change
 between current and stale). The index's open, build, close and re-derivation

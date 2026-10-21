@@ -77,7 +77,7 @@ pub(super) fn read_camera_keypoints_with(
 ) -> (KeypointExtent, Vec<ObservedKeypoint>) {
     let mut extent = KeypointExtent::default();
     let mut out = Vec::new();
-    let table = &base.image_table;
+    let table = &base.image_set;
     let Some(lens) = table.cameras.get(camera) else {
         return (extent, out);
     };
@@ -133,7 +133,7 @@ pub(super) fn read_camera_keypoints_with(
 
 /// The observation rows of each image of `camera` in `recon`, by image.
 fn rows_by_image(recon: &SfmrReconstruction, camera: usize) -> Vec<Vec<usize>> {
-    let table = &recon.image_table;
+    let table = &recon.image_set;
     let mut rows_of: Vec<Vec<usize>> = vec![Vec::new(); table.images.len()];
     for (row, observation) in recon.point_set.tracks.iter().enumerate() {
         let image = observation.image_index as usize;
@@ -184,7 +184,7 @@ impl CameraModelProposal {
     /// the image's stored pose. A point at infinity is reprojected as the
     /// direction it is. Empty for an image the proposal's camera did not take.
     pub(crate) fn image_reprojections(&self, image: usize) -> Vec<ObservationReprojection> {
-        let Some(row) = self.value.image_table.images.get(image) else {
+        let Some(row) = self.value.image_set.images.get(image) else {
             return Vec::new();
         };
         if row.camera_index as usize != self.camera {

@@ -622,7 +622,7 @@ pub struct ReprojectionNoise {
     pub observation_count: usize,
     /// Observations left out because their residual passed the gate.
     pub outlier_count: usize,
-    /// The same over each camera's observations, indexed as image_table.cameras.
+    /// The same over each camera's observations, indexed as image_set.cameras.
     pub per_camera_sigma_px: Vec<Option<f64>>,
     pub per_camera_observation_count: Vec<usize>,
 }
@@ -767,7 +767,7 @@ keypoints that belong to no point yet, and the bench's from sightings it has not
 committed. Discovery builds its tracks with `observation_ray`, one member
 keypoint at a time, so that it keeps the members that give a ray, and calls the
 batch functions on the result; the bench, which holds each sighting's projected
-image rather than the image table, builds one track with `observed_ray` per
+image rather than the image set, builds one track with `observed_ray` per
 sighting (`TrackRays::of_sightings`) and calls the single-track functions. `point_or_bearing_scores` is the convenience
 over the stored points, built on `track_rays`, for the reports and the
 reclassification pass.
@@ -791,11 +791,11 @@ pub struct RayBatch {
 }
 
 /// None for an index past the table, a non-finite pixel, or what observed_ray declines.
-pub fn observation_ray(image_table: &ImageTable, image_index: usize, pixel: [f64; 2],
+pub fn observation_ray(image_set: &ImageSet, image_index: usize, pixel: [f64; 2],
     sigma_px: f64) -> Option<ObservationRay>;
 /// One output track per input track (CSR over observations), holding the
 /// observations that give a ray.
-pub fn track_rays(image_table: &ImageTable, observations: &[(usize, [f64; 2])],
+pub fn track_rays(image_set: &ImageSet, observations: &[(usize, [f64; 2])],
     offsets: &[usize], sigma_px: f64) -> RayBatch;
 
 pub struct PointOrBearingScores {

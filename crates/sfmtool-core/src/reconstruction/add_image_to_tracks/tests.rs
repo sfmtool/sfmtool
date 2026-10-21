@@ -110,7 +110,7 @@ impl Capture {
 
     /// Where `world` lands in image `i`.
     fn project(&self, i: usize, world: Point3<f64>) -> [f64; 2] {
-        let im = &self.recon.image_table.images[i];
+        let im = &self.recon.image_set.images[i];
         let q = im.quaternion_wxyz;
         let t = im.translation_xyz;
         let pose = RigidTransform::from_wxyz_translation([q.w, q.i, q.j, q.k], [t.x, t.y, t.z]);
@@ -127,8 +127,8 @@ impl Capture {
         t: Vector3<f64>,
         tex: fn(f64, f64) -> f64,
     ) {
-        self.recon.image_table.images[i].quaternion_wxyz = q;
-        self.recon.image_table.images[i].translation_xyz = t;
+        self.recon.image_set.images[i].quaternion_wxyz = q;
+        self.recon.image_set.images[i].translation_xyz = t;
         self.pyramids[i] = ImageU8Pyramid::build(&render(&pinhole(), &q, &t, tex), 4);
     }
 }
@@ -138,8 +138,8 @@ impl Capture {
 fn capture(points: &[(Point3<f64>, &[u32])]) -> Capture {
     let mut recon = SfmrReconstruction::demo(1);
     let n = CENTERS.len();
-    recon.image_table.cameras = vec![pinhole()];
-    recon.image_table.images = CENTERS
+    recon.image_set.cameras = vec![pinhole()];
+    recon.image_set.images = CENTERS
         .iter()
         .enumerate()
         .map(|(i, &c)| {
@@ -152,15 +152,11 @@ fn capture(points: &[(Point3<f64>, &[u32])]) -> Capture {
             }
         })
         .collect();
-    let stats_row = recon.image_table.depth_statistics.images[0].clone();
+    let stats_row = recon.image_set.depth_statistics.images[0].clone();
+    recon.image_set.depth_statistics.images.resize(n, stats_row);
+    let histogram_row = recon.image_set.depth_histogram_counts[0].clone();
     recon
-        .image_table
-        .depth_statistics
-        .images
-        .resize(n, stats_row);
-    let histogram_row = recon.image_table.depth_histogram_counts[0].clone();
-    recon
-        .image_table
+        .image_set
         .depth_histogram_counts
         .resize(n, histogram_row);
 
@@ -591,7 +587,7 @@ fn the_calls_preconditions_are_refused_by_name() {
         Err(AddImageToTracksError::NoTargetImage(TARGET))
     ));
     let mut unposed = cap.recon.clone();
-    unposed.image_table.images[TARGET].translation_xyz = Vector3::new(f64::NAN, 0.0, 0.0);
+    unposed.image_set.images[TARGET].translation_xyz = Vector3::new(f64::NAN, 0.0, 0.0);
     assert!(matches!(
         add_image_to_tracks(&unposed, TARGET, &pyr, &options, &Progress::none()),
         Err(AddImageToTracksError::Unposed(TARGET))
@@ -630,7 +626,7 @@ fn basis_statistics_read_as_documented() {
 /// The poses of the capture's images, for building [`ProjectedImage`]s.
 fn poses_of(cap: &Capture) -> Vec<RigidTransform> {
     cap.recon
-        .image_table
+        .image_set
         .images
         .iter()
         .map(|im| {

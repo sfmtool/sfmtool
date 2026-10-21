@@ -232,7 +232,7 @@ fn deleting_an_image_produces_a_new_base_with_an_empty_overlay() {
     let id = node(&state);
     let before = Arc::clone(&state.scene[0].edited().base);
     let images = state.scene[0].image_count();
-    let name = state.scene[0].recon().image_table.images[1].name.clone();
+    let name = state.scene[0].recon().image_set.images[1].name.clone();
 
     state.delete_image(ImageRef::new(id, 1)).expect("an image");
 
@@ -246,7 +246,7 @@ fn deleting_an_image_produces_a_new_base_with_an_empty_overlay() {
     assert_eq!(node.image_count(), images - 1);
     assert!(node
         .recon()
-        .image_table
+        .image_set
         .images
         .iter()
         .all(|image| image.name != name));
@@ -861,10 +861,10 @@ pub(crate) fn projected_embedded_demo(points: usize) -> SfmrReconstruction {
         .collect();
     let mut keypoints = Array2::<f32>::zeros((tracks.len(), 2));
     for (row, track) in tracks.iter().enumerate() {
-        let image = &recon.image_table.images[track.image_index as usize];
+        let image = &recon.image_set.images[track.image_index as usize];
         let point = recon.point_set.points[track.point_index as usize].position;
         let cam = image.quaternion_wxyz.to_rotation_matrix() * point.coords + image.translation_xyz;
-        let (x, y) = recon.image_table.cameras[image.camera_index as usize]
+        let (x, y) = recon.image_set.cameras[image.camera_index as usize]
             .ray_to_pixel([cam.x, cam.y, cam.z])
             .expect("every demo camera sees every demo point");
         keypoints[[row, 0]] = x as f32;
@@ -877,7 +877,7 @@ pub(crate) fn projected_embedded_demo(points: usize) -> SfmrReconstruction {
     for p in 0..points {
         let position = recon.point_set.points[p].position;
         let centers: Vec<_> = (0..=(p % 3))
-            .map(|image| recon.image_table.images[image].camera_center())
+            .map(|image| recon.image_set.images[image].camera_center())
             .collect();
         let normal = mean_viewing_normal(&position, &centers);
         let patch = OrientedPatch::from_center_normal(
@@ -920,7 +920,7 @@ fn resectable_state() -> (AppState, ReconId) {
         "/runs/run_a.sfmr",
     ));
     let id = state.scene[0].id;
-    let image = &mut state.scene[0].recon_mut().image_table.images[1];
+    let image = &mut state.scene[0].recon_mut().image_set.images[1];
     image.translation_xyz += nalgebra::Vector3::new(0.30, -0.20, 0.15);
     crate::resect::tests::give_cluster_patches(&mut state, id);
     (state, id)
@@ -928,7 +928,7 @@ fn resectable_state() -> (AppState, ReconId) {
 
 /// How far image `index`'s camera centre stands from `centre`.
 fn centre_offset(state: &AppState, index: usize, centre: nalgebra::Point3<f64>) -> f64 {
-    (state.scene[0].recon().image_table.images[index].camera_center() - centre).norm()
+    (state.scene[0].recon().image_set.images[index].camera_center() - centre).norm()
 }
 
 #[test]
@@ -938,7 +938,7 @@ fn resecting_pushes_a_version_whose_base_is_new_and_whose_images_stay_put() {
     let images = state.scene[0].image_count();
     let truth = crate::scene_graph::tests::resectable_node("/runs/truth.sfmr")
         .recon()
-        .image_table
+        .image_set
         .images[1]
         .camera_center();
     let moved = centre_offset(&state, 1, truth);
@@ -957,7 +957,7 @@ fn resecting_pushes_a_version_whose_base_is_new_and_whose_images_stay_put() {
         node.edited().deleted_points.is_empty() && node.edited().added.points.is_empty(),
         "the new version arrived with an overlay"
     );
-    assert_eq!(node.image_count(), images, "the image table moved");
+    assert_eq!(node.image_count(), images, "the image set moved");
     let recovered = centre_offset(&state, 1, truth);
     assert!(
         recovered < moved * 0.1,
@@ -996,7 +996,7 @@ fn the_action_log_carries_one_entry_naming_the_image_and_the_version() {
 #[test]
 fn an_undo_puts_the_stored_pose_and_the_selection_back() {
     let (mut state, id) = resectable_state();
-    let stored = state.scene[0].recon().image_table.images[1].camera_center();
+    let stored = state.scene[0].recon().image_set.images[1].camera_center();
     state.selected_point = Some(PointRef::new(id, 9));
 
     state
@@ -1005,13 +1005,13 @@ fn an_undo_puts_the_stored_pose_and_the_selection_back() {
     let selected = state.selected_point.expect("the point survived the edit");
     assert_eq!(selected.recon, id);
     assert!(
-        (state.scene[0].recon().image_table.images[1].camera_center() - stored).norm() > 1e-6,
+        (state.scene[0].recon().image_set.images[1].camera_center() - stored).norm() > 1e-6,
         "the pose did not move"
     );
 
     state.undo(id).expect("one version to undo");
     assert_eq!(
-        state.scene[0].recon().image_table.images[1].camera_center(),
+        state.scene[0].recon().image_set.images[1].camera_center(),
         stored
     );
     assert_eq!(state.selected_point, Some(PointRef::new(id, 9)));
@@ -1020,7 +1020,7 @@ fn an_undo_puts_the_stored_pose_and_the_selection_back() {
 #[test]
 fn a_resection_that_cannot_be_attempted_pushes_no_version_and_logs_a_failure() {
     let (mut state, id) = resectable_state();
-    state.scene[0].recon_mut().image_table.images[1].translation_xyz =
+    state.scene[0].recon_mut().image_set.images[1].translation_xyz =
         nalgebra::Vector3::new(f64::NAN, 0.0, 0.0);
 
     let why = state
@@ -1091,7 +1091,7 @@ pub(crate) fn adjustable_state() -> (AppState, ReconId) {
         "/runs/run_a.sfmr",
     ));
     let id = state.scene[0].id;
-    let image = &mut state.scene[0].recon_mut().image_table.images[1];
+    let image = &mut state.scene[0].recon_mut().image_set.images[1];
     image.translation_xyz += nalgebra::Vector3::new(0.02, -0.015, 0.01);
     (state, id)
 }
@@ -1103,7 +1103,7 @@ fn bundle_adjusting_pushes_a_version_with_a_new_base_and_keeps_the_images() {
     let images = state.scene[0].image_count();
     let truth = crate::scene_graph::tests::resectable_node("/runs/truth.sfmr")
         .recon()
-        .image_table
+        .image_set
         .images[1]
         .camera_center();
     let moved = centre_offset(&state, 1, truth);
@@ -1120,7 +1120,7 @@ fn bundle_adjusting_pushes_a_version_with_a_new_base_and_keeps_the_images() {
         !Arc::ptr_eq(&before, &node.edited().base),
         "a bulk edit reused its input's base"
     );
-    assert_eq!(node.image_count(), images, "the image table moved");
+    assert_eq!(node.image_count(), images, "the image set moved");
     assert_eq!(
         node.history.current_version().label,
         "Bundle adjusted run_a"
@@ -1225,7 +1225,7 @@ fn a_released_focal_is_named_in_the_label_and_the_entry() {
     // The demo camera is a two-focal PINHOLE, which the adjustment's focal
     // column is not exact for; a single-focal one of the same geometry is.
     {
-        let camera = &mut state.scene[0].recon_mut().image_table.cameras[0];
+        let camera = &mut state.scene[0].recon_mut().image_set.cameras[0];
         let (fx, _) = camera.focal_lengths();
         let (cx, cy) = camera.principal_point();
         camera.model = sfmtool_core::CameraModel::SimplePinhole {
@@ -1255,7 +1255,7 @@ fn an_undo_puts_every_pose_back() {
     let (mut state, id) = adjustable_state();
     let before: Vec<nalgebra::Point3<f64>> = state.scene[0]
         .recon()
-        .image_table
+        .image_set
         .images
         .iter()
         .map(|i| i.camera_center())
@@ -1269,7 +1269,7 @@ fn an_undo_puts_every_pose_back() {
 
     let after: Vec<nalgebra::Point3<f64>> = state.scene[0]
         .recon()
-        .image_table
+        .image_set
         .images
         .iter()
         .map(|i| i.camera_center())
@@ -1302,7 +1302,7 @@ fn two_camera_state() -> (AppState, ReconId) {
     let (mut state, id) = adjustable_state();
     {
         let recon = state.scene[0].recon_mut();
-        let camera = &mut recon.image_table.cameras[0];
+        let camera = &mut recon.image_set.cameras[0];
         let (fx, _) = camera.focal_lengths();
         let (cx, cy) = camera.principal_point();
         camera.model = sfmtool_core::CameraModel::SimplePinhole {
@@ -1310,9 +1310,9 @@ fn two_camera_state() -> (AppState, ReconId) {
             principal_point_x: cx,
             principal_point_y: cy,
         };
-        let second = recon.image_table.cameras[0].clone();
-        recon.image_table.cameras.push(second);
-        recon.image_table.images[2].camera_index = 1;
+        let second = recon.image_set.cameras[0].clone();
+        recon.image_set.cameras.push(second);
+        recon.image_set.images[2].camera_index = 1;
     }
     (state, id)
 }
@@ -1347,7 +1347,7 @@ fn each_released_camera_is_named_in_the_entry() {
     );
     assert!(gates.iter().all(|g| g.focal_refusal.is_none()));
     // Image 2 is camera 1's, and every other image camera 0's.
-    let images = state.scene[0].recon().image_table.images.len();
+    let images = state.scene[0].recon().image_set.images.len();
     assert_eq!(
         gates.iter().map(|g| g.images).collect::<Vec<_>>(),
         vec![images - 1, 1]
@@ -1380,9 +1380,9 @@ fn the_distortion_gate_opens_on_a_camera_with_a_spline() {
     }
     {
         let recon = state.scene[0].recon_mut();
-        let (f, _) = recon.image_table.cameras[1].focal_lengths();
-        let (cx, cy) = recon.image_table.cameras[1].principal_point();
-        recon.image_table.cameras[1].model = sfmtool_core::CameraModel::SfmtoolPinhole {
+        let (f, _) = recon.image_set.cameras[1].focal_lengths();
+        let (cx, cy) = recon.image_set.cameras[1].principal_point();
+        recon.image_set.cameras[1].model = sfmtool_core::CameraModel::SfmtoolPinhole {
             focal_length: f,
             principal_point_x: cx,
             principal_point_y: cy,
@@ -1414,9 +1414,9 @@ fn the_distortion_gate_opens_on_a_simple_radial_fisheye() {
     let (mut state, id) = two_camera_state();
     {
         let recon = state.scene[0].recon_mut();
-        let (f, _) = recon.image_table.cameras[0].focal_lengths();
-        let (cx, cy) = recon.image_table.cameras[0].principal_point();
-        recon.image_table.cameras[0].model = sfmtool_core::CameraModel::SimpleRadialFisheye {
+        let (f, _) = recon.image_set.cameras[0].focal_lengths();
+        let (cx, cy) = recon.image_set.cameras[0].principal_point();
+        recon.image_set.cameras[0].model = sfmtool_core::CameraModel::SimpleRadialFisheye {
             focal_length: f,
             principal_point_x: cx,
             principal_point_y: cy,
@@ -1446,9 +1446,9 @@ fn the_focal_gate_names_the_camera_that_cannot_release_its_focal() {
     let (mut state, _) = two_camera_state();
     {
         let recon = state.scene[0].recon_mut();
-        let (f, _) = recon.image_table.cameras[1].focal_lengths();
-        let (cx, cy) = recon.image_table.cameras[1].principal_point();
-        recon.image_table.cameras[1].model = sfmtool_core::CameraModel::Pinhole {
+        let (f, _) = recon.image_set.cameras[1].focal_lengths();
+        let (cx, cy) = recon.image_set.cameras[1].principal_point();
+        recon.image_set.cameras[1].model = sfmtool_core::CameraModel::Pinhole {
             focal_length_x: f,
             focal_length_y: f,
             principal_point_x: cx,
@@ -1481,7 +1481,7 @@ fn the_gate_and_the_focal_gate_pass_on_a_node_that_can_be_adjusted() {
 // ── Move camera: the bulk edit that moves one pose ──────────────────────
 
 #[test]
-fn moving_a_camera_pushes_a_new_base_and_leaves_the_image_table_where_it_was() {
+fn moving_a_camera_pushes_a_new_base_and_leaves_the_image_set_where_it_was() {
     let (mut state, id) = adjustable_state();
     let before = Arc::clone(&state.scene[0].edited().base);
     let images = state.scene[0].image_count();
@@ -1502,7 +1502,7 @@ fn moving_a_camera_pushes_a_new_base_and_leaves_the_image_table_where_it_was() {
         !Arc::ptr_eq(&before, &node.edited().base),
         "a bulk edit reused its input's base"
     );
-    assert_eq!(node.image_count(), images, "the image table moved");
+    assert_eq!(node.image_count(), images, "the image set moved");
     assert_eq!(node.point_count(), points, "the move deleted a point");
     let label = node.history.current_version().label.clone();
     assert!(label.starts_with("Moved camera "), "{label}");
@@ -1534,18 +1534,18 @@ fn a_move_of_an_image_that_is_not_there_pushes_no_version_and_logs_a_failure() {
 #[test]
 fn an_undo_of_a_move_puts_the_pose_back() {
     let (mut state, id) = adjustable_state();
-    let before = state.scene[0].recon().image_table.images[1].camera_center();
+    let before = state.scene[0].recon().image_set.images[1].camera_center();
     let truth = crate::scene_graph::tests::resectable_node("/runs/truth.sfmr");
     let pose = sfmtool_core::reconstruction::move_camera::pose_of(truth.recon(), 1);
 
     state
         .move_camera(ImageRef::new(id, 1), &pose)
         .expect("a posed image and a finite pose");
-    let moved = state.scene[0].recon().image_table.images[1].camera_center();
+    let moved = state.scene[0].recon().image_set.images[1].camera_center();
     assert!((moved - before).norm() > 1e-6, "the move moved nothing");
 
     state.undo(id).expect("one edit to undo");
-    let restored = state.scene[0].recon().image_table.images[1].camera_center();
+    let restored = state.scene[0].recon().image_set.images[1].camera_center();
     assert!((restored - before).norm() < 1e-12);
 }
 
@@ -1611,7 +1611,7 @@ fn a_bulk_edit_with_nothing_to_fold_names_no_materialise() {
 ///
 /// Undo, redo and a jump are steps through the node's *history*; none of them
 /// says anything about what the person is looking at, and a point edit does not
-/// touch the image table at all. The one thing that can take the photograph
+/// touch the image set at all. The one thing that can take the photograph
 /// away is a move across an edit that deleted it, and the selection follows by
 /// **name**, so an image renumbered by such a move is found again rather than
 /// silently swapped for its neighbour.
@@ -1697,7 +1697,7 @@ pub(crate) fn convertible_state(dir: &std::path::Path) -> (AppState, ReconId) {
         std::fs::create_dir_all(path.parent().expect("a feature directory")).unwrap();
         crate::sift_index::tests::write_sift(
             &path,
-            &recon.image_table.images[image].name,
+            &recon.image_set.images[image].name,
             &vec![vec![0u8; 128]; count],
             &positions,
         );
@@ -1799,12 +1799,12 @@ fn converting_pushes_one_embedded_patches_version_over_the_same_rows() {
 fn converting_renders_and_persists_patch_bitmaps_when_photographs_are_available() {
     let dir = tempfile::tempdir().unwrap();
     let (mut state, id) = convertible_state(dir.path());
-    let camera = &state.scene[0].recon().image_table.cameras[0];
+    let camera = &state.scene[0].recon().image_set.cameras[0];
     let photograph =
         image::RgbImage::from_pixel(camera.width, camera.height, image::Rgb([40, 80, 120]));
     // Two readable views suffice for the first point's bitmap. The other images
     // are deliberately absent, as they may be when a workspace has moved.
-    for image in &state.scene[0].recon().image_table.images[..2] {
+    for image in &state.scene[0].recon().image_set.images[..2] {
         photograph.save(dir.path().join(&image.name)).unwrap();
     }
 
@@ -2480,7 +2480,7 @@ fn state_with_photographs_on_disk() -> (AppState, tempfile::TempDir) {
     let dir = tempfile::tempdir().expect("a temporary directory");
     let mut recon = SfmrReconstruction::demo(64);
     recon.workspace_dir = dir.path().to_path_buf();
-    for (i, image) in recon.image_table.images.iter().enumerate() {
+    for (i, image) in recon.image_set.images.iter().enumerate() {
         let path = dir.path().join(&image.name);
         std::fs::create_dir_all(path.parent().expect("a parent")).expect("a directory");
         image::RgbImage::from_fn(16, 12, |x, y| image::Rgb([x as u8, y as u8, i as u8]))
@@ -2540,7 +2540,7 @@ fn a_second_step_over_the_same_images_reads_nothing_from_disk() {
 fn a_step_refuses_on_an_unreadable_photograph() {
     let (state, dir) = state_with_photographs_on_disk();
     let id = node(&state);
-    let name = state.scene[0].recon().image_table.images[1].name.clone();
+    let name = state.scene[0].recon().image_set.images[1].name.clone();
     std::fs::remove_file(dir.path().join(&name)).expect("the photograph was written");
 
     let collector = crate::progress::Collector::new(false);
@@ -2574,7 +2574,7 @@ fn a_step_refuses_on_an_unreadable_photograph() {
     );
 }
 
-/// Deleting an image renumbers the image table, and the photographs stay: the
+/// Deleting an image renumbers the image set, and the photographs stay: the
 /// cache is keyed by path, which the renumbering does not change.
 #[test]
 fn deleting_an_image_keeps_the_decoded_photographs() {
@@ -2747,9 +2747,9 @@ fn a_gesture_applied_while_the_dock_is_swapped_out_loses_the_raise() {
 fn spline_camera_state() -> (AppState, ReconId) {
     let (mut state, id) = two_camera_state();
     let recon = state.scene[0].recon_mut();
-    let (f, _) = recon.image_table.cameras[1].focal_lengths();
-    let (cx, cy) = recon.image_table.cameras[1].principal_point();
-    recon.image_table.cameras[1].model = sfmtool_core::CameraModel::SfmtoolPinhole {
+    let (f, _) = recon.image_set.cameras[1].focal_lengths();
+    let (cx, cy) = recon.image_set.cameras[1].principal_point();
+    recon.image_set.cameras[1].model = sfmtool_core::CameraModel::SfmtoolPinhole {
         focal_length: f,
         principal_point_x: cx,
         principal_point_y: cy,
@@ -2780,11 +2780,11 @@ fn a_refit_of_a_spline_pushes_one_version_labelled_with_the_change() {
         node.history.current_version().label,
         "Refit spline of camera 1 of run_a: 4 → 6 coefficients, domain 45.0° → 50.0°"
     );
-    let camera = &node.recon().image_table.cameras[1];
+    let camera = &node.recon().image_set.cameras[1];
     assert_eq!(camera.model.radial_spline().expect("a spline").0.len(), 6);
     // Only the named camera changed.
     assert_eq!(
-        node.recon().image_table.cameras[0].model_name(),
+        node.recon().image_set.cameras[0].model_name(),
         "SIMPLE_PINHOLE"
     );
     let row = newest(&state);
@@ -2797,7 +2797,7 @@ fn a_refit_of_a_spline_pushes_one_version_labelled_with_the_change() {
 
     // Undo is the old camera back.
     state.undo(id).expect("one edit to undo");
-    let camera = &state.scene[0].recon().image_table.cameras[1];
+    let camera = &state.scene[0].recon().image_set.cameras[1];
     assert_eq!(camera.model.radial_spline().expect("a spline").0.len(), 4);
 }
 

@@ -1417,7 +1417,7 @@ fn the_bench_layer_outlines_the_patch_where_its_corners_project() {
         .track()
         .and_then(|payload| payload.patch_frame.as_ref())
         .expect("a track from a point carries the stored patch as its patch frame");
-    let table = &node.edited().base.image_table;
+    let table = &node.edited().base.image_set;
     let image = &table.images[0];
     let camera = &table.cameras[image.camera_index as usize];
     let q = image.quaternion_wxyz.quaternion();
@@ -1476,7 +1476,7 @@ fn the_bench_layer_draws_the_projection_offset_for_every_verdict() {
         .track()
         .and_then(|payload| payload.patch_frame.as_ref())
         .expect("a track from a point carries the stored patch as its patch frame");
-    let table = &node.edited().base.image_table;
+    let table = &node.edited().base.image_set;
     let image = &table.images[0];
     let camera = &table.cameras[image.camera_index as usize];
     let q = image.quaternion_wxyz.quaternion();
@@ -1623,7 +1623,7 @@ fn ghost_fixture() -> (SceneNode, sfmtool_core::bench::EditableTrack, usize) {
     let unseen = (0..node.edited().image_count())
         .find(|i| track.observations.iter().all(|o| o.image as usize != *i))
         .expect("the fixture's track does not span every image");
-    let eye = node.edited().base.image_table.images[unseen].camera_center();
+    let eye = node.edited().base.image_set.images[unseen].camera_center();
     let track = with_patch_frame(&track, |patch_frame| {
         let patch = patch_frame
             .as_mut()
@@ -1684,7 +1684,7 @@ fn the_bench_layer_ghosts_the_patch_in_an_image_the_track_does_not_observe() {
         .track()
         .and_then(|payload| payload.patch_frame.as_ref())
         .expect("a track from a point carries the stored patch");
-    let (camera, pose) = crate::bench::geometry::view_of(&node.edited().base.image_table, unseen)
+    let (camera, pose) = crate::bench::geometry::view_of(&node.edited().base.image_set, unseen)
         .expect("the demo's images have cameras");
     for (s, t) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
         let expected = to_panel(&photograph, patch_pixel(patch, &camera, &pose, s, t));
@@ -1831,7 +1831,7 @@ fn no_ghost_is_drawn_without_a_patch_frame_or_for_a_patch_it_cannot_see() {
 
     // Turned a right angle about the vertical, the plane holds the line of
     // sight: the square is seen edge-on and projects to a line.
-    let eye = node.edited().base.image_table.images[unseen].camera_center();
+    let eye = node.edited().base.image_set.images[unseen].camera_center();
     let edge_on = with_patch_frame(&track, |patch_frame| {
         let patch = patch_frame.as_mut().expect("the fixture has a patch frame");
         *patch = sfmtool_core::patch::cloud::OrientedPatch::from_center_normal(
@@ -1857,7 +1857,7 @@ fn with_the_lock_off_a_press_on_the_ghost_pans_and_edits_nothing() {
         .track()
         .and_then(|payload| payload.patch_frame.as_ref())
         .expect("a track from a point carries the stored patch");
-    let (camera, pose) = crate::bench::geometry::view_of(&node.edited().base.image_table, unseen)
+    let (camera, pose) = crate::bench::geometry::view_of(&node.edited().base.image_set, unseen)
         .expect("the demo's images have cameras");
     let centre = patch_pixel(patch, &camera, &pose, 0.0, 0.0);
     let corner = patch_pixel(patch, &camera, &pose, 1.0, 1.0);
@@ -2400,7 +2400,7 @@ fn outline_at(
     sfmtool_core::geometry::RigidTransform,
 ) {
     let sighting = &track.observations[observation];
-    let table = &node.edited().base.image_table;
+    let table = &node.edited().base.image_set;
     let (camera, pose) = crate::bench::geometry::view_of(table, sighting.image as usize)
         .expect("the fixture's images have cameras");
     let patch_frame = track
@@ -2432,7 +2432,7 @@ fn projection_offsets(
         .iter()
         .map(|observation| {
             let (camera, pose) = crate::bench::geometry::view_of(
-                &node.edited().base.image_table,
+                &node.edited().base.image_set,
                 observation.image as usize,
             )
             .expect("the fixture's images have cameras");
@@ -2936,7 +2936,7 @@ fn with_the_lock_off_the_outline_takes_no_drag_at_the_track_stage() {
         moved: true,
         cancelled: false,
     };
-    let table = &state.scene[0].edited().base.image_table;
+    let table = &state.scene[0].edited().base.image_set;
     assert!(super::bench_track::Layer::edit(table, &track, &drag, false).is_none());
     assert!(super::bench_track::Layer::edit(table, &track, &drag, true).is_some());
 
@@ -2956,7 +2956,7 @@ fn with_the_lock_off_the_outline_takes_no_drag_at_the_track_stage() {
         .expect("a pixel on the sensor")
         .label;
     let cluster = on_bench(&state, id, &cluster);
-    let table = &state.scene[0].edited().base.image_table;
+    let table = &state.scene[0].edited().base.image_set;
     for lock in [true, false] {
         let dot = super::bench_track::Drag {
             image: 0,
@@ -3121,7 +3121,7 @@ fn a_click_on_a_handle_over_a_feature_of_another_point_selects_no_point() {
     );
 
     // With the ghost's centre on it, the handle takes the click.
-    let eye = node.edited().base.image_table.images[unseen].camera_center();
+    let eye = node.edited().base.image_set.images[unseen].camera_center();
     let under = node
         .edited()
         .point(other as u32)
@@ -3230,7 +3230,7 @@ fn ghost_state() -> (crate::state::AppState, crate::scene::ReconId, String, usiz
     let (mut state, id, label) = bench_state();
     let track = on_bench(&state, id, &label);
     let unseen = unseen_image(&state.scene[0], &track);
-    let eye = state.scene[0].edited().base.image_table.images[unseen].camera_center();
+    let eye = state.scene[0].edited().base.image_set.images[unseen].camera_center();
     let want = leaning(&patch_frame(&track), eye, 30.0).normal();
     state
         .edit_bench_patch(
@@ -3243,7 +3243,7 @@ fn ghost_state() -> (crate::state::AppState, crate::scene::ReconId, String, usiz
         .expect("a finite normal");
     let track = on_bench(&state, id, &label);
     let (_, pose) =
-        crate::bench::geometry::view_of(&state.scene[0].edited().base.image_table, unseen)
+        crate::bench::geometry::view_of(&state.scene[0].edited().base.image_set, unseen)
             .expect("the demo's images have cameras");
     let patch = patch_frame(&track);
     let eye = pose.inverse_translation_origin();
@@ -3258,7 +3258,7 @@ fn ghost_state() -> (crate::state::AppState, crate::scene::ReconId, String, usiz
 
 /// Where a world point lands in one image, in its own px.
 fn pixel_of(node: &SceneNode, image: usize, point: nalgebra::Point3<f64>) -> [f64; 2] {
-    let (camera, pose) = crate::bench::geometry::view_of(&node.edited().base.image_table, image)
+    let (camera, pose) = crate::bench::geometry::view_of(&node.edited().base.image_set, image)
         .expect("the demo's images have cameras");
     camera
         .project_homogeneous(&pose, point.coords, 1.0)
@@ -3284,7 +3284,7 @@ fn layer_at(
     lock: bool,
 ) -> Option<super::bench_track::Layer> {
     super::bench_track::Layer::build(
-        &node.edited().base.image_table,
+        &node.edited().base.image_set,
         image,
         track,
         egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1e6, 1e6)),
@@ -3309,7 +3309,7 @@ fn the_locked_ghost_offers_the_patch_handles_and_the_unlocked_one_none() {
     let node = &state.scene[0];
     let track = on_bench(&state, id, &label);
     let patch = patch_frame(&track);
-    let (camera, pose) = crate::bench::geometry::view_of(&node.edited().base.image_table, unseen)
+    let (camera, pose) = crate::bench::geometry::view_of(&node.edited().base.image_set, unseen)
         .expect("the demo's images have cameras");
     let at = |s, t| pos(patch_pixel(&patch, &camera, &pose, s, t));
     let here = Viewpoint::Image(unseen as u32);
@@ -3406,7 +3406,7 @@ fn dragging_the_ghost_centre_slides_the_patch_under_the_pointer() {
     let track = on_bench(&state, id, &label);
     let patch = patch_frame(&track);
     let (camera, pose) =
-        crate::bench::geometry::view_of(&state.scene[0].edited().base.image_table, unseen)
+        crate::bench::geometry::view_of(&state.scene[0].edited().base.image_set, unseen)
             .expect("the demo's images have cameras");
     let was = patch_pixel(&patch, &camera, &pose, 0.0, 0.0);
     let to = [was[0] + 1.5, was[1] + 2.0];
@@ -3450,7 +3450,7 @@ fn dragging_the_ghost_edge_and_corner_resizes_and_spins_the_patch() {
     let track = on_bench(&state, id, &label);
     let patch = patch_frame(&track);
     let (camera, pose) =
-        crate::bench::geometry::view_of(&state.scene[0].edited().base.image_table, unseen)
+        crate::bench::geometry::view_of(&state.scene[0].edited().base.image_set, unseen)
             .expect("the demo's images have cameras");
     let centre = patch_pixel(&patch, &camera, &pose, 0.0, 0.0);
     let from = patch_pixel(&patch, &camera, &pose, 1.0, 0.0);
@@ -3615,7 +3615,7 @@ fn the_normal_is_hidden_end_on_absent_at_the_cluster_stage_and_not_offered_unloc
 
     let (node, track) = bench_track_fixture();
     let member = track.observations[0].image as usize;
-    let eye = node.edited().base.image_table.images[member].camera_center();
+    let eye = node.edited().base.image_set.images[member].camera_center();
     let end_on = with_patch_frame(&track, |patch_frame| {
         let patch = patch_frame.as_mut().expect("the fixture has a patch frame");
         *patch = leaning(patch, eye, 0.0);
@@ -3696,7 +3696,7 @@ fn the_normal_is_hidden_end_on_absent_at_the_cluster_stage_and_not_offered_unloc
         moved: true,
         cancelled: false,
     };
-    let table = &node.edited().base.image_table;
+    let table = &node.edited().base.image_set;
     assert!(super::bench_track::Layer::edit(table, &oblique, &drag, false).is_none());
     assert!(super::bench_track::Layer::edit(table, &oblique, &drag, true).is_some());
 

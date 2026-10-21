@@ -31,10 +31,10 @@ const IMAGE: usize = 3;
 fn with_projected_keypoints(mut recon: SfmrReconstruction) -> SfmrReconstruction {
     let mut keypoints = Array2::<f32>::zeros((recon.point_set.tracks.len(), 2));
     for (row, observation) in recon.point_set.tracks.iter().enumerate() {
-        let image = &recon.image_table.images[observation.image_index as usize];
+        let image = &recon.image_set.images[observation.image_index as usize];
         let point = &recon.point_set.points[observation.point_index as usize];
         let camera = recon
-            .image_table
+            .image_set
             .camera_for_image(observation.image_index as usize);
         let cam = image.quaternion_wxyz * point.position.coords + image.translation_xyz;
         if let Some((u, v)) = camera.ray_to_pixel([cam.x, cam.y, cam.z]) {
@@ -44,7 +44,7 @@ fn with_projected_keypoints(mut recon: SfmrReconstruction) -> SfmrReconstruction
     }
     recon.point_set.observations = ObservationSource::EmbeddedPatches {
         keypoints_xy: keypoints,
-        image_file_hashes: vec![[0u8; 16]; recon.image_table.images.len()],
+        image_file_hashes: vec![[0u8; 16]; recon.image_set.images.len()],
     };
     recon.metadata.feature_source =
         sfmtool_sfmr_format::FEATURE_SOURCE_EMBEDDED_PATCHES.to_string();
@@ -180,7 +180,7 @@ fn the_gate_refuses_outside_camera_view_and_while_a_lock_is_held() {
 #[test]
 fn the_gate_refuses_an_image_with_no_pose() {
     let mut recon = SfmrReconstruction::demo(64);
-    recon.image_table.images[IMAGE].translation_xyz = Vector3::new(f64::NAN, 0.0, 0.0);
+    recon.image_set.images[IMAGE].translation_xyz = Vector3::new(f64::NAN, 0.0, 0.0);
     let (state, viewer, _id) = looking_through(recon);
     assert!(refusal(&state, &viewer)
         .expect("an unposed image")
@@ -259,7 +259,7 @@ fn the_readout_equals_a_direct_computation_and_rises_as_the_camera_moves() {
 
     // The same numbers the core computes for that pose over the same value.
     let direct = sfmtool_core::reconstruction::move_camera::residual_quantiles_px(
-        state.scene[0].recon().image_table.camera_for_image(IMAGE),
+        state.scene[0].recon().image_set.camera_for_image(IMAGE),
         &pending,
         &sfmtool_core::reconstruction::move_camera::edited_image_reprojection_samples(
             state.scene[0].edited(),

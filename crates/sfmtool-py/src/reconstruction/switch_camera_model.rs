@@ -134,7 +134,7 @@ fn run(
         },
         ..SwitchCameraModelOptions::default()
     };
-    let cameras = cameras.unwrap_or_else(|| (0..value.image_table.cameras.len()).collect());
+    let cameras = cameras.unwrap_or_else(|| (0..value.image_set.cameras.len()).collect());
     let (next, report) = py
         .detach(|| core_switch(value, &cameras, &target, &options))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
@@ -282,8 +282,7 @@ impl PySfmrReconstruction {
         cameras: Option<Vec<usize>>,
         read_sift_files: bool,
     ) -> PyResult<Bound<'py, PyList>> {
-        let cameras =
-            cameras.unwrap_or_else(|| (0..self.inner.image_table.cameras.len()).collect());
+        let cameras = cameras.unwrap_or_else(|| (0..self.inner.image_set.cameras.len()).collect());
         let reach = py.detach(|| core_outermost(&self.inner, &cameras, read_sift_files));
         let out = PyList::empty(py);
         for entry in &reach {

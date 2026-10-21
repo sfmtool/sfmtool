@@ -60,8 +60,8 @@ fn equidistant() -> CameraIntrinsics {
 /// The scene through `cameras`, image `i` through camera `camera_of(i)`.
 fn scene(cameras: Vec<CameraIntrinsics>, camera_of: impl Fn(usize) -> u32) -> SfmrReconstruction {
     let mut recon = SfmrReconstruction::demo(1);
-    recon.image_table.cameras = cameras;
-    recon.image_table.images = (0..IMAGES)
+    recon.image_set.cameras = cameras;
+    recon.image_set.images = (0..IMAGES)
         .map(|i| {
             let angle = 0.25 * (i as f64 - (IMAGES as f64 - 1.0) / 2.0);
             let centre = Vector3::new(8.0 * angle.sin(), 0.5 * jitter(i, 11), 8.0 * angle.cos());
@@ -74,16 +74,16 @@ fn scene(cameras: Vec<CameraIntrinsics>, camera_of: impl Fn(usize) -> u32) -> Sf
             }
         })
         .collect();
-    let stats = recon.image_table.depth_statistics.images[0].clone();
-    recon.image_table.depth_statistics.images = vec![stats; IMAGES];
-    recon.image_table.depth_histogram_counts =
-        vec![recon.image_table.depth_histogram_counts[0].clone(); IMAGES];
+    let stats = recon.image_set.depth_statistics.images[0].clone();
+    recon.image_set.depth_statistics.images = vec![stats; IMAGES];
+    recon.image_set.depth_histogram_counts =
+        vec![recon.image_set.depth_histogram_counts[0].clone(); IMAGES];
 
     let mut positions: Vec<Point3<f64>> = (0..POINTS)
         .map(|p| Point3::new(2.0 * jitter(p, 1), 2.0 * jitter(p, 2), 1.5 * jitter(p, 3)))
         .collect();
     // One point 95° off the first image's axis, three units out.
-    let first = &recon.image_table.images[0];
+    let first = &recon.image_set.images[0];
     let wide = WIDE_DEG.to_radians();
     let local = Vector3::new(wide.sin(), 0.0, -wide.cos()) * 3.0;
     let world = first.quaternion_wxyz.inverse() * (local - first.translation_xyz);
@@ -111,8 +111,8 @@ fn scene(cameras: Vec<CameraIntrinsics>, camera_of: impl Fn(usize) -> u32) -> Sf
             (0..IMAGES).collect()
         };
         for i in images {
-            let image = &recon.image_table.images[i];
-            let camera = &recon.image_table.cameras[image.camera_index as usize];
+            let image = &recon.image_set.images[i];
+            let camera = &recon.image_set.cameras[image.camera_index as usize];
             let local = image.quaternion_wxyz * position.coords + image.translation_xyz;
             let Some((u, v)) = camera.ray_to_pixel([local.x, local.y, local.z]) else {
                 continue;
@@ -167,7 +167,7 @@ fn poses_points_and_keypoints_are_unchanged() {
     )
     .unwrap();
 
-    for (a, b) in out.image_table.images.iter().zip(&recon.image_table.images) {
+    for (a, b) in out.image_set.images.iter().zip(&recon.image_set.images) {
         assert_eq!(a.quaternion_wxyz, b.quaternion_wxyz);
         assert_eq!(a.translation_xyz, b.translation_xyz);
         assert_eq!(a.camera_index, b.camera_index);
@@ -192,10 +192,10 @@ fn poses_points_and_keypoints_are_unchanged() {
             b.rms_reprojection_error
         );
     }
-    assert_eq!(out.image_table.cameras[0].model_name(), "SFMTOOL_FISHEYE");
-    assert_eq!(out.image_table.cameras[0], report.cameras[0].refit.camera);
+    assert_eq!(out.image_set.cameras[0].model_name(), "SFMTOOL_FISHEYE");
+    assert_eq!(out.image_set.cameras[0], report.cameras[0].refit.camera);
     // The input is untouched.
-    assert_eq!(recon.image_table.cameras[0], kerry_cam0());
+    assert_eq!(recon.image_set.cameras[0], kerry_cam0());
 
     let entry = &report.cameras[0];
     assert_eq!(entry.camera, 0);
@@ -234,8 +234,8 @@ fn only_the_named_cameras_change() {
         &SwitchCameraModelOptions::default(),
     )
     .unwrap();
-    assert_eq!(out.image_table.cameras[0], kerry_cam0());
-    assert_eq!(out.image_table.cameras[1].model_name(), "SFMTOOL_FISHEYE");
+    assert_eq!(out.image_set.cameras[0], kerry_cam0());
+    assert_eq!(out.image_set.cameras[1].model_name(), "SFMTOOL_FISHEYE");
     assert_eq!(report.cameras.len(), 1);
     assert_eq!(report.cameras[0].camera, 1);
     assert_eq!(report.cameras[0].images, IMAGES / 2);
@@ -367,20 +367,20 @@ fn a_spline_switched_to_its_own_model_is_refitted_over_its_whole_domain() {
     assert_eq!(entry.refit, expected);
     assert_eq!(entry.refit.theta_fit_source, ThetaFitSource::SplineDomain);
     assert!((entry.refit.theta_fit_deg - 108.0).abs() < 1e-9);
-    assert_eq!(out.image_table.cameras[0], expected.camera);
-    let Some((coeffs, _, _)) = out.image_table.cameras[0].model.radial_spline() else {
+    assert_eq!(out.image_set.cameras[0], expected.camera);
+    let Some((coeffs, _, _)) = out.image_set.cameras[0].model.radial_spline() else {
         panic!("still a spline");
     };
     assert_eq!(coeffs.len(), 10);
     assert!(
-        (crate::camera::refit_intrinsics::spline_domain_deg(&out.image_table.cameras[0]).unwrap()
+        (crate::camera::refit_intrinsics::spline_domain_deg(&out.image_set.cameras[0]).unwrap()
             - 108.0)
             .abs()
             < 1e-9
     );
     // The other camera is not touched, and the comparison still covers the
     // switched camera's observations.
-    assert_eq!(out.image_table.cameras[1], kerry_cam0());
+    assert_eq!(out.image_set.cameras[1], kerry_cam0());
     assert!(entry.observations.observations > 0);
 
     // With no domain given the domain end is kept bit for bit.
@@ -392,7 +392,7 @@ fn a_spline_switched_to_its_own_model_is_refitted_over_its_whole_domain() {
     );
     let (Some((_, before, _)), Some((_, after, _))) = (
         source.model.radial_spline(),
-        out.image_table.cameras[0].model.radial_spline(),
+        out.image_set.cameras[0].model.radial_spline(),
     ) else {
         panic!("spline models");
     };
@@ -460,9 +460,8 @@ fn a_spline_refit_the_model_cannot_have_is_refused_naming_the_camera() {
 fn write_sift_files(recon: &mut SfmrReconstruction, dir: &tempfile::TempDir) {
     recon.workspace_dir = dir.path().to_path_buf();
     recon.metadata.workspace.contents.feature_prefix_dir = "features".into();
-    for image in 0..recon.image_table.images.len() {
-        let camera =
-            &recon.image_table.cameras[recon.image_table.images[image].camera_index as usize];
+    for image in 0..recon.image_set.images.len() {
+        let camera = &recon.image_set.cameras[recon.image_set.images[image].camera_index as usize];
         let (cx, cy) = camera.principal_point();
         let positions = Array2::from_shape_vec((1, 2), vec![cx as f32, cy as f32]).unwrap();
         let data = sfmtool_sift_format::SiftData {
@@ -473,7 +472,7 @@ fn write_sift_files(recon: &mut SfmrReconstruction, dir: &tempfile::TempDir) {
             },
             metadata: sfmtool_sift_format::SiftMetadata {
                 version: sfmtool_sift_format::SIFT_FORMAT_VERSION,
-                image_name: recon.image_table.images[image].name.clone(),
+                image_name: recon.image_set.images[image].name.clone(),
                 image_file_xxh128: "0".repeat(32),
                 image_file_size: 1,
                 image_width: camera.width,
@@ -523,7 +522,7 @@ fn the_outermost_keypoint_can_be_left_out_of_the_report() {
         (asked.camera, &asked.source, &asked.refit, asked.images)
     );
     assert_eq!(entry.observations, asked.observations);
-    assert_eq!(without.image_table.cameras, with.image_table.cameras);
+    assert_eq!(without.image_set.cameras, with.image_set.cameras);
     for (a, b) in without.point_set.points.iter().zip(&with.point_set.points) {
         assert_eq!(a.rms_reprojection_error, b.rms_reprojection_error);
     }

@@ -553,7 +553,7 @@ impl PyEditedReconstruction {
     /// points and left the pose alone.
     ///
     /// Args:
-    ///     image: The image's index in this version's image table.
+    ///     image: The image's index in this version's image set.
     ///     cluster_patches_path: Optional cluster-patches ``.matches`` file.
     ///         Without it the 2D-3D pairs are the tracks' alone; with it the
     ///         file's clusters are used beside them, each as a track of its
@@ -900,7 +900,7 @@ impl PyEditedReconstruction {
                     focal: opt_f,
                     distortion: opt_distortion,
                 };
-                value.image_table.cameras.len()
+                value.image_set.cameras.len()
             ],
         };
         let options = BundleAdjustOptions {

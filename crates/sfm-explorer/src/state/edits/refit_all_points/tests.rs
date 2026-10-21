@@ -31,7 +31,7 @@ fn refit_state(missing: Option<usize>) -> (AppState, ReconId) {
     let mut state = AppState::new();
     state.append_node(SceneNode::demo(projected_embedded_demo(12)));
     let id = state.selected_recon.expect("a selected reconstruction");
-    let camera = &state.scene[0].recon().image_table.cameras[0];
+    let camera = &state.scene[0].recon().image_set.cameras[0];
     let (w, h) = (camera.width, camera.height);
     for image in 0..state.scene[0].image_count() {
         if Some(image) == missing {
@@ -150,7 +150,7 @@ fn a_cancelled_refit_pushes_no_version_and_writes_a_failed_entry() {
 #[test]
 fn a_photograph_that_cannot_be_read_fails_the_run_and_names_the_image() {
     let (mut state, id) = refit_state(Some(1));
-    let name = state.scene[0].recon().image_table.images[1].name.clone();
+    let name = state.scene[0].recon().image_set.images[1].name.clone();
     state
         .start_refit_all_points(id)
         .expect("the gate reads no photograph");

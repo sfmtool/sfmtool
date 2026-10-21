@@ -5,7 +5,7 @@
 //!
 //! egui wants `ColorImage` (RGBA); every image source the viewer holds is
 //! 3-channel RGB: the display thumbnails (a file's
-//! [`ImageTable::thumbnails_y_x_rgb`], or the rows the open built) and
+//! [`ImageSet::thumbnails_y_x_rgb`], or the rows the open built) and
 //! the decoded full-resolution
 //! images in [`crate::state::AppState`]'s photograph cache. Three panels used to expand it
 //! themselves, and the copies disagreed: two derived the output extent from the
@@ -19,7 +19,7 @@
 //! its neighbour rendered fine. Both extents now come from the same place the
 //! bytes do.
 //!
-//! [`ImageTable::thumbnails_y_x_rgb`]: sfmtool_core::ImageTable::thumbnails_y_x_rgb
+//! [`ImageSet::thumbnails_y_x_rgb`]: sfmtool_core::ImageSet::thumbnails_y_x_rgb
 
 use ndarray::ArrayView3;
 

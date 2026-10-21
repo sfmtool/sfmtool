@@ -274,7 +274,7 @@ Explorer (`sfm-explorer` lib tests, headless):
   the dead band, the implicit exit, the keys, the undo re-snap, the highlighted
   set, a lock whose node is closed under it, and that holding the lock leaves
   the value alone.
-- `state/edits/tests.rs`: the version pushed and its new base, the image table
+- `state/edits/tests.rs`: the version pushed and its new base, the image set
   standing still, the label, the selection following the identity map, the undo,
   and a refusal pushing no version and logging a failure.
 - `scene_graph/tests.rs`: the image row's `Move Camera` entry and the image it

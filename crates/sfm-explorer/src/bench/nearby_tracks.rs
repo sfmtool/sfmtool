@@ -257,7 +257,7 @@ impl AppState {
             .ok_or_else(|| crate::state::NOT_LOADED.to_string())?;
         let recon = node.recon();
         let image_names: Vec<String> = recon
-            .image_table
+            .image_set
             .images
             .iter()
             .map(|row| row.name.clone())

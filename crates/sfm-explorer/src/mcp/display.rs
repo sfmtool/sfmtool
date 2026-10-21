@@ -589,7 +589,7 @@ fn geometry_for(state: &AppState, image: ImageRef) -> Result<Option<ViewGeometry
 /// `image`'s size in its own pixels, from the lens it was shot through.
 fn image_size_px(state: &AppState, image: ImageRef) -> Option<[f32; 2]> {
     let node = state.node(image.recon)?;
-    let table = &node.recon().image_table;
+    let table = &node.recon().image_set;
     let camera = table
         .cameras
         .get(table.images.get(image.index())?.camera_index as usize)?;

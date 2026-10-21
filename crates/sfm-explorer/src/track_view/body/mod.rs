@@ -2297,7 +2297,7 @@ fn show_summary(ui: &mut egui::Ui, summary: &HeaderSummary) {
 fn point_summary(edited: &EditedReconstruction, point: u32) -> Option<HeaderSummary> {
     let view = edited.point(point)?;
     let stored = view.point();
-    let table = &edited.base.image_table;
+    let table = &edited.base.image_set;
     let images: Vec<usize> = view
         .observations()
         .iter()
@@ -2346,7 +2346,7 @@ fn track_summary(recon: &SfmrReconstruction, track: &EditableTrack) -> Option<He
     let error_px = (!errors.is_empty())
         .then(|| (errors.iter().map(|e| e * e).sum::<f64>() / errors.len() as f64).sqrt());
     let images = || kept.iter().map(|o| o.image as usize);
-    let table = &recon.image_table;
+    let table = &recon.image_set;
     let (max_angle_deg, condition, depth_z) = match payload.position {
         Some(position) => {
             let rays =

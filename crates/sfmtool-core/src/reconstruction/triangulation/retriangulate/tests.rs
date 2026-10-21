@@ -62,8 +62,8 @@ fn pinhole() -> CameraIntrinsics {
 
 /// Where `world` lands in image `i`, or `None` when it is outside the frame.
 fn project(recon: &SfmrReconstruction, i: usize, world: Point3<f64>) -> Option<[f32; 2]> {
-    let image = &recon.image_table.images[i];
-    let camera = &recon.image_table.cameras[image.camera_index as usize];
+    let image = &recon.image_set.images[i];
+    let camera = &recon.image_set.cameras[image.camera_index as usize];
     let local = image.quaternion_wxyz * world.coords + image.translation_xyz;
     let (u, v) = camera.ray_to_pixel([local.x, local.y, local.z])?;
     if u < 0.0 || v < 0.0 || u >= camera.width as f64 || v >= camera.height as f64 {
@@ -90,8 +90,8 @@ fn scene(
 ) -> SfmrReconstruction {
     let images = camera_of.len();
     let mut recon = SfmrReconstruction::demo(1);
-    recon.image_table.cameras = cameras;
-    recon.image_table.images = (0..images)
+    recon.image_set.cameras = cameras;
+    recon.image_set.images = (0..images)
         .map(|i| {
             let angle = 0.3 * (i as f64 - (images as f64 - 1.0) / 2.0);
             let centre = Vector3::new(8.0 * angle.sin(), 0.0, 8.0 * angle.cos());
@@ -104,10 +104,10 @@ fn scene(
             }
         })
         .collect();
-    let stats = recon.image_table.depth_statistics.images[0].clone();
-    recon.image_table.depth_statistics.images = vec![stats; images];
-    recon.image_table.depth_histogram_counts =
-        vec![recon.image_table.depth_histogram_counts[0].clone(); images];
+    let stats = recon.image_set.depth_statistics.images[0].clone();
+    recon.image_set.depth_statistics.images = vec![stats; images];
+    recon.image_set.depth_histogram_counts =
+        vec![recon.image_set.depth_histogram_counts[0].clone(); images];
 
     recon.point_set.points = (0..POINTS)
         .map(|p| Point3D {
@@ -433,7 +433,7 @@ fn a_held_point_on_its_own_leaves_nothing_to_solve() {
 #[test]
 fn a_ranged_point_keeps_the_distance_the_value_states() {
     let truth = truth();
-    let centre = truth.image_table.images[0].camera_center();
+    let centre = truth.image_set.images[0].camera_center();
     let range = (truth.point_set.points[3].position - centre).norm() + 1.0;
     let mut recon = nudged();
     constrain(&mut recon, 3, POINT_CONSTRAINT_RANGED, range, 0);
@@ -767,11 +767,11 @@ fn the_patch_frame_of_a_moved_point_keeps_its_angular_size() {
     let ratio = f64::from(after / before);
     let was = start
         .base
-        .image_table
+        .image_set
         .placement_scale(&start.base.point_set.points[0].position);
     let now = next
         .base
-        .image_table
+        .image_set
         .placement_scale(&next.base.point_set.points[0].position);
     assert!(
         (ratio - now / was).abs() < 1e-5,
@@ -786,10 +786,10 @@ fn an_unposed_image_does_not_stop_a_moved_points_frame_from_rescaling() {
     // placeholder centre is not a camera centre, so the placement distance is
     // measured from the three posed ones.
     let mut recon = nudge(scene(vec![pinhole()], &[0; 4], |_, i| i < 3));
-    recon.image_table.images[3].translation_xyz = Vector3::new(f64::NAN, f64::NAN, f64::NAN);
+    recon.image_set.images[3].translation_xyz = Vector3::new(f64::NAN, f64::NAN, f64::NAN);
     let centroid = Point3::from(
         (0..3)
-            .map(|i| recon.image_table.images[i].camera_center().coords)
+            .map(|i| recon.image_set.images[i].camera_center().coords)
             .sum::<Vector3<f64>>()
             / 3.0,
     );
@@ -893,7 +893,7 @@ fn a_track_read_through_the_wrong_camera_does_not_land_on_the_truth() {
     // the pinhole-only tracks are untouched by the change.
     let truth = two_camera_truth();
     let mut recon = nudge(two_camera_truth());
-    recon.image_table.cameras[1] = pinhole();
+    recon.image_set.cameras[1] = pinhole();
     let (next, _, _) = retriangulate_points(
         &edited(recon),
         RetriangulateWhich::All,
@@ -919,7 +919,7 @@ fn a_track_read_through_the_wrong_camera_does_not_land_on_the_truth() {
 /// centre.
 fn two_camera_ranged() -> (SfmrReconstruction, Point3<f64>) {
     let truth = two_camera_truth();
-    let centre = truth.image_table.images[1].camera_center();
+    let centre = truth.image_set.images[1].camera_center();
     let mut recon = nudge(two_camera_truth());
     for p in [3, 4] {
         let range = (truth.point_set.points[p].position - centre).norm();
@@ -961,7 +961,7 @@ fn a_ranged_point_read_through_the_wrong_camera_does_not_land_on_the_truth() {
     // miss the truth while still keeping their distance.
     let truth = two_camera_truth();
     let (mut recon, centre) = two_camera_ranged();
-    recon.image_table.cameras[1] = pinhole();
+    recon.image_set.cameras[1] = pinhole();
     let (next, _, report) = retriangulate_points(
         &edited(recon),
         RetriangulateWhich::All,
@@ -1132,7 +1132,7 @@ fn a_far_track_read_through_the_wrong_camera_misses_its_bearing() {
     // that point elsewhere, and whatever the rule makes of the track, it is
     // not the direction the far point lies in.
     let (mut recon, direction) = two_camera_far();
-    recon.image_table.cameras[1] = pinhole();
+    recon.image_set.cameras[1] = pinhole();
     let options = RetriangulateOptions {
         likelihood: Some(LikelihoodRule::at(0.2)),
         ..RetriangulateOptions::default()
@@ -1195,7 +1195,7 @@ fn a_camera_no_image_names_changes_nothing() {
     )
     .expect("the fixture retriangulates");
     let mut recon = nudged();
-    recon.image_table.cameras.push(fisheye());
+    recon.image_set.cameras.push(fisheye());
     let (two, _, two_report) = retriangulate_points(
         &edited(recon),
         RetriangulateWhich::All,
@@ -1210,7 +1210,7 @@ fn a_camera_no_image_names_changes_nothing() {
 #[test]
 fn a_value_with_no_pose_is_refused() {
     let mut recon = nudged();
-    for image in recon.image_table.images.iter_mut() {
+    for image in recon.image_set.images.iter_mut() {
         image.translation_xyz = Vector3::new(f64::NAN, f64::NAN, f64::NAN);
     }
     let start = edited(recon);
@@ -1346,8 +1346,8 @@ fn backward_sighting(p: usize) -> (SfmrReconstruction, SfmrReconstruction) {
     let mut truth = scene(vec![pinhole()], &[0; 4], |q, i| i < 3 || q == p);
     let centre = Vector3::new(0.0, 0.0, -8.0);
     let rotation = UnitQuaternion::face_towards(&(-centre), &Vector3::y()).inverse();
-    truth.image_table.images[3].quaternion_wxyz = rotation;
-    truth.image_table.images[3].translation_xyz = -(rotation * centre);
+    truth.image_set.images[3].quaternion_wxyz = rotation;
+    truth.image_set.images[3].translation_xyz = -(rotation * centre);
     let along = (centre - truth.point_set.points[p].position.coords).normalize();
     let local = rotation * along;
     let (u, v) = pinhole()
@@ -1795,7 +1795,7 @@ fn the_bulk_path_folds_the_overlay_in_and_reads_statuses_back_through_it() {
 /// has no origin to measure from, so it is solved free.
 fn ranged_from_an_unposed_image() -> SfmrReconstruction {
     let mut recon = nudge(scene(vec![pinhole()], &[0; 4], |_, i| i < 3));
-    recon.image_table.images[3].translation_xyz = Vector3::new(f64::NAN, f64::NAN, f64::NAN);
+    recon.image_set.images[3].translation_xyz = Vector3::new(f64::NAN, f64::NAN, f64::NAN);
     constrain(&mut recon, 2, POINT_CONSTRAINT_RANGED, 5.0, 3);
     recon
 }

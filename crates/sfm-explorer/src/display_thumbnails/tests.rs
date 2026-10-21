@@ -45,7 +45,7 @@ pub(crate) fn workspace_with_photographs(dir: &Path, missing: &[usize]) -> SfmrR
     let mut recon = SfmrReconstruction::demo(16);
     recon.workspace_dir = dir.to_path_buf();
     std::fs::create_dir_all(dir.join("images")).unwrap();
-    for (i, image) in recon.image_table.images.iter_mut().enumerate() {
+    for (i, image) in recon.image_set.images.iter_mut().enumerate() {
         image.name = format!("images/photo_{i:02}.png");
         if missing.contains(&i) {
             continue;
@@ -54,7 +54,7 @@ pub(crate) fn workspace_with_photographs(dir: &Path, missing: &[usize]) -> SfmrR
         let photo = image::RgbImage::from_pixel(96, 54, image::Rgb([r, g, b]));
         photo.save(dir.join(&image.name)).unwrap();
     }
-    assert!(recon.image_table.thumbnails_y_x_rgb.is_none());
+    assert!(recon.image_set.thumbnails_y_x_rgb.is_none());
     recon
 }
 
@@ -78,7 +78,7 @@ pub(crate) fn write_sift_thumbnails(
             },
             metadata: sfmtool_sift_format::SiftMetadata {
                 version: sfmtool_sift_format::SIFT_FORMAT_VERSION,
-                image_name: recon.image_table.images[image].name.clone(),
+                image_name: recon.image_set.images[image].name.clone(),
                 image_file_xxh128: "0".repeat(32),
                 image_file_size: 1,
                 image_width: 96,
@@ -128,12 +128,12 @@ fn build(recon: &SfmrReconstruction) -> (Option<Arc<DisplayThumbnails>>, BuiltFr
 #[test]
 fn a_file_with_thumbnails_shares_its_own_column() {
     let mut recon = SfmrReconstruction::demo(16);
-    let n = recon.image_table.images.len();
+    let n = recon.image_set.images.len();
     let column = Arc::new(Array4::<u8>::from_shape_fn(
         (n, THUMBNAIL_SIZE, THUMBNAIL_SIZE, 3),
         |(i, _, _, c)| (i * 10 + c) as u8,
     ));
-    recon.image_table.thumbnails_y_x_rgb = Some(Arc::clone(&column));
+    recon.image_set.thumbnails_y_x_rgb = Some(Arc::clone(&column));
 
     let node = SceneNode::demo(recon);
     let display = node.display_thumbnails.as_ref().expect("the file's column");
@@ -155,7 +155,7 @@ fn a_row_comes_from_the_sift_first_the_photograph_second_and_the_grey_last() {
     // 0, 1 and 2 have a vouched-for .sift, 2 without its photograph; 3 has a
     // .sift the reconstruction does not vouch for; 5 has neither.
     write_sift_thumbnails(&mut recon, &[0, 1, 2, 3], &[0, 1, 2]);
-    let n = recon.image_table.images.len();
+    let n = recon.image_set.images.len();
 
     let (display, from) = build(&recon);
     let display = display.expect("rows to show");
@@ -191,7 +191,7 @@ fn a_capture_with_nothing_to_build_from_has_no_display_column() {
     let recon = workspace_with_photographs(&dir, &all);
     let (display, from) = build(&recon);
     assert!(display.is_none());
-    assert_eq!(from.placeholders, recon.image_table.images.len());
+    assert_eq!(from.placeholders, recon.image_set.images.len());
     // Every panel falls back to its placeholder.
     assert!(row_for(None, &recon, 0).is_none());
     let _ = std::fs::remove_dir_all(&dir);
@@ -230,9 +230,9 @@ fn an_image_the_column_was_not_built_for_falls_back_to_the_values_column() {
     let display = build(&recon).0.expect("photographs");
 
     let mut other = recon.clone();
-    other.image_table.images[5].name = "elsewhere/new.png".into();
-    let n = other.image_table.images.len();
-    other.image_table.thumbnails_y_x_rgb = Some(Arc::new(Array4::from_elem(
+    other.image_set.images[5].name = "elsewhere/new.png".into();
+    let n = other.image_set.images.len();
+    other.image_set.thumbnails_y_x_rgb = Some(Arc::new(Array4::from_elem(
         (n, THUMBNAIL_SIZE, THUMBNAIL_SIZE, 3),
         7u8,
     )));

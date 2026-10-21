@@ -20,7 +20,7 @@ fn fixture(dir: &TempDir) -> SfmrReconstruction {
     recon.metadata.workspace.contents.feature_prefix_dir = "features".into();
 
     let mut hashes = Vec::new();
-    for image in 0..recon.image_table.images.len() {
+    for image in 0..recon.image_set.images.len() {
         let count = recon.point_set.max_track_feature_index[image] as usize + 1;
         let mut positions = Array2::<f32>::zeros((count, 2));
         for feature in 0..count {
@@ -35,11 +35,11 @@ fn fixture(dir: &TempDir) -> SfmrReconstruction {
             },
             metadata: sfmtool_sift_format::SiftMetadata {
                 version: sfmtool_sift_format::SIFT_FORMAT_VERSION,
-                image_name: recon.image_table.images[image].name.clone(),
+                image_name: recon.image_set.images[image].name.clone(),
                 image_file_xxh128: "0".repeat(32),
                 image_file_size: 1,
-                image_width: recon.image_table.cameras[0].width,
-                image_height: recon.image_table.cameras[0].height,
+                image_width: recon.image_set.cameras[0].width,
+                image_height: recon.image_set.cameras[0].height,
                 feature_count: count as u32,
             },
             content_hash: sfmtool_sift_format::SiftContentHash::default(),
@@ -138,7 +138,7 @@ fn an_embedded_patches_value_is_not_touched() {
     let keypoints = recon.keypoints_xy().unwrap().clone();
     recon.point_set.observations = ObservationSource::EmbeddedPatches {
         keypoints_xy: keypoints,
-        image_file_hashes: vec![[0; 16]; recon.image_table.images.len()],
+        image_file_hashes: vec![[0; 16]; recon.image_set.images.len()],
     };
     assert_eq!(
         recon.fill_keypoints_from_sift(&Progress::none()),

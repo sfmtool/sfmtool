@@ -56,7 +56,7 @@ pub use reconstruction::{
     bundle_adjust, BundleAdjustError, BundleAdjustOptions, BundleAdjustReport, CameraAdjustment,
 };
 pub use reconstruction::{
-    move_camera, EditError, EditedReconstruction, ImageTable, MoveCameraError, MoveCameraReport,
+    move_camera, EditError, EditedReconstruction, ImageSet, MoveCameraError, MoveCameraReport,
     ObservationSource, Point3D, PointConstraintColumns, PointMap, PointRecord, PointSet, PointView,
     ReconstructionError, RecordObservation, ReprojectionSample, RowMap, SfmrImage,
     SfmrReconstruction, SiftKeypointFill, TrackObservation,
@@ -68,11 +68,11 @@ pub use reconstruction::{
 /// `sfmtool_core::progress_info!` name what they have always named.
 pub use sfmtool_progress as progress;
 pub use sfmtool_progress::{progress_info, progress_note, progress_status, progress_warn};
-/// Re-exported so consumers of [`ImageTable::thumbnails_y_x_rgb`] can
+/// Re-exported so consumers of [`ImageSet::thumbnails_y_x_rgb`] can
 /// size buffers from the same constant the format pins, without depending on
 /// `sfmtool-sfmr-format` directly.
 pub use sfmtool_sfmr_format::THUMBNAIL_SIZE;
-/// Re-exported for the same reason, one level up: [`ImageTable::rig_frame_data`]
+/// Re-exported for the same reason, one level up: [`ImageSet::rig_frame_data`]
 /// is a public field whose type nothing downstream could otherwise name, so a
 /// consumer wanting to read — or build — a rig had to depend on `sfmtool-sfmr-format`
 /// itself to say what it was holding.

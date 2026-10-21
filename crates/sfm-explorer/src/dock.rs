@@ -537,7 +537,7 @@ impl TabContext<'_> {
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new(&node.label).strong());
                     ui.label(
-                        egui::RichText::new(format!("({} images)", recon.image_table.images.len()))
+                        egui::RichText::new(format!("({} images)", recon.image_set.images.len()))
                             .weak()
                             .small(),
                     );
@@ -740,10 +740,10 @@ impl TabContext<'_> {
             // The camera the selected image resolves to — the subject of
             // the intrinsics layer, and `None` with no image selected.
             let camera = selected_image.and_then(|idx| {
-                let camera_index = recon.image_table.images.get(idx)?.camera_index as usize;
+                let camera_index = recon.image_set.images.get(idx)?.camera_index as usize;
                 Some((
                     CameraRef::new(id, camera_index),
-                    recon.image_table.cameras.get(camera_index)?,
+                    recon.image_set.cameras.get(camera_index)?,
                 ))
             });
             // What the panel's controls were before this frame ran.
@@ -1381,7 +1381,7 @@ impl TabContext<'_> {
                 // A version's poses and points are new, so what the panels
                 // cached *about* them -- the rendered patches, the prepared
                 // track rows, the per-camera derived quantities -- describes a
-                // geometry the node no longer holds. The image table did not
+                // geometry the node no longer holds. The image set did not
                 // move, so the decoded pixels keyed by an image index did not
                 // become statements about a different image, and they stay.
                 if self.state.resect_image(image.recon, image.index()).is_ok() {
@@ -1416,7 +1416,7 @@ impl TabContext<'_> {
                 if let Err(message) = self.state.delete_image(image) {
                     self.state.action_log.fail(Kind::Edit, message);
                 }
-                // A bulk edit renumbers the image table, so the panels'
+                // A bulk edit renumbers the image set, so the panels'
                 // textures are keyed by indexes that now name other images.
                 self.forget_recon(image.recon);
             }

@@ -42,18 +42,18 @@ impl UploadedThumbnails {
             (Some(a), Some(b)) => Arc::ptr_eq(a, b),
             _ => false,
         };
-        let same_column = match (&self.column, &recon.image_table.thumbnails_y_x_rgb) {
+        let same_column = match (&self.column, &recon.image_set.thumbnails_y_x_rgb) {
             (None, None) => true,
             (Some(a), Some(b)) => Arc::ptr_eq(a, b),
             _ => false,
         };
         same_display
             && same_column
-            && self.names.len() == recon.image_table.images.len()
+            && self.names.len() == recon.image_set.images.len()
             && self
                 .names
                 .iter()
-                .zip(&recon.image_table.images)
+                .zip(&recon.image_set.images)
                 .all(|(name, image)| *name == image.name)
     }
 }
@@ -104,10 +104,9 @@ impl SceneRenderer {
         display: Option<&Arc<DisplayThumbnails>>,
         progress: &Progress<'_>,
     ) -> Uploaded {
-        let image_count = recon.image_table.images.len() as u32;
+        let image_count = recon.image_set.images.len() as u32;
         self.ensure_recon(device, id, progress);
-        if image_count == 0 || (display.is_none() && recon.image_table.thumbnails_y_x_rgb.is_none())
-        {
+        if image_count == 0 || (display.is_none() && recon.image_set.thumbnails_y_x_rgb.is_none()) {
             let bundle = self.recons.get_mut(&id).expect("just ensured");
             bundle.thumbnail_texture = None;
             bundle.thumbnail_view = None;
@@ -227,9 +226,9 @@ impl SceneRenderer {
         bundle.thumbnail_view = Some(texture_view);
         bundle.uploaded_thumbnails = Some(UploadedThumbnails {
             display: display.cloned(),
-            column: recon.image_table.thumbnails_y_x_rgb.clone(),
+            column: recon.image_set.thumbnails_y_x_rgb.clone(),
             names: recon
-                .image_table
+                .image_set
                 .images
                 .iter()
                 .map(|image| image.name.clone())

@@ -663,7 +663,7 @@ fn a_bench_observation_target_selects_its_own_camera_image() {
     let first = crate::scene::ImageRef::new(state.scene[0].id, 0);
     state.select_image(Some(first));
     let size = {
-        let camera = &state.scene[0].recon().image_table.cameras[0];
+        let camera = &state.scene[0].recon().image_set.cameras[0];
         [camera.width as f32, camera.height as f32]
     };
     state.image_detail_view = Some(crate::image_detail::ViewGeometry {
@@ -955,7 +955,7 @@ fn the_scene_s_content_hash_is_the_hash_its_point_ids_carry() {
 /// screen, and so does the point.
 ///
 /// The failure this pins down is Image Detail going to "No image selected" on
-/// every step of a run of bench steps, none of which touches the image table.
+/// every step of a run of bench steps, none of which touches the image set.
 #[test]
 fn a_history_move_keeps_the_photograph_and_the_point_selected() {
     let (mut state, mut viewer) = benchable();
@@ -1955,7 +1955,7 @@ fn a_bench_pixel_off_the_photograph_is_clamped_and_the_reply_says_so() {
     // good to the arithmetic's last bits rather than bit for bit. So a corner
     // pixel comes back a rounding either side of the corner.
     let used = moved["pixel"].as_array().expect("the pixel it used");
-    let camera = &state.scene[0].recon().image_table.cameras[0];
+    let camera = &state.scene[0].recon().image_set.cameras[0];
     for (value, extent) in used.iter().zip([camera.width, camera.height]) {
         let value = value.as_f64().expect("a number");
         assert!(

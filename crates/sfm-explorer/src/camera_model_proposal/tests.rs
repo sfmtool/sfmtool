@@ -22,7 +22,7 @@ pub(crate) fn spline_state() -> (AppState, ReconId) {
     let (mut state, id) = crate::state::edits::tests::adjustable_state();
     {
         let recon = state.scene[0].recon_mut();
-        let camera = &mut recon.image_table.cameras[0];
+        let camera = &mut recon.image_set.cameras[0];
         let (f, _) = camera.focal_lengths();
         let (cx, cy) = camera.principal_point();
         camera.model = CameraModel::SimplePinhole {
@@ -30,7 +30,7 @@ pub(crate) fn spline_state() -> (AppState, ReconId) {
             principal_point_x: cx,
             principal_point_y: cy,
         };
-        let mut second = recon.image_table.cameras[0].clone();
+        let mut second = recon.image_set.cameras[0].clone();
         second.model = CameraModel::SfmtoolPinhole {
             focal_length: f,
             principal_point_x: cx,
@@ -38,8 +38,8 @@ pub(crate) fn spline_state() -> (AppState, ReconId) {
             bspline_rho_max: 1.0,
             bspline: vec![0.0; 4],
         };
-        recon.image_table.cameras.push(second);
-        for image in recon.image_table.images.iter_mut().skip(4) {
+        recon.image_set.cameras.push(second);
+        for image in recon.image_set.images.iter_mut().skip(4) {
             image.camera_index = 1;
         }
     }
@@ -110,7 +110,7 @@ fn the_model_list_orders_the_targets_by_the_source() {
     assert!(!targets.contains(&"OPENCV_FISHEYE"), "{targets:?}");
 
     let (state, _) = spline_state();
-    let cameras = &state.scene[0].recon().image_table.cameras;
+    let cameras = &state.scene[0].recon().image_set.cameras;
     let pinhole = targets_for(&cameras[0]);
     assert_eq!(pinhole[0], "SFMTOOL_PINHOLE");
     assert!(!pinhole.contains(&"SIMPLE_PINHOLE"), "{pinhole:?}");
@@ -257,7 +257,7 @@ fn apply_pushes_the_switch_and_the_retriangulation_as_one_version() {
         point.position.x += 0.01;
     }
     let before = positions(&state);
-    let camera_before = state.scene[0].recon().image_table.cameras[1].clone();
+    let camera_before = state.scene[0].recon().image_set.cameras[1].clone();
     state
         .open_camera_model_proposal(CameraRef::new(id, 1), None)
         .expect("opens");
@@ -293,7 +293,7 @@ fn apply_pushes_the_switch_and_the_retriangulation_as_one_version() {
         "Refit spline of camera 1 of run_a: 4 → 6 coefficients, domain 45.0° kept and \
          retriangulated its tracks"
     );
-    let camera = &state.scene[0].recon().image_table.cameras[1];
+    let camera = &state.scene[0].recon().image_set.cameras[1];
     assert_eq!(camera.model.radial_spline().expect("a spline").0.len(), 6);
     let row = newest(&state);
     assert!(!row.failed, "{}", row.text);
@@ -316,7 +316,7 @@ fn apply_pushes_the_switch_and_the_retriangulation_as_one_version() {
     );
 
     state.undo(id).expect("one edit to undo");
-    assert_eq!(state.scene[0].recon().image_table.cameras[1], camera_before);
+    assert_eq!(state.scene[0].recon().image_set.cameras[1], camera_before);
     assert_eq!(positions(&state), before);
 }
 
@@ -621,7 +621,7 @@ fn switch_model_is_greyed_for_the_three_reasons() {
     assert_eq!(state.switch_model_refusal(CameraRef::new(id, 1)), None);
     state.drop_camera_model_proposal(id, Dropped::Cancelled);
 
-    for image in state.scene[0].recon_mut().image_table.images.iter_mut() {
+    for image in state.scene[0].recon_mut().image_set.images.iter_mut() {
         image.translation_xyz.x = f64::NAN;
     }
     let why = state
@@ -778,9 +778,9 @@ pub(crate) fn fisheye_node(path: &str) -> crate::scene::SceneNode {
 
     let mut recon = sfmtool_core::SfmrReconstruction::demo(120);
     let camera = kerry_camera();
-    recon.image_table.cameras = vec![camera.clone()];
+    recon.image_set.cameras = vec![camera.clone()];
     let wide: Vec<sfmtool_core::reconstruction::Point3D> = recon
-        .image_table
+        .image_set
         .images
         .iter()
         .map(|image| {
@@ -803,7 +803,7 @@ pub(crate) fn fisheye_node(path: &str) -> crate::scene::SceneNode {
     let mut keypoints: Vec<[f32; 2]> = Vec::new();
     for (p, point) in recon.point_set.points.iter().enumerate() {
         let mut count = 0u32;
-        for (i, image) in recon.image_table.images.iter().enumerate() {
+        for (i, image) in recon.image_set.images.iter().enumerate() {
             let local = image.quaternion_wxyz * point.position.coords + image.translation_xyz;
             // Inside the fold, so the keypoint is the exact projection of a
             // ray the lens images.
@@ -826,7 +826,7 @@ pub(crate) fn fisheye_node(path: &str) -> crate::scene::SceneNode {
         }
         counts.push(count);
     }
-    let images = recon.image_table.images.len();
+    let images = recon.image_set.images.len();
     let mut keypoints_xy = ndarray::Array2::<f32>::zeros((keypoints.len(), 2));
     for (row, uv) in keypoints.iter().enumerate() {
         keypoints_xy[[row, 0]] = uv[0];
@@ -919,7 +919,7 @@ fn a_point_at_infinity_is_reprojected_as_a_direction() {
     let point = recon.point_set.tracks[row].point_index as usize;
     // The direction from image 2's centre through the point: the keypoint
     // stays the projection of that direction.
-    let centre = recon.image_table.images[2].camera_center();
+    let centre = recon.image_set.images[2].camera_center();
     let direction = (recon.point_set.points[point].position - centre).normalize();
     recon.point_set.points[point].position = nalgebra::Point3::from(direction);
     recon.point_set.points[point].w = 0.0;
@@ -1031,7 +1031,7 @@ fn one_pass_gives_the_outermost_extent_and_reads_each_sift_file_once() {
 
         // One read per image of the camera, each its own file.
         let images = base
-            .image_table
+            .image_set
             .images
             .iter()
             .filter(|image| image.camera_index == 0)
@@ -1047,7 +1047,7 @@ fn one_pass_gives_the_outermost_extent_and_reads_each_sift_file_once() {
             .point_set
             .tracks
             .iter()
-            .filter(|t| base.image_table.images[t.image_index as usize].camera_index == 0)
+            .filter(|t| base.image_set.images[t.image_index as usize].camera_index == 0)
             .count();
         assert_eq!(observed.len(), observations);
         assert_eq!(

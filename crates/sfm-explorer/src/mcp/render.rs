@@ -86,7 +86,7 @@ pub(super) fn reconstruction(node: &SceneNode, solo: Option<ReconId>, index_file
             // agent comparing a reply against a screenshot should not find two.
             "points_at_infinity": node.infinity_point_count(),
             "camera_images": node.image_count(),
-            "camera_intrinsics": recon.image_table.cameras.len(),
+            "camera_intrinsics": recon.image_set.cameras.len(),
             // Through the overlay, as `points` is: a deleted point takes its
             // whole track with it and a committed one brings its own, so the
             // base's count is what the file held before the session started
@@ -175,7 +175,7 @@ pub(super) fn selection(state: &AppState) -> Value {
             "index": image.index(),
             "name": state
                 .node(image.recon)
-                .and_then(|node| node.recon().image_table.images.get(image.index()))
+                .and_then(|node| node.recon().image_set.images.get(image.index()))
                 .map(|im| im.name.clone()),
         })),
         "camera_intrinsics": state.selected_camera.map(|camera| json!({
@@ -249,7 +249,7 @@ pub(super) fn view(state: &AppState, viewer: &Viewer3D) -> Value {
             "camera_image_index": camera_view.image.index(),
             "name": state
                 .node(camera_view.image.recon)
-                .and_then(|node| node.recon().image_table.images.get(camera_view.image.index()))
+                .and_then(|node| node.recon().image_set.images.get(camera_view.image.index()))
                 .map(|im| im.name.clone()),
         })),
     })
@@ -327,7 +327,7 @@ pub(super) fn camera_image_row(
     index: usize,
     observations: usize,
 ) -> Value {
-    let image = &recon.image_table.images[index];
+    let image = &recon.image_set.images[index];
     json!({
         "index": index,
         "name": image.name,
@@ -517,7 +517,7 @@ fn triangulation(proposal: &crate::camera_model_proposal::CameraModelProposal) -
 /// reports the count for every image it returns, and a per-image scan would
 /// make listing a reconstruction quadratic in its observation count.
 pub(super) fn observations_per_image(recon: &SfmrReconstruction) -> Vec<usize> {
-    let mut counts = vec![0usize; recon.image_table.images.len()];
+    let mut counts = vec![0usize; recon.image_set.images.len()];
     for observation in &recon.point_set.tracks {
         if let Some(slot) = counts.get_mut(observation.image_index as usize) {
             *slot += 1;

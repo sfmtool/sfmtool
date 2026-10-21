@@ -631,7 +631,7 @@ fn demo_panel_fixture() -> (
         std::path::Path::new("/runs/demo.sfmr"),
         sfmtool_core::SfmrReconstruction::demo(64),
     );
-    let camera = &node.recon().image_table.cameras[0];
+    let camera = &node.recon().image_set.cameras[0];
     let (w, h) = (
         f32::from(camera.width as u16),
         f32::from(camera.height as u16),
@@ -1153,7 +1153,7 @@ fn the_layer_cache_does_not_serve_the_proposed_camera_as_the_current_one() {
     let proposal = state.camera_model_proposal.as_ref().unwrap();
     let camera_ref = proposal.camera_ref();
     let generation = proposal.generation;
-    let current = &state.scene[0].recon().image_table.cameras[0];
+    let current = &state.scene[0].recon().image_set.cameras[0];
     let proposed = detail
         .intrinsics
         .get(&(camera_ref, super::LayerModel::Proposed(generation)))

@@ -401,7 +401,7 @@ pub(super) fn bundle_adjust(
     };
     let count = state
         .node(id)
-        .map_or(0, |node| node.edited().base.image_table.cameras.len());
+        .map_or(0, |node| node.edited().base.image_set.cameras.len());
     let mut releases = vec![defaults; count];
     let mut named = vec![false; count];
     for entry in overrides {
@@ -516,7 +516,7 @@ pub(super) fn propose_camera_model(
 
     let id = resolve_reconstruction(state, Some(label))?;
     let node = state.node(id).expect("just resolved");
-    let cameras = &node.recon().image_table.cameras;
+    let cameras = &node.recon().image_set.cameras;
     let source = cameras.get(request.camera).ok_or_else(|| {
         ToolError::new(format!(
             "camera_intrinsics_index {} does not exist; {} has {} camera(s).",

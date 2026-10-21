@@ -82,7 +82,7 @@ pub(super) fn counts_text(ui: &egui::Ui, node: &SceneNode) -> String {
     let images = format!("{} imgs", compact_count(node.image_count()));
     let cameras = format!(
         "{} cams",
-        compact_count(node.recon().image_table.cameras.len())
+        compact_count(node.recon().image_set.cameras.len())
     );
     let available = ui.available_width();
     let font = egui::TextStyle::Small.resolve(ui.style());

@@ -313,8 +313,8 @@ pub(in crate::bench) fn fixture_of(
     let mut recon = SfmrReconstruction::demo(1);
     let n = scene.len();
 
-    recon.image_table.cameras = vec![scene.cameras[0].clone()];
-    recon.image_table.images = (0..n)
+    recon.image_set.cameras = vec![scene.cameras[0].clone()];
+    recon.image_set.images = (0..n)
         .map(|i| {
             let [w, x, y, z] = scene.poses[i].rotation.to_wxyz_array();
             SfmrImage {
@@ -327,15 +327,11 @@ pub(in crate::bench) fn fixture_of(
         .collect();
     // One row per image either way: `resize` covers a scene with fewer cameras
     // than the demo value it is built on and one with more.
-    let stats_row = recon.image_table.depth_statistics.images[0].clone();
+    let stats_row = recon.image_set.depth_statistics.images[0].clone();
+    recon.image_set.depth_statistics.images.resize(n, stats_row);
+    let histogram_row = recon.image_set.depth_histogram_counts[0].clone();
     recon
-        .image_table
-        .depth_statistics
-        .images
-        .resize(n, stats_row);
-    let histogram_row = recon.image_table.depth_histogram_counts[0].clone();
-    recon
-        .image_table
+        .image_set
         .depth_histogram_counts
         .resize(n, histogram_row);
 

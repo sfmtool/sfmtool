@@ -942,7 +942,7 @@ impl Ctx<'_> {
 
     /// The stem of an image's name, which a cluster's label is minted from.
     fn image_stem(&self, image: u32) -> String {
-        let name = &self.edited.base.image_table.images[image as usize].name;
+        let name = &self.edited.base.image_set.images[image as usize].name;
         std::path::Path::new(name)
             .file_stem()
             .map_or_else(|| name.clone(), |s| s.to_string_lossy().into_owned())

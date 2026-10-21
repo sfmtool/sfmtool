@@ -1451,7 +1451,7 @@ fn no_description_promises_indexes_stay_without_the_pending_fold() {
 }
 
 /// `delete_camera_image` renumbers the bench's observations with the image
-/// table, so no tool tells an agent that an observation's position is never
+/// set, so no tool tells an agent that an observation's position is never
 /// renumbered, and the delete's own description says what it does to the
 /// bench. Bug bash of PR #672.
 #[test]

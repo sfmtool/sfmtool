@@ -86,7 +86,7 @@ they reach for agree.
 ### When the question is asked
 
 The state is derived when an index is opened or built, and again when a version
-lands on the node whose image table differs from the one it was derived
+lands on the node whose image set differs from the one it was derived
 against. It is held per node and **never computed per frame**: a version that
 moves geometry, poses or the bench leaves the corpus's claim about the node
 exactly as true as it was, and only one that adds, removes, renames or reorders
@@ -318,7 +318,7 @@ impl AppState {
     pub(crate) fn sift_index_path(&self, id: ReconId) -> Option<PathBuf>;
 
     /// Open the node's index if nothing has looked yet, and re-derive the
-    /// state when a version has moved the image table. Called through
+    /// state when a version has moved the image set. Called through
     /// `refresh_index_files`.
     pub(crate) fn refresh_sift_index(&mut self, id: ReconId);
     pub(crate) fn open_sift_index(&mut self, id: ReconId, path: PathBuf)
@@ -383,7 +383,7 @@ path on disk, and on one whose images have no `.sift` companion; a built index
 reading as current over both an `embedded_patches` and a `sift_files` node; each
 staleness cause producing its own sentence -- a row count, a name out of place,
 a re-extracted `.sift`, one that appeared, one that vanished -- with a superset
-index stale; a version that moves the image table re-deriving the state and one
+index stale; a version that moves the image set re-deriving the state and one
 that does not leaving it alone; the look at an absent file being silent and
 remembered; and closing letting go of the forest, leaving the file and refusing
 the search. Two more drive the build directly, over a `Progress` that records

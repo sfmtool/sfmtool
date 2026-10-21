@@ -605,7 +605,7 @@ impl TrackMeasurement {
 /// ([`EditableTrack::delete_image`]).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Observation {
-    /// The image, as an index into the node's image table.
+    /// The image, as an index into the node's image set.
     pub image: u32,
     /// Where it came from.
     pub provenance: Provenance,

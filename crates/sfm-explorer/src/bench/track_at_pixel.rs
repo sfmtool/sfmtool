@@ -64,7 +64,7 @@ pub(crate) fn is_create_track_chord(modifiers: egui::Modifiers) -> bool {
 /// and its translation finite, the rule the Scene tree's *Resect Image* greys
 /// by. A non-finite one is a placeholder rather than a registration.
 fn is_posed(recon: &sfmtool_core::SfmrReconstruction, image: usize) -> bool {
-    recon.image_table.images.get(image).is_some_and(|row| {
+    recon.image_set.images.get(image).is_some_and(|row| {
         row.quaternion_wxyz.coords.iter().all(|c| c.is_finite())
             && row.translation_xyz.iter().all(|c| c.is_finite())
     })
@@ -186,11 +186,11 @@ impl AppState {
             return Some(crate::state::NOT_LOADED.to_string());
         };
         let recon = node.recon();
-        if image.index() >= recon.image_table.images.len() {
+        if image.index() >= recon.image_set.images.len() {
             return Some(format!(
                 "{} has {} images; there is no image {}.",
                 node.label,
-                recon.image_table.images.len(),
+                recon.image_set.images.len(),
                 image.index()
             ));
         }
@@ -270,7 +270,7 @@ impl AppState {
             ));
         }
         // The files are opened on sight when they are there and nothing has
-        // looked yet, and re-judged when a version has moved the image table,
+        // looked yet, and re-judged when a version has moved the image set,
         // so the states read below are the node's as it stands.
         self.refresh_index_files(id);
         let index_note = self.index_files_note(id);
@@ -286,7 +286,7 @@ impl AppState {
             .ok_or_else(|| crate::state::NOT_LOADED.to_string())?;
         let recon = node.recon();
         let image_names: Vec<String> = recon
-            .image_table
+            .image_set
             .images
             .iter()
             .map(|row| row.name.clone())

@@ -286,14 +286,14 @@ fn a_member_whose_pixel_gives_no_ray_is_left_out() {
         members: members.clone(),
     }];
 
-    let kept = candidate_rays(&recon.image_table, &candidates, &pixels, 0.5, 2);
+    let kept = candidate_rays(&recon.image_set, &candidates, &pixels, 0.5, 2);
     assert_eq!(kept.members, vec![members[1..].to_vec()]);
     assert_eq!(kept.rays.offsets, vec![0, members.len() - 1]);
     let images: Vec<usize> = members[1..].iter().map(|m| m.0 as usize).collect();
     assert_eq!(kept.ray_images, images);
 
     // With every member required, the candidate keeps none and is unscored.
-    let short = candidate_rays(&recon.image_table, &candidates, &pixels, 0.5, members.len());
+    let short = candidate_rays(&recon.image_set, &candidates, &pixels, 0.5, members.len());
     assert_eq!(short.members, vec![Vec::new()]);
     assert_eq!(short.rays.offsets, vec![0, 0]);
     assert_eq!(

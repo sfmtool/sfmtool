@@ -177,7 +177,7 @@ fn far_demo(points: usize) -> SfmrReconstruction {
     for point in &mut recon.point_set.points {
         point.position += shift;
     }
-    for image in &mut recon.image_table.images {
+    for image in &mut recon.image_set.images {
         let centre = image.camera_center().coords + shift;
         image.translation_xyz = -(image.quaternion_wxyz * centre);
     }
@@ -194,8 +194,8 @@ fn far_demo(points: usize) -> SfmrReconstruction {
     recon.point_set.patch_u_halfvec_xyz = Some(u);
     recon.point_set.patch_v_halfvec_xyz = Some(v);
     recon.point_set.patch_bitmaps_y_x_rgba = Some(Arc::new(bitmaps));
-    let n = recon.image_table.images.len();
-    recon.image_table.thumbnails_y_x_rgb = Some(Arc::new(Array4::from_elem(
+    let n = recon.image_set.images.len();
+    recon.image_set.thumbnails_y_x_rgb = Some(Arc::new(Array4::from_elem(
         (n, THUMBNAIL_SIZE, THUMBNAIL_SIZE, 3),
         90,
     )));

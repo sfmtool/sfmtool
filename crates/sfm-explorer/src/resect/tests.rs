@@ -22,7 +22,7 @@ use crate::state::AppState;
 /// Needs inline keypoints, which every resectable fixture carries.
 pub(crate) fn write_cluster_patches_like_tracks(recon: &SfmrReconstruction, path: &Path) {
     let keypoints = recon.keypoints_xy().expect("an embedded fixture");
-    let n = recon.image_table.images.len();
+    let n = recon.image_set.images.len();
     let mut starts = vec![0u32];
     let mut member_images = Vec::new();
     let mut member_features = Vec::new();
@@ -90,7 +90,7 @@ pub(crate) fn write_cluster_patches_like_tracks(recon: &SfmrReconstruction, path
             content_xxh128: String::new(),
         },
         image_names: recon
-            .image_table
+            .image_set
             .images
             .iter()
             .map(|image| image.name.clone())
@@ -102,11 +102,11 @@ pub(crate) fn write_cluster_patches_like_tracks(recon: &SfmrReconstruction, path
             ndarray::Array2::from_shape_vec(
                 (n, 2),
                 recon
-                    .image_table
+                    .image_set
                     .images
                     .iter()
                     .flat_map(|image| {
-                        let camera = &recon.image_table.cameras[image.camera_index as usize];
+                        let camera = &recon.image_set.cameras[image.camera_index as usize];
                         [camera.width, camera.height]
                     })
                     .collect(),
@@ -155,7 +155,7 @@ fn resectable() -> (AppState, ReconId) {
         "/runs/run_a.sfmr",
     ));
     let id = state.scene[0].id;
-    state.scene[0].recon_mut().image_table.images[1].translation_xyz +=
+    state.scene[0].recon_mut().image_set.images[1].translation_xyz +=
         nalgebra::Vector3::new(0.30, -0.20, 0.15);
     (state, id)
 }
@@ -216,7 +216,7 @@ fn an_unsaved_node_is_told_to_save_first() {
 #[test]
 fn the_image_s_own_reasons_come_before_the_file_s() {
     let (mut state, id) = resectable();
-    state.scene[0].recon_mut().image_table.images[2].translation_xyz =
+    state.scene[0].recon_mut().image_set.images[2].translation_xyz =
         nalgebra::Vector3::new(f64::NAN, 0.0, 0.0);
     assert_eq!(
         state.resect_image_refusal(ImageRef::new(id, 2)).as_deref(),

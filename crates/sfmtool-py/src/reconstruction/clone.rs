@@ -404,16 +404,16 @@ fn apply_image_field(
             }
             let n = arr.shape()[0];
             // Resize images if needed (when combined with image_names)
-            while recon.image_table.images.len() < n {
-                recon.image_table.images.push(sfmtool_core::SfmrImage {
+            while recon.image_set.images.len() < n {
+                recon.image_set.images.push(sfmtool_core::SfmrImage {
                     name: String::new(),
                     camera_index: 0,
                     quaternion_wxyz: UnitQuaternion::identity(),
                     translation_xyz: Vector3::zeros(),
                 });
             }
-            recon.image_table.images.truncate(n);
-            for (i, im) in recon.image_table.images.iter_mut().enumerate() {
+            recon.image_set.images.truncate(n);
+            for (i, im) in recon.image_set.images.iter_mut().enumerate() {
                 let off = i * 4;
                 // Bit-preserving for already-unit inputs, so cloning a
                 // reconstruction with its own accessor arrays round-trips
@@ -437,15 +437,15 @@ fn apply_image_field(
                     arr.shape()[1]
                 )));
             }
-            if arr.shape()[0] != recon.image_table.images.len() {
+            if arr.shape()[0] != recon.image_set.images.len() {
                 return Err(pyo3::exceptions::PyValueError::new_err(format!(
                     "clone_with_changes(): 'translations' length ({}) must match image count ({}). \
                      Hint: pass 'quaternions_wxyz' or 'image_names' first to resize.",
                     arr.shape()[0],
-                    recon.image_table.images.len()
+                    recon.image_set.images.len()
                 )));
             }
-            for (i, im) in recon.image_table.images.iter_mut().enumerate() {
+            for (i, im) in recon.image_set.images.iter_mut().enumerate() {
                 let off = i * 3;
                 im.translation_xyz = Vector3::new(s[off], s[off + 1], s[off + 2]);
             }
@@ -468,7 +468,7 @@ fn apply_image_field(
         "cameras" => {
             use sfmtool_core::CameraIntrinsics;
             let sfmr_cameras = extract_cameras_as_sfmr(value)?;
-            recon.image_table.cameras = sfmr_cameras
+            recon.image_set.cameras = sfmr_cameras
                 .iter()
                 .map(|sc| {
                     CameraIntrinsics::try_from(sc).map_err(|e| {
@@ -481,7 +481,7 @@ fn apply_image_field(
         }
         "thumbnails_y_x_rgb" if value.is_none() => {
             // Drop the column: every row of everything else is kept.
-            recon.image_table.thumbnails_y_x_rgb = None;
+            recon.image_set.thumbnails_y_x_rgb = None;
         }
         "thumbnails_y_x_rgb" => {
             // The `$dtype` slot also carries the shape suffix here so the
@@ -501,17 +501,17 @@ fn apply_image_field(
                      (N, {s}, {s}, 3), got shape {shape:?}"
                 )));
             }
-            recon.image_table.thumbnails_y_x_rgb =
+            recon.image_set.thumbnails_y_x_rgb =
                 Some(Arc::new(arr.as_array().as_standard_layout().into_owned()));
         }
         "rig_frame_data" => {
             if value.is_none() {
-                recon.image_table.rig_frame_data = None;
+                recon.image_set.rig_frame_data = None;
             } else {
                 // Wrap in a temporary dict for extract_rig_frame_data
                 let tmp = PyDict::new(py);
                 tmp.set_item("rig_frame_data", value)?;
-                recon.image_table.rig_frame_data = extract_rig_frame_data(py, &tmp)?;
+                recon.image_set.rig_frame_data = extract_rig_frame_data(py, &tmp)?;
             }
         }
         "world_space_unit" => {
@@ -715,10 +715,10 @@ fn finalize(
 
     // Resize depth_histogram_counts to match the (possibly new) image count.
     // When the image count changes, histogram data becomes stale so we reset it.
-    if recon.image_table.depth_histogram_counts.len() != recon.image_table.images.len() {
-        let num_buckets = recon.image_table.depth_statistics.num_histogram_buckets as usize;
-        recon.image_table.depth_histogram_counts =
-            vec![vec![0u32; num_buckets]; recon.image_table.images.len()];
+    if recon.image_set.depth_histogram_counts.len() != recon.image_set.images.len() {
+        let num_buckets = recon.image_set.depth_statistics.num_histogram_buckets as usize;
+        recon.image_set.depth_histogram_counts =
+            vec![vec![0u32; num_buckets]; recon.image_set.images.len()];
     }
 
     apply_patches(&mut recon, kw)?;
@@ -799,28 +799,28 @@ fn apply_image_count_changes(
     if let Some(names) = image_names {
         let n = names.len();
         // Resize images vec to match
-        while recon.image_table.images.len() < n {
-            recon.image_table.images.push(sfmtool_core::SfmrImage {
+        while recon.image_set.images.len() < n {
+            recon.image_set.images.push(sfmtool_core::SfmrImage {
                 name: String::new(),
                 camera_index: 0,
                 quaternion_wxyz: UnitQuaternion::identity(),
                 translation_xyz: Vector3::zeros(),
             });
         }
-        recon.image_table.images.truncate(n);
-        for (i, im) in recon.image_table.images.iter_mut().enumerate() {
+        recon.image_set.images.truncate(n);
+        for (i, im) in recon.image_set.images.iter_mut().enumerate() {
             im.name.clone_from(&names[i]);
         }
     }
     if let Some(ref indexes) = camera_indexes {
-        if indexes.len() != recon.image_table.images.len() {
+        if indexes.len() != recon.image_set.images.len() {
             return Err(pyo3::exceptions::PyValueError::new_err(format!(
                 "clone_with_changes(): 'camera_indexes' length ({}) must match image count ({})",
                 indexes.len(),
-                recon.image_table.images.len()
+                recon.image_set.images.len()
             )));
         }
-        for (i, im) in recon.image_table.images.iter_mut().enumerate() {
+        for (i, im) in recon.image_set.images.iter_mut().enumerate() {
             im.camera_index = indexes[i];
         }
     }
@@ -943,7 +943,7 @@ fn check_patch_rows(recon: &SfmrReconstruction) -> PyResult<()> {
 /// points are the same points: unchanged where the tracks are, and where the
 /// tracks were replaced, each point's reference moves to the observation of
 /// the same image in its new track, `-1` where there is none. The same image
-/// is the one at the same index when the image table is unchanged (the same
+/// is the one at the same index when the image set is unchanged (the same
 /// names in the same order), and otherwise the one with the same name, so
 /// images appended or reordered around it carry it. Every row is `-1` for a
 /// frame that is new.
@@ -952,7 +952,7 @@ fn check_patch_rows(recon: &SfmrReconstruction) -> PyResult<()> {
 /// input names any reference (a row `>= 0`) and the result has patch frames
 /// without a `reference_observations` value: a changed point count, since
 /// there is no mapping from the old points to the new, and replaced tracks,
-/// with a changed image table, where an image a reference is in no longer has
+/// with a changed image set, where an image a reference is in no longer has
 /// its name on exactly one image of the result, since a reference is then
 /// carried by its image's name. Resetting every row to `-1` there would cut
 /// each stored bitmap from its observation without a word, so the caller
@@ -996,21 +996,21 @@ fn settle_reference_observations(
         ));
     }
     // Across replaced tracks a reference stays on its image. Where the image
-    // table is unchanged (the same names in the same order) that is the same
+    // set is unchanged (the same names in the same order) that is the same
     // index, whatever the names are. Otherwise it follows its image by name,
     // so images appended, reordered or renamed around it carry it; an image
     // name the result no longer holds once (gone, or now on two images)
     // carries nothing.
-    let same_images = inner.image_table.images.len() == recon.image_table.images.len()
+    let same_images = inner.image_set.images.len() == recon.image_set.images.len()
         && inner
-            .image_table
+            .image_set
             .images
             .iter()
-            .zip(&recon.image_table.images)
+            .zip(&recon.image_set.images)
             .all(|(a, b)| a.name == b.name);
     let mut new_index: HashMap<&str, Option<u32>> = HashMap::new();
     if !same_images {
-        for (i, image) in recon.image_table.images.iter().enumerate() {
+        for (i, image) in recon.image_set.images.iter().enumerate() {
             new_index
                 .entry(image.name.as_str())
                 .and_modify(|e| *e = None)
@@ -1023,7 +1023,7 @@ fn settle_reference_observations(
         if same_images {
             return Some(Some(image));
         }
-        let name = &inner.image_table.images[image as usize].name;
+        let name = &inner.image_set.images[image as usize].name;
         Some(new_index.get(name.as_str()).copied().flatten())
     };
     if names_any && replacing_tracks && (0..point_count).any(|p| referenced_image(p) == Some(None))
@@ -1116,7 +1116,7 @@ fn settle_observation_readings(
             return Ok(());
         }
         let name = |r: &SfmrReconstruction, image: u32| -> String {
-            r.image_table.images[image as usize].name.clone()
+            r.image_set.images[image as usize].name.clone()
         };
         let by_key: HashMap<(u32, String), ObservationReading> = inner
             .point_set
@@ -1158,7 +1158,7 @@ fn settle_observation_readings(
     if references_moved && recon.point_set.points.len() == old_point_count {
         let reference_image = |r: &SfmrReconstruction, p: usize| -> Option<String> {
             r.point_set.reference_observation_row(p).map(|row| {
-                r.image_table.images[r.point_set.tracks[row].image_index as usize]
+                r.image_set.images[r.point_set.tracks[row].image_index as usize]
                     .name
                     .clone()
             })
@@ -1289,7 +1289,7 @@ fn carry_sift_keypoints(source: &SfmrReconstruction, recon: &mut SfmrReconstruct
     let mut known = std::collections::HashMap::new();
     if let (Some(old_xy), Some(old_features)) = (source.keypoints_xy(), source.feature_indexes()) {
         for (row, (obs, &feature)) in source.point_set.tracks.iter().zip(old_features).enumerate() {
-            let name = source.image_table.images[obs.image_index as usize]
+            let name = source.image_set.images[obs.image_index as usize]
                 .name
                 .as_str();
             known.insert((name, feature), [old_xy[[row, 0]], old_xy[[row, 1]]]);
@@ -1301,7 +1301,7 @@ fn carry_sift_keypoints(source: &SfmrReconstruction, recon: &mut SfmrReconstruct
         .iter()
         .zip(feature_indexes.iter())
         .map(|(obs, &feature)| {
-            let name = recon.image_table.images[obs.image_index as usize]
+            let name = recon.image_set.images[obs.image_index as usize]
                 .name
                 .as_str();
             known.get(&(name, feature)).copied()
@@ -1424,7 +1424,7 @@ fn rebuild_observation_source(
         return Ok(());
     }
 
-    let n_img = recon.image_table.images.len();
+    let n_img = recon.image_set.images.len();
     let require_img_len = |name: &str, len: usize| -> PyResult<()> {
         if len != n_img {
             return Err(pyo3::exceptions::PyValueError::new_err(format!(

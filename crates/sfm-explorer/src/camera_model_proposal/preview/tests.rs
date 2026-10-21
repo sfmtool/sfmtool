@@ -10,7 +10,7 @@ use nalgebra::{Point3, Vector3};
 use sfmtool_core::reconstruction::bundle_adjust::patch_frame_factor;
 use sfmtool_core::reconstruction::triangulation::{PointCensus, PointVerdict};
 use sfmtool_core::reconstruction::{
-    GeometryChange, ImageTable, Point3D, RetriangulateOutcome, RetriangulateReport,
+    GeometryChange, ImageSet, Point3D, RetriangulateOutcome, RetriangulateReport,
     RetriangulatedPoint,
 };
 use sfmtool_core::{RowMap, SfmrReconstruction};
@@ -79,7 +79,7 @@ fn every_outcome_decides_what_the_point_does() {
         } => {
             assert_eq!(target, answer.position);
             assert!(!at_infinity && changed);
-            let before = ImageTable::placement_scale_from(&centroid, &stored.position);
+            let before = ImageSet::placement_scale_from(&centroid, &stored.position);
             let expected = patch_frame_factor(&centroid, Some(before), Some(&answer.position));
             assert_eq!(Some(size_factor), expected);
             assert_eq!(size_factor, 0.5);
@@ -223,8 +223,8 @@ fn the_targets_and_counts_are_read_off_the_report() {
     assert_eq!(targets.base[5][3], FLAG_LOSES);
     assert_eq!(targets.base[7][3], FLAG_LOSES);
     assert_eq!(targets.base[8][3], FLAG_STILL, "a held point moved");
-    let centroid = answer.image_table.camera_centroid();
-    let before = ImageTable::placement_scale_from(&centroid, &stored.point_set.points[0].position);
+    let centroid = answer.image_set.camera_centroid();
+    let before = ImageSet::placement_scale_from(&centroid, &stored.point_set.points[0].position);
     let expected = patch_frame_factor(
         &centroid,
         Some(before),

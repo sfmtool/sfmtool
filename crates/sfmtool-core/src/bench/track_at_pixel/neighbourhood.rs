@@ -446,7 +446,7 @@ impl MatchesClusters {
     /// the reconstruction's order.
     ///
     /// A member is matched to a reconstruction image by its name in the file's
-    /// image table. A member in an image the reconstruction does not hold is
+    /// image set. A member in an image the reconstruction does not hold is
     /// kept, with no image, and is never found by a query.
     pub fn new(matches: &MatchesData, image_names: &[&str]) -> Result<Self, MatchesClustersError> {
         let clusters = matches

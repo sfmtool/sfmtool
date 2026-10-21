@@ -319,7 +319,7 @@ pub struct SceneNode {
     ///
     /// The node's, not the value's: the file's own column when it carries
     /// one, otherwise the rows the open built from the `.sift` files and the
-    /// photographs, keyed by image name so one column serves every version. Never written into an `ImageTable`, so
+    /// photographs, keyed by image name so one column serves every version. Never written into an `ImageSet`, so
     /// nothing drawn here can reach a save. See [`crate::display_thumbnails`].
     pub display_thumbnails: Option<Arc<DisplayThumbnails>>,
 }
@@ -424,7 +424,7 @@ impl SceneNode {
         self.history.current().point_count()
     }
 
-    /// How many images the node holds. The overlay never edits the image table,
+    /// How many images the node holds. The overlay never edits the image set,
     /// so this is the base's count.
     pub fn image_count(&self) -> usize {
         self.history.current().image_count()
@@ -643,7 +643,7 @@ pub(crate) fn world_point(scene: &[SceneNode], point: PointRef) -> Option<WorldP
 /// frame rather than as a degenerate one.
 pub fn camera_world_centres(node: &SceneNode, index: usize) -> Vec<nalgebra::Point3<f64>> {
     node.recon()
-        .image_table
+        .image_set
         .images
         .iter()
         .filter(|image| image.camera_index as usize == index)
@@ -668,7 +668,7 @@ pub fn camera_sibling_images(node: &SceneNode, selected: Option<CameraRef>) -> V
     };
     let siblings: Vec<usize> = node
         .recon()
-        .image_table
+        .image_set
         .images
         .iter()
         .enumerate()

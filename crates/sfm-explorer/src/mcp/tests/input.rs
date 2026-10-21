@@ -79,7 +79,7 @@ struct Photograph {
 
 impl Photograph {
     fn of(node: &SceneNode) -> Self {
-        let camera = &node.recon().image_table.cameras[0];
+        let camera = &node.recon().image_set.cameras[0];
         let (w, h) = (camera.width as f32, camera.height as f32);
         let count = node.recon().point_set.image_feature_to_point[0]
             .len()

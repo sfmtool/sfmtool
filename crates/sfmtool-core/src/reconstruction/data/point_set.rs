@@ -94,7 +94,7 @@ pub struct PointSet {
     /// The per-image hash vectors this carries are the one thing on the point
     /// side that is measured per image; they travel with the variant that
     /// selects them rather than splitting a second discriminator off into the
-    /// image table.
+    /// image set.
     pub observations: ObservationSource,
     /// Optional per-point oriented-patch frame (parallel to `points`), persisted
     /// in `points3d/` (version 3+). `patch_u_halfvec_xyz` and
@@ -368,7 +368,7 @@ impl PointSet {
     /// `w`-values externally. The two per-image maps are sized from
     /// `image_count`, which is the one thing the point side cannot see for
     /// itself; [`SfmrReconstruction::rebuild_derived_fields`] supplies it from
-    /// the image table.
+    /// the image set.
     ///
     /// [`SfmrReconstruction::rebuild_derived_fields`]: super::SfmrReconstruction::rebuild_derived_fields
     pub fn rebuild_derived_fields(&mut self, image_count: usize) {

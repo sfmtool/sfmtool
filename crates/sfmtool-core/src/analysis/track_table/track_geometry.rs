@@ -15,7 +15,7 @@
 use nalgebra::Point3;
 
 use crate::reconstruction::triangulation::{depth_uncertainty_batch, triangulate_batch};
-use crate::reconstruction::{ImageTable, PointView};
+use crate::reconstruction::{ImageSet, PointView};
 
 /// The unit rays from each of `images`' camera centres to `position`, in
 /// world space, which [`compute_max_pairwise_angle`] reads.
@@ -25,7 +25,7 @@ use crate::reconstruction::{ImageTable, PointView};
 /// them is zero. An image index past the table, or a camera centre on the
 /// point itself, gives no ray.
 pub fn observation_rays(
-    image_table: &ImageTable,
+    image_set: &ImageSet,
     position: &Point3<f64>,
     at_infinity: bool,
     images: impl IntoIterator<Item = usize>,
@@ -37,7 +37,7 @@ pub fn observation_rays(
                 let d = position.coords;
                 return Some([d.x, d.y, d.z]);
             }
-            let image = image_table.images.get(img_idx)?;
+            let image = image_set.images.get(img_idx)?;
             let dir = position - image.camera_center();
             let len = dir.norm();
             (len > 1e-12).then(|| [dir.x / len, dir.y / len, dir.z / len])
@@ -69,7 +69,7 @@ pub fn compute_max_pairwise_angle(rays: &[[f64; 3]]) -> f64 {
 /// stored numbers are that direction rather than a place, and subtracting a
 /// camera centre from them would measure the spread of rays to a point one
 /// unit from the world origin. A track with fewer than two usable rays is `0`.
-pub fn compute_max_ray_angle_deg(image_table: &ImageTable, view: &PointView<'_>) -> f32 {
+pub fn compute_max_ray_angle_deg(image_set: &ImageSet, view: &PointView<'_>) -> f32 {
     let point = view.point();
     if point.is_at_infinity() {
         return 0.0;
@@ -78,7 +78,7 @@ pub fn compute_max_ray_angle_deg(image_table: &ImageTable, view: &PointView<'_>)
         .observations()
         .iter()
         .map(|obs| obs.image_index as usize);
-    let rays = observation_rays(image_table, &point.position, false, images);
+    let rays = observation_rays(image_set, &point.position, false, images);
     compute_max_pairwise_angle(&rays) as f32
 }
 
@@ -90,7 +90,7 @@ pub fn compute_max_ray_angle_deg(image_table: &ImageTable, view: &PointView<'_>)
 /// uncertain about, and for fewer than two usable rays. The per-ray angular
 /// noise is `max(error, 1 px) / f`, with `error` the point's stored
 /// reprojection error ([`Point3D::rms_reprojection_error`](crate::reconstruction::Point3D::rms_reprojection_error)).
-pub fn compute_point_diagnostics(image_table: &ImageTable, view: &PointView<'_>) -> (f32, f32) {
+pub fn compute_point_diagnostics(image_set: &ImageSet, view: &PointView<'_>) -> (f32, f32) {
     let pt = view.point();
     if pt.is_at_infinity() {
         return (f32::NAN, f32::NAN);
@@ -100,7 +100,7 @@ pub fn compute_point_diagnostics(image_table: &ImageTable, view: &PointView<'_>)
         .iter()
         .map(|obs| obs.image_index as usize);
     compute_position_diagnostics(
-        image_table,
+        image_set,
         &pt.position,
         f64::from(pt.rms_reprojection_error),
         images,
@@ -113,7 +113,7 @@ pub fn compute_point_diagnostics(image_table: &ImageTable, view: &PointView<'_>)
 /// track that has a position and observations but no stored point, such as a
 /// bench track. Returns `(NaN, NaN)` with fewer than two usable rays.
 pub fn compute_position_diagnostics(
-    image_table: &ImageTable,
+    image_set: &ImageSet,
     position: &Point3<f64>,
     error_px: f64,
     images: impl IntoIterator<Item = usize>,
@@ -127,7 +127,7 @@ pub fn compute_position_diagnostics(
     let mut centers = Vec::new();
     let mut sigma = Vec::new();
     for img_idx in images {
-        let Some(image) = image_table.images.get(img_idx) else {
+        let Some(image) = image_set.images.get(img_idx) else {
             continue;
         };
         let center = image.camera_center();
@@ -136,7 +136,7 @@ pub fn compute_position_diagnostics(
         if len > 1e-12 {
             dirs.push(dir / len);
             centers.push(center);
-            let (fx, fy) = image_table.cameras[image.camera_index as usize].focal_lengths();
+            let (fx, fy) = image_set.cameras[image.camera_index as usize].focal_lengths();
             sigma.push(noise / fx.max(fy));
         }
     }

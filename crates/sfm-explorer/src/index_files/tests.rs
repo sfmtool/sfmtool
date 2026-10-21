@@ -96,7 +96,7 @@ fn a_build_with_a_stale_index_rebuilds_both() {
         let recon = state.node(id).expect("loaded").recon();
         crate::sift_index::tests::write_sift(
             &recon.sift_path_for_image(2),
-            &recon.image_table.images[2].name,
+            &recon.image_set.images[2].name,
             &vec![vec![5u8; 128]; 30],
             &(0..30)
                 .map(|i| [100.0 + 10.0 * f64::from(i), 300.0])
@@ -213,7 +213,7 @@ fn a_missing_photograph_fails_the_cluster_half_naming_it() {
     let (mut state, id) = unbuilt(dir.path());
     let missing = {
         let recon = state.node(id).expect("loaded").recon();
-        recon.workspace_dir.join(&recon.image_table.images[4].name)
+        recon.workspace_dir.join(&recon.image_set.images[4].name)
     };
     std::fs::remove_file(&missing).unwrap();
     state.start_build_index_files(id).expect("it starts");

@@ -335,10 +335,10 @@ impl Parts {
 /// The plain case: the stock layout, the 3D Viewer in front, `.` forward and
 /// `,` back, wrapping at both ends.
 #[test]
-fn the_step_keys_walk_the_image_table_and_wrap() {
+fn the_step_keys_walk_the_image_set_and_wrap() {
     let mut parts = Parts::new();
     let id = parts.recon();
-    let n = parts.state.scene[0].recon().image_table.images.len();
+    let n = parts.state.scene[0].recon().image_set.images.len();
     assert!(n >= 3, "the fixture has {n} images");
     parts.state.select_image(Some(ImageRef::new(id, 0)));
 

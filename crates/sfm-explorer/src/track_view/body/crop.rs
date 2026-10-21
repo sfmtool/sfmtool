@@ -121,7 +121,7 @@ pub(super) fn outline(
     match &track.stage {
         Stage::Track(payload) => {
             let patch = payload.patch_frame.as_ref()?;
-            let (camera, pose) = geometry::view_of(&recon.image_table, row.image as usize)?;
+            let (camera, pose) = geometry::view_of(&recon.image_set, row.image as usize)?;
             let patch_frame = geometry::anchored_patch_frame(patch, &camera, &pose, row);
             let (samples, per_edge) = geometry::project_outline(&patch_frame, &camera, &pose);
             // Each axis sampled as densely as the edges beside it, so a

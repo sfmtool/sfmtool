@@ -26,7 +26,7 @@ pub(super) fn editable() -> (AppState, Viewer3D) {
     ));
     let id = state.scene[0].id;
     state.select_recon(id);
-    let camera = &state.scene[0].recon().image_table.cameras[0];
+    let camera = &state.scene[0].recon().image_set.cameras[0];
     let (width, height) = (camera.width, camera.height);
     for index in 0..2 {
         let data: Vec<u8> = (0..(width * height * 3)).map(|i| (i % 251) as u8).collect();
@@ -65,7 +65,7 @@ pub(super) fn failures(state: &AppState) -> Vec<(Actor, bool, String)> {
 /// Nudge image 1 off its stored pose, which is what gives a resection and an
 /// adjustment something to pull back.
 pub(super) fn perturb(state: &mut AppState, distance: f64) {
-    let image = &mut state.scene[0].recon_mut().image_table.images[1];
+    let image = &mut state.scene[0].recon_mut().image_set.images[1];
     image.translation_xyz += nalgebra::Vector3::new(distance, -distance * 0.7, distance * 0.5);
 }
 
@@ -400,12 +400,12 @@ fn a_refused_edit_pushes_no_version_and_is_logged_once() {
     assert_eq!(failures(&state).len(), 1, "{:?}", rows(&state));
 }
 
-/// A bulk edit renumbers the image table, and the reply is read off the version
+/// A bulk edit renumbers the image set, and the reply is read off the version
 /// it pushed rather than off the request.
 #[test]
 fn delete_camera_image_renumbers_and_reports_the_version() {
     let (mut state, mut viewer) = editable();
-    let before = state.scene[0].recon().image_table.images.len();
+    let before = state.scene[0].recon().image_set.images.len();
     let reply = call(
         &mut state,
         &mut viewer,
@@ -413,9 +413,9 @@ fn delete_camera_image_renumbers_and_reports_the_version() {
         json!({ "reconstruction_label": "run_a", "camera_image": 1 }),
     );
     assert_eq!(
-        state.scene[0].recon().image_table.images.len(),
+        state.scene[0].recon().image_set.images.len(),
         before - 1,
-        "the image table did not shrink"
+        "the image set did not shrink"
     );
     assert!(
         reply["label"]
@@ -507,7 +507,7 @@ pub(super) fn adjusted(state: &mut AppState, viewer: &mut Viewer3D, arguments: V
 /// pinhole it replaces.
 fn with_flat_spline_cameras(state: &mut AppState) {
     let recon = state.scene[0].recon_mut();
-    for camera in &mut recon.image_table.cameras {
+    for camera in &mut recon.image_set.cameras {
         let (f, _) = camera.focal_lengths();
         let (cx, cy) = camera.principal_point();
         camera.model = sfmtool_core::CameraModel::SfmtoolPinhole {
@@ -527,8 +527,8 @@ fn with_flat_spline_cameras(state: &mut AppState) {
 /// describe the geometry.
 fn with_two_cameras(state: &mut AppState) {
     let recon = state.scene[0].recon_mut();
-    let original = recon.image_table.cameras[0].clone();
-    let camera = &mut recon.image_table.cameras[0];
+    let original = recon.image_set.cameras[0].clone();
+    let camera = &mut recon.image_set.cameras[0];
     let (f, _) = camera.focal_lengths();
     let (cx, cy) = camera.principal_point();
     camera.model = sfmtool_core::CameraModel::SimplePinhole {
@@ -536,8 +536,8 @@ fn with_two_cameras(state: &mut AppState) {
         principal_point_x: cx,
         principal_point_y: cy,
     };
-    recon.image_table.cameras.push(original);
-    recon.image_table.images[2].camera_index = 1;
+    recon.image_set.cameras.push(original);
+    recon.image_set.images[2].camera_index = 1;
 }
 
 /// The defaults reach every camera, and a `cameras` entry overrides them for
@@ -833,7 +833,7 @@ fn switch_camera_model_refits_a_spline_with_its_own_count_and_domain_by_default(
         report.contains("fit rms ") && report.contains("median error"),
         "{report}"
     );
-    let camera = &state.scene[0].recon().image_table.cameras[0];
+    let camera = &state.scene[0].recon().image_set.cameras[0];
     let (bspline, rho_max, _) = camera.model.radial_spline().expect("a spline");
     assert_eq!(bspline.len(), 6);
     assert_eq!(
@@ -866,7 +866,7 @@ fn switch_camera_model_refits_a_spline_with_its_own_count_and_domain_by_default(
 #[test]
 fn switch_camera_model_switches_to_a_named_model() {
     let (mut state, mut viewer) = editable();
-    let before = state.scene[0].recon().image_table.cameras[0]
+    let before = state.scene[0].recon().image_set.cameras[0]
         .model_name()
         .to_string();
     let reply = call(
@@ -884,7 +884,7 @@ fn switch_camera_model_switches_to_a_named_model() {
         format!("Switched camera 0 of run_a from {before} to SFMTOOL_PINHOLE")
     );
     assert_eq!(
-        state.scene[0].recon().image_table.cameras[0].model_name(),
+        state.scene[0].recon().image_set.cameras[0].model_name(),
         "SFMTOOL_PINHOLE"
     );
     assert_eq!(version_count(&state), 2);
@@ -2608,7 +2608,7 @@ fn move_camera_image_pushes_a_version_the_reply_names() {
     );
 
     // The camera stands where the call put it, in the node's own frame.
-    let centre = state.scene[0].recon().image_table.images[1].camera_center();
+    let centre = state.scene[0].recon().image_set.images[1].camera_center();
     for (axis, expected) in translation.iter().enumerate() {
         assert!(
             (centre[axis] - expected).abs() < 1e-9,
@@ -3180,7 +3180,7 @@ fn switch_camera_model_with_proposal_applies_it_and_moves_the_tracks() {
         point.position.y += 0.01;
     }
     let before = point_positions(&state);
-    let model_before = state.scene[0].recon().image_table.cameras[0]
+    let model_before = state.scene[0].recon().image_set.cameras[0]
         .model_name()
         .to_string();
     call(
@@ -3239,7 +3239,7 @@ fn switch_camera_model_with_proposal_applies_it_and_moves_the_tracks() {
     );
     assert_eq!(point_positions(&state), before);
     assert_eq!(
-        state.scene[0].recon().image_table.cameras[0].model_name(),
+        state.scene[0].recon().image_set.cameras[0].model_name(),
         model_before
     );
 }

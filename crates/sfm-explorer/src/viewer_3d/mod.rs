@@ -221,7 +221,7 @@ pub(crate) fn transformed_pose(
 fn record_camera_view(log: &mut ActionLog, image: ImageRef, node: &SceneNode) {
     let name = node
         .recon()
-        .image_table
+        .image_set
         .images
         .get(image.index())
         .map(|i| i.name.as_str())
@@ -1470,8 +1470,8 @@ impl Viewer3D {
     fn compute_camera_view(&self, image_ref: ImageRef, node: &SceneNode) -> EnterCameraViewState {
         let reconstruction = node.recon();
         let img_idx = image_ref.index();
-        let image = &reconstruction.image_table.images[img_idx];
-        let camera = &reconstruction.image_table.cameras[image.camera_index as usize];
+        let image = &reconstruction.image_set.images[img_idx];
+        let camera = &reconstruction.image_set.cameras[image.camera_index as usize];
 
         let (world_pose, end_position) = transformed_pose(image, node.transform());
         let r_world_from_cam = world_pose.inverse();
@@ -1482,7 +1482,7 @@ impl Viewer3D {
         let end_orientation = world_pose;
 
         let end_distance = reconstruction
-            .image_table
+            .image_set
             .depth_statistics
             .images
             .get(img_idx)
@@ -1534,14 +1534,14 @@ impl Viewer3D {
 
         let reconstruction = node.recon();
         let new_img_idx = new_image_ref.index();
-        let new_image = &reconstruction.image_table.images[new_img_idx];
+        let new_image = &reconstruction.image_set.images[new_img_idx];
         let (new_qwxyz, position) = transformed_pose(new_image, node.transform());
 
         // Compute new orientation preserving relative viewing direction.
         //   new_orientation = orientation * old_r_world_from_cam * new_qwxyz
         let orientation = self.camera.camera.orientation * old_r_world_from_cam * new_qwxyz;
         let distance = reconstruction
-            .image_table
+            .image_set
             .depth_statistics
             .images
             .get(new_img_idx)
@@ -1713,8 +1713,8 @@ impl Viewer3D {
             };
 
         let reconstruction = node.recon();
-        let image = &reconstruction.image_table.images[image_ref.index()];
-        let lens = &reconstruction.image_table.cameras[image.camera_index as usize];
+        let image = &reconstruction.image_set.images[image_ref.index()];
+        let lens = &reconstruction.image_set.cameras[image.camera_index as usize];
         let ray = lens.pixel_to_ray(f64::from(pixel[0]), f64::from(pixel[1]));
         let (world_pose, _) = transformed_pose(image, node.transform());
         let bearing = world_pose.inverse() * Vector3::new(ray[0], ray[1], ray[2]);

@@ -27,9 +27,9 @@ fn heavy(workspace: &Path) -> SfmrReconstruction {
     std::fs::write(workspace.join(".sfm-workspace.json"), "{}").unwrap();
     let mut recon = SfmrReconstruction::demo(12);
     recon.workspace_dir = workspace.to_path_buf();
-    let images = recon.image_table.images.len();
+    let images = recon.image_set.images.len();
     let points = recon.point_set.points.len();
-    recon.image_table.thumbnails_y_x_rgb = Some(Arc::new(Array4::from_elem(
+    recon.image_set.thumbnails_y_x_rgb = Some(Arc::new(Array4::from_elem(
         (images, THUMBNAIL_SIZE, THUMBNAIL_SIZE, 3),
         77u8,
     )));
@@ -87,7 +87,7 @@ fn to_minimal_drops_the_heavy_columns_and_the_incidental_metadata() {
     options.insert("transforms".to_string(), serde_json::json!(["Minimal"]));
     let minimal = recon.to_minimal(&out, &STAMP, options.clone());
 
-    assert!(minimal.image_table.thumbnails_y_x_rgb.is_none());
+    assert!(minimal.image_set.thumbnails_y_x_rgb.is_none());
     assert!(minimal.point_set.patch_bitmaps_y_x_rgba.is_none());
     assert!(!minimal.point_set.patch_bitmaps_for_display);
     // The geometry stays, so bitmaps can be rendered back onto it.
@@ -100,11 +100,11 @@ fn to_minimal_drops_the_heavy_columns_and_the_incidental_metadata() {
     // Not the content the input was read as.
     assert!(minimal.content_hash.content_xxh128.is_empty());
     // The input is untouched.
-    assert!(recon.image_table.thumbnails_y_x_rgb.is_some());
+    assert!(recon.image_set.thumbnails_y_x_rgb.is_some());
 
     minimal.save(&out).unwrap();
     let read = SfmrReconstruction::load(&out, &Progress::none()).unwrap();
-    assert!(read.image_table.thumbnails_y_x_rgb.is_none());
+    assert!(read.image_set.thumbnails_y_x_rgb.is_none());
     assert!(read.point_set.patch_bitmaps_y_x_rgba.is_none());
     assert!(read.point_set.patch_u_halfvec_xyz.is_some());
     assert!(read.metadata.workspace.absolute_path.is_empty());

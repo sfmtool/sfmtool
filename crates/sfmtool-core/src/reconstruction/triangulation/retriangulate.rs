@@ -28,7 +28,7 @@ use crate::numeric::median_in_place;
 use crate::progress::{Cancelled, Progress};
 use crate::progress_info;
 use crate::reconstruction::bundle_adjust::{is_posed, patch_frame_factor, rescale_patch_frame};
-use crate::reconstruction::data::{ImageTable, Point3D};
+use crate::reconstruction::data::{ImageSet, Point3D};
 use crate::reconstruction::edited::{EditError, EditedReconstruction, PointMap};
 
 /// Which points one retriangulation re-solves.
@@ -577,7 +577,7 @@ pub fn retriangulate_points(
     };
     progress.check_cancel()?;
 
-    let table = &work.base.image_table;
+    let table = &work.base.image_set;
     let estimates = {
         let _phase = p_solve.phase("retriangulate");
         triangulate_points_through_cameras(
@@ -675,7 +675,7 @@ fn check_preconditions(edited: &EditedReconstruction) -> Result<(), Retriangulat
     if !edited.has_keypoints() {
         return Err(RetriangulateError::NoKeypoints);
     }
-    let table = &edited.base.image_table;
+    let table = &edited.base.image_set;
     if !table
         .images
         .iter()
@@ -695,7 +695,7 @@ fn gather(
     work: &EditedReconstruction,
     named: Option<Vec<u32>>,
 ) -> Result<Gathered, RetriangulateError> {
-    let table = &work.base.image_table;
+    let table = &work.base.image_set;
 
     let posed: Vec<usize> = (0..table.images.len())
         .filter(|&i| {
@@ -787,7 +787,7 @@ fn gather(
 /// A point whose reference the value does not name carries no origin to measure
 /// from, so the rule says nothing about it and it is solved free.
 fn ranged_entry(
-    table: &ImageTable,
+    table: &ImageSet,
     constraint: Option<(u8, f64, u32)>,
     any_ranged: &mut bool,
 ) -> PointDistance {
@@ -812,7 +812,7 @@ fn ranged_entry(
 /// retriangulation, and
 /// [`refit_points`](crate::bench::refit_points::refit_points) for a ranged
 /// point at a finite distance.
-pub(crate) fn reference_camera_center(table: &ImageTable, reference: u32) -> Option<[f64; 3]> {
+pub(crate) fn reference_camera_center(table: &ImageSet, reference: u32) -> Option<[f64; 3]> {
     let image = table.images.get(reference as usize)?;
     if !is_posed(&image.quaternion_wxyz, &image.translation_xyz) {
         return None;
@@ -912,7 +912,7 @@ fn write_in_place(
     let mut out = work.base.clone_for_edit();
     // The poses do not move, so one centroid measures both sides of every
     // frame rescale.
-    let centroid = out.image_table.camera_centroid();
+    let centroid = out.image_set.camera_centroid();
     let pruned = pruned_per_slot(gathered, estimates);
     let mut points = Vec::with_capacity(gathered.targets.len() + gathered.held.len());
     for (slot, &index) in gathered.targets.iter().enumerate() {
@@ -941,7 +941,7 @@ fn write_in_place(
         };
         let before = &out.point_set.points[p];
         let before_scale = (!before.is_at_infinity())
-            .then(|| ImageTable::placement_scale_from(&centroid, &before.position));
+            .then(|| ImageSet::placement_scale_from(&centroid, &before.position));
         let after = (w != 0.0).then_some(&position);
         rescale_patch_frame(&mut out, p, &centroid, before_scale, after);
         let point = &mut out.point_set.points[p];
@@ -967,7 +967,7 @@ fn write_overlay(
     estimates: &TriangulatedPoints,
 ) -> Result<(EditedReconstruction, PointMap, Vec<RetriangulatedPoint>), RetriangulateError> {
     let mut next = edited.clone();
-    let centroid = edited.base.image_table.camera_centroid();
+    let centroid = edited.base.image_set.camera_centroid();
     let pruned = pruned_per_slot(gathered, estimates);
     let mut points = Vec::with_capacity(gathered.targets.len() + gathered.held.len());
     let mut moves = Vec::new();
@@ -992,7 +992,7 @@ fn write_overlay(
             record.constraint = Some((POINT_CONSTRAINT_FREE, f64::NAN, NO_REFERENCE_IMAGE));
         }
         let before_scale = (!record.point.is_at_infinity())
-            .then(|| ImageTable::placement_scale_from(&centroid, &record.point.position));
+            .then(|| ImageSet::placement_scale_from(&centroid, &record.point.position));
         let after = (w != 0.0).then_some(&position);
         if let Some(factor) = patch_frame_factor(&centroid, before_scale, after) {
             for half in [&mut record.patch_u_halfvec, &mut record.patch_v_halfvec] {

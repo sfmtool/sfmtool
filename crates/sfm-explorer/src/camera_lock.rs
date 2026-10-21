@@ -74,7 +74,7 @@ impl CameraLock {
     /// The image's basename, as every label and log line names it.
     fn basename<'a>(&self, node: &'a SceneNode) -> &'a str {
         node.recon()
-            .image_table
+            .image_set
             .images
             .get(self.image.index())
             .map(|image| crate::resect::basename(&image.name))
@@ -100,7 +100,7 @@ pub(crate) fn refusal(state: &AppState, viewer: &Viewer3D) -> Option<String> {
     if state.camera_model_proposal_on(node.id).is_some() {
         return Some("Apply or cancel the camera model proposal first".to_string());
     }
-    let Some(image) = node.recon().image_table.images.get(view.image.index()) else {
+    let Some(image) = node.recon().image_set.images.get(view.image.index()) else {
         return Some("That image is no longer in the reconstruction".to_string());
     };
     let posed = image.quaternion_wxyz.coords.iter().all(|c| c.is_finite())
@@ -133,7 +133,7 @@ pub(crate) fn enter(viewer: &mut Viewer3D, state: &mut AppState) -> Result<(), S
     let recon = node.recon();
     let stored = sfmtool_core::reconstruction::move_camera::pose_of(recon, image.index());
     let samples = edited_image_reprojection_samples(edited, image.index());
-    let camera = recon.image_table.camera_for_image(image.index()).clone();
+    let camera = recon.image_set.camera_for_image(image.index()).clone();
     let stored_residual = residual_quantiles_px(&camera, &stored, &samples);
     let highlighted: HashSet<u32> = edited
         .live_indexes()
@@ -433,7 +433,7 @@ pub(crate) fn resnap_camera_view(viewer: &mut Viewer3D, state: &AppState) {
     let Some(node) = state.node(image.recon) else {
         return;
     };
-    if image.index() >= node.recon().image_table.images.len() {
+    if image.index() >= node.recon().image_set.images.len() {
         return;
     }
     let pose = sfmtool_core::reconstruction::move_camera::pose_of(node.recon(), image.index());
@@ -511,7 +511,7 @@ fn snap_to(viewer: &mut Viewer3D, pose: &Se3Transform, node: &SceneNode) {
 /// moved, and because it is `O(images)` on a keystroke.
 fn capture_extent(recon: &SfmrReconstruction) -> f64 {
     let centres: Vec<Point3<f64>> = recon
-        .image_table
+        .image_set
         .images
         .iter()
         .map(|image| image.camera_center())

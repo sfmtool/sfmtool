@@ -71,7 +71,7 @@ CSR form that every algorithm consumes is **materialised** from base plus
 edits only when a bulk edit, a save or a size threshold asks for it, and the
 materialisation keeps every point in its place.
 
-Under it, `SfmrReconstruction` is already an image table plus a point set
+Under it, `SfmrReconstruction` is already an image set plus a point set
 ([`../core/reconstruction/edited-reconstruction.md`](../core/reconstruction/edited-reconstruction.md)),
 so the base's point side and the addition set are one type and per-point
 algorithms take a point set rather than the whole, and the two heavy columns
@@ -82,7 +82,7 @@ behind one `Arc`, shared whole by every version in a run of point edits, and
 the thing a point edit updates is the edit part of the version, which is its
 own. A bulk edit produces a new base, a copy of the light columns; the patch
 bitmaps and thumbnails, which are 88 % of the bytes, sit behind their own
-`Arc` inside the point set and the image table, and a bulk edit that did not
+`Arc` inside the point set and the image set, and a bulk edit that did not
 touch them (every one but a patch refit) points at its input's. Nothing is
 ever written through those `Arc`s, so it is sharing, not copy-on-write. The
 history budget (Part 2) bounds how many bases a node holds; § "Step 1's

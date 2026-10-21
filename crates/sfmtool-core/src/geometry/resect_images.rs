@@ -423,12 +423,12 @@ pub fn resect_images(
     source: ResectSource<'_>,
     options: &ResectImageOptions,
 ) -> Result<ResectedImages, ResectImageError> {
-    let count = recon.image_table.images.len();
+    let count = recon.image_set.images.len();
     if image_indexes.is_empty() {
         return Err(ResectImageError::NoTargets);
     }
     let posed: Vec<bool> = recon
-        .image_table
+        .image_set
         .images
         .iter()
         .map(|image| is_posed(&image.quaternion_wxyz, &image.translation_xyz))
@@ -525,7 +525,7 @@ pub fn resect_images(
     // held-out position or a held-out bearing, in point order.
     let mut pairs_of: HashMap<usize, Vec<Pair>> = HashMap::new();
     for &t in image_indexes {
-        let camera = &recon.image_table.cameras[recon.image_table.images[t].camera_index as usize];
+        let camera = &recon.image_set.cameras[recon.image_set.images[t].camera_index as usize];
         let rows = &target_rows[&t];
         let points = &observed[&t];
         let mut out = Vec::with_capacity(rows.len());
@@ -557,8 +557,7 @@ pub fn resect_images(
     };
     if let Some(support) = &cluster_support {
         for &t in image_indexes {
-            let camera =
-                &recon.image_table.cameras[recon.image_table.images[t].camera_index as usize];
+            let camera = &recon.image_set.cameras[recon.image_set.images[t].camera_index as usize];
             let pairs = pairs_of.get_mut(&t).expect("every target has pairs");
             pairs.extend(
                 support[&t]
@@ -574,8 +573,7 @@ pub fn resect_images(
     let estimates: HashMap<usize, Estimate> = image_indexes
         .par_iter()
         .map(|&t| {
-            let camera =
-                &recon.image_table.cameras[recon.image_table.images[t].camera_index as usize];
+            let camera = &recon.image_set.cameras[recon.image_set.images[t].camera_index as usize];
             let pairs = &pairs_of[&t];
             let finite = pairs.iter().filter(|p| p.source != Source::Bearing).count();
             let bearings: Vec<BearingPair> = pairs
@@ -628,8 +626,8 @@ pub fn resect_images(
     for &t in image_indexes {
         let estimate = &estimates[&t];
         if estimate.accepted {
-            out.image_table.images[t].quaternion_wxyz = estimate.rotation;
-            out.image_table.images[t].translation_xyz = estimate.translation;
+            out.image_set.images[t].quaternion_wxyz = estimate.rotation;
+            out.image_set.images[t].translation_xyz = estimate.translation;
         }
     }
     let mut retriangulated: HashSet<usize> = HashSet::new();
@@ -664,7 +662,7 @@ pub fn resect_images(
         .iter()
         .map(|&t| {
             let estimate = &estimates[&t];
-            let stored = &recon.image_table.images[t];
+            let stored = &recon.image_set.images[t];
             let (rotation, translation) = if estimate.accepted {
                 (estimate.rotation, estimate.translation)
             } else {
@@ -968,12 +966,12 @@ fn triangulate_groups(
             let (rotation, translation) = match replace[image] {
                 Some(pose) => pose,
                 None => (
-                    recon.image_table.images[image].quaternion_wxyz,
-                    recon.image_table.images[image].translation_xyz,
+                    recon.image_set.images[image].quaternion_wxyz,
+                    recon.image_set.images[image].translation_xyz,
                 ),
             };
             let camera =
-                &recon.image_table.cameras[recon.image_table.images[image].camera_index as usize];
+                &recon.image_set.cameras[recon.image_set.images[image].camera_index as usize];
             let ray = camera.pixel_to_ray(uv[0], uv[1]);
             let world = rotation.inverse() * Vector3::new(ray[0], ray[1], ray[2]);
             let norm = world.norm();
@@ -1028,9 +1026,9 @@ fn held_out_bearings(
                 continue;
             };
             let camera =
-                &recon.image_table.cameras[recon.image_table.images[image].camera_index as usize];
+                &recon.image_set.cameras[recon.image_set.images[image].camera_index as usize];
             let ray = camera.pixel_to_ray(uv[0], uv[1]);
-            let world = recon.image_table.images[image].quaternion_wxyz.inverse()
+            let world = recon.image_set.images[image].quaternion_wxyz.inverse()
                 * Vector3::new(ray[0], ray[1], ray[2]);
             let norm = world.norm();
             if norm > 0.0 && !norm.is_nan() {
@@ -1103,8 +1101,8 @@ impl Estimate {
         reason: String,
     ) -> Self {
         Estimate {
-            rotation: recon.image_table.images[image_index].quaternion_wxyz,
-            translation: recon.image_table.images[image_index].translation_xyz,
+            rotation: recon.image_set.images[image_index].quaternion_wxyz,
+            translation: recon.image_set.images[image_index].translation_xyz,
             rotation_only,
             pairs,
             inliers: Counts::default(),
@@ -1243,7 +1241,7 @@ fn rotation_estimate(
     );
     Estimate {
         rotation,
-        translation: recon.image_table.images[image_index].translation_xyz,
+        translation: recon.image_set.images[image_index].translation_xyz,
         rotation_only: true,
         pairs: only_bearings(n),
         inliers: only_bearings(inliers),
@@ -1287,13 +1285,13 @@ fn bearing_span(bearings: &[Vector3<f64>]) -> f64 {
 /// it in this unit: the resection here, and the moved camera in
 /// [`move_camera`](crate::reconstruction::move_camera::move_camera).
 pub(crate) fn scene_scale(recon: &SfmrReconstruction) -> Option<f64> {
-    let mut per_image: Vec<Vec<f64>> = vec![Vec::new(); recon.image_table.images.len()];
+    let mut per_image: Vec<Vec<f64>> = vec![Vec::new(); recon.image_set.images.len()];
     for obs in recon.point_set.tracks.iter() {
         let point = &recon.point_set.points[obs.point_index as usize];
         if point.is_at_infinity() {
             continue;
         }
-        let image = &recon.image_table.images[obs.image_index as usize];
+        let image = &recon.image_set.images[obs.image_index as usize];
         let d = (point.position - image.camera_center()).norm();
         if d.is_finite() && d > 0.0 {
             per_image[obs.image_index as usize].push(d);

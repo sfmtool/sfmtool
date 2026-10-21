@@ -21,7 +21,7 @@ use sfmtool_core::numeric;
 use sfmtool_core::reconstruction::bundle_adjust::patch_frame_factor;
 use sfmtool_core::reconstruction::triangulation::PointVerdict;
 use sfmtool_core::reconstruction::{
-    GeometryChange, ImageTable, Point3D, RetriangulateOutcome, RetriangulateReport,
+    GeometryChange, ImageSet, Point3D, RetriangulateOutcome, RetriangulateReport,
 };
 use sfmtool_core::{RowMap, SfmrReconstruction};
 
@@ -107,7 +107,7 @@ pub(crate) fn point_preview(
             let size_factor = if at_infinity {
                 1.0
             } else {
-                let before = ImageTable::placement_scale_from(centroid, &stored.position);
+                let before = ImageSet::placement_scale_from(centroid, &stored.position);
                 patch_frame_factor(centroid, Some(before), Some(&answer.position)).unwrap_or(1.0)
             };
             PointPreview::Moves {
@@ -212,7 +212,7 @@ impl PreviewTargets {
         };
         let mut shifts = Vec::new();
         let mut lost = std::collections::BTreeMap::<u8, (PointVerdict, usize)>::new();
-        let centroid = answer.image_table.camera_centroid();
+        let centroid = answer.image_set.camera_centroid();
         for status in &report.points {
             let (Some(stored_point), Some(answer_point)) = (
                 stored.point_set.points.get(status.index as usize),

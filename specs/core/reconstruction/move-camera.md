@@ -227,7 +227,7 @@ no finite structure to measure against, where every displacement is unitless.
 ## Implementation notes
 
 **Four helpers are shared rather than copied.** The pixel-to-world ray is
-`ImageTable::world_ray`, the single-track solve with its three refusal signals is
+`ImageSet::world_ray`, the single-track solve with its three refusal signals is
 `triangulation::triangulate_track`, the patch-frame resize is
 `bundle_adjust::rescale_patch_frame` and the per-observation residual is
 `data::observation_reprojection_error`. Each has exactly one definition in the
@@ -242,7 +242,7 @@ is no second statement of which poses the solve is against.
 **The placement scale is read on both sides of the move.** A patch frame's
 angular extent converts to a world one through the distance from the camera-cloud
 centroid, and moving a camera moves that centroid. The rescale therefore measures
-`before` against the input's image table and `after` against the output's, which
+`before` against the input's image set and `after` against the output's, which
 is the same treatment the adjustment gives a solve that moved every camera.
 
 **The report's counts partition the observed tracks.** `retriangulated + kept +

@@ -62,7 +62,7 @@ fn kerry_park_camera() -> CameraIntrinsics {
 /// no `P` and a focal length in pixels per radian.
 fn fisheye_node() -> SceneNode {
     let mut node = pinhole_node();
-    node.recon_mut().image_table.cameras[0] = kerry_park_camera();
+    node.recon_mut().image_set.cameras[0] = kerry_park_camera();
     node
 }
 
@@ -70,7 +70,7 @@ fn fisheye_node() -> SceneNode {
 /// second, single-focal-length model for the rest.
 fn two_camera_node() -> SceneNode {
     let mut node = pinhole_node();
-    node.recon_mut().image_table.cameras.push(CameraIntrinsics {
+    node.recon_mut().image_set.cameras.push(CameraIntrinsics {
         model: CameraModel::SimpleRadial {
             focal_length: 344.0,
             principal_point_x: 135.0,
@@ -80,7 +80,7 @@ fn two_camera_node() -> SceneNode {
         width: 270,
         height: 480,
     });
-    for image in node.recon_mut().image_table.images.iter_mut().skip(4) {
+    for image in node.recon_mut().image_set.images.iter_mut().skip(4) {
         image.camera_index = 1;
     }
     node
@@ -102,9 +102,9 @@ fn transformed_node() -> SceneNode {
 /// `sensor_from_rig`, `right` is offset along X. Four frames of two images.
 fn rig_node() -> SceneNode {
     let mut node = pinhole_node();
-    node.recon_mut().image_table.images.truncate(8);
-    let images = node.recon_mut().image_table.images.len();
-    node.recon_mut().image_table.rig_frame_data = Some(RigFrameData {
+    node.recon_mut().image_set.images.truncate(8);
+    let images = node.recon_mut().image_set.images.len();
+    node.recon_mut().image_set.rig_frame_data = Some(RigFrameData {
         rigs_metadata: RigsMetadata {
             rig_count: 1,
             sensor_count: 2,
@@ -200,7 +200,7 @@ fn the_header_names_the_node_the_camera_and_the_model() {
 #[test]
 fn a_beta_model_marks_the_header() {
     let mut node = pinhole_node();
-    node.recon_mut().image_table.cameras[0] = CameraIntrinsics {
+    node.recon_mut().image_set.cameras[0] = CameraIntrinsics {
         model: CameraModel::SfmtoolFisheye {
             focal_length: 129.0,
             principal_point_x: 240.0,
@@ -221,7 +221,7 @@ fn a_beta_model_marks_the_header() {
 #[test]
 fn the_spline_count_is_an_integer_and_its_domain_end_is_in_degrees() {
     let mut node = pinhole_node();
-    node.recon_mut().image_table.cameras[0] = CameraIntrinsics {
+    node.recon_mut().image_set.cameras[0] = CameraIntrinsics {
         model: CameraModel::SfmtoolFisheye {
             focal_length: 129.0,
             principal_point_x: 240.0,
@@ -241,7 +241,7 @@ fn the_spline_count_is_an_integer_and_its_domain_end_is_in_degrees() {
     assert!(!says(&painted, "2.617994"), "{painted:?}");
     assert_eq!(domain.chars().count(), 14);
 
-    let text = super::header::parameters_text(&node.recon().image_table.cameras[0]);
+    let text = super::header::parameters_text(&node.recon().image_set.cameras[0]);
     assert!(text
         .lines()
         .any(|l| l.ends_with(&count) && l.starts_with("bspline_coeff_count")));
@@ -257,7 +257,7 @@ fn the_parameter_table_is_in_declaration_order() {
     // and `sfm inspect` cannot drift into two different orders.
     let node = fisheye_node();
     let painted = show(&node, Some(0), None);
-    let declared: Vec<String> = node.recon().image_table.cameras[0]
+    let declared: Vec<String> = node.recon().image_set.cameras[0]
         .model
         .parameter_names()
         .iter()
@@ -384,7 +384,7 @@ fn a_perspective_model_shows_p() {
 #[test]
 fn p_is_k_times_s_times_rt_and_not_k_times_rt() {
     let node = pinhole_node();
-    let camera = &node.recon().image_table.cameras[0];
+    let camera = &node.recon().image_set.cameras[0];
     let pose = Pose::resolve(&node, 0, camera, PoseFrame::Stored);
     let p = pose.projection.expect("a pinhole has a P");
 
@@ -440,7 +440,7 @@ fn the_extrinsics_block_appears_only_with_an_image_selected() {
     assert!(says(&with_image, "Rotation R"));
     assert!(says(&with_image, "Camera centre C"));
     assert!(says(&with_image, "Axes in world"));
-    assert!(says(&with_image, &node.recon().image_table.images[3].name));
+    assert!(says(&with_image, &node.recon().image_set.images[3].name));
 }
 
 #[test]
@@ -492,8 +492,8 @@ fn the_stored_pose_is_the_default_and_the_marker_follows_the_frame() {
 #[test]
 fn the_transformed_pose_is_the_stored_pose_through_the_node_transform() {
     let node = transformed_node();
-    let camera = &node.recon().image_table.cameras[0];
-    let image = &node.recon().image_table.images[0];
+    let camera = &node.recon().image_set.cameras[0];
+    let image = &node.recon().image_set.images[0];
 
     let stored = Pose::resolve(&node, 0, camera, PoseFrame::Stored);
     let moved = Pose::resolve(&node, 0, camera, PoseFrame::NodeTransform);
@@ -513,7 +513,7 @@ fn the_transformed_pose_is_the_stored_pose_through_the_node_transform() {
 #[test]
 fn an_untransformed_node_ignores_the_transformed_frame() {
     let node = pinhole_node();
-    let camera = &node.recon().image_table.cameras[0];
+    let camera = &node.recon().image_set.cameras[0];
     let stored = Pose::resolve(&node, 0, camera, PoseFrame::Stored);
     let asked = Pose::resolve(&node, 0, camera, PoseFrame::NodeTransform);
     assert!(!asked.transformed);
@@ -557,7 +557,7 @@ fn a_reconstruction_with_no_rig_draws_no_rig_block() {
 #[test]
 fn the_copied_parameter_text_is_the_table() {
     let node = pinhole_node();
-    let camera = &node.recon().image_table.cameras[0];
+    let camera = &node.recon().image_set.cameras[0];
     let text = super::header::parameters_text(camera);
     let lines: Vec<&str> = text.lines().collect();
     let declared = camera.model.parameter_names();
@@ -607,7 +607,7 @@ fn the_derived_report_is_cached_per_camera_and_dropped_with_the_node() {
 /// distortion parameters at all, so its residual is identically zero.
 fn equidistant_node() -> SceneNode {
     let mut node = pinhole_node();
-    node.recon_mut().image_table.cameras[0] = CameraIntrinsics {
+    node.recon_mut().image_set.cameras[0] = CameraIntrinsics {
         model: CameraModel::EquidistantFisheye {
             focal_length: 152.8,
             principal_point_x: 240.0,
@@ -623,7 +623,7 @@ fn equidistant_node() -> SceneNode {
 /// reference map rather than a pinhole's or an equidistant fisheye's.
 fn equirectangular_node() -> SceneNode {
     let mut node = pinhole_node();
-    node.recon_mut().image_table.cameras[0] = CameraIntrinsics {
+    node.recon_mut().image_set.cameras[0] = CameraIntrinsics {
         model: CameraModel::Equirectangular {
             focal_length_x: 2048.0 / std::f64::consts::TAU,
             focal_length_y: 1024.0 / std::f64::consts::PI,
@@ -746,8 +746,8 @@ fn a_distortion_free_model_gets_the_banner_naming_its_family() {
 #[test]
 fn a_camera_with_no_image_gets_a_statement_instead_of_a_plot() {
     let mut node = pinhole_node();
-    node.recon_mut().image_table.cameras[0].width = 0;
-    node.recon_mut().image_table.cameras[0].height = 0;
+    node.recon_mut().image_set.cameras[0].width = 0;
+    node.recon_mut().image_set.cameras[0].height = 0;
     let painted = show(&node, Some(0), None);
     assert!(says(&painted, "No projection to plot"));
     assert!(!says(&painted, "θ off-axis"));
@@ -769,7 +769,7 @@ fn spline_proposal_state() -> (crate::state::AppState, crate::scene::ReconId) {
     let (mut state, id) = crate::state::edits::tests::adjustable_state();
     {
         let recon = state.scene[0].recon_mut();
-        let camera = &mut recon.image_table.cameras[0];
+        let camera = &mut recon.image_set.cameras[0];
         let (f, _) = camera.focal_lengths();
         let (cx, cy) = camera.principal_point();
         camera.model = CameraModel::SimplePinhole {
@@ -777,7 +777,7 @@ fn spline_proposal_state() -> (crate::state::AppState, crate::scene::ReconId) {
             principal_point_x: cx,
             principal_point_y: cy,
         };
-        let mut second = recon.image_table.cameras[0].clone();
+        let mut second = recon.image_set.cameras[0].clone();
         second.model = CameraModel::SfmtoolPinhole {
             focal_length: f,
             principal_point_x: cx,
@@ -785,8 +785,8 @@ fn spline_proposal_state() -> (crate::state::AppState, crate::scene::ReconId) {
             bspline_rho_max: 1.0,
             bspline: vec![0.0; 4],
         };
-        recon.image_table.cameras.push(second);
-        for image in recon.image_table.images.iter_mut().skip(4) {
+        recon.image_set.cameras.push(second);
+        for image in recon.image_set.images.iter_mut().skip(4) {
             image.camera_index = 1;
         }
     }

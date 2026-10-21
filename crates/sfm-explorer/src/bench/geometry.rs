@@ -33,7 +33,7 @@ use sfmtool_core::bench::{
 use sfmtool_core::camera::CameraIntrinsics;
 use sfmtool_core::geometry::RigidTransform;
 use sfmtool_core::patch::cloud::OrientedPatch;
-use sfmtool_core::{EditedReconstruction, ImageTable};
+use sfmtool_core::{EditedReconstruction, ImageSet};
 
 #[cfg(test)]
 mod tests;
@@ -424,11 +424,11 @@ fn turned_shape(
 /// The camera and the pose of one image, or `None` when the image or its camera
 /// is not in the table.
 pub(crate) fn view_of(
-    image_table: &ImageTable,
+    image_set: &ImageSet,
     image: usize,
 ) -> Option<(CameraIntrinsics, RigidTransform)> {
-    let row = image_table.images.get(image)?;
-    let camera = image_table.cameras.get(row.camera_index as usize)?;
+    let row = image_set.images.get(image)?;
+    let camera = image_set.cameras.get(row.camera_index as usize)?;
     Some((camera.clone(), crate::scene::cam_from_world(row)))
 }
 

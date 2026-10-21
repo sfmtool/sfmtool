@@ -32,7 +32,7 @@ fn observed_demo(n: usize, seed: u64) -> SfmrReconstruction {
 
 fn centers_of(recon: &SfmrReconstruction) -> Vec<Point3<f64>> {
     recon
-        .image_table
+        .image_set
         .images
         .iter()
         .map(|im| im.camera_center())
@@ -55,7 +55,7 @@ fn far_point(recon: &SfmrReconstruction, p: usize, dist: f64) -> Point3<f64> {
 /// as `compute_observation_reprojection_errors` measures them.
 fn rms_and_mean_of_observation_errors(recon: &SfmrReconstruction, p: usize) -> (f32, f32) {
     let mut errors = Vec::new();
-    for image in 0..recon.image_table.images.len() {
+    for image in 0..recon.image_set.images.len() {
         let feat_to_point = &recon.point_set.image_feature_to_point[image];
         for (feature, error) in recon
             .compute_observation_reprojection_errors(image)
@@ -129,7 +129,7 @@ fn classify_demotes_a_far_point_to_its_scored_bearing() {
     let bearing = scores.scores[0].unwrap().bearing;
     assert!((pt.position.coords - bearing.normalize()).norm() < 1e-12);
     assert!((pt.position.coords.norm() - 1.0).abs() < 1e-12);
-    let truth = (far.coords - recon.image_table.camera_centroid().coords).normalize();
+    let truth = (far.coords - recon.image_set.camera_centroid().coords).normalize();
     assert!(pt.position.coords.angle(&truth) < 1e-3);
     // The normal is zeroed, and the error is the bearing's own residual,
     // which is of the order of the noise.
@@ -196,7 +196,7 @@ fn classify_promotes_a_bearing_whose_rays_ask_for_a_depth() {
     // point it is: the verdict is finite, and the fit places it there.
     let mut recon = observed_demo(50, 5);
     let truth = recon.point_set.points[0].position;
-    let origin = recon.image_table.camera_centroid();
+    let origin = recon.image_set.camera_centroid();
     store_as_bearing(&mut recon, 0, truth - origin);
 
     let (classified, summary) = recon.classify_points_at_infinity(None).unwrap();
@@ -233,7 +233,7 @@ fn classify_without_finite_points_changes_nothing() {
     // Every point at infinity: there is no finite point to measure the noise
     // from, so nothing is decided.
     let mut recon = observed_demo(20, 6);
-    let origin = recon.image_table.camera_centroid();
+    let origin = recon.image_set.camera_centroid();
     for p in 0..20 {
         let d = recon.point_set.points[p].position - origin;
         store_as_bearing(&mut recon, p, d);
@@ -293,19 +293,19 @@ fn classify_does_not_promote_without_a_usable_point() {
     // depth. The point stays a bearing.
     let mut recon = SfmrReconstruction::demo(50);
     let (rotation, c0) = {
-        let image = &recon.image_table.images[0];
+        let image = &recon.image_set.images[0];
         (image.quaternion_wxyz, image.camera_center())
     };
     // The camera looks down its −z axis.
     let forward = rotation.inverse() * -Vector3::z();
     let right = rotation.inverse() * Vector3::x();
     let c1 = c0 - forward;
-    recon.image_table.images[1].quaternion_wxyz = rotation;
-    recon.image_table.images[1].translation_xyz = -(rotation * c1.coords);
+    recon.image_set.images[1].quaternion_wxyz = rotation;
+    recon.image_set.images[1].translation_xyz = -(rotation * c1.coords);
     let near = c0 + 1.0e-3 * (forward + 0.5 * right);
     recon.point_set.points[0].position = near;
     observe(&mut recon, [NOISE_PX, NOISE_PX], 8);
-    let origin = recon.image_table.camera_centroid();
+    let origin = recon.image_set.camera_centroid();
     store_as_bearing(&mut recon, 0, near - origin);
 
     let scores = recon
@@ -338,7 +338,7 @@ fn classify_leaves_a_point_neither_a_point_nor_a_bearing_describes() {
     // left as stored and counted.
     let mut recon = SfmrReconstruction::demo(1);
     let (rotation, c0) = {
-        let image = &recon.image_table.images[0];
+        let image = &recon.image_set.images[0];
         (image.quaternion_wxyz, image.camera_center())
     };
     // The camera looks down its −z axis; turning it half a turn about its own
@@ -348,8 +348,8 @@ fn classify_leaves_a_point_neither_a_point_nor_a_bearing_describes() {
     let c1 = c0 + forward;
     let back = nalgebra::UnitQuaternion::from_axis_angle(&Vector3::y_axis(), std::f64::consts::PI)
         * rotation;
-    recon.image_table.images[1].quaternion_wxyz = back;
-    recon.image_table.images[1].translation_xyz = -(back * c1.coords);
+    recon.image_set.images[1].quaternion_wxyz = back;
+    recon.image_set.images[1].translation_xyz = -(back * c1.coords);
     let near = c0 + 1.0e-3 * (forward + 0.5 * right);
     recon.point_set.points[0].position = near;
     observe(&mut recon, [NOISE_PX, NOISE_PX], 18);
@@ -377,7 +377,7 @@ fn classify_releases_the_constraints_of_the_points_it_changes() {
     let mut recon = SfmrReconstruction::demo(50);
     recon.point_set.points[0].position = far_point(&recon, 0, 1.0e6);
     observe(&mut recon, [NOISE_PX, NOISE_PX], 9);
-    let origin = recon.image_table.camera_centroid();
+    let origin = recon.image_set.camera_centroid();
     let d1 = recon.point_set.points[1].position - origin;
     store_as_bearing(&mut recon, 1, d1);
     let mut constraints = PointConstraintColumns::all_free(50);
@@ -434,7 +434,7 @@ fn materialize_places_point_along_its_direction() {
     let pt = &materialised.point_set.points[0];
     assert_eq!(pt.w, 1.0);
     // The point lies on the ray origin + t·d, so (pt - origin) ∥ d.
-    let origin = recon.image_table.camera_centroid().coords;
+    let origin = recon.image_set.camera_centroid().coords;
     let offset = pt.position.coords - origin;
     let perp = offset - offset.dot(&dir) * dir;
     assert!(perp.norm() < 1e-6, "materialised point must lie along d");
@@ -484,7 +484,7 @@ fn materialize_is_inverse_free_but_round_trips_classification() {
     // infinity: its keypoints still show no parallax.
     let mut recon = SfmrReconstruction::demo(50);
     let far = far_point(&recon, 0, 1.0e6);
-    let origin = recon.image_table.camera_centroid();
+    let origin = recon.image_set.camera_centroid();
     store_as_bearing(&mut recon, 0, far - origin);
     observe(&mut recon, [NOISE_PX, NOISE_PX], 11);
 
@@ -530,7 +530,7 @@ fn facing_patch(
     half_u: f64,
     half_v: f64,
 ) -> (Vector3<f64>, Vector3<f64>) {
-    let origin = recon.image_table.camera_centroid();
+    let origin = recon.image_set.camera_centroid();
     let d = (recon.point_set.points[0].position - origin).normalize();
     let a = d.cross(&Vector3::z()).normalize();
     let b = d.cross(&a).normalize();
@@ -557,7 +557,7 @@ fn classify_rescales_patch_frame_to_angular_extents() {
         Vector3::new(50.0, 0.0, 0.0),
         Vector3::new(0.0, 25.0, 0.0),
     );
-    let origin = recon.image_table.camera_centroid();
+    let origin = recon.image_set.camera_centroid();
     let dist = (recon.point_set.points[0].position.coords - origin.coords).norm();
 
     let (classified, _) = recon.classify_points_at_infinity(None).unwrap();
@@ -627,7 +627,7 @@ fn materialize_rescales_patch_frame_to_world_extents() {
     let materialised = recon.materialize_points_at_infinity();
     let pt = &materialised.point_set.points[0];
     assert_eq!(pt.w, 1.0);
-    let origin = recon.image_table.camera_centroid();
+    let origin = recon.image_set.camera_centroid();
     let t = (pt.position.coords - origin.coords).norm();
     let u = materialised.point_set.patch_u_halfvec_xyz.as_ref().unwrap();
     assert!((f64::from(u[[0, 0]]) - 0.01 * t).abs() / (0.01 * t) < 1e-6);
@@ -642,7 +642,7 @@ fn classify_then_materialize_preserves_apparent_patch_size() {
     observe(&mut recon, [NOISE_PX, NOISE_PX], 14);
     let (u0, v0) = facing_patch(&recon, 50.0, 25.0);
     with_patch(&mut recon, u0, v0);
-    let origin = recon.image_table.camera_centroid();
+    let origin = recon.image_set.camera_centroid();
     let dist0 = (recon.point_set.points[0].position.coords - origin.coords).norm();
     let apparent0 = 50.0 / dist0;
 
@@ -674,7 +674,7 @@ fn demotion_then_promotion_restores_the_patch_frame() {
     let (u0, v0) = facing_patch(&recon, 2.0, 1.0);
     with_patch(&mut recon, u0, v0);
     let original = recon.point_set.points[0].position;
-    let dist = (original - recon.image_table.camera_centroid()).norm();
+    let dist = (original - recon.image_set.camera_centroid()).norm();
 
     let (demoted, summary) = recon.classify_points_at_infinity(Some(1.0e4)).unwrap();
     assert!(summary.demoted >= 1);
@@ -726,11 +726,11 @@ fn classify_demotes_a_point_seen_from_one_centre() {
     let mut references = vec![-1; recon.point_count()];
     references[0] = 1;
     recon.point_set.reference_observations = Some(references);
-    let c0 = recon.image_table.images[0].camera_center();
-    let r1 = recon.image_table.images[1].quaternion_wxyz;
-    recon.image_table.images[1].translation_xyz = -(r1 * c0.coords);
+    let c0 = recon.image_set.images[0].camera_center();
+    let r1 = recon.image_set.images[1].quaternion_wxyz;
+    recon.image_set.images[1].translation_xyz = -(r1 * c0.coords);
     recon.point_set.points[0].position = c0;
-    let c1 = recon.image_table.images[1].camera_center();
+    let c1 = recon.image_set.images[1].camera_center();
     assert!(
         (c1 - c0).norm() < 1e-12,
         "the centres coincide to round-off"
@@ -792,10 +792,10 @@ fn classify_refits_a_finite_point_stored_behind_its_cameras() {
 /// `recon` with one more image, which observes nothing and has no pose: its
 /// row is a placeholder with a non-finite translation.
 fn with_an_unposed_image(mut recon: SfmrReconstruction) -> SfmrReconstruction {
-    let mut image = recon.image_table.images[0].clone();
+    let mut image = recon.image_set.images[0].clone();
     image.name = "unposed.jpg".to_string();
     image.translation_xyz = Vector3::new(f64::NAN, f64::NAN, f64::NAN);
-    recon.image_table.images.push(image);
+    recon.image_set.images.push(image);
     recon
 }
 

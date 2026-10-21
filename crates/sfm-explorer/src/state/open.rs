@@ -258,7 +258,7 @@ fn load_for_display(
     read.set_fraction(1.0);
     progress.check_cancel()?;
 
-    let wants_thumbnails = recon.image_table.thumbnails_y_x_rgb.is_none();
+    let wants_thumbnails = recon.image_set.thumbnails_y_x_rgb.is_none();
     let wants_bitmaps = recon.point_set.patch_u_halfvec_xyz.is_some()
         && recon.point_set.patch_bitmaps_y_x_rgba.is_none()
         && recon.keypoints_xy().is_some();

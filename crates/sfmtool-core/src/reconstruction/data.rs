@@ -18,10 +18,10 @@
 //! - [`sift_keypoints`] — a `sift_files` reconstruction's inline keypoint
 //!   column, filled from its `.sift` files.
 //!
-//! The type itself is two owned halves: an [`ImageTable`] of the cameras, the
+//! The type itself is two owned halves: an [`ImageSet`] of the cameras, the
 //! posed images and the per-image columns, and a [`PointSet`] of the points,
 //! the tracks and the per-point and per-observation columns. Those live in
-//! [`image_table`] and [`point_set`]; `specs/core/reconstruction/edited-reconstruction.md`
+//! [`image_set`] and [`point_set`]; `specs/core/reconstruction/edited-reconstruction.md`
 //! says why the line falls where it does.
 
 use std::path::{Path, PathBuf};
@@ -37,14 +37,14 @@ use sfmtool_sfmr_format::{
 mod affine_shape;
 mod conversion;
 mod demo;
-mod image_table;
+mod image_set;
 mod point_set;
 mod readings;
 mod recompute;
 mod sift_keypoints;
 
 pub use affine_shape::patch_affine_shape;
-pub use image_table::ImageTable;
+pub use image_set::ImageSet;
 pub(crate) use point_set::observation_confidence_byte;
 pub use point_set::{ObservationSource, PointSet};
 pub use readings::{
@@ -299,7 +299,7 @@ pub struct TrackObservation {
 /// This is the Rust equivalent of Python's `SfmrReconstruction` class.
 /// All fields from the `.sfmr` format are represented.
 ///
-/// The data is two owned halves. [`ImageTable`] holds everything addressed by
+/// The data is two owned halves. [`ImageSet`] holds everything addressed by
 /// image index -- the cameras, the posed images, the thumbnails, the depth
 /// statistics and histograms, the rig grouping. [`PointSet`] holds everything
 /// addressed by point or by observation -- the points, the CSR tracks, the
@@ -327,7 +327,7 @@ pub struct SfmrReconstruction {
     /// is for.
     pub content_hash: ContentHash,
     /// The cameras, the posed images, and every per-image column.
-    pub image_table: ImageTable,
+    pub image_set: ImageSet,
     /// The points, the tracks, and every per-point and per-observation column.
     pub point_set: PointSet,
 }
@@ -374,7 +374,7 @@ impl SfmrReconstruction {
     /// [`PointSet::validate_observation_columns`].
     pub fn validate_observation_columns(&self) -> Result<(), String> {
         self.point_set
-            .validate_observation_columns(self.image_table.image_count())
+            .validate_observation_columns(self.image_set.image_count())
     }
 
     /// Check that the optional per-point constraint columns are parallel to
@@ -448,7 +448,7 @@ impl SfmrReconstruction {
                 ));
             }
         }
-        let n_img = self.image_table.images.len();
+        let n_img = self.image_set.images.len();
         for p in 0..n_pt {
             let k = constraints.point_constraints[p];
             if !matches!(
@@ -471,7 +471,7 @@ impl SfmrReconstruction {
 
     /// Number of registered images.
     pub fn image_count(&self) -> usize {
-        self.image_table.image_count()
+        self.image_set.image_count()
     }
 
     /// Returns the number of 3D points. See [`PointSet::point_count`].
@@ -486,7 +486,7 @@ impl SfmrReconstruction {
 
     /// Number of camera models.
     pub fn camera_count(&self) -> usize {
-        self.image_table.camera_count()
+        self.image_set.camera_count()
     }
 
     /// Returns a point's observations. See [`PointSet::observations_for_point`].
@@ -521,7 +521,7 @@ impl SfmrReconstruction {
     /// stored in `metadata.workspace.feature_prefix_dir`.
     pub fn sift_path_for_image(&self, image_idx: usize) -> PathBuf {
         let prefix = &self.metadata.workspace.contents.feature_prefix_dir;
-        let image = &self.image_table.images[image_idx];
+        let image = &self.image_set.images[image_idx];
         let image_rel = Path::new(&image.name);
         let image_parent = image_rel.parent().unwrap_or(Path::new(""));
         let image_basename = image_rel.file_name().unwrap_or_default();
@@ -540,7 +540,7 @@ impl SfmrReconstruction {
     /// Call this after mutating tracks, observation counts, or point
     /// `w`-values externally.
     pub fn rebuild_derived_fields(&mut self) {
-        let image_count = self.image_table.image_count();
+        let image_count = self.image_set.image_count();
         self.point_set.rebuild_derived_fields(image_count);
     }
 }

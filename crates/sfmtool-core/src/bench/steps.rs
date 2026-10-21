@@ -384,7 +384,7 @@ fn default_point_label(edited: &EditedReconstruction, point: u32) -> String {
 /// pixels; a `.sift` feature carries its own.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClusterSeed {
-    /// The image, as an index into the node's image table.
+    /// The image, as an index into the node's image set.
     pub image: u32,
     /// The image's stem, which the label is minted from.
     pub image_stem: String,
@@ -665,7 +665,7 @@ pub enum Viewpoint {
     /// The image this observation is in, the patch re-anchored on its
     /// keypoint. The observation is named by its position in the track's list.
     Observation(usize),
-    /// This image, by its index in the reconstruction's image table, with the
+    /// This image, by its index in the reconstruction's image set, with the
     /// patch read as it stands. Any image with a camera will do, one the track
     /// observes included; what the variant says is that no keypoint anchors the
     /// square.
@@ -767,7 +767,7 @@ fn triple(v: &[f64; 3]) -> String {
 /// Where a new observation goes, and what put it there.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ObservationSeed {
-    /// The image, as an index into the node's image table.
+    /// The image, as an index into the node's image set.
     pub image: u32,
     /// Where in it, in source-image px.
     pub pixel: [f64; 2],
@@ -2786,7 +2786,7 @@ fn view_of(
     ),
     TrackEditError,
 > {
-    let table = &edited.base.image_table;
+    let table = &edited.base.image_set;
     let row = table
         .images
         .get(image as usize)

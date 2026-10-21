@@ -23,9 +23,9 @@ use crate::{ObservationSource, SfmrReconstruction};
 /// state the same pixels in the other two ways.
 pub(crate) fn noisy_demo(num_points: usize, sigma_px: [f64; 2], seed: u64) -> SfmrReconstruction {
     let mut recon = SfmrReconstruction::demo(num_points);
-    let second = recon.image_table.cameras[0].clone();
-    recon.image_table.cameras.push(second);
-    for (i, image) in recon.image_table.images.iter_mut().enumerate() {
+    let second = recon.image_set.cameras[0].clone();
+    recon.image_set.cameras.push(second);
+    for (i, image) in recon.image_set.images.iter_mut().enumerate() {
         image.camera_index = (i % 2) as u32;
     }
     observe(&mut recon, sigma_px, seed);
@@ -41,8 +41,8 @@ pub(crate) fn observe(recon: &mut SfmrReconstruction, sigma_px: [f64; 2], seed: 
     let tracks = &recon.point_set.tracks;
     let mut keypoints = Array2::<f32>::zeros((tracks.len(), 2));
     for (row, obs) in tracks.iter().enumerate() {
-        let image = &recon.image_table.images[obs.image_index as usize];
-        let camera = &recon.image_table.cameras[image.camera_index as usize];
+        let image = &recon.image_set.images[obs.image_index as usize];
+        let camera = &recon.image_set.cameras[image.camera_index as usize];
         let point = &recon.point_set.points[obs.point_index as usize];
         let p_cam = if point.is_at_infinity() {
             image.quaternion_wxyz * point.position.coords
@@ -100,11 +100,11 @@ pub(crate) fn as_sift_only(recon: &SfmrReconstruction, dir: &TempDir) -> SfmrRec
             },
             metadata: sfmtool_sift_format::SiftMetadata {
                 version: sfmtool_sift_format::SIFT_FORMAT_VERSION,
-                image_name: out.image_table.images[image].name.clone(),
+                image_name: out.image_set.images[image].name.clone(),
                 image_file_xxh128: "0".repeat(32),
                 image_file_size: 1,
-                image_width: out.image_table.cameras[0].width,
-                image_height: out.image_table.cameras[0].height,
+                image_width: out.image_set.cameras[0].width,
+                image_height: out.image_set.cameras[0].height,
                 feature_count: count as u32,
             },
             content_hash: sfmtool_sift_format::SiftContentHash::default(),
@@ -199,8 +199,8 @@ fn points_at_infinity_are_left_out() {
         if obs.point_index % 3 == 0 {
             continue;
         }
-        let image = &recon.image_table.images[obs.image_index as usize];
-        let camera = &recon.image_table.cameras[image.camera_index as usize];
+        let image = &recon.image_set.images[obs.image_index as usize];
+        let camera = &recon.image_set.cameras[image.camera_index as usize];
         let p = &recon.point_set.points[obs.point_index as usize].position;
         let p_cam = image.quaternion_wxyz * p.coords + image.translation_xyz;
         let (u, v) = camera.ray_to_pixel([p_cam.x, p_cam.y, p_cam.z]).unwrap();
@@ -310,7 +310,7 @@ fn an_observation_the_ray_construction_declines_is_left_out() {
     // declines it and the point-or-bearing test gives it no ray. The measure
     // leaves it out too, rather than counting it as an outlier.
     let mut recon = SfmrReconstruction::demo(200);
-    recon.image_table.cameras[0] = CameraIntrinsics {
+    recon.image_set.cameras[0] = CameraIntrinsics {
         model: CameraModel::OpenCVFisheye {
             focal_length_x: 500.0,
             focal_length_y: 500.0,
@@ -351,7 +351,7 @@ fn round_off_residuals_are_not_outliers() {
     for (sigma, camera) in noise
         .per_camera_sigma_px
         .iter()
-        .zip(&recon.image_table.cameras)
+        .zip(&recon.image_set.cameras)
     {
         if let Some(sigma) = sigma {
             assert!(*sigma >= super::camera_keypoint_resolution_px(camera));

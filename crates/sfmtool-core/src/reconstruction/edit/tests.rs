@@ -207,7 +207,7 @@ fn demo_with_depth_statistics() -> SfmrReconstruction {
 
 /// The six length fields of one image's depth statistics, in a fixed order.
 fn depth_lengths(recon: &SfmrReconstruction, image: usize) -> [Option<f64>; 6] {
-    let stats = &recon.image_table.depth_statistics.images[image];
+    let stats = &recon.image_set.depth_statistics.images[image];
     [
         stats.histogram_min_z,
         stats.histogram_max_z,
@@ -233,10 +233,10 @@ fn se3_transform_scales_the_depth_statistics_and_keeps_the_counts() {
     ));
 
     assert!(
-        (0..recon.image_table.images.len()).any(|i| depth_lengths(&recon, i)[2].is_some()),
+        (0..recon.image_set.images.len()).any(|i| depth_lengths(&recon, i)[2].is_some()),
         "the fixture has depths to scale"
     );
-    for i in 0..recon.image_table.images.len() {
+    for i in 0..recon.image_set.images.len() {
         for (before, after) in depth_lengths(&recon, i)
             .into_iter()
             .zip(depth_lengths(&out, i))
@@ -244,21 +244,21 @@ fn se3_transform_scales_the_depth_statistics_and_keeps_the_counts() {
             assert_eq!(before.map(|z| z * scale), after);
         }
         let (a, b) = (
-            &recon.image_table.depth_statistics.images[i].observed,
-            &out.image_table.depth_statistics.images[i].observed,
+            &recon.image_set.depth_statistics.images[i].observed,
+            &out.image_set.depth_statistics.images[i].observed,
         );
         assert_eq!((a.count, a.infinity_count), (b.count, b.infinity_count));
     }
     assert_eq!(
-        recon.image_table.depth_histogram_counts,
-        out.image_table.depth_histogram_counts
+        recon.image_set.depth_histogram_counts,
+        out.image_set.depth_histogram_counts
     );
 
     // The multiplication is the answer a re-derivation from the transformed
     // poses and points gives.
     let mut rederived = out.clone();
     rederived.recompute_depth_statistics().unwrap();
-    for i in 0..out.image_table.images.len() {
+    for i in 0..out.image_set.images.len() {
         for (ours, theirs) in depth_lengths(&out, i)
             .into_iter()
             .zip(depth_lengths(&rederived, i))
@@ -292,12 +292,12 @@ fn se3_transform_without_a_scale_leaves_the_depth_statistics_alone() {
         Se3Transform::new(RotQuaternion::identity(), V3::new(5.0, -2.0, 1.0), 1.0),
     ] {
         let out = recon.apply_se3_transform(&transform);
-        for i in 0..recon.image_table.images.len() {
+        for i in 0..recon.image_set.images.len() {
             assert_eq!(depth_lengths(&recon, i), depth_lengths(&out, i));
         }
         assert_eq!(
-            recon.image_table.depth_histogram_counts,
-            out.image_table.depth_histogram_counts
+            recon.image_set.depth_histogram_counts,
+            out.image_set.depth_histogram_counts
         );
     }
 }
@@ -386,7 +386,7 @@ fn a_reordered_track_keeps_its_reference_through_a_save() {
 fn subset_keeping_all_images_carries_the_patch_frame() {
     let recon = demo_with_patches();
     let u0 = recon.point_set.patch_u_halfvec_xyz.clone().unwrap();
-    let all: Vec<u32> = (0..recon.image_table.images.len() as u32).collect();
+    let all: Vec<u32> = (0..recon.image_set.images.len() as u32).collect();
     let out = recon.subset_by_image_indices(&all, true).unwrap();
 
     assert_eq!(out.point_count(), recon.point_count());
@@ -400,23 +400,23 @@ fn subset_keeping_all_images_carries_the_patch_frame() {
 #[test]
 fn subset_of_a_value_without_thumbnails_has_none() {
     let recon = SfmrReconstruction::demo(4);
-    assert!(recon.image_table.thumbnails_y_x_rgb.is_none());
+    assert!(recon.image_set.thumbnails_y_x_rgb.is_none());
     let out = recon.subset_by_image_indices(&[2, 0], false).unwrap();
-    assert!(out.image_table.thumbnails_y_x_rgb.is_none());
+    assert!(out.image_set.thumbnails_y_x_rgb.is_none());
 }
 
 #[test]
 fn subset_keeps_the_thumbnail_rows_of_the_kept_images_in_order() {
     let mut recon = SfmrReconstruction::demo(4);
-    let n = recon.image_table.images.len();
+    let n = recon.image_set.images.len();
     let edge = crate::THUMBNAIL_SIZE;
-    recon.image_table.thumbnails_y_x_rgb = Some(Arc::new(Array4::<u8>::from_shape_fn(
+    recon.image_set.thumbnails_y_x_rgb = Some(Arc::new(Array4::<u8>::from_shape_fn(
         (n, edge, edge, 3),
         |(i, y, x, c)| ((i * 41 + y + x * 2 + c) % 256) as u8,
     )));
     let out = recon.subset_by_image_indices(&[2, 0], false).unwrap();
-    let before = recon.image_table.thumbnails_y_x_rgb.as_ref().unwrap();
-    let after = out.image_table.thumbnails_y_x_rgb.as_ref().unwrap();
+    let before = recon.image_set.thumbnails_y_x_rgb.as_ref().unwrap();
+    let after = out.image_set.thumbnails_y_x_rgb.as_ref().unwrap();
     assert_eq!(after.shape(), [2, edge, edge, 3]);
     assert_eq!(
         after.index_axis(ndarray::Axis(0), 0),

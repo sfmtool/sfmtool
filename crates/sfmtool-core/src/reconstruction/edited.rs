@@ -29,7 +29,7 @@ use sfmtool_sfmr_format::{
 use crate::patch::cloud::OrientedPatch;
 
 use super::data::{
-    ImageTable, ObservationReading, ObservationReadings, ObservationSource, Point3D,
+    ImageSet, ObservationReading, ObservationReadings, ObservationSource, Point3D,
     PointConstraintColumns, PointSet, SfmrReconstruction, TrackObservation,
 };
 
@@ -44,7 +44,7 @@ pub use row_map::RowMap;
 pub enum EditError {
     /// The edited index names no live point: past the end, or already deleted.
     NoSuchPoint(u32),
-    /// An observation names an image the base's image table does not hold.
+    /// An observation names an image the base's image set does not hold.
     ImageOutOfRange {
         /// Which observation of the record.
         observation: usize,
@@ -72,7 +72,7 @@ pub enum EditError {
     },
     /// A constraint code the format does not define.
     UnknownConstraint(u8),
-    /// A constraint whose reference image the base's image table does not hold.
+    /// A constraint whose reference image the base's image set does not hold.
     ConstraintImageOutOfRange(u32),
     /// A reference observation that is neither `-1` nor an index into the
     /// record's observations.
@@ -153,7 +153,7 @@ impl std::error::Error for EditError {}
 /// the record already answers.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RecordObservation {
-    /// The image, as an index into the base's image table.
+    /// The image, as an index into the base's image set.
     pub image_index: u32,
     /// The `.sift` feature this observation is, for a `sift_files` base.
     pub feature_index: Option<u32>,
@@ -536,7 +536,7 @@ pub struct EditedReconstruction {
     pub deleted_points: HashSet<u32>,
     /// The points this version holds and the base does not, as a point set with
     /// exactly the base's columns, whose observations index the base's image
-    /// table.
+    /// set.
     pub added: PointSet,
     /// For each added point, the base index it replaces (a modified point), or
     /// `None` for a point that is new. What puts a modified point back in its
@@ -893,7 +893,7 @@ impl EditedReconstruction {
             view.point(),
             nalgebra::Vector3::new(u[0] as f64, u[1] as f64, u[2] as f64),
             nalgebra::Vector3::new(v[0] as f64, v[1] as f64, v[2] as f64),
-            &self.base.image_table,
+            &self.base.image_set,
             image_index,
             keypoint_xy,
         )
@@ -994,7 +994,7 @@ impl EditedReconstruction {
     pub fn posed_lenses(&self) -> Vec<u32> {
         let mut lenses: Vec<u32> = self
             .base
-            .image_table
+            .image_set
             .images
             .iter()
             .filter(|image| {
@@ -1356,7 +1356,7 @@ impl EditedReconstruction {
                     // No per-image hash column at all: the image's name is what
                     // this reconstruction says the image is.
                     None => h.update(
-                        self.base.image_table.images[obs.image_index as usize]
+                        self.base.image_set.images[obs.image_index as usize]
                             .name
                             .as_bytes(),
                     ),
@@ -1457,9 +1457,9 @@ impl EditedReconstruction {
             content_hash: ContentHash::default(),
             // No overlay edit touches an image, so the whole table is the
             // base's, thumbnails shared rather than copied.
-            image_table: ImageTable {
-                thumbnails_y_x_rgb: self.base.image_table.thumbnails_y_x_rgb.clone(),
-                ..self.base.image_table.clone()
+            image_set: ImageSet {
+                thumbnails_y_x_rgb: self.base.image_set.thumbnails_y_x_rgb.clone(),
+                ..self.base.image_set.clone()
             },
             point_set,
         };

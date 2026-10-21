@@ -59,9 +59,9 @@ pub(crate) struct SiftIndex {
     pub(crate) images: usize,
     /// Why this index is not an index of the node as it stands, or `None` when
     /// it is. Derived when the file is opened or built, and again when a
-    /// version lands whose image table differs -- never per frame.
+    /// version lands whose image set differs -- never per frame.
     stale: Option<String>,
-    /// Fingerprint of the node's image table the state above was derived
+    /// Fingerprint of the node's image set the state above was derived
     /// against, which is what says a version has moved the question.
     node_images: u64,
     /// The version the state above was derived against, so a frame that pushed
@@ -112,7 +112,7 @@ fn normalized(path: &Path) -> PathBuf {
 
 /// The `.sift` file of every image of `recon` that has one, by image index.
 pub(crate) fn readable_sift_files(recon: &SfmrReconstruction) -> Vec<(u32, PathBuf)> {
-    (0..recon.image_table.images.len())
+    (0..recon.image_set.images.len())
         .map(|image| (image as u32, recon.sift_path_for_image(image)))
         .filter(|(_, path)| path.is_file())
         .collect()
@@ -140,7 +140,7 @@ impl AppState {
     }
 
     /// Look for `id`'s index if nothing has yet, and re-derive its state when
-    /// the node's image table has moved since the state was derived.
+    /// the node's image set has moved since the state was derived.
     ///
     /// Called through [`Self::refresh_index_files`], which is what Track View,
     /// the Scene tree and the first item put on a node's bench call, and which
@@ -181,7 +181,7 @@ impl AppState {
         self.action_log.set_actor(standing);
     }
 
-    /// Re-derive the state of an open index when the node's image table has
+    /// Re-derive the state of an open index when the node's image set has
     /// moved under it.
     ///
     /// The version serial is the cheap question and the image names are the
@@ -289,7 +289,7 @@ impl AppState {
     pub(crate) fn sift_sources_refusal(&self, id: ReconId) -> Option<String> {
         let node = self.node(id)?;
         let recon = node.recon();
-        let any = (0..recon.image_table.images.len())
+        let any = (0..recon.image_set.images.len())
             .any(|image| recon.sift_path_for_image(image).is_file());
         (!any).then(|| {
             format!(
@@ -387,7 +387,7 @@ impl BuildPlan {
             path,
             sources: readable_sift_files(recon),
             image_names: recon
-                .image_table
+                .image_set
                 .images
                 .iter()
                 .map(|image| image.name.clone())
@@ -791,7 +791,7 @@ fn corpus_images(forest: &LazyKdForestU8) -> usize {
         .map_or(0, |table| table.names.len())
 }
 
-/// A digest of a reconstruction's image table, as the thing a staleness verdict
+/// A digest of a reconstruction's image set, as the thing a staleness verdict
 /// is about.
 ///
 /// Touches no file, so a version that lands on a node costs this and nothing
@@ -801,8 +801,8 @@ fn corpus_images(forest: &LazyKdForestU8) -> usize {
 pub(crate) fn image_fingerprint(recon: &SfmrReconstruction) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    recon.image_table.images.len().hash(&mut hasher);
-    for image in &recon.image_table.images {
+    recon.image_set.images.len().hash(&mut hasher);
+    for image in &recon.image_set.images {
         image.name.hash(&mut hasher);
     }
     hasher.finish()
@@ -840,7 +840,7 @@ fn staleness(forest: &LazyKdForestU8, recon: &SfmrReconstruction, path: &Path) -
         }
         Ok(Some(table)) => table,
     };
-    let images = &recon.image_table.images;
+    let images = &recon.image_set.images;
     if table.names.len() != images.len() {
         return Some(format!(
             "{} indexes {} images and this reconstruction has {}.",

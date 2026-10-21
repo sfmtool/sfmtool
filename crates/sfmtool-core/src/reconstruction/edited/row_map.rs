@@ -89,7 +89,7 @@ impl RowMap {
     ///
     /// `image_map` says where each image of `before` went: one entry per image
     /// of `before`, holding its index in `after` or `None` for an image the
-    /// edit dropped. `None` for the whole argument means the image table did
+    /// edit dropped. `None` for the whole argument means the image set did
     /// not move, which is every bulk edit but an image subset.
     ///
     /// ## The invariant it rests on

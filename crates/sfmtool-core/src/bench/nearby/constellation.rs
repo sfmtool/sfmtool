@@ -149,7 +149,7 @@ pub fn constellation_seeds(
             from.push((Some(k as u32), [f64::from(p[0]), f64::from(p[1])]));
         }
     }
-    let name = &edited.base.image_table.images[image as usize].name;
+    let name = &edited.base.image_set.images[image as usize].name;
     let stem = std::path::Path::new(name)
         .file_stem()
         .map_or_else(|| name.clone(), |s| s.to_string_lossy().into_owned());

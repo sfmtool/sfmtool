@@ -147,7 +147,7 @@ fn an_image_already_in_every_track_adds_nothing_and_pushes_no_version() {
 fn the_refusals_are_the_greyed_entrys_sentences() {
     // An unposed image.
     let mut recon = without_image(plane_recon(), 0);
-    recon.image_table.images[0].translation_xyz.x = f64::NAN;
+    recon.image_set.images[0].translation_xyz.x = f64::NAN;
     let mut state = AppState::new();
     state.append_node(SceneNode::demo(recon));
     let id = state.scene[0].id;

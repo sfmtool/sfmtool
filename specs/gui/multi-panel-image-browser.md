@@ -408,7 +408,7 @@ column ([display_thumbnails.rs](../../crates/sfm-explorer/src/display_thumbnails
 `SceneNode::display_thumbnails`), which comes from one of two sources:
 
 - **The file's own column.** When the `.sfmr` carries thumbnails, the display column is
-  the image table's own `Arc`, shared rather than copied.
+  the image set's own `Arc`, shared rather than copied.
 - **Rows the open builds.** When the file carries none (a version 11 file written
   without them), the open that reads it builds every row before the node appears, as a
   stage of its background task (`thumbnails`, [background-tasks.md](background-tasks.md)
@@ -438,12 +438,12 @@ column ([display_thumbnails.rs](../../crates/sfm-explorer/src/display_thumbnails
   open's `thumbnails` stage says how many rows came from each source.
 
 **Display thumbnails are the node's, not the value's.** They live on the scene node beside
-its history and never enter an `ImageTable`, so nothing the viewer builds can reach a save
+its history and never enter an `ImageSet`, so nothing the viewer builds can reach a save
 or a content hash: a file opened without thumbnails is saved without them, whatever was
 drawn. The viewer has no command that writes them into a value; `sfm xform
 --add-thumbnails` is how a file gains thumbnails. They are **keyed by image name**, so the
 one column built when the node opens serves every version: Delete Image renumbers the image
-table and Undo renumbers it back, and a name still finds its row. An image the column was
+set and Undo renumbers it back, and a name still finds its row. An image the column was
 not built for falls back to the value's own column when it carries one.
 
 **Every row is final when the node appears**, so no panel ever draws a row that is still

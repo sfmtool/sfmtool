@@ -155,7 +155,7 @@ pub(crate) struct CameraGate {
 /// refuse the release it asks for, and the hover text names the camera and its
 /// model.
 pub(crate) fn camera_gates(edited: &EditedReconstruction) -> Vec<CameraGate> {
-    let table = &edited.base.image_table;
+    let table = &edited.base.image_set;
     let posed: Vec<u32> = table
         .images
         .iter()
@@ -209,7 +209,7 @@ impl BundleAdjustGates {
     /// Every gate, read off `edited`.
     pub(crate) fn of(edited: &EditedReconstruction) -> Self {
         Self {
-            camera_count: edited.base.image_table.cameras.len(),
+            camera_count: edited.base.image_set.cameras.len(),
             cameras: camera_gates(edited),
         }
     }

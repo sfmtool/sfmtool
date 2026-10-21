@@ -89,10 +89,10 @@ impl SfmrReconstruction {
         meta.operation = stamp.operation.to_string();
         meta.tool = stamp.tool.to_string();
         meta.tool_version = stamp.tool_version.to_string();
-        meta.image_count = self.image_table.images.len() as u32;
+        meta.image_count = self.image_set.images.len() as u32;
         meta.point_count = self.point_set.points.len() as u32;
         meta.observation_count = self.point_set.tracks.len() as u32;
-        meta.camera_count = self.image_table.cameras.len() as u32;
+        meta.camera_count = self.image_set.cameras.len() as u32;
 
         match stamp.workspace_path {
             Some(stated) => self.set_workspace_relative_path(stated),
@@ -193,7 +193,7 @@ impl SfmrReconstruction {
         tool_options: BTreeMap<String, serde_json::Value>,
     ) -> SfmrReconstruction {
         let mut minimal = self.clone_for_edit();
-        minimal.image_table.thumbnails_y_x_rgb = None;
+        minimal.image_set.thumbnails_y_x_rgb = None;
         // The references stay: they name the observation each bitmap is to be
         // rendered from again. A pick only a display render made goes.
         minimal.point_set.drop_patch_bitmaps();

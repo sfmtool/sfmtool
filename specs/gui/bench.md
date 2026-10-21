@@ -308,7 +308,7 @@ impl AppState {
     pub(crate) fn sift_index_state(&self, id: ReconId) -> IndexFileState;
     pub(crate) fn sift_index_path(&self, id: ReconId) -> Option<PathBuf>;
     /// Open the node's index files if they are there and nothing has looked
-    /// yet, re-derive their states when a version has moved the image table,
+    /// yet, re-derive their states when a version has moved the image set,
     /// and remember the look either way.
     pub(crate) fn refresh_index_files(&mut self, id: ReconId);
     pub(crate) fn open_index_files(&mut self, id: ReconId, sift_index: Option<PathBuf>,
@@ -451,10 +451,10 @@ The centre goes through the whole similarity, the axes are rotated and the
 half-extent is scaled; a track at infinity keeps the rotation alone; a
 cluster-stage item has no world geometry and keeps its `Arc`.
 
-**Deleting an image renumbers the bench's observations with the image table**,
+**Deleting an image renumbers the bench's observations with the image set**,
 in the one version that deletes the image (`AppState::delete_image` pushes the
 pair through `push_pair`). Every observation of every item names its
-photograph by its index in the node's image table, and the delete moves each
+photograph by its index in the node's image set, and the delete moves each
 later image down by one; carried along unchanged, every observation past the
 deleted image would name the next photograph, a reading would score the wrong
 pixels as `current`, and a commit would write them into the reconstruction.

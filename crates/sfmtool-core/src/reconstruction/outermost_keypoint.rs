@@ -98,7 +98,7 @@ pub fn outermost_keypoints(
     cameras: &[usize],
     read_sift_files: bool,
 ) -> Vec<OutermostKeypoints> {
-    let table = &recon.image_table;
+    let table = &recon.image_set;
     let mut chosen: Vec<usize> = cameras
         .iter()
         .copied()

@@ -40,8 +40,7 @@ use crate::reconstruction::triangulation::{
     DEFAULT_DEPTH_LIKELIHOOD_RATIO_THRESHOLD,
 };
 use crate::reconstruction::{
-    ImageTable, ObservationSource, Point3D, ReconstructionError, SfmrReconstruction,
-    TrackObservation,
+    ImageSet, ObservationSource, Point3D, ReconstructionError, SfmrReconstruction, TrackObservation,
 };
 use sfmtool_sfmr_format::{NO_REFERENCE_IMAGE, POINT_CONSTRAINT_FREE};
 
@@ -358,7 +357,7 @@ struct CandidateRays {
 /// decided; a candidate left with fewer than `min_views` members gets no rays,
 /// and so no score.
 fn candidate_rays(
-    image_table: &ImageTable,
+    image_set: &ImageSet,
     candidates: &[InfinityTrack],
     pixels: &HashMap<(u32, u32), [f64; 2]>,
     sigma_px: f64,
@@ -378,8 +377,7 @@ fn candidate_rays(
             .iter()
             .filter_map(|&(img, feat)| {
                 let pixel = pixels[&(img, feat)];
-                observation_ray(image_table, img as usize, pixel, sigma_px)
-                    .map(|r| ((img, feat), r))
+                observation_ray(image_set, img as usize, pixel, sigma_px).map(|r| ((img, feat), r))
             })
             .collect();
         if observed.len() >= min_views {
@@ -453,11 +451,11 @@ impl UnionFind {
 /// Largest focal length (pixels) for each image's camera.
 fn per_image_focal_max(recon: &SfmrReconstruction) -> Vec<f64> {
     recon
-        .image_table
+        .image_set
         .images
         .iter()
         .map(|im| {
-            let (fx, fy) = recon.image_table.cameras[im.camera_index as usize].focal_lengths();
+            let (fx, fy) = recon.image_set.cameras[im.camera_index as usize].focal_lengths();
             fx.max(fy)
         })
         .collect()
@@ -545,8 +543,8 @@ impl SfmrReconstruction {
         // and to measure an appended point's reprojection error.
         let mut obs_xy: HashMap<(u32, u32), [f64; 2]> = HashMap::new();
 
-        for (img_idx, image) in self.image_table.images.iter().enumerate() {
-            let camera = &self.image_table.cameras[image.camera_index as usize];
+        for (img_idx, image) in self.image_set.images.iter().enumerate() {
+            let camera = &self.image_set.cameras[image.camera_index as usize];
             let sift_path = self.sift_path_for_image(img_idx);
             let sift =
                 sfmtool_sift_format::read_sift_partial(&sift_path, read_count).map_err(|e| {
@@ -604,7 +602,7 @@ impl SfmrReconstruction {
             rays,
             ray_images,
             members: kept_members,
-        } = candidate_rays(&self.image_table, &found, &obs_xy, sigma, min_views);
+        } = candidate_rays(&self.image_set, &found, &obs_xy, sigma, min_views);
         let decisions = decide_candidate_tracks(&rays);
 
         // How far each track's cameras can tell a point from infinity, at the
@@ -612,7 +610,7 @@ impl SfmrReconstruction {
         // camera extents: the count of appended bearings the cameras could not
         // resolve at the capture's own scale.
         let camera_centers: Vec<Point3<f64>> = self
-            .image_table
+            .image_set
             .images
             .iter()
             .map(|im| im.camera_center())
@@ -637,8 +635,8 @@ impl SfmrReconstruction {
                 let Some(&observed) = obs_xy.get(&(img, feat)) else {
                     continue;
                 };
-                let image = &self.image_table.images[img as usize];
-                let camera = &self.image_table.cameras[image.camera_index as usize];
+                let image = &self.image_set.images[img as usize];
+                let camera = &self.image_set.cameras[image.camera_index as usize];
                 if let Some(e) = observation_reprojection_error(
                     &image.quaternion_wxyz,
                     &image.translation_xyz,

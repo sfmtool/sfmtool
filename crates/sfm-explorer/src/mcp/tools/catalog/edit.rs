@@ -280,7 +280,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           none. A bulk edit: every image index at or after the deleted one moves \
                           down by one and the surviving points are renumbered, so indexes read \
                           before the call no longer mean what they meant. The bench moves with \
-                          the image table in the same version: every bench observation in the \
+                          the image set in the same version: every bench observation in the \
                           deleted image is dropped and those in later images move down by one, \
                           so observation positions read from get_bench_track before the call may \
                           name other observations after it, and an item whose observations were \
@@ -303,7 +303,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           the camera centre, which is what get_camera_image reports as center. \
                           The tracks that image observes are re-triangulated around the new pose \
                           where two or more pixels see them; a bearing only it sees turns with \
-                          it, and anything else keeps its position. The image table stays put and \
+                          it, and anything else keeps its position. The image set stays put and \
                           nothing is renumbered unless a point edit is pending, in which case \
                           the deleted slots close up first, as delete_point describes. Undo (Ctrl+Z in the window) puts the stored pose \
                           back.",
@@ -347,7 +347,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           its cluster patches file, so that file must be current; a missing or \
                           stale one is refused with the reason, and build_index_files makes \
                           it. A bulk edit: the points the image observes are re-triangulated \
-                          and the surviving ones are renumbered, while the image table stays \
+                          and the surviving ones are renumbered, while the image set stays \
                           put. A refused estimate pushes no version.",
             kind: Write,
             schema: object(

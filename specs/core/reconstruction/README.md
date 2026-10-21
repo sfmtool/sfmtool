@@ -5,7 +5,7 @@ Operations on reconstruction data itself. Implemented in
 
 | Document | Description |
 |----------|-------------|
-| [edited-reconstruction.md](edited-reconstruction.md) | A reconstruction as a value: the image table, the point set, the two heavy columns they share, and the edited form that is a shared immutable base plus its point edits, with materialisation and the row map. |
+| [edited-reconstruction.md](edited-reconstruction.md) | A reconstruction as a value: the image set, the point set, the two heavy columns they share, and the edited form that is a shared immutable base plus its point edits, with materialisation and the row map. |
 | [move-camera.md](move-camera.md) | Putting one image at a pose a caller names, and settling the tracks it observes around it: the ones two or more pixels see re-triangulated, a bearing only it sees turned with the camera, everything else kept, and a residual pair measured before and after. |
 | [switch-camera-model.md](switch-camera-model.md) | Switching cameras of a reconstruction to another camera model by fitting the new model to the old one, with poses, points and keypoints untouched, and the reprojection errors compared before and after on one fixed set of observations. |
 | [outermost-keypoint.md](outermost-keypoint.md) | The keypoint of each camera that lies furthest from its principal point, among the observations and among every feature detected in the images' `.sift` files, as a radius and an incidence angle: how far out the photographs reach, shown wherever a spline domain is edited. |

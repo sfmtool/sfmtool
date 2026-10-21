@@ -83,7 +83,7 @@ struct FeatureOverlayState {
     /// leaves the same index selected still invalidates it.
     image: ImageRef,
     /// The node version this overlay was built for. A point edit leaves the
-    /// image table alone, so nothing here is keyed by an index that moved, but
+    /// image set alone, so nothing here is keyed by an index that moved, but
     /// it does change which points are live, and the overlay is a statement
     /// about the live ones: the features it draws, and the point each one
     /// selects. Serials are minted once and never reused, so a new version and
@@ -534,7 +534,7 @@ impl ImageDetail {
         // Control and Shift held: the press is Create Track Here's, and takes
         // no handle.
         chord: bool,
-        image_table: &sfmtool_core::ImageTable,
+        image_set: &sfmtool_core::ImageSet,
         img_idx: usize,
         image_rect: egui::Rect,
         effective_scale: f32,
@@ -550,7 +550,7 @@ impl ImageDetail {
         }
         let track = track?;
         let layer = bench_track::Layer::build(
-            image_table,
+            image_set,
             img_idx,
             track,
             image_rect,
@@ -619,7 +619,7 @@ impl ImageDetail {
             if let Some(drag) = self.bench_drag.take() {
                 *released = true;
                 if drag.moved {
-                    response.bench_edit = bench_track::Layer::edit(image_table, track, &drag, lock);
+                    response.bench_edit = bench_track::Layer::edit(image_set, track, &drag, lock);
                 }
             }
         }
@@ -854,7 +854,7 @@ impl ImageDetail {
             bench.focused_track.filter(|_| bench.view_only.is_none()),
             bench.lock,
             chord,
-            &edited.base.image_table,
+            &edited.base.image_set,
             img_idx,
             image_rect,
             effective_scale,
@@ -906,15 +906,15 @@ impl ImageDetail {
         if response.has_pointer && ui.input(|i| i.key_pressed(egui::Key::I)) {
             intrinsics_display.enabled = !intrinsics_display.enabled;
         }
-        // The image table and its cameras are the base's: no point edit moves an
+        // The image set and its cameras are the base's: no point edit moves an
         // image, and a bulk edit that does hands the node a new base.
-        let image_table = &edited.base.image_table;
-        let camera_ref = image_table
+        let image_set = &edited.base.image_set;
+        let camera_ref = image_set
             .images
             .get(img_idx)
             .map(|image| CameraRef::new(recon_id, image.camera_index as usize));
         let camera = camera_ref
-            .and_then(|camera_ref| image_table.cameras.get(camera_ref.index()))
+            .and_then(|camera_ref| image_set.cameras.get(camera_ref.index()))
             .cloned();
         let view = View {
             origin: image_rect.min,
@@ -1374,7 +1374,7 @@ fn populate_feature_diagnostics(
                         continue;
                     };
                     let (cond, z) =
-                        crate::metrics::compute_point_diagnostics(&edited.base.image_table, &view);
+                        crate::metrics::compute_point_diagnostics(&edited.base.image_set, &view);
                     feature.condition_number = cond;
                     feature.inverse_depth_z = z;
                 }
@@ -1397,5 +1397,5 @@ fn compute_max_track_angle_deg(edited: &EditedReconstruction, point_idx: u32) ->
     let Some(view) = edited.point(point_idx) else {
         return f32::NAN;
     };
-    crate::metrics::compute_max_ray_angle_deg(&edited.base.image_table, &view)
+    crate::metrics::compute_max_ray_angle_deg(&edited.base.image_set, &view)
 }

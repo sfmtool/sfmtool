@@ -200,8 +200,8 @@ impl Correspondences {
 /// `image name → index`, first occurrence winning — the same rule
 /// `sfm align`'s by-cameras mode uses when a name repeats.
 fn images_by_name(recon: &SfmrReconstruction) -> HashMap<&str, usize> {
-    let mut map = HashMap::with_capacity(recon.image_table.images.len());
-    for (i, image) in recon.image_table.images.iter().enumerate() {
+    let mut map = HashMap::with_capacity(recon.image_set.images.len());
+    for (i, image) in recon.image_set.images.iter().enumerate() {
         map.entry(image.name.as_str()).or_insert(i);
     }
     map
@@ -214,7 +214,7 @@ pub fn shared_images(source: &SfmrReconstruction, target: &SfmrReconstruction) -
     let target_by_name = images_by_name(target);
     let mut seen: HashMap<&str, ()> = HashMap::new();
     let mut pairs = Vec::new();
-    for (i, image) in source.image_table.images.iter().enumerate() {
+    for (i, image) in source.image_set.images.iter().enumerate() {
         let name = image.name.as_str();
         if seen.insert(name, ()).is_some() {
             continue; // a repeated source name pairs once, like the target side
@@ -237,8 +237,8 @@ fn camera_correspondences(
     };
     for (i, j) in shared_images(source, target) {
         out.push(
-            &source.image_table.images[i as usize].camera_center(),
-            &target.image_table.images[j as usize].camera_center(),
+            &source.image_set.images[i as usize].camera_center(),
+            &target.image_set.images[j as usize].camera_center(),
         );
     }
     out

@@ -68,7 +68,7 @@ use sfmtool_core::camera::CameraIntrinsics;
 use sfmtool_core::geometry::RigidTransform;
 use sfmtool_core::patch::cloud::OrientedPatch;
 use sfmtool_core::EditedReconstruction;
-use sfmtool_core::ImageTable;
+use sfmtool_core::ImageSet;
 
 use crate::bench::geometry::{self, PatchEdit, Tilt};
 use crate::bench::{distance_to_segment, resize_cursor, verdict_color};
@@ -316,7 +316,7 @@ impl Layer {
     /// `lock` is Track View's *Lock*, which decides whether the patch-wide
     /// handles take a drag at all.
     pub(super) fn build(
-        image_table: &ImageTable,
+        image_set: &ImageSet,
         img_idx: usize,
         track: &EditableTrack,
         image_rect: Rect,
@@ -331,7 +331,7 @@ impl Layer {
             .collect();
         let to_panel = panel_mapping(image_rect, effective_scale);
         if here.is_empty() {
-            return Self::ghost(image_table, img_idx, track, &to_panel, lock);
+            return Self::ghost(image_set, img_idx, track, &to_panel, lock);
         }
         let mut layer = Layer {
             sightings: Vec::new(),
@@ -354,7 +354,7 @@ impl Layer {
         }
         match &track.stage {
             Stage::Track(payload) => {
-                let view = geometry::view_of(image_table, img_idx);
+                let view = geometry::view_of(image_set, img_idx);
                 layer.build_track_stage(
                     track,
                     &here,
@@ -519,7 +519,7 @@ impl Layer {
     /// only, having no keypoint of its own for the dot to move: no mark, no
     /// arrow, no handle, and a press on it pans.
     fn ghost(
-        image_table: &ImageTable,
+        image_set: &ImageSet,
         img_idx: usize,
         track: &EditableTrack,
         to_panel: &impl Fn([f64; 2]) -> Pos2,
@@ -529,7 +529,7 @@ impl Layer {
             return None;
         };
         let patch = payload.patch_frame.as_ref()?;
-        let (camera, pose) = geometry::view_of(image_table, img_idx)?;
+        let (camera, pose) = geometry::view_of(image_set, img_idx)?;
         if !patch.is_front_facing(&pose)
             || geometry::plane_is_edge_on(patch, pose.inverse_translation_origin())
         {
@@ -830,7 +830,7 @@ impl Layer {
     /// `None` when the pointer names nothing the patch can be given: a ray that
     /// misses its plane, or a turn about the centre itself.
     pub(super) fn edit(
-        image_table: &ImageTable,
+        image_set: &ImageSet,
         track: &EditableTrack,
         drag: &Drag,
         lock: bool,
@@ -851,7 +851,7 @@ impl Layer {
             return None;
         }
         let read_square = |outline: Viewpoint| {
-            let (camera, pose) = geometry::view_of(image_table, drag.image)?;
+            let (camera, pose) = geometry::view_of(image_set, drag.image)?;
             let square = square_of(track, outline, &camera, &pose)?;
             let from = geometry::pixel_ray(&camera, &pose, drag.from)?;
             let to = geometry::pixel_ray(&camera, &pose, drag.to)?;
@@ -1073,22 +1073,16 @@ pub(super) fn draw(
     // The preview: the track the release would push, drawn instead of the one
     // on the bench. Through the same function the release goes through, so
     // there is one answer rather than a drawn guess and a pushed result.
-    let image_table = &edited.base.image_table;
+    let image_set = &edited.base.image_set;
     let previewed = drag
         .filter(|drag| drag.image == img_idx && !drag.cancelled)
-        .and_then(|drag| Layer::edit(image_table, track, drag, lock))
+        .and_then(|drag| Layer::edit(image_set, track, drag, lock))
         .and_then(|edit| geometry::apply(track, edited, &edit).ok())
         .map(|(next, _)| next);
     let shown = previewed.as_ref().unwrap_or(track);
 
-    let Some(layer) = Layer::build(
-        image_table,
-        img_idx,
-        shown,
-        image_rect,
-        effective_scale,
-        lock,
-    ) else {
+    let Some(layer) = Layer::build(image_set, img_idx, shown, image_rect, effective_scale, lock)
+    else {
         return;
     };
     layer.paint(painter);

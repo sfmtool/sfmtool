@@ -41,7 +41,7 @@ fn state() -> (AppState, ReconId) {
 /// the axes, so two tiles cut at two places are two different pictures.
 fn cache_photographs(state: &mut AppState, id: ReconId) {
     let node = crate::scene::node_by_id(&state.scene, id).expect("loaded");
-    let camera = &node.recon().image_table.cameras[0];
+    let camera = &node.recon().image_set.cameras[0];
     let (w, h) = (camera.width, camera.height);
     let images = node.image_count();
     for image in 0..images {
@@ -1212,8 +1212,8 @@ fn a_search_candidate_draws_its_tile_where_the_seed_put_it() {
         Stage::Track(payload) => payload.patch_frame.clone().expect("a fitted patch"),
         Stage::Cluster(_) => panic!("a track put on from a point is at the track stage"),
     };
-    let sfmr_image = &recon.image_table.images[row.image as usize];
-    let camera = &recon.image_table.cameras[sfmr_image.camera_index as usize];
+    let sfmr_image = &recon.image_set.images[row.image as usize];
+    let camera = &recon.image_set.cameras[sfmr_image.camera_index as usize];
     let cam_from_world = crate::scene::cam_from_world(sfmr_image);
     let sampler = super::tile::tile_sampler(recon, &track, candidate);
     let at_the_seed = super::patch::patch_color_image(
@@ -2199,7 +2199,7 @@ fn a_row_s_menu_offers_the_rebuild_when_the_index_is_stale_and_starts_it() {
         let recon = state.node(id).expect("loaded").recon();
         crate::sift_index::tests::write_sift(
             &recon.sift_path_for_image(2),
-            &recon.image_table.images[2].name,
+            &recon.image_set.images[2].name,
             &vec![vec![5u8; 128]; 3],
             &[[10.0, 20.0], [30.0, 40.0], [50.0, 60.0]],
         );
@@ -3437,7 +3437,7 @@ fn hovering_a_name_shows_it_whole() {
             style.interaction.tooltip_grace_time = 0.0;
         });
         let node = state.node(id).expect("the node");
-        let name = node.recon().image_table.images[1].name.clone();
+        let name = node.recon().image_set.images[1].name.clone();
         let y = row_y(&mut panel, &ctx, &state, 1);
         // The Name cell prints the name itself where it fits, so the hover
         // is what adds one more copy of it.
@@ -3586,8 +3586,7 @@ fn a_hover_view_marks_the_projection_as_far_off_as_the_row_s_error() {
     // where the point projects.
     let image = 3;
     let recon = state.node(id).expect("loaded").recon();
-    let (camera, pose) =
-        crate::bench::geometry::view_of(&recon.image_table, image).expect("a view");
+    let (camera, pose) = crate::bench::geometry::view_of(&recon.image_set, image).expect("a view");
     let projected = camera
         .project_homogeneous(&pose, position.coords, patch_frame.w)
         .expect("the demo cameras see every point");
@@ -4482,7 +4481,7 @@ fn a_crop_s_hover_view_gives_the_axes_in_photograph_pixels() {
     let row = &track.observations[0];
     let recon = state.node(id).expect("loaded").recon();
     let (camera, pose) =
-        crate::bench::geometry::view_of(&recon.image_table, row.image as usize).expect("a view");
+        crate::bench::geometry::view_of(&recon.image_set, row.image as usize).expect("a view");
     let patch_frame = crate::bench::geometry::anchored_patch_frame(&patch, &camera, &pose, row);
     let across = |s: f64, t: f64| {
         let (xyz, w) = patch_frame.corner_homogeneous(s, t);
@@ -4591,8 +4590,7 @@ fn a_crop_s_hover_view_marks_the_keypoint_and_the_projection() {
     // A sighting of the point in a fourth image, 5 px off its projection.
     let image = 3;
     let recon = state.node(id).expect("loaded").recon();
-    let (camera, pose) =
-        crate::bench::geometry::view_of(&recon.image_table, image).expect("a view");
+    let (camera, pose) = crate::bench::geometry::view_of(&recon.image_set, image).expect("a view");
     let projected = camera
         .project_homogeneous(&pose, position.coords, patch_frame.w)
         .expect("the demo cameras see every point");
@@ -4677,7 +4675,7 @@ fn the_tile_frame_is_anchored_on_the_observation_s_own_keypoint() {
     let patch_frame = view.patch_frame().expect("the point has a patch frame");
     for (k, obs) in view.observations().iter().enumerate() {
         let (camera, pose) =
-            crate::bench::geometry::view_of(&node.recon().image_table, obs.image_index as usize)
+            crate::bench::geometry::view_of(&node.recon().image_set, obs.image_index as usize)
                 .expect("a posed image");
         let stored = view.keypoint_xy(k).expect("a stored keypoint");
         // Displaced from the projection, so the two anchors differ.
@@ -4717,7 +4715,7 @@ fn a_keypoint_whose_ray_cannot_meet_the_patch_falls_back_to_the_geometric_patch_
     use nalgebra::{Point3, Vector3};
     let (state, id) = state();
     let (camera, pose) =
-        crate::bench::geometry::view_of(&state.node(id).expect("loaded").recon().image_table, 0)
+        crate::bench::geometry::view_of(&state.node(id).expect("loaded").recon().image_set, 0)
             .expect("a posed image");
     let behind = sfmtool_core::patch::cloud::OrientedPatch::from_infinity_direction(
         Point3::from(-(pose.to_rotation_matrix().transpose() * Vector3::new(0.0, 0.0, -1.0))),
@@ -4737,7 +4735,7 @@ fn a_keypoint_whose_ray_cannot_meet_the_patch_falls_back_to_the_geometric_patch_
 #[test]
 fn a_long_image_name_is_cut_in_its_middle() {
     let mut recon = crate::state::edits::tests::projected_embedded_demo(12);
-    for (i, image) in recon.image_table.images.iter_mut().enumerate() {
+    for (i, image) in recon.image_set.images.iter_mut().enumerate() {
         image.name =
             format!("images/a_capture_directory_with_a_long_name/fisheye_left/image_{i:03}.jpg");
     }
@@ -5593,8 +5591,8 @@ fn the_zoom_reads_the_patch_reanchored_on_the_keypoint() {
     };
     let patch = payload.patch_frame.clone().expect("a patch");
     let row = 1;
-    let image = &recon.image_table.images[track.observations[row].image as usize];
-    let camera = &recon.image_table.cameras[image.camera_index as usize];
+    let image = &recon.image_set.images[track.observations[row].image as usize];
+    let camera = &recon.image_set.cameras[image.camera_index as usize];
     let pose = crate::scene::cam_from_world(image);
     let [x, y] = camera
         .project_homogeneous(&pose, patch.center.coords, patch.w)
@@ -5642,8 +5640,8 @@ fn with_no_patch_bitmaps_the_zoom_is_per_grid_px_of_the_evaluation() {
     };
     let patch = payload.patch_frame.as_ref().expect("a patch");
     for row in 0..track.observations.len() {
-        let image = &recon.image_table.images[track.observations[row].image as usize];
-        let camera = &recon.image_table.cameras[image.camera_index as usize];
+        let image = &recon.image_set.images[track.observations[row].image as usize];
+        let camera = &recon.image_set.cameras[image.camera_index as usize];
         let pose = crate::scene::cam_from_world(image);
         let site = track.observations[row].site().expect("a site");
         let anchored = patch

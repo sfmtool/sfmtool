@@ -150,7 +150,7 @@ pub fn thumbnail_from_rgb(pixels: &[u8], width: usize, height: usize) -> Vec<u8>
 /// # }
 /// ```
 pub fn verified_sift_thumbnail(recon: &SfmrReconstruction, index: usize) -> Option<Array3<u8>> {
-    if index >= recon.image_table.images.len() || recon.workspace_dir.as_os_str().is_empty() {
+    if index >= recon.image_set.images.len() || recon.workspace_dir.as_os_str().is_empty() {
         return None;
     }
     let path = recon.sift_path_for_image(index);
@@ -198,7 +198,7 @@ pub enum ThumbnailSource {
 ///
 /// # Panics
 ///
-/// Panics if `index` is past the image table.
+/// Panics if `index` is past the image set.
 pub fn display_thumbnail_row(
     recon: &SfmrReconstruction,
     index: usize,
@@ -209,7 +209,7 @@ pub fn display_thumbnail_row(
     }
     let path = recon
         .workspace_dir
-        .join(&recon.image_table.images[index].name);
+        .join(&recon.image_set.images[index].name);
     if path.is_file() {
         if let Ok(image) = crate::camera::image::ImageU8::read_rgb(&path) {
             let (width, height) = (image.width() as usize, image.height() as usize);
@@ -297,7 +297,7 @@ mod tests {
         let mut recon = SfmrReconstruction::demo(12);
         recon.workspace_dir = dir.path().to_path_buf();
         let names: Vec<String> = recon
-            .image_table
+            .image_set
             .images
             .iter()
             .map(|image| image.name.clone())
@@ -329,7 +329,7 @@ mod tests {
 
         // An embedded_patches reconstruction names the photograph instead.
         let mut embedded = recon.clone();
-        let n = embedded.image_table.images.len();
+        let n = embedded.image_set.images.len();
         let mut hashes = vec![[0u8; 16]; n];
         hashes[1] = parse_hash_bytes(image_hash).unwrap();
         embedded.point_set.observations = crate::ObservationSource::EmbeddedPatches {

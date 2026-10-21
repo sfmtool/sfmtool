@@ -128,7 +128,7 @@ fn point_diagnostics_are_finite_for_a_triangulated_point() {
     let recon = SfmrReconstruction::demo(12);
     let edited = sfmtool_core::EditedReconstruction::new(std::sync::Arc::new(recon));
     let view = edited.point(5).expect("a live point");
-    let (cond, z) = compute_point_diagnostics(&edited.base.image_table, &view);
+    let (cond, z) = compute_point_diagnostics(&edited.base.image_set, &view);
     assert!(cond.is_finite() && cond >= 1.0, "condition number {cond}");
     assert!(z.is_finite(), "inverse-depth z {z}");
 }

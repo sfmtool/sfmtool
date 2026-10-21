@@ -116,8 +116,8 @@ const DEMO_IMAGES: u32 = 8;
 /// thumbnails does. The demo itself carries none: it has no photographs.
 fn demo(points: usize) -> SfmrReconstruction {
     let mut recon = SfmrReconstruction::demo(points);
-    let n = recon.image_table.images.len();
-    recon.image_table.thumbnails_y_x_rgb = Some(Arc::new(Array4::from_shape_fn(
+    let n = recon.image_set.images.len();
+    recon.image_set.thumbnails_y_x_rgb = Some(Arc::new(Array4::from_shape_fn(
         (n, 128, 128, 3),
         |(i, y, x, c)| ((i * 29 + y + x + c) % 256) as u8,
     )));
@@ -132,7 +132,7 @@ fn edited_of(recon: &SfmrReconstruction) -> sfmtool_core::EditedReconstruction {
 
 /// Replace the single camera so every image resolves to `model`.
 fn with_camera_model(mut recon: SfmrReconstruction, model: CameraModel) -> SfmrReconstruction {
-    recon.image_table.cameras = vec![CameraIntrinsics {
+    recon.image_set.cameras = vec![CameraIntrinsics {
         model,
         width: 1920,
         height: 1080,
@@ -199,7 +199,7 @@ fn with_embedded_keypoints(mut recon: SfmrReconstruction) -> SfmrReconstruction 
     let obs_count = recon.point_set.tracks.len();
     recon.point_set.observations = ObservationSource::EmbeddedPatches {
         keypoints_xy: Array2::<f32>::from_elem((obs_count, 2), 100.0),
-        image_file_hashes: vec![[0u8; 16]; recon.image_table.images.len()],
+        image_file_hashes: vec![[0u8; 16]; recon.image_set.images.len()],
     };
     recon
 }
@@ -225,7 +225,7 @@ fn sift_cache(images: usize, features: usize) -> HashMap<ImageRef, CachedSiftFea
 /// rather than a restatement of the code under test.
 fn camera_cloud_diagonal(recon: &SfmrReconstruction) -> f64 {
     let centres: Vec<_> = recon
-        .image_table
+        .image_set
         .images
         .iter()
         .map(|im| im.camera_center())
@@ -502,9 +502,9 @@ fn upload_thumbnails_spills_onto_extra_atlas_pages() {
     });
     let mut recon = demo(16);
     let images = 25;
-    let template = recon.image_table.images[0].clone();
-    recon.image_table.images = vec![template; images];
-    recon.image_table.thumbnails_y_x_rgb = Some(Arc::new(Array4::zeros((images, 128, 128, 3))));
+    let template = recon.image_set.images[0].clone();
+    recon.image_set.images = vec![template; images];
+    recon.image_set.thumbnails_y_x_rgb = Some(Arc::new(Array4::zeros((images, 128, 128, 3))));
     let mut r = SceneRenderer::new();
 
     r.upload_thumbnails(&device, &queue, RECON, &recon, None, &SILENT);
@@ -526,8 +526,8 @@ fn upload_thumbnails_spills_onto_extra_atlas_pages() {
 fn upload_thumbnails_skips_an_imageless_reconstruction() {
     let (device, queue) = device();
     let mut recon = demo(8);
-    recon.image_table.images.clear();
-    recon.image_table.thumbnails_y_x_rgb = Some(Arc::new(Array4::zeros((0, 128, 128, 3))));
+    recon.image_set.images.clear();
+    recon.image_set.thumbnails_y_x_rgb = Some(Arc::new(Array4::zeros((0, 128, 128, 3))));
     let mut r = SceneRenderer::new();
 
     r.upload_thumbnails(&device, &queue, RECON, &recon, None, &SILENT);
@@ -1155,8 +1155,8 @@ fn an_aligned_nodes_background_image_stays_in_front_of_the_camera() {
     use super::super::uniforms::bg_image_uniforms;
 
     let recon = SfmrReconstruction::demo(64);
-    let image = &recon.image_table.images[3];
-    let camera = &recon.image_table.cameras[image.camera_index as usize];
+    let image = &recon.image_set.images[3];
+    let camera = &recon.image_set.cameras[image.camera_index as usize];
 
     // A half-turn: the alignment between two solves that disagree about which
     // way the scene faces, and the one that makes a background image left in
@@ -1296,7 +1296,7 @@ fn resetting_a_node_transform_puts_its_bounds_back() {
 #[test]
 fn track_rays_are_built_through_the_owning_nodes_transform() {
     let recon = demo(4);
-    let cache = sift_cache(recon.image_table.images.len(), 8);
+    let cache = sift_cache(recon.image_set.images.len(), 8);
     let t = similarity(2.0);
 
     let native = track_ray_edges(&edited_of(&recon), point(0), &cache, &identity());
@@ -1328,7 +1328,7 @@ fn upload_track_rays_emits_one_ray_per_cached_observation() {
     // Point 3, not 0: demo sets feature_indexes[i] = i, so a non-zero point
     // makes the obs_start + k -> feature_indexes -> cache lookup chain
     // load-bearing rather than always resolving index 0.
-    let cache = sift_cache(recon.image_table.images.len(), 8);
+    let cache = sift_cache(recon.image_set.images.len(), 8);
     let mut r = SceneRenderer::new();
 
     r.upload_track_rays(&device, &edited_of(&recon), point(3), &cache, &identity());
@@ -1341,7 +1341,7 @@ fn upload_track_rays_emits_one_ray_per_cached_observation() {
 #[test]
 fn track_rays_for_a_finite_point_stop_near_the_scene() {
     let recon = demo(4);
-    let cache = sift_cache(recon.image_table.images.len(), 8);
+    let cache = sift_cache(recon.image_set.images.len(), 8);
 
     let edges = track_ray_edges(&edited_of(&recon), point(0), &cache, &identity());
 
@@ -1384,7 +1384,7 @@ fn upload_track_rays_skips_feature_indexes_past_a_truncated_cache() {
     let (device, _queue) = device();
     let recon = demo(4);
     // Cache present but holding zero features, so every lookup misses.
-    let cache = sift_cache(recon.image_table.images.len(), 0);
+    let cache = sift_cache(recon.image_set.images.len(), 0);
     let mut r = SceneRenderer::new();
 
     r.upload_track_rays(&device, &edited_of(&recon), point(0), &cache, &identity());
@@ -1416,7 +1416,7 @@ fn track_rays_for_a_point_at_infinity_run_to_twice_the_scene_extent() {
     let mut recon = demo(4);
     recon.point_set.points[0].w = 0.0;
     assert!(recon.point_set.points[0].is_at_infinity());
-    let cache = sift_cache(recon.image_table.images.len(), 8);
+    let cache = sift_cache(recon.image_set.images.len(), 8);
 
     let edges = track_ray_edges(&edited_of(&recon), point(0), &cache, &identity());
 
@@ -1527,7 +1527,7 @@ fn track_ray_edges_follow_a_committed_track_to_its_new_index() {
 fn clear_track_rays_drops_the_buffer() {
     let (device, _queue) = device();
     let recon = demo(4);
-    let cache = sift_cache(recon.image_table.images.len(), 8);
+    let cache = sift_cache(recon.image_set.images.len(), 8);
     let mut r = SceneRenderer::new();
     r.upload_track_rays(&device, &edited_of(&recon), point(0), &cache, &identity());
     assert_eq!(r.track_ray_count, 2);
@@ -1554,7 +1554,7 @@ fn recon_with_real_bg_image(tag: &str) -> (SfmrReconstruction, TempDir) {
 
     let mut recon = demo(4);
     recon.workspace_dir = dir.path().to_path_buf();
-    recon.image_table.images[0].name = BG_NAME.to_string();
+    recon.image_set.images[0].name = BG_NAME.to_string();
     (recon, dir)
 }
 
@@ -2351,12 +2351,12 @@ fn a_new_base_keeps_the_thumbnail_atlas_when_the_images_are_the_same() {
     assert_eq!(
         bundle(&r).thumbnail_texture.clone().unwrap(),
         atlas,
-        "an edit that left the image table alone rebuilt its atlas",
+        "an edit that left the image set alone rebuilt its atlas",
     );
 }
 
 #[test]
-fn a_new_base_rebuilds_the_thumbnail_atlas_when_the_image_table_moves() {
+fn a_new_base_rebuilds_the_thumbnail_atlas_when_the_image_set_moves() {
     let (device, queue) = device();
     let before = demo(8);
     let mut r = SceneRenderer::new();
@@ -2366,15 +2366,15 @@ fn a_new_base_rebuilds_the_thumbnail_atlas_when_the_image_table_moves() {
 
     // What `delete_image` hands over: a shorter table with its own thumbnails.
     let mut after = demo(8);
-    after.image_table.images.pop();
+    after.image_set.images.pop();
     let kept = after
-        .image_table
+        .image_set
         .thumbnails_y_x_rgb
         .as_ref()
         .unwrap()
         .slice(ndarray::s![..7, .., .., ..])
         .to_owned();
-    after.image_table.thumbnails_y_x_rgb = Some(Arc::new(kept));
+    after.image_set.thumbnails_y_x_rgb = Some(Arc::new(kept));
     r.upload_thumbnails(&device, &queue, RECON, &after, None, &SILENT);
 
     assert_ne!(

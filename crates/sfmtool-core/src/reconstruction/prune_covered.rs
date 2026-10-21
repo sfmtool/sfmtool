@@ -620,7 +620,7 @@ fn prune_rows(
         content_hash: ContentHash::default(),
         // The prune touches no image, so the whole table is the source's,
         // thumbnails shared rather than copied.
-        image_table: source.image_table.clone(),
+        image_set: source.image_set.clone(),
         point_set,
     }
 }

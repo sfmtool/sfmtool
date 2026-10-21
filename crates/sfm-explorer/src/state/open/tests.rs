@@ -34,9 +34,9 @@ pub(crate) fn saved_with_photographs(dir: &Path) -> PathBuf {
     let mut recon = crate::state::edits::tests::projected_embedded_demo(12);
     recon.workspace_dir = dir.to_path_buf();
     std::fs::create_dir_all(dir.join("images")).unwrap();
-    let camera = recon.image_table.cameras[0].clone();
+    let camera = recon.image_set.cameras[0].clone();
     let (w, h) = (camera.width, camera.height);
-    for (i, image) in recon.image_table.images.iter_mut().enumerate() {
+    for (i, image) in recon.image_set.images.iter_mut().enumerate() {
         image.name = format!("images/photo_{i:02}.png");
         // A pattern rather than a flat field, as the bench fixture's: a render
         // of a flat field is a flat tile, which says nothing about where it
@@ -47,7 +47,7 @@ pub(crate) fn saved_with_photographs(dir: &Path) -> PathBuf {
         });
         photo.save(dir.join(&image.name)).unwrap();
     }
-    assert!(recon.image_table.thumbnails_y_x_rgb.is_none());
+    assert!(recon.image_set.thumbnails_y_x_rgb.is_none());
     assert!(recon.point_set.patch_bitmaps_y_x_rgba.is_none());
     save_into(dir, &recon, "recon.sfmr")
 }
@@ -67,7 +67,7 @@ fn opening_builds_every_thumbnail_from_the_sift_first_then_the_photographs() {
     let dir = temp_dir("thumbnails");
     let mut recon = workspace_with_photographs(&dir, &[2, 5]);
     write_sift_thumbnails(&mut recon, &[0, 1, 2], &[0, 1, 2]);
-    let n = recon.image_table.images.len();
+    let n = recon.image_set.images.len();
     let path = save_into(&dir, &recon, "recon.sfmr");
 
     let mut state = AppState::new();
@@ -82,7 +82,7 @@ fn opening_builds_every_thumbnail_from_the_sift_first_then_the_photographs() {
     assert!(is_flat(row(3), colour_of(3)), "row 3 is its photograph");
     assert!(is_flat(row(5), [PLACEHOLDER_GREY; 3]), "row 5 has neither");
     // Display data on the node: the value is the file's, without thumbnails.
-    assert!(node.recon().image_table.thumbnails_y_x_rgb.is_none());
+    assert!(node.recon().image_set.thumbnails_y_x_rgb.is_none());
 
     let entry = newest(&state);
     assert!(!entry.failed, "{}", entry.text);

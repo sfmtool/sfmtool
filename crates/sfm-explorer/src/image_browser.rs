@@ -65,7 +65,7 @@ pub(crate) fn thumbnail_id(index: usize) -> egui::Id {
 /// the sequence has none selected.
 fn image_name(recon: &SfmrReconstruction, index: Option<usize>) -> String {
     index
-        .and_then(|index| recon.image_table.images.get(index))
+        .and_then(|index| recon.image_set.images.get(index))
         .map(|image| image.name.clone())
         .unwrap_or_else(|| "no image".to_string())
 }
@@ -252,7 +252,7 @@ impl ImageBrowser {
         #[cfg(test)]
         self.hits.clear();
 
-        let num_images = recon.image_table.images.len();
+        let num_images = recon.image_set.images.len();
 
         // Cache invalidation: if the reconstruction changed, clear everything.
         if self.cached_recon != Some(recon_id) || num_images != self.cached_image_count {
@@ -301,7 +301,7 @@ impl ImageBrowser {
         let mut thumb_positions: Vec<(f32, f32)> = Vec::with_capacity(num_images);
         let mut x = 0.0_f32;
         for i in 0..num_images {
-            let cam = &recon.image_table.cameras[recon.image_table.images[i].camera_index as usize];
+            let cam = &recon.image_set.cameras[recon.image_set.images[i].camera_index as usize];
             let aspect = cam.width as f32 / cam.height as f32;
             let w = img_height * aspect;
             thumb_positions.push((x, w));
@@ -882,7 +882,7 @@ impl ImageBrowser {
         display: Option<&DisplayThumbnails>,
     ) {
         const BANDS: usize = 8;
-        let num_images = recon.image_table.images.len();
+        let num_images = recon.image_set.images.len();
         let rows: Option<Vec<_>> = (0..num_images)
             .map(|i| row_for(display, recon, i))
             .collect();

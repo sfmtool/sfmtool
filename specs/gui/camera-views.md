@@ -520,7 +520,7 @@ On reconstruction load, `upload_thumbnails()` synchronously:
    within page = `i % images_per_page`), and each filled band goes up in one
    `write_texture`. The band is shared with the patch atlas, which is where the
    reason for it is written down (`upload/atlas.rs`): one call per tile is
-   priced by the tile count rather than the pixel count, which an image table
+   priced by the tile count rather than the pixel count, which an image set
    feels as it grows.
 3. Creates the image quad bind group (uniforms + texture array view + sampler)
 

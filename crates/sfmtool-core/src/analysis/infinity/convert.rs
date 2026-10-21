@@ -238,11 +238,11 @@ pub fn camera_extents(centers: &[Point3<f64>]) -> f64 {
 impl SfmrReconstruction {
     /// Largest focal length (pixels) for each image's camera.
     fn per_image_focal_max(&self) -> Vec<f64> {
-        self.image_table
+        self.image_set
             .images
             .iter()
             .map(|im| {
-                let (fx, fy) = self.image_table.cameras[im.camera_index as usize].focal_lengths();
+                let (fx, fy) = self.image_set.cameras[im.camera_index as usize].focal_lengths();
                 fx.max(fy)
             })
             .collect()
@@ -326,7 +326,7 @@ impl SfmrReconstruction {
         }
         let mut summary = InfinityReclassification::default();
 
-        let pixels = self.observation_pixels(&vec![true; self.image_table.images.len()])?;
+        let pixels = self.observation_pixels(&vec![true; self.image_set.images.len()])?;
         let sigma = match sigma_px {
             Some(s) => s,
             None => {
@@ -356,13 +356,13 @@ impl SfmrReconstruction {
             }
             offsets.push(observations.len());
         }
-        let rays = track_rays(&self.image_table, &observations, &offsets, sigma);
+        let rays = track_rays(&self.image_set, &observations, &offsets, sigma);
         let scores = bearing_score_batch(&rays.dirs, &rays.centers, &rays.offsets, &rays.weights);
 
         // The reference both conversions measure point distances from: the
         // posed cameras' centroid, which every edit that resizes a patch frame
         // also measures from.
-        let origin = self.image_table.camera_centroid();
+        let origin = self.image_set.camera_centroid();
         let min_depth = self.min_point_depth();
 
         let mut recon = self.clone_for_edit();
@@ -498,7 +498,7 @@ impl SfmrReconstruction {
     /// [`is_usable_point`]).
     pub fn min_point_depth(&self) -> f64 {
         let centers: Vec<Point3<f64>> = self
-            .image_table
+            .image_set
             .images
             .iter()
             .map(|im| im.camera_center())
@@ -550,11 +550,11 @@ impl SfmrReconstruction {
             if !(pixel[0].is_finite() && pixel[1].is_finite()) {
                 continue;
             }
-            let image = &self.image_table.images[obs.image_index as usize];
+            let image = &self.image_set.images[obs.image_index as usize];
             if let Some(e) = observation_reprojection_error(
                 &image.quaternion_wxyz,
                 &image.translation_xyz,
-                &self.image_table.cameras[image.camera_index as usize],
+                &self.image_set.cameras[image.camera_index as usize],
                 position,
                 at_infinity,
                 pixel,
@@ -577,7 +577,7 @@ impl SfmrReconstruction {
     ///
     /// A `w = 0` point has no depth to recover, so this does not triangulate.
     /// It places the point along its stored direction, at the camera-cloud
-    /// centroid ([`ImageTable::camera_centroid`](crate::reconstruction::ImageTable::camera_centroid),
+    /// centroid ([`ImageSet::camera_centroid`](crate::reconstruction::ImageSet::camera_centroid),
     /// the mean of the posed images' centres) plus a distance `t · d`. `t` is
     /// the largest per-camera distance beyond which the materialised point's
     /// parallax falls below one pixel (`fᵢ · r⊥ᵢ`, the focal length times the
@@ -590,11 +590,11 @@ impl SfmrReconstruction {
     /// export, a finite-only solver). It is not the inverse of
     /// [`Self::classify_points_at_infinity`].
     pub fn materialize_points_at_infinity(&self) -> Self {
-        if self.image_table.images.is_empty() {
+        if self.image_set.images.is_empty() {
             return self.clone();
         }
         let centers: Vec<Point3<f64>> = self
-            .image_table
+            .image_set
             .images
             .iter()
             .map(|im| im.camera_center())
@@ -602,8 +602,8 @@ impl SfmrReconstruction {
         let focal_max = self.per_image_focal_max();
 
         // Reference origin: the centroid of the posed cameras, the one
-        // `ImageTable::placement_scale` measures from.
-        let origin = self.image_table.camera_centroid();
+        // `ImageSet::placement_scale` measures from.
+        let origin = self.image_set.camera_centroid();
 
         // Fallback placement distance when the pixel-differential geometry is
         // degenerate (every camera lies on the line origin + t·d).

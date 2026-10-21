@@ -24,8 +24,8 @@ fn rays_by_hand(recon: &SfmrReconstruction, point: usize, sigma_px: f64) -> Rays
     let start = recon.point_set.observation_offsets[point];
     let (mut dirs, mut centers, mut weights) = (Vec::new(), Vec::new(), Vec::new());
     for (k, obs) in recon.observations_for_point(point).iter().enumerate() {
-        let image = &recon.image_table.images[obs.image_index as usize];
-        let camera = &recon.image_table.cameras[image.camera_index as usize];
+        let image = &recon.image_set.images[obs.image_index as usize];
+        let camera = &recon.image_set.cameras[image.camera_index as usize];
         let pixel = [
             keypoints[[start + k, 0]] as f64,
             keypoints[[start + k, 1]] as f64,
@@ -196,7 +196,7 @@ fn refuses_what_it_cannot_run() {
 #[test]
 fn observation_ray_is_observed_ray_with_the_camera_centre() {
     let recon = noisy_demo(5, [0.5, 0.5], 18);
-    let table = &recon.image_table;
+    let table = &recon.image_set;
     let image = &table.images[3];
     let camera = &table.cameras[image.camera_index as usize];
     let pixel = [900.0, 500.0];
@@ -214,7 +214,7 @@ fn observation_ray_is_observed_ray_with_the_camera_centre() {
 #[test]
 fn track_rays_keeps_one_track_per_input_track() {
     let recon = noisy_demo(5, [0.5, 0.5], 19);
-    let table = &recon.image_table;
+    let table = &recon.image_set;
     let observations = [
         (0, [900.0, 500.0]),
         (1, [950.0, 520.0]),

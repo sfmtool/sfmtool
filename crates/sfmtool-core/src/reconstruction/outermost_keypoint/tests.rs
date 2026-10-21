@@ -28,9 +28,8 @@ fn fixture(dir: &TempDir) -> SfmrReconstruction {
     let mut recon = SfmrReconstruction::demo(POINTS);
     recon.workspace_dir = dir.path().to_path_buf();
     recon.metadata.workspace.contents.feature_prefix_dir = "features".into();
-    for image in 0..recon.image_table.images.len() {
-        let camera =
-            &recon.image_table.cameras[recon.image_table.images[image].camera_index as usize];
+    for image in 0..recon.image_set.images.len() {
+        let camera = &recon.image_set.cameras[recon.image_set.images[image].camera_index as usize];
         let observed = recon.point_set.max_track_feature_index[image] as usize + 1;
         let count = observed + 1;
         let mut positions = Array2::<f32>::zeros((count, 2));
@@ -50,7 +49,7 @@ fn fixture(dir: &TempDir) -> SfmrReconstruction {
             },
             metadata: sfmtool_sift_format::SiftMetadata {
                 version: sfmtool_sift_format::SIFT_FORMAT_VERSION,
-                image_name: recon.image_table.images[image].name.clone(),
+                image_name: recon.image_set.images[image].name.clone(),
                 image_file_xxh128: "0".repeat(32),
                 image_file_size: 1,
                 image_width: camera.width,
@@ -72,7 +71,7 @@ fn fixture(dir: &TempDir) -> SfmrReconstruction {
 
 /// Every camera index of the fixture.
 fn all_cameras(recon: &SfmrReconstruction) -> Vec<usize> {
-    (0..recon.image_table.cameras.len()).collect()
+    (0..recon.image_set.cameras.len()).collect()
 }
 
 /// The largest feature index any observation of `camera`'s images uses.
@@ -84,7 +83,7 @@ fn largest_observed_feature(recon: &SfmrReconstruction, camera: usize) -> Option
         .iter()
         .enumerate()
         .filter(|(_, o)| {
-            recon.image_table.images[o.image_index as usize].camera_index as usize == camera
+            recon.image_set.images[o.image_index as usize].camera_index as usize == camera
         })
         .map(|(row, _)| features[row] as usize)
         .max()
@@ -95,11 +94,11 @@ fn the_detected_keypoint_reaches_past_the_observed_one() {
     let dir = tempfile::tempdir().unwrap();
     let recon = fixture(&dir);
     let reach = outermost_keypoints(&recon, &all_cameras(&recon), true);
-    assert_eq!(reach.len(), recon.image_table.cameras.len());
+    assert_eq!(reach.len(), recon.image_set.cameras.len());
     for entry in &reach {
-        let camera = &recon.image_table.cameras[entry.camera];
+        let camera = &recon.image_set.cameras[entry.camera];
         let images = recon
-            .image_table
+            .image_set
             .images
             .iter()
             .filter(|i| i.camera_index as usize == entry.camera)
@@ -156,7 +155,7 @@ fn inline_keypoints_are_observed_without_reading_a_file() {
     let mut recon = fixture(&dir);
     let rows = recon.point_set.tracks.len();
     let mut keypoints_xy = Array2::<f32>::zeros((rows, 2));
-    let camera = recon.image_table.cameras[0].clone();
+    let camera = recon.image_set.cameras[0].clone();
     let (cx, cy) = camera.principal_point();
     for row in 0..rows {
         keypoints_xy[[row, 0]] = cx as f32;
@@ -164,7 +163,7 @@ fn inline_keypoints_are_observed_without_reading_a_file() {
     }
     recon.point_set.observations = ObservationSource::EmbeddedPatches {
         keypoints_xy,
-        image_file_hashes: vec![[0u8; 16]; recon.image_table.images.len()],
+        image_file_hashes: vec![[0u8; 16]; recon.image_set.images.len()],
     };
     let reach = outermost_keypoints(&recon, &[0], false);
     let observed = reach[0].observed.expect("inline keypoints");
@@ -172,7 +171,7 @@ fn inline_keypoints_are_observed_without_reading_a_file() {
         .point_set
         .tracks
         .iter()
-        .rposition(|o| recon.image_table.images[o.image_index as usize].camera_index == 0)
+        .rposition(|o| recon.image_set.images[o.image_index as usize].camera_index == 0)
         .expect("camera 0 is observed");
     assert!(
         (observed.radius_px - last as f64).abs() < 1e-3,
@@ -185,7 +184,7 @@ fn inline_keypoints_are_observed_without_reading_a_file() {
 fn a_camera_past_the_table_is_ignored() {
     let dir = tempfile::tempdir().unwrap();
     let recon = fixture(&dir);
-    let count = recon.image_table.cameras.len();
+    let count = recon.image_set.cameras.len();
     let reach = outermost_keypoints(&recon, &[count + 3, 0, 0], true);
     assert_eq!(reach.len(), 1);
     assert_eq!(reach[0].camera, 0);

@@ -663,8 +663,7 @@ fn value_bytes(value: &EditedReconstruction, previous: Option<&EditedReconstruct
     }
     let base = &*value.base;
     let mut bytes = point_set_bytes(&base.point_set) as u64;
-    bytes +=
-        (base.image_table.images.len() * std::mem::size_of::<sfmtool_core::SfmrImage>()) as u64;
+    bytes += (base.image_set.images.len() * std::mem::size_of::<sfmtool_core::SfmrImage>()) as u64;
     // The two heavy columns count only when this value does not point at the
     // same allocation its predecessor's base did.
     // A node's display thumbnails built by the open are the node's, not any
@@ -672,9 +671,9 @@ fn value_bytes(value: &EditedReconstruction, previous: Option<&EditedReconstruct
     // here. Patch bitmaps the open rendered for display are the value's column
     // and count like any other.
     let previous_base = previous.map(|p| &*p.base);
-    if let Some(thumbnails) = &base.image_table.thumbnails_y_x_rgb {
+    if let Some(thumbnails) = &base.image_set.thumbnails_y_x_rgb {
         let shared = previous_base.is_some_and(|p| {
-            p.image_table
+            p.image_set
                 .thumbnails_y_x_rgb
                 .as_ref()
                 .is_some_and(|q| Arc::ptr_eq(q, thumbnails))

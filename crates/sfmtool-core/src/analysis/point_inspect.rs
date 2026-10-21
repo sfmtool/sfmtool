@@ -102,7 +102,7 @@ impl SfmrReconstruction {
         let observations = self.observations_for_point(point_idx);
         let noise = (pt.rms_reprojection_error as f64).max(noise_floor_px);
         let feature_indexes = self.feature_indexes();
-        let mut wanted = vec![false; self.image_table.images.len()];
+        let mut wanted = vec![false; self.image_set.images.len()];
         for obs in observations {
             wanted[obs.image_index as usize] = true;
         }
@@ -116,8 +116,8 @@ impl SfmrReconstruction {
         for (k, obs) in observations.iter().enumerate() {
             let feature_index = feature_indexes.map(|f| f[start + k]);
             let img_idx = obs.image_index as usize;
-            let image = &self.image_table.images[img_idx];
-            let camera = &self.image_table.cameras[image.camera_index as usize];
+            let image = &self.image_set.images[img_idx];
+            let camera = &self.image_set.cameras[image.camera_index as usize];
             let (fx, fy) = camera.focal_lengths();
             let (u, v) = (pixels[[start + k, 0]] as f64, pixels[[start + k, 1]] as f64);
             let mut inspection = ObservationInspection {
@@ -150,7 +150,7 @@ impl SfmrReconstruction {
         }
 
         let centers_all: Vec<Point3<f64>> = self
-            .image_table
+            .image_set
             .images
             .iter()
             .map(|im| im.camera_center())

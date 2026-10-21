@@ -109,7 +109,7 @@ pub const BUDGET_ENV_VAR: &str;
 Why it is shaped this way:
 
 - **Keyed by path, not by image index.** An image index is a position in one
-  version's image table, and an edit that deletes a camera image renumbers
+  version's image set, and an edit that deletes a camera image renumbers
   the table although no file changed. A path does not change when the table is
   renumbered, and two reconstructions over the same workspace share their
   decodes. The key is the path as joined from the workspace directory and the

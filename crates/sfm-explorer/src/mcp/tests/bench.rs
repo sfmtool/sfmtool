@@ -34,7 +34,7 @@ pub(super) fn benchable_with(recon: sfmtool_core::SfmrReconstruction) -> (AppSta
     ));
     let id = state.scene[0].id;
     state.select_recon(id);
-    let camera = &state.scene[0].recon().image_table.cameras[0];
+    let camera = &state.scene[0].recon().image_set.cameras[0];
     let (w, h) = (camera.width, camera.height);
     for image in 0..state.scene[0].image_count() {
         let data: Vec<u8> = (0..(w * h * 3))
@@ -341,7 +341,7 @@ fn the_patch_tools_slide_resize_and_turn_and_each_is_one_version() {
             .expect("a patch frame");
         for observation in &track.observations {
             let (camera, pose) = crate::bench::geometry::view_of(
-                &state.scene[0].edited().base.image_table,
+                &state.scene[0].edited().base.image_set,
                 observation.image as usize,
             )
             .expect("the fixture's images have cameras");
@@ -365,7 +365,7 @@ fn the_patch_tools_slide_resize_and_turn_and_each_is_one_version() {
             .expect("the track is on the bench");
         let sighting = &track.observations[0];
         let (camera, pose) = crate::bench::geometry::view_of(
-            &state.scene[0].edited().base.image_table,
+            &state.scene[0].edited().base.image_set,
             sighting.image as usize,
         )
         .expect("the fixture's images have cameras");
@@ -547,7 +547,7 @@ fn the_patch_tools_take_a_pixel_in_a_camera_image_the_track_has_no_sighting_in()
         .find(|i| track.observations.iter().all(|o| o.image as usize != *i))
         .expect("the fixture's track does not span every image");
     let (camera, pose) =
-        crate::bench::geometry::view_of(&state.scene[0].edited().base.image_table, unseen)
+        crate::bench::geometry::view_of(&state.scene[0].edited().base.image_set, unseen)
             .expect("the fixture's images have cameras");
     let patch = |state: &AppState| {
         state
@@ -589,9 +589,7 @@ fn the_patch_tools_take_a_pixel_in_a_camera_image_the_track_has_no_sighting_in()
     );
 
     // By name, as every camera_image argument may be.
-    let name = state.scene[0].recon().image_table.images[unseen]
-        .name
-        .clone();
+    let name = state.scene[0].recon().image_set.images[unseen].name.clone();
     let was = patch(&state);
     let far = corner(&was, -1.0, 0.0);
     let target = corner(&was, 1.5, 0.0);
@@ -1360,8 +1358,8 @@ fn every_track_stage_row_reports_its_patch_jacobian_and_zoom() {
     assert_eq!(rows.len(), 3, "{track}");
     for row in rows {
         let index = row["camera_image"].as_u64().expect("an image") as usize;
-        let image = &recon.image_table.images[index];
-        let camera = &recon.image_table.cameras[image.camera_index as usize];
+        let image = &recon.image_set.images[index];
+        let camera = &recon.image_set.cameras[image.camera_index as usize];
         let pose = crate::scene::cam_from_world(image);
         let pixel: [f64; 2] = serde_json::from_value(row["pixel"].clone()).expect("a pixel");
         let anchored = patch
@@ -3605,7 +3603,7 @@ fn find_nearby_tracks_answers_an_empty_find_and_refuses_what_cannot_run() {
     );
     assert_eq!(history_len(&mut state, &mut viewer), versions);
 
-    state.scene[0].recon_mut().image_table.images[1]
+    state.scene[0].recon_mut().image_set.images[1]
         .translation_xyz
         .x = f64::NAN;
     let unposed = refused_call(
@@ -4631,13 +4629,13 @@ fn bench_observation_names(state: &mut AppState, viewer: &mut Viewer3D, item: &s
 }
 
 /// Deleting an image renumbers every later one, and the bench moves with the
-/// image table: the observation in the deleted image goes, the one after it
+/// image set: the observation in the deleted image goes, the one after it
 /// still names the photograph it was sighted in, and committing the track
 /// writes a point whose observations are those photographs at their own
 /// pixels. The selected observations follow the renumbering, and an undo
 /// brings the bench back as it was. Bug bash 2026-09-29, finding 1.
 #[test]
-fn deleting_an_image_moves_the_bench_observations_with_the_image_table() {
+fn deleting_an_image_moves_the_bench_observations_with_the_image_set() {
     let (mut state, mut viewer) = benchable();
     let item = on_the_bench(&mut state, &mut viewer);
     let before = bench_observation_names(&mut state, &mut viewer, &item);

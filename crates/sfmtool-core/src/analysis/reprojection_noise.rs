@@ -65,7 +65,7 @@ pub struct ReprojectionNoise {
     /// spread.
     pub outlier_count: usize,
     /// The same measure over the observations made by each camera, indexed as
-    /// `image_table.cameras`; `None` for a camera with no counted observation.
+    /// `image_set.cameras`; `None` for a camera with no counted observation.
     /// Each is never under that camera's keypoint resolution.
     pub per_camera_sigma_px: Vec<Option<f64>>,
     /// How many observations each entry of `per_camera_sigma_px` is measured
@@ -76,7 +76,7 @@ pub struct ReprojectionNoise {
 /// One observation's residual, as the measure reads it.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ObservationResidual {
-    /// The observing image's camera, an index into `image_table.cameras`.
+    /// The observing image's camera, an index into `image_set.cameras`.
     pub camera: usize,
     /// The pixel offset from the observation to its point's projection.
     pub residual: [f64; 2],
@@ -123,7 +123,7 @@ impl SfmrReconstruction {
     /// [`Self::reprojection_noise`] reads its pixels.
     pub(crate) fn finite_observing_images(&self) -> Vec<bool> {
         let points = &self.point_set.points;
-        let mut wanted = vec![false; self.image_table.images.len()];
+        let mut wanted = vec![false; self.image_set.images.len()];
         for obs in &self.point_set.tracks {
             if !points[obs.point_index as usize].is_at_infinity() {
                 wanted[obs.image_index as usize] = true;
@@ -140,7 +140,7 @@ impl SfmrReconstruction {
         &self,
         pixels: &Array2<f32>,
     ) -> Vec<ObservationResidual> {
-        let images = &self.image_table.images;
+        let images = &self.image_set.images;
         let points = &self.point_set.points;
         let mut out = Vec::new();
         for (row, obs) in self.point_set.tracks.iter().enumerate() {
@@ -154,7 +154,7 @@ impl SfmrReconstruction {
             }
             let image = &images[obs.image_index as usize];
             let camera_index = image.camera_index as usize;
-            let camera = &self.image_table.cameras[camera_index];
+            let camera = &self.image_set.cameras[camera_index];
             // The test gives a pixel observed_ray declines no ray, so it does
             // not count towards the noise the rays are weighted by either. The
             // noise level passed here only scales the weight, which is unused.
@@ -187,14 +187,14 @@ impl SfmrReconstruction {
     pub(crate) fn reprojection_noise_from_pixels(&self, pixels: &Array2<f32>) -> ReprojectionNoise {
         let residuals = self.finite_observation_residuals(pixels);
         let mut noise =
-            gated_reprojection_noise(&residuals, self.image_table.cameras.len(), OUTLIER_GATE);
+            gated_reprojection_noise(&residuals, self.image_set.cameras.len(), OUTLIER_GATE);
         // Keypoints at the exact projections of their points measure round-off,
         // or 0, which would weight every ray of the point-or-bearing test
         // infinitely; the level is never finer than a keypoint can be stored.
         for (sigma, camera) in noise
             .per_camera_sigma_px
             .iter_mut()
-            .zip(&self.image_table.cameras)
+            .zip(&self.image_set.cameras)
         {
             *sigma = sigma.map(|s| s.max(camera_keypoint_resolution_px(camera)));
         }
@@ -220,7 +220,7 @@ impl SfmrReconstruction {
 /// point-or-bearing test then calls any track with parallax a point.
 pub fn keypoint_resolution_px(recon: &SfmrReconstruction) -> f64 {
     recon
-        .image_table
+        .image_set
         .cameras
         .iter()
         .map(camera_keypoint_resolution_px)

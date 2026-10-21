@@ -118,7 +118,7 @@ struct Judged {
     /// The version it was derived at, so a frame that pushed nothing costs one
     /// comparison.
     serial: u64,
-    /// The node's image table, as [`image_fingerprint`] digests it.
+    /// The node's image set, as [`image_fingerprint`] digests it.
     node_images: u64,
     /// The index open beside the node: its path, its content hash and whether
     /// it was current. `None` when none was open.
@@ -171,7 +171,7 @@ fn staleness(
              refined."
         ));
     }
-    let images = &recon.image_table.images;
+    let images = &recon.image_set.images;
     if file.image_names.len() != images.len() {
         return Some(format!(
             "{shown} covers {} images and this reconstruction has {}.",
@@ -316,7 +316,7 @@ impl AppState {
     }
 
     /// Re-derive the state of an open cluster-patches file when the node's
-    /// image table or the index open beside it has moved.
+    /// image set or the index open beside it has moved.
     ///
     /// Reads no file: the facts the verdict needs were read at open, and the
     /// comparisons are over a few hundred names and one hash.
@@ -422,7 +422,7 @@ impl AppState {
             index: index_key(self.sift_index(id)),
         };
         let image_names: Vec<String> = recon
-            .image_table
+            .image_set
             .images
             .iter()
             .map(|image| image.name.clone())
@@ -477,7 +477,7 @@ impl ClusterPlan {
     pub(crate) fn of(node: &SceneNode) -> Result<Self, String> {
         let path = cluster_patches_path(node).ok_or_else(|| unsaved_refusal(node))?;
         let recon = node.recon();
-        let images = &recon.image_table.images;
+        let images = &recon.image_set.images;
         let mut workspace = recon.metadata.workspace.clone();
         workspace.absolute_path = recon.workspace_dir.display().to_string();
         workspace.relative_path = match recon.measured_workspace_path(&path) {
@@ -500,7 +500,7 @@ impl ClusterPlan {
             camera_dims: images
                 .iter()
                 .map(|image| {
-                    let camera = &recon.image_table.cameras[image.camera_index as usize];
+                    let camera = &recon.image_set.cameras[image.camera_index as usize];
                     [camera.width, camera.height]
                 })
                 .collect(),

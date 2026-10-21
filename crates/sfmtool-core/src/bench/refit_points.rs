@@ -28,7 +28,7 @@ use crate::patch::normal_refine::ProjectedImage;
 use crate::progress::{Cancelled, Progress};
 use crate::reconstruction::bundle_adjust::is_posed;
 use crate::reconstruction::data::{
-    ImageTable, ObservationReading, ObservationReadings, ObservationSource, PointSet,
+    ImageSet, ObservationReading, ObservationReadings, ObservationSource, PointSet,
     SfmrReconstruction,
 };
 use crate::reconstruction::edited::{reprojection_noise_level, EditedReconstruction, PointRecord};
@@ -534,7 +534,7 @@ fn check_preconditions(
         return Err(RefitPointsError::NoPatchFrames);
     }
     if !recon
-        .image_table
+        .image_set
         .images
         .iter()
         .any(|image| is_posed(&image.quaternion_wxyz, &image.translation_xyz))
@@ -593,7 +593,7 @@ fn point_ranges(recon: &SfmrReconstruction) -> Vec<PointRange> {
     let Some(columns) = recon.point_set.point_constraints.as_ref() else {
         return vec![PointRange::Free; recon.point_count()];
     };
-    let table: &ImageTable = &recon.image_table;
+    let table: &ImageSet = &recon.image_set;
     (0..recon.point_count())
         .map(|p| {
             let kind = columns.point_constraints[p];

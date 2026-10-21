@@ -1094,7 +1094,7 @@ impl AppState {
     /// surviving points are renumbered. The caller drops its panel-local caches
     /// for the node afterwards, exactly as it does when a node is closed.
     ///
-    /// The bench moves with the image table, in the same version
+    /// The bench moves with the image set, in the same version
     /// ([`sfmtool_core::bench::Bench::delete_image`]): bench observations in
     /// the deleted image are dropped, those in later images move down by one,
     /// and an item whose observations were all in the deleted image is
@@ -1123,9 +1123,7 @@ impl AppState {
                 node.label
             ));
         }
-        let name = node.recon().image_table.images[removed as usize]
-            .name
-            .clone();
+        let name = node.recon().image_set.images[removed as usize].name.clone();
 
         // Materialise only when there is an overlay to fold in; an empty one
         // materialises to its own base, and the subset can read that directly.
@@ -1232,7 +1230,7 @@ impl AppState {
     /// A bulk edit: the resection re-poses one image and re-triangulates the
     /// points it observes, so the next version is a whole new base and the map
     /// is the one `RowMap::by_scan` reads off the call's input and output. The
-    /// image table does not move -- a resection re-poses an image, it does not
+    /// image set does not move -- a resection re-poses an image, it does not
     /// remove one -- so image indexes, the image and camera selections, and the
     /// decoded pixels keyed by them all still mean what they meant.
     ///
@@ -1289,7 +1287,7 @@ impl AppState {
         let label = self.scene[index].label.clone();
         let name = self.scene[index]
             .recon()
-            .image_table
+            .image_set
             .images
             .get(image)
             .map(|i| i.name.clone())
@@ -1351,7 +1349,7 @@ impl AppState {
 
         // The resection may drop a point it could neither re-triangulate nor
         // hold out, and says nothing about which; the map is read off its input
-        // and its output. The image table is untouched, so no image map.
+        // and its output. The image set is untouched, so no image map.
         let scan = {
             let _phase = collector.phase("row map");
             RowMap::by_scan(source_value, &resected, None)
@@ -1396,7 +1394,7 @@ impl AppState {
     /// the identity map -- it is still run rather than assumed, because the map
     /// is a fact about the two values and not about this method.
     ///
-    /// The image table does not move, so image indexes and the selections and
+    /// The image set does not move, so image indexes and the selections and
     /// decodes keyed by them all still mean what they meant; what the panels
     /// cached *about* the geometry is the caller's to drop, as it is after the
     /// resection and the adjustment. Records its own outcome as one Action Log
@@ -1445,7 +1443,7 @@ impl AppState {
         let label = self.scene[index].label.clone();
         let name = self.scene[index]
             .recon()
-            .image_table
+            .image_set
             .images
             .get(image.index())
             .map(|i| i.name.clone())
@@ -1478,7 +1476,7 @@ impl AppState {
                 .map_err(|e| refuse(e.to_string()))?
         };
         // The move deletes and creates no points, so this scan is the identity
-        // map -- read off the two values rather than asserted. The image table
+        // map -- read off the two values rather than asserted. The image set
         // is untouched, so no image map.
         let scan = {
             let _phase = collector.phase("row map");
@@ -1540,7 +1538,7 @@ impl AppState {
     /// What this returns an `Err` for is a refusal to *begin*, which is logged
     /// like the refusals the edit used to write itself.
     ///
-    /// The image table does not move, so image indexes and the selections keyed
+    /// The image set does not move, so image indexes and the selections keyed
     /// by them still mean what they meant.
     pub(crate) fn start_bundle_adjust(
         &mut self,
@@ -1624,7 +1622,7 @@ impl AppState {
             };
             // The solve drops the points it left unsupported and says how many,
             // not which; the map is read off its input and its output. The image
-            // table is untouched, so no image map.
+            // set is untouched, so no image map.
             let scan = {
                 let _phase = progress.phase("row map");
                 match RowMap::by_scan(source, &adjusted, None) {
@@ -2031,8 +2029,8 @@ impl AppState {
         let mut cameras = Vec::with_capacity(recon.image_count());
         let mut poses = Vec::with_capacity(recon.image_count());
         let mut paths = Vec::with_capacity(recon.image_count());
-        for (i, im) in recon.image_table.images.iter().enumerate() {
-            cameras.push(recon.image_table.cameras[im.camera_index as usize].clone());
+        for (i, im) in recon.image_set.images.iter().enumerate() {
+            cameras.push(recon.image_set.cameras[im.camera_index as usize].clone());
             let q = im.quaternion_wxyz;
             poses.push(RigidTransform::from_wxyz_translation(
                 [q.w, q.i, q.j, q.k],
@@ -2058,7 +2056,7 @@ impl AppState {
 
     /// Drop everything this state holds that is keyed by an image of `id`.
     ///
-    /// What a bulk edit owes: it renumbers the image table, so a cached set of
+    /// What a bulk edit owes: it renumbers the image set, so a cached set of
     /// SIFT features would silently become a statement about a different
     /// image. The photographs stay: [`AppState::photographs`] is keyed by path,
     /// which a renumbering does not change. The panels' own texture caches are
@@ -2080,14 +2078,14 @@ impl AppState {
     /// move.
     ///
     /// A name rather than an index, for the reason the wire addresses images by
-    /// one: an index is a coordinate in a particular version's image table, and
+    /// one: an index is a coordinate in a particular version's image set, and
     /// a move that crosses a `delete_camera_image` crosses a renumbering of
     /// that table. The name is what the two versions agree on.
     fn selected_image_name(&self, id: ReconId) -> Option<String> {
         let image = self.selected_image.filter(|i| i.recon == id)?;
         let node = self.node(id)?;
         node.recon()
-            .image_table
+            .image_set
             .images
             .get(image.index())
             .map(|image| image.name.clone())
@@ -2101,7 +2099,7 @@ impl AppState {
     /// Undo, redo and a jump are steps through a node's *history* and not
     /// statements about what the person is looking at, so the photograph on
     /// screen stays on screen -- which for a bench step, an adjustment or a
-    /// point edit is every time, none of them touching the image table. Only a
+    /// point edit is every time, none of them touching the image set. Only a
     /// move across a `delete_camera_image` can take the image away, and then
     /// the selection clears because there is nothing left to show.
     ///
@@ -2112,7 +2110,7 @@ impl AppState {
         let index = name.and_then(|name| {
             let node = self.node(id)?;
             node.recon()
-                .image_table
+                .image_set
                 .images
                 .iter()
                 .position(|image| image.name == name)
@@ -2124,7 +2122,7 @@ impl AppState {
             // the version at the cursor has.
             let cameras = self
                 .node(id)
-                .map(|node| node.recon().image_table.cameras.len())
+                .map(|node| node.recon().image_set.cameras.len())
                 .unwrap_or(0);
             self.selected_camera = self
                 .selected_camera

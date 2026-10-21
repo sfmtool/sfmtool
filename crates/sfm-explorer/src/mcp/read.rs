@@ -403,7 +403,7 @@ pub(super) fn list_camera_images(
     let id = super::resolve_reconstruction(state, reconstruction_label)?;
     let node = state.node(id).expect("just resolved");
     let recon = node.recon();
-    let total = recon.image_table.images.len();
+    let total = recon.image_set.images.len();
     let limit = limit.min(MAX_LIMIT);
     let end = offset.saturating_add(limit).min(total);
     let observations = render::observations_per_image(recon);
@@ -430,8 +430,8 @@ pub(super) fn get_camera_image(
 
     let node = state.node(id).expect("just resolved");
     let recon = node.recon();
-    let image = &recon.image_table.images[index];
-    let camera = &recon.image_table.cameras[image.camera_index as usize];
+    let image = &recon.image_set.images[index];
+    let camera = &recon.image_set.cameras[image.camera_index as usize];
     let quaternion = image.quaternion_wxyz;
     Ok(json!({
         "reconstruction_label": node.label,
@@ -495,9 +495,9 @@ pub(super) fn get_camera_intrinsics(
     resolve_camera_intrinsics(state, id, index)?;
     let node = state.node(id).expect("just resolved");
     let recon = node.recon();
-    let camera = &recon.image_table.cameras[index];
+    let camera = &recon.image_set.cameras[index];
     let users: Vec<usize> = recon
-        .image_table
+        .image_set
         .images
         .iter()
         .enumerate()
@@ -582,8 +582,8 @@ pub(super) fn get_point(state: &mut AppState, query: &crate::goto_point::PointQu
         .enumerate()
         .map(|(k, observation)| {
             let image_index = observation.image_index as usize;
-            let image = &recon.image_table.images[image_index];
-            let camera = &recon.image_table.cameras[image.camera_index as usize];
+            let image = &recon.image_set.images[image_index];
+            let camera = &recon.image_set.cameras[image.camera_index as usize];
             let xy = observation_xy(
                 state,
                 recon_id,

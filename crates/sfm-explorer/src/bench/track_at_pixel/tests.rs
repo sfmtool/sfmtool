@@ -142,17 +142,13 @@ fn plane_recon_with(points: &[Point3<f64>], depth: f64) -> SfmrReconstruction {
     let half_extent = HALF_EXTENT * depth / PLANE_Z;
     let n = CENTERS.len();
     let mut recon = SfmrReconstruction::demo(1);
-    recon.image_table.cameras = vec![pinhole()];
-    recon.image_table.images = (0..n).map(image_row).collect();
-    let stats_row = recon.image_table.depth_statistics.images[0].clone();
+    recon.image_set.cameras = vec![pinhole()];
+    recon.image_set.images = (0..n).map(image_row).collect();
+    let stats_row = recon.image_set.depth_statistics.images[0].clone();
+    recon.image_set.depth_statistics.images.resize(n, stats_row);
+    let histogram_row = recon.image_set.depth_histogram_counts[0].clone();
     recon
-        .image_table
-        .depth_statistics
-        .images
-        .resize(n, stats_row);
-    let histogram_row = recon.image_table.depth_histogram_counts[0].clone();
-    recon
-        .image_table
+        .image_set
         .depth_histogram_counts
         .resize(n, histogram_row);
 
@@ -475,7 +471,7 @@ fn create_track_here_is_greyed_where_it_cannot_run() {
     assert_eq!(state.create_track_here_refusal(image), None);
 
     // An image with no pose has no ray through the pixel.
-    state.scene[0].recon_mut().image_table.images[1]
+    state.scene[0].recon_mut().image_set.images[1]
         .translation_xyz
         .x = f64::NAN;
     assert_eq!(

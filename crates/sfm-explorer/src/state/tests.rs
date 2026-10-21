@@ -278,6 +278,6 @@ fn the_panels_read_the_pyramid_the_cache_holds_for_the_path() {
     // Image 1 has no file behind it, and nothing was inserted for it.
     assert!(peek_full_res_pyramid(&cache, &recon, 1).is_none());
     assert_eq!(cache.stats().misses, 0, "a peek read a file");
-    // An index past the image table.
+    // An index past the image set.
     assert!(peek_full_res_pyramid(&cache, &recon, recon.image_count()).is_none());
 }

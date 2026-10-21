@@ -612,7 +612,7 @@ fn show_node(ui: &mut egui::Ui, node: &mut SceneNode, ctx: &NodeContext, out: &m
 ///
 /// Rows rather than a question asked while drawing, because each file's state
 /// is derived when it is opened or built and when a version moves the image
-/// table, never per frame (`specs/gui/index-files.md`).
+/// set, never per frame (`specs/gui/index-files.md`).
 pub(super) struct IndexFilesRows {
     /// The SIFT index's row.
     pub(super) index: IndexFileRow,

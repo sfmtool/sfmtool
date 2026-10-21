@@ -21,7 +21,7 @@ use sfmtool_sfmr_format::{
 use crate::camera::CameraIntrinsics;
 
 use super::{
-    compute_observation_offsets, count_points_at_infinity, ImageTable, ObservationSource, Point3D,
+    compute_observation_offsets, count_points_at_infinity, ImageSet, ObservationSource, Point3D,
     PointSet, SfmrImage, SfmrReconstruction, TrackObservation,
 };
 
@@ -205,7 +205,7 @@ impl SfmrReconstruction {
             metadata,
             // No file behind this value, which is what the default state says.
             content_hash: ContentHash::default(),
-            image_table: ImageTable {
+            image_set: ImageSet {
                 cameras,
                 images,
                 // Demo data has no photographs, and a zero column would be the

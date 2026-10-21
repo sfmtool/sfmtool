@@ -148,7 +148,7 @@ impl AppState {
         let label = node.label.clone();
         let name = node
             .recon()
-            .image_table
+            .image_set
             .images
             .get(image.index())
             .map(|im| crate::resect::basename(&im.name).to_string())

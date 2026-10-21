@@ -157,7 +157,7 @@ impl SfmrReconstruction {
         };
 
         // Per-image: a minimal keypoint read plus the source-image identity hash.
-        let n_images = self.image_table.images.len();
+        let n_images = self.image_set.images.len();
         let mut reading = reading.phase("read keypoints");
         progress_note!(reading, "{n_images} images");
         let mut positions_per_image: Vec<Vec<[f32; 2]>> = Vec::with_capacity(n_images);

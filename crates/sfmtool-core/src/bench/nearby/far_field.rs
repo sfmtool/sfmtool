@@ -865,7 +865,7 @@ impl Refitter<'_, '_> {
     /// A track on `sight` with the queried pixel as observation 0, turned
     /// out, fitted twice.
     fn refit_track(&self, sight: &[(u32, [f64; 2])]) -> Result<EditableTrack, String> {
-        let name = &self.edited.base.image_table.images[self.image as usize].name;
+        let name = &self.edited.base.image_set.images[self.image as usize].name;
         let stem = std::path::Path::new(name)
             .file_stem()
             .map_or_else(|| name.clone(), |s| s.to_string_lossy().into_owned());

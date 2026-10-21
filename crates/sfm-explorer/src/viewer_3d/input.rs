@@ -20,7 +20,7 @@ use crate::state::AppState;
 
 impl Viewer3D {
     /// Handles `,` / `.` -- stepping the **selected image** back and forward
-    /// through the selected reconstruction's image table, wrapping at both
+    /// through the selected reconstruction's image set, wrapping at both
     /// ends.
     ///
     /// In camera view the viewport comes along, switching which camera it looks
@@ -57,7 +57,7 @@ impl Viewer3D {
         let Some(node) = crate::scene::node_by_id(&state.scene, recon_id) else {
             return;
         };
-        let n = node.recon().image_table.images.len();
+        let n = node.recon().image_set.images.len();
         if n == 0 {
             return;
         }
@@ -141,12 +141,12 @@ impl Viewer3D {
         let name = state
             .selected_image
             .filter(|i| i.recon == current)
-            .and_then(|i| state.scene[from].recon().image_table.images.get(i.index()))
+            .and_then(|i| state.scene[from].recon().image_set.images.get(i.index()))
             .map(|image| image.name.clone());
         let carried = name.and_then(|name| {
             state.scene[to]
                 .recon()
-                .image_table
+                .image_set
                 .images
                 .iter()
                 .position(|image| image.name == name)

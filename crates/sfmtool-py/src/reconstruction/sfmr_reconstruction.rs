@@ -256,7 +256,7 @@ impl PySfmrReconstruction {
     #[getter]
     fn cameras(&self) -> Vec<PyCameraIntrinsics> {
         self.inner
-            .image_table
+            .image_set
             .cameras
             .iter()
             .map(|c| PyCameraIntrinsics { inner: c.clone() })
@@ -267,7 +267,7 @@ impl PySfmrReconstruction {
     #[getter]
     fn image_names(&self) -> Vec<String> {
         self.inner
-            .image_table
+            .image_set
             .images
             .iter()
             .map(|im| im.name.clone())
@@ -281,7 +281,7 @@ impl PySfmrReconstruction {
     fn camera_indexes<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray1<u32>> {
         let vec: Vec<u32> = self
             .inner
-            .image_table
+            .image_set
             .images
             .iter()
             .map(|im| im.camera_index)
@@ -294,7 +294,7 @@ impl PySfmrReconstruction {
     fn quaternions_wxyz<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray2<f64>> {
         let vec2: Vec<Vec<f64>> = self
             .inner
-            .image_table
+            .image_set
             .images
             .iter()
             .map(|im| {
@@ -310,7 +310,7 @@ impl PySfmrReconstruction {
     fn translations<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray2<f64>> {
         let vec2: Vec<Vec<f64>> = self
             .inner
-            .image_table
+            .image_set
             .images
             .iter()
             .map(|im| {
@@ -441,11 +441,11 @@ impl PySfmrReconstruction {
     /// or drops the bitmaps or passes a new ``patches`` frame for the same
     /// points. A call that replaces the tracks moves each reference to the
     /// observation of the same image in the point's new track (``-1`` where
-    /// there is none): the image at the same index when the image table is
+    /// there is none): the image at the same index when the image set is
     /// unchanged (the same names in the same order), and otherwise the image
     /// of the same name, so images appended or reordered in the same call
     /// carry it. A call that has patch frames and either changes the point
-    /// count, or replaces the tracks and changes the image table while an
+    /// count, or replaces the tracks and changes the image set while an
     /// image a reference is in no longer has its name on exactly one image,
     /// has no way to carry the references, and is refused unless it passes
     /// ``reference_observations`` (or the input names none). A point left with
@@ -746,7 +746,7 @@ impl PySfmrReconstruction {
             let borrow = self_.borrow();
             // Through the `Arc`: the view must point at the array itself, not
             // at the pointer that owns it.
-            borrow.inner.image_table.thumbnails_y_x_rgb.as_deref()? as *const ndarray::Array4<u8>
+            borrow.inner.image_set.thumbnails_y_x_rgb.as_deref()? as *const ndarray::Array4<u8>
         };
         let view = unsafe { PyArray4::borrow_from_array(&*ptr, self_.clone().into_any()) };
         // The buffer is shared: every clone of this reconstruction that did not
@@ -771,13 +771,13 @@ impl PySfmrReconstruction {
     /// Depth statistics as a Python dict (serialized via JSON).
     #[getter]
     fn depth_statistics(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        serde_to_py(py, &self.inner.image_table.depth_statistics)
+        serde_to_py(py, &self.inner.image_set.depth_statistics)
     }
 
     /// Depth histogram counts, shape `(N, num_buckets)`.
     #[getter]
     fn depth_histogram_counts<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray2<u32>> {
-        PyArray2::from_vec2(py, &self.inner.image_table.depth_histogram_counts).unwrap()
+        PyArray2::from_vec2(py, &self.inner.image_set.depth_histogram_counts).unwrap()
     }
 
     /// Return a new reconstruction containing only the images at
@@ -1094,17 +1094,17 @@ impl PySfmrReconstruction {
     fn triangulation_diagnostics(&self, py: Python<'_>, noise_px: f64) -> PyResult<Py<PyAny>> {
         let recon = &self.inner;
         let centers: Vec<Point3<f64>> = recon
-            .image_table
+            .image_set
             .images
             .iter()
             .map(|im| im.camera_center())
             .collect();
         let focal_max: Vec<f64> = recon
-            .image_table
+            .image_set
             .images
             .iter()
             .map(|im| {
-                let (fx, fy) = recon.image_table.cameras[im.camera_index as usize].focal_lengths();
+                let (fx, fy) = recon.image_set.cameras[im.camera_index as usize].focal_lengths();
                 fx.max(fy)
             })
             .collect();
@@ -1503,7 +1503,7 @@ impl PySfmrReconstruction {
     #[getter]
     fn rig_frame_data(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         use crate::helpers::rig_frame_data_to_py;
-        match &self.inner.image_table.rig_frame_data {
+        match &self.inner.image_set.rig_frame_data {
             Some(rf) => rig_frame_data_to_py(py, rf),
             None => Ok(py.None()),
         }
@@ -1548,7 +1548,7 @@ impl PySfmrReconstruction {
     /// from the new tracks (which must stay grouped by point), so an
     /// ``observation_counts`` value passed in the same call is ignored.
     /// Every track row must name an image of the result: a
-    /// ``track_image_indexes`` entry past the image table, or kept tracks that
+    /// ``track_image_indexes`` entry past the image set, or kept tracks that
     /// name an image a shorter ``image_names`` drops, raise ``ValueError``.
     ///
     /// On a ``sift_files`` reconstruction, ``keypoints_xy=None`` drops the

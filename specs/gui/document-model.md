@@ -16,7 +16,7 @@ must not cost a copy of that per edit. So a version is a **base plus its edits**
 an immutable reconstruction behind a shared pointer, plus the handful of point
 changes made on top of it. A point edit shares the base with the version before
 it and costs the size of the edit; a bulk edit -- one that changes the image
-table or the structure wholesale -- produces a new base, sharing the two heavy
+set or the structure wholesale -- produces a new base, sharing the two heavy
 columns with the old one when it did not touch them.
 
 A version has three halves: that value; the node's **bench** as it stood beside
@@ -243,7 +243,7 @@ spec is [`edits/commit-track.md`](edits/commit-track.md).
 **Delete image is the bulk edit.** It materialises the current value when the
 overlay is not empty, runs `SfmrReconstruction::subset_by_image_indices` over the
 remaining images with orphaned points dropped, and pushes the output as the next
-version's base with an empty overlay. The image table is renumbered, so every
+version's base with an empty overlay. The image set is renumbered, so every
 image index at or past the deleted one moves down by one, and the points the
 deleted image was the only witness of are gone. The bench beside the value is
 renumbered in the same version, because its observations name images by the
@@ -258,7 +258,7 @@ reconstruction with no images is not one.
 ### What a bulk edit owes the rest of the viewer
 
 A point edit moves no image index, so nothing keyed by one has to be told; what
-it does owe is the section below. A bulk edit renumbers the image table, and a
+it does owe is the section below. A bulk edit renumbers the image set, and a
 cached decode or a selected index keyed by an image is then a statement about a
 different photo. So `delete_image`, undo and redo each drop the node's SIFT
 cache and clear its hover state, and the caller drops the panel-local texture
@@ -326,7 +326,7 @@ all leave the base the same allocation, so none of them does.
 **The two atlases are keyed on their own pixels, not on the base.** A new base
 is a coarse signal: it says the value changed, not which part of it. The
 thumbnail atlas is a function of the node's display thumbnails, the image
-table's own thumbnail column and the image list (see
+set's own thumbnail column and the image list (see
 [camera-views.md](camera-views.md) § "Thumbnail loading"), and the patch atlas of the patch bitmap column and the packing over it, and a bulk edit
 rewrites poses, positions and patch frames while touching neither column.
 Rebuilding an atlas means a texture allocation and one `write_texture` per tile,
@@ -490,7 +490,7 @@ per-point colourings, the track-highlight helpers, and the MCP `get_point` reply
 The embedded-features overlay walks the version's **live indexes** rather than
 the base's rows, which is base-minus-deleted followed by the additions.
 
-What still reads the base is what the overlay does not change: the image table,
+What still reads the base is what the overlay does not change: the image set,
 the cameras, the thumbnails, and **column presence**, which an addition set never
 introduces or removes. Nothing on a frame path materialises.
 

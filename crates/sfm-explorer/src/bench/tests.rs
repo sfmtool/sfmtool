@@ -44,7 +44,7 @@ fn state_of(recon: sfmtool_core::SfmrReconstruction) -> (AppState, ReconId) {
     let mut state = AppState::new();
     state.append_node(SceneNode::demo(recon));
     let id = state.selected_recon.expect("a selected reconstruction");
-    let camera = &state.scene[0].recon().image_table.cameras[0];
+    let camera = &state.scene[0].recon().image_set.cameras[0];
     let (w, h) = (camera.width, camera.height);
     for image in 0..state.scene[0].image_count() {
         // A pattern rather than a constant: a flat field gives the correlation
@@ -1872,10 +1872,10 @@ fn a_geometry_search_reads_only_the_images_that_could_see_the_patch() {
     use sfmtool_core::patch::view_selection::view_could_see_patch;
 
     let mut recon = projected_embedded_demo(12);
-    let image_count = recon.image_table.images.len();
+    let image_count = recon.image_set.images.len();
     let moved = 3;
     {
-        let [first, .., image] = &mut recon.image_table.images[..=moved] else {
+        let [first, .., image] = &mut recon.image_set.images[..=moved] else {
             unreachable!("the demo has more than three images");
         };
         image.quaternion_wxyz = first.quaternion_wxyz;
@@ -1891,7 +1891,7 @@ fn a_geometry_search_reads_only_the_images_that_could_see_the_patch() {
         panic!("a committed point goes on the bench at the track stage");
     };
     let patch = payload.patch_frame.as_ref().expect("a framed track");
-    let table = &state.scene[0].recon().image_table;
+    let table = &state.scene[0].recon().image_set;
     let could_see: Vec<usize> = (0..image_count)
         .filter(|&i| {
             let image = &table.images[i];

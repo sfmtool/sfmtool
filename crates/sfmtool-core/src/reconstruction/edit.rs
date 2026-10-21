@@ -114,7 +114,7 @@ impl SfmrReconstruction {
 
         // Transform camera poses
         let new_images: Vec<SfmrImage> = self
-            .image_table
+            .image_set
             .images
             .iter()
             .map(|im| {
@@ -130,7 +130,7 @@ impl SfmrReconstruction {
             .collect();
 
         // Scale rig sensor translations if needed
-        let new_rig_frame_data = if let Some(ref rf) = self.image_table.rig_frame_data {
+        let new_rig_frame_data = if let Some(ref rf) = self.image_set.rig_frame_data {
             let scale = transform.scale;
             if (scale - 1.0).abs() > f64::EPSILON {
                 let mut rf = rf.clone();
@@ -181,7 +181,7 @@ impl SfmrReconstruction {
         // statistics. The counts, both the per-image ones and the histogram
         // rows, are what that leaves alone.
         let scale_depth = |z: Option<f64>| z.map(|z| z * transform.scale);
-        let mut depth_statistics = self.image_table.depth_statistics.clone();
+        let mut depth_statistics = self.image_set.depth_statistics.clone();
         for stats in depth_statistics.images.iter_mut() {
             stats.histogram_min_z = scale_depth(stats.histogram_min_z);
             stats.histogram_max_z = scale_depth(stats.histogram_max_z);
@@ -198,16 +198,16 @@ impl SfmrReconstruction {
             workspace_dir: self.workspace_dir.clone(),
             metadata: self.metadata.clone(),
             content_hash: self.content_hash.clone(),
-            image_table: ImageTable {
+            image_set: ImageSet {
                 images: new_images,
                 rig_frame_data: new_rig_frame_data,
-                cameras: self.image_table.cameras.clone(),
+                cameras: self.image_set.cameras.clone(),
                 // The thumbnails are pixels of the source images, which a
                 // similarity of the scene does not touch, so the new value
                 // shares the old one's array rather than copying it.
-                thumbnails_y_x_rgb: self.image_table.thumbnails_y_x_rgb.clone(),
+                thumbnails_y_x_rgb: self.image_set.thumbnails_y_x_rgb.clone(),
                 depth_statistics,
-                depth_histogram_counts: self.image_table.depth_histogram_counts.clone(),
+                depth_histogram_counts: self.image_set.depth_histogram_counts.clone(),
             },
             point_set: PointSet {
                 infinity_point_count,
@@ -284,7 +284,7 @@ impl SfmrReconstruction {
         // column (SiftFiles `feature_indexes` / EmbeddedPatches `keypoints_xy`
         // rows) is filtered in lockstep with the tracks below, and the per-image
         // hashes follow the image subset.
-        let old_image_count = self.image_table.images.len();
+        let old_image_count = self.image_set.images.len();
         let new_image_count = image_indices.len();
 
         // Validate: in bounds, no duplicates. old_to_new is None for removed
@@ -308,12 +308,12 @@ impl SfmrReconstruction {
         // Build new image-indexed data in the order given.
         let new_images: Vec<SfmrImage> = image_indices
             .iter()
-            .map(|&i| self.image_table.images[i as usize].clone())
+            .map(|&i| self.image_set.images[i as usize].clone())
             .collect();
 
         // A new column of the kept rows when the input has one; a value
         // without thumbnails stays without them.
-        let new_thumbnails = self.image_table.thumbnails_y_x_rgb.as_ref().map(|thumbs| {
+        let new_thumbnails = self.image_set.thumbnails_y_x_rgb.as_ref().map(|thumbs| {
             let mut out = Array4::<u8>::zeros((
                 new_image_count,
                 thumbs.shape()[1],
@@ -329,16 +329,16 @@ impl SfmrReconstruction {
 
         let new_depth_stats_images: Vec<ImageDepthStats> = image_indices
             .iter()
-            .map(|&i| self.image_table.depth_statistics.images[i as usize].clone())
+            .map(|&i| self.image_set.depth_statistics.images[i as usize].clone())
             .collect();
         let new_depth_statistics = DepthStatistics {
-            num_histogram_buckets: self.image_table.depth_statistics.num_histogram_buckets,
+            num_histogram_buckets: self.image_set.depth_statistics.num_histogram_buckets,
             images: new_depth_stats_images,
         };
 
         let new_depth_histogram_counts: Vec<Vec<u32>> = image_indices
             .iter()
-            .map(|&i| self.image_table.depth_histogram_counts[i as usize].clone())
+            .map(|&i| self.image_set.depth_histogram_counts[i as usize].clone())
             .collect();
 
         // Select the kept observation rows. Input tracks are grouped by
@@ -553,7 +553,7 @@ impl SfmrReconstruction {
 
         // Filter rig/frame data.
         let new_rig_frame_data = self
-            .image_table
+            .image_set
             .rig_frame_data
             .as_ref()
             .map(|rf| subset_rig_frame_data(rf, image_indices));
@@ -563,8 +563,8 @@ impl SfmrReconstruction {
             workspace_dir: self.workspace_dir.clone(),
             metadata: self.metadata.clone(),
             content_hash: self.content_hash.clone(),
-            image_table: ImageTable {
-                cameras: self.image_table.cameras.clone(),
+            image_set: ImageSet {
+                cameras: self.image_set.cameras.clone(),
                 images: new_images,
                 thumbnails_y_x_rgb: new_thumbnails,
                 depth_statistics: new_depth_statistics,
@@ -712,7 +712,7 @@ impl SfmrReconstruction {
         let new_observation_offsets = compute_observation_offsets(&new_observation_counts);
 
         // Rebuild per-image feature→point mapping (sift_files only).
-        let image_count = self.image_table.images.len();
+        let image_count = self.image_set.images.len();
         let mut new_image_feature_to_point = vec![HashMap::new(); image_count];
         let mut new_max_track_feature_index = vec![0u32; image_count];
         if let ObservationSource::SiftFiles {
@@ -733,7 +733,7 @@ impl SfmrReconstruction {
             content_hash: self.content_hash.clone(),
             // A point mask touches no image, so the whole table is the input's,
             // thumbnails shared rather than copied.
-            image_table: self.image_table.clone(),
+            image_set: self.image_set.clone(),
             point_set: PointSet {
                 infinity_point_count,
                 points: new_points,

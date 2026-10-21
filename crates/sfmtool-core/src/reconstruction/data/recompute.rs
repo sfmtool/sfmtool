@@ -60,8 +60,8 @@ impl SfmrReconstruction {
             return Ok(self.embedded_observation_reprojection_errors(image_index));
         }
 
-        let image = &self.image_table.images[image_index];
-        let camera = &self.image_table.cameras[image.camera_index as usize];
+        let image = &self.image_set.images[image_index];
+        let camera = &self.image_set.cameras[image.camera_index as usize];
 
         let inline = self.keypoints_xy();
         // Feature positions from the image's `.sift` file, read only when there
@@ -159,7 +159,7 @@ impl SfmrReconstruction {
         let Some(feature_indexes) = self.feature_indexes() else {
             return Ok(Cow::Owned(pixels));
         };
-        let mut observed = vec![false; self.image_table.images.len()];
+        let mut observed = vec![false; self.image_set.images.len()];
         for obs in tracks {
             observed[obs.image_index as usize] = true;
         }
@@ -192,8 +192,8 @@ impl SfmrReconstruction {
         let Some(keypoints_xy) = self.keypoints_xy() else {
             return Vec::new();
         };
-        let image = &self.image_table.images[image_index];
-        let camera = &self.image_table.cameras[image.camera_index as usize];
+        let image = &self.image_set.images[image_index];
+        let camera = &self.image_set.cameras[image.camera_index as usize];
         self.point_set
             .tracks
             .iter()
@@ -238,8 +238,8 @@ impl SfmrReconstruction {
             let mut sum = 0.0f64;
             let mut count = 0u32;
             for (k, obs) in self.observations_for_point(point_idx).iter().enumerate() {
-                let image = &self.image_table.images[obs.image_index as usize];
-                let camera = &self.image_table.cameras[image.camera_index as usize];
+                let image = &self.image_set.images[obs.image_index as usize];
+                let camera = &self.image_set.cameras[image.camera_index as usize];
                 let obs_global = start + k;
                 let observed = [
                     keypoints_xy[[obs_global, 0]] as f64,
@@ -293,7 +293,7 @@ impl SfmrReconstruction {
         let mut error_sums = vec![0.0f64; num_points];
         let mut error_counts = vec![0u32; num_points];
 
-        for img_idx in 0..self.image_table.images.len() {
+        for img_idx in 0..self.image_set.images.len() {
             let results = self.compute_observation_reprojection_errors(img_idx)?;
             let feat_to_point = &self.point_set.image_feature_to_point[img_idx];
             for (feat_idx, error) in results {
@@ -354,7 +354,7 @@ impl SfmrReconstruction {
         let mut error_sums = vec![0.0f64; num_points];
         let mut error_counts = vec![0u32; num_points];
 
-        for img_idx in 0..self.image_table.images.len() {
+        for img_idx in 0..self.image_set.images.len() {
             let feat_to_point = &self.point_set.image_feature_to_point[img_idx];
             // Skip images observing no point at infinity — avoids reading their
             // `.sift` file just to discard every observation.
@@ -396,14 +396,14 @@ impl SfmrReconstruction {
     pub fn recompute_depth_statistics(&mut self) -> Result<(), SfmrError> {
         use ndarray::Array1;
 
-        let image_count = self.image_table.images.len();
+        let image_count = self.image_set.images.len();
         let points3d_count = self.point_set.points.len();
         let observation_count = self.point_set.tracks.len();
 
         // Build columnar arrays from the reconstruction data
         let mut quaternions_wxyz = Array2::<f64>::zeros((image_count, 4));
         let mut translations_xyz = Array2::<f64>::zeros((image_count, 3));
-        for (i, im) in self.image_table.images.iter().enumerate() {
+        for (i, im) in self.image_set.images.iter().enumerate() {
             let q = im.quaternion_wxyz.quaternion();
             quaternions_wxyz[[i, 0]] = q.w;
             quaternions_wxyz[[i, 1]] = q.i;
@@ -438,9 +438,9 @@ impl SfmrReconstruction {
         )?;
 
         // Store results back
-        self.image_table.depth_statistics = result.depth_statistics;
+        self.image_set.depth_statistics = result.depth_statistics;
         let num_buckets = result.observed_depth_histogram_counts.ncols();
-        self.image_table.depth_histogram_counts = (0..image_count)
+        self.image_set.depth_histogram_counts = (0..image_count)
             .map(|i| {
                 (0..num_buckets)
                     .map(|j| result.observed_depth_histogram_counts[[i, j]])

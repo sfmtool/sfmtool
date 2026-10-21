@@ -607,8 +607,8 @@ fn feature_bearing(
     pixel: [f32; 2],
 ) -> Vector3<f64> {
     let recon = node.recon();
-    let photo = &recon.image_table.images[image.index()];
-    let lens = &recon.image_table.cameras[photo.camera_index as usize];
+    let photo = &recon.image_set.images[image.index()];
+    let lens = &recon.image_set.cameras[photo.camera_index as usize];
     let ray = lens.pixel_to_ray(f64::from(pixel[0]), f64::from(pixel[1]));
     let (world_pose, _) = super::transformed_pose(photo, node.transform());
     world_pose.inverse() * Vector3::new(ray[0], ray[1], ray[2])
@@ -632,7 +632,7 @@ fn landing_ndc(viewer: &Viewer3D, bearing: Vector3<f64>) -> [f64; 2] {
 fn looking_through_toward_a_corner_feature_turns_it_into_the_middle() {
     let (mut viewer, node, image) = through_a_demo_camera();
     let straight = viewer.compute_camera_view(image, &node);
-    let lens = &node.recon().image_table.cameras[0];
+    let lens = &node.recon().image_set.cameras[0];
     let pixel = [lens.width as f32 * 0.02, lens.height as f32 * 0.02];
     let bearing = feature_bearing(&node, image, pixel);
     let mut log = crate::action_log::ActionLog::default();
@@ -666,7 +666,7 @@ fn looking_through_toward_a_corner_feature_turns_it_into_the_middle() {
 fn looking_through_toward_a_central_feature_is_looking_straight_through() {
     let (mut viewer, node, image) = through_a_demo_camera();
     let straight = viewer.compute_camera_view(image, &node);
-    let (cx, cy) = node.recon().image_table.cameras[0].principal_point();
+    let (cx, cy) = node.recon().image_set.cameras[0].principal_point();
     let mut log = crate::action_log::ActionLog::default();
 
     viewer.look_through_toward_feature(image, &node, [cx as f32, cy as f32], 0.0, &mut log);
@@ -1481,7 +1481,7 @@ fn as_bearing(state: &AppState, id: ReconId, track: &EditableTrack) -> EditableT
         .expect("a loaded node")
         .edited()
         .base
-        .image_table
+        .image_set
         .images[track.observations[0].image as usize]
         .camera_center();
     let mut track = track.clone();

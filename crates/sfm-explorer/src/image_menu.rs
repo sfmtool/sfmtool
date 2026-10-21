@@ -159,7 +159,7 @@ impl AppState {
         let node = self.node(id)?;
         let posed: Vec<bool> = node
             .recon()
-            .image_table
+            .image_set
             .images
             .iter()
             .map(|image| {
@@ -169,7 +169,7 @@ impl AppState {
             .collect();
         let recon = node.recon();
         let photographs = recon
-            .image_table
+            .image_set
             .images
             .iter()
             .map(|image| {

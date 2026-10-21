@@ -13,7 +13,7 @@
 
 use nalgebra::{Point3, UnitQuaternion, Vector3};
 
-use super::data::{ImageTable, SfmrReconstruction};
+use super::data::{ImageSet, SfmrReconstruction};
 
 use super::outermost_keypoint::{outermost_keypoints, KeypointReach};
 use crate::camera::distortion::bspline::MIN_BSPLINE_COEFFS;
@@ -113,7 +113,7 @@ impl Default for BundleAdjustOptions {
 impl BundleAdjustOptions {
     /// The defaults with `release` for each of `camera_count` cameras: the
     /// uniform case, where every camera of a table is released alike. Pass the
-    /// table's length, `recon.image_table.cameras.len()`.
+    /// table's length, `recon.image_set.cameras.len()`.
     pub fn uniform(camera_count: usize, release: CameraRelease) -> Self {
         Self {
             releases: vec![release; camera_count],
@@ -427,7 +427,7 @@ pub fn bundle_adjust(
         .keypoints_xy()
         .ok_or(BundleAdjustError::NoKeypoints)?;
 
-    let table = &recon.image_table;
+    let table = &recon.image_set;
     // The solve's image list, and the map from the table's indexes onto it. An
     // unposed image is not a camera the residuals can be written against, so it
     // sits the solve out and its observations do not enter.
@@ -702,15 +702,15 @@ pub fn bundle_adjust(
     // ── Writing the answer back ───────────────────────────────────────────
     let mut out = recon.clone_for_edit();
     for (slot, &i) in posed.iter().enumerate() {
-        out.image_table.images[i].quaternion_wxyz = quats[slot];
-        out.image_table.images[i].translation_xyz = trans[slot];
+        out.image_set.images[i].quaternion_wxyz = quats[slot];
+        out.image_set.images[i].translation_xyz = trans[slot];
     }
     // Each camera in the solve takes the one the kernel returned, which is
     // itself at its solved focal where its focal was released, with its solved
     // `k1` or spline where its distortion was, and itself unchanged otherwise:
     // nothing else about any lens moves.
     for (&c, solved_camera) in used.iter().zip(&solved.cameras) {
-        out.image_table.cameras[c as usize] = solved_camera.clone();
+        out.image_set.cameras[c as usize] = solved_camera.clone();
     }
     // The outermost observation of each camera's images, under the camera the
     // solve returned; the value carries inline keypoints, so nothing is read.
@@ -746,8 +746,8 @@ pub fn bundle_adjust(
     let mut points_deleted = 0usize;
     // The frame rescale measures "before" against the input's poses and
     // "after" against the output's; each centroid is taken once, not per point.
-    let centroid_before = recon.image_table.camera_centroid();
-    let centroid_after = out.image_table.camera_centroid();
+    let centroid_before = recon.image_set.camera_centroid();
+    let centroid_after = out.image_set.camera_centroid();
     for p in 0..n_pt {
         if !in_solve[p] {
             continue;
@@ -767,7 +767,7 @@ pub fn bundle_adjust(
             p,
             &centroid_after,
             (!was_at_infinity)
-                .then(|| ImageTable::placement_scale_from(&centroid_before, &before_position)),
+                .then(|| ImageSet::placement_scale_from(&centroid_before, &before_position)),
             (!now_at_infinity).then_some(&after_position),
         );
         let point = &mut out.point_set.points[p];
@@ -806,7 +806,7 @@ pub fn bundle_adjust(
 /// solve, whether
 /// [`move_camera`](super::move_camera::move_camera) has a pose to replace,
 /// which images a resection treats as already registered, and which centres
-/// [`ImageTable::camera_centroid`] averages.
+/// [`ImageSet::camera_centroid`] averages.
 pub(crate) fn is_posed(rotation: &UnitQuaternion<f64>, translation: &Vector3<f64>) -> bool {
     rotation.coords.iter().all(|c| c.is_finite()) && translation.iter().all(|c| c.is_finite())
 }
@@ -848,12 +848,12 @@ pub fn distortion_is_releasable(camera: &CameraIntrinsics) -> bool {
 /// The stored half-vectors are world-space extents on a finite point and
 /// angular ones tangent to the direction sphere on a bearing, and the distance
 /// that converts between them is the placement distance
-/// ([`ImageTable::placement_scale`](super::data::ImageTable::placement_scale)).
+/// ([`ImageSet::placement_scale`](super::data::ImageSet::placement_scale)).
 /// `before` is that distance where the point had one and `None` where it was a
 /// bearing; `after` is the point's new position where it has one and `None`
 /// where it is now a bearing, measured from `centroid`, the camera centroid of
 /// the table the point now stands in
-/// ([`ImageTable::camera_centroid`]),
+/// ([`ImageSet::camera_centroid`]),
 /// which the caller takes once for every point it writes. So one call covers a
 /// point that merely moved, a point that changed representation, and a point
 /// that did neither.
@@ -898,10 +898,10 @@ pub(crate) fn rescale_patch_frame(
 /// where it was a bearing; `after` is its new position where it has one and
 /// `None` where it is now a bearing, measured from `centroid`, the camera
 /// centroid of the table the point now stands in
-/// ([`ImageTable::camera_centroid`]).
+/// ([`ImageSet::camera_centroid`]).
 /// A caller writing many points takes the centroid once and measures each
 /// `before` with
-/// [`ImageTable::placement_scale_from`],
+/// [`ImageSet::placement_scale_from`],
 /// so the whole write costs one pass over the images.
 ///
 /// The arithmetic every edit that moves a point applies to its frame (the
@@ -918,10 +918,10 @@ pub(crate) fn rescale_patch_frame(
 /// ```
 /// use nalgebra::Point3;
 /// use sfmtool_core::reconstruction::bundle_adjust::patch_frame_factor;
-/// use sfmtool_core::reconstruction::ImageTable;
+/// use sfmtool_core::reconstruction::ImageSet;
 ///
 /// let centroid = Point3::origin();
-/// let before = ImageTable::placement_scale_from(&centroid, &Point3::new(0.0, 0.0, 4.0));
+/// let before = ImageSet::placement_scale_from(&centroid, &Point3::new(0.0, 0.0, 4.0));
 /// // A point that halves its distance from the centroid halves its frame.
 /// let factor = patch_frame_factor(&centroid, Some(before), Some(&Point3::new(0.0, 2.0, 0.0)));
 /// assert_eq!(factor, Some(0.5));
@@ -939,7 +939,7 @@ pub fn patch_frame_factor(
         None => 1.0,
     };
     let after = match after {
-        Some(position) => usable(ImageTable::placement_scale_from(centroid, position))?,
+        Some(position) => usable(ImageSet::placement_scale_from(centroid, position))?,
         None => 1.0,
     };
     let factor = (after / before) as f32;

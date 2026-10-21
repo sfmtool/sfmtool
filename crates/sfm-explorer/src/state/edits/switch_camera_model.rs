@@ -251,7 +251,7 @@ impl AppState {
         let label = node.label.clone();
         let c = request.camera;
         let refuse = |why: String| format!("Switch camera model of {label} refused: {why}");
-        let cameras = &node.recon().image_table.cameras;
+        let cameras = &node.recon().image_set.cameras;
         let Some(camera) = cameras.get(c) else {
             return Err(refuse(format!(
                 "camera {c} does not exist; the reconstruction has {} camera(s)",
@@ -658,7 +658,7 @@ impl ProposalApplied {
 /// The proposal's tracks: every point with at least one observation in an
 /// image taken through camera `camera`, ascending.
 pub(crate) fn tracks_of_camera(recon: &SfmrReconstruction, camera: usize) -> Vec<u32> {
-    let table = &recon.image_table;
+    let table = &recon.image_set;
     let mut seen = vec![false; recon.point_set.points.len()];
     for observation in &recon.point_set.tracks {
         if table.images[observation.image_index as usize].camera_index as usize == camera {

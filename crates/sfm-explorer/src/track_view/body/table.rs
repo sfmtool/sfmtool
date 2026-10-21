@@ -1371,7 +1371,7 @@ impl TrackBody {
                     )),
                     SortColumn::Name => Some(SortKey::Text(
                         recon
-                            .image_table
+                            .image_set
                             .images
                             .get(row.image as usize)
                             .map(|im| im.name.clone())
@@ -1688,7 +1688,7 @@ impl TrackBody {
         let checks = cell_checks(judged.as_ref(), &self.evaluation);
         let grids = row_grids(row, stage, &self.evaluation);
         let name = recon
-            .image_table
+            .image_set
             .images
             .get(image.index())
             .map(|im| im.name.clone())

@@ -370,7 +370,7 @@ fn a_transform_out_of_measurable_range_is_refused() {
 fn picture(state: &AppState, id: ReconId) -> Vec<Point3<f64>> {
     let node = state.node(id).expect("loaded");
     let mut at = crate::scene::FitPoints::of(node).positions;
-    for camera in 0..node.recon().image_table.cameras.len() {
+    for camera in 0..node.recon().image_set.cameras.len() {
         at.extend(crate::scene::camera_world_centres(node, camera));
     }
     at
@@ -392,8 +392,8 @@ fn reprojections(state: &AppState, id: ReconId) -> Vec<Option<(f64, f64)>> {
         .tracks
         .iter()
         .map(|observation| {
-            let image = &recon.image_table.images[observation.image_index as usize];
-            let camera = &recon.image_table.cameras[image.camera_index as usize];
+            let image = &recon.image_set.images[observation.image_index as usize];
+            let camera = &recon.image_set.cameras[image.camera_index as usize];
             let point = &recon.point_set.points[observation.point_index as usize];
             let seen = crate::scene::cam_from_world(image).transform_point(&point.position);
             camera.ray_to_pixel([seen.x, seen.y, seen.z])

@@ -123,8 +123,8 @@ pub(crate) fn index_of(dir: &Path) -> PathBuf {
 /// something to score; nothing here asserts what it scores.
 pub(crate) fn with_photographs(state: &AppState, id: ReconId) {
     let recon = state.node(id).expect("loaded").recon();
-    for (index, image) in recon.image_table.images.iter().enumerate() {
-        let camera = &recon.image_table.cameras[image.camera_index as usize];
+    for (index, image) in recon.image_set.images.iter().enumerate() {
+        let camera = &recon.image_set.cameras[image.camera_index as usize];
         let phase = index as f32;
         let picture = image::RgbImage::from_fn(camera.width, camera.height, |x, y| {
             let (x, y) = (x as f32, y as f32);
@@ -160,7 +160,7 @@ pub(crate) fn with_sift_files(state: &AppState, id: ReconId, center: [f64; 2]) {
         })
         .collect();
 
-    for image in 0..recon.image_table.images.len() as u32 {
+    for image in 0..recon.image_set.images.len() as u32 {
         if image == UNINDEXED_IMAGE {
             continue;
         }
@@ -189,7 +189,7 @@ pub(crate) fn with_sift_files(state: &AppState, id: ReconId, center: [f64; 2]) {
         std::fs::create_dir_all(path.parent().expect("a feature directory")).unwrap();
         write_sift(
             &path,
-            &recon.image_table.images[image as usize].name,
+            &recon.image_set.images[image as usize].name,
             &descriptors,
             &positions,
         );
@@ -400,7 +400,7 @@ fn a_build_indexes_every_sift_file_and_opens_what_it_wrote() {
         .clone();
     let recon = state.node(id).expect("loaded").recon();
     let expected: Vec<String> = recon
-        .image_table
+        .image_set
         .images
         .iter()
         .map(|image| image.name.clone())
@@ -464,7 +464,7 @@ fn an_index_over_other_images_is_stale_naming_the_first_one_it_disagrees_on() {
     {
         let node = renamed.scene.first_mut().expect("one node");
         let recon = Arc::make_mut(&mut node.history.current_mut().base);
-        recon.image_table.images[0].name = "somewhere_else.jpg".into();
+        recon.image_set.images[0].name = "somewhere_else.jpg".into();
     }
     renamed
         .open_sift_index(other_id, path.clone())
@@ -537,11 +537,11 @@ fn re_extracted_features_make_the_index_stale() {
         // different content hash in the file's own metadata.
         write_sift(
             &sift,
-            &recon.image_table.images[2].name,
+            &recon.image_set.images[2].name,
             &vec![vec![7u8; DIM]; 4],
             &[[10.0, 20.0], [30.0, 40.0], [50.0, 60.0], [70.0, 80.0]],
         );
-        recon.image_table.images[2].name.clone()
+        recon.image_set.images[2].name.clone()
     };
     state.open_sift_index(id, path).expect("it opens");
     assert_eq!(state.sift_index_state(id), IndexFileState::Stale);
@@ -569,12 +569,12 @@ fn a_sift_file_that_appeared_or_vanished_makes_the_index_stale() {
         std::fs::create_dir_all(sift.parent().expect("a feature directory")).unwrap();
         write_sift(
             &sift,
-            &recon.image_table.images[UNINDEXED_IMAGE as usize].name,
+            &recon.image_set.images[UNINDEXED_IMAGE as usize].name,
             &vec![vec![3u8; DIM]; 2],
             &[[1.0, 2.0], [3.0, 4.0]],
         );
         (
-            recon.image_table.images[UNINDEXED_IMAGE as usize]
+            recon.image_set.images[UNINDEXED_IMAGE as usize]
                 .name
                 .clone(),
             recon.sift_path_for_image(0),
@@ -593,7 +593,7 @@ fn a_sift_file_that_appeared_or_vanished_makes_the_index_stale() {
     // first, so it is the discrepancy the sentence names.
     let gone = {
         let recon = state.node(id).expect("loaded").recon();
-        recon.image_table.images[0].name.clone()
+        recon.image_set.images[0].name.clone()
     };
     std::fs::remove_file(&vanished).unwrap();
     state.open_sift_index(id, path).expect("it opens");
@@ -603,24 +603,24 @@ fn a_sift_file_that_appeared_or_vanished_makes_the_index_stale() {
     );
 }
 
-/// The state is derived again when a version moves the image table, and left
+/// The state is derived again when a version moves the image set, and left
 /// alone when one does not -- which is what keeps the `.sift` reads off every
 /// edit.
 #[test]
-fn a_version_re_derives_the_state_only_when_it_moves_the_image_table() {
+fn a_version_re_derives_the_state_only_when_it_moves_the_image_set() {
     let dir = tempfile::tempdir().unwrap();
     let (mut state, id, label) = searchable(dir.path());
     assert_eq!(state.sift_index_state(id), IndexFileState::Current);
 
     // A `.sift` file rewritten underneath: a re-derivation would find it and
     // call the index stale, so the verdict after a version that leaves the
-    // image table alone says whether one happened.
+    // image set alone says whether one happened.
     {
         let recon = state.node(id).expect("loaded").recon();
         let sift = recon.sift_path_for_image(2);
         write_sift(
             &sift,
-            &recon.image_table.images[2].name,
+            &recon.image_set.images[2].name,
             &vec![vec![9u8; DIM]; 3],
             &[[11.0, 21.0], [31.0, 41.0], [51.0, 61.0]],
         );
@@ -710,7 +710,7 @@ fn the_parallel_read_lands_every_row_where_one_thread_puts_it() {
     with_sift_files(&state, id, [900.0, 500.0]);
     let recon = state.node(id).expect("loaded").recon();
     let sources = super::readable_sift_files(recon);
-    let images = recon.image_table.images.len();
+    let images = recon.image_set.images.len();
 
     let many = read_corpus_of(&sources, images);
     let one = rayon::ThreadPoolBuilder::new()

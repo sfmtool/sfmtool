@@ -183,7 +183,7 @@ pub enum Found {
 /// One image the patch was found in, and what the search did about it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SearchMatch {
-    /// The image, as an index into the node's image table.
+    /// The image, as an index into the node's image set.
     pub image: u32,
     /// Correspondences that agreed with the warp.
     pub inliers: usize,

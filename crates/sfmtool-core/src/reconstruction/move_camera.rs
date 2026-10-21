@@ -10,7 +10,7 @@
 use nalgebra::{Point3, Vector3};
 
 use super::bundle_adjust::{is_posed, rescale_patch_frame};
-use super::data::{observation_reprojection_error, ImageTable, SfmrReconstruction};
+use super::data::{observation_reprojection_error, ImageSet, SfmrReconstruction};
 use super::triangulation::triangulate_track;
 use crate::camera::CameraIntrinsics;
 use crate::geometry::resect_images::scene_scale;
@@ -21,7 +21,7 @@ use crate::{RotQuaternion, Se3Transform};
 /// because the caller is a menu entry that has to say so in one sentence.
 #[derive(Debug, Clone, PartialEq)]
 pub enum MoveCameraError {
-    /// The image index is past the reconstruction's image table.
+    /// The image index is past the reconstruction's image set.
     ImageOutOfRange {
         /// The index named.
         image: usize,
@@ -152,11 +152,11 @@ pub fn move_camera(
     image: usize,
     world_from_camera: &Se3Transform,
 ) -> Result<(SfmrReconstruction, MoveCameraReport), MoveCameraError> {
-    let image_count = recon.image_table.images.len();
+    let image_count = recon.image_set.images.len();
     if image >= image_count {
         return Err(MoveCameraError::ImageOutOfRange { image, image_count });
     }
-    let stored = &recon.image_table.images[image];
+    let stored = &recon.image_set.images[image];
     if !is_posed(&stored.quaternion_wxyz, &stored.translation_xyz) {
         return Err(MoveCameraError::NoPose(image));
     }
@@ -173,14 +173,14 @@ pub fn move_camera(
     let stored_rotation = stored.quaternion_wxyz;
     let stored_centre = stored.camera_center();
     let residual_before_px = residual_quantiles_px(
-        recon.image_table.camera_for_image(image),
+        recon.image_set.camera_for_image(image),
         &pose_of(recon, image),
         &image_reprojection_samples(recon, image),
     );
 
     let mut out = recon.clone_for_edit();
     {
-        let row = &mut out.image_table.images[image];
+        let row = &mut out.image_set.images[image];
         row.quaternion_wxyz = cam_from_world;
         row.translation_xyz = -(cam_from_world * centre);
     }
@@ -200,8 +200,8 @@ pub fn move_camera(
     };
     // Each frame rescale measures "before" against the stored poses and "after"
     // against the moved ones; each centroid is taken once, not per track.
-    let centroid_before = recon.image_table.camera_centroid();
-    let centroid_after = out.image_table.camera_centroid();
+    let centroid_before = recon.image_set.camera_centroid();
+    let centroid_after = out.image_set.camera_centroid();
 
     let scale = scene_scale(recon);
     let translation = (Point3::from(centre) - stored_centre).norm();
@@ -235,8 +235,8 @@ pub fn move_camera(
                 .map(|(k, row)| {
                     let pixel = [f64::from(xy[[start + k, 0]]), f64::from(xy[[start + k, 1]])];
                     let at = row.image_index as usize;
-                    let ray = out.image_table.world_ray(at, pixel)?;
-                    Some((ray, out.image_table.images[at].camera_center()))
+                    let ray = out.image_set.world_ray(at, pixel)?;
+                    Some((ray, out.image_set.images[at].camera_center()))
                 })
                 .collect()
         });
@@ -272,7 +272,7 @@ pub fn move_camera(
             &mut out,
             p,
             &centroid_after,
-            Some(ImageTable::placement_scale_from(&centroid_before, &before)),
+            Some(ImageSet::placement_scale_from(&centroid_before, &before)),
             Some(&tri.point),
         );
         out.point_set.points[p].position = tri.point;
@@ -282,7 +282,7 @@ pub fn move_camera(
 
     out.rebuild_derived_fields();
     report.residual_after_px = residual_quantiles_px(
-        out.image_table.camera_for_image(image),
+        out.image_set.camera_for_image(image),
         &pose_of(&out, image),
         &image_reprojection_samples(&out, image),
     );
@@ -391,7 +391,7 @@ pub fn residual_quantiles_px(
 /// frame: the form [`move_camera`] takes and [`residual_quantiles_px`]
 /// measures against.
 pub fn pose_of(recon: &SfmrReconstruction, image: usize) -> Se3Transform {
-    let row = &recon.image_table.images[image];
+    let row = &recon.image_set.images[image];
     Se3Transform::new(
         RotQuaternion::from_nalgebra(row.quaternion_wxyz.inverse()),
         row.camera_center().coords,
@@ -412,12 +412,12 @@ fn track_rms_px(recon: &SfmrReconstruction, p: usize) -> f64 {
     let mut count = 0usize;
     for (k, row) in recon.point_set.tracks[start..end].iter().enumerate() {
         let at = row.image_index as usize;
-        let image = &recon.image_table.images[at];
+        let image = &recon.image_set.images[at];
         let observed = [f64::from(xy[[start + k, 0]]), f64::from(xy[[start + k, 1]])];
         if let Some(r) = observation_reprojection_error(
             &image.quaternion_wxyz,
             &image.translation_xyz,
-            recon.image_table.camera_for_image(at),
+            recon.image_set.camera_for_image(at),
             &point.position,
             point.is_at_infinity(),
             observed,

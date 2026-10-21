@@ -255,7 +255,7 @@ pub fn switch_camera_model(
     options: &SwitchCameraModelOptions,
 ) -> Result<(SfmrReconstruction, SwitchCameraModelReport), SwitchCameraModelError> {
     let refit_options = &options.refit;
-    let count = recon.image_table.cameras.len();
+    let count = recon.image_set.cameras.len();
     let mut chosen: Vec<usize> = cameras.to_vec();
     chosen.sort_unstable();
     chosen.dedup();
@@ -266,7 +266,7 @@ pub fn switch_camera_model(
         return Err(SwitchCameraModelError::UnknownCamera { camera, count });
     }
 
-    let table = &recon.image_table;
+    let table = &recon.image_set;
     let tracks = &recon.point_set.tracks;
     let camera_of_row = |row: usize| table.images[tracks[row].image_index as usize].camera_index;
     // Which slot of `chosen` each camera is, or `None` for a camera left alone.
@@ -304,7 +304,7 @@ pub fn switch_camera_model(
     // ── The switched value ─────────────────────────────────────────────────
     let mut out = recon.clone_for_edit();
     for (&c, refit) in chosen.iter().zip(&refits) {
-        out.image_table.cameras[c] = refit.camera.clone();
+        out.image_set.cameras[c] = refit.camera.clone();
     }
 
     // Each touched point's stored error, over every one of its observations
@@ -393,7 +393,7 @@ pub fn fit_camera_switch(
     target: &RefitTarget,
     options: &RefitOptions,
 ) -> Result<CameraIntrinsicsRefit, SwitchCameraModelError> {
-    let table = &recon.image_table;
+    let table = &recon.image_set;
     let count = table.cameras.len();
     let Some(source) = table.cameras.get(camera) else {
         return Err(SwitchCameraModelError::UnknownCamera { camera, count });
@@ -449,8 +449,8 @@ pub fn default_fit_angle(
     recon: &SfmrReconstruction,
     camera: usize,
 ) -> Result<(f64, ThetaFitSource), SwitchCameraModelError> {
-    let count = recon.image_table.cameras.len();
-    let Some(source) = recon.image_table.cameras.get(camera) else {
+    let count = recon.image_set.cameras.len();
+    let Some(source) = recon.image_set.cameras.get(camera) else {
         return Err(SwitchCameraModelError::UnknownCamera { camera, count });
     };
     let max_theta_deg = widest_ray(recon, camera).map_or(f64::NAN, |(_, t)| t);
@@ -463,7 +463,7 @@ pub fn default_fit_angle(
 /// and a badly placed point can reach far past any keypoint the camera
 /// detected.
 fn widest_ray(recon: &SfmrReconstruction, camera: usize) -> Option<(usize, f64)> {
-    let table = &recon.image_table;
+    let table = &recon.image_set;
     let mut widest: Option<(usize, f64)> = None;
     for (row, observation) in recon.point_set.tracks.iter().enumerate() {
         if table.images[observation.image_index as usize].camera_index as usize != camera {
@@ -571,12 +571,12 @@ fn observation_pixels(
 /// none.
 fn row_error(recon: &SfmrReconstruction, row: usize, pixel: Option<[f64; 2]>) -> Option<f64> {
     let observation = &recon.point_set.tracks[row];
-    let image = &recon.image_table.images[observation.image_index as usize];
+    let image = &recon.image_set.images[observation.image_index as usize];
     let point = &recon.point_set.points[observation.point_index as usize];
     observation_reprojection_error(
         &image.quaternion_wxyz,
         &image.translation_xyz,
-        &recon.image_table.cameras[image.camera_index as usize],
+        &recon.image_set.cameras[image.camera_index as usize],
         &point.position,
         point.is_at_infinity(),
         pixel?,
@@ -589,7 +589,7 @@ fn row_error(recon: &SfmrReconstruction, row: usize, pixel: Option<[f64; 2]>) ->
 /// model being replaced. `NaN` for an unposed image.
 fn incidence_deg(recon: &SfmrReconstruction, row: usize) -> f64 {
     let observation = &recon.point_set.tracks[row];
-    let image = &recon.image_table.images[observation.image_index as usize];
+    let image = &recon.image_set.images[observation.image_index as usize];
     let p = &recon.point_set.points[observation.point_index as usize];
     let camera_frame = if p.is_at_infinity() {
         image.quaternion_wxyz * p.position.coords

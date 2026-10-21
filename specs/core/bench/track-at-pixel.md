@@ -174,7 +174,7 @@ use sfmtool_core::bench::{
     TrackAtPixelSources,
 };
 
-let names: Vec<&str> = edited.base.image_table.images.iter().map(|i| i.name.as_str()).collect();
+let names: Vec<&str> = edited.base.image_set.images.iter().map(|i| i.name.as_str()).collect();
 let clusters = MatchesClusters::new(&matches, &names)?;
 let sources = TrackAtPixelSources {
     sift_index: Some(SiftIndexSource { forest: &forest, keypoints: &keypoints }),

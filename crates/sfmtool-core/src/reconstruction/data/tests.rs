@@ -88,7 +88,7 @@ fn test_observation_affine_shape_frontoparallel() {
     let mut recon = SfmrReconstruction::demo(16);
 
     // Pinhole with principal point at the origin, for easy arithmetic.
-    recon.image_table.cameras[0] = crate::CameraIntrinsics {
+    recon.image_set.cameras[0] = crate::CameraIntrinsics {
         model: crate::camera::CameraModel::Pinhole {
             focal_length_x: 100.0,
             focal_length_y: 100.0,
@@ -100,9 +100,9 @@ fn test_observation_affine_shape_frontoparallel() {
     };
     // Image 0 at the origin looking down −Z (identity world->camera, the
     // canonical convention).
-    recon.image_table.images[0].camera_index = 0;
-    recon.image_table.images[0].quaternion_wxyz = UnitQuaternion::identity();
-    recon.image_table.images[0].translation_xyz = Vector3::zeros();
+    recon.image_set.images[0].camera_index = 0;
+    recon.image_set.images[0].quaternion_wxyz = UnitQuaternion::identity();
+    recon.image_set.images[0].translation_xyz = Vector3::zeros();
     // Point 0 at (0, 0, −2) — in front — with a fronto-parallel patch:
     // half-extent 0.05 along world X (u) and Y (v), normal u × v = +Z
     // (toward the camera).
@@ -158,7 +158,7 @@ fn test_observation_affine_shape_rotated_camera() {
     use ndarray::Array2;
 
     let mut recon = SfmrReconstruction::demo(16);
-    recon.image_table.cameras[0] = crate::CameraIntrinsics {
+    recon.image_set.cameras[0] = crate::CameraIntrinsics {
         model: crate::camera::CameraModel::Pinhole {
             focal_length_x: 100.0,
             focal_length_y: 100.0,
@@ -171,9 +171,9 @@ fn test_observation_affine_shape_rotated_camera() {
     // World->camera rotation = +90° about Z; camera at the origin. The
     // rotated canonical camera still sees a point at world −Z in front.
     let rot = Rotation3::from_axis_angle(&Vector3::z_axis(), std::f64::consts::FRAC_PI_2);
-    recon.image_table.images[0].camera_index = 0;
-    recon.image_table.images[0].quaternion_wxyz = UnitQuaternion::from_rotation_matrix(&rot);
-    recon.image_table.images[0].translation_xyz = Vector3::zeros();
+    recon.image_set.images[0].camera_index = 0;
+    recon.image_set.images[0].quaternion_wxyz = UnitQuaternion::from_rotation_matrix(&rot);
+    recon.image_set.images[0].translation_xyz = Vector3::zeros();
     recon.point_set.points[0].position = Point3::new(0.0, 0.0, -2.0);
     recon.point_set.points[0].w = 1.0;
     let n = recon.point_set.points.len();
@@ -204,12 +204,9 @@ fn test_observation_affine_shape_rotated_camera() {
 #[test]
 fn test_subset_keep_all_images_is_identity() {
     let recon = SfmrReconstruction::demo(1000);
-    let indices: Vec<u32> = (0..recon.image_table.images.len() as u32).collect();
+    let indices: Vec<u32> = (0..recon.image_set.images.len() as u32).collect();
     let subset = recon.subset_by_image_indices(&indices, false).unwrap();
-    assert_eq!(
-        subset.image_table.images.len(),
-        recon.image_table.images.len()
-    );
+    assert_eq!(subset.image_set.images.len(), recon.image_set.images.len());
     assert_eq!(subset.point_set.points.len(), recon.point_set.points.len());
     assert_eq!(subset.point_set.tracks.len(), recon.point_set.tracks.len());
     assert_eq!(
@@ -225,7 +222,7 @@ fn test_subset_keeps_all_points_by_default() {
     // (i % 8) and ((i + 1) % 8), so ~2 points out of every 8 touch image 0.
     let subset = recon.subset_by_image_indices(&[0], false).unwrap();
 
-    assert_eq!(subset.image_table.images.len(), 1);
+    assert_eq!(subset.image_set.images.len(), 1);
     // Default: all points kept even if their track dropped to zero.
     assert_eq!(subset.point_set.points.len(), recon.point_set.points.len());
     assert_eq!(
@@ -259,7 +256,7 @@ fn test_subset_drops_orphaned_points_when_requested() {
     let recon = SfmrReconstruction::demo(1000);
     let subset = recon.subset_by_image_indices(&[0], true).unwrap();
 
-    assert_eq!(subset.image_table.images.len(), 1);
+    assert_eq!(subset.image_set.images.len(), 1);
     // All surviving points have at least one observation.
     assert!(subset.point_set.observation_counts.iter().all(|&c| c > 0));
     assert_eq!(
@@ -290,7 +287,7 @@ fn test_subset_drops_orphaned_points_when_requested() {
 #[test]
 fn test_subset_rejects_out_of_bounds_and_duplicates() {
     let recon = SfmrReconstruction::demo(1000);
-    let n = recon.image_table.images.len() as u32;
+    let n = recon.image_set.images.len() as u32;
     assert!(recon.subset_by_image_indices(&[n], false).is_err());
     assert!(recon.subset_by_image_indices(&[0, 0], false).is_err());
 }
@@ -303,7 +300,7 @@ fn test_subset_filters_rig_frame_data() {
     // Start from the demo (8 images) and attach a trivial rig/frame
     // structure: one single-sensor rig, one frame per image.
     let mut recon = SfmrReconstruction::demo(1000);
-    let n_images = recon.image_table.images.len();
+    let n_images = recon.image_set.images.len();
     let rig_def = RigDefinition {
         name: "rig0".to_string(),
         sensor_count: 1,
@@ -311,7 +308,7 @@ fn test_subset_filters_rig_frame_data() {
         ref_sensor_name: "sensor0".to_string(),
         sensor_names: vec!["sensor0".to_string()],
     };
-    recon.image_table.rig_frame_data = Some(RigFrameData {
+    recon.image_set.rig_frame_data = Some(RigFrameData {
         rigs_metadata: RigsMetadata {
             rig_count: 1,
             sensor_count: 1,
@@ -330,7 +327,7 @@ fn test_subset_filters_rig_frame_data() {
 
     // Keep images 0, 3, 5 — three frames survive and must be remapped to 0,1,2.
     let subset = recon.subset_by_image_indices(&[0, 3, 5], false).unwrap();
-    let rf = subset.image_table.rig_frame_data.as_ref().unwrap();
+    let rf = subset.image_set.rig_frame_data.as_ref().unwrap();
     assert_eq!(rf.frames_metadata.frame_count, 3);
     assert_eq!(rf.rig_indexes.len(), 3);
     assert_eq!(rf.image_frame_indexes.to_vec(), vec![0, 1, 2]);
@@ -363,7 +360,7 @@ fn test_embedded_patches_round_trips_through_reconstruction() {
     // Build an embedded_patches SfmrData by hand (drop the .sift-link arrays, add
     // inline keypoints + image hash), load it, and round-trip it back.
     let recon = demo_embedded(10);
-    let n = recon.image_table.images.len();
+    let n = recon.image_set.images.len();
     let kp_expected = recon.keypoints_xy().unwrap().clone();
 
     assert_eq!(recon.feature_source(), FEATURE_SOURCE_EMBEDDED_PATCHES);
@@ -490,7 +487,7 @@ fn test_subset_by_image_indices_keeps_embedded() {
     let sub = recon
         .subset_by_image_indices(&[0, 2], true)
         .expect("subset must support embedded_patches");
-    assert_eq!(sub.image_table.images.len(), 2);
+    assert_eq!(sub.image_set.images.len(), 2);
     assert_eq!(sub.feature_source(), FEATURE_SOURCE_EMBEDDED_PATCHES);
     // The inline keypoints stay parallel to the filtered tracks, and every
     // observation references a kept (remapped) image.
@@ -499,7 +496,7 @@ fn test_subset_by_image_indices_keeps_embedded() {
         .expect("embedded_patches keeps keypoints");
     assert_eq!(kp.shape()[0], sub.point_set.tracks.len());
     for obs in &sub.point_set.tracks {
-        assert!((obs.image_index as usize) < sub.image_table.images.len());
+        assert!((obs.image_index as usize) < sub.image_set.images.len());
     }
     // Observations on the two removed images are gone.
     assert!(sub.point_set.tracks.len() < n_obs_before);
@@ -546,7 +543,7 @@ fn test_validate_observation_columns_detects_desync() {
 }
 
 #[test]
-fn test_validate_observation_columns_refuses_a_track_row_past_the_image_table() {
+fn test_validate_observation_columns_refuses_a_track_row_past_the_image_set() {
     for mut recon in [SfmrReconstruction::demo(4), demo_embedded(4)] {
         let n_img = recon.image_count();
         recon.point_set.validate_track_image_indexes(n_img).unwrap();
@@ -556,7 +553,7 @@ fn test_validate_observation_columns_refuses_a_track_row_past_the_image_table() 
         recon.point_set.tracks[3].image_index = n_img as u32;
         let err = recon
             .validate_observation_columns()
-            .expect_err("a row past the image table must be rejected");
+            .expect_err("a row past the image set must be rejected");
         assert_eq!(
             err,
             format!("track row 3: image index {n_img} out of range for {n_img} images")
@@ -569,7 +566,7 @@ fn test_validate_observation_columns_refuses_a_track_row_past_the_image_table() 
 }
 
 #[test]
-fn test_from_sfmr_data_refuses_a_track_row_past_the_image_table() {
+fn test_from_sfmr_data_refuses_a_track_row_past_the_image_set() {
     // A `sift_files` value without an inline keypoint column: the format
     // reader checks a row's image only where it reads that column, and the
     // per-image feature maps are built from the rows, so this used to panic.
@@ -578,7 +575,7 @@ fn test_from_sfmr_data_refuses_a_track_row_past_the_image_table() {
         let mut data = recon.to_sfmr_data();
         data.image_indexes[1] = n_img as u32 + 5;
         let Err(SfmrError::InvalidFormat(msg)) = SfmrReconstruction::from_sfmr_data(data) else {
-            panic!("a row past the image table must be refused");
+            panic!("a row past the image set must be refused");
         };
         assert_eq!(
             msg,
@@ -769,8 +766,8 @@ fn test_compute_observation_reprojection_errors_sift_files_prefers_inline() {
     // Each pair measures the reprojection against that observation's own inline
     // row, found by crossing the feature-keyed map with the observation rows.
     let keypoints_xy = recon.keypoints_xy().unwrap();
-    let image = &recon.image_table.images[0];
-    let camera = &recon.image_table.cameras[image.camera_index as usize];
+    let image = &recon.image_set.images[0];
+    let camera = &recon.image_set.cameras[image.camera_index as usize];
     for (feature_index, error) in &results {
         let point_index = recon.point_set.image_feature_to_point[0][feature_index];
         let row = recon
@@ -798,7 +795,7 @@ fn test_compute_observation_reprojection_errors_embedded() {
     let recon = demo_embedded_projected(10);
     assert!(recon.point_set.image_feature_to_point[0].is_empty());
 
-    for image_index in 0..recon.image_table.images.len() {
+    for image_index in 0..recon.image_set.images.len() {
         let rows: Vec<u32> = recon
             .point_set
             .tracks
@@ -1018,8 +1015,8 @@ fn test_sfmr_data_colmap_to_canonical_converts_every_section() {
         sensor_translations_xyz: sensor_t.clone(),
         frames_metadata: FramesMetadata { frame_count: 0 },
         rig_indexes: Array1::from_vec(vec![]),
-        image_sensor_indexes: Array1::from_vec(vec![0; recon.image_table.images.len()]),
-        image_frame_indexes: Array1::from_vec(vec![0; recon.image_table.images.len()]),
+        image_sensor_indexes: Array1::from_vec(vec![0; recon.image_set.images.len()]),
+        image_frame_indexes: Array1::from_vec(vec![0; recon.image_set.images.len()]),
     });
 
     let orig_quats = data.quaternions_wxyz.clone();
@@ -1164,16 +1161,8 @@ fn test_v4_file_upgrades_to_canonical_on_load_and_saves_as_v5() {
         loaded.metadata.version,
         sfmtool_sfmr_format::SFMR_FORMAT_VERSION
     );
-    assert_eq!(
-        loaded.image_table.images.len(),
-        recon.image_table.images.len()
-    );
-    for (li, ri) in loaded
-        .image_table
-        .images
-        .iter()
-        .zip(&recon.image_table.images)
-    {
+    assert_eq!(loaded.image_set.images.len(), recon.image_set.images.len());
+    for (li, ri) in loaded.image_set.images.iter().zip(&recon.image_set.images) {
         assert_rotations_close(&li.quaternion_wxyz, &ri.quaternion_wxyz, &li.name);
         for k in 0..3 {
             assert!(
@@ -1202,10 +1191,10 @@ fn test_v4_file_upgrades_to_canonical_on_load_and_saves_as_v5() {
     );
     let reloaded = SfmrReconstruction::load(&saved, &Progress::none()).unwrap();
     for (li, ri) in reloaded
-        .image_table
+        .image_set
         .images
         .iter()
-        .zip(&loaded.image_table.images)
+        .zip(&loaded.image_set.images)
     {
         assert_rotations_close(&li.quaternion_wxyz, &ri.quaternion_wxyz, &li.name);
         for k in 0..3 {
@@ -1239,8 +1228,8 @@ fn demo_embedded_projected(num_points: usize) -> SfmrReconstruction {
     let mut recon = demo_embedded(num_points);
     let mut keypoints = recon.keypoints_xy().unwrap().clone();
     for (obs_index, obs) in recon.point_set.tracks.iter().enumerate() {
-        let image = &recon.image_table.images[obs.image_index as usize];
-        let camera = &recon.image_table.cameras[image.camera_index as usize];
+        let image = &recon.image_set.images[obs.image_index as usize];
+        let camera = &recon.image_set.cameras[image.camera_index as usize];
         let point = &recon.point_set.points[obs.point_index as usize];
         let p_cam = image.quaternion_wxyz * point.position.coords + image.translation_xyz;
         assert!(
@@ -1274,8 +1263,8 @@ fn demo_embedded_projected(num_points: usize) -> SfmrReconstruction {
 fn assert_projects_onto_keypoints(recon: &SfmrReconstruction, tol: f64, ctx: &str) {
     let keypoints = recon.keypoints_xy().expect("embedded_patches fixture");
     for (obs_index, obs) in recon.point_set.tracks.iter().enumerate() {
-        let image = &recon.image_table.images[obs.image_index as usize];
-        let camera = &recon.image_table.cameras[image.camera_index as usize];
+        let image = &recon.image_set.images[obs.image_index as usize];
+        let camera = &recon.image_set.cameras[image.camera_index as usize];
         let point = &recon.point_set.points[obs.point_index as usize];
         let p_cam = image.quaternion_wxyz * point.position.coords + image.translation_xyz;
         assert!(
@@ -1347,12 +1336,7 @@ fn test_canonical_version_file_loads_without_convention_upgrade() {
 
         // Poses and points come back exactly as stored — no conversion touched
         // them.
-        for (li, ri) in loaded
-            .image_table
-            .images
-            .iter()
-            .zip(&recon.image_table.images)
-        {
+        for (li, ri) in loaded.image_set.images.iter().zip(&recon.image_set.images) {
             let (lq, rq) = (
                 li.quaternion_wxyz.quaternion(),
                 ri.quaternion_wxyz.quaternion(),
@@ -1459,10 +1443,10 @@ fn test_canonical_version_file_round_trips_through_load_and_save() {
 
     let mut reloaded = SfmrReconstruction::load(&resaved, &Progress::none()).unwrap();
     for (li, ri) in reloaded
-        .image_table
+        .image_set
         .images
         .iter()
-        .zip(&recon.image_table.images)
+        .zip(&recon.image_set.images)
     {
         assert_rotations_close(&li.quaternion_wxyz, &ri.quaternion_wxyz, &li.name);
         assert_eq!(li.translation_xyz, ri.translation_xyz);
@@ -1516,7 +1500,7 @@ fn saved_demo(name: &str, points: usize) -> std::path::PathBuf {
 /// tolerance, because the question is whether reporting moved anything at all.
 fn load_bits(recon: &SfmrReconstruction) -> Vec<u64> {
     let mut bits = Vec::new();
-    for image in &recon.image_table.images {
+    for image in &recon.image_set.images {
         bits.push(u64::from(image.camera_index));
         bits.extend(image.quaternion_wxyz.coords.iter().map(|c| c.to_bits()));
         bits.extend(image.translation_xyz.iter().map(|c| c.to_bits()));
@@ -1825,8 +1809,8 @@ fn test_recompute_point_errors_fisheye_keeps_past_ninety_observations() {
         width: 480,
         height: 480,
     };
-    recon.image_table.cameras = vec![cam.clone()];
-    for im in recon.image_table.images.iter_mut() {
+    recon.image_set.cameras = vec![cam.clone()];
+    for im in recon.image_set.images.iter_mut() {
         im.camera_index = 0;
         im.quaternion_wxyz = UnitQuaternion::identity();
         im.translation_xyz = Vector3::zeros();
@@ -1841,7 +1825,7 @@ fn test_recompute_point_errors_fisheye_keeps_past_ninety_observations() {
         pt.w = 1.0;
     }
     assert!(
-        (recon.image_table.images[0].quaternion_wxyz * recon.point_set.points[0].position.coords).z
+        (recon.image_set.images[0].quaternion_wxyz * recon.point_set.points[0].position.coords).z
             > 0.0,
         "fixture must be past 90 deg (canonical z > 0)"
     );
@@ -1857,7 +1841,7 @@ fn test_recompute_point_errors_fisheye_keeps_past_ninety_observations() {
                 .windows(2)
                 .position(|w| (w[0]..w[1]).contains(&k))
                 .expect("observation belongs to a point");
-            let image = &recon.image_table.images[obs.image_index as usize];
+            let image = &recon.image_set.images[obs.image_index as usize];
             let p_cam = image.quaternion_wxyz * recon.point_set.points[p_idx].position.coords
                 + image.translation_xyz;
             let (u, v) = cam.ray_to_pixel([p_cam.x, p_cam.y, p_cam.z]).unwrap();
@@ -2042,12 +2026,12 @@ fn display_only_marks_are_checked_against_the_points_and_the_references() {
 #[test]
 fn a_placement_distance_from_a_centroid_taken_once_is_the_per_call_one() {
     let recon = SfmrReconstruction::demo(4);
-    let table = &recon.image_table;
+    let table = &recon.image_set;
     assert!(table.images.len() > 1, "the fixture has a camera cloud");
     let centroid = table.camera_centroid();
     for point in &recon.point_set.points {
         assert_eq!(
-            ImageTable::placement_scale_from(&centroid, &point.position),
+            ImageSet::placement_scale_from(&centroid, &point.position),
             table.placement_scale(&point.position),
         );
     }
@@ -2069,7 +2053,7 @@ fn a_placement_distance_from_a_centroid_taken_once_is_the_per_call_one() {
 #[test]
 fn the_camera_centroid_leaves_out_unposed_images() {
     let recon = SfmrReconstruction::demo(4);
-    let table = &recon.image_table;
+    let table = &recon.image_set;
     assert!(table.images.len() > 2, "the fixture has a camera cloud");
     let posed_mean = table.images[1..]
         .iter()
@@ -2109,13 +2093,13 @@ fn keypoints_off_projection(
     let tracks = &recon.point_set.tracks;
     Array2::from_shape_fn((tracks.len(), 2), |(row, c)| {
         let obs = &tracks[row];
-        let image = &recon.image_table.images[obs.image_index as usize];
+        let image = &recon.image_set.images[obs.image_index as usize];
         let point = &recon.point_set.points[obs.point_index as usize];
         // The residual against the origin is the projection itself.
         let [u, v] = observation_reprojection_residual(
             &image.quaternion_wxyz,
             &image.translation_xyz,
-            &recon.image_table.cameras[image.camera_index as usize],
+            &recon.image_set.cameras[image.camera_index as usize],
             &point.position,
             point.is_at_infinity(),
             [0.0, 0.0],
@@ -2181,7 +2165,7 @@ fn test_recompute_point_errors_from_sift_files_is_the_rms() {
     recon.metadata.workspace.contents.feature_prefix_dir = "features".into();
     let keypoints = keypoints_off_projection(&recon, one_and_three_px);
     let features = recon.point_set.feature_indexes().unwrap().to_vec();
-    for image in 0..recon.image_table.images.len() {
+    for image in 0..recon.image_set.images.len() {
         let count = recon.point_set.max_track_feature_index[image] as usize + 1;
         let mut positions = Array2::<f32>::zeros((count, 2));
         for (row, obs) in recon.point_set.tracks.iter().enumerate() {
@@ -2199,11 +2183,11 @@ fn test_recompute_point_errors_from_sift_files_is_the_rms() {
             },
             metadata: sfmtool_sift_format::SiftMetadata {
                 version: sfmtool_sift_format::SIFT_FORMAT_VERSION,
-                image_name: recon.image_table.images[image].name.clone(),
+                image_name: recon.image_set.images[image].name.clone(),
                 image_file_xxh128: "0".repeat(32),
                 image_file_size: 1,
-                image_width: recon.image_table.cameras[0].width,
-                image_height: recon.image_table.cameras[0].height,
+                image_width: recon.image_set.cameras[0].width,
+                image_height: recon.image_set.cameras[0].height,
                 feature_count: count as u32,
             },
             content_hash: sfmtool_sift_format::SiftContentHash::default(),
@@ -2234,7 +2218,7 @@ fn test_recompute_infinity_point_errors_is_the_rms() {
     let mut recon = demo_sift_files_inline(10);
     // Point 0 becomes a bearing along the direction its first camera sees it.
     let first = recon.observations_for_point(0)[0].image_index as usize;
-    let center = recon.image_table.images[first].camera_center();
+    let center = recon.image_set.images[first].camera_center();
     let dir = (recon.point_set.points[0].position - center).normalize();
     recon.point_set.points[0].position = nalgebra::Point3::from(dir);
     recon.point_set.points[0].w = 0.0;
@@ -2267,7 +2251,7 @@ fn test_recompute_point_errors_with_nothing_projecting_is_zero() {
     let behind = obs
         .iter()
         .map(|o| {
-            recon.image_table.images[o.image_index as usize]
+            recon.image_set.images[o.image_index as usize]
                 .camera_center()
                 .coords
         })
@@ -2275,7 +2259,7 @@ fn test_recompute_point_errors_with_nothing_projecting_is_zero() {
         * 2.0;
     recon.point_set.points[0].position = nalgebra::Point3::from(behind);
     for o in &obs {
-        let image = &recon.image_table.images[o.image_index as usize];
+        let image = &recon.image_set.images[o.image_index as usize];
         let p_cam = image.quaternion_wxyz * behind + image.translation_xyz;
         assert!(
             p_cam.z > 0.0,

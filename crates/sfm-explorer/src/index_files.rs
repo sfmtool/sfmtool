@@ -90,7 +90,7 @@ const CLUSTER_SHARE: f32 = 0.875;
 
 impl AppState {
     /// Look for `id`'s index files if nothing has yet, and re-derive their
-    /// states when the node's image table, or the index the cluster patches
+    /// states when the node's image set, or the index the cluster patches
     /// are judged against, has moved.
     ///
     /// What Track View, the Scene tree and the first item put on a node's bench

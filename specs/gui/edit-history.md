@@ -179,7 +179,7 @@ it does follow the *photograph*. A cursor move is a step through the node's
 history and not a statement about what the person is looking at, so the image on
 screen stays on screen: the move reads the selected image's `.sfmr` name before
 it steps, and puts the selection back on the image of that name in the version
-it lands on. For every edit that leaves the image table alone -- a point edit, a
+it lands on. For every edit that leaves the image set alone -- a point edit, a
 bench step, an adjustment -- that is the same index it started at; across an
 edit that renumbered the table it is the index the same photograph now holds;
 and where the version it lands on has no image of that name, which only a
@@ -317,7 +317,7 @@ check runs over the whole span before the cursor moves, so a refusal leaves the
 cursor where it was.
 
 What a bulk edit owes the rest of the viewer is owed here too: the walk may pass
-a version whose base renumbered the image table, so the caches keyed by an image
+a version whose base renumbered the image set, so the caches keyed by an image
 index are dropped, exactly as an undo drops them, and the image selection is
 found again by name in the version the walk comes to rest on.
 

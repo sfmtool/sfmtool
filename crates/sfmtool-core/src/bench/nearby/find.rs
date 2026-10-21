@@ -639,7 +639,7 @@ pub fn nearby_track_label(group: &str, rank: usize, order: usize, point: Option<
 
 /// The stem of image `image`'s name.
 fn image_stem(edited: &EditedReconstruction, image: u32) -> String {
-    let name = &edited.base.image_table.images[image as usize].name;
+    let name = &edited.base.image_set.images[image as usize].name;
     std::path::Path::new(name)
         .file_stem()
         .map_or_else(|| name.clone(), |s| s.to_string_lossy().into_owned())

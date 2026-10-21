@@ -265,7 +265,7 @@ empty, runs the core function over it with `TracksAndClusters`, and pushes the
 result with the row map `RowMap::by_scan` reads
 off that call's input and output: the resection may drop a point it can neither
 re-triangulate nor hold out, and says nothing about which. The selection follows
-that map. The image table does not move, so image indexes, the image and camera
+that map. The image set does not move, so image indexes, the image and camera
 selections and the decoded pixels keyed by them all still mean what they meant;
 what the panels cached *about* the geometry -- rendered patches, prepared track
 rows, per-camera derived quantities -- is dropped, because it describes a
@@ -533,7 +533,7 @@ Explorer (`sfm-explorer` lib tests, headless egui):
 - The refusal names the file's state and the build entry, or tells an unsaved
   node to save first; an image's own reasons come first
   (`resect/tests.rs`).
-- The version pushed and its new base, the image table standing still, the pose
+- The version pushed and its new base, the image set standing still, the pose
   recovered from a perturbation, one Action Log entry naming the image, the
   source split and the serials, an undo putting the pose and the selection
   back, and the refusals -- one the call could not attempt, one the estimate

@@ -82,8 +82,8 @@ fn truth_through(
     camera_of: impl Fn(usize) -> u32,
 ) -> SfmrReconstruction {
     let mut recon = SfmrReconstruction::demo(1);
-    recon.image_table.cameras = cameras;
-    recon.image_table.images = (0..IMAGES)
+    recon.image_set.cameras = cameras;
+    recon.image_set.images = (0..IMAGES)
         .map(|i| {
             let angle = 0.25 * (i as f64 - (IMAGES as f64 - 1.0) / 2.0);
             let centre = Vector3::new(8.0 * angle.sin(), 0.5 * jitter(i, 11), 8.0 * angle.cos());
@@ -98,10 +98,10 @@ fn truth_through(
             }
         })
         .collect();
-    let stats = recon.image_table.depth_statistics.images[0].clone();
-    recon.image_table.depth_statistics.images = vec![stats; IMAGES];
-    recon.image_table.depth_histogram_counts =
-        vec![recon.image_table.depth_histogram_counts[0].clone(); IMAGES];
+    let stats = recon.image_set.depth_statistics.images[0].clone();
+    recon.image_set.depth_statistics.images = vec![stats; IMAGES];
+    recon.image_set.depth_histogram_counts =
+        vec![recon.image_set.depth_histogram_counts[0].clone(); IMAGES];
 
     recon.point_set.points = (0..POINTS)
         .map(|p| Point3D {
@@ -163,8 +163,8 @@ fn truth_through(
 
 /// Where `world` lands in image `i`, or `None` when it is outside the frame.
 fn project(recon: &SfmrReconstruction, i: usize, world: Point3<f64>) -> Option<[f32; 2]> {
-    let image = &recon.image_table.images[i];
-    let camera = &recon.image_table.cameras[image.camera_index as usize];
+    let image = &recon.image_set.images[i];
+    let camera = &recon.image_set.cameras[image.camera_index as usize];
     let local = image.quaternion_wxyz * world.coords + image.translation_xyz;
     let (u, v) = camera.ray_to_pixel([local.x, local.y, local.z])?;
     if u < 0.0 || v < 0.0 || u >= camera.width as f64 || v >= camera.height as f64 {
@@ -181,7 +181,7 @@ fn perturbed() -> SfmrReconstruction {
 
 /// `recon` with every pose but the first and every point nudged off it.
 fn perturb(mut recon: SfmrReconstruction) -> SfmrReconstruction {
-    for (i, image) in recon.image_table.images.iter_mut().enumerate().skip(1) {
+    for (i, image) in recon.image_set.images.iter_mut().enumerate().skip(1) {
         let spin = UnitQuaternion::from_axis_angle(&Vector3::y_axis(), 0.01 * jitter(i, 5));
         image.quaternion_wxyz = spin * image.quaternion_wxyz;
         image.translation_xyz += Vector3::new(
@@ -238,8 +238,7 @@ fn with_one_sighting(mut recon: SfmrReconstruction, point: u32) -> SfmrReconstru
 
 /// How far image `i`'s camera centre stands from the truth's.
 fn centre_error(recon: &SfmrReconstruction, truth: &SfmrReconstruction, i: usize) -> f64 {
-    (recon.image_table.images[i].camera_center() - truth.image_table.images[i].camera_center())
-        .norm()
+    (recon.image_set.images[i].camera_center() - truth.image_set.images[i].camera_center()).norm()
 }
 
 /// The largest distance any point stands from the truth's.
@@ -310,7 +309,7 @@ fn the_poses_and_the_points_converge_on_the_truth() {
 fn the_input_is_untouched() {
     let source = perturbed();
     let poses: Vec<Vector3<f64>> = source
-        .image_table
+        .image_set
         .images
         .iter()
         .map(|i| i.translation_xyz)
@@ -319,7 +318,7 @@ fn the_input_is_untouched() {
 
     bundle_adjust(&source, &BundleAdjustOptions::default(), &Progress::none()).expect("well posed");
 
-    for (image, translation) in source.image_table.images.iter().zip(&poses) {
+    for (image, translation) in source.image_set.images.iter().zip(&poses) {
         assert_eq!(image.translation_xyz, *translation);
     }
     for (point, position) in source.point_set.points.iter().zip(&positions) {
@@ -333,7 +332,7 @@ fn a_released_focal_is_found_and_reported() {
     let mut source = perturbed();
     // A lens 6 % off. Everything else is the perturbed fixture, so the focal is
     // the parameter that has to move for the residuals to come down.
-    source.image_table.cameras[0] = source.image_table.cameras[0].with_focal(FOCAL * 1.06);
+    source.image_set.cameras[0] = source.image_set.cameras[0].with_focal(FOCAL * 1.06);
 
     let options = BundleAdjustOptions::uniform(1, CameraRelease::FOCAL);
     let (out, report) = bundle_adjust(&source, &options, &Progress::none()).expect("well posed");
@@ -346,12 +345,12 @@ fn a_released_focal_is_found_and_reported() {
         "{report:?}"
     );
     assert_eq!(
-        out.image_table.cameras[0].focal_lengths().0,
+        out.image_set.cameras[0].focal_lengths().0,
         camera.focal_after
     );
     assert_eq!(
-        truth.image_table.cameras[0].width,
-        out.image_table.cameras[0].width
+        truth.image_set.cameras[0].width,
+        out.image_set.cameras[0].width
     );
 }
 
@@ -485,7 +484,7 @@ fn a_patch_frame_follows_its_point_in_depth_beside_an_unposed_image() {
     // The unposed image sits the solve out, and its placeholder centre is not
     // part of the camera cloud the placement distance is measured from.
     let mut source = perturbed();
-    source.image_table.images[5].translation_xyz = Vector3::new(f64::NAN, 0.0, 0.0);
+    source.image_set.images[5].translation_xyz = Vector3::new(f64::NAN, 0.0, 0.0);
     assert_frame_follows_point_in_depth(source);
 }
 
@@ -497,19 +496,19 @@ fn assert_frame_follows_point_in_depth(source: SfmrReconstruction) {
     // frame has to come back with it.
     let mut moved = source.clone();
     let centroid_distance = source
-        .image_table
+        .image_set
         .placement_scale(&source.point_set.points[7].position);
     let direction = source.point_set.points[7].position.coords.normalize();
     moved.point_set.points[7].position += direction * centroid_distance;
     let stretched = moved
-        .image_table
+        .image_set
         .placement_scale(&moved.point_set.points[7].position);
 
     let (out, _) = bundle_adjust(&moved, &BundleAdjustOptions::default(), &Progress::none())
         .expect("well posed");
 
     let settled = out
-        .image_table
+        .image_set
         .placement_scale(&out.point_set.points[7].position);
     let before = moved
         .point_set
@@ -606,19 +605,19 @@ fn two_cameras_are_adjusted_each_through_its_own_lens() {
     // under its own lens.
     for (c, camera) in report.cameras.iter().enumerate() {
         let reach = camera.outermost_observed.expect("observed");
-        assert_eq!(out.image_table.images[reach.image].camera_index as usize, c);
-        let (cx, cy) = out.image_table.cameras[c].principal_point();
+        assert_eq!(out.image_set.images[reach.image].camera_index as usize, c);
+        let (cx, cy) = out.image_set.cameras[c].principal_point();
         assert!((reach.radius_px - (reach.xy[0] - cx).hypot(reach.xy[1] - cy)).abs() < 1e-9);
     }
-    assert_eq!(out.image_table.cameras, truth.image_table.cameras);
+    assert_eq!(out.image_set.cameras, truth.image_set.cameras);
 }
 
 #[test]
 fn a_released_focal_is_found_for_each_camera() {
     let truth = two_camera_truth();
     let mut source = perturb(truth.clone());
-    source.image_table.cameras[0] = source.image_table.cameras[0].with_focal(FOCAL * 1.05);
-    source.image_table.cameras[1] = source.image_table.cameras[1].with_focal(620.0 * 0.95);
+    source.image_set.cameras[0] = source.image_set.cameras[0].with_focal(FOCAL * 1.05);
+    source.image_set.cameras[1] = source.image_set.cameras[1].with_focal(620.0 * 0.95);
     let options = BundleAdjustOptions::uniform(2, CameraRelease::FOCAL);
 
     let (out, report) = bundle_adjust(&source, &options, &Progress::none()).expect("well posed");
@@ -632,13 +631,13 @@ fn a_released_focal_is_found_for_each_camera() {
             "camera {j}: {report:?}"
         );
         assert_eq!(
-            out.image_table.cameras[j].focal_lengths().0,
+            out.image_set.cameras[j].focal_lengths().0,
             camera.focal_after
         );
         // Nothing but the focal moved.
         assert_eq!(
-            out.image_table.cameras[j],
-            source.image_table.cameras[j].with_focal(camera.focal_after)
+            out.image_set.cameras[j],
+            source.image_set.cameras[j].with_focal(camera.focal_after)
         );
     }
 }
@@ -646,7 +645,7 @@ fn a_released_focal_is_found_for_each_camera() {
 #[test]
 fn a_focal_release_names_the_camera_that_cannot_take_one() {
     let mut source = perturb(two_camera_truth());
-    source.image_table.cameras[1] = CameraIntrinsics {
+    source.image_set.cameras[1] = CameraIntrinsics {
         model: CameraModel::Pinhole {
             focal_length_x: 620.0,
             focal_length_y: 620.0,
@@ -687,10 +686,10 @@ fn a_camera_no_posed_image_uses_comes_back_untouched() {
         width: IMG_W,
         height: IMG_H,
     };
-    source.image_table.cameras.push(unused.clone());
-    source.image_table.cameras.push(second_pinhole());
-    source.image_table.images[5].camera_index = 2;
-    source.image_table.images[5].translation_xyz = Vector3::new(f64::NAN, 0.0, 0.0);
+    source.image_set.cameras.push(unused.clone());
+    source.image_set.cameras.push(second_pinhole());
+    source.image_set.images[5].camera_index = 2;
+    source.image_set.images[5].translation_xyz = Vector3::new(f64::NAN, 0.0, 0.0);
     let options = BundleAdjustOptions::uniform(3, CameraRelease::FOCAL);
 
     let (out, report) = bundle_adjust(&source, &options, &Progress::none()).expect("well posed");
@@ -698,14 +697,14 @@ fn a_camera_no_posed_image_uses_comes_back_untouched() {
     assert_eq!(report.images, IMAGES - 1);
     assert_eq!(report.cameras.len(), 1);
     assert_eq!(report.cameras[0].camera, 0);
-    assert_eq!(out.image_table.cameras[1], unused);
-    assert_eq!(out.image_table.cameras[2], second_pinhole());
+    assert_eq!(out.image_set.cameras[1], unused);
+    assert_eq!(out.image_set.cameras[2], second_pinhole());
 }
 
 #[test]
 fn a_focal_release_on_a_model_that_cannot_take_one_is_refused() {
     let mut source = perturbed();
-    source.image_table.cameras[0] = CameraIntrinsics {
+    source.image_set.cameras[0] = CameraIntrinsics {
         model: CameraModel::Pinhole {
             focal_length_x: FOCAL,
             focal_length_y: FOCAL,
@@ -731,7 +730,7 @@ fn a_focal_release_on_a_model_that_cannot_take_one_is_refused() {
 #[test]
 fn an_unposed_table_and_an_empty_schedule_are_refused() {
     let mut source = perturbed();
-    for image in source.image_table.images.iter_mut() {
+    for image in source.image_set.images.iter_mut() {
         image.translation_xyz = Vector3::new(f64::NAN, 0.0, 0.0);
     }
     assert_eq!(
@@ -1011,11 +1010,11 @@ impl Collector {
 /// tolerance, because the question is whether reporting moved anything at all.
 fn value_bits(recon: &SfmrReconstruction) -> Vec<u64> {
     let mut bits = Vec::new();
-    for image in &recon.image_table.images {
+    for image in &recon.image_set.images {
         bits.extend(image.quaternion_wxyz.coords.iter().map(|c| c.to_bits()));
         bits.extend(image.translation_xyz.iter().map(|c| c.to_bits()));
     }
-    for camera in &recon.image_table.cameras {
+    for camera in &recon.image_set.cameras {
         let (fx, fy) = camera.focal_lengths();
         bits.push(fx.to_bits());
         bits.push(fy.to_bits());
@@ -1253,7 +1252,7 @@ fn the_fraction_only_ever_moves_forward() {
 fn a_cancelled_adjustment_refuses_and_writes_nothing() {
     let source = perturbed();
     let poses: Vec<Vector3<f64>> = source
-        .image_table
+        .image_set
         .images
         .iter()
         .map(|i| i.translation_xyz)
@@ -1285,7 +1284,7 @@ fn a_cancelled_adjustment_refuses_and_writes_nothing() {
         "a cancelled adjustment wrote something back"
     );
 
-    for (image, translation) in source.image_table.images.iter().zip(&poses) {
+    for (image, translation) in source.image_set.images.iter().zip(&poses) {
         assert_eq!(image.translation_xyz, *translation);
     }
     for (point, position) in source.point_set.points.iter().zip(&positions) {
@@ -1369,7 +1368,7 @@ fn a_released_spline_moves_toward_the_lens() {
     let mut source = perturb(truth.clone());
     // The same lens with its spline flattened: the focal and the spline have to
     // move together for the residuals to come down.
-    source.image_table.cameras[0] = spline_fisheye(vec![0.0; planted.len()]);
+    source.image_set.cameras[0] = spline_fisheye(vec![0.0; planted.len()]);
 
     let (out, report) =
         bundle_adjust(&source, &distortion_released(), &Progress::none()).expect("well posed");
@@ -1380,7 +1379,7 @@ fn a_released_spline_moves_toward_the_lens() {
         report.median_residual_after < 0.1 * report.median_residual_before,
         "{report:?}"
     );
-    let Some((solved, _, _)) = out.image_table.cameras[0].model.radial_spline() else {
+    let Some((solved, _, _)) = out.image_set.cameras[0].model.radial_spline() else {
         panic!("the camera is still a spline model");
     };
     // The coefficient the observations reach most moved most of the way to the
@@ -1392,7 +1391,7 @@ fn a_released_spline_moves_toward_the_lens() {
 fn a_released_k1_moves_toward_the_lens() {
     let truth = truth_through(vec![radial_fisheye(0.2)], |_| 0);
     let mut source = perturb(truth);
-    source.image_table.cameras[0] = radial_fisheye(0.0);
+    source.image_set.cameras[0] = radial_fisheye(0.0);
 
     let (out, report) =
         bundle_adjust(&source, &distortion_released(), &Progress::none()).expect("well posed");
@@ -1403,7 +1402,7 @@ fn a_released_k1_moves_toward_the_lens() {
         report.median_residual_after < 0.1 * report.median_residual_before,
         "{report:?}"
     );
-    let k1 = k1_of(&out.image_table.cameras[0]);
+    let k1 = k1_of(&out.image_set.cameras[0]);
     assert!(k1 > 0.1, "k1 {k1}");
 }
 
@@ -1422,8 +1421,8 @@ fn a_mixed_solve_releases_each_camera_its_own_distortion() {
         |i| (i % 3) as u32,
     );
     let mut source = perturb(truth);
-    source.image_table.cameras[0] = spline_fisheye(vec![0.0; planted.len()]);
-    source.image_table.cameras[1] = radial_fisheye(0.0);
+    source.image_set.cameras[0] = spline_fisheye(vec![0.0; planted.len()]);
+    source.image_set.cameras[1] = radial_fisheye(0.0);
     let options = releasing(&[
         CameraRelease::FOCAL_AND_DISTORTION,
         CameraRelease::FOCAL_AND_DISTORTION,
@@ -1442,13 +1441,13 @@ fn a_mixed_solve_releases_each_camera_its_own_distortion() {
         report.median_residual_after < 0.2 * report.median_residual_before,
         "{report:?}"
     );
-    let Some((solved, _, _)) = out.image_table.cameras[0].model.radial_spline() else {
+    let Some((solved, _, _)) = out.image_set.cameras[0].model.radial_spline() else {
         panic!("camera 0 is still a spline model");
     };
     assert!(solved.iter().any(|&c| c != 0.0), "{solved:?}");
-    assert!(k1_of(&out.image_table.cameras[1]) > 0.05);
+    assert!(k1_of(&out.image_set.cameras[1]) > 0.05);
     assert!(matches!(
-        out.image_table.cameras[2].model,
+        out.image_set.cameras[2].model,
         CameraModel::SimplePinhole { .. }
     ));
 }
@@ -1515,7 +1514,7 @@ fn a_camera_without_distortion_keeps_its_lens_beside_one_that_releases() {
     let (out, report) = bundle_adjust(&source, &options, &Progress::none()).expect("well posed");
     assert!(report.cameras[0].focal_released && report.cameras[0].distortion_released);
     assert!(!report.cameras[1].focal_released && !report.cameras[1].distortion_released);
-    assert_eq!(out.image_table.cameras[1], pinhole());
+    assert_eq!(out.image_set.cameras[1], pinhole());
 }
 
 /// An `OPENCV_FISHEYE` lens, whose four coefficients act on a normalized
@@ -1546,12 +1545,12 @@ fn a_rig_releases_its_spline_camera_and_holds_its_opencv_fisheye() {
         |i| (i % 2) as u32,
     );
     let mut source = perturb(truth);
-    source.image_table.cameras[1] = spline_fisheye(vec![0.0; planted.len()]);
+    source.image_set.cameras[1] = spline_fisheye(vec![0.0; planted.len()]);
     let options = releasing(&[CameraRelease::HELD, CameraRelease::FOCAL_AND_DISTORTION]);
 
     let (out, report) = bundle_adjust(&source, &options, &Progress::none()).expect("well posed");
 
-    assert_eq!(out.image_table.cameras[0], opencv_fisheye());
+    assert_eq!(out.image_set.cameras[0], opencv_fisheye());
     let held = &report.cameras[0];
     assert_eq!(
         (held.camera, held.focal_released, held.distortion_released),
@@ -1567,7 +1566,7 @@ fn a_rig_releases_its_spline_camera_and_holds_its_opencv_fisheye() {
         ),
         (1, true, true)
     );
-    let Some((solved, _, _)) = out.image_table.cameras[1].model.radial_spline() else {
+    let Some((solved, _, _)) = out.image_set.cameras[1].model.radial_spline() else {
         panic!("camera 1 is still a spline model");
     };
     assert!(solved.iter().any(|&c| c != 0.0), "{solved:?}");
@@ -1654,7 +1653,7 @@ fn every_camera_held_still_refines_the_poses_and_the_points() {
         assert!(!camera.focal_released && !camera.distortion_released);
         assert_eq!(camera.focal_before, camera.focal_after);
     }
-    assert_eq!(held.image_table.cameras, source.image_table.cameras);
+    assert_eq!(held.image_set.cameras, source.image_set.cameras);
 }
 
 #[test]

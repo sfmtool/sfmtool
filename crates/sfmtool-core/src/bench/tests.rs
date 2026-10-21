@@ -4387,7 +4387,7 @@ fn a_commit_of_a_duplicate_creates_a_point_rather_than_replacing_one() {
 /// under a corner.
 fn distorted(edited: &EditedReconstruction) -> EditedReconstruction {
     let mut recon = (*edited.base).clone();
-    let (focal, cx, cy) = match recon.image_table.cameras[0].model {
+    let (focal, cx, cy) = match recon.image_set.cameras[0].model {
         crate::camera::CameraModel::Pinhole {
             focal_length_x,
             principal_point_x,
@@ -4396,7 +4396,7 @@ fn distorted(edited: &EditedReconstruction) -> EditedReconstruction {
         } => (focal_length_x, principal_point_x, principal_point_y),
         _ => panic!("the fixture's camera is a pinhole"),
     };
-    recon.image_table.cameras[0].model = crate::camera::CameraModel::SimpleRadial {
+    recon.image_set.cameras[0].model = crate::camera::CameraModel::SimpleRadial {
         focal_length: focal,
         principal_point_x: cx,
         principal_point_y: cy,
@@ -4407,7 +4407,7 @@ fn distorted(edited: &EditedReconstruction) -> EditedReconstruction {
 
 /// The camera and the pose of image `image`, as the steps read them.
 fn view(edited: &EditedReconstruction, image: usize) -> (CameraIntrinsics, RigidTransform) {
-    let table = &edited.base.image_table;
+    let table = &edited.base.image_set;
     let row = &table.images[image];
     let camera = table.cameras[row.camera_index as usize].clone();
     let q = row.quaternion_wxyz.quaternion();
@@ -4910,7 +4910,7 @@ fn displacement_of(before: &EditableTrack, after: &EditableTrack) -> Vector3<f64
 /// Somewhere on the sensor of image 0, for a step that has to be refused rather
 /// than measured.
 fn scene_pixel(edited: &EditedReconstruction) -> [f64; 2] {
-    let camera = &edited.base.image_table.cameras[0];
+    let camera = &edited.base.image_set.cameras[0];
     [camera.width as f64 / 2.0, camera.height as f64 / 2.0]
 }
 

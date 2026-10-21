@@ -60,7 +60,7 @@ impl GroundTruth {
             &Progress::none(),
         )
         .expect("the ground truth loads");
-        let images = &recon.image_table.images;
+        let images = &recon.image_set.images;
         let paths: Vec<PathBuf> = images.iter().map(|i| dir.join(&i.name)).collect();
         let refs: Vec<&Path> = paths.iter().map(PathBuf::as_path).collect();
         let (pyramids, _) = PhotographCache::new(0, 8)
@@ -87,13 +87,13 @@ impl GroundTruth {
 
     pub(super) fn views(&self) -> Vec<ProjectedImage<'_>> {
         self.recon
-            .image_table
+            .image_set
             .images
             .iter()
             .zip(&self.poses)
             .zip(&self.pyramids)
             .map(|((image, cam_from_world), pyramid)| ProjectedImage {
-                camera: &self.recon.image_table.cameras[image.camera_index as usize],
+                camera: &self.recon.image_set.cameras[image.camera_index as usize],
                 cam_from_world,
                 pyramid,
             })

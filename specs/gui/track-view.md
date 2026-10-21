@@ -2055,7 +2055,7 @@ draws the circle of the one selected row larger.
 
 Track View asks the node to look for its index files, the SIFT index and the
 cluster-patches file ([`index-files.md`](index-files.md)), whenever it draws, in
-either mode, and to re-derive their states when the node's image table, or the
+either mode, and to re-derive their states when the node's image set, or the
 index the cluster patches are judged against, has moved. A session so finds the
 files the last one built without anyone asking, and a look that found nothing
 is remembered, so a node with neither file is not checked on every frame.

@@ -333,11 +333,11 @@ fn main() {
     if let Some(ws) = opt("--workspace") {
         recon.workspace_dir = PathBuf::from(ws);
     }
-    let images = &recon.image_table.images;
+    let images = &recon.image_set.images;
     let poses: Vec<RigidTransform> = images.iter().map(pose_of).collect();
     let cams: Vec<&CameraIntrinsics> = images
         .iter()
-        .map(|i| &recon.image_table.cameras[i.camera_index as usize])
+        .map(|i| &recon.image_set.cameras[i.camera_index as usize])
         .collect();
     let cloud = PatchCloud::from_stored_patch_frames(&recon).expect("patch frames");
     let r = recon

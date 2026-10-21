@@ -276,7 +276,7 @@ pub(crate) fn figure(bench: &BenchTrack<'_>, eye: Point3<f64>) -> Option<Figure>
     let disc = disc(patch_frame, radius, &place, in_color);
     let normal = (!at_infinity).then(|| arrow(patch_frame, half, bench.transform, &rotation, eye));
 
-    let image_table = &bench.edited.base.image_table;
+    let image_set = &bench.edited.base.image_set;
     let marks = bench
         .track
         .observations
@@ -284,7 +284,7 @@ pub(crate) fn figure(bench: &BenchTrack<'_>, eye: Point3<f64>) -> Option<Figure>
         .enumerate()
         .filter_map(|(observation, sighting)| {
             let site = sighting.site()?;
-            let (camera, pose) = geometry::view_of(image_table, sighting.image as usize)?;
+            let (camera, pose) = geometry::view_of(image_set, sighting.image as usize)?;
             // The one unprojection, core's own: the keypoint's ray meets the
             // patch frame's plane and what it named is read off that meeting. A
             // ray that cannot meet the plane in front of its camera --

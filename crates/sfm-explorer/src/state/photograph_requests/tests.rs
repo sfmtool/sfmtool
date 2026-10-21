@@ -14,7 +14,7 @@ fn demo_in(dir: &Path) -> SfmrReconstruction {
     let mut recon = SfmrReconstruction::demo(8);
     assert!(recon.image_count() > 1, "the demo has two images");
     recon.workspace_dir = dir.to_path_buf();
-    for (i, image) in recon.image_table.images.iter_mut().enumerate() {
+    for (i, image) in recon.image_set.images.iter_mut().enumerate() {
         image.name = format!("photo_{i:02}.png");
     }
     image::RgbImage::from_fn(6, 4, |x, y| image::Rgb([x as u8, y as u8, 3]))
@@ -83,7 +83,7 @@ fn a_file_that_cannot_be_read_ends_as_unreadable_rather_than_decoding_forever() 
     assert!(!requests.is_in_flight(&path), "no second request");
     assert_eq!(cache.stats().misses, 1);
 
-    // An index past the image table has no file to ask for.
+    // An index past the image set has no file to ask for.
     assert!(matches!(
         display_photograph(&cache, &requests, &recon, recon.image_count(), &ctx),
         DisplayPhotograph::Unreadable

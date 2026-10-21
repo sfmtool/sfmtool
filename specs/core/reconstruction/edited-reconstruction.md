@@ -1,4 +1,4 @@
-# A reconstruction as a value: the image table and the point set
+# A reconstruction as a value: the image set and the point set
 
 A Structure-from-Motion result in memory is two different kinds of thing bundled
 into one: a list of photographs with the camera poses and lens models that place
@@ -16,7 +16,7 @@ the size of that track rather than the size of the reconstruction.
 
 The type is `SfmrReconstruction`, the in-memory form of a `.sfmr` file. It holds
 three things about the file itself (where the workspace is, the metadata, the
-content hashes) and then two owned halves: an **image table** and a **point set**.
+content hashes) and then two owned halves: an **image set** and a **point set**.
 It is a plain value with no interior identity: cloning it gives an independent
 reconstruction, and an operation that changes one is written as a function from a
 reconstruction to a reconstruction rather than as a mutation of a shared object.
@@ -28,9 +28,9 @@ pointer so that a clone which does not change them costs nothing for them.
 
 The three types live in
 [data.rs](../../../crates/sfmtool-core/src/reconstruction/data.rs) and its two
-children [image_table.rs](../../../crates/sfmtool-core/src/reconstruction/data/image_table.rs)
+children [image_set.rs](../../../crates/sfmtool-core/src/reconstruction/data/image_set.rs)
 and [point_set.rs](../../../crates/sfmtool-core/src/reconstruction/data/point_set.rs),
-re-exported as `sfmtool_core::{SfmrReconstruction, ImageTable, PointSet}`. The
+re-exported as `sfmtool_core::{SfmrReconstruction, ImageSet, PointSet}`. The
 reconstruction reaches Python as `sfmtool.reconstruction.SfmrReconstruction`,
 which exposes columns and never the struct layout, so the split is invisible
 there.
@@ -40,11 +40,11 @@ pub struct SfmrReconstruction {
     pub workspace_dir: PathBuf,
     pub metadata: SfmrMetadata,
     pub content_hash: ContentHash,
-    pub image_table: ImageTable,
+    pub image_set: ImageSet,
     pub point_set: PointSet,
 }
 
-pub struct ImageTable {
+pub struct ImageSet {
     pub cameras: Vec<CameraIntrinsics>,
     pub images: Vec<SfmrImage>,
     pub thumbnails_y_x_rgb: Option<Arc<Array4<u8>>>,
@@ -94,7 +94,7 @@ impl PointSet {
     pub fn validate_observation_columns(&self, image_count: usize) -> Result<(), String>;
 }
 
-impl ImageTable {
+impl ImageSet {
     pub fn image_count(&self) -> usize;
     pub fn camera_count(&self) -> usize;
     pub fn camera_for_image(&self, image_index: usize) -> &CameraIntrinsics;
@@ -111,19 +111,19 @@ that only wants a count does not have to know which half answers it.
 
 **Two owned structs rather than two `Arc`s.** A reconstruction is a value, and
 the halves are parts of that value, not separately shared objects. Putting the
-whole image table behind a pointer would make two reconstructions able to observe
+whole image set behind a pointer would make two reconstructions able to observe
 each other's edits, which is exactly what the value model is for avoiding. The
 sharing this design does want is narrower than a half: it is the two heavy
 columns, and it is expressed at those two fields.
 
 **The split is by what an index means, not by what an algorithm wants.**
-Everything in the image table is addressed by image index or reached from one
+Everything in the image set is addressed by image index or reached from one
 (`cameras` through `SfmrImage::camera_index`, `rig_frame_data` through the frame
 grouping). Everything in the point set is addressed by point index or by
 observation row. That rule decides every field without a judgement call, and it
 is why a per-point algorithm can take a `&PointSet` and an image count rather
 than the whole reconstruction: an addition set of points that shares an image
-table is then the same type as the base's point side.
+set is then the same type as the base's point side.
 
 **The two heavy columns are shared, and shared is not copy-on-write.** On the
 largest real reconstruction measured (530 674 points, 8.1 million observations,
@@ -181,7 +181,7 @@ by the image count.** `observation_offsets`, `image_feature_to_point`,
 `max_track_feature_index` and `infinity_point_count` are all a function of the
 tracks and the points; the image count only says how long two of the vectors are.
 So `PointSet::rebuild_derived_fields` takes the count as an argument, and
-`SfmrReconstruction::rebuild_derived_fields` supplies it from the image table.
+`SfmrReconstruction::rebuild_derived_fields` supplies it from the image set.
 
 ### Example
 
@@ -197,7 +197,7 @@ for obs in recon.observations_for_point(0) {
 }
 
 // Naming the half when an operation belongs to one of them.
-let pose = &recon.image_table.images[0];
+let pose = &recon.image_set.images[0];
 let colour = recon.point_set.points[0].color;
 
 // A point-side edit, with the derived indexes restored afterwards.
@@ -226,7 +226,7 @@ two parts instead: an immutable base, and the small set of edits made on it.
   size of the edit.
 - **The additions** are the points this version holds and the base does not, as
   a `PointSet` of their own with exactly the base's columns, whose observations
-  index the base's image table. The one exception is the observation readings
+  index the base's image set. The one exception is the observation readings
   ([../../formats/sfmr-file-format.md](../../formats/sfmr-file-format.md) §
   "Observation readings"), which a record may leave out and may bring to a
   base without them: a record without them adds rows with nothing measured, and a
@@ -237,7 +237,7 @@ two parts instead: an immutable base, and the small set of edits made on it.
   measured. So a bench commit can store the readings
   it measured in a file that had none.
 
-The images and the cameras are the base's. An edit to the image table is not an
+The images and the cameras are the base's. An edit to the image set is not an
 overlay edit.
 
 ### Two kinds of edit
@@ -348,7 +348,7 @@ impl EditedReconstruction {
 impl RowMap {
     /// The map a whole-value edit performed, read off its input and its output.
     /// `image_map` is one entry per image of `before`, or `None` when the edit
-    /// left the image table alone.
+    /// left the image set alone.
     pub fn by_scan(before: &SfmrReconstruction, after: &SfmrReconstruction,
         image_map: Option<&[Option<u32>]>) -> Result<RowMap, EditError>;
 }
@@ -444,7 +444,7 @@ its place**: a modified point goes back to the base index it replaced, carrying
 its new record and track; a deleted point's slot closes up, shifting the points
 after it down by one; and only a point that is new to this base is appended,
 after the last base point, in the order the additions were made. The derived
-indexes are rebuilt at the end. The image table is the base's, thumbnails shared
+indexes are rebuilt at the end. The image set is the base's, thumbnails shared
 rather than copied.
 
 Keeping places is what makes the materialised file readable beside the one it
@@ -487,7 +487,7 @@ so the map has to be recovered afterwards, from the two values.
 `RowMap::by_scan(before, after, image_map)` does that. `image_map` says where
 each image of `before` went, one entry per image, holding its index in `after`
 or nothing for an image the edit dropped; `None` for the whole argument means
-the image table did not move, which is every bulk edit but an image subset.
+the image set did not move, which is every bulk edit but an image subset.
 
 **The invariant it rests on is that a bulk edit never reorders the points that
 survive it.** Every one of them is a selection or a per-point rewrite over the
@@ -695,7 +695,7 @@ The enum carries both the per-observation pixel column (`feature_indexes` and
 `keypoints_xy`) and the per-image hash vectors (`feature_tool_hashes`,
 `sift_content_hashes`, `image_file_hashes`), because a `.sfmr` file is wholly one
 mode and one discriminator selects both sets of columns at once. Splitting the
-per-image half into the image table would put a second discriminator there that
+per-image half into the image set would put a second discriminator there that
 has to agree with this one, and a pair of enums that can disagree is a worse
 invariant than one field that is measured per image while living on the point
 side. So the enum stays whole in the point set, and it is the single exception to

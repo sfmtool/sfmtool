@@ -287,7 +287,7 @@ fn find_nearby_tracks_is_refused_where_create_track_here_is() {
     let image = ImageRef::new(id, 0);
     assert_eq!(state.find_nearby_tracks_refusal(image, true), None);
 
-    state.scene[0].recon_mut().image_table.images[1]
+    state.scene[0].recon_mut().image_set.images[1]
         .translation_xyz
         .x = f64::NAN;
     assert_eq!(

@@ -7,7 +7,7 @@
 //! frustum's far plane, an Image Browser cell and its colour barcode, and a
 //! Track View row each show a 128 x 128 picture of an image. When the file
 //! carries a thumbnail column those are its rows, and the display column here
-//! is the image table's own [`Arc`], shared rather than copied. When it does
+//! is the image set's own [`Arc`], shared rather than copied. When it does
 //! not, [`DisplayThumbnails::build`] fills every row in as part of the open
 //! ([`crate::state::open`]): from the image's `.sift` first, which already holds
 //! the row reduced, from the photograph second, and as a flat grey placeholder
@@ -15,10 +15,10 @@
 //!
 //! **Display thumbnails belong to the node.** They are held on the
 //! [`crate::scene::SceneNode`] beside its history and never enter an
-//! `ImageTable`, so nothing built here can reach a save or a content hash: a
+//! `ImageSet`, so nothing built here can reach a save or a content hash: a
 //! file opened without thumbnails is saved without them, whatever was drawn.
 //!
-//! **They are keyed by image name.** Delete Image renumbers the image table
+//! **They are keyed by image name.** Delete Image renumbers the image set
 //! and Undo renumbers it back, so a column addressed by index would need
 //! rebuilding on every such step; addressed by the workspace-relative name the
 //! table carries, one column built when the node opens serves every version.
@@ -64,7 +64,7 @@ impl DisplayThumbnails {
     /// The display column of a reconstruction that carries thumbnails: its
     /// own column, shared. `None` when it carries none.
     pub(crate) fn embedded(recon: &SfmrReconstruction) -> Option<Arc<Self>> {
-        let column = recon.image_table.thumbnails_y_x_rgb.as_ref()?;
+        let column = recon.image_set.thumbnails_y_x_rgb.as_ref()?;
         Some(Arc::new(Self {
             rows_by_name: names_to_rows(recon),
             column: Arc::clone(column),
@@ -90,7 +90,7 @@ impl DisplayThumbnails {
         recon: &SfmrReconstruction,
         progress: &Progress<'_>,
     ) -> Result<(Option<Arc<Self>>, BuiltFrom), Cancelled> {
-        let images = &recon.image_table.images;
+        let images = &recon.image_set.images;
         let total = images.len();
         let landed = AtomicUsize::new(0);
         let rows: Vec<(Vec<u8>, ThumbnailSource)> = (0..total)
@@ -143,10 +143,10 @@ impl DisplayThumbnails {
     }
 }
 
-/// Image name to row, over `recon`'s image table as it stands.
+/// Image name to row, over `recon`'s image set as it stands.
 fn names_to_rows(recon: &SfmrReconstruction) -> HashMap<String, usize> {
     recon
-        .image_table
+        .image_set
         .images
         .iter()
         .enumerate()
@@ -164,7 +164,7 @@ fn build_row(recon: &SfmrReconstruction, index: usize) -> (Vec<u8>, ThumbnailSou
              showing a placeholder",
             recon
                 .workspace_dir
-                .join(&recon.image_table.images[index].name)
+                .join(&recon.image_set.images[index].name)
                 .display()
         );
     }
@@ -183,10 +183,10 @@ pub(crate) fn row_for<'a>(
     recon: &'a SfmrReconstruction,
     index: usize,
 ) -> Option<ArrayView3<'a, u8>> {
-    let name = &recon.image_table.images.get(index)?.name;
+    let name = &recon.image_set.images.get(index)?.name;
     if let Some(row) = display.and_then(|display| display.row(name)) {
         return Some(row);
     }
-    let column = recon.image_table.thumbnails_y_x_rgb.as_ref()?;
+    let column = recon.image_set.thumbnails_y_x_rgb.as_ref()?;
     (index < column.shape()[0]).then(|| column.index_axis(Axis(0), index))
 }

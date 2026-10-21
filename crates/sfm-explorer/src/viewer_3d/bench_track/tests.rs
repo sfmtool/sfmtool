@@ -140,7 +140,7 @@ fn a_track_at_infinity_draws_directions_and_no_normal() {
         .expect("a loaded node")
         .edited()
         .base
-        .image_table
+        .image_set
         .images[track.observations[0].image as usize]
         .camera_center();
     let Stage::Track(payload) = &mut track.stage else {
@@ -197,7 +197,7 @@ fn each_mark_reprojects_onto_the_keypoint_it_came_from() {
     let (state, id, track) = staged_track();
     let figure = figure_of(&state, id, &track).expect("a figure");
     let node = state.node(id).expect("a loaded node");
-    let image_table = &node.edited().base.image_table;
+    let image_set = &node.edited().base.image_set;
 
     let placed: Vec<_> = track
         .observations
@@ -216,7 +216,7 @@ fn each_mark_reprojects_onto_the_keypoint_it_came_from() {
 
     for (observation, mark) in placed.iter().zip(&figure.marks) {
         let (camera, pose) =
-            geometry::view_of(image_table, observation.image as usize).expect("the view");
+            geometry::view_of(image_set, observation.image as usize).expect("the view");
         let q = nalgebra::Vector3::new(
             f64::from(mark.segment.b[0]),
             f64::from(mark.segment.b[1]),

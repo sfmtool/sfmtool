@@ -179,7 +179,7 @@ adjustment deletes the points it left unsupported and says how many rather than
 which. The selection follows that map: it stays on the point it was on, and
 clears if that point is one of the deleted.
 
-The image table does not move, so image indexes, the image and camera selections
+The image set does not move, so image indexes, the image and camera selections
 and the decoded pixels keyed by them all still mean what they meant. What the
 panels cached *about* the geometry -- rendered patches, prepared track rows,
 per-camera derived quantities -- is dropped, because it describes a geometry the
@@ -250,7 +250,7 @@ call's shape over a real reconstruction, and the refusals.
 
 Explorer (`sfm-explorer` lib tests, headless):
 
-- `state/edits/tests.rs`: the version pushed and its new base, the image table
+- `state/edits/tests.rs`: the version pushed and its new base, the image set
   standing still, the perturbed camera coming back, the label with and without
   the focal, the log entry's counts and serials, an undo putting every pose back,
   the selection following the map, the gated refusal for no inline keypoints

@@ -88,7 +88,7 @@ pub fn render_patch_bitmap_column(
         return Ok(None);
     };
     let [decode, render] = progress.split([1.0, 3.0]);
-    let images = &recon.image_table.images;
+    let images = &recon.image_set.images;
     let total = images.len();
     let pyramids = {
         let mut phase = decode.phase("decode photographs");
@@ -104,7 +104,7 @@ pub fn render_patch_bitmap_column(
             .into_iter()
             .zip(images)
             .map(|(pyramid, image)| {
-                let camera = &recon.image_table.cameras[image.camera_index as usize];
+                let camera = &recon.image_set.cameras[image.camera_index as usize];
                 pyramid.filter(|pyramid| {
                     let level = pyramid.level(0);
                     level.width() == camera.width && level.height() == camera.height
@@ -146,7 +146,7 @@ pub fn render_patch_bitmap_column(
         .zip(&pyramids)
         .map(|((image, cam_from_world), pyramid)| {
             pyramid.as_ref().map(|pyramid| ProjectedImage {
-                camera: &recon.image_table.cameras[image.camera_index as usize],
+                camera: &recon.image_set.cameras[image.camera_index as usize],
                 cam_from_world,
                 pyramid,
             })

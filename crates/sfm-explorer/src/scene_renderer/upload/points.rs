@@ -90,8 +90,8 @@ impl SceneRenderer {
         };
         let camera_nn_scale = {
             let mut phase = progress.detail_phase("camera spacing");
-            let scale = compute_camera_nn_scale(&recon.image_table.images);
-            progress_note!(phase, "{} cameras", recon.image_table.images.len());
+            let scale = compute_camera_nn_scale(&recon.image_set.images);
+            progress_note!(phase, "{} cameras", recon.image_set.images.len());
             scale
         };
         let bounds = {

@@ -17,7 +17,7 @@ use ndarray::{Array2, Array4};
 
 use crate::camera::{CameraIntrinsics, CameraModel};
 use crate::reconstruction::data::{
-    ImageTable, ObservationSource, Point3D, SfmrImage, SfmrReconstruction, TrackObservation,
+    ImageSet, ObservationSource, Point3D, SfmrImage, SfmrReconstruction, TrackObservation,
 };
 use crate::{RotQuaternion, Se3Transform};
 
@@ -77,7 +77,7 @@ fn image_row(name: &str, rotation: UnitQuaternion<f64>, centre: Point3<f64>) -> 
 }
 
 /// Where `world` lands in image `i` of `table`, in source-image px.
-fn project(table: &ImageTable, i: usize, world: Point3<f64>) -> [f32; 2] {
+fn project(table: &ImageSet, i: usize, world: Point3<f64>) -> [f32; 2] {
     let image = &table.images[i];
     let cam = image.quaternion_wxyz * world.coords + image.translation_xyz;
     let (u, v) = table
@@ -110,8 +110,8 @@ fn world_from_camera(rotation: UnitQuaternion<f64>, centre: Point3<f64>) -> Se3T
 fn truth(observed_by: &[Vec<usize>], at_infinity: &[usize]) -> SfmrReconstruction {
     let n = CENTERS.len();
     let mut recon = SfmrReconstruction::demo(1);
-    recon.image_table.cameras = vec![pinhole()];
-    recon.image_table.images = (0..n)
+    recon.image_set.cameras = vec![pinhole()];
+    recon.image_set.images = (0..n)
         .map(|i| {
             image_row(
                 &format!("image_{i}.jpg"),
@@ -120,8 +120,8 @@ fn truth(observed_by: &[Vec<usize>], at_infinity: &[usize]) -> SfmrReconstructio
             )
         })
         .collect();
-    recon.image_table.depth_statistics.images.truncate(n);
-    recon.image_table.depth_histogram_counts.truncate(n);
+    recon.image_set.depth_statistics.images.truncate(n);
+    recon.image_set.depth_histogram_counts.truncate(n);
 
     let count = observed_by.len();
     let mut tracks = Vec::new();
@@ -133,7 +133,7 @@ fn truth(observed_by: &[Vec<usize>], at_infinity: &[usize]) -> SfmrReconstructio
                 point_index: p as u32,
             });
             let xy = project(
-                &recon.image_table,
+                &recon.image_set,
                 i,
                 Point3::from(Vector3::from_row_slice(&WORLD[p])),
             );
@@ -184,7 +184,7 @@ fn truth(observed_by: &[Vec<usize>], at_infinity: &[usize]) -> SfmrReconstructio
         let row = recon.point_set.tracks[start];
         let xy = recon.point_set.keypoints_xy().expect("inline keypoints");
         let ray = recon
-            .image_table
+            .image_set
             .world_ray(
                 row.image_index as usize,
                 [f64::from(xy[[start, 0]]), f64::from(xy[[start, 1]])],
@@ -207,8 +207,8 @@ fn all_seen(points: usize) -> Vec<Vec<usize>> {
 fn displaced(recon: &SfmrReconstruction) -> SfmrReconstruction {
     let mut out = recon.clone();
     let rotation = UnitQuaternion::from_axis_angle(&Vector3::y_axis(), 0.05) * looking_down_z();
-    out.image_table.images[0] = image_row(
-        &out.image_table.images[0].name.clone(),
+    out.image_set.images[0] = image_row(
+        &out.image_set.images[0].name.clone(),
         rotation,
         Point3::new(-0.5 + 0.08, -0.3 - 0.04, 0.06),
     );
@@ -236,7 +236,7 @@ fn an_image_past_the_table_is_refused() {
 fn an_image_with_no_pose_is_refused() {
     let mut recon = truth(&all_seen(WORLD.len()), &[]);
     let target = pose(&recon, 1);
-    recon.image_table.images[1].translation_xyz = Vector3::new(f64::NAN, 0.0, 0.0);
+    recon.image_set.images[1].translation_xyz = Vector3::new(f64::NAN, 0.0, 0.0);
     let err = move_camera(&recon, 1, &target)
         .map(|_| ())
         .expect_err("image 1 carries no pose");
@@ -317,8 +317,8 @@ fn the_input_is_untouched() {
         move_camera(&wrong, 0, &pose(&truth_recon, 0)).expect("a finite pose on image 0");
 
     assert_eq!(
-        wrong.image_table.images[0].translation_xyz,
-        before.image_table.images[0].translation_xyz
+        wrong.image_set.images[0].translation_xyz,
+        before.image_set.images[0].translation_xyz
     );
     for p in 0..WORLD.len() {
         assert_eq!(
@@ -360,7 +360,7 @@ fn a_single_view_bearing_becomes_the_moved_cameras_ray() {
     let start = moved.point_set.observation_offsets[1];
     let xy = moved.point_set.keypoints_xy().expect("inline keypoints");
     let expected = moved
-        .image_table
+        .image_set
         .world_ray(0, [f64::from(xy[[start, 0]]), f64::from(xy[[start, 1]])])
         .expect("a ray through the stored keypoint");
     let got = moved.point_set.points[1].position;
@@ -388,7 +388,7 @@ fn a_bearing_two_images_see_keeps_its_direction() {
 fn a_value_with_no_keypoints_moves_its_camera_and_keeps_every_point() {
     let mut recon = truth(&all_seen(WORLD.len()), &[]);
     let observation_count = recon.point_set.tracks.len();
-    let image_count = recon.image_table.images.len();
+    let image_count = recon.image_set.images.len();
     recon.point_set.observations = ObservationSource::SiftFiles {
         feature_indexes: (0..observation_count as u32).collect(),
         keypoints_xy: None,
@@ -442,13 +442,13 @@ fn a_re_triangulated_points_frame_is_rescaled_by_its_depth_ratio() {
     let truth_recon = truth(&all_seen(WORLD.len()), &[]);
     let wrong = displaced(&truth_recon);
     let before_position = wrong.point_set.points[0].position;
-    let before_scale = wrong.image_table.placement_scale(&before_position);
+    let before_scale = wrong.image_set.placement_scale(&before_position);
 
     let (moved, _report) =
         move_camera(&wrong, 0, &pose(&truth_recon, 0)).expect("a finite pose on image 0");
 
     let after_scale = moved
-        .image_table
+        .image_set
         .placement_scale(&moved.point_set.points[0].position);
     let expected = HALF_EXTENT * (after_scale / before_scale) as f32;
     let u = moved
@@ -500,7 +500,7 @@ fn the_report_measures_the_residual_before_and_after() {
     // The same numbers a caller can compute for itself from the value that came
     // back, which is what the viewer's own readout does every frame.
     let direct = residual_quantiles_px(
-        moved.image_table.camera_for_image(0),
+        moved.image_set.camera_for_image(0),
         &pose(&moved, 0),
         &image_reprojection_samples(&moved, 0),
     )
@@ -517,7 +517,7 @@ fn the_report_measures_the_move_itself() {
     let (_moved, report) = move_camera(&wrong, 0, &target).expect("a finite pose on image 0");
 
     let expected_translation =
-        (Point3::from(target.translation) - wrong.image_table.images[0].camera_center()).norm();
+        (Point3::from(target.translation) - wrong.image_set.images[0].camera_center()).norm();
     assert!((report.translation - expected_translation).abs() < 1e-12);
     assert!((report.rotation_deg - 0.05_f64.to_degrees()).abs() < 1e-9);
     let scene = report

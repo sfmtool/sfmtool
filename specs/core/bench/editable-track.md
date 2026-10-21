@@ -1138,7 +1138,7 @@ index into the list is stable for the life of the track: an agent holding an
 index after a verdict still holds the same observation, and a measurement is
 keyed by the index of the observation it was taken of. The one thing that
 renumbers them is deleting an image from the reconstruction, which is not a step
-on the track but a change to the image table its observations index into
+on the track but a change to the image set its observations index into
 ([When an image is deleted](#when-an-image-is-deleted)).
 
 **Provenance** is where the sighting came from, and it is shown rather than
@@ -3358,7 +3358,7 @@ The refusals are: the cluster stage (*"upgrade it before committing"*), a
 `sift_files` reconstruction (an observation the localizer placed is a keypoint
 and not a feature index), fewer than two `in` observations, no position, no
 frame or no bitmap where the reconstruction stores one per point, an `in`
-observation with no keypoint, and an image past the image table.
+observation with no keypoint, and an image past the image set.
 
 `CommitReport::label(node)` writes the sentence a log records, which needs the
 name the caller knows the reconstruction by: `Committed track: 5 observations in
@@ -3368,7 +3368,7 @@ nothing, `Committed track: no effect, point 1207 of bull already holds it`.
 ### When an image is deleted
 
 An observation names its photograph by its index in the reconstruction's image
-table, and deleting an image from the reconstruction moves every later image
+set, and deleting an image from the reconstruction moves every later image
 down by one. A track carried across that delete unchanged would name, in every
 observation past the deleted image, the photograph after the one it was sighted
 in, and a commit would write those pixels into the wrong images.

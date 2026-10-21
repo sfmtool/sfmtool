@@ -68,7 +68,7 @@ fn a_render_with_no_usable_photograph_draws_nothing() {
     assert!(rendered.is_none(), "no photograph was readable");
 
     let mut resized = seoul_bull();
-    for camera in &mut resized.image_table.cameras {
+    for camera in &mut resized.image_set.cameras {
         camera.width += 1;
     }
     let rendered =
@@ -123,7 +123,7 @@ fn a_missing_view_leaves_each_reference_naming_its_own_observation() {
     use crate::patch::PatchCloud;
 
     let recon = seoul_bull();
-    let images = &recon.image_table.images;
+    let images = &recon.image_set.images;
     let paths: Vec<PathBuf> = images
         .iter()
         .map(|i| recon.workspace_dir.join(&i.name))
@@ -149,7 +149,7 @@ fn a_missing_view_leaves_each_reference_naming_its_own_observation() {
     let views: Vec<Option<ProjectedImage<'_>>> = (0..images.len())
         .map(|i| {
             (!dropped.contains(&i)).then(|| ProjectedImage {
-                camera: &recon.image_table.cameras[images[i].camera_index as usize],
+                camera: &recon.image_set.cameras[images[i].camera_index as usize],
                 cam_from_world: &poses[i],
                 pyramid: &pyramids[i],
             })
@@ -366,7 +366,7 @@ fn stored_references_survive_missing_views_skipped_points_and_zero_frames() {
 
     let mut recon = seoul_bull();
     let count = recon.point_count();
-    let images = &recon.image_table.images;
+    let images = &recon.image_set.images;
     let paths: Vec<PathBuf> = images
         .iter()
         .map(|i| recon.workspace_dir.join(&i.name))
@@ -416,11 +416,11 @@ fn stored_references_survive_missing_views_skipped_points_and_zero_frames() {
     );
 
     let dropped = [0usize, 3, 7];
-    let images = &recon.image_table.images;
+    let images = &recon.image_set.images;
     let views: Vec<Option<ProjectedImage<'_>>> = (0..images.len())
         .map(|i| {
             (!dropped.contains(&i)).then(|| ProjectedImage {
-                camera: &recon.image_table.cameras[images[i].camera_index as usize],
+                camera: &recon.image_set.cameras[images[i].camera_index as usize],
                 cam_from_world: &poses[i],
                 pyramid: &pyramids[i],
             })

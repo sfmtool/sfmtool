@@ -14,7 +14,7 @@ use crate::camera::sampler::{Sampler, SamplerChoice};
 use crate::patch::normal_refine::PatchWindow;
 use crate::progress::Event;
 use crate::reconstruction::{
-    observation_reading_options, ImageTable, ObservationReading, ObservationReadings,
+    observation_reading_options, ImageSet, ObservationReading, ObservationReadings,
     SfmrReconstruction,
 };
 
@@ -99,7 +99,7 @@ fn stored_columns_read_the_stored_point() {
     let recon = edited(demo(20));
     let table = compute(&recon, &TrackTableColumn::ALL);
     assert_eq!(table.point_indexes(), (0..20).collect::<Vec<u32>>());
-    let centroid = recon.base.image_table.camera_centroid();
+    let centroid = recon.base.image_set.camera_centroid();
     for (row, &index) in table.point_indexes().iter().enumerate() {
         let point = recon.point(index).unwrap().point().clone();
         let v = |c| table.values(c).unwrap()[row];
@@ -116,7 +116,7 @@ fn stored_columns_read_the_stored_point() {
         assert_eq!(v64(TrackTableColumn::Z), point.position.z);
         assert_eq!(
             v(TrackTableColumn::CentroidDistance),
-            ImageTable::placement_scale_from(&centroid, &point.position) as f32
+            ImageSet::placement_scale_from(&centroid, &point.position) as f32
         );
     }
     // A position column is read as f64 only, and an f32 column as f32 only.
@@ -152,12 +152,12 @@ fn computed_columns_are_the_track_geometry_definitions() {
             TrackTableColumn::InverseDepthZ,
         ],
     );
-    let image_table = &recon.base.image_table;
+    let image_set = &recon.base.image_set;
     for (row, &index) in table.point_indexes().iter().enumerate() {
         let view = recon.point(index).unwrap();
-        let (cond, z) = compute_point_diagnostics(image_table, &view);
+        let (cond, z) = compute_point_diagnostics(image_set, &view);
         let angle = table.values(TrackTableColumn::MaxRayAngleDeg).unwrap()[row];
-        assert_eq!(angle, compute_max_ray_angle_deg(image_table, &view));
+        assert_eq!(angle, compute_max_ray_angle_deg(image_set, &view));
         assert!(angle > 1.0, "two cameras of the arc see point {index}");
         assert_eq!(
             table.values(TrackTableColumn::ConditionNumber).unwrap()[row],
@@ -177,7 +177,7 @@ fn computed_columns_are_the_track_geometry_definitions() {
 fn the_max_ray_angle_is_the_widest_pair_of_rays() {
     let recon = edited(demo(5));
     let view = recon.point(3).unwrap();
-    let table = &recon.base.image_table;
+    let table = &recon.base.image_set;
     let images = view.observations().iter().map(|o| o.image_index as usize);
     let rays = observation_rays(table, &view.point().position, false, images);
     assert_eq!(rays.len(), 2);
@@ -241,7 +241,7 @@ fn absent_columns_are_skipped() {
 #[test]
 fn centroid_distance_is_absent_with_no_posed_image() {
     let mut recon = demo(6);
-    for image in &mut recon.image_table.images {
+    for image in &mut recon.image_set.images {
         image.translation_xyz = nalgebra::Vector3::repeat(f64::NAN);
     }
     let recon = edited(recon);

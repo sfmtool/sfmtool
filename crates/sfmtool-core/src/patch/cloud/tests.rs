@@ -5,7 +5,7 @@ use super::*;
 use crate::camera::WarpMap;
 use crate::camera::{CameraIntrinsics, CameraModel};
 use crate::reconstruction::data::patch_affine_shape;
-use crate::reconstruction::{ImageTable, Point3D, SfmrImage};
+use crate::reconstruction::{ImageSet, Point3D, SfmrImage};
 use nalgebra::{Point3, UnitQuaternion, Vector3};
 use sfmtool_sfmr_format::DepthStatistics;
 
@@ -617,22 +617,22 @@ fn scene_arrays(
     Vec<CameraIntrinsics>,
 ) {
     let quats = recon
-        .image_table
+        .image_set
         .images
         .iter()
         .map(|im| im.quaternion_wxyz)
         .collect();
     let trans = recon
-        .image_table
+        .image_set
         .images
         .iter()
         .map(|im| im.translation_xyz)
         .collect();
     let cams = recon
-        .image_table
+        .image_set
         .images
         .iter()
-        .map(|im| recon.image_table.cameras[im.camera_index as usize].clone())
+        .map(|im| recon.image_set.cameras[im.camera_index as usize].clone())
         .collect();
     (quats, trans, cams)
 }
@@ -675,7 +675,7 @@ fn write_demo_sift(recon: &mut SfmrReconstruction, tag: &str) -> Vec<f64> {
     recon.workspace_dir = dir.clone();
     recon.metadata.workspace.contents.feature_prefix_dir = "features".into();
 
-    for img in 0..recon.image_table.images.len() {
+    for img in 0..recon.image_set.images.len() {
         let count = recon.point_set.max_track_feature_index[img] as usize + 1;
         let mut affine = Array3::<f32>::zeros((count, 2, 2));
         for f in 0..count {
@@ -691,11 +691,11 @@ fn write_demo_sift(recon: &mut SfmrReconstruction, tag: &str) -> Vec<f64> {
             },
             metadata: sfmtool_sift_format::SiftMetadata {
                 version: sfmtool_sift_format::SIFT_FORMAT_VERSION,
-                image_name: recon.image_table.images[img].name.clone(),
+                image_name: recon.image_set.images[img].name.clone(),
                 image_file_xxh128: "0".repeat(32),
                 image_file_size: 1,
-                image_width: recon.image_table.cameras[0].width,
-                image_height: recon.image_table.cameras[0].height,
+                image_width: recon.image_set.cameras[0].width,
+                image_height: recon.image_set.cameras[0].height,
                 feature_count: count as u32,
             },
             content_hash: sfmtool_sift_format::SiftContentHash::default(),
@@ -837,7 +837,7 @@ fn feature_size_with_unreadable_sift_is_not_a_missing_file() {
     std::fs::create_dir_all(dir.join("features")).unwrap();
     recon.workspace_dir = dir.clone();
     recon.metadata.workspace.contents.feature_prefix_dir = "features".into();
-    for img in 0..recon.image_table.images.len() {
+    for img in 0..recon.image_set.images.len() {
         let path = recon.sift_path_for_image(img);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, b"not a sift file").unwrap();
@@ -1165,11 +1165,11 @@ fn from_tracks_feature_size_reads_the_view_camera_model() {
 
 // ── from_affine_shape_at_depth ────────────────────────────────────────────
 
-/// A one-image `ImageTable` carrying `camera` at `pose`, so the format's own
+/// A one-image `ImageSet` carrying `camera` at `pose`, so the format's own
 /// frame-to-shape rule ([`patch_affine_shape`]) can be run against a patch built
 /// here. The columns a shape read does not touch are left empty.
-fn one_image_table(camera: CameraIntrinsics, pose: &RigidTransform) -> ImageTable {
-    ImageTable {
+fn one_image_set(camera: CameraIntrinsics, pose: &RigidTransform) -> ImageSet {
+    ImageSet {
         cameras: vec![camera],
         images: vec![SfmrImage {
             name: "view.jpg".to_string(),
@@ -1203,7 +1203,7 @@ fn project_shape_back(
         rms_reprojection_error: 0.0,
         normal: Vector3::zeros(),
     };
-    let table = one_image_table(camera, pose);
+    let table = one_image_set(camera, pose);
     patch_affine_shape(
         &point,
         patch.u_axis * patch.half_extent[0],

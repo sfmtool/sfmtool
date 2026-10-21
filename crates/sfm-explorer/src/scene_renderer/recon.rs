@@ -258,7 +258,7 @@ pub(super) struct ReconResources {
     ///
     /// The atlas is a function of those alone, so an edit that leaves them alone
     /// leaves the atlas correct, and every edit that is not about the image
-    /// table does. See [`PatchResources::uploaded_bitmaps`], which is the same
+    /// set does. See [`PatchResources::uploaded_bitmaps`], which is the same
     /// reuse key for the other atlas.
     pub uploaded_thumbnails: Option<super::upload::UploadedThumbnails>,
     /// Per-recon `ImageQuadUniforms` (view-projection + this atlas's grid).

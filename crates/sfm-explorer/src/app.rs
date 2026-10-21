@@ -741,7 +741,7 @@ impl App {
                 self.scene_renderer.update_frustum_colors(
                     queue,
                     id,
-                    node.recon().image_table.images.len(),
+                    node.recon().image_set.images.len(),
                     self.state.selected_image_in(id),
                     hidden_image.and_then(|h| h.index_in(id)),
                     &track_images,

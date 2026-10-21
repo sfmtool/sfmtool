@@ -130,13 +130,13 @@ impl PosedViews {
 
     pub(crate) fn from_reconstruction(recon: &sfmtool_core::SfmrReconstruction) -> Self {
         let cameras = recon
-            .image_table
+            .image_set
             .images
             .iter()
-            .map(|im| recon.image_table.cameras[im.camera_index as usize].clone())
+            .map(|im| recon.image_set.cameras[im.camera_index as usize].clone())
             .collect();
         let poses = recon
-            .image_table
+            .image_set
             .images
             .iter()
             .map(|im| {

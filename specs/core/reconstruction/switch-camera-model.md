@@ -219,7 +219,7 @@ models, and is fitted like any other source too.
 ### What is written back
 
 Each switched camera is replaced by its fitted camera. Nothing else in the image
-table, the point set or the observation columns changes. The stored error of
+set, the point set or the observation columns changes. The stored error of
 every point observed in an image that uses a switched camera is recomputed as
 the root mean square of its reprojection errors over all its observations, the convention
 `SfmrReconstruction::recompute_point_errors` writes; a point with none that

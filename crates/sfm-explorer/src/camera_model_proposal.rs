@@ -522,13 +522,13 @@ pub(crate) fn open_refusal(
             node.label
         ));
     }
-    let cameras = node.recon().image_table.cameras.len();
+    let cameras = node.recon().image_set.cameras.len();
     if camera >= cameras {
         return Some(format!(
             "Camera {camera} does not exist; the reconstruction has {cameras} camera(s)."
         ));
     }
-    let posed = node.recon().image_table.images.iter().any(|image| {
+    let posed = node.recon().image_set.images.iter().any(|image| {
         image.quaternion_wxyz.coords.iter().all(|c| c.is_finite())
             && image.translation_xyz.iter().all(|c| c.is_finite())
     });
@@ -657,7 +657,7 @@ impl AppState {
             let (value, map) = edited.materialize();
             (Arc::new(value), Some(map))
         };
-        let source = node.recon().image_table.cameras[camera.index()].clone();
+        let source = node.recon().image_set.cameras[camera.index()].clone();
         // One read of each image's `.sift` file feeds both the outermost
         // extent, over the version's base as the switch reports it, and the
         // keypoints of the value the fits read.

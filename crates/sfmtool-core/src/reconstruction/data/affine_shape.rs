@@ -12,7 +12,7 @@
 
 use nalgebra::Vector3;
 
-use super::{ImageTable, Point3D, SfmrReconstruction};
+use super::{ImageSet, Point3D, SfmrReconstruction};
 
 /// The projected affine shape of one patch frame in one image.
 ///
@@ -28,15 +28,15 @@ pub fn patch_affine_shape(
     point: &Point3D,
     u: Vector3<f64>,
     v: Vector3<f64>,
-    image_table: &ImageTable,
+    image_set: &ImageSet,
     image_index: usize,
     keypoint_xy: [f32; 2],
 ) -> Option<[[f32; 2]; 2]> {
     if u.norm_squared() == 0.0 || v.norm_squared() == 0.0 {
         return None; // no patch for this point
     }
-    let image = image_table.images.get(image_index)?;
-    let camera = image_table.cameras.get(image.camera_index as usize)?;
+    let image = image_set.images.get(image_index)?;
+    let camera = image_set.cameras.get(image.camera_index as usize)?;
     let r = image.quaternion_wxyz.to_rotation_matrix();
 
     // Where to evaluate the frame. For a point at infinity the patch is
@@ -121,7 +121,7 @@ impl SfmrReconstruction {
             v_arr[[point_idx, 1]] as f64,
             v_arr[[point_idx, 2]] as f64,
         );
-        patch_affine_shape(point, u, v, &self.image_table, image_index, keypoint_xy)
+        patch_affine_shape(point, u, v, &self.image_set, image_index, keypoint_xy)
     }
 
     /// Per-point maximum keypoint feature size (px) for an `embedded_patches`

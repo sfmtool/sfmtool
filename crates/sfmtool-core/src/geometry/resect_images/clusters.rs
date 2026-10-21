@@ -121,7 +121,7 @@ pub(super) fn cluster_support(
     // only identity the two files share, and one of them may have been written
     // with Windows separators.
     let by_name: HashMap<String, usize> = recon
-        .image_table
+        .image_set
         .images
         .iter()
         .enumerate()
@@ -200,7 +200,7 @@ pub(super) fn cluster_support(
 
     // One triangulation per candidate, at the tracked images' stored poses.
     let groups: Vec<Sightings> = candidates.iter().map(|c| c.0.clone()).collect();
-    let no_replacement: Vec<Option<Pose>> = vec![None; recon.image_table.images.len()];
+    let no_replacement: Vec<Option<Pose>> = vec![None; recon.image_set.images.len()];
     let placed = triangulate_groups(recon, &groups, &no_replacement);
 
     for ((others, answers), position) in candidates.into_iter().zip(placed) {
@@ -249,8 +249,8 @@ pub(super) fn member_residual(
     uv: [f64; 2],
     world: [f64; 3],
 ) -> f64 {
-    let stored = &recon.image_table.images[image];
-    let camera = &recon.image_table.cameras[stored.camera_index as usize];
+    let stored = &recon.image_set.images[image];
+    let camera = &recon.image_set.cameras[stored.camera_index as usize];
     let local = stored.quaternion_wxyz * Vector3::new(world[0], world[1], world[2])
         + stored.translation_xyz;
     let ray = camera.pixel_to_ray(uv[0], uv[1]);

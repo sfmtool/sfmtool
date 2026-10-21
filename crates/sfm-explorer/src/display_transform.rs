@@ -329,7 +329,7 @@ fn out_of_range_refusal(
         });
     let centres = node
         .recon()
-        .image_table
+        .image_set
         .images
         .iter()
         .map(|image| image.camera_center());

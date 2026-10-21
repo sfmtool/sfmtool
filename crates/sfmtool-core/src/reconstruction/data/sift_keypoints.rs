@@ -83,7 +83,7 @@ impl SfmrReconstruction {
             } => (feature_indexes, sift_content_hashes),
         };
 
-        let n_images = self.image_table.images.len();
+        let n_images = self.image_set.images.len();
         let mut observed = vec![false; n_images];
         for obs in &self.point_set.tracks {
             observed[obs.image_index as usize] = true;

@@ -504,7 +504,7 @@ fn downgrade(
     };
     let u = patch_frame.u_axis * patch_frame.half_extent[0];
     let v = patch_frame.v_axis * patch_frame.half_extent[1];
-    let table = &edited.base.image_table;
+    let table = &edited.base.image_set;
 
     // Each observation's own seed: where it sits, and the footprint the patch frame
     // has there. The shape is the format's own rule for deriving a keypoint's

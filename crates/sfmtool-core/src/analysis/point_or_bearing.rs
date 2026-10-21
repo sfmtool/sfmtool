@@ -28,7 +28,7 @@ use crate::reconstruction::triangulation::point_or_bearing::{
     bearing_score_batch, fit_point_and_bearing, fit_point_and_bearing_batch, observed_ray,
     BearingScore, PointBearingFit, PointBearingFitOptions,
 };
-use crate::reconstruction::{ImageTable, ReconstructionError, SfmrReconstruction};
+use crate::reconstruction::{ImageSet, ReconstructionError, SfmrReconstruction};
 
 /// One observation as the point-or-bearing test reads it.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -57,13 +57,13 @@ pub struct RayBatch {
 }
 
 /// The ray, camera centre and noise weight of `pixel` in image `image_index`
-/// of `image_table`, at per-axis pixel noise `sigma_px`.
+/// of `image_set`, at per-axis pixel noise `sigma_px`.
 ///
 /// `None` when the index is past the table, the pixel is not finite, or
 /// [`observed_ray`] declines it (a `sigma_px` that is not finite and positive,
 /// or a pixel outside the camera model's domain).
 pub fn observation_ray(
-    image_table: &ImageTable,
+    image_set: &ImageSet,
     image_index: usize,
     pixel: [f64; 2],
     sigma_px: f64,
@@ -71,8 +71,8 @@ pub fn observation_ray(
     if !(pixel[0].is_finite() && pixel[1].is_finite()) {
         return None;
     }
-    let image = image_table.images.get(image_index)?;
-    let camera = image_table.cameras.get(image.camera_index as usize)?;
+    let image = image_set.images.get(image_index)?;
+    let camera = image_set.cameras.get(image.camera_index as usize)?;
     let ray = observed_ray(camera, &image.quaternion_wxyz, pixel, sigma_px)?;
     Some(ObservationRay {
         dir: ray.dir,
@@ -106,12 +106,12 @@ pub fn observation_ray(
 ///     (1, [10.0, 20.0]),
 ///     (2, [12.5, 19.0]),
 /// ];
-/// let rays = track_rays(&recon.image_table, &observations, &[0, 2, 4], sigma_px);
+/// let rays = track_rays(&recon.image_set, &observations, &[0, 2, 4], sigma_px);
 /// let scores = bearing_score_batch(&rays.dirs, &rays.centers, &rays.offsets, &rays.weights);
 /// # }
 /// ```
 pub fn track_rays(
-    image_table: &ImageTable,
+    image_set: &ImageSet,
     observations: &[(usize, [f64; 2])],
     offsets: &[usize],
     sigma_px: f64,
@@ -122,7 +122,7 @@ pub fn track_rays(
         .map(|t| {
             observations[offsets[t]..offsets[t + 1]]
                 .iter()
-                .filter_map(|&(image, pixel)| observation_ray(image_table, image, pixel, sigma_px))
+                .filter_map(|&(image, pixel)| observation_ray(image_set, image, pixel, sigma_px))
                 .collect()
         })
         .collect();
@@ -359,7 +359,7 @@ impl SfmrReconstruction {
         // when the noise level is to be measured, those that observe a finite
         // point, so that a `.sift` file is read once for both.
         let mut wanted = match sigma_px {
-            Some(_) => vec![false; self.image_table.images.len()],
+            Some(_) => vec![false; self.image_set.images.len()],
             None => self.finite_observing_images(),
         };
         for &p in &point_indexes {
@@ -390,7 +390,7 @@ impl SfmrReconstruction {
             }
             offsets.push(observations.len());
         }
-        let rays = track_rays(&self.image_table, &observations, &offsets, sigma_px);
+        let rays = track_rays(&self.image_set, &observations, &offsets, sigma_px);
 
         let scores = bearing_score_batch(&rays.dirs, &rays.centers, &rays.offsets, &rays.weights);
         let fits = fit.map(|options| {

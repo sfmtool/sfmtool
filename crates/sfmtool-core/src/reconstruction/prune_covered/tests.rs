@@ -62,8 +62,8 @@ fn pinhole() -> CameraIntrinsics {
 
 /// Where `world` lands in image `i`, or `None` when it is outside the frame.
 fn project(recon: &SfmrReconstruction, i: usize, world: Point3<f64>) -> Option<[f32; 2]> {
-    let image = &recon.image_table.images[i];
-    let camera = &recon.image_table.cameras[image.camera_index as usize];
+    let image = &recon.image_set.images[i];
+    let camera = &recon.image_set.cameras[image.camera_index as usize];
     let local = image.quaternion_wxyz * world.coords + image.translation_xyz;
     let (u, v) = camera.ray_to_pixel([local.x, local.y, local.z])?;
     if u < 0.0 || v < 0.0 || u >= camera.width as f64 || v >= camera.height as f64 {
@@ -77,8 +77,8 @@ fn project(recon: &SfmrReconstruction, i: usize, world: Point3<f64>) -> Option<[
 /// patch frame per point at that point's own extent.
 fn scene() -> SfmrReconstruction {
     let mut recon = SfmrReconstruction::demo(1);
-    recon.image_table.cameras = vec![pinhole()];
-    recon.image_table.images = (0..IMAGES)
+    recon.image_set.cameras = vec![pinhole()];
+    recon.image_set.images = (0..IMAGES)
         .map(|i| {
             let angle = 0.2 * (i as f64 - (IMAGES as f64 - 1.0) / 2.0);
             let centre = Vector3::new(8.0 * angle.sin(), 0.0, 8.0 * angle.cos());
@@ -91,10 +91,10 @@ fn scene() -> SfmrReconstruction {
             }
         })
         .collect();
-    let stats = recon.image_table.depth_statistics.images[0].clone();
-    recon.image_table.depth_statistics.images = vec![stats; IMAGES];
-    recon.image_table.depth_histogram_counts =
-        vec![recon.image_table.depth_histogram_counts[0].clone(); IMAGES];
+    let stats = recon.image_set.depth_statistics.images[0].clone();
+    recon.image_set.depth_statistics.images = vec![stats; IMAGES];
+    recon.image_set.depth_histogram_counts =
+        vec![recon.image_set.depth_histogram_counts[0].clone(); IMAGES];
 
     recon.point_set.points = SCENE
         .iter()
@@ -486,7 +486,7 @@ fn a_value_without_inline_keypoints_is_refused() {
 #[test]
 fn a_value_without_poses_is_refused() {
     let mut recon = scene();
-    for image in recon.image_table.images.iter_mut() {
+    for image in recon.image_set.images.iter_mut() {
         image.translation_xyz = Vector3::new(f64::NAN, f64::NAN, f64::NAN);
     }
     let error = prune(&edited(recon)).expect_err("no pose, no projection");

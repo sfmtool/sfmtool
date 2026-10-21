@@ -24,7 +24,7 @@ use super::SfmrImage;
 /// `cameras`, which `SfmrImage::camera_index` indexes into, and
 /// `rig_frame_data`, which groups images into rig frames.
 #[derive(Clone)]
-pub struct ImageTable {
+pub struct ImageSet {
     /// Camera intrinsic parameters, indexed by `SfmrImage::camera_index`.
     pub cameras: Vec<CameraIntrinsics>,
     /// Registered images with poses.
@@ -48,7 +48,7 @@ pub struct ImageTable {
     pub rig_frame_data: Option<RigFrameData>,
 }
 
-impl ImageTable {
+impl ImageSet {
     /// Number of registered images.
     pub fn image_count(&self) -> usize {
         self.images.len()

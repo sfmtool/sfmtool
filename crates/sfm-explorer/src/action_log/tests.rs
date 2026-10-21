@@ -1159,7 +1159,7 @@ fn adjustable_scene() -> (AppState, ReconId) {
         "/runs/run_a.sfmr",
     ));
     let id = state.scene[0].id;
-    state.scene[0].recon_mut().image_table.images[1].translation_xyz +=
+    state.scene[0].recon_mut().image_set.images[1].translation_xyz +=
         nalgebra::Vector3::new(0.02, -0.015, 0.01);
     state
         .delete_point(PointRef::new(id, 7))

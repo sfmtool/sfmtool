@@ -439,7 +439,7 @@ camera-cloud centroid, which is where
 `SfmrReconstruction::materialize_points_at_infinity` places a bearing and what a
 bench fit multiplies by and divides by when a track crosses
 ([`../bench/editable-track.md`](../bench/editable-track.md)). Here it is
-`ImageTable::placement_scale`, measured from the same reference so the
+`ImageSet::placement_scale`, measured from the same reference so the
 conversions cancel exactly.
 
 An adjustment moves points in depth without changing what they look like, so a
@@ -455,7 +455,7 @@ The centroid is the mean of the posed images' camera centres. An unposed image
 (a non-finite rotation or translation) has no centre, so it is left out rather
 than turning every distance into `NaN`, and a table with no posed image measures
 from the origin. It is taken once per table, not once per point:
-`ImageTable::camera_centroid` gives it and `ImageTable::placement_scale_from`
+`ImageSet::camera_centroid` gives it and `ImageSet::placement_scale_from`
 measures a position from it, so a write-back over every point costs one pass
 over the images. `placement_scale` is the same two steps for a caller with one
 point to measure. The ratio itself is one public function,
@@ -489,7 +489,7 @@ reads a point's residuals, and a point no posed image observes has none; treatin
 "no finite residual" as the verdict without that guard would delete every point
 of an unposed corner of the capture rather than leaving it alone.
 
-**The frame rescale reads two different image tables.** The "before" distance is
+**The frame rescale reads two different image sets.** The "before" distance is
 measured against the input's poses and the "after" against the output's, because
 the centroid itself moves when the cameras do. Measuring both against one table
 would leave the frame carrying the gauge drift of the solve.

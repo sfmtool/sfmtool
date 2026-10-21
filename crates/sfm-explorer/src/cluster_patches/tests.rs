@@ -114,7 +114,7 @@ fn a_build_writes_cluster_patches_that_read_current() {
     assert!(data.clusters.is_some() && data.cluster_patches.is_some());
     let recon = state.node(id).expect("loaded").recon();
     let names: Vec<String> = recon
-        .image_table
+        .image_set
         .images
         .iter()
         .map(|image| image.name.clone())
@@ -155,7 +155,7 @@ fn the_file_holds_what_the_two_cli_steps_make_from_the_same_index() {
     let file = state.cluster_patches(id).expect("built").path.clone();
     let built = sfmtool_matches_format::read_matches(&file).expect("a readable file");
     let recon = state.node(id).expect("loaded").recon();
-    let images = recon.image_table.images.len();
+    let images = recon.image_set.images.len();
 
     // `sfm match --cluster`, over the index: per-image counts off the `.sift`
     // metadata, a self-join at the binding's budget, the clustering.
@@ -232,7 +232,7 @@ fn the_file_holds_what_the_two_cli_steps_make_from_the_same_index() {
     // `sfm cluster-patches`: the photographs as `read_image_rgb` decodes them,
     // the detections scattered to their rows, one refinement call.
     let pyramids: Vec<ImageU8Pyramid> = recon
-        .image_table
+        .image_set
         .images
         .iter()
         .map(|image| {
@@ -371,7 +371,7 @@ fn cluster_patches_from_a_stale_index_are_stale() {
         let recon = state.node(id).expect("loaded").recon();
         crate::sift_index::tests::write_sift(
             &recon.sift_path_for_image(2),
-            &recon.image_table.images[2].name,
+            &recon.image_set.images[2].name,
             &vec![vec![7u8; 128]; 4],
             &[[10.0, 20.0], [30.0, 40.0], [50.0, 60.0], [70.0, 80.0]],
         );
@@ -400,7 +400,7 @@ fn cluster_patches_from_another_index_are_stale() {
         std::fs::create_dir_all(sift.parent().expect("a feature directory")).unwrap();
         crate::sift_index::tests::write_sift(
             &sift,
-            &recon.image_table.images[image].name,
+            &recon.image_set.images[image].name,
             &vec![vec![3u8; 128]; 2],
             &[[1.0, 2.0], [3.0, 4.0]],
         );
@@ -435,10 +435,10 @@ fn cluster_patches_with_no_index_open_are_stale() {
     assert!(why.contains("No SIFT index is open"), "{why}");
 }
 
-/// A version that moves the image table re-derives the verdict, and one that
+/// A version that moves the image set re-derives the verdict, and one that
 /// does not leaves it alone.
 #[test]
-fn a_version_that_moves_the_image_table_makes_the_file_stale() {
+fn a_version_that_moves_the_image_set_makes_the_file_stale() {
     let dir = tempfile::tempdir().unwrap();
     let (mut state, id, label) = searchable(dir.path());
     state
@@ -469,7 +469,7 @@ fn cluster_patches_over_other_images_are_stale_naming_the_first() {
     {
         let node = renamed.scene.first_mut().expect("one node");
         let recon = Arc::make_mut(&mut node.history.current_mut().base);
-        recon.image_table.images[0].name = "somewhere_else.jpg".into();
+        recon.image_set.images[0].name = "somewhere_else.jpg".into();
     }
     renamed
         .open_index_files(other_id, None, Some(path.clone()))

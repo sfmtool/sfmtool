@@ -2213,12 +2213,9 @@ fn frame_description(state: &AppState, viewer: &Viewer3D) -> String {
         .camera_view
         .as_ref()
         .and_then(|camera_view| {
-            state.node(camera_view.image.recon).and_then(|node| {
-                node.recon()
-                    .image_table
-                    .images
-                    .get(camera_view.image.index())
-            })
+            state
+                .node(camera_view.image.recon)
+                .and_then(|node| node.recon().image_set.images.get(camera_view.image.index()))
         })
         .map(|image| format!(", looking through {}", image.name))
         .unwrap_or_default();
@@ -2279,18 +2276,18 @@ pub(super) fn resolve_camera_image(
         .ok_or_else(|| ToolError::new(crate::state::NOT_LOADED))?;
     let index = match selector {
         CameraImageSel::Index(index) => {
-            if *index >= node.recon().image_table.images.len() {
+            if *index >= node.recon().image_set.images.len() {
                 return Err(ToolError::new(format!(
                     "{} has {} camera images — index {index} is out of range.",
                     node.label,
-                    node.recon().image_table.images.len()
+                    node.recon().image_set.images.len()
                 )));
             }
             *index
         }
         CameraImageSel::Name(name) => node
             .recon()
-            .image_table
+            .image_set
             .images
             .iter()
             .position(|image| image.name == *name)
@@ -2315,11 +2312,11 @@ pub(super) fn resolve_camera_intrinsics(
     let node = state
         .node(reconstruction)
         .ok_or_else(|| ToolError::new(crate::state::NOT_LOADED))?;
-    if index >= node.recon().image_table.cameras.len() {
+    if index >= node.recon().image_set.cameras.len() {
         return Err(ToolError::new(format!(
             "{} has {} camera intrinsics records — index {index} is out of range.",
             node.label,
-            node.recon().image_table.cameras.len()
+            node.recon().image_set.cameras.len()
         )));
     }
     Ok(CameraRef::new(reconstruction, index))

@@ -141,8 +141,8 @@ fn track_tile_geometry<'a>(
     let row = track.observations.get(observation)?;
     let site = crate::bench::observation_site(row)?;
     let patch_frame = payload.patch_frame.as_ref()?;
-    let image = recon.image_table.images.get(row.image as usize)?;
-    let camera = recon.image_table.cameras.get(image.camera_index as usize)?;
+    let image = recon.image_set.images.get(row.image as usize)?;
+    let camera = recon.image_set.cameras.get(image.camera_index as usize)?;
     Some((
         patch_frame,
         camera,
@@ -272,8 +272,8 @@ pub(super) fn context(
     match &track.stage {
         Stage::Track(payload) => {
             let patch_frame = payload.patch_frame.as_ref()?;
-            let image = recon.image_table.images.get(img_idx)?;
-            let camera = recon.image_table.cameras.get(image.camera_index as usize)?;
+            let image = recon.image_set.images.get(img_idx)?;
+            let camera = recon.image_set.cameras.get(image.camera_index as usize)?;
             let pose = crate::scene::cam_from_world(image);
             let anchored = patch_frame.anchored_at_keypoint(camera, &pose, site.pixel);
             let mut wide = anchored.clone().unwrap_or_else(|| patch_frame.clone());

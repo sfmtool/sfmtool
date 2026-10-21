@@ -107,16 +107,16 @@ the viewer calls them for one point at a time:
 
 ```rust
 pub fn observation_rays(
-    image_table: &ImageTable,
+    image_set: &ImageSet,
     position: &Point3<f64>,
     at_infinity: bool,
     images: impl IntoIterator<Item = usize>,
 ) -> Vec<[f64; 3]>;
 pub fn compute_max_pairwise_angle(rays: &[[f64; 3]]) -> f64;
-pub fn compute_max_ray_angle_deg(image_table: &ImageTable, view: &PointView<'_>) -> f32;
-pub fn compute_point_diagnostics(image_table: &ImageTable, view: &PointView<'_>) -> (f32, f32);
+pub fn compute_max_ray_angle_deg(image_set: &ImageSet, view: &PointView<'_>) -> f32;
+pub fn compute_point_diagnostics(image_set: &ImageSet, view: &PointView<'_>) -> (f32, f32);
 pub fn compute_position_diagnostics(
-    image_table: &ImageTable,
+    image_set: &ImageSet,
     position: &Point3<f64>,
     error_px: f64,
     images: impl IntoIterator<Item = usize>,
@@ -191,7 +191,7 @@ it makes no difference to what a column means.
 | `rms_error_px` | stored | `Point3D::rms_reprojection_error`, the stored per-point RMS reprojection error in pixels, as its doc comment defines it; the viewer's `get_point` reports the same number as `rms_error_px`. A file holds what its writer stored | defined | never |
 | `at_infinity` | stored | 1 for a point at infinity (`w = 0`), 0 for a finite one | defined | never |
 | `x`, `y`, `z` | stored | the point's position in the stored frame, in the reconstruction's world-space unit (scene units where none is declared) | no value | never |
-| `centroid_distance` | stored | distance from the posed cameras' centroid, the number `ImageTable::placement_scale` gives, in the unit of `x` | no value | the reconstruction has no posed image |
+| `centroid_distance` | stored | distance from the posed cameras' centroid, the number `ImageSet::placement_scale` gives, in the unit of `x` | no value | the reconstruction has no posed image |
 | `normal_confidence` | stored | the stored `normal_confidence` byte, 0 to 255 | defined | the reconstruction has no `normal_confidence` column |
 | `lowest_zncc` | stored | the lowest stored per-observation ZNCC in the track, read from `observation_confidence` as `byte / 255` over the non-zero bytes only | no value when no observation of the track was measured | the reconstruction has no `observation_confidence` column |
 | `largest_zncc_self_similarity_radius` | stored | the largest ZNCC self-similarity radius among the track's observation readings: the semi-major axis of the stored ellipse, `ellipse_axes[0]`, in patch px, skipping unmeasured rows | no value when every row is unmeasured | the reconstruction has no observation readings |
@@ -245,7 +245,7 @@ indexes:
 - A bound or a sort on a column the `TrackTable` does not hold is refused with
   `ColumnNotComputed`, which covers both a column the caller did not ask for
   and one the reconstruction could not supply. A `seen_in_image` past the
-  image table is refused with `ImageOutOfRange`.
+  image set is refused with `ImageOutOfRange`.
 
 The `TrackTable` must have been computed from the same version the query is
 run against: the query reads the reconstruction only for `seen_in_image` and
@@ -278,7 +278,7 @@ origin, where an `f32` resolves only about 6 cm. Eleven `f32` columns and three
 another 44 MB for no gain. Every value is computed in `f64` and rounded once
 when it is stored.
 
-Each point's values depend only on that point and the image table, so the
+Each point's values depend only on that point and the image set, so the
 output is bit-identical for every thread count. `query_points` sorts stably
 and breaks ties by point index, so equal keys always come out in the same
 order, and a test can compare whole results exactly.

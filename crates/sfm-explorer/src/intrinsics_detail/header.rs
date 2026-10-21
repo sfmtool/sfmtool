@@ -38,7 +38,7 @@ pub(super) fn show_header(
     let mut switch = false;
     let uses = node
         .recon()
-        .image_table
+        .image_set
         .images
         .iter()
         .filter(|image| image.camera_index as usize == index)

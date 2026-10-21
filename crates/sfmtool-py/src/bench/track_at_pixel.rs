@@ -87,7 +87,7 @@ impl PyTrackAtPixelSources {
         let names: Vec<&str> = edited
             .inner
             .base
-            .image_table
+            .image_set
             .images
             .iter()
             .map(|im| im.name.as_str())

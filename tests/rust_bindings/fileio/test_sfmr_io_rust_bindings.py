@@ -384,7 +384,7 @@ class TestReferenceObservations:
             here = [k for k, i in enumerate(track) if swapped[i] == name]
             assert new_refs[p] == (here[0] if here else -1)
 
-        # Where the image table is unchanged, a reference is carried by image
+        # Where the image set is unchanged, a reference is carried by image
         # index, so a name on two images still carries; once the table
         # changes, it is carried by name, and a duplicated name cannot be.
         dup_names = list(old_names)

@@ -592,7 +592,7 @@ pub fn add_image_to_tracks(
     options: &AddImageToTracksOptions,
     progress: &Progress<'_>,
 ) -> Result<(SfmrReconstruction, AddImageToTracksReport), AddImageToTracksError> {
-    let table = &recon.image_table;
+    let table = &recon.image_set;
     let image_count = table.images.len();
     if image >= image_count {
         return Err(AddImageToTracksError::NoSuchImage { image, image_count });

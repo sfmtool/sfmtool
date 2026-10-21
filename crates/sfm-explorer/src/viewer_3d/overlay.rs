@@ -253,7 +253,7 @@ impl Viewer3D {
         let (now, stored) = crate::camera_lock::residuals(lock, &pending);
         let basename = node
             .recon()
-            .image_table
+            .image_set
             .images
             .get(lock.image.index())
             .map(|image| crate::resect::basename(&image.name))
@@ -346,7 +346,7 @@ pub(crate) fn hover_overlay_text(
         Some(PickTarget::Image(image)) => {
             let node = node_by_id(scene, image.recon);
             let name = node
-                .and_then(|node| node.recon().image_table.images.get(image.index()))
+                .and_then(|node| node.recon().image_set.images.get(image.index()))
                 .map(|img| img.name.as_str())
                 .unwrap_or("?");
             match node.filter(|_| qualify) {

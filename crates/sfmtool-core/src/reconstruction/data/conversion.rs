@@ -25,7 +25,7 @@ use crate::progress::Progress;
 use crate::progress_note;
 
 use super::{
-    compute_observation_offsets, count_points_at_infinity, ImageTable, ObservationSource, Point3D,
+    compute_observation_offsets, count_points_at_infinity, ImageSet, ObservationSource, Point3D,
     PointConstraintColumns, PointSet, SfmrImage, SfmrReconstruction, SiftKeypointFill,
     TrackObservation,
 };
@@ -377,7 +377,7 @@ impl SfmrReconstruction {
             workspace_dir: data.workspace_dir.unwrap_or_default(),
             metadata: data.metadata,
             content_hash: data.content_hash,
-            image_table: ImageTable {
+            image_set: ImageSet {
                 cameras,
                 images,
                 thumbnails_y_x_rgb: data.thumbnails_y_x_rgb.map(Arc::new),
@@ -463,10 +463,10 @@ impl SfmrReconstruction {
     pub fn to_sfmr_data(&self) -> SfmrData {
         use ndarray::{Array1, Array2};
 
-        let image_count = self.image_table.images.len();
+        let image_count = self.image_set.images.len();
         let point_count = self.point_set.points.len();
         let observation_count = self.point_set.tracks.len();
-        let num_buckets = self.image_table.depth_statistics.num_histogram_buckets as usize;
+        let num_buckets = self.image_set.depth_statistics.num_histogram_buckets as usize;
         // Keep the emitted metadata's discriminator in sync with the variant,
         // and its derived counts in sync with the actual arrays (in-memory
         // editors such as clone_with_changes can change the array sizes without
@@ -480,7 +480,7 @@ impl SfmrReconstruction {
 
         // Images
         let image_names: Vec<String> = self
-            .image_table
+            .image_set
             .images
             .iter()
             .map(|im| im.name.clone())
@@ -489,7 +489,7 @@ impl SfmrReconstruction {
         let mut quaternions_wxyz = Array2::<f64>::zeros((image_count, 4));
         let mut translations_xyz = Array2::<f64>::zeros((image_count, 3));
 
-        for (i, im) in self.image_table.images.iter().enumerate() {
+        for (i, im) in self.image_set.images.iter().enumerate() {
             camera_indexes[i] = im.camera_index;
             let q = im.quaternion_wxyz.quaternion();
             quaternions_wxyz[[i, 0]] = q.w;
@@ -574,7 +574,7 @@ impl SfmrReconstruction {
 
         // Depth histogram counts
         let mut observed_depth_histogram_counts = Array2::<u32>::zeros((image_count, num_buckets));
-        for (i, row) in self.image_table.depth_histogram_counts.iter().enumerate() {
+        for (i, row) in self.image_set.depth_histogram_counts.iter().enumerate() {
             for (j, &val) in row.iter().enumerate() {
                 observed_depth_histogram_counts[[i, j]] = val;
             }
@@ -582,7 +582,7 @@ impl SfmrReconstruction {
 
         // Convert CameraIntrinsics → SfmrCamera for serialization
         let cameras: Vec<SfmrCamera> = self
-            .image_table
+            .image_set
             .cameras
             .iter()
             .map(SfmrCamera::from)
@@ -593,7 +593,7 @@ impl SfmrReconstruction {
             metadata,
             content_hash: self.content_hash.clone(),
             cameras,
-            rig_frame_data: self.image_table.rig_frame_data.clone(),
+            rig_frame_data: self.image_set.rig_frame_data.clone(),
             patch_u_halfvec_xyz: self.point_set.patch_u_halfvec_xyz.clone(),
             patch_v_halfvec_xyz: self.point_set.patch_v_halfvec_xyz.clone(),
             // A column rendered for display is not part of the reconstruction:
@@ -612,7 +612,7 @@ impl SfmrReconstruction {
             feature_tool_hashes,
             sift_content_hashes,
             image_file_hashes,
-            thumbnails_y_x_rgb: self.image_table.thumbnails_y_x_rgb.as_deref().cloned(),
+            thumbnails_y_x_rgb: self.image_set.thumbnails_y_x_rgb.as_deref().cloned(),
             positions_xyzw,
             colors_rgb,
             reprojection_errors,
@@ -665,7 +665,7 @@ impl SfmrReconstruction {
                         }),
                 )
             }),
-            depth_statistics: self.image_table.depth_statistics.clone(),
+            depth_statistics: self.image_set.depth_statistics.clone(),
             observed_depth_histogram_counts,
         }
     }

@@ -248,7 +248,7 @@ pub fn build_web_export(
             "the patch size must be at least 1".into(),
         ));
     }
-    let images = &recon.image_table.images;
+    let images = &recon.image_set.images;
     let start_index = match &options.start_image {
         Some(name) => Some(
             images
@@ -453,7 +453,7 @@ pub fn build_web_export(
     let mut cameras = Vec::with_capacity(images.len());
     let per_page = thumb_layout.map(|layout| layout.per_page());
     for (i, image) in images.iter().enumerate() {
-        let camera = &recon.image_table.cameras[image.camera_index as usize];
+        let camera = &recon.image_set.cameras[image.camera_index as usize];
         let c = image.camera_center();
         let rel = [c.x - centre.x, c.y - centre.y, c.z - centre.z];
         let grid = lens_grid(image, camera, &centre, frustum_length);
@@ -616,8 +616,8 @@ fn thumbnail_rows(
     counts: &mut ThumbnailCounts,
     progress: &Progress<'_>,
 ) -> Result<Option<Vec<Vec<u8>>>, Cancelled> {
-    let total = recon.image_table.images.len();
-    if let Some(column) = &recon.image_table.thumbnails_y_x_rgb {
+    let total = recon.image_set.images.len();
+    if let Some(column) = &recon.image_set.thumbnails_y_x_rgb {
         counts.file = total;
         let rows = column
             .outer_iter()
@@ -733,7 +733,7 @@ fn lens_grid(
 /// the cameras are on, far enough back that the points' bounding sphere, or
 /// most of the cameras when they are farther out, fills the view.
 fn framing_view(recon: &SfmrReconstruction, centre: &Point3<f64>, radius: f64) -> Value {
-    let images = &recon.image_table.images;
+    let images = &recon.image_set.images;
     let offsets: Vec<Vector3<f64>> = images.iter().map(|i| i.camera_center() - centre).collect();
     let mut reach = radius;
     let mut side = Vector3::zeros();
@@ -770,8 +770,8 @@ fn start_view(
     centre: &Point3<f64>,
     radius: f64,
 ) -> Value {
-    let image = &recon.image_table.images[index];
-    let camera = recon.image_table.camera_for_image(index);
+    let image = &recon.image_set.images[index];
+    let camera = recon.image_set.camera_for_image(index);
     let eye = image.camera_center() - centre;
     let forward = image.quaternion_wxyz.inverse() * Vector3::new(0.0, 0.0, -1.0);
     let along = (-eye).dot(&forward);

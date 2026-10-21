@@ -103,7 +103,7 @@ fn apply_with_the_answer_installs_the_version_the_task_would_push() {
     solved.finish_background_tasks();
 
     let (a, b) = (held.scene[0].recon(), solved.scene[0].recon());
-    assert_eq!(a.image_table.cameras, b.image_table.cameras);
+    assert_eq!(a.image_set.cameras, b.image_set.cameras);
     assert_eq!(positions(&held), positions(&solved));
     assert_eq!(
         held.scene[0].history.current_version().label,
@@ -145,7 +145,7 @@ fn an_answer_for_an_older_generation_is_not_installed() {
     ));
     state.finish_background_tasks();
     assert_eq!(versions(&state), 2);
-    let camera = &state.scene[0].recon().image_table.cameras[1];
+    let camera = &state.scene[0].recon().image_set.cameras[1];
     assert_eq!(camera.model.radial_spline().expect("a spline").0.len(), 8);
 }
 

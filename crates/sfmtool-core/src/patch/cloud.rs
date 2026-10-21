@@ -732,22 +732,22 @@ impl PatchCloud {
         // Per-image pose + camera model (the image's camera, cloned per image so
         // the shared routine indexes everything by image).
         let cam_quats: Vec<UnitQuaternion<f64>> = recon
-            .image_table
+            .image_set
             .images
             .iter()
             .map(|im| im.quaternion_wxyz)
             .collect();
         let cam_translations: Vec<Vector3<f64>> = recon
-            .image_table
+            .image_set
             .images
             .iter()
             .map(|im| im.translation_xyz)
             .collect();
         let cam_intrinsics: Vec<CameraIntrinsics> = recon
-            .image_table
+            .image_set
             .images
             .iter()
-            .map(|im| recon.image_table.cameras[im.camera_index as usize].clone())
+            .map(|im| recon.image_set.cameras[im.camera_index as usize].clone())
             .collect();
 
         // FeatureSize is the one policy that reads the workspace `.sift` files:
@@ -786,7 +786,7 @@ impl PatchCloud {
         // failure can say which files are absent. Empty when no scales are read.
         let mut missing_sift: Vec<Option<PathBuf>> = Vec::new();
         let obs_scales: Vec<Option<f64>> = if reads_scales {
-            let n_images = recon.image_table.images.len();
+            let n_images = recon.image_set.images.len();
             let n_obs = recon.point_set.tracks.len();
             let mut phase = scales.phase("read feature scales");
             progress_note!(phase, "{n_images} images");

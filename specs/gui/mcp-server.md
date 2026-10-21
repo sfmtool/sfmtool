@@ -3553,7 +3553,7 @@ edit pushed, like every other edit's.
 
 The tracks that image observes are re-triangulated around the new pose where two
 or more pixels still see them; a bearing only it sees turns with it, and
-everything else keeps its position. The image table does not move and no point
+everything else keeps its position. The image set does not move and no point
 is renumbered unless a point edit is pending (§ "The editing family"), but the
 geometry a panel cached is a statement about a value the
 node no longer holds, so the drain drops those caches as it does after a bulk
@@ -3593,7 +3593,7 @@ The two bulk edits.
 ```
 
 `resect_camera_image` is the resection landed as the node's next
-version ([edits/resect-image.md](edits/resect-image.md)). The image table does
+version ([edits/resect-image.md](edits/resect-image.md)). The image set does
 not move, so image indexes and the selections keyed by them still mean what they
 meant; the points the image observes are re-triangulated, so point indexes do
 not. A refused *estimate* pushes no version.
@@ -5655,7 +5655,7 @@ where a test hands no host over.
   names, and leaves that one sentence in the log as `Mcp`; `delete_points`
   pushes one version for its whole list with the same reply, and a list naming
   a dead point, an empty list or one that is not whole numbers is refused and
-  pushes nothing; `delete_camera_image` shrinks the image table; the resection and the adjustment push a
+  pushes nothing; `delete_camera_image` shrinks the image set; the resection and the adjustment push a
   version and report the estimate and the residuals. What each family *does* to
   a reconstruction is asserted in `state::edits::tests`, over the same
   `AppState` calls these make.

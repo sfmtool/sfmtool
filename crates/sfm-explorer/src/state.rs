@@ -1262,7 +1262,7 @@ impl AppState {
         let node = self.node(image.recon)?;
         let camera = node
             .recon()
-            .image_table
+            .image_set
             .images
             .get(image.index())?
             .camera_index as usize;
@@ -1363,7 +1363,7 @@ impl AppState {
     /// resolves. Only ever used to build a log entry.
     pub(crate) fn image_name(&self, image: ImageRef) -> String {
         self.node(image.recon)
-            .and_then(|node| node.recon().image_table.images.get(image.index()))
+            .and_then(|node| node.recon().image_set.images.get(image.index()))
             .map(|i| i.name.clone())
             .unwrap_or_else(|| format!("#{}", image.index()))
     }
@@ -1707,10 +1707,10 @@ pub(crate) const NOT_LOADED: &str = "That reconstruction is no longer loaded.";
 /// The path image `index` of `recon` is read from, which is also the key the
 /// photograph cache ([`AppState::photographs`]) holds its pyramid under: the
 /// workspace directory joined with the image's name. `None` for an index the
-/// image table does not have.
+/// image set does not have.
 pub(crate) fn photograph_path(recon: &SfmrReconstruction, index: usize) -> Option<PathBuf> {
     recon
-        .image_table
+        .image_set
         .images
         .get(index)
         .map(|image| recon.workspace_dir.join(&image.name))

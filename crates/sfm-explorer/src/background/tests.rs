@@ -46,7 +46,7 @@ fn adjustable() -> (AppState, ReconId) {
         "/runs/run_a.sfmr",
     ));
     let id = state.scene[0].id;
-    let image = &mut state.scene[0].recon_mut().image_table.images[1];
+    let image = &mut state.scene[0].recon_mut().image_set.images[1];
     image.translation_xyz += nalgebra::Vector3::new(0.02, -0.015, 0.01);
     (state, id)
 }
@@ -126,10 +126,10 @@ fn a_backgrounded_adjustment_installs_the_kernel_s_own_answer() {
     // that the worker installed the answer the kernel gave it, not that a
     // rayon-parallel solve reduces its floats in the same order twice.
     for (i, (a, b)) in installed
-        .image_table
+        .image_set
         .images
         .iter()
-        .zip(&expected.image_table.images)
+        .zip(&expected.image_set.images)
         .enumerate()
     {
         let moved = (a.camera_center() - b.camera_center()).norm();
@@ -740,7 +740,7 @@ fn a_cancelled_operation_writes_a_failed_entry_and_pushes_nothing() {
     let before = Arc::clone(&state.scene[0].edited().base);
     let centres: Vec<nalgebra::Point3<f64>> = state.scene[0]
         .recon()
-        .image_table
+        .image_set
         .images
         .iter()
         .map(|image| image.camera_center())
@@ -771,7 +771,7 @@ fn a_cancelled_operation_writes_a_failed_entry_and_pushes_nothing() {
     );
     let after: Vec<nalgebra::Point3<f64>> = state.scene[0]
         .recon()
-        .image_table
+        .image_set
         .images
         .iter()
         .map(|image| image.camera_center())

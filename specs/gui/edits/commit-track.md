@@ -35,7 +35,7 @@ disagree about when it can run. The refusals are the core ones -- the track is
 at the cluster stage (*"upgrade it before committing"*), the node is
 `sift_files`, fewer than two observations are `in`, the track carries no
 position, no frame or no bitmap where the reconstruction stores one per point,
-an `in` observation has no keypoint, or one names an image past the image table
+an `in` observation has no keypoint, or one names an image past the image set
 -- plus the viewer's own refusal while a background task holds the node.
 
 The button is **not** greyed on a track that would write nothing. That reading
