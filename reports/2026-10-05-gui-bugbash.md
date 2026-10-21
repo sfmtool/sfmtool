@@ -210,6 +210,13 @@ the visible-target one cannot be (finding 3).
 > Table panel, is drafted in `specs/drafts/track-table.md` (with the background
 > queues it depends on now built and described in `specs/gui/background-tasks.md`), branch
 > `draft-track-table`._
+>
+> _Status (2026-10-20): **Done** — the MCP read `find_points` takes bounds
+> on any track table column (`track_length`, `rms_error_px`, …),
+> `seen_in_camera_image`, `order_by`, the values to return and a page, and
+> returns point ids with those values; each of the three searches is one call
+> (`specs/gui/mcp-server.md` § "`find_points`"). The Track Table panel is a
+> later step of `specs/drafts/track-table.md`. Branch `find-points`._
 
 To reproduce the tutorial's screenshots an agent needs "a track of about 18
 observations seen in image 3", "a 4-observation track through image 57" and

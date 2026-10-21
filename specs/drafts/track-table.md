@@ -1,14 +1,17 @@
 # Track Table
 
 **Status:** Draft. Amends [gui/mcp-server.md](../gui/mcp-server.md) (the
-"no tool returns bulk arrays" stance, and new tools),
+panel-query tools),
 [gui/point-cloud-rendering.md](../gui/point-cloud-rendering.md) (the
 non-goal "Point colouring and filtering by quality") and
 [gui/panel-layout.md](../gui/panel-layout.md) (a tenth panel) and
 [gui/background-tasks.md](../gui/background-tasks.md) § "Two queues" and
-§ "Quiet tasks" (two quiet tasks and one asked-for fast-queue operation).
+§ "Quiet tasks" (two quiet tasks).
 Part 1, the track table and its query in core, is built and
 filed as [core/analysis/track-table.md](../core/analysis/track-table.md).
+The `find_points` read, the track table cache it reads, `TrackTable::merge`
+and the asked-for *Find points* operation that fills the cache are built and
+specified in [gui/mcp-server.md](../gui/mcp-server.md) § "`find_points`".
 Parts 2 to 4 will file as `gui/track-table.md`, with the wire tools also
 described in `gui/mcp-server.md`.
 
@@ -35,9 +38,6 @@ Decided:
   and an agent filtering by the same bounds see the same points.
 - The panel's home is the centre group, as a tab beside the 3D Viewer and
   Image Detail, where it has the height for rows of pictures (§ "Placement").
-- A `find_points` call that needs a computed column the cache does not hold
-  queues an asked-for fast-queue task of its own, *Find points*, rather than
-  promoting the panel's quiet job (§ "`find_points`").
 - The error column is `rms_error_px`, the stored
   `Point3D::rms_reprojection_error` (an RMS since #1000), which `get_point`
   also reports as `rms_error_px`. `max_ray_angle_deg` is the largest pairwise
@@ -64,9 +64,11 @@ back point ids with the same numbers, a page at a time.
 The questions this answers are the ones a person asks while judging a solve:
 "what are the worst points?", "how many points have a track of two?", "which
 points does this image see, and which of them are badly triangulated?".
-Today each of these needs a script against the `.sfmr` file, or, for an agent,
-one `get_point` call per point. The 2026-10-05 bug bash needed 9,941
-`get_point` calls, taking 2 min 11 s, to find three example tracks
+For a person each of these needs a script against the `.sfmr` file. An agent
+asks `find_points`, which is built
+([gui/mcp-server.md](../gui/mcp-server.md) § "`find_points`"); before it, the
+2026-10-05 bug bash needed 9,941 `get_point` calls, taking 2 min 11 s, to find
+three example tracks
 ([reports/2026-10-05-gui-bugbash.md](../../reports/2026-10-05-gui-bugbash.md)
 finding 6).
 
@@ -79,7 +81,7 @@ The design has three layers, and each is useful without the ones above it:
 2. **The Track Table panel**, which shows the columns, edits a query and
    follows the selection.
 3. **The wire**: `find_points`, which runs a query and returns the matched
-   points, and a read/write pair for the panel's own query.
+   points (built), and a read/write pair for the panel's own query.
 
 ## Part 1: the track table and its query (core)
 
@@ -311,9 +313,10 @@ the column is selected again.
 
 ### Computing the columns
 
-The panel reads a **track table cache**: one core `TrackTable` per node,
-for the version at its cursor, keyed by `(ReconId, document_serial)`. The
-columns are computed by the **table job**, a quiet, read-only task on the fast
+The panel reads the **track table cache** that `find_points` reads: one core
+`TrackTable` per node, for the version at its cursor, keyed by
+`(ReconId, document_serial)` ([gui/mcp-server.md](../gui/mcp-server.md)
+§ "`find_points`"). The panel's columns are computed by the **table job**, a quiet, read-only task on the fast
 queue ([gui/background-tasks.md](../gui/background-tasks.md) § "Quiet tasks"),
 *Track Table columns*. It locks no node and writes no Action Log row, so a
 person can sort and filter the version on screen while a slow task such as a
@@ -323,10 +326,9 @@ is dropped, and an edit cancels the running job through its `Progress`.
 
 Each run of the job computes a `TrackTable` of only the columns the cache does
 not hold yet, with `TrackTable::compute`, and the UI thread merges it into the
-cached table when it lands, with `TrackTable::merge` (Step 2). The two tables
-are of the same version, so their rows are the same `live_indexes()` in the
-same order, and the merge moves column arrays without copying values; a table
-of another version is refused. The job runs the stored columns first and the
+cached table when it lands, with `TrackTable::merge`, as *Find points* does
+([core/analysis/track-table.md](../core/analysis/track-table.md) § "Merging
+tables"). The job runs the stored columns first and the
 computed ones as a second run, so the table is usable while the slow columns
 are still being computed.
 
@@ -349,7 +351,11 @@ then the other bench items' evaluations.
 The job starts when the panel is visible. Computed columns are computed only
 once a visible column, a bound or the sort needs them. A hidden panel costs
 nothing. A `find_points` call does not start the quiet job; it queues *Find
-points* (Part 3), which fills the same cache.
+points* ([gui/mcp-server.md](../gui/mcp-server.md) § "`find_points`"), which
+fills the same cache. A running quiet table job is cancelled for it and queued
+again behind it, as for any asked-for task. If the two compute the same
+columns at once the work is done twice, and the merge keeps the column the
+cache already holds.
 
 **Progress.** `TrackTable::compute` reports the stored columns and then the
 computed ones, each with its own share of the job's range, so its fraction
@@ -394,65 +400,17 @@ no bitmap to show. Both columns appear after Convert to Embedded Patches.
 
 ### `find_points` (read)
 
-```jsonc
-// find_points
-{
-  "reconstruction_label": "dino",            // optional: defaults to the selected one
-  "bounds": [ { "column": "track_length", "min": 3 },
-              { "column": "rms_error_px", "max": 1.5 } ],
-  "seen_in_camera_image": 2,                 // optional: an index or a name, as camera_image takes
-  "order_by": { "column": "rms_error_px", "descending": true },  // optional
-  "columns": ["track_length", "image_count", "rms_error_px"],  // optional: the values to return
-  "offset": 0, "limit": 50                   // as list_camera_images: default 50, at most 500
-}
-// reply
-{
-  "reconstruction_label": "dino",
-  "live_points": 9941,
-  "matched": 1204,
-  "offset": 0,
-  "points": [
-    { "id": "pt3d_2db7e1f4_9873", "index": 9873,
-      "track_length": 57, "image_count": 45, "rms_error_px": 0.82 },
-    …
-  ]
-}
-```
+Built, and specified in [gui/mcp-server.md](../gui/mcp-server.md)
+§ "`find_points`", with the track table cache it reads and the *Find points*
+operation that fills it. It runs `query_points` over the same cache the panel
+will read, so a `find_points` call and the panel with the same bounds agree.
+What later steps add to it:
 
-- **It runs `query_points`** over the same track table cache the panel uses, so a
-  `find_points` call and the panel with the same bounds agree. The returned
-  value columns default to the bound and sorted columns plus `track_length`
-  and `rms_error_px`.
-- **Columns the cache does not hold are computed by a task of the call's
-  own.** When every column the call names (in `bounds`, `order_by` and
-  `columns`) is in the cache for the version at the cursor, `find_points`
-  answers in the frame it is drained. Otherwise it queues *Find points*, an
-  asked-for fast-queue operation that locks nothing (it pushes no version),
-  computes a `TrackTable` of the missing columns, which the UI thread merges
-  into the cache when it lands, and answers the call then. Like any asked-for task, it replies directly when it lands within
-  `REPLY_DIRECTLY_WITHIN` and with a handle otherwise, is listed in
-  `get_scene`'s `background_tasks`, can be cancelled, and writes an Action Log
-  row when it lands (for example *Found 1,204 of 38,888 points in dino*). It needs no new
-  rule in the queue machinery: a running quiet table job is cancelled for it
-  and queued again behind it, as for any asked-for task. If the panel's quiet
-  job is computing the same columns at that moment, the work is done twice,
-  and the merge keeps the column already in the cache. `limit` and the cache
-  keep the cost of a repeat call down to a slice.
-- **The reply is paged scalars.** It carries no bulk arrays: at most 500 rows
-  of a few numbers each. The mcp-server.md statement "no tool here returns bulk
-  arrays" is narrowed to "no tool returns a whole column or a whole track
-  table; `find_points` returns at most a page of summary values", and the
-  `get_scene` description changes to match.
-- **Errors** name the column that is not available and list the ones that
-  are, or name the camera image that is out of range. They use the same
-  wording as the panel's greyed bound.
-
-This closes bug bash finding 6. The three tracks the bug bash searched for
-take three calls:
-
-- `{seen_in_camera_image: 2, bounds: [{column: "track_length", min: 16, max: 20}]}`
-- `{seen_in_camera_image: 56, bounds: [{column: "track_length", min: 4, max: 4}]}`
-- `{order_by: {column: "track_length", descending: true}, limit: 1}`
+- **The picture columns.** `find_points` refuses `crop` and `patch` today as
+  columns it does not know. Once the panel has them, the refusal says that
+  picture columns belong to the panel only.
+- **The panel's greyed bound** uses the wording of `find_points`' refusal of a
+  column the reconstruction cannot supply.
 
 ### `get_track_table_query` / `set_track_table_query`
 
@@ -485,11 +443,6 @@ panel at its default size checked before the step is done. In the background
 queue work, those captures found nine problems that the tests had passed:
 layout, contrast, a wrong progress fraction and a missing title line.
 
-2. **`find_points`**, which adds `TrackTable::merge` to core (with its test and
-   its section in [core/analysis/track-table.md](../core/analysis/track-table.md))
-   and brings the track table cache and the *Find points* operation into the
-   viewer, for the stored and the computed columns. Only the wire uses them at
-   this step, and the mcp-server.md stance is revised.
 3. **The Track Table panel** with the stored columns, the Patch column, the
    Size slider, sorting, bounds, selection and hover, and the quiet table job
    (*Track Table columns*) for the stored columns. The panel's state is

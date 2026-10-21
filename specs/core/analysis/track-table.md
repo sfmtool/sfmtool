@@ -16,9 +16,11 @@ returning the matching point indexes in a chosen order.
 The definitions live in one place so that every surface that quotes a number
 quotes the same one. The viewer's Track View header and its Image Detail heat
 maps call the same functions for one point that the table calls for every
-point, and the Python binding returns the arrays the table holds. The draft
-[track-table.md](../../drafts/track-table.md) proposes a Track Table panel and
-a `find_points` wire tool that show the table and run this query.
+point, and the Python binding returns the arrays the table holds. The viewer's
+`find_points` wire tool runs this query over a cached table
+([gui/mcp-server.md](../../gui/mcp-server.md) § "`find_points`"), and the draft
+[track-table.md](../../drafts/track-table.md) proposes a Track Table panel
+that shows the table.
 
 ## Rust API
 
@@ -188,7 +190,7 @@ of the same version. A caller that keeps a table for the version on screen
 computes only the columns it lacks, as a second table and off its own thread,
 and merges that table in when it lands, so the columns it already holds are
 not computed again. The viewer's track table cache does this
-([gui/mcp-server.md](../../gui/mcp-server.md) § "find_points").
+([gui/mcp-server.md](../../gui/mcp-server.md) § "`find_points`").
 
 - **The arrays are moved, not copied.** `merge` takes `other` by value and
   moves each of its column vectors into an empty slot, so a merge costs a

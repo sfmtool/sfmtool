@@ -16,14 +16,16 @@ two run at the same time (§ "Two queues"), so a bundle adjustment of one
 reconstruction does not stop a person opening another file or fitting a track
 on another reconstruction's bench. A task started while its queue is busy
 **waits** behind the tasks already waiting there, and starts when they have
-landed. The eighteen operations are `Open`, which reads files and
+landed. The nineteen operations are `Open`, which reads files and
 makes them nodes (§ "Opening a file"); the six whole-value edits, `Bundle
 adjust`, `Convert to embedded patches`, `Retriangulate all points`, `Refit all
 points`, `Switch camera model` and `Prune covered observations`; `Add image to
-tracks`; and the ten the bench runs, `Fit track`, `Set track stage`, `Fit normal`, `Finite
+tracks`; the ten the bench runs, `Fit track`, `Set track stage`, `Fit normal`, `Finite
 difference normal`, `Grid plane normal`, `Search descriptors`, `Geometry
 search`, `Build index files`, `Create track at pixel` and `Find nearby tracks`
-([bench.md](bench.md)). `Switch camera model` is a camera model proposal's
+([bench.md](bench.md)); and `Find points`, which computes the track table
+columns a `find_points` call needs and the track table cache lacks
+([mcp-server.md](mcp-server.md) § "`find_points`"). `Switch camera model` is a camera model proposal's
 Apply: the switch of one camera followed by the retriangulation of the tracks
 its images observe, as one version
 ([edits/switch-camera-model.md](edits/switch-camera-model.md)); it polls the
@@ -55,6 +57,7 @@ half, between the images it reads, as each leaf of the forest is placed, and
 between batches of the blocks it writes, and in its cluster-patches half in
 front of every query of the self-join, between the photographs it decodes and
 between batches of the clusters it refines ([index-files.md](index-files.md)).
+Find points polls it between blocks of points as it computes the columns.
 
 This covers the worker and what makes it safe, the panel, what the rest of the
 viewer may do meanwhile, what is written when a task ends, and the wire.
@@ -158,6 +161,7 @@ pub(crate) struct Operation {
 | Build index files | slow | yes | no |
 | Open | fast | no (it makes a new node) | no |
 | Fit track, Set track stage, Fit normal, Finite difference normal, Grid plane normal, Search descriptors, Geometry search, Create track at pixel, Find nearby tracks | fast | yes | no |
+| Find points | fast | no; it pushes no version (it fills the track table cache) | no |
 | Live evaluation | fast | no; it does not start on a locked node (§ "Quiet tasks") | yes |
 | Camera model proposal | fast | no; it pushes no version (Apply installs its answer), and an open proposal refuses every task on its node | yes |
 
@@ -201,7 +205,13 @@ refuses it: it is taken after the checks, and the task starts from its queue
 without asking again.
 
 **A task that locks nothing runs beside a locking one.** Open makes a new node,
-so it locks none and an open waits only for its queue.
+so it locks none and an open waits only for its queue. Find points reads the
+value at its node's cursor and keeps its answer in the track table cache, so
+it locks nothing and is not refused by a busy node or by an open camera model
+proposal: it runs beside a bundle adjustment of the same node, against the
+version on screen. A run that lands after its node's document serial has
+moved is dropped with a failed row ([mcp-server.md](mcp-server.md)
+§ "`find_points`").
 
 The camera model proposal's job locks nothing either, but it does not meet a
 locking task on its node: an open proposal refuses every task start on its
@@ -286,11 +296,12 @@ waits behind them, and nothing reports them as the viewer being busy:
   consecutive. The panel shows a running quiet task in one dim line (§ "Quiet
   line").
 
-No wire call waits on a quiet task. The Track Table draft
+No wire call waits on a quiet task. A `find_points` call whose columns are not
+cached queues *Find points*, which is asked for, rather than a quiet task
+([mcp-server.md](mcp-server.md) § "`find_points`"). The Track Table draft
 ([../drafts/track-table.md](../drafts/track-table.md) § "Computing the
 columns") proposes two more quiet tasks, its column job and its reference
-picks, and a rule under which a quiet task that a `find_points` call waits on
-is treated as asked for while the call waits.
+picks, which fill the same track table cache.
 
 ## What the user sees
 
@@ -1116,6 +1127,11 @@ pub(crate) enum Finished {
     /// ([bench.md](bench.md) § "Find Nearby Tracks"). The row is an `Edit`
     /// when the version wrote points and a `Bench` row otherwise.
     NearbyTracks(Box<NearbyTracksRun>),
+    /// A Find points run: the track table columns the cache lacked, for the
+    /// document serial the job read, merged into the track table cache on the
+    /// GUI thread before the query runs ([mcp-server.md](mcp-server.md)
+    /// § "`find_points`"). Not a version.
+    FoundPoints(Box<FindPointsRun>),
     /// The files an open read, each with what it filled in for display or
     /// the sentence saying why it could not be read. Appended in order.
     Opened(Vec<OpenedFile>),
@@ -1240,7 +1256,9 @@ while it waited, since the outcome is an `Err` for a cancellation and a refusal
 alike; `FinishedTask::ended` reads the two as one `Ended` (`Done`, `Cancelled`
 or `Failed`), which is what the panel marks a finished task with. For an open
 it also holds `opened`, the first node the open made, which is what
-`open_reconstruction` answers with once the open lands. A ring rather than one
+`open_reconstruction` answers with once the open lands, and for a Find points
+run `found_points`, the matched point indexes and the document serial they
+were matched at, which is what `find_points` pages through. A ring rather than one
 slot, because the two queues finish independently and both are polled in the
 same step of the frame: a fast task could land between a slow task's landing and
 the poll that reads it, and push the slow task out of a single slot. The
@@ -1292,8 +1310,10 @@ answer that takes longer than the threshold to arrive.
 entry of the node the open made, with `already_open` saying whether the path was
 open when the call was made; the pending reply records which answer it owes as
 `Answer::Opened { already_open }`, where an edit's is `Answer::Version(node)`,
-`create_track_at_pixel`'s `Answer::CreatedTrack(node)` and
-`find_nearby_tracks`'s `Answer::FoundNearby(node)`.
+`create_track_at_pixel`'s `Answer::CreatedTrack(node)`,
+`find_nearby_tracks`'s `Answer::FoundNearby(node)` and `find_points`'s
+`Answer::FoundPoints(page)`, the page of matched points it owes, read from the
+track table cache once *Find points* has landed.
 Its handle's `reconstruction_label` is the file's stem, the label the node
 arrives with unless another node already holds it.
 

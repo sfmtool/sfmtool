@@ -113,7 +113,7 @@ place.
 
 ## The tool surface
 
-Ninety-seven tools. Seventeen read -- sixteen that answer with JSON, and
+Ninety-eight tools. Eighteen read -- seventeen that answer with JSON, and
 `screenshot`, which closes the loop by handing back a picture -- seventy-three
 write, six send input, and one writes a file. `get_widgets` and the six input
 tools, `click`, `hover`, `drag`, `scroll`, `press_key` and `type_text`, read
@@ -128,6 +128,7 @@ and press the viewer's widgets the way a person's eyes, mouse and keyboard do
 | `get_camera_image` | read | One camera image: pose, intrinsics, observation stats |
 | `get_camera_intrinsics` | read | One intrinsics record and the camera images that use it |
 | `get_point` | read | One 3D point: position, colour, RMS reprojection error (`rms_error_px`), patch frame, full track, and the viewed track's evaluation for the viewed point |
+| `find_points` | read | The points of one reconstruction that pass bounds on the track table's columns, optionally only those one camera image sees, sorted by a column, a page at a time with the values asked for; computes the columns it lacks with *Find points*, on a worker thread |
 | `get_action_log` | read | What has happened in the viewer, from a revision onward, filtered by who did it, optionally with each row's stages |
 | `get_timing_detail` | read | Whether the detailed stages of an operation are being recorded |
 | `set_timing_detail` | write | Record the detailed stages of an operation, or stop |
@@ -220,7 +221,7 @@ and press the viewer's widgets the way a person's eyes, mouse and keyboard do
 | `press_key` | input | Press and release one key, with modifiers, optionally with the pointer moved over a panel first |
 | `type_text` | input | Type a string into the focused text input, or into one named by its widget id |
 
-Every tool is annotated: the sixteen reads and `screenshot` carry
+Every tool is annotated: the seventeen reads and `screenshot` carry
 `readOnlyHint: true`, the seventy-three writes `destructiveHint: false` (none of
 them touches a file on disk: `close_reconstruction` unloads, it does not
 delete; `set_window_layout` changes the window and the dock, not the layout file
@@ -542,8 +543,9 @@ addressable. No arguments.
 ```
 
 `counts` is summary only. A 4 M-point cloud must never cross this boundary as
-JSON, and no tool here returns bulk arrays — that is what the `.sfmr` file and
-`sfm inspect` are for. The agent reads the file for the data and asks the
+JSON: no tool returns a whole column or a whole track table, and `find_points`
+returns at most a page of summary values (§ "`find_points`"). The bulk data is
+what the `.sfmr` file and `sfm inspect` are for. The agent reads the file for the data and asks the
 viewer for the *state*. `points_at_infinity` is read the way
 `scene::visible_stats` reads it, so this number and the one in the viewport's
 stats overlay are the same number. **Every count is the version's**, read
@@ -850,6 +852,127 @@ of the point it came from — takes an index one past the end: the point
 `get_scene` reports as the selection can sit above `counts.points`, and an index
 below it can name nothing. So what is refused is an index that names no live
 point, and the refusal says that rather than quoting a count.
+
+### `find_points`
+
+A read that runs the track table query
+([core/analysis/track-table.md](../core/analysis/track-table.md)) over one
+reconstruction and answers with a page of the points that pass, each with its
+values. It is what an agent calls instead of one `get_point` per point to find
+"the worst points", "the points with a track of two" or "the points this image
+sees that are badly triangulated". The handler is
+[mcp/find_points.rs](../../crates/sfm-explorer/src/mcp/find_points.rs), and the
+cache and the operation it starts are in
+[track_table.rs](../../crates/sfm-explorer/src/track_table.rs).
+
+```jsonc
+// find_points
+{
+  "reconstruction_label": "dino",            // optional: defaults to the selected one
+  "bounds": [ { "column": "track_length", "min": 3 },
+              { "column": "rms_error_px", "max": 1.5 } ],   // optional
+  "seen_in_camera_image": 2,                 // optional: an index or a name, as camera_image takes
+  "order_by": { "column": "rms_error_px", "descending": true },  // optional
+  "columns": ["track_length", "image_count", "rms_error_px"],    // optional: the values to return
+  "offset": 0, "limit": 50                   // as list_camera_images: default 50, at most 500
+}
+// reply
+{
+  "reconstruction_label": "dino",
+  "live_points": 9941,
+  "matched": 1204,
+  "offset": 0,
+  "points": [
+    { "id": "pt3d_2db7e1f4_9873", "index": 9873,
+      "track_length": 57, "image_count": 45, "rms_error_px": 0.82 },
+    …
+  ]
+}
+```
+
+- **The query is core's `query_points`.** A bound keeps the points whose
+  value is at least `min` and at most `max`, both inclusive; a bound with
+  neither end filters nothing, and every bound must pass. `seen_in_camera_image`
+  keeps the points with an observation in that image. `order_by` sorts by one
+  column, ascending unless `descending` is true, stably, so equal values keep
+  ascending point index; a point with no value sorts last in either direction
+  and fails any bound that sets an end. Without `order_by` the points come in
+  ascending point index. `matched` counts every point that passed, and
+  `offset` and `limit` take a page of them in that order; an offset past the end
+  is an empty page with `matched` still given. `live_points` is the number of
+  live points the table has rows for.
+- **The values returned** are the columns `columns` names, each once, in the
+  order named. Without `columns` they are the bound columns and the sorted
+  column, in that order, followed by `track_length` and `rms_error_px`, each
+  once. `id` is the point's portable id, the `pt3d_<hash>_<index>` form
+  `get_point` takes, and `index` its index in the version at the cursor.
+- **No value is `null`.** Core holds a point's missing value as a NaN, and JSON
+  has no NaN, so a value that is not finite is `null`: a point at infinity has
+  `null` for `x`, `y`, `z`, `centroid_distance`, `condition_number` and
+  `inverse_depth_z` and `0` for `max_ray_angle_deg`, as the core table defines
+  them, and a track no observation of which was measured has `null` for
+  `lowest_zncc`. A count, a byte and the flag (`track_length`, `image_count`,
+  `normal_confidence`, `at_infinity`) are integers. The positions are the `f64`
+  the table holds; every other value goes through its shortest `f32` spelling,
+  so a stored `0.82` reads `0.82` rather than `0.8199999928474426`.
+- **The columns come from the track table cache.** The viewer keeps one core
+  `TrackTable` per reconstruction for the version at its cursor, keyed by the
+  reconstruction and its document serial
+  (`AppState::track_tables`, a `TrackTableCache`). A bench step keeps the
+  document serial and so keeps the table; an edit, an undo or a redo moves it,
+  and the cached table is then for another version and is not read. A node
+  holds at most one entry: a table computed for another serial replaces it,
+  and closing the node drops it.
+- **A call whose columns are all cached answers in the frame it is drained.**
+  Otherwise it queues **Find points**, an asked-for operation on the fast queue
+  that locks nothing, since it pushes no version
+  ([background-tasks.md](background-tasks.md) § "Two queues"). Its job computes,
+  with `TrackTable::compute`, a table of only the columns the cache lacks, from
+  the value at the cursor when the call was made. When it lands the GUI thread
+  merges that table into the cached one with `TrackTable::merge`, which moves
+  the column arrays and keeps a column the cache already holds, runs the query
+  and answers the call. A run that lands after the document serial has moved,
+  because an edit or an undo came in while it ran, is dropped with the failed
+  row *"Find points of {label} finished, but {label} has changed since it
+  started, so its answer was dropped."*, and the call is refused with it; the
+  caller calls again. Like every asked-for task it replies directly when it
+  lands within `REPLY_DIRECTLY_WITHIN` and with a handle otherwise
+  ([background-tasks.md](background-tasks.md) § "On the wire"), is listed in
+  `get_scene`'s `background_tasks` and by `get_background_tasks`, and is
+  cancelled by `cancel_background_tasks`. A cancelled run caches nothing.
+- **It runs beside a slow task.** Because it locks nothing, a busy node does
+  not refuse it: a bundle adjustment holding the node leaves `find_points`
+  reading the version on screen, which is the value the adjustment was handed.
+  A camera model proposal open on the node does not refuse it either.
+- **The Action Log.** The call writes its `Query` row when it is drained, as
+  every read does (`find_points dino 0..50`). A call that starts *Find points*
+  also gets the task's row when it lands, *"Found 1204 of 9941 points in
+  dino"*, filed under the same `Query` kind, since every asked-for task writes
+  the row it ends with ([background-tasks.md](background-tasks.md) § "When it
+  finishes"). A call answered from the cache writes the `Query` row alone.
+- **Refusals.** A column name that is not a track table column is refused at the
+  parse, *"find_points does not know the column "error" — the columns are
+  track_length, image_count, …"*, in `bounds`, `order_by` and `columns` alike;
+  so are the picture columns of the Track Table draft. A column the
+  reconstruction cannot supply, `normal_confidence` on a file with no such
+  stored column for one, is refused with *"{label} cannot supply the column
+  normal_confidence: the columns it can supply are …"*. A bound whose `min` is
+  above its `max` is refused, *"find_points wants each bound's min to be at most
+  its max — got min 5 and max 3 for track_length."*, and a camera image out of
+  range or not found by name gets the refusal every tool that takes
+  `camera_image` gives.
+
+**The reply is a page of summary values.** At most 500 rows of a few numbers
+each, so it does not break the rule `get_scene` states: no tool returns a whole
+column or a whole track table, and `find_points` returns at most a page of
+summary values.
+
+The three tracks the 2026-10-05 bug bash searched for with 9,941 `get_point`
+calls take three calls:
+
+- `{seen_in_camera_image: 2, bounds: [{column: "track_length", min: 16, max: 20}]}`
+- `{seen_in_camera_image: 56, bounds: [{column: "track_length", min: 4, max: 4}]}`
+- `{order_by: {column: "track_length", descending: true}, limit: 1}`
 
 ### `open_reconstruction` / `close_reconstruction`
 
@@ -5510,6 +5633,20 @@ where a test hands no host over.
   rather than panicking on it.
 - **Label addressing survives a node being replaced**: a node replaced with a fresh
   `ReconId` still answers to the same label.
+- **`find_points`**, in `mcp::tests::find_points`: a cold cache defers to
+  *Find points* and answers when it lands, with the default values, `pt3d_`
+  ids, the task's `Found … points` row and the call's `Query` row; a warm cache
+  answers in the frame, and its bounds, descending sort and pages are a slice
+  of one order; `seen_in_camera_image` by index and by name keeps exactly the
+  points that image observes; a point at infinity has `null` for `x`, `y`, `z`
+  and `condition_number`; the refusals name an unknown column, a column the
+  reconstruction cannot supply with the ones it can, a `min` above a `max` and
+  an image out of range; a waiting *Find points* is listed by `get_scene`,
+  handed back as a handle past the window and removed by
+  `cancel_background_tasks`; and a call runs beside a slow task that holds the
+  node. The cache's keying, its merge of a second run, its replacement after
+  an edit, the dropped run that lands after one, and the close that drops it
+  are in `track_table::tests`.
 - **Solo**: it moves rather than accumulating, leaves the selection alone, and
   keeps `visible` and `drawn` distinguishable.
 - **A refusal is atomic**: an unknown tint lists the palette and leaves the
@@ -5883,7 +6020,7 @@ where a test hands no host over.
   and the panel list in the prose above are asserted against `catalog()` and
   `Tab::ALL`, because a number written out in words is the first thing to go
   stale.
-- **The catalog is ninety-seven tools**, seventeen of them reads, six of the
+- **The catalog is ninety-eight tools**, eighteen of them reads, six of the
   `Input` kind and one of the `Save` kind, those seven carrying
   `destructiveHint: true`;
   `set_window_layout`'s schema advertises `sfm_explorer_layout`, `window` and
@@ -6108,8 +6245,9 @@ Other candidates, in rough order of value:
 
 ## Non-goals
 
-- **Not a data channel.** No tool returns point arrays, descriptors, thumbnails
-  or track tables in bulk. The agent reads `.sfmr` files with `sfm inspect`; it
+- **Not a data channel.** No tool returns point arrays, descriptors, thumbnails,
+  a whole track table column or a whole track table; `find_points` returns at
+  most a page of summary values. The agent reads `.sfmr` files with `sfm inspect`; it
   asks the viewer about *state*.
 - **Not a replacement for the CLI.** Solving, matching, transforming and
   exporting stay `sfm` subcommands. The viewer's MCP surface drives the viewer.
@@ -6152,6 +6290,7 @@ Other candidates, in rough order of value:
 | `--mcp PORT` | `8787` (`cli::DEFAULT_MCP_PORT`) | The loopback port to bind. `0` takes an ephemeral one, printed at startup. |
 | `list_camera_images` `limit` | `50` (`read::DEFAULT_LIMIT`) | Rows per page. `0` is refused, as the schema's `"minimum": 1` says. |
 | `list_camera_images` `limit` cap | `500` (`read::MAX_LIMIT`) | The most one call will return, whatever it asked for. |
+| `find_points` `limit` | `50` (`read::DEFAULT_LIMIT`), at most `500` (`read::MAX_LIMIT`) | Points per page, as `list_camera_images`. |
 | `screenshot` `max_dimension` | none — the native size of whatever was photographed | Longest side of the returned PNG. Below `16` (`frame::MIN_MAX_DIMENSION`, the schema's `"minimum"`) is refused. |
 | `get_action_log` `limit` | `200` (`read::ACTION_LOG_DEFAULT_LIMIT`) | Entries per call. `0` is refused, as the schema's `"minimum": 1` says. |
 | `get_action_log` `limit` cap | `1000` (`read::ACTION_LOG_MAX_LIMIT`) | The most one call will return, whatever it asked for. |
