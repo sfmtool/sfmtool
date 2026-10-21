@@ -13,20 +13,22 @@
 //! view's keypoint implies, and only where that growth is refused, from an
 //! exhaustive shift search about that shift; it grows the window outward,
 //! fitting tilt and shift by Levenberg–Marquardt (`solve`) at each size, and
-//! ends with a fit of the whole grid on the robust cell score. Each growth
-//! gives the view's own plane and its information about the tilt.
+//! ends with a fit of the whole grid on the robust cell score. A growth stops
+//! early, refused, at a window stage whose score shows it will not reach the
+//! floor. Each growth gives the view's own plane and its information about
+//! the tilt.
 //!
 //! A selection of views, picked near to far by their angle from the
 //! reference, is grown against the reference, the first from the starting
-//! plane and each later one from the plane of the views kept before it, and
-//! their planes are combined by a robust information-weighted mean, with no fit of the views together
+//! plane and each later one from the plane of the views kept before it
+//! alone, and their planes are combined by a robust information-weighted mean, with no fit of the views together
 //! (`combine`); the widest pairs of kept views are then matched against each
 //! other and their planes added to the mean (`selected`). The patch is turned
 //! to the combined plane whenever a view joined, unless the turn is large and
 //! the evidence for it weak, when the starting normal is kept; on a turn,
 //! each joined view's keypoint is written where that plane and its shift put
 //! the patch, and each view not picked has its shift alone fitted at that
-//! plane.
+//! plane, over a mid-size window and then briefly over the whole grid.
 //!
 //! `specs/drafts/grown-plane-normal.md` is the design.
 
@@ -60,6 +62,29 @@ use render::{anchored, Grid, Samples, ViewImage, ViewRender};
 use solve::{
     live_cells, maximise, normal_matrix, schur_tilt, shift_response, Iteration, Reading, ViewFit,
 };
+
+/// A growth stops, refused ([`GrownPlaneRefusal::StoppedEarly`]), at a window
+/// stage from [`EARLY_REFUSAL_FROM_STAGE`] on whose ZNCC is under
+/// [`GrownPlaneNormalOptions::min_held_zncc`] less this. On the ground-truth
+/// sweep, 24 of 5545 growths that passed the floor had such a window stage,
+/// and 496 of 1562 refused growths stop at one.
+const EARLY_REFUSAL_MARGIN: f64 = 0.25;
+
+/// The first stage, counted in [`GrownPlaneAttempt::stage_zncc`] from the
+/// first window's unfitted score at 0, that [`EARLY_REFUSAL_MARGIN`] applies
+/// to: the second window fitted. The first fitted window's score is too often
+/// low on a growth that passes.
+const EARLY_REFUSAL_FROM_STAGE: usize = 2;
+
+/// The window a shift-only fit fits the shift over first, as an index into
+/// the stages' half-widths: the second fitted window's, `1/5` of the grid's
+/// side under the default fractions, or the widest on a grid with fewer
+/// windows.
+const SHIFT_ONLY_WINDOW: usize = 2;
+
+/// The Levenberg–Marquardt iterations of the whole-grid fit that follows a
+/// shift-only fit's window fit.
+const SHIFT_ONLY_GRID_ITERATIONS: u32 = 2;
 
 /// How [`grown_plane_normal`] grows its windows, fits its planes and decides
 /// which views it keeps.
@@ -101,7 +126,8 @@ pub struct GrownPlaneNormalOptions {
     pub max_agreement_distance: f64,
     /// The floor every whole-grid score is held to: a view's own score, its
     /// score at the combined plane, a pair's score between its two views and
-    /// a shift-only view's score at the final plane. 0.5.
+    /// a shift-only view's score at the final plane. A growth stops early at
+    /// a window stage more than 0.25 under it. 0.5.
     pub min_held_zncc: f64,
     /// A weakest-direction `σ` above this, degrees, is reported as low
     /// confidence. It does not by itself stop the turn. 2.
@@ -317,6 +343,10 @@ pub enum GrownPlaneRefusal {
     /// At the combined plane, at its shift moved there, its robust grid score
     /// is under [`GrownPlaneNormalOptions::min_held_zncc`].
     HeldUnderFloor,
+    /// A window stage of a growth, from the second window fitted on, scored
+    /// under [`GrownPlaneNormalOptions::min_held_zncc`] less 0.25, and the
+    /// growth stopped there with no whole-grid stage.
+    StoppedEarly,
     /// A pair one of whose views was left out.
     ViewLeftOut,
 }
@@ -331,18 +361,21 @@ pub struct GrownPlaneAttempt {
     /// Each stage's score: the first window's ZNCC at its starting shift (the
     /// keypoint-implied one, or the search's best), each later window's ZNCC
     /// after its fit, and the whole grid's robust score after the last fit.
+    /// A growth that stopped early ([`GrownPlaneRefusal::StoppedEarly`])
+    /// ends at the window stage it stopped at, with no whole-grid score.
     pub stage_zncc: Vec<f64>,
     /// The shift the growth ended at, image px.
     pub shift: [f64; 2],
     /// The outward normal of the plane the growth ended at, world frame.
     pub normal: [f64; 3],
-    /// The robust grid score there.
+    /// The robust grid score there; `NaN` for a growth that stopped early.
     pub grid_zncc: f64,
     /// `σ` along its own plane's weakest direction, degrees, from its own
-    /// information at its own plane and shift.
+    /// information at its own plane and shift; `NaN` for a growth that
+    /// stopped early.
     pub sigma_deg: f64,
-    /// Why it was refused, which is only ever
-    /// [`GrownPlaneRefusal::UnderFloor`]; `None` when it was taken. Whether a
+    /// Why it was refused, [`GrownPlaneRefusal::UnderFloor`] or
+    /// [`GrownPlaneRefusal::StoppedEarly`]; `None` when it was taken. Whether a
     /// taken one is kept is the combination's verdict, in
     /// [`GrownPlaneSequence::views`].
     pub refusal: Option<GrownPlaneRefusal>,
@@ -368,9 +401,9 @@ pub struct GrownPlaneTry {
     /// Its angle from the reference as seen from the patch centre, degrees.
     pub angle_deg: f64,
     /// Its growths, in the order made, up to the first that was taken: from
-    /// the combined plane first where a view had been kept before it, then
-    /// from the starting plane at the keypoint-implied shift and from the
-    /// stage-1 search after. A
+    /// the combined plane where a view had been kept before it, at the
+    /// keypoint-implied shift alone; else from the starting plane, at the
+    /// keypoint-implied shift and from the stage-1 search after. A
     /// search that lands on the keypoint-implied shift itself is not grown
     /// again, since that growth was the one just refused, and a view with no
     /// implied shift is grown from the search alone. A try made because the
@@ -469,8 +502,9 @@ pub enum GrownPlaneView {
         keypoint: Option<[f64; 2]>,
     },
     /// Not picked by the selection: its shift alone
-    /// was fitted at the final plane, from its first window, and it is not in
-    /// the plane. `keypoint` is written when `grid_zncc` reaches
+    /// was fitted at the final plane, from its first window, over a mid-size
+    /// window and then for two iterations over the whole grid, and it is not
+    /// in the plane. `keypoint` is written when `grid_zncc` reaches
     /// [`GrownPlaneNormalOptions::min_held_zncc`] and the pixel is on the
     /// photograph, and is `None` otherwise.
     ShiftOnly {
@@ -669,9 +703,11 @@ impl std::fmt::Display for GrownPlaneSequence {
 /// of the views kept before it: a 7×7 window at the grid's centre starts from the shift the view's keypoint implies, the window grows
 /// by [`GrownPlaneNormalOptions::window_fractions`] with tilt and shift fitted
 /// at each size, and a last fit takes the whole grid on the robust cell
-/// score. A growth under [`GrownPlaneNormalOptions::min_held_zncc`] is made
-/// again with its first window's shift found by an exhaustive search about
-/// that shift; a view with no keypoint is grown from the search alone. Each
+/// score. A growth stops, refused, at a window stage from the second fitted
+/// on that scores under [`GrownPlaneNormalOptions::min_held_zncc`] less 0.25.
+/// A growth from the starting plane under the floor is made again with its
+/// first window's shift found by an exhaustive search about that shift; a
+/// view with no keypoint is grown from the search alone. Each
 /// growth gives the view's own plane and its information about the tilt, the
 /// Schur complement of its normal matrix.
 ///
@@ -684,9 +720,9 @@ impl std::fmt::Display for GrownPlaneSequence {
 /// [`GrownPlaneNormalOptions::rung_ratio`] times the widest angle kept, out
 /// to the widest views, within a rung the view whose predicted information
 /// most raises the weakest information measured so far. Each later pick is
-/// grown from the combined plane of the views kept so far and, where that is
-/// refused, from the starting plane, and a rung waits until one of its views
-/// is kept. The selection stops when the combined plane's weakest `σ`
+/// grown from the combined plane of the views kept so far, from its
+/// keypoint-implied shift alone, and a rung waits until one of its views is
+/// kept. The selection stops when the combined plane's weakest `σ`
 /// reaches
 /// [`GrownPlaneNormalOptions::target_sigma_deg`] or
 /// [`GrownPlaneNormalOptions::max_selected_views`] views have passed the
@@ -699,7 +735,9 @@ impl std::fmt::Display for GrownPlaneSequence {
 /// from the search, and the planes are combined again. Then up to
 /// [`GrownPlaneNormalOptions::max_pairs`] of the widest pairs of kept views
 /// are matched against each other and their planes added to the mean. Every
-/// view not picked has its shift alone fitted at the final plane.
+/// view not picked has its shift alone fitted at the final plane: over the
+/// second fitted window's samples, then for two iterations over the whole
+/// grid.
 ///
 /// When at least one view joined, the turn to the final plane is judged: a
 /// turn of at least [`GrownPlaneNormalOptions::weak_turn_deg`] under
@@ -1179,6 +1217,7 @@ fn verdict_words(refusal: Option<GrownPlaneRefusal>) -> &'static str {
         Some(GrownPlaneRefusal::TooFar) => "refused too far",
         Some(GrownPlaneRefusal::HeldUnderFloor) => "refused held under the floor",
         Some(GrownPlaneRefusal::ViewLeftOut) => "refused, a view left out",
+        Some(GrownPlaneRefusal::StoppedEarly) => "refused, stopped early",
     }
 }
 
@@ -1466,11 +1505,26 @@ impl Sequence<'_, '_, '_> {
 
     /// Judge a growth of candidate `i` on its own, in a `judge` phase: taken
     /// when its own robust grid score reaches the floor, its information read
-    /// at its own plane.
+    /// at its own plane. A growth that stopped early is refused already, and
+    /// its information is not read.
     fn judge(&self, i: usize, mut grown: Grown, progress: &Progress<'_>) -> Judged {
         let options = self.options;
         let mut phase = progress.detail_phase("judge");
         let renders_before = self.renders[i].renders();
+        if grown.attempt.refusal == Some(GrownPlaneRefusal::StoppedEarly) {
+            // No refused growth is combined, so its information is not read.
+            progress_note!(phase, "{}", verdict_words(grown.attempt.refusal));
+            drop(phase);
+            let estimate = Estimate {
+                index: i,
+                tilt: grown.tilt,
+                shift: grown.attempt.shift,
+                information: Matrix2::zeros(),
+                normal: None,
+                attempt: grown.attempt.clone(),
+            };
+            return Judged { grown, estimate };
+        }
         let estimate = self.estimate_of(i, &grown);
         let sigma = sigmas_deg(&estimate.information, options.zncc_tolerance)[0];
         let attempt = &mut grown.attempt;
@@ -1494,7 +1548,9 @@ impl Sequence<'_, '_, '_> {
 
     /// Grow candidate `i` from the plane `from`, from the first window's
     /// ZNCC, shift and start in `first`: the growing windows, and the whole
-    /// grid's robust fit.
+    /// grid's robust fit. A window stage from [`EARLY_REFUSAL_FROM_STAGE`] on
+    /// that scores under the floor less [`EARLY_REFUSAL_MARGIN`] ends the
+    /// growth there, refused ([`GrownPlaneRefusal::StoppedEarly`]).
     fn grow(
         &self,
         i: usize,
@@ -1527,6 +1583,23 @@ impl Sequence<'_, '_, '_> {
                 "half-width {half}: ZNCC {s:.3}, {taken} iterations, {} renders",
                 render.renders() - renders_before
             );
+            let early_floor = self.options.min_held_zncc - EARLY_REFUSAL_MARGIN;
+            if stage_zncc.len() > EARLY_REFUSAL_FROM_STAGE && (s.is_nan() || s < early_floor) {
+                let tilt = [p[0], p[1]];
+                return Ok(Grown {
+                    tilt,
+                    attempt: GrownPlaneAttempt {
+                        start,
+                        tilt_start,
+                        stage_zncc,
+                        shift: [p[2], p[3]],
+                        normal: self.grid.plane_normal(tilt).into(),
+                        grid_zncc: f64::NAN,
+                        sigma_deg: f64::NAN,
+                        refusal: Some(GrownPlaneRefusal::StoppedEarly),
+                    },
+                });
+            }
         }
         progress.check_cancel()?;
         let mut stage = progress.detail_phase("whole-grid stage");

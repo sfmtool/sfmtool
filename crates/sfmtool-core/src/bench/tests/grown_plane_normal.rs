@@ -10,8 +10,9 @@
 //! the reference whose pairs sharpen the plane, a selection that matches a
 //! few of many views, a flat wall, and large turns on weak and on strong
 //! evidence, and the ladder's selection near to far: its order, a refused
-//! rung retried from the starting plane, its end at the widest view that
-//! passes, and a view at the reference's centre.
+//! pick whose rung waits for its other view, its end at the widest view that
+//! passes, and a view at the reference's centre; a growth stopped early, and
+//! keypoints off the content in views fitted for their shift alone.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -605,9 +606,11 @@ fn the_keypoint_implied_shift_takes_the_right_peak_on_repeating_texture() {
 /// where the pose projects the point, past the widened search's 12 px about
 /// zero shift, and each keypoint 6 px off the content, past what the fit
 /// recovers and past the 3 px search about the keypoint, every view grown
-/// from its keypoint-implied shift with no search is refused; the search
-/// then widens about that shift, finds the content, and the view joins and
-/// is written on it.
+/// from its keypoint-implied shift with no search is refused. For the first
+/// pick, grown from the starting plane, the search then widens about that
+/// shift, finds the content, and the view joins and is written on it. A
+/// later pick is grown from the combined plane at its keypoint-implied shift
+/// alone, is refused, and is left out.
 #[test]
 fn the_widened_search_is_centred_on_the_keypoint() {
     let centres = vec![
@@ -653,9 +656,10 @@ fn the_widened_search_is_centred_on_the_keypoint() {
 
     let (turned, report) = run(&scene, &edited, &track, &GrownPlaneNormalOptions::default());
     let sequence = sequence_of(&report);
-    assert_eq!(sequence.joined(), 3, "{sequence:#?}");
+    assert_eq!(sequence.joined(), 1, "{sequence:#?}");
+    assert_eq!(sequence.left_out(), 2, "{sequence:#?}");
     // Grown from the keypoint-implied shift, 6 px off, a view is refused,
-    // from the combined plane and from the starting plane alike; the search
+    // from the starting plane and from the combined plane alike; the search
     // that follows from the starting plane is what joins.
     for (k, entry) in sequence.trace.iter().enumerate() {
         let starts: Vec<_> = entry
@@ -665,16 +669,17 @@ fn the_widened_search_is_centred_on_the_keypoint() {
             .collect();
         let searched = (GrownPlaneTiltStart::Starting, GrownPlaneStart::Widened);
         let unsearched = (GrownPlaneTiltStart::Starting, GrownPlaneStart::NoSearch);
-        let expected = if k == 0 {
-            vec![unsearched, searched]
+        if k == 0 {
+            assert_eq!(starts, [unsearched, searched], "{entry:#?}");
+            let (last, refused) = entry.attempts.split_last().expect("growths");
+            assert!(refused.iter().all(|a| a.refusal.is_some()));
+            assert!(last.refusal.is_none());
         } else {
             let combined = (GrownPlaneTiltStart::Combined, GrownPlaneStart::NoSearch);
-            vec![combined, unsearched, searched]
-        };
-        assert_eq!(starts, expected, "{entry:#?}");
-        let (last, refused) = entry.attempts.split_last().expect("growths");
-        assert!(refused.iter().all(|a| a.refusal.is_some()));
-        assert!(last.refusal.is_none());
+            assert_eq!(starts, [combined], "{entry:#?}");
+            assert!(entry.attempts[0].refusal.is_some(), "{entry:#?}");
+            assert_eq!(entry.outcome, GrownPlaneTryOutcome::LeftOut);
+        }
     }
     for (row, view) in sequence.views.iter().enumerate() {
         if let GrownPlaneView::Joined { start, .. } = view {
@@ -1259,10 +1264,11 @@ fn the_ladder_visits_views_near_to_far() {
 }
 
 /// A view in the second rung that sees unrelated texture is refused from
-/// the combined plane and grown again from the starting plane, where it is
-/// refused too; the rung waits, and its other view is picked next.
+/// the combined plane, its growth stopped at a window stage, and is not grown
+/// again from the starting plane; the rung waits, and its other view is
+/// picked next.
 #[test]
-fn a_refused_rung_is_retried_from_the_start() {
+fn a_refused_pick_waits_for_its_rungs_other_view() {
     // The unrelated view is across the first pick's offset and the wider of
     // the second rung's two, so the rung's prediction picks it first.
     let views = [(12.0, 0.0), (17.0, 20.0), (22.0, 90.0), (35.0, 200.0)];
@@ -1280,12 +1286,12 @@ fn a_refused_rung_is_retried_from_the_start() {
     assert_eq!(pick.rung, 1, "{:#?}", sequence.picks);
     let entry = &sequence.trace[bad];
     assert_eq!(entry.outcome, GrownPlaneTryOutcome::LeftOut);
-    assert_eq!(entry.attempts[0].tilt_start, GrownPlaneTiltStart::Combined);
-    assert!(entry.attempts.len() >= 2, "{entry:#?}");
-    assert!(
-        entry.attempts[1..]
-            .iter()
-            .all(|a| a.tilt_start == GrownPlaneTiltStart::Starting),
+    assert_eq!(entry.attempts.len(), 1, "{entry:#?}");
+    let attempt = &entry.attempts[0];
+    assert_eq!(attempt.tilt_start, GrownPlaneTiltStart::Combined);
+    assert_eq!(
+        attempt.refusal,
+        Some(GrownPlaneRefusal::StoppedEarly),
         "{entry:#?}"
     );
     // The rung waits for its other view before the ladder moves out.
@@ -1360,4 +1366,116 @@ fn a_view_at_the_references_centre_ends_the_ladder() {
     assert_eq!(angles.len(), 2, "{:#?}", sequence.picks);
     assert!(angles[0].abs() < 0.5, "{angles:?}");
     assert!((angles[1] - 35.0).abs() < 0.5, "{angles:?}");
+}
+
+/// The first rung's view sees unrelated texture: each of its growths stops
+/// at a window stage, refused as stopped early, with no whole-grid score or
+/// `σ`, and the view is left out for it. The views that pass are grown
+/// through every stage, and the patch is still turned onto the plane.
+#[test]
+fn a_growth_that_cannot_reach_the_floor_stops_early() {
+    let scene = ladder_scene(&spread(&[12.0, 20.0, 32.0]), &[12.0]);
+    let (track, turned, report) = run_ladder(&scene);
+    let sequence = sequence_of(&report);
+    let stages = sequence.window_half_widths.len() + 1;
+    let row = row_of(&track, 1);
+    let entry = sequence
+        .trace
+        .iter()
+        .find(|t| t.observation == row)
+        .expect("the unrelated view is tried");
+    assert_eq!(entry.outcome, GrownPlaneTryOutcome::LeftOut, "{entry:#?}");
+    for attempt in &entry.attempts {
+        assert_eq!(
+            attempt.refusal,
+            Some(GrownPlaneRefusal::StoppedEarly),
+            "{entry:#?}"
+        );
+        let n = attempt.stage_zncc.len();
+        assert!((3..stages).contains(&n), "{entry:#?}");
+        assert!(attempt.stage_zncc[n - 1] < 0.25, "{entry:#?}");
+        assert!(attempt.grid_zncc.is_nan() && attempt.sigma_deg.is_nan());
+    }
+    assert!(
+        matches!(
+            sequence.views[row],
+            GrownPlaneView::LeftOut {
+                reason: GrownPlaneRefusal::StoppedEarly,
+                ..
+            }
+        ),
+        "{:?}",
+        sequence.views[row]
+    );
+    for t in sequence.trace.iter().filter(|t| t.observation != row) {
+        let attempt = t.attempts.last().expect("a growth");
+        assert!(attempt.refusal.is_none(), "{t:#?}");
+        assert_eq!(attempt.stage_zncc.len(), stages, "{t:#?}");
+        assert!(attempt.grid_zncc >= 0.5, "{t:#?}");
+    }
+    let after = degrees(patch_frame_of(&turned).normal(), truth());
+    assert!(after < 1.0, "{after:.3}: {report}");
+}
+
+/// The views the selection does not pick hold keypoints 1.5 px off the
+/// content along each axis. Each one's shift-only fit, over a mid-size
+/// window and then briefly over the whole grid, moves its keypoint back onto
+/// the content, where the step writes it.
+#[test]
+fn the_shift_only_fit_places_keypoints_on_the_content() {
+    let mut centres = vec![centre(0.0, 0.0)];
+    for (ring, from) in [10.0, 20.0, 30.0, 40.0].into_iter().enumerate() {
+        for k in 0..4 {
+            centres.push(centre(from, 90.0 * k as f64 + 22.5 * ring as f64));
+        }
+    }
+    let scene = Scene::looking_at(&centres, WORLD, camera(), textured_plane);
+    let edited = edited_of(&scene);
+    let track = tilted_track(&edited, Vector3::new(0.4, 1.0, 0.0), 15.0);
+    let (mut track, _) = set_reference(&track, row_of(&track, 0)).expect("an in row");
+    let reference = row_of(&track, 0);
+    for (row, observation) in track.observations.iter_mut().enumerate() {
+        if row == reference {
+            continue;
+        }
+        let p = scene.project(observation.image as usize, WORLD);
+        observation.track = Some(TrackMeasurement {
+            keypoint: Some([(p[0] + 1.5) as f32, (p[1] - 1.5) as f32]),
+            ..TrackMeasurement::default()
+        });
+    }
+    let options = GrownPlaneNormalOptions {
+        target_sigma_deg: 1.0,
+        max_selected_views: 16,
+        ..Default::default()
+    };
+    let (turned, report) = run(&scene, &edited, &track, &options);
+    let sequence = sequence_of(&report);
+    assert!(sequence.turned(), "{report}");
+    let shift_only = sequence.shift_only();
+    assert!(shift_only >= 10, "{report}");
+    let mut written = 0;
+    for (row, view) in sequence.views.iter().enumerate() {
+        if let GrownPlaneView::ShiftOnly {
+            keypoint,
+            was,
+            grid_zncc,
+            ..
+        } = view
+        {
+            let truth = scene.project(track.observations[row].image as usize, WORLD);
+            let was = was.expect("a keypoint before the step");
+            assert!(distance_px(was, truth) > 2.0);
+            assert!(*grid_zncc >= 0.5, "row {row}: {view:?}");
+            let at = keypoint.expect("passed the floor, on the photograph");
+            assert!(
+                distance_px(at, truth) < 0.5,
+                "row {row}: {at:?} vs {truth:?}"
+            );
+            let held = keypoint_of(&turned, row).expect("written");
+            assert!(distance_px(held, at) < 1e-3);
+            written += 1;
+        }
+    }
+    assert_eq!(written, shift_only);
 }

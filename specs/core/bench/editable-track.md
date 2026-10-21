@@ -3896,12 +3896,13 @@ one dict per observation whose `kind` names the `GrownPlaneView`:
 (`"no_search"`, `"keypoint"`, `"widened"` or `"no_keypoint"`), `shift`, `grid_zncc`,
 `distance`, `held_zncc`, `was` and `keypoint`; `"shift_only"` with `start`,
 `shift`, `grid_zncc`, `was` and `keypoint`; `"left_out"` with `reason`
-(`"under_floor"`, `"too_far"` or `"held_under_floor"`), `distance` and
+(`"under_floor"`, `"stopped_early"`, `"too_far"` or `"held_under_floor"`), `distance` and
 `held_zncc`; and `"not_attempted"`. `trace` holds one dict per try with
 `observation`, `image`, `angle_deg`, `outcome` (`"matched"` or
 `"left_out"`), `combined_normal`, `combined_sigma_deg` and `attempts`, each
 with `start`, `stage_zncc` (a float64 array), `shift`, `normal`,
-`grid_zncc`, `sigma_deg`, `refusal` (`None` or `"under_floor"`) and
+`grid_zncc`, `sigma_deg` (both `NaN` for a growth that stopped early at a
+window stage), `refusal` (`None`, `"under_floor"` or `"stopped_early"`) and
 `tilt_start` (`"starting"` or `"combined"`, the plane the growth started
 from). `picks` holds one dict per pick of the selection, with
 `observation`, `image`, `angle_deg`, `offset_direction`, `scale_px`,

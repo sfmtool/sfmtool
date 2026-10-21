@@ -269,7 +269,7 @@ GROWN_VIEW_KEYS = {
     "not_attempted": {"kind"},
 }
 GROWN_STARTS = {"no_search", "keypoint", "widened", "no_keypoint"}
-GROWN_REFUSALS = {"under_floor", "too_far", "held_under_floor"}
+GROWN_REFUSALS = {"under_floor", "stopped_early", "too_far", "held_under_floor"}
 
 # Every keyword of ``grown_plane_normal`` but the fit's, at the Rust default.
 GROWN_DEFAULTS = {
@@ -354,17 +354,17 @@ class TestGrownPlaneNormal:
                 "combined_sigma_deg",
             }
             assert entry["outcome"] in {"matched", "left_out"}
-            # From the combined plane, then from the starting plane at the
-            # keypoint-implied shift and then from the search; a retry after
-            # the combination is the search alone, or nothing where it lands
-            # on the implied shift.
-            assert len(entry["attempts"]) <= 3
+            # From the combined plane alone, or from the starting plane at
+            # the keypoint-implied shift and then from the search; a retry
+            # after the combination is the search alone, or nothing where it
+            # lands on the implied shift.
+            assert len(entry["attempts"]) <= 2
             for attempt in entry["attempts"]:
                 assert attempt["start"] in GROWN_STARTS
                 assert attempt["stage_zncc"].dtype == np.float64
                 assert attempt["shift"].shape == (2,)
                 assert np.linalg.norm(attempt["normal"]) == pytest.approx(1.0)
-                assert attempt["refusal"] in {None, "under_floor"}
+                assert attempt["refusal"] in {None, "under_floor", "stopped_early"}
                 assert attempt["tilt_start"] in {"starting", "combined"}
             if entry["combined_normal"] is not None:
                 assert np.linalg.norm(entry["combined_normal"]) == pytest.approx(1.0)
