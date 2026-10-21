@@ -138,7 +138,7 @@ fn a_file_with_thumbnails_shares_its_own_column() {
     let node = SceneNode::demo(recon);
     let display = node.display_thumbnails.as_ref().expect("the file's column");
     assert_eq!(display.len(), n);
-    // Shared rather than copied: the row is a view into the table's own array.
+    // Shared rather than copied: the row is a view into the image set's own array.
     let row = display.row("image_003.jpg").expect("a row");
     assert_eq!(
         row.as_ptr(),
@@ -213,7 +213,7 @@ fn rows_follow_the_image_name_across_a_renumbering() {
     let recon = workspace_with_photographs(&dir, &[]);
     let display = build(&recon).0.expect("photographs");
 
-    // Delete Image renumbers the table: what was image 3 is image 2 now, and
+    // Delete Image renumbers the image set: what was image 3 is image 2 now, and
     // the column built for the first version still draws it.
     let subset = recon
         .subset_by_image_indices(&[0, 1, 3, 4, 5, 6, 7], false)

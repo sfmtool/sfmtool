@@ -4407,9 +4407,9 @@ fn distorted(edited: &EditedReconstruction) -> EditedReconstruction {
 
 /// The camera and the pose of image `image`, as the steps read them.
 fn view(edited: &EditedReconstruction, image: usize) -> (CameraIntrinsics, RigidTransform) {
-    let table = &edited.base.image_set;
-    let row = &table.images[image];
-    let camera = table.cameras[row.camera_index as usize].clone();
+    let image_set = &edited.base.image_set;
+    let row = &image_set.images[image];
+    let camera = image_set.cameras[row.camera_index as usize].clone();
     let q = row.quaternion_wxyz.quaternion();
     let pose = RigidTransform::from_wxyz_translation(
         [q.w, q.i, q.j, q.k],

@@ -592,8 +592,8 @@ pub fn add_image_to_tracks(
     options: &AddImageToTracksOptions,
     progress: &Progress<'_>,
 ) -> Result<(SfmrReconstruction, AddImageToTracksReport), AddImageToTracksError> {
-    let table = &recon.image_set;
-    let image_count = table.images.len();
+    let image_set = &recon.image_set;
+    let image_count = image_set.images.len();
     if image >= image_count {
         return Err(AddImageToTracksError::NoSuchImage { image, image_count });
     }
@@ -603,7 +603,7 @@ pub fn add_image_to_tracks(
             expected: image_count,
         });
     }
-    let target = &table.images[image];
+    let target = &image_set.images[image];
     if !is_posed(&target.quaternion_wxyz, &target.translation_xyz) {
         return Err(AddImageToTracksError::Unposed(image));
     }
@@ -643,7 +643,7 @@ pub fn add_image_to_tracks(
     };
 
     // Poses and cameras from the value, so a view can never disagree with it.
-    let poses: Vec<RigidTransform> = table
+    let poses: Vec<RigidTransform> = image_set
         .images
         .iter()
         .map(|im| {
@@ -654,10 +654,10 @@ pub fn add_image_to_tracks(
         .collect();
     let views: Vec<Option<ProjectedImage<'_>>> = (0..image_count)
         .map(|i| {
-            let im = &table.images[i];
+            let im = &image_set.images[i];
             let pyramid = pyramids[i]?;
             is_posed(&im.quaternion_wxyz, &im.translation_xyz).then(|| ProjectedImage {
-                camera: &table.cameras[im.camera_index as usize],
+                camera: &image_set.cameras[im.camera_index as usize],
                 cam_from_world: &poses[i],
                 pyramid,
             })

@@ -55,7 +55,7 @@ fn an_unknown_label_names_what_is_loaded() {
 #[test]
 fn every_ref_taking_tool_refuses_an_index_that_names_nothing() {
     let (mut state, mut viewer) = two_reconstructions();
-    // The image and camera tables are dense and are refused by their count; a
+    // The image and camera lists are dense and are refused by their count; a
     // point index is a place in a version's own index space, which an edit
     // leaves holes in, so what it is refused by is naming no live point.
     for (command, expected) in [

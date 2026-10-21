@@ -1653,7 +1653,7 @@ fn a_cursor_move_across_a_deleted_image_follows_the_photograph() {
     assert_eq!(
         state.selected_image,
         Some(ImageRef::new(id, 4)),
-        "the delete did not move the selection down with the table"
+        "the delete did not move the selection down with the image set"
     );
     assert_eq!(state.image_name(ImageRef::new(id, 4)), name);
 

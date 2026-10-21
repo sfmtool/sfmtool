@@ -59,7 +59,7 @@ pub struct RayBatch {
 /// The ray, camera centre and noise weight of `pixel` in image `image_index`
 /// of `image_set`, at per-axis pixel noise `sigma_px`.
 ///
-/// `None` when the index is past the table, the pixel is not finite, or
+/// `None` when the index is past the image set, the pixel is not finite, or
 /// [`observed_ray`] declines it (a `sigma_px` that is not finite and positive,
 /// or a pixel outside the camera model's domain).
 pub fn observation_ray(

@@ -23,7 +23,7 @@ use super::{CameraModelProposal, KeypointExtent};
 /// One observation of the proposal's camera whose keypoint could be read.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct ObservedKeypoint {
-    /// The image, by table index.
+    /// The image, by image index.
     pub(crate) image: usize,
     /// The point it observes, by index in the value the proposal fits.
     pub(crate) point: usize,
@@ -77,13 +77,13 @@ pub(super) fn read_camera_keypoints_with(
 ) -> (KeypointExtent, Vec<ObservedKeypoint>) {
     let mut extent = KeypointExtent::default();
     let mut out = Vec::new();
-    let table = &base.image_set;
-    let Some(lens) = table.cameras.get(camera) else {
+    let image_set = &base.image_set;
+    let Some(lens) = image_set.cameras.get(camera) else {
         return (extent, out);
     };
     let base_rows = rows_by_image(base, camera);
     let value_rows = rows_by_image(value, camera);
-    for (image, row) in table.images.iter().enumerate() {
+    for (image, row) in image_set.images.iter().enumerate() {
         if row.camera_index as usize != camera {
             continue;
         }
@@ -133,11 +133,11 @@ pub(super) fn read_camera_keypoints_with(
 
 /// The observation rows of each image of `camera` in `recon`, by image.
 fn rows_by_image(recon: &SfmrReconstruction, camera: usize) -> Vec<Vec<usize>> {
-    let table = &recon.image_set;
-    let mut rows_of: Vec<Vec<usize>> = vec![Vec::new(); table.images.len()];
+    let image_set = &recon.image_set;
+    let mut rows_of: Vec<Vec<usize>> = vec![Vec::new(); image_set.images.len()];
     for (row, observation) in recon.point_set.tracks.iter().enumerate() {
         let image = observation.image_index as usize;
-        if table
+        if image_set
             .images
             .get(image)
             .is_some_and(|row| row.camera_index as usize == camera)

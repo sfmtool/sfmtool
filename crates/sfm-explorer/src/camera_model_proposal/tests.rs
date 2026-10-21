@@ -901,7 +901,7 @@ fn an_images_observations_are_reprojected_under_both_cameras() {
         let (dx, dy) = (o.keypoint[0] - 240.0, o.keypoint[1] - 240.0);
         dx.hypot(dy) > 200.0
     }));
-    // An image the table does not have gets nothing.
+    // An image the image set does not have gets nothing.
     assert!(proposal.image_reprojections(999).is_empty());
 }
 

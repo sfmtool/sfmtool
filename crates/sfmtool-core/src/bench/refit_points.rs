@@ -548,7 +548,7 @@ fn check_preconditions(
             expected,
         });
     }
-    // Every image a track names is in the table, so no step indexes past it:
+    // Every image a track names is in the image set, so no step indexes past it:
     // the fit's minimum point depth reads each observation's camera centre
     // and the record checks each `in` row's image. The value's builders
     // already refuse such a row; this holds for a caller that wrote the
@@ -593,7 +593,7 @@ fn point_ranges(recon: &SfmrReconstruction) -> Vec<PointRange> {
     let Some(columns) = recon.point_set.point_constraints.as_ref() else {
         return vec![PointRange::Free; recon.point_count()];
     };
-    let table: &ImageSet = &recon.image_set;
+    let image_set: &ImageSet = &recon.image_set;
     (0..recon.point_count())
         .map(|p| {
             let kind = columns.point_constraints[p];
@@ -608,7 +608,7 @@ fn point_ranges(recon: &SfmrReconstruction) -> Vec<PointRange> {
                     })
                 }
                 POINT_CONSTRAINT_RANGED if distance.is_finite() && distance > 0.0 => {
-                    match reference_camera_center(table, reference) {
+                    match reference_camera_center(image_set, reference) {
                         Some(origin) => PointRange::Applied(PointDistance { distance, origin }),
                         None => PointRange::Unresolved,
                     }

@@ -2297,19 +2297,19 @@ fn show_summary(ui: &mut egui::Ui, summary: &HeaderSummary) {
 fn point_summary(edited: &EditedReconstruction, point: u32) -> Option<HeaderSummary> {
     let view = edited.point(point)?;
     let stored = view.point();
-    let table = &edited.base.image_set;
+    let image_set = &edited.base.image_set;
     let images: Vec<usize> = view
         .observations()
         .iter()
         .map(|obs| obs.image_index as usize)
         .collect();
     let rays = crate::metrics::observation_rays(
-        table,
+        image_set,
         &stored.position,
         stored.is_at_infinity(),
         images.iter().copied(),
     );
-    let (condition, depth_z) = crate::metrics::compute_point_diagnostics(table, &view);
+    let (condition, depth_z) = crate::metrics::compute_point_diagnostics(image_set, &view);
     Some(HeaderSummary {
         point: Some(stored.clone()),
         error_px: Some(f64::from(stored.rms_reprojection_error)),
@@ -2346,16 +2346,20 @@ fn track_summary(recon: &SfmrReconstruction, track: &EditableTrack) -> Option<He
     let error_px = (!errors.is_empty())
         .then(|| (errors.iter().map(|e| e * e).sum::<f64>() / errors.len() as f64).sqrt());
     let images = || kept.iter().map(|o| o.image as usize);
-    let table = &recon.image_set;
+    let image_set = &recon.image_set;
     let (max_angle_deg, condition, depth_z) = match payload.position {
         Some(position) => {
-            let rays =
-                crate::metrics::observation_rays(table, &position, payload.at_infinity, images());
+            let rays = crate::metrics::observation_rays(
+                image_set,
+                &position,
+                payload.at_infinity,
+                images(),
+            );
             let (condition, depth_z) = if payload.at_infinity {
                 (f32::NAN, f32::NAN)
             } else {
                 crate::metrics::compute_position_diagnostics(
-                    table,
+                    image_set,
                     &position,
                     error_px.unwrap_or(1.0),
                     images(),

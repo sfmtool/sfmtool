@@ -71,7 +71,7 @@ fn constrain(recon: &mut SfmrReconstruction, triples: &[(u8, f64, u32)]) {
 
 const FREE: (u8, f64, u32) = (POINT_CONSTRAINT_FREE, f64::NAN, NO_REFERENCE_IMAGE);
 
-/// Take image `image`'s pose away in the value's table: its row is a
+/// Take image `image`'s pose away in the value's image set: its row is a
 /// placeholder, which is what an image with no pose stores.
 fn unpose(recon: &mut SfmrReconstruction, image: usize) {
     let row = &mut recon.image_set.images[image];
@@ -486,11 +486,11 @@ fn a_ranged_point_is_read_at_its_distance_and_stays_ranged() {
         assert_eq!(keypoint_of(&out, 0, k), keypoint_of(&free_out, 0, k));
     }
     // The coordinate is the distance rule's over those keypoints.
-    let table = &out.image_set;
+    let image_set = &out.image_set;
     let uv: Vec<f64> = (0..2)
         .flat_map(|k| keypoint_of(&out, 0, k).map(f64::from))
         .collect();
-    let quats: Vec<f64> = table
+    let quats: Vec<f64> = image_set
         .images
         .iter()
         .flat_map(|i| {
@@ -498,7 +498,7 @@ fn a_ranged_point_is_read_at_its_distance_and_stays_ranged() {
             [q.w, q.i, q.j, q.k]
         })
         .collect();
-    let translations: Vec<f64> = table
+    let translations: Vec<f64> = image_set
         .images
         .iter()
         .flat_map(|i| {
@@ -511,7 +511,7 @@ fn a_ranged_point_is_read_at_its_distance_and_stays_ranged() {
         origin: [origin.x, origin.y, origin.z],
     };
     let rule = triangulate_points_from_observations(
-        &table.cameras[0],
+        &image_set.cameras[0],
         ObservationSet {
             uv: &uv,
             obs_image: &[0, 1],
@@ -566,13 +566,14 @@ fn a_point_ranged_at_infinity_stays_a_bearing_at_the_mean_of_its_rays() {
     let point = &out.point_set.points[0];
     assert_eq!(point.w, 0.0);
 
-    let table = &out.image_set;
+    let image_set = &out.image_set;
     let mut sum = Vector3::zeros();
     let observing = out.point_set.observations_for_point(0);
     for (k, observation) in observing.iter().enumerate() {
-        let image = &table.images[observation.image_index as usize];
+        let image = &image_set.images[observation.image_index as usize];
         let [u, v] = keypoint_of(&out, 0, k);
-        let d = table.cameras[image.camera_index as usize].pixel_to_ray(f64::from(u), f64::from(v));
+        let d =
+            image_set.cameras[image.camera_index as usize].pixel_to_ray(f64::from(u), f64::from(v));
         sum += image.quaternion_wxyz.inverse() * Vector3::new(d[0], d[1], d[2]);
     }
     let mean = (sum / observing.len() as f64).normalize();
@@ -900,9 +901,9 @@ fn the_run_refuses_a_value_it_cannot_refit() {
         }
     );
 
-    // A track naming an image past the table, which a value whose tracks were
+    // A track naming an image past the image set, which a value whose tracks were
     // replaced by hand can carry: refused up front, even with a view for it,
-    // rather than panicking where a step indexes the table by it.
+    // rather than panicking where a step indexes the image set by it.
     let mut corrupt = with_columns(fixture_points(&scene, &three_points()), BITMAP_R);
     let row = corrupt.point_set.observation_offsets[1] - 1;
     corrupt.point_set.tracks[row].image_index = 3;

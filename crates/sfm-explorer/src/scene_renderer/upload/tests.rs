@@ -2364,7 +2364,7 @@ fn a_new_base_rebuilds_the_thumbnail_atlas_when_the_image_set_moves() {
     r.upload_thumbnails(&device, &queue, RECON, &before, None, &SILENT);
     let atlas = bundle(&r).thumbnail_texture.clone().unwrap();
 
-    // What `delete_image` hands over: a shorter table with its own thumbnails.
+    // What `delete_image` hands over: a shorter image set with its own thumbnails.
     let mut after = demo(8);
     after.image_set.images.pop();
     let kept = after
@@ -2380,7 +2380,7 @@ fn a_new_base_rebuilds_the_thumbnail_atlas_when_the_image_set_moves() {
     assert_ne!(
         bundle(&r).thumbnail_texture.clone().unwrap(),
         atlas,
-        "a table of 7 images must not be drawn from an atlas of 8",
+        "an image set of 7 images must not be drawn from an atlas of 8",
     );
 }
 

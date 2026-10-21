@@ -2786,12 +2786,12 @@ fn view_of(
     ),
     TrackEditError,
 > {
-    let table = &edited.base.image_set;
-    let row = table
+    let image_set = &edited.base.image_set;
+    let row = image_set
         .images
         .get(image as usize)
         .ok_or(TrackEditError::NoSuchImage { image })?;
-    let camera = table
+    let camera = image_set
         .cameras
         .get(row.camera_index as usize)
         .ok_or(TrackEditError::NoSuchImage { image })?;

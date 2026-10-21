@@ -47,7 +47,7 @@ use super::{retriangulate_refusal, retriangulate_summary, version_before};
 /// default, resolved against the camera as it is when the switch runs.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub(crate) struct SwitchCameraModelRequest {
-    /// The camera's index in the node's camera table.
+    /// The camera's index among the node's cameras.
     pub(crate) camera: usize,
     /// The target model's name, or `None` for the camera's own model.
     pub(crate) camera_model: Option<String>,
@@ -194,7 +194,7 @@ impl AppState {
     /// Switch one camera of `id` to the model `request` names, fitted to it,
     /// and install the answer as the node's next version.
     ///
-    /// A bulk edit: the camera table changes and the stored error of every
+    /// A bulk edit: the image set's cameras change and the stored error of every
     /// point the camera's images observe is recomputed, so the next version is
     /// a whole new base; no pose, point, keypoint or track moves, and the row
     /// map read off the two values is the identity. Records its own outcome,
@@ -625,7 +625,7 @@ pub(crate) fn switch_and_retriangulate(
 pub(crate) struct ResolvedSwitch {
     /// The node's label, for the sentences.
     pub(crate) label: String,
-    /// The camera's index in the node's camera table.
+    /// The camera's index among the node's cameras.
     pub(crate) camera: usize,
     /// The model, with its count.
     pub(crate) target: RefitTarget,
@@ -658,10 +658,10 @@ impl ProposalApplied {
 /// The proposal's tracks: every point with at least one observation in an
 /// image taken through camera `camera`, ascending.
 pub(crate) fn tracks_of_camera(recon: &SfmrReconstruction, camera: usize) -> Vec<u32> {
-    let table = &recon.image_set;
+    let image_set = &recon.image_set;
     let mut seen = vec![false; recon.point_set.points.len()];
     for observation in &recon.point_set.tracks {
-        if table.images[observation.image_index as usize].camera_index as usize == camera {
+        if image_set.images[observation.image_index as usize].camera_index as usize == camera {
             seen[observation.point_index as usize] = true;
         }
     }

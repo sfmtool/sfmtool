@@ -358,7 +358,7 @@ fn point_values(
     view: &PointView<'_>,
     columns: &[TrackTableColumn],
 ) -> [f64; COLUMN_COUNT] {
-    let table = &context.recon.base.image_set;
+    let image_set = &context.recon.base.image_set;
     let point = view.point();
     let at_infinity = point.is_at_infinity();
     let finite = |v: f64| if at_infinity { f64::NAN } else { v };
@@ -398,15 +398,17 @@ fn point_values(
             TrackTableColumn::LargestZnccSelfSimilarityRadius => {
                 largest_self_similarity_radius(view)
             }
-            TrackTableColumn::MaxRayAngleDeg => f64::from(compute_max_ray_angle_deg(table, view)),
+            TrackTableColumn::MaxRayAngleDeg => {
+                f64::from(compute_max_ray_angle_deg(image_set, view))
+            }
             TrackTableColumn::ConditionNumber => f64::from(
                 diagnostics
-                    .get_or_insert_with(|| compute_point_diagnostics(table, view))
+                    .get_or_insert_with(|| compute_point_diagnostics(image_set, view))
                     .0,
             ),
             TrackTableColumn::InverseDepthZ => f64::from(
                 diagnostics
-                    .get_or_insert_with(|| compute_point_diagnostics(table, view))
+                    .get_or_insert_with(|| compute_point_diagnostics(image_set, view))
                     .1,
             ),
         };

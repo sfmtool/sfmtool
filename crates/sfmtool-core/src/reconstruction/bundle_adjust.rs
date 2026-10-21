@@ -44,9 +44,9 @@ const DEFAULT_MIN_OBS: usize = 12;
 #[derive(Debug, Clone)]
 pub struct BundleAdjustOptions {
     /// What each camera may release, one entry per camera in the
-    /// reconstruction's camera table, in table order. A camera no posed image
+    /// reconstruction's image set, in camera index order. A camera no posed image
     /// uses is not in the solve, and its entry is ignored. An empty list, the
-    /// default, holds every camera; any other length than the table's is
+    /// default, holds every camera; any other length than the camera count is
     /// refused ([`BundleAdjustError::ReleaseCount`]). Nothing is released by
     /// default, because a lens that moves is a different claim about the
     /// capture than a pose that does, and the caller should be the one making
@@ -112,8 +112,8 @@ impl Default for BundleAdjustOptions {
 
 impl BundleAdjustOptions {
     /// The defaults with `release` for each of `camera_count` cameras: the
-    /// uniform case, where every camera of a table is released alike. Pass the
-    /// table's length, `recon.image_set.cameras.len()`.
+    /// uniform case, where every camera of an image set is released alike. Pass the
+    /// camera count, `recon.image_set.cameras.len()`.
     pub fn uniform(camera_count: usize, release: CameraRelease) -> Self {
         Self {
             releases: vec![release; camera_count],
@@ -159,17 +159,17 @@ pub enum BundleAdjustError {
     /// The observations carry no pixel: a `sift_files` value without the
     /// format's optional inline keypoint column.
     NoKeypoints,
-    /// The release list's length is neither zero nor the camera table's.
+    /// The release list's length is neither zero nor the camera count.
     ReleaseCount {
         /// The entries given.
         releases: usize,
-        /// The cameras the table holds.
+        /// The cameras the image set holds.
         cameras: usize,
     },
     /// A camera in the solve was asked to release its focal, and its model is
     /// one the kernel's focal column is not exact for.
     FocalNotReleasable {
-        /// The camera's index in the reconstruction's camera table.
+        /// The camera's index among the reconstruction's cameras.
         camera: usize,
         /// Its model's name.
         camera_model: &'static str,
@@ -177,13 +177,13 @@ pub enum BundleAdjustError {
     /// A camera in the solve was asked to release its distortion without its
     /// focal.
     DistortionWithoutFocal {
-        /// The camera's index in the reconstruction's camera table.
+        /// The camera's index among the reconstruction's cameras.
         camera: usize,
     },
     /// A camera in the solve was asked to release its distortion, and its
     /// model has none the adjustment can release.
     DistortionNotReleasable {
-        /// The camera's index in the reconstruction's camera table.
+        /// The camera's index among the reconstruction's cameras.
         camera: usize,
         /// Its model's name.
         camera_model: &'static str,
@@ -325,7 +325,7 @@ pub struct BundleAdjustReport {
     /// The same median after it. Taken over the observations of the points that
     /// survived, which is the population the value that comes back describes.
     pub median_residual_after: f64,
-    /// One entry per camera in the solve, in camera-table order.
+    /// One entry per camera in the solve, in camera index order.
     pub cameras: Vec<CameraAdjustment>,
     /// The storage decision of the free points: the noise level they were
     /// decided at, whether the final round converged, and how many crossed in
@@ -336,7 +336,7 @@ pub struct BundleAdjustReport {
 /// What one adjustment did to one camera.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CameraAdjustment {
-    /// The camera's index in the reconstruction's camera table.
+    /// The camera's index among the reconstruction's cameras.
     pub camera: usize,
     /// Posed images taken through it that were in the solve.
     pub images: usize,
@@ -364,7 +364,7 @@ pub struct CameraAdjustment {
 /// focal and its `k1` or radial spline are refined together
 /// against every observation that carries a pixel, by the staged robust solve in
 /// [`crate::geometry::bundle_adjust()`]. The posed images may be taken through
-/// any number of the table's cameras; each keeps its own lens in the solve, and a
+/// any number of the image set's cameras; each keeps its own lens in the solve, and a
 /// camera no posed image uses is not in it and comes back as it went in. A free
 /// point goes in as the position or the direction it is and, under the default
 /// [`BundleAdjustOptions::free_points`], comes back as whichever the
@@ -427,13 +427,13 @@ pub fn bundle_adjust(
         .keypoints_xy()
         .ok_or(BundleAdjustError::NoKeypoints)?;
 
-    let table = &recon.image_set;
-    // The solve's image list, and the map from the table's indexes onto it. An
+    let image_set = &recon.image_set;
+    // The solve's image list, and the map from the image set's indexes onto it. An
     // unposed image is not a camera the residuals can be written against, so it
     // sits the solve out and its observations do not enter.
-    let mut old_to_new: Vec<Option<u32>> = vec![None; table.images.len()];
-    let mut posed: Vec<usize> = Vec::with_capacity(table.images.len());
-    for (i, image) in table.images.iter().enumerate() {
+    let mut old_to_new: Vec<Option<u32>> = vec![None; image_set.images.len()];
+    let mut posed: Vec<usize> = Vec::with_capacity(image_set.images.len());
+    for (i, image) in image_set.images.iter().enumerate() {
         if is_posed(&image.quaternion_wxyz, &image.translation_xyz) {
             old_to_new[i] = Some(posed.len() as u32);
             posed.push(i);
@@ -443,31 +443,31 @@ pub fn bundle_adjust(
         return Err(BundleAdjustError::NoPosedImages);
     }
 
-    // The cameras of the solve: the table's entries the posed images use, in
-    // table order, and each posed image's index into that list. A camera only
+    // The cameras of the solve: the image set's cameras the posed images use, in
+    // camera index order, and each posed image's index into that list. A camera only
     // unposed images use sits the solve out with them.
     let mut used: Vec<u32> = posed
         .iter()
-        .map(|&i| table.images[i].camera_index)
+        .map(|&i| image_set.images[i].camera_index)
         .collect();
     used.sort_unstable();
     used.dedup();
     let source_cameras: Vec<CameraIntrinsics> = used
         .iter()
-        .map(|&c| table.cameras[c as usize].clone())
+        .map(|&c| image_set.cameras[c as usize].clone())
         .collect();
     let image_camera: Vec<u32> = posed
         .iter()
         .map(|&i| {
-            used.binary_search(&table.images[i].camera_index)
+            used.binary_search(&image_set.images[i].camera_index)
                 .expect("every posed image's camera is in the list") as u32
         })
         .collect();
-    // Each camera of the solve's release, from the caller's list in table
+    // Each camera of the solve's release, from the caller's list in camera
     // order. The release refuses rather than degrades: the kernel would hold a
     // parameter its model cannot release and move the rest, and a report
     // saying it was released would then be false of that camera.
-    let camera_count = table.cameras.len();
+    let camera_count = image_set.cameras.len();
     if !options.releases.is_empty() && options.releases.len() != camera_count {
         return Err(BundleAdjustError::ReleaseCount {
             releases: options.releases.len(),
@@ -521,11 +521,11 @@ pub fn bundle_adjust(
     // ── The arrays the kernel takes ────────────────────────────────────────
     let mut quats: Vec<UnitQuaternion<f64>> = posed
         .iter()
-        .map(|&i| table.images[i].quaternion_wxyz)
+        .map(|&i| image_set.images[i].quaternion_wxyz)
         .collect();
     let mut trans: Vec<Vector3<f64>> = posed
         .iter()
-        .map(|&i| table.images[i].translation_xyz)
+        .map(|&i| image_set.images[i].translation_xyz)
         .collect();
     let n_pt = recon.point_set.points.len();
     let mut points: Vec<[f64; 3]> = recon
@@ -852,7 +852,7 @@ pub fn distortion_is_releasable(camera: &CameraIntrinsics) -> bool {
 /// `before` is that distance where the point had one and `None` where it was a
 /// bearing; `after` is the point's new position where it has one and `None`
 /// where it is now a bearing, measured from `centroid`, the camera centroid of
-/// the table the point now stands in
+/// the image set the point now stands in
 /// ([`ImageSet::camera_centroid`]),
 /// which the caller takes once for every point it writes. So one call covers a
 /// point that merely moved, a point that changed representation, and a point
@@ -897,7 +897,7 @@ pub(crate) fn rescale_patch_frame(
 /// `before` is the point's placement distance where it had one and `None`
 /// where it was a bearing; `after` is its new position where it has one and
 /// `None` where it is now a bearing, measured from `centroid`, the camera
-/// centroid of the table the point now stands in
+/// centroid of the image set the point now stands in
 /// ([`ImageSet::camera_centroid`]).
 /// A caller writing many points takes the centroid once and measures each
 /// `before` with

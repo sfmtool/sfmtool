@@ -2964,26 +2964,26 @@ impl AppState {
             .track(label)
             .ok_or_else(|| format!("Nothing on the bench is called {label}."))?;
         let track = (**track).clone();
-        let table = &node.recon().image_set;
+        let image_set = &node.recon().image_set;
         let patch_frame = match &track.stage {
             Stage::Track(payload) => payload.patch_frame.as_ref(),
             Stage::Cluster(_) => None,
         };
         let needed: Vec<usize> = match patch_frame {
-            None => (0..table.images.len()).collect(),
+            None => (0..image_set.images.len()).collect(),
             Some(patch) => {
                 let own: std::collections::BTreeSet<usize> = track
                     .observations
                     .iter()
                     .map(|o| o.image as usize)
                     .collect();
-                table
+                image_set
                     .images
                     .iter()
                     .enumerate()
                     .filter(|&(i, image)| {
                         own.contains(&i)
-                            || table
+                            || image_set
                                 .cameras
                                 .get(image.camera_index as usize)
                                 .is_none_or(|camera| {
@@ -3116,9 +3116,9 @@ impl AppState {
     /// The lens of one camera image, for the clamp and for anything else that
     /// needs the photograph's own extent.
     fn image_camera(&self, image: ImageRef) -> Option<sfmtool_core::camera::CameraIntrinsics> {
-        let table = &self.node(image.recon)?.recon().image_set;
-        let row = table.images.get(image.index())?;
-        table.cameras.get(row.camera_index as usize).cloned()
+        let image_set = &self.node(image.recon)?.recon().image_set;
+        let row = image_set.images.get(image.index())?;
+        image_set.cameras.get(row.camera_index as usize).cloned()
     }
 
     /// Where one `.sift` feature sits and what keypoint frame it carries, read

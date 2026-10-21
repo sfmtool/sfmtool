@@ -79,7 +79,7 @@ fn truth() -> SfmrReconstruction {
     scene(vec![pinhole()], &[0; IMAGES], |_, _| true)
 }
 
-/// The truth's construction over any camera table: one image per entry of
+/// The truth's construction over any list of cameras: one image per entry of
 /// `camera_of`, taken through the camera it names, on the same arc, with point
 /// `p` observed in image `i` wherever `sees(p, i)` says so. Every observation a
 /// track is meant to carry has to land inside its frame.
@@ -887,7 +887,7 @@ fn each_track_is_solved_through_the_cameras_that_saw_it() {
 
 #[test]
 fn a_track_read_through_the_wrong_camera_does_not_land_on_the_truth() {
-    // The control for the test above: the same pixels with the table saying
+    // The control for the test above: the same pixels with the image set saying
     // every image was taken through the pinhole. The fisheye's pixels then
     // state the wrong rays, so the tracks they belong to miss the truth, and
     // the pinhole-only tracks are untouched by the change.
@@ -956,7 +956,7 @@ fn a_ranged_point_seen_through_the_second_camera_lands_on_the_truth() {
 #[test]
 fn a_ranged_point_read_through_the_wrong_camera_does_not_land_on_the_truth() {
     // The control for the test above: the distance alone does not place the
-    // point, so with the table saying every image was taken through the
+    // point, so with the image set saying every image was taken through the
     // pinhole, the fisheye's pixels state the wrong rays and the ranged points
     // miss the truth while still keeping their distance.
     let truth = two_camera_truth();
@@ -1127,7 +1127,7 @@ fn a_far_point_named_alone_is_rewritten_as_its_bearing_and_says_why() {
 
 #[test]
 fn a_far_track_read_through_the_wrong_camera_misses_its_bearing() {
-    // The control for the test above: with the table saying every image was
+    // The control for the test above: with the image set saying every image was
     // taken through the pinhole, the far track's fisheye pixels state rays
     // that point elsewhere, and whatever the rule makes of the track, it is
     // not the direction the far point lies in.

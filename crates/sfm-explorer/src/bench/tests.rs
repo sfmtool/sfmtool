@@ -1891,13 +1891,13 @@ fn a_geometry_search_reads_only_the_images_that_could_see_the_patch() {
         panic!("a committed point goes on the bench at the track stage");
     };
     let patch = payload.patch_frame.as_ref().expect("a framed track");
-    let table = &state.scene[0].recon().image_set;
+    let image_set = &state.scene[0].recon().image_set;
     let could_see: Vec<usize> = (0..image_count)
         .filter(|&i| {
-            let image = &table.images[i];
+            let image = &image_set.images[i];
             view_could_see_patch(
                 patch,
-                &table.cameras[image.camera_index as usize],
+                &image_set.cameras[image.camera_index as usize],
                 &crate::scene::cam_from_world(image),
             )
         })

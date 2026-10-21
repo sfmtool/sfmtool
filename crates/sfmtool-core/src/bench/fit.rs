@@ -1084,10 +1084,10 @@ fn ranged_coordinate(
     ins: &[usize],
     range: PointDistance,
 ) -> Result<(Point3<f64>, bool), FitError> {
-    let table = &edited.base.image_set;
-    let mut quats_wxyz = Vec::with_capacity(table.images.len() * 4);
-    let mut translations = Vec::with_capacity(table.images.len() * 3);
-    for image in &table.images {
+    let image_set = &edited.base.image_set;
+    let mut quats_wxyz = Vec::with_capacity(image_set.images.len() * 4);
+    let mut translations = Vec::with_capacity(image_set.images.len() * 3);
+    for image in &image_set.images {
         if is_posed(&image.quaternion_wxyz, &image.translation_xyz) {
             let q = image.quaternion_wxyz;
             quats_wxyz.extend_from_slice(&[q.w, q.i, q.j, q.k]);
@@ -1098,7 +1098,7 @@ fn ranged_coordinate(
             translations.extend_from_slice(&[f64::NAN; 3]);
         }
     }
-    let image_camera: Vec<u32> = table.images.iter().map(|i| i.camera_index).collect();
+    let image_camera: Vec<u32> = image_set.images.iter().map(|i| i.camera_index).collect();
     let mut uv = Vec::with_capacity(ins.len() * 2);
     let mut obs_image = Vec::with_capacity(ins.len());
     for &i in ins {
@@ -1110,7 +1110,7 @@ fn ranged_coordinate(
     }
     let obs_point = vec![0u32; obs_image.len()];
     let answer = triangulate_points_through_cameras(
-        &table.cameras,
+        &image_set.cameras,
         &image_camera,
         ObservationSet {
             uv: &uv,

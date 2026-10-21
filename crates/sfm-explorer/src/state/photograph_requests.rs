@@ -32,8 +32,8 @@ pub(crate) enum DisplayPhotograph {
     /// Being decoded on a worker, or about to be. A repaint follows the
     /// decode.
     Decoding,
-    /// The file could not be read or decoded, or the image index is not in the
-    /// table.
+    /// The file could not be read or decoded, or the image index is not in the image
+    /// set.
     Unreadable,
 }
 

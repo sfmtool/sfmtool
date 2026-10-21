@@ -890,7 +890,7 @@ fn switch_camera_model_switches_to_a_named_model() {
     assert_eq!(version_count(&state), 2);
 }
 
-/// A camera the table does not have, and a refit the model cannot make, are
+/// A camera the image set does not have, and a refit the model cannot make, are
 /// refused naming the camera, and push nothing.
 #[test]
 fn switch_camera_model_refuses_naming_the_camera() {

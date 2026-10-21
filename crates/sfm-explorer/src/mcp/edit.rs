@@ -383,9 +383,9 @@ pub(super) fn add_camera_image_to_tracks(
 /// the transport, which is what the call used to do for any reconstruction
 /// worth adjusting.
 ///
-/// `defaults` is the release every camera of the node's table takes, and each
+/// `defaults` is the release every camera of the node's image set takes, and each
 /// of `overrides` replaces it for one camera, field by field. An override
-/// naming a camera the table does not have, or naming one camera twice, is
+/// naming a camera the image set does not have, or naming one camera twice, is
 /// refused before anything starts. `options` carries the rest of the request;
 /// its release list is the one built here.
 pub(super) fn bundle_adjust(

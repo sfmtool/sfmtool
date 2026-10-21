@@ -422,7 +422,7 @@ fn turned_shape(
 // ---- Reading a pointer against a projected patch ---------------------------
 
 /// The camera and the pose of one image, or `None` when the image or its camera
-/// is not in the table.
+/// is not in the image set.
 pub(crate) fn view_of(
     image_set: &ImageSet,
     image: usize,

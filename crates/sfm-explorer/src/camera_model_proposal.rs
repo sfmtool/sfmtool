@@ -169,7 +169,7 @@ pub(crate) struct PreviewDraw {
 pub(crate) struct CameraModelProposal {
     /// The node the camera belongs to.
     pub(crate) recon: ReconId,
-    /// The camera's index in the node's camera table.
+    /// The camera's index among the node's cameras.
     pub(crate) camera: usize,
     /// The node's label, for the sentences that name it.
     pub(crate) label: String,
@@ -505,7 +505,7 @@ pub(crate) fn targets_for(source: &CameraIntrinsics) -> Vec<&'static str> {
 /// The three greyed cases every entry carries: the node busy with a background
 /// task (`busy`, the sentence the busy node's other edits carry), a proposal
 /// already open on another camera of the node, and a node with no posed
-/// image; and a camera the table does not have.
+/// image; and a camera the image set does not have.
 pub(crate) fn open_refusal(
     node: &crate::scene::SceneNode,
     camera: usize,

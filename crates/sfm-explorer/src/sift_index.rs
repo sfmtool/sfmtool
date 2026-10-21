@@ -203,7 +203,7 @@ impl AppState {
         }
         let fingerprint = image_fingerprint(node.recon());
         let moved = fingerprint != index.node_images;
-        // Re-derived only when the table the judgement was about has moved,
+        // Re-derived only when the image set the judgement was about has moved,
         // which is the read of every `.sift` metadata; otherwise the version is
         // noted and the verdict stands.
         let (stale, images) = match moved {
@@ -795,7 +795,7 @@ fn corpus_images(forest: &LazyKdForestU8) -> usize {
 /// is about.
 ///
 /// Touches no file, so a version that lands on a node costs this and nothing
-/// else: only a table that has gained, lost, renamed or reordered an image can
+/// else: only an image set that has gained, lost, renamed or reordered an image can
 /// change what the index's three tests answer, and that is exactly what this
 /// value moves on.
 pub(crate) fn image_fingerprint(recon: &SfmrReconstruction) -> u64 {

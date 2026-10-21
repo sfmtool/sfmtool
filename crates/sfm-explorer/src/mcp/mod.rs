@@ -75,7 +75,7 @@ use panel_rect::panel_crop;
 /// default the call states for every camera.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct CameraReleaseOverride {
-    /// The camera's index in the reconstruction's camera table.
+    /// The camera's index among the reconstruction's cameras.
     pub(crate) camera_intrinsics_index: usize,
     /// Release its focal length, or `None` for the call's `release_focal`.
     pub(crate) release_focal: Option<bool>,
@@ -2501,7 +2501,7 @@ pub(crate) struct Applied {
     /// One outcome per command, in the order they were applied.
     pub(crate) outcomes: Vec<Outcome>,
     /// The nodes a command renumbered ([`Command::renumbers`]), for the caller
-    /// to drop what its panels cached about the table they had.
+    /// to drop what its panels cached about the image set they had.
     pub(crate) stale: Vec<ReconId>,
 }
 

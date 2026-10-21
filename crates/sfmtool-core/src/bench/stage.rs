@@ -504,7 +504,7 @@ fn downgrade(
     };
     let u = patch_frame.u_axis * patch_frame.half_extent[0];
     let v = patch_frame.v_axis * patch_frame.half_extent[1];
-    let table = &edited.base.image_set;
+    let image_set = &edited.base.image_set;
 
     // Each observation's own seed: where it sits, and the footprint the patch frame
     // has there. The shape is the format's own rule for deriving a keypoint's
@@ -544,7 +544,7 @@ fn downgrade(
             seeded.push(None);
             continue;
         };
-        let Some(shape) = patch_affine_shape(&point, u, v, table, image, keypoint) else {
+        let Some(shape) = patch_affine_shape(&point, u, v, image_set, image, keypoint) else {
             // The patch frame does not project into this image: the seed keeps
             // whatever the observation already carried, and the next reading
             // reports it as unmeasured.

@@ -251,7 +251,7 @@ fn only_a_real_sift_read_records_a_stage() {
 
 /// The panels' accessor hands back the pyramid the cache holds for the image's
 /// path -- the same pixels, not a copy of them -- and an image with nothing
-/// cached, or past the table, is `None` without a read. What the panels do on
+/// cached, or past the image set, is `None` without a read. What the panels do on
 /// a miss is tested beside `display_photograph`.
 ///
 /// Pointer equality, because an accessor that handed back a second buffer

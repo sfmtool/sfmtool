@@ -507,7 +507,7 @@ impl TabContext<'_> {
             } else {
                 // The cursor moved over any number of steps, one of which may
                 // have been a bulk edit, so the image-keyed textures the panels
-                // hold are statements about a table that has been renumbered.
+                // hold are statements about an image set that has been renumbered.
                 self.forget_recon(id);
             }
         }

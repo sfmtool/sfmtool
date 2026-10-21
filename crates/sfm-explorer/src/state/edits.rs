@@ -142,7 +142,7 @@ pub(crate) fn retriangulate_refusal(
 /// focal before and after, and nothing when no focal was released.
 ///
 /// A solve over one camera reads `, focal 2803.5 → 2794.1`, and one over
-/// several names each camera by its table index, `, camera 0 focal 2803.5 →
+/// several names each camera by its index, `, camera 0 focal 2803.5 →
 /// 2794.1, camera 1 focal 1401.2 → 1399.8`, because a bare list of numbers
 /// would not say which lens moved.
 fn focal_changes(cameras: &[sfmtool_core::CameraAdjustment]) -> String {
@@ -221,7 +221,7 @@ fn free_point_clause(decision: Option<&sfmtool_core::geometry::FreePointDecision
 /// already says only poses and points moved. When every camera released the
 /// same thing, one phrase: `, focal released` over one camera, and `, focal
 /// released on every camera` over several. When the cameras differ, each is
-/// named by its table index, `, camera 0 focal and lens distortion released,
+/// named by its index, `, camera 0 focal and lens distortion released,
 /// camera 1 held`, because the label is the one line that says which lens
 /// moved.
 fn release_clause(cameras: &[sfmtool_core::CameraAdjustment]) -> String {
@@ -1171,7 +1171,7 @@ impl AppState {
         let map = PointMap::Chain(steps);
 
         // The bench's observations name images by the same indexes, so they
-        // move down with the table: the observations in the deleted image are
+        // move down with the image set: the observations in the deleted image are
         // dropped, and a track left with none is discarded.
         let (bench, deletion) = node.history.current_bench().delete_image(removed);
         let bench = if deletion.changed() {
@@ -2080,7 +2080,7 @@ impl AppState {
     /// A name rather than an index, for the reason the wire addresses images by
     /// one: an index is a coordinate in a particular version's image set, and
     /// a move that crosses a `delete_camera_image` crosses a renumbering of
-    /// that table. The name is what the two versions agree on.
+    /// that image set. The name is what the two versions agree on.
     fn selected_image_name(&self, id: ReconId) -> Option<String> {
         let image = self.selected_image.filter(|i| i.recon == id)?;
         let node = self.node(id)?;

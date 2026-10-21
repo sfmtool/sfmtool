@@ -673,7 +673,7 @@ fn a_focal_release_names_the_camera_that_cannot_take_one() {
 #[test]
 fn a_camera_no_posed_image_uses_comes_back_untouched() {
     let mut source = perturbed();
-    // A camera the table carries but no image uses, and one only an unposed
+    // A camera the image set carries but no image uses, and one only an unposed
     // image uses. Neither is in the solve, and the release is not refused on
     // their models.
     let unused = CameraIntrinsics {

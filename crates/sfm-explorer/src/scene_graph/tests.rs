@@ -38,8 +38,8 @@ const VIEWPORT: egui::Vec2 = egui::vec2(320.0, 900.0);
 /// two nodes can be made to share image names or not, at will, and so a camera
 /// list can be made longer than the panel shows at once.
 ///
-/// Only the image *list* grows: nothing exercised here reads the per-image side
-/// tables, and `SfmrReconstruction::demo` fixes the camera ring at 8.
+/// Only the image *list* grows: nothing exercised here reads the per-image
+/// columns, and `SfmrReconstruction::demo` fixes the camera ring at 8.
 fn recon_named(points: usize, images: usize, prefix: &str) -> SfmrReconstruction {
     let mut recon = SfmrReconstruction::demo(points);
     let template = recon.image_set.images[0].clone();

@@ -76,11 +76,11 @@ fn image_row(name: &str, rotation: UnitQuaternion<f64>, centre: Point3<f64>) -> 
     }
 }
 
-/// Where `world` lands in image `i` of `table`, in source-image px.
-fn project(table: &ImageSet, i: usize, world: Point3<f64>) -> [f32; 2] {
-    let image = &table.images[i];
+/// Where `world` lands in image `i` of `image_set`, in source-image px.
+fn project(image_set: &ImageSet, i: usize, world: Point3<f64>) -> [f32; 2] {
+    let image = &image_set.images[i];
     let cam = image.quaternion_wxyz * world.coords + image.translation_xyz;
-    let (u, v) = table
+    let (u, v) = image_set
         .camera_for_image(i)
         .ray_to_pixel([cam.x, cam.y, cam.z])
         .expect("the point is in front of every camera of this scene");

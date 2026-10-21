@@ -25,7 +25,7 @@ pub struct KeypointReach {
     /// Its incidence angle in degrees under the camera's model: the angle
     /// between the optical axis and the ray the model gives the pixel.
     pub theta_deg: f64,
-    /// The image it is in, by table index.
+    /// The image it is in, by image index.
     pub image: usize,
     /// The pixel.
     pub xy: [f64; 2],
@@ -47,7 +47,7 @@ impl KeypointReach {
 /// The outermost keypoints of one camera's images.
 #[derive(Debug, Clone, PartialEq)]
 pub struct OutermostKeypoints {
-    /// The camera's index in the reconstruction's camera table.
+    /// The camera's index among the reconstruction's cameras.
     pub camera: usize,
     /// The images that use it, posed or not.
     pub images: usize,
@@ -75,8 +75,8 @@ pub struct OutermostKeypoints {
 /// over every feature of those images' `.sift` files, read when
 /// `read_sift_files` is set; an image whose file cannot be read is skipped and
 /// not counted in `detected_images`, so a value that sits beside no `.sift`
-/// files reports `detected: None` rather than failing. A camera index past the
-/// table is ignored.
+/// files reports `detected: None` rather than failing. A camera index past the image
+/// set's cameras is ignored.
 ///
 /// # Example
 ///
@@ -98,11 +98,11 @@ pub fn outermost_keypoints(
     cameras: &[usize],
     read_sift_files: bool,
 ) -> Vec<OutermostKeypoints> {
-    let table = &recon.image_set;
+    let image_set = &recon.image_set;
     let mut chosen: Vec<usize> = cameras
         .iter()
         .copied()
-        .filter(|&c| c < table.cameras.len())
+        .filter(|&c| c < image_set.cameras.len())
         .collect();
     chosen.sort_unstable();
     chosen.dedup();
@@ -120,22 +120,22 @@ pub fn outermost_keypoints(
 
     // Each image's observation rows, for the images of the chosen cameras.
     let tracks = &recon.point_set.tracks;
-    let mut rows_of: Vec<Vec<usize>> = vec![Vec::new(); table.images.len()];
+    let mut rows_of: Vec<Vec<usize>> = vec![Vec::new(); image_set.images.len()];
     for (row, observation) in tracks.iter().enumerate() {
         let image = observation.image_index as usize;
-        if slot_of.contains_key(&(table.images[image].camera_index as usize)) {
+        if slot_of.contains_key(&(image_set.images[image].camera_index as usize)) {
             rows_of[image].push(row);
         }
     }
     let inline = recon.keypoints_xy();
     let features = recon.feature_indexes();
 
-    for (i, image) in table.images.iter().enumerate() {
+    for (i, image) in image_set.images.iter().enumerate() {
         let c = image.camera_index as usize;
         let Some(&slot) = slot_of.get(&c) else {
             continue;
         };
-        let camera = &table.cameras[c];
+        let camera = &image_set.cameras[c];
         let entry = &mut out[slot];
         entry.images += 1;
         let positions = if read_sift_files {

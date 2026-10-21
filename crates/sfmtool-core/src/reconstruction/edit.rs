@@ -731,7 +731,7 @@ impl SfmrReconstruction {
             workspace_dir: self.workspace_dir.clone(),
             metadata: self.metadata.clone(),
             content_hash: self.content_hash.clone(),
-            // A point mask touches no image, so the whole table is the input's,
+            // A point mask touches no image, so the whole image set is the input's,
             // thumbnails shared rather than copied.
             image_set: self.image_set.clone(),
             point_set: PointSet {

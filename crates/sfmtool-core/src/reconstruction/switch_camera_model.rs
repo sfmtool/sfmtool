@@ -31,7 +31,7 @@ use crate::numeric::quantile_of_sorted;
 pub enum SwitchCameraModelError {
     /// No camera was named.
     NoCameras,
-    /// A camera index past the camera table.
+    /// A camera index past the image set's cameras.
     UnknownCamera {
         /// The index given.
         camera: usize,
@@ -40,7 +40,7 @@ pub enum SwitchCameraModelError {
     },
     /// The fit refused one camera.
     Refit {
-        /// The camera's index in the reconstruction's camera table.
+        /// The camera's index among the reconstruction's cameras.
         camera: usize,
         /// The fit's refusal.
         error: RefitError,
@@ -160,7 +160,7 @@ impl Default for SwitchCameraModelOptions {
 /// What the switch did to one camera.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CameraSwitch {
-    /// The camera's index in the reconstruction's camera table.
+    /// The camera's index among the reconstruction's cameras.
     pub camera: usize,
     /// The camera before the switch.
     pub source: CameraIntrinsics,
@@ -177,7 +177,7 @@ pub struct CameraSwitch {
     pub outermost: Option<OutermostKeypoints>,
 }
 
-/// What one switch did, one entry per switched camera in table order.
+/// What one switch did, one entry per switched camera in camera index order.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SwitchCameraModelReport {
     /// One entry per switched camera.
@@ -266,9 +266,10 @@ pub fn switch_camera_model(
         return Err(SwitchCameraModelError::UnknownCamera { camera, count });
     }
 
-    let table = &recon.image_set;
+    let image_set = &recon.image_set;
     let tracks = &recon.point_set.tracks;
-    let camera_of_row = |row: usize| table.images[tracks[row].image_index as usize].camera_index;
+    let camera_of_row =
+        |row: usize| image_set.images[tracks[row].image_index as usize].camera_index;
     // Which slot of `chosen` each camera is, or `None` for a camera left alone.
     let mut slot_of: Vec<Option<usize>> = vec![None; count];
     for (slot, &c) in chosen.iter().enumerate() {
@@ -350,7 +351,7 @@ pub fn switch_camera_model(
     };
     let mut entries = Vec::with_capacity(chosen.len());
     for (((&c, refit), rows), outermost) in chosen.iter().zip(refits).zip(rows_of).zip(outermost) {
-        let images = table
+        let images = image_set
             .images
             .iter()
             .filter(|image| image.camera_index as usize == c)
@@ -358,7 +359,7 @@ pub fn switch_camera_model(
         let observations = compare(&rows, refit.extent.source_trusted_deg);
         entries.push(CameraSwitch {
             camera: c,
-            source: table.cameras[c].clone(),
+            source: image_set.cameras[c].clone(),
             refit,
             images,
             observations,
@@ -385,17 +386,17 @@ pub fn switch_camera_model(
 ///
 /// # Errors
 ///
-/// [`SwitchCameraModelError::UnknownCamera`] for an index past the camera
-/// table, and [`SwitchCameraModelError::Refit`] where the fit refuses.
+/// [`SwitchCameraModelError::UnknownCamera`] for an index past the image set's
+/// cameras, and [`SwitchCameraModelError::Refit`] where the fit refuses.
 pub fn fit_camera_switch(
     recon: &SfmrReconstruction,
     camera: usize,
     target: &RefitTarget,
     options: &RefitOptions,
 ) -> Result<CameraIntrinsicsRefit, SwitchCameraModelError> {
-    let table = &recon.image_set;
-    let count = table.cameras.len();
-    let Some(source) = table.cameras.get(camera) else {
+    let image_set = &recon.image_set;
+    let count = image_set.cameras.len();
+    let Some(source) = image_set.cameras.get(camera) else {
         return Err(SwitchCameraModelError::UnknownCamera { camera, count });
     };
     let tracks = &recon.point_set.tracks;
@@ -463,10 +464,10 @@ pub fn default_fit_angle(
 /// and a badly placed point can reach far past any keypoint the camera
 /// detected.
 fn widest_ray(recon: &SfmrReconstruction, camera: usize) -> Option<(usize, f64)> {
-    let table = &recon.image_set;
+    let image_set = &recon.image_set;
     let mut widest: Option<(usize, f64)> = None;
     for (row, observation) in recon.point_set.tracks.iter().enumerate() {
-        if table.images[observation.image_index as usize].camera_index as usize != camera {
+        if image_set.images[observation.image_index as usize].camera_index as usize != camera {
             continue;
         }
         let t = incidence_deg(recon, row);

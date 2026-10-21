@@ -177,13 +177,13 @@ fn computed_columns_are_the_track_geometry_definitions() {
 fn the_max_ray_angle_is_the_widest_pair_of_rays() {
     let recon = edited(demo(5));
     let view = recon.point(3).unwrap();
-    let table = &recon.base.image_set;
+    let image_set = &recon.base.image_set;
     let images = view.observations().iter().map(|o| o.image_index as usize);
-    let rays = observation_rays(table, &view.point().position, false, images);
+    let rays = observation_rays(image_set, &view.point().position, false, images);
     assert_eq!(rays.len(), 2);
     let dot: f64 = (0..3).map(|k| rays[0][k] * rays[1][k]).sum();
     let expected = dot.clamp(-1.0, 1.0).acos().to_degrees() as f32;
-    assert!((compute_max_ray_angle_deg(table, &view) - expected).abs() < 1e-5);
+    assert!((compute_max_ray_angle_deg(image_set, &view) - expected).abs() < 1e-5);
     assert_eq!(compute_max_pairwise_angle(&[]), 0.0);
     assert_eq!(compute_max_pairwise_angle(&[[0.0, 0.0, 1.0]]), 0.0);
 }

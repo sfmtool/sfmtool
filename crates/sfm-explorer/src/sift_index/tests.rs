@@ -635,7 +635,7 @@ fn a_version_re_derives_the_state_only_when_it_moves_the_image_set() {
         "a version that moves no image re-reads nothing"
     );
 
-    // One that does move the table re-derives, and now finds the rewritten
+    // One that does move the image set re-derives, and now finds the rewritten
     // file as well as the missing row.
     state
         .delete_image(ImageRef::new(id, 5))

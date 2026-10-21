@@ -196,25 +196,25 @@ fn refuses_what_it_cannot_run() {
 #[test]
 fn observation_ray_is_observed_ray_with_the_camera_centre() {
     let recon = noisy_demo(5, [0.5, 0.5], 18);
-    let table = &recon.image_set;
-    let image = &table.images[3];
-    let camera = &table.cameras[image.camera_index as usize];
+    let image_set = &recon.image_set;
+    let image = &image_set.images[3];
+    let camera = &image_set.cameras[image.camera_index as usize];
     let pixel = [900.0, 500.0];
-    let ray = observation_ray(table, 3, pixel, 0.5).unwrap();
+    let ray = observation_ray(image_set, 3, pixel, 0.5).unwrap();
     let direct = observed_ray(camera, &image.quaternion_wxyz, pixel, 0.5).unwrap();
     assert_eq!(ray.dir, direct.dir);
     assert_eq!(ray.weight, direct.weight);
     assert_eq!(ray.center, image.camera_center());
 
-    assert_eq!(observation_ray(table, 99, pixel, 0.5), None);
-    assert_eq!(observation_ray(table, 3, [f64::NAN, 500.0], 0.5), None);
-    assert_eq!(observation_ray(table, 3, pixel, 0.0), None);
+    assert_eq!(observation_ray(image_set, 99, pixel, 0.5), None);
+    assert_eq!(observation_ray(image_set, 3, [f64::NAN, 500.0], 0.5), None);
+    assert_eq!(observation_ray(image_set, 3, pixel, 0.0), None);
 }
 
 #[test]
 fn track_rays_keeps_one_track_per_input_track() {
     let recon = noisy_demo(5, [0.5, 0.5], 19);
-    let table = &recon.image_set;
+    let image_set = &recon.image_set;
     let observations = [
         (0, [900.0, 500.0]),
         (1, [950.0, 520.0]),
@@ -222,10 +222,10 @@ fn track_rays_keeps_one_track_per_input_track() {
         (5, [960.0, 540.0]),
     ];
     // Track 0 has two rays, track 1 none, track 2 one usable of two.
-    let rays = track_rays(table, &observations, &[0, 2, 2, 4], 0.5);
+    let rays = track_rays(image_set, &observations, &[0, 2, 2, 4], 0.5);
     assert_eq!(rays.offsets, vec![0, 2, 2, 3]);
     assert_eq!(rays.dirs.len(), 3);
-    let last = observation_ray(table, 5, [960.0, 540.0], 0.5).unwrap();
+    let last = observation_ray(image_set, 5, [960.0, 540.0], 0.5).unwrap();
     assert_eq!(
         (rays.dirs[2], rays.centers[2], rays.weights[2]),
         (last.dir, last.center, last.weight)
@@ -234,7 +234,7 @@ fn track_rays_keeps_one_track_per_input_track() {
     assert!(scores[0].is_some());
     assert_eq!(scores[1], None);
     assert_eq!(scores[2], None);
-    assert_eq!(track_rays(table, &[], &[0], 0.5).offsets, vec![0]);
+    assert_eq!(track_rays(image_set, &[], &[0], 0.5).offsets, vec![0]);
 }
 
 /// Rays from three cameras on a line to `target`, weighted for an isotropic

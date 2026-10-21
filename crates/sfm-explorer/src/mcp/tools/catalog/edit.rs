@@ -491,7 +491,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                                     "camera_intrinsics_index": {
                                         "type": "integer",
                                         "minimum": 0,
-                                        "description": "The camera's index in the reconstruction's camera table.",
+                                        "description": "The camera's index among the reconstruction's cameras.",
                                     },
                                     "release_focal": flag("Solve this camera's focal length. Omit for the call's release_focal."),
                                     "release_distortion": flag("Solve this camera's lens distortion, together with its focal. Omit for the call's release_distortion."),
@@ -726,8 +726,8 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                         json!({
                             "type": "integer",
                             "minimum": 0,
-                            "description": "The camera's index in the reconstruction's camera \
-                                            table, as get_camera_intrinsics takes it.",
+                            "description": "The camera's index among the reconstruction's \
+                                            cameras, as get_camera_intrinsics takes it.",
                         }),
                     ),
                 ],

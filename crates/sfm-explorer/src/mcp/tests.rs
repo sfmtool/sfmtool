@@ -63,7 +63,7 @@ fn recon(images: usize, prefix: &str) -> SfmrReconstruction {
         image.camera_index = if i < images / 2 { 0 } else { 1 };
     }
     recon.metadata.camera_count = recon.image_set.cameras.len() as u32;
-    // Resize the per-image derived tables to match the grown image list.
+    // Resize the per-image derived columns to match the grown image list.
     recon.rebuild_derived_fields();
     recon
 }

@@ -102,7 +102,7 @@ fn gate(camera: usize, camera_model: &'static str) -> CameraGate {
 
 /// A rig: a spline camera 0, an `OPENCV_FISHEYE` camera 1 that can release
 /// nothing, and a `SIMPLE_PINHOLE` camera 3 with a focal and no distortion.
-/// Camera 2 is in the table and no posed image uses it, so it has no row.
+/// Camera 2 is in the image set and no posed image uses it, so it has no row.
 fn rig() -> BundleAdjustGates {
     BundleAdjustGates {
         camera_count: 4,

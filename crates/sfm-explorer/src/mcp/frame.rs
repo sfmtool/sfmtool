@@ -125,7 +125,7 @@ impl App {
         let mut host = window.clone();
         let applied = apply_as_agent(&mut self.state, &mut self.viewer_3d, &mut host, commands);
         // A bulk edit or a cursor move renumbers, so what the panels cached
-        // about the table they had -- rendered patches, prepared track rows,
+        // about the image set they had -- rendered patches, prepared track rows,
         // per-camera derived quantities -- describes a geometry the node no
         // longer holds. Dropped here for the same reason the menus and the Edit
         // History panel drop it around the same `AppState` calls; the panels

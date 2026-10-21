@@ -1203,12 +1203,12 @@ fn project_shape_back(
         rms_reprojection_error: 0.0,
         normal: Vector3::zeros(),
     };
-    let table = one_image_set(camera, pose);
+    let image_set = one_image_set(camera, pose);
     patch_affine_shape(
         &point,
         patch.u_axis * patch.half_extent[0],
         patch.v_axis * patch.half_extent[1],
-        &table,
+        &image_set,
         0,
         [keypoint[0] as f32, keypoint[1] as f32],
     )

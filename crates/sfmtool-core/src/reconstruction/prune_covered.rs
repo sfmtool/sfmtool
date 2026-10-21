@@ -618,7 +618,7 @@ fn prune_rows(
         // The hashes on a value describe the file it came from, and this value
         // is not that file.
         content_hash: ContentHash::default(),
-        // The prune touches no image, so the whole table is the source's,
+        // The prune touches no image, so the whole image set is the source's,
         // thumbnails shared rather than copied.
         image_set: source.image_set.clone(),
         point_set,

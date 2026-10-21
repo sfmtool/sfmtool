@@ -1417,9 +1417,9 @@ fn the_bench_layer_outlines_the_patch_where_its_corners_project() {
         .track()
         .and_then(|payload| payload.patch_frame.as_ref())
         .expect("a track from a point carries the stored patch as its patch frame");
-    let table = &node.edited().base.image_set;
-    let image = &table.images[0];
-    let camera = &table.cameras[image.camera_index as usize];
+    let image_set = &node.edited().base.image_set;
+    let image = &image_set.images[0];
+    let camera = &image_set.cameras[image.camera_index as usize];
     let q = image.quaternion_wxyz.quaternion();
     let pose = RigidTransform::from_wxyz_translation(
         [q.w, q.i, q.j, q.k],
@@ -1476,9 +1476,9 @@ fn the_bench_layer_draws_the_projection_offset_for_every_verdict() {
         .track()
         .and_then(|payload| payload.patch_frame.as_ref())
         .expect("a track from a point carries the stored patch as its patch frame");
-    let table = &node.edited().base.image_set;
-    let image = &table.images[0];
-    let camera = &table.cameras[image.camera_index as usize];
+    let image_set = &node.edited().base.image_set;
+    let image = &image_set.images[0];
+    let camera = &image_set.cameras[image.camera_index as usize];
     let q = image.quaternion_wxyz.quaternion();
     let pose = RigidTransform::from_wxyz_translation(
         [q.w, q.i, q.j, q.k],
@@ -2400,8 +2400,8 @@ fn outline_at(
     sfmtool_core::geometry::RigidTransform,
 ) {
     let sighting = &track.observations[observation];
-    let table = &node.edited().base.image_set;
-    let (camera, pose) = crate::bench::geometry::view_of(table, sighting.image as usize)
+    let image_set = &node.edited().base.image_set;
+    let (camera, pose) = crate::bench::geometry::view_of(image_set, sighting.image as usize)
         .expect("the fixture's images have cameras");
     let patch_frame = track
         .track()
@@ -2936,9 +2936,9 @@ fn with_the_lock_off_the_outline_takes_no_drag_at_the_track_stage() {
         moved: true,
         cancelled: false,
     };
-    let table = &state.scene[0].edited().base.image_set;
-    assert!(super::bench_track::Layer::edit(table, &track, &drag, false).is_none());
-    assert!(super::bench_track::Layer::edit(table, &track, &drag, true).is_some());
+    let image_set = &state.scene[0].edited().base.image_set;
+    assert!(super::bench_track::Layer::edit(image_set, &track, &drag, false).is_none());
+    assert!(super::bench_track::Layer::edit(image_set, &track, &drag, true).is_some());
 
     // At the cluster stage every handle is one sighting's already, so the lock
     // changes nothing: the dot places that seed and a corner turns that shape,
@@ -2956,7 +2956,7 @@ fn with_the_lock_off_the_outline_takes_no_drag_at_the_track_stage() {
         .expect("a pixel on the sensor")
         .label;
     let cluster = on_bench(&state, id, &cluster);
-    let table = &state.scene[0].edited().base.image_set;
+    let image_set = &state.scene[0].edited().base.image_set;
     for lock in [true, false] {
         let dot = super::bench_track::Drag {
             image: 0,
@@ -2968,7 +2968,7 @@ fn with_the_lock_off_the_outline_takes_no_drag_at_the_track_stage() {
         };
         assert!(
             matches!(
-                super::bench_track::Layer::edit(table, &cluster, &dot, lock),
+                super::bench_track::Layer::edit(image_set, &cluster, &dot, lock),
                 Some(crate::bench::PatchEdit::Sight { observation: 0, .. })
             ),
             "lock {lock}",
@@ -2984,7 +2984,7 @@ fn with_the_lock_off_the_outline_takes_no_drag_at_the_track_stage() {
         };
         assert!(
             matches!(
-                super::bench_track::Layer::edit(table, &cluster, &corner, lock),
+                super::bench_track::Layer::edit(image_set, &cluster, &corner, lock),
                 Some(crate::bench::PatchEdit::SpinShape { observation: 0, .. })
             ),
             "lock {lock}",
@@ -3696,9 +3696,9 @@ fn the_normal_is_hidden_end_on_absent_at_the_cluster_stage_and_not_offered_unloc
         moved: true,
         cancelled: false,
     };
-    let table = &node.edited().base.image_set;
-    assert!(super::bench_track::Layer::edit(table, &oblique, &drag, false).is_none());
-    assert!(super::bench_track::Layer::edit(table, &oblique, &drag, true).is_some());
+    let image_set = &node.edited().base.image_set;
+    assert!(super::bench_track::Layer::edit(image_set, &oblique, &drag, false).is_none());
+    assert!(super::bench_track::Layer::edit(image_set, &oblique, &drag, true).is_some());
 
     // The cluster stage has no shared geometry, so no normal.
     use sfmtool_core::bench::{create_cluster, Bench, ClusterSeed};

@@ -133,7 +133,7 @@ pub(crate) fn parse_schedule(text: &str) -> Result<Vec<BaSchedule>, String> {
 /// greyed.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct CameraGate {
-    /// The camera's index in the camera table.
+    /// The camera's index among the image set's cameras.
     pub(crate) camera: usize,
     /// Its model's name.
     pub(crate) camera_model: &'static str,
@@ -148,15 +148,15 @@ pub(crate) struct CameraGate {
     pub(crate) distortion_refusal: Option<String>,
 }
 
-/// One [`CameraGate`] per camera the posed images use, in table order.
+/// One [`CameraGate`] per camera the posed images use, in camera index order.
 ///
 /// Each release is decided on that camera's own model, as the core function
 /// decides it, so a checkbox is greyed exactly when the core function would
 /// refuse the release it asks for, and the hover text names the camera and its
 /// model.
 pub(crate) fn camera_gates(edited: &EditedReconstruction) -> Vec<CameraGate> {
-    let table = &edited.base.image_set;
-    let posed: Vec<u32> = table
+    let image_set = &edited.base.image_set;
+    let posed: Vec<u32> = image_set
         .images
         .iter()
         .filter(|image| {
@@ -169,7 +169,7 @@ pub(crate) fn camera_gates(edited: &EditedReconstruction) -> Vec<CameraGate> {
         .posed_lenses()
         .into_iter()
         .map(|c| {
-            let camera = &table.cameras[c as usize];
+            let camera = &image_set.cameras[c as usize];
             let camera_model = camera.model_name();
             CameraGate {
                 camera: c as usize,
@@ -198,7 +198,7 @@ pub(crate) fn camera_gates(edited: &EditedReconstruction) -> Vec<CameraGate> {
 /// checkbox is greyed.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct BundleAdjustGates {
-    /// The length of the node's camera table, which the answer's release list
+    /// How many cameras the node's image set holds, which the answer's release list
     /// is sized to.
     pub(crate) camera_count: usize,
     /// [`camera_gates`].
@@ -220,8 +220,8 @@ impl BundleAdjustGates {
 pub struct BundleAdjustAnswer {
     /// The node to adjust.
     pub recon: ReconId,
-    /// What each camera releases, one entry per camera in the node's camera
-    /// table: held for a camera the dialog showed no row for, and never a
+    /// What each camera releases, one entry per camera in the node's image
+    /// set: held for a camera the dialog showed no row for, and never a
     /// release the camera's row had greyed. A distortion release only ever
     /// comes with the focal of the same camera.
     pub releases: Vec<CameraRelease>,
@@ -279,7 +279,7 @@ impl Pending {
         }
     }
 
-    /// The release list the answer carries: one entry per camera in the table,
+    /// The release list the answer carries: one entry per camera in the image set,
     /// held where no row stands for it.
     fn releases(&self) -> Vec<CameraRelease> {
         let mut releases = vec![CameraRelease::HELD; self.gates.camera_count];

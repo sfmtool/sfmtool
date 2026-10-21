@@ -158,7 +158,7 @@ impl PyEditedReconstruction {
     ///     camera_model: The model name, case-insensitive: ``SFMTOOL_FISHEYE``,
     ///         ``SFMTOOL_PINHOLE``, ``EQUIDISTANT_FISHEYE`` or a COLMAP lens
     ///         model.
-    ///     cameras: Camera-table indexes to switch (default: every camera).
+    ///     cameras: Camera indexes to switch (default: every camera).
     ///     coeff_count: Spline coefficients for the two spline models.
     ///         Default: the camera's own count when it already has this
     ///         model's spline, otherwise 8. Refused for any other model.
@@ -264,7 +264,7 @@ impl PySfmrReconstruction {
     /// the incidence angle this reconstruction's camera model gives its pixel.
     ///
     /// Args:
-    ///     cameras: Camera-table indexes (default: every camera).
+    ///     cameras: Camera indexes (default: every camera).
     ///     read_sift_files: Read the images' ``.sift`` files (default
     ///         ``True``). Without them a ``sift_files`` reconstruction has no
     ///         observed pixel either.

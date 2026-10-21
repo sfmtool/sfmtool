@@ -988,7 +988,7 @@ impl EditedReconstruction {
         self.posed_lenses().len()
     }
 
-    /// The camera-table indexes the **posed** images of this value are taken
+    /// The camera indexes the **posed** images of this value are taken
     /// through, ascending and each once: the cameras a bundle adjustment
     /// solves, and so the ones a caller offering its focal release checks.
     pub fn posed_lenses(&self) -> Vec<u32> {
@@ -1455,7 +1455,7 @@ impl EditedReconstruction {
             // never-written reconstruction carries.
             // `SfmrReconstruction::content_xxh128` is the live answer.
             content_hash: ContentHash::default(),
-            // No overlay edit touches an image, so the whole table is the
+            // No overlay edit touches an image, so the whole image set is the
             // base's, thumbnails shared rather than copied.
             image_set: ImageSet {
                 thumbnails_y_x_rgb: self.base.image_set.thumbnails_y_x_rgb.clone(),
