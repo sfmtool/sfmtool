@@ -102,7 +102,7 @@ fn stored_columns_read_the_stored_point() {
         let v64 = |c| columns.values_f64(c).unwrap()[row];
         assert_eq!(v(PointColumn::TrackLength), 2.0);
         assert_eq!(v(PointColumn::ImageCount), 2.0);
-        assert_eq!(v(PointColumn::ErrorPx), point.error);
+        assert_eq!(v(PointColumn::RmsErrorPx), point.error);
         assert_eq!(v(PointColumn::AtInfinity), 0.0);
         assert_eq!(v64(PointColumn::X), point.position.x);
         assert_eq!(v64(PointColumn::Y), point.position.y);
@@ -185,7 +185,7 @@ fn a_point_at_infinity_has_no_position_and_no_triangulation() {
     assert_eq!(v(PointColumn::TrackLength, 4), 2.0);
     assert_eq!(v(PointColumn::ImageCount, 4), 2.0);
     assert_eq!(
-        v(PointColumn::ErrorPx, 4),
+        v(PointColumn::RmsErrorPx, 4),
         recon.point(4).unwrap().point().error
     );
     for c in [PointColumn::X, PointColumn::Y, PointColumn::Z] {
@@ -561,13 +561,13 @@ fn a_query_on_a_column_not_computed_is_refused() {
         &recon,
         &columns,
         &PointQueryOptions {
-            bounds: vec![bound(PointColumn::ErrorPx, Some(0.0), None)],
+            bounds: vec![bound(PointColumn::RmsErrorPx, Some(0.0), None)],
             ..Default::default()
         },
     );
     assert_eq!(
         by_bound,
-        Err(PointQueryError::ColumnNotComputed(PointColumn::ErrorPx))
+        Err(PointQueryError::ColumnNotComputed(PointColumn::RmsErrorPx))
     );
     let by_sort = query_points(
         &recon,

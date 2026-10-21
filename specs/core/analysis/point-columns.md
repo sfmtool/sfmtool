@@ -33,7 +33,7 @@ bound as `sfmtool.analysis.point_columns`.
 /// One named per-point value. The wire name is the stable identifier.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum PointColumn {
-    TrackLength, ImageCount, ErrorPx, AtInfinity, X, Y, Z, CentroidDistance,
+    TrackLength, ImageCount, RmsErrorPx, AtInfinity, X, Y, Z, CentroidDistance,
     NormalConfidence, LowestZncc, LargestZnccSelfSimilarityRadius,
     MaxRayAngleDeg, ConditionNumber, InverseDepthZ,
 }
@@ -161,14 +161,14 @@ use sfmtool_core::progress::Progress;
 
 let columns = PointColumns::compute(
     &edited,
-    &[PointColumn::TrackLength, PointColumn::ErrorPx],
+    &[PointColumn::TrackLength, PointColumn::RmsErrorPx],
     &Progress::none(),
 )?;
 // The 20 worst-error points with a track of at least 3, seen in image 2.
 let worst = query_points(&edited, &columns, &PointQueryOptions {
     bounds: vec![ColumnBounds { column: PointColumn::TrackLength, min: Some(3.0), max: None }],
     seen_in_image: Some(2),
-    order_by: Some((PointColumn::ErrorPx, SortOrder::Descending)),
+    order_by: Some((PointColumn::RmsErrorPx, SortOrder::Descending)),
 })?;
 let page = &worst[..worst.len().min(20)];
 ```
@@ -185,7 +185,7 @@ it makes no difference to what a column means.
 |---|---|---|---|---|
 | `track_length` | stored | number of observations in the track | defined | never |
 | `image_count` | stored | number of distinct images among those observations; less than `track_length` where one image holds several observations of the point, which a GLOMAP solve produces | defined | never |
-| `error_px` | stored | `Point3D::error`, the stored per-point reprojection error in pixels, as its doc comment defines it; the viewer's `get_point` reports the same number as `error`. A file holds what its writer stored | defined | never |
+| `rms_error_px` | stored | `Point3D::error`, the stored per-point RMS reprojection error in pixels, as its doc comment defines it; the viewer's `get_point` reports the same number. A file holds what its writer stored | defined | never |
 | `at_infinity` | stored | 1 for a point at infinity (`w = 0`), 0 for a finite one | defined | never |
 | `x`, `y`, `z` | stored | the point's position in the stored frame, in the reconstruction's world-space unit (scene units where none is declared) | no value | never |
 | `centroid_distance` | stored | distance from the posed cameras' centroid, the number `ImageTable::placement_scale` gives, in the unit of `x` | no value | the reconstruction has no posed image |
@@ -194,7 +194,7 @@ it makes no difference to what a column means.
 | `largest_zncc_self_similarity_radius` | stored | the largest ZNCC self-similarity radius among the track's observation readings: the semi-major axis of the stored ellipse, `ellipse_axes[0]`, in patch px, skipping unmeasured rows | no value when every row is unmeasured | the reconstruction has no observation readings |
 | `max_ray_angle_deg` | computed | the largest angle between two of the track's viewing rays, the rays from each observing camera's centre to the stored point (`compute_max_ray_angle_deg`) | 0 | never |
 | `condition_number` | computed | condition number of the point's triangulation from those rays (`compute_point_diagnostics`) | no value | never |
-| `inverse_depth_z` | computed | inverse-depth z-score from the same triangulation, with per-ray angular noise `max(error_px, 1) / f` | no value | never |
+| `inverse_depth_z` | computed | inverse-depth z-score from the same triangulation, with per-ray angular noise `max(rms_error_px, 1) / f` | no value | never |
 
 A column that is **absent** for a whole reconstruction is reported by
 `PointColumn::is_available`, and `compute` skips it rather than failing, so
@@ -297,8 +297,8 @@ silently.
 import numpy as np
 from sfmtool.analysis import point_columns
 
-cols = point_columns(recon, ["track_length", "error_px"])
-worst = cols["point_index"][np.argsort(-cols["error_px"], kind="stable")][:20]
+cols = point_columns(recon, ["track_length", "rms_error_px"])
+worst = cols["point_index"][np.argsort(-cols["rms_error_px"], kind="stable")][:20]
 ```
 
 The query is not bound: a NumPy mask and an `argsort` over the arrays do the

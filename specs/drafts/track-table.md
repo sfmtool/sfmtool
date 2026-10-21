@@ -90,9 +90,12 @@ Built. The columns, their definitions, `PointColumns::compute`, `query_points`
 and the `sfmtool.analysis.point_columns` binding are specified in
 [core/analysis/point-columns.md](../core/analysis/point-columns.md), and the
 column words are in [GLOSSARY.md](../GLOSSARY.md) § "Point columns". Parts 2
-and 3 below use its wire names (`track_length`, `error_px`,
+and 3 below use its wire names (`track_length`, `rms_error_px`,
 `max_ray_angle_deg`, …), its "absent" and "no value" rules, and its sort rule
-that rows with no value go last in either order.
+that rows with no value go last in either order. The error column is
+`rms_error_px`, the same name the viewer's `get_point` reply gives the same
+number once #1000 renames that field from `error`, so the table, `find_points`
+and `get_point` use one name for it.
 
 ## Part 2: the Track Table panel
 
@@ -143,7 +146,7 @@ still being decoded.
   History do. The header names that reconstruction and counts matched rows
   against live points.
 - **The heading row** sorts by the column that is clicked. The first click
-  sorts the bad end first where the column has one (`error_px`,
+  sorts the bad end first where the column has one (`rms_error_px`,
   `condition_number`, `inverse_depth_z` and
   `largest_zncc_self_similarity_radius` descending; `track_length`,
   `image_count`, `max_ray_angle_deg`, `lowest_zncc` and `normal_confidence`
@@ -390,10 +393,10 @@ no bitmap to show. Both columns appear after Convert to Embedded Patches.
 {
   "reconstruction_label": "dino",            // optional: defaults to the selected one
   "bounds": [ { "column": "track_length", "min": 3 },
-              { "column": "error_px", "max": 1.5 } ],
+              { "column": "rms_error_px", "max": 1.5 } ],
   "seen_in_camera_image": 2,                 // optional: an index or a name, as camera_image takes
-  "order_by": { "column": "error_px", "descending": true },  // optional
-  "columns": ["track_length", "image_count", "error_px"],  // optional: the values to return
+  "order_by": { "column": "rms_error_px", "descending": true },  // optional
+  "columns": ["track_length", "image_count", "rms_error_px"],  // optional: the values to return
   "offset": 0, "limit": 50                   // as list_camera_images: default 50, at most 500
 }
 // reply
@@ -404,7 +407,7 @@ no bitmap to show. Both columns appear after Convert to Embedded Patches.
   "offset": 0,
   "points": [
     { "id": "pt3d_2db7e1f4_9873", "index": 9873,
-      "track_length": 57, "image_count": 45, "error_px": 0.82 },
+      "track_length": 57, "image_count": 45, "rms_error_px": 0.82 },
     …
   ]
 }
@@ -413,7 +416,7 @@ no bitmap to show. Both columns appear after Convert to Embedded Patches.
 - **It runs `query_points`** over the same column cache the panel uses, so a
   `find_points` call and the panel with the same bounds agree. The returned
   value columns default to the bound and sorted columns plus `track_length`
-  and `error_px`.
+  and `rms_error_px`.
 - **Columns the cache does not hold are computed by a task of the call's
   own.** When every column the call names (in `bounds`, `order_by` and
   `columns`) is in the cache for the version at the cursor, `find_points`
@@ -512,10 +515,6 @@ layout, contrast, a wrong progress fraction and a missing title line.
 
 - **The quiet order.** Whether the Track Table's columns should go ahead of
   the focused item's evaluation when the table is the panel in view.
-- **The error column's name on the wire.** The column is `error_px`, and
-  `get_point` reports the same number as `rms_error_px`. They can stay
-  different names for one value, or the column can take the `rms_` prefix
-  too.
 - **Errors in files written before Step 0a** hold the mean (or, for a file
   converted from COLMAP and never recomputed, COLMAP's value). Whether the
   open should recompute them, or the table should say when a file's errors

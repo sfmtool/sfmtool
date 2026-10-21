@@ -38,9 +38,9 @@ pub enum PointColumn {
     /// Number of distinct images among the track's observations, less than
     /// the track length where one image holds several observations.
     ImageCount,
-    /// The point's stored reprojection error in pixels,
+    /// The point's stored RMS reprojection error in pixels,
     /// [`Point3D::error`](crate::reconstruction::Point3D::error).
-    ErrorPx,
+    RmsErrorPx,
     /// `1` for a point at infinity (`w = 0`), `0` for a finite one.
     AtInfinity,
     /// The stored position's x, in the stored frame. No value at infinity.
@@ -93,7 +93,7 @@ impl PointColumn {
     pub const ALL: [PointColumn; COLUMN_COUNT] = [
         PointColumn::TrackLength,
         PointColumn::ImageCount,
-        PointColumn::ErrorPx,
+        PointColumn::RmsErrorPx,
         PointColumn::AtInfinity,
         PointColumn::X,
         PointColumn::Y,
@@ -112,7 +112,7 @@ impl PointColumn {
         match self {
             PointColumn::TrackLength => "track_length",
             PointColumn::ImageCount => "image_count",
-            PointColumn::ErrorPx => "error_px",
+            PointColumn::RmsErrorPx => "rms_error_px",
             PointColumn::AtInfinity => "at_infinity",
             PointColumn::X => "x",
             PointColumn::Y => "y",
@@ -363,7 +363,7 @@ fn point_values(
                 images.dedup();
                 images.len() as f64
             }
-            PointColumn::ErrorPx => f64::from(point.error),
+            PointColumn::RmsErrorPx => f64::from(point.error),
             PointColumn::AtInfinity => {
                 if at_infinity {
                     1.0

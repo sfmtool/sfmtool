@@ -32,7 +32,7 @@ fn all_names() -> String {
 /// The named per-point values of every live point of a reconstruction.
 ///
 /// Each column is one value per point under a fixed name: ``track_length``,
-/// ``image_count``, ``error_px``, ``at_infinity``, ``x``, ``y``, ``z``,
+/// ``image_count``, ``rms_error_px``, ``at_infinity``, ``x``, ``y``, ``z``,
 /// ``centroid_distance``, ``normal_confidence``, ``lowest_zncc``,
 /// ``largest_zncc_self_similarity_radius``, ``max_ray_angle_deg``,
 /// ``condition_number`` and ``inverse_depth_z``. These are the numbers the

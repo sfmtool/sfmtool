@@ -18,7 +18,7 @@ from sfmtool.reconstruction import EditedReconstruction, SfmrReconstruction
 ALL_COLUMNS = (
     "track_length",
     "image_count",
-    "error_px",
+    "rms_error_px",
     "at_infinity",
     "x",
     "y",
@@ -42,7 +42,7 @@ def test_every_supplied_column_is_returned_with_its_dtype(recon):
     cols = point_columns(recon)
     n = recon.point_count
     assert set(cols) <= set(ALL_COLUMNS) | {"point_index"}
-    for name in ("track_length", "error_px", "x", "max_ray_angle_deg"):
+    for name in ("track_length", "rms_error_px", "x", "max_ray_angle_deg"):
         assert name in cols
     assert cols["point_index"].dtype == np.uint32
     np.testing.assert_array_equal(cols["point_index"], np.arange(n))
@@ -60,7 +60,7 @@ def test_stored_columns_match_the_reconstruction(recon):
     np.testing.assert_array_equal(
         cols["track_length"], np.bincount(track_points, minlength=recon.point_count)
     )
-    np.testing.assert_array_equal(cols["error_px"], recon.errors)
+    np.testing.assert_array_equal(cols["rms_error_px"], recon.errors)
     xyzw = recon.positions_xyzw
     at_infinity = xyzw[:, 3] == 0.0
     assert at_infinity.any(), "the ground truth holds points at infinity"
