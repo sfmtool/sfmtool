@@ -35,13 +35,14 @@ use crate::table_sort::{paint_sort_triangle, SortRule, TableSort, SORT_TRIANGLE_
 const COLUMN_COUNT: usize = TrackTableColumn::ALL.len();
 
 /// The columns shown before any are hidden or shown: the point is always
-/// shown, and of the stored columns the track's length, its image count, its
-/// error and whether it is at infinity.
-const DEFAULT_COLUMNS: [TrackTableColumn; 4] = [
+/// shown, and of the stored columns the track's length, its error and its
+/// distance, which is `∞` for a point at infinity. Repeat obs. is shown as
+/// well while the reconstruction has a point with repeat observations
+/// ([`TrackTableQuery::is_shown`]).
+const DEFAULT_COLUMNS: [TrackTableColumn; 3] = [
     TrackTableColumn::TrackLength,
-    TrackTableColumn::ImageCount,
     TrackTableColumn::RmsErrorPx,
-    TrackTableColumn::AtInfinity,
+    TrackTableColumn::CentroidDistance,
 ];
 
 /// The width of the Point column.
@@ -52,12 +53,14 @@ const MIN_VALUE_WIDTH: f32 = 84.0;
 const CELL_PAD: f32 = 6.0;
 
 impl SortRule for TrackTableColumn {
-    /// The columns whose large values are the bad end: the error, the
-    /// condition number, the inverse-depth z and the self-similarity radius.
+    /// The columns whose large values are the bad end: the repeat
+    /// observations, the error, the condition number, the inverse-depth z and
+    /// the self-similarity radius.
     fn worst_first_descending(self) -> bool {
         matches!(
             self,
-            TrackTableColumn::RmsErrorPx
+            TrackTableColumn::RepeatObservations
+                | TrackTableColumn::RmsErrorPx
                 | TrackTableColumn::ConditionNumber
                 | TrackTableColumn::InverseDepthZ
                 | TrackTableColumn::LargestZnccSelfSimilarityRadius
@@ -71,7 +74,6 @@ fn worst_first_ascending(column: TrackTableColumn) -> bool {
     matches!(
         column,
         TrackTableColumn::TrackLength
-            | TrackTableColumn::ImageCount
             | TrackTableColumn::MaxRayAngleDeg
             | TrackTableColumn::LowestZncc
             | TrackTableColumn::NormalConfidence
@@ -82,9 +84,8 @@ fn worst_first_ascending(column: TrackTableColumn) -> bool {
 fn column_title(column: TrackTableColumn) -> &'static str {
     match column {
         TrackTableColumn::TrackLength => "Track",
-        TrackTableColumn::ImageCount => "Images",
+        TrackTableColumn::RepeatObservations => "Repeat obs.",
         TrackTableColumn::RmsErrorPx => "Error (px)",
-        TrackTableColumn::AtInfinity => "\u{221e}",
         TrackTableColumn::X => "X",
         TrackTableColumn::Y => "Y",
         TrackTableColumn::Z => "Z",
@@ -103,17 +104,14 @@ fn column_title(column: TrackTableColumn) -> &'static str {
 fn column_description(column: TrackTableColumn) -> &'static str {
     match column {
         TrackTableColumn::TrackLength => "The number of observations in the track.",
-        TrackTableColumn::ImageCount => {
-            "The number of distinct images among the track's observations. It is less than \
-             Track where one image holds several observations of the point."
+        TrackTableColumn::RepeatObservations => {
+            "The track's observations beyond one per image: Track less the number of distinct \
+             images that see the point. Anything but 0 is a defect, one image holding several \
+             observations of the point, which a GLOMAP solve can produce. The column is shown \
+             while the reconstruction has such a point, unless it was unticked here."
         }
         TrackTableColumn::RmsErrorPx => {
             "The point's stored RMS reprojection error over its observations, in pixels."
-        }
-        TrackTableColumn::AtInfinity => {
-            "\u{221e} for a point at infinity, which is a direction rather than a position. \
-             The value is 1 for such a point and 0 for a finite one, so a minimum of 1 keeps \
-             only the points at infinity."
         }
         TrackTableColumn::X | TrackTableColumn::Y | TrackTableColumn::Z => {
             "The point's position along this axis, in the reconstruction's unit. A point at \
@@ -121,7 +119,9 @@ fn column_description(column: TrackTableColumn) -> &'static str {
         }
         TrackTableColumn::CentroidDistance => {
             "The point's distance from the centroid of the posed cameras, in the unit of X. A \
-             point at infinity has no value."
+             point at infinity, a direction rather than a position, is at \u{221e}: it sorts \
+             above every finite distance, a finite maximum drops it, and a minimum of inf \
+             keeps only the points at infinity."
         }
         TrackTableColumn::NormalConfidence => "The stored normal confidence, 0 to 255.",
         TrackTableColumn::LowestZncc => {
@@ -213,6 +213,11 @@ struct TrackTableQuery {
     shown: Vec<TrackTableColumn>,
     /// Whether only the points the selected image observes are kept.
     seen_in_selected_image: bool,
+    /// Whether Repeat obs. has been ticked or unticked in the Columns menu.
+    /// Until it has, the column is shown exactly while the reconstruction
+    /// on show has a point with repeat observations; after, `shown` alone
+    /// decides, so the panel never undoes the person's choice.
+    repeat_observations_chosen: bool,
 }
 
 impl Default for TrackTableQuery {
@@ -222,6 +227,7 @@ impl Default for TrackTableQuery {
             sort: None,
             shown: DEFAULT_COLUMNS.to_vec(),
             seen_in_selected_image: false,
+            repeat_observations_chosen: false,
         }
     }
 }
@@ -241,6 +247,40 @@ impl TrackTableQuery {
     /// hidden: a hidden column never filters or orders the rows unseen.
     fn holds(&self, column: TrackTableColumn) -> bool {
         self.bound(column).is_set() || self.sort.is_some_and(|sort| sort.column == column)
+    }
+
+    /// Whether `column` is drawn, where `repeats` says whether the
+    /// reconstruction on show has a point with repeat observations. A column
+    /// in `shown` is drawn. Repeat obs. is drawn as well, until the person
+    /// ticks or unticks it in the Columns menu, while `repeats` is true or
+    /// while it holds a bound or the sort, so that it is not hidden while it
+    /// filters or orders the rows.
+    fn is_shown(&self, column: TrackTableColumn, repeats: bool) -> bool {
+        self.shown.contains(&column)
+            || (column == TrackTableColumn::RepeatObservations
+                && !self.repeat_observations_chosen
+                && (repeats || self.holds(column)))
+    }
+
+    /// The columns drawn, in [`TrackTableColumn::ALL`] order
+    /// ([`Self::is_shown`]).
+    fn visible(&self, repeats: bool) -> Vec<TrackTableColumn> {
+        TrackTableColumn::ALL
+            .into_iter()
+            .filter(|&c| self.is_shown(c, repeats))
+            .collect()
+    }
+
+    /// Tick or untick `column` in the Columns menu: [`Self::set_shown`], and
+    /// for Repeat obs. the end of showing it by itself.
+    fn choose_shown(&mut self, column: TrackTableColumn, shown: bool, repeats: bool) {
+        if column == TrackTableColumn::RepeatObservations && !self.repeat_observations_chosen {
+            if self.is_shown(column, repeats) && !shown && self.holds(column) {
+                return;
+            }
+            self.repeat_observations_chosen = true;
+        }
+        self.set_shown(column, shown);
     }
 
     /// Show or hide `column`. Hiding one that [`Self::holds`] does nothing.
@@ -287,6 +327,9 @@ struct RowList {
     rows: Vec<u32>,
     /// The query's refusal, when it refused.
     error: Option<String>,
+    /// How many live points of the table the rows were computed from have
+    /// repeat observations, `0` while the table does not hold the column.
+    repeats: usize,
     /// How many times the rows have been computed, for the test that holds
     /// the rule that an unchanged query does not compute them again.
     recomputed: u64,
@@ -328,6 +371,11 @@ impl RowList {
                 self.error = Some(error.to_string());
             }
         }
+        // Counted with the rows, so once per change of the table rather than
+        // once per frame.
+        self.repeats = table
+            .values(TrackTableColumn::RepeatObservations)
+            .map_or(0, |values| values.iter().filter(|&&v| v > 0.0).count());
         self.inputs = Some(inputs);
         self.recomputed += 1;
         moved
@@ -553,7 +601,7 @@ impl TrackTablePanel {
             return asked;
         }
 
-        let layout = ColumnLayout::new(ui, &self.query, edited);
+        let layout = ColumnLayout::new(ui, &self.query.visible(self.rows.repeats > 0), edited);
         let selected = state.selected_point.filter(|p| p.recon == id);
         // A selection made elsewhere scrolls its row into view; otherwise a
         // new sort, new bounds or another reconstruction starts at the top,
@@ -619,6 +667,13 @@ impl TrackTablePanel {
         selected_image: Option<u32>,
     ) {
         let edited = node.edited();
+        // The count of the table on show, which the row list was computed
+        // from.
+        let repeats = if table.is_some() {
+            self.rows.repeats
+        } else {
+            0
+        };
         ui.horizontal_wrapped(|ui| {
             ui.label(egui::RichText::new(&node.label).strong());
             if let Some(table) = table {
@@ -627,6 +682,17 @@ impl TrackTablePanel {
                     grouped(self.rows.rows.len()),
                     grouped(table.point_indexes().len())
                 ));
+            }
+            if repeats > 0 {
+                ui.label(format!(
+                    "\u{b7} {} with repeat observations",
+                    grouped(repeats)
+                ))
+                .on_hover_text(
+                    "Live points whose track holds more than one observation in one image, \
+                     whatever the bounds. That is a defect in the reconstruction, which a \
+                     GLOMAP solve can produce. Click the Repeat obs. heading to put them first.",
+                );
             }
             if stale {
                 ui.spinner();
@@ -650,7 +716,7 @@ impl TrackTablePanel {
                         if !offered(column, edited) {
                             continue;
                         }
-                        let mut shown = query.shown.contains(&column);
+                        let mut shown = query.is_shown(column, repeats > 0);
                         let locked = shown && query.holds(column);
                         let response = ui
                             .add_enabled(
@@ -664,7 +730,7 @@ impl TrackTablePanel {
                                 column_title(column)
                             ));
                         if response.changed() {
-                            query.set_shown(column, shown);
+                            query.choose_shown(column, shown, repeats > 0);
                         }
                     }
                 });
@@ -973,11 +1039,11 @@ struct ColumnLayout {
 impl ColumnLayout {
     /// The Point column, then each shown column `edited` can supply, each
     /// wide enough for its heading, its sort triangle and its two bound boxes.
-    fn new(ui: &egui::Ui, query: &TrackTableQuery, edited: &EditedReconstruction) -> Self {
+    fn new(ui: &egui::Ui, shown: &[TrackTableColumn], edited: &EditedReconstruction) -> Self {
         let font = egui::TextStyle::Body.resolve(ui.style());
         let mut slots = vec![(Slot::Point, 0.0, POINT_WIDTH)];
         let mut x = POINT_WIDTH;
-        for &column in &query.shown {
+        for &column in shown {
             if !offered(column, edited) {
                 continue;
             }
@@ -1181,9 +1247,9 @@ impl RowsView<'_> {
 }
 
 /// One cell's text: `…` for a column the cache does not hold yet, `-` for a
-/// point with no value, a whole number for a count, `∞` or nothing for
-/// `at_infinity`, and three significant digits otherwise. Positions keep up to
-/// three decimals however large they are.
+/// point with no value, a whole number for a count, `∞` for an infinite value
+/// (the distance of a point at infinity), and three significant digits
+/// otherwise. Positions keep up to three decimals however large they are.
 fn cell_text(table: &TrackTable, column: TrackTableColumn, row: usize) -> String {
     if column.is_f64() {
         return match table.values_f64(column) {
@@ -1200,15 +1266,8 @@ fn cell_text(table: &TrackTable, column: TrackTableColumn, row: usize) -> String
     }
     match column {
         TrackTableColumn::TrackLength
-        | TrackTableColumn::ImageCount
+        | TrackTableColumn::RepeatObservations
         | TrackTableColumn::NormalConfidence => format!("{}", v as i64),
-        TrackTableColumn::AtInfinity => {
-            if v != 0.0 {
-                "\u{221e}".to_string()
-            } else {
-                String::new()
-            }
-        }
         TrackTableColumn::LowestZncc => format!("{v:.2}"),
         _ => significant(f64::from(v), 3, 3),
     }
@@ -1224,10 +1283,13 @@ fn position_text(v: f64) -> String {
 }
 
 /// `v` to `digits` significant digits, with at most `max_decimals` decimals,
-/// keeping every whole digit.
+/// keeping every whole digit; `∞` or `-∞` for an infinite value.
 fn significant(v: f64, digits: i32, max_decimals: i32) -> String {
-    if !v.is_finite() {
-        return format!("{v}");
+    if v.is_infinite() {
+        return if v > 0.0 { "\u{221e}" } else { "-\u{221e}" }.to_string();
+    }
+    if v.is_nan() {
+        return "-".to_string();
     }
     if v == 0.0 {
         return "0".to_string();

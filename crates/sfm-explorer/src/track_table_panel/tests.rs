@@ -636,8 +636,8 @@ fn a_column_holding_a_bound_or_the_sort_cannot_be_hidden() {
     query.click_heading(TrackTableColumn::TrackLength);
     query.set_shown(TrackTableColumn::TrackLength, false);
     assert!(query.shown.contains(&TrackTableColumn::TrackLength));
-    query.set_shown(TrackTableColumn::ImageCount, false);
-    assert!(!query.shown.contains(&TrackTableColumn::ImageCount));
+    query.set_shown(TrackTableColumn::CentroidDistance, false);
+    assert!(!query.shown.contains(&TrackTableColumn::CentroidDistance));
     query.set_shown(TrackTableColumn::Z, true);
     query.set_shown(TrackTableColumn::X, true);
     let at = |c| query.shown.iter().position(|&s| s == c).unwrap();
@@ -645,6 +645,159 @@ fn a_column_holding_a_bound_or_the_sort_cannot_be_hidden() {
         at(TrackTableColumn::X) < at(TrackTableColumn::Z),
         "ALL order"
     );
+}
+
+/// The fixture with each of `points` holding its second observation in the
+/// image of its first, so that its track has one repeat observation.
+fn state_with_repeats(points: &[u32]) -> (AppState, ReconId) {
+    let (mut state, id) = state();
+    let recon = state.scene[0].recon_mut();
+    for &point in points {
+        let rows: Vec<usize> = (0..recon.point_set.tracks.len())
+            .filter(|&k| recon.point_set.tracks[k].point_index == point)
+            .collect();
+        assert!(rows.len() >= 2, "point {point} has two observations");
+        recon.point_set.tracks[rows[1]].image_index = recon.point_set.tracks[rows[0]].image_index;
+    }
+    recon.rebuild_derived_fields();
+    (state, id)
+}
+
+/// The value columns' headings the panel painted.
+fn headings(texts: &[String]) -> Vec<&str> {
+    ["Track", "Repeat obs.", "Error (px)", "Distance", "X"]
+        .into_iter()
+        .filter(|title| texts.iter().any(|t| t == title))
+        .collect()
+}
+
+/// The default columns are Track, Error and Distance; Repeat obs. stays out
+/// while no point has a repeat observation, and the header says nothing of
+/// them.
+#[test]
+fn the_default_columns_are_track_error_and_distance() {
+    let (mut state, _) = state();
+    let (ctx, mut panel) = shown(&mut state);
+    let texts = painted_texts(&ctx, input(1200.0), |ui| panel.show(ui, &mut state));
+    assert_eq!(
+        headings(&texts),
+        ["Track", "Error (px)", "Distance"],
+        "{texts:?}"
+    );
+    assert!(
+        !texts.iter().any(|t| t.contains("repeat observations")),
+        "{texts:?}"
+    );
+}
+
+/// Distance holds `∞` for the point at infinity: it sorts above every finite
+/// distance, a finite maximum drops it, and a minimum of inf keeps it alone.
+#[test]
+fn a_point_at_infinity_sorts_and_filters_as_the_largest_distance() {
+    let (mut state, _) = state();
+    let (ctx, mut panel) = shown(&mut state);
+    let heading = painted_at(&ctx, &mut panel, &mut state, "Distance");
+    click(&ctx, &mut panel, &mut state, heading);
+    frame(&ctx, &mut panel, &mut state);
+    assert_eq!(
+        panel.query.sort,
+        Some(TableSort {
+            column: TrackTableColumn::CentroidDistance,
+            descending: false
+        })
+    );
+    assert_eq!(*panel.rows().last().unwrap(), BEARING, "∞ is the largest");
+    click(&ctx, &mut panel, &mut state, heading);
+    frame(&ctx, &mut panel, &mut state);
+    assert_eq!(panel.rows()[0], BEARING, "∞ first in decreasing order");
+
+    panel
+        .query
+        .bound_mut(TrackTableColumn::CentroidDistance)
+        .max = "1e9".into();
+    frame(&ctx, &mut panel, &mut state);
+    assert_eq!(panel.rows().len(), POINTS - 1);
+    assert!(!panel.rows().contains(&BEARING));
+    *panel.query.bound_mut(TrackTableColumn::CentroidDistance) = Default::default();
+    panel
+        .query
+        .bound_mut(TrackTableColumn::CentroidDistance)
+        .min = "inf".into();
+    frame(&ctx, &mut panel, &mut state);
+    assert_eq!(panel.rows(), [BEARING]);
+}
+
+/// Repeat obs. is shown by itself while the reconstruction has a point with
+/// repeat observations, the header counts those points, and its first click
+/// puts the worst first.
+#[test]
+fn repeat_observations_show_themselves_and_their_count() {
+    let (mut state, _) = state_with_repeats(&[3, 12]);
+    let (ctx, mut panel) = shown(&mut state);
+    let texts = painted_texts(&ctx, input(1200.0), |ui| panel.show(ui, &mut state));
+    assert_eq!(
+        headings(&texts),
+        ["Track", "Repeat obs.", "Error (px)", "Distance"],
+        "{texts:?}"
+    );
+    assert!(
+        texts
+            .iter()
+            .any(|t| t == "\u{b7} 2 with repeat observations"),
+        "{texts:?}"
+    );
+    assert!(
+        !panel
+            .query
+            .shown
+            .contains(&TrackTableColumn::RepeatObservations),
+        "shown without being added to the person's columns"
+    );
+    let heading = painted_at(&ctx, &mut panel, &mut state, "Repeat obs.");
+    click(&ctx, &mut panel, &mut state, heading);
+    frame(&ctx, &mut panel, &mut state);
+    assert_eq!(
+        panel.query.sort,
+        Some(TableSort {
+            column: TrackTableColumn::RepeatObservations,
+            descending: true
+        })
+    );
+    assert_eq!(&panel.rows()[..2], [3, 12], "the defects first");
+}
+
+/// Showing Repeat obs. by itself never undoes the person's choice: unticked,
+/// it stays hidden though the reconstruction has repeats; ticked, it stays
+/// shown though it has none. While it holds the sort it is not hidden.
+#[test]
+fn the_persons_choice_of_repeat_observations_wins() {
+    let column = TrackTableColumn::RepeatObservations;
+    let mut query = TrackTableQuery::default();
+    assert!(query.is_shown(column, true));
+    assert!(!query.is_shown(column, false));
+    query.choose_shown(column, false, true);
+    assert!(!query.is_shown(column, true), "unticked stays hidden");
+
+    let mut query = TrackTableQuery::default();
+    query.choose_shown(column, true, false);
+    assert!(query.is_shown(column, false), "ticked stays shown");
+    assert_eq!(
+        query.visible(false),
+        [
+            TrackTableColumn::TrackLength,
+            column,
+            TrackTableColumn::RmsErrorPx,
+            TrackTableColumn::CentroidDistance,
+        ]
+    );
+
+    // Shown by itself and sorted by, it stays while it orders the rows, on a
+    // reconstruction with no repeats and against an untick.
+    let mut query = TrackTableQuery::default();
+    query.click_heading(column);
+    assert!(query.is_shown(column, false));
+    query.choose_shown(column, false, true);
+    assert!(query.is_shown(column, true));
 }
 
 /// A column the reconstruction cannot supply is left out, and a bound on it
@@ -777,22 +930,29 @@ fn values_print_to_three_significant_digits() {
     assert_eq!(significant(0.0, 3, 4), "0");
     assert_eq!(significant(1_234_567.25, 4, 3), "1234567");
     assert_eq!(significant(1.23456, 4, 3), "1.235");
+    assert_eq!(significant(f64::INFINITY, 3, 3), "\u{221e}");
+    assert_eq!(significant(f64::NEG_INFINITY, 3, 3), "-\u{221e}");
 }
 
-/// The bearing's cells: no position, `∞` in its column, and a count still.
+/// The bearing's cells: no position, a distance of `∞`, and a count still.
 #[test]
-fn a_point_at_infinity_prints_no_position_and_the_infinity_mark() {
+fn a_point_at_infinity_prints_no_position_and_an_infinite_distance() {
     let (mut state, id) = state();
     let _ = shown(&mut state);
     let table = state.track_table(id).unwrap();
     let row = table.point_indexes().binary_search(&BEARING).unwrap();
     assert_eq!(cell_text(table, TrackTableColumn::X, row), "-");
     assert_eq!(
-        cell_text(table, TrackTableColumn::AtInfinity, row),
+        cell_text(table, TrackTableColumn::CentroidDistance, row),
         "\u{221e}"
     );
-    assert_eq!(cell_text(table, TrackTableColumn::AtInfinity, 0), "");
+    let finite = cell_text(table, TrackTableColumn::CentroidDistance, 0);
+    assert!(finite.parse::<f64>().is_ok_and(f64::is_finite), "{finite}");
     assert_eq!(cell_text(table, TrackTableColumn::TrackLength, row), "2");
+    assert_eq!(
+        cell_text(table, TrackTableColumn::RepeatObservations, row),
+        "0"
+    );
     assert_eq!(
         cell_text(table, TrackTableColumn::MaxRayAngleDeg, row),
         "\u{2026}",

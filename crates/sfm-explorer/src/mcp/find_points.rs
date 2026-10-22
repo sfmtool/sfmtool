@@ -276,8 +276,9 @@ fn points_reply(
     })
 }
 
-/// One value as the wire carries it: `null` for no value, an integer for a
-/// count, a byte or the `at_infinity` flag, a position at `f64`, and any
+/// One value as the wire carries it: `null` for no value, the string `"inf"`
+/// for `+∞` (the `centroid_distance` of a point at infinity), which JSON has no
+/// number for, an integer for a count or a byte, a position at `f64`, and any
 /// other column through its shortest `f32` spelling.
 fn value(table: &TrackTable, column: TrackTableColumn, row: usize) -> Value {
     if column.is_f64() {
@@ -285,13 +286,15 @@ fn value(table: &TrackTable, column: TrackTableColumn, row: usize) -> Value {
         return edit::finite(v);
     }
     let v = table.values(column).expect("a needed column is held")[row];
-    if !v.is_finite() {
+    if v.is_nan() {
         return Value::Null;
+    }
+    if v.is_infinite() {
+        return json!(if v > 0.0 { "inf" } else { "-inf" });
     }
     match column {
         TrackTableColumn::TrackLength
-        | TrackTableColumn::ImageCount
-        | TrackTableColumn::AtInfinity
+        | TrackTableColumn::RepeatObservations
         | TrackTableColumn::NormalConfidence => json!(v as i64),
         _ => json!(v.to_string().parse::<f64>().unwrap_or(f64::from(v))),
     }

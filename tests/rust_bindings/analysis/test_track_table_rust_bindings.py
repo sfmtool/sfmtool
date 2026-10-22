@@ -17,9 +17,8 @@ from sfmtool.reconstruction import EditedReconstruction, SfmrReconstruction
 
 ALL_COLUMNS = (
     "track_length",
-    "image_count",
+    "repeat_observations",
     "rms_error_px",
-    "at_infinity",
     "x",
     "y",
     "z",
@@ -64,17 +63,35 @@ def test_stored_columns_match_the_reconstruction(recon):
     xyzw = recon.positions_xyzw
     at_infinity = xyzw[:, 3] == 0.0
     assert at_infinity.any(), "the ground truth holds points at infinity"
-    np.testing.assert_array_equal(table["at_infinity"], at_infinity.astype(np.float32))
     for k, name in enumerate("xyz"):
         np.testing.assert_array_equal(table[name][~at_infinity], xyzw[~at_infinity, k])
         assert np.isnan(table[name][at_infinity]).all()
-    assert np.isnan(table["centroid_distance"][at_infinity]).all()
-    assert (table["image_count"] <= table["track_length"]).all()
+    # A point at infinity is at distance +inf, and only a point at infinity is.
+    np.testing.assert_array_equal(np.isposinf(table["centroid_distance"]), at_infinity)
+    assert np.isfinite(table["centroid_distance"][~at_infinity]).all()
+    # The ground truth has one observation per image in every track.
+    assert (table["repeat_observations"] == 0.0).all()
+
+
+def test_repeat_observations_counts_the_observations_beyond_one_per_image(recon):
+    edited = EditedReconstruction(recon)
+    record = edited.point(0)
+    images = np.array(record["image_indexes"])
+    assert len(images) >= 3
+    # Point 0 again, with its second observation in the image of its first:
+    # one image holding two observations of the point.
+    images[1] = images[0]
+    record["image_indexes"] = images.tolist()
+    added = edited.add_point(record)
+    table = track_table(edited, ["track_length", "repeat_observations"])
+    repeats = dict(zip(table["point_index"].tolist(), table["repeat_observations"]))
+    assert repeats[added] == 1.0
+    assert sum(v != 0.0 for v in repeats.values()) == 1
 
 
 def test_points_at_infinity_have_zero_ray_angle_and_no_diagnostics(recon):
     table = track_table(recon)
-    at_infinity = table["at_infinity"] == 1.0
+    at_infinity = recon.positions_xyzw[:, 3] == 0.0
     assert (table["max_ray_angle_deg"][at_infinity] == 0.0).all()
     assert np.isnan(table["condition_number"][at_infinity]).all()
     assert np.isnan(table["inverse_depth_z"][at_infinity]).all()

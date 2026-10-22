@@ -138,14 +138,19 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           track table's columns, optionally only those one camera image sees, \
                           sorted by a column, a page at a time, each with its point id, its \
                           index and the values asked for. The columns are track_length, \
-                          image_count, rms_error_px, at_infinity, x, y, z, centroid_distance, \
+                          repeat_observations, rms_error_px, x, y, z, centroid_distance, \
                           normal_confidence, lowest_zncc, largest_zncc_self_similarity_radius, \
-                          max_ray_angle_deg, condition_number and inverse_depth_z. A bound \
-                          keeps the points whose value is at least min and at most max, both \
-                          inclusive; a point with no value in a column fails any bound on it \
-                          and sorts last whichever way the sort runs. A value is null where the \
-                          point has none: x, y, z, centroid_distance, condition_number and \
-                          inverse_depth_z at infinity, for one. The values returned default \
+                          max_ray_angle_deg, condition_number and inverse_depth_z. \
+                          repeat_observations is the track's observations beyond one per \
+                          image; anything but 0 is a defect. A bound keeps the points whose \
+                          value is at least min and at most max, both inclusive; a point with \
+                          no value in a column fails any bound on it and sorts last whichever \
+                          way the sort runs. A value is null where the point has none: x, y, z, \
+                          condition_number and inverse_depth_z at infinity, for one. A point at \
+                          infinity's centroid_distance is +infinity, sent as the string \"inf\": \
+                          it sorts above every finite distance, a finite max drops it, and the \
+                          bound {\"column\": \"centroid_distance\", \"min\": \"inf\"} keeps \
+                          exactly the points at infinity. The values returned default \
                           to the bound and sorted columns followed by track_length and \
                           rms_error_px. The reply carries live_points, the number of live \
                           points, and matched, the number that passed. The columns are \
@@ -173,19 +178,26 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                                     (
                                         "min",
                                         json!({
-                                            "type": "number",
                                             "description":
-                                                "The least value kept, inclusive. Omit for no \
-                                                 lower bound.",
+                                                "The least value kept, inclusive: a number, or \
+                                                 \"inf\" for +infinity. Omit for no lower bound.",
+                                            "anyOf": [
+                                                { "type": "number" },
+                                                { "type": "string", "enum": ["inf"] },
+                                            ],
                                         }),
                                     ),
                                     (
                                         "max",
                                         json!({
-                                            "type": "number",
                                             "description":
-                                                "The greatest value kept, inclusive. Omit for no \
-                                                 upper bound.",
+                                                "The greatest value kept, inclusive: a number, \
+                                                 or \"inf\" for +infinity. Omit for no upper \
+                                                 bound.",
+                                            "anyOf": [
+                                                { "type": "number" },
+                                                { "type": "string", "enum": ["inf"] },
+                                            ],
                                         }),
                                     ),
                                 ],

@@ -13,7 +13,8 @@ use crate::reconstruction::EditedReconstruction;
 /// A minimum and a maximum on one column, either of which may be left open.
 /// A row passes when its value is at least `min` and at most `max`; a row
 /// with no value (NaN) fails a bound that sets either. A bound that sets
-/// neither filters nothing.
+/// neither filters nothing. `+∞` (the `centroid_distance` of a point at
+/// infinity) is a value: it passes any `min` and fails any finite `max`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ColumnBounds {
     pub column: TrackTableColumn,
@@ -77,7 +78,8 @@ impl std::error::Error for TrackTableQueryError {}
 ///
 /// The sort is stable and breaks ties by ascending point index, whichever way
 /// it runs, and rows with no value sort after every row that has one, in
-/// either direction.
+/// either direction. An infinite value is a value, not "no value": `+∞` sorts
+/// after every finite value ascending and before them descending.
 ///
 /// # Errors
 ///
@@ -141,8 +143,9 @@ pub fn query_points(
                 (true, true) => Ordering::Equal,
                 (true, false) => Ordering::Greater,
                 (false, true) => Ordering::Less,
-                // Neither is NaN, so the comparison is total; `-0` and `0`
-                // compare equal and keep their point-index order.
+                // Neither is NaN, so the comparison is total, infinities
+                // included; `-0` and `0` compare equal and keep their
+                // point-index order.
                 (false, false) => {
                     let ascending = va.partial_cmp(&vb).unwrap_or(Ordering::Equal);
                     match order {

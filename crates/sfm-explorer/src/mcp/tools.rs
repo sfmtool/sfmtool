@@ -1683,7 +1683,7 @@ impl Args<'_> {
                     .optional_string("column")?
                     .ok_or_else(|| inner.error("needs column — a track table column's name."))?;
                 let column = super::find_points::parse_column(self.tool, &column)?;
-                let (min, max) = (inner.optional_f64("min")?, inner.optional_f64("max")?);
+                let (min, max) = (inner.bound_end("min")?, inner.bound_end("max")?);
                 if let (Some(lo), Some(hi)) = (min, max) {
                     if lo > hi {
                         return Err(self.error(format!(
@@ -1696,6 +1696,20 @@ impl Args<'_> {
                 Ok(sfmtool_core::analysis::track_table::ColumnBounds { column, min, max })
             })
             .collect()
+    }
+
+    /// One end of a `find_points` bound: a number, or the string `"inf"` for
+    /// `+∞`, which JSON cannot write as a number. `{"min": "inf"}` keeps
+    /// exactly the values that are `+∞`, the `centroid_distance` of a point
+    /// at infinity. Any other string is refused rather than read as no bound.
+    fn bound_end(&self, key: &str) -> Result<Option<f64>, ToolError> {
+        match self.map.get(key) {
+            Some(Value::String(text)) if text == "inf" => Ok(Some(f64::INFINITY)),
+            Some(Value::String(text)) => Err(self.error(format!(
+                "wants {key} to be a number or the string \"inf\" — got the string {text:?}."
+            ))),
+            _ => self.optional_f64(key),
+        }
     }
 
     /// `find_points`' sort: `{column, descending?}`, ascending by default.

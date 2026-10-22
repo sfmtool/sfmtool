@@ -105,12 +105,11 @@ fn stored_columns_read_the_stored_point() {
         let v = |c| table.values(c).unwrap()[row];
         let v64 = |c| table.values_f64(c).unwrap()[row];
         assert_eq!(v(TrackTableColumn::TrackLength), 2.0);
-        assert_eq!(v(TrackTableColumn::ImageCount), 2.0);
+        assert_eq!(v(TrackTableColumn::RepeatObservations), 0.0);
         assert_eq!(
             v(TrackTableColumn::RmsErrorPx),
             point.rms_reprojection_error
         );
-        assert_eq!(v(TrackTableColumn::AtInfinity), 0.0);
         assert_eq!(v64(TrackTableColumn::X), point.position.x);
         assert_eq!(v64(TrackTableColumn::Y), point.position.y);
         assert_eq!(v64(TrackTableColumn::Z), point.position.z);
@@ -125,7 +124,7 @@ fn stored_columns_read_the_stored_point() {
 }
 
 #[test]
-fn image_count_counts_an_image_once() {
+fn repeat_observations_counts_the_observations_beyond_one_per_image() {
     let mut recon = demo(4);
     // Point 0's two observations both in its first image.
     let first = recon.point_set.tracks[0].image_index;
@@ -134,11 +133,29 @@ fn image_count_counts_an_image_once() {
     let recon = edited(recon);
     let table = compute(
         &recon,
-        &[TrackTableColumn::TrackLength, TrackTableColumn::ImageCount],
+        &[
+            TrackTableColumn::TrackLength,
+            TrackTableColumn::RepeatObservations,
+        ],
     );
+    let repeats = table.values(TrackTableColumn::RepeatObservations).unwrap();
     assert_eq!(table.values(TrackTableColumn::TrackLength).unwrap()[0], 2.0);
-    assert_eq!(table.values(TrackTableColumn::ImageCount).unwrap()[0], 1.0);
-    assert_eq!(table.values(TrackTableColumn::ImageCount).unwrap()[1], 2.0);
+    assert_eq!(repeats[0], 1.0);
+    assert_eq!(&repeats[1..], [0.0; 3]);
+    let worst = query_points(
+        &recon,
+        &table,
+        &TrackTableQueryOptions {
+            bounds: vec![ColumnBounds {
+                column: TrackTableColumn::RepeatObservations,
+                min: Some(1.0),
+                max: None,
+            }],
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(worst, [0]);
 }
 
 #[test]
@@ -189,14 +206,13 @@ fn the_max_ray_angle_is_the_widest_pair_of_rays() {
 }
 
 #[test]
-fn a_point_at_infinity_has_no_position_and_no_triangulation() {
+fn a_point_at_infinity_has_no_position_an_infinite_distance_and_no_triangulation() {
     let recon = edited(with_bearing(demo(10), 4));
     let table = compute(&recon, &TrackTableColumn::ALL);
     let v = |c, row: usize| table.values(c).unwrap()[row];
     let v64 = |c, row: usize| table.values_f64(c).unwrap()[row];
-    assert_eq!(v(TrackTableColumn::AtInfinity, 4), 1.0);
     assert_eq!(v(TrackTableColumn::TrackLength, 4), 2.0);
-    assert_eq!(v(TrackTableColumn::ImageCount, 4), 2.0);
+    assert_eq!(v(TrackTableColumn::RepeatObservations, 4), 0.0);
     assert_eq!(
         v(TrackTableColumn::RmsErrorPx, 4),
         recon.point(4).unwrap().point().rms_reprojection_error
@@ -208,13 +224,13 @@ fn a_point_at_infinity_has_no_position_and_no_triangulation() {
     ] {
         assert!(v64(c, 4).is_nan(), "{c:?}");
     }
-    assert!(v(TrackTableColumn::CentroidDistance, 4).is_nan());
+    assert_eq!(v(TrackTableColumn::CentroidDistance, 4), f32::INFINITY);
     // A bearing's rays are parallel.
     assert_eq!(v(TrackTableColumn::MaxRayAngleDeg, 4), 0.0);
     assert!(v(TrackTableColumn::ConditionNumber, 4).is_nan());
     assert!(v(TrackTableColumn::InverseDepthZ, 4).is_nan());
     // Its neighbours are finite and unaffected.
-    assert_eq!(v(TrackTableColumn::AtInfinity, 3), 0.0);
+    assert!(v(TrackTableColumn::CentroidDistance, 3).is_finite());
     assert!(v64(TrackTableColumn::X, 3).is_finite());
     assert!(v(TrackTableColumn::ConditionNumber, 5).is_finite());
 }
@@ -502,8 +518,8 @@ fn merge_refuses_a_table_of_another_version() {
 
 // ── The query ────────────────────────────────────────────────────────────
 
-/// Ten points, point 7 at infinity (so no `x`), with `track_length` and `x`
-/// computed.
+/// Ten points, point 7 at infinity (so no `x` and a `centroid_distance` of
+/// `+∞`), with `track_length`, `x` and `centroid_distance` computed.
 fn query_fixture() -> (EditedReconstruction, TrackTable) {
     let recon = edited(with_bearing(demo(10), 7));
     let table = compute(
@@ -511,7 +527,7 @@ fn query_fixture() -> (EditedReconstruction, TrackTable) {
         &[
             TrackTableColumn::TrackLength,
             TrackTableColumn::X,
-            TrackTableColumn::AtInfinity,
+            TrackTableColumn::CentroidDistance,
         ],
     );
     (recon, table)
@@ -549,7 +565,7 @@ fn bounds_are_inclusive_and_all_must_pass() {
         &TrackTableQueryOptions {
             bounds: vec![
                 bound(TrackTableColumn::TrackLength, Some(2.0), None),
-                bound(TrackTableColumn::AtInfinity, None, Some(0.0)),
+                bound(TrackTableColumn::CentroidDistance, None, Some(f64::MAX)),
             ],
             ..Default::default()
         },
@@ -629,18 +645,50 @@ fn ties_keep_point_index_order_whichever_way_the_sort_runs() {
         .unwrap();
         assert_eq!(sorted, (0..10).collect::<Vec<u32>>(), "{order:?}");
     }
-    // The bearing ties with none: it sorts last ascending by at_infinity and
-    // first descending, the finite points keeping their order around it.
-    let descending = query_points(
-        &recon,
-        &table,
-        &TrackTableQueryOptions {
-            order_by: Some((TrackTableColumn::AtInfinity, SortOrder::Descending)),
-            ..Default::default()
-        },
-    )
-    .unwrap();
-    assert_eq!(descending, [7, 0, 1, 2, 3, 4, 5, 6, 8, 9]);
+}
+
+#[test]
+fn infinity_is_a_value_a_min_keeps_and_a_finite_max_drops() {
+    let (recon, table) = query_fixture();
+    let query = |min: Option<f64>, max: Option<f64>| {
+        query_points(
+            &recon,
+            &table,
+            &TrackTableQueryOptions {
+                bounds: vec![bound(TrackTableColumn::CentroidDistance, min, max)],
+                ..Default::default()
+            },
+        )
+        .unwrap()
+    };
+    assert_eq!(query(Some(f64::INFINITY), None), [7]);
+    assert!(query(Some(0.0), None).contains(&7));
+    assert!(!query(None, Some(f64::MAX)).contains(&7));
+    assert_eq!(query(None, Some(f64::MAX)).len(), 9);
+    // An infinite max is no upper end: it keeps the point at infinity.
+    assert_eq!(query(None, Some(f64::INFINITY)).len(), 10);
+}
+
+#[test]
+fn infinity_sorts_as_the_largest_value_and_before_no_value() {
+    // Four rows: a distance of 1, `+∞`, no value and 0.5.
+    let recon = edited(demo(4));
+    let mut table = compute(&recon, &[]);
+    table.values_f32[TrackTableColumn::CentroidDistance.ordinal()] =
+        Some(vec![1.0, f32::INFINITY, f32::NAN, 0.5]);
+    let sorted = |order| {
+        query_points(
+            &recon,
+            &table,
+            &TrackTableQueryOptions {
+                order_by: Some((TrackTableColumn::CentroidDistance, order)),
+                ..Default::default()
+            },
+        )
+        .unwrap()
+    };
+    assert_eq!(sorted(SortOrder::Ascending), [3, 0, 1, 2]);
+    assert_eq!(sorted(SortOrder::Descending), [1, 0, 3, 2]);
 }
 
 #[test]

@@ -187,7 +187,7 @@ fn seen_in_camera_image_keeps_the_points_that_image_observes() {
 }
 
 #[test]
-fn a_point_at_infinity_has_no_position_on_the_wire() {
+fn a_point_at_infinity_has_no_position_and_an_inf_distance_on_the_wire() {
     let (mut state, mut viewer) = editable();
     {
         let recon = state.scene[0].recon_mut();
@@ -196,12 +196,13 @@ fn a_point_at_infinity_has_no_position_on_the_wire() {
         p.w = 0.0;
         recon.rebuild_derived_fields();
     }
+    let live = state.scene[0].edited().live_indexes().count();
     let reply = answered(
         &mut state,
         &mut viewer,
         json!({
-            "bounds": [{ "column": "at_infinity", "min": 1 }],
-            "columns": ["x", "y", "z", "at_infinity", "max_ray_angle_deg", "condition_number"],
+            "bounds": [{ "column": "centroid_distance", "min": "inf" }],
+            "columns": ["x", "y", "z", "centroid_distance", "max_ray_angle_deg", "condition_number"],
         }),
     );
     assert_eq!(reply["matched"], json!(1), "{reply}");
@@ -210,16 +211,61 @@ fn a_point_at_infinity_has_no_position_on_the_wire() {
     assert_eq!(point["x"], Value::Null);
     assert_eq!(point["y"], Value::Null);
     assert_eq!(point["z"], Value::Null);
-    assert_eq!(point["at_infinity"], json!(1));
+    assert_eq!(point["centroid_distance"], json!("inf"));
     assert_eq!(point["max_ray_angle_deg"], json!(0.0));
     assert_eq!(point["condition_number"], Value::Null);
-    // A finite point has its position.
+    // A finite max drops it, and a finite point has its position and a
+    // number for its distance.
     let finite = answered(
         &mut state,
         &mut viewer,
-        json!({ "bounds": [{ "column": "at_infinity", "max": 0 }], "columns": ["x"], "limit": 1 }),
+        json!({
+            "bounds": [{ "column": "centroid_distance", "max": 1e12 }],
+            "columns": ["x", "centroid_distance"],
+            "limit": 500,
+        }),
     );
+    assert_eq!(finite["matched"], json!(live - 1), "{finite}");
+    assert!(!indexes(&finite).contains(&5));
     assert!(finite["points"][0]["x"].is_f64(), "{finite}");
+    assert!(
+        finite["points"][0]["centroid_distance"].is_f64(),
+        "{finite}"
+    );
+    // A max of "inf" is no upper end, and sorted descending the point at
+    // infinity comes first.
+    let sorted = answered(
+        &mut state,
+        &mut viewer,
+        json!({
+            "bounds": [{ "column": "centroid_distance", "max": "inf" }],
+            "order_by": { "column": "centroid_distance", "descending": true },
+            "limit": 2,
+        }),
+    );
+    assert_eq!(sorted["matched"], json!(live), "{sorted}");
+    assert_eq!(indexes(&sorted)[0], 5);
+}
+
+#[test]
+fn repeat_observations_count_the_observations_beyond_one_per_image() {
+    let (mut state, mut viewer) = editable();
+    {
+        let recon = state.scene[0].recon_mut();
+        let rows: Vec<usize> = (0..recon.point_set.tracks.len())
+            .filter(|&k| recon.point_set.tracks[k].point_index == 4)
+            .collect();
+        recon.point_set.tracks[rows[1]].image_index = recon.point_set.tracks[rows[0]].image_index;
+        recon.rebuild_derived_fields();
+    }
+    let reply = answered(
+        &mut state,
+        &mut viewer,
+        json!({ "bounds": [{ "column": "repeat_observations", "min": 1 }] }),
+    );
+    assert_eq!(reply["matched"], json!(1), "{reply}");
+    assert_eq!(reply["points"][0]["index"], json!(4));
+    assert_eq!(reply["points"][0]["repeat_observations"], json!(1));
 }
 
 #[test]
@@ -255,6 +301,17 @@ fn the_refusals_name_the_columns() {
         backwards.0,
         "find_points wants each bound's min to be at most its max — got min 5 and max 3 for \
          track_length."
+    );
+    let other_string = refused_call(
+        &mut state,
+        &mut viewer,
+        "find_points",
+        json!({ "bounds": [{ "column": "centroid_distance", "min": "infinity" }] }),
+    );
+    assert_eq!(
+        other_string.0,
+        "find_points.bounds wants min to be a number or the string \"inf\" — got the string \
+         \"infinity\"."
     );
     let no_column = refused_call(
         &mut state,

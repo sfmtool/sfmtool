@@ -39,14 +39,14 @@ pub use track_geometry::{
 pub enum TrackTableColumn {
     /// Number of observations in the track.
     TrackLength,
-    /// Number of distinct images among the track's observations, less than
-    /// the track length where one image holds several observations.
-    ImageCount,
+    /// The track's observations beyond one per image: the track length less
+    /// the number of distinct images among its observations. Non-zero is a
+    /// defect, an image holding several observations of the point, which a
+    /// GLOMAP solve can produce.
+    RepeatObservations,
     /// The point's stored RMS reprojection error in pixels,
     /// [`Point3D::rms_reprojection_error`](crate::reconstruction::Point3D::rms_reprojection_error).
     RmsErrorPx,
-    /// `1` for a point at infinity (`w = 0`), `0` for a finite one.
-    AtInfinity,
     /// The stored position's x, in the stored frame. No value at infinity.
     X,
     /// The stored position's y. No value at infinity.
@@ -55,7 +55,7 @@ pub enum TrackTableColumn {
     Z,
     /// Distance from the posed cameras' centroid, as
     /// [`ImageSet::placement_scale`](crate::reconstruction::ImageSet::placement_scale)
-    /// measures it. No value at infinity; absent with no posed image.
+    /// measures it; `+∞` for a point at infinity, absent with no posed image.
     CentroidDistance,
     /// The stored `normal_confidence` byte, 0 to 255; absent without the
     /// column.
@@ -90,15 +90,14 @@ pub enum ColumnCost {
 }
 
 /// The number of columns, the length of [`TrackTableColumn::ALL`].
-const COLUMN_COUNT: usize = 14;
+const COLUMN_COUNT: usize = 13;
 
 impl TrackTableColumn {
     /// Every column, in the order the spec's catalogue lists them.
     pub const ALL: [TrackTableColumn; COLUMN_COUNT] = [
         TrackTableColumn::TrackLength,
-        TrackTableColumn::ImageCount,
+        TrackTableColumn::RepeatObservations,
         TrackTableColumn::RmsErrorPx,
-        TrackTableColumn::AtInfinity,
         TrackTableColumn::X,
         TrackTableColumn::Y,
         TrackTableColumn::Z,
@@ -115,9 +114,8 @@ impl TrackTableColumn {
     pub fn wire_name(self) -> &'static str {
         match self {
             TrackTableColumn::TrackLength => "track_length",
-            TrackTableColumn::ImageCount => "image_count",
+            TrackTableColumn::RepeatObservations => "repeat_observations",
             TrackTableColumn::RmsErrorPx => "rms_error_px",
-            TrackTableColumn::AtInfinity => "at_infinity",
             TrackTableColumn::X => "x",
             TrackTableColumn::Y => "y",
             TrackTableColumn::Z => "z",
@@ -431,29 +429,29 @@ fn point_values(
     for &column in columns {
         let value = match column {
             TrackTableColumn::TrackLength => view.observations().len() as f64,
-            TrackTableColumn::ImageCount => {
+            TrackTableColumn::RepeatObservations => {
                 let mut images: Vec<u32> =
                     view.observations().iter().map(|o| o.image_index).collect();
+                let length = images.len();
                 images.sort_unstable();
                 images.dedup();
-                images.len() as f64
+                (length - images.len()) as f64
             }
             TrackTableColumn::RmsErrorPx => f64::from(point.rms_reprojection_error),
-            TrackTableColumn::AtInfinity => {
-                if at_infinity {
-                    1.0
-                } else {
-                    0.0
-                }
-            }
             TrackTableColumn::X => finite(point.position.x),
             TrackTableColumn::Y => finite(point.position.y),
             TrackTableColumn::Z => finite(point.position.z),
+            // A point at infinity is farther than any finite point, so its
+            // distance is `+∞`, a value that sorts and bounds like one.
             TrackTableColumn::CentroidDistance => {
-                finite(crate::reconstruction::ImageSet::placement_scale_from(
-                    &context.centroid,
-                    &point.position,
-                ))
+                if at_infinity {
+                    f64::INFINITY
+                } else {
+                    crate::reconstruction::ImageSet::placement_scale_from(
+                        &context.centroid,
+                        &point.position,
+                    )
+                }
             }
             TrackTableColumn::NormalConfidence => {
                 view.normal_confidence().map_or(f64::NAN, f64::from)

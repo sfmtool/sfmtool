@@ -34,12 +34,13 @@ fn all_names() -> String {
 /// on each call and never stored.
 ///
 /// Each column is one value per point under a fixed name: ``track_length``,
-/// ``image_count``, ``rms_error_px``, ``at_infinity``, ``x``, ``y``, ``z``,
+/// ``repeat_observations``, ``rms_error_px``, ``x``, ``y``, ``z``,
 /// ``centroid_distance``, ``normal_confidence``, ``lowest_zncc``,
 /// ``largest_zncc_self_similarity_radius``, ``max_ray_angle_deg``,
 /// ``condition_number`` and ``inverse_depth_z``. These are the numbers the
 /// viewer shows for the same points. A point with no value in a column (a
-/// point at infinity has no ``x``) holds NaN there.
+/// point at infinity has no ``x``) holds NaN there; a point at infinity's
+/// ``centroid_distance`` is ``inf``.
 ///
 /// Args:
 ///     recon: An :class:`SfmrReconstruction`, or an

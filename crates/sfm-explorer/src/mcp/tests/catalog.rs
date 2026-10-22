@@ -52,7 +52,7 @@ fn representative_tool_calls() -> Vec<(&'static str, Value)> {
                 "bounds": [{ "column": "track_length", "min": 2 }],
                 "seen_in_camera_image": 0,
                 "order_by": { "column": "rms_error_px", "descending": true },
-                "columns": ["track_length", "image_count"],
+                "columns": ["track_length", "repeat_observations"],
                 "offset": 0,
                 "limit": 10,
             }),
