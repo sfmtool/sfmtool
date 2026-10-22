@@ -1,7 +1,7 @@
 # Track Table
 
 **Status:** Draft. Amends [gui/track-table.md](../gui/track-table.md) (the
-picture columns, the Size slider, the computed columns and Filter the 3D view),
+Crop picture column, the computed columns and Filter the 3D view),
 [gui/mcp-server.md](../gui/mcp-server.md) (the panel-query tools and the
 picture columns' refusal in `find_points`),
 [gui/point-cloud-rendering.md](../gui/point-cloud-rendering.md) (the
@@ -15,8 +15,10 @@ the asked-for *Find points* operation that fills the cache are built and
 specified in [gui/mcp-server.md](../gui/mcp-server.md) § "`find_points`". The
 Track Table panel with the stored columns, sorting, bounds, selection and
 hover, and the quiet *Track Table columns* job that fills the cache with the
-stored columns, is built and filed as [gui/track-table.md](../gui/track-table.md).
-This draft holds what remains.
+stored columns, is built and filed as [gui/track-table.md](../gui/track-table.md),
+and so are its Patch picture column, the Size slider and the texture cache
+the picture cells draw from ([gui/track-table.md](../gui/track-table.md)
+§ "The Patch column"). This draft holds what remains.
 
 Decided:
 
@@ -78,8 +80,10 @@ still being decoded.
   `condition_number` or `inverse_depth_z` sorts descending, and on
   `max_ray_angle_deg` ascending, the bad end first. The panel's sort rule for
   `TrackTableColumn` already says so.
-- **The rows** keep a uniform height for `ScrollArea::show_rows`: the picture
-  size while a picture column is shown, and text height while neither is.
+- **The rows** keep a uniform height for `ScrollArea::show_rows`, set by the
+  Size slider while a picture column is shown, as they are for the Patch
+  column now ([gui/track-table.md](../gui/track-table.md) § "The Patch
+  column").
 - **The query** gains the 3D toggle (§ "Filtering the 3D view") as panel
   state, beside the bounds, the sort, the visible columns and the selected-image
   box.
@@ -89,12 +93,14 @@ still being decoded.
 The two picture columns show what each point looks like in the
 photographs, which a column of numbers does not. Crop comes before Patch, as
 in Track View, so the photograph as it is comes before the picture made from
-it.
+it. The Patch column is built: what it shows, when it is offered, the Size
+slider, its hover and how its pictures are cached are in
+[gui/track-table.md](../gui/track-table.md) § "The Patch column". Crop joins
+it among the pinned columns, between Point and Patch.
 
 | Column | Shows | Absent when |
 |---|---|---|
 | **Crop** (`crop`) | the reference photograph cut around the patch's outline, with the outline drawn over it, by Track View's crop rule ([track-view.md](../gui/track-view.md) § "The observation table", the paragraph "The crop beside the tile shows the patch as the photograph holds it"): the patch frame at the reference observation's keypoint, its boundary projected through the camera's own model, the bounding box widened by one pixel and made square, at most 128 texels a side. Track View strokes the outline in the row's verdict colour; the table has no verdict and strokes it white over a wider dark stroke, the way Track View draws its marks. The photograph is the point's reference observation (§ "The reference photograph") | the reconstruction has no patch frames or no stored keypoints, the usual case for a `sift_files` reconstruction |
-| **Patch** (`patch`) | the point's patch bitmap (`PointView::patch_bitmap`): the bitmap the file stores, or the display patch bitmap the open renders for a file with patch frames and no bitmaps. This is the picture in Track View's header slot (`patch::stored_patch_image`), not Track View's per-row *Patch* tile, which is rendered again from each observation's own photograph. It is drawn with nearest filtering | the reconstruction has no patch bitmap column: no stored bitmaps, and no display bitmaps, because the file has no patch frames, has no stored keypoints, or none of its photographs could be read. A `sift_files` reconstruction is usually in this case |
 
 #### The reference photograph
 
@@ -149,21 +155,20 @@ store a reference.
   passes its track's values. A `PointView` supplies the same values, so the
   table builds no track per row. Points at infinity are already handled by the
   helpers through the patch frame's `w` and homogeneous projection.
-- **The pictures set the row height.** A **Size** slider in the header sets
-  the picture size from 32 to 128 points, defaulting to 64. Every row has that
-  height while a picture column is shown, and text height while neither is
-  shown, so `show_rows` keeps uniform rows.
+- **The pictures set the row height.** The Size slider built with the Patch
+  column sets the Crop pictures' size too, and the row height while either
+  picture column is shown.
 - **Hovering the crop** shows Track View's crop hover view: the crop centred
   in three times its width and height of the photograph, with the outline, a
   dot at the keypoint, the amber ring where the point projects, and the
-  photograph's name above it. **Hovering the patch** shows the bitmap at three
-  times the Size, with the text Track View's header slot gives a viewed point
-  (`track_patch_hover`), or, for a point that stores no reference, the text
-  in § "The reference photograph". A click on a picture is
-  the row's click, as in Track View.
-- **Picture columns cannot be sorted or bounded.** Clicking their headings
-  does nothing, and they have no bounds boxes.
-- **Each cell says why it is empty.** A picture cell is one of:
+  photograph's name above it. **Hovering the patch** of a point that stores no
+  reference shows the text in § "The reference photograph" in place of the
+  stored-patch text the Patch cell's hover shows now. A click on a picture is
+  the row's click, as it is on a Patch cell.
+- **Crop cannot be sorted or bounded,** as Patch cannot.
+- **Each cell says why it is empty.** A Crop cell is one of the picture, *no
+  patch* or an empty frame the Patch cell draws (`CellPicture`), or one of the
+  further cases below:
   - the picture;
   - an empty frame while its photograph is decoding or its reference is being
     picked;
@@ -174,13 +179,10 @@ store a reference.
     (`crop::region` gives no region). An outline that projects but lies
     outside the photograph still gives a crop, drawn transparent where it is
     off the photograph, as in Track View;
-  - *no patch*, for an all-zero bitmap row, which the display render leaves
-    for a point it could not render.
-- **Only visible rows are drawn.** Patch textures come from bitmaps already in
-  memory and are cached in a texture cache keyed by
-  `(ReconId, point, document_serial)` and bounded by entry count, so
-  scrolling back over rows already seen costs no upload. Crops need their
-  photograph decoded. The table asks the shared photograph cache
+- **Only visible rows are drawn.** Crop textures go in the texture cache the
+  Patch cells use (`PictureTextures`, keyed by column, node, point and
+  document serial and bounded by entry count). Crops need their photograph
+  decoded. The table asks the shared photograph cache
   (`state::display_photograph`) for the visible rows' photographs. Track View
   only checks that cache, so the table is a new source of decodes.
 - **Requests wait for the scroll to stop.** A sort by a number puts
@@ -322,15 +324,12 @@ queue work, those captures found nine problems that the tests had passed:
 layout, contrast, a wrong progress fraction and a missing title line.
 
 Step 3a, the panel with the stored columns, sorting, bounds, selection and
-hover and the quiet table job, is built
-([gui/track-table.md](../gui/track-table.md)).
+hover and the quiet table job, and step 3b, the Patch column, the Size slider
+and `stored_patch_image` moved into `patch_pictures`, a module both panels
+use, are built ([gui/track-table.md](../gui/track-table.md)).
 
-- **3b. The Patch column and the Size slider.** The Patch picture column, the
-  Size slider that sets the picture size and the row height, and moving
-  `stored_patch_image` out of Track View's private `patch` module into the
-  module both panels use.
-- **4. The Crop column**, moving Track View's tile and crop helpers into a
-  shared module and rewriting them to take values rather than a track, with
+- **4. The Crop column**, moving Track View's tile and crop helpers into
+  `patch_pictures`, beside `stored_patch_image`, and rewriting them to take values rather than a track, with
   requests that wait for the scroll to stop and reference picks for the
   visible rows that store none.
 - **5. The computed columns in the panel**, filled by the quiet table job.
