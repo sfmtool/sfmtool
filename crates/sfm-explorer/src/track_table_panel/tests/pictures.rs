@@ -1,7 +1,7 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Headless tests for the Track Table's Patch column, the *Size* slider and
+//! Headless tests for the Track Table's Patch column, the *Size* dropdown and
 //! the texture cache the picture cells draw from.
 
 use std::sync::Arc;
@@ -11,7 +11,7 @@ use sfmtool_core::analysis::track_table::TrackTableColumn;
 
 use super::super::pictures::{
     Absent, CellPicture, Made, PictureColumn, PictureKey, PictureTextures, DEFAULT_PICTURE_SIZE,
-    MIN_PICTURE_SIZE, PICTURE_PAD, TEXTURE_CAPACITY,
+    PICTURE_PAD, PICTURE_SIZES, TEXTURE_CAPACITY,
 };
 use super::super::{text_row_height, TrackTablePanel};
 use super::{click, frame, input, painted_at, shown, state, POINTS};
@@ -66,7 +66,7 @@ fn drawn_row_height(panel: &TrackTablePanel) -> f32 {
 }
 
 /// A reconstruction with no patch bitmap, as a `sift_files` one usually is,
-/// has no Patch column and no Size slider, and its rows are a line of text
+/// has no Patch column and no Size dropdown, and its rows are a line of text
 /// high. One with bitmaps has the Patch column, shown by default and drawn
 /// before the value columns, and its rows are the default picture size high.
 #[test]
@@ -191,38 +191,44 @@ fn the_texture_cache_releases_the_pictures_drawn_longest_ago() {
     assert!(!textures.holds(&key(1)));
 }
 
-/// The Size slider sets the row height, and the rows at the top stay there
-/// when it changes.
+/// Each size the Size dropdown offers sets the row height, and the rows at
+/// the top stay there when it changes. At 16 pt the row is a text row high,
+/// since a picture and its padding are shorter than a line of text.
 #[test]
-fn the_size_slider_sets_the_row_height_and_keeps_the_top_row() {
+fn each_picture_size_sets_the_row_height_and_keeps_the_top_row() {
     let (mut state, id) = state_with_bitmaps();
     let (ctx, mut panel) = shown_short(&mut state);
     state.select_point(PointRef {
         recon: id,
-        point: 30,
+        point: 20,
     });
     short(&ctx, &mut panel, &mut state);
     short(&ctx, &mut panel, &mut state);
+    // Point 20, low enough that the rows below the top one fill the window
+    // even at 16 pt, so the scroll can keep the top row at the top.
     let top = drawn_points(&panel)[0];
-    assert!(top > 20, "scrolled down to the selection: {top}");
+    assert!(top > 10, "scrolled down to the selection: {top}");
 
-    for size in [MIN_PICTURE_SIZE, 128.0, DEFAULT_PICTURE_SIZE] {
+    let mut text_height = 0.0;
+    run_frame_headless(&ctx, input(100.0), |ui| text_height = text_row_height(ui));
+    for size in [16.0, 128.0, 32.0, DEFAULT_PICTURE_SIZE] {
         panel.picture_size.0 = size;
         short(&ctx, &mut panel, &mut state);
-        assert_eq!(drawn_row_height(&panel), size + 2.0 * PICTURE_PAD);
+        assert_eq!(
+            drawn_row_height(&panel),
+            (size + 2.0 * PICTURE_PAD).max(text_height),
+            "size {size}"
+        );
         assert_eq!(drawn_points(&panel)[0], top, "size {size}");
         short(&ctx, &mut panel, &mut state);
         assert_eq!(drawn_points(&panel)[0], top, "size {size}, settled");
     }
 
-    // Hiding the pictures goes to text rows. Those are short enough that the
-    // scroll stops at the last row before the top row can reach the top, so
-    // the top row stays on screen rather than at the top.
+    // Hiding the pictures goes to text rows, and the top row stays at the top.
     panel.query.set_picture_shown(PictureColumn::Patch, false);
     short(&ctx, &mut panel, &mut state);
-    let drawn = drawn_points(&panel);
-    assert!(drawn.contains(&top), "{drawn:?}");
-    assert_eq!(*drawn.last().unwrap(), POINTS as u32 - 1);
+    assert_eq!(drawn_row_height(&panel), text_height);
+    assert_eq!(drawn_points(&panel)[0], top, "text rows");
 }
 
 /// While the rows are of the version before an edit, their cells draw the
@@ -318,14 +324,34 @@ fn the_patch_heading_does_not_sort() {
     assert_eq!(panel.rows(), (0..POINTS as u32).collect::<Vec<_>>());
 }
 
-/// The smallest picture row is taller than a text row, so it still holds a
-/// line of body text.
+/// The dropdown offers 16, 32, 64 and 128 pt, and 64 before another is
+/// picked.
+#[test]
+fn the_size_dropdown_offers_four_sizes_and_starts_at_64() {
+    assert_eq!(PICTURE_SIZES, [16.0, 32.0, 64.0, 128.0]);
+    assert_eq!(DEFAULT_PICTURE_SIZE, 64.0);
+    assert_eq!(TrackTablePanel::new().picture_size.0, DEFAULT_PICTURE_SIZE);
+}
+
+/// Every picture row holds a line of body text. At 16 pt the picture and its
+/// padding are shorter than a text row, so the row is a text row high; at 32
+/// pt and up the picture row is the taller.
 #[test]
 fn the_smallest_row_holds_a_line_of_text() {
-    let ctx = egui::Context::default();
-    let mut height = 0.0;
-    run_frame_headless(&ctx, input(100.0), |ui| height = text_row_height(ui));
-    assert!(MIN_PICTURE_SIZE + 2.0 * PICTURE_PAD > height);
+    let (mut state, _) = state_with_bitmaps();
+    let (ctx, mut panel) = shown_short(&mut state);
+    let mut text_height = 0.0;
+    run_frame_headless(&ctx, input(100.0), |ui| text_height = text_row_height(ui));
+    assert!(
+        16.0 + 2.0 * PICTURE_PAD < text_height,
+        "16 pt needs the text row"
+    );
+    assert!(32.0 + 2.0 * PICTURE_PAD > text_height);
+    for size in PICTURE_SIZES {
+        panel.picture_size.0 = size;
+        short(&ctx, &mut panel, &mut state);
+        assert!(drawn_row_height(&panel) >= text_height, "size {size}");
+    }
 }
 
 /// The Patch column is pinned with the Point column: scrolled sideways, its
@@ -396,8 +422,121 @@ fn the_patch_column_stays_put_when_the_table_scrolls_sideways() {
 /// keeps it inside a small window.
 #[test]
 fn the_hover_view_is_three_times_the_size_up_to_its_cap() {
-    use super::super::pictures::{hover_size, MAX_HOVER_SIZE, MAX_PICTURE_SIZE};
+    use super::super::pictures::{hover_size, MAX_HOVER_SIZE};
     assert_eq!(hover_size(DEFAULT_PICTURE_SIZE), 3.0 * DEFAULT_PICTURE_SIZE);
-    assert_eq!(hover_size(MIN_PICTURE_SIZE), 3.0 * MIN_PICTURE_SIZE);
-    assert_eq!(hover_size(MAX_PICTURE_SIZE), MAX_HOVER_SIZE);
+    assert_eq!(hover_size(16.0), 48.0);
+    assert_eq!(hover_size(128.0), MAX_HOVER_SIZE);
+}
+
+/// One frame of the panel in the short window with `events` delivered, and
+/// the AccessKit nodes it built: what `get_widgets` reads a widget's role,
+/// name, value and rectangle from.
+fn accessible_frame(
+    ctx: &egui::Context,
+    panel: &mut TrackTablePanel,
+    state: &mut AppState,
+    events: Vec<egui::Event>,
+) -> Vec<egui::accesskit::Node> {
+    let mut raw = input(400.0);
+    raw.events = events;
+    let mut output = ctx.run_ui(raw, |ui| panel.show(ui, state));
+    output.textures_delta.clear();
+    output
+        .platform_output
+        .accesskit_update
+        .expect("AccessKit is on")
+        .nodes
+        .into_iter()
+        .map(|(_, node)| node)
+        .collect()
+}
+
+/// Press and release the primary button at `at`, then draw one more frame and
+/// return its nodes.
+fn accessible_click(
+    ctx: &egui::Context,
+    panel: &mut TrackTablePanel,
+    state: &mut AppState,
+    at: egui::Pos2,
+) -> Vec<egui::accesskit::Node> {
+    for pressed in [true, false] {
+        accessible_frame(
+            ctx,
+            panel,
+            state,
+            vec![
+                egui::Event::PointerMoved(at),
+                egui::Event::PointerButton {
+                    pos: at,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::default(),
+                },
+            ],
+        );
+    }
+    accessible_frame(ctx, panel, state, Vec::new())
+}
+
+/// The one node of `role`.
+fn only(nodes: &[egui::accesskit::Node], role: egui::accesskit::Role) -> &egui::accesskit::Node {
+    let mut found = nodes.iter().filter(|node| node.role() == role);
+    let node = found.next().unwrap_or_else(|| panic!("no {role:?}"));
+    assert!(found.next().is_none(), "more than one {role:?}");
+    node
+}
+
+/// The centre of a node's rectangle.
+fn centre(node: &egui::accesskit::Node) -> egui::Pos2 {
+    let bounds = node.bounds().expect("the node has a rectangle");
+    egui::pos2(
+        ((bounds.x0 + bounds.x1) / 2.0) as f32,
+        ((bounds.y0 + bounds.y1) / 2.0) as f32,
+    )
+}
+
+/// The Size dropdown is named *Size* in the accessibility tree, with the size
+/// it shows as its value, which is what `get_widgets` lists it by. A click on
+/// it opens its four sizes, and a click on one picks it, as an agent does
+/// through `click`.
+#[test]
+fn the_size_dropdown_is_named_and_a_click_on_an_entry_picks_its_size() {
+    use egui::accesskit::Role;
+    let (mut state, _) = state_with_bitmaps();
+    let ctx = egui::Context::default();
+    ctx.enable_accesskit();
+    let mut panel = TrackTablePanel::new();
+    accessible_frame(&ctx, &mut panel, &mut state, Vec::new());
+    state.settle_track_table_columns();
+    let nodes = accessible_frame(&ctx, &mut panel, &mut state, Vec::new());
+    let dropdown = only(&nodes, Role::ComboBox);
+    assert_eq!(dropdown.label(), Some("Size"));
+    assert_eq!(dropdown.value(), Some("64 pt"));
+
+    for (pick, text) in [(16.0, "16 pt"), (128.0, "128 pt"), (32.0, "32 pt")] {
+        let nodes = accessible_frame(&ctx, &mut panel, &mut state, Vec::new());
+        let at = centre(only(&nodes, Role::ComboBox));
+        let nodes = accessible_click(&ctx, &mut panel, &mut state, at);
+        // The update's nodes are in no drawing order, so the entries are
+        // read top to bottom.
+        let mut entries: Vec<(f64, &str)> = nodes
+            .iter()
+            .filter(|node| node.role() == Role::Button)
+            .filter_map(|node| Some((node.bounds()?.y0, node.label()?)))
+            .filter(|(_, name)| name.ends_with(" pt"))
+            .collect();
+        entries.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let entries: Vec<&str> = entries.into_iter().map(|(_, name)| name).collect();
+        assert_eq!(entries, ["16 pt", "32 pt", "64 pt", "128 pt"]);
+        let entry = nodes
+            .iter()
+            .find(|node| node.role() == Role::Button && node.label() == Some(text))
+            .expect("the entry");
+        let at = centre(entry);
+        let nodes = accessible_click(&ctx, &mut panel, &mut state, at);
+        assert_eq!(panel.picture_size.0, pick);
+        let dropdown = only(&nodes, Role::ComboBox);
+        assert_eq!(dropdown.label(), Some("Size"));
+        assert_eq!(dropdown.value(), Some(text));
+    }
 }

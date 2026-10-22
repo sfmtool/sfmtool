@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The Track Table's picture columns: what each one shows, the picture size
-//! the header's *Size* slider sets, and the texture cache the cells draw from.
+//! the header's *Size* dropdown sets, and the texture cache the cells draw from.
 //!
 //! See `specs/gui/track-table.md` § "The Patch column" and § "The Crop
 //! column". The picture columns are pinned beside the Point column and set the
@@ -24,13 +24,12 @@ use crate::document::VersionSerial;
 use crate::patch_pictures::crop::{CropPicture, DrawnCrop, Outline, CELL_TEXTURE_OPTIONS};
 use crate::scene::ReconId;
 
-/// The smallest picture size the *Size* slider sets, in points. A row is then
-/// [`PICTURE_PAD`] taller on each side, which still holds a line of body text
-/// with room around it.
-pub(super) const MIN_PICTURE_SIZE: f32 = 32.0;
-/// The largest picture size the *Size* slider sets, in points.
-pub(super) const MAX_PICTURE_SIZE: f32 = 128.0;
-/// The picture size before the slider is moved, in points.
+/// The picture sizes the *Size* dropdown offers, in points, smallest first.
+/// At 16 a picture and its [`PICTURE_PAD`] are shorter than a line of body
+/// text, so the row is a text row high (`ColumnLayout::row_height`) and the
+/// picture is centred in it.
+pub(super) const PICTURE_SIZES: [f32; 4] = [16.0, 32.0, 64.0, 128.0];
+/// The picture size before another is picked, in points.
 pub(super) const DEFAULT_PICTURE_SIZE: f32 = 64.0;
 /// Space between a picture and its row's top and bottom edges, so that the
 /// pictures of two rows do not touch.

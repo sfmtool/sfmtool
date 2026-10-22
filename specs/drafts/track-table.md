@@ -13,7 +13,7 @@ specified in [gui/mcp-server.md](../gui/mcp-server.md) § "`find_points`". The
 Track Table panel with the stored columns, sorting, bounds, selection and
 hover, and the quiet *Track Table columns* job that fills the cache with the
 stored columns, is built and filed as [gui/track-table.md](../gui/track-table.md),
-and so are its Patch picture column, the Size slider and the texture cache
+and so are its Patch picture column, the Size dropdown and the texture cache
 the picture cells draw from ([gui/track-table.md](../gui/track-table.md)
 § "The Patch column"), and so are its Crop picture column, the reference picks
 that give a point with no stored reference its photograph, and the
@@ -171,10 +171,10 @@ layout, contrast, a wrong progress fraction and a missing title line.
 
 Step 3a, the panel with the stored columns, sorting, bounds, selection and
 hover and the quiet table job, step 3b, the Patch column, the Size slider
-and `stored_patch_image` moved into `patch_pictures`, a module both panels
-use, and step 4, the Crop column with the crop moved into `patch_pictures` and
-made to take values, the requests that wait for the scroll to stop and the
-reference picks, are built ([gui/track-table.md](../gui/track-table.md)).
+(since replaced by the Size dropdown) and `stored_patch_image` moved into
+`patch_pictures`, a module both panels use, and step 4, the Crop column with
+the crop moved into `patch_pictures` and made to take values, the requests
+that wait for the scroll to stop and the reference picks, are built ([gui/track-table.md](../gui/track-table.md)).
 
 - **5. The computed columns in the panel**, filled by the quiet table job.
 - **6. Filter the 3D view** (dim and hide).

@@ -66,7 +66,7 @@ Panels menu opens it.
 ```
 ┌ Track Table ───────────────────────────────────────────────────────────────────────┐
 │ dino  1,204 of 9,941 points  · 3 with repeat observations  [Columns]               │
-│   Size [──●──] 64 pt                                                               │
+│   Size [64 pt ▾]                                                                   │
 │ ☐ Only points seen in IMG_0042.jpg                                                 │
 ├────────┬────────┬────────┬─────────┬─────────────┬────────────┬──────────┬────────┤
 │ Point  │ Crop   │ Patch  │ Track ▼ │ Repeat obs. │ Error (px) │ Distance │        │
@@ -194,7 +194,7 @@ decoded.
 The **Patch** column (`patch` in the query, `PictureColumn::Patch`) is a
 picture column: it shows what each point looks like, which a column of numbers
 does not, so a person sorting by a number sees each point's patch next to it.
-The column, the *Size* slider and the texture cache are in
+The column, the *Size* dropdown and the texture cache are in
 [track_table_panel/pictures.rs](../../crates/sfm-explorer/src/track_table_panel/pictures.rs).
 
 - **What it shows** is the point's patch bitmap (`PointView::patch_bitmap`):
@@ -212,7 +212,7 @@ The column, the *Size* slider and the texture cache are in
   bitmap** (`EditedReconstruction::has_patch_bitmaps`), stored or rendered by
   the open for display. A reconstruction with neither, the usual case for a
   `sift_files` one, has no Patch column, no entry for it in the Columns menu
-  and no *Size* slider, and its rows are text high; the column appears after
+  and no *Size* dropdown, and its rows are text high; the column appears after
   Convert to Embedded Patches, whose open renders display bitmaps.
 - **It is shown by default, after the Crop column.** It is drawn after the
   Point column and the Crop column, as in Track View the photograph comes
@@ -223,18 +223,32 @@ The column, the *Size* slider and the texture cache are in
 - **It cannot be sorted or bounded.** Its heading takes no click and it has no
   bound boxes. Its heading's hover text says what the column shows and that
   it cannot be sorted or bounded.
-- **Size.** A slider in the header, *Size*, sets the picture size from 32 to
-  128 pt, 64 by default, in whole points, for both picture columns. Every row
-  is the picture size and 2 pt above and below high while a picture column is
-  shown, so `show_rows` keeps rows of one height; at 32 pt a row is still
-  taller than a line of text. With both hidden the slider is greyed and the
-  rows are text high. The picture is centred in a cell the picture size and 6 pt either
-  side wide, or wider where the heading needs it. When the row height changes,
-  by the slider or by showing or hiding the column, the vertical scroll
-  offset is scaled by the new height over the old, so the row at the top stays
-  at the top, unless the rows end first. The size is panel state like the
-  query: it is not saved. A reconstruction that can supply neither picture
-  column has no slider.
+- **Size.** A dropdown in the header, *Size*, sets the picture size for both
+  picture columns to one of 16, 32, 64 and 128 pt (`PICTURE_SIZES`), 64 by
+  default. 16 pt fits more rows on screen for when the picture matters less.
+  Every row is the picture size and 2 pt above and below high while a picture
+  column is shown, or a text row high where that is taller, so `show_rows`
+  keeps rows of one height and every row holds a line of text. At 16 pt the
+  picture and its padding are shorter than a text row, so the row is a text
+  row high and the picture is centred in it; at 32 pt and up the picture row
+  is the taller. With both picture columns hidden the dropdown is greyed and
+  the rows are text high. The picture is centred in a cell the picture size and
+  6 pt either side wide, or wider where the heading needs it. When the row
+  height changes, by the dropdown or by showing or hiding the column, the
+  vertical scroll offset is scaled by the new height over the old, so the row
+  at the top stays at the top, unless the rows end first. The size is panel
+  state like the query: it is not saved. A reconstruction that can supply
+  neither picture column has no dropdown.
+
+  The dropdown is named *Size* in the accessibility tree, as its AccessKit
+  label, and its value is the size it shows (`64 pt`), so `get_widgets` lists
+  it as a `combo_box` named `Size` with that `value`
+  ([mcp-server.md](mcp-server.md) § "`get_widgets`"). egui's `labelled_by`,
+  which links it to the *Size* label drawn before it, leaves the label empty,
+  so the name is set on the node itself. Its entries are buttons named
+  `16 pt` to `128 pt` in the dropdown it opens, so an agent picks a size with
+  two `click`s. The label and the dropdown stay together when the header line
+  wraps.
 - **Hovering a picture** shows it at three times the picture size, at most
   256 pt so it stays inside a small window, with the text Track View's header
   slot gives a viewed point's stored patch (`STORED_PATCH_HOVER`) and the
@@ -309,7 +323,7 @@ cuts a row's crop with,
   Crop column and no entry for it in the Columns menu. It appears after Convert
   to Embedded Patches.
 - **It is shown by default and comes first** among the picture columns, right
-  after the Point column, and is pinned with it. It shares the *Size* slider,
+  after the Point column, and is pinned with it. It shares the *Size* dropdown,
   the row height and the texture cache with the Patch column (§ "The Patch
   column").
 - **It cannot be sorted or bounded.** Its heading takes no click and it has no
@@ -544,7 +558,7 @@ The bounds, the sort, the visible columns (the picture columns among them) and t
 (`TrackTableQuery`), like the Image Detail display settings. They are not held
 in a version, cost no undo step and are not saved with the reconstruction or in
 the layout file. A single query is used for whichever reconstruction is
-selected. The picture size the *Size* slider sets is panel state beside the
+selected. The picture size the *Size* dropdown sets is panel state beside the
 query and is not saved either.
 
 ## Computing the columns
@@ -617,10 +631,10 @@ the frame the selection changed.
 | `DEFAULT_COLUMNS` | Track, Error (px), Distance | The value columns shown before any is hidden or shown. Repeat obs. is shown as well while the reconstruction has a point with repeat observations and the person has not ticked or unticked it. The Crop and Patch columns are shown by default too, where the reconstruction can supply them. |
 | `POINT_WIDTH` | 72 pt | The Point column's width. |
 | `MIN_VALUE_WIDTH` | 84 pt | The narrowest a value column is, room for its two bound boxes; a wider heading widens its column. |
-| `MIN_PICTURE_SIZE`, `MAX_PICTURE_SIZE` | 32 pt, 128 pt | The *Size* slider's range. |
-| `DEFAULT_PICTURE_SIZE` | 64 pt | The picture size before the slider moves. |
+| `PICTURE_SIZES` | 16, 32, 64, 128 pt | The sizes the *Size* dropdown offers. |
+| `DEFAULT_PICTURE_SIZE` | 64 pt | The picture size before another is picked. |
 | `PICTURE_PAD` | 2 pt | Space above and below a picture in its row. |
-| Row height | the picture size + 2 × `PICTURE_PAD` while a picture column is shown; the body text height + 6 pt while none is | Every row's height. |
+| Row height | the picture size + 2 × `PICTURE_PAD`, or the body text height + 6 pt where that is taller, while a picture column is shown; the body text height + 6 pt while none is | Every row's height. |
 | `HOVER_SCALE`, `MAX_HOVER_SIZE` | 3, 256 pt | A picture's hover view is three times the picture size, at most 256 pt. |
 | `TEXTURE_CAPACITY` | 1024 | The pictures the texture cache holds before it releases the ones drawn longest ago, down to three quarters of it. Crops and patches count together. |
 | `SCROLL_SETTLE_S` | 0.15 s | How long the rows on screen stay the same before the Crop cells ask for photographs and picks (§ "Requests wait for the scroll to stop"). |
@@ -683,7 +697,7 @@ with one point at infinity:
 runs the Patch column over the same reconstruction given an 8 × 8 bitmap per
 point, one of them all zero:
 
-- a reconstruction with no bitmaps has no Patch column, no *Size* slider and
+- a reconstruction with no bitmaps has no Patch column, no *Size* dropdown and
   text-high rows; with bitmaps the column is shown by default between Point
   and Track and the rows are the default size high, and hiding it brings text
   rows back;
@@ -694,16 +708,21 @@ point, one of them all zero:
   releases down to three quarters of it, keeps a picture the frame drew and
   releases the one drawn longest ago, and a cell with nothing to make it from
   waits;
-- each slider size sets the row height and keeps the top row at the top, and
-  hiding the pictures keeps it on screen;
+- the dropdown offers 16, 32, 64 and 128 pt and starts at 64;
+- each of the four sizes sets the row height, a text row high at 16 pt, and
+  keeps the top row at the top, and so does hiding the pictures;
+- every size's row holds a line of text, and 16 pt is the one size whose
+  picture row alone would not;
+- the dropdown is named *Size* in the AccessKit tree with the size it shows as
+  its value, a click on it lists the four sizes in order, and a click on one
+  picks it;
 - after an edit, out-of-date rows make no pictures: a row drawn before keeps
   its picture and a row not drawn before waits, and the new version's
   pictures are made once its table lands;
 - hovering a picture shows the stored-patch text, a click on it selects the
   row, and a click on the Patch heading does not sort;
 - scrolled sideways, the Patch heading stays put with the Point column;
-- the hover view is three times the size up to its cap, and the smallest row
-  is taller than a line of text.
+- the hover view is three times the size up to its cap.
 
 Track View's drawing of the same bitmap is held by
 [patch_pictures/tests.rs](../../crates/sfm-explorer/src/patch_pictures/tests.rs)

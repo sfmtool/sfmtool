@@ -46,7 +46,7 @@ use crate::state::{AppState, DisplayPhotograph};
 use crate::table_sort::{paint_sort_triangle, SortRule, TableSort, SORT_TRIANGLE_HALF_WIDTH};
 use pictures::{
     hover_size, paint_picture, patch_image, Absent, CellPicture, Made, PictureColumn, PictureKey,
-    PictureTextures, DEFAULT_PICTURE_SIZE, MAX_PICTURE_SIZE, MIN_PICTURE_SIZE, PICTURE_PAD,
+    PictureTextures, DEFAULT_PICTURE_SIZE, PICTURE_PAD, PICTURE_SIZES,
 };
 
 /// The wire names of the panel's picture columns, which `find_points`
@@ -442,6 +442,45 @@ impl RowList {
     }
 }
 
+/// The name of the picture size's dropdown, which is also the label drawn
+/// before it.
+const SIZE_NAME: &str = "Size";
+
+/// A picture size as the dropdown writes it: `64 pt`.
+fn size_text(size: f32) -> String {
+    format!("{size} pt")
+}
+
+/// The *Size* label and the dropdown of [`PICTURE_SIZES`] over `size`.
+///
+/// The dropdown carries [`SIZE_NAME`] as its AccessKit label, which is the
+/// name `get_widgets` lists it under, and the size it shows as its value.
+/// egui's `labelled_by`, which links it to the label for a screen reader,
+/// leaves the label empty.
+fn size_dropdown(ui: &mut egui::Ui, size: &mut f32) {
+    let label = ui.label(SIZE_NAME);
+    let response = egui::ComboBox::from_id_salt("track_table_picture_size")
+        .selected_text(size_text(*size))
+        .show_ui(ui, |ui| {
+            for choice in PICTURE_SIZES {
+                ui.selectable_value(size, choice, size_text(choice));
+            }
+        })
+        .response
+        .labelled_by(label.id);
+    ui.ctx()
+        .accesskit_node_builder(response.id, |node| node.set_label(SIZE_NAME));
+    response
+        .on_hover_text(
+            "The size of the pictures, which sets the height of the rows. The rows at the top \
+             stay there when it changes.",
+        )
+        .on_disabled_hover_text(
+            "The size of the pictures. No picture column is shown, so the rows are a line of \
+             text high.",
+        );
+}
+
 /// What the query cannot apply to the reconstruction on show, said in the
 /// header so that nothing filters unseen and nothing is dropped unsaid.
 #[derive(Debug, Default, PartialEq)]
@@ -453,7 +492,7 @@ struct Unapplied {
     pending: Vec<TrackTableColumn>,
 }
 
-/// The picture size the *Size* slider sets, in points: the side of each
+/// The picture size the *Size* dropdown sets, in points: the side of each
 /// picture, and with [`PICTURE_PAD`] above and below, the row height while a
 /// picture column is shown. Panel state like the query, and not saved.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -499,12 +538,12 @@ pub(crate) struct TrackTablePanel {
     query: TrackTableQuery,
     /// The rows that pass it, kept between frames.
     rows: RowList,
-    /// The picture size the header's *Size* slider sets.
+    /// The picture size the header's *Size* dropdown sets.
     picture_size: PictureSize,
     /// The textures of the pictures drawn, kept between frames.
     pictures: PictureTextures,
     /// The row height and the vertical scroll offset of the last frame's
-    /// rows, so that a new row height (the *Size* slider, or a picture column
+    /// rows, so that a new row height (the *Size* dropdown, or a picture column
     /// shown or hidden) keeps the same rows at the top.
     scroll: Option<(f32, f32)>,
     /// Whether the rows on screen have stopped changing, which the *Crop*
@@ -916,23 +955,9 @@ impl TrackTablePanel {
             if PictureColumn::ALL.iter().any(|c| c.is_available(edited)) {
                 let pictures_shown = !query.visible_pictures(edited).is_empty();
                 ui.add_enabled_ui(pictures_shown, |ui| {
-                    let label = ui.label("Size");
-                    let size = &mut self.picture_size.0;
-                    ui.add(
-                        egui::Slider::new(size, MIN_PICTURE_SIZE..=MAX_PICTURE_SIZE)
-                            .step_by(1.0)
-                            .fixed_decimals(0)
-                            .suffix(" pt"),
-                    )
-                    .labelled_by(label.id)
-                    .on_hover_text(
-                        "The size of the pictures, which sets the height of the rows. The rows \
-                         at the top stay there when it changes.",
-                    )
-                    .on_disabled_hover_text(
-                        "The size of the pictures. No picture column is shown, so the rows are \
-                         a line of text high.",
-                    );
+                    // One group, so that a wrapping header line keeps the
+                    // label beside its dropdown.
+                    ui.horizontal(|ui| size_dropdown(ui, &mut self.picture_size.0));
                 });
             }
             let image_name = selected_image.and_then(|index| {
@@ -1264,8 +1289,8 @@ struct ColumnLayout {
     /// The side of each picture.
     picture_size: f32,
     /// Every row's height: the picture size and [`PICTURE_PAD`] above and
-    /// below while a picture column is shown, and a line of text while none
-    /// is.
+    /// below while a picture column is shown, or a line of text where that is
+    /// taller or while none is shown.
     row_height: f32,
 }
 
@@ -1309,7 +1334,7 @@ impl ColumnLayout {
         let row_height = if pictures.is_empty() {
             text_row_height(ui)
         } else {
-            picture_size + 2.0 * PICTURE_PAD
+            (picture_size + 2.0 * PICTURE_PAD).max(text_row_height(ui))
         };
         Self {
             slots,
