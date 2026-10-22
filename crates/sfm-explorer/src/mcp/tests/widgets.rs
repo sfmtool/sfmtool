@@ -551,6 +551,7 @@ fn a_combo_box_in_a_panel_opens_a_dropdown() {
         .find(|entry| entry["role"] == json!("combo_box"))
         .expect("the combo box")
         .clone();
+    assert_eq!(combo["value"], json!("One"), "the choice it shows");
     let body = super::super::panel_rect::panel_crop(
         &harness.state.dock,
         Tab::BackgroundTasks,

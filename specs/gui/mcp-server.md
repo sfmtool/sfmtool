@@ -2581,8 +2581,9 @@ clicked.
   target's pixels, each edge rounded on its own as the panel crop rounds. A
   widget that is clipped out entirely is left out.
 - **`enabled`**, **`toggled`** (check boxes and radio buttons only; `null`
-  when indeterminate) and **`value`** (text inputs, sliders and drag values
-  only, as a string).
+  when indeterminate) and **`value`** (text inputs, sliders, drag values and
+  combo boxes only, as a string; for a combo box, the text it shows for its
+  choice).
 - **`sense`**: `click`, `drag`, `click_and_drag`, or `none`. It says whether
   `click` on this widget can do anything. egui's `Sense` has no bit for
   hovering, so a widget that only shows a tooltip is `none` like text that

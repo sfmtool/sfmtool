@@ -737,7 +737,7 @@ impl WidgetFrame {
         }
         if matches!(
             widget.role,
-            Some(Role::TextInput | Role::Slider | Role::SpinButton)
+            Some(Role::TextInput | Role::Slider | Role::SpinButton | Role::ComboBox)
         ) {
             entry.insert("value".into(), json!(widget.value));
         }
@@ -992,10 +992,11 @@ fn node_name(node: &accesskit::Node) -> Option<String> {
     (!name.is_empty()).then(|| name.to_string())
 }
 
-/// A text input's text, or a slider's or drag value's number, as a string.
+/// A text input's text, a slider's or drag value's number as a string, or
+/// the text a combo box shows for its choice.
 fn node_value(node: &accesskit::Node, role: Option<Role>) -> Option<String> {
     match role {
-        Some(Role::TextInput) => node.value().map(str::to_string),
+        Some(Role::TextInput | Role::ComboBox) => node.value().map(str::to_string),
         Some(Role::Slider | Role::SpinButton) => node
             .numeric_value()
             .map(|value| value.to_string())
