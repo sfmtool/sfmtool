@@ -2502,31 +2502,6 @@ fn the_cluster_stage_shows_its_template_in_the_slot() {
     );
 }
 
-/// A patch bitmap of one, three or four channels becomes an opaque picture of
-/// its colours, and an all-zero bitmap, which is how no patch is written,
-/// becomes none.
-#[test]
-fn a_stored_patch_image_reads_any_channel_count() {
-    use ndarray::Array3;
-
-    let image = |channels: usize, fill: &[u8]| {
-        let bitmap = Array3::from_shape_fn((2, 3, channels), |(_, _, c)| fill[c]);
-        super::patch::stored_patch_image(bitmap.view())
-    };
-    let grey = image(1, &[40]).expect("a grey patch");
-    assert_eq!(grey.size, [3, 2]);
-    assert_eq!(grey.pixels[0], egui::Color32::from_rgb(40, 40, 40));
-    let rgb = image(3, &[10, 20, 30]).expect("an RGB patch");
-    assert_eq!(rgb.pixels[5], egui::Color32::from_rgb(10, 20, 30));
-    let rgba = image(4, &[10, 20, 30, 7]).expect("an RGBA patch");
-    assert_eq!(
-        rgba.pixels[0],
-        egui::Color32::from_rgb(10, 20, 30),
-        "the confidence channel is not dropped for an opaque alpha"
-    );
-    assert!(image(4, &[0, 0, 0, 0]).is_none(), "an empty patch drew");
-}
-
 /// A bitmap for judging is drawn dimmed in the header's slot and in a recent
 /// chip, and the slot's hover says it is not the track's patch and that a
 /// commit does not write it; a patch the next render replaces says so.

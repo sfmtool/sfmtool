@@ -43,6 +43,7 @@ mod layout;
 mod mcp;
 mod metrics;
 mod motion;
+mod patch_pictures;
 mod platform;
 mod point_ids;
 mod progress;

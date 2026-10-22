@@ -1186,7 +1186,7 @@ impl TrackBody {
             let sfmtool_core::bench::Stage::Track(payload) = &track.stage else {
                 return None;
             };
-            let image = patch::stored_patch_image(payload.bitmap.as_ref()?.view())?;
+            let image = crate::patch_pictures::stored_patch_image(payload.bitmap.as_ref()?.view())?;
             Some(ctx.load_texture("bench_hover_bitmap", image, egui::TextureOptions::NEAREST))
         });
         texture.as_ref().map(|texture| texture.id())
@@ -2487,7 +2487,9 @@ fn show_track_patch(
             ui.painter()
                 .rect_filled(rect, 2.0, ui.visuals().faint_bg_color);
             response.on_hover_text(match (stage, mode) {
-                (StageKind::Track, BodyMode::Viewed) => "The point has no stored patch",
+                (StageKind::Track, BodyMode::Viewed) => {
+                    crate::patch_pictures::NO_STORED_PATCH_HOVER
+                }
                 (StageKind::Track, BodyMode::Edited) => {
                     "No patch yet: fit the track to store its reference view's tile as the patch"
                 }
@@ -2515,10 +2517,7 @@ fn track_patch_hover(stage: StageKind, mode: BodyMode, kind: patch::BitmapKind) 
              is unpinned and the reference-view rule picks another row, so no row is scored \
              against it. A commit before that render writes it as the point's stored patch"
         }
-        (StageKind::Track, BodyMode::Viewed, _) => {
-            "The point's stored patch: the render of its reference observation, or, where \
-             an older file stores none, a mean of its views"
-        }
+        (StageKind::Track, BodyMode::Viewed, _) => crate::patch_pictures::STORED_PATCH_HOVER,
         (StageKind::Track, BodyMode::Edited, patch::BitmapKind::Patch) => {
             "The track's patch: the render of its reference observation, the row marked in \
              the Reference column, or, where an older file stores none, a mean of its \

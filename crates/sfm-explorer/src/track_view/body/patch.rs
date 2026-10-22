@@ -18,10 +18,10 @@
 //! warp from the patch grid at the reconstruction's patch resolution `R` -- not
 //! the tile's display resolution -- which the table's *Zoom* column prints the
 //! zoom of.
-//! [`stored_patch_image`] turns a patch bitmap into an opaque picture, which
-//! is what the header's patch slot draws at the track stage, and
 //! [`track_patch_image`] picks the picture of a track's own patch for its
-//! stage, for the header and the recent items strip alike.
+//! stage, for the header and the recent items strip alike; at the track stage
+//! that is the patch bitmap as [`crate::patch_pictures::stored_patch_image`]
+//! draws it, the picture the Track Table's *Patch* column draws too.
 
 use sfmtool_core::bench::{EditableTrack, Stage};
 use sfmtool_core::camera::image::ImageU8Pyramid;
@@ -199,8 +199,8 @@ impl BitmapKind {
 }
 
 /// The picture of a track's own patch: the patch bitmap at the track
-/// stage ([`stored_patch_image`]), the template at the cluster stage, `None`
-/// where there is neither. A bitmap for judging
+/// stage ([`crate::patch_pictures::stored_patch_image`]), the template at
+/// the cluster stage, `None` where there is neither. A bitmap for judging
 /// (`TrackPayload::bitmap_for_judging`) is drawn at a third of its
 /// brightness, so it does not pass for the track's patch.
 ///
@@ -209,7 +209,8 @@ impl BitmapKind {
 pub(crate) fn track_patch_image(track: &EditableTrack) -> Option<egui::ColorImage> {
     match &track.stage {
         Stage::Track(payload) => {
-            let mut image = stored_patch_image(payload.bitmap.as_ref()?.view())?;
+            let mut image =
+                crate::patch_pictures::stored_patch_image(payload.bitmap.as_ref()?.view())?;
             if payload.bitmap_for_judging {
                 for pixel in &mut image.pixels {
                     let [r, g, b, a] = pixel.to_array();
@@ -225,33 +226,4 @@ pub(crate) fn track_patch_image(track: &EditableTrack) -> Option<egui::ColorImag
             Some(super::tile::color_image(&grid, shape[0], shape[2]))
         }
     }
-}
-
-/// A patch bitmap, `(rows, columns, channels)`, as an opaque RGBA image, or
-/// `None` when it is all zero, which is how a point with no stored patch is
-/// written.
-///
-/// One channel is repeated across RGB, three are RGB, and a fourth, the
-/// alpha (on the photograph for a view's tile, the cross-view confidence for
-/// a fused mean an older file stores), is dropped for an opaque alpha. What the
-/// header's patch slot draws at the track stage: the patch bitmap, which
-/// for a track read from a point is that point's stored patch and which a
-/// commit writes as it.
-pub(crate) fn stored_patch_image(bitmap: ndarray::ArrayView3<'_, u8>) -> Option<egui::ColorImage> {
-    let [h, w, channels] = [bitmap.shape()[0], bitmap.shape()[1], bitmap.shape()[2]];
-    if channels == 0 || bitmap.iter().all(|&b| b == 0) {
-        return None;
-    }
-    let mut rgba = Vec::with_capacity(h * w * 4);
-    for row in 0..h {
-        for col in 0..w {
-            let level = |c: usize| bitmap[[row, col, c.min(channels - 1)]];
-            if channels >= 3 {
-                rgba.extend_from_slice(&[level(0), level(1), level(2), 255]);
-            } else {
-                rgba.extend_from_slice(&[level(0), level(0), level(0), 255]);
-            }
-        }
-    }
-    Some(egui::ColorImage::from_rgba_unmultiplied([w, h], &rgba))
 }

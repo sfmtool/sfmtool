@@ -707,11 +707,15 @@ that (`patch::BitmapKind`):
   replaces it, that no row is scored against it meanwhile, and that a commit
   before that render writes it.
 
-The bitmap is converted by `patch::stored_patch_image`: one channel repeated
+The bitmap is converted by `stored_patch_image`, in
+[patch_pictures.rs](../../crates/sfm-explorer/src/patch_pictures.rs), which the
+Track Table's *Patch* column draws its pictures with too
+([track-table.md](track-table.md) § "The Patch column"): one channel repeated
 across RGB, three as RGB, and a fourth, the confidence, dropped for an opaque
 alpha, and an all-zero bitmap, which is how a point with no stored patch is
-written, is not drawn. The upload is kept against the track's `Arc` and dropped
-with the tiles.
+written, is not drawn. The viewed point's hover text over it is the one the
+Track Table's *Patch* cell shows (`patch_pictures::STORED_PATCH_HOVER`). The
+upload is kept against the track's `Arc` and dropped with the tiles.
 
 #### The toolbar
 
