@@ -164,7 +164,10 @@ Until the new table lands the panel keeps showing the rows, the count, the
 headings and the bound boxes it showed for the version before, and marks them
 out of date: a spinner and *Updating…* in the header line, and the rows' text
 dimmed. When the new table lands the row list is computed from it and replaces
-the old one in the same frame, without scrolling back to the top.
+the old one in the same frame. It does not scroll back to the top unless the
+query changed while the rows were out of date: a new sort, new bounds or a
+change of the selected-image box set meanwhile scrolls to the top on landing,
+as it does at any other time.
 
 The old rows are read from the old version's table, which the track table
 cache still holds: a node's entry is replaced only when a table for another
