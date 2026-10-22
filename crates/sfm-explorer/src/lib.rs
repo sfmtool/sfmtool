@@ -53,6 +53,7 @@ mod scene_graph;
 mod scene_renderer;
 mod sift_index;
 mod state;
+mod table_sort;
 #[cfg(test)]
 mod test_support;
 mod texture;

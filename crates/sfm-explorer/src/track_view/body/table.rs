@@ -69,6 +69,7 @@ use super::{
 };
 use crate::scene::{ImageRef, ReconId};
 use crate::state::AppState;
+use crate::table_sort::{paint_sort_triangle, SortRule, SORT_TRIANGLE_HALF_WIDTH};
 
 /// Side of one rendered tile, and so the tallest thing in a row. The size the
 /// Track View draws its own tiles at, because they are the same
@@ -112,9 +113,6 @@ const GRID_SIDE: f32 = 3.0 * GRID_CELL + 4.0;
 const PLOT_SIDE: f32 = 44.0;
 /// Side of the same plot in its hover view.
 const PLOT_HOVER_SIDE: f32 = 220.0;
-/// Half the width of the triangle after the heading the rows are ordered by.
-/// Small, since *Img* has little room before *Crop*.
-const SORT_TRIANGLE_HALF_WIDTH: f32 = 4.0;
 
 /// What one row drew, kept so that a test reads the table the app draws rather
 /// than a second computation of it.
@@ -417,15 +415,16 @@ impl SortColumn {
     }
 }
 
-/// The order the rows are drawn in: by which column, and which way. A tool
-/// setting kept for the session, as *Lock* is: it moves nothing on the track.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct TableSort {
-    /// The column the rows are ordered by.
-    pub column: SortColumn,
-    /// Whether the order is decreasing rather than increasing.
-    pub descending: bool,
+impl SortRule for SortColumn {
+    fn worst_first_descending(self) -> bool {
+        SortColumn::worst_first_descending(self)
+    }
 }
+
+/// The order the rows are drawn in: by which column, and which way, by the
+/// click rule the viewer's tables share ([`crate::table_sort`]). A tool
+/// setting kept for the session, as *Lock* is: it moves nothing on the track.
+pub(crate) type TableSort = crate::table_sort::TableSort<SortColumn>;
 
 impl Default for TableSort {
     /// Increasing by image.
@@ -434,20 +433,6 @@ impl Default for TableSort {
             column: SortColumn::Image,
             descending: false,
         }
-    }
-}
-
-impl TableSort {
-    /// The order a click on `column`'s heading leaves: the same column the
-    /// other way when the rows are already ordered by it, and otherwise that
-    /// column in the direction [`SortColumn::worst_first_descending`] gives.
-    pub(super) fn clicked(self, column: SortColumn) -> Self {
-        let descending = if self.column == column {
-            !self.descending
-        } else {
-            column.worst_first_descending()
-        };
-        Self { column, descending }
     }
 }
 
@@ -2501,36 +2486,6 @@ pub(super) fn sort_hover(sort: TableSort, column: SortColumn) -> &'static str {
         }
         (false, _) => "Click to put the rows in increasing order by this column.",
     }
-}
-
-/// The small triangle beside the heading the rows are ordered by, centred at
-/// `c`: pointing up for increasing order and down for decreasing.
-fn paint_sort_triangle(
-    painter: &egui::Painter,
-    c: egui::Pos2,
-    descending: bool,
-    color: egui::Color32,
-) {
-    let (half, rise) = (SORT_TRIANGLE_HALF_WIDTH, 3.0);
-    // Clockwise on the screen, as egui's tessellator wants a filled shape.
-    let points = if descending {
-        vec![
-            egui::pos2(c.x - half, c.y - rise),
-            egui::pos2(c.x + half, c.y - rise),
-            egui::pos2(c.x, c.y + rise),
-        ]
-    } else {
-        vec![
-            egui::pos2(c.x - half, c.y + rise),
-            egui::pos2(c.x, c.y - rise),
-            egui::pos2(c.x + half, c.y + rise),
-        ]
-    };
-    painter.add(egui::Shape::convex_polygon(
-        points,
-        color,
-        egui::Stroke::NONE,
-    ));
 }
 
 /// The threshold row under the headings: each bar's box in the column whose
