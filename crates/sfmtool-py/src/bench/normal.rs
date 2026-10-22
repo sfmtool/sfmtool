@@ -1101,7 +1101,7 @@ fn grid_plane_normal(
 ///
 /// The views grown are a selection, picked one at a time near to far by
 /// their angle from the reference, in rungs, until the combined weakest ``σ``
-/// is at most ``target_sigma_deg`` (default 1.5) or ``max_selected_views``
+/// is at most ``target_sigma_deg`` (default 2.75) or ``max_selected_views``
 /// (default 6) have passed the floor: a growth whose own score reaches
 /// ``min_held_zncc`` (default 0.5). The first rung is the view nearest
 /// ``first_rung_deg`` (default 15.0) within ``first_rung_min_deg`` (default
@@ -1122,7 +1122,7 @@ fn grid_plane_normal(
 /// (default 0.01) turns information into a covariance, ``min_coverage``
 /// (default 0.6) is the share of a ZNCC's samples that must land on the
 /// photograph, and
-/// ``low_confidence_sigma_deg`` (default 2.0) is the weakest-direction ``σ``,
+/// ``low_confidence_sigma_deg`` (default 3.67) is the weakest-direction ``σ``,
 /// with each pair's information halved, above which the plane is reported as
 /// low confidence. A turn from the starting normal of at least
 /// ``weak_turn_deg`` (default 70.0) that is under ``min_turn_sigma_ratio``

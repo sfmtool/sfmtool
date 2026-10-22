@@ -18,7 +18,9 @@ use std::cell::{Cell, RefCell, RefMut};
 use nalgebra::{DMatrix, Vector3};
 
 use crate::camera::image::ImageU8;
-use crate::camera::remap::{sample_bilinear_u8, sample_bilinear_with_grad_u8};
+use crate::camera::remap::sample_bilinear_u8;
+#[cfg(test)]
+use crate::camera::remap::sample_bilinear_with_grad_u8;
 use crate::camera::sampler::bilinear_mip_level;
 use crate::camera::warp_map::{patch_grid_jacobian, singular_values_2x2};
 use crate::camera::CameraIntrinsics;
@@ -369,6 +371,7 @@ impl<'a> ViewImage<'a> {
             let y = ((p[1] + shift[1]) / self.scale) as f32;
             for c in 0..ch {
                 let (dx, dy) = match read {
+                    #[cfg(test)]
                     GradientRead::Bilinear => {
                         let (_, dx, dy) = sample_bilinear_with_grad_u8(self.level, x, y, c as u32);
                         (dx, dy)
@@ -381,13 +384,22 @@ impl<'a> ViewImage<'a> {
     }
 }
 
-/// How a sample's image gradient is read.
+/// How a sample's image gradient is read. The step reads it one way,
+/// [`Self::Sobel`], for the fits' steps and for the information about the
+/// tilt; the tests also read the bilinear read's own derivative, the exact
+/// derivative of the render, to check the Jacobian against a difference of
+/// renders.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum GradientRead {
     /// The derivative of the bilinear read itself, from its four taps: the
     /// exact slope of the value, which jumps where the position crosses a
     /// pixel centre. Where an axis's two taps are clamped to one edge pixel
     /// the value does not move along it, and the gradient along it is zero.
+    /// Test-only: a Jacobian read through it follows a central difference of
+    /// renders within 3%, which checks how the Jacobian is put together;
+    /// through the Sobel gradient it differs by tens of percent on a textured
+    /// photograph.
+    #[cfg(test)]
     Bilinear,
     /// The bilinear read, at the same position and with the same weights as
     /// the value, of the level's Sobel gradient images: at each pixel, the

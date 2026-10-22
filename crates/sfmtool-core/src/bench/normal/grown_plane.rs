@@ -132,7 +132,7 @@ pub struct GrownPlaneNormalOptions {
     /// a window stage more than 0.25 under it. 0.5.
     pub min_held_zncc: f64,
     /// A weakest-direction `σ` above this, degrees, is reported as low
-    /// confidence. It does not by itself stop the turn. 2.
+    /// confidence. It does not by itself stop the turn. 3.67.
     pub low_confidence_sigma_deg: f64,
     /// The smallest turn, degrees, that must be backed by evidence: a turn
     /// from the starting normal to the combined plane of at least this, with
@@ -150,7 +150,7 @@ pub struct GrownPlaneNormalOptions {
     /// The most pairs of kept views matched against each other. 3.
     pub max_pairs: usize,
     /// The selection stops matching views once the combined plane's weakest
-    /// `σ` is at most this, degrees. 1.5.
+    /// `σ` is at most this, degrees. 2.75.
     pub target_sigma_deg: f64,
     /// The selection stops matching views once this many have passed the
     /// floor. 6.
@@ -195,11 +195,11 @@ impl Default for GrownPlaneNormalOptions {
             zncc_tolerance: 0.01,
             max_agreement_distance: 3.0,
             min_held_zncc: 0.5,
-            low_confidence_sigma_deg: 2.0,
+            low_confidence_sigma_deg: 3.67,
             weak_turn_deg: 70.0,
             min_turn_sigma_ratio: 3.0,
             max_pairs: 3,
-            target_sigma_deg: 1.5,
+            target_sigma_deg: 2.75,
             max_selected_views: 6,
             first_rung_deg: 15.0,
             first_rung_min_deg: 10.0,

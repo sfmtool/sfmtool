@@ -15,17 +15,17 @@
 //! image shift by its image gradient, and with the tilt by that gradient
 //! times how its pixel moves as the plane turns, and both go through the
 //! block's normalisation by the chain rule ([`Block::add_derivative`]), so a
-//! Jacobian costs no render. The fit's steps read the gradient from the
-//! level's Sobel gradient images ([`GradientRead::Sobel`]), which is
-//! continuous across pixel edges; the information about the tilt reads the
-//! derivative of the bilinear read itself ([`GradientRead::Bilinear`]), the
-//! local slope of the score the fit maximises. A step is kept only when the true score, read
-//! again from a fresh render, rises; otherwise the damping grows and the step
-//! is tried again, and a stage that cannot rise keeps the parameters it was
-//! given. The render that scores a kept step also gives the residual the next
-//! iteration linearises at, so a kept point is rendered once. A fit stops
-//! once a kept step raises the score by less than `min_improvement`, or by
-//! less than [`MIN_RELATIVE_GAIN`] of what its first kept step raised it.
+//! Jacobian costs no render. The fit's steps and the information about the
+//! tilt both read the gradient from the level's Sobel gradient images
+//! ([`GradientRead::Sobel`]), which is continuous across pixel edges and is
+//! the slope of the photograph averaged over about two pixels. A step is
+//! kept only when the true score, read again from a fresh render, rises;
+//! otherwise the damping grows and the step is tried again, and a stage that
+//! cannot rise keeps the parameters it was given. The render that scores a
+//! kept step also gives the residual the next iteration linearises at, so a
+//! kept point is rendered once. A fit stops once a kept step raises the score
+//! by less than `min_improvement`, or by less than [`MIN_RELATIVE_GAIN`] of
+//! what its first kept step raised it.
 
 use nalgebra::{DMatrix, DVector, Matrix2};
 
@@ -592,15 +592,15 @@ impl Objective for PairFit<'_, '_, '_> {
 }
 
 /// The normal matrix `JᵀJ` of `objective`'s frozen residual at `p`, over every
-/// parameter, with the derivative of the bilinear read as each sample's
-/// gradient; `None` where nothing can be read.
+/// parameter, with the Sobel gradient the fit's steps use as each sample's
+/// gradient ([`GradientRead::Sobel`]); `None` where nothing can be read.
 pub(super) fn normal_matrix<O: Objective>(objective: &O, p: &[f64]) -> Option<DMatrix<f64>> {
     let (_, frozen) = objective.freeze(p);
     let (fz, r0) = frozen?;
     if r0.is_empty() {
         return None;
     }
-    let j = objective.jacobian(&fz, p, &r0, GradientRead::Bilinear);
+    let j = objective.jacobian(&fz, p, &r0, GradientRead::Sobel);
     Some(j.transpose() * &j)
 }
 

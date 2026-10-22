@@ -9,9 +9,11 @@
 
 use nalgebra::{DMatrix, Vector3};
 
+use super::combine::sigmas_deg;
 use super::render::{Block, GradientRead, Gradients, Grid, Samples, ViewImage, ViewRender};
 use super::solve::{
-    cell_znccs, forward_difference, live_cells, Objective, PairFit, Reading, ViewFit,
+    cell_znccs, forward_difference, live_cells, normal_matrix, schur_tilt, tilt_information,
+    Objective, PairFit, Reading, ViewFit,
 };
 use crate::bench::tests::scene::{texture, Scene, PLANE_Z, WORLD};
 use crate::camera::image::ImageU8;
@@ -233,6 +235,61 @@ fn the_analytic_jacobian_follows_a_difference_of_renders() {
             assert!(old < 0.2, "{model} {name}: {old}");
         }
     }
+}
+
+/// The information about the tilt, which gives `σ`, the robust mean's
+/// weights and the selection's stop, is the normal matrix of the Jacobian the
+/// fits step with, read through the Sobel gradient, and not that of the
+/// bilinear read's own derivative. On this texture, whose detail is a few px
+/// across, the Sobel gradient is the smaller, so the information is smaller
+/// and the weakest `σ` larger than the bilinear derivative would give.
+#[test]
+fn the_information_is_read_through_the_sobel_gradient() {
+    let scene = scene("pinhole");
+    let views = scene.views();
+    let patch_frame = patch_frame();
+    let side = 32;
+    let grid = Grid::new(&patch_frame, &views[0], None, side);
+    let images: Vec<ViewImage<'_>> = views
+        .iter()
+        .map(|v| ViewImage::new(v, &grid.anchored_patch_frame, side))
+        .collect();
+    let renders: Vec<ViewRender<'_, '_>> =
+        images.iter().map(|i| ViewRender::new(&grid, i)).collect();
+    let reference = renders[0].render([0.0; 2], [0.0; 2], &grid.all());
+    let live = live_cells(&grid.cells, &reference);
+    let fit = ViewFit {
+        render: &renders[1],
+        reference: &reference,
+        live: &live,
+        reading: Reading::Grid,
+        held: None,
+        min_coverage: 0.6,
+    };
+    let p = [0.06, -0.04, 0.3, -0.2];
+    let (_, frozen) = fit.freeze(&p);
+    let (fz, r0) = frozen.expect("the fit reads something");
+    let sobel = fit.jacobian(&fz, &p, &r0, GradientRead::Sobel);
+    let bilinear = fit.jacobian(&fz, &p, &r0, GradientRead::Bilinear);
+    let (sobel, bilinear) = (sobel.transpose() * &sobel, bilinear.transpose() * &bilinear);
+    let n = normal_matrix(&fit, &p).expect("the fit reads something");
+    assert!(
+        (&n - &sobel).norm() <= 1e-12 * sobel.norm(),
+        "{n} vs {sobel}"
+    );
+    assert!(
+        (&n - &bilinear).norm() > 0.1 * bilinear.norm(),
+        "{n} vs {bilinear}"
+    );
+    let tau = 0.01;
+    let sigma = sigmas_deg(&tilt_information(&fit, &p), tau)[0];
+    let sobel_sigma = sigmas_deg(&schur_tilt(&sobel), tau)[0];
+    let bilinear_sigma = sigmas_deg(&schur_tilt(&bilinear), tau)[0];
+    assert!(
+        (sigma - sobel_sigma).abs() <= 1e-9 * sobel_sigma,
+        "{sigma} vs {sobel_sigma}"
+    );
+    assert!(sigma > 1.1 * bilinear_sigma, "{sigma} vs {bilinear_sigma}");
 }
 
 /// A view shifted until about a quarter of the grid lies off the photograph:

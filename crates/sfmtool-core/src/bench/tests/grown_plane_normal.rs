@@ -341,7 +341,7 @@ fn narrow_views_turn_the_patch_with_low_confidence() {
     let _ = turned;
 }
 
-/// The narrow views' turn of about 20 degrees on a `σ` of about 10, with the
+/// The narrow views' turn of about 20 degrees on a `σ` of about 13, with the
 /// weak-turn rule starting at 10 degrees: a large turn on weak evidence. The
 /// step keeps the starting normal and every keypoint, fits no view's shift
 /// alone, and still reports the plane it found, its turn, its precision and
@@ -657,7 +657,12 @@ fn the_widened_search_is_centred_on_the_keypoint() {
     // The reference is the camera whose pose is right.
     let (track, _) = set_reference(&track, row_of(&track, 0)).expect("an in row");
 
-    let (turned, report) = run(&scene, &edited, &track, &GrownPlaneNormalOptions::default());
+    // A target under what two views reach, so that all three are picked.
+    let options = GrownPlaneNormalOptions {
+        target_sigma_deg: 1.0,
+        ..Default::default()
+    };
+    let (turned, report) = run(&scene, &edited, &track, &options);
     let sequence = sequence_of(&report);
     assert_eq!(sequence.joined(), 3, "{sequence:#?}");
     assert!(sequence.picks[1..].iter().all(|p| p.rung == 1));
@@ -1113,7 +1118,7 @@ fn the_selection_reaches_the_target_sigma_matching_few_views() {
     let edited = edited_of(&scene);
     let track = tilted_track(&edited, Vector3::new(0.4, 1.0, 0.0), 15.0);
     let (track, _) = set_reference(&track, row_of(&track, 0)).expect("an in row");
-    let target = 1.0;
+    let target = 2.0;
     let options = GrownPlaneNormalOptions {
         target_sigma_deg: target,
         max_selected_views: 16,
@@ -1483,7 +1488,7 @@ fn the_shift_only_fit_places_keypoints_on_the_content() {
         });
     }
     let options = GrownPlaneNormalOptions {
-        target_sigma_deg: 1.0,
+        target_sigma_deg: 2.0,
         max_selected_views: 16,
         ..Default::default()
     };
