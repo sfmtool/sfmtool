@@ -873,7 +873,7 @@ cache and the operation it starts are in
               { "column": "rms_error_px", "max": 1.5 } ],   // optional
   "seen_in_camera_image": 2,                 // optional: an index or a name, as camera_image takes
   "order_by": { "column": "rms_error_px", "descending": true },  // optional
-  "columns": ["track_length", "image_count", "rms_error_px"],    // optional: the values to return
+  "columns": ["track_length", "repeat_observations", "rms_error_px"],  // optional: the values to return
   "offset": 0, "limit": 50                   // as list_camera_images: default 50, at most 500
 }
 // reply
@@ -884,7 +884,7 @@ cache and the operation it starts are in
   "offset": 0,
   "points": [
     { "id": "pt3d_2db7e1f4_9873", "index": 9873,
-      "track_length": 57, "image_count": 45, "rms_error_px": 0.82 },
+      "track_length": 57, "repeat_observations": 0, "rms_error_px": 0.82 },
     …
   ]
 }
@@ -892,7 +892,13 @@ cache and the operation it starts are in
 
 - **The query is core's `query_points`.** A bound keeps the points whose
   value is at least `min` and at most `max`, both inclusive; a bound with
-  neither end filters nothing, and every bound must pass. `seen_in_camera_image`
+  neither end filters nothing, and every bound must pass. `min` and `max` are
+  each a number or the string `"inf"` for `+∞`, so
+  `{"column": "centroid_distance", "min": "inf"}` keeps exactly the points at
+  infinity, any finite `max` on `centroid_distance` drops them, and a `max` of
+  `"inf"` sets no upper end. Sorted by `centroid_distance` they come after
+  every finite point ascending and first descending, ahead of any point with
+  no value. `seen_in_camera_image`
   keeps the points with an observation in that image. `order_by` sorts by one
   column, ascending unless `descending` is true, stably, so equal values keep
   ascending point index; a point with no value sorts last in either direction
@@ -906,13 +912,15 @@ cache and the operation it starts are in
   column, in that order, followed by `track_length` and `rms_error_px`, each
   once. `id` is the point's portable id, the `pt3d_<hash>_<index>` form
   `get_point` takes, and `index` its index in the version at the cursor.
-- **No value is `null`.** Core holds a point's missing value as a NaN, and JSON
-  has no NaN, so a value that is not finite is `null`: a point at infinity has
-  `null` for `x`, `y`, `z`, `centroid_distance`, `condition_number` and
+- **No value is `null`, and `+∞` is `"inf"`.** Core holds a point's missing
+  value as a NaN, and JSON has no NaN, so a missing value is `null`: a point at
+  infinity has `null` for `x`, `y`, `z`, `condition_number` and
   `inverse_depth_z` and `0` for `max_ray_angle_deg`, as the core table defines
   them, and a track no observation of which was measured has `null` for
-  `lowest_zncc`. A count, a byte and the flag (`track_length`, `image_count`,
-  `normal_confidence`, `at_infinity`) are integers. The positions are the `f64`
+  `lowest_zncc`. JSON has no infinity either, so the `+∞` a point at infinity
+  has for `centroid_distance` is sent as the string `"inf"`, which is a value,
+  not "no value". A count and a byte (`track_length`, `repeat_observations`,
+  `normal_confidence`) are integers. The positions are the `f64`
   the table holds; every other value goes through its shortest `f32` spelling,
   so a stored `0.82` reads `0.82` rather than `0.8199999928474426`.
 - **The columns come from the track table cache.** The viewer keeps one core
@@ -968,13 +976,16 @@ cache and the operation it starts are in
   finishes"). A call answered from the cache writes the `Query` row alone.
 - **Refusals.** A column name that is not a track table column is refused at the
   parse, *"find_points does not know the column "error" — the columns are
-  track_length, image_count, …"*, in `bounds`, `order_by` and `columns` alike;
+  track_length, repeat_observations, …"*, in `bounds`, `order_by` and `columns` alike;
   so are the picture columns of the Track Table draft. A column the
   reconstruction cannot supply, `normal_confidence` on a file with no such
   stored column for one, is refused with *"{label} cannot supply the column
   normal_confidence: the columns it can supply are …"*. A bound whose `min` is
   above its `max` is refused, *"find_points wants each bound's min to be at most
-  its max — got min 5 and max 3 for track_length."*, and a camera image out of
+  its max — got min 5 and max 3 for track_length."*. A string for `min` or
+  `max` other than `"inf"` is refused, *"find_points.bounds wants min to be a
+  number or the string "inf" — got the string "infinity"."*, rather than read
+  as no bound. A camera image out of
   range or not found by name gets the refusal every tool that takes
   `camera_image` gives.
 
@@ -5656,9 +5667,13 @@ where a test hands no host over.
   answers in the frame, and its bounds, descending sort and pages are a slice
   of one order; `seen_in_camera_image` by index and by name keeps exactly the
   points that image observes; a point at infinity has `null` for `x`, `y`, `z`
-  and `condition_number`; the refusals name an unknown column, a column the
-  reconstruction cannot supply with the ones it can, a `min` above a `max` and
-  an image out of range; a waiting *Find points* is listed by `get_scene`,
+  and `condition_number` and `"inf"` for `centroid_distance`, a `min` of
+  `"inf"` keeps it alone, a finite `max` drops it, and a `max` of `"inf"` with
+  a descending sort keeps it and puts it first; `repeat_observations` counts
+  an observation moved into an image its track already has; the refusals name
+  an unknown column, a column the reconstruction cannot supply with the ones
+  it can, a `min` above a `max`, a bound string other than `"inf"` and an
+  image out of range; a waiting *Find points* is listed by `get_scene`,
   handed back as a handle past the window and removed by
   `cancel_background_tasks`; a call runs beside a slow task that holds the
   node; and a call whose run lands after a run for another version replaced

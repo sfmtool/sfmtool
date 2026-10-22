@@ -36,7 +36,7 @@ bound as `sfmtool.analysis.track_table`.
 /// One named per-point value. The wire name is the stable identifier.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum TrackTableColumn {
-    TrackLength, ImageCount, RmsErrorPx, AtInfinity, X, Y, Z, CentroidDistance,
+    TrackLength, RepeatObservations, RmsErrorPx, X, Y, Z, CentroidDistance,
     NormalConfidence, LowestZncc, LargestZnccSelfSimilarityRadius,
     MaxRayAngleDeg, ConditionNumber, InverseDepthZ,
 }
@@ -45,7 +45,7 @@ pub enum TrackTableColumn {
 pub enum ColumnCost { Stored, Computed }
 
 impl TrackTableColumn {
-    pub const ALL: [TrackTableColumn; 14];
+    pub const ALL: [TrackTableColumn; 13];
     pub fn wire_name(self) -> &'static str;
     pub fn from_wire_name(name: &str) -> Option<Self>;
     pub fn cost(self) -> ColumnCost;
@@ -216,11 +216,10 @@ it makes no difference to what a column means.
 | Wire name | Class | Definition | Point at infinity | Absent when |
 |---|---|---|---|---|
 | `track_length` | stored | number of observations in the track | defined | never |
-| `image_count` | stored | number of distinct images among those observations; less than `track_length` where one image holds several observations of the point, which a GLOMAP solve produces | defined | never |
+| `repeat_observations` | stored | the track's observations beyond one per image: `track_length` less the number of distinct images among them. Anything but 0 is a defect in the reconstruction, one image holding several observations of the point, which a GLOMAP solve can produce; it is kept so that it can be found and fixed | defined | never |
 | `rms_error_px` | stored | `Point3D::rms_reprojection_error`, the stored per-point RMS reprojection error in pixels, as its doc comment defines it; the viewer's `get_point` reports the same number as `rms_error_px`. A file holds what its writer stored | defined | never |
-| `at_infinity` | stored | 1 for a point at infinity (`w = 0`), 0 for a finite one | defined | never |
 | `x`, `y`, `z` | stored | the point's position in the stored frame, in the reconstruction's world-space unit (scene units where none is declared) | no value | never |
-| `centroid_distance` | stored | distance from the posed cameras' centroid, the number `ImageSet::placement_scale` gives, in the unit of `x` | no value | the reconstruction has no posed image |
+| `centroid_distance` | stored | distance from the posed cameras' centroid, the number `ImageSet::placement_scale` gives, in the unit of `x` | `+∞` | the reconstruction has no posed image |
 | `normal_confidence` | stored | the stored `normal_confidence` byte, 0 to 255 | defined | the reconstruction has no `normal_confidence` column |
 | `lowest_zncc` | stored | the lowest stored per-observation ZNCC in the track, read from `observation_confidence` as `byte / 255` over the non-zero bytes only | no value when no observation of the track was measured | the reconstruction has no `observation_confidence` column |
 | `largest_zncc_self_similarity_radius` | stored | the largest ZNCC self-similarity radius among the track's observation readings: the semi-major axis of the stored ellipse, `ellipse_axes[0]`, in patch px, skipping unmeasured rows | no value when every row is unmeasured | the reconstruction has no observation readings |
@@ -248,6 +247,15 @@ rather than reporting 0 for a track with one unmeasured observation.
 when the base or an added point carries readings, rather than from the base
 alone.
 
+**The distance at infinity.** A point at infinity is farther from the cameras
+than any finite point, so its `centroid_distance` is `+∞`, a value rather than
+no value. That makes the column answer "which points are at infinity?" as
+well: a bound with `min` `+∞` keeps exactly them, a finite `max` drops them,
+and sorted by distance they come after every finite point ascending and first
+descending. No separate column flags them. `x`, `y` and `z` have no value at
+infinity, since the stored three numbers are a direction there, not a
+position.
+
 **The ray angle at infinity.** A point at infinity is a bearing: its stored
 three numbers are a direction, and every sighting of it casts the same ray, so
 its widest pair is 0° whatever the baseline. Subtracting a camera centre from
@@ -265,11 +273,14 @@ indexes:
 - A row passes a bound when its value is at least `min` and at most `max`,
   both inclusive. A NaN fails every bound that sets either end, so a point
   with no value is never inside a range. A bound that sets neither end filters
-  nothing.
+  nothing. An infinite value is compared as a number: `+∞` passes any `min`,
+  fails any finite `max`, and passes a `max` of `+∞`.
 - With `order_by`, the rows are sorted by that column, stably, so equal
   values keep ascending point index whichever way the sort runs. Rows with no
   value sort after every row with one, in either direction, which is Track
-  View's rule for empty cells. `-0` and `0` compare equal. Without `order_by`
+  View's rule for empty cells. `+∞` is a value, not "no value": it sorts
+  after every finite value ascending and before them descending, and always
+  ahead of the rows with no value. `-0` and `0` compare equal. Without `order_by`
   the rows keep `live_indexes()` order, which is ascending point index.
 - A bound or a sort on a column the `TrackTable` does not hold is refused with
   `ColumnNotComputed`, which covers both a column the caller did not ask for
@@ -302,9 +313,9 @@ Values are stored as `f32`, except the position columns, which are stored as
 `f64`. The columns are shown to three or four significant digits and filtered
 against bounds a person types, so `f32` is enough for every derived value. A
 position is not: a georeferenced reconstruction can sit 10⁶ m from the
-origin, where an `f32` resolves only about 6 cm. Eleven `f32` columns and three
-`f64` ones over 10⁶ points take 68 MB, and making every column `f64` would add
-another 44 MB for no gain. Every value is computed in `f64` and rounded once
+origin, where an `f32` resolves only about 6 cm. Ten `f32` columns and three
+`f64` ones over 10⁶ points take 64 MB, and making every column `f64` would add
+another 40 MB for no gain. Every value is computed in `f64` and rounded once
 when it is stored.
 
 Each point's values depend only on that point and the image set, so the
@@ -320,7 +331,8 @@ each computed column's wire name to an `(n,)` NumPy array, `float32`, or
 point index of each row. `recon` is an `SfmrReconstruction` (wrapped as an
 `EditedReconstruction` for the call) or an `EditedReconstruction`, read
 through its edits. With `columns=None` it computes every column the
-reconstruction can supply. A list of names computes those; a name that is not
+reconstruction can supply. A point at infinity's `centroid_distance` is
+`inf` in its array. A list of names computes those; a name that is not
 a column, or names a column the reconstruction cannot supply, raises
 `ValueError` saying which columns there are, rather than leaving the key out
 silently.
@@ -344,12 +356,14 @@ The Rust tests in
 [track_table/tests.rs](../../../crates/sfmtool-core/src/analysis/track_table/tests.rs)
 build small reconstructions from the demo reconstruction and check each column
 against the stored data or the per-point function it is defined by: a point
-at infinity (no position, distance or diagnostics, a ray angle of 0), an image
-holding two observations of one point, absent optional columns, unmeasured
+at infinity (no position or diagnostics, a distance of `+∞`, a ray angle of
+0), an image holding two observations of one point (one repeat observation),
+absent optional columns, unmeasured
 `observation_confidence` bytes and unmeasured readings, and deleted and added
 points. They check the query's inclusive bounds, NaN against a bound, a bound with
-neither end, `seen_in_image`, ties in both sort orders, no-value rows last in
-both orders and both refusals; that `merge` moves the missing columns, keeps
+neither end, `+∞` against a `min` and a finite `max`, `seen_in_image`, ties in
+both sort orders, `+∞` sorting as the largest value ahead of the no-value
+rows, no-value rows last in both orders and both refusals; that `merge` moves the missing columns, keeps
 the ones already held and refuses a table of another version; that a
 cancelled `compute` returns `Cancelled`;
 that progress runs to the end through both passes; and that the values are
@@ -360,7 +374,9 @@ these definitions through its re-exports.
 The binding's tests in
 [test_track_table_rust_bindings.py](../../../tests/rust_bindings/analysis/test_track_table_rust_bindings.py)
 check the names, dtypes and rows against the seoul_bull ground truth's own
-arrays, the column selection and its refusals, and an edited reconstruction.
+arrays (a distance of `inf` exactly at the points at infinity), a moved
+observation's repeat, the column selection and its refusals, and an edited
+reconstruction.
 
 ## Non-goals
 

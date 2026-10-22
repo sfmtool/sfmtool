@@ -2,9 +2,10 @@
 
 The Track Table is the SfM Explorer panel that lists every 3D point of the
 selected reconstruction as one row, with the numbers that say how well the
-point is supported as its columns: how many observations its track has, how
-many photographs see it, its reprojection error, whether it is at infinity,
-where it is, and what its stored patch readings say. A person sorts by any
+point is supported as its columns: how many observations its track has,
+whether one photograph holds more than one of them, its reprojection error,
+where it is and how far from the cameras (`∞` for a point at infinity), and
+what its stored patch readings say. A person sorts by any
 column with a click on its heading, sets a minimum and a maximum on each, and
 reads off how many points pass. Clicking a row selects that point everywhere
 else in the viewer. A reconstruction can hold a few million points, so the
@@ -61,19 +62,23 @@ Panels menu opens it.
 
 ```
 ┌ Track Table ──────────────────────────────────────────────────────────────────┐
-│ dino  1,204 of 9,941 points  [Columns]  ☐ Only points seen in IMG_0042.jpg    │
-├────────┬─────────┬─────────┬────────────┬──────┬──────────────────────────────┤
-│ Point  │ Track ▼ │ Images  │ Error (px) │ ∞    │                              │
-│        │[3 ][   ]│[  ][  ] │[   ][1.5]  │[ ][ ]│                              │
-├────────┼─────────┼─────────┼────────────┼──────┼──────────────────────────────┤
-│ #9873  │      57 │      45 │      0.820 │      │                              │
-│ #830   │      18 │      18 │      0.610 │      │                              │
-└────────┴─────────┴─────────┴────────────┴──────┴──────────────────────────────┘
+│ dino  1,204 of 9,941 points  · 3 with repeat observations  [Columns]          │
+│ ☐ Only points seen in IMG_0042.jpg                                            │
+├────────┬─────────┬─────────────┬────────────┬──────────┬──────────────────────┤
+│ Point  │ Track ▼ │ Repeat obs. │ Error (px) │ Distance │                      │
+│        │[3 ][   ]│[    ][    ] │[   ][1.5]  │[   ][   ]│                      │
+├────────┼─────────┼─────────────┼────────────┼──────────┼──────────────────────┤
+│ #9873  │      57 │           2 │      0.820 │     4.17 │                      │
+│ #830   │      18 │           0 │      0.610 │        ∞ │                      │
+└────────┴─────────┴─────────────┴────────────┴──────────┴──────────────────────┘
 ```
 
 - **It follows the selected reconstruction**, as Image Browser and Edit History
   do. The header names that reconstruction and counts the matched rows against
-  its live points, with the thousands grouped (*1,204 of 9,941 points*). With no
+  its live points, with the thousands grouped (*1,204 of 9,941 points*). When
+  any live point has repeat observations, the count goes on with how many do,
+  whatever the bounds (*· 3 with repeat observations*), since such a point is a
+  defect to find and fix; with none it says nothing of them. With no
   reconstruction loaded the panel says *No reconstruction loaded*. The first
   time the panel shows a reconstruction, until the table job has computed the
   columns for the version at the cursor, the panel says *Computing the track
@@ -90,20 +95,30 @@ Panels menu opens it.
   |---|---|---|
   | Point | the point index | `#9873` |
   | Track | `track_length` | a whole number |
-  | Images | `image_count` | a whole number |
+  | Repeat obs. | `repeat_observations` | a whole number, `0` for a sound track |
   | Error (px) | `rms_error_px` | three significant digits, at most three decimals |
-  | ∞ | `at_infinity` | `∞` for a point at infinity, empty for a finite one |
   | X, Y, Z | `x`, `y`, `z` | four significant digits, every whole digit kept, at most three decimals |
-  | Distance | `centroid_distance` | three significant digits, at most three decimals |
+  | Distance | `centroid_distance` | three significant digits, at most three decimals; `∞` for a point at infinity |
   | Normal conf. | `normal_confidence` | a whole number, 0 to 255 |
   | Lowest ZNCC | `lowest_zncc` | two decimals |
   | Self-sim. radius | `largest_zncc_self_similarity_radius` | three significant digits, at most three decimals |
 
   A point with no value in a column (a NaN in the table: a point at infinity's
   `x`) shows `-`. A column the cache does not hold yet shows `…`. The number
-  cells are right-aligned.
+  cells are right-aligned. There is no column that flags a point at infinity:
+  its Distance is `∞`, so a sort by Distance gathers the points at infinity at
+  one end and a minimum of `inf` keeps only them.
 - **Columns**, a menu, lists every column the reconstruction can supply with a
-  checkbox. The default set is Track, Images, Error and ∞. A column that holds
+  checkbox. The default set is Track, Error and Distance. **Repeat obs. shows
+  itself**: until the person ticks or unticks it in this menu, it is shown
+  exactly while the reconstruction on show has a point with repeat
+  observations, so a defect is not hidden behind a column nobody thought to
+  open, and a sound reconstruction does not spend a column on zeros. Once it
+  has been ticked or unticked, the menu alone decides, for every
+  reconstruction, so the panel never undoes a choice the person made. It is
+  not added to the person's columns while it shows itself
+  (`TrackTableQuery::is_shown`, `repeat_observations_chosen`), and while it
+  holds a bound or the sort it stays shown whatever the reconstruction. A column that holds
   a bound or the sort cannot be hidden until those are cleared, so a hidden
   column never filters or orders the rows without the person seeing it. Its
   checkbox is greyed, and its hover text says why. The menu stays open while
@@ -114,10 +129,12 @@ Panels menu opens it.
   filters nothing, its label is dimmed while it is ticked, and its hover text
   says so.
 - **The heading row** sorts by the column clicked. The first click on a
-  column sorts the bad end first where the column has one: `rms_error_px` and
+  column sorts the bad end first where the column has one:
+  `repeat_observations`, `rms_error_px` and
   `largest_zncc_self_similarity_radius` descending, `track_length`,
-  `image_count`, `lowest_zncc` and `normal_confidence` ascending. Every other
-  column sorts ascending first. A second click on the same heading reverses the
+  `lowest_zncc` and `normal_confidence` ascending. Every other column sorts
+  ascending first, Distance among them, which puts the points at infinity, at
+  `∞`, after every finite distance and their second click first. A second click on the same heading reverses the
   order. A triangle after the heading marks the sorted column, pointing up for
   increasing and down for decreasing. Rows with no value go last in either
   order, which is the track table query's rule. A click on **Point** puts the
@@ -128,7 +145,9 @@ Panels menu opens it.
 - **The bounds row**, under the headings, has a minimum box and a maximum box
   per column. A row passes when its value is at least the minimum and at most
   the maximum, both inclusive, and every bound must pass; a row with no value
-  fails any bound that sets an end. An empty box sets no bound. A box whose
+  fails any bound that sets an end. An empty box sets no bound. `inf` is a
+  number here: a minimum of `inf` on Distance keeps only the points at
+  infinity, and any finite maximum drops them. A box whose
   text is not a number sets none either, and its text is drawn in the error
   colour with a hover text saying so. The rows are filtered again on the frame
   after an edit of a box. Each box is named for its column, *minimum Error
@@ -284,7 +303,7 @@ the frame the selection changed.
 
 | Parameter | Value | Meaning |
 |---|---|---|
-| `DEFAULT_COLUMNS` | Track, Images, Error (px), ∞ | The value columns shown before any is hidden or shown. |
+| `DEFAULT_COLUMNS` | Track, Error (px), Distance | The value columns shown before any is hidden or shown. Repeat obs. is shown as well while the reconstruction has a point with repeat observations and the person has not ticked or unticked it. |
 | `POINT_WIDTH` | 72 pt | The Point column's width. |
 | `MIN_VALUE_WIDTH` | 84 pt | The narrowest a value column is, room for its two bound boxes; a wider heading widens its column. |
 | Row height | the body text height + 6 pt | Every row's height. |
@@ -311,6 +330,14 @@ with one point at infinity:
 - a bound keeps the rows inside it, both ends inclusive, and a row with no
   value fails it; a box that is not a number sets no bound; sorting puts the
   no-value row last in either order;
+- the default columns are Track, Error and Distance; the point at infinity's
+  Distance is `∞`, last ascending and first descending, dropped by a finite
+  maximum and kept alone by a minimum of `inf`;
+- with two points holding repeat observations, Repeat obs. is shown without
+  being added to the person's columns, the header says *· 2 with repeat
+  observations* and the heading's first click puts those points first; an
+  untick keeps it hidden though there are repeats, a tick keeps it shown
+  though there are none, and while it holds the sort it is not hidden;
 - a frame with an unchanged query does not compute the row list again, through
   five frames, a hover and an image selection, and a change of the query, the
   version or the cached columns does;
@@ -331,8 +358,8 @@ with one point at infinity:
   the new table lands; the first open says *Computing…* with no count;
 - scrolled sideways, the Point heading and the Point cells keep their x
   position while the value columns' headings move;
-- the cell text of a point at infinity, the grouping of counts and the
-  significant digits.
+- the cell text of a point at infinity (`-` for X, `∞` for Distance), the
+  grouping of counts and the significant digits.
 
 The layout tests in `layout::tests` and the MCP layout and catalog tests count
 the panel among the ten.

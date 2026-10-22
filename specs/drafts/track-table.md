@@ -56,13 +56,13 @@ agent can set up the view a person sees.
 │ 1,204 of 9,941 points  [Columns]  Size [──●──] ☐ Only points seen in selected image   │
 │ ☐ Filter the 3D view: (•) Dim ( ) Hide                                                │
 ├────────┬────────┬────────┬─────────┬─────────┬────────────┬───────────────┬───────────┤
-│ Point  │ Crop   │ Patch  │ Track ▼ │ Images  │ Error (px) │ Ray angle (°) │ Cond.     │
+│ Point  │ Crop   │ Patch  │ Track ▼ │Distance │ Error (px) │ Ray angle (°) │ Cond.     │
 │        │        │        │ [3 ][  ]│ [  ][  ]│ [   ][1.5 ]│ [2  ][    ]   │ [  ][  ]  │
 ├────────┼────────┼────────┼─────────┼─────────┼────────────┼───────────────┼───────────┤
-│ #9873  │ ░▓▓▓▓░ │ ▓▓▓▓▓▓ │    57   │    45   │    0.820   │     41.2      │    3.1    │
+│ #9873  │ ░▓▓▓▓░ │ ▓▓▓▓▓▓ │    57   │   4.17  │    0.820   │     41.2      │    3.1    │
 │        │ ░▓▓▓▓░ │ ▓▓▓▓▓▓ │         │         │            │               │           │
 ├────────┼────────┼────────┼─────────┼─────────┼────────────┼───────────────┼───────────┤
-│ #830   │ ░░░░░░ │ ▓▓▓▓▓▓ │    18   │    18   │    0.610   │     22.7      │    …      │
+│ #830   │ ░░░░░░ │ ▓▓▓▓▓▓ │    18   │     ∞   │    0.610   │     22.7      │    …      │
 │        │ ░░░░░░ │ ▓▓▓▓▓▓ │         │         │            │               │           │
 └────────┴────────┴────────┴─────────┴─────────┴────────────┴───────────────┴───────────┘
 ```
@@ -70,8 +70,8 @@ agent can set up the view a person sees.
 The second row's crop is still an empty frame because its photograph is
 still being decoded.
 
-- **The default columns** become Point, Crop, Patch, Track, Images, Error, ∞
-  and Ray angle. The Columns menu lists the picture columns and the computed
+- **The default columns** become Point, Crop, Patch, Track, Error, Distance
+  and Ray angle, with Repeat obs. shown by itself as it is now. The Columns menu lists the picture columns and the computed
   columns beside the stored ones.
 - **The heading rule** for the computed columns: a first click on
   `condition_number` or `inverse_depth_z` sorts descending, and on
