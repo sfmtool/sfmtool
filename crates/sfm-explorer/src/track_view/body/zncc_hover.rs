@@ -19,7 +19,7 @@ use sfmtool_core::patch::blur_matched::BlurScratch;
 use sfmtool_core::patch::stored_bitmap::stored_bitmap_planes;
 
 use super::reference::grid_lines;
-use super::tile::{CONTEXT_FACTOR, CONTEXT_HOVER_SIDE};
+use crate::patch_pictures::marks::{CONTEXT_FACTOR, CONTEXT_HOVER_SIDE};
 
 /// Side of each tile in the hover, in points: the size the tile's own hover
 /// view draws the tile at, a third of its picture.

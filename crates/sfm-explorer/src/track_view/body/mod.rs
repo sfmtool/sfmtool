@@ -305,10 +305,10 @@ pub struct TrackBody {
     /// The crop of each row's photograph around the patch's outline, by
     /// observation index, kept and dropped with [`TrackBody::tiles`]: it moves
     /// exactly when the tile does. `None` is cached as the tile's is.
-    crops: HashMap<usize, Option<crop::DrawnCrop>>,
+    crops: HashMap<usize, Option<crate::patch_pictures::crop::DrawnCrop>>,
     /// The hover view of each row's crop, rendered the first time the pointer
     /// rests on that crop and dropped with [`TrackBody::crops`].
-    crop_contexts: HashMap<usize, Option<crop::DrawnCrop>>,
+    crop_contexts: HashMap<usize, Option<crate::patch_pictures::crop::DrawnCrop>>,
     /// The stored bitmap as blurred for each row's blur-matched score, by
     /// observation index, uploaded the first time the pointer rests on that
     /// row's *ZNCC* cell and dropped with [`TrackBody::tiles`], since a step
@@ -1228,7 +1228,7 @@ impl TrackBody {
         track: &EditableTrack,
         observation: usize,
         state: &AppState,
-    ) -> Option<&crop::DrawnCrop> {
+    ) -> Option<&crate::patch_pictures::crop::DrawnCrop> {
         if !self.crops.contains_key(&observation) {
             let drawn = self.drawn_crop(ctx, recon, track, observation, state, false)?;
             self.crops.insert(observation, drawn);
@@ -1246,7 +1246,7 @@ impl TrackBody {
         track: &EditableTrack,
         observation: usize,
         state: &AppState,
-    ) -> Option<&crop::DrawnCrop> {
+    ) -> Option<&crate::patch_pictures::crop::DrawnCrop> {
         if !self.crop_contexts.contains_key(&observation) {
             let drawn = self.drawn_crop(ctx, recon, track, observation, state, true)?;
             self.crop_contexts.insert(observation, drawn);
@@ -1270,7 +1270,7 @@ impl TrackBody {
         observation: usize,
         state: &AppState,
         in_context: bool,
-    ) -> Option<Option<crop::DrawnCrop>> {
+    ) -> Option<Option<crate::patch_pictures::crop::DrawnCrop>> {
         let id = self.showing.as_ref().map(|showing| showing.node)?;
         let row = track.observations.get(observation)?;
         let image = ImageRef::new(id, row.image as usize);
@@ -1288,17 +1288,13 @@ impl TrackBody {
                     format!("bench_crop_{}_{observation}", image.index()),
                     // Each photograph pixel magnified to a block, as the tile
                     // is, so the crop shows the photograph's own resolution.
-                    egui::TextureOptions {
-                        magnification: egui::TextureFilter::Nearest,
-                        minification: egui::TextureFilter::Linear,
-                        ..egui::TextureOptions::NEAREST
-                    },
+                    crate::patch_pictures::crop::CELL_TEXTURE_OPTIONS,
                 )
             };
-            Some(crop::DrawnCrop::new(
+            Some(crate::patch_pictures::crop::DrawnCrop::new(
                 ctx,
                 picture,
-                row.verdict,
+                crate::bench::verdict_color(row.verdict),
                 name,
                 options,
             ))

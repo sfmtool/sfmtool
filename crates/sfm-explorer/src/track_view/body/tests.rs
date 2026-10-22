@@ -3493,7 +3493,7 @@ fn largest_difference_in_box(tile: &egui::ColorImage, context: &super::tile::Til
 #[test]
 fn a_tile_s_hover_view_holds_the_tile_in_its_middle_at_either_stage() {
     let (mut state, id, label, _, _) = on_the_bench();
-    let k = super::tile::CONTEXT_FACTOR as f32;
+    let k = crate::patch_pictures::marks::CONTEXT_FACTOR as f32;
     let check = |state: &AppState, stage: &str| {
         let observations = state
             .bench_track(id, &label)
@@ -3593,7 +3593,7 @@ fn a_hover_view_marks_the_projection_as_far_off_as_the_row_s_error() {
     let (_, context) = tile_and_context(&state, id, &label, added);
     assert_eq!(
         context.projection_of,
-        Some(super::tile::ProjectionOf::Point)
+        Some(crate::patch_pictures::marks::ProjectionOf::Point)
     );
     let stated = context.projection_px.expect("a projection distance");
     assert!(
@@ -3613,7 +3613,7 @@ fn a_hover_view_marks_the_projection_as_far_off_as_the_row_s_error() {
         .expect("the keypoint meets the patch");
     wide.half_extent = wide
         .half_extent
-        .map(|h| h * f64::from(super::tile::CONTEXT_FACTOR));
+        .map(|h| h * f64::from(crate::patch_pictures::marks::CONTEXT_FACTOR));
     let side = f64::from(context.image.size[0] as u32);
     let to_photograph = |at: egui::Pos2| {
         let s = 2.0 * f64::from(at.x) / side - 1.0;
@@ -4303,9 +4303,9 @@ fn crop_and_context(
     label: &str,
     observation: usize,
 ) -> (
-    super::crop::Outline,
-    super::crop::CropPicture,
-    super::crop::CropPicture,
+    crate::patch_pictures::crop::Outline,
+    crate::patch_pictures::crop::CropPicture,
+    crate::patch_pictures::crop::CropPicture,
 ) {
     let track = state.bench_track(id, label).expect("on the bench").clone();
     let row = &track.observations[observation];
@@ -4328,7 +4328,7 @@ fn crop_and_context(
 #[test]
 fn a_crop_holds_the_whole_outline_with_a_pixel_to_spare() {
     let (mut state, id, label, _, _) = on_the_bench();
-    let margin = super::crop::CROP_MARGIN_PX;
+    let margin = crate::patch_pictures::crop::CROP_MARGIN_PX;
     let check = |state: &AppState, stage: &str| {
         let track = state.bench_track(id, &label).expect("on the bench").clone();
         for observation in 0..track.observations.len() {
@@ -4406,7 +4406,7 @@ fn a_crop_holds_the_whole_outline_with_a_pixel_to_spare() {
 #[test]
 fn a_crop_s_hover_view_holds_the_crop_in_its_middle_third() {
     let (state, id, label, _, _) = on_the_bench();
-    let k = super::tile::CONTEXT_FACTOR as usize;
+    let k = crate::patch_pictures::marks::CONTEXT_FACTOR as usize;
     let observations = state
         .bench_track(id, &label)
         .expect("on the bench")
@@ -4475,7 +4475,7 @@ fn a_crop_s_hover_view_gives_the_axes_in_photograph_pixels() {
             "axis {axis} is {got} px, the edge midpoints {want} px apart"
         );
     }
-    let caption = super::crop::context_caption(&context);
+    let caption = crate::patch_pictures::crop::context_caption(&context);
     for axis in context.axes_px {
         let text = format!("{:.1} px", axis.expect("projects"));
         assert!(caption.contains(&text), "{text} is not in {caption}");
@@ -4591,7 +4591,7 @@ fn a_crop_s_hover_view_marks_the_keypoint_and_the_projection() {
 
     let (_, _, context) = crop_and_context(&state, id, &label, added);
     let region = context.crop;
-    let k = super::tile::CONTEXT_FACTOR as i64;
+    let k = crate::patch_pictures::marks::CONTEXT_FACTOR as i64;
     let corner = [
         (region.min[0] - region.size[0] * (k / 2)) as f64,
         (region.min[1] - region.size[1] * (k / 2)) as f64,
@@ -4609,14 +4609,14 @@ fn a_crop_s_hover_view_marks_the_keypoint_and_the_projection() {
     );
     assert_eq!(
         context.projection_of,
-        Some(super::tile::ProjectionOf::Point)
+        Some(crate::patch_pictures::marks::ProjectionOf::Point)
     );
     let stated = context.projection_px.expect("a projection distance");
     assert!(
         (stated - error).abs() < 1e-6,
         "the hover view states {stated} px, the row {error} px"
     );
-    let caption = super::crop::context_caption(&context);
+    let caption = crate::patch_pictures::crop::context_caption(&context);
     assert!(
         caption.contains(&format!("{stated:.2} px away along the dashed line")),
         "the caption does not state the distance: {caption}"
@@ -4630,7 +4630,7 @@ fn a_crop_s_hover_view_marks_the_keypoint_and_the_projection() {
     assert_eq!(context.projection, None);
     assert_eq!(context.projection_of, None);
     assert!(
-        super::crop::context_caption(&context).contains("no point to project"),
+        crate::patch_pictures::crop::context_caption(&context).contains("no point to project"),
         "the cluster caption does not say why there is no ring"
     );
 }

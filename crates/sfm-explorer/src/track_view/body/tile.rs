@@ -66,6 +66,9 @@ use sfmtool_core::patch::cluster_refine::{sample_member_grid, ClusterRefineParam
 use sfmtool_core::SfmrReconstruction;
 
 use super::patch::PatchJacobian;
+use crate::patch_pictures::marks::{
+    paint_marks, projection_bullet, ProjectionOf, CONTEXT_FACTOR, CONTEXT_HOVER_SIDE,
+};
 
 /// The tile for one observation, uploaded, or `None` when [`image()`] had
 /// nothing to render.
@@ -202,16 +205,6 @@ pub(super) fn image(
         }
     }
 }
-
-/// How many times the patch's width the hover view of a tile shows. For
-/// display only: the hover view is rendered at this many times
-/// [`super::patch::PATCH_RES`], and no number is read from it.
-///
-/// Odd, so that the patch sits in the middle with whole patch widths of the
-/// photograph on every side and its box falls on texel boundaries whatever the
-/// tile's resolution: at `3` the patch is the middle third of the picture, with
-/// one patch width of the photograph on every side.
-pub(super) const CONTEXT_FACTOR: u32 = 3;
 
 /// A tile in context: the picture the hover view draws, and the places it
 /// marks on it, each in the picture's own texels, `(0, 0)` its top-left corner
@@ -380,21 +373,6 @@ pub(super) fn color_image(grid: &[f32], resolution: usize, channels: usize) -> e
     egui::ColorImage::from_rgba_unmultiplied([resolution, resolution], &rgba)
 }
 
-/// Side of the hover view's picture on screen, in points: large enough to
-/// judge a patch width of photograph on each side of the patch, small enough
-/// for a tooltip beside a row.
-pub(super) const CONTEXT_HOVER_SIDE: f32 = 288.0;
-
-/// What the projection in a [`TileContext`] is the projection of, which is
-/// what the row's *Proj. err* column measures to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum ProjectionOf {
-    /// The track's triangulated point.
-    Point,
-    /// The patch's centre, before the track is triangulated.
-    PatchCentre,
-}
-
 /// A [`TileContext`] uploaded: what the table keeps per row once the hover
 /// view has been asked for, and draws from on every frame it is shown.
 pub(super) struct DrawnContext {
@@ -466,38 +444,6 @@ impl DrawnContext {
     }
 }
 
-/// Draw the marks a hover view puts over its picture, in screen points: a dot
-/// at `keypoint`, where the observation sits, a ring at `projection`, where
-/// the track's point or its patch's centre projects, and a dashed line from
-/// the one to the other.
-///
-/// Each mark is a light stroke over a wider dark one, so it reads over a
-/// bright photograph and a dark one alike, the ring in amber. The tile's hover
-/// view and the crop's both draw through this, so the two mark one place the
-/// same way.
-pub(super) fn paint_marks(
-    painter: &egui::Painter,
-    keypoint: Option<egui::Pos2>,
-    projection: Option<egui::Pos2>,
-) {
-    let halo = egui::Stroke::new(3.0, egui::Color32::from_black_alpha(170));
-    let light = egui::Stroke::new(1.5, egui::Color32::from_gray(240));
-    let projection_color = egui::Color32::from_rgb(255, 196, 64);
-    if let (Some(keypoint), Some(projection)) = (keypoint, projection) {
-        let line = [keypoint, projection];
-        for stroke in [halo, light] {
-            painter.extend(egui::Shape::dashed_line(&line, stroke, 5.0, 4.0));
-        }
-    }
-    if let Some(at) = projection {
-        painter.circle_stroke(at, 5.0, egui::Stroke::new(4.0, halo.color));
-        painter.circle_stroke(at, 5.0, egui::Stroke::new(2.0, projection_color));
-    }
-    if let Some(at) = keypoint {
-        painter.circle(at, 3.0, light.color, egui::Stroke::new(1.5, halo.color));
-    }
-}
-
 /// The bullets under a tile's hover view: what the picture is, and what each
 /// mark on it is.
 pub(super) fn context_caption(context: &TileContext) -> String {
@@ -513,34 +459,4 @@ pub(super) fn context_caption(context: &TileContext) -> String {
             context.projection_px,
         )
     )
-}
-
-/// The bullet a hover view's caption gives its ring: what was projected, and
-/// how far from the observation it landed.
-///
-/// `outside` is whether the ring lies outside the picture, `None` where there
-/// is no ring to draw; `projection_px` the distance in the photograph's
-/// pixels, `None` where nothing projected. Shared by the tile's hover view and
-/// the crop's, so the two say one thing about one mark.
-pub(super) fn projection_bullet(
-    projection_of: Option<ProjectionOf>,
-    outside: Option<bool>,
-    projection_px: Option<f64>,
-) -> String {
-    let what = match projection_of {
-        None => return "\u{2022} No ring: a cluster has no point to project".to_string(),
-        Some(ProjectionOf::Point) => "the track's point",
-        Some(ProjectionOf::PatchCentre) => "the patch's centre",
-    };
-    match (outside, projection_px) {
-        (Some(outside), Some(px)) => format!(
-            "\u{2022} Ring: where {what} projects, {px:.2} px away along the dashed line{}",
-            if outside { ", outside this view" } else { "" }
-        ),
-        (None, Some(px)) => format!(
-            "\u{2022} No ring: {what} projects {px:.2} px away, off the patch's plane as this \
-             view sees it",
-        ),
-        _ => format!("\u{2022} No ring: {what} does not project into this photograph"),
-    }
 }

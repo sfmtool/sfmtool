@@ -53,13 +53,18 @@ either mode, and
 [body/](../../crates/sfm-explorer/src/track_view/body/) is the one body that
 draws both modes: `mod.rs` the header, the toolbar and the boxes, `table.rs` the
 observation table, `tile.rs` the tile each row draws and its hover view,
-`crop.rs` the crop of the photograph beside the tile and its hover view,
-`surface_plot.rs` the self-similarity surface plot, `reference.rs` the
+`crop.rs` the values of a row's crop read off its track, `surface_plot.rs` the self-similarity surface plot, `reference.rs` the
 *Reference* column's cells, hover text and sort key,
 [`zncc_hover.rs`](../../crates/sfm-explorer/src/track_view/body/zncc_hover.rs)
 the *ZNCC* cell's hover at the track stage, and `patch.rs` the warp a
 track-stage tile is rendered through and the picture of a track's own patch,
-which the header and the strip both draw. The
+which the header and the strip both draw. The crop itself and the marks
+both hover views draw are in
+[patch_pictures/](../../crates/sfm-explorer/src/patch_pictures/), which the
+Track Table's picture columns use too: `crop.rs` cuts a photograph around a
+patch's outline and draws it and its hover view, and `marks.rs` holds the
+hover views' dot, ring and dashed line, the ring's caption bullet,
+`CONTEXT_FACTOR` and the hover side. The
 viewed track is [bench/viewed.rs](../../crates/sfm-explorer/src/bench/viewed.rs).
 The bench steps the body reports are `AppState` methods in
 [bench.rs](../../crates/sfm-explorer/src/bench.rs), and the dock applies them in
@@ -1780,7 +1785,7 @@ bounded by its byte budget, which drops the least recently used photographs
 first.
 
 **Hovering a tile shows it in context.** The tooltip draws the same picture
-over three times the patch's width (`tile::CONTEXT_FACTOR`), 288 points across,
+over three times the patch's width (`patch_pictures::marks::CONTEXT_FACTOR`), 288 points across,
 so a person can see what surrounds the patch and whether it sits on the surface
 they meant. The wider picture is rendered at the tile's own sampling, so the
 tile is its middle third texel for texel: at the track stage the tile's patch frame,
@@ -1831,7 +1836,7 @@ model (`geometry::project_outline`, the function Image Detail strokes), so on a
 fisheye the edges show as the curves they are. At the cluster stage it is the
 observation's parallelogram (`geometry::parallelogram`). The crop is the
 outline's bounding box widened by one photograph pixel on every side
-(`crop::CROP_MARGIN_PX`) and rounded out to whole pixels, so the whole outline
+(`patch_pictures::crop::CROP_MARGIN_PX`) and rounded out to whole pixels, so the whole outline
 is in it with its stroke clear of the edge, and then widened on its shorter
 side, evenly on either side, until it is square. The photograph is not
 stretched: the extra is more of the photograph around the outline, which stays
@@ -1843,10 +1848,10 @@ nearest filtering as the tile is, so the photograph's own resolution shows.
 
 **Hovering the crop shows it in context**, as hovering the tile does: the same
 crop centred in three times its width and height of the photograph
-(`tile::CONTEXT_FACTOR`), at the crop's own sampling, so the crop is its middle
+(`marks::CONTEXT_FACTOR`), at the crop's own sampling, so the crop is its middle
 third texel for texel, drawn at 288 points with the outline over it. Over the
 outline are the tile's hover view's marks, drawn by the same code
-(`tile::paint_marks`): a dot where the observation sits and, at the track
+(`marks::paint_marks`): a dot where the observation sits and, at the track
 stage, the amber ring where the track's point projects, or before the track is
 triangulated its patch's centre, with a dashed line from the dot to the ring.
 The picture is the photograph itself, so each mark sits at its own pixel. The
@@ -1854,7 +1859,7 @@ crop is not boxed: the outline already shows where it is. As on the tile,
 the tooltip opens with the photograph's full name, and short bullets under the
 picture say what the outline and the view are, with the crop's size in
 photograph pixels, what the marks are and how far the projection is, in the
-bullet the tile's hover view uses (`tile::projection_bullet`), and the patch's
+bullet the tile's hover view uses (`marks::projection_bullet`), and the patch's
 two axes, the one across the tile and the one up it, as lengths in the
 photograph's pixels. At the track stage each axis is measured
 along its projection through the lens, from one edge's midpoint through the
@@ -1871,6 +1876,21 @@ crop and its hover view are cached per row beside the tiles and dropped with
 them; like a tile, a crop whose photograph is not decoded yet is not cached,
 so it appears once the decode ends. The hover view is rendered the first time the pointer rests on the
 crop. Its hover region takes no click, so a click on the crop is the row's.
+
+**The crop is drawn from values, not from the track.** The functions that cut
+it (`patch_pictures::crop`) take what the outline is made of: at the track
+stage `patch_outline` takes the patch frame with its `w`, the camera and its
+pose, the observation's keypoint, and what to project, the track's point or
+before it is triangulated its patch's centre; at the cluster stage
+`cluster_outline` takes the keypoint, its affine shape and the cluster's
+radius. `image` and `context` then cut the crop and its hover view from an
+outline and the photograph, and `DrawnCrop` uploads and draws either, its
+outline stroked in the colour it is given, here the row's verdict colour. The
+row's own `crop.rs` reads those values off the track and the observation and
+passes them, so a panel that reads the same values off a point of the
+reconstruction draws that point's crop without building a track. A patch frame of a
+point at infinity carries `w = 0`, and both the outline and the projection are
+homogeneous, so a bearing's crop is cut as any other.
 
 **Each judged reading is coloured by its bar.** Five readings are judged, one
 per bar: the *whole* line of the ZNCC cell by the minimum ZNCC, its *mid* line
