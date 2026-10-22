@@ -29,7 +29,7 @@ columns a `find_points` call needs and the track table cache lacks
 Apply: the switch of one camera followed by the retriangulation of the tracks
 its images observe, as one version
 ([edits/switch-camera-model.md](edits/switch-camera-model.md)); it polls the
-flag on either side of the switch and inside the retriangulation. Every one of them is **cancellable**. Three
+flag on either side of the switch and inside the retriangulation. Every one of them is **cancellable**. Four
 more are **quiet tasks**: work the viewer starts by itself to keep a panel
 current, which runs from the fast queue, gives way to every task someone asks
 for, locks no node, writes no row for running and is not reported on the wire
@@ -43,7 +43,9 @@ proposal's current generation
 proposal's job"). `Track Table columns` is the Track Table panel's table job:
 it computes the stored track table columns the track table cache lacks for the
 node the panel shows ([track-table.md](track-table.md) § "Computing the
-columns"). The open polls the
+columns"). `Track Table reference picks` picks the reference observation of
+each visible point that stores none, for the Track Table's *Crop* column
+([track-table.md](track-table.md) § "The reference photograph"). The open polls the
 flag between files, between each file's stages, before every thumbnail it builds
 and every photograph it decodes, and before every patch it renders, and a
 cancelled open appends no node. The bench steps
@@ -168,6 +170,7 @@ pub(crate) struct Operation {
 | Live evaluation | fast | no; it does not start on a locked node (§ "Quiet tasks") | yes |
 | Camera model proposal | fast | no; it pushes no version (Apply installs its answer), and an open proposal refuses every task on its node | yes |
 | Track Table columns | fast | no; it pushes no version (it fills the track table cache), and it runs on a locked node (§ "Quiet tasks") | yes |
+| Track Table reference picks | fast | no; it pushes no version (the panel keeps its picks), and it runs on a locked node (§ "Quiet tasks") | yes |
 
 The **slow queue** holds the operations whose cost grows with the whole
 reconstruction and that use every core, Build index files among them; the
@@ -233,24 +236,29 @@ the pool with it, which slows the adjustment while the fast task runs
 ## Quiet tasks
 
 A **quiet task** is work the viewer starts by itself to keep a panel current,
-rather than work a person or an agent asked for. There are three quiet
+rather than work a person or an agent asked for. There are four quiet
 operations: `Live evaluation`, the bench's live evaluation of one track
 ([bench.md](bench.md) § "Live evaluation"); `Camera model proposal`, the
 job that switches an open proposal's camera and, for its preview,
 retriangulates its tracks ([edits/switch-camera-model.md](edits/switch-camera-model.md)
-§ "The proposal's job"); and `Track Table columns`, the Track Table panel's
+§ "The proposal's job"); `Track Table columns`, the Track Table panel's
 table job, which computes the stored track table columns the track table cache
 lacks for the node the panel shows ([track-table.md](track-table.md)
-§ "Computing the columns"). Nobody asked for any of them, so nothing someone
+§ "Computing the columns"); and `Track Table reference picks`, which runs the
+reference-view rule for each point on screen in the Track Table that stores no
+reference observation, one point after another, so its *Crop* cell knows which
+photograph to cut ([track-table.md](track-table.md) § "The reference
+photograph"). Nobody asked for any of them, so nothing someone
 asked for waits behind them, and nothing reports them as the viewer being busy:
 
 - **It gives way to a task someone asks for.** When a task that is not quiet
   is queued in the queue a quiet task is running in, or a locking task is
   queued on the node a quiet task runs on, in either queue, the quiet task's
-  cancel flag is set (`AppState::give_way_to`). The table job is the
-  exception to the second case: it keeps its answer in the cache keyed by the
-  serial it read, so a locking task on its node in the other queue leaves it
-  running (see "It is checked again when it would start", below). It is not taken off its
+  cancel flag is set (`AppState::give_way_to`). The table job and the
+  reference picks are the exception to the second case: each keeps its answer
+  keyed by the serial it read, so a locking task on its node in the other
+  queue leaves it running (see "It is checked again when it would start",
+  below). It is not taken off its
   queue: the task that displaced it starts once the quiet task's worker
   reports that it has stopped, because a queue still runs one task at a time.
   How soon that is depends on how often its kernels poll the flag: an
@@ -259,7 +267,9 @@ asked for waits behind them, and nothing reports them as the viewer being busy:
   after it, and its retriangulation between its three stages, but the switch
   itself takes no `Progress`, so a cancel that arrives during it is read when
   it returns (§ "Open questions" has what that costs); the table job polls
-  between blocks of points. Its source then queues
+  between blocks of points; the reference picks poll between their picks,
+  between the photographs a pick decodes and inside the rule's renders. Its
+  source then queues
   it again, behind that task, as it already does for a cancelled run, so this
   loses at most the work the cancelled run had done.
 - **Waiting tasks someone asked for start ahead of waiting quiet ones.** A task
@@ -268,11 +278,13 @@ asked for waits behind them, and nothing reports them as the viewer being busy:
   quiet tasks ahead of it in the fixed order among quiet tasks, its
   `QuietRank`: the camera model proposal's job, whose comparison and preview
   are on screen while a person decides whether to apply it, then the viewed
-  track's evaluation, the focused item's, the Track Table's columns, and then
+  track's evaluation, the focused item's, the Track Table's columns, the
+  Track Table's reference picks, and then
   any other bench item's evaluation.
 - **Each source keeps at most one waiting entry.** A source is one producer of
   quiet work (`QuietSource::CameraModelProposal`,
-  `QuietSource::LiveEvaluation`, `QuietSource::TrackTableColumns`). A new request replaces the
+  `QuietSource::LiveEvaluation`, `QuietSource::TrackTableColumns`,
+  `QuietSource::TrackTableReferencePicks`). A new request replaces the
   source's waiting entry rather than adding a second, because a quiet task's
   input is the state of a panel and only the latest state matters.
 - **It is checked again when it would start.** A waiting quiet task whose node
@@ -281,11 +293,11 @@ asked for waits behind them, and nothing reports them as the viewer being busy:
   not lock its node itself. A source says whether its work waits for its node
   (`QuietSource::waits_for_its_node`): the live evaluation's answer lands into
   the bench a locking task has captured and the proposal's job meets no locking
-  task, so both wait. The Track Table's table job does not: it pushes no
-  version and its answer is keyed by the document serial it read, so it starts
-  on a node a slow task holds and computes the version on screen, which is the
-  value the slow task was handed; when that task lands its version the serial
-  moves and the job runs again.
+  task, so both wait. The Track Table's table job and its reference picks do
+  not: they push no version and their answers are keyed by the document serial
+  they read, so they start on a node a slow task holds and work on the version
+  on screen, which is the value the slow task was handed; when that task lands
+  its version the serial moves and they run again.
 - **A dropped or replaced entry is not a failure.** A quiet task's job is a
   `QuietJob`: the work, `FnOnce(&Progress) + Send`, which sends its answers to
   its source on the source's own channel, and a second closure the queue calls
@@ -293,8 +305,9 @@ asked for waits behind them, and nothing reports them as the viewer being busy:
   message. The source reads that as "not run", not as the end of its channel:
   the live evaluation records no failure and picks the subject again when its
   node is free, the proposal keeps neither a comparison nor an answer and
-  queues the job again when it next wants it, and the table job is queued
-  again on the next frame the panel still lacks a column.
+  queues the job again when it next wants it, the table job is queued
+  again on the next frame the panel still lacks a column, and the reference
+  picks on the next frame the panel still has a point on screen to pick for.
 - **It writes no Action Log row for running and leaves no record.** It is not
   put in the ring of finished tasks, so a burst of evaluations during a slider
   drag, or of proposal jobs while Fit to θ is dragged, cannot push out the record of a task someone is waiting on, and it is
@@ -319,9 +332,7 @@ asked for waits behind them, and nothing reports them as the viewer being busy:
 No wire call waits on a quiet task. A `find_points` call whose columns are not
 cached queues *Find points*, which is asked for, rather than a quiet task
 ([mcp-server.md](mcp-server.md) § "`find_points`"); a running table job is
-asked to stop for it, and the two fill the same track table cache. The Track
-Table draft ([../drafts/track-table.md](../drafts/track-table.md) § "The
-reference photograph") proposes a fourth quiet task, its reference picks.
+asked to stop for it, and the two fill the same track table cache.
 
 ## What the user sees
 
@@ -1488,6 +1499,13 @@ over the real channel so the tests are about the seam and not about a solver:
   holds its node; an edit asks it to stop, and a table it brings back for the
   serial its node has left is dropped; and its kernel stops when its flag is
   set.
+- The Track Table's reference picks, in
+  [track_table_panel/tests/crop.rs](../../crates/sfm-explorer/src/track_table_panel/tests/crop.rs)
+  ([track-table.md](track-table.md) § "Testing"): a task asked for in the fast
+  queue asks them to stop, starts once they have, and they are queued again
+  behind it; they run while a slow task holds the node; an edit asks them to
+  stop and keeps no pick for the version the node left; and their work stops
+  when its flag is set.
 - Two operations in different queues run at the same time, and the fast one
   lands while the slow one is still running.
 - Three operations started in the same queue run one after the other, in the

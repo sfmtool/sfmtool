@@ -21,6 +21,14 @@ pub(crate) const STORED_PATCH_HOVER: &str =
     "The point's stored patch: the render of its reference \
      observation, or, where an older file stores none, a mean of its views";
 
+/// The hover text over a Track Table *Patch* cell whose point stores no
+/// reference observation: its stored bitmap need not be the render of the
+/// photograph the *Crop* cell shows, which is the reference-view rule's pick.
+pub(crate) const UNREFERENCED_PATCH_HOVER: &str =
+    "The point's stored patch. The point stores no reference observation, so this \
+     bitmap is not the render of the photograph in the Crop cell, which is the \
+     reference-view rule's pick";
+
 /// The hover text where a point stores no patch: an all-zero bitmap row.
 pub(crate) const NO_STORED_PATCH_HOVER: &str = "The point has no stored patch";
 

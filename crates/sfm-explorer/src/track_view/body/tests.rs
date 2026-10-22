@@ -4319,6 +4319,55 @@ fn crop_and_context(
     (outline, crop, context)
 }
 
+/// The crop the Track Table cuts for a point, from the values its point
+/// supplies (the patch frame with its `w`, the keypoint and the point's
+/// position), is the crop Track View cuts for the same observation of a track
+/// put on the bench from that point: the same pixels, region and outline.
+#[test]
+fn a_crop_cut_from_a_point_s_values_is_track_view_s_crop() {
+    let (state, id, label, _, _) = on_the_bench();
+    let track = state.bench_track(id, &label).expect("on the bench").clone();
+    let node = state.node(id).expect("loaded");
+    let recon = node.recon();
+    let view = node.edited().point(POINT).expect("a live point");
+    let patch_frame = view.patch_frame().expect("a patch frame");
+    assert!(track.observations.len() >= 2);
+    for (k, row) in track.observations.iter().enumerate() {
+        assert_eq!(row.image, view.observations()[k].image_index);
+        let src = state
+            .cached_photograph(id, row.image as usize)
+            .expect("a cached photograph");
+        let from_track = super::crop::image(recon, &track, k, &src).expect("a crop");
+        let (camera, pose) =
+            crate::bench::geometry::view_of(&recon.image_set, row.image as usize).expect("a view");
+        let keypoint = view.keypoint_xy(k).expect("a keypoint");
+        let outline = crate::patch_pictures::crop::patch_outline(
+            &patch_frame,
+            &camera,
+            &pose,
+            [f64::from(keypoint[0]), f64::from(keypoint[1])],
+            view.point().position,
+            crate::patch_pictures::marks::ProjectionOf::Point,
+        );
+        let from_point = crate::patch_pictures::crop::image(&outline, &src).expect("a crop");
+        assert_eq!(from_point.crop, from_track.crop, "observation {k}");
+        assert_eq!(
+            from_point.image.size, from_track.image.size,
+            "observation {k}"
+        );
+        assert_eq!(
+            from_point.image.pixels, from_track.image.pixels,
+            "observation {k}"
+        );
+        assert_eq!(from_point.outline, from_track.outline, "observation {k}");
+        assert_eq!(from_point.keypoint, from_track.keypoint, "observation {k}");
+        assert_eq!(
+            from_point.projection, from_track.projection,
+            "observation {k}"
+        );
+    }
+}
+
 /// The crop is square, and is the outline's bounding box widened by the margin,
 /// rounded out to whole pixels and then widened evenly on its shorter side:
 /// every sample of the outline lies at least the margin inside it, on the

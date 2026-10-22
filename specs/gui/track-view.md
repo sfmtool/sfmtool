@@ -1887,8 +1887,9 @@ radius. `image` and `context` then cut the crop and its hover view from an
 outline and the photograph, and `DrawnCrop` uploads and draws either, its
 outline stroked in the colour it is given, here the row's verdict colour. The
 row's own `crop.rs` reads those values off the track and the observation and
-passes them, so a panel that reads the same values off a point of the
-reconstruction draws that point's crop without building a track. A patch frame of a
+passes them, so the Track Table's *Crop* cell, which reads the same values
+off a point of the reconstruction, draws that point's crop without building a
+track ([track-table.md](track-table.md) § "The Crop column"). A patch frame of a
 point at infinity carries `w = 0`, and both the outline and the projection are
 homogeneous, so a bearing's crop is cut as any other.
 

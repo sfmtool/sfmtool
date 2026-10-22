@@ -916,6 +916,12 @@ pub struct AppState {
     /// [`crate::track_table_panel::job`].
     pub(crate) track_table_jobs: crate::track_table_panel::job::TrackTableJobs,
 
+    /// The Track Table panel's reference picks: the references picked for
+    /// visible points that store none, for the version at their node's
+    /// cursor, and the quiet task picking them. Session state, not part of
+    /// any version. See [`crate::track_table_panel::picks`].
+    pub(crate) reference_picks: crate::track_table_panel::picks::ReferencePicks,
+
     /// The bars Track View's threshold boxes hold while it shows the viewed
     /// track. They judge the readings drawn and change no verdict; a put of
     /// the viewed point carries them onto the new track when they differ from
@@ -1048,6 +1054,7 @@ impl AppState {
             viewed_tracks: Default::default(),
             track_tables: Default::default(),
             track_table_jobs: Default::default(),
+            reference_picks: Default::default(),
             viewed_thresholds: Default::default(),
         }
     }

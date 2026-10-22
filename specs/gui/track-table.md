@@ -5,8 +5,9 @@ selected reconstruction as one row, with the numbers that say how well the
 point is supported as its columns: how many observations its track has,
 whether one photograph holds more than one of them, its reprojection error,
 where it is and how far from the cameras (`∞` for a point at infinity), and
-what its stored patch readings say, and, for a reconstruction whose points
-carry a patch bitmap, a picture of each point's patch. A person sorts by any
+what its stored patch readings say, and two pictures of what each point looks
+like: its reference photograph cut around its patch, and its patch bitmap. A
+person sorts by any
 column with a click on its heading, sets a minimum and a maximum on each, and
 reads off how many points pass. Clicking a row selects that point everywhere
 else in the viewer. A reconstruction can hold a few million points, so the
@@ -29,11 +30,11 @@ points. Track View ([track-view.md](track-view.md)) shows one track; this panel
 lists all of them.
 
 The panel shows the stored columns, the ones read straight off the
-reconstruction, and the **Patch** picture column (§ "The Patch column"). The
-**Crop** picture column (the reference photograph cut around each point's
-patch), the computed columns (the largest ray angle, the condition number and
-the inverse-depth z), applying the filter to the 3D view and the wire tools
-that read and write the panel's query are proposed in
+reconstruction, and two picture columns: **Crop**, the point's reference
+photograph cut around its patch (§ "The Crop column"), and **Patch**, its patch
+bitmap (§ "The Patch column"). The computed columns (the largest ray angle, the
+condition number and the inverse-depth z), applying the filter to the 3D view
+and the wire tools that read and write the panel's query are proposed in
 [drafts/track-table.md](../drafts/track-table.md).
 
 ## Placement
@@ -63,21 +64,24 @@ Panels menu opens it.
 ## What it shows
 
 ```
-┌ Track Table ──────────────────────────────────────────────────────────────────┐
-│ dino  1,204 of 9,941 points  · 3 with repeat observations  [Columns]          │
-│   Size [──●──] 64 pt                                                          │
-│ ☐ Only points seen in IMG_0042.jpg                                            │
-├────────┬────────┬─────────┬─────────────┬────────────┬──────────┬────────────┤
-│ Point  │ Patch  │ Track ▼ │ Repeat obs. │ Error (px) │ Distance │            │
-│        │        │[3 ][   ]│[    ][    ] │[   ][1.5]  │[   ][   ]│            │
-├────────┼────────┼─────────┼─────────────┼────────────┼──────────┼────────────┤
-│ #9873  │ ▓▓▓▓▓▓ │      57 │           2 │      0.820 │     4.17 │            │
-│        │ ▓▓▓▓▓▓ │         │             │            │          │            │
-├────────┼────────┼─────────┼─────────────┼────────────┼──────────┼────────────┤
-│ #830   │no patch│      18 │           0 │      0.610 │        ∞ │            │
-│        │        │         │             │            │          │            │
-└────────┴────────┴─────────┴─────────────┴────────────┴──────────┴────────────┘
+┌ Track Table ───────────────────────────────────────────────────────────────────────┐
+│ dino  1,204 of 9,941 points  · 3 with repeat observations  [Columns]               │
+│   Size [──●──] 64 pt                                                               │
+│ ☐ Only points seen in IMG_0042.jpg                                                 │
+├────────┬────────┬────────┬─────────┬─────────────┬────────────┬──────────┬────────┤
+│ Point  │ Crop   │ Patch  │ Track ▼ │ Repeat obs. │ Error (px) │ Distance │        │
+│        │        │        │[3 ][   ]│[    ][    ] │[   ][1.5]  │[   ][   ]│        │
+├────────┼────────┼────────┼─────────┼─────────────┼────────────┼──────────┼────────┤
+│ #9873  │ ░▓▓▓▓░ │ ▓▓▓▓▓▓ │      57 │           2 │      0.820 │     4.17 │        │
+│        │ ░▓▓▓▓░ │ ▓▓▓▓▓▓ │         │             │            │          │        │
+├────────┼────────┼────────┼─────────┼─────────────┼────────────┼──────────┼────────┤
+│ #830   │ ┌────┐ │ ▓▓▓▓▓▓ │      18 │           0 │      0.610 │        ∞ │        │
+│        │ └────┘ │ ▓▓▓▓▓▓ │         │             │            │          │        │
+└────────┴────────┴────────┴─────────┴─────────────┴────────────┴──────────┴────────┘
 ```
+
+The second row's crop is an empty frame because its photograph is still being
+decoded.
 
 - **It follows the selected reconstruction**, as Image Browser and Edit History
   do. The header names that reconstruction and counts the matched rows against
@@ -91,9 +95,9 @@ Panels menu opens it.
   table of {label}…* beside a spinner. After an edit it keeps the rows on show
   instead (§ "After an edit").
 - **The columns** are the Point column, which is always shown and is the row's
-  key, `#` and the point index, the Patch picture column where the
-  reconstruction can supply it (§ "The Patch column"), and the stored track
-  table columns the reconstruction can supply. A column the reconstruction cannot supply
+  key, `#` and the point index, the Crop and Patch picture columns where the
+  reconstruction can supply them (§ "The Crop column", § "The Patch column"),
+  and the stored track table columns the reconstruction can supply. A column the reconstruction cannot supply
   (`TrackTableColumn::is_available` false, such as `normal_confidence` on a
   file with no such stored column) is left out: it has no heading, no bounds
   and no entry in the Columns menu.
@@ -116,8 +120,8 @@ Panels menu opens it.
   its Distance is `∞`, so a sort by Distance gathers the points at infinity at
   one end and a minimum of `inf` keeps only them.
 - **Columns**, a menu, lists every column the reconstruction can supply with a
-  checkbox, the Patch column first, as it is drawn. The default set is Patch,
-  Track, Error and Distance. **Repeat obs. shows
+  checkbox, the picture columns first, Crop then Patch, as they are drawn. The
+  default set is Crop, Patch, Track, Error and Distance. **Repeat obs. shows
   itself**: until the person ticks or unticks it in this menu, it is shown
   exactly while the reconstruction on show has a point with repeat
   observations, so a defect is not hidden behind a column nobody thought to
@@ -163,13 +167,13 @@ Panels menu opens it.
 - **The rows** are virtualised with `ScrollArea::show_rows`, as the Action
   Log is, so a million rows cost only the visible ones per frame. `show_rows`
   needs one height for every row: the picture size and 2 pt above and below
-  while the Patch column is shown, and one text line's height while it is not
+  while a picture column is shown, and one text line's height while none is
   (§ "The Patch column"). Alternate rows are shaded. The table scrolls sideways when its columns
   are wider than the panel, with the headings and the bounds moving with the
   rows; they stay put while the rows scroll up and down. The Point column is
   pinned: its heading and its cells stay at the panel's left edge while the
   value columns scroll sideways and pass under it, so every row keeps its
-  point index on screen. The Patch column is pinned with it (§ "The Patch
+  point index on screen. The picture columns are pinned with it (§ "The Patch
   column"). The rows scroll up and down as one, the pinned
   cells with them, and a row's click and hover cover the whole row, its
   Point cell included. A new sort, new bounds,
@@ -210,30 +214,41 @@ The column, the *Size* slider and the texture cache are in
   `sift_files` one, has no Patch column, no entry for it in the Columns menu
   and no *Size* slider, and its rows are text high; the column appears after
   Convert to Embedded Patches, whose open renders display bitmaps.
-- **It is shown by default and comes first.** It is drawn right after the Point
-  column and is pinned with it: while the value columns scroll sideways they
-  pass under both, so a row keeps its point index and its picture on screen.
-  The Columns menu lists it first and can hide it. The *Crop* column proposed
-  in [drafts/track-table.md](../drafts/track-table.md) goes between the two.
+- **It is shown by default, after the Crop column.** It is drawn after the
+  Point column and the Crop column, as in Track View the photograph comes
+  before the picture made from it, and is pinned with them: while the value
+  columns scroll sideways they pass under the pinned columns, so a row keeps
+  its point index and its pictures on screen. The Columns menu lists it after
+  Crop and can hide it.
 - **It cannot be sorted or bounded.** Its heading takes no click and it has no
   bound boxes. Its heading's hover text says what the column shows and that
   it cannot be sorted or bounded.
 - **Size.** A slider in the header, *Size*, sets the picture size from 32 to
-  128 pt, 64 by default, in whole points. Every row is the picture size and
-  2 pt above and below high while the Patch column is shown, so `show_rows`
-  keeps rows of one height; at 32 pt a row is still taller than a line of
-  text. With the column hidden the slider is greyed and the rows are text
-  high. The picture is centred in a cell the picture size and 6 pt either
+  128 pt, 64 by default, in whole points, for both picture columns. Every row
+  is the picture size and 2 pt above and below high while a picture column is
+  shown, so `show_rows` keeps rows of one height; at 32 pt a row is still
+  taller than a line of text. With both hidden the slider is greyed and the
+  rows are text high. The picture is centred in a cell the picture size and 6 pt either
   side wide, or wider where the heading needs it. When the row height changes,
   by the slider or by showing or hiding the column, the vertical scroll
   offset is scaled by the new height over the old, so the row at the top stays
   at the top, unless the rows end first. The size is panel state like the
-  query: it is not saved.
+  query: it is not saved. A reconstruction that can supply neither picture
+  column has no slider.
 - **Hovering a picture** shows it at three times the picture size, at most
   256 pt so it stays inside a small window, with the text Track View's header
   slot gives a viewed point's stored patch (`STORED_PATCH_HOVER`) and the
   point's portable id. Over *no patch* the hover says the point has no stored
   patch. A click on a picture is the row's click.
+- **A point that stores no reference** says so in its hover, where the
+  reconstruction has a Crop column: the point stores no reference observation,
+  so its bitmap is not the render of the photograph in the Crop cell, which is
+  the reference-view rule's pick (`UNREFERENCED_PATCH_HOVER`,
+  § "The reference photograph"). That is a point at `-1` in a file with stored
+  bitmaps, or in a file with no `reference_observations` column, whose bitmap
+  is an older file's mean of its views or the render of an observation since
+  removed. A point the open's display render picked for has a reference, its
+  display-only pick, and its hover is the stored-patch text.
 
 ### Drawing the pictures
 
@@ -258,8 +273,191 @@ The column, the *Size* slider and the texture cache are in
   value at the cursor is the new version's. When the new rows arrive their
   pictures are made for the new serial.
 - **Shared with the Crop column.** The cache key names the column, and a cell
-  is one of a picture, *no patch* or an empty frame (`CellPicture`), so the
-  Crop column of the draft uses the same cache and the same cell drawing.
+  is a picture, an empty frame or the reason it has none (`CellPicture`), so
+  the Crop column uses the same cache and the same cell drawing
+  (§ "The Crop column").
+
+## The Crop column
+
+The **Crop** column (`crop` in the query, `PictureColumn::Crop`) shows the
+point's reference photograph as it is, cut around the outline its patch has
+there, so a person sorting by a number sees the pixels the point stands for
+beside the patch made from them. It is in
+[track_table_panel.rs](../../crates/sfm-explorer/src/track_table_panel.rs)
+(`RowsView::crop_picture`), and cuts the crop with the functions Track View
+cuts a row's crop with,
+[patch_pictures/crop.rs](../../crates/sfm-explorer/src/patch_pictures/crop.rs)
+([track-view.md](track-view.md) § "The observation table").
+
+- **What it shows** is Track View's crop rule applied to the point's reference
+  observation: the patch frame (with the point's `w`) re-anchored at that
+  observation's keypoint, its boundary projected through the camera's own
+  model, the bounding box of the outline widened by one photograph pixel and
+  made square, read at most 128 texels a side. The outline is drawn over it.
+  Track View strokes the outline in the row's verdict colour; the table has no
+  verdict and strokes it white over a wider dark stroke, the way Track View
+  draws the marks over its hover views. The crop takes values rather than a
+  track: the patch frame, the camera and its pose, the keypoint and the point's
+  position, all read off the row's `PointView` (`crop::patch_outline`), so the
+  table builds no track per row. A point at infinity is cropped as any other:
+  its patch frame carries `w = 0` and the outline and the projection are
+  homogeneous.
+- **It is offered only where the outline can be made**: where the points carry
+  a patch frame and the observations a keypoint
+  (`EditedReconstruction::has_patch_frames` and `has_keypoints`). A
+  reconstruction without either, the usual case for a `sift_files` one, has no
+  Crop column and no entry for it in the Columns menu. It appears after Convert
+  to Embedded Patches.
+- **It is shown by default and comes first** among the picture columns, right
+  after the Point column, and is pinned with it. It shares the *Size* slider,
+  the row height and the texture cache with the Patch column (§ "The Patch
+  column").
+- **It cannot be sorted or bounded.** Its heading takes no click and it has no
+  bound boxes. A click on a crop is the row's click.
+- **Each cell says why it is empty.** A Crop cell is drawn from a
+  `CellPicture`, as a Patch cell is, and is one of:
+  - the crop;
+  - an empty frame while its photograph is decoding or its reference is being
+    picked, or while the scroll has not yet stopped over it (below);
+  - *unreadable*, when the photograph cannot be read
+    (`DisplayPhotograph::Unreadable`);
+  - *no reference*, when the point stores no reference observation and the
+    reference-view rule picks none;
+  - *off image*, when no sample of the outline projects into the photograph
+    (`crop::region` gives no region), as for a patch behind the camera. An
+    outline that projects but lies partly or wholly outside the photograph
+    still gives a crop, transparent where it is off the photograph, as in
+    Track View;
+  - *no patch*, for a point whose patch half-vectors are zero, so it has no
+    patch frame to outline.
+- **Hovering a crop** shows Track View's crop hover view: the photograph's
+  name, then the crop centred in three times its width and height of the
+  photograph, with the outline, a dot at the keypoint, the amber ring where
+  the point projects and the dashed line between them, and the bullets Track
+  View gives under it, then the point's portable id. The wider picture is cut
+  the first time the pointer rests on the cell and kept while it stays there
+  (`PictureTextures::crop_context`). Over a cell with no crop the hover says
+  why, in a sentence.
+
+### The reference photograph
+
+The photograph is the point's reference observation's
+(`PointView::reference_observation`, which includes a pick that only the
+open's display render made). A point that stores none, stored as `-1` or in a
+file with no `reference_observations` column, gets one from the reference-view
+rule, run at the point's stored keypoints: `stored_bitmap::render_reference`,
+which makes the pick without keeping the bitmap, over the photographs of the
+point's track that can be read and are the size their camera says, at the
+reconstruction's patch resolution. It is the pick an evaluation would make
+without localising the rows first. With fewer than two such views there is no
+pick, as for the bitmap writers.
+
+Which points reach the rule follows from whether the open rendered display
+bitmaps (`PointSet::patch_bitmaps_for_display`):
+
+- **A file with stored bitmaps** renders none at the open, so a point it stores
+  at `-1` (a file older than `.sfmr` v12, one whose bitmaps are a mean of the
+  views, or one whose point lost its reference observation) has had no pick
+  made. Its crop waits for a pick, and its Patch cell's hover says the bitmap
+  is not the render of the crop's photograph (§ "The Patch column").
+- **A file the open rendered display bitmaps for** already ran the rule for
+  every point it stores at `-1`, on the same keypoints and photographs, and
+  kept every pick it made. A point it left at `-1` found no eligible view, and
+  the same rule would pick nothing again, so its cell says *no reference* at
+  once and nothing is queued for it.
+
+The picks are a quiet task (§ "The reference picks"). Each is kept by
+`(ReconId, point, document_serial)` in the panel's state on `AppState`
+(`ReferencePicks`), not written into the version, so it costs no undo step and
+does not reach a save. A commit from Track View is still the way to store a
+reference.
+
+### Requests wait for the scroll to stop
+
+A crop needs its photograph decoded, and the table asks the shared photograph
+cache for it (`state::display_photograph`, which starts the decode on the rayon
+pool and repaints when it lands). Track View only looks in that cache, so the
+table is a source of decodes of its own. A sort by a number puts neighbouring
+rows in different photographs, so scrolling through a large table would queue a
+decode, and a pick, for every row it passes.
+
+So the cells ask for photographs and picks only once the rows on screen have
+stopped changing: once the range of rows the frame draws has stayed the same
+for `SCROLL_SETTLE_S`, 0.15 s (`ScrollMotion`). While it is still changing, a
+cell draws the crop it already holds or an empty frame, looks in the photograph
+cache without starting a decode, and asks for no pick; the panel asks for a
+repaint at the moment the rows will count as stopped. The first frame that
+draws rows counts as stopped, so a table opened or sorted shows its crops at
+once. A new row count after an edit moves the rows like a scroll does.
+
+The delay was measured on `dino_dog_toy` (85 photographs at 2040×1536, with its
+bitmaps stored and half its references cleared so every second point needs a
+pick), in a release build on the development machine. egui spreads one wheel
+scroll over about 0.14 s of frames (an MCP `scroll` of 25 lines returned after
+0.14 to 0.17 s), during which the rows change on nearly every frame. A cold
+decode of one photograph through the cache took 15 to 17 ms, a pick whose track
+photographs were not decoded 47 to 292 ms (3 to 18 views), and a pick whose
+photographs were 1 to 12 ms. Twelve such scrolls in quick succession passed about 180 rows
+sorted by error; the screenshot taken just after the last one shows the rows
+it stopped on in empty frames, and the next, a few seconds later, their crops. 0.15 s is just over the time egui spreads one wheel scroll
+over, so a wheel turned steadily or a scroll bar dragged never counts as
+stopped, and it is shorter than one cold pick, so the wait adds less than the
+work it saves.
+
+**The cost is bounded by the photograph cache.** A page of rows from a metric
+sort can touch most of a reconstruction's photographs, and a pick decodes every
+photograph its track observes. The cache's budget is a quarter of physical
+memory, clamped to 1–16 GiB (`photograph_cache::default_budget_bytes`). All of
+`dino_dog_toy`, 85 photographs at 2040×1536 with their pyramids, takes about
+1.07 GB decoded. A reconstruction with more photographs than the budget holds
+evicts them and decodes them again as the table scrolls, which costs time but
+no memory beyond the budget.
+
+**Out-of-date rows ask for nothing.** While the rows are of the version before
+an edit (§ "After an edit") a Crop cell draws the crop already made for that
+version, dimmed, or an empty frame, as a Patch cell does; no photograph is
+asked for and no pick is queued for a version the rows do not belong to.
+
+### The reference picks
+
+The picks are a quiet, read-only task on the fast queue, *Track Table reference
+picks* (`Operation::TRACK_TABLE_REFERENCE_PICKS`;
+[background-tasks.md](background-tasks.md) § "Quiet tasks"), in
+[track_table_panel/picks.rs](../../crates/sfm-explorer/src/track_table_panel/picks.rs).
+
+- **The panel names the points.** On each frame its rows have stopped changing
+  and are of the version at the cursor, the panel names the points it drew
+  whose crops wait for a pick (`AppState::want_reference_picks`), and the
+  frame clears that before the dock draws, with the table job's node
+  (`AppState::hide_track_table`). A hidden panel, or one being scrolled, names
+  none. Twice per frame, after the table job's driver,
+  `AppState::drive_track_table_picks` takes the picks that came back, forgets
+  the picks of versions their nodes have left, and queues, updates or stops
+  the task.
+- **One task, one pick at a time.** The task takes the next point from a list
+  it shares with the GUI thread, decodes the photographs of the point's track
+  through the photograph cache, runs the rule, sends the pick back with a wake
+  of the window, and takes the next. Each frame the driver replaces the list
+  with the points named that have no pick, leaving out the one in hand, so a
+  row that leaves the view is taken off it, and the task ends once the list is
+  empty. Each pick gives the decode the first half of the task's range and the
+  rule the second (`DECODE_AND_STEP`, as the bench steps do), and spans the
+  whole range, since the list changes as the rows scroll; nothing draws a
+  quiet task's fraction.
+- **An edit cancels it.** When the document serial at its node's cursor moves
+  while it runs, or the node is closed, it is asked to stop through its
+  `Progress`, and a pick that comes back for a serial the node has left is
+  dropped. The next task is queued once the rows are of the new version.
+- **It locks nothing and does not wait for its node.** It pushes no version and
+  keeps its picks keyed by the serial it read, so it runs while a slow task
+  such as a bundle adjustment holds the node, against the version on screen
+  (`QuietSource::TrackTableReferencePicks`, whose `waits_for_its_node` is
+  false).
+- **It is quiet.** It writes no Action Log row, is not reported on the wire,
+  and gives way to any task queued in the fast queue, *Find points* or an Open
+  among them; the driver queues it again behind that task with the points
+  still to pick. Among quiet tasks it waits after the table's columns and
+  ahead of the other bench items' evaluations (`QuietRank`).
 
 ## After an edit
 
@@ -269,8 +467,9 @@ the table job computes the new version's table
 Until the new table lands the panel keeps showing the rows, the count, the
 headings and the bound boxes it showed for the version before, and marks them
 out of date: a spinner and *Updating…* in the header line, the rows' text
-dimmed, and their Patch pictures drawn at half brightness, with none made for
-them (§ "Drawing the pictures"). When the new table lands the row list is computed from it and replaces
+dimmed, and their pictures drawn at half brightness, with none made for them
+and no photograph or pick asked for (§ "Drawing the pictures", § "The Crop
+column"). When the new table lands the row list is computed from it and replaces
 the old one in the same frame. It does not scroll back to the top unless the
 query changed while the rows were out of date: a new sort, new bounds or a
 change of the selected-image box set meanwhile scrolls to the top on landing,
@@ -319,7 +518,7 @@ the job still read the cache only for the version at the cursor.
 
 ## The query is panel state
 
-The bounds, the sort, the visible columns (the Patch column among them) and the
+The bounds, the sort, the visible columns (the picture columns among them) and the
 "seen in the selected image" box are UI state of the panel
 (`TrackTableQuery`), like the Image Detail display settings. They are not held
 in a version, cost no undo step and are not saved with the reconstruction or in
@@ -368,8 +567,9 @@ columns* (`Operation::TRACK_TABLE_COLUMNS`;
 - **It is quiet.** It writes no Action Log row, is not reported on the wire,
   and gives way to any asked-for task queued in the fast queue, *Find points*
   among them; the driver queues it again behind that task. Among the quiet
-  tasks it waits after the focused item's evaluation and ahead of the other
-  bench items' evaluations.
+  tasks it waits after the focused item's evaluation and ahead of the
+  reference picks (§ "The reference picks") and the other bench items'
+  evaluations.
 
 ## The row list
 
@@ -393,15 +593,17 @@ the frame the selection changed.
 
 | Parameter | Value | Meaning |
 |---|---|---|
-| `DEFAULT_COLUMNS` | Track, Error (px), Distance | The value columns shown before any is hidden or shown. Repeat obs. is shown as well while the reconstruction has a point with repeat observations and the person has not ticked or unticked it. The Patch column is shown by default too, where the reconstruction can supply it. |
+| `DEFAULT_COLUMNS` | Track, Error (px), Distance | The value columns shown before any is hidden or shown. Repeat obs. is shown as well while the reconstruction has a point with repeat observations and the person has not ticked or unticked it. The Crop and Patch columns are shown by default too, where the reconstruction can supply them. |
 | `POINT_WIDTH` | 72 pt | The Point column's width. |
 | `MIN_VALUE_WIDTH` | 84 pt | The narrowest a value column is, room for its two bound boxes; a wider heading widens its column. |
 | `MIN_PICTURE_SIZE`, `MAX_PICTURE_SIZE` | 32 pt, 128 pt | The *Size* slider's range. |
 | `DEFAULT_PICTURE_SIZE` | 64 pt | The picture size before the slider moves. |
 | `PICTURE_PAD` | 2 pt | Space above and below a picture in its row. |
-| Row height | the picture size + 2 × `PICTURE_PAD` while the Patch column is shown; the body text height + 6 pt while it is not | Every row's height. |
+| Row height | the picture size + 2 × `PICTURE_PAD` while a picture column is shown; the body text height + 6 pt while none is | Every row's height. |
 | `HOVER_SCALE`, `MAX_HOVER_SIZE` | 3, 256 pt | A picture's hover view is three times the picture size, at most 256 pt. |
-| `TEXTURE_CAPACITY` | 1024 | The pictures the texture cache holds before it releases the ones drawn longest ago, down to three quarters of it. |
+| `TEXTURE_CAPACITY` | 1024 | The pictures the texture cache holds before it releases the ones drawn longest ago, down to three quarters of it. Crops and patches count together. |
+| `SCROLL_SETTLE_S` | 0.15 s | How long the rows on screen stay the same before the Crop cells ask for photographs and picks (§ "Requests wait for the scroll to stop"). |
+| Crop outline | 1 pt light grey over 2.5 pt dark | The stroke over a crop in a cell (`CELL_OUTLINE`). |
 
 ## Testing
 
@@ -486,14 +688,56 @@ Track View's drawing of the same bitmap is held by
 [patch_pictures/tests.rs](../../crates/sfm-explorer/src/patch_pictures/tests.rs)
 and Track View's own header tests.
 
+[track_table_panel/tests/crop.rs](../../crates/sfm-explorer/src/track_table_panel/tests/crop.rs)
+runs the Crop column over an `embedded_patches` reconstruction of 60 points
+with stored bitmaps, photographs in the cache, references stored for some
+points and not others, a point with no patch frame, one behind its reference
+camera and one at infinity:
+
+- the column is offered only where the points carry patch frames and the
+  observations keypoints, is shown by default and is drawn between Point and
+  Patch; its heading does not sort;
+- each cell state: a crop, a crop of the point at infinity, *no patch*, *off
+  image*, an empty frame while its photograph decodes, then *unreadable* once
+  the decode of a missing file fails;
+- a point the display render left at `-1` says *no reference* at once and
+  queues no pick; a point with stored bitmaps and no reference waits, is picked
+  by the task, and draws the crop of the rule's pick, with no version pushed
+  and the version's reference still `-1`;
+- while the rows move under the wheel no photograph is asked for and no pick
+  wanted or queued, and once they have stayed put for `SCROLL_SETTLE_S` the
+  visible rows' photographs are asked for and exactly their picks wanted;
+- an edit while the picks run asks them to stop and keeps no pick for the
+  version left; no pick is wanted or queued while the rows are out of date,
+  and the new version's are once its table lands;
+- a task asked for in the fast queue asks the picks to stop and starts once
+  they have, and the picks are queued again behind it; a slow task holding the
+  node leaves them running and they finish beside it;
+- a row that leaves the view leaves the running task's list, and with none
+  wanted it picks nothing more;
+- hovering a crop shows the photograph's name and Track View's crop caption;
+  hovering the patch of an unreferenced point says its bitmap is not the
+  render of the crop's photograph, and a referenced one gives the stored-patch
+  text.
+
+Track View's body tests hold that a crop cut from a point's values is the crop
+Track View cuts from a track put on the bench from that point, pixel for pixel,
+with the same region and outline. `background::tests` holds the picks'
+declared queue, lock and quiet value to [background-tasks.md](background-tasks.md)
+and their work to its claim to stop when cancelled; the MCP tests hold the
+`find_points` refusal of the picture columns.
+
 The layout tests in `layout::tests` and the MCP layout and catalog tests count
 the panel among the ten.
 
 ## Non-goals
 
-- The Crop picture column, the computed columns, Filter the 3D view and
+- The computed columns, Filter the 3D view and
   `get_track_table_query` / `set_track_table_query` are not built.
   They are proposed in [drafts/track-table.md](../drafts/track-table.md).
+- The picture columns are not returned on the wire: `find_points` refuses
+  `crop` and `patch` ([mcp-server.md](mcp-server.md) § "`find_points`"), and
+  an agent sees them with `screenshot {"panel_name": "track_table"}`.
 - Multi-column sort. One column orders the rows; ties keep ascending point
   index.
 - The query is not saved, in the layout file or anywhere else.

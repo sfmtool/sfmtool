@@ -15,9 +15,13 @@
 //! never once per frame, and only the visible rows are drawn
 //! (`ScrollArea::show_rows`). The picture columns ([`pictures`]) are pinned
 //! beside the Point column, set the row height, and make a picture only for a
-//! row on screen.
+//! row on screen. The *Crop* column's photographs are decoded, and the
+//! references of points that store none picked ([`picks`]), only for the rows
+//! on screen once the scroll position has stopped changing
+//! ([`SCROLL_SETTLE_S`]).
 
 pub(crate) mod job;
+pub(crate) mod picks;
 mod pictures;
 
 #[cfg(test)]
@@ -27,15 +31,22 @@ use sfmtool_core::analysis::track_table::{
     query_points, ColumnBounds, ColumnCost, SortOrder, TrackTable, TrackTableColumn,
     TrackTableQueryOptions,
 };
+use std::cell::RefCell;
+use std::sync::Arc;
+
+use sfmtool_core::camera::image::ImageU8Pyramid;
+use sfmtool_core::camera::PeekedPhotograph;
 use sfmtool_core::EditedReconstruction;
 
 use crate::document::VersionSerial;
+use crate::patch_pictures::crop;
+use crate::patch_pictures::marks::ProjectionOf;
 use crate::scene::{PointRef, ReconId, SceneNode};
-use crate::state::AppState;
+use crate::state::{AppState, DisplayPhotograph};
 use crate::table_sort::{paint_sort_triangle, SortRule, TableSort, SORT_TRIANGLE_HALF_WIDTH};
 use pictures::{
-    hover_size, paint_picture, CellPicture, PictureColumn, PictureKey, PictureTextures,
-    DEFAULT_PICTURE_SIZE, MAX_PICTURE_SIZE, MIN_PICTURE_SIZE, PICTURE_PAD,
+    hover_size, paint_picture, patch_image, Absent, CellPicture, Made, PictureColumn, PictureKey,
+    PictureTextures, DEFAULT_PICTURE_SIZE, MAX_PICTURE_SIZE, MIN_PICTURE_SIZE, PICTURE_PAD,
 };
 
 /// How many columns the track table has.
@@ -58,6 +69,16 @@ const POINT_WIDTH: f32 = 72.0;
 const MIN_VALUE_WIDTH: f32 = 84.0;
 /// Space between a cell's text and its column's edges.
 const CELL_PAD: f32 = 6.0;
+
+/// How long the rows on screen must stay the same before the *Crop* column
+/// asks for their photographs and queues reference picks for them, in
+/// seconds. While the rows are still changing, as a drag of the scroll bar or
+/// a turn of the wheel moves them on every frame, the cells draw the crops
+/// already held and ask for nothing, so scrolling through a large table
+/// sorted by a number does not queue a decode for every photograph it passes.
+/// See `specs/gui/track-table.md` § "The Crop column" for the measurement it
+/// was chosen from.
+pub(crate) const SCROLL_SETTLE_S: f64 = 0.15;
 
 impl SortRule for TrackTableColumn {
     /// The columns whose large values are the bad end: the repeat
@@ -434,6 +455,31 @@ impl Default for PictureSize {
     }
 }
 
+/// Whether the rows on screen have stopped changing: the range of rows the
+/// last frame drew and when it last changed, in egui's time.
+#[derive(Debug, Clone, Default)]
+struct ScrollMotion {
+    /// The rows the last frame drew, by their place in the row list.
+    range: Option<std::ops::Range<usize>>,
+    /// When `range` last changed, or `None` while it has not changed since
+    /// the panel first drew rows.
+    changed_at: Option<f64>,
+}
+
+impl ScrollMotion {
+    /// Note that the frame at `now` draws `range`, and answer how long until
+    /// the rows count as stopped: `None` once they have stayed the same for
+    /// [`SCROLL_SETTLE_S`], or from the first frame that draws rows.
+    fn observe(&mut self, range: std::ops::Range<usize>, now: f64) -> Option<f64> {
+        if self.range.as_ref().is_some_and(|last| *last != range) {
+            self.changed_at = Some(now);
+        }
+        self.range = Some(range);
+        let waited = now - self.changed_at?;
+        (waited < SCROLL_SETTLE_S).then_some(SCROLL_SETTLE_S - waited)
+    }
+}
+
 /// The Track Table panel's state: its query, the row list, the picture size
 /// and the pictures drawn, and what it remembers of the last frame to keep the
 /// selection, the hover and the scroll position in step.
@@ -451,6 +497,9 @@ pub(crate) struct TrackTablePanel {
     /// rows, so that a new row height (the *Size* slider, or a picture column
     /// shown or hidden) keeps the same rows at the top.
     scroll: Option<(f32, f32)>,
+    /// Whether the rows on screen have stopped changing, which the *Crop*
+    /// column waits for before it asks for photographs and picks.
+    motion: ScrollMotion,
     /// The selected point as of the last frame, so that a selection made
     /// elsewhere scrolls its row into view once.
     seen_selection: Option<PointRef>,
@@ -464,6 +513,10 @@ pub(crate) struct TrackTablePanel {
     /// and what the cell drew.
     #[cfg(test)]
     drawn_pictures: Vec<(u32, PictureColumn, CellPicture)>,
+    /// Every image whose photograph a *Crop* cell asked to have decoded, in
+    /// order, over every frame.
+    #[cfg(test)]
+    requested_photographs: Vec<usize>,
 }
 
 /// What the panel's frame asked the state for, applied once the node it drew
@@ -480,6 +533,13 @@ struct Asked {
     /// The picture cells drawn, for a test to read.
     #[cfg(test)]
     pictures: Vec<(u32, PictureColumn, CellPicture)>,
+    /// The points of the drawn rows whose crops wait for a reference pick,
+    /// with their node and version, on a frame whose rows have stopped
+    /// changing and are of the version at the cursor; `None` otherwise.
+    picks: Option<(ReconId, VersionSerial, Vec<u32>)>,
+    /// The images whose photographs the drawn crops asked to have decoded.
+    #[cfg(test)]
+    requested: Vec<usize>,
 }
 
 impl TrackTablePanel {
@@ -588,6 +648,10 @@ impl TrackTablePanel {
         {
             self.drawn = std::mem::take(&mut asked.drawn);
             self.drawn_pictures = std::mem::take(&mut asked.pictures);
+            self.requested_photographs.append(&mut asked.requested);
+        }
+        if let Some((node, document, points)) = asked.picks.take() {
+            state.want_reference_picks(node, document, points);
         }
         if let Some(point) = asked.select {
             self.seen_selection = Some(point);
@@ -696,24 +760,40 @@ impl TrackTablePanel {
         if self.rows.rows.is_empty() {
             ui.label(egui::RichText::new("No point passes the bounds.").weak());
         } else {
+            let document = self
+                .rows
+                .inputs
+                .as_ref()
+                .expect("rows on show were computed")
+                .document;
             let rows = RowsView {
+                state,
                 node,
                 table,
                 rows: &self.rows.rows,
-                document: self
-                    .rows
-                    .inputs
-                    .as_ref()
-                    .expect("rows on show were computed")
-                    .document,
+                document,
                 layout: &layout,
                 selected,
                 hovered,
                 stale,
+                wanted_picks: RefCell::new(Vec::new()),
+                requested: RefCell::new(Vec::new()),
             };
             self.pictures.begin_frame();
-            let shown = rows.show(ui, scroll_to, self.scroll, &mut self.pictures, &mut asked);
+            let shown = rows.show(
+                ui,
+                scroll_to,
+                self.scroll,
+                &mut self.motion,
+                &mut self.pictures,
+                &mut asked,
+            );
             self.pictures.end_frame();
+            if shown.settled && !stale {
+                asked.picks = Some((id, document, rows.wanted_picks.take()));
+            }
+            #[cfg(test)]
+            asked.requested.append(&mut rows.requested.borrow_mut());
             self.scroll = Some(shown.scroll);
             left = shown.left;
             let over = shown.over;
@@ -1238,6 +1318,9 @@ fn text_row_height(ui: &egui::Ui) -> f32 {
 
 /// The rows, as one frame draws them.
 struct RowsView<'a> {
+    /// The state, for the photograph cache and the reference picks the
+    /// *Crop* cells read.
+    state: &'a AppState,
     node: &'a SceneNode,
     table: &'a TrackTable,
     rows: &'a [u32],
@@ -1254,6 +1337,11 @@ struct RowsView<'a> {
     /// deleted. Their pictures are the ones already drawn for that version,
     /// dimmed; none is made for them.
     stale: bool,
+    /// The points whose crops wait for a reference pick, gathered as the
+    /// cells are drawn on a frame whose rows have stopped changing.
+    wanted_picks: RefCell<Vec<u32>>,
+    /// The images whose photographs the crops drawn asked to have decoded.
+    requested: RefCell<Vec<usize>>,
 }
 
 /// What drawing the rows answers.
@@ -1264,6 +1352,9 @@ struct RowsShown {
     left: f32,
     /// The row height and the vertical scroll offset the rows were drawn at.
     scroll: (f32, f32),
+    /// Whether the rows drawn have stopped changing, so the crops asked for
+    /// their photographs and picks.
+    settled: bool,
 }
 
 /// One picture cell a row drew: its column, its rectangle and its picture.
@@ -1278,12 +1369,15 @@ impl RowsView<'_> {
     /// viewport's left edge rather than the rows', so they stay there while
     /// the rest scrolls sideways. The pictures of the drawn rows come from
     /// `pictures`, which makes the ones it lacks for rows that are up to
-    /// date.
+    /// date. `motion` says whether the rows drawn have stopped changing; until
+    /// they have, a crop asks for no photograph and no pick, and a repaint is
+    /// asked for the moment they will count as stopped.
     fn show(
         &self,
         ui: &mut egui::Ui,
         scroll_to: Option<usize>,
         last_scroll: Option<(f32, f32)>,
+        motion: &mut ScrollMotion,
         pictures: &mut PictureTextures,
         asked: &mut Asked,
     ) -> RowsShown {
@@ -1305,11 +1399,18 @@ impl RowsView<'_> {
         }
         let pinned_left = ui.available_rect_before_wrap().left();
         let mut drawn_left = pinned_left;
+        let now = ui.input(|i| i.time);
+        let mut settled = true;
         let output = area.show_rows(ui, row_height, self.rows.len(), |ui, range| {
             ui.set_min_width(self.layout.width);
             let top = ui.max_rect().top();
             let left = ui.max_rect().left();
             drawn_left = left;
+            if let Some(wait) = motion.observe(range.clone(), now) {
+                settled = false;
+                ui.ctx()
+                    .request_repaint_after(std::time::Duration::from_secs_f64(wait));
+            }
             let mut hovered_row = None;
             for (k, position) in range.clone().enumerate() {
                 let point = self.rows[position];
@@ -1330,7 +1431,15 @@ impl RowsView<'_> {
                     point,
                 };
                 let selected = self.selected == Some(reference);
-                let cells = self.paint_row(ui, rect, pinned_left, position, reference, pictures);
+                let cells = self.paint_row(
+                    ui,
+                    rect,
+                    pinned_left,
+                    position,
+                    reference,
+                    pictures,
+                    settled,
+                );
                 response.widget_info(|| {
                     egui::WidgetInfo::selected(
                         egui::WidgetType::SelectableLabel,
@@ -1363,8 +1472,9 @@ impl RowsView<'_> {
                     match under {
                         Some(&(column, _, picture)) => {
                             let size = hover_size(self.layout.picture_size);
+                            let key = self.key(column, point);
                             response.on_hover_ui_at_pointer(|ui| {
-                                show_picture_hover(ui, column, picture, size, &id);
+                                self.show_picture_hover(ui, key, picture, size, pictures, &id);
                             });
                         }
                         None => {
@@ -1391,13 +1501,216 @@ impl RowsView<'_> {
             over,
             left: drawn_left,
             scroll: (row_height, output.state.offset.y),
+            settled,
         }
+    }
+
+    /// The cache key of `point`'s cell in `column`, for the version the rows
+    /// belong to.
+    fn key(&self, column: PictureColumn, point: u32) -> PictureKey {
+        PictureKey {
+            column,
+            node: self.node.id,
+            point,
+            document: self.document,
+        }
+    }
+
+    /// The *Crop* picture of `point`: its reference photograph cut around its
+    /// patch's outline, or why there is none, or [`Made::NotYet`] while the
+    /// photograph is decoding or the reference is being picked.
+    ///
+    /// The photograph is the point's reference observation's. A point that
+    /// stores none gets the reference-view rule's pick ([`picks`]), unless the
+    /// open rendered display bitmaps: that render ran the same rule on the
+    /// same keypoints and photographs and kept every pick it made, so a point
+    /// it left with none says *no reference* at once. Only while `settled` does a crop ask for a pick or for its
+    /// photograph to be decoded; until then it draws what is held.
+    fn crop_picture(&self, ctx: &egui::Context, point: u32, settled: bool) -> Made {
+        let edited = self.node.edited();
+        let recon = self.node.recon();
+        let Some(view) = edited.point(point) else {
+            return Made::Absent(Absent::NoPatch);
+        };
+        let Some(patch_frame) = view.patch_frame() else {
+            return Made::Absent(Absent::NoPatch);
+        };
+        let stored = view
+            .reference_observation()
+            .and_then(|r| u32::try_from(r).ok());
+        let reference = match stored {
+            Some(reference) => reference,
+            // The open rendered display bitmaps, running the rule for every
+            // point the file stores at -1, and kept every pick it made.
+            None if recon.point_set.patch_bitmaps_for_display => {
+                return Made::Absent(Absent::NoReference)
+            }
+            None => match self
+                .state
+                .reference_pick(self.node.id, point, self.document)
+            {
+                Some(Some(reference)) => reference,
+                Some(None) => return Made::Absent(Absent::NoReference),
+                None => {
+                    if settled {
+                        self.wanted_picks.borrow_mut().push(point);
+                    }
+                    return Made::NotYet;
+                }
+            },
+        } as usize;
+        let (Some(observation), Some(keypoint)) = (
+            view.observations().get(reference),
+            view.keypoint_xy(reference),
+        ) else {
+            return Made::Absent(Absent::NoReference);
+        };
+        let image = observation.image_index as usize;
+        let Some((camera, pose)) = crate::bench::geometry::view_of(&recon.image_set, image) else {
+            return Made::Absent(Absent::Unreadable);
+        };
+        let pyramid = match self.photograph(ctx, image, settled) {
+            Ok(pyramid) => pyramid,
+            Err(made) => return made,
+        };
+        let outline = crop::patch_outline(
+            &patch_frame,
+            &camera,
+            &pose,
+            [f64::from(keypoint[0]), f64::from(keypoint[1])],
+            view.point().position,
+            ProjectionOf::Point,
+        );
+        match crop::image(&outline, &pyramid) {
+            Some(picture) => Made::Crop {
+                picture: Box::new(picture),
+                outline: Box::new(outline),
+                image,
+            },
+            None => Made::Absent(Absent::OffImage),
+        }
+    }
+
+    /// The photograph of `image` as the photograph cache holds it. While
+    /// `settled`, a photograph the cache does not hold is asked for
+    /// (`state::display_photograph`, which decodes it on the rayon pool and
+    /// repaints when it lands); otherwise the cache is only looked in.
+    fn photograph(
+        &self,
+        ctx: &egui::Context,
+        image: usize,
+        settled: bool,
+    ) -> Result<Arc<ImageU8Pyramid>, Made> {
+        let recon = self.node.recon();
+        if settled {
+            return match crate::state::display_photograph(
+                &self.state.photographs,
+                &self.state.photograph_requests,
+                recon,
+                image,
+                ctx,
+            ) {
+                DisplayPhotograph::Decoded(pyramid) => Ok(pyramid),
+                DisplayPhotograph::Decoding => {
+                    self.requested.borrow_mut().push(image);
+                    Err(Made::NotYet)
+                }
+                DisplayPhotograph::Unreadable => Err(Made::Absent(Absent::Unreadable)),
+            };
+        }
+        let Some(path) = crate::state::photograph_path(recon, image) else {
+            return Err(Made::Absent(Absent::Unreadable));
+        };
+        match self.state.photographs.peek_state(&path) {
+            PeekedPhotograph::Decoded(pyramid) => Ok(pyramid),
+            PeekedPhotograph::Unreadable => Err(Made::Absent(Absent::Unreadable)),
+            PeekedPhotograph::NotDecoded => Err(Made::NotYet),
+        }
+    }
+
+    /// A picture cell's hover view: the picture with what it is, or why the
+    /// cell has none, and the point's portable id `id` under it.
+    ///
+    /// A crop shows Track View's crop hover view: the photograph's name, then
+    /// the crop in three times its width and height of the photograph with the
+    /// outline, the dot at the keypoint and the ring where the point projects,
+    /// then the caption under it. A patch shows the picture at `size` points
+    /// with the stored-patch text, or, for a point that stores no reference,
+    /// a text saying that the bitmap is not the render of the photograph the
+    /// Crop column shows.
+    fn show_picture_hover(
+        &self,
+        ui: &mut egui::Ui,
+        key: PictureKey,
+        picture: CellPicture,
+        size: f32,
+        pictures: &mut PictureTextures,
+        id: &str,
+    ) {
+        match (key.column, picture) {
+            (PictureColumn::Crop, CellPicture::Texture(_)) => {
+                let recon = self.node.recon();
+                let pyramid = |image: usize| {
+                    crate::state::peek_full_res_pyramid(&self.state.photographs, recon, image)
+                };
+                let image = pictures.crop(&key).map(|(_, _, image)| image);
+                if let Some(name) = image
+                    .and_then(|image| recon.image_set.images.get(image))
+                    .map(|image| image.name.clone())
+                {
+                    ui.label(egui::RichText::new(name).strong());
+                }
+                match pictures.crop_context(ui.ctx(), key, &pyramid) {
+                    Some(drawn) => drawn.show(ui),
+                    None => {
+                        ui.label("The photograph is being read again.");
+                    }
+                }
+            }
+            (PictureColumn::Crop, CellPicture::Absent(absent)) => {
+                ui.set_max_width(320.0);
+                ui.label(crop_absent_hover(absent));
+            }
+            (PictureColumn::Crop, CellPicture::Waiting) => {
+                ui.set_max_width(320.0);
+                ui.label(
+                    "The photograph of the point's reference observation is being read, or its \
+                     reference is being picked.",
+                );
+            }
+            (PictureColumn::Patch, CellPicture::Texture(texture)) => {
+                ui.set_max_width(size.max(240.0));
+                ui.add(egui::Image::new((texture, egui::vec2(size, size))));
+                // Said only where the reconstruction has a Crop column for
+                // the bitmap to differ from.
+                let edited = self.node.edited();
+                let unreferenced = PictureColumn::Crop.is_available(edited)
+                    && !edited
+                        .point(key.point)
+                        .and_then(|view| view.reference_observation())
+                        .is_some_and(|r| r >= 0);
+                ui.label(format!(
+                    "{}.",
+                    if unreferenced {
+                        crate::patch_pictures::UNREFERENCED_PATCH_HOVER
+                    } else {
+                        crate::patch_pictures::STORED_PATCH_HOVER
+                    }
+                ));
+            }
+            (PictureColumn::Patch, _) => {
+                ui.set_max_width(size.max(240.0));
+                ui.label(format!("{}.", crate::patch_pictures::NO_STORED_PATCH_HOVER));
+            }
+        }
+        ui.label(format!("{id}. Click to select it."));
     }
 
     /// Paint one row: its fill, then each cell. The pinned cells, the Point
     /// cell and the pictures, are at `pinned_left`, the viewport's left edge,
     /// and the value cells are clipped to the right of them. Answers each
     /// picture cell drawn.
+    #[allow(clippy::too_many_arguments)]
     fn paint_row(
         &self,
         ui: &egui::Ui,
@@ -1406,6 +1719,7 @@ impl RowsView<'_> {
         position: usize,
         reference: PointRef,
         pictures: &mut PictureTextures,
+        settled: bool,
     ) -> Vec<DrawnPicture> {
         let point = reference.point;
         let selected = self.selected == Some(reference);
@@ -1465,21 +1779,26 @@ impl RowsView<'_> {
                         egui::pos2(pinned_left + x, rect.min.y),
                         egui::vec2(width, rect.height()),
                     );
-                    let key = PictureKey {
-                        column,
-                        node: self.node.id,
-                        point,
-                        document: self.document,
-                    };
+                    let key = self.key(column, point);
                     // Made only for a row of the version on show: a row of the
                     // version before an edit may name a point the edit deleted
                     // or changed, so it draws only what was drawn for it.
                     let edited = self.node.edited();
-                    let make = || column.image(edited, point);
-                    let make: Option<&dyn Fn() -> Option<egui::ColorImage>> =
-                        (!self.stale).then_some(&make);
+                    let make = || match column {
+                        PictureColumn::Crop => self.crop_picture(ui.ctx(), point, settled),
+                        PictureColumn::Patch => patch_image(edited, point),
+                    };
+                    let make: Option<&dyn Fn() -> Made> = (!self.stale).then_some(&make);
                     let picture = pictures.picture(ui.ctx(), key, make);
-                    paint_picture(ui, cell, self.layout.picture_size, picture, self.stale);
+                    let crop = pictures.crop(&key).map(|(drawn, _, _)| drawn);
+                    paint_picture(
+                        ui,
+                        cell,
+                        self.layout.picture_size,
+                        picture,
+                        crop,
+                        self.stale,
+                    );
                     cells.push((column, cell, picture));
                 }
                 Slot::Value(column) => {
@@ -1497,25 +1816,23 @@ impl RowsView<'_> {
     }
 }
 
-/// A picture cell's hover view: the picture at `size` points, with what it
-/// is and the point's portable id `id` under it.
-fn show_picture_hover(
-    ui: &mut egui::Ui,
-    column: PictureColumn,
-    picture: CellPicture,
-    size: f32,
-    id: &str,
-) {
-    ui.set_max_width(size.max(240.0));
-    let text = match (column, picture) {
-        (PictureColumn::Patch, CellPicture::Texture(texture)) => {
-            ui.add(egui::Image::new((texture, egui::vec2(size, size))));
-            crate::patch_pictures::STORED_PATCH_HOVER
+/// What a *Crop* cell's hover says when the cell has no picture.
+fn crop_absent_hover(absent: Absent) -> &'static str {
+    match absent {
+        Absent::NoPatch => {
+            "The point has no patch frame, so there is no outline to cut a crop around."
         }
-        (PictureColumn::Patch, _) => crate::patch_pictures::NO_STORED_PATCH_HOVER,
-    };
-    ui.label(format!("{text}."));
-    ui.label(format!("{id}. Click to select it."));
+        Absent::Unreadable => "The photograph of the point's reference observation cannot be read.",
+        Absent::NoReference => {
+            "The point stores no reference observation and the reference-view rule picks none: \
+             fewer than two photographs that see it can be read, or none of them sees its \
+             patch well enough."
+        }
+        Absent::OffImage => {
+            "No part of the patch's outline projects into the photograph of the point's \
+             reference observation."
+        }
+    }
 }
 
 /// One cell's text: `…` for a column the cache does not hold yet, `-` for a

@@ -10,7 +10,7 @@ use ndarray::Array4;
 use sfmtool_core::analysis::track_table::TrackTableColumn;
 
 use super::super::pictures::{
-    CellPicture, PictureColumn, PictureKey, PictureTextures, DEFAULT_PICTURE_SIZE,
+    Absent, CellPicture, Made, PictureColumn, PictureKey, PictureTextures, DEFAULT_PICTURE_SIZE,
     MIN_PICTURE_SIZE, PICTURE_PAD, TEXTURE_CAPACITY,
 };
 use super::super::{text_row_height, TrackTablePanel};
@@ -144,7 +144,7 @@ fn pictures_are_made_only_for_the_visible_rows() {
         .iter()
         .find(|&&(p, _, _)| p == NO_PATCH)
         .expect("the row with no patch is drawn");
-    assert_eq!(no_patch.2, CellPicture::Nothing);
+    assert_eq!(no_patch.2, CellPicture::Absent(Absent::NoPatch));
     let texts = painted_texts(&ctx, input(400.0), |ui| panel.show(ui, &mut state));
     assert!(texts.iter().any(|t| t == "no patch"), "{texts:?}");
 }
@@ -162,7 +162,7 @@ fn the_texture_cache_releases_the_pictures_drawn_longest_ago() {
         point,
         document,
     };
-    let image = || Some(egui::ColorImage::filled([2, 2], egui::Color32::GRAY));
+    let image = || Made::Image(egui::ColorImage::filled([2, 2], egui::Color32::GRAY));
     let ctx = egui::Context::default();
     let mut textures = PictureTextures::default();
     // One new picture per frame, and point 0 drawn on every frame.

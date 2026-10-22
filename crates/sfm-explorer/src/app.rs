@@ -244,6 +244,10 @@ impl App {
         if self.state.drive_track_table_columns() {
             self.egui_ctx.request_repaint();
         }
+        // And its reference picks, which wait behind its columns.
+        if self.state.drive_track_table_picks() {
+            self.egui_ctx.request_repaint();
+        }
         // After both, so a Surface Tiling Mode sequence sees the step it waits
         // on end, and the evaluation after it land, in the frame they do
         // (`crate::bench::surface_tiling`).
@@ -379,6 +383,11 @@ impl App {
         // The Track Table drew this frame and said which node it shows, so
         // its table job is queued for that node in the same frame.
         if self.state.drive_track_table_columns() {
+            self.egui_ctx.request_repaint();
+        }
+        // And the reference picks for the rows it drew once its scroll
+        // stopped.
+        if self.state.drive_track_table_picks() {
             self.egui_ctx.request_repaint();
         }
 

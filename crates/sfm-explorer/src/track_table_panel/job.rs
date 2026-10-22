@@ -150,11 +150,12 @@ impl AppState {
         self.track_table_jobs.wanted = Some(node);
     }
 
-    /// Forget which node the Track Table panel showed: called by the frame
-    /// before the dock draws, so a frame in which the panel is hidden asks for
-    /// nothing.
+    /// Forget which node the Track Table panel showed, and which points it
+    /// wanted picked: called by the frame before the dock draws, so a frame in
+    /// which the panel is hidden asks for nothing.
     pub(crate) fn hide_track_table(&mut self) {
         self.track_table_jobs.wanted = None;
+        self.hide_reference_picks();
     }
 
     /// Take what the queued job has computed, and queue or stop one so that

@@ -220,6 +220,9 @@ pub(crate) enum QuietSource {
     LiveEvaluation,
     /// The Track Table panel's table job ([`crate::track_table_panel::job`]).
     TrackTableColumns,
+    /// The Track Table panel's reference picks
+    /// ([`crate::track_table_panel::picks`]).
+    TrackTableReferencePicks,
 }
 
 impl QuietSource {
@@ -229,14 +232,15 @@ impl QuietSource {
     ///
     /// True for the live evaluation, whose answer lands into the bench a
     /// locking task has captured, and for the camera model proposal's job. The
-    /// Track Table's table job keeps its answer in the track table cache, keyed
-    /// by the document serial it read, so it runs on a node a slow task holds,
-    /// against the version on screen, and gives way only to a task queued in
-    /// its own queue.
+    /// Track Table's table job keeps its answer in the track table cache, and
+    /// its reference picks keep theirs in the panel's own state, each keyed by
+    /// the document serial it read, so both run on a node a slow task holds,
+    /// against the version on screen, and give way only to a task queued in
+    /// their own queue.
     pub(crate) fn waits_for_its_node(self) -> bool {
         match self {
             QuietSource::CameraModelProposal | QuietSource::LiveEvaluation => true,
-            QuietSource::TrackTableColumns => false,
+            QuietSource::TrackTableColumns | QuietSource::TrackTableReferencePicks => false,
         }
     }
 }
@@ -248,8 +252,9 @@ impl QuietSource {
 /// preview are on screen while a person decides whether to apply it. The live
 /// evaluation's place depends on its subject: the viewed track and the focused
 /// item are what Track View shows, so they go ahead of the other bench items,
-/// in the order the evaluation driver picks them. The Track Table's columns go
-/// between the focused item and the other bench items.
+/// in the order the evaluation driver picks them. The Track Table's columns,
+/// then its reference picks, go between the focused item and the other bench
+/// items.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum QuietRank {
     /// The camera model proposal's job.
@@ -260,6 +265,8 @@ pub(crate) enum QuietRank {
     FocusedItem,
     /// The Track Table panel's table job.
     TrackTableColumns,
+    /// The Track Table panel's reference picks.
+    TrackTableReferencePicks,
     /// The live evaluation of any other bench item.
     BenchItem,
 }
@@ -725,6 +732,27 @@ impl Operation {
         quiet: true,
     };
 
+    /// The Track Table panel's reference picks
+    /// ([`crate::track_table_panel::picks`]): the reference observation of
+    /// each visible point that stores none, picked by the reference-view rule
+    /// for the *Crop* column. A quiet task.
+    ///
+    /// It locks nothing, since it pushes no version: its picks are kept by the
+    /// panel's state, keyed by the document serial they were made for, so it
+    /// runs on a node a slow task holds ([`QuietSource::waits_for_its_node`]).
+    /// Cancellable because it polls the flag between its picks, between the
+    /// photographs each pick decodes and inside the rule's renders. It writes
+    /// no row, so its kind is never read; it is the kind of the panel it
+    /// serves.
+    pub(crate) const TRACK_TABLE_REFERENCE_PICKS: Operation = Operation {
+        name: "Track Table reference picks",
+        cancellable: true,
+        kind: Kind::Display,
+        queue: Queue::Fast,
+        locks: false,
+        quiet: true,
+    };
+
     /// Every operation that can go to the background.
     ///
     /// A list rather than a set of constants used one at a time, so the tests
@@ -733,7 +761,7 @@ impl Operation {
     /// declaration nothing checks is a declaration that rots.
     // Read by those tests alone, which is what it is for.
     #[cfg(test)]
-    pub(crate) const ALL: [Operation; 22] = [
+    pub(crate) const ALL: [Operation; 23] = [
         Operation::OPEN,
         Operation::BUNDLE_ADJUST,
         Operation::TO_EMBEDDED_PATCHES,
@@ -756,6 +784,7 @@ impl Operation {
         Operation::LIVE_EVALUATION,
         Operation::CAMERA_MODEL_PROPOSAL,
         Operation::TRACK_TABLE_COLUMNS,
+        Operation::TRACK_TABLE_REFERENCE_PICKS,
     ];
 }
 

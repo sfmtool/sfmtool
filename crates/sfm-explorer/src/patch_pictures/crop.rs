@@ -379,6 +379,11 @@ impl DrawnCrop {
         }
     }
 
+    /// The uploaded picture's texture.
+    pub(crate) fn texture_id(&self) -> egui::TextureId {
+        self.texture.id()
+    }
+
     /// The largest rect of the picture's shape that fits in `bounds`, centred
     /// in it.
     fn fitted(&self, bounds: Rect) -> Rect {
