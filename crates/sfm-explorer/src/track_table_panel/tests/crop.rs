@@ -324,31 +324,164 @@ fn each_crop_cell_draws_the_picture_or_says_why_not() {
     }
 }
 
-/// A point the open's display render left at -1 has no reference to find:
-/// the render ran the rule on the same keypoints and photographs. Its cell
-/// says *no reference* at once, and nothing is queued for it.
+/// Zero the bitmap rows of every point [`stored_reference`] leaves at -1, as
+/// a bitmap writer does for a point whose reference-view rule found no
+/// eligible view.
+fn rejected_by_the_rule(recon: &mut SfmrReconstruction) {
+    let mut bitmaps = (**recon.point_set.patch_bitmaps_y_x_rgba.as_ref().unwrap()).clone();
+    for p in 0..POINTS {
+        if stored_reference(p) == -1 {
+            bitmaps.index_axis_mut(ndarray::Axis(0), p).fill(0);
+        }
+    }
+    recon.point_set.patch_bitmaps_y_x_rgba = Some(Arc::new(bitmaps));
+}
+
+/// A point a bitmap writer left at -1 with a zero bitmap row has no reference
+/// to find: the writer ran the rule on the same keypoints and photographs and
+/// found no eligible view. That holds for the open's display render and for a
+/// file whose bitmaps are stored, as Convert to Embedded Patches writes them,
+/// so such a point is not picked again. Its cell says *no reference* at once,
+/// and nothing is queued for it.
 #[test]
-fn a_point_the_display_render_left_unreferenced_says_so_without_a_pick() {
+fn a_point_the_rule_already_rejected_says_so_without_a_pick() {
+    for for_display in [true, false] {
+        let mut clock = Clock(0.0);
+        let mut recon = crop_recon();
+        recon.point_set.patch_bitmaps_for_display = for_display;
+        rejected_by_the_rule(&mut recon);
+        let (mut state, _) = state_with(recon, &[0, 1, 2]);
+        let (ctx, mut panel) = shown(&mut state, 4800.0, &mut clock);
+        let unreferenced = (FIRST_FAR..POINTS as u32)
+            .find(|&p| stored_reference(p as usize) == -1)
+            .unwrap();
+        assert_eq!(
+            cell(&panel, unreferenced, PictureColumn::Crop),
+            Some(CellPicture::Absent(Absent::NoReference)),
+            "for display: {for_display}"
+        );
+        assert_eq!(state.reference_picks.wanted_points(), Some(&[][..]));
+        state.drive_track_table_picks();
+        assert_eq!(state.reference_picks.queued_task(), None);
+        assert_eq!(state.reference_picks.tasks_queued, 0);
+        let texts = painted_texts(&ctx, at(4800.0, clock.tick()), |ui| {
+            panel.show(ui, &mut state)
+        });
+        assert!(texts.iter().any(|t| t == "no reference"), "{texts:?}");
+    }
+}
+
+/// Deleting an image drops the reference of every point whose reference
+/// observation was in it, and those points keep the bitmap rendered from it.
+/// On a reconstruction the open rendered display bitmaps for, they are not
+/// read as rejected by the rule: they are queued for a pick, which finds a
+/// reference among the views left, while a point the rule did reject still
+/// says *no reference* without one.
+#[test]
+fn a_point_that_lost_its_reference_to_an_edit_is_picked_again() {
     let mut clock = Clock(0.0);
     let mut recon = crop_recon();
     recon.point_set.patch_bitmaps_for_display = true;
-    let (mut state, _) = state_with(recon, &[0, 1, 2]);
-    let (ctx, mut panel) = shown(&mut state, 4800.0, &mut clock);
-    let unreferenced = (FIRST_FAR..POINTS as u32)
+    // Above FIRST_FAR, points seen twice store reference 1, in image 1, and
+    // so do the points seen three times, except the first, which the rule
+    // rejected.
+    let rejected = (FIRST_FAR..POINTS as u32)
         .find(|&p| stored_reference(p as usize) == -1)
         .unwrap();
-    assert_eq!(
-        cell(&panel, unreferenced, PictureColumn::Crop),
-        Some(CellPicture::Absent(Absent::NoReference))
+    let references = recon.point_set.reference_observations.as_mut().unwrap();
+    for (p, reference) in references.iter_mut().enumerate().skip(FIRST_FAR as usize) {
+        if stored_reference(p) == -1 && p as u32 != rejected {
+            *reference = 1;
+        }
+    }
+    let in_image_1 = references.iter().filter(|&&r| r == 1).count();
+    let mut bitmaps = (**recon.point_set.patch_bitmaps_y_x_rgba.as_ref().unwrap()).clone();
+    bitmaps
+        .index_axis_mut(ndarray::Axis(0), rejected as usize)
+        .fill(0);
+    recon.point_set.patch_bitmaps_y_x_rgba = Some(Arc::new(bitmaps));
+    let (mut state, id) = state_with(recon, &[0, 1, 2]);
+    let (ctx, mut panel) = shown(&mut state, 4800.0, &mut clock);
+
+    state
+        .delete_image(crate::scene::ImageRef::new(id, 1))
+        .expect("deletable");
+    frame(&ctx, &mut panel, &mut state, 4800.0, clock.tick());
+    state.settle_track_table_columns();
+    frame(&ctx, &mut panel, &mut state, 4800.0, clock.tick());
+    frame(
+        &ctx,
+        &mut panel,
+        &mut state,
+        4800.0,
+        clock.wait(SCROLL_SETTLE_S + 0.01),
     );
-    assert_eq!(state.reference_picks.wanted_points(), Some(&[][..]));
-    state.drive_track_table_picks();
-    assert_eq!(state.reference_picks.queued_task(), None);
-    assert_eq!(state.reference_picks.tasks_queued, 0);
-    let texts = painted_texts(&ctx, at(4800.0, clock.tick()), |ui| {
-        panel.show(ui, &mut state)
-    });
-    assert!(texts.iter().any(|t| t == "no reference"), "{texts:?}");
+
+    let node = state.node(id).expect("loaded");
+    let edited = node.edited();
+    let lost: Vec<u32> = panel
+        .drawn()
+        .iter()
+        .map(|&(p, _)| p)
+        .filter(|&p| {
+            let view = edited.point(p).unwrap();
+            view.reference_observation() == Some(-1)
+                && view.patch_bitmap().unwrap().iter().any(|&b| b != 0)
+        })
+        .collect();
+    assert_eq!(
+        lost.len(),
+        in_image_1,
+        "the points whose reference was in image 1"
+    );
+    // The ones seen three times keep two views to pick from.
+    let two_left: Vec<u32> = lost
+        .iter()
+        .copied()
+        .filter(|&p| edited.point(p).unwrap().observations().len() >= 2)
+        .collect();
+    assert!(!two_left.is_empty());
+    let wanted = state.reference_picks.wanted_points().expect("picks wanted");
+    assert_eq!(wanted, &lost[..], "they are queued for a pick");
+    for &p in &lost {
+        assert_eq!(
+            cell(&panel, p, PictureColumn::Crop),
+            Some(CellPicture::Waiting)
+        );
+    }
+    // The one the rule rejected, wherever the edit moved it, says so at once.
+    let said: Vec<u32> = panel
+        .drawn_pictures
+        .iter()
+        .filter(|&&(_, c, picture)| {
+            c == PictureColumn::Crop && picture == CellPicture::Absent(Absent::NoReference)
+        })
+        .map(|&(p, _, _)| p)
+        .collect();
+    assert_eq!(said.len(), 1, "{said:?}");
+    assert!(edited
+        .point(said[0])
+        .unwrap()
+        .patch_bitmap()
+        .unwrap()
+        .iter()
+        .all(|&b| b == 0));
+
+    state.settle_reference_picks();
+    let document = state.scene[0].history.current_version().document_serial;
+    for &p in &two_left {
+        assert!(
+            matches!(state.reference_pick(id, p, document), Some(Some(_))),
+            "#{p} was picked from the views left"
+        );
+    }
+    frame(&ctx, &mut panel, &mut state, 4800.0, clock.tick());
+    for &p in &two_left {
+        assert!(matches!(
+            cell(&panel, p, PictureColumn::Crop),
+            Some(CellPicture::Texture(_))
+        ));
+    }
 }
 
 /// A point that stores no reference waits in an empty frame while its pick is
@@ -714,6 +847,21 @@ fn hovering_a_crop_shows_it_in_context_and_an_unreferenced_patch_says_so() {
         texts
             .iter()
             .any(|t| t.contains("Outline: the patch as it lands in the photograph")),
+        "{texts:?}"
+    );
+    // Said of the point, not of a bench track's row and its tile.
+    assert!(
+        texts.iter().any(
+            |t| t.contains("Dot: the keypoint of the point's reference observation")
+                && t.contains("Ring: where the point projects")
+                && t.contains("along the patch's first axis")
+        ),
+        "{texts:?}"
+    );
+    assert!(
+        !texts
+            .iter()
+            .any(|t| t.contains("the track's point") || t.contains("across the tile")),
         "{texts:?}"
     );
 

@@ -110,6 +110,10 @@ struct Queued {
 pub(crate) struct ReferencePicks {
     /// Every pick made for a version still at its node's cursor.
     held: HashMap<PickKey, Option<u32>>,
+    /// The document serial the picks held for each node were made for, so a
+    /// frame finds out whether any are out of date by looking at the nodes
+    /// rather than at every pick.
+    serials: HashMap<ReconId, VersionSerial>,
     /// The points the panel drew this frame that need a pick, or `None`
     /// while it is hidden, scrolling or drawing rows of a version the node
     /// has left.
@@ -349,16 +353,23 @@ impl AppState {
     /// Returns whether anything changed that the next frame has to draw.
     pub(crate) fn drive_track_table_picks(&mut self) -> bool {
         let mut changed = self.poll_reference_picks();
-        // A pick is for one version; the rows of another never read it.
-        let mut serials: HashMap<ReconId, Option<VersionSerial>> = HashMap::new();
-        let mut held = std::mem::take(&mut self.reference_picks.held);
-        held.retain(|key, _| {
-            *serials
-                .entry(key.node)
-                .or_insert_with(|| self.document_at_cursor(key.node))
-                == Some(key.document)
-        });
-        self.reference_picks.held = held;
+        // A pick is for one version; the rows of another never read it. The
+        // picks are pruned only on a frame a node's serial has moved, so the
+        // cost of a frame does not grow with the picks held.
+        let left: Vec<ReconId> = self
+            .reference_picks
+            .serials
+            .iter()
+            .filter(|&(&node, &document)| self.document_at_cursor(node) != Some(document))
+            .map(|(&node, _)| node)
+            .collect();
+        if !left.is_empty() {
+            let picks = &mut self.reference_picks;
+            for node in &left {
+                picks.serials.remove(node);
+            }
+            picks.held.retain(|key, _| !left.contains(&key.node));
+        }
 
         // The points still to pick, for the version at the node's cursor.
         let todo = self.reference_picks.wanted.as_ref().and_then(|wanted| {
@@ -499,6 +510,7 @@ impl AppState {
             match queued.messages.try_recv() {
                 Ok(Message::Picked { point, reference }) => {
                     if self.document_at_cursor(node) == Some(document) {
+                        self.reference_picks.serials.insert(node, document);
                         self.reference_picks.held.insert(
                             PickKey {
                                 node,

@@ -1531,10 +1531,10 @@ impl RowsView<'_> {
     /// photograph is decoding or the reference is being picked.
     ///
     /// The photograph is the point's reference observation's. A point that
-    /// stores none gets the reference-view rule's pick ([`picks`]), unless the
-    /// open rendered display bitmaps: that render ran the same rule on the
-    /// same keypoints and photographs and kept every pick it made, so a point
-    /// it left with none says *no reference* at once. Only while `settled` does a crop ask for a pick or for its
+    /// stores none gets the reference-view rule's pick ([`picks`]), unless a
+    /// bitmap writer already ran the rule for it and found no eligible view
+    /// ([`rule_found_no_reference`]): then the cell says *no reference* at
+    /// once. Only while `settled` does a crop ask for a pick or for its
     /// photograph to be decoded; until then it draws what is held.
     fn crop_picture(&self, ctx: &egui::Context, point: u32, settled: bool) -> Made {
         let edited = self.node.edited();
@@ -1550,11 +1550,8 @@ impl RowsView<'_> {
             .and_then(|r| u32::try_from(r).ok());
         let reference = match stored {
             Some(reference) => reference,
-            // The open rendered display bitmaps, running the rule for every
-            // point the file stores at -1, and kept every pick it made.
-            None if recon.point_set.patch_bitmaps_for_display => {
-                return Made::Absent(Absent::NoReference)
-            }
+            // A bitmap writer ran the rule for this point and found nothing.
+            None if rule_found_no_reference(&view) => return Made::Absent(Absent::NoReference),
             None => match self
                 .state
                 .reference_pick(self.node.id, point, self.document)
@@ -1824,6 +1821,24 @@ impl RowsView<'_> {
         }
         cells
     }
+}
+
+/// Whether a bitmap writer has already run the reference-view rule for the
+/// point of `view` and found no eligible view, so a pick would find nothing.
+///
+/// Read off the point's own row, so it travels with the point through every
+/// edit as its bitmap and reference do: every writer that runs the rule (the
+/// open's display render, Convert to Embedded Patches, `--add-patch-bitmaps`)
+/// writes a zero bitmap row and `-1` where the rule picks none, and nothing
+/// else writes that pair. A point that lost its reference through an edit,
+/// such as deleting the image it was in, keeps the bitmap rendered from it, so
+/// it is not read as rejected and is picked again; so is a point of an older
+/// file whose bitmap is a mean of its views.
+fn rule_found_no_reference(view: &sfmtool_core::PointView<'_>) -> bool {
+    view.reference_observation().is_none_or(|r| r < 0)
+        && view
+            .patch_bitmap()
+            .is_some_and(|bitmap| bitmap.iter().all(|&b| b == 0))
 }
 
 /// What a *Crop* cell's hover says when the cell has no picture.

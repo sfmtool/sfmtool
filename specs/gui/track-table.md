@@ -333,8 +333,11 @@ cuts a row's crop with,
 - **Hovering a crop** shows Track View's crop hover view: the photograph's
   name, then the crop centred in three times its width and height of the
   photograph, with the outline, a dot at the keypoint, the amber ring where
-  the point projects and the dashed line between them, and the bullets Track
-  View gives under it, then the point's portable id. The wider picture is cut
+  the point projects and the dashed line between them, then the bullets Track
+  View gives under it, worded for a point rather than a bench row
+  (`crop::point_context_caption`: the dot is the keypoint of the point's
+  reference observation, the ring where the point projects, and the axes the
+  patch's first and second), then the point's portable id. The wider picture is cut
   the first time the pointer rests on the cell and kept while it stays there
   (`PictureTextures::crop_context`). Over a cell with no crop the hover says
   why, in a sentence.
@@ -352,19 +355,31 @@ reconstruction's patch resolution. It is the pick an evaluation would make
 without localising the rows first. With fewer than two such views there is no
 pick, as for the bitmap writers.
 
-Which points reach the rule follows from whether the open rendered display
-bitmaps (`PointSet::patch_bitmaps_for_display`):
+A point at `-1` reaches the rule unless a bitmap writer has already run the rule
+for it and found no eligible view. That is read off the point's own row: every
+writer that runs the rule (the open's display render, Convert to Embedded
+Patches, `--add-patch-bitmaps`) writes a zero bitmap row and `-1` for a point
+the rule picks nothing for, and keeps every pick it makes. So a point at `-1`
+whose bitmap row is all zero says *no reference* at once and nothing is queued
+for it, since the same rule on the same keypoints and photographs would pick
+nothing again (`rule_found_no_reference`). The mark is the pair itself, carried
+in lockstep with the point by every pass that keeps, drops or reorders points,
+as the bitmaps and references are, so it holds for the version an edit makes
+as well as for the open's. Every other point at `-1` is queued for a pick:
 
-- **A file with stored bitmaps** renders none at the open, so a point it stores
-  at `-1` (a file older than `.sfmr` v12, one whose bitmaps are a mean of the
-  views, or one whose point lost its reference observation) has had no pick
-  made. Its crop waits for a pick, and its Patch cell's hover says the bitmap
-  is not the render of the crop's photograph (§ "The Patch column").
-- **A file the open rendered display bitmaps for** already ran the rule for
-  every point it stores at `-1`, on the same keypoints and photographs, and
-  kept every pick it made. A point it left at `-1` found no eligible view, and
-  the same rule would pick nothing again, so its cell says *no reference* at
-  once and nothing is queued for it.
+- **A point that lost its reference through an edit**, such as deleting the
+  image its reference observation was in, keeps the bitmap rendered from that
+  observation while its reference becomes `-1`
+  (`PointSet::select_reference_observations`), so it is picked again from the
+  views it has left, whether or not the open rendered display bitmaps.
+- **A point of a file with stored bitmaps and `-1` references whose bitmap is
+  not zero**, as in a file older than `.sfmr` v12 or one whose bitmaps are a
+  mean of the views, has had no pick made. Its Patch cell's hover says the
+  bitmap is not the render of the crop's photograph (§ "The Patch column").
+
+The file-wide mark of display bitmaps (`PointSet::patch_bitmaps_for_display`)
+does not decide this: an edit carries it unchanged to a version whose points
+can have lost their references since the open's render.
 
 The picks are a quiet task (§ "The reference picks"). Each is kept by
 `(ReconId, point, document_serial)` in the panel's state on `AppState`
@@ -432,7 +447,9 @@ picks* (`Operation::TRACK_TABLE_REFERENCE_PICKS`;
   (`AppState::hide_track_table`). A hidden panel, or one being scrolled, names
   none. Twice per frame, after the table job's driver,
   `AppState::drive_track_table_picks` takes the picks that came back, forgets
-  the picks of versions their nodes have left, and queues, updates or stops
+  the picks of versions their nodes have left (looking only at the serial of
+  each node it holds picks for, so a frame costs the same however many picks
+  are held, and pruning only when one has moved), and queues, updates or stops
   the task.
 - **One task, one pick at a time.** The task takes the next point from a list
   it shares with the GUI thread, decodes the photographs of the point's track
@@ -700,8 +717,13 @@ camera and one at infinity:
 - each cell state: a crop, a crop of the point at infinity, *no patch*, *off
   image*, an empty frame while its photograph decodes, then *unreadable* once
   the decode of a missing file fails;
-- a point the display render left at `-1` says *no reference* at once and
-  queues no pick; a point with stored bitmaps and no reference waits, is picked
+- a point a bitmap writer left at `-1` with a zero bitmap row says *no
+  reference* at once and queues no pick, whether the bitmaps were rendered for
+  display or stored, as Convert to Embedded Patches stores them; after an
+  image is deleted from a reconstruction with display bitmaps, the points whose
+  reference was in it are queued for a pick and those with two views left get
+  one, while the rule-rejected point still says *no reference*; a point with
+  stored bitmaps and no reference waits, is picked
   by the task, and draws the crop of the rule's pick, with no version pushed
   and the version's reference still `-1`;
 - while the rows move under the wheel no photograph is asked for and no pick
@@ -715,7 +737,8 @@ camera and one at infinity:
   node leaves them running and they finish beside it;
 - a row that leaves the view leaves the running task's list, and with none
   wanted it picks nothing more;
-- hovering a crop shows the photograph's name and Track View's crop caption;
+- hovering a crop shows the photograph's name and the crop caption worded for
+  a point;
   hovering the patch of an unreferenced point says its bitmap is not the
   render of the crop's photograph, and a referenced one gives the stored-patch
   text.

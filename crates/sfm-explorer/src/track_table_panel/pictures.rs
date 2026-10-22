@@ -378,6 +378,7 @@ impl PictureTextures {
             let (_, outline, image) = self.crop(&key)?;
             let src = pyramid(image)?;
             let drawn = crate::patch_pictures::crop::context(outline, &src).map(|picture| {
+                let caption = crate::patch_pictures::crop::point_context_caption(&picture);
                 DrawnCrop::new(
                     ctx,
                     picture,
@@ -385,6 +386,7 @@ impl PictureTextures {
                     format!("track_table_crop_context_{}", key.point),
                     egui::TextureOptions::LINEAR,
                 )
+                .with_caption(caption)
             });
             self.hover = Some((key, drawn));
         }

@@ -384,6 +384,13 @@ impl DrawnCrop {
         self.texture.id()
     }
 
+    /// This crop with `caption` under its hover view in place of
+    /// [`context_caption`]'s.
+    pub(crate) fn with_caption(mut self, caption: String) -> Self {
+        self.caption = caption;
+        self
+    }
+
     /// The largest rect of the picture's shape that fits in `bounds`, centred
     /// in it.
     fn fitted(&self, bounds: Rect) -> Rect {
@@ -505,6 +512,41 @@ pub(crate) fn context_caption(picture: &CropPicture) -> String {
             picture.projection.map(|at| !view.contains(at)),
             picture.projection_px,
         ),
+        axis(picture.axes_px[0]),
+        axis(picture.axes_px[1]),
+    )
+}
+
+/// The bullets under the hover view of a point's crop, as a Track Table row
+/// shows it: [`context_caption`]'s, said of the point and its reference
+/// observation rather than of a bench track's row and its tile.
+pub(crate) fn point_context_caption(picture: &CropPicture) -> String {
+    let [w, h] = picture.crop.size;
+    let axis = |axis: Option<f64>| match axis {
+        Some(px) => format!("{px:.1} px"),
+        None => "not all in this photograph".to_string(),
+    };
+    let view = Rect::from_min_size(
+        Pos2::ZERO,
+        egui::vec2(picture.image.size[0] as f32, picture.image.size[1] as f32),
+    );
+    let ring = match (picture.projection, picture.projection_px) {
+        (Some(at), Some(px)) => format!(
+            "\u{2022} Ring: where the point projects, {px:.2} px away along the dashed line{}",
+            if view.contains(at) {
+                ""
+            } else {
+                ", outside this view"
+            }
+        ),
+        _ => "\u{2022} No ring: the point does not project into this photograph".to_string(),
+    };
+    format!(
+        "\u{2022} Outline: the patch as it lands in the photograph\n\
+         \u{2022} View: {CONTEXT_FACTOR}x the crop, which is {w} x {h} px of the photograph\n\
+         \u{2022} Dot: the keypoint of the point's reference observation\n\
+         {ring}\n\
+         \u{2022} Axes: {} along the patch's first axis, {} along its second",
         axis(picture.axes_px[0]),
         axis(picture.axes_px[1]),
     )
