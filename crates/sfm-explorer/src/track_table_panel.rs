@@ -49,6 +49,16 @@ use pictures::{
     PictureTextures, DEFAULT_PICTURE_SIZE, MAX_PICTURE_SIZE, MIN_PICTURE_SIZE, PICTURE_PAD,
 };
 
+/// The wire names of the panel's picture columns, which `find_points`
+/// refuses with a sentence of their own: they belong to the panel only.
+#[cfg_attr(not(feature = "mcp"), allow(dead_code))]
+pub(crate) fn picture_column_names() -> Vec<&'static str> {
+    PictureColumn::ALL
+        .iter()
+        .map(|column| column.wire_name())
+        .collect()
+}
+
 /// How many columns the track table has.
 const COLUMN_COUNT: usize = TrackTableColumn::ALL.len();
 

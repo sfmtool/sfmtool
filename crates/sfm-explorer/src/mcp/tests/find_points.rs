@@ -283,13 +283,29 @@ fn the_refusals_name_the_columns() {
         ),
         "{unknown}"
     );
-    let unknown = refused_call(
-        &mut state,
-        &mut viewer,
-        "find_points",
+    // The panel's picture columns are refused with their own sentence, in
+    // `columns`, `bounds` and `order_by` alike.
+    for args in [
         json!({ "columns": ["patch"] }),
-    );
-    assert!(unknown.0.contains("\"patch\""), "{unknown}");
+        json!({ "columns": ["crop"] }),
+        json!({ "bounds": [{ "column": "crop", "min": 1 }] }),
+        json!({ "order_by": { "column": "patch" } }),
+    ] {
+        let picture = refused_call(&mut state, &mut viewer, "find_points", args.clone());
+        let name = if args.to_string().contains("crop") {
+            "crop"
+        } else {
+            "patch"
+        };
+        assert!(
+            picture.0.starts_with(&format!(
+                "find_points does not take the column \"{name}\": picture columns belong to the \
+                 Track Table panel only, and screenshot {{\"panel_name\": \"track_table\"}} \
+                 shows them. The columns are track_length, "
+            )),
+            "{args}: {picture}"
+        );
+    }
 
     let backwards = refused_call(
         &mut state,

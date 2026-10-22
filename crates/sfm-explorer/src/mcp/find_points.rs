@@ -60,13 +60,24 @@ pub(super) fn column_names(columns: impl IntoIterator<Item = TrackTableColumn>) 
         .join(", ")
 }
 
-/// The column a wire name names, or the refusal listing every column.
+/// The column a wire name names, or the refusal listing every column. A
+/// picture column of the Track Table panel is refused with its own sentence:
+/// it is a column of the panel and holds no numbers, so a person or an agent
+/// sees it in the panel's screenshot rather than in a reply.
 pub(super) fn parse_column(tool: &str, name: &str) -> Result<TrackTableColumn, ToolError> {
     TrackTableColumn::from_wire_name(name).ok_or_else(|| {
-        ToolError::new(format!(
-            "{tool} does not know the column {name:?} — the columns are {}.",
-            column_names(TrackTableColumn::ALL)
-        ))
+        let columns = column_names(TrackTableColumn::ALL);
+        if crate::track_table_panel::picture_column_names().contains(&name) {
+            ToolError::new(format!(
+                "{tool} does not take the column {name:?}: picture columns belong to the Track \
+                 Table panel only, and screenshot {{\"panel_name\": \"track_table\"}} shows them. \
+                 The columns are {columns}."
+            ))
+        } else {
+            ToolError::new(format!(
+                "{tool} does not know the column {name:?} — the columns are {columns}."
+            ))
+        }
     })
 }
 

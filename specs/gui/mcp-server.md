@@ -976,8 +976,12 @@ cache and the operation it starts are in
   finishes"). A call answered from the cache writes the `Query` row alone.
 - **Refusals.** A column name that is not a track table column is refused at the
   parse, *"find_points does not know the column "error" — the columns are
-  track_length, repeat_observations, …"*, in `bounds`, `order_by` and `columns` alike;
-  so are the picture columns of the Track Table draft. A column the
+  track_length, repeat_observations, …"*, in `bounds`, `order_by` and `columns` alike.
+  The Track Table's picture columns, `crop` and `patch`, are refused there too,
+  with a sentence of their own: *"find_points does not take the column "crop":
+  picture columns belong to the Track Table panel only, and screenshot
+  {"panel_name": "track_table"} shows them. The columns are track_length, …"*
+  ([track-table.md](track-table.md) § "The Crop column"). A column the
   reconstruction cannot supply, `normal_confidence` on a file with no such
   stored column for one, is refused with *"{label} cannot supply the column
   normal_confidence: the columns it can supply are …"*. A bound whose `min` is
