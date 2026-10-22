@@ -23,9 +23,9 @@ The reason a panel can be closed at all is that the window is increasingly
 shared. A human and an agent looking at the same viewer want different things
 from it at different moments — the agent wants the 3D viewport as large as
 possible before a screenshot, the human wants the Action Log in front to see
-what the agent just did — and a fixed nine-panel grid serves neither. What
+what the agent just did — and a fixed ten-panel grid serves neither. What
 makes closing safe to allow is that there is a way back: a panel with no way
-back is a trap. The **Panels** menu is that way back — it lists all nine,
+back is a trap. The **Panels** menu is that way back — it lists all ten,
 ticks the open ones, and re-opens a closed one with a click.
 
 ## What the user sees
@@ -40,11 +40,12 @@ panel leaves an empty dock and an intact menu bar; the Panels menu is how
 anything comes back.
 
 A closed panel keeps its state. Panel structs (`ImageBrowser`, `ImageDetail`,
-`TrackView`, `IntrinsicsDetail`, `SceneGraphPanel`,
+`TrackView`, `IntrinsicsDetail`, `SceneGraphPanel`, `TrackTablePanel`,
 `Viewer3D`) live on
 `App` for the life of the process and are not touched by closing; the dock
 merely stops asking them to draw. Re-opening the Image Detail panel shows the
-image and zoom it had when it closed. This is the same mechanism that already
+image and zoom it had when it closed, and re-opening the Track Table shows the
+query it had. This is the same mechanism that already
 covers a tab behind another tab in the same node.
 
 Two panels have no struct at all: the Action Log draws the log itself, and the
@@ -68,6 +69,7 @@ Panels
   ✓ Camera Intrinsics
   ✓ Action Log
   ✓ Edit History
+  ✓ Track Table
   ─────────────
     Reset Layout
   ─────────────
@@ -75,7 +77,7 @@ Panels
     Load Layout...
 ```
 
-The nine entries are in default-layout order, each a checkbox reading the
+The ten entries are in `Tab::ALL` order, each a checkbox reading the
 panel's open state. Clicking a **ticked** entry closes that panel, exactly as
 its tab's close button does. Clicking an **unticked** entry opens it, at its
 home position (§ "Home positions"), and makes it the active tab of its node so
@@ -83,7 +85,7 @@ the click has something to show for itself. There is no "raise" entry: a ticked
 panel is one the user can see the tab of.
 
 **Reset Layout** replaces the whole panel arrangement — main surface and any
-floating windows — with `Layout::default()`, the nine-panel grid
+floating windows — with `Layout::default()`, the ten-panel grid
 [multi-panel-image-browser.md](multi-panel-image-browser.md) § "Default
 Layout" describes. Panel state survives, as it does for a close. It leaves the
 *window* where the user put it: their window is theirs, and a panel reset is not
@@ -115,8 +117,9 @@ as nearly as the current arrangement allows. Three rules, tried in order:
    `show_panel` tool.)
 2. **A default group-mate is open:** push it into that node, behind the
    current tabs, then make it active. There are four groups. Three of them are
-   the multi-tab nodes of the default layout (3D Viewer / Image Detail, Track
-   View / Camera Intrinsics, and Image Browser / Action Log / Edit History), and a panel from any of them goes home to whichever of its
+   the multi-tab nodes of the default layout (3D Viewer / Image Detail / Track
+   Table, Track View / Camera Intrinsics, and Image Browser / Action Log / Edit
+   History), and a panel from any of them goes home to whichever of its
    group-mates is still there. The fourth, Scene / Background Tasks, is a
    top-bottom split rather than one node, and is a group anyway: a Background
    Tasks panel re-opened belongs beside the tree, where rule 3 would give it a
@@ -127,14 +130,15 @@ as nearly as the current arrangement allows. Three rules, tried in order:
    | Panel | Home edge | New node's share |
    |-------|-----------|------------------|
    | Scene, Background Tasks | left | 0.18 |
-   | 3D Viewer | *(takes the root)* | — |
+   | 3D Viewer, Track Table | *(takes the root)* | — |
    | Image Browser, Action Log, Edit History | below | 0.20 |
    | Image Detail, Track View, Camera Intrinsics | right | 0.33 |
 
-   "Takes the root" for the 3D Viewer means: if the dock is empty it becomes
-   the root leaf; if not, it is pushed into the root's first leaf as a new
-   active tab, because the viewport is what everything else is arranged
-   around and there is no edge that is home to it. Any panel opened into an
+   "Takes the root" for the 3D Viewer and the Track Table means: if the dock
+   is empty it becomes the root leaf; if not, it is pushed into the root's first
+   leaf as a new active tab, because the viewport is what everything else is
+   arranged around and there is no edge that is home to it. The Track Table goes
+   where the viewport goes because its rows want the height of the centre. Any panel opened into an
    **empty** dock becomes its root leaf, whatever the table says.
 
 Rule 3 approximates the default layout rather than reproducing it — a bottom
@@ -237,7 +241,7 @@ observed a window (a headless `AppState`):
           "split": "left_right",
           "fraction": 0.67,
           "first": {
-            "tabs": ["viewer_3d", "image_detail"],
+            "tabs": ["viewer_3d", "image_detail", "track_table"],
             "active": "viewer_3d"
           },
           "second": {
@@ -402,7 +406,7 @@ cannot do.
 
 An object with `main` and `windows`, both optional: the split tree of the main
 surface and the floating windows. Or the string **`"default"`**, the stock
-nine-panel grid — a file that says `"layout": "default"` is a reset. The viewer
+ten-panel grid — a file that says `"layout": "default"` is a reset. The viewer
 never writes that form. The section may be absent or `null`, meaning the panels
 are left alone.
 
@@ -422,6 +426,7 @@ which makes them greppable against the `Tab` enum and readable in a diff:
 | `camera_intrinsics` | `IntrinsicsDetail` | Camera Intrinsics |
 | `action_log` | `ActionLog` | Action Log |
 | `edit_history` | `EditHistory` | Edit History |
+| `track_table` | `TrackTable` | Track Table |
 
 A name follows its panel's title, and a name no panel carries is not an alias
 for one: `background_task`, the singular of Background Tasks' name, is refused
@@ -487,9 +492,10 @@ each with its message:
 - `layout` is an object, `null`, or the string `"default"`; any other string is
   `layout: the only named layout is "default"`, and anything else `layout: must
   be an arrangement, null, or "default"`.
-- Inside `layout`: every panel name is one of the nine (`unknown panel
+- Inside `layout`: every panel name is one of the ten (`unknown panel
   "viewer3d"; the panels are scene, background_tasks, viewer_3d, image_browser,
-  image_detail, track_view, camera_intrinsics, action_log, edit_history`); **every panel appears at most
+  image_detail, track_view, camera_intrinsics, action_log, edit_history,
+  track_table`); **every panel appears at most
   once** across `main` and every window (`panel "scene" appears more than once`),
   because a `Tab` is a singleton — one struct draws it — and two tabs with one
   identity would draw one panel twice and confuse egui's widget ids, while a
@@ -638,7 +644,7 @@ pub(crate) struct LayoutRect { pub x: f32, pub y: f32, pub width: f32, pub heigh
 
 pub(crate) const LAYOUT_VERSION: u64 = 2;
 
-/// The stock nine-panel grid. `Layout::default().to_dock()` is what the
+/// The stock ten-panel grid. `Layout::default().to_dock()` is what the
 /// viewer starts with, and what Reset Layout restores.
 impl Default for Layout { fn default() -> Self; }
 
@@ -1001,6 +1007,7 @@ nothing to raise.
 | `layout::LEFT_COLUMN_SPLIT` | `0.72` | The Scene tree's share of the left column, the Background Tasks panel taking the rest. |
 | Image Browser / Action Log / Edit History home | below, `0.20` | Same. |
 | Image Detail / Track View / Camera Intrinsics home | right, `0.33` | Same. |
+| 3D Viewer / Track Table home | the root | Same: the root's first leaf, or the root of an empty dock. |
 | `layout::DEFAULT_LAYOUT_FILE_NAME` | `.sfm-explorer-default-layout.json` | The file the viewer reads at startup, and the name the save dialog offers. |
 | `--no-default-layout` | off | Skip the startup load (`cli::Args::no_default_layout`). |
 
@@ -1019,7 +1026,7 @@ default-layout test lives here too, beside the layout it checks.
   `"layout": "default"` round-trips too.
 - **Every panel appears exactly once in the default**, and `Tab::ALL` is in
   the menu's order.
-- **Wire names round-trip** for all nine, and `from_wire_name` refuses
+- **Wire names round-trip** for all ten, and `from_wire_name` refuses
   `"Scene"`, `"viewer3d"`, `""`, and the three names no panel carries,
   `"point_track"`, `"track_edit"` and `"background_task"`.
 - **Home positions:** for each panel, close it from the default layout and
@@ -1034,7 +1041,7 @@ default-layout test lives here too, beside the layout it checks.
   zero size, a wrong-length pair, `focus: false`, a malformed `monitor`, a
   `monitor` with nothing to fit), `layout` as a string other than `"default"`,
   and every panel-tree rule under its `layout.` prefix — unknown panel name
-  (listing the nine), a panel in two leaves, a panel in `main` and in a window,
+  (listing the ten), a panel in two leaves, a panel in `main` and in a window,
   an empty leaf, `active` not in `tabs`, `fraction` of `0`, `1` and `1.5`, an
   unknown key inside a leaf and inside a split, and a node that is neither.
 - **A document with neither section is valid and `is_empty`**, as is one whose
@@ -1088,7 +1095,7 @@ default-layout test lives here too, beside the layout it checks.
 
 The menu itself is exercised through `test_support::painted_texts`, which is
 why `panels_menu` is a function taking a `Ui`: a headless frame draws the body
-and the test asserts it painted all nine panel titles and the three
+and the test asserts it painted all ten panel titles and the three
 layout-wide items, and that drawing it changed nothing. What the *click* does
 is `show_panel` / `hide_panel`, tested directly against `is_panel_open` and the
 resulting `Layout` — synthesizing a pointer press at a widget rect would test

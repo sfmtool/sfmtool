@@ -21,18 +21,18 @@ root, and everything below describes the arrangement to its right.
 ## Default Layout
 
 ```
-┌───────┬──────────────────────────┬──────────────┐
-│  File                            │  (menu bar)  │
-├───────┼──────────────────────────┼──────────────┤
-│       │[3D Viewer][Image Detail] │ [Track View] │
-│       │                          │              │
-│ Scene │        3D Viewer         │  Track View  │
-│       │                          │              │
-├───────┤                          │              │
-│Backgr.├──────────────────────────┴──────────────┤
-│       │[Image Browser][Action Log][Edit History]│
-│       │ ◀ [img01] [img02] [img03] [img04] ... ▶ │
-└───────┴─────────────────────────────────────────┘
+┌───────┬──────────────────────────────────────┬──────────────┐
+│  File                                        │  (menu bar)  │
+├───────┼──────────────────────────────────────┼──────────────┤
+│       │[3D Viewer][Image Detail][Track Table]│ [Track View] │
+│       │                                      │              │
+│ Scene │              3D Viewer               │  Track View  │
+│       │                                      │              │
+├───────┤                                      │              │
+│Backgr.├──────────────────────────────────────┴──────────────┤
+│       │[Image Browser][Action Log][Edit History]            │
+│       │ ◀ [img01] [img02] [img03] [img04] ... ▶             │
+└───────┴─────────────────────────────────────────────────────┘
 ```
 
 - **Scene**: left, ~18% width, upper ~72% of that column. The tree of loaded
@@ -46,6 +46,10 @@ root, and everything below describes the arrangement to its right.
   Full-resolution image of the selected camera. The two are the large pictures
   of one selection and each wants the width, so they take turns in the middle
   rather than halving it.
+- **Track Table**: the third tab of that group, behind both. Every point of the
+  selected reconstruction as a sortable, filterable row
+  ([track-table.md](track-table.md)); the middle is the area with the height
+  for its rows.
 - **Track View**: top-right, ~1/3 width, sharing a tab group with Camera
   Intrinsics, and the active member of it. The column beside the
   pictures is where the tables about the selection go.

@@ -107,7 +107,7 @@ sfmtool/
 │   │       ├── main.rs           # Thin entry-point shim (calls into lib.rs)
 │   │       ├── lib.rs            # Winit event loop, wgpu setup, window/DPI plumbing
 │   │       ├── app.rs            # Per-frame pipeline: uploads, render passes, egui pass
-│   │       ├── dock.rs           # egui_dock Tab enum and TabViewer impl (4 tabs)
+│   │       ├── dock.rs           # egui_dock Tab enum and TabViewer impl (10 panels)
 │   │       ├── viewer_3d/        # ViewportCamera, interaction, fly navigation
 │   │       │   ├── mod.rs        # Viewer3D state and per-frame `show`
 │   │       │   ├── camera.rs     # ViewportCamera + clip-plane / FOV control
@@ -154,6 +154,9 @@ sfmtool/
 │   │       │   ├── mod.rs            # Panel state and per-frame `show`
 │   │       │   ├── input.rs          # Pan / zoom / hover dispatch
 │   │       │   └── overlay.rs        # Feature + reprojection overlays
+│   │       ├── track_table_panel.rs  # Track Table: every point as a row, its query and row list
+│   │       ├── track_table_panel/    # The table job (job.rs) that fills the track table cache
+│   │       ├── table_sort.rs         # The heading-click sort rule Track View and Track Table share
 │   │       ├── track_view/           # Track View: the Edit checkbox and its one body
 │   │       │   ├── mod.rs            # The box, the empty state, and the choice of mode
 │   │       │   └── body/             # One track, Viewed (Edit clear) or Edited (Edit ticked)
@@ -198,7 +201,7 @@ sfmtool/
 | `lib.rs` | Window creation, wgpu device/surface, DirectManipulation init, `winit` event loop, Windows DPI awareness, `egui_dock` `DockState` initialization from `Layout::default()` ([panel-layout.md](panel-layout.md)). |
 | `app.rs` | The per-frame pipeline (`App::run_ui_and_paint`): per-frame uploads (points, frustums, frustum colors, thumbnails, track rays, bg image, clip planes), camera-uniform updates, scene encoder + render passes, egui pass with the dock UI, AccessKit propagation, surface acquire/present, pick-result dispatch. |
 | `app/menu.rs`, `app/modals.rs`, `app/save.rs` | The menu bar and keyboard shortcuts, modal answers and deferred closes, and File-menu save handling, respectively. The egui pass calls them in that order before drawing the dock. |
-| `dock.rs` | `Tab` enum (4 variants) and `egui_dock::TabViewer` implementation: routes each tab to its panel's `show()` and threads the cross-panel `*Response` shape into `AppState`. |
+| `dock.rs` | `Tab` enum (10 variants) and `egui_dock::TabViewer` implementation: routes each tab to its panel's `show()` and threads the cross-panel `*Response` shape into `AppState`. |
 | `viewer_3d/` | `ViewportCamera` (wraps `Camera` from sfmtool-core with FOV/clip planes), orbit/pan/zoom math, WASD fly navigation with Q/E tilt, input handling (mouse/trackpad/keyboard), Alt-mode target control, camera view mode, grid drawing. `mod.rs` orchestrates; `camera.rs`/`input.rs`/`overlay.rs` own the sub-concerns; `display.rs` lists the HUD's display fields, which the HUD and the MCP `viewer_3d_display` tools share. |
 | `scene_renderer/` | All GPU pipeline management across ~14 modules: texture creation/resize, point upload, frustum upload (pinhole + distorted), thumbnail texture array atlas loading, uniform updates, multi-pass rendering, GPU readback, per-pass pipeline creation (`pipelines/` subdirectory). |
 | `state.rs` | `AppState` struct: reconstruction data, visibility toggles, selected image/points, hover state, rendering parameters, the dock, and the window snapshot — plus the small selection and lookup accessors the panels call every frame. |
@@ -210,6 +213,7 @@ sfmtool/
 | `image_menu.rs` | The image menu: `show`, which lays out an image's context-menu entries (`Resect Image`, `Add Image to Tracks`, `Move Camera`, `Delete Image`) with their greyed states and gives back the one chosen, and `AppState::image_menu` / `resect_image_refusal`, which say why `Resect Image` is greyed. A Scene tree image row and an Image Browser thumbnail both call `show`, and the dock carries the entry out through one function. See [scene-graph.md](scene-graph.md) § "Image menu". |
 | `image_detail/` | Full-resolution image display for the selected camera, with lazy loading, aspect-ratio-preserving fit, pan/zoom that persists across image and reconstruction switches, and 7 overlay modes. |
 | `track_view/` | Track View ([track-view.md](track-view.md)). `mod.rs` draws the *Edit* checkbox, which reads the focused item, and the empty state, and hands the rest to `body/`, the one body that draws a track in two modes: with *Edit* clear the viewed track, the selected point read as an editable track off every bench, read-only, with the point's summary in the header and a *Verdict* column the session's read-only bars colour; with *Edit* ticked the focused item of the selected node's bench, with its verdict switches, the threshold boxes that apply to it, and the toolbar that fits, moves the stage, splits and commits. Both show the crop, the rendered tile, the ZNCC and self-similarity readings and the evaluation's state. `table.rs` draws the table, `tile.rs` and `crop.rs` the two pictures per row and their hover views, `patch.rs` the warp and the stored bitmap's conversion. The header's triangulation numbers are `metrics.rs`, at the crate root. |
+| `track_table_panel.rs`, `track_table_panel/` | The Track Table panel ([track-table.md](track-table.md)): the query it keeps as panel state, the row list it computes again only when the query, the version or the cached columns change, the virtualised rows, and in `job.rs` the quiet *Track Table columns* job that fills the track table cache (`track_table.rs`) it shares with `find_points`. `table_sort.rs` holds the heading-click sort rule it shares with Track View. |
 | `bench.rs` | Every step on a node's bench, as a version of that node: the `AppState` methods that call the pure `sfmtool_core::bench` steps, push one version and write one Action Log row, and the two that read photographs as background tasks. `bench/live.rs` keeps every track evaluated against its current inputs, on a worker of its own, with no version and no row. See [bench.md](bench.md). |
 | `goto_point.rs` | Go to Point: parses a typed point index or `pt3d_<hash>_<index>` ID, resolves it against the loaded scene (bare index → selected node, hash → the node carrying it), and owns the modal that collects it. Parse and lookup are plain functions over the scene slice; the dialog returns a `PointRef` rather than applying it. See [goto-point.md](goto-point.md). |
 | `save_minimal_prompt.rs` | The workspace path `File > Save As Minimal...` asks about once its file dialog has named a file: a `SaveMinimalPrompt` holding the chosen file and the text of the field, prefilled with the path the save would measure, and reporting a `SaveMinimalAnswer` for the caller to write with rather than writing anything itself. See [saving.md](saving.md) § "The workspace path prompt". |

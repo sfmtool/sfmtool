@@ -17,10 +17,9 @@ The definitions live in one place so that every surface that quotes a number
 quotes the same one. The viewer's Track View header and its Image Detail heat
 maps call the same functions for one point that the table calls for every
 point, and the Python binding returns the arrays the table holds. The viewer's
-`find_points` wire tool runs this query over a cached table
-([gui/mcp-server.md](../../gui/mcp-server.md) § "`find_points`"), and the draft
-[track-table.md](../../drafts/track-table.md) proposes a Track Table panel
-that shows the table.
+Track Table panel ([gui/track-table.md](../../gui/track-table.md)) shows the
+table, and its `find_points` wire tool runs this query over the same cached
+table ([gui/mcp-server.md](../../gui/mcp-server.md) § "`find_points`").
 
 ## Rust API
 

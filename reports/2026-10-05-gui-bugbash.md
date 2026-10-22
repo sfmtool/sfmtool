@@ -217,6 +217,12 @@ the visible-target one cannot be (finding 3).
 > returns point ids with those values; each of the three searches is one call
 > (`specs/gui/mcp-server.md` § "`find_points`"). The Track Table panel is a
 > later step of `specs/drafts/track-table.md`. PR #1008._
+>
+> _Status (2026-10-21): **Done** — the Track Table panel lists every point
+> with the stored columns, sorts by a heading and filters by per-column bounds
+> over the same cache `find_points` reads (`specs/gui/track-table.md`); its
+> picture and computed columns remain in `specs/drafts/track-table.md`. Branch
+> `track-table-panel`._
 
 To reproduce the tutorial's screenshots an agent needs "a track of about 18
 observations seen in image 3", "a 4-observation track through image 57" and
