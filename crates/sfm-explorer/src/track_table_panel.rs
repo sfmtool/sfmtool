@@ -501,17 +501,35 @@ impl TrackTablePanel {
             .selected_image
             .and_then(|image| image.index_in(id))
             .map(|index| index as u32);
-        let table = state.track_table(id);
+        let current = state.track_table(id);
+        // While the table of a new version is computed, the table the row
+        // list was computed from is kept on show, marked out of date: the
+        // cache holds it until the new one replaces it.
+        let previous = match current {
+            Some(_) => None,
+            None => state.track_tables.latest(id).and_then(|(document, table)| {
+                let inputs = self.rows.inputs.as_ref()?;
+                (inputs.node == id && inputs.document == document && self.rows.error.is_none())
+                    .then_some(table)
+            }),
+        };
+        let stale = previous.is_some();
+        let table = current.or(previous);
 
-        // The rows first, so the header counts the rows this frame draws.
+        // The rows first, so the header counts the rows this frame draws. Out
+        // of date, they are not computed again: the old table's rows and the
+        // new version's observations do not go together, so a change of the
+        // query waits for the new table.
         let mut reordered = false;
         let unapplied = table.map(|table| {
             let (inputs, unapplied) = self.row_inputs(node, table, selected_image);
-            reordered = self.rows.refresh(edited, table, inputs);
+            if !stale {
+                reordered = self.rows.refresh(edited, table, inputs);
+            }
             unapplied
         });
 
-        self.show_header(ui, node, table, selected_image);
+        self.show_header(ui, node, table, stale, selected_image);
         if let Some(unapplied) = &unapplied {
             show_unapplied(ui, node, unapplied);
         }
@@ -539,8 +557,12 @@ impl TrackTablePanel {
         let selected = state.selected_point.filter(|p| p.recon == id);
         // A selection made elsewhere scrolls its row into view; otherwise a
         // new sort, new bounds or another reconstruction starts at the top,
-        // where the rows the query puts first are.
-        let scroll_to = if state.selected_point != self.seen_selection {
+        // where the rows the query puts first are. Out of date, the rows may
+        // name points the new version deleted, so the selection is looked for
+        // once the new table lands.
+        let scroll_to = if stale {
+            None
+        } else if state.selected_point != self.seen_selection {
             self.seen_selection = state.selected_point;
             selected.and_then(|p| self.rows.rows.iter().position(|&row| row == p.point))
         } else {
@@ -553,7 +575,9 @@ impl TrackTablePanel {
         // stay put while the rows scroll up and down. Their space is taken
         // now and they are drawn after the rows, from the left edge the rows
         // were drawn from on this frame, so a sideways scroll moves them with
-        // the columns under them, as Track View's headings do.
+        // the columns under them, as Track View's headings do. The Point
+        // column is pinned at the panel's left edge, in the rows and above
+        // them.
         let heading_band = reserve_band(ui, heading_height(ui));
         let bounds_band = reserve_band(ui, bounds_height(ui));
         let mut left = heading_band.left();
@@ -567,6 +591,7 @@ impl TrackTablePanel {
                 layout: &layout,
                 selected,
                 hovered,
+                stale,
             };
             let (over, rows_left) = rows.show(ui, scroll_to, &mut asked);
             left = rows_left;
@@ -576,6 +601,8 @@ impl TrackTablePanel {
                 asked.hover = Some(None);
             }
         }
+        // Out of date, the headings and the boxes stay live: an edit of them
+        // changes the query, and the rows follow it once the new table lands.
         self.show_headings(ui, heading_band, left, &layout);
         self.show_bounds(ui, bounds_band, left, &layout);
         asked
@@ -588,6 +615,7 @@ impl TrackTablePanel {
         ui: &mut egui::Ui,
         node: &SceneNode,
         table: Option<&TrackTable>,
+        stale: bool,
         selected_image: Option<u32>,
     ) {
         let edited = node.edited();
@@ -599,6 +627,17 @@ impl TrackTablePanel {
                     grouped(self.rows.rows.len()),
                     grouped(table.point_indexes().len())
                 ));
+            }
+            if stale {
+                ui.spinner();
+                ui.label(egui::RichText::new("Updating\u{2026}").weak())
+                    .on_hover_text(
+                        "The reconstruction has changed. These rows and the count are of the \
+                         version before the change, and they are replaced when the track table \
+                         of the version now shown is ready. Until then a row cannot be selected \
+                         or hovered, since it may name a point that no longer exists, and a \
+                         change of the bounds or the sort applies once the new rows arrive.",
+                    );
             }
             let query = &mut self.query;
             egui::containers::menu::MenuButton::new("Columns")
@@ -664,16 +703,17 @@ impl TrackTablePanel {
         left: f32,
         layout: &ColumnLayout,
     ) {
-        let ui = &mut band_ui(ui, band);
+        let pinned_ui = &mut band_ui(ui, band);
+        let scrolled_ui = &mut band_ui(ui, scrolled_part(band));
         let height = band.height();
-        let rect = egui::Rect::from_min_size(
-            egui::pos2(left, band.min.y),
-            egui::vec2(layout.width, height),
-        );
-        let font = egui::TextStyle::Body.resolve(ui.style());
+        let font = egui::TextStyle::Body.resolve(pinned_ui.style());
         for &(slot, x, width) in &layout.slots {
+            let (ui, cell_left) = match slot {
+                Slot::Point => (&mut *pinned_ui, band.left()),
+                Slot::Value(_) => (&mut *scrolled_ui, left + x),
+            };
             let cell = egui::Rect::from_min_size(
-                egui::pos2(rect.min.x + x, rect.min.y),
+                egui::pos2(cell_left, band.min.y),
                 egui::vec2(width, height),
             );
             let response = ui.interact(
@@ -758,7 +798,9 @@ impl TrackTablePanel {
         left: f32,
         layout: &ColumnLayout,
     ) {
-        let ui = &mut band_ui(ui, band);
+        // The Point column has no boxes, and the value columns' boxes pass
+        // under it, as their cells do.
+        let ui = &mut band_ui(ui, scrolled_part(band));
         let height = band.height();
         let rect = egui::Rect::from_min_size(
             egui::pos2(left, band.min.y),
@@ -829,6 +871,14 @@ fn band_ui(ui: &mut egui::Ui, band: egui::Rect) -> egui::Ui {
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(band));
     child.set_clip_rect(band.intersect(ui.clip_rect()));
     child
+}
+
+/// The part of `band` right of the pinned Point column, where the value
+/// columns scroll sideways.
+fn scrolled_part(band: egui::Rect) -> egui::Rect {
+    let mut part = band;
+    part.min.x = (band.min.x + POINT_WIDTH).min(band.max.x);
+    part
 }
 
 /// The heading row's height.
@@ -957,6 +1007,11 @@ struct RowsView<'a> {
     layout: &'a ColumnLayout,
     selected: Option<PointRef>,
     hovered: Option<PointRef>,
+    /// Whether the rows are of a version the node has left, kept on show
+    /// while the new version's table is computed. Such rows are dimmed and
+    /// take no click and no hover: one may name a point the new version
+    /// deleted.
+    stale: bool,
 }
 
 impl RowsView<'_> {
@@ -968,7 +1023,8 @@ impl RowsView<'_> {
     /// Draw the visible rows, scrolling row `scroll_to` into view, and answer
     /// whether the pointer is over the rows and the left edge the rows were
     /// drawn from, which the headings follow. A click and a hover go into
-    /// `asked`.
+    /// `asked`. The Point cells are drawn at the viewport's left edge rather
+    /// than the rows', so they stay there while the rest scrolls sideways.
     fn show(&self, ui: &mut egui::Ui, scroll_to: Option<usize>, asked: &mut Asked) -> (bool, f32) {
         let row_height = Self::row_height(ui);
         // Rows touch: the selection and hover fills meet, and row `k` starts at
@@ -982,7 +1038,8 @@ impl RowsView<'_> {
             let centred = row as f32 * row_height - 0.5 * ui.available_height() + row_height;
             area = area.vertical_scroll_offset(centred.max(0.0));
         }
-        let mut drawn_left = ui.available_rect_before_wrap().left();
+        let pinned_left = ui.available_rect_before_wrap().left();
+        let mut drawn_left = pinned_left;
         let output = area.show_rows(ui, row_height, self.rows.len(), |ui, range| {
             ui.set_min_width(self.layout.width);
             let top = ui.max_rect().top();
@@ -995,24 +1052,20 @@ impl RowsView<'_> {
                     egui::pos2(left, top + k as f32 * row_height),
                     egui::vec2(self.layout.width, row_height),
                 );
-                let response = ui.interact(
-                    rect,
-                    ui.id().with(("track_table_row", point)),
-                    egui::Sense::click(),
-                );
+                // The whole row, the pinned Point cell with it: the cell lies
+                // inside the row's rectangle wherever it is scrolled to.
+                let sense = if self.stale {
+                    egui::Sense::hover()
+                } else {
+                    egui::Sense::click()
+                };
+                let response = ui.interact(rect, ui.id().with(("track_table_row", point)), sense);
                 let reference = PointRef {
                     recon: self.node.id,
                     point,
                 };
                 let selected = self.selected == Some(reference);
-                self.paint_row(
-                    ui,
-                    rect,
-                    position,
-                    point,
-                    selected,
-                    self.hovered == Some(reference),
-                );
+                self.paint_row(ui, rect, pinned_left, position, reference);
                 response.widget_info(|| {
                     egui::WidgetInfo::selected(
                         egui::WidgetType::SelectableLabel,
@@ -1026,7 +1079,7 @@ impl RowsView<'_> {
                 if response.clicked() {
                     asked.select = Some(reference);
                 }
-                if response.hovered() {
+                if response.hovered() && !self.stale {
                     hovered_row = Some(reference);
                     // Minted for the row under the pointer only: an id walks
                     // the node's version graph.
@@ -1041,25 +1094,32 @@ impl RowsView<'_> {
         // The hover position rather than `rect_contains_pointer`, which reads
         // the last position a pointer that has left the window had; and only
         // where no popup or window lies over the rows.
-        let over = ui.ctx().pointer_hover_pos().is_some_and(|at| {
-            output.inner_rect.contains(at) && ui.ctx().layer_id_at(at) == Some(ui.layer_id())
-        });
+        // Out of date, the rows do not own the hover: a pointer over them
+        // counts as over none, so leaving the live rows clears it once.
+        let over = !self.stale
+            && ui.ctx().pointer_hover_pos().is_some_and(|at| {
+                output.inner_rect.contains(at) && ui.ctx().layer_id_at(at) == Some(ui.layer_id())
+            });
         if over {
             asked.hover = Some(output.inner);
         }
         (over, drawn_left)
     }
 
-    /// Paint one row: its fill, then each cell's text.
+    /// Paint one row: its fill, then each cell's text. The Point cell is at
+    /// `pinned_left`, the viewport's left edge, and the value cells are
+    /// clipped to the right of it.
     fn paint_row(
         &self,
         ui: &egui::Ui,
         rect: egui::Rect,
+        pinned_left: f32,
         position: usize,
-        point: u32,
-        selected: bool,
-        hovered: bool,
+        reference: PointRef,
     ) {
+        let point = reference.point;
+        let selected = self.selected == Some(reference);
+        let hovered = self.hovered == Some(reference);
         let visuals = ui.visuals();
         let fill = if selected {
             Some(visuals.selection.bg_fill)
@@ -1079,6 +1139,9 @@ impl RowsView<'_> {
             // The hover fill is lighter than the panel, so the text over it
             // is the strong colour to keep its contrast.
             visuals.strong_text_color()
+        } else if self.stale {
+            // Dimmed: the rows are of the version before an edit.
+            visuals.weak_text_color()
         } else {
             visuals.text_color()
         };
@@ -1088,19 +1151,31 @@ impl RowsView<'_> {
             .point_indexes()
             .binary_search(&point)
             .expect("a matched point is a row of the table it was matched in");
+        let clip = ui.clip_rect();
+        let mut scrolled_clip = clip;
+        scrolled_clip.min.x = scrolled_clip.min.x.max(pinned_left + POINT_WIDTH);
+        let scrolled = ui.painter().with_clip_rect(scrolled_clip);
         for &(slot, x, width) in &self.layout.slots {
-            let (text, align) = match slot {
-                Slot::Point => (format!("#{point}"), egui::Align2::LEFT_CENTER),
-                Slot::Value(column) => (
-                    cell_text(self.table, column, row),
-                    egui::Align2::RIGHT_CENTER,
-                ),
-            };
-            let anchor = match slot {
-                Slot::Point => egui::pos2(rect.min.x + x + CELL_PAD, rect.center().y),
-                Slot::Value(_) => egui::pos2(rect.min.x + x + width - CELL_PAD, rect.center().y),
-            };
-            ui.painter().text(anchor, align, text, font.clone(), color);
+            match slot {
+                Slot::Point => {
+                    ui.painter().text(
+                        egui::pos2(pinned_left + CELL_PAD, rect.center().y),
+                        egui::Align2::LEFT_CENTER,
+                        format!("#{point}"),
+                        font.clone(),
+                        color,
+                    );
+                }
+                Slot::Value(column) => {
+                    scrolled.text(
+                        egui::pos2(rect.min.x + x + width - CELL_PAD, rect.center().y),
+                        egui::Align2::RIGHT_CENTER,
+                        cell_text(self.table, column, row),
+                        font.clone(),
+                        color,
+                    );
+                }
+            }
         }
     }
 }

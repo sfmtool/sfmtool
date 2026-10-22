@@ -62,6 +62,20 @@ impl TrackTableCache {
             .map(|entry| &entry.table)
     }
 
+    /// The table held for `node` whatever serial it is for, with that serial.
+    ///
+    /// After an edit this is the table of a version the node has left until
+    /// the new version's table replaces it. Only the Track Table panel reads
+    /// it, to keep showing its last rows, marked out of date, while the new
+    /// table is computed; a query for the version at the cursor reads
+    /// [`Self::get`].
+    pub(crate) fn latest(&self, node: ReconId) -> Option<(VersionSerial, &TrackTable)> {
+        self.entries
+            .iter()
+            .find(|entry| entry.node == node)
+            .map(|entry| (entry.document, &entry.table))
+    }
+
     /// Merge `table`, computed for `node` at `document`, into the cache.
     ///
     /// Into the entry for that serial when there is one, with

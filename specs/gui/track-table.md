@@ -74,9 +74,11 @@ Panels menu opens it.
 - **It follows the selected reconstruction**, as Image Browser and Edit History
   do. The header names that reconstruction and counts the matched rows against
   its live points, with the thousands grouped (*1,204 of 9,941 points*). With no
-  reconstruction loaded the panel says *No reconstruction loaded*. Until the
-  table job has computed the columns for the version at the cursor, the panel
-  says *Computing the track table of {label}…* beside a spinner.
+  reconstruction loaded the panel says *No reconstruction loaded*. The first
+  time the panel shows a reconstruction, until the table job has computed the
+  columns for the version at the cursor, the panel says *Computing the track
+  table of {label}…* beside a spinner. After an edit it keeps the rows on show
+  instead (§ "After an edit").
 - **The columns** are the Point column, which is always shown and is the row's
   key, `#` and the point index, and the stored track table columns the
   reconstruction can supply. A column the reconstruction cannot supply
@@ -135,7 +137,12 @@ Panels menu opens it.
   height, as the Action Log is, so a million rows cost only the visible ones per
   frame. Alternate rows are shaded. The table scrolls sideways when its columns
   are wider than the panel, with the headings and the bounds moving with the
-  rows; they stay put while the rows scroll up and down. A new sort, new bounds,
+  rows; they stay put while the rows scroll up and down. The Point column is
+  pinned: its heading and its cells stay at the panel's left edge while the
+  value columns scroll sideways and pass under it, so every row keeps its
+  point index on screen. The rows scroll up and down as one, the pinned
+  cells with them, and a row's click and hover cover the whole row, its
+  Point cell included. A new sort, new bounds,
   the selected-image box or another reconstruction scrolls the rows back to the
   top, where the rows the query puts first are; a new version of the same
   reconstruction does not.
@@ -147,6 +154,40 @@ Panels menu opens it.
   cannot supply it. The bounds are kept for a reconstruction that can.* A bound
   or the sort on a column the cache does not hold yet is not applied either, and
   the line says *Filtering and sorting when {heading} is ready.*
+
+## After an edit
+
+An edit, an undo or a redo moves the document serial at the node's cursor, and
+the table job computes the new version's table
+(§ "Computing the columns"). On a large reconstruction that takes a while.
+Until the new table lands the panel keeps showing the rows, the count, the
+headings and the bound boxes it showed for the version before, and marks them
+out of date: a spinner and *Updating…* in the header line, and the rows' text
+dimmed. When the new table lands the row list is computed from it and replaces
+the old one in the same frame, without scrolling back to the top.
+
+The old rows are read from the old version's table, which the track table
+cache still holds: a node's entry is replaced only when a table for another
+serial is merged (`TrackTableCache::latest` reads it whatever its serial).
+The panel shows it only when its row list was computed from that table, for
+the same node and serial; otherwise, as when another reconstruction was
+selected meanwhile, it says *Computing…* as on a first open. `find_points` and
+the job still read the cache only for the version at the cursor.
+
+- **An out-of-date row cannot be selected or hovered.** A row of the version
+  before may name a point the edit deleted, and `select_point` on it would
+  select a point that no longer exists. Every out-of-date row is treated the
+  same rather than only the deleted ones, since telling them apart means
+  looking each one up in the new version: the rows take no click, set no
+  hover and show no hover text, and a hover the panel owned is cleared once.
+  The selected and hovered points of other panels are still drawn.
+- **A change of the query waits.** The headings and the bound boxes stay
+  live, so a sort or a bound can be set while the rows are out of date, but
+  the row list is not computed again until the new table lands. Running the
+  query over the old table would read the old version's values with the new
+  version's observations for the selected-image box, which do not go
+  together. A selection made elsewhere while the rows are out of date is
+  scrolled into view once the new rows arrive.
 
 ## Selection and hover
 
@@ -280,6 +321,13 @@ with one point at infinity:
 - a click on a row selects its point; hovering a row hovers its point and
   leaving clears it once; a selection made elsewhere scrolls its row into
   view, and a new sort scrolls back to the top;
+- after an edit the old rows, count and headings stay on show marked
+  *Updating…*, a bound set meanwhile waits, and the new rows and count replace
+  them when the job lands; an out-of-date row, a deleted point's or a
+  surviving one's, takes no click and no hover, and a click selects again once
+  the new table lands; the first open says *Computing…* with no count;
+- scrolled sideways, the Point heading and the Point cells keep their x
+  position while the value columns' headings move;
 - the cell text of a point at infinity, the grouping of counts and the
   significant digits.
 

@@ -186,6 +186,12 @@ fn the_table_job_fills_the_cache_with_the_stored_columns() {
         "{texts:?}"
     );
     assert!(
+        !texts
+            .iter()
+            .any(|t| t == "Updating\u{2026}" || t.ends_with(" points")),
+        "the first open has no rows to keep on show: {texts:?}"
+    );
+    assert!(
         state.drive_track_table_columns(),
         "the first frame queues it"
     );
@@ -824,5 +830,159 @@ fn a_new_sort_scrolls_back_to_the_top() {
         panel.drawn().iter().any(|(p, _)| *p == first),
         "{:?}",
         panel.drawn().iter().map(|(p, _)| p).collect::<Vec<_>>()
+    );
+}
+
+// -- After an edit --------------------------------------------------------------
+
+/// After an edit, until the new version's table lands, the panel keeps the
+/// rows, the count and the headings of the version before, marked *Updating…*,
+/// and a change of the bounds waits for the new table. Then the new rows and
+/// count replace them.
+#[test]
+fn an_edit_keeps_the_old_rows_on_show_until_the_new_table_lands() {
+    let (mut state, id) = state();
+    let (ctx, mut panel) = shown(&mut state);
+    state
+        .delete_point(PointRef {
+            recon: id,
+            point: 0,
+        })
+        .expect("deletable");
+    assert!(
+        state.track_table(id).is_none(),
+        "the new table is not ready"
+    );
+
+    let texts = painted_texts(&ctx, input(1200.0), |ui| panel.show(ui, &mut state));
+    assert!(texts.iter().any(|t| t == "40 of 40 points"), "{texts:?}");
+    assert!(texts.iter().any(|t| t == "Updating\u{2026}"), "{texts:?}");
+    assert!(texts.iter().any(|t| t == "Error (px)"), "{texts:?}");
+    assert!(texts.iter().any(|t| t == "#0"), "{texts:?}");
+    assert!(
+        !texts.iter().any(|t| t.starts_with("Computing")),
+        "{texts:?}"
+    );
+    assert_eq!(panel.rows().len(), POINTS);
+
+    // A bound set while the rows are out of date waits for the new table.
+    let computed = panel.recomputed();
+    panel.query.bound_mut(TrackTableColumn::RmsErrorPx).max = "0.95".into();
+    frame(&ctx, &mut panel, &mut state);
+    frame(&ctx, &mut panel, &mut state);
+    assert_eq!(panel.rows().len(), POINTS);
+    assert_eq!(panel.recomputed(), computed);
+
+    state.settle_track_table_columns();
+    frame(&ctx, &mut panel, &mut state);
+    let texts = painted_texts(&ctx, input(1200.0), |ui| panel.show(ui, &mut state));
+    // Points 1 to 9 have an error under 0.95 px; point 0 is gone.
+    assert!(texts.iter().any(|t| t == "9 of 39 points"), "{texts:?}");
+    assert!(!texts.iter().any(|t| t == "Updating\u{2026}"), "{texts:?}");
+    assert!(!texts.iter().any(|t| t == "#0"), "{texts:?}");
+    assert_eq!(panel.rows(), (1..=9).collect::<Vec<u32>>().as_slice());
+}
+
+/// An out-of-date row takes no click and no hover, the deleted point's row
+/// and a surviving point's row alike, since a row of the version before may
+/// name a point the new version no longer has. Once the new table lands a
+/// click selects again.
+#[test]
+fn an_out_of_date_row_cannot_be_selected_or_hovered() {
+    let (mut state, id) = state();
+    let (ctx, mut panel) = shown(&mut state);
+    state
+        .delete_point(PointRef {
+            recon: id,
+            point: 0,
+        })
+        .expect("deletable");
+    frame(&ctx, &mut panel, &mut state);
+    for point in [0, 5] {
+        let &(_, rect) = panel
+            .drawn()
+            .iter()
+            .find(|(p, _)| *p == point)
+            .expect("the old row is drawn");
+        click(&ctx, &mut panel, &mut state, rect.center());
+        assert_eq!(state.selected_point, None, "row #{point}");
+        assert_eq!(state.hovered_point, None, "row #{point}");
+    }
+
+    state.settle_track_table_columns();
+    frame(&ctx, &mut panel, &mut state);
+    let &(point, rect) = panel.drawn().iter().find(|(p, _)| *p == 5).unwrap();
+    click(&ctx, &mut panel, &mut state, rect.center());
+    assert_eq!(state.selected_point, Some(PointRef { recon: id, point }));
+}
+
+// -- The pinned Point column ------------------------------------------------------
+
+/// Scrolled sideways, the Point heading and the Point cells stay at the left
+/// edge while the value columns' headings and cells move.
+#[test]
+fn the_point_column_stays_put_when_the_table_scrolls_sideways() {
+    let (mut state, _) = state();
+    let narrow = |time: f64| egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(300.0, 600.0),
+        )),
+        time: Some(time),
+        ..Default::default()
+    };
+    let ctx = egui::Context::default();
+    let mut panel = TrackTablePanel::new();
+    for column in [
+        TrackTableColumn::X,
+        TrackTableColumn::Y,
+        TrackTableColumn::Z,
+        TrackTableColumn::CentroidDistance,
+    ] {
+        panel.query.set_shown(column, true);
+    }
+    run_frame_headless(&ctx, narrow(0.0), |ui| panel.show(ui, &mut state));
+    state.settle_track_table_columns();
+    run_frame_headless(&ctx, narrow(0.1), |ui| panel.show(ui, &mut state));
+    let left_of = |texts: &[crate::test_support::PaintedText], text: &str| {
+        texts
+            .iter()
+            .find(|t| t.text == text)
+            .unwrap_or_else(|| panic!("{text:?} was not painted"))
+            .rect
+            .left()
+    };
+    let before = painted_text_rects(&ctx, narrow(0.2), |ui| panel.show(ui, &mut state));
+    let &(_, row) = panel.drawn().iter().find(|(p, _)| *p == 2).unwrap();
+
+    let mut time = 0.3;
+    for _ in 0..20 {
+        let mut raw = narrow(time);
+        raw.events = vec![
+            egui::Event::PointerMoved(egui::pos2(150.0, row.center().y)),
+            egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: egui::vec2(-40.0, 0.0),
+                phase: egui::TouchPhase::Move,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ];
+        run_frame_headless(&ctx, raw, |ui| panel.show(ui, &mut state));
+        time += 0.1;
+    }
+    let after = painted_text_rects(&ctx, narrow(time), |ui| panel.show(ui, &mut state));
+
+    for pinned in ["Point", "#2"] {
+        assert_eq!(
+            left_of(&before, pinned),
+            left_of(&after, pinned),
+            "{pinned} moved"
+        );
+    }
+    let moved = left_of(&before, "Track") - left_of(&after, "Track");
+    assert!(moved > 50.0, "the Track heading moved {moved}");
+    assert!(
+        left_of(&after, "Distance") < left_of(&before, "Distance") - 50.0,
+        "the Distance heading did not scroll into view"
     );
 }
