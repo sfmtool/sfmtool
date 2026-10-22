@@ -906,10 +906,15 @@ pub struct AppState {
     pub(crate) viewed_tracks: crate::bench::viewed::ViewedTracks,
 
     /// The track table cache: at most one track table per node, for the
-    /// version at its cursor, which `find_points` reads and *Find points*
-    /// fills. Session state, not part of any version. See
-    /// [`crate::track_table`].
+    /// version at its cursor, which `find_points` and the Track Table panel
+    /// read, and *Find points* and the panel's table job fill. Session state,
+    /// not part of any version. See [`crate::track_table`].
     pub(crate) track_tables: crate::track_table::TrackTableCache,
+
+    /// The Track Table panel's table job: the node the panel asked for this
+    /// frame and the job queued for it, if any. See
+    /// [`crate::track_table_panel::job`].
+    pub(crate) track_table_jobs: crate::track_table_panel::job::TrackTableJobs,
 
     /// The bars Track View's threshold boxes hold while it shows the viewed
     /// track. They judge the readings drawn and change no verdict; a put of
@@ -1042,6 +1047,7 @@ impl AppState {
             surface_tiling: None,
             viewed_tracks: Default::default(),
             track_tables: Default::default(),
+            track_table_jobs: Default::default(),
             viewed_thresholds: Default::default(),
         }
     }

@@ -315,11 +315,11 @@ handful of "pane". A panel has one handle, its name, so the argument spells
 both: **`panel_name`**, by the rule below that makes a reconstruction's
 argument `reconstruction_label`.
 
-The nine names are the layout file's, and there is no second spelling of them
+The ten names are the layout file's, and there is no second spelling of them
 anywhere: `scene`, `background_tasks`, `viewer_3d`, `image_browser`,
 `image_detail`, `track_view`, `camera_intrinsics`, `action_log`,
-`edit_history` (`Tab::wire_name`). An unknown name is refused with a message
-listing all nine (`Tab::all_wire_names`), and that includes a name no panel
+`edit_history`, `track_table` (`Tab::wire_name`). An unknown name is refused with a message
+listing all ten (`Tab::all_wire_names`), and that includes a name no panel
 carries any more: `point_track`, `track_edit` and `background_task` are refused
 like any other unknown name, with no alias. `Tab` stays the Rust name — it is
 `egui_dock`'s word for the thing in a node, and the code is not the wire.
@@ -918,7 +918,12 @@ cache and the operation it starts are in
 - **The columns come from the track table cache.** The viewer keeps one core
   `TrackTable` per reconstruction for the version at its cursor, keyed by the
   reconstruction and its document serial
-  (`AppState::track_tables`, a `TrackTableCache`). A bench step keeps the
+  (`AppState::track_tables`, a `TrackTableCache`). The Track Table panel reads
+  the same cache, and its quiet table job fills it with the stored columns
+  ([track-table.md](track-table.md) § "Computing the columns"), so a column
+  either computed serves both, and the panel and a call with the same bounds see
+  the same points. A call does not start the panel's job; a running one is asked
+  to stop when *Find points* is queued, and is queued again behind it. A bench step keeps the
   document serial and so keeps the table; an edit, an undo or a redo moves it,
   and the cached table is then for another version and is not read. A node
   holds at most one entry: a table computed for another serial replaces it,
@@ -1263,7 +1268,7 @@ to set — the same rule as `set_reconstruction_display`.
 
 **The wire spellings are the code's.** `overlay_mode` takes the snake-cased
 `OverlayMode` variant (`OverlayMode::wire_name`, `from_wire_name`,
-`all_wire_names`, exactly as `Tab` spells the nine panels), because the GUI's
+`all_wire_names`, exactly as `Tab` spells the ten panels), because the GUI's
 labels — `Reproj Error`, `Max Track Angle` — are display text with spaces in
 it, and § "Where the GUI has no word, the code's word wins" applies to a word
 the GUI has only as a label. An unknown mode is refused with a message listing
@@ -3113,7 +3118,7 @@ Where the window is, and which panels are where. No arguments.
     "layout": { "main": { /* … */ }, "windows": [] }
   },
   "window": { /* the window block, live, with `monitors` — null with no window */ },
-  "panels": {                       // one entry per panel, always all nine
+  "panels": {                       // one entry per panel, always all ten
     "scene":             { "open": true,  "active": true },
     "background_tasks":  { "open": true,  "active": true },
     "viewer_3d":         { "open": true,  "active": true },
@@ -3122,7 +3127,8 @@ Where the window is, and which panels are where. No arguments.
     "track_view":        { "open": true,  "active": true },
     "camera_intrinsics": { "open": true,  "active": false },
     "action_log":        { "open": true,  "active": false },
-    "edit_history":      { "open": true,  "active": false }
+    "edit_history":      { "open": true,  "active": false },
+    "track_table":       { "open": true,  "active": false }
   }
 }
 ```

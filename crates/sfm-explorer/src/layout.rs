@@ -181,14 +181,14 @@ pub(crate) enum Home {
 /// asked for and a third left column would not be.
 const GROUPS: [&[Tab]; 4] = [
     &[Tab::SceneGraph, Tab::BackgroundTasks],
-    &[Tab::Viewer3D, Tab::ImageDetail],
+    &[Tab::Viewer3D, Tab::ImageDetail, Tab::TrackTable],
     &[Tab::TrackView, Tab::IntrinsicsDetail],
     &[Tab::ImageBrowser, Tab::ActionLog, Tab::EditHistory],
 ];
 
 impl Tab {
     /// Every panel, in default-layout order — which is the Panels menu's order.
-    pub(crate) const ALL: [Tab; 9] = [
+    pub(crate) const ALL: [Tab; 10] = [
         Tab::SceneGraph,
         Tab::BackgroundTasks,
         Tab::Viewer3D,
@@ -198,6 +198,7 @@ impl Tab {
         Tab::IntrinsicsDetail,
         Tab::ActionLog,
         Tab::EditHistory,
+        Tab::TrackTable,
     ];
 
     /// The panel's name on the wire: its title, lower-cased and joined with
@@ -216,6 +217,7 @@ impl Tab {
             Tab::IntrinsicsDetail => "camera_intrinsics",
             Tab::ActionLog => "action_log",
             Tab::EditHistory => "edit_history",
+            Tab::TrackTable => "track_table",
         }
     }
 
@@ -237,7 +239,9 @@ impl Tab {
     /// Where this panel is put when nothing of its default group is open.
     pub(crate) fn home(self) -> Home {
         match self {
-            Tab::Viewer3D => Home::Root,
+            // The Track Table goes where the viewport goes: the centre is the
+            // area with the height for its rows.
+            Tab::Viewer3D | Tab::TrackTable => Home::Root,
             // The same edge and share as Scene, whose group-mate it is: with
             // the tree gone too, the panel that replaces it belongs where the
             // tree was.
@@ -278,14 +282,14 @@ impl Tab {
 const LEFT_COLUMN_SPLIT: f32 = 0.72;
 
 impl Default for Layout {
-    /// The stock nine-panel grid:
+    /// The stock ten-panel grid:
     ///
     /// ```text
-    /// ┌────────┬─────────────────────────┬──────────────┐
-    /// │ Scene  │[3D Viewer][Image Detail]│ [Track View] │
-    /// ├────────┼─────────────────────────┴──────────────┤
-    /// │Backgr. │[Image Browser][Action Log][Edit History]│
-    /// └────────┴────────────────────────────────────────┘
+    /// ┌────────┬──────────────────────────────────────┬──────────────┐
+    /// │ Scene  │[3D Viewer][Image Detail][Track Table]│ [Track View] │
+    /// ├────────┼──────────────────────────────────────┴──────────────┤
+    /// │Backgr. │[Image Browser][Action Log][Edit History]             │
+    /// └────────┴─────────────────────────────────────────────────────┘
     /// ```
     ///
     /// The left column takes a narrow left split of the root, narrow because
@@ -294,13 +298,16 @@ impl Default for Layout {
     /// share and the Background panel taking the rest. Three nodes hold more
     /// than one tab, and in all three the first is the active one: the bottom
     /// node opens on the Image Browser with the Action Log and the Edit History
-    /// behind it, the middle node on the 3D Viewer with Image Detail behind it,
-    /// and the right-hand node on Track View with Camera Intrinsics behind it.
+    /// behind it, the middle node on the 3D Viewer with Image Detail and the
+    /// Track Table behind it, and the right-hand node on Track View with Camera
+    /// Intrinsics behind it.
     ///
     /// The viewport and Image Detail share a node because they are the two
     /// large pictures of the same selection and each wants the width: flipping
     /// between the scene and the photograph is one click, and neither is
-    /// squeezed into half of the middle while the other is being read.
+    /// squeezed into half of the middle while the other is being read. The
+    /// Track Table is the third tab there because the centre is the largest
+    /// area of the window, the one with the height for its rows.
     ///
     /// `Layout::default().to_dock()` is what the viewer starts with, and what
     /// Panels ▸ Reset Layout restores.
@@ -321,7 +328,11 @@ impl Default for Layout {
                     first: Box::new(LayoutNode::Split {
                         split: SplitDirection::LeftRight,
                         fraction: 0.67,
-                        first: Box::new(LayoutNode::leaf(&[Tab::Viewer3D, Tab::ImageDetail])),
+                        first: Box::new(LayoutNode::leaf(&[
+                            Tab::Viewer3D,
+                            Tab::ImageDetail,
+                            Tab::TrackTable,
+                        ])),
                         second: Box::new(LayoutNode::leaf(&[
                             Tab::TrackView,
                             Tab::IntrinsicsDetail,

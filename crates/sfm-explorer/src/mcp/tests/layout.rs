@@ -312,7 +312,7 @@ fn get_window_layout_returns_the_file_the_window_and_the_panels() {
             tab.wire_name()
         );
     }
-    // The default layout has three multi-tab nodes, so four of the nine sit
+    // The default layout has three multi-tab nodes, so five of the ten sit
     // behind a sibling rather than in front of it.
     let active: Vec<&str> = Tab::ALL
         .iter()

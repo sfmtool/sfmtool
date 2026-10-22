@@ -43,7 +43,7 @@ const DEFAULT_JSON: &str = r#"{
           "split": "left_right",
           "fraction": 0.67,
           "first": {
-            "tabs": ["viewer_3d", "image_detail"],
+            "tabs": ["viewer_3d", "image_detail", "track_table"],
             "active": "viewer_3d"
           },
           "second": {
@@ -149,12 +149,15 @@ fn the_action_log_shares_the_bottom_node_with_the_image_browser() {
     );
 }
 
-/// Image Detail rides behind the viewport, and the right-hand column holds the
-/// two panels that read out numbers about the selection.
+/// Image Detail and the Track Table ride behind the viewport, and the
+/// right-hand column holds the two panels that read out numbers about the
+/// selection.
 ///
 /// The two big pictures of one selection share a node so that each gets the
 /// full width of the middle and flipping between them is one click; the
-/// narrower column beside them is where a table belongs.
+/// narrower column beside them is where a table of one selection belongs. The
+/// Track Table lists every point, and the middle is the area with the height
+/// for its rows.
 #[test]
 fn the_viewport_opens_with_image_detail_behind_it_and_the_tables_beside_it() {
     let leaves = main_leaves(&Layout::default());
@@ -162,7 +165,10 @@ fn the_viewport_opens_with_image_detail_behind_it_and_the_tables_beside_it() {
         .iter()
         .find(|(tabs, _)| tabs.contains(&Tab::Viewer3D))
         .expect("no leaf holds the 3D Viewer");
-    assert_eq!(middle.0, vec![Tab::Viewer3D, Tab::ImageDetail]);
+    assert_eq!(
+        middle.0,
+        vec![Tab::Viewer3D, Tab::ImageDetail, Tab::TrackTable]
+    );
     assert_eq!(
         middle.1,
         Tab::Viewer3D,
@@ -296,8 +302,8 @@ fn every_panel_appears_exactly_once_in_the_default() {
     assert!(layout.validate("layout").is_ok());
 }
 
-/// The menu lists the panels in the order the default layout reads in: down
-/// the left column, then the middle, then the right, then the bottom strip.
+/// The menu lists the panels in this fixed order, the Track Table, the tenth
+/// panel, last.
 #[test]
 fn tab_all_is_in_the_menus_order() {
     assert_eq!(
@@ -312,6 +318,7 @@ fn tab_all_is_in_the_menus_order() {
             Tab::IntrinsicsDetail,
             Tab::ActionLog,
             Tab::EditHistory,
+            Tab::TrackTable,
         ]
     );
 }
@@ -440,12 +447,13 @@ fn a_panel_with_no_group_mate_splits_the_root() {
     }
 }
 
-/// The 3D Viewer has no home edge: with its group-mate gone too, it joins the
+/// The 3D Viewer has no home edge: with its group-mates gone too, it joins the
 /// root's first leaf.
 #[test]
 fn the_viewer_joins_the_first_leaf() {
     let mut state = state();
     state.hide_panel(Tab::ImageDetail);
+    state.hide_panel(Tab::TrackTable);
     state.hide_panel(Tab::Viewer3D);
     state.show_panel(Tab::Viewer3D);
     let leaves = main_leaves(&state.layout());
@@ -639,7 +647,8 @@ fn an_unknown_panel_name_lists_them_all() {
     assert_eq!(
         message,
         "layout.main: unknown panel \"viewer3d\"; the panels are scene, background_tasks, viewer_3d, \
-         image_browser, image_detail, track_view, camera_intrinsics, action_log, edit_history"
+         image_browser, image_detail, track_view, camera_intrinsics, action_log, edit_history, \
+         track_table"
     );
 }
 
@@ -682,7 +691,7 @@ fn the_earlier_stock_layout_is_refused_and_leaves_the_dock_alone() {
         message,
         "layout.main.second.first.second: unknown panel \"point_track\"; the panels are scene, \
          background_tasks, viewer_3d, image_browser, image_detail, track_view, camera_intrinsics, \
-         action_log, edit_history"
+         action_log, edit_history, track_table"
     );
 }
 

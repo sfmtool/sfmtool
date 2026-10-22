@@ -117,6 +117,7 @@ fn with_tabs(
     let mut image_browser = ImageBrowser::new();
     let mut image_detail = ImageDetail::new();
     let mut intrinsics_detail = IntrinsicsDetail::new();
+    let mut track_table = crate::track_table_panel::TrackTablePanel::new();
     let scroll_input = platform::ScrollInput::default();
     let ctx = egui::Context::default();
     let mut apply = Some(apply);
@@ -131,6 +132,7 @@ fn with_tabs(
             image_browser: &mut image_browser,
             image_detail: &mut image_detail,
             track_view: &mut *track_view,
+            track_table: &mut track_table,
             intrinsics_detail: &mut intrinsics_detail,
             frame: Progress::none(),
             scene_texture_id: None,

@@ -710,6 +710,7 @@ fn each_operation_declares_the_spec_s_queue_lock_and_quiet_value() {
         ("Find points", Fast, false, false),
         ("Live evaluation", Fast, false, true),
         ("Camera model proposal", Fast, false, true),
+        ("Track Table columns", Fast, false, true),
     ];
     assert_eq!(
         table.len(),
@@ -849,6 +850,9 @@ fn quiet_job_stops(operation: Operation) -> bool {
             let (state, _) = crate::camera_model_proposal::tests::spline_state();
             state.camera_model_proposal_job_stops_when_cancelled()
         }
+        // The stored columns of a reconstruction several blocks of points
+        // long, which `TrackTable::compute` polls the flag between.
+        "Track Table columns" => crate::track_table_panel::job::job_stops_when_cancelled(),
         other => panic!("{other} has no starter here; add one"),
     }
 }

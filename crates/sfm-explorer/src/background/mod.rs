@@ -31,14 +31,16 @@
 //!   or was cancelled before it started, kept in a ring of the last
 //!   [`FINISHED_KEPT`]. All three are found by id ([`AppState::task`]).
 //! - A **quiet task** ([`Operation::quiet`]) is work the viewer starts by
-//!   itself to keep a panel current: the bench's live evaluation, or a camera
-//!   model proposal's job. It is
+//!   itself to keep a panel current: the bench's live evaluation, a camera
+//!   model proposal's job, or the Track Table's table job. It is
 //!   queued by its source with [`AppState::start_quiet_task`] as a [`QuietJob`]
 //!   that answers on the source's own channel. It gives way to every task
 //!   someone asks for: a task queued in its queue, or a locking task queued on
 //!   its node, asks it to stop and starts once it has; it waits behind every
 //!   such task; a source has at most one waiting entry; and it is dropped
-//!   rather than started on a locked node. It writes no row, leaves no record
+//!   rather than started on a locked node. A source whose work does not wait
+//!   for its node ([`QuietSource::waits_for_its_node`]) is the exception to the
+//!   two rules about its node. It writes no row, leaves no record
 //!   and is left out of [`AppState::running_tasks`], [`AppState::waiting_tasks`],
 //!   [`AppState::task`] and the [`BusyNotice`].
 //! - [`Report`] is what crosses the channel, and carries no progress: phases,
@@ -216,6 +218,27 @@ pub(crate) enum QuietSource {
     CameraModelProposal,
     /// The bench's live evaluation ([`crate::bench::live`]).
     LiveEvaluation,
+    /// The Track Table panel's table job ([`crate::track_table_panel::job`]).
+    TrackTableColumns,
+}
+
+impl QuietSource {
+    /// Whether its work waits for its node to be free: it is dropped rather
+    /// than started on a locked node, and a locking task queued on its node in
+    /// either queue asks it to stop.
+    ///
+    /// True for the live evaluation, whose answer lands into the bench a
+    /// locking task has captured, and for the camera model proposal's job. The
+    /// Track Table's table job keeps its answer in the track table cache, keyed
+    /// by the document serial it read, so it runs on a node a slow task holds,
+    /// against the version on screen, and gives way only to a task queued in
+    /// its own queue.
+    pub(crate) fn waits_for_its_node(self) -> bool {
+        match self {
+            QuietSource::CameraModelProposal | QuietSource::LiveEvaluation => true,
+            QuietSource::TrackTableColumns => false,
+        }
+    }
 }
 
 /// A quiet task's place in the fixed order among waiting quiet tasks, the
@@ -225,7 +248,8 @@ pub(crate) enum QuietSource {
 /// preview are on screen while a person decides whether to apply it. The live
 /// evaluation's place depends on its subject: the viewed track and the focused
 /// item are what Track View shows, so they go ahead of the other bench items,
-/// in the order the evaluation driver picks them.
+/// in the order the evaluation driver picks them. The Track Table's columns go
+/// between the focused item and the other bench items.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum QuietRank {
     /// The camera model proposal's job.
@@ -234,6 +258,8 @@ pub(crate) enum QuietRank {
     ViewedTrack,
     /// The live evaluation of the focused bench item.
     FocusedItem,
+    /// The Track Table panel's table job.
+    TrackTableColumns,
     /// The live evaluation of any other bench item.
     BenchItem,
 }
@@ -679,6 +705,26 @@ impl Operation {
         quiet: true,
     };
 
+    /// The Track Table panel's table job
+    /// ([`crate::track_table_panel::job`]): the stored columns the track table
+    /// cache does not hold yet, computed for the version at the cursor of the
+    /// node the panel shows. A quiet task.
+    ///
+    /// It locks nothing, since it pushes no version: it keeps its answer in the
+    /// cache, keyed by the document serial it read, so it runs on a node a slow
+    /// task holds ([`QuietSource::waits_for_its_node`]). Cancellable because
+    /// `TrackTable::compute` polls the flag between blocks of points and hands
+    /// back `Cancelled`. It writes no row, so its kind is never read; it is the
+    /// kind of the panel settings it serves.
+    pub(crate) const TRACK_TABLE_COLUMNS: Operation = Operation {
+        name: "Track Table columns",
+        cancellable: true,
+        kind: Kind::Display,
+        queue: Queue::Fast,
+        locks: false,
+        quiet: true,
+    };
+
     /// Every operation that can go to the background.
     ///
     /// A list rather than a set of constants used one at a time, so the tests
@@ -687,7 +733,7 @@ impl Operation {
     /// declaration nothing checks is a declaration that rots.
     // Read by those tests alone, which is what it is for.
     #[cfg(test)]
-    pub(crate) const ALL: [Operation; 21] = [
+    pub(crate) const ALL: [Operation; 22] = [
         Operation::OPEN,
         Operation::BUNDLE_ADJUST,
         Operation::TO_EMBEDDED_PATCHES,
@@ -709,6 +755,7 @@ impl Operation {
         Operation::FIND_POINTS,
         Operation::LIVE_EVALUATION,
         Operation::CAMERA_MODEL_PROPOSAL,
+        Operation::TRACK_TABLE_COLUMNS,
     ];
 }
 
@@ -733,6 +780,9 @@ pub(crate) struct BackgroundTask {
     pub(crate) id: u64,
     /// What it is, for the refusals, and what it claims about itself.
     pub(crate) operation: Operation,
+    /// The source that queued it, for a quiet task, and `None` for one
+    /// someone asked for.
+    quiet_source: Option<QuietSource>,
     /// The node it will install its answer into, and the node it locks when
     /// [`Operation::locks`] says it does: `None` for an open, whose node does
     /// not exist until it finishes.
@@ -1382,7 +1432,8 @@ impl AppState {
     /// quiet task running in its queue, which it would otherwise wait behind,
     /// and, for a task that locks `node`, a quiet task running on that node in
     /// either queue, whose answer would land into the bench the new task's
-    /// job has just captured.
+    /// job has just captured. A quiet task whose source does not wait for its
+    /// node ([`QuietSource::waits_for_its_node`]) gives way only in its queue.
     ///
     /// The quiet task is not taken off its queue: it runs until it reads the
     /// flag, so a queue still runs one task at a time, and the task that
@@ -1393,7 +1444,10 @@ impl AppState {
             let Some(task) = self.quiet_running_in(queue) else {
                 continue;
             };
-            let on_its_node = operation.locks && node.is_some() && task.node == node;
+            let waits = task
+                .quiet_source
+                .is_some_and(QuietSource::waits_for_its_node);
+            let on_its_node = waits && operation.locks && node.is_some() && task.node == node;
             if queue == operation.queue || on_its_node {
                 task.cancel.store(true, Ordering::Relaxed);
             }
@@ -1408,7 +1462,8 @@ impl AppState {
     /// if it has one, is replaced, its job told it was dropped. It starts at
     /// once only when its queue is idle, and then only when `node` is not
     /// locked: a quiet task does not start on a locked node, and is dropped,
-    /// its source told so, rather than run. The id is from a count of its own
+    /// its source told so, rather than run, unless its source does not wait for
+    /// its node ([`QuietSource::waits_for_its_node`]). The id is from a count of its own
     /// ([`AppState::next_quiet_id`]), so the ids the wire hands out stay
     /// consecutive. An error is a worker thread that could not be spawned.
     ///
@@ -1487,9 +1542,12 @@ impl AppState {
     }
 
     /// Start `task` from its idle queue, or, for a quiet task whose node has
-    /// become locked since it was queued, drop it and tell its source.
+    /// become locked since it was queued and whose source waits for its node,
+    /// drop it and tell its source.
     fn begin(&mut self, task: WaitingTask) -> Result<(), String> {
-        if task.operation.quiet
+        if task
+            .quiet_source()
+            .is_some_and(QuietSource::waits_for_its_node)
             && task
                 .node
                 .is_some_and(|node| self.busy_refusal(node).is_some())
@@ -1505,6 +1563,7 @@ impl AppState {
     /// The queue must be idle. `started`, which the Action Log row's cost is
     /// measured from, is now, however long the task waited.
     fn run_task(&mut self, task: WaitingTask) -> Result<(), String> {
+        let quiet_source = task.quiet_source();
         let WaitingTask {
             id,
             operation,
@@ -1567,6 +1626,7 @@ impl AppState {
         self.queue_mut(operation.queue).running = Some(BackgroundTask {
             id,
             operation,
+            quiet_source,
             node,
             label,
             started: Instant::now(),

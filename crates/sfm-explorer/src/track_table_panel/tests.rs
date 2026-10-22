@@ -1,0 +1,725 @@
+// Copyright The SfM Tool Authors
+// SPDX-License-Identifier: Apache-2.0
+
+//! Headless tests for the Track Table panel and its table job.
+//!
+//! egui lays a frame out with no GPU behind it, so `show` really does run the
+//! query and paint the visible rows; the assertions read the rows the panel
+//! drew, the strings it painted and the state it changed. The table job runs
+//! on a real worker through the fast queue.
+
+use std::sync::mpsc;
+
+use sfmtool_core::analysis::track_table::{TrackTableColumn, TrackTableQueryOptions};
+use sfmtool_core::progress::Progress;
+use sfmtool_core::SfmrReconstruction;
+
+use super::{cell_text, grouped, significant, TrackTablePanel, TrackTableQuery};
+use crate::background::{Finished, Operation};
+use crate::scene::{ImageRef, PointRef, ReconId, SceneNode};
+use crate::state::AppState;
+use crate::table_sort::TableSort;
+use crate::test_support::{painted_text_rects, painted_texts, run_frame_headless};
+
+/// How many points the fixture holds.
+const POINTS: usize = 40;
+
+/// The point the fixture makes a point at infinity, which has no `x`.
+const BEARING: u32 = 7;
+
+/// A state holding one demo node of [`POINTS`] points, selected. Point `p`'s
+/// error is `p / 10` px, so sorting by error orders the points by index, and
+/// point [`BEARING`] is a point at infinity.
+fn state() -> (AppState, ReconId) {
+    let mut recon = SfmrReconstruction::demo(POINTS);
+    for (p, point) in recon.point_set.points.iter_mut().enumerate() {
+        point.rms_reprojection_error = p as f32 / 10.0;
+    }
+    let point = &mut recon.point_set.points[BEARING as usize];
+    point.position = nalgebra::Point3::from(point.position.coords.normalize());
+    point.w = 0.0;
+    recon.rebuild_derived_fields();
+    let mut state = AppState::new();
+    state.append_node(SceneNode::demo(recon));
+    let id = state.scene[0].id;
+    state.select_recon(id);
+    (state, id)
+}
+
+/// A window of 800 × `height` points.
+fn input(height: f32) -> egui::RawInput {
+    egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(800.0, height),
+        )),
+        ..Default::default()
+    }
+}
+
+/// One frame of the panel, in a window tall enough for every row.
+fn frame(ctx: &egui::Context, panel: &mut TrackTablePanel, state: &mut AppState) {
+    run_frame_headless(ctx, input(1200.0), |ui| panel.show(ui, state));
+}
+
+/// A panel drawn once, its table job run to its end, and drawn again, so the
+/// rows are on screen.
+fn shown(state: &mut AppState) -> (egui::Context, TrackTablePanel) {
+    let ctx = egui::Context::default();
+    let mut panel = TrackTablePanel::new();
+    frame(&ctx, &mut panel, state);
+    state.settle_track_table_columns();
+    frame(&ctx, &mut panel, state);
+    (ctx, panel)
+}
+
+/// Press and release the primary button at `at`, over two frames.
+fn click(ctx: &egui::Context, panel: &mut TrackTablePanel, state: &mut AppState, at: egui::Pos2) {
+    for pressed in [true, false] {
+        let mut raw = input(1200.0);
+        raw.events = vec![
+            egui::Event::PointerMoved(at),
+            egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::default(),
+            },
+        ];
+        run_frame_headless(ctx, raw, |ui| panel.show(ui, state));
+    }
+}
+
+/// Where the panel painted `text`, the first time.
+fn painted_at(
+    ctx: &egui::Context,
+    panel: &mut TrackTablePanel,
+    state: &mut AppState,
+    text: &str,
+) -> egui::Pos2 {
+    painted_text_rects(ctx, input(1200.0), |ui| panel.show(ui, state))
+        .into_iter()
+        .find(|painted| painted.text == text)
+        .unwrap_or_else(|| panic!("{text:?} was not painted"))
+        .rect
+        .center()
+}
+
+/// The stored columns the cache holds for `id` at its cursor.
+fn held(state: &AppState, id: ReconId) -> Vec<TrackTableColumn> {
+    let table = state.track_table(id).expect("a cached table");
+    TrackTableColumn::ALL
+        .into_iter()
+        .filter(|&c| table.has(c))
+        .collect()
+}
+
+// -- Registration and placement ---------------------------------------------
+
+#[test]
+fn the_panel_is_the_tenth_tab_titled_track_table() {
+    use crate::dock::Tab;
+    assert_eq!(Tab::ALL.len(), 10);
+    assert_eq!(Tab::ALL[9], Tab::TrackTable);
+    assert_eq!(Tab::TrackTable.title(), "Track Table");
+    assert_eq!(Tab::TrackTable.wire_name(), "track_table");
+    assert_eq!(Tab::from_wire_name("track_table"), Some(Tab::TrackTable));
+}
+
+/// Its home is the centre group, behind the 3D Viewer and Image Detail, and
+/// the 3D Viewer stays the raised tab, so the default layout opens showing the
+/// panels it did before.
+#[test]
+fn the_default_layout_puts_the_table_behind_the_viewport_and_image_detail() {
+    use crate::dock::Tab;
+    use crate::layout::{Layout, LayoutNode};
+    fn leaves(node: &LayoutNode, out: &mut Vec<(Vec<Tab>, Tab)>) {
+        match node {
+            LayoutNode::Leaf { tabs, active } => out.push((tabs.clone(), *active)),
+            LayoutNode::Split { first, second, .. } => {
+                leaves(first, out);
+                leaves(second, out);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    leaves(Layout::default().main.as_ref().expect("docked"), &mut out);
+    let centre = out
+        .iter()
+        .find(|(tabs, _)| tabs.contains(&Tab::TrackTable))
+        .expect("the table is docked");
+    assert_eq!(
+        centre.0,
+        vec![Tab::Viewer3D, Tab::ImageDetail, Tab::TrackTable]
+    );
+    assert_eq!(centre.1, Tab::Viewer3D);
+}
+
+#[test]
+fn with_no_node_selected_the_panel_says_so() {
+    let mut state = AppState::new();
+    let mut panel = TrackTablePanel::new();
+    let texts = painted_texts(&egui::Context::default(), input(600.0), |ui| {
+        panel.show(ui, &mut state)
+    });
+    assert!(
+        texts.iter().any(|t| t == "No reconstruction loaded"),
+        "{texts:?}"
+    );
+    assert_eq!(state.track_table_jobs.queued_task(), None);
+}
+
+// -- The table job ----------------------------------------------------------
+
+/// The panel's first frame queues the job, and its table fills the cache with
+/// every stored column the node can supply and none of the computed ones.
+#[test]
+fn the_table_job_fills_the_cache_with_the_stored_columns() {
+    let (mut state, id) = state();
+    let ctx = egui::Context::default();
+    let mut panel = TrackTablePanel::new();
+    let texts = painted_texts(&ctx, input(600.0), |ui| panel.show(ui, &mut state));
+    assert!(
+        texts
+            .iter()
+            .any(|t| t.starts_with("Computing the track table of")),
+        "{texts:?}"
+    );
+    assert!(
+        state.drive_track_table_columns(),
+        "the first frame queues it"
+    );
+    state.settle_track_table_columns();
+    let edited = state.scene[0].edited().clone();
+    let expected: Vec<TrackTableColumn> = super::job::missing_stored_columns(&edited, None);
+    assert!(!expected.is_empty());
+    assert_eq!(held(&state, id), expected);
+    assert!(
+        !state.drive_track_table_columns(),
+        "nothing is queued once every stored column is held"
+    );
+    assert_eq!(state.track_table_jobs.queued_task(), None);
+    assert_eq!(state.scene[0].history.versions().len(), 1, "a read");
+}
+
+/// A column *Find points* already cached is kept, not computed again: the job
+/// computes only the columns the cache lacks and merges them beside it.
+#[test]
+fn the_job_merges_beside_what_find_points_cached() {
+    let (mut state, id) = state();
+    state
+        .start_find_points(
+            id,
+            vec![
+                TrackTableColumn::TrackLength,
+                TrackTableColumn::MaxRayAngleDeg,
+            ],
+            TrackTableQueryOptions::default(),
+        )
+        .expect("a read");
+    state.finish_background_tasks();
+    let kept = state
+        .track_table(id)
+        .unwrap()
+        .values(TrackTableColumn::TrackLength)
+        .unwrap()
+        .as_ptr();
+    let (_ctx, _panel) = shown(&mut state);
+    let table = state.track_table(id).unwrap();
+    assert_eq!(
+        table
+            .values(TrackTableColumn::TrackLength)
+            .unwrap()
+            .as_ptr(),
+        kept,
+        "the column already held is kept"
+    );
+    assert!(table.has(TrackTableColumn::RmsErrorPx));
+    assert!(
+        table.has(TrackTableColumn::MaxRayAngleDeg),
+        "the panel and find_points share one cache"
+    );
+}
+
+/// A frame in which the panel does not draw asks for nothing.
+#[test]
+fn a_hidden_panel_queues_no_job() {
+    let (mut state, id) = state();
+    state.want_track_table_columns(id);
+    state.hide_track_table();
+    assert!(!state.drive_track_table_columns());
+    assert_eq!(state.track_table_jobs.queued_task(), None);
+    assert!(state.track_table(id).is_none());
+}
+
+/// An edit while the job runs asks it to stop, and a table it brings back
+/// for the serial the node has left is dropped rather than merged.
+#[test]
+fn an_edit_cancels_the_job_and_its_table_for_the_old_serial_is_dropped() {
+    let (mut state, id) = state();
+    let (open, hold) = mpsc::channel();
+    state.track_table_jobs.hold_next = Some(hold);
+    let ctx = egui::Context::default();
+    let mut panel = TrackTablePanel::new();
+    frame(&ctx, &mut panel, &mut state);
+    state.drive_track_table_columns();
+    let task = state.track_table_jobs.queued_task().expect("queued");
+    assert!(
+        state.quiet_task_running(task),
+        "an idle fast queue starts it"
+    );
+    let old = state.scene[0].history.current_version().document_serial;
+
+    state
+        .delete_point(PointRef {
+            recon: id,
+            point: 0,
+        })
+        .expect("deletable");
+    state.drive_track_table_columns();
+    assert!(state.quiet_task_cancelled(task), "the edit asks it to stop");
+
+    open.send(()).expect("the job waits at its gate");
+    state.wait_for_track_table_job();
+    assert!(
+        state.track_tables.get(id, old).is_none(),
+        "nothing was merged for the serial the node left"
+    );
+    assert!(state.track_table(id).is_none());
+
+    // The next drive queues the job for the version now at the cursor.
+    state.settle_track_table_columns();
+    let table = state.track_table(id).expect("computed for the new serial");
+    assert_eq!(table.point_indexes().len(), POINTS - 1);
+}
+
+/// A table that lands after the cursor moved is dropped even when nothing
+/// cancelled the job.
+#[test]
+fn a_table_that_lands_for_an_old_serial_is_dropped() {
+    let (mut state, id) = state();
+    let (open, hold) = mpsc::channel();
+    state.track_table_jobs.hold_next = Some(hold);
+    state.want_track_table_columns(id);
+    state.drive_track_table_columns();
+    let old = state.scene[0].history.current_version().document_serial;
+    state
+        .delete_point(PointRef {
+            recon: id,
+            point: 0,
+        })
+        .expect("deletable");
+    // No drive between the edit and the landing, so the job is not asked to
+    // stop and brings back the table of the old version.
+    open.send(()).expect("the job waits at its gate");
+    state.wait_for_track_table_job();
+    assert!(state.track_tables.get(id, old).is_none());
+    assert!(state.track_table(id).is_none());
+}
+
+/// The job locks nothing and reads the version on screen, so it runs while a
+/// slow task holds the node.
+#[test]
+fn the_job_runs_on_a_node_a_slow_task_holds() {
+    let (mut state, id) = state();
+    let (open, hold) = mpsc::channel::<()>();
+    state
+        .start_background_task(
+            Operation::BUNDLE_ADJUST,
+            id,
+            Box::new(move |_progress: &Progress<'_>| {
+                let _ = hold.recv();
+                Finished::Failed("held for the test".to_string())
+            }),
+        )
+        .expect("nothing else runs");
+    assert!(state.busy_refusal(id).is_some(), "the node is locked");
+    let (_ctx, _panel) = shown(&mut state);
+    assert!(
+        state.track_table(id).is_some(),
+        "the table was computed beside the slow task"
+    );
+    open.send(()).expect("the slow task waits at its gate");
+    state.finish_background_tasks();
+}
+
+/// Holding the declaration `cancellable: true` to its claim: the kernel the
+/// job runs stops when its flag is set.
+#[test]
+fn the_job_stops_when_cancelled() {
+    assert!(super::job::job_stops_when_cancelled());
+}
+
+// -- The row list -------------------------------------------------------------
+
+/// A bound keeps the rows inside it, both ends inclusive, and a row with no
+/// value fails a bound on its column.
+#[test]
+fn bounds_filter_the_rows_and_a_row_with_no_value_fails_them() {
+    let (mut state, _) = state();
+    let (ctx, mut panel) = shown(&mut state);
+    assert_eq!(panel.rows().len(), POINTS);
+
+    panel.query.bound_mut(TrackTableColumn::RmsErrorPx).min = "1".into();
+    panel.query.bound_mut(TrackTableColumn::RmsErrorPx).max = "2".into();
+    frame(&ctx, &mut panel, &mut state);
+    assert_eq!(panel.rows(), (10..=20).collect::<Vec<u32>>().as_slice());
+
+    // X: every finite point has a value; the bearing has none.
+    panel.query = TrackTableQuery::default();
+    panel.query.set_shown(TrackTableColumn::X, true);
+    panel.query.bound_mut(TrackTableColumn::X).min = "-1e9".into();
+    frame(&ctx, &mut panel, &mut state);
+    assert_eq!(panel.rows().len(), POINTS - 1);
+    assert!(!panel.rows().contains(&BEARING));
+}
+
+/// A box that does not hold a number sets no bound, and says so.
+#[test]
+fn a_box_that_is_not_a_number_sets_no_bound() {
+    let (mut state, _) = state();
+    let (ctx, mut panel) = shown(&mut state);
+    panel.query.bound_mut(TrackTableColumn::RmsErrorPx).max = "one".into();
+    frame(&ctx, &mut panel, &mut state);
+    assert_eq!(panel.rows().len(), POINTS);
+}
+
+/// The rows sort by the clicked column, and the rows with no value go last
+/// in either order.
+#[test]
+fn sorting_puts_the_rows_with_no_value_last_in_either_order() {
+    let (mut state, _) = state();
+    let (ctx, mut panel) = shown(&mut state);
+    panel.query.set_shown(TrackTableColumn::X, true);
+    for descending in [false, true] {
+        panel.query.sort = Some(TableSort {
+            column: TrackTableColumn::X,
+            descending,
+        });
+        frame(&ctx, &mut panel, &mut state);
+        assert_eq!(panel.rows().len(), POINTS);
+        assert_eq!(*panel.rows().last().unwrap(), BEARING, "{descending}");
+    }
+}
+
+/// The row list is computed once per change of its inputs: a frame with an
+/// unchanged query, version and cache does not compute it again, and a change
+/// of any of the three does.
+#[test]
+fn a_frame_with_an_unchanged_query_does_not_recompute_the_row_list() {
+    let (mut state, id) = state();
+    let (ctx, mut panel) = shown(&mut state);
+    let first = panel.recomputed();
+    assert_eq!(first, 1, "computed once, when the table first arrived");
+    for _ in 0..5 {
+        frame(&ctx, &mut panel, &mut state);
+    }
+    assert_eq!(panel.recomputed(), first, "five unchanged frames");
+
+    // Moving the pointer, selecting an image and hovering change nothing it
+    // reads.
+    state.select_image(Some(ImageRef::new(id, 0)));
+    state.hovered_point = Some(PointRef {
+        recon: id,
+        point: 3,
+    });
+    frame(&ctx, &mut panel, &mut state);
+    assert_eq!(panel.recomputed(), first);
+
+    // The query.
+    panel.query.click_heading(TrackTableColumn::RmsErrorPx);
+    frame(&ctx, &mut panel, &mut state);
+    frame(&ctx, &mut panel, &mut state);
+    assert_eq!(panel.recomputed(), first + 1);
+
+    // The version: an edit moves the serial, and the rows are computed again
+    // once the job has brought the new version's columns.
+    state
+        .delete_point(PointRef {
+            recon: id,
+            point: 1,
+        })
+        .expect("deletable");
+    frame(&ctx, &mut panel, &mut state);
+    state.settle_track_table_columns();
+    frame(&ctx, &mut panel, &mut state);
+    frame(&ctx, &mut panel, &mut state);
+    assert_eq!(panel.recomputed(), first + 2);
+    assert!(!panel.rows().contains(&1));
+
+    // The cache: a column merged in moves the inputs.
+    state
+        .start_find_points(
+            id,
+            vec![TrackTableColumn::MaxRayAngleDeg],
+            TrackTableQueryOptions::default(),
+        )
+        .expect("a read");
+    state.finish_background_tasks();
+    frame(&ctx, &mut panel, &mut state);
+    frame(&ctx, &mut panel, &mut state);
+    assert_eq!(panel.recomputed(), first + 3);
+}
+
+/// With the box ticked, only the points the selected image observes are
+/// kept; with no image selected it filters nothing.
+#[test]
+fn the_selected_image_box_keeps_the_points_that_image_sees() {
+    let (mut state, id) = state();
+    let (ctx, mut panel) = shown(&mut state);
+    panel.query.seen_in_selected_image = true;
+    frame(&ctx, &mut panel, &mut state);
+    assert_eq!(panel.rows().len(), POINTS, "no image selected");
+
+    state.select_image(Some(ImageRef::new(id, 0)));
+    frame(&ctx, &mut panel, &mut state);
+    let recon = state.scene[0].recon();
+    let seen: Vec<u32> = (0..POINTS as u32)
+        .filter(|&p| {
+            recon
+                .point_set
+                .tracks
+                .iter()
+                .any(|t| t.point_index == p && t.image_index == 0)
+        })
+        .collect();
+    assert!(!seen.is_empty() && seen.len() < POINTS);
+    assert_eq!(panel.rows(), seen.as_slice());
+}
+
+// -- The heading row and the columns ------------------------------------------
+
+/// A first click on Error puts the worst rows first; a second reverses them;
+/// a click on Point puts them back in point order.
+#[test]
+fn clicking_a_heading_sorts_worst_first_and_a_second_click_reverses() {
+    let (mut state, _) = state();
+    let (ctx, mut panel) = shown(&mut state);
+    let heading = painted_at(&ctx, &mut panel, &mut state, "Error (px)");
+    click(&ctx, &mut panel, &mut state, heading);
+    frame(&ctx, &mut panel, &mut state);
+    assert_eq!(
+        panel.query.sort,
+        Some(TableSort {
+            column: TrackTableColumn::RmsErrorPx,
+            descending: true
+        })
+    );
+    assert_eq!(panel.rows()[0], POINTS as u32 - 1, "the worst error first");
+
+    click(&ctx, &mut panel, &mut state, heading);
+    frame(&ctx, &mut panel, &mut state);
+    assert_eq!(panel.rows()[0], 0);
+
+    let point = painted_at(&ctx, &mut panel, &mut state, "Point");
+    click(&ctx, &mut panel, &mut state, point);
+    assert_eq!(panel.query.sort, None);
+}
+
+/// A column holding a bound or the sort cannot be hidden, so a hidden column
+/// never filters or orders the rows unseen.
+#[test]
+fn a_column_holding_a_bound_or_the_sort_cannot_be_hidden() {
+    let mut query = TrackTableQuery::default();
+    query.bound_mut(TrackTableColumn::RmsErrorPx).max = "2".into();
+    query.set_shown(TrackTableColumn::RmsErrorPx, false);
+    assert!(query.shown.contains(&TrackTableColumn::RmsErrorPx));
+    query.click_heading(TrackTableColumn::TrackLength);
+    query.set_shown(TrackTableColumn::TrackLength, false);
+    assert!(query.shown.contains(&TrackTableColumn::TrackLength));
+    query.set_shown(TrackTableColumn::ImageCount, false);
+    assert!(!query.shown.contains(&TrackTableColumn::ImageCount));
+    query.set_shown(TrackTableColumn::Z, true);
+    query.set_shown(TrackTableColumn::X, true);
+    let at = |c| query.shown.iter().position(|&s| s == c).unwrap();
+    assert!(
+        at(TrackTableColumn::X) < at(TrackTableColumn::Z),
+        "ALL order"
+    );
+}
+
+/// A column the reconstruction cannot supply is left out, and a bound on it
+/// is kept, said, and filters nothing.
+#[test]
+fn a_column_the_reconstruction_cannot_supply_is_left_out() {
+    let (mut state, _) = state();
+    let edited = state.scene[0].edited().clone();
+    assert!(!TrackTableColumn::NormalConfidence.is_available(&edited));
+    let (ctx, mut panel) = shown(&mut state);
+    panel
+        .query
+        .set_shown(TrackTableColumn::NormalConfidence, true);
+    panel
+        .query
+        .bound_mut(TrackTableColumn::NormalConfidence)
+        .min = "100".into();
+    let texts = painted_texts(&ctx, input(1200.0), |ui| panel.show(ui, &mut state));
+    assert!(!texts.iter().any(|t| t == "Normal conf."), "{texts:?}");
+    assert!(
+        texts
+            .iter()
+            .any(|t| t.starts_with("Not filtering or sorting by Normal conf.")),
+        "{texts:?}"
+    );
+    assert_eq!(panel.rows().len(), POINTS);
+}
+
+/// The header names the reconstruction and counts matched rows against live
+/// points.
+#[test]
+fn the_header_counts_matched_rows_against_live_points() {
+    let (mut state, _) = state();
+    let (ctx, mut panel) = shown(&mut state);
+    panel.query.bound_mut(TrackTableColumn::RmsErrorPx).max = "0.95".into();
+    let texts = painted_texts(&ctx, input(1200.0), |ui| panel.show(ui, &mut state));
+    assert!(texts.iter().any(|t| t == "10 of 40 points"), "{texts:?}");
+    let label = state.scene[0].label.clone();
+    assert!(texts.contains(&label), "{texts:?}");
+}
+
+// -- Selection and hover ------------------------------------------------------
+
+/// Clicking a row selects its point, as any other selection does.
+#[test]
+fn clicking_a_row_selects_its_point() {
+    let (mut state, id) = state();
+    let (ctx, mut panel) = shown(&mut state);
+    let &(point, rect) = panel
+        .drawn()
+        .iter()
+        .find(|(point, _)| *point == 5)
+        .expect("row 5 is drawn");
+    click(&ctx, &mut panel, &mut state, rect.center());
+    assert_eq!(state.selected_point, Some(PointRef { recon: id, point }));
+}
+
+/// Hovering a row hovers its point, and leaving the rows clears it once.
+#[test]
+fn hovering_a_row_hovers_its_point_and_leaving_clears_it() {
+    let (mut state, id) = state();
+    let (ctx, mut panel) = shown(&mut state);
+    let &(point, rect) = panel.drawn().iter().find(|(p, _)| *p == 4).unwrap();
+    let mut raw = input(1200.0);
+    raw.events = vec![egui::Event::PointerMoved(rect.center())];
+    run_frame_headless(&ctx, raw, |ui| panel.show(ui, &mut state));
+    assert_eq!(state.hovered_point, Some(PointRef { recon: id, point }));
+
+    let mut raw = input(1200.0);
+    raw.events = vec![egui::Event::PointerGone];
+    run_frame_headless(&ctx, raw, |ui| panel.show(ui, &mut state));
+    assert_eq!(state.hovered_point, None);
+
+    // Another panel's hover is left alone once the pointer is away.
+    let other = PointRef {
+        recon: id,
+        point: 9,
+    };
+    state.hovered_point = Some(other);
+    frame(&ctx, &mut panel, &mut state);
+    assert_eq!(state.hovered_point, Some(other));
+}
+
+/// A point selected elsewhere has its row scrolled into view, when it is
+/// among the matched rows.
+#[test]
+fn a_selection_made_elsewhere_scrolls_its_row_into_view() {
+    let (mut state, id) = state();
+    let ctx = egui::Context::default();
+    let mut panel = TrackTablePanel::new();
+    let short = |ctx: &egui::Context, panel: &mut TrackTablePanel, state: &mut AppState| {
+        run_frame_headless(ctx, input(240.0), |ui| panel.show(ui, state));
+    };
+    short(&ctx, &mut panel, &mut state);
+    state.settle_track_table_columns();
+    short(&ctx, &mut panel, &mut state);
+    let far = POINTS as u32 - 2;
+    assert!(
+        !panel.drawn().iter().any(|(p, _)| *p == far),
+        "the window is short enough to leave the row out"
+    );
+    state.select_point(PointRef {
+        recon: id,
+        point: far,
+    });
+    short(&ctx, &mut panel, &mut state);
+    short(&ctx, &mut panel, &mut state);
+    assert!(
+        panel.drawn().iter().any(|(p, _)| *p == far),
+        "{:?}",
+        panel.drawn().iter().map(|(p, _)| p).collect::<Vec<_>>()
+    );
+}
+
+// -- Cell text ----------------------------------------------------------------
+
+#[test]
+fn counts_are_grouped_by_thousands() {
+    assert_eq!(grouped(0), "0");
+    assert_eq!(grouped(999), "999");
+    assert_eq!(grouped(9_941), "9,941");
+    assert_eq!(grouped(1_234_567), "1,234,567");
+}
+
+#[test]
+fn values_print_to_three_significant_digits() {
+    assert_eq!(significant(0.8213, 3, 4), "0.821");
+    assert_eq!(significant(41.24, 3, 4), "41.2");
+    assert_eq!(significant(1234.6, 3, 4), "1235");
+    assert_eq!(significant(0.0, 3, 4), "0");
+    assert_eq!(significant(1_234_567.25, 4, 3), "1234567");
+    assert_eq!(significant(1.23456, 4, 3), "1.235");
+}
+
+/// The bearing's cells: no position, `∞` in its column, and a count still.
+#[test]
+fn a_point_at_infinity_prints_no_position_and_the_infinity_mark() {
+    let (mut state, id) = state();
+    let _ = shown(&mut state);
+    let table = state.track_table(id).unwrap();
+    let row = table.point_indexes().binary_search(&BEARING).unwrap();
+    assert_eq!(cell_text(table, TrackTableColumn::X, row), "-");
+    assert_eq!(
+        cell_text(table, TrackTableColumn::AtInfinity, row),
+        "\u{221e}"
+    );
+    assert_eq!(cell_text(table, TrackTableColumn::AtInfinity, 0), "");
+    assert_eq!(cell_text(table, TrackTableColumn::TrackLength, row), "2");
+    assert_eq!(
+        cell_text(table, TrackTableColumn::MaxRayAngleDeg, row),
+        "\u{2026}",
+        "a column the cache does not hold yet"
+    );
+}
+
+/// A new sort starts the rows at the top, where the rows it puts first are,
+/// even after a selection scrolled the table down.
+#[test]
+fn a_new_sort_scrolls_back_to_the_top() {
+    let (mut state, id) = state();
+    let ctx = egui::Context::default();
+    let mut panel = TrackTablePanel::new();
+    let short = |ctx: &egui::Context, panel: &mut TrackTablePanel, state: &mut AppState| {
+        run_frame_headless(ctx, input(240.0), |ui| panel.show(ui, state));
+    };
+    short(&ctx, &mut panel, &mut state);
+    state.settle_track_table_columns();
+    short(&ctx, &mut panel, &mut state);
+    state.select_point(PointRef {
+        recon: id,
+        point: POINTS as u32 - 2,
+    });
+    short(&ctx, &mut panel, &mut state);
+    short(&ctx, &mut panel, &mut state);
+    assert!(!panel.drawn().iter().any(|(p, _)| *p == 0));
+
+    panel.query.click_heading(TrackTableColumn::RmsErrorPx);
+    short(&ctx, &mut panel, &mut state);
+    short(&ctx, &mut panel, &mut state);
+    let first = panel.rows()[0];
+    assert_eq!(first, POINTS as u32 - 1);
+    assert!(
+        panel.drawn().iter().any(|(p, _)| *p == first),
+        "{:?}",
+        panel.drawn().iter().map(|(p, _)| p).collect::<Vec<_>>()
+    );
+}

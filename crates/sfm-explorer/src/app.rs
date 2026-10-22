@@ -238,6 +238,12 @@ impl App {
         if self.state.drive_bench_evaluation() {
             self.egui_ctx.request_repaint();
         }
+        // And the Track Table's columns, so a `find_points` call drained below
+        // reads the columns the table job just brought back. After the two
+        // above, because it waits behind them among the quiet tasks.
+        if self.state.drive_track_table_columns() {
+            self.egui_ctx.request_repaint();
+        }
         // After both, so a Surface Tiling Mode sequence sees the step it waits
         // on end, and the evaluation after it land, in the frame they do
         // (`crate::bench::surface_tiling`).
@@ -367,6 +373,12 @@ impl App {
         // the evaluation of the new inputs in the same frame. The tool calls
         // drained above are covered by this call as well.
         if self.state.drive_bench_evaluation() {
+            self.egui_ctx.request_repaint();
+        }
+
+        // The Track Table drew this frame and said which node it shows, so
+        // its table job is queued for that node in the same frame.
+        if self.state.drive_track_table_columns() {
             self.egui_ctx.request_repaint();
         }
 
@@ -1032,6 +1044,7 @@ impl App {
         let image_browser = &mut self.image_browser;
         let image_detail = &mut self.image_detail;
         let track_view = &mut self.track_view;
+        let track_table = &mut self.track_table;
         let intrinsics_detail = &mut self.intrinsics_detail;
 
         // Both close paths are collected here rather than acted on in the menu
@@ -1073,6 +1086,10 @@ impl App {
                 // a frame in which it is hidden leaves none current and the
                 // live evaluation drops it (`crate::bench::viewed`).
                 app_state.hide_viewed_track();
+                // The Track Table says which node it shows when it draws, for
+                // the same reason: a frame in which it is hidden asks its table
+                // job for nothing (`crate::track_table_panel::job`).
+                app_state.hide_track_table();
                 let mut tab_context = TabContext {
                     state: app_state,
                     viewer_3d,
@@ -1080,6 +1097,7 @@ impl App {
                     image_browser,
                     image_detail,
                     track_view,
+                    track_table,
                     intrinsics_detail,
                     frame: *progress,
                     scene_texture_id,

@@ -58,6 +58,7 @@ mod table_sort;
 mod test_support;
 mod texture;
 mod track_table;
+mod track_table_panel;
 mod track_view;
 mod viewer_3d;
 mod window;
@@ -336,6 +337,7 @@ pub fn run_with_args(args: impl IntoIterator<Item = String>) -> Result<(), RunEr
         image_browser: ImageBrowser::new(),
         image_detail: ImageDetail::new(),
         track_view: TrackView::new(),
+        track_table: crate::track_table_panel::TrackTablePanel::new(),
         intrinsics_detail: IntrinsicsDetail::new(),
         scene_renderer: SceneRenderer::new(),
         frame: Arc::new(Collector::new(false)),
@@ -454,6 +456,7 @@ pub(crate) struct App {
     pub(crate) image_browser: ImageBrowser,
     pub(crate) image_detail: ImageDetail,
     pub(crate) track_view: TrackView,
+    pub(crate) track_table: crate::track_table_panel::TrackTablePanel,
     pub(crate) intrinsics_detail: IntrinsicsDetail,
     pub(crate) scene_renderer: SceneRenderer,
     /// Where this frame's own phases land: the uploads, the two draws and the

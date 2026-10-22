@@ -3,9 +3,9 @@
 
 //! Dock tab identity and tab rendering.
 //!
-//! Names the nine panels (Scene, Background, 3D Viewer, Image Browser, Image
-//! Detail, Track View, Camera Intrinsics, Action Log, Edit History) and holds
-//! the `TabViewer`
+//! Names the ten panels (Scene, Background, 3D Viewer, Image Browser, Image
+//! Detail, Track View, Camera Intrinsics, Action Log, Edit History, Track
+//! Table) and holds the `TabViewer`
 //! implementation that renders each panel's content. How they are *arranged* —
 //! the default grid, the Panels menu, the layout file — is [`crate::layout`].
 
@@ -21,6 +21,7 @@ use crate::platform;
 use crate::scene::{selected_node, CameraRef, ImageRef, PointRef, ReconId, SceneNode};
 use crate::scene_graph::{SceneGraphPanel, SceneGraphResponse};
 use crate::state::{AppState, FeatureDisplaySettings, IntrinsicsDisplaySettings, OverlayMode};
+use crate::track_table_panel::TrackTablePanel;
 use crate::track_view::{TrackBodyResponse, TrackView};
 use crate::viewer_3d::Viewer3D;
 
@@ -43,6 +44,9 @@ pub(crate) enum Tab {
     IntrinsicsDetail,
     ActionLog,
     EditHistory,
+    /// Every live point of the selected reconstruction as a row of the track
+    /// table. See [`crate::track_table_panel`].
+    TrackTable,
 }
 
 impl Tab {
@@ -57,6 +61,7 @@ impl Tab {
             Tab::IntrinsicsDetail => "Camera Intrinsics",
             Tab::ActionLog => "Action Log",
             Tab::EditHistory => "Edit History",
+            Tab::TrackTable => "Track Table",
         }
     }
 }
@@ -85,6 +90,7 @@ pub(crate) struct TabContext<'a> {
     pub image_browser: &'a mut ImageBrowser,
     pub image_detail: &'a mut ImageDetail,
     pub track_view: &'a mut TrackView,
+    pub track_table: &'a mut TrackTablePanel,
     pub intrinsics_detail: &'a mut IntrinsicsDetail,
     /// Where the panel work that can outlast a frame reports: the `.sift`
     /// reads the overlays ask for.
@@ -137,6 +143,7 @@ impl TabViewer for TabContext<'_> {
             // a session, and the log is exactly what says so.
             Tab::ActionLog => crate::action_log::show(ui, &mut self.state.action_log),
             Tab::EditHistory => self.show_edit_history(ui),
+            Tab::TrackTable => self.track_table.show(ui, self.state),
         }
     }
 
