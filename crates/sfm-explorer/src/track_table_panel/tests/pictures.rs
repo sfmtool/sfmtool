@@ -318,8 +318,8 @@ fn the_patch_heading_does_not_sort() {
     assert_eq!(panel.rows(), (0..POINTS as u32).collect::<Vec<_>>());
 }
 
-/// The rows are a line of text high at the smallest picture size too: the
-/// smallest row still holds a line of body text.
+/// The smallest picture row is taller than a text row, so it still holds a
+/// line of body text.
 #[test]
 fn the_smallest_row_holds_a_line_of_text() {
     let ctx = egui::Context::default();

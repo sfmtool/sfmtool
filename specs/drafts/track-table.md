@@ -166,9 +166,8 @@ store a reference.
   stored-patch text the Patch cell's hover shows now. A click on a picture is
   the row's click, as it is on a Patch cell.
 - **Crop cannot be sorted or bounded,** as Patch cannot.
-- **Each cell says why it is empty.** A Crop cell is one of the picture, *no
-  patch* or an empty frame the Patch cell draws (`CellPicture`), or one of the
-  further cases below:
+- **Each cell says why it is empty.** A Crop cell is drawn from a
+  `CellPicture`, as a Patch cell is, with further cases, and is one of:
   - the picture;
   - an empty frame while its photograph is decoding or its reference is being
     picked;
@@ -178,7 +177,7 @@ store a reference.
   - *off image*, when no point of the outline projects into the photograph
     (`crop::region` gives no region). An outline that projects but lies
     outside the photograph still gives a crop, drawn transparent where it is
-    off the photograph, as in Track View;
+    off the photograph, as in Track View.
 - **Only visible rows are drawn.** Crop textures go in the texture cache the
   Patch cells use (`PictureTextures`, keyed by column, node, point and
   document serial and bounded by entry count). Crops need their photograph
@@ -329,9 +328,9 @@ and `stored_patch_image` moved into `patch_pictures`, a module both panels
 use, are built ([gui/track-table.md](../gui/track-table.md)).
 
 - **4. The Crop column**, moving Track View's tile and crop helpers into
-  `patch_pictures`, beside `stored_patch_image`, and rewriting them to take values rather than a track, with
-  requests that wait for the scroll to stop and reference picks for the
-  visible rows that store none.
+  `patch_pictures`, beside `stored_patch_image`, and rewriting them to take
+  values rather than a track, with requests that wait for the scroll to stop
+  and reference picks for the visible rows that store none.
 - **5. The computed columns in the panel**, filled by the quiet table job.
 - **6. Filter the 3D view** (dim and hide).
 - **7. `get_track_table_query` / `set_track_table_query`.**

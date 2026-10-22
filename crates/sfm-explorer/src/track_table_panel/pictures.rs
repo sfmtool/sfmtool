@@ -154,8 +154,8 @@ pub(super) struct PictureTextures {
     entries: HashMap<PictureKey, Entry>,
     /// The frame now being drawn.
     frame: u64,
-    /// How many pictures have been made, for the tests that hold which rows
-    /// ask for one.
+    /// The key of every picture made, in order, for the tests that hold which
+    /// rows ask for one.
     #[cfg(test)]
     pub(super) made: Vec<PictureKey>,
 }

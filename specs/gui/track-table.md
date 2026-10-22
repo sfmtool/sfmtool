@@ -216,7 +216,8 @@ The column, the *Size* slider and the texture cache are in
   The Columns menu lists it first and can hide it. The *Crop* column proposed
   in [drafts/track-table.md](../drafts/track-table.md) goes between the two.
 - **It cannot be sorted or bounded.** Its heading takes no click and it has no
-  bound boxes. Its heading's hover text says what the column shows and that.
+  bound boxes. Its heading's hover text says what the column shows and that
+  it cannot be sorted or bounded.
 - **Size.** A slider in the header, *Size*, sets the picture size from 32 to
   128 pt, 64 by default, in whole points. Every row is the picture size and
   2 pt above and below high while the Patch column is shown, so `show_rows`
