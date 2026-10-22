@@ -247,8 +247,9 @@ The column, the *Size* dropdown and the texture cache are in
   which links it to the *Size* label drawn before it, leaves the label empty,
   so the name is set on the node itself. Its entries are buttons named
   `16 pt` to `128 pt` in the dropdown it opens, so an agent picks a size with
-  two `click`s. The label and the dropdown stay together when the header line
-  wraps.
+  two `click`s. The dropdown is as wide as its widest entry, `128 pt`, and its
+  arrow, whichever size it shows, rather than egui's default combo box width.
+  The label and the dropdown stay together when the header line wraps.
 - **Hovering a picture** shows it at three times the picture size, at most
   256 pt so it stays inside a small window, with the text Track View's header
   slot gives a viewed point's stored patch (`STORED_PATCH_HOVER`) and the
@@ -715,7 +716,8 @@ point, one of them all zero:
   picture row alone would not;
 - the dropdown is named *Size* in the AccessKit tree with the size it shows as
   its value, a click on it lists the four sizes in order, and a click on one
-  picks it;
+  picks it; it is narrower than egui's default combo box and the same width
+  at every size;
 - after an edit, out-of-date rows make no pictures: a row drawn before keeps
   its picture and a row not drawn before waits, and the new version's
   pictures are made once its table lands;

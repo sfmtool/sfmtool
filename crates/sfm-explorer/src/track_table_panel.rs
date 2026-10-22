@@ -459,7 +459,27 @@ fn size_text(size: f32) -> String {
 /// leaves the label empty.
 fn size_dropdown(ui: &mut egui::Ui, size: &mut f32) {
     let label = ui.label(SIZE_NAME);
+    // As wide as the widest size and the arrow, not egui's default combo
+    // width, so the header keeps its room; the same for every size, so the
+    // header does not shift when the size changes.
+    let widest = PICTURE_SIZES
+        .iter()
+        .map(|&choice| {
+            egui::WidgetText::from(size_text(choice))
+                .into_galley(
+                    ui,
+                    Some(egui::TextWrapMode::Extend),
+                    f32::INFINITY,
+                    egui::TextStyle::Button,
+                )
+                .size()
+                .x
+        })
+        .fold(0.0, f32::max);
+    let spacing = ui.spacing();
+    let width = widest + spacing.icon_spacing + spacing.icon_width + 2.0 * spacing.button_padding.x;
     let response = egui::ComboBox::from_id_salt("track_table_picture_size")
+        .width(width)
         .selected_text(size_text(*size))
         .show_ui(ui, |ui| {
             for choice in PICTURE_SIZES {

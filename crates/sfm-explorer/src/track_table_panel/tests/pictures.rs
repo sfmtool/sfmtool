@@ -512,6 +512,15 @@ fn the_size_dropdown_is_named_and_a_click_on_an_entry_picks_its_size() {
     let dropdown = only(&nodes, Role::ComboBox);
     assert_eq!(dropdown.label(), Some("Size"));
     assert_eq!(dropdown.value(), Some("64 pt"));
+    let width = |node: &egui::accesskit::Node| {
+        let bounds = node.bounds().expect("the node has a rectangle");
+        bounds.x1 - bounds.x0
+    };
+    let default_width = width(dropdown);
+    assert!(
+        default_width < egui::Spacing::default().combo_width as f64,
+        "narrower than egui's default: {default_width}"
+    );
 
     for (pick, text) in [(16.0, "16 pt"), (128.0, "128 pt"), (32.0, "32 pt")] {
         let nodes = accessible_frame(&ctx, &mut panel, &mut state, Vec::new());
@@ -538,5 +547,6 @@ fn the_size_dropdown_is_named_and_a_click_on_an_entry_picks_its_size() {
         let dropdown = only(&nodes, Role::ComboBox);
         assert_eq!(dropdown.label(), Some("Size"));
         assert_eq!(dropdown.value(), Some(text));
+        assert_eq!(width(dropdown), default_width, "the same width at {text}");
     }
 }
