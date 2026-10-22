@@ -134,8 +134,8 @@ Panels menu opens it.
   `largest_zncc_self_similarity_radius` descending, `track_length`,
   `lowest_zncc` and `normal_confidence` ascending. Every other column sorts
   ascending first, Distance among them, which puts the points at infinity, at
-  `∞`, after every finite distance and their second click first. A second click on the same heading reverses the
-  order. A triangle after the heading marks the sorted column, pointing up for
+  `∞`, after every finite distance; a second click puts them first. A second
+  click on the same heading reverses the order. A triangle after the heading marks the sorted column, pointing up for
   increasing and down for decreasing. Rows with no value go last in either
   order, which is the track table query's rule. A click on **Point** puts the
   rows back in increasing point index, the order with no sort. The click rule

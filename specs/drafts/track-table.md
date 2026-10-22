@@ -71,8 +71,9 @@ The second row's crop is still an empty frame because its photograph is
 still being decoded.
 
 - **The default columns** become Point, Crop, Patch, Track, Error, Distance
-  and Ray angle, with Repeat obs. shown by itself as it is now. The Columns menu lists the picture columns and the computed
-  columns beside the stored ones.
+  and Ray angle, with Repeat obs. shown by itself as it is now. The Columns
+  menu lists the picture columns and the computed columns beside the stored
+  ones.
 - **The heading rule** for the computed columns: a first click on
   `condition_number` or `inverse_depth_z` sorts descending, and on
   `max_ray_angle_deg` ascending, the bad end first. The panel's sort rule for

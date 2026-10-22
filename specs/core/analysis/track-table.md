@@ -363,8 +363,8 @@ absent optional columns, unmeasured
 points. They check the query's inclusive bounds, NaN against a bound, a bound with
 neither end, `+∞` against a `min` and a finite `max`, `seen_in_image`, ties in
 both sort orders, `+∞` sorting as the largest value ahead of the no-value
-rows, no-value rows last in both orders and both refusals; that `merge` moves the missing columns, keeps
-the ones already held and refuses a table of another version; that a
+rows, no-value rows last in both orders and both refusals; that `merge`
+moves the missing columns, keeps the ones already held and refuses a table of another version; that a
 cancelled `compute` returns `Cancelled`;
 that progress runs to the end through both passes; and that the values are
 bit-identical with one thread and with four. The viewer's own tests of the
