@@ -21,6 +21,8 @@ use crate::state::AppState;
 use crate::table_sort::TableSort;
 use crate::test_support::{painted_text_rects, painted_texts, run_frame_headless};
 
+mod pictures;
+
 /// How many points the fixture holds.
 const POINTS: usize = 40;
 

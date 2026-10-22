@@ -13,9 +13,12 @@
 //! millions of points, so the row list is computed again only when its inputs
 //! change (the query, the document serial or the columns the cache holds),
 //! never once per frame, and only the visible rows are drawn
-//! (`ScrollArea::show_rows`).
+//! (`ScrollArea::show_rows`). The picture columns ([`pictures`]) are pinned
+//! beside the Point column, set the row height, and make a picture only for a
+//! row on screen.
 
 pub(crate) mod job;
+mod pictures;
 
 #[cfg(test)]
 mod tests;
@@ -30,6 +33,10 @@ use crate::document::VersionSerial;
 use crate::scene::{PointRef, ReconId, SceneNode};
 use crate::state::AppState;
 use crate::table_sort::{paint_sort_triangle, SortRule, TableSort, SORT_TRIANGLE_HALF_WIDTH};
+use pictures::{
+    hover_size, paint_picture, CellPicture, PictureColumn, PictureKey, PictureTextures,
+    DEFAULT_PICTURE_SIZE, MAX_PICTURE_SIZE, MIN_PICTURE_SIZE, PICTURE_PAD,
+};
 
 /// How many columns the track table has.
 const COLUMN_COUNT: usize = TrackTableColumn::ALL.len();
@@ -211,6 +218,9 @@ struct TrackTableQuery {
     /// The value columns shown, in [`TrackTableColumn::ALL`] order. The Point
     /// column is always shown.
     shown: Vec<TrackTableColumn>,
+    /// The picture columns shown, in [`PictureColumn::ALL`] order. Every one
+    /// is shown by default, for a reconstruction that can supply it.
+    pictures: Vec<PictureColumn>,
     /// Whether only the points the selected image observes are kept.
     seen_in_selected_image: bool,
     /// Whether Repeat obs. has been ticked or unticked in the Columns menu.
@@ -226,6 +236,7 @@ impl Default for TrackTableQuery {
             bounds: std::array::from_fn(|_| BoundText::default()),
             sort: None,
             shown: DEFAULT_COLUMNS.to_vec(),
+            pictures: PictureColumn::ALL.to_vec(),
             seen_in_selected_image: false,
             repeat_observations_chosen: false,
         }
@@ -293,6 +304,24 @@ impl TrackTableQuery {
         } else if !self.holds(column) {
             self.shown.retain(|&c| c != column);
         }
+    }
+
+    /// Show or hide the picture column `column`.
+    fn set_picture_shown(&mut self, column: PictureColumn, shown: bool) {
+        self.pictures.retain(|&c| c != column);
+        if shown {
+            self.pictures.push(column);
+            self.pictures.sort();
+        }
+    }
+
+    /// The picture columns drawn for `edited`: the shown ones it can supply.
+    fn visible_pictures(&self, edited: &EditedReconstruction) -> Vec<PictureColumn> {
+        self.pictures
+            .iter()
+            .copied()
+            .filter(|c| c.is_available(edited))
+            .collect()
     }
 
     /// The order a click on `column`'s heading leaves, by the rule the
@@ -393,14 +422,35 @@ struct Unapplied {
     pending: Vec<TrackTableColumn>,
 }
 
-/// The Track Table panel's state: its query, the row list, and what it
-/// remembers of the last frame to keep the selection and the hover in step.
+/// The picture size the *Size* slider sets, in points: the side of each
+/// picture, and with [`PICTURE_PAD`] above and below, the row height while a
+/// picture column is shown. Panel state like the query, and not saved.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct PictureSize(f32);
+
+impl Default for PictureSize {
+    fn default() -> Self {
+        Self(DEFAULT_PICTURE_SIZE)
+    }
+}
+
+/// The Track Table panel's state: its query, the row list, the picture size
+/// and the pictures drawn, and what it remembers of the last frame to keep the
+/// selection, the hover and the scroll position in step.
 #[derive(Debug, Default)]
 pub(crate) struct TrackTablePanel {
     /// The query, which is panel state.
     query: TrackTableQuery,
     /// The rows that pass it, kept between frames.
     rows: RowList,
+    /// The picture size the header's *Size* slider sets.
+    picture_size: PictureSize,
+    /// The textures of the pictures drawn, kept between frames.
+    pictures: PictureTextures,
+    /// The row height and the vertical scroll offset of the last frame's
+    /// rows, so that a new row height (the *Size* slider, or a picture column
+    /// shown or hidden) keeps the same rows at the top.
+    scroll: Option<(f32, f32)>,
     /// The selected point as of the last frame, so that a selection made
     /// elsewhere scrolls its row into view once.
     seen_selection: Option<PointRef>,
@@ -410,6 +460,10 @@ pub(crate) struct TrackTablePanel {
     /// The rows the last frame drew, each with its rectangle.
     #[cfg(test)]
     drawn: Vec<(u32, egui::Rect)>,
+    /// The picture cells the last frame drew: the row's point, the column
+    /// and what the cell drew.
+    #[cfg(test)]
+    drawn_pictures: Vec<(u32, PictureColumn, CellPicture)>,
 }
 
 /// What the panel's frame asked the state for, applied once the node it drew
@@ -423,6 +477,9 @@ struct Asked {
     /// The rows drawn, each with its rectangle, for a test to click.
     #[cfg(test)]
     drawn: Vec<(u32, egui::Rect)>,
+    /// The picture cells drawn, for a test to read.
+    #[cfg(test)]
+    pictures: Vec<(u32, PictureColumn, CellPicture)>,
 }
 
 impl TrackTablePanel {
@@ -530,6 +587,7 @@ impl TrackTablePanel {
         #[cfg(test)]
         {
             self.drawn = std::mem::take(&mut asked.drawn);
+            self.drawn_pictures = std::mem::take(&mut asked.pictures);
         }
         if let Some(point) = asked.select {
             self.seen_selection = Some(point);
@@ -601,7 +659,13 @@ impl TrackTablePanel {
             return asked;
         }
 
-        let layout = ColumnLayout::new(ui, &self.query.visible(self.rows.repeats > 0), edited);
+        let layout = ColumnLayout::new(
+            ui,
+            &self.query.visible_pictures(edited),
+            &self.query.visible(self.rows.repeats > 0),
+            edited,
+            self.picture_size.0,
+        );
         let selected = state.selected_point.filter(|p| p.recon == id);
         // A selection made elsewhere scrolls its row into view; otherwise a
         // new sort, new bounds or another reconstruction starts at the top,
@@ -636,13 +700,23 @@ impl TrackTablePanel {
                 node,
                 table,
                 rows: &self.rows.rows,
+                document: self
+                    .rows
+                    .inputs
+                    .as_ref()
+                    .expect("rows on show were computed")
+                    .document,
                 layout: &layout,
                 selected,
                 hovered,
                 stale,
             };
-            let (over, rows_left) = rows.show(ui, scroll_to, &mut asked);
-            left = rows_left;
+            self.pictures.begin_frame();
+            let shown = rows.show(ui, scroll_to, self.scroll, &mut self.pictures, &mut asked);
+            self.pictures.end_frame();
+            self.scroll = Some(shown.scroll);
+            left = shown.left;
+            let over = shown.over;
             if over {
                 self.had_pointer = true;
             } else if std::mem::take(&mut self.had_pointer) {
@@ -712,6 +786,19 @@ impl TrackTablePanel {
                         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside),
                 )
                 .ui(ui, |ui| {
+                    // The picture columns first, as they are drawn.
+                    for column in PictureColumn::ALL {
+                        if !column.is_available(edited) {
+                            continue;
+                        }
+                        let mut shown = query.pictures.contains(&column);
+                        let response = ui
+                            .checkbox(&mut shown, column.title())
+                            .on_hover_text(column.description());
+                        if response.changed() {
+                            query.set_picture_shown(column, shown);
+                        }
+                    }
                     for column in TrackTableColumn::ALL {
                         if !offered(column, edited) {
                             continue;
@@ -734,6 +821,30 @@ impl TrackTablePanel {
                         }
                     }
                 });
+            // The picture size, for a reconstruction with a picture column;
+            // greyed while none is shown, since the rows are then text.
+            if PictureColumn::ALL.iter().any(|c| c.is_available(edited)) {
+                let pictures_shown = !query.visible_pictures(edited).is_empty();
+                ui.add_enabled_ui(pictures_shown, |ui| {
+                    let label = ui.label("Size");
+                    let size = &mut self.picture_size.0;
+                    ui.add(
+                        egui::Slider::new(size, MIN_PICTURE_SIZE..=MAX_PICTURE_SIZE)
+                            .step_by(1.0)
+                            .fixed_decimals(0)
+                            .suffix(" pt"),
+                    )
+                    .labelled_by(label.id)
+                    .on_hover_text(
+                        "The size of the pictures, which sets the height of the rows. The rows \
+                         at the top stay there when it changes.",
+                    )
+                    .on_disabled_hover_text(
+                        "The size of the pictures. No picture column is shown, so the rows are \
+                         a line of text high.",
+                    );
+                });
+            }
             let image_name = selected_image.and_then(|index| {
                 node.recon()
                     .image_set
@@ -761,7 +872,8 @@ impl TrackTablePanel {
     }
 
     /// The heading row: a click on a value column's heading orders the rows
-    /// by it, and a click on *Point* puts them back in point order.
+    /// by it, and a click on *Point* puts them back in point order. A picture
+    /// column's heading takes no click, since its pictures have no order.
     fn show_headings(
         &mut self,
         ui: &mut egui::Ui,
@@ -770,18 +882,37 @@ impl TrackTablePanel {
         layout: &ColumnLayout,
     ) {
         let pinned_ui = &mut band_ui(ui, band);
-        let scrolled_ui = &mut band_ui(ui, scrolled_part(band));
+        let scrolled_ui = &mut band_ui(ui, scrolled_part(band, layout.pinned_width));
         let height = band.height();
         let font = egui::TextStyle::Body.resolve(pinned_ui.style());
         for &(slot, x, width) in &layout.slots {
             let (ui, cell_left) = match slot {
-                Slot::Point => (&mut *pinned_ui, band.left()),
+                Slot::Point | Slot::Picture(_) => (&mut *pinned_ui, band.left() + x),
                 Slot::Value(_) => (&mut *scrolled_ui, left + x),
             };
             let cell = egui::Rect::from_min_size(
                 egui::pos2(cell_left, band.min.y),
                 egui::vec2(width, height),
             );
+            if let Slot::Picture(picture) = slot {
+                ui.painter().text(
+                    egui::pos2(cell.min.x + CELL_PAD, cell.center().y),
+                    egui::Align2::LEFT_CENTER,
+                    picture.title(),
+                    font.clone(),
+                    ui.visuals().text_color(),
+                );
+                let response = ui.interact(
+                    cell,
+                    ui.id().with(("track_table_heading", slot)),
+                    egui::Sense::hover(),
+                );
+                response.widget_info(|| {
+                    egui::WidgetInfo::labeled(egui::WidgetType::Label, true, picture.title())
+                });
+                response.on_hover_text(picture.description());
+                continue;
+            }
             let response = ui.interact(
                 cell,
                 ui.id().with(("track_table_heading", slot)),
@@ -793,8 +924,8 @@ impl TrackTablePanel {
                 ui.visuals().text_color()
             };
             let (title, column) = match slot {
-                Slot::Point => ("Point", None),
                 Slot::Value(column) => (column_title(column), Some(column)),
+                _ => ("Point", None),
             };
             let word = ui.painter().text(
                 egui::pos2(cell.min.x + CELL_PAD, cell.center().y),
@@ -864,9 +995,9 @@ impl TrackTablePanel {
         left: f32,
         layout: &ColumnLayout,
     ) {
-        // The Point column has no boxes, and the value columns' boxes pass
-        // under it, as their cells do.
-        let ui = &mut band_ui(ui, scrolled_part(band));
+        // The pinned columns have no boxes, and the value columns' boxes pass
+        // under them, as their cells do.
+        let ui = &mut band_ui(ui, scrolled_part(band, layout.pinned_width));
         let height = band.height();
         let rect = egui::Rect::from_min_size(
             egui::pos2(left, band.min.y),
@@ -939,11 +1070,11 @@ fn band_ui(ui: &mut egui::Ui, band: egui::Rect) -> egui::Ui {
     child
 }
 
-/// The part of `band` right of the pinned Point column, where the value
-/// columns scroll sideways.
-fn scrolled_part(band: egui::Rect) -> egui::Rect {
+/// The part of `band` right of the pinned columns, `pinned_width` wide,
+/// where the value columns scroll sideways.
+fn scrolled_part(band: egui::Rect, pinned_width: f32) -> egui::Rect {
     let mut part = band;
-    part.min.x = (band.min.x + POINT_WIDTH).min(band.max.x);
+    part.min.x = (band.min.x + pinned_width).min(band.max.x);
     part
 }
 
@@ -1018,51 +1149,91 @@ fn show_unapplied(ui: &mut egui::Ui, node: &SceneNode, unapplied: &Unapplied) {
 
 /// One column the table draws.
 ///
-/// The Point column and the value columns are text. The picture columns of
-/// the draft are further kinds of slot, and the row height then follows the
-/// pictures rather than the text.
+/// The Point column and the value columns are text; a picture column draws a
+/// picture per row, and while one is shown the row height follows the
+/// picture size rather than the text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum Slot {
     /// The point index, the row's key.
     Point,
+    /// A picture column, pinned beside the Point column.
+    Picture(PictureColumn),
     /// One track table column.
     Value(TrackTableColumn),
 }
 
 /// The columns drawn, left to right, each with its left edge and its width
-/// from the table's left edge.
+/// from the table's left edge, and the height of every row.
 struct ColumnLayout {
     slots: Vec<(Slot, f32, f32)>,
     width: f32,
+    /// The width of the pinned columns: the Point column and the picture
+    /// columns, which stay at the panel's left edge while the value columns
+    /// scroll sideways under them.
+    pinned_width: f32,
+    /// The side of each picture.
+    picture_size: f32,
+    /// Every row's height: the picture size and [`PICTURE_PAD`] above and
+    /// below while a picture column is shown, and a line of text while none
+    /// is.
+    row_height: f32,
 }
 
 impl ColumnLayout {
-    /// The Point column, then each shown column `edited` can supply, each
-    /// wide enough for its heading, its sort triangle and its two bound boxes.
-    fn new(ui: &egui::Ui, shown: &[TrackTableColumn], edited: &EditedReconstruction) -> Self {
+    /// The Point column, then each picture column of `pictures` at
+    /// `picture_size`, then each shown column `edited` can supply, each value
+    /// column wide enough for its heading, its sort triangle and its two bound
+    /// boxes.
+    fn new(
+        ui: &egui::Ui,
+        pictures: &[PictureColumn],
+        shown: &[TrackTableColumn],
+        edited: &EditedReconstruction,
+        picture_size: f32,
+    ) -> Self {
         let font = egui::TextStyle::Body.resolve(ui.style());
+        let title_width = |title: &str| {
+            ui.painter()
+                .layout_no_wrap(title.to_string(), font.clone(), egui::Color32::WHITE)
+                .size()
+                .x
+        };
         let mut slots = vec![(Slot::Point, 0.0, POINT_WIDTH)];
         let mut x = POINT_WIDTH;
+        for &picture in pictures {
+            let width = (picture_size.max(title_width(picture.title())) + 2.0 * CELL_PAD).round();
+            slots.push((Slot::Picture(picture), x, width));
+            x += width;
+        }
+        let pinned_width = x;
         for &column in shown {
             if !offered(column, edited) {
                 continue;
             }
-            let title = ui
-                .painter()
-                .layout_no_wrap(
-                    column_title(column).to_string(),
-                    font.clone(),
-                    egui::Color32::WHITE,
-                )
-                .size()
-                .x;
+            let title = title_width(column_title(column));
             let width =
                 (title + 2.0 * CELL_PAD + 4.0 * SORT_TRIANGLE_HALF_WIDTH).max(MIN_VALUE_WIDTH);
             slots.push((Slot::Value(column), x, width));
             x += width;
         }
-        Self { slots, width: x }
+        let row_height = if pictures.is_empty() {
+            text_row_height(ui)
+        } else {
+            picture_size + 2.0 * PICTURE_PAD
+        };
+        Self {
+            slots,
+            width: x,
+            pinned_width,
+            picture_size,
+            row_height,
+        }
     }
+}
+
+/// The row height while no picture column is shown: a line of text.
+fn text_row_height(ui: &egui::Ui) -> f32 {
+    ui.text_style_height(&egui::TextStyle::Body) + 6.0
 }
 
 /// The rows, as one frame draws them.
@@ -1070,29 +1241,53 @@ struct RowsView<'a> {
     node: &'a SceneNode,
     table: &'a TrackTable,
     rows: &'a [u32],
+    /// The document serial of the version the rows belong to, which names
+    /// their pictures: the node's serial at its cursor while the rows are up
+    /// to date, the version before an edit while they are not.
+    document: VersionSerial,
     layout: &'a ColumnLayout,
     selected: Option<PointRef>,
     hovered: Option<PointRef>,
     /// Whether the rows are of a version the node has left, kept on show
     /// while the new version's table is computed. Such rows are dimmed and
     /// take no click and no hover: one may name a point the new version
-    /// deleted.
+    /// deleted. Their pictures are the ones already drawn for that version,
+    /// dimmed; none is made for them.
     stale: bool,
 }
 
-impl RowsView<'_> {
-    /// The row height while no picture column is shown: a line of text.
-    fn row_height(ui: &egui::Ui) -> f32 {
-        ui.text_style_height(&egui::TextStyle::Body) + 6.0
-    }
+/// What drawing the rows answers.
+struct RowsShown {
+    /// Whether the pointer is over the rows.
+    over: bool,
+    /// The left edge the rows were drawn from, which the headings follow.
+    left: f32,
+    /// The row height and the vertical scroll offset the rows were drawn at.
+    scroll: (f32, f32),
+}
 
-    /// Draw the visible rows, scrolling row `scroll_to` into view, and answer
-    /// whether the pointer is over the rows and the left edge the rows were
-    /// drawn from, which the headings follow. A click and a hover go into
-    /// `asked`. The Point cells are drawn at the viewport's left edge rather
-    /// than the rows', so they stay there while the rest scrolls sideways.
-    fn show(&self, ui: &mut egui::Ui, scroll_to: Option<usize>, asked: &mut Asked) -> (bool, f32) {
-        let row_height = Self::row_height(ui);
+/// One picture cell a row drew: its column, its rectangle and its picture.
+type DrawnPicture = (PictureColumn, egui::Rect, CellPicture);
+
+impl RowsView<'_> {
+    /// Draw the visible rows, scrolling row `scroll_to` into view. With no
+    /// row to scroll to and a row height other than the last frame's
+    /// (`last_scroll`, the height and offset it was drawn at), the offset is
+    /// scaled to the new height, so the same rows stay at the top. A click
+    /// and a hover go into `asked`. The pinned cells are drawn at the
+    /// viewport's left edge rather than the rows', so they stay there while
+    /// the rest scrolls sideways. The pictures of the drawn rows come from
+    /// `pictures`, which makes the ones it lacks for rows that are up to
+    /// date.
+    fn show(
+        &self,
+        ui: &mut egui::Ui,
+        scroll_to: Option<usize>,
+        last_scroll: Option<(f32, f32)>,
+        pictures: &mut PictureTextures,
+        asked: &mut Asked,
+    ) -> RowsShown {
+        let row_height = self.layout.row_height;
         // Rows touch: the selection and hover fills meet, and row `k` starts at
         // exactly `k` row heights, which is what the scroll below aims at.
         ui.spacing_mut().item_spacing.y = 0.0;
@@ -1103,6 +1298,10 @@ impl RowsView<'_> {
         if let Some(row) = scroll_to {
             let centred = row as f32 * row_height - 0.5 * ui.available_height() + row_height;
             area = area.vertical_scroll_offset(centred.max(0.0));
+        } else if let Some((last_height, last_offset)) =
+            last_scroll.filter(|&(height, _)| height != row_height && height > 0.0)
+        {
+            area = area.vertical_scroll_offset(last_offset / last_height * row_height);
         }
         let pinned_left = ui.available_rect_before_wrap().left();
         let mut drawn_left = pinned_left;
@@ -1118,8 +1317,8 @@ impl RowsView<'_> {
                     egui::pos2(left, top + k as f32 * row_height),
                     egui::vec2(self.layout.width, row_height),
                 );
-                // The whole row, the pinned Point cell with it: the cell lies
-                // inside the row's rectangle wherever it is scrolled to.
+                // The whole row, the pinned cells with it: they lie inside the
+                // row's rectangle wherever it is scrolled to.
                 let sense = if self.stale {
                     egui::Sense::hover()
                 } else {
@@ -1131,7 +1330,7 @@ impl RowsView<'_> {
                     point,
                 };
                 let selected = self.selected == Some(reference);
-                self.paint_row(ui, rect, pinned_left, position, reference);
+                let cells = self.paint_row(ui, rect, pinned_left, position, reference, pictures);
                 response.widget_info(|| {
                     egui::WidgetInfo::selected(
                         egui::WidgetType::SelectableLabel,
@@ -1141,7 +1340,14 @@ impl RowsView<'_> {
                     )
                 });
                 #[cfg(test)]
-                asked.drawn.push((point, rect));
+                {
+                    asked.drawn.push((point, rect));
+                    asked.pictures.extend(
+                        cells
+                            .iter()
+                            .map(|&(column, _, picture)| (point, column, picture)),
+                    );
+                }
                 if response.clicked() {
                     asked.select = Some(reference);
                 }
@@ -1149,10 +1355,22 @@ impl RowsView<'_> {
                     hovered_row = Some(reference);
                     // Minted for the row under the pointer only: an id walks
                     // the node's version graph.
-                    response.on_hover_text_at_pointer(format!(
-                        "{}. Click to select it.",
-                        crate::scene::point_id(self.node, point as usize)
-                    ));
+                    let id = crate::scene::point_id(self.node, point as usize);
+                    let under = ui
+                        .ctx()
+                        .pointer_hover_pos()
+                        .and_then(|at| cells.iter().find(|(_, cell, _)| cell.contains(at)));
+                    match under {
+                        Some(&(column, _, picture)) => {
+                            let size = hover_size(self.layout.picture_size);
+                            response.on_hover_ui_at_pointer(|ui| {
+                                show_picture_hover(ui, column, picture, size, &id);
+                            });
+                        }
+                        None => {
+                            response.on_hover_text_at_pointer(format!("{id}. Click to select it."));
+                        }
+                    }
                 }
             }
             hovered_row
@@ -1169,12 +1387,17 @@ impl RowsView<'_> {
         if over {
             asked.hover = Some(output.inner);
         }
-        (over, drawn_left)
+        RowsShown {
+            over,
+            left: drawn_left,
+            scroll: (row_height, output.state.offset.y),
+        }
     }
 
-    /// Paint one row: its fill, then each cell's text. The Point cell is at
-    /// `pinned_left`, the viewport's left edge, and the value cells are
-    /// clipped to the right of it.
+    /// Paint one row: its fill, then each cell. The pinned cells, the Point
+    /// cell and the pictures, are at `pinned_left`, the viewport's left edge,
+    /// and the value cells are clipped to the right of them. Answers each
+    /// picture cell drawn.
     fn paint_row(
         &self,
         ui: &egui::Ui,
@@ -1182,7 +1405,8 @@ impl RowsView<'_> {
         pinned_left: f32,
         position: usize,
         reference: PointRef,
-    ) {
+        pictures: &mut PictureTextures,
+    ) -> Vec<DrawnPicture> {
         let point = reference.point;
         let selected = self.selected == Some(reference);
         let hovered = self.hovered == Some(reference);
@@ -1219,8 +1443,12 @@ impl RowsView<'_> {
             .expect("a matched point is a row of the table it was matched in");
         let clip = ui.clip_rect();
         let mut scrolled_clip = clip;
-        scrolled_clip.min.x = scrolled_clip.min.x.max(pinned_left + POINT_WIDTH);
+        scrolled_clip.min.x = scrolled_clip
+            .min
+            .x
+            .max(pinned_left + self.layout.pinned_width);
         let scrolled = ui.painter().with_clip_rect(scrolled_clip);
+        let mut cells = Vec::new();
         for &(slot, x, width) in &self.layout.slots {
             match slot {
                 Slot::Point => {
@@ -1231,6 +1459,28 @@ impl RowsView<'_> {
                         font.clone(),
                         color,
                     );
+                }
+                Slot::Picture(column) => {
+                    let cell = egui::Rect::from_min_size(
+                        egui::pos2(pinned_left + x, rect.min.y),
+                        egui::vec2(width, rect.height()),
+                    );
+                    let key = PictureKey {
+                        column,
+                        node: self.node.id,
+                        point,
+                        document: self.document,
+                    };
+                    // Made only for a row of the version on show: a row of the
+                    // version before an edit may name a point the edit deleted
+                    // or changed, so it draws only what was drawn for it.
+                    let edited = self.node.edited();
+                    let make = || column.image(edited, point);
+                    let make: Option<&dyn Fn() -> Option<egui::ColorImage>> =
+                        (!self.stale).then_some(&make);
+                    let picture = pictures.picture(ui.ctx(), key, make);
+                    paint_picture(ui, cell, self.layout.picture_size, picture, self.stale);
+                    cells.push((column, cell, picture));
                 }
                 Slot::Value(column) => {
                     scrolled.text(
@@ -1243,7 +1493,29 @@ impl RowsView<'_> {
                 }
             }
         }
+        cells
     }
+}
+
+/// A picture cell's hover view: the picture at `size` points, with what it
+/// is and the point's portable id `id` under it.
+fn show_picture_hover(
+    ui: &mut egui::Ui,
+    column: PictureColumn,
+    picture: CellPicture,
+    size: f32,
+    id: &str,
+) {
+    ui.set_max_width(size.max(240.0));
+    let text = match (column, picture) {
+        (PictureColumn::Patch, CellPicture::Texture(texture)) => {
+            ui.add(egui::Image::new((texture, egui::vec2(size, size))));
+            crate::patch_pictures::STORED_PATCH_HOVER
+        }
+        (PictureColumn::Patch, _) => crate::patch_pictures::NO_STORED_PATCH_HOVER,
+    };
+    ui.label(format!("{text}."));
+    ui.label(format!("{id}. Click to select it."));
 }
 
 /// One cell's text: `…` for a column the cache does not hold yet, `-` for a
