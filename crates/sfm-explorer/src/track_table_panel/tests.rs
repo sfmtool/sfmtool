@@ -343,6 +343,109 @@ fn the_job_runs_on_a_node_a_slow_task_holds() {
     state.finish_background_tasks();
 }
 
+/// A locking task queued on the job's node in the other queue does not ask
+/// the running job to stop: the job does not wait for its node, so it gives
+/// way only in its own queue.
+#[test]
+fn a_slow_task_queued_on_its_node_leaves_the_running_job_alone() {
+    let (mut state, id) = state();
+    let (open_job, hold_job) = mpsc::channel();
+    state.track_table_jobs.hold_next = Some(hold_job);
+    state.want_track_table_columns(id);
+    state.drive_track_table_columns();
+    let task = state.track_table_jobs.queued_task().expect("queued");
+    assert!(
+        state.quiet_task_running(task),
+        "an idle fast queue starts it"
+    );
+
+    let (open_slow, hold_slow) = mpsc::channel::<()>();
+    state
+        .start_background_task(
+            Operation::BUNDLE_ADJUST,
+            id,
+            Box::new(move |_progress: &Progress<'_>| {
+                let _ = hold_slow.recv();
+                Finished::Failed("held for the test".to_string())
+            }),
+        )
+        .expect("the slow queue is idle");
+    assert!(state.busy_refusal(id).is_some(), "the node is locked");
+    assert!(
+        !state.quiet_task_cancelled(task),
+        "a locking task in the slow queue asked the table job to stop"
+    );
+
+    open_job.send(()).expect("the job waits at its gate");
+    state.wait_for_track_table_job();
+    assert!(
+        state.track_table(id).is_some(),
+        "the job finished beside the slow task"
+    );
+    open_slow.send(()).expect("the slow task waits at its gate");
+    state.finish_background_tasks();
+}
+
+/// *Find points* queued in the fast queue while the job runs asks it to stop,
+/// starts once it has, and the job is queued again behind it.
+#[test]
+fn find_points_queued_while_the_job_runs_cancels_it_and_it_runs_again_behind() {
+    let (mut state, id) = state();
+    let (open_job, hold_job) = mpsc::channel();
+    state.track_table_jobs.hold_next = Some(hold_job);
+    state.want_track_table_columns(id);
+    state.drive_track_table_columns();
+    let task = state.track_table_jobs.queued_task().expect("queued");
+    assert!(state.quiet_task_running(task));
+
+    let find = state
+        .start_find_points(
+            id,
+            vec![TrackTableColumn::MaxRayAngleDeg],
+            TrackTableQueryOptions::default(),
+        )
+        .expect("a read");
+    assert!(
+        state.quiet_task_cancelled(task),
+        "an asked-for task in the fast queue asks the job to stop"
+    );
+    assert!(
+        state.waiting_task(find).is_some(),
+        "Find points waits for it"
+    );
+
+    // The cancelled job computes nothing and leaves the queue, and Find
+    // points starts in its place.
+    open_job.send(()).expect("the job waits at its gate");
+    state.wait_for_track_table_job();
+    assert!(
+        state.track_table(id).is_none(),
+        "the cancelled job merged nothing"
+    );
+    assert!(
+        state.running_task(find).is_some(),
+        "Find points runs once the job has stopped"
+    );
+
+    // The driver queues the job again, behind Find points.
+    state.drive_track_table_columns();
+    let again = state.track_table_jobs.queued_task().expect("queued again");
+    assert_ne!(again, task);
+    assert!(
+        !state.quiet_task_running(again),
+        "the job waits behind Find points"
+    );
+
+    state.settle_track_table_columns();
+    let table = state.track_table(id).expect("both landed");
+    assert!(table.has(TrackTableColumn::MaxRayAngleDeg));
+    assert!(table.has(TrackTableColumn::RmsErrorPx));
+    assert!(matches!(
+        state.task(find),
+        Some(crate::background::TaskState::Finished(_))
+    ));
+}
+
 /// Holding the declaration `cancellable: true` to its claim: the kernel the
 /// job runs stops when its flag is set.
 #[test]
