@@ -365,7 +365,11 @@ for it, since the same rule on the same keypoints and photographs would pick
 nothing again (`rule_found_no_reference`). The mark is the pair itself, carried
 in lockstep with the point by every pass that keeps, drops or reorders points,
 as the bitmaps and references are, so it holds for the version an edit makes
-as well as for the open's. Every other point at `-1` is queued for a pick:
+as well as for the open's. One other point carries the same pair and so says
+*no reference* without a pick: a point whose reference photograph was not to
+hand when its bitmap was rendered, which keeps its reference beside a zero row
+(`render_patch_cloud_bitmaps`), and which then loses that reference through an
+edit. Every other point at `-1` is queued for a pick:
 
 - **A point that lost its reference through an edit**, such as deleting the
   image its reference observation was in, keeps the bitmap rendered from that

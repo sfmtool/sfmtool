@@ -1829,8 +1829,11 @@ impl RowsView<'_> {
 /// Read off the point's own row, so it travels with the point through every
 /// edit as its bitmap and reference do: every writer that runs the rule (the
 /// open's display render, Convert to Embedded Patches, `--add-patch-bitmaps`)
-/// writes a zero bitmap row and `-1` where the rule picks none, and nothing
-/// else writes that pair. A point that lost its reference through an edit,
+/// writes a zero bitmap row and `-1` where the rule picks none. One other
+/// point reads the same and is not picked: one whose reference photograph was
+/// not to hand when its bitmap was rendered, so it kept its reference beside a
+/// zero row, and which then lost that reference through an edit. Any other
+/// point that lost its reference through an edit,
 /// such as deleting the image it was in, keeps the bitmap rendered from it, so
 /// it is not read as rejected and is picked again; so is a point of an older
 /// file whose bitmap is a mean of its views.
