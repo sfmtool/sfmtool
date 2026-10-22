@@ -25,9 +25,9 @@ pub(crate) trait SortRule: Copy + Eq {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct TableSort<C> {
     /// The column the rows are ordered by.
-    pub column: C,
+    pub(crate) column: C,
     /// Whether the order is decreasing rather than increasing.
-    pub descending: bool,
+    pub(crate) descending: bool,
 }
 
 impl<C: SortRule> TableSort<C> {

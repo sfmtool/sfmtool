@@ -92,7 +92,7 @@ Panels menu opens it.
   | Error (px) | `rms_error_px` | three significant digits, at most three decimals |
   | ∞ | `at_infinity` | `∞` for a point at infinity, empty for a finite one |
   | X, Y, Z | `x`, `y`, `z` | four significant digits, every whole digit kept, at most three decimals |
-  | Distance | `centroid_distance` | as X |
+  | Distance | `centroid_distance` | three significant digits, at most three decimals |
   | Normal conf. | `normal_confidence` | a whole number, 0 to 255 |
   | Lowest ZNCC | `lowest_zncc` | two decimals |
   | Self-sim. radius | `largest_zncc_self_similarity_radius` | three significant digits, at most three decimals |
@@ -160,7 +160,7 @@ Panels menu opens it.
   scroll it.
 - **Hovering a row** sets `hovered_point`, as the Scene tree and Image Detail
   hovers do, so the 3D viewer and Image Browser highlight it. The hover text
-  is the point's portable id, `pt3d_<hash>_<index>`. While the pointer is over
+  names the point's portable id, `pt3d_<hash>_<index>`. While the pointer is over
   the rows the panel owns the hover, and over no row it clears it; leaving the
   rows clears it once, so a hover set by another panel is left alone. A row
   another panel hovers is drawn with the hover fill, its text in the strong
@@ -187,7 +187,7 @@ columns* (`Operation::TRACK_TABLE_COLUMNS`;
 - **It starts when the panel is drawn.** Each frame the panel draws, it names
   the node it shows (`AppState::want_track_table_columns`), and the frame
   clears that before the dock draws (`AppState::hide_track_table`), as Track
-  View does for the viewed track. Once per frame, before the MCP drain and again
+  View does for the viewed track. Twice per frame, before the MCP drain and again
   after the egui pass, `AppState::drive_track_table_columns` queues the job
   when the cache lacks a stored column that node can supply. A hidden panel
   costs nothing.

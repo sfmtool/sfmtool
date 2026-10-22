@@ -218,11 +218,11 @@ and active tab of that leaf with Camera Intrinsics behind it, so the stock grid
 is
 
 ```
-+--------+-------------------------+----------------------------------+
-| Scene  |[3D Viewer][Image Detail]| [Track View][Camera Intrinsics]  |
-+--------+-------------------------+----------------------------------+
-|Backgr. |[Image Browser][Action Log][Edit History]                   |
-+--------+------------------------------------------------------------+
++--------+--------------------------------------+---------------------------------+
+| Scene  |[3D Viewer][Image Detail][Track Table]| [Track View][Camera Intrinsics] |
++--------+--------------------------------------+---------------------------------+
+|Backgr. |[Image Browser][Action Log][Edit History]                                |
++--------+-------------------------------------------------------------------------+
 ```
 
 and the group the layout's placement rules call home is
@@ -235,9 +235,10 @@ ticked in the Panels menu, and saved in the layout file.
 **A saved layout that names `point_track` or `track_edit` is refused whole.**
 Those are unknown panel names like any other, and the refusal is the ordinary
 one from [`panel-layout.md`](panel-layout.md) § "Validation", prefixed with the
-path to the leaf and listing the nine names that exist: `unknown panel
+path to the leaf and listing the ten names that exist: `unknown panel
 "point_track"; the panels are scene, background_tasks, viewer_3d, image_browser,
-image_detail, track_view, camera_intrinsics, action_log, edit_history`. The
+image_detail, track_view, camera_intrinsics, action_log, edit_history,
+track_table`. The
 reader carries no alias for either, and the at-most-once rule applies to
 `track_view` as to every other name. Reset Layout is the way back, and saving the
 layout afterwards writes a file the viewer reads.

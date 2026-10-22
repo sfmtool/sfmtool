@@ -187,7 +187,8 @@ const GROUPS: [&[Tab]; 4] = [
 ];
 
 impl Tab {
-    /// Every panel, in default-layout order — which is the Panels menu's order.
+    /// Every panel, in the Panels menu's order: the default layout's order for
+    /// the first nine, then the Track Table, the tenth panel, last.
     pub(crate) const ALL: [Tab; 10] = [
         Tab::SceneGraph,
         Tab::BackgroundTasks,

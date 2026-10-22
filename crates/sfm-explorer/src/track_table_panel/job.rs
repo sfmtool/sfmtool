@@ -15,8 +15,8 @@
 //!   document serial at that node's cursor. The panel says which node it shows
 //!   each time it draws ([`AppState::want_track_table_columns`]), and the frame
 //!   clears that before the dock draws ([`AppState::hide_track_table`]), so a
-//!   hidden panel asks for nothing. Once per frame
-//!   [`AppState::drive_track_table_columns`] queues a job when the track table
+//!   hidden panel asks for nothing. Twice per frame, before the MCP drain and
+//!   after the egui pass, [`AppState::drive_track_table_columns`] queues a job when the track table
 //!   cache lacks a stored column the node can supply.
 //! - **One job is queued at a time.** A job runs [`TrackTable::compute`] for
 //!   the missing columns of the value at the cursor when it was queued, and
@@ -160,7 +160,8 @@ impl AppState {
     /// Take what the queued job has computed, and queue or stop one so that
     /// the job queued is for the node the panel shows, at its cursor.
     ///
-    /// Called once per frame. Returns whether anything changed that the next
+    /// Called twice per frame, before the MCP drain and after the egui pass.
+    /// Returns whether anything changed that the next
     /// frame has to draw.
     pub(crate) fn drive_track_table_columns(&mut self) -> bool {
         let mut changed = self.poll_track_table_job();

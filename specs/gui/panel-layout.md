@@ -684,7 +684,7 @@ pub(crate) enum Home { Root, Edge { edge: egui_dock::Split, share: f32 } }
 /// `serde`-derived: the file never passes through a `Deserialize`, and these
 /// two functions are also what the MCP tools spell panels with.
 impl Tab {
-    pub(crate) const ALL: [Tab; 9];           // default-layout order, the menu's order
+    pub(crate) const ALL: [Tab; 10];          // the menu's order, the Track Table last
     pub(crate) fn wire_name(self) -> &'static str;
     pub(crate) fn from_wire_name(name: &str) -> Option<Tab>;
     /// All of them, comma-joined, as the unknown-panel message lists them.

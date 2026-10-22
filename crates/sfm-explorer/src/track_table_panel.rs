@@ -1139,7 +1139,7 @@ fn cell_text(table: &TrackTable, column: TrackTableColumn, row: usize) -> String
     }
 }
 
-/// A position or a distance: four significant digits, with at most three
+/// A position: four significant digits, with at most three
 /// decimals and every whole digit kept.
 fn position_text(v: f64) -> String {
     if v.is_nan() {
