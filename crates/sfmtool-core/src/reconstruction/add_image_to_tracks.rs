@@ -550,9 +550,11 @@ impl From<Cancelled> for AddImageToTracksError {
 /// the numbers it was judged on (see [`CandidateReport`]). The accepted
 /// observations are written with their keypoint and, where the value has the
 /// column, their ZNCC in `observation_confidence` on the bench commit's byte
-/// scale, raised to `1` because `0` means unmeasured. Nothing else changes:
-/// every point keeps its index, position, frame, bitmap, colour, constraint and
-/// stored error, and every existing observation is untouched.
+/// scale, raised to `1` because `0` means unmeasured. A point that gains an
+/// observation has its RMS reprojection error computed again over its whole
+/// track, the new keypoint included. Nothing else changes: every point keeps
+/// its index, position, frame, bitmap, colour and constraint, and every
+/// existing observation is untouched.
 ///
 /// `progress` names the measuring and the write-back and is how the call is
 /// asked to stop; a stopped call returns [`AddImageToTracksError::Cancelled`].
@@ -1355,6 +1357,12 @@ fn insert_observations(
     // The hashes on a value describe the file it came from, and this value is
     // not that file.
     next.content_hash = ContentHash::default();
+    // A point with a new observation is scored again over its whole track.
+    let mut gained = vec![false; next.point_set.points.len()];
+    for &p in added.keys() {
+        gained[p as usize] = true;
+    }
+    next.rescore_points_from_inline_keypoints(&gained);
     next
 }
 

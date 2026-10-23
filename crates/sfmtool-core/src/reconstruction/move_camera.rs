@@ -118,9 +118,7 @@ pub struct ReprojectionSample {
 /// - a **finite point with two or more observations that all carry a pixel** is
 ///   re-triangulated from the value's own poses and lenses, the moved one
 ///   included, by [`triangulate_track`]. Its patch frame is rescaled by its
-///   placement-distance ratio so the patch keeps its angular size, and its
-///   stored `rms_reprojection_error` becomes the RMS of its own residuals at
-///   the new geometry;
+///   placement-distance ratio so the patch keeps its angular size;
 /// - a **bearing whose only observation is this image** rotates with the
 ///   camera: its direction becomes the moved camera's ray through its keypoint;
 /// - everything else **keeps its position**: a track whose triangulation
@@ -128,6 +126,12 @@ pub struct ReprojectionSample {
 ///   alone sees, and any track whose observations carry no pixel. A
 ///   `sift_files` value without the optional inline keypoint column states no
 ///   ray, so its camera moves and its points stand.
+///
+/// Every track this image observes then stores the RMS of its reprojection
+/// errors at the new geometry, whether its point moved or stood, since its
+/// observation in this image projects through the new pose. A `sift_files`
+/// value without the inline keypoint column has no pixels to score against
+/// and keeps its stored errors.
 ///
 /// The derived indexes are rebuilt, so the value that comes back is complete.
 ///
@@ -276,11 +280,17 @@ pub fn move_camera(
             Some(&tri.point),
         );
         out.point_set.points[p].position = tri.point;
-        out.point_set.points[p].rms_reprojection_error = track_rms_px(&out, p) as f32;
         report.retriangulated += 1;
     }
 
     out.rebuild_derived_fields();
+    // Every track this image observes projects through the moved pose, so
+    // each is scored again, the ones that kept their position included.
+    let mut moved = vec![false; out.point_set.points.len()];
+    for &point in &observed {
+        moved[point as usize] = true;
+    }
+    out.rescore_points_from_inline_keypoints(&moved);
     report.residual_after_px = residual_quantiles_px(
         out.image_set.camera_for_image(image),
         &pose_of(&out, image),
@@ -397,41 +407,6 @@ pub fn pose_of(recon: &SfmrReconstruction, image: usize) -> Se3Transform {
         row.camera_center().coords,
         1.0,
     )
-}
-
-/// The RMS of point `p`'s own reprojection residuals at `recon`'s geometry, or
-/// its stored error when nothing about it projects.
-fn track_rms_px(recon: &SfmrReconstruction, p: usize) -> f64 {
-    let Some(xy) = recon.point_set.keypoints_xy() else {
-        return f64::from(recon.point_set.points[p].rms_reprojection_error);
-    };
-    let point = &recon.point_set.points[p];
-    let start = recon.point_set.observation_offsets[p];
-    let end = recon.point_set.observation_offsets[p + 1];
-    let mut sum = 0.0;
-    let mut count = 0usize;
-    for (k, row) in recon.point_set.tracks[start..end].iter().enumerate() {
-        let at = row.image_index as usize;
-        let image = &recon.image_set.images[at];
-        let observed = [f64::from(xy[[start + k, 0]]), f64::from(xy[[start + k, 1]])];
-        if let Some(r) = observation_reprojection_error(
-            &image.quaternion_wxyz,
-            &image.translation_xyz,
-            recon.image_set.camera_for_image(at),
-            &point.position,
-            point.is_at_infinity(),
-            observed,
-        )
-        .filter(|r| r.is_finite())
-        {
-            sum += r * r;
-            count += 1;
-        }
-    }
-    if count == 0 {
-        return f64::from(point.rms_reprojection_error);
-    }
-    (sum / count as f64).sqrt()
 }
 
 #[cfg(test)]

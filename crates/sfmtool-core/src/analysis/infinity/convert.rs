@@ -584,7 +584,9 @@ impl SfmrReconstruction {
     /// camera-to-origin offset perpendicular to the direction) — far enough to
     /// be faithful in every camera, no farther. Finite points are left
     /// unchanged, as is any malformed `w = 0` point whose stored direction has
-    /// zero length.
+    /// zero length. A placed point stores the RMS of its reprojection errors
+    /// at its finite position, measured from the inline keypoints; without
+    /// that column it keeps the error it had as a bearing.
     ///
     /// The result exists for consumers that cannot represent `w = 0` (COLMAP
     /// export, a finite-only solver). It is not the inverse of
@@ -652,6 +654,14 @@ impl SfmrReconstruction {
         // Promotion rewrites the point's representation, so its constraint is
         // released for the reason the demotion above releases one.
         release_touched_constraints(&mut recon, &patch_fixes);
+
+        // A placed point's projection moves by up to a pixel, so each is
+        // scored again at its finite position.
+        let mut placed = vec![false; recon.point_set.points.len()];
+        for &(pidx, _) in &patch_fixes {
+            placed[pidx] = true;
+        }
+        recon.rescore_points_from_inline_keypoints(&placed);
 
         apply_patch_fixes(&mut recon, patch_fixes);
         recon.point_set.infinity_point_count = count_points_at_infinity(&recon.point_set.points);

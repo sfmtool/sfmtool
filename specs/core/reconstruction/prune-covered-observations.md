@@ -11,7 +11,9 @@ supersede it, and drops the points left standing on too little.
 It is a **subtraction, not a solve**. No point moves, no camera moves, no lens
 moves, nothing is re-triangulated and nothing is adjusted. A surviving point
 comes back with the position, patch frame, bitmap, colour and constraint it went
-in with, and only its observation list is shorter. What a caller does afterwards
+in with, and only its observation list is shorter. A survivor that lost a row
+has its RMS reprojection error computed again over the rows it keeps, since the
+stored value was measured over the retired ones too. What a caller does afterwards
 -- re-read the structure, adjust it, or neither -- is the caller's.
 
 The rule it applies is [covered-by-finer.md](../analysis/covered-by-finer.md),
@@ -259,6 +261,8 @@ observation's projected radius is a known multiple of its neighbour's.
   nothing and every survivor moved down by one.
 - **A surviving point keeps everything but the rows**: position, frame, bitmap,
   colour, constraint.
+- **A point that loses a row is scored again** over the rows it keeps, and a
+  point that loses none keeps its stored error.
 - **The pairs the rule does not fire on are left alone**, and the same-scale
   pair is counted contained, so it is the scale test that spares it.
 - **The input is left as it was**, and two prunes of one value agree.

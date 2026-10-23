@@ -109,7 +109,9 @@ pub struct MergedPointsAndTracks {
     pub positions: Vec<[f64; 3]>,
     /// Averaged RGB colors per point.
     pub colors: Vec<[u8; 3]>,
-    /// Averaged reprojection errors per point.
+    /// The average of the merged points' stored errors, per point. This is
+    /// not the RMS reprojection error of the merged track; `sfm merge` scores
+    /// every point again once the poses are refined.
     pub errors: Vec<f32>,
     /// Image indexes for all track observations.
     pub track_image_indexes: Vec<u32>,

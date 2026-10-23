@@ -154,9 +154,7 @@ projection is repeated.
      re-triangulated from the value's own poses and lenses, the moved one
      included, by this module's own batch solve. Its patch frame is
      rescaled by the ratio of its placement distances, so the patch keeps the
-     angular size it had, and its stored `rms_reprojection_error` becomes the RMS of its own
-     residuals at the new geometry, because the column would otherwise describe
-     a geometry the value no longer holds;
+     angular size it had;
    - a **bearing whose only observation is this image** rotates with the camera:
      its stored direction becomes the moved camera's ray through its keypoint.
      One ray is exactly what a bearing is, and it is the ray that moved;
@@ -171,6 +169,12 @@ projection is repeated.
 
 3. **The derived indexes are rebuilt**, so the value that comes back is
    complete.
+4. **Every track this image observes is scored again.** Its stored
+   `rms_reprojection_error` becomes the RMS of its residuals at the new
+   geometry, from the inline keypoints, whether its point moved or stood: its
+   observation in this image projects through the new pose, so the column
+   would otherwise describe a geometry the value no longer holds. A value
+   without the inline keypoint column keeps its stored errors.
 
 **Refusals.** The image index is past the image set; the image carries no pose, its
 stored rotation or translation being a non-finite placeholder rather than a

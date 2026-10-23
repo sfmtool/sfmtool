@@ -880,13 +880,18 @@ impl PySfmrReconstruction {
 
     /// Recompute per-point root-mean-square reprojection errors from scratch.
     ///
-    /// For each image, loads feature positions from the `.sift` file and
-    /// reprojects all observed 3D points through the camera model. Each
-    /// point's error is set to the root mean square of the pixel-space
-    /// reprojection errors of all its observations.
+    /// Reprojects every observed point through its camera and measures the
+    /// pixel distance to the observation's keypoint, read from the inline
+    /// ``keypoints_xy`` column when the reconstruction has one and otherwise
+    /// from the images' ``.sift`` files. Each point's error is set to the root
+    /// mean square of those distances. A point at infinity projects its
+    /// bearing; an observation the camera cannot image (a point behind it) is
+    /// left out, and a point with none left gets ``0.0``.
     ///
     /// This replaces any errors read from COLMAP/GLOMAP binary files,
-    /// ensuring errors are always in pixel coordinates.
+    /// ensuring errors are always in pixel coordinates. A writer that changes
+    /// a reconstruction's keypoints, tracks, cameras, poses or positions
+    /// through :meth:`clone_with_changes` calls this on the result.
     fn recompute_point_errors(&mut self) -> PyResult<()> {
         self.inner
             .recompute_point_errors()
@@ -1543,6 +1548,12 @@ impl PySfmrReconstruction {
     /// ``image_file_hashes`` (a ``list[bytes]`` or ``None``). To produce an
     /// ``embedded_patches`` reconstruction, set ``feature_source``,
     /// ``keypoints_xy``, and ``image_file_hashes`` together.
+    ///
+    /// The points' stored errors are not scored again, whatever is replaced:
+    /// each keeps its ``rms_reprojection_errors`` entry (a point added by a
+    /// longer ``positions`` gets ``0.0``). A caller that changes the keypoints,
+    /// tracks, cameras, poses or positions calls :meth:`recompute_point_errors`
+    /// on the result, so the stored errors are the RMS for what the value holds.
     ///
     /// When the track arrays are replaced, ``observation_counts`` is recomputed
     /// from the new tracks (which must stay grouped by point), so an

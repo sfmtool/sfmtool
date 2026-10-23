@@ -38,6 +38,10 @@ At least two reconstructions are required.
    same image name and feature index, since the merge renders nothing; an
    observation no input read, or one from an input whose readings stand under
    other options than the first input's that has them, is not measured.
+8. **Score the points** — Each point's RMS reprojection error is computed
+   over its merged track at the refined poses (`recompute_point_errors`),
+   replacing the average of the merged points' stored errors that step 5
+   carries.
 
 ## Usage Examples
 

@@ -424,6 +424,34 @@ fn materialize_makes_every_point_finite() {
 }
 
 #[test]
+fn materialize_scores_each_placed_point_at_its_finite_position() {
+    let mut recon = SfmrReconstruction::demo(20);
+    // Points 0..5 become bearings both their cameras look along, observed
+    // where their directions project.
+    for p in 0..5 {
+        let dir = far_point(&recon, p, 2.0) - far_point(&recon, p, 1.0);
+        store_as_bearing(&mut recon, p, dir);
+    }
+    observe(&mut recon, [NOISE_PX, NOISE_PX], 3);
+    recon.recompute_point_errors().unwrap();
+    for point in &mut recon.point_set.points[5..] {
+        point.rms_reprojection_error = 7.0;
+    }
+
+    let materialised = recon.materialize_points_at_infinity();
+
+    for p in 0..5 {
+        let (rms, _) = rms_and_mean_of_observation_errors(&materialised, p);
+        let stored = materialised.point_set.points[p].rms_reprojection_error;
+        assert!((stored - rms).abs() < 1e-5, "point {p}: {stored} vs {rms}");
+    }
+    // A finite point is not placed, so it keeps what it stored.
+    assert!(materialised.point_set.points[5..]
+        .iter()
+        .all(|p| p.rms_reprojection_error == 7.0));
+}
+
+#[test]
 fn materialize_places_point_along_its_direction() {
     let mut recon = SfmrReconstruction::demo(1);
     let dir = Vector3::new(0.0, 0.0, 1.0);

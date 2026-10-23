@@ -231,6 +231,34 @@ fn a_surviving_point_keeps_everything_but_the_rows() {
     assert_eq!(before.observations().len(), after.observations().len());
 }
 
+/// A point that loses a row is scored again over the rows it keeps; a point
+/// that keeps every row keeps its stored error.
+#[test]
+fn a_point_that_loses_a_row_is_scored_again() {
+    let mut start = scene();
+    // Point 1's image-0 keypoint is moved 3 px off its projection, so its
+    // stored 0.25 px is wrong for the full track and right for neither.
+    let row = start.point_set.observation_offsets[1];
+    let ObservationSource::EmbeddedPatches { keypoints_xy, .. } = &mut start.point_set.observations
+    else {
+        panic!("the fixture is embedded_patches");
+    };
+    keypoints_xy[[row, 0]] += 3.0;
+    // Retire point 1's image-1 row, keeping its image-0 and image-2 rows.
+    let mut keep_row = vec![true; start.point_set.tracks.len()];
+    keep_row[row + 1] = false;
+    let keep_point = vec![true; POINTS];
+
+    let pruned = prune_rows(&start, &keep_row, &keep_point);
+
+    // Rows 3 px and ~0 px off: the RMS is 3 / sqrt(2).
+    let got = pruned.point_set.points[1].rms_reprojection_error;
+    assert!((got - 3.0 / 2f32.sqrt()).abs() < 1e-2, "point 1: {got} px");
+    for p in [0, 2, 3, 4, 5] {
+        assert_eq!(pruned.point_set.points[p].rms_reprojection_error, 0.25);
+    }
+}
+
 /// The pair the footprint does not reach is left alone, and the same-scale
 /// pair is spared by the scale test rather than by the distance.
 #[test]

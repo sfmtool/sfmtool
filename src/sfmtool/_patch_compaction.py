@@ -170,7 +170,9 @@ def compact_to_embedded_patches(
 
     Args:
         recon: The source reconstruction (provides camera poses/intrinsics, image
-            names, and the per-point geometry to carry over).
+            names, and the per-point geometry to carry over). Its stored
+            errors are not carried over: each surviving point's RMS
+            reprojection error is computed again from the keypoints written.
         cloud: The refined patch cloud (its ``point_indexes`` index ``recon``'s
             points); supplies each surviving point's ``(u, v)`` frame **and** the
             finite points' stored normal, re-derived as ``normalize(u × v)`` so
@@ -271,7 +273,6 @@ def compact_to_embedded_patches(
     positions_xyzw = np.asarray(recon.positions_xyzw, dtype=np.float64)[survivors]
     centers = np.asarray(recon.positions, dtype=np.float64)[survivors]
     colors = np.asarray(recon.colors, dtype=np.uint8)[survivors]
-    errors = np.asarray(recon.rms_reprojection_errors, dtype=np.float32)[survivors]
     normals = (
         np.asarray(recon.normals, dtype=np.float32)[survivors]
         if recon.has_normals
@@ -391,7 +392,6 @@ def compact_to_embedded_patches(
     kwargs: dict[str, Any] = {
         "positions": positions_xyzw,
         "colors": colors,
-        "rms_reprojection_errors": errors,
     }
     if normals is not None:
         kwargs["normals"] = normals
@@ -406,7 +406,11 @@ def compact_to_embedded_patches(
         kwargs["patch_bitmaps"] = new_bitmaps
     kwargs["reference_observations"] = reference_observations
 
-    return recon.clone_with_changes(**kwargs)
+    out = recon.clone_with_changes(**kwargs)
+    # The tracks and keypoints are new, so the input's stored errors describe
+    # other observations. Score every point again on the keypoints written.
+    out.recompute_point_errors()
+    return out
 
 
 def render_from_references(

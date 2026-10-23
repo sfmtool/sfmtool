@@ -258,3 +258,89 @@ class TestToColmapBinE2E:
         assert result.exit_code != 0
         assert "100-200" in result.output
         assert "Available file numbers" in result.output
+
+
+# =============================================================================
+# COLMAP import stores the RMS error
+# =============================================================================
+
+
+class TestColmapImportErrors:
+    """A COLMAP import stores each point's RMS reprojection error.
+
+    COLMAP's per-point error is the mean of its observation errors. The model
+    written here carries a sentinel in place of it, so a test that read COLMAP's
+    value would see the sentinel.
+    """
+
+    SENTINEL = 99.0
+
+    def _model_with_sentinel_errors(self, tmp_path, sfmr_path):
+        import pycolmap
+
+        from sfmtool.colmap.io import save_colmap_binary
+        from sfmtool.reconstruction import SfmrReconstruction
+
+        model_dir = tmp_path / "colmap_model"
+        save_colmap_binary(SfmrReconstruction.load(sfmr_path), model_dir)
+        model = pycolmap.Reconstruction(str(model_dir))
+        for point in model.points3D.values():
+            point.error = self.SENTINEL
+        model.write(str(model_dir))
+        return model_dir, model
+
+    def _metadata(self, sfmr_path, model):
+        from sfmtool._workspace import load_workspace_config
+        from sfmtool.colmap.io import build_metadata
+
+        workspace_dir = sfmr_path.parent
+        return build_metadata(
+            workspace_dir=workspace_dir,
+            output_path=workspace_dir / "imported.sfmr",
+            workspace_config=load_workspace_config(workspace_dir),
+            operation="import",
+            tool_name="colmap",
+            image_count=model.num_reg_images(),
+            point_count=len(model.points3D),
+            observation_count=sum(
+                len(p.track.elements) for p in model.points3D.values()
+            ),
+            camera_count=len(model.cameras),
+        )
+
+    def _assert_rms(self, recon):
+        from .conftest import per_point_reprojection_error_stats
+
+        stored = np.asarray(recon.rms_reprojection_errors, dtype=np.float64)
+        mean, rms = per_point_reprojection_error_stats(recon)
+        assert not np.any(stored == np.float32(self.SENTINEL))
+        np.testing.assert_allclose(stored, rms, rtol=1e-5, atol=1e-5)
+        # The model is one where the two statistics differ, so the check above
+        # tells the RMS from the mean.
+        assert np.mean(np.abs(rms - mean) > 1e-3) > 0.5
+
+    def test_binary_import_stores_the_rms(self, tmp_path, seoul_bull_workspace):
+        from sfmtool.colmap.io import colmap_binary_to_rust_sfmr
+
+        model_dir, model = self._model_with_sentinel_errors(
+            tmp_path, seoul_bull_workspace
+        )
+        recon = colmap_binary_to_rust_sfmr(
+            model_dir,
+            seoul_bull_workspace.parent / "test_17_image",
+            self._metadata(seoul_bull_workspace, model),
+            classify_infinity=False,
+        )
+        self._assert_rms(recon)
+
+    def test_pycolmap_import_stores_the_rms(self, tmp_path, seoul_bull_workspace):
+        from sfmtool.colmap.io import pycolmap_to_rust_sfmr
+
+        _, model = self._model_with_sentinel_errors(tmp_path, seoul_bull_workspace)
+        recon = pycolmap_to_rust_sfmr(
+            model,
+            seoul_bull_workspace.parent / "test_17_image",
+            self._metadata(seoul_bull_workspace, model),
+            classify_infinity=False,
+        )
+        self._assert_rms(recon)

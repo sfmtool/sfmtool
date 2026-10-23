@@ -30,7 +30,8 @@ It is therefore a **pure in-place modifier** — the keypoint counterpart of
   dropped.
 - Only `keypoints_xy` values move (and, with `bitmaps` — on by default, the
   per-point patch textures are re-rendered at the refined keypoints; disable
-  with `bitmaps=false`).
+  with `bitmaps=false`). Each point's RMS reprojection error is then computed
+  again at the refined keypoints (`recompute_point_errors`).
 
 **Precondition:** requires an `embedded_patches` reconstruction and rejects
 `sift_files` with a `UsageError` pointing at `sfm xform --to-embedded-patches`

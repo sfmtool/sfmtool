@@ -188,6 +188,14 @@ input track reshaped (expanded by vetting, trimmed by drops), not copied through
 - **Image identity.** For each surviving image, `images/image_file_hashes[i]` is
   copied from the image's `.sift` `image_file_xxh128` metadata field (hex → 16
   bytes, the same decode already used for `sift_content_hashes`).
+- **Point errors.** Every compaction, the final one and those between rounds,
+  computes each point's RMS reprojection error again on the keypoints it
+  writes (`compact_to_embedded_patches` calls `recompute_point_errors`). The
+  input's errors are not carried over: the vetting and the sub-pixel rounds
+  change the tracks and move the keypoints, so they were measured on other
+  observations; on the 85-image dino_dog_toy solve the observation count grows
+  from 72,936 to about 162,000, and one point's input error of 1.51 px is
+  10.33 px on its written keypoints.
 
 ## Errors
 

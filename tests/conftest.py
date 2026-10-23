@@ -917,6 +917,44 @@ def assert_references_name_track_observations(
     return refs
 
 
+def per_point_reprojection_error_stats(recon) -> tuple[np.ndarray, np.ndarray]:
+    """``(mean, rms)`` of each point's per-observation reprojection errors.
+
+    Measured from the keypoints ``recon`` holds through
+    ``compute_observation_reprojection_errors``; an observation the camera
+    cannot image (NaN) is left out, and a point with none left gets ``0.0``,
+    as ``recompute_point_errors`` stores it.
+    """
+    n = recon.point_count
+    sums = np.zeros(n)
+    squares = np.zeros(n)
+    counts = np.zeros(n)
+    track_images = np.asarray(recon.track_image_indexes)
+    track_points = np.asarray(recon.track_point_indexes)
+    embedded = recon.feature_source == "embedded_patches"
+    features = None if embedded else np.asarray(recon.track_feature_indexes)
+    for image in range(recon.image_count):
+        rows = np.asarray(recon.compute_observation_reprojection_errors(image))
+        if rows.size == 0:
+            continue
+        ids = rows[:, 0].astype(np.int64)
+        errors = rows[:, 1].astype(np.float64)
+        if embedded:
+            points = track_points[ids]
+        else:
+            mine = track_images == image
+            by_feature = dict(zip(features[mine].tolist(), track_points[mine].tolist()))
+            points = np.array([by_feature[f] for f in ids.tolist()], dtype=np.int64)
+        ok = ~np.isnan(errors)
+        np.add.at(sums, points[ok], errors[ok])
+        np.add.at(squares, points[ok], errors[ok] ** 2)
+        np.add.at(counts, points[ok], 1)
+    seen = counts > 0
+    mean = np.where(seen, sums / np.maximum(counts, 1), 0.0)
+    rms = np.where(seen, np.sqrt(squares / np.maximum(counts, 1)), 0.0)
+    return mean, rms
+
+
 def points_with_past_90_candidate(recon) -> set[int]:
     """Finite points that some image sees past 90 deg off its optical axis.
 

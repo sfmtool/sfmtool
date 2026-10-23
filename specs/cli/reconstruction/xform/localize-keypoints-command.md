@@ -39,10 +39,12 @@ in-place `--refine-keypoints`, with a fundamentally different shape:
   output; the observation count can only shrink.
 - **Points can be dropped.** After localization, a point whose kept-view count
   falls below `min_views` (default 2) is culled entirely; surviving points are
-  renumbered densely (ascending source order). Positions, colors, errors and
-  patch frames are carried over per survivor; each finite survivor's normal is
+  renumbered densely (ascending source order). Positions, colors and patch
+  frames are carried over per survivor; each finite survivor's normal is
   re-derived from its patch frame (`normalize(u × v)`), and a point at
-  infinity keeps its stored row.
+  infinity keeps its stored row. Each survivor's RMS reprojection error is
+  computed again on the keypoints written, since the input's was measured on
+  other observations.
 - **The track structure is rebuilt.** `keypoints_xy`,
   `track_image_indexes` / `track_point_indexes` / `observation_counts` are all
   reconstructed from the kept views — nothing structural from the input is

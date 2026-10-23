@@ -229,39 +229,52 @@ impl SfmrReconstruction {
     /// [`Self::compute_observation_reprojection_errors`] instead.
     fn inline_point_reprojection_errors(&self) -> Option<Vec<f32>> {
         let keypoints_xy = self.keypoints_xy()?;
-        let num_points = self.point_set.points.len();
-        let mut out = vec![0.0f32; num_points];
-        for (point_idx, slot) in out.iter_mut().enumerate() {
-            let point = &self.point_set.points[point_idx];
-            let at_infinity = point.is_at_infinity();
-            let start = self.point_set.observation_offsets[point_idx];
-            let mut sum = 0.0f64;
-            let mut count = 0u32;
-            for (k, obs) in self.observations_for_point(point_idx).iter().enumerate() {
-                let image = &self.image_set.images[obs.image_index as usize];
-                let camera = &self.image_set.cameras[image.camera_index as usize];
-                let obs_global = start + k;
-                let observed = [
-                    keypoints_xy[[obs_global, 0]] as f64,
-                    keypoints_xy[[obs_global, 1]] as f64,
-                ];
-                if let Some(e) = observation_reprojection_error(
-                    &image.quaternion_wxyz,
-                    &image.translation_xyz,
-                    camera,
-                    &point.position,
-                    at_infinity,
-                    observed,
-                ) {
-                    sum += e * e;
-                    count += 1;
-                }
-            }
-            if count > 0 {
-                *slot = (sum / count as f64).sqrt() as f32;
+        let out = (0..self.point_set.points.len())
+            .map(|point_idx| {
+                let start = self.point_set.observation_offsets[point_idx];
+                let observations = self
+                    .observations_for_point(point_idx)
+                    .iter()
+                    .enumerate()
+                    .map(|(k, obs)| {
+                        let row = start + k;
+                        (
+                            obs.image_index as usize,
+                            [keypoints_xy[[row, 0]] as f64, keypoints_xy[[row, 1]] as f64],
+                        )
+                    });
+                rms_reprojection_error_px(
+                    &self.image_set,
+                    &self.point_set.points[point_idx],
+                    observations,
+                )
+            })
+            .collect();
+        Some(out)
+    }
+
+    /// Set the RMS reprojection error of each point `points[i]` marks from the
+    /// inline `keypoints_xy` column, leaving the other points' errors as they
+    /// are. `points` has one entry per point.
+    ///
+    /// For an edit that changes some points' tracks and knows which: it reads
+    /// no `.sift` file, so a value without the inline column is left
+    /// unchanged and the call returns `false`. Scored as
+    /// [`Self::recompute_point_errors`] scores, so a point with no observation
+    /// that projects stores `0.0`.
+    pub(crate) fn rescore_points_from_inline_keypoints(&mut self, points: &[bool]) -> bool {
+        if !points.iter().any(|&p| p) {
+            return true;
+        }
+        let Some(errors) = self.inline_point_reprojection_errors() else {
+            return false;
+        };
+        for ((pt, error), &rescore) in self.point_set.points.iter_mut().zip(errors).zip(points) {
+            if rescore {
+                pt.rms_reprojection_error = error;
             }
         }
-        Some(out)
+        true
     }
 
     /// Recompute per-point root-mean-square reprojection errors from scratch.
@@ -459,6 +472,44 @@ impl SfmrReconstruction {
         }
 
         Ok(())
+    }
+}
+
+/// The RMS reprojection error (px) of `point` over `observations`, each an
+/// image index into `image_set` and the pixel the observation stands at: the
+/// square root of the mean of the squared
+/// [`observation_reprojection_error`]s. An observation the camera cannot image
+/// is left out, and a point with no observation left stores `0.0`. A point at
+/// infinity projects its bearing.
+///
+/// The one per-point statistic behind [`SfmrReconstruction::recompute_point_errors`]
+/// on the inline-keypoint path and the edits that score a point again.
+pub(crate) fn rms_reprojection_error_px(
+    image_set: &super::ImageSet,
+    point: &super::Point3D,
+    observations: impl IntoIterator<Item = (usize, [f64; 2])>,
+) -> f32 {
+    let mut sum = 0.0f64;
+    let mut count = 0u32;
+    for (image_index, observed) in observations {
+        let image = &image_set.images[image_index];
+        let camera = &image_set.cameras[image.camera_index as usize];
+        if let Some(e) = observation_reprojection_error(
+            &image.quaternion_wxyz,
+            &image.translation_xyz,
+            camera,
+            &point.position,
+            point.is_at_infinity(),
+            observed,
+        ) {
+            sum += e * e;
+            count += 1;
+        }
+    }
+    if count == 0 {
+        0.0
+    } else {
+        (sum / count as f64).sqrt() as f32
     }
 }
 

@@ -28,7 +28,7 @@ use crate::numeric::median_in_place;
 use crate::progress::{Cancelled, Progress};
 use crate::progress_info;
 use crate::reconstruction::bundle_adjust::{is_posed, patch_frame_factor, rescale_patch_frame};
-use crate::reconstruction::data::{ImageSet, Point3D};
+use crate::reconstruction::data::{rms_reprojection_error_px, ImageSet, Point3D};
 use crate::reconstruction::edited::{EditError, EditedReconstruction, PointMap};
 
 /// Which points one retriangulation re-solves.
@@ -460,6 +460,9 @@ impl RetriangulateReport {
 /// direction its rays agree on; a point the likelihood rule finds no depth in
 /// becomes the bearing the point-or-bearing test fits; and the patch frame of a
 /// point that moved is rescaled so the patch keeps the angular size it had.
+/// A point that moved stores the RMS of its reprojection errors at its new
+/// geometry, measured from the inline keypoints; a `sift_files` value without
+/// that column keeps the error it had.
 ///
 /// **The report says what happened to every point asked about.**
 /// [`RetriangulateReport::points`] holds one [`RetriangulatedPoint`] per point,
@@ -916,6 +919,7 @@ fn write_in_place(
     let centroid = out.image_set.camera_centroid();
     let pruned = pruned_per_slot(gathered, estimates);
     let mut points = Vec::with_capacity(gathered.targets.len() + gathered.held.len());
+    let mut moved = vec![false; out.point_set.points.len()];
     for (slot, &index) in gathered.targets.iter().enumerate() {
         let p = index as usize;
         let decision = decide_point(&out.point_set.points[p], estimates, &pruned, slot);
@@ -948,8 +952,11 @@ fn write_in_place(
         let point = &mut out.point_set.points[p];
         point.position = position;
         point.w = w;
+        moved[p] = true;
     }
     out.rebuild_derived_fields();
+    // Each moved point is scored again at its new position.
+    out.rescore_points_from_inline_keypoints(&moved);
     (
         EditedReconstruction::new(Arc::new(out)),
         PointMap::Removed(Vec::new()),
@@ -1006,6 +1013,20 @@ fn write_overlay(
         }
         record.point.position = position;
         record.point.w = w;
+        // The moved point is scored again at its new position, where every
+        // observation carries its pixel.
+        let pixels: Option<Vec<(usize, [f64; 2])>> = record
+            .observations
+            .iter()
+            .map(|obs| {
+                obs.keypoint_xy
+                    .map(|[u, v]| (obs.image_index as usize, [f64::from(u), f64::from(v)]))
+            })
+            .collect();
+        if let Some(pixels) = pixels {
+            record.point.rms_reprojection_error =
+                rms_reprojection_error_px(&edited.base.image_set, &record.point, pixels);
+        }
         let to = next.replace_point(index, record)?;
         moves.push((index, to));
         points.push(RetriangulatedPoint {

@@ -385,6 +385,27 @@ fn a_bearing_two_images_see_keeps_its_direction() {
 }
 
 #[test]
+fn a_track_that_keeps_its_position_is_scored_at_the_moved_pose() {
+    let mut observed_by = all_seen(WORLD.len());
+    observed_by[2] = vec![0, 2];
+    let recon = truth(&observed_by, &[2]);
+    let wrong = displaced(&recon);
+    assert_eq!(wrong.point_set.points[2].rms_reprojection_error, 0.5);
+
+    let (moved, _) = move_camera(&wrong, 0, &pose(&recon, 0)).expect("a finite pose");
+
+    // The bearing stood, but its image-0 observation projects through the
+    // moved pose, so its error is the RMS there rather than the 0.5 px it
+    // stored. (The fixture's keypoints are a finite point's, so the bearing
+    // does not fit them exactly.)
+    let mut rescored = moved.clone();
+    rescored.recompute_point_errors().unwrap();
+    let stored = moved.point_set.points[2].rms_reprojection_error;
+    assert_eq!(stored, rescored.point_set.points[2].rms_reprojection_error);
+    assert_ne!(stored, 0.5);
+}
+
+#[test]
 fn a_value_with_no_keypoints_moves_its_camera_and_keeps_every_point() {
     let mut recon = truth(&all_seen(WORLD.len()), &[]);
     let observation_count = recon.point_set.tracks.len();
@@ -406,10 +427,8 @@ fn a_value_with_no_keypoints_moves_its_camera_and_keeps_every_point() {
     assert_eq!(report.residual_before_px, None);
     assert_eq!(report.residual_after_px, None);
     for p in 0..WORLD.len() {
-        assert_eq!(
-            moved.point_set.points[p].position,
-            recon.point_set.points[p].position
-        );
+        // No pixels to score against, so the stored error stands too.
+        assert_eq!(moved.point_set.points[p], recon.point_set.points[p]);
     }
     assert!((pose(&moved, 0).translation - target.translation).norm() < 1e-12);
 }

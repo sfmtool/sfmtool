@@ -411,6 +411,10 @@ impl From<ReconstructionError> for ResectImageError {
 ///    observations. A point that fails keeps its held-out position when it has
 ///    one, and is otherwise dropped with its observations. No bundle adjustment
 ///    runs.
+/// 4. **Errors.** Every point a target observes stores the RMS of its
+///    reprojection errors at the new poses and positions, measured from the
+///    inline keypoints; a `sift_files` value without that column keeps the
+///    errors it had.
 ///
 /// The derived reconstruction's metadata records the operation, the targets,
 /// the correspondence source and the estimates' inlier fractions, so a later
@@ -646,6 +650,15 @@ pub fn resect_images(
             (None, None) => drop_mask[p] = true,
         }
     }
+    // Every point a target observes has moved, or is seen through a moved
+    // pose, so each is scored again before the dropped ones go.
+    let mut touched = vec![false; recon.point_set.points.len()];
+    for &t in image_indexes {
+        for &p in &observed[&t] {
+            touched[p] = true;
+        }
+    }
+    out.rescore_points_from_inline_keypoints(&touched);
     let removed: HashSet<usize> = drop_mask
         .iter()
         .enumerate()

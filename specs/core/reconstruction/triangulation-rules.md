@@ -397,7 +397,8 @@ bar turns down, becomes the direction its rays agree on; a point the likelihood
 rule finds no depth in becomes the bearing the point-or-bearing test fits; and
 the patch frame of a point that moved is rescaled so the patch keeps the angular
 size it had, by the same ratio the adjustment and the camera move resize theirs
-by.
+by. A point that moved stores the RMS of its reprojection errors at its new
+geometry, from the inline keypoints.
 
 ### The report
 

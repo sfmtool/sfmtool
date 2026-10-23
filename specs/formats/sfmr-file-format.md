@@ -1106,28 +1106,55 @@ Reprojection errors:
   consumers (e.g. the reprojection-error point filter) score points at infinity
   by it like any finite point.
 
-Which writer stores which value:
+The value is the RMS for the keypoints, tracks, cameras and poses the file
+holds. A writer that changes any of those for a point scores that point again;
+one that changes none of them for a point keeps its stored value. Which writer
+does which:
 
-- **The RMS, computed from the observations.**
+- **Every point scored from the observations.**
   `SfmrReconstruction::recompute_point_errors`, which the Python
-  `SfmrReconstruction.from_data` runs, so every `sfm solve` and COLMAP import
-  stores the RMS, and `recompute_infinity_point_errors`; the points that
+  `SfmrReconstruction.from_data` runs, so every `sfm solve` (incremental,
+  global and rig), `sfm from-colmap-bin`, `sfm densify` and `sfm undistort`
+  stores the RMS. A COLMAP import does not keep COLMAP's per-point error,
+  which is the mean of the observation errors: `colmap_binary_to_rust_sfmr` and
+  `pycolmap_to_rust_sfmr` pass zeros, and `from_data` scores every point.
+  `sfm xform --bundle-adjust` through pycolmap recomputes every point after the
+  solve. `sfm embed-patches` and `sfm xform --localize-keypoints` score every
+  point on the keypoints written, in `compact_to_embedded_patches`, and so does
+  `sfm xform --refine-keypoints` once it moves the keypoints. `sfm merge`
+  scores every point once the merged poses are refined, replacing the average
+  of the merged points' stored errors that the point merge carries.
+- **The points an edit touches, scored again.** The points that
   `classify_points_at_infinity` changes and the bearings `find_points_at_infinity`
-  adds; the bench's commit and Refit All Points; Switch Camera Model, for the
-  points its cameras see; Move Camera, for the points it re-triangulates when
-  the reconstruction carries inline keypoints; sfmtool's own bundle
-  adjustment, for the points it solves; and `sfm xform --bundle-adjust`
-  through pycolmap, which recomputes every point's error after the solve
-  rather than keeping COLMAP's, which is the mean.
-- **A value carried from elsewhere.** `sfm merge` stores the average of the
-  merged points' stored errors. An edit that moves a point or its keypoints
-  without scoring it again, such as Retriangulate or `--refine-keypoints`,
-  keeps the error the point had.
+  adds; `materialize_points_at_infinity`, for the bearings it places; the
+  bench's commit and Refit All Points; Switch Camera Model, for the points its
+  cameras see; sfmtool's own bundle adjustment, for the points it solves; Move
+  Camera, for every track the moved image observes, moved or kept; Resect
+  Image, for every point a target image observes; Retriangulate, for the points
+  it moves; Add Image to Tracks, for the points that gain an observation; Prune
+  Covered Observations and an image subset (`sfm xform`'s image filters, the
+  `--range` options, Delete Image), for the points that lose one. Each scores
+  from the inline `keypoints_xy` column; a `sift_files` value without that
+  column keeps the errors it had, since these edits read no `.sift` file.
+- **Nothing a point's error depends on changes, so it is kept.** A similarity
+  transform of the whole reconstruction (`sfm xform`'s rotate, scale,
+  translate and alignment operations, `sfm align`) moves points and cameras
+  together. A point filter or a delete removes whole points with their tracks.
+  `to_embedded_patches` and `to_minimal` carry the keypoints as they are.
+
+An observation the camera cannot image, such as a point behind it, is left
+out of its point's RMS, and a point with no observation left stores `0.0`.
 
 Before sfmtool's writers stored the RMS, they stored the mean of the
 per-observation errors, so a file written by an earlier sfmtool holds the mean
-in this column until its errors are recomputed. A reader does not recompute
-them on open.
+in this column until its errors are recomputed. A solve or COLMAP import of
+that time stored the mean of sfmtool's own per-observation errors, not
+COLMAP's value. A file written after that change and before the writers above
+scored the points they touch can hold an error measured on other keypoints
+or tracks: `sfm embed-patches`, `--localize-keypoints` and `--refine-keypoints`
+copied the input's errors after moving the keypoints, `sfm merge` stored the
+average, and the edits in the second list kept the errors they had. A reader
+does not recompute them on open.
 
 The names this column goes by outside the file. The entry's name, and the
 keys that copy it field for field, stay `reprojection_errors`, because the

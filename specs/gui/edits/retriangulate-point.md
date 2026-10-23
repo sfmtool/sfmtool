@@ -133,7 +133,9 @@ the two layers meet:
 
 The patch frame of a point that moved is rescaled so the patch keeps the angular
 size it had, by the same ratio the adjustment and the camera move resize theirs
-by.
+by. A point that moved stores the RMS of its reprojection errors at its new
+geometry, measured from the inline keypoints; a `sift_files` value without that
+column keeps the error it had.
 
 ### On a worker
 

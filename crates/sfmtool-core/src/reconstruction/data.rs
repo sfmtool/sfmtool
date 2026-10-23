@@ -55,7 +55,9 @@ pub use sift_keypoints::SiftKeypointFill;
 
 // Re-exported at the old path: `analysis::infinity::discover` imports it as
 // `crate::reconstruction::data::observation_reprojection_error`.
-pub(crate) use recompute::{observation_reprojection_error, observation_reprojection_residual};
+pub(crate) use recompute::{
+    observation_reprojection_error, observation_reprojection_residual, rms_reprojection_error_px,
+};
 
 pub use conversion::unit_quaternion_preserving;
 

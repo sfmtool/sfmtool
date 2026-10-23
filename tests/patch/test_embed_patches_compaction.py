@@ -27,6 +27,7 @@ from sfmtool.reconstruction import SfmrReconstruction
 from sfmtool.patches import PatchCloud
 from sfmtool.fileio import verify_sfmr
 
+from ..conftest import per_point_reprojection_error_stats
 from .conftest import load_images, rotation_matrices
 
 
@@ -652,3 +653,41 @@ def test_reference_observations_from_images_takes_the_first_observation():
     out = reference_observations_from_images(recon, np.array([5, 2, 7]))
     np.testing.assert_array_equal(out, [1, 0, -1])
     assert out.dtype == np.int32
+
+
+def test_compact_scores_each_point_on_the_keypoints_it_writes(
+    seoul_bull_workspace: Path, tmp_path: Path
+):
+    """The compacted points' errors are the RMS of their reprojection errors at
+    the keypoints written, not the input's errors for its own keypoints."""
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    images = load_images(recon)
+    cloud, _, locs = _run_pipeline(recon, images)
+    hashes = image_file_hashes_from_images(recon)
+    # Move every localized keypoint, so that no input error can be right.
+    for loc in locs:
+        kp = np.asarray(loc["keypoints"], dtype=np.float64).reshape(-1, 2)
+        loc["keypoints"] = kp + np.array([1.5, -1.0])
+
+    new = compact_to_embedded_patches(recon, cloud, locs, hashes, min_views=2)
+
+    stored = np.asarray(new.rms_reprojection_errors, dtype=np.float64)
+    _, rms = per_point_reprojection_error_stats(new)
+    np.testing.assert_allclose(stored, rms, rtol=1e-5, atol=1e-5)
+
+    # The written file holds the same values.
+    out = tmp_path / "embedded.sfmr"
+    new.save(str(out), operation="embed_patches")
+    reloaded = SfmrReconstruction.load(str(out))
+    _, reloaded_rms = per_point_reprojection_error_stats(reloaded)
+    np.testing.assert_allclose(
+        np.asarray(reloaded.rms_reprojection_errors), reloaded_rms, atol=1e-5
+    )
+
+    # The input's errors were for other keypoints: most survivors' differ.
+    survivors = sorted(
+        int(loc["point_index"]) for loc in locs if len(np.asarray(loc["views"])) >= 2
+    )
+    source = np.asarray(recon.rms_reprojection_errors, dtype=np.float64)[survivors]
+    assert len(survivors) == new.point_count
+    assert np.mean(np.abs(source - stored) > 1e-2) > 0.5

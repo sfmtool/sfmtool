@@ -267,6 +267,13 @@ impl SfmrReconstruction {
     /// point's reference observation is renumbered to the observation's new
     /// place in its track.
     ///
+    /// A point that loses an observation gets its RMS reprojection error
+    /// computed again over the observations it keeps, from the inline
+    /// keypoint column; a point left with none stores `0.0`. A point that
+    /// keeps every observation keeps its stored error. A `sift_files` value
+    /// without the inline column has no keypoints to score against, reads no
+    /// `.sift` file here, and keeps every stored error.
+    ///
     /// If `drop_orphaned_points` is true, 3D points with zero remaining
     /// observations are removed and point IDs are remapped to be contiguous.
     /// Otherwise, all 3D points are kept with their original IDs (some may
@@ -380,6 +387,21 @@ impl SfmrReconstruction {
             .as_ref()
             .map(|r| r.select(&kept_obs));
 
+        // Each point's surviving observation count, by its old index.
+        let mut per_point_count = vec![0u32; self.point_set.points.len()];
+        for obs in &new_tracks {
+            per_point_count[obs.point_index as usize] += 1;
+        }
+        // The points that lost an observation, in the output's point order:
+        // their stored error was measured over observations the subset drops,
+        // so they are scored again below.
+        let lost_observation: Vec<bool> = per_point_count
+            .iter()
+            .zip(&self.point_set.observation_counts)
+            .filter(|&(&kept, _)| kept > 0 || !drop_orphaned_points)
+            .map(|(&kept, &old)| kept < old)
+            .collect();
+
         // Points + observation counts. A patch frame is per-point, so it rides
         // along: subset keeps the rows for surviving points (geometry is
         // unchanged, so the frame vectors stay valid). The per-point normal
@@ -396,11 +418,7 @@ impl SfmrReconstruction {
             new_reference_observations,
             new_display_only_references,
         ) = if drop_orphaned_points {
-            // Count surviving observations per point and build a keep mask.
-            let mut per_point_count = vec![0u32; self.point_set.points.len()];
-            for obs in &new_tracks {
-                per_point_count[obs.point_index as usize] += 1;
-            }
+            // Build a keep mask from the surviving observation counts.
             let keep_mask: Vec<bool> = per_point_count.iter().map(|&c| c > 0).collect();
 
             // Remap point ids to be contiguous over kept points.
@@ -460,14 +478,10 @@ impl SfmrReconstruction {
                 self.point_set.select_display_only_references(&keep_idx),
             )
         } else {
-            // Keep all points; recompute per-point counts from the filtered tracks.
-            let mut per_point_count = vec![0u32; self.point_set.points.len()];
-            for obs in &new_tracks {
-                per_point_count[obs.point_index as usize] += 1;
-            }
+            // Keep all points, with the per-point counts of the filtered tracks.
             (
                 self.point_set.points.clone(),
-                per_point_count,
+                per_point_count.clone(),
                 new_tracks,
                 self.point_set.patch_u_halfvec_xyz.clone(),
                 self.point_set.patch_v_halfvec_xyz.clone(),
@@ -559,7 +573,7 @@ impl SfmrReconstruction {
             .map(|rf| subset_rig_frame_data(rf, image_indices));
 
         let infinity_point_count = count_points_at_infinity(&new_points);
-        Ok(SfmrReconstruction {
+        let mut subset = SfmrReconstruction {
             workspace_dir: self.workspace_dir.clone(),
             metadata: self.metadata.clone(),
             content_hash: self.content_hash.clone(),
@@ -592,7 +606,9 @@ impl SfmrReconstruction {
                 image_feature_to_point: new_image_feature_to_point,
                 max_track_feature_index: new_max_track_feature_index,
             },
-        })
+        };
+        subset.rescore_points_from_inline_keypoints(&lost_observation);
+        Ok(subset)
     }
 
     /// Filter 3D points by a boolean mask, returning a new reconstruction.

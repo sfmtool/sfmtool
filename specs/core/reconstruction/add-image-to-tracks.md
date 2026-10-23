@@ -229,8 +229,10 @@ under, every existing row not measured; one whose
 readings stand under other options than those the new views were read under
 (another resolution, sampler or window) gets new rows with
 nothing measured. Every existing row is carried with its observation. Each
-track stays in image order. The stored per-point error is left as it was,
-since nothing moved the point.
+track stays in image order. A point that gains an observation has its RMS
+reprojection error computed again over its whole track, the new keypoint
+included, since its stored value was measured without it; a point that gains
+none keeps its error.
 
 ## The judging rules
 

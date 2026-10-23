@@ -318,6 +318,15 @@ fn every_point_lands_back_on_the_truth_its_pixels_state() {
             next.base.point_set.points[p].position
         );
     }
+    // Each moved point stores the RMS of its residuals at its new position,
+    // which is near zero on the truth, not the 0.25 px it stored before.
+    let mut rescored = (*next.base).clone();
+    rescored.recompute_point_errors().unwrap();
+    for p in 0..POINTS {
+        let stored = next.base.point_set.points[p].rms_reprojection_error;
+        assert_eq!(stored, rescored.point_set.points[p].rms_reprojection_error);
+        assert!(stored < 0.01, "point {p}: {stored} px");
+    }
     // Nothing was deleted and nothing created, so every index still means
     // what it meant.
     for p in 0..POINTS as u32 {
@@ -561,6 +570,19 @@ fn one_point_is_an_overlay_edit_over_the_very_same_base() {
         (moved.point().position - truth.point_set.points[1].position).norm() < TRUTH_TOLERANCE,
         "{:?}",
         moved.point().position
+    );
+    // It is scored at its new position; the others keep their stored error.
+    assert!(
+        moved.point().rms_reprojection_error < 0.01,
+        "{}",
+        moved.point().rms_reprojection_error
+    );
+    assert_eq!(
+        next.point(0)
+            .expect("still live")
+            .point()
+            .rms_reprojection_error,
+        0.25
     );
     // And nothing else moved.
     assert_eq!(map.forward(0), Some(0));

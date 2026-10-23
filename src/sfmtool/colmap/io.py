@@ -418,7 +418,9 @@ def colmap_binary_to_rust_sfmr(
         translations_xyz=translations_xyz,
         positions_xyzw=finite_positions_xyzw(positions_xyz),
         colors_rgb=data["colors_rgb"],
-        reprojection_errors=data["reprojection_errors"],
+        # COLMAP's points3D.bin error is the mean of its observation errors,
+        # not the RMS the column holds; from_data scores every point again.
+        reprojection_errors=np.zeros(len(data["positions_xyz"]), dtype=np.float32),
         track_image_indexes=data["track_image_indexes"],
         track_feature_indexes=data["track_feature_indexes"],
         point_indexes=data["track_point3d_indexes"],
@@ -513,12 +515,10 @@ def pycolmap_to_rust_sfmr(
 
     point_positions = []
     point_colors = []
-    point_errors = []
     for pid in sorted_point_ids:
         pt = points3d[pid]
         point_positions.append(pt.xyz)
         point_colors.append(pt.color)
-        point_errors.append(pt.error)
 
     # Prepare tracks
     image_indexes_list = []
@@ -559,7 +559,9 @@ def pycolmap_to_rust_sfmr(
         translations_xyz=translations_xyz,
         positions_xyzw=finite_positions_xyzw(point_positions),
         colors_rgb=np.array(point_colors, dtype=np.uint8),
-        reprojection_errors=np.array(point_errors, dtype=np.float32),
+        # COLMAP's Point3D.error is the mean of its observation errors, not
+        # the RMS the column holds; from_data scores every point again.
+        reprojection_errors=np.zeros(len(sorted_point_ids), dtype=np.float32),
         track_image_indexes=np.array(image_indexes_list, dtype=np.uint32),
         track_feature_indexes=np.array(feature_indexes_list, dtype=np.uint32),
         point_indexes=np.array(points3d_indexes_list, dtype=np.uint32),

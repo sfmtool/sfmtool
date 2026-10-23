@@ -128,6 +128,10 @@ def merge_reconstructions(
         source_reconstructions=reconstructions,
         camera_mapping=camera_mapping,
     )
+    # A merged point's track joins the tracks of its sources and the poses were
+    # refined, so the average of the sources' errors is not its error. Score
+    # every point again on the merged tracks and poses.
+    result.recompute_point_errors()
     click.echo(f"  Completed in {time.perf_counter() - step_start:.2f}s")
 
     click.echo("\n" + "=" * 70)

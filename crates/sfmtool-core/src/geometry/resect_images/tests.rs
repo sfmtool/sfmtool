@@ -394,6 +394,26 @@ fn a_perturbed_pose_is_recovered_from_held_out_structure() {
     assert_eq!(out.report.source, "tracks");
     assert_eq!(out.reconstruction.metadata.operation, "explorer_resect");
 
+    // Every point the target observes is scored at the resected pose and its
+    // new position: the stored errors are the ones a recompute gives.
+    let mut rescored = out.reconstruction.clone();
+    rescored.recompute_point_errors().unwrap();
+    for (got, want) in out
+        .reconstruction
+        .point_set
+        .points
+        .iter()
+        .zip(&rescored.point_set.points)
+    {
+        assert_eq!(got.rms_reprojection_error, want.rms_reprojection_error);
+    }
+    assert!(out
+        .reconstruction
+        .point_set
+        .points
+        .iter()
+        .any(|p| p.rms_reprojection_error > 0.0));
+
     // The source is untouched under every outcome.
     assert_eq!(
         source.image_set.images[target].quaternion_wxyz,

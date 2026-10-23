@@ -21,7 +21,10 @@ from sfmtool.cli import main
 from sfmtool.xform import RefineKeypointsTransform
 from sfmtool.xform._arg_parser import parse_refine_keypoints_params
 
-from ..conftest import assert_references_name_track_observations
+from ..conftest import (
+    assert_references_name_track_observations,
+    per_point_reprojection_error_stats,
+)
 
 
 # ── Argument grammar ────────────────────────────────────────────────────────
@@ -226,6 +229,23 @@ def test_refine_keypoints_structural_invariance(seoul_bull_workspace, tmp_path):
     assert is_valid, errors
     reloaded = SfmrReconstruction.load(path)
     np.testing.assert_array_equal(np.asarray(reloaded.keypoints_xy), new_keypoints)
+
+
+@pytest.mark.parametrize("bitmaps", [False, True])
+def test_refine_keypoints_scores_the_points_on_the_moved_keypoints(
+    seoul_bull_workspace, bitmaps
+):
+    """The keypoints move, so each point's stored error is the RMS of its
+    reprojection errors at the refined keypoints, on both write paths."""
+    recon = _embedded(seoul_bull_workspace)
+
+    out = _modest_params(bitmaps=bitmaps).apply(recon)
+
+    _, rms = per_point_reprojection_error_stats(out)
+    stored = np.asarray(out.rms_reprojection_errors, dtype=np.float64)
+    np.testing.assert_allclose(stored, rms, rtol=1e-5, atol=1e-5)
+    before = np.asarray(recon.rms_reprojection_errors, dtype=np.float64)
+    assert not np.allclose(stored, before)
 
 
 def test_refine_keypoints_stay_in_frame(seoul_bull_workspace):

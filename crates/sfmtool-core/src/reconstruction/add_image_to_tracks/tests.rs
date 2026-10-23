@@ -341,8 +341,21 @@ fn the_existing_observations_and_points_come_back_unchanged() {
     let (next, _) = run(&cap, &fixed());
     let before = cap.recon.keypoints_xy().unwrap();
     let after = next.keypoints_xy().unwrap();
+    // Every point gained an observation, so its error is scored again over
+    // the whole track; everything else about it is unchanged.
+    let mut rescored = next.clone();
+    rescored.recompute_point_errors().unwrap();
     for p in 0..points.len() {
-        assert_eq!(next.point_set.points[p], cap.recon.point_set.points[p]);
+        let (got, was) = (&next.point_set.points[p], &cap.recon.point_set.points[p]);
+        assert_eq!(
+            (got.position, got.w, got.color, got.normal),
+            (was.position, was.w, was.color, was.normal)
+        );
+        assert_ne!(got.rms_reprojection_error, was.rms_reprojection_error);
+        assert_eq!(
+            got.rms_reprojection_error,
+            rescored.point_set.points[p].rms_reprojection_error
+        );
         for k in 0..4 {
             let old = cap.recon.point_set.observation_offsets[p] + k;
             let new = next.point_set.observation_offsets[p] + k;

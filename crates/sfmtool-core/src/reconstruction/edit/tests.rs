@@ -551,3 +551,69 @@ fn an_image_reorder_keeps_each_track_in_image_order_with_its_columns() {
         );
     }
 }
+
+/// `SfmrReconstruction::demo(8)` with an inline keypoint column whose row `k`
+/// sits `k + 1` px to the right of its point's projection, so observation
+/// row `k` has a reprojection error of `k + 1` px.
+fn demo_with_offset_keypoints() -> SfmrReconstruction {
+    let mut recon = SfmrReconstruction::demo(8);
+    let set = &recon.point_set;
+    let mut column = Array2::<f32>::zeros((set.tracks.len(), 2));
+    for (k, obs) in set.tracks.iter().enumerate() {
+        let image = &recon.image_set.images[obs.image_index as usize];
+        let camera = &recon.image_set.cameras[image.camera_index as usize];
+        let point = &set.points[obs.point_index as usize];
+        let p_cam = image.quaternion_wxyz * point.position.coords + image.translation_xyz;
+        let (u, v) = camera.ray_to_pixel([p_cam.x, p_cam.y, p_cam.z]).unwrap();
+        column[[k, 0]] = (u + (k + 1) as f64) as f32;
+        column[[k, 1]] = v as f32;
+    }
+    if let ObservationSource::SiftFiles { keypoints_xy, .. } = &mut recon.point_set.observations {
+        *keypoints_xy = Some(column);
+    }
+    recon
+}
+
+#[test]
+fn an_image_subset_scores_again_each_point_that_loses_an_observation() {
+    let recon = demo_with_offset_keypoints();
+    let stored: Vec<f32> = recon
+        .point_set
+        .points
+        .iter()
+        .map(|p| p.rms_reprojection_error)
+        .collect();
+    // Point p sees images p and p + 1 (point 7 sees 0 and 7), at rows 2p and
+    // 2p + 1. Dropping image 1 leaves point 0 with its image-0 row (row 0,
+    // 1 px) and point 1 with its image-2 row (row 3, 4 px).
+    let keep: Vec<u32> = (0..8u32).filter(|&i| i != 1).collect();
+    let out = recon.subset_by_image_indices(&keep, true).unwrap();
+    let got: Vec<f32> = out
+        .point_set
+        .points
+        .iter()
+        .map(|p| p.rms_reprojection_error)
+        .collect();
+    assert!((got[0] - 1.0).abs() < 1e-3, "point 0: {}", got[0]);
+    assert!((got[1] - 4.0).abs() < 1e-3, "point 1: {}", got[1]);
+    // The points that keep both observations keep the error they stored.
+    assert_eq!(&got[2..], &stored[2..]);
+
+    // Dropping images 0 and 1 leaves point 0 no observation: kept as an
+    // orphan, it stores 0.0.
+    let keep: Vec<u32> = (2..8u32).collect();
+    let out = recon.subset_by_image_indices(&keep, false).unwrap();
+    assert_eq!(out.point_set.points[0].rms_reprojection_error, 0.0);
+    // Point 7 keeps its image-7 row (row 15, 16 px).
+    assert!((out.point_set.points[7].rms_reprojection_error - 16.0).abs() < 1e-3);
+}
+
+#[test]
+fn an_image_subset_without_inline_keypoints_keeps_the_stored_errors() {
+    let recon = SfmrReconstruction::demo(8);
+    let keep: Vec<u32> = (0..8u32).filter(|&i| i != 1).collect();
+    let out = recon.subset_by_image_indices(&keep, true).unwrap();
+    for (a, b) in out.point_set.points.iter().zip(&recon.point_set.points) {
+        assert_eq!(a.rms_reprojection_error, b.rms_reprojection_error);
+    }
+}

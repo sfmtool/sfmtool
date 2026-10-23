@@ -512,7 +512,8 @@ fn bands(measured: &Measured, flagged: &[bool], keep_owner: &[bool]) -> Vec<Prun
 ///
 /// Every column but the tracks travels verbatim: a surviving point keeps its
 /// position, its frame, its bitmap, its colour and its constraint, and only its
-/// observation list is shorter.
+/// observation list is shorter. A point that lost a row has its RMS
+/// reprojection error computed again over the rows it keeps.
 fn prune_rows(
     source: &SfmrReconstruction,
     keep_row: &[bool],
@@ -608,11 +609,18 @@ fn prune_rows(
     };
     point_set.rebuild_derived_fields(source.image_count());
 
+    // The surviving points that lost an observation, in the output's order.
+    let lost_observation: Vec<bool> = keep_idx
+        .iter()
+        .zip(&point_set.observation_counts)
+        .map(|(&old, &kept)| kept < set.observation_counts[old])
+        .collect();
+
     let mut metadata = source.metadata.clone();
     metadata.point_count = point_set.points.len() as u32;
     metadata.observation_count = point_set.tracks.len() as u32;
     metadata.infinity_point_count = point_set.infinity_point_count as u32;
-    SfmrReconstruction {
+    let mut pruned = SfmrReconstruction {
         workspace_dir: source.workspace_dir.clone(),
         metadata,
         // The hashes on a value describe the file it came from, and this value
@@ -622,7 +630,10 @@ fn prune_rows(
         // thumbnails shared rather than copied.
         image_set: source.image_set.clone(),
         point_set,
-    }
+    };
+    // Their stored errors were measured over the retired rows too.
+    pruned.rescore_points_from_inline_keypoints(&lost_observation);
+    pruned
 }
 
 #[cfg(test)]

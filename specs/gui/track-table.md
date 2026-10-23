@@ -922,10 +922,18 @@ the panel among the ten.
 
 - **The quiet order.** Whether the table's columns should go ahead of the
   focused item's evaluation while the table is the panel in view.
-- **Errors in files written before #1000** hold the mean rather than the RMS
-  (or, for a file converted from COLMAP and never recomputed, COLMAP's value).
-  Whether the open should recompute them, or the table should say when a file's
-  errors predate the change, is undecided.
+- **Errors in older files** can disagree with the RMS the column describes.
+  A file written before #1000 holds the mean of sfmtool's own per-observation
+  errors; a solve or COLMAP import of that time stored that mean too, not
+  COLMAP's value, since `from_data` scored every point then as it does now. A
+  file written after #1000 by `sfm embed-patches`, `--localize-keypoints`,
+  `--refine-keypoints`, `sfm merge`, an image subset or one of the viewer's
+  point edits, before those writers scored the points they touch
+  ([sfmr-file-format.md](../formats/sfmr-file-format.md#points3dreprojection_errorsnfloat32zst)),
+  can hold an error measured on other keypoints or tracks: an embed-patches
+  output copied its input's errors after growing the tracks and moving the
+  keypoints. Whether the open should recompute them, or the table should say
+  when a file's errors may be stale, is undecided.
 - **Does the query persist?** It could be kept in the layout file, or
   per-session only, as it is now.
 - **`lowest_zncc`'s source.** The column reads `observation_confidence`. The

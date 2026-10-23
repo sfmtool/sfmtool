@@ -92,7 +92,9 @@ points-at-infinity filter applies.
 reverse_image_mapping)` produces the merged point set and track columns:
 
 1. **Group points:** each correspondence group becomes one temp point with
-   position/color/error **averaged** over its members, and the union of the
+   position/color/error **averaged** over its members (the averaged error is
+   not the merged track's RMS, so `sfm merge` scores every point again once it
+   has refined the poses), and the union of the
    members' observations remapped into merged-image indices via
    `reverse_image_mapping`.
 2. **Unique points:** every point not in any group is carried over as its

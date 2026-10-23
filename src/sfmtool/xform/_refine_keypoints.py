@@ -241,6 +241,8 @@ class RefineKeypointsTransform:
             moved = recon.clone_with_changes(
                 keypoints_xy=kxy, patches=cloud, reference_observations=references
             )
+            # The keypoints moved, so score every point again on them.
+            moved.recompute_point_errors()
             bitmaps, references = render_from_references(
                 moved,
                 images,
@@ -270,12 +272,15 @@ class RefineKeypointsTransform:
             references = np.where(stored >= 0, stored, aligned).astype(np.int32)
         else:
             references = aligned
-        # The moved keypoints are read again on their renders, with no bitmap
-        # to score against, so the scores are NaN.
+        # The points are scored again on the moved keypoints. The moved
+        # keypoints are read again on their renders, with no bitmap to score
+        # against, so the scores are NaN.
+        moved = recon.clone_with_changes(
+            keypoints_xy=kxy, patch_bitmaps=None, reference_observations=references
+        )
+        moved.recompute_point_errors()
         return with_observation_readings(
-            recon.clone_with_changes(
-                keypoints_xy=kxy, patch_bitmaps=None, reference_observations=references
-            ),
+            moved,
             images,
             resolution=self.resolution,
             sampler=self.sampler,

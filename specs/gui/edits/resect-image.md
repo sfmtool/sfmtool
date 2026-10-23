@@ -232,6 +232,11 @@ diagnostics rather than as a separate angle threshold). A point that fails keeps
 its held-out position from step 2 when it has one, and is otherwise removed with
 its observations.
 
+Every point a target observes then stores the RMS of its reprojection errors
+at the new poses and positions, measured from the inline keypoints, since both
+the point and the pose it is seen through may have moved. A `sift_files` value
+without the inline keypoint column keeps its stored errors.
+
 ### 5. Result
 
 The resected reconstruction differs from the source only in the accepted

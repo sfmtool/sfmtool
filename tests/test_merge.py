@@ -15,6 +15,8 @@ from sfmtool.reconstruction import SfmrReconstruction
 from sfmtool.cli import main
 from sfmtool.xform import IncludeRangeFilter, apply_transforms
 
+from .conftest import per_point_reprojection_error_stats
+
 
 def _apply_transforms_to_file(input_path, output_path, transforms):
     """Helper that wraps apply_transforms with file I/O."""
@@ -94,6 +96,35 @@ class TestMergeSubsets:
         original_names = {Path(n).name for n in original.image_names}
         merged_names = {Path(n).name for n in merged.image_names}
         assert original_names == merged_names
+
+    def test_subsets_and_merge_store_the_rms_of_their_tracks(
+        self, seoul_bull_workspace, tmp_path
+    ):
+        """An image subset and a merge change tracks, so each scores its points
+        again: the stored errors are the RMS over the tracks written."""
+        subset_paths = []
+        for name, images in [("a", "1-10"), ("b", "6-17")]:
+            path = tmp_path / f"subset_{name}.sfmr"
+            _apply_transforms_to_file(
+                seoul_bull_workspace, path, [IncludeRangeFilter(RangeExpr(images))]
+            )
+            subset_paths.append(path)
+        for path in subset_paths:
+            subset = SfmrReconstruction.load(path)
+            _, rms = per_point_reprojection_error_stats(subset)
+            np.testing.assert_allclose(
+                subset.rms_reprojection_errors, rms, rtol=1e-5, atol=1e-5
+            )
+
+        merged_path = tmp_path / "merged.sfmr"
+        _merge_reconstructions_to_file(
+            input_paths=subset_paths, output_path=merged_path
+        )
+        merged = SfmrReconstruction.load(merged_path)
+        _, rms = per_point_reprojection_error_stats(merged)
+        np.testing.assert_allclose(
+            merged.rms_reprojection_errors, rms, rtol=1e-5, atol=1e-5
+        )
 
     def test_merge_three_overlapping_subsets(self, seoul_bull_workspace, tmp_path):
         """Merge three overlapping subsets (1-7, 5-12, 10-17)."""
