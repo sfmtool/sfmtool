@@ -67,14 +67,46 @@ const COLUMN_COUNT: usize = TrackTableColumn::ALL.len();
 /// The columns shown before any are hidden or shown: the point is always
 /// shown, and of the stored columns the track's length, its error and its
 /// distance, which is `∞` for a point at infinity, and of the computed ones
-/// the ray angle. Repeat obs. is shown as well while the reconstruction has a
-/// point with repeat observations ([`TrackTableQuery::is_shown`]).
+/// the ray angle. A defect count ([`DEFECT_COLUMNS`]) is shown as well while
+/// the reconstruction has a point whose count is not 0
+/// ([`TrackTableQuery::is_shown`]).
 const DEFAULT_COLUMNS: [TrackTableColumn; 4] = [
     TrackTableColumn::TrackLength,
     TrackTableColumn::RmsErrorPx,
     TrackTableColumn::CentroidDistance,
     TrackTableColumn::MaxRayAngleDeg,
 ];
+
+/// The **defect counts**: the columns that are 0 for a sound track and count
+/// a defect otherwise, Repeat obs. and Back-facing obs. Each is shown by
+/// itself while the reconstruction has a point whose count is not 0, until
+/// the person ticks or unticks it in the Columns menu, and the header counts
+/// those points.
+const DEFECT_COLUMNS: [TrackTableColumn; 2] = [
+    TrackTableColumn::RepeatObservations,
+    TrackTableColumn::BackFacingObservations,
+];
+
+/// The header's count of the points with a defect in `column`, one of
+/// [`DEFECT_COLUMNS`], and its hover text.
+fn defect_count_text(column: TrackTableColumn, count: usize) -> (String, &'static str) {
+    match column {
+        TrackTableColumn::BackFacingObservations => (
+            format!("\u{b7} {} with back-facing observations", grouped(count)),
+            "Live points whose patch one of their observations sees at a viewing angle of \
+             90\u{b0} or more, edge on or from behind, whatever the bounds. No patch is drawn \
+             on such a view, and the reference-view rule never picks it, so the patch's \
+             normal is likely wrong for the point. Click the Back-facing obs. heading to put \
+             them first.",
+        ),
+        _ => (
+            format!("\u{b7} {} with repeat observations", grouped(count)),
+            "Live points whose track holds more than one observation in one image, \
+             whatever the bounds. That is a defect in the reconstruction, which a \
+             GLOMAP solve can produce. Click the Repeat obs. heading to put them first.",
+        ),
+    }
+}
 
 /// The width of the Point column.
 const POINT_WIDTH: f32 = 72.0;
@@ -94,16 +126,21 @@ const CELL_PAD: f32 = 6.0;
 pub(crate) const SCROLL_SETTLE_S: f64 = 0.15;
 
 impl SortRule for TrackTableColumn {
-    /// The columns whose large values are the bad end: the repeat
-    /// observations, the error, the condition number and the self-similarity
-    /// radius.
+    /// The columns whose large values are the bad end: the defect counts,
+    /// the errors, the condition number, the self-similarity radii and the
+    /// elongation, and the viewing angle.
     fn worst_first_descending(self) -> bool {
         matches!(
             self,
             TrackTableColumn::RepeatObservations
+                | TrackTableColumn::BackFacingObservations
                 | TrackTableColumn::RmsErrorPx
+                | TrackTableColumn::LargestErrorPx
                 | TrackTableColumn::ConditionNumber
                 | TrackTableColumn::LargestZnccSelfSimilarityRadius
+                | TrackTableColumn::ReferenceZnccSelfSimilarityRadius
+                | TrackTableColumn::ReferenceZnccSelfSimilarityElongation
+                | TrackTableColumn::LargestViewingAngleDeg
         )
     }
 }
@@ -119,6 +156,7 @@ fn worst_first_ascending(column: TrackTableColumn) -> bool {
             | TrackTableColumn::MaxRayAngleDeg
             | TrackTableColumn::InverseDepthZ
             | TrackTableColumn::LowestZncc
+            | TrackTableColumn::LowestBlurMatchedBitmapZncc
             | TrackTableColumn::NormalConfidence
     )
 }
@@ -128,15 +166,21 @@ fn column_title(column: TrackTableColumn) -> &'static str {
     match column {
         TrackTableColumn::TrackLength => "Track",
         TrackTableColumn::RepeatObservations => "Repeat obs.",
+        TrackTableColumn::BackFacingObservations => "Back-facing obs.",
         TrackTableColumn::RmsErrorPx => "Error (px)",
+        TrackTableColumn::LargestErrorPx => "Largest error (px)",
         TrackTableColumn::X => "X",
         TrackTableColumn::Y => "Y",
         TrackTableColumn::Z => "Z",
         TrackTableColumn::CentroidDistance => "Distance",
         TrackTableColumn::NormalConfidence => "Normal conf.",
         TrackTableColumn::LowestZncc => "Lowest ZNCC",
+        TrackTableColumn::LowestBlurMatchedBitmapZncc => "Lowest bitmap ZNCC",
         TrackTableColumn::LargestZnccSelfSimilarityRadius => "Self-sim. radius",
+        TrackTableColumn::ReferenceZnccSelfSimilarityRadius => "Ref. self-sim. radius",
+        TrackTableColumn::ReferenceZnccSelfSimilarityElongation => "Ref. elongation",
         TrackTableColumn::MaxRayAngleDeg => "Ray angle (\u{b0})",
+        TrackTableColumn::LargestViewingAngleDeg => "Viewing angle (\u{b0})",
         TrackTableColumn::ConditionNumber => "Cond.",
         TrackTableColumn::InverseDepthZ => "Inv. depth z",
     }
@@ -153,8 +197,23 @@ fn column_description(column: TrackTableColumn) -> &'static str {
              observations of the point, which a GLOMAP solve can produce. The column is shown \
              while the reconstruction has such a point, unless it was unticked here."
         }
+        TrackTableColumn::BackFacingObservations => {
+            "The number of the track's observations that see the point's patch at a viewing \
+             angle of 90\u{b0} or more, edge on or from behind, where no patch is drawn and \
+             which the reference-view rule never picks. Anything but 0 says the patch's \
+             normal is likely wrong. A point with no patch frame has no value. The column is \
+             shown while the reconstruction has such a point, unless it was unticked here. \
+             Computed after the stored columns."
+        }
         TrackTableColumn::RmsErrorPx => {
             "The point's stored RMS reprojection error over its observations, in pixels."
+        }
+        TrackTableColumn::LargestErrorPx => {
+            "The largest reprojection error among the track's observations, in pixels: each \
+             observation's keypoint against the point's projection into its image, a point \
+             at infinity projected along its direction. One bad observation in a long track \
+             barely moves the RMS error but sets this. An observation behind its camera is \
+             left out, as it is from the RMS. Computed after the stored columns."
         }
         TrackTableColumn::X | TrackTableColumn::Y | TrackTableColumn::Z => {
             "The point's position along this axis, in the reconstruction's unit. A point at \
@@ -171,15 +230,42 @@ fn column_description(column: TrackTableColumn) -> &'static str {
             "The lowest measured ZNCC among the track's observations, 0 to 1. A track with no \
              measured observation has no value."
         }
+        TrackTableColumn::LowestBlurMatchedBitmapZncc => {
+            "The lowest blur-matched ZNCC against the point's stored patch bitmap among the \
+             track's observation readings, the score Track View's ZNCC column shows and its \
+             bars judge, -1 to 1. Lowest ZNCC reads another stored score. A track with no \
+             score read has no value."
+        }
         TrackTableColumn::LargestZnccSelfSimilarityRadius => {
             "The largest ZNCC self-similarity radius among the track's observation readings, \
              in patch px. A track with no measured reading has no value."
+        }
+        TrackTableColumn::ReferenceZnccSelfSimilarityRadius => {
+            "How far the point's patch, as its reference view sees it, can slide over itself \
+             and still match itself, in patch px up to 3: the ZNCC self-similarity radius of \
+             the stored reading at the reference observation, or of the patch bitmap where \
+             there is none. A large radius is a patch with little texture, which nothing \
+             localizes well. A point with neither has no value. Computed after the stored \
+             columns."
+        }
+        TrackTableColumn::ReferenceZnccSelfSimilarityElongation => {
+            "The same reading's self-similarity ellipse, its long axis over its short one: 1 \
+             for a patch that slides as far every way, large for an edge, which slides along \
+             itself and is fixed only across it. A point with no reading has no value. \
+             Computed after the stored columns."
         }
         TrackTableColumn::MaxRayAngleDeg => {
             "The largest angle between two of the track's viewing rays, the rays from each \
              observing camera's centre to the point, in degrees. A small angle leaves the \
              point's depth poorly fixed. A point at infinity is at 0: every sighting of a \
              direction casts the same ray. Computed after the stored columns."
+        }
+        TrackTableColumn::LargestViewingAngleDeg => {
+            "The most oblique view of the point's patch: the largest angle, in degrees, \
+             between the patch's normal and the direction to an observing camera, as Track \
+             View's Reference column shows it, 0 facing the patch and 90 edge on. Past 90 a \
+             view sees the patch from behind. A point with no patch frame has no value. \
+             Computed after the stored columns."
         }
         TrackTableColumn::ConditionNumber => {
             "The condition number of the point's triangulation from its viewing rays. A large \
@@ -272,11 +358,11 @@ struct TrackTableQuery {
     pictures: Vec<PictureColumn>,
     /// Whether only the points the selected image observes are kept.
     seen_in_selected_image: bool,
-    /// Whether Repeat obs. has been ticked or unticked in the Columns menu.
-    /// Until it has, the column is shown exactly while the reconstruction
-    /// on show has a point with repeat observations; after, `shown` alone
-    /// decides, so the panel never undoes the person's choice.
-    repeat_observations_chosen: bool,
+    /// The defect counts ([`DEFECT_COLUMNS`]) that have been ticked or
+    /// unticked in the Columns menu. Until one has, it is shown exactly while
+    /// the reconstruction on show has a point whose count is not 0; after,
+    /// `shown` alone decides, so the panel never undoes the person's choice.
+    chosen_defects: Vec<TrackTableColumn>,
 }
 
 impl Default for TrackTableQuery {
@@ -287,7 +373,7 @@ impl Default for TrackTableQuery {
             shown: DEFAULT_COLUMNS.to_vec(),
             pictures: PictureColumn::ALL.to_vec(),
             seen_in_selected_image: false,
-            repeat_observations_chosen: false,
+            chosen_defects: Vec::new(),
         }
     }
 }
@@ -309,28 +395,34 @@ impl TrackTableQuery {
         self.bound(column).is_set() || self.sort.is_some_and(|sort| sort.column == column)
     }
 
-    /// Whether `column` is drawn, where `repeats` says whether the
-    /// reconstruction on show has a point with repeat observations. A column
-    /// in `shown` is drawn. Repeat obs. is drawn as well, until the person
-    /// ticks or unticks it in the Columns menu, while `repeats` is true or
-    /// while it holds a bound or the sort, so that it is not hidden while it
-    /// filters or orders the rows.
-    fn is_shown(&self, column: TrackTableColumn, repeats: bool) -> bool {
+    /// Whether `column` is drawn, where `defective` names the defect counts
+    /// ([`DEFECT_COLUMNS`]) in which the reconstruction on show has a point
+    /// whose count is not 0. A column in `shown` is drawn. A defect count is
+    /// drawn as well, until the person ticks or unticks it in the Columns
+    /// menu, while it is in `defective` or while it holds a bound or the
+    /// sort, so that it is not hidden while it filters or orders the rows.
+    fn is_shown(&self, column: TrackTableColumn, defective: &[TrackTableColumn]) -> bool {
         self.shown.contains(&column)
-            || (column == TrackTableColumn::RepeatObservations
-                && !self.repeat_observations_chosen
-                && (repeats || self.holds(column)))
+            || (self.shows_by_itself(column) && (defective.contains(&column) || self.holds(column)))
+    }
+
+    /// Whether `column` is a defect count the person has neither ticked nor
+    /// unticked, which is shown by itself while the reconstruction has a
+    /// defect in it.
+    fn shows_by_itself(&self, column: TrackTableColumn) -> bool {
+        DEFECT_COLUMNS.contains(&column) && !self.chosen_defects.contains(&column)
     }
 
     /// The computed columns the table job has to compute for this query: the
-    /// ones shown, and the ones holding a bound or the sort (which are shown
-    /// too), in [`TrackTableColumn::ALL`] order. A computed column none of
-    /// those needs is never computed for the panel.
+    /// ones shown, the ones holding a bound or the sort (which are shown
+    /// too), and a computed defect count that shows itself, whose values say
+    /// whether it is drawn, in [`TrackTableColumn::ALL`] order. A computed
+    /// column none of those needs is never computed for the panel.
     fn needed_computed(&self) -> Vec<TrackTableColumn> {
         TrackTableColumn::ALL
             .into_iter()
             .filter(|&c| c.cost() == ColumnCost::Computed)
-            .filter(|&c| self.shown.contains(&c) || self.holds(c))
+            .filter(|&c| self.shown.contains(&c) || self.holds(c) || self.shows_by_itself(c))
             .collect()
     }
 
@@ -347,21 +439,26 @@ impl TrackTableQuery {
 
     /// The columns drawn, in [`TrackTableColumn::ALL`] order
     /// ([`Self::is_shown`]).
-    fn visible(&self, repeats: bool) -> Vec<TrackTableColumn> {
+    fn visible(&self, defective: &[TrackTableColumn]) -> Vec<TrackTableColumn> {
         TrackTableColumn::ALL
             .into_iter()
-            .filter(|&c| self.is_shown(c, repeats))
+            .filter(|&c| self.is_shown(c, defective))
             .collect()
     }
 
     /// Tick or untick `column` in the Columns menu: [`Self::set_shown`], and
-    /// for Repeat obs. the end of showing it by itself.
-    fn choose_shown(&mut self, column: TrackTableColumn, shown: bool, repeats: bool) {
-        if column == TrackTableColumn::RepeatObservations && !self.repeat_observations_chosen {
-            if self.is_shown(column, repeats) && !shown && self.holds(column) {
+    /// for a defect count the end of showing it by itself.
+    fn choose_shown(
+        &mut self,
+        column: TrackTableColumn,
+        shown: bool,
+        defective: &[TrackTableColumn],
+    ) {
+        if self.shows_by_itself(column) {
+            if self.is_shown(column, defective) && !shown && self.holds(column) {
                 return;
             }
-            self.repeat_observations_chosen = true;
+            self.chosen_defects.push(column);
         }
         self.set_shown(column, shown);
     }
@@ -428,15 +525,27 @@ struct RowList {
     rows: Vec<u32>,
     /// The query's refusal, when it refused.
     error: Option<String>,
-    /// How many live points of the table the rows were computed from have
-    /// repeat observations, `0` while the table does not hold the column.
-    repeats: usize,
+    /// Per defect count of [`DEFECT_COLUMNS`], how many live points of the
+    /// table the rows were computed from have a count that is not 0, `0`
+    /// while the table does not hold the column.
+    defects: [usize; DEFECT_COLUMNS.len()],
     /// How many times the rows have been computed, for the test that holds
     /// the rule that an unchanged query does not compute them again.
     recomputed: u64,
 }
 
 impl RowList {
+    /// The defect counts in which the table has a point whose count is not
+    /// 0, in [`DEFECT_COLUMNS`] order.
+    fn defective(&self) -> Vec<TrackTableColumn> {
+        DEFECT_COLUMNS
+            .into_iter()
+            .zip(self.defects)
+            .filter(|&(_, count)| count > 0)
+            .map(|(column, _)| column)
+            .collect()
+    }
+
     /// Compute the rows again when `inputs` differ from the ones they were
     /// computed from, and answer whether the query or the node moved, which
     /// puts other rows at the top. A new version or a column landing in the
@@ -474,9 +583,11 @@ impl RowList {
         }
         // Counted with the rows, so once per change of the table rather than
         // once per frame.
-        self.repeats = table
-            .values(TrackTableColumn::RepeatObservations)
-            .map_or(0, |values| values.iter().filter(|&&v| v > 0.0).count());
+        self.defects = DEFECT_COLUMNS.map(|column| {
+            table
+                .values(column)
+                .map_or(0, |values| values.iter().filter(|&&v| v > 0.0).count())
+        });
         self.inputs = Some(inputs);
         self.recomputed += 1;
         moved
@@ -894,7 +1005,7 @@ impl TrackTablePanel {
         let layout = ColumnLayout::new(
             ui,
             &self.query.visible_pictures(edited),
-            &self.query.visible(self.rows.repeats > 0),
+            &self.query.visible(&self.rows.defective()),
             edited,
             self.picture_size.0,
         );
@@ -989,12 +1100,12 @@ impl TrackTablePanel {
         selected_image: Option<u32>,
     ) {
         let edited = node.edited();
-        // The count of the table on show, which the row list was computed
+        // The counts of the table on show, which the row list was computed
         // from.
-        let repeats = if table.is_some() {
-            self.rows.repeats
+        let defective = if table.is_some() {
+            self.rows.defective()
         } else {
-            0
+            Vec::new()
         };
         ui.horizontal_wrapped(|ui| {
             ui.label(egui::RichText::new(&node.label).strong());
@@ -1005,16 +1116,13 @@ impl TrackTablePanel {
                     grouped(table.point_indexes().len())
                 ));
             }
-            if repeats > 0 {
-                ui.label(format!(
-                    "\u{b7} {} with repeat observations",
-                    grouped(repeats)
-                ))
-                .on_hover_text(
-                    "Live points whose track holds more than one observation in one image, \
-                     whatever the bounds. That is a defect in the reconstruction, which a \
-                     GLOMAP solve can produce. Click the Repeat obs. heading to put them first.",
-                );
+            if table.is_some() {
+                for (column, count) in DEFECT_COLUMNS.into_iter().zip(self.rows.defects) {
+                    if count > 0 {
+                        let (text, hover) = defect_count_text(column, count);
+                        ui.label(text).on_hover_text(hover);
+                    }
+                }
             }
             if stale {
                 ui.spinner();
@@ -1051,7 +1159,7 @@ impl TrackTablePanel {
                         if !offered(column, edited) {
                             continue;
                         }
-                        let mut shown = query.is_shown(column, repeats > 0);
+                        let mut shown = query.is_shown(column, &defective);
                         let locked = shown && query.holds(column);
                         let response = ui
                             .add_enabled(
@@ -1065,7 +1173,7 @@ impl TrackTablePanel {
                                 column_title(column)
                             ));
                         if response.changed() {
-                            query.choose_shown(column, shown, repeats > 0);
+                            query.choose_shown(column, shown, &defective);
                         }
                     }
                 });
@@ -2050,8 +2158,11 @@ fn cell_text(table: &TrackTable, column: TrackTableColumn, row: usize) -> String
     match column {
         TrackTableColumn::TrackLength
         | TrackTableColumn::RepeatObservations
+        | TrackTableColumn::BackFacingObservations
         | TrackTableColumn::NormalConfidence => format!("{}", v as i64),
-        TrackTableColumn::LowestZncc => format!("{v:.2}"),
+        TrackTableColumn::LowestZncc | TrackTableColumn::LowestBlurMatchedBitmapZncc => {
+            format!("{v:.2}")
+        }
         TrackTableColumn::ConditionNumber | TrackTableColumn::InverseDepthZ => {
             compact(f64::from(v))
         }

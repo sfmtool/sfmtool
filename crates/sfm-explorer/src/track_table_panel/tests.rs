@@ -24,6 +24,7 @@ use crate::test_support::{painted_text_rects, painted_texts, run_frame_headless}
 mod computed;
 mod crop;
 mod pictures;
+mod quality;
 
 /// How many points the fixture holds.
 const POINTS: usize = 40;
@@ -725,6 +726,7 @@ fn headings(texts: &[String]) -> Vec<&str> {
     [
         "Track",
         "Repeat obs.",
+        "Back-facing obs.",
         "Error (px)",
         "Distance",
         "Ray angle (\u{b0})",
@@ -844,17 +846,18 @@ fn repeat_observations_show_themselves_and_their_count() {
 #[test]
 fn the_persons_choice_of_repeat_observations_wins() {
     let column = TrackTableColumn::RepeatObservations;
+    let repeats = [column];
     let mut query = TrackTableQuery::default();
-    assert!(query.is_shown(column, true));
-    assert!(!query.is_shown(column, false));
-    query.choose_shown(column, false, true);
-    assert!(!query.is_shown(column, true), "unticked stays hidden");
+    assert!(query.is_shown(column, &repeats));
+    assert!(!query.is_shown(column, &[]));
+    query.choose_shown(column, false, &repeats);
+    assert!(!query.is_shown(column, &repeats), "unticked stays hidden");
 
     let mut query = TrackTableQuery::default();
-    query.choose_shown(column, true, false);
-    assert!(query.is_shown(column, false), "ticked stays shown");
+    query.choose_shown(column, true, &[]);
+    assert!(query.is_shown(column, &[]), "ticked stays shown");
     assert_eq!(
-        query.visible(false),
+        query.visible(&[]),
         [
             TrackTableColumn::TrackLength,
             column,
@@ -868,9 +871,29 @@ fn the_persons_choice_of_repeat_observations_wins() {
     // reconstruction with no repeats and against an untick.
     let mut query = TrackTableQuery::default();
     query.click_heading(column);
-    assert!(query.is_shown(column, false));
-    query.choose_shown(column, false, true);
-    assert!(query.is_shown(column, true));
+    assert!(query.is_shown(column, &[]));
+    query.choose_shown(column, false, &repeats);
+    assert!(query.is_shown(column, &repeats));
+}
+
+/// Each defect count shows itself by its own defects and keeps its own
+/// choice: back-facing observations show Back-facing obs. and not Repeat
+/// obs., and unticking one leaves the other showing itself.
+#[test]
+fn each_defect_count_shows_itself_by_its_own_defects() {
+    let back = TrackTableColumn::BackFacingObservations;
+    let repeat = TrackTableColumn::RepeatObservations;
+    let mut query = TrackTableQuery::default();
+    assert!(query.is_shown(back, &[back]));
+    assert!(!query.is_shown(repeat, &[back]));
+    assert!(!query.is_shown(back, &[repeat]));
+    // The table job computes it while it may show itself.
+    assert!(query.needed_computed().contains(&back));
+    query.choose_shown(back, false, &[back, repeat]);
+    assert!(!query.is_shown(back, &[back, repeat]));
+    assert!(query.is_shown(repeat, &[back, repeat]));
+    // Unticked, it is no longer computed for the panel.
+    assert!(!query.needed_computed().contains(&back));
 }
 
 /// A column the reconstruction cannot supply is left out, and a bound on it

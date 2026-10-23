@@ -306,6 +306,7 @@ fn value(table: &TrackTable, column: TrackTableColumn, row: usize) -> Value {
     match column {
         TrackTableColumn::TrackLength
         | TrackTableColumn::RepeatObservations
+        | TrackTableColumn::BackFacingObservations
         | TrackTableColumn::NormalConfidence => json!(v as i64),
         _ => json!(v.to_string().parse::<f64>().unwrap_or(f64::from(v))),
     }

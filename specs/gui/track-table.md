@@ -30,10 +30,13 @@ points. Track View ([track-view.md](track-view.md)) shows one track; this panel
 lists all of them.
 
 The panel shows the stored columns, the ones read straight off the
-reconstruction, the computed columns that say how well a point is triangulated
-(the largest ray angle, the condition number and the inverse-depth z, computed
-after the stored ones and only when shown, bounded or sorted by; § "Computing
-the columns"), and two picture columns: **Crop**, the point's reference
+reconstruction, the computed columns (computed after the stored ones and only
+when shown, bounded or sorted by; § "Computing the columns") that say how well
+a point is triangulated (the largest ray angle, the condition number and the
+inverse-depth z), how well its worst observation fits (the largest
+reprojection error) and how good its patch is (the reference view's
+self-similarity radius and elongation, the largest viewing angle and the count
+of back-facing observations), and two picture columns: **Crop**, the point's reference
 photograph cut around its patch (§ "The Crop column"), and **Patch**, its patch
 bitmap (§ "The Patch column"). Applying the filter to the 3D view and the wire
 tools that read and write the panel's query are proposed in
@@ -89,7 +92,9 @@ decoded.
   its live points, with the thousands grouped (*1,204 of 9,941 points*). When
   any live point has repeat observations, the count goes on with how many do,
   whatever the bounds (*· 3 with repeat observations*), since such a point is a
-  defect to find and fix; with none it says nothing of them. With no
+  defect to find and fix; with none it says nothing of them. The same goes for
+  back-facing observations once that column is computed (*· 12 with
+  back-facing observations*), after the repeat count where both are there. With no
   reconstruction loaded the panel says *No reconstruction loaded*. The first
   time the panel shows a reconstruction, until the table job has computed the
   columns for the version at the cursor, the panel says *Computing the track
@@ -109,24 +114,51 @@ decoded.
   | Point | the point index | `#9873` |
   | Track | `track_length` | a whole number |
   | Repeat obs. | `repeat_observations` | a whole number, `0` for a sound track |
+  | Back-facing obs. | `back_facing_observations` | a whole number, `0` for a sound track; `-` for a point with no patch frame |
   | Error (px) | `rms_error_px` | three significant digits, at most three decimals |
+  | Largest error (px) | `largest_error_px` | as Error |
   | X, Y, Z | `x`, `y`, `z` | four significant digits, every whole digit kept, at most three decimals |
   | Distance | `centroid_distance` | three significant digits, at most three decimals; `∞` for a point at infinity |
   | Normal conf. | `normal_confidence` | a whole number, 0 to 255 |
   | Lowest ZNCC | `lowest_zncc` | two decimals |
+  | Lowest bitmap ZNCC | `lowest_blur_matched_bitmap_zncc` | two decimals |
   | Self-sim. radius | `largest_zncc_self_similarity_radius` | three significant digits, at most three decimals |
+  | Ref. self-sim. radius | `reference_zncc_self_similarity_radius` | as Self-sim. radius |
+  | Ref. elongation | `reference_zncc_self_similarity_elongation` | as Self-sim. radius; `1` for a round ellipse |
   | Ray angle (°) | `max_ray_angle_deg` | three significant digits, at most three decimals; `0` for a point at infinity |
+  | Viewing angle (°) | `largest_viewing_angle_deg` | as Ray angle; `-` for a point with no patch frame |
   | Cond. | `condition_number` | three significant digits, at most three decimals, and from 10⁵ on in scientific notation (`1.23e7`); `-` for a point at infinity |
   | Inv. depth z | `inverse_depth_z` | as Cond.; `∞` where the depth uncertainty is 0; `-` for a point at infinity |
 
-  The last three are the computed columns
+  Back-facing obs., Largest error, the two Ref. columns, Ray angle, Viewing
+  angle, Cond. and Inv. depth z are the computed columns
   ([core/analysis/track-table.md](../core/analysis/track-table.md) § "The
   columns"). Their hover texts say what makes a value bad and what a point at
   infinity holds: its sightings cast one ray, so its widest pair is 0°, and
   its triangulation has no depth to be uncertain about, so it has no condition
   number and no inverse-depth z. A condition number or an inverse-depth z can
   run to many orders of magnitude, so a large one is written in scientific
-  notation and its cell stays as narrow as the others.
+  notation and its cell stays as narrow as the others. The quality columns'
+  hover texts say what each reads:
+
+  - *Back-facing obs.*: the observations that see the patch at a viewing angle
+    of 90° or more, edge on or from behind, where no patch is drawn and which
+    the reference-view rule never picks, so that anything but 0 says the
+    patch's normal is likely wrong.
+  - *Largest error (px)*: the worst observation's reprojection error, which
+    one bad observation in a long track sets and barely moves the RMS.
+  - *Lowest bitmap ZNCC*: the lowest blur-matched score against the stored
+    patch bitmap, the score Track View's *ZNCC* column shows and its bars
+    judge, and that *Lowest ZNCC* reads another stored score.
+  - *Ref. self-sim. radius*: how far the patch, as its reference view sees it,
+    slides over itself and still matches itself, from the stored reading at
+    the reference observation or from the patch bitmap, and that a large
+    radius is a patch with little texture.
+  - *Ref. elongation*: the same ellipse's long axis over its short one, 1 for
+    a patch that slides as far every way and large for an edge.
+  - *Viewing angle (°)*: the most oblique view of the patch, the angle between
+    its normal and the direction to an observing camera as Track View's
+    *Reference* column shows it, 0 facing and 90 edge on.
 
   A point with no value in a column (a NaN in the table: a point at infinity's
   `x`) shows `-`. A column the cache does not hold yet shows `…` in every
@@ -137,18 +169,22 @@ decoded.
   one end and a minimum of `inf` keeps only them.
 - **Columns**, a menu, lists every column the reconstruction can supply with a
   checkbox, the picture columns first, Crop then Patch, as they are drawn,
-  then the stored columns, then the computed ones, in the order their
-  headings are drawn. The default set is Crop, Patch, Track, Error, Distance
-  and Ray angle. **Repeat obs. shows
-  itself**: until the person ticks or unticks it in this menu, it is shown
-  exactly while the reconstruction on show has a point with repeat
-  observations, so a defect is not hidden behind a column nobody thought to
-  open, and a sound reconstruction does not spend a column on zeros. Once it
-  has been ticked or unticked, the menu alone decides, for every
-  reconstruction, so the panel never undoes a choice the person made. It is
-  not added to the person's columns while it shows itself
-  (`TrackTableQuery::is_shown`, `repeat_observations_chosen`), and while it
-  holds a bound or the sort it stays shown whatever the reconstruction. A column that holds
+  then the track table columns in the order their headings are drawn, which
+  is `TrackTableColumn::ALL`'s, stored and computed together. The default set
+  is Crop, Patch, Track, Error, Distance and Ray angle. **The defect counts
+  show themselves.** Repeat obs. and Back-facing obs. (`DEFECT_COLUMNS`) are
+  0 for a sound track. Until the person ticks or unticks one in this menu, it
+  is shown exactly while the reconstruction on show has a point whose count is
+  not 0, so a defect is not hidden behind a column nobody thought to open, and
+  a sound reconstruction does not spend a column on zeros. Once one has been
+  ticked or unticked, the menu alone decides for it, for every reconstruction,
+  so the panel never undoes a choice the person made; the other keeps showing
+  itself. A defect count is not added to the person's columns while it shows
+  itself (`TrackTableQuery::is_shown`, `chosen_defects`), and while it holds a
+  bound or the sort it stays shown whatever the reconstruction.
+  Back-facing obs. is computed, so the panel needs its values to know whether
+  to show it: while it may show itself the table job computes it in the second
+  run (§ "Computing the columns"), and it appears when that run lands. A column that holds
   a bound or the sort cannot be hidden until those are cleared, so a hidden
   column never filters or orders the rows without the person seeing it. Its
   checkbox is greyed, and its hover text says why. The menu stays open while
@@ -163,19 +199,23 @@ decoded.
   box filters nothing, its label is dimmed while it is ticked, and its hover
   text says so.
 - **The header line** is one `horizontal_wrapped` row: the reconstruction's
-  label, the count and the repeat count after it, a spinner and *Updating…*
+  label, the count and the defect counts after it, a spinner and *Updating…*
   while the rows are out of date, *Columns*, *Size* and *Seen in selected
   image*. With a label as long as `seoul_bull_sculpture_ground_truth`, no
   repeat observations and the rows up to date, it fits on one line in the
-  Track Table's panel of a 1280 pt window. The repeat count and *Updating…*
+  Track Table's panel of a 1280 pt window. A defect count and *Updating…*
   each lengthen it and can take it onto a second line. When the line wraps,
   the *Size* label stays beside its dropdown (§ "The Patch column").
 - **The heading row** sorts by the column clicked. The first click on a
   column sorts the bad end first where the column has one:
-  `repeat_observations`, `rms_error_px`, `condition_number` and
-  `largest_zncc_self_similarity_radius` descending, `track_length`,
-  `max_ray_angle_deg`, `inverse_depth_z`, `lowest_zncc` and
-  `normal_confidence` ascending. The inverse-depth z is the depth over its
+  `repeat_observations`, `back_facing_observations`, `rms_error_px`,
+  `largest_error_px`, `condition_number`,
+  `largest_zncc_self_similarity_radius`,
+  `reference_zncc_self_similarity_radius`,
+  `reference_zncc_self_similarity_elongation` and
+  `largest_viewing_angle_deg` descending, `track_length`,
+  `max_ray_angle_deg`, `inverse_depth_z`, `lowest_zncc`,
+  `lowest_blur_matched_bitmap_zncc` and `normal_confidence` ascending. The inverse-depth z is the depth over its
   uncertainty, and a small one is a point that cannot be told from one at
   infinity, so its bad end is its small values. Every other column sorts
   ascending first, Distance among them, which puts the points at infinity, at
@@ -639,9 +679,12 @@ columns* (`Operation::TRACK_TABLE_COLUMNS`;
   computes the stored columns the cache lacks or, once it holds them all, the
   computed columns the panel needs that it lacks
   (`job::columns_to_compute`). The stored columns read data the
-  reconstruction holds; a computed one loops over every pair of a track's rays
-  or triangulates it, per point, which on a reconstruction of millions of
-  points takes far longer. So on a first open the rows, the stored values and
+  reconstruction holds; a computed one loops over every pair of a track's rays,
+  triangulates it, projects or measures the viewing angle of each of its
+  observations, or reads a patch bitmap's self-similarity, per point, which on
+  a reconstruction of millions of points takes far longer. The bitmap reading,
+  the reference columns' fallback, is the costliest (core's § "Implementation
+  notes" gives its cost per point). So on a first open the rows, the stored values and
   the pictures are on screen and can be sorted, bounded and clicked while the
   computed columns are computed, their cells `…` meanwhile. The exception is
   a node whose cache still holds an earlier version's table, which is what the
@@ -653,11 +696,13 @@ columns* (`Operation::TRACK_TABLE_COLUMNS`;
   § "Implementation notes"). Nothing draws a quiet task's fraction, but the
   fraction follows the work.
 - **A computed column is computed only when the query needs it**: when it is
-  shown, or holds a bound or the sort (`TrackTableQuery::needed_computed`).
-  Ray angle is shown by default, so it is computed for a table opened with the
-  default columns; the condition number and the inverse-depth z are computed
-  the first time one is ticked in the Columns menu, and a table nobody ticks
-  them in never pays for them. Each run computes the columns needed then; a
+  shown, or holds a bound or the sort, or is a defect count that may show
+  itself (`TrackTableQuery::needed_computed`). Ray angle is shown by default,
+  so it is computed for a table opened with the default columns, and so is
+  Back-facing obs. where the reconstruction has patch frames, until it is
+  ticked or unticked; the condition number, the inverse-depth z and the other
+  quality columns are computed the first time one is ticked in the Columns
+  menu, and a table nobody ticks them in never pays for them. Each run computes the columns needed then; a
   column ticked while a run is under way is computed by the run after it. A
   run still waiting in the queue whose columns are no longer the ones needed
   is replaced.
@@ -713,7 +758,8 @@ the frame the selection changed.
 
 | Parameter | Value | Meaning |
 |---|---|---|
-| `DEFAULT_COLUMNS` | Track, Error (px), Distance, Ray angle (°) | The value columns shown before any is hidden or shown. Repeat obs. is shown as well while the reconstruction has a point with repeat observations and the person has not ticked or unticked it. The Crop and Patch columns are shown by default too, where the reconstruction can supply them. |
+| `DEFAULT_COLUMNS` | Track, Error (px), Distance, Ray angle (°) | The value columns shown before any is hidden or shown. Each of `DEFECT_COLUMNS` is shown as well while the reconstruction has a point whose count in it is not 0 and the person has not ticked or unticked it. The Crop and Patch columns are shown by default too, where the reconstruction can supply them. |
+| `DEFECT_COLUMNS` | Repeat obs., Back-facing obs. | The defect counts, which show themselves and are counted in the header. |
 | `POINT_WIDTH` | 72 pt | The Point column's width. |
 | `MIN_VALUE_WIDTH` | 84 pt | The narrowest a value column is, room for its two bound boxes; a wider heading widens its column. |
 | `PICTURE_SIZES` | 16, 32, 64, 128 pt | The sizes the *Size* dropdown offers. |
@@ -816,8 +862,29 @@ runs the computed columns over the same reconstruction:
 - a point at infinity shows `0` for Ray angle and `-` for Cond. and Inv. depth
   z, and a large value is written as `1.23e5`.
 
+[track_table_panel/tests/quality.rs](../../crates/sfm-explorer/src/track_table_panel/tests/quality.rs)
+runs the quality columns over the demo reconstruction given a patch frame on
+every point, some facing away from both their cameras, and observation
+readings:
+
+- the six headings are *Back-facing obs.*, *Largest error (px)*, *Lowest
+  bitmap ZNCC*, *Ref. self-sim. radius*, *Ref. elongation* and *Viewing angle
+  (°)*, and the first click on each puts the bad end first, ascending for the
+  score and descending for the others;
+- with three back-facing points, Back-facing obs. shows itself once the second
+  run lands, without being added to the person's columns, the header says
+  *· 3 with back-facing observations* and nothing of repeat observations, its
+  cells are whole numbers, the lowest bitmap ZNCC prints two decimals, and
+  its first click puts the three points first;
+- with none, the column is computed and stays hidden, and the header says
+  nothing of it;
+- each defect count shows itself by its own defects, unticking one leaves the
+  other showing itself, and an unticked Back-facing obs. is no longer computed
+  for the panel.
+
 The MCP tests hold that a `find_points` call ordered by `max_ray_angle_deg`
-answers in the frame from the column the panel's job computed.
+answers in the frame from the column the panel's job computed, and that a
+bound and a sort on `largest_error_px` return core's values in its order.
 
 [track_table_panel/tests/pictures.rs](../../crates/sfm-explorer/src/track_table_panel/tests/pictures.rs)
 runs the Patch column over the same reconstruction given an 8 × 8 bitmap per
@@ -936,6 +1003,8 @@ the panel among the ten.
   when a file's errors may be stale, is undecided.
 - **Does the query persist?** It could be kept in the layout file, or
   per-session only, as it is now.
-- **`lowest_zncc`'s source.** The column reads `observation_confidence`. The
-  observation readings carry `blur_matched_bitmap_zncc` too, which may be the
-  better reading where both exist.
+- **`lowest_zncc` beside `lowest_blur_matched_bitmap_zncc`.** The first reads
+  `observation_confidence` and the second the readings' blur-matched score
+  against the stored bitmap, which is the number Track View's bars judge.
+  Whether `lowest_zncc` is still worth a column where both exist is
+  undecided.

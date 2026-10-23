@@ -629,3 +629,43 @@ fn a_computed_column_the_track_table_panel_filled_answers_in_the_frame() {
     assert!(!angles.is_empty());
     assert!(angles.windows(2).all(|w| w[0] <= w[1]), "{angles:?}");
 }
+
+/// A track-quality column is a column like any other on the wire: it bounds,
+/// sorts and returns the values core's table holds, worst first.
+#[test]
+fn the_largest_error_bounds_and_sorts_like_any_column() {
+    let (mut state, mut viewer) = editable();
+    let edited = state.scene[0].edited().clone();
+    assert!(TrackTableColumn::LargestErrorPx.is_available(&edited));
+    let table = sfmtool_core::analysis::track_table::TrackTable::compute(
+        &edited,
+        &[TrackTableColumn::LargestErrorPx],
+        &sfmtool_core::progress::Progress::none(),
+    )
+    .unwrap();
+    let values = table.values(TrackTableColumn::LargestErrorPx).unwrap();
+    let mut expected: Vec<(f32, u32)> = table
+        .point_indexes()
+        .iter()
+        .zip(values)
+        .filter(|(_, v)| !v.is_nan())
+        .map(|(&p, &v)| (v, p))
+        .collect();
+    expected.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
+    let reply = answered(
+        &mut state,
+        &mut viewer,
+        json!({
+            "order_by": { "column": "largest_error_px", "descending": true },
+            "bounds": [{ "column": "largest_error_px", "min": 0 }],
+            "limit": 5,
+        }),
+    );
+    assert_eq!(reply["matched"], json!(expected.len()), "{reply}");
+    let points = reply["points"].as_array().unwrap();
+    for (point, (value, index)) in points.iter().zip(&expected) {
+        assert_eq!(point["index"], json!(index), "{reply}");
+        let got = point["largest_error_px"].as_f64().unwrap();
+        assert!((got - f64::from(*value)).abs() < 1e-4, "{got} vs {value}");
+    }
+}
