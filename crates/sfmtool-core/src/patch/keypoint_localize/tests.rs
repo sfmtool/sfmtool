@@ -1441,8 +1441,9 @@ fn search_shift_matches_reference_flat_channel_and_invalid() {
 ///   * the tightest AVX2-path boundary reachable via integer margin
 ///     (`span = 15`; `span = 16` is unreachable since `span = 2·margin + 1` is
 ///     always odd — the 16-lane store still exercises by spilling 15 lanes),
-///   * a span that overflows the AVX2 kernel's 16-lane cap (`span = 17`),
-///     which forces the dispatcher to the scalar fallback (verifies the gate).
+///   * the first span past the 16-lane kernel (`span = 17`), which the
+///     dispatcher sends to the chunked kernel; that kernel is held to the
+///     scalar form bit for bit by `wide_compute_channel_grids_match_scalar_exactly`.
 ///
 /// Mirrors `super::normal_refine::fronto_cache::tests::resample_avx2_matches_scalar`.
 #[test]
@@ -1452,7 +1453,7 @@ fn compute_channel_grids_avx2_matches_scalar() {
         (24, 6),         // span = 13 (production default)
         (16, 7),         // span = 15 (AVX2 path, tightest reachable boundary)
         (24, 7),         // span = 15, larger core
-        (20, 8),         // span = 17 (overflows AVX2 cap → scalar fallback)
+        (20, 8),         // span = 17 (past the 16-lane kernel → chunked kernel)
     ] {
         run_compute_channel_grids_equivalence(resolution, margin);
     }
@@ -1544,15 +1545,116 @@ fn run_compute_channel_grids_equivalence(resolution: usize, margin: i64) {
     }
 }
 
+/// For spans over 16 the dispatched `compute_channel_grids` (the chunked AVX2
+/// kernel where available) gives grids **bit-identical** to the scalar form,
+/// which every search this wide ran before that kernel existed. Covers odd
+/// spans (the only ones a search asks for, `2·margin + 1`) and even ones,
+/// spans with a last chunk of 1–8 lanes (one `__m256`) and of 9–16 lanes (two),
+/// exact multiples of 8 and 16, a window at the tile's top-left, and a window
+/// against its bottom-right corner, where the last chunk's load runs furthest
+/// into the row padding, on every channel.
+#[test]
+fn wide_compute_channel_grids_match_scalar_exactly() {
+    let resolution = 16usize;
+    let support = disk_support(resolution);
+    let channels = 3usize;
+    for span in [
+        17usize, 18, 19, 23, 24, 25, 29, 31, 32, 33, 40, 41, 47, 48, 49,
+    ] {
+        // A tile 3 px wider than the window needs, so the window can sit at
+        // either corner.
+        let cr = resolution + span - 1 + 3;
+        let tile = synthetic_tile(cr, channels, false);
+        for (win_oy, win_ox) in [(0usize, 0usize), (3, 3), (0, 3), (3, 0), (1, 2)] {
+            assert_wide_grids_exact(&tile, &support, resolution, span, win_oy, win_ox);
+        }
+    }
+}
+
+fn assert_wide_grids_exact(
+    tile: &ContextTile,
+    support: &Support,
+    resolution: usize,
+    span: usize,
+    win_oy: usize,
+    win_ox: usize,
+) {
+    let n = support.pixels.len();
+    let w_f32: Vec<f32> = support.weights.iter().map(|&w| w as f32).collect();
+    let mut offsets = Vec::new();
+    support_offsets(support, resolution, tile.istride, &mut offsets);
+    let kern: Vec<f32> = (0..n)
+        .map(|k| support.sqrt_weights[k] * (0.7 + 0.3 * ((k as f32) * 0.13).sin()))
+        .collect();
+    let gsz = span * span;
+    for c in 0..tile.channels {
+        let mut want = [vec![0f32; gsz], vec![0f32; gsz], vec![0f32; gsz]];
+        let [w_n, w_s1, w_s2] = &mut want;
+        compute_channel_grids_scalar(
+            &tile.planes[c],
+            support,
+            &kern,
+            &w_f32,
+            resolution,
+            tile.istride,
+            span,
+            win_oy,
+            win_ox,
+            w_n,
+            w_s1,
+            w_s2,
+        );
+        // Garbage in the outputs first: the kernel overwrites them.
+        let mut got = [
+            vec![f32::NAN; gsz],
+            vec![f32::NAN; gsz],
+            vec![f32::NAN; gsz],
+        ];
+        let [g_n, g_s1, g_s2] = &mut got;
+        compute_channel_grids(
+            &tile.planes[c],
+            support,
+            &offsets,
+            &kern,
+            &w_f32,
+            resolution,
+            tile.istride,
+            span,
+            win_oy,
+            win_ox,
+            g_n,
+            g_s1,
+            g_s2,
+        );
+        for (name, (g, w)) in ["n", "s1", "s2"].iter().zip(got.iter().zip(&want)) {
+            for s in 0..gsz {
+                assert_eq!(
+                    g[s].to_bits(),
+                    w[s].to_bits(),
+                    "span {span} window ({win_oy}, {win_ox}) ch {c} {name}[{s}]: {} vs {}",
+                    g[s],
+                    w[s]
+                );
+            }
+        }
+    }
+}
+
 /// The whole dispatched `search_shift` agrees with the per-candidate `f64`
 /// oracle (`search_shift_ref`) — exercising the AVX2 inner loop end-to-end on
 /// the same clear-peak fixtures `search_shift_matches_reference*` use. The
 /// integer argmax must match exactly (it drives the read accumulator).
 #[test]
 fn search_shift_avx2_matches_scalar() {
-    for &(resolution, margin, dy0, dx0) in
-        &[(20usize, 4i64, 1i64, -2i64), (24, 6, -3, 2), (16, 3, -1, 2)]
-    {
+    for &(resolution, margin, dy0, dx0) in &[
+        (20usize, 4i64, 1i64, -2i64),
+        (24, 6, -3, 2),
+        (16, 3, -1, 2),
+        // Spans 17, 21 and 29: the chunked kernel.
+        (20, 8, 5, -7),
+        (24, 10, -9, 4),
+        (16, 14, 11, -12),
+    ] {
         let cr = resolution + 2 * margin as usize;
         let channels = 3usize;
         let support = disk_support(resolution);

@@ -52,12 +52,21 @@ pub(super) fn support_offsets(
 /// grids — they are overwritten, not accumulated; the caller does **not** need to
 /// pre-zero them.
 ///
-/// Runtime-dispatched to a hand-rolled AVX2 kernel where available (mirrors
-/// `normal_refine::fronto_cache::resample_support_avx2`); the scalar form is the
-/// reference, the non-x86 / non-AVX2 fallback, and the path for spans larger
-/// than the AVX2 kernel's 16-lane row. `offsets` is [`support_offsets`] for
-/// this `support`, `resolution` and `istride`; the AVX2 kernel addresses its
-/// loads through it.
+/// Runtime-dispatched to one of two hand-rolled AVX2 kernels where available
+/// (mirrors `normal_refine::fronto_cache::resample_support_avx2`); the scalar
+/// form is the reference and the non-x86 / non-AVX2 fallback.
+///
+/// - `span ≤ 16`: `compute_channel_grids_avx2` holds one 16-lane grid row in
+///   registers and accumulates with FMA, so it agrees with the scalar form to
+///   within `f32` rounding (one rounding per term where the scalar form takes
+///   two), not bit for bit.
+/// - `span > 16`: `compute_channel_grids_avx2_wide` walks each grid row in
+///   chunks of 16 cells and accumulates with a separate multiply and add in
+///   the scalar form's order, so its grids are **bit-identical** to the scalar
+///   form's, which is what searches this wide ran before the kernel existed.
+///
+/// `offsets` is [`support_offsets`] for this `support`, `resolution` and
+/// `istride`; the AVX2 kernels address their loads through it.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn compute_channel_grids(
     plane: &[f32],
@@ -76,8 +85,8 @@ pub(super) fn compute_channel_grids(
 ) {
     #[cfg(target_arch = "x86_64")]
     {
-        // The AVX2 kernel handles spans up to 16 (one pair of `__m256` lanes per
-        // gy row). The default `span = 13` fits; larger spans fall back to scalar.
+        // Spans up to 16 fit one pair of `__m256` lanes per gy row (the default
+        // `span = 13` does); wider spans take the chunked kernel.
         if span <= 16 && is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
             // SAFETY: see `compute_channel_grids_avx2`'s SAFETY block — the runtime
             // feature check, `span ≤ 16`, and the cache's `istride` padding plus the
@@ -90,14 +99,29 @@ pub(super) fn compute_channel_grids(
                 );
             }
         }
+        if span > 16 && is_x86_feature_detected!("avx2") {
+            // SAFETY: see `compute_channel_grids_avx2_wide`'s SAFETY block — the
+            // runtime feature check, and the cache's `istride` padding plus the
+            // `win_o*`/`r_k`/`c_k` invariants, which put every chunk's first lane
+            // inside the tile, ensure every 16- or 8-wide load stays in bounds of
+            // `plane[..istride * cache_rows]`.
+            unsafe {
+                compute_channel_grids_avx2_wide(
+                    plane, support, offsets, kern, w, resolution, istride, span, win_oy, win_ox,
+                    g_n, g_s1, g_s2,
+                );
+            }
+            return;
+        }
     }
     compute_channel_grids_scalar(
         plane, support, kern, w, resolution, istride, span, win_oy, win_ox, g_n, g_s1, g_s2,
     );
 }
 
-/// Scalar reference for [`compute_channel_grids`]: the algebra the AVX2 kernel
-/// must match, the non-x86 / non-AVX2 fallback, and the equivalence test's oracle.
+/// Scalar reference for [`compute_channel_grids`]: the algebra the AVX2 kernels
+/// must match (the wide one bit for bit), the non-x86 / non-AVX2 fallback, and
+/// the equivalence tests' oracle.
 /// Internally uses a k-outer in-memory accumulator over the `(N, S1, S2)` grids;
 /// the function owns its outputs (zeroes them before accumulating) so the external
 /// contract is "overwrite", matching the AVX2 path.
@@ -163,7 +187,7 @@ pub(super) fn compute_channel_grids_scalar(
 ///    is_x86_feature_detected!("fma")` (the `#[target_feature]` enable is
 ///    sound only when the runtime has these).
 /// 2. **Span fits in 16 lanes:** `span ≤ 16` (one pair of `__m256` per `gy`
-///    row); larger spans must take the scalar fallback.
+///    row); larger spans take `compute_channel_grids_avx2_wide`.
 /// 3. **Plane buffer covers every 16-wide load:** for every support pixel `k`
 ///    with `r_k = pixel/resolution`, `c_k = pixel%resolution`, and every
 ///    `gy ∈ [0, span)`,
@@ -265,6 +289,163 @@ unsafe fn compute_channel_grids_avx2(
         store_first(n_lo, n_hi, &mut g_n[gbase..][..span]);
         store_first(s1_lo, s1_hi, &mut g_s1[gbase..][..span]);
         store_first(s2_lo, s2_hi, &mut g_s2[gbase..][..span]);
+    }
+}
+
+/// Hand-rolled AVX2 implementation of [`compute_channel_grids`] for spans over
+/// 16. Each `gy` row is cut into chunks of 16 cells, the last one loaded 8 or
+/// 16 lanes wide as its remainder needs; a chunk holds its cells of
+/// `(N, S1, S2)` in YMM accumulators across the whole `k`-loop, as
+/// `compute_channel_grids_avx2` does for its single chunk, so the grids are
+/// written once per chunk rather than read and written once per support pixel
+/// as the scalar form does.
+///
+/// **Bit-identical to [`compute_channel_grids_scalar`].** Every lane computes
+/// the scalar form's sequence for its cell: starting from `+0.0`, for each `k`
+/// in order, `N += kern[k] · v`, `t = w[k] · v`, `S1 += t`, `S2 += t · v`,
+/// each product and sum rounded once as `f32`, with no FMA. The scalar loop's
+/// `w_k * v * v` is `(w_k · v) · v` by left associativity, the same `t · v`.
+/// The lanes past `span` in a last chunk are computed from whatever the load
+/// read and are not stored.
+///
+/// # Safety
+///
+/// The caller must uphold:
+///
+/// 1. **CPU feature:** `is_x86_feature_detected!("avx2")` (the
+///    `#[target_feature]` enable is sound only when the runtime has it).
+/// 2. **The search window lies inside the tile:** for every support pixel `k`
+///    with `r_k = pixel/resolution`, `c_k = pixel%resolution`, and every
+///    `gy, gx ∈ [0, span)`, the cell read, row `gy + win_oy + r_k` and column
+///    `gx + win_ox + c_k`, is a tile pixel: row `< cache_rows` and column
+///    `< res`. The scalar form's slices bounds-check the same reads, and the
+///    tile sizing in `search_shift` guarantees it.
+/// 3. **Plane buffer covers every chunk load:** `plane.len() ≥ istride ·
+///    cache_rows` and `istride ≥ res − 1 + 16`, the cache's
+///    `istride = align_up(res − 1 + 16, 8)` padding. A chunk starts at a grid
+///    column `gx0 < span`, so by (2) its first lane reads a tile column
+///    `≤ res − 1`, and its last lane, at most 15 further on, a column
+///    `≤ res + 14 < istride`: inside the same padded row, which on the tile's
+///    last row ends at `istride · cache_rows`. The padding that admits the
+///    `span ≤ 16` kernel's one 16-wide load from any tile column therefore
+///    admits every chunk of any span, with no masked load and no wider pad.
+/// 4. **Output buffers cover the span × span grid:**
+///    `g_n.len()`, `g_s1.len()`, `g_s2.len() ≥ span * span`.
+/// 5. **`offsets` is [`support_offsets`] of the same `support`, `resolution`
+///    and `istride`**, and `kern.len()`, `w.len() ≥ support.pixels.len()`.
+///
+/// `debug_assert!`s check (3) at the per-call worst case, (4) and (5); release
+/// builds rely on the caller's contract.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+#[allow(clippy::too_many_arguments)]
+unsafe fn compute_channel_grids_avx2_wide(
+    plane: &[f32],
+    support: &Support,
+    offsets: &[usize],
+    kern: &[f32],
+    w: &[f32],
+    resolution: usize,
+    istride: usize,
+    span: usize,
+    win_oy: usize,
+    win_ox: usize,
+    g_n: &mut [f32],
+    g_s1: &mut [f32],
+    g_s2: &mut [f32],
+) {
+    use std::arch::x86_64::*;
+    let gsz = span * span;
+    debug_assert!(
+        g_n.len() >= gsz && g_s1.len() >= gsz && g_s2.len() >= gsz,
+        "output grids must cover span * span"
+    );
+    let n = support.pixels.len();
+    debug_assert_eq!(offsets.len(), n);
+    debug_assert!(kern.len() >= n && w.len() >= n);
+    // The furthest lane any chunk loads: the last grid row, the largest `r_k`
+    // and `c_k`, and the last chunk read to its full width.
+    if let (Some(r_max), Some(c_max)) = (
+        support.pixels.iter().map(|&p| p / resolution).max(),
+        support.pixels.iter().map(|&p| p % resolution).max(),
+    ) {
+        let last_gx0 = (span - 1) / 16 * 16;
+        let last_width = if span - last_gx0 > 8 { 16 } else { 8 };
+        let end = (span - 1 + win_oy + r_max) * istride + win_ox + c_max + last_gx0 + last_width;
+        debug_assert!(
+            end <= plane.len(),
+            "AVX2 load would read past the centered plane: end={end} > plane.len()={} \
+             (span={span}, istride={istride}, win_oy={win_oy}, win_ox={win_ox}, \
+             r_max={r_max}, c_max={c_max})",
+            plane.len(),
+        );
+    }
+    let plane_ptr = plane.as_ptr();
+    let offsets_ptr = offsets.as_ptr();
+    let kern_ptr = kern.as_ptr();
+    let w_ptr = w.as_ptr();
+    let mut tmp = [0.0f32; 16];
+    for gy in 0..span {
+        let row_base = (gy + win_oy) * istride + win_ox;
+        let gbase = gy * span;
+        let mut gx0 = 0;
+        while gx0 < span {
+            let lanes = (span - gx0).min(16);
+            let chunk_base = row_base + gx0;
+            let at = gbase + gx0;
+            if lanes > 8 {
+                let mut n_lo = _mm256_setzero_ps();
+                let mut n_hi = _mm256_setzero_ps();
+                let mut s1_lo = _mm256_setzero_ps();
+                let mut s1_hi = _mm256_setzero_ps();
+                let mut s2_lo = _mm256_setzero_ps();
+                let mut s2_hi = _mm256_setzero_ps();
+                for k in 0..n {
+                    let base = chunk_base + *offsets_ptr.add(k);
+                    let v_lo = _mm256_loadu_ps(plane_ptr.add(base));
+                    let v_hi = _mm256_loadu_ps(plane_ptr.add(base + 8));
+                    let kb = _mm256_set1_ps(*kern_ptr.add(k));
+                    let wb = _mm256_set1_ps(*w_ptr.add(k));
+                    n_lo = _mm256_add_ps(n_lo, _mm256_mul_ps(kb, v_lo));
+                    n_hi = _mm256_add_ps(n_hi, _mm256_mul_ps(kb, v_hi));
+                    let t_lo = _mm256_mul_ps(wb, v_lo);
+                    let t_hi = _mm256_mul_ps(wb, v_hi);
+                    s1_lo = _mm256_add_ps(s1_lo, t_lo);
+                    s1_hi = _mm256_add_ps(s1_hi, t_hi);
+                    s2_lo = _mm256_add_ps(s2_lo, _mm256_mul_ps(t_lo, v_lo));
+                    s2_hi = _mm256_add_ps(s2_hi, _mm256_mul_ps(t_hi, v_hi));
+                }
+                let mut store = |lo: __m256, hi: __m256, dst: &mut [f32]| {
+                    _mm256_storeu_ps(tmp.as_mut_ptr(), lo);
+                    _mm256_storeu_ps(tmp.as_mut_ptr().add(8), hi);
+                    dst[at..][..lanes].copy_from_slice(&tmp[..lanes]);
+                };
+                store(n_lo, n_hi, g_n);
+                store(s1_lo, s1_hi, g_s1);
+                store(s2_lo, s2_hi, g_s2);
+            } else {
+                let mut n_acc = _mm256_setzero_ps();
+                let mut s1 = _mm256_setzero_ps();
+                let mut s2 = _mm256_setzero_ps();
+                for k in 0..n {
+                    let v = _mm256_loadu_ps(plane_ptr.add(chunk_base + *offsets_ptr.add(k)));
+                    let kb = _mm256_set1_ps(*kern_ptr.add(k));
+                    let wb = _mm256_set1_ps(*w_ptr.add(k));
+                    n_acc = _mm256_add_ps(n_acc, _mm256_mul_ps(kb, v));
+                    let t = _mm256_mul_ps(wb, v);
+                    s1 = _mm256_add_ps(s1, t);
+                    s2 = _mm256_add_ps(s2, _mm256_mul_ps(t, v));
+                }
+                let mut store = |acc: __m256, dst: &mut [f32]| {
+                    _mm256_storeu_ps(tmp.as_mut_ptr(), acc);
+                    dst[at..][..lanes].copy_from_slice(&tmp[..lanes]);
+                };
+                store(n_acc, g_n);
+                store(s1, g_s1);
+                store(s2, g_s2);
+            }
+            gx0 += 16;
+        }
     }
 }
 

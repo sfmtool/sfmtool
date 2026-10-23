@@ -26,7 +26,8 @@ rows) is in
 the two searches (`search_shift` for the whole grid, `search_shift_plus_descent`
 for the descent) and their reused `SearchScratch` in
 [keypoint_localize/search.rs](../../../crates/sfmtool-core/src/patch/keypoint_localize/search.rs),
-and the AVX2 kernels (`compute_channel_grids_avx2` for the whole grid,
+and the AVX2 kernels (`compute_channel_grids_avx2` for the whole grid up to
+16 cells wide, `compute_channel_grids_avx2_wide` for wider grids,
 `score_cell_one_channel_avx2` for one cell) with their scalar fallbacks,
 dispatched at runtime, in
 [keypoint_localize/kernels.rs](../../../crates/sfmtool-core/src/patch/keypoint_localize/kernels.rs).
@@ -177,10 +178,31 @@ It costs 113 µs per search against the descent's 50 µs at the default window
 (13×13 cells), which is 1.1 to 1.2 times the descent's time per track, since
 the renders dominate. The measurements are in
 [patch-keypoint-localization.md](patch-keypoint-localization.md#how-the-alignment-was-measured).
-The accumulation kernel's AVX2 path covers spans up to 16 cells; the span is
-`2·⌈search⌉ + 1`, so that is `search` up to 7. A wider window runs the scalar
-kernel, and at `search` 9 the whole grid costs 1.2 to 2.0 times the descent
-per track (1.7 to 2.0 on DnDTabletop, 1.2 to 1.8 on DinoLedge).
+The span is `2·⌈search⌉ + 1`, so the register-blocked kernel above, one
+16-lane row, covers `search` up to 7. A wider window, such as the bench's
+read-back searches at 6 px plus the widest keypoint offset, runs
+`compute_channel_grids_avx2_wide`, described below.
+
+### Spans over 16
+
+`compute_channel_grids_avx2_wide` cuts each grid row into chunks of 16 cells,
+the last loaded 8 or 16 lanes wide as its remainder needs, and holds each
+chunk's `N`, `S1` and `S2` in YMM accumulators across the whole `k` loop, as
+the 16-lane kernel does for its single chunk. It needs no wider row padding:
+every chunk starts at a grid column inside the window, so its first lane reads
+a tile column `≤ side − 1` and its last lane at most 15 further on, which the
+`istride = align_up(side − 1 + 16, 8)` padding already admits for a 16-wide
+load from any tile column.
+
+Unlike the 16-lane kernel it accumulates with a separate multiply and add per
+term, in the scalar form's order (`N += kern·v`, `t = w·v`, `S1 += t`,
+`S2 += t·v`), so its grids are bit-identical to the scalar form's
+(`wide_compute_channel_grids_match_scalar_exactly`), and a search this wide
+gives exactly the keypoint and score it gave on the scalar form. Measured per
+channel for a `R = 24` disk support (448 pixels), single-threaded: 10.7 µs
+against 36.6 µs for the scalar form at span 17, 20.8 against 67.2 µs at span 25
+and 35.4 against 113.2 µs at span 33, against 5.1 µs for the 16-lane kernel at
+span 13.
 
 ### "+"-descent
 
@@ -283,7 +305,10 @@ pattern instead.
   channel (`search_shift_matches_reference*`).
 - **AVX2 against scalar.** The centered-`f32` scalar forms are the reference and
   the non-x86 / non-AVX2 fallback; `compute_channel_grids_avx2_matches_scalar`
-  checks the whole-grid kernel within `f32` tolerance, and
+  checks the 16-lane whole-grid kernel within `f32` tolerance (it uses FMA,
+  one rounding per term where the scalar form takes two),
+  `wide_compute_channel_grids_match_scalar_exactly` checks the chunked kernel
+  for spans over 16 bit for bit, and
   `score_cell_matches_compute_channel_grids` checks the per-cell kernel against
   the whole-grid kernel's value at every cell of the grid.
 - **End to end.** The localizer's own accuracy, against ground truth, is measured
