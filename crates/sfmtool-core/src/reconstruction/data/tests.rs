@@ -414,6 +414,33 @@ fn test_recompute_infinity_point_errors_embedded() {
 }
 
 #[test]
+fn test_rescore_marked_points_matches_full_recompute() {
+    // Scoring a few marked points gives each the value the full recompute
+    // gives it, a point at infinity and one behind every camera included, and
+    // leaves the unmarked points' stored errors alone.
+    let mut recon = demo_embedded(10);
+    recon.point_set.points[0].position = nalgebra::Point3::new(0.0, 0.0, -1.0);
+    recon.point_set.points[0].w = 0.0;
+    recon.point_set.points[3].position = nalgebra::Point3::new(0.0, 0.0, -1.0e6);
+    for p in &mut recon.point_set.points {
+        p.rms_reprojection_error = -1.0;
+    }
+    let mut full = recon.clone();
+    full.recompute_point_errors().unwrap();
+
+    let marked: Vec<bool> = (0..10).map(|p| p % 3 == 0).collect();
+    assert!(recon.rescore_points_from_inline_keypoints(&marked));
+    for (p, &mark) in marked.iter().enumerate() {
+        let got = recon.point_set.points[p].rms_reprojection_error;
+        if mark {
+            assert_eq!(got, full.point_set.points[p].rms_reprojection_error);
+        } else {
+            assert_eq!(got, -1.0, "point {p} is not marked");
+        }
+    }
+}
+
+#[test]
 fn test_to_sfmr_data_is_sift_files() {
     // A reconstruction round-trips as a sift_files v4 file.
     let data = SfmrReconstruction::demo(10).to_sfmr_data();
