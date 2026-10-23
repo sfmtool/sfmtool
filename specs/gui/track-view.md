@@ -1099,9 +1099,10 @@ err (px)`, the same at either stage. The geometry search box is named by the
 label before it, `geometry search min relative ZNCC (%)`. Outside the
 thresholds, the *per axis* and *overlap* boxes are named `pieces per axis` and
 `piece overlap (%)`, since their text is a suffix inside the value; the field
-*Rename* opens is `item name`; and the header's two icon buttons are named
+*Rename* opens is `item name`; and the header's icon buttons are named
 `Copy Point ID` and `Go to Point`, after their hover text and the dialog the
-second opens.
+second opens, with the Viewed header's copy button for the coordinates named
+`Copy coordinates`, its hover text.
 
 The sixth box, *geometry search min relative ZNCC (%)*, is
 `geometry_search_min_relative_zncc`: the fraction of the track's own

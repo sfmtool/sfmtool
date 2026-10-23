@@ -6146,7 +6146,8 @@ where a test hands no host over.
   on the bench and with its Rename field open, and the Go to Point, Bundle
   Adjust and Save As Minimal dialogs, and reads the names their number boxes,
   dropdowns, text inputs and icon buttons are listed under; none of the
-  number boxes, dropdowns and text inputs drawn there is unnamed.
+  number boxes, dropdowns and text inputs drawn there is unnamed, and a
+  number box keeps its name while a click has it open for typing.
 - **The input tools reach what a person's input reaches**, in `mcp::tests::input`,
   which runs each call a step per frame through the same `PendingInput` the
   viewer runs, in real egui passes that draw the viewer's own menu bar,

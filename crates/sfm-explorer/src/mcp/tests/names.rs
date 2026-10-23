@@ -212,6 +212,28 @@ fn the_image_detail_toolbar_and_its_gear_popup_name_their_controls() {
         "{toolbar:#}"
     );
 
+    // A click opens the box for typing, which draws a text field with the
+    // box's id in its place; the box keeps its name while it is open.
+    let min = the_role(&toolbar, "spin_button", "minimum size (px)").clone();
+    let typing = drawn.click(&min, &mut draw);
+    assert!(
+        drawn.ctx.memory(|memory| memory.focused()).is_some(),
+        "the box is open for typing"
+    );
+    the_role(&typing, "spin_button", "minimum size (px)");
+    assert_all_named(&typing);
+    // Escape closes it again, so the gear below is clicked with no box open.
+    drawn.frame(
+        vec![egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::default(),
+        }],
+        &mut draw,
+    );
+
     let gear = the_role(&toolbar, "button", "⚙").clone();
     let popup = drawn.click(&gear, &mut draw);
     assert_eq!(popup["menus"].as_array().unwrap().len(), 1, "{popup:#}");
