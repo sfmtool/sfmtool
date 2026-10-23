@@ -140,7 +140,10 @@ seoul_bull and 15% on kerry_park; on 40 long DnDTabletop tracks no change was
 measurable against the run-to-run spread.
 A separate single-accumulator pass over the invalidity plane, with the same
 structure and offsets, marks unscorable shifts; it is skipped for a tile with
-every pixel in frame. The argmax and the 3×3 quadratic
+every pixel in frame. It is a plain loop left to the compiler: it runs only for
+a tile that reaches past the photograph's edge, which in the bench read-back
+is 1 to 15% of the searches on the three ground truths, at most 2.4% of the
+localizer's time and 0.1% of the step's. The argmax and the 3×3 quadratic
 sub-pixel fit follow.
 
 ### Why centering enables f32
