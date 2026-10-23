@@ -290,7 +290,7 @@ class TestColmapImportErrors:
         return model_dir, model
 
     def _metadata(self, sfmr_path, model):
-        from sfmtool._workspace import load_workspace_config
+        from sfmtool import load_workspace_config
         from sfmtool.colmap.io import build_metadata
 
         workspace_dir = sfmr_path.parent

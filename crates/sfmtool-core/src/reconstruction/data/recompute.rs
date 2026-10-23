@@ -230,32 +230,38 @@ impl SfmrReconstruction {
     fn inline_point_reprojection_errors(&self) -> Option<Vec<f32>> {
         let keypoints_xy = self.keypoints_xy()?;
         let out = (0..self.point_set.points.len())
-            .map(|point_idx| {
-                let start = self.point_set.observation_offsets[point_idx];
-                let observations = self
-                    .observations_for_point(point_idx)
-                    .iter()
-                    .enumerate()
-                    .map(|(k, obs)| {
-                        let row = start + k;
-                        (
-                            obs.image_index as usize,
-                            [keypoints_xy[[row, 0]] as f64, keypoints_xy[[row, 1]] as f64],
-                        )
-                    });
-                rms_reprojection_error_px(
-                    &self.image_set,
-                    &self.point_set.points[point_idx],
-                    observations,
-                )
-            })
+            .map(|point_idx| self.inline_point_error(keypoints_xy, point_idx))
             .collect();
         Some(out)
     }
 
+    /// The RMS reprojection error (px) of point `point_idx` against the inline
+    /// `keypoints_xy` column, by [`rms_reprojection_error_px`].
+    fn inline_point_error(&self, keypoints_xy: &Array2<f32>, point_idx: usize) -> f32 {
+        let start = self.point_set.observation_offsets[point_idx];
+        let observations = self
+            .observations_for_point(point_idx)
+            .iter()
+            .enumerate()
+            .map(|(k, obs)| {
+                let row = start + k;
+                (
+                    obs.image_index as usize,
+                    [keypoints_xy[[row, 0]] as f64, keypoints_xy[[row, 1]] as f64],
+                )
+            });
+        rms_reprojection_error_px(
+            &self.image_set,
+            &self.point_set.points[point_idx],
+            observations,
+        )
+    }
+
     /// Set the RMS reprojection error of each point `points[i]` marks from the
     /// inline `keypoints_xy` column, leaving the other points' errors as they
-    /// are. `points` has one entry per point.
+    /// are. `points` has one entry per point. Only the marked points are
+    /// measured, so an edit that touches a few points of a large
+    /// reconstruction costs only those points' observations.
     ///
     /// For an edit that changes some points' tracks and knows which: it reads
     /// no `.sift` file, so a value without the inline column is left
@@ -266,13 +272,17 @@ impl SfmrReconstruction {
         if !points.iter().any(|&p| p) {
             return true;
         }
-        let Some(errors) = self.inline_point_reprojection_errors() else {
+        let Some(keypoints_xy) = self.keypoints_xy() else {
             return false;
         };
-        for ((pt, error), &rescore) in self.point_set.points.iter_mut().zip(errors).zip(points) {
-            if rescore {
-                pt.rms_reprojection_error = error;
-            }
+        let errors: Vec<(usize, f32)> = points
+            .iter()
+            .enumerate()
+            .filter(|&(_, &rescore)| rescore)
+            .map(|(p, _)| (p, self.inline_point_error(keypoints_xy, p)))
+            .collect();
+        for (p, error) in errors {
+            self.point_set.points[p].rms_reprojection_error = error;
         }
         true
     }
