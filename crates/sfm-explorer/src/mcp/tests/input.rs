@@ -113,12 +113,14 @@ struct Harness {
     clicks: Clicks,
     drags: Drags,
     list: List,
+    /// The value of the test number box beside Count.
+    number: f64,
     names: WidgetNames,
 }
 
 /// The tab bodies: the real Scene and Image Detail panels; a button that
-/// counts its clicks and a pad that records its drags in the Background Tasks
-/// panel; a label for every other panel.
+/// counts its clicks, a number box beside it, and a pad that records its drags
+/// in the Background Tasks panel; a label for every other panel.
 struct Tabs<'a> {
     state: &'a mut AppState,
     scene_graph: &'a mut SceneGraphPanel,
@@ -127,6 +129,7 @@ struct Tabs<'a> {
     clicks: &'a mut Clicks,
     drags: &'a mut Drags,
     list: &'a mut List,
+    number: &'a mut f64,
 }
 
 impl TabViewer for Tabs<'_> {
@@ -177,7 +180,19 @@ impl TabViewer for Tabs<'_> {
                 crate::state::record_image_detail_changes(&mut state.action_log, &before, &after);
             }
             Tab::BackgroundTasks => {
-                let response = ui.button("Count");
+                // Count, and beside it a number box that takes a typed value
+                // when it is left, as the Track View threshold boxes do.
+                let response = ui
+                    .horizontal(|ui| {
+                        let response = ui.button("Count");
+                        ui.add(
+                            egui::DragValue::new(&mut *self.number)
+                                .range(0.0..=100.0)
+                                .update_while_editing(false),
+                        );
+                        response
+                    })
+                    .inner;
                 self.clicks.clicked += u32::from(response.clicked());
                 self.clicks.double_clicked += u32::from(response.double_clicked());
                 self.clicks.triple_clicked += u32::from(response.triple_clicked());
@@ -244,6 +259,7 @@ impl Harness {
             clicks: Clicks::default(),
             drags: Drags::default(),
             list: List::default(),
+            number: 5.0,
             names: WidgetNames::default(),
         };
         harness.settle();
@@ -275,6 +291,7 @@ impl Harness {
             clicks,
             drags,
             list,
+            number,
             ..
         } = self;
         let mut output = ctx.run_ui(input, |root_ui| {
@@ -292,6 +309,7 @@ impl Harness {
                         clicks,
                         drags,
                         list,
+                        number,
                     },
                 );
                 state.dock = dock;
@@ -1068,8 +1086,118 @@ fn type_text_fills_go_to_point_and_enter_selects_the_point() {
     );
 }
 
-/// A widget that is not a text input is refused, and so is a call with
-/// nothing focused, each as one failed row.
+/// The test number box in the Background Tasks panel, from a listing of it.
+fn number_box(harness: &mut Harness) -> Value {
+    let panel = harness.listing(Some(Tab::BackgroundTasks));
+    let boxes: Vec<&Value> = panel["widgets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|entry| entry["role"] == json!("spin_button"))
+        .collect();
+    assert_eq!(boxes.len(), 1, "one number box in {panel:#}");
+    boxes[0].clone()
+}
+
+/// Named by its widget id, a number box is clicked open for typing as a
+/// person's click opens it, with its text selected, so the typed number
+/// replaces the old one. A box that takes its value when it is left has it
+/// after Enter.
+#[test]
+fn type_text_sets_a_number_box_by_its_widget_id() {
+    let mut harness = Harness::new();
+    let entry = number_box(&mut harness);
+    assert_eq!(entry["value"], json!("5"), "{entry:#}");
+
+    let reply = harness.ok(
+        "type_text",
+        json!({ "text": "42", "widget": entry["widget"] }),
+    );
+    assert_eq!(reply["focused"]["widget"], entry["widget"], "{reply:#}");
+    assert_eq!(reply["focused"]["role"], json!("spin_button"), "{reply:#}");
+    let last = harness.state.action_log.entries().last().unwrap();
+    assert_eq!(
+        last.text,
+        "type_text 2 characters into the number box in the Background Tasks panel"
+    );
+    // Not yet: this box takes its value when it is left.
+    assert_eq!(harness.number, 5.0);
+
+    let reply = harness.ok("press_key", json!({ "key": "Enter" }));
+    assert_eq!(reply["focused"], Value::Null, "{reply:#}");
+    assert_eq!(harness.number, 42.0);
+    assert_eq!(number_box(&mut harness)["value"], json!("42"));
+}
+
+/// After a click has opened a number box, type_text without widget types into
+/// it, since it has keyboard focus.
+#[test]
+fn type_text_types_into_a_number_box_a_click_opened() {
+    let mut harness = Harness::new();
+    let entry = number_box(&mut harness);
+    harness.ok("click", json!({ "widget": entry["widget"] }));
+    let reply = harness.ok("type_text", json!({ "text": "7.5" }));
+    assert_eq!(reply["focused"]["widget"], entry["widget"], "{reply:#}");
+    harness.ok("press_key", json!({ "key": "Enter" }));
+    assert_eq!(harness.number, 7.5);
+}
+
+/// Text that is not a number leaves the value as it was, and a number outside
+/// the box's range is clamped to it, as egui does with a person's typing.
+#[test]
+fn a_number_box_keeps_its_value_for_text_that_is_not_a_number() {
+    let mut harness = Harness::new();
+    let entry = number_box(&mut harness);
+    harness.ok(
+        "type_text",
+        json!({ "text": "abc", "widget": entry["widget"] }),
+    );
+    harness.ok("press_key", json!({ "key": "Enter" }));
+    assert_eq!(harness.number, 5.0);
+    assert_eq!(number_box(&mut harness)["value"], json!("5"));
+
+    harness.ok(
+        "type_text",
+        json!({ "text": "500", "widget": entry["widget"] }),
+    );
+    harness.ok("press_key", json!({ "key": "Enter" }));
+    assert_eq!(harness.number, 100.0);
+}
+
+/// The viewer's own number box in Load Demo Data takes its value as it is
+/// typed, so the typed number replaces the old one with no Enter.
+#[test]
+fn type_text_sets_the_load_demo_data_number_of_points() {
+    let mut harness = Harness::new();
+    harness.state.show_demo_dialog = true;
+    let window = harness.listing(None);
+    let dialog = &window["dialogs"][0];
+    assert_eq!(dialog["title"], json!("Load Demo Data"), "{window:#}");
+    let entry = dialog["widgets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["role"] == json!("spin_button"))
+        .expect("the number of points")
+        .clone();
+    assert_eq!(entry["value"], json!("1000"), "{entry:#}");
+
+    let reply = harness.ok(
+        "type_text",
+        json!({ "text": "250", "widget": entry["widget"] }),
+    );
+    assert_eq!(harness.state.demo_num_points, 250, "{reply:#}");
+    assert_eq!(reply["focused"]["value"], json!("250"), "{reply:#}");
+    let last = harness.state.action_log.entries().last().unwrap();
+    assert_eq!(
+        last.text,
+        "type_text 3 characters into the number box in Load Demo Data"
+    );
+}
+
+/// A widget that is not a text input or a number box is refused naming the
+/// two roles that take text, and so is a call with nothing focused, each as
+/// one failed row.
 #[test]
 fn type_text_is_refused_where_the_text_would_go_nowhere() {
     let mut harness = Harness::new();
@@ -1081,7 +1209,7 @@ fn type_text_is_refused_where_the_text_would_go_nowhere() {
         json!({ "text": "x", "widget": file["widget"] }),
     );
     assert!(
-        error.0.contains("not") || error.0.contains("text input"),
+        error.0.contains("text_input") && error.0.contains("spin_button"),
         "{error}"
     );
     assert!(error.0.contains("\"File\""), "{error}");

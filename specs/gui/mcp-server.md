@@ -219,7 +219,7 @@ and press the viewer's widgets the way a person's eyes, mouse and keyboard do
 | `drag` | input | Press a mouse button at the first point of a path, move through the rest one point per frame with the button held, and release at the last |
 | `scroll` | input | Move the pointer to a point or a widget and turn the mouse wheel or move two fingers on a trackpad there, with modifiers |
 | `press_key` | input | Press and release one key, with modifiers, optionally with the pointer moved over a panel first |
-| `type_text` | input | Type a string into the focused text input, or into one named by its widget id |
+| `type_text` | input | Type a string into the focused text input or number box, or into one named by its widget id |
 
 Every tool is annotated: the seventeen reads and `screenshot` carry
 `readOnlyHint: true`, the seventy-three writes `destructiveHint: false` (none of
@@ -2571,7 +2571,9 @@ clicked.
   widgets by `name` and `path`, because a change to the code that builds a
   panel can change an id without changing anything a person sees.
 - **`role`**: the AccessKit role in snake case (`button`, `check_box`,
-  `label`, `text_input`, `slider`, `spin_button`, …). A widget with no
+  `label`, `text_input`, `slider`, `spin_button`, …). A number box (egui's
+  `DragValue`) is a `spin_button`, also while it is open for typing, since egui
+  gives its text field the box's role. A widget with no
   accessibility node, or one whose role is `Unknown`, has role `null`: it can
   still be clicked, but nothing in the tree says what it is. The Scene tree's
   row rectangles and the dock's tab close buttons are examples.
@@ -2581,9 +2583,10 @@ clicked.
   target's pixels, each edge rounded on its own as the panel crop rounds. A
   widget that is clipped out entirely is left out.
 - **`enabled`**, **`toggled`** (check boxes and radio buttons only; `null`
-  when indeterminate) and **`value`** (text inputs, sliders, drag values and
+  when indeterminate) and **`value`** (text inputs, sliders, number boxes and
   combo boxes only, as a string; for a combo box, the text it shows for its
-  choice).
+  choice; for a number box, its number, which does not change while it is
+  being typed into until the box takes the typed number).
 - **`sense`**: `click`, `drag`, `click_and_drag`, or `none`. It says whether
   `click` on this widget can do anything. egui's `Sense` has no bit for
   hovering, so a widget that only shows a tooltip is `none` like text that
@@ -3015,6 +3018,7 @@ at the end for modifiers.
 { "key": "Z", "modifiers": ["command"] }                  // Undo
 { "key": "I", "panel_name": "image_detail" }              // a shortcut read over a panel
 { "text": "pt3d_1a2b3c4d_17", "widget": "4be0…" }         // type_text into a text input
+{ "text": "0.25", "widget": "91c3…" }                     // type_text into a number box
 ```
 
 **`press_key`** sends one key: a press in one frame and the release in the
@@ -3046,23 +3050,39 @@ the tool reaches each:
   moves there for a frame first, as `hover` does, and stays there; with
   `panel_name` and no `at_px` it goes to the centre of the panel's body. The
   frame before the move is drawn with no input, as `click`'s first is.
-- **A focused text input**: its own editing keys (`Backspace`, the arrows,
-  `Enter` to confirm). Focus is whatever the last click gave it, as for a
-  person.
+- **A focused text input or number box**: its own editing keys (`Backspace`,
+  the arrows, `Enter` to confirm; on a number box `ArrowUp` and `ArrowDown`
+  step the number). Focus is whatever the last click gave it, as for a person.
 
-**`type_text`** enters a string into a text input as one of egui's `Text`
-events per call, which is what an input method delivers when it commits. With
-`widget`, it clicks the widget first to focus it, and refuses if the widget is
-not a `text_input`, or if the click did not give it focus. The click puts the
-cursor where it lands, as a person's does, so a field that opened with its text
-selected (Go to Point, prefilled with the selected point's id) is typed onto the
-end rather than over the selection; `type_text` without `widget` types over it.
+**`type_text`** enters a string into a text input or a number box as one of
+egui's `Text` events per call, which is what an input method delivers when it
+commits. The two roles it types into are `text_input` and `spin_button`; a
+number box is egui's `DragValue`, which a click opens for typing as a text
+field that keeps the `spin_button` role. With `widget`, it clicks the widget
+first to focus it, and refuses if the widget has neither role, naming both, or
+if the click did not give it focus. The click does what a person's does. On a
+text input it puts the cursor where it lands, so a field that opened with its
+text selected (Go to Point, prefilled with the selected point's id) is typed
+onto the end rather than over the selection; `type_text` without `widget`
+types over it. On a number box that is not yet open for typing, the click opens
+it with its whole number selected, so the typed text replaces the number; on
+one already open, the click puts the cursor where it lands, as on a text input.
 Without `widget`, a frame is drawn first to read what has focus, the text goes
 to the focused widget, and the call is refused if nothing has focus, or if what
 has focus takes no text, since text sent there would be dropped with no sign.
 Empty text is refused at the parse. It types; it does not press Enter. A dialog
 that confirms on Enter takes a `press_key` after it, so a test can check the
 field's `value` before it confirms.
+
+A number box takes the typed text as egui takes a person's: it parses the
+text as a number, ignoring whitespace, clamps it to the box's range, and leaves
+the value as it was when the text is not a number. When it does so depends on
+the box. egui's default is to take each change as it is typed (Load Demo
+Data's number of points); the Track View threshold boxes take the number only
+when the box is
+left, so a `type_text` there is followed by `press_key` `Enter`, which closes
+the box and commits the number. Either way the box's `value` in a listing is
+its number, so it shows the typed number once the box has taken it.
 
 **The replies** carry `dialogs` and `menus` like the pointer tools, plus
 `focused`: the listing entry of the widget that has keyboard focus afterwards,
@@ -3072,9 +3092,11 @@ when the call named one, and of the window otherwise.
 
 **In the Action Log**, kind `Input`: `press_key Ctrl+Z`, `press_key I over
 image_detail` (and `over image_detail 210,160` when the call gave `at_px`),
-`type_text 16 characters into the text input in Go to Point`. A text input
-often has no name of its own, so the row names the dialog or panel it sits in,
-and the input's name as well where it has one. The typed text itself is not
+`type_text 16 characters into the text input in Go to Point`, and `type_text 4
+characters into the number box in the Track View panel` for a number box. A
+text input or number box often has no name of its own, so the row names the
+dialog or panel it sits in, and the field's name as well where it has one. The
+typed text itself is not
 recorded, because the log is visible to anyone watching the window and the
 text could be a path the person did not mean to show. A `type_text` with
 `widget` writes this one row and no row for the click that focused the input.
@@ -6098,9 +6120,14 @@ where a test hands no host over.
   row before the person's `Undo:` row; Escape closes Go to Point and the reply
   no longer lists it; `I` over Image Detail toggles its intrinsics layer and
   elsewhere does not; `type_text` fills the Go to Point field's `value`, a
-  second call types after it, and Enter then selects the point; the modifiers
-  are released afterwards; `type_text` is refused on a widget that is not a text
-  input and with nothing focused; an unknown key is refused with the names; a
+  second call types after it, and Enter then selects the point; `type_text`
+  sets a number box named by its widget id, replacing its number, which a box
+  that takes its value when left has after Enter; it types into a number box a
+  click opened; text that is not a number leaves the value as it was and a
+  number past the range is clamped; it sets Load Demo Data's number of points
+  as it types; the modifiers are released afterwards; `type_text` is refused on
+  a widget that is not a text input or number box, naming both roles, and with
+  nothing focused; an unknown key is refused with the names; a
   point outside the target, a closed panel, a panel behind a tab, an unknown
   widget id (listed before, and never listed) and a minimized window are each
   refused in the words above as one failed row; the parse refuses no target,

@@ -169,8 +169,9 @@ pub(super) fn specs() -> Vec<ToolSpec> {
             description: "Press one key and release it in the next frame, with any modifiers \
                           held across both. It goes where a person's key would: to a menu bar \
                           shortcut (command Z undoes, command G opens Go to Point), to an open \
-                          dialog (Enter runs it, Escape cancels it), to the text input with \
-                          keyboard focus, or with panel_name or at_px to the panel the pointer \
+                          dialog (Enter runs it, Escape cancels it), to the text input or \
+                          number box with keyboard focus, or with panel_name or at_px to the \
+                          panel the pointer \
                           is moved over first (I over image_detail toggles its intrinsics \
                           layer). A letter key is a key, not text: type_text types. The reply \
                           gives the dialogs and menus open afterwards and focused, the widget \
@@ -204,15 +205,22 @@ pub(super) fn specs() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "type_text",
-            description: "Type a string into a text input, as one text event, which is what an \
-                          input method delivers when it commits. With widget, the text input is \
-                          clicked first to focus it; a widget that is not a text input is \
-                          refused. Without it, the text goes to the widget with keyboard focus, \
-                          and the call is refused when nothing has focus or what has it takes no \
-                          text. It does not press Enter: send press_key Enter after it, so the \
-                          field's value can be checked first. The reply gives the dialogs and \
-                          menus open afterwards and focused, the widget with keyboard focus. The \
-                          Action Log records how many characters were typed, never the text.",
+            description: "Type a string into a text input or a number box (role text_input or \
+                          spin_button), as one text event, which is what an input method \
+                          delivers when it commits. With widget, the field is clicked first to \
+                          focus it, as a person's click does: a number box opens for typing with \
+                          its number selected, so the text replaces it, and a text input takes \
+                          the text where the click put the cursor. A widget of any other role is \
+                          refused. Without widget, the text goes to the widget with keyboard \
+                          focus, and the call is refused when nothing has focus or what has it \
+                          takes no text. It does not press Enter: send press_key Enter after it, \
+                          so the field can be checked first. A number box takes a typed number \
+                          as it is typed, or, like the Track View threshold boxes, only when \
+                          Enter is pressed or focus leaves it; text that is not a number leaves \
+                          the value as it was, and a number is clamped to the box's range. The \
+                          reply gives the dialogs \
+                          and menus open afterwards and focused, the widget with keyboard focus. \
+                          The Action Log records how many characters were typed, never the text.",
             kind: Input,
             schema: object(
                 &[("widget", widget_schema())],

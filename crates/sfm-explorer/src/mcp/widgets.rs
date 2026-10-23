@@ -88,10 +88,20 @@ impl Widget {
         self.name.as_deref()
     }
 
-    /// Whether this is a text input, the one kind of widget text can be typed
-    /// into.
+    /// Whether text can be typed into this: a text input, or a number box
+    /// (`spin_button`, egui's `DragValue`), which keeps that role while it is
+    /// open for typing.
     pub(crate) fn takes_text(&self) -> bool {
-        self.role == Some(Role::TextInput)
+        self.text_field_kind().is_some()
+    }
+
+    /// `text input` or `number box`, for a widget text can be typed into.
+    pub(crate) fn text_field_kind(&self) -> Option<&'static str> {
+        match self.role {
+            Some(Role::TextInput) => Some("text input"),
+            Some(Role::SpinButton) => Some("number box"),
+            _ => None,
+        }
     }
 
     /// The role as the listing spells it, or `None` where the tree says

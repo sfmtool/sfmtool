@@ -119,8 +119,8 @@ pub(crate) enum InputCommand {
     /// Enter a string as one `Text` event.
     TypeText {
         text: String,
-        /// The text input to click first, by the value of its id. `None`
-        /// types into whatever has keyboard focus.
+        /// The text input or number box to click first, by the value of its
+        /// id. `None` types into whatever has keyboard focus.
         widget: Option<u64>,
     },
 }
@@ -693,14 +693,16 @@ impl PendingInput {
                             Some(focused) => {
                                 return Err(ToolError::new(format!(
                                     "The widget with keyboard focus is {}, which is not a text \
-                                 input, so the text would be dropped. Name the text input with \
-                                 widget, or click it first.",
+                                 input or a number box (role text_input or spin_button), so the \
+                                 text would be dropped. Name the field with widget, or click it \
+                                 first.",
                                     frame.describe(focused)
                                 )))
                             }
                             None => return Err(ToolError::new(
                                 "Nothing has keyboard focus, so the text would be dropped with \
-                                 no sign. Name the text input with widget, or click it first.",
+                                 no sign. Name the text input or number box with widget, or \
+                                 click it first.",
                             )),
                         },
                     };
@@ -710,9 +712,10 @@ impl PendingInput {
                 } else {
                     "characters"
                 };
+                let kind = into.text_field_kind().unwrap_or("text input");
                 let input = match into.name() {
-                    Some(name) => format!("the text input \"{name}\""),
-                    None => "the text input".to_string(),
+                    Some(name) => format!("the {kind} \"{name}\""),
+                    None => format!("the {kind}"),
                 };
                 state.action_log.record_as(
                     Actor::Mcp,
@@ -767,7 +770,8 @@ impl PendingInput {
                     .ok_or_else(|| unknown_widget(frame, value, names))?;
                 if matches!(self.command, InputCommand::TypeText { .. }) && !widget.takes_text() {
                     return Err(ToolError::new(format!(
-                        "type_text types into a text input, and widget {value:016x} is {}{}.",
+                        "type_text types into a text input or a number box (role text_input \
+                         or spin_button), and widget {value:016x} is {}{}.",
                         frame.describe(widget),
                         widget
                             .role_text()
