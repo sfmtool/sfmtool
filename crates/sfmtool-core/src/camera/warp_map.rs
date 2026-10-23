@@ -63,36 +63,59 @@ fn wrap_difference(d: f64, period: f64) -> f64 {
     d - period * (d / period).round()
 }
 
-/// Destination-pixel count at or below which the warp / remap row loops run
-/// sequentially. For small destinations (e.g. the `R×R` patch grids of
-/// patch-normal refinement) the rayon scaffolding costs an order of magnitude
-/// more than the row work itself. It is only the *size* half of the decision —
-/// see [`parallelize_rows`], which also requires idle parallelism to exist, so
-/// even a full-image warp runs its rows serially when the caller is already a
-/// rayon worker.
-pub(crate) const PAR_MIN_PIXELS: usize = 2048;
+/// Destination-pixel count at or below which a remap's row loop runs serially.
+/// A remap reads several source texels per pixel (about 0.03 to 0.05 µs per
+/// pixel serially), so its rows pay for the rayon pool from a few thousand
+/// pixels on. For small destinations (e.g. the `R×R` patch grids of
+/// patch-normal refinement) the pool costs an order of magnitude more than the
+/// row work itself.
+pub(crate) const REMAP_PAR_MIN_PIXELS: usize = 2048;
+
+/// Destination-pixel count at or below which [`WarpMap::compute_svd`] runs
+/// serially. Its per-pixel work, a central-difference Jacobian and a
+/// closed-form 2×2 SVD, takes about 0.016 µs per pixel serially, and handing
+/// rows to a pool whose threads have gone to sleep costs about 200 µs before
+/// the first row runs. Measured from a plain thread with the pool idle
+/// between calls, the parallel pass is slower at 16384 px (`128²`) and faster
+/// from about 25600 px (`160²`) on: at 2500 px, the localizer's context tile
+/// under the bench's widened search, it costs about 230 µs against 45 µs
+/// serially.
+pub(crate) const SVD_PAR_MIN_PIXELS: usize = 16384;
+
+/// Destination-pixel count at or below which a warp map's coordinate rows
+/// (built by [`WarpMap::from_cameras`] and the constructors that share its
+/// row loop; [`WarpMap::from_patch`] is always serial) and
+/// [`WarpMap::compute_jacobians`] run serially. Both take
+/// about 0.006 µs per pixel serially for a perspective pair, cheaper again
+/// than the SVD, and measured as for [`SVD_PAR_MIN_PIXELS`] the parallel pass
+/// is slower or no faster up to about 65536 px (`256²`).
+pub(crate) const MAP_PAR_MIN_PIXELS: usize = 65536;
 
 /// Whether a row loop over a `pixels`-pixel destination should be handed to
-/// rayon. Two independent conditions, both necessary:
+/// rayon, given the pass's `min_pixels` ([`REMAP_PAR_MIN_PIXELS`],
+/// [`SVD_PAR_MIN_PIXELS`] or [`MAP_PAR_MIN_PIXELS`]). Two independent
+/// conditions, both necessary:
 ///
-/// 1. **Enough work to amortize the scaffolding** — `pixels > PAR_MIN_PIXELS`.
+/// 1. **Enough work to amortize the pool** — `pixels > min_pixels`. The
+///    threshold is per pass because the per-pixel work differs by about ten
+///    times between a coordinate row and a remap, while the cost of waking
+///    the pool does not.
 /// 2. **Idle parallelism to exploit** — the caller is not already running on a
 ///    rayon worker thread. Every patch kernel (normal refinement, keypoint
 ///    localization, sub-pixel refinement, view selection) renders its tiles
 ///    from inside an already-saturated `par_iter` over patches, so a nested
 ///    `par_iter` over the tile's ~R-long rows contends for the very pool it
 ///    runs in rather than adding throughput. The pixel threshold alone does not
-///    catch this: the localizer's search cache is `R + 4·search` on a side
-///    (`48×48 = 2304` px at the production defaults), just over the cutoff, and
-///    the nested split cost `15.2 ms` per `compute_svd` call against `~0.12 ms`
-///    of actual serial work — a 125× per-pixel penalty over the identical
-///    closed-form 2×2 SVD run serially by `normal_refine`'s smaller tiles.
+///    catch this: a remap of the localizer's search cache at `48×48 = 2304` px
+///    is over [`REMAP_PAR_MIN_PIXELS`].
 ///
-/// Purely an execution-strategy switch: every parallel path here is a
-/// row-ordered map/reduce, so serial and parallel results are bit-identical
-/// (asserted by `serial_and_parallel_paths_are_bit_identical` in `tests`).
-pub(crate) fn parallelize_rows(pixels: usize) -> bool {
-    pixels > PAR_MIN_PIXELS && rayon::current_thread_index().is_none()
+/// Purely an execution-strategy switch: every parallel path here writes each
+/// row's slots of a buffer allocated up front, or collects rows in index
+/// order, with the same per-pixel work as the serial loop, so serial and
+/// parallel results are bit-identical (asserted by
+/// `serial_and_parallel_paths_are_bit_identical` in `tests`).
+pub(crate) fn parallelize_rows(pixels: usize, min_pixels: usize) -> bool {
+    pixels > min_pixels && rayon::current_thread_index().is_none()
 }
 
 /// Build the concatenated interleaved-`(x, y)` `f32` buffer of a
@@ -102,24 +125,20 @@ pub(crate) fn parallelize_rows(pixels: usize) -> bool {
 /// paths produce bit-identical buffers.
 fn build_rows(cols: u32, rows: u32, fill_row: impl Fn(u32, &mut [f32]) + Sync) -> Vec<f32> {
     let row_len = 2 * cols as usize;
-    if !parallelize_rows(cols as usize * rows as usize) {
-        let mut data = vec![0.0f32; row_len * rows as usize];
-        if row_len > 0 {
-            for (row, row_data) in data.chunks_exact_mut(row_len).enumerate() {
-                fill_row(row as u32, row_data);
-            }
-        }
-        data
-    } else {
-        (0..rows)
-            .into_par_iter()
-            .flat_map(|row| {
-                let mut row_data = vec![0.0f32; row_len];
-                fill_row(row, &mut row_data);
-                row_data
-            })
-            .collect()
+    let mut data = vec![0.0f32; row_len * rows as usize];
+    if row_len == 0 {
+        return data;
     }
+    if !parallelize_rows(cols as usize * rows as usize, MAP_PAR_MIN_PIXELS) {
+        for (row, row_data) in data.chunks_exact_mut(row_len).enumerate() {
+            fill_row(row as u32, row_data);
+        }
+    } else {
+        data.par_chunks_exact_mut(row_len)
+            .enumerate()
+            .for_each(|(row, row_data)| fill_row(row as u32, row_data));
+    }
+    data
 }
 
 /// Singular value decomposition of the 2x2 Jacobian at each warp map pixel.
@@ -524,65 +543,47 @@ impl WarpMap {
         let h = self.height as usize;
         let n = w * h;
 
-        let per_pixel = |col: usize, row: usize| {
-            let j = self.jacobian_at(col, row, w, h);
-            let (s_maj, s_min, dx, dy) = svd_2x2(j[0], j[1], j[2], j[3]);
-            (j, s_maj, s_min, dx, dy)
-        };
-
-        let (sigma_major, sigma_minor, source_major_dir, jacobians) = if !parallelize_rows(n) {
-            let mut sigma_major = Vec::with_capacity(n);
-            let mut sigma_minor = Vec::with_capacity(n);
-            let mut source_major_dir = Vec::with_capacity(2 * n);
-            let mut jacobians = Vec::with_capacity(4 * n);
-            for row in 0..h {
+        // Every pass writes its row's slots of the four buffers, so the serial
+        // loop and the rayon pass over row chunks fill identical buffers.
+        let mut sigma_major = vec![0.0f32; n];
+        let mut sigma_minor = vec![0.0f32; n];
+        let mut source_major_dir = vec![0.0f32; 2 * n];
+        let mut jacobians = vec![0.0f32; 4 * n];
+        let fill_row =
+            |row: usize, major: &mut [f32], minor: &mut [f32], dir: &mut [f32], jac: &mut [f32]| {
                 for col in 0..w {
-                    let (j, s_maj, s_min, dx, dy) = per_pixel(col, row);
-                    sigma_major.push(s_maj);
-                    sigma_minor.push(s_min);
-                    source_major_dir.push(dx);
-                    source_major_dir.push(dy);
-                    jacobians.extend_from_slice(&j);
+                    let j = self.jacobian_at(col, row, w, h);
+                    let (s_maj, s_min, dx, dy) = svd_2x2(j[0], j[1], j[2], j[3]);
+                    major[col] = s_maj;
+                    minor[col] = s_min;
+                    dir[2 * col] = dx;
+                    dir[2 * col + 1] = dy;
+                    jac[4 * col..4 * col + 4].copy_from_slice(&j);
                 }
+            };
+        if n > 0 {
+            if !parallelize_rows(n, SVD_PAR_MIN_PIXELS) {
+                for (row, (((major, minor), dir), jac)) in sigma_major
+                    .chunks_exact_mut(w)
+                    .zip(sigma_minor.chunks_exact_mut(w))
+                    .zip(source_major_dir.chunks_exact_mut(2 * w))
+                    .zip(jacobians.chunks_exact_mut(4 * w))
+                    .enumerate()
+                {
+                    fill_row(row, major, minor, dir, jac);
+                }
+            } else {
+                sigma_major
+                    .par_chunks_exact_mut(w)
+                    .zip(sigma_minor.par_chunks_exact_mut(w))
+                    .zip(source_major_dir.par_chunks_exact_mut(2 * w))
+                    .zip(jacobians.par_chunks_exact_mut(4 * w))
+                    .enumerate()
+                    .for_each(|(row, (((major, minor), dir), jac))| {
+                        fill_row(row, major, minor, dir, jac);
+                    });
             }
-            (sigma_major, sigma_minor, source_major_dir, jacobians)
-        } else {
-            (0..h)
-                .into_par_iter()
-                .map(|row| {
-                    let mut row_major = Vec::with_capacity(w);
-                    let mut row_minor = Vec::with_capacity(w);
-                    let mut row_dir = Vec::with_capacity(2 * w);
-                    let mut row_jac = Vec::with_capacity(4 * w);
-
-                    for col in 0..w {
-                        let (j, s_maj, s_min, dx, dy) = per_pixel(col, row);
-                        row_major.push(s_maj);
-                        row_minor.push(s_min);
-                        row_dir.push(dx);
-                        row_dir.push(dy);
-                        row_jac.extend_from_slice(&j);
-                    }
-                    (row_major, row_minor, row_dir, row_jac)
-                })
-                .reduce(
-                    || {
-                        (
-                            Vec::with_capacity(n),
-                            Vec::with_capacity(n),
-                            Vec::with_capacity(2 * n),
-                            Vec::with_capacity(4 * n),
-                        )
-                    },
-                    |mut acc, row| {
-                        acc.0.extend(row.0);
-                        acc.1.extend(row.1);
-                        acc.2.extend(row.2);
-                        acc.3.extend(row.3);
-                        acc
-                    },
-                )
-        };
+        }
 
         self.svd = Some(WarpMapSvd {
             sigma_major,
@@ -606,26 +607,24 @@ impl WarpMap {
         let h = self.height as usize;
         let n = w * h;
 
-        let jacobians: Vec<f32> = if !parallelize_rows(n) {
-            let mut j = Vec::with_capacity(4 * n);
-            for row in 0..h {
-                for col in 0..w {
-                    j.extend_from_slice(&self.jacobian_at(col, row, w, h));
-                }
+        let mut jacobians = vec![0.0f32; 4 * n];
+        let fill_row = |row: usize, jac: &mut [f32]| {
+            for col in 0..w {
+                jac[4 * col..4 * col + 4].copy_from_slice(&self.jacobian_at(col, row, w, h));
             }
-            j
-        } else {
-            (0..h)
-                .into_par_iter()
-                .flat_map(|row| {
-                    let mut row_j = Vec::with_capacity(4 * w);
-                    for col in 0..w {
-                        row_j.extend_from_slice(&self.jacobian_at(col, row, w, h));
-                    }
-                    row_j
-                })
-                .collect()
         };
+        if n > 0 {
+            if !parallelize_rows(n, MAP_PAR_MIN_PIXELS) {
+                for (row, jac) in jacobians.chunks_exact_mut(4 * w).enumerate() {
+                    fill_row(row, jac);
+                }
+            } else {
+                jacobians
+                    .par_chunks_exact_mut(4 * w)
+                    .enumerate()
+                    .for_each(|(row, jac)| fill_row(row, jac));
+            }
+        }
 
         self.jacobians = Some(jacobians);
     }

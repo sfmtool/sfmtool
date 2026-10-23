@@ -6,7 +6,7 @@
 use rayon::prelude::*;
 
 use crate::camera::sampler::bilinear_mip_level;
-use crate::camera::warp_map::{parallelize_rows, WarpMap};
+use crate::camera::warp_map::{parallelize_rows, WarpMap, REMAP_PAR_MIN_PIXELS};
 
 mod aniso_avx2;
 pub mod prof;
@@ -25,7 +25,7 @@ fn remap_rows(
     fill_row: impl Fn(u32, &mut [u8]) + Sync,
 ) -> Vec<u8> {
     let out_stride = out_w as usize * channels as usize;
-    if !parallelize_rows((out_w as usize) * (out_h as usize)) {
+    if !parallelize_rows((out_w as usize) * (out_h as usize), REMAP_PAR_MIN_PIXELS) {
         let mut data = vec![0u8; out_stride * out_h as usize];
         for (row, row_data) in data.chunks_exact_mut(out_stride).enumerate() {
             fill_row(row as u32, row_data);
@@ -802,7 +802,7 @@ fn remap_rows_f32x3_into(
     debug_assert_eq!(value.len(), total);
     debug_assert_eq!(grad_x.len(), total);
     debug_assert_eq!(grad_y.len(), total);
-    if !parallelize_rows((out_w as usize) * (out_h as usize)) {
+    if !parallelize_rows((out_w as usize) * (out_h as usize), REMAP_PAR_MIN_PIXELS) {
         for row in 0..out_h {
             let off = row as usize * stride;
             fill_row(

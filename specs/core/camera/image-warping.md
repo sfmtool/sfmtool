@@ -226,6 +226,24 @@ distorted image. Both return an error for fisheye and equirectangular cameras.
 implementation uses `rayon` to parallelize over rows, consistent with the existing
 batch operations in `camera/distortion.rs`.
 
+A row pass goes to the pool only when the caller is not itself a rayon worker
+and the destination has more pixels than that pass's threshold
+(`parallelize_rows` in
+[warp_map.rs](../../../crates/sfmtool-core/src/camera/warp_map.rs)). The
+threshold is per pass because the cost of waking the pool, about 200 µs when
+its threads have gone to sleep, is the same for every pass while the per-pixel
+work differs about tenfold:
+
+| Pass | Serial cost per pixel | Parallel above |
+|------|-----------------------|----------------|
+| Coordinate rows (`from_cameras` and the pose constructors) and `compute_jacobians` | about 0.006 µs | 65536 px |
+| `compute_svd` | about 0.016 µs | 16384 px |
+| Remaps (`remap_bilinear`, `_mip`, `_aniso` and the gradient forms) | about 0.03–0.05 µs | 2048 px |
+
+Each parallel pass writes each row's slots of buffers allocated up front, with
+the same per-pixel work as the serial loop, so the two give bit-identical
+results. `from_patch` projects its grid serially in every case.
+
 ### Fisheye and the `ray_to_pixel` Gap
 
 For fisheye undistortion, pixels near the image boundary may map to very large

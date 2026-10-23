@@ -928,7 +928,10 @@ fn remap_rows_serial_and_parallel_paths_are_bit_identical() {
     let src = textured_src(160, 120, 3);
     let map = translation_warp_map(160, 120, 3.25, -2.75);
     assert!(
-        crate::camera::warp_map::parallelize_rows(160 * 120),
+        crate::camera::warp_map::parallelize_rows(
+            160 * 120,
+            crate::camera::warp_map::REMAP_PAR_MIN_PIXELS
+        ),
         "test needs the parallel path"
     );
 
@@ -949,7 +952,10 @@ fn remap_rows_f32x3_serial_and_parallel_paths_are_bit_identical() {
     let src = textured_src(160, 120, 3);
     let map = translation_warp_map(160, 120, 1.5, 0.75);
     assert!(
-        crate::camera::warp_map::parallelize_rows(160 * 120),
+        crate::camera::warp_map::parallelize_rows(
+            160 * 120,
+            crate::camera::warp_map::REMAP_PAR_MIN_PIXELS
+        ),
         "test needs the parallel path"
     );
 

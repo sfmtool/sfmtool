@@ -901,25 +901,36 @@ fn on_rayon_worker<T: Send>(f: impl Fn() -> T + Sync + Send) -> T {
 
 #[test]
 fn parallelize_rows_needs_both_size_and_idle_parallelism() {
-    // Small destination: never worth the scaffolding, in or out of the pool.
-    assert!(!parallelize_rows(PAR_MIN_PIXELS));
-    assert!(!on_rayon_worker(|| parallelize_rows(PAR_MIN_PIXELS)));
-    // Large destination: parallel from a plain caller, serial from a rayon
-    // worker (the pool is already saturated by the outer loop — this is the
-    // localization cache tile's situation, 48x48 = 2304 px).
-    assert!(parallelize_rows(PAR_MIN_PIXELS + 1));
-    assert!(!on_rayon_worker(|| parallelize_rows(PAR_MIN_PIXELS + 1)));
-    assert!(!on_rayon_worker(|| parallelize_rows(48 * 48)));
+    for min in [REMAP_PAR_MIN_PIXELS, SVD_PAR_MIN_PIXELS, MAP_PAR_MIN_PIXELS] {
+        // Small destination: never worth the pool, in or out of it.
+        assert!(!parallelize_rows(min, min));
+        assert!(!on_rayon_worker(|| parallelize_rows(min, min)));
+        // Large destination: parallel from a plain caller, serial from a
+        // rayon worker (the pool is already saturated by the outer loop).
+        assert!(parallelize_rows(min + 1, min));
+        assert!(!on_rayon_worker(|| parallelize_rows(min + 1, min)));
+    }
+    // The localizer's context tile at the bench's widened search, 50x50 =
+    // 2500 px, from a plain caller: its remap goes to the pool, its SVD and
+    // its coordinate rows do not.
+    assert!(parallelize_rows(50 * 50, REMAP_PAR_MIN_PIXELS));
+    assert!(!parallelize_rows(50 * 50, SVD_PAR_MIN_PIXELS));
+    assert!(!parallelize_rows(50 * 50, MAP_PAR_MIN_PIXELS));
 }
 
 #[test]
 fn serial_and_parallel_paths_are_bit_identical() {
-    // A destination comfortably over PAR_MIN_PIXELS so the plain-caller path
+    // A destination over every pass's threshold so the plain-caller path
     // really does go parallel, with a non-trivial (distorted) warp so the
     // Jacobians and SVD are not the identity everywhere.
-    let src = simple_radial(96, 64, 80.0, -0.2);
-    let dst = pinhole(96, 64, 80.0);
-    assert!(parallelize_rows(96 * 64), "test needs the parallel path");
+    let src = simple_radial(320, 240, 260.0, -0.2);
+    let dst = pinhole(320, 240, 260.0);
+    for min in [REMAP_PAR_MIN_PIXELS, SVD_PAR_MIN_PIXELS, MAP_PAR_MIN_PIXELS] {
+        assert!(
+            parallelize_rows(320 * 240, min),
+            "test needs the parallel path"
+        );
+    }
 
     let build = || {
         let mut m = WarpMap::from_cameras(&src, &dst);
