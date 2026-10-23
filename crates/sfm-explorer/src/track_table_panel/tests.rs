@@ -262,7 +262,7 @@ fn the_job_merges_beside_what_find_points_cached() {
 #[test]
 fn a_hidden_panel_queues_no_job() {
     let (mut state, id) = state();
-    state.want_track_table_columns(id, Vec::new());
+    state.want_track_table_columns(id, Vec::new(), Vec::new());
     state.hide_track_table();
     assert!(!state.drive_track_table_columns());
     assert_eq!(state.track_table_jobs.queued_task(), None);
@@ -317,7 +317,7 @@ fn a_table_that_lands_for_an_old_serial_is_dropped() {
     let (mut state, id) = state();
     let (open, hold) = mpsc::channel();
     state.track_table_jobs.hold_next = Some(hold);
-    state.want_track_table_columns(id, Vec::new());
+    state.want_track_table_columns(id, Vec::new(), Vec::new());
     state.drive_track_table_columns();
     let old = state.scene[0].history.current_version().document_serial;
     state
@@ -368,7 +368,7 @@ fn a_slow_task_queued_on_its_node_leaves_the_running_job_alone() {
     let (mut state, id) = state();
     let (open_job, hold_job) = mpsc::channel();
     state.track_table_jobs.hold_next = Some(hold_job);
-    state.want_track_table_columns(id, Vec::new());
+    state.want_track_table_columns(id, Vec::new(), Vec::new());
     state.drive_track_table_columns();
     let task = state.track_table_jobs.queued_task().expect("queued");
     assert!(
@@ -410,7 +410,7 @@ fn find_points_queued_while_the_job_runs_cancels_it_and_it_runs_again_behind() {
     let (mut state, id) = state();
     let (open_job, hold_job) = mpsc::channel();
     state.track_table_jobs.hold_next = Some(hold_job);
-    state.want_track_table_columns(id, Vec::new());
+    state.want_track_table_columns(id, Vec::new(), Vec::new());
     state.drive_track_table_columns();
     let task = state.track_table_jobs.queued_task().expect("queued");
     assert!(state.quiet_task_running(task));

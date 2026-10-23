@@ -22,12 +22,16 @@
 //!   egui pass, [`AppState::drive_track_table_columns`] queues a job when the
 //!   track table cache lacks a stored column the node can supply, or, once it
 //!   holds them all, a computed column the panel needs.
-//! - **The stored columns come first.** A job computes either the missing
-//!   stored columns or the missing computed ones the panel needs, never both
+//! - **The stored columns come first.** A job computes the missing stored
+//!   columns before the missing computed ones the panel needs
 //!   ([`columns_to_compute`]), so the table is usable while the computed
 //!   columns, which cost a pass over every pair of rays or a triangulation per
 //!   point, are still being computed. A computed column that no visible
-//!   column, bound or sort needs is not computed.
+//!   column, bound or sort needs is not computed. After an edit, while the
+//!   panel keeps the old version's rows on show, the computed columns a bound
+//!   or the sort names are computed in the same run as the stored ones, so the
+//!   old rows stay until the whole query can apply to the new version rather
+//!   than the rows falling back to another order in between.
 //! - **One job is queued at a time.** A job runs [`TrackTable::compute`] for
 //!   its columns of the value at the cursor when it was queued, and sends the
 //!   table back. The GUI thread merges it into the cache with
@@ -68,6 +72,8 @@ struct Inputs {
 struct Wanted {
     node: ReconId,
     computed: Vec<TrackTableColumn>,
+    /// The computed columns among `computed` that hold a bound or the sort.
+    ordering: Vec<TrackTableColumn>,
 }
 
 /// What comes back on a job's channel.
@@ -138,26 +144,36 @@ pub(super) fn missing_stored_columns(
 
 /// The columns the next job computes for `edited`, given the table `held`
 /// for its version and the computed columns the panel needs, `computed`: the
-/// stored columns it can supply that `held` lacks, or, once it holds them all,
-/// the columns of `computed` it lacks. Empty when there is nothing to compute.
+/// stored columns it can supply that `held` lacks, with the columns of
+/// `with_stored` it lacks, or, once it holds every stored column, the columns
+/// of `computed` it lacks, in [`TrackTableColumn::ALL`] order. Empty when there
+/// is nothing to compute.
 ///
 /// The stored columns go first so that the table is usable while the
 /// computed ones, which cost far more per point, are still being computed.
+/// `with_stored` names the computed columns that go in the same run as the
+/// stored ones: the ones a bound or the sort names while the panel keeps an
+/// earlier version's rows on show, which stay until the whole query applies.
 pub(super) fn columns_to_compute(
     edited: &sfmtool_core::EditedReconstruction,
     held: Option<&TrackTable>,
     computed: &[TrackTableColumn],
+    with_stored: &[TrackTableColumn],
 ) -> Vec<TrackTableColumn> {
-    let stored = missing_stored_columns(edited, held);
+    let missing_computed = |names: &[TrackTableColumn]| {
+        TrackTableColumn::ALL
+            .into_iter()
+            .filter(|c| names.contains(c))
+            .filter(|c| c.cost() == ColumnCost::Computed && c.is_available(edited))
+            .filter(|&c| !held.is_some_and(|table| table.has(c)))
+            .collect::<Vec<_>>()
+    };
+    let mut stored = missing_stored_columns(edited, held);
     if !stored.is_empty() {
+        stored.extend(missing_computed(with_stored));
         return stored;
     }
-    computed
-        .iter()
-        .copied()
-        .filter(|c| c.cost() == ColumnCost::Computed && c.is_available(edited))
-        .filter(|&c| !held.is_some_and(|table| table.has(c)))
-        .collect()
+    missing_computed(computed)
 }
 
 /// The work one job does: `columns` computed for `edited`, sent on `sender`
@@ -197,14 +213,19 @@ pub(crate) fn job_stops_when_cancelled() -> bool {
 
 impl AppState {
     /// Say that the Track Table panel shows `node` in this frame and needs the
-    /// computed columns `computed`, so the table job keeps the stored columns
-    /// and those current.
+    /// computed columns `computed`, of which `ordering` hold a bound or the
+    /// sort, so the table job keeps the stored columns and those current.
     pub(super) fn want_track_table_columns(
         &mut self,
         node: ReconId,
         computed: Vec<TrackTableColumn>,
+        ordering: Vec<TrackTableColumn>,
     ) {
-        self.track_table_jobs.wanted = Some(Wanted { node, computed });
+        self.track_table_jobs.wanted = Some(Wanted {
+            node,
+            computed,
+            ordering,
+        });
     }
 
     /// Forget which node the Track Table panel showed, and which points it
@@ -267,8 +288,26 @@ impl AppState {
     fn track_table_job_inputs(&self) -> Option<(Inputs, Vec<TrackTableColumn>)> {
         let wanted = self.track_table_jobs.wanted.as_ref()?;
         let node = self.node(wanted.node)?;
-        let columns =
-            columns_to_compute(node.edited(), self.track_table(node.id), &wanted.computed);
+        let document = node.history.current_version().document_serial;
+        // An earlier version's table still cached is what the panel keeps on
+        // show after an edit: its rows stay until the bounds and the sort can
+        // apply to the new version, so the computed columns they name come
+        // with the stored ones.
+        let earlier_on_show = self
+            .track_tables
+            .latest(node.id)
+            .is_some_and(|(cached, _)| cached != document);
+        let with_stored: &[TrackTableColumn] = if earlier_on_show {
+            &wanted.ordering
+        } else {
+            &[]
+        };
+        let columns = columns_to_compute(
+            node.edited(),
+            self.track_table(node.id),
+            &wanted.computed,
+            with_stored,
+        );
         if columns.is_empty() {
             return None;
         }

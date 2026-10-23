@@ -269,6 +269,15 @@ fn a_first_table_lists_its_rows_by_the_rest_of_the_query() {
     panel.query.bound_mut(TrackTableColumn::RmsErrorPx).max = "0.95".into();
     frame(&ctx, &mut panel, &mut state);
     state.drive_track_table_columns();
+    assert!(
+        state
+            .track_table_jobs
+            .queued_columns()
+            .unwrap()
+            .iter()
+            .all(|c| c.cost() == ColumnCost::Stored),
+        "a first open computes the stored columns alone first"
+    );
     state.wait_for_track_table_job();
     let painted = texts(&ctx, &mut panel, &mut state);
     assert_eq!(panel.rows(), (0..=9).collect::<Vec<u32>>().as_slice());
@@ -460,4 +469,163 @@ fn a_point_at_infinity_prints_a_zero_angle_and_no_triangulation_values() {
     assert_eq!(compact(123_456.0), "1.23e5");
     assert_eq!(compact(-2.5e7), "-2.50e7");
     assert_eq!(compact(f64::INFINITY), "\u{221e}");
+}
+
+/// A table sorted by Ray angle, after an edit: the job computes the new
+/// version's stored columns and its ray angles in one run, so the old rows
+/// stay on show, dimmed, with no frame in another order, until the new ray
+/// angles land and the rows are sorted by them. A column that is only shown,
+/// Cond., is computed by the run after.
+#[test]
+fn an_edit_keeps_rows_sorted_by_a_computed_column_until_it_lands_again() {
+    let (mut state, id) = state();
+    let ctx = egui::Context::default();
+    let mut panel = TrackTablePanel::new();
+    panel
+        .query
+        .set_shown(TrackTableColumn::ConditionNumber, true);
+    panel.query.click_heading(TrackTableColumn::MaxRayAngleDeg);
+    frame(&ctx, &mut panel, &mut state);
+    state.settle_track_table_columns();
+    frame(&ctx, &mut panel, &mut state);
+    let old_rows = panel.rows().to_vec();
+    assert_eq!(old_rows.len(), POINTS);
+    assert_eq!(
+        old_rows[0], BEARING,
+        "the point at infinity's 0 comes first"
+    );
+
+    let (open, hold) = mpsc::channel();
+    state.track_table_jobs.hold_next = Some(hold);
+    let worst = old_rows[1];
+    state
+        .delete_point(PointRef {
+            recon: id,
+            point: worst,
+        })
+        .expect("deletable");
+    frame(&ctx, &mut panel, &mut state);
+    state.drive_track_table_columns();
+    let columns = state.track_table_jobs.queued_columns().unwrap().to_vec();
+    assert!(
+        columns.contains(&TrackTableColumn::MaxRayAngleDeg),
+        "{columns:?}"
+    );
+    assert!(
+        columns.contains(&TrackTableColumn::RmsErrorPx),
+        "{columns:?}"
+    );
+    assert!(
+        !columns.contains(&TrackTableColumn::ConditionNumber),
+        "a column only shown waits for the next run: {columns:?}"
+    );
+    for _ in 0..3 {
+        let painted = texts(&ctx, &mut panel, &mut state);
+        assert!(
+            painted.iter().any(|t| t == "Updating\u{2026}"),
+            "{painted:?}"
+        );
+        assert!(
+            !painted.iter().any(|t| t.ends_with(" ready.")),
+            "{painted:?}"
+        );
+        assert_eq!(panel.rows(), old_rows.as_slice());
+    }
+
+    open.send(()).expect("the job waits at its gate");
+    state.wait_for_track_table_job();
+    let painted = texts(&ctx, &mut panel, &mut state);
+    assert!(
+        !painted.iter().any(|t| t == "Updating\u{2026}"),
+        "{painted:?}"
+    );
+    assert!(
+        !painted.iter().any(|t| t.ends_with(" ready.")),
+        "{painted:?}"
+    );
+    let edited = state.scene[0].edited().clone();
+    let expected = query_points(
+        &edited,
+        state.track_table(id).unwrap(),
+        &TrackTableQueryOptions {
+            order_by: Some((TrackTableColumn::MaxRayAngleDeg, SortOrder::Ascending)),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(expected.len(), POINTS - 1);
+    assert_eq!(
+        panel.rows(),
+        expected.as_slice(),
+        "sorted in the frame the table lands"
+    );
+
+    // Cond., only shown, follows as its own run.
+    state.drive_track_table_columns();
+    assert_eq!(
+        state.track_table_jobs.queued_columns(),
+        Some([TrackTableColumn::ConditionNumber].as_slice())
+    );
+    state.wait_for_track_table_job();
+    assert!(state
+        .track_table(id)
+        .unwrap()
+        .has(TrackTableColumn::ConditionNumber));
+}
+
+/// A second edit while the run that holds the stored columns and the sorted
+/// ray angle computes asks it to stop and merges nothing; the next run is for
+/// the version now at the cursor.
+#[test]
+fn a_second_edit_cancels_the_run_of_stored_and_sorted_columns() {
+    let (mut state, id) = state();
+    let ctx = egui::Context::default();
+    let mut panel = TrackTablePanel::new();
+    panel.query.click_heading(TrackTableColumn::MaxRayAngleDeg);
+    frame(&ctx, &mut panel, &mut state);
+    state.settle_track_table_columns();
+    frame(&ctx, &mut panel, &mut state);
+    let first = state.scene[0].history.current_version().document_serial;
+
+    let (open, hold) = mpsc::channel();
+    state.track_table_jobs.hold_next = Some(hold);
+    state
+        .delete_point(PointRef {
+            recon: id,
+            point: 3,
+        })
+        .expect("deletable");
+    frame(&ctx, &mut panel, &mut state);
+    state.drive_track_table_columns();
+    let task = state.track_table_jobs.queued_task().expect("queued");
+    assert!(state
+        .track_table_jobs
+        .queued_columns()
+        .unwrap()
+        .contains(&TrackTableColumn::MaxRayAngleDeg));
+    let second = state.scene[0].history.current_version().document_serial;
+
+    state
+        .delete_point(PointRef {
+            recon: id,
+            point: 4,
+        })
+        .expect("deletable");
+    state.drive_track_table_columns();
+    assert!(state.quiet_task_cancelled(task), "the edit asks it to stop");
+    open.send(()).expect("the job waits at its gate");
+    state.wait_for_track_table_job();
+    assert!(state.track_tables.get(id, second).is_none());
+    assert!(
+        state.track_tables.get(id, first).is_some(),
+        "the rows on show keep their table"
+    );
+
+    frame(&ctx, &mut panel, &mut state);
+    state.settle_track_table_columns();
+    frame(&ctx, &mut panel, &mut state);
+    let table = state.track_table(id).expect("the latest version's table");
+    assert_eq!(table.point_indexes().len(), POINTS - 2);
+    assert!(table.has(TrackTableColumn::MaxRayAngleDeg));
+    assert_eq!(panel.rows().len(), POINTS - 2);
 }

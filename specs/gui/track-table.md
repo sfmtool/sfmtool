@@ -228,9 +228,10 @@ decoded.
   on show stay as they are, rather than being ordered or filtered by part of
   the query, and a change of a bound or the sort made meanwhile waits with
   them; the whole query applies in the frame the columns land. With no rows
-  listed yet for the version, as when its stored columns first land, the rows
-  are listed by the rest of the query, so the table is usable while the
-  column is computed. The line's hover text says the same.
+  listed yet, as on a first open when the stored columns land, the rows are
+  listed by the rest of the query, so the table is usable while the column is
+  computed. After an edit the old rows stay on show instead (§ "After an
+  edit"). The line's hover text says the same.
 
 ## The Patch column
 
@@ -555,13 +556,15 @@ change of the selected-image box set meanwhile scrolls to the top on landing,
 as it does at any other time.
 
 The old rows keep the computed values they showed, read from the old table,
-dimmed with the rest. Nothing is computed for the new version beyond its
-stored columns until they land: the job computes those first, as it does on a
-first open, and the computed columns the query needs follow as the second run.
-So a table sorted by Ray angle comes back in two steps after an edit: once the
-new stored columns land the rows are listed by the rest of the query, with
-*Sorting when Ray angle (°) is ready.*, and once the new ray angles land they
-are sorted by them (§ "What it shows").
+dimmed with the rest. A computed column that holds a bound or the sort is
+computed for the new version in the same run as its stored columns, so the
+old rows stay on show until the whole query can apply: a table sorted by Ray
+angle keeps its old rows, dimmed and in their old order, until the new
+version's stored columns and ray angles land together, and in that frame the
+new rows replace them, sorted. A person sorting by Ray angle and deleting the
+worst point sees the order change once per edit, never a frame in point
+order. A computed column that is only shown is computed by the run after, its
+cells `…` meanwhile, so it does not hold the rows back.
 
 The old rows are read from the old version's table, which the track table
 cache still holds: a node's entry is replaced only when a table for another
@@ -633,19 +636,22 @@ columns* (`Operation::TRACK_TABLE_COLUMNS`;
   lacks a stored column that node can supply or a computed column the panel
   needs. A hidden panel costs nothing.
 - **The stored columns first, the computed ones as a second run.** A job
-  computes either the stored columns the cache lacks or, once it holds them
-  all, the computed columns the panel needs that it lacks, never both
+  computes the stored columns the cache lacks or, once it holds them all, the
+  computed columns the panel needs that it lacks
   (`job::columns_to_compute`). The stored columns read data the
   reconstruction holds; a computed one loops over every pair of a track's rays
   or triangulates it, per point, which on a reconstruction of millions of
-  points takes far longer. So the rows, the stored values and the pictures are
-  on screen and can be sorted, bounded and clicked while the computed columns
-  are computed, their cells `…` meanwhile. A first job of computed columns
-  alone gets the whole of its progress range, so `TrackTable::compute`'s
-  split of the range between the stored and the computed pass
-  ([core/analysis/track-table.md](../core/analysis/track-table.md)
-  § "Implementation notes") is not needed here; nothing draws a quiet task's
-  fraction either.
+  points takes far longer. So on a first open the rows, the stored values and
+  the pictures are on screen and can be sorted, bounded and clicked while the
+  computed columns are computed, their cells `…` meanwhile. The exception is
+  a node whose cache still holds an earlier version's table, which is what the
+  panel keeps on show after an edit (§ "After an edit"): there the computed
+  columns that hold a bound or the sort (`TrackTableQuery::ordering_computed`)
+  are computed in the same run as the stored ones, and `TrackTable::compute`
+  gives the stored pass a tenth of the run's progress range and the computed
+  pass the rest ([core/analysis/track-table.md](../core/analysis/track-table.md)
+  § "Implementation notes"). Nothing draws a quiet task's fraction, but the
+  fraction follows the work.
 - **A computed column is computed only when the query needs it**: when it is
   shown, or holds a bound or the sort (`TrackTableQuery::needed_computed`).
   Ray angle is shown by default, so it is computed for a table opened with the
@@ -796,6 +802,13 @@ runs the computed columns over the same reconstruction:
 - an edit while the second run computes asks it to stop and merges nothing,
   the old rows keep their ray angles on show, and the next run is the new
   version's stored columns, the computed ones after it;
+- with the table sorted by Ray angle, an edit queues one run of the new
+  version's stored columns and its ray angles, the old rows stay on show in
+  their order, marked *Updating…* and with no waiting line, until it lands,
+  and in that frame the rows are the new version's sorted by ray angle; Cond.,
+  only shown, follows in the run after; a second edit while that run computes
+  asks it to stop and merges nothing, and the next run is for the version
+  then at the cursor;
 - a computed column *Find points* cached is not computed again and its array
   is kept;
 - the first click on Ray angle and Inv. depth z sorts ascending and on Cond.

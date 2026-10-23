@@ -334,6 +334,17 @@ impl TrackTableQuery {
             .collect()
     }
 
+    /// The computed columns holding a bound or the sort, in
+    /// [`TrackTableColumn::ALL`] order. After an edit the table job computes
+    /// them with the new version's stored columns, so the old rows stay on
+    /// show until the whole query can apply.
+    fn ordering_computed(&self) -> Vec<TrackTableColumn> {
+        TrackTableColumn::ALL
+            .into_iter()
+            .filter(|&c| c.cost() == ColumnCost::Computed && self.holds(c))
+            .collect()
+    }
+
     /// The columns drawn, in [`TrackTableColumn::ALL`] order
     /// ([`Self::is_shown`]).
     fn visible(&self, repeats: bool) -> Vec<TrackTableColumn> {
@@ -779,7 +790,11 @@ impl TrackTablePanel {
         // After the frame's edits of the query, so a column ticked or a
         // heading clicked in this frame is computed from the drive that
         // follows the egui pass.
-        state.want_track_table_columns(id, self.query.needed_computed());
+        state.want_track_table_columns(
+            id,
+            self.query.needed_computed(),
+            self.query.ordering_computed(),
+        );
         // The rows are computed from the query at the top of a frame, so an
         // edit this frame made shows in the next one, which is asked for here
         // rather than left to the next input event.
