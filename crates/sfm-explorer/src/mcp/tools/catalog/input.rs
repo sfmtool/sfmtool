@@ -171,9 +171,8 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           shortcut (command Z undoes, command G opens Go to Point), to an open \
                           dialog (Enter runs it, Escape cancels it), to the text input or \
                           number box with keyboard focus, or with panel_name or at_px to the \
-                          panel the pointer \
-                          is moved over first (I over image_detail toggles its intrinsics \
-                          layer). A letter key is a key, not text: type_text types. The reply \
+                          panel the pointer is moved over first (I over image_detail toggles \
+                          its intrinsics layer). A letter key is a key, not text: type_text types. The reply \
                           gives the dialogs and menus open afterwards and focused, the widget \
                           with keyboard focus, or null.",
             kind: Input,
@@ -220,10 +219,8 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           the value as it was, and a number is clamped to the box's range. Type \
                           the number as the box shows it, which can differ from its value: a \
                           Track View ZNCC box with value 0.7 shows 70 percent and takes 85 for \
-                          0.85. The \
-                          reply gives the dialogs \
-                          and menus open afterwards and focused, the widget with keyboard focus. \
-                          The Action Log records how many characters were typed, never the text.",
+                          0.85. The reply gives the dialogs and menus open afterwards and \
+                          focused, the widget with keyboard focus. The Action Log records how many characters were typed, never the text.",
             kind: Input,
             schema: object(
                 &[("widget", widget_schema())],

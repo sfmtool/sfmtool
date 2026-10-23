@@ -3075,16 +3075,16 @@ that confirms on Enter takes a `press_key` after it, so a test can check the
 field's `value` before it confirms.
 
 A number box takes the typed text as egui takes a person's: it parses the
-text as a number, ignoring whitespace, clamps it to the box's range, and leaves
-the value as it was when the text is not a number. When it does so depends on
-the box. egui's default is to take each change as it is typed (Load Demo
-Data's number of points); the Track View threshold boxes take the number only
-when the box is
-left, so a `type_text` there is followed by `press_key` `Enter`, which closes
-the box and commits the number. Either way the box's `value` in a listing is
-its number, so it shows the typed number once the box has taken it.
+text with the box's parser (egui's default reads a number and ignores
+whitespace), clamps it to the box's range, and leaves the value as it was when
+the text is not a number. When it does so depends on the box. egui's default is
+to take each change as it is typed (Load Demo Data's number of points); the
+Track View threshold boxes take the number only when the box is left, so a
+`type_text` there is followed by `press_key` `Enter`, which closes the box and
+commits the number. Either way the box's `value` in a listing is its number, so
+it shows the typed number once the box has taken it.
 
-The text is read with the box's own parser, so it is the number as the box
+Since the text is read with the box's own parser, it is the number as the box
 shows it, which can differ from its `value`. The Track View ZNCC boxes show
 percent: a box whose `value` is `0.7` shows 70, and `type_text` `85` then Enter
 sets it to `0.85`, while `0.85` would set it to `0.0085`.
@@ -3101,9 +3101,8 @@ image_detail` (and `over image_detail 210,160` when the call gave `at_px`),
 characters into the number box in the Track View panel` for a number box. A
 text input or number box often has no name of its own, so the row names the
 dialog or panel it sits in, and the field's name as well where it has one. The
-typed text itself is not
-recorded, because the log is visible to anyone watching the window and the
-text could be a path the person did not mean to show. A `type_text` with
+typed text itself is not recorded, because the log is visible to anyone
+watching the window and the text could be a path the person did not mean to show. A `type_text` with
 `widget` writes this one row and no row for the click that focused the input.
 
 ### What synthetic input does not exercise
