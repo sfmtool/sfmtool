@@ -3084,6 +3084,11 @@ left, so a `type_text` there is followed by `press_key` `Enter`, which closes
 the box and commits the number. Either way the box's `value` in a listing is
 its number, so it shows the typed number once the box has taken it.
 
+The text is read with the box's own parser, so it is the number as the box
+shows it, which can differ from its `value`. The Track View ZNCC boxes show
+percent: a box whose `value` is `0.7` shows 70, and `type_text` `85` then Enter
+sets it to `0.85`, while `0.85` would set it to `0.0085`.
+
 **The replies** carry `dialogs` and `menus` like the pointer tools, plus
 `focused`: the listing entry of the widget that has keyboard focus afterwards,
 or `null`. A key that opens or closes a dialog (Escape on `Go to Point`) shows

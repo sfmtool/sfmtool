@@ -217,7 +217,10 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           so the field can be checked first. A number box takes a typed number \
                           as it is typed, or, like the Track View threshold boxes, only when \
                           Enter is pressed or focus leaves it; text that is not a number leaves \
-                          the value as it was, and a number is clamped to the box's range. The \
+                          the value as it was, and a number is clamped to the box's range. Type \
+                          the number as the box shows it, which can differ from its value: a \
+                          Track View ZNCC box with value 0.7 shows 70 percent and takes 85 for \
+                          0.85. The \
                           reply gives the dialogs \
                           and menus open afterwards and focused, the widget with keyboard focus. \
                           The Action Log records how many characters were typed, never the text.",
