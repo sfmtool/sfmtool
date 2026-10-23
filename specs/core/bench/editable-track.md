@@ -3163,7 +3163,12 @@ it. It takes the reference and the working grid by
 geometry, and for each view picked fits the plane's tilt and the view's image
 shift so that the view's samples through the plane agree with the
 reference's by ZNCC, over a window that grows from the grid's centre to the
-whole grid. It combines the views' own planes by a robust
+whole grid. It trusts the keypoints it is given: every view is grown, and
+every shift-only fit made, from the shift the view's keypoint implies, with
+no search for another, so a view whose keypoint is off by more than its
+growth recovers is left out, and a view with no keypoint is left out as
+`NoKeypoint` without a growth. Fitting the keypoints is a separate step a
+caller runs first, such as `fit`. It combines the views' own planes by a robust
 information-weighted mean, with no fit of the views together, adds the
 planes of the widest pairs of kept views matched against each other, and
 when it turns the patch fits the shift alone of every view it did not
@@ -3896,15 +3901,14 @@ and its ratio to `sigma_weak_deg`, or `None`),
 `low_confidence`), `turned`, `joined`, `left_out`, `shift_only`, `matched`,
 `pairs_kept`, `written`, `views`, `trace`, `picks` and `pairs`. `views` holds
 one dict per observation whose `kind` names the `GrownPlaneView`:
-`"reference"` with `keypoint`; `"joined"` with `start`
-(`"no_search"`, `"keypoint"`, `"widened"` or `"no_keypoint"`), `shift`, `grid_zncc`,
-`distance`, `held_zncc`, `was` and `keypoint`; `"shift_only"` with `start`,
+`"reference"` with `keypoint`; `"joined"` with `shift`, `grid_zncc`,
+`distance`, `held_zncc`, `was` and `keypoint`; `"shift_only"` with
 `shift`, `grid_zncc`, `was` and `keypoint`; `"left_out"` with `reason`
-(`"under_floor"`, `"stopped_early"`, `"too_far"` or `"held_under_floor"`), `distance` and
-`held_zncc`; and `"not_attempted"`. `trace` holds one dict per try with
+(`"under_floor"`, `"stopped_early"`, `"too_far"`, `"held_under_floor"` or
+`"no_keypoint"`), `distance` and `held_zncc`; and `"not_attempted"`. `trace` holds one dict per try with
 `observation`, `image`, `angle_deg`, `outcome` (`"matched"` or
 `"left_out"`), `combined_normal`, `combined_sigma_deg` and `attempts`, each
-with `start`, `stage_zncc` (a float64 array), `shift`, `normal`,
+with `stage_zncc` (a float64 array), `shift`, `normal`,
 `grid_zncc`, `sigma_deg` (both `NaN` for a growth that stopped early at a
 window stage), `refusal` (`None`, `"under_floor"` or `"stopped_early"`) and
 `tilt_start` (`"starting"` or `"combined"`, the plane the growth started
