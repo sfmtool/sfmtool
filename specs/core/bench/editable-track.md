@@ -2715,7 +2715,9 @@ The evaluation reports its phases through `progress` as `refine` and
 `self-similarity` at the cluster stage, `localize`, `self-similarity` and
 `reference view` and `bitmap scores` at the track stage; a detailed
 `progress` times the localizer's tile renders inside `localize`, the
-self-similarity tiles' renders inside `self-similarity` and member
+self-similarity tiles' renders inside `self-similarity`, the renders at the
+pixels a fit refused to walk rows to (`walked_to`) inside their own
+`walked tiles` phase between `self-similarity` and `reference view`, and member
 coherence's renders inside `reference view`.
 
 **At the track stage** the reading is **one round** of

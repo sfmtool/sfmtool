@@ -484,9 +484,11 @@ impl std::fmt::Display for EvaluateReport {
 ///
 /// `progress` is where the call names its phases, the names the batch kernels
 /// carry: `refine` and `self-similarity` at the cluster stage, and `localize`,
-/// `self-similarity` and `reference view` at the track stage, the last holding
-/// member coherence's render detail phases. Pass `&Progress::none()` to report
-/// nothing.
+/// `self-similarity`, `reference view` and `bitmap scores` at the track stage,
+/// `reference view` holding member coherence's render detail phases. A
+/// detailed `progress` also records a `walked tiles` detail phase between
+/// `self-similarity` and `reference view`, holding the renders at the pixels a
+/// fit refused to walk rows to. Pass `&Progress::none()` to report nothing.
 ///
 /// # Example
 ///
@@ -2372,7 +2374,8 @@ pub fn score_bitmap(
 /// ([`TrackMeasurement::walked_to`](super::track::TrackMeasurement::walked_to)),
 /// on the grid and with the sampler a reading renders each row's own tile
 /// with, so the two are scored against the bitmap alike. Rows a fit did not
-/// refuse have none; the list is usually empty.
+/// refuse have none; the list is usually empty. The renders run inside a
+/// `walked tiles` detail phase of `progress`.
 fn walked_tiles(
     track: &EditableTrack,
     images: &[ProjectedImage<'_>],
@@ -2381,13 +2384,14 @@ fn walked_tiles(
     progress: &Progress<'_>,
 ) -> Result<Vec<(usize, ViewTile)>, EvaluateError> {
     let resolution = options.localize.resolution.max(2) as usize;
+    let mut phase = progress.detail_phase("walked tiles");
     let mut walked = Vec::new();
     for i in evaluated(track) {
         let observation = &track.observations[i];
         let Some(to) = observation.track.as_ref().and_then(|m| m.walked_to) else {
             continue;
         };
-        progress.check_cancel()?;
+        phase.check_cancel()?;
         let view = &images[observation.image as usize];
         let tile = render_view_tile(
             patch_frame,
@@ -2395,10 +2399,11 @@ fn walked_tiles(
             Some(to),
             resolution,
             options.localize.sampler,
-            progress,
+            &phase,
         );
         walked.push((i, tile));
     }
+    progress_note!(phase, "{} observations", walked.len());
     Ok(walked)
 }
 

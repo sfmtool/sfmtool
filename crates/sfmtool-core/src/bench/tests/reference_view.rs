@@ -2258,3 +2258,79 @@ fn a_readings_localizer_renders_are_recorded_under_localize() {
         assert!(p.start + p.took <= end, "{p:#?} ends after localize");
     }
 }
+
+/// The renders at the pixels a fit refused to walk rows to are recorded in
+/// their own `walked tiles` detail phase: under a detailed
+/// [`PhaseLog`](crate::progress::PhaseLog) it is closed once, at the depth of
+/// the evaluation's other phases, after `self-similarity` and before
+/// `reference view`, and the walked row's render is one depth below it and
+/// inside its time span.
+#[test]
+fn a_readings_walked_tile_renders_are_recorded_under_walked_tiles() {
+    use crate::progress::{Event, PhaseLog};
+
+    let truth = GroundTruth::load();
+    let views = truth.views();
+    let offsets = &truth.recon.point_set.observation_offsets;
+    let point = (0..truth.recon.point_count())
+        .find(|&p| offsets[p + 1] - offsets[p] >= MIN_TRACK)
+        .expect("the ground truth has a long track") as u32;
+    let edited = EditedReconstruction::new(Arc::new(truth.recon.clone()));
+    let (bench, report) = create_track(
+        &Bench::new(),
+        &edited,
+        point,
+        &CreateTrackOptions::default(),
+    )
+    .expect("the point is live");
+    let track = bench.track(&report.label).expect("just put on");
+    let options = EvaluateOptions::default();
+    let (mut read, _) =
+        evaluate(track, &edited, &views, &options, &Progress::none()).expect("the track reads");
+    let measurement = read
+        .observations
+        .iter_mut()
+        .filter_map(|o| o.track.as_mut())
+        .find(|m| m.keypoint.is_some())
+        .expect("a row was read");
+    let keypoint = measurement.keypoint.expect("just found");
+    measurement.walked_to = Some([f64::from(keypoint[0]) + 1.5, f64::from(keypoint[1]) - 0.5]);
+
+    let log = PhaseLog::new();
+    let sink = |event: Event<'_>| log.record(event);
+    let progress = Progress::to(&sink).detailed(true);
+    evaluate(&read, &edited, &views, &options, &progress).expect("the track reads");
+    let phases = log.phases();
+
+    let position = |name: &str| {
+        let found: Vec<_> = phases
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.name == name)
+            .collect();
+        assert_eq!(found.len(), 1, "{name}: {phases:#?}");
+        found[0]
+    };
+    let (at, walked) = position("walked tiles");
+    let (similarity_at, similarity) = position("self-similarity");
+    let (reference_at, _) = position("reference view");
+    assert!(similarity_at < at && at < reference_at, "{phases:#?}");
+    assert_eq!(walked.depth, similarity.depth, "{phases:#?}");
+    let (start, end) = (walked.start, walked.start + walked.took);
+    let inside: Vec<_> = phases
+        .iter()
+        .filter(|p| p.start >= start && p.start <= end && p.depth > walked.depth)
+        .collect();
+    assert_eq!(
+        inside
+            .iter()
+            .filter(|p| p.name.starts_with("render "))
+            .count(),
+        1,
+        "one walked row, one render: {phases:#?}"
+    );
+    for p in &inside {
+        assert_eq!(p.depth, walked.depth + 1, "{p:#?}");
+        assert!(p.start + p.took <= end, "{p:#?} ends after walked tiles");
+    }
+}
