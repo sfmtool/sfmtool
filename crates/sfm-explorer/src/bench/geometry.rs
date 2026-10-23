@@ -188,8 +188,8 @@ pub(crate) enum EditReport {
         /// How far it turned, in degrees.
         degrees: f64,
     },
-    /// The patch turned to face a new normal, every sighting rebuilt on the
-    /// turned axes.
+    /// The patch turned to face a new normal about its centre, so with no
+    /// keypoint moved.
     Tilted(TiltReport),
     /// One sighting placed by hand.
     Sighted(SightReport),

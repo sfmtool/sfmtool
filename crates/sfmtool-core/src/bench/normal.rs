@@ -12,9 +12,9 @@
 //! design. A [`fit`] moves the patch's centre and leaves its
 //! normal as it was; these do the opposite. Each estimates a normal, turns
 //! the patch to it with [`tilt_patch`] -- so the turn
-//! stops where that step's cap stops it, and every sighting keeps its in-plane
-//! offset -- and ends as a fit does, by reading the result back and rendering
-//! the patch bitmap over the turned square. The centre does not move.
+//! stops where that step's cap stops it, and no keypoint moves -- and ends as
+//! a fit does, by reading the result back and rendering the patch bitmap over
+//! the turned square. The centre does not move.
 
 use nalgebra::{Point3, SymmetricEigen, Vector3};
 

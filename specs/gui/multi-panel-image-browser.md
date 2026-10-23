@@ -648,7 +648,7 @@ press on it pans the photograph as a press on empty image does.
   every observation is a view of it, so dragging a mark slides that patch
   across its own plane until its centre sits under the pointer: the
   half-vectors and the normal are kept, and **every** observation's keypoint
-  moves by the same displacement along the plane, keeping its own offset, so
+  moves by its own photograph's displacement of the centre's projection, so
   the outline moves in every image at once. At the **cluster** stage there is
   no shared geometry, so the mark is that sighting's own seed and nothing else
   moves. With Track View's *Lock* cleared the track stage's mark is that
@@ -710,15 +710,14 @@ fisheye's pixel names the ray its lens really images there.
 
 At the track stage the patch is shared, so all three gestures change the
 outline in **every** image. The two that move its centre -- the slide and the
-resize -- also move the track's point and **carry every sighting along the
-plane by the same displacement**, which keeps each one's own offset from where
-the centre projects: that offset is where the photograph sees the patch's
-content against where the geometry puts its middle, and it is what the tiles
-are cut on, so resetting the keypoints to the centre would scramble the
-correlation the next reading scores. The sighting the gesture came through
-therefore lands under the pointer -- its plane point plus the displacement *is*
-the plane point under the pixel -- and the others move with the patch. A turn
-moves the centre nowhere, so every sighting stays where it is. None of the three pins anything: where the
+resize -- also move the track's point and **move every keypoint by its own
+photograph's displacement of the centre's projection**, which keeps each one's
+gap from where the centre projects: a keypoint marks where its photograph sees
+the patch's centre, so the gap is that sighting's own error, and a gesture that
+says where the patch is has no grounds to correct it. The pointer is read less
+the gap of the sighting the gesture came through, so that sighting lands under
+the pointer, and the others move with the patch. A turn moves the centre
+nowhere, so every keypoint stays where it is. None of the three pins anything: where the
 patch is says nothing about whether a sighting belongs to it
 ([`../core/bench/editable-track.md`](../core/bench/editable-track.md) § "Placing,
 sizing and turning by hand"). At the cluster stage each sighting has its own

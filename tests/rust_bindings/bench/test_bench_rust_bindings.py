@@ -1688,7 +1688,7 @@ class TestDuplicating:
 class TestTheNormalHandSteps:
     """``translate_patch`` and ``tilt_patch``: the two moves no pixel can name.
 
-    The arithmetic -- the least rotation, the offsets kept, the cap -- is proved
+    The arithmetic -- the least rotation, the keypoints kept, the cap -- is proved
     in Rust; what is checked here is that the bindings carry each step's numbers
     and hand back a new value.
     """

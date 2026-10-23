@@ -1165,17 +1165,18 @@ fn set_reference(
 /// This moves the **patch**, not one sighting: a track-stage track has one
 /// patch and every observation is a view of it, so the centre moves in-plane,
 /// the half-vectors and the normal are kept, and every observation's keypoint
-/// is carried along the plane by that same displacement, keeping its own
-/// in-plane offset from the centre. That offset is what each observation's
-/// tile is cut on, so resetting the keypoints to the centre's projection would
-/// scramble the correlation the next reading scores. Nothing is pinned -- a
+/// moves by its own photograph's displacement of the centre's projection. A
+/// keypoint marks where its photograph sees the patch's centre, so its gap from
+/// the centre's projection is that sighting's own error, and the move keeps it
+/// in the photograph. A sighting never localized takes the projection of the
+/// moved centre. Nothing is pinned -- a
 /// translation says where the patch is, not whether a sighting belongs to it --
 /// and the measurements and the bitmap go, because all of them were read at a
 /// place the patch has left. A sighting the moved centre no longer projects
 /// into is left with no keypoint and ``NoProjection`` as its reason.
 ///
-/// The pointer is read against the outline as drawn: the patch re-anchored on
-/// that observation's own sighting, so that sighting lands under ``pixel``.
+/// The pointer is read less that observation's gap from the centre's
+/// projection, so that sighting lands under ``pixel``.
 /// :func:`sight_observation` is the step for **one** keypoint.
 ///
 /// A pixel off the photograph names no place on it, so it is brought to the
@@ -1228,9 +1229,10 @@ fn translate_patch_to_pixel(
 ///
 /// ``u`` and ``v`` slide it across its own plane and ``n`` moves it along its
 /// outward normal, the one direction no photograph can name; a mixed ``by``
-/// does both. Every sighting is carried by the displacement and keeps its own
-/// in-plane offset from the centre; one the moved centre no longer projects
-/// into is left with no keypoint. The axes, the normal and the size are
+/// does both. Every keypoint moves by its own photograph's displacement of the
+/// centre's projection, keeping its gap from that projection; a sighting never
+/// localized takes the moved centre's projection, and one the moved centre no
+/// longer projects into is left with no keypoint. The axes, the normal and the size are
 /// untouched and nothing is pinned.
 ///
 /// Returns ``(EditableTrack, report)`` carrying ``by``, ``center``, ``moved``,
@@ -1274,9 +1276,10 @@ fn translate_patch(
 /// rotation, toward the outward ``normal`` named (any non-zero length),
 /// stopping ``MAX_TILT_DEG`` from any observation's camera.
 ///
-/// The centre and the half-lengths do not move; every sighting keeps the
-/// in-plane offset it was measured at and is re-projected from the turned
-/// plane. The bitmap and the measurements are dropped, and nothing is pinned.
+/// The centre and the half-lengths do not move, so no keypoint moves: a
+/// keypoint marks where its photograph sees the centre. A sighting never
+/// localized takes the centre's projection. The bitmap and the measurements are
+/// dropped, and nothing is pinned.
 ///
 /// Returns ``(EditableTrack, report)`` carrying ``degrees``, ``asked``,
 /// ``normal`` (the one the patch now shows), ``stopped`` (``None``, or a dict
@@ -1389,9 +1392,9 @@ fn sight_observation(
 ///
 /// ``moved_edge`` is ``"+u"``, ``"-u"``, ``"+v"``, ``"-v"`` or ``None``, and it
 /// is the discriminator for what becomes of the sightings: named, that edge
-/// moves and the far one is held, so the centre shifts and every sighting is
-/// carried with it; omitted, both edges move about a held centre and no sighting
-/// is touched.
+/// moves and the far one is held, so the centre shifts and every keypoint moves
+/// by its own photograph's displacement of the centre's projection; omitted,
+/// both edges move about a held centre and no keypoint moves.
 ///
 /// Returns ``(EditableTrack, report)``.
 #[pyfunction]

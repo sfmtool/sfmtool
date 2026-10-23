@@ -504,8 +504,8 @@ pub(crate) enum Command {
         /// How far, positive from `+x` toward `+y` of the image raster.
         angle_deg: f64,
     },
-    /// Turn the track-stage patch to face a new outward normal. Every
-    /// sighting is rebuilt on the turned axes.
+    /// Turn the track-stage patch to face a new outward normal. The centre
+    /// does not move, so no keypoint does.
     TiltBenchPatch {
         reconstruction_label: String,
         track: Option<String>,

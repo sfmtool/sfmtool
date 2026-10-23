@@ -4439,12 +4439,11 @@ fn corner_pixel(
 }
 
 /// Each sighting's offset from where the centre projects, in its own image's
-/// pixels: the gap between where that photograph sees the patch's content and
-/// where the geometry puts the patch's middle.
+/// pixels: the gap between where that photograph sees the patch's centre and
+/// where the geometry puts it.
 ///
-/// **What a move of the patch must not disturb.** It is what the tile is cut on
-/// and the correlation is scored at, so a step that reset every keypoint to the
-/// centre's projection would zero all of them and scramble the next reading.
+/// **What a move of the patch must not disturb.** The gap is that sighting's
+/// own error, and every patch step keeps it in the photograph.
 fn projection_offsets(track: &EditableTrack, edited: &EditedReconstruction) -> Vec<[f64; 2]> {
     track
         .observations
@@ -4460,6 +4459,22 @@ fn projection_offsets(track: &EditableTrack, edited: &EditedReconstruction) -> V
             [site[0] - centre[0], site[1] - centre[1]]
         })
         .collect()
+}
+
+/// Move every keypoint off the centre's projection, each by a gap of its own.
+///
+/// The fixture's keypoints are each point's exact projection, so every gap is
+/// zero and a step that reset them all to the centre's projection would pass,
+/// as would one that kept an offset on the patch's plane. A gap of a few pixels
+/// tells the three rules apart.
+fn off_centre(track: &mut EditableTrack) {
+    for (k, observation) in track.observations.iter_mut().enumerate() {
+        let site = observation.site().expect("a sighting");
+        observation.track.as_mut().expect("a track slot").keypoint = Some([
+            (site[0] + 2.0 + k as f64) as f32,
+            (site[1] - 3.0 + 2.0 * k as f64) as f32,
+        ]);
+    }
 }
 
 /// The outline a person sees at `observation`: the patch re-anchored on that
@@ -4585,10 +4600,12 @@ fn moving_a_cluster_sighting_moves_its_seed_and_keeps_the_shape_it_is_read_at() 
 /// invert the radial term, which is why the two are run with different
 /// tolerances rather than with one loose enough for both.
 ///
-/// The assertions are about the **patch frame** the step wrote, not about the outline
-/// redrawn from the keypoint it wrote beside it: a keypoint is an `f32` slot, so
-/// re-anchoring on it is within a rounding of the centre and not on it. That
-/// rounding is what the looser bound on the dot below allows for.
+/// The square the dragged photograph shows is the patch's projection moved by
+/// that sighting's gap from the centre's projection, the gap every patch step
+/// keeps. The exact assertions are about the **patch frame** the step wrote,
+/// seen through that gap as read before the step; the keypoint the step wrote
+/// beside it is an `f32` slot, which is what the looser bound on the keypoints
+/// below allows for.
 #[test]
 fn a_resize_from_an_edge_lands_that_edge_under_the_pixel_and_leaves_the_far_one_alone() {
     let scene = Scene::new();
@@ -4599,31 +4616,30 @@ fn a_resize_from_an_edge_lands_that_edge_under_the_pixel_and_leaves_the_far_one_
 
 fn resize_edge_case(edited: &EditedReconstruction, tolerance: f64) {
     let (bench, label) = bench_with_point(edited, 0);
-    let track = unpinned(track_of(&bench, &label));
+    let mut track = unpinned(track_of(&bench, &label));
+    off_centre(&mut track);
 
     let sighting = track.observations[1].image as usize;
     let (camera, pose) = view(edited, sighting);
-    let before = outline_of(&track, edited, 1);
-    let unanchored = track
-        .track()
-        .and_then(|payload| payload.patch_frame.clone())
-        .expect("a patch frame");
-    // The far edge's midpoint, which the resize promises not to move.
-    let far_before = corner_pixel(&before, &camera, &pose, -1.0, 0.0);
-    // Aim well outside the outline, along the `+u` edge's own direction.
-    let out = corner_pixel(&before, &camera, &pose, 2.3, 0.0);
-
+    let unanchored = patch_frame_of(&track);
     let offsets = projection_offsets(&track, edited);
+    let gap = offsets[1];
+    let seen = |patch: &OrientedPatch, s: f64, t: f64| {
+        let pixel = corner_pixel(patch, &camera, &pose, s, t);
+        [pixel[0] + gap[0], pixel[1] + gap[1]]
+    };
+    // The far edge's midpoint, which the resize promises not to move.
+    let far_before = seen(&unanchored, -1.0, 0.0);
+    // Aim well outside the outline, along the `+u` edge's own direction.
+    let out = seen(&unanchored, 2.3, 0.0);
+
     let (next, report) =
         resize_patch_to_pixel(&track, edited, Viewpoint::Observation(1), Edge::PlusU, out)
             .expect("a pixel the ray reaches");
     assert!(report.changed);
     assert_eq!(report.observation, Some(1));
 
-    let after = next
-        .track()
-        .and_then(|p| p.patch_frame.clone())
-        .expect("a patch frame");
+    let after = patch_frame_of(&next);
     assert_eq!(
         after.half_extent[0], after.half_extent[1],
         "a patch frame is square, so a resize is one scale"
@@ -4637,47 +4653,45 @@ fn resize_edge_case(edited: &EditedReconstruction, tolerance: f64) {
         report.half - report.was,
     );
 
-    // The claim, stated on the **exact** patch frame the step's own numbers describe:
-    // the outline is the patch re-anchored on the dragged sighting, and that
-    // sighting's plane point moved by the same displacement, so this is what is
-    // drawn -- without the `f32` keypoint slot standing between the arithmetic
-    // and the assertion.
-    let drawn = OrientedPatch {
-        center: before.center + moved,
-        half_extent: after.half_extent,
-        ..before.clone()
-    };
-    let dragged = corner_pixel(&drawn, &camera, &pose, 1.0, 0.0);
+    // The claim, on the exact patch frame the step wrote: seen through the
+    // dragged sighting's gap, its dragged edge is on the pointer and its far
+    // edge where it was.
+    let dragged = seen(&after, 1.0, 0.0);
     assert!(
         (dragged[0] - out[0]).abs() < tolerance && (dragged[1] - out[1]).abs() < tolerance,
         "the dragged edge should land on {out:?}, it landed on {dragged:?}",
     );
-    let far_after = corner_pixel(&drawn, &camera, &pose, -1.0, 0.0);
+    let far_after = seen(&after, -1.0, 0.0);
     assert!(
         (far_after[0] - far_before[0]).abs() < tolerance
             && (far_after[1] - far_before[1]).abs() < tolerance,
         "the far edge moved from {far_before:?} to {far_after:?}",
     );
-    // And on the outline as it is really redrawn, through that slot: the same,
-    // to a thousandth of a pixel.
-    let redrawn = outline_of(&next, edited, 1);
-    for (s, name) in [(1.0, "dragged"), (-1.0, "far")] {
-        let want = if s > 0.0 { out } else { far_before };
-        let got = corner_pixel(&redrawn, &camera, &pose, s, 0.0);
+
+    // **Every keypoint moved by its own photograph's displacement of the
+    // centre's projection**, so every sighting keeps its gap from that
+    // projection. And nothing is pinned, because where the patch is says
+    // nothing about whether a sighting belongs to it.
+    for ((before, now), (offset, kept)) in track
+        .observations
+        .iter()
+        .zip(&next.observations)
+        .zip(offsets.iter().zip(projection_offsets(&next, edited)))
+    {
+        let (camera, pose) = view(edited, before.image as usize);
+        let from = corner_pixel(&unanchored, &camera, &pose, 0.0, 0.0);
+        let to = corner_pixel(&after, &camera, &pose, 0.0, 0.0);
+        let site = before.site().expect("a sighting");
+        let want = [site[0] + to[0] - from[0], site[1] + to[1] - from[1]];
+        let got = now.site().expect("a sighting");
         assert!(
             (got[0] - want[0]).abs() < 1e-3 && (got[1] - want[1]).abs() < 1e-3,
-            "the redrawn {name} edge should be at {want:?}, it is at {got:?}",
+            "image {} should sight the resized patch at {want:?}, it sights {got:?}",
+            before.image,
         );
-    }
-
-    // **Every sighting keeps its own offset from the centre's projection**,
-    // which is what the tiles are cut on: the keypoints were carried along the
-    // plane rather than reset to the centre. And nothing is pinned, because
-    // where the patch is says nothing about whether a sighting belongs to it.
-    for (offset, now) in offsets.iter().zip(projection_offsets(&next, edited)) {
         assert!(
-            (now[0] - offset[0]).abs() < 1e-3 && (now[1] - offset[1]).abs() < 1e-3,
-            "a resize scrambled a sighting's offset: {offset:?} became {now:?}",
+            (kept[0] - offset[0]).abs() < 1e-3 && (kept[1] - offset[1]).abs() < 1e-3,
+            "a resize changed a sighting's gap: {offset:?} became {kept:?}",
         );
     }
     assert!(next.observations.iter().all(|o| !o.pinned));
@@ -4702,6 +4716,7 @@ fn sliding_the_patch_lands_the_dot_under_the_pointer_and_moves_every_sighting() 
 fn translate_case(edited: &EditedReconstruction, tolerance: f64) {
     let (bench, label) = bench_with_point(edited, 0);
     let mut track = unpinned(track_of(&bench, &label));
+    off_centre(&mut track);
     // A measurement to be dropped, and a pin the slide must not invent.
     track.observations[1]
         .track
@@ -4712,16 +4727,17 @@ fn translate_case(edited: &EditedReconstruction, tolerance: f64) {
     let dragged = 1;
     let image = track.observations[dragged].image as usize;
     let (camera, pose) = view(edited, image);
-    let was = track
-        .track()
-        .and_then(|payload| payload.patch_frame.clone())
-        .expect("a patch frame");
-    let outline = outline_of(&track, edited, dragged);
-    // Aim at a place on the outline that is not its centre, so the slide is a
-    // real move: the `(0.7, 0.4)` point of the square.
-    let target = corner_pixel(&outline, &camera, &pose, 0.7, 0.4);
-
+    let was = patch_frame_of(&track);
     let offsets = projection_offsets(&track, edited);
+    let gap = offsets[dragged];
+    // Aim at a place on the square this photograph shows that is not its
+    // centre, so the slide is a real move: the `(0.7, 0.4)` point of the
+    // square, seen through the sighting's gap.
+    let target = {
+        let pixel = corner_pixel(&was, &camera, &pose, 0.7, 0.4);
+        [pixel[0] + gap[0], pixel[1] + gap[1]]
+    };
+
     let (next, report) =
         translate_patch_to_pixel(&track, edited, Viewpoint::Observation(dragged), target)
             .expect("a pixel the ray reaches");
@@ -4730,10 +4746,7 @@ fn translate_case(edited: &EditedReconstruction, tolerance: f64) {
     assert_eq!(report.image, track.observations[dragged].image);
     assert_eq!(report.placed, next.observations.len());
 
-    let patch_frame = next
-        .track()
-        .and_then(|payload| payload.patch_frame.clone())
-        .expect("a patch frame");
+    let patch_frame = patch_frame_of(&next);
     // In-plane only: the normal, the axes and the size are untouched, and the
     // offset lies in the plane it moved across.
     assert!((patch_frame.normal() - was.normal()).norm() < 1e-12);
@@ -4753,10 +4766,8 @@ fn translate_case(edited: &EditedReconstruction, tolerance: f64) {
     );
     assert_eq!(next.track().and_then(|p| p.bitmap.clone()), None);
 
-    // **The dot the drag came through lands under the pointer.** Its own plane
-    // point plus the displacement is, by construction, the plane point under
-    // the pixel -- so this holds without the centre going anywhere near it,
-    // which is the whole point of carrying the offsets.
+    // **The dot the drag came through lands under the pointer.** The centre
+    // now projects at the pointer less the sighting's gap, and the gap is kept.
     let landed = next.observations[dragged].site().expect("a sighting");
     assert!(
         (landed[0] - target[0]).abs() < 1e-3 && (landed[1] - target[1]).abs() < 1e-3,
@@ -4765,26 +4776,21 @@ fn translate_case(edited: &EditedReconstruction, tolerance: f64) {
     assert_eq!(report.pixel, landed);
     // Exactly, before the `f32` keypoint slot rounds it.
     let exact = {
-        let moved = OrientedPatch {
-            center: outline.center + displacement_of(&track, &next),
-            ..outline.clone()
-        };
-        corner_pixel(&moved, &camera, &pose, 0.0, 0.0)
+        let pixel = corner_pixel(&patch_frame, &camera, &pose, 0.0, 0.0);
+        [pixel[0] + gap[0], pixel[1] + gap[1]]
     };
     assert!(
         (exact[0] - target[0]).abs() < tolerance && (exact[1] - target[1]).abs() < tolerance,
-        "the dragged sighting's plane point should project to {target:?}, it projects to {exact:?}",
+        "the moved centre seen through the gap should be at {target:?}, it is at {exact:?}",
     );
 
-    // **Every sighting keeps its own offset from the centre's projection.**
-    // That offset is where the photograph sees the patch's content against
-    // where the geometry puts its middle, and it is what the tile is cut on: a
-    // step that reset the keypoints to the centre would zero every one of them
-    // and scramble the correlation.
+    // **Every sighting keeps its own gap from the centre's projection.** A
+    // keypoint marks where its photograph sees the patch's centre, so the gap is
+    // that sighting's own error, which a slide has no grounds to correct.
     for (offset, now) in offsets.iter().zip(projection_offsets(&next, edited)) {
         assert!(
             (now[0] - offset[0]).abs() < 1e-3 && (now[1] - offset[1]).abs() < 1e-3,
-            "a slide scrambled a sighting's offset: {offset:?} became {now:?}",
+            "a slide changed a sighting's gap: {offset:?} became {now:?}",
         );
     }
     for observation in &next.observations {
@@ -5057,8 +5063,8 @@ fn a_translation_across_the_plane_moves_the_centre_and_every_sighting() {
         Some(patch_frame.center)
     );
     assert_eq!(next.track().and_then(|p| p.bitmap.clone()), None);
-    // Every sighting kept its own offset from where the centre projects, which
-    // is what the tile is cut on, and none of them was ruled on.
+    // Every sighting kept its own gap from where the centre projects, and none
+    // of them was ruled on.
     for (offset, now) in offsets.iter().zip(projection_offsets(&next, &edited)) {
         assert!(
             (now[0] - offset[0]).abs() < 1e-3 && (now[1] - offset[1]).abs() < 1e-3,
@@ -5405,39 +5411,29 @@ fn a_displacement_that_is_not_one_and_a_cluster_are_both_refused() {
     ));
 }
 
-/// Each sighting's in-plane offset `(a_i, b_i)` on the patch's own axes: where
-/// that photograph sees the patch's content against the patch frame's middle, read on
-/// the plane rather than in pixels.
-///
-/// **What an offset along the normal must not disturb.** The plane travels with
-/// the patch, so the pair is the whole of what says where the tile is cut, and
-/// each keypoint afterwards has to be the projection of `c' + a_i u + b_i v` and
-/// of nothing else.
-fn plane_offsets(track: &EditableTrack, edited: &EditedReconstruction) -> Vec<(f64, f64)> {
-    let patch_frame = patch_frame_of(track);
+/// Where each observation's photograph sees the centre of `patch_frame`, in that
+/// image's pixels: the projection every keypoint is moved with.
+fn centre_pixels(
+    track: &EditableTrack,
+    edited: &EditedReconstruction,
+    patch_frame: &OrientedPatch,
+) -> Vec<[f64; 2]> {
     track
         .observations
         .iter()
         .map(|observation| {
             let (camera, pose) = view(edited, observation.image as usize);
-            let site = observation.site().expect("a sighting");
-            let offset = patch_frame
-                .keypoint_plane_offset(&camera, &pose, site)
-                .expect("the fixture's rays meet the plane");
-            (
-                offset.dot(&patch_frame.u_axis),
-                offset.dot(&patch_frame.v_axis),
-            )
+            corner_pixel(patch_frame, &camera, &pose, 0.0, 0.0)
         })
         .collect()
 }
 
 /// The one edit no photograph can name: the patch's depth. The centre travels
-/// the distance asked for along the outward normal and the plane goes with it,
-/// so each sighting keeps its own in-plane offset and each keypoint becomes the
-/// projection of the patch where it now stands.
+/// the distance asked for along the outward normal, and each keypoint moves by
+/// its own photograph's displacement of the centre's projection, so every
+/// sighting keeps its gap from that projection.
 #[test]
-fn a_translation_along_the_normal_keeps_every_in_plane_offset() {
+fn a_translation_along_the_normal_moves_each_keypoint_with_its_photographs_centre() {
     let scene = Scene::new();
     let edited = edited_with_columns(&scene, WORLD);
     let (bench, label) = bench_with_point(&edited, 0);
@@ -5453,23 +5449,9 @@ fn a_translation_along_the_normal_keeps_every_in_plane_offset() {
         track.track().and_then(|p| p.bitmap.as_ref()).is_some(),
         "the column fixture should carry a patch bitmap to drop"
     );
-    // The fixture's keypoints are each point's exact projection, so every
-    // in-plane offset is zero and a step that reset them all would pass. Put
-    // each sighting somewhere of its own first, which is what a photograph says
-    // when it sees the patch's content off the patch frame's middle.
-    for (k, observation) in track.observations.iter_mut().enumerate() {
-        let site = observation.site().expect("a sighting");
-        observation.track.as_mut().expect("a track slot").keypoint = Some([
-            (site[0] + 2.0 + k as f64) as f32,
-            (site[1] - 3.0 + 2.0 * k as f64) as f32,
-        ]);
-    }
+    off_centre(&mut track);
     let was = patch_frame_of(&track);
-    let offsets = plane_offsets(&track, &edited);
-    assert!(
-        offsets.iter().all(|(a, b)| a.hypot(*b) > 1e-6),
-        "every sighting should sit off the frame's middle: {offsets:?}",
-    );
+    let from = centre_pixels(&track, &edited, &was);
 
     let distance = -0.37;
     let (next, report) = translate_patch(&track, &edited, Vector3::new(0.0, 0.0, distance))
@@ -5496,35 +5478,29 @@ fn a_translation_along_the_normal_keeps_every_in_plane_offset() {
     );
     assert_eq!(next.track().and_then(|p| p.bitmap.clone()), None);
 
-    // Every offset survived, and every keypoint is the projection of the place
-    // that offset names on the **moved** plane -- worked out here from the pair
-    // that was read before the move, rather than from anything the step did.
-    let now = plane_offsets(&next, &edited);
-    assert_eq!(now.len(), offsets.len());
-    for (before, after) in offsets.iter().zip(&now) {
+    // Every keypoint moved by its own photograph's displacement of the centre's
+    // projection -- worked out here from the two centres rather than from
+    // anything the step did.
+    let to = centre_pixels(&next, &edited, &patch_frame);
+    for (k, (before, after)) in track
+        .observations
+        .iter()
+        .zip(&next.observations)
+        .enumerate()
+    {
+        let site = before.site().expect("a sighting");
+        let want = [
+            site[0] + to[k][0] - from[k][0],
+            site[1] + to[k][1] - from[k][1],
+        ];
+        let got = after.site().expect("a sighting");
         assert!(
-            (after.0 - before.0).abs() < 1e-6 && (after.1 - before.1).abs() < 1e-6,
-            "an offset scrambled a sighting's place on the plane: {before:?} became {after:?}",
+            (got[0] - want[0]).abs() < 1e-3 && (got[1] - want[1]).abs() < 1e-3,
+            "image {} should sight the moved patch at {want:?}, it sights {got:?}",
+            after.image,
         );
-    }
-    for (observation, (a, b)) in next.observations.iter().zip(&offsets) {
-        let (camera, pose) = view(&edited, observation.image as usize);
-        let place = patch_frame.center + patch_frame.u_axis * *a + patch_frame.v_axis * *b;
-        let (u, v) = camera
-            .ray_to_pixel({
-                let pc = pose.transform_point_homogeneous(place.coords, 1.0);
-                [pc.x, pc.y, pc.z]
-            })
-            .expect("the moved patch is still in front of the fixture's cameras");
-        let site = observation.site().expect("a sighting");
-        assert!(
-            (site[0] - u).abs() < 1e-3 && (site[1] - v).abs() < 1e-3,
-            "image {} should sight the moved patch at {:?}, it sights {site:?}",
-            observation.image,
-            [u, v],
-        );
-        assert!(!observation.pinned, "an offset is not a verdict");
-        let measurement = observation.track.as_ref().expect("a track slot");
+        assert!(!after.pinned, "an offset is not a verdict");
+        let measurement = after.track.as_ref().expect("a track slot");
         assert_eq!(measurement.plain_zncc, None);
         assert_eq!(measurement.reason, None);
     }
@@ -5664,10 +5640,10 @@ fn facing(track: &EditableTrack, normal: Vector3<f64>) -> EditableTrack {
 
 /// The other edit no photograph can name: which way the surface under the
 /// sightings faces. The patch turns about its centre by the least rotation, so
-/// no spin comes with the tilt, and every sighting keeps the in-plane offset it
-/// was measured at, rebuilt on the turned axes.
+/// no spin comes with the tilt, and since the centre does not move no keypoint
+/// does: a keypoint marks where its photograph sees the centre.
 #[test]
-fn a_tilt_is_the_least_rotation_and_rebuilds_every_sighting_on_the_turned_axes() {
+fn a_tilt_is_the_least_rotation_and_moves_no_keypoint() {
     let scene = Scene::new();
     let edited = edited_with_columns(&scene, WORLD);
     let (bench, label) = bench_with_point(&edited, 0);
@@ -5683,23 +5659,10 @@ fn a_tilt_is_the_least_rotation_and_rebuilds_every_sighting_on_the_turned_axes()
         track.track().and_then(|p| p.bitmap.as_ref()).is_some(),
         "the column fixture should carry a patch bitmap to drop"
     );
-    // The fixture's keypoints are each point's exact projection, so every
-    // in-plane offset is zero and a step that reset them all would pass. Put
-    // each sighting somewhere of its own first, which is what a photograph says
-    // when it sees the patch's content off the patch frame's middle.
-    for (k, observation) in track.observations.iter_mut().enumerate() {
-        let site = observation.site().expect("a sighting");
-        observation.track.as_mut().expect("a track slot").keypoint = Some([
-            (site[0] + 2.0 + k as f64) as f32,
-            (site[1] - 3.0 + 2.0 * k as f64) as f32,
-        ]);
-    }
+    // Off the centre's projection, so a step that rebuilt each sighting on the
+    // turned axes, or reset it to the centre, would move it.
+    off_centre(&mut track);
     let was = patch_frame_of(&track);
-    let offsets = plane_offsets(&track, &edited);
-    assert!(
-        offsets.iter().all(|(a, b)| a.hypot(*b) > 1e-6),
-        "every sighting should sit off the frame's middle: {offsets:?}",
-    );
 
     // Twenty degrees off the normal toward `+u`, which is well inside every
     // observation's cap and so is reached whole.
@@ -5736,36 +5699,19 @@ fn a_tilt_is_the_least_rotation_and_rebuilds_every_sighting_on_the_turned_axes()
     );
     assert!(patch_frame.normal().dot(&axis).abs() < 1e-12);
 
-    // Every offset survived, and every keypoint is the projection of the place
-    // that offset names on the **turned** axes -- worked out here from the pair
-    // read before the turn rather than from anything the step did.
-    let now = plane_offsets(&next, &edited);
-    assert_eq!(now.len(), offsets.len());
-    for (before, after) in offsets.iter().zip(&now) {
-        assert!(
-            (after.0 - before.0).abs() < 1e-6 && (after.1 - before.1).abs() < 1e-6,
-            "a tilt scrambled a sighting's place on the plane: {before:?} became {after:?}",
+    // **Every keypoint is exactly where it was**, and only the measurements
+    // read over the old square are gone.
+    for (before, after) in track.observations.iter().zip(&next.observations) {
+        assert_eq!(
+            after.track.as_ref().and_then(|m| m.keypoint),
+            before.track.as_ref().and_then(|m| m.keypoint),
+            "a tilt moved the keypoint in image {}",
+            after.image,
         );
-    }
-    for (observation, (a, b)) in next.observations.iter().zip(&offsets) {
-        let (camera, pose) = view(&edited, observation.image as usize);
-        let place = patch_frame.center + patch_frame.u_axis * *a + patch_frame.v_axis * *b;
-        let (u, v) = camera
-            .ray_to_pixel({
-                let pc = pose.transform_point_homogeneous(place.coords, 1.0);
-                [pc.x, pc.y, pc.z]
-            })
-            .expect("the turned patch is still in front of the fixture's cameras");
-        let site = observation.site().expect("a sighting");
-        assert!(
-            (site[0] - u).abs() < 1e-3 && (site[1] - v).abs() < 1e-3,
-            "image {} should sight the turned patch at {:?}, it sights {site:?}",
-            observation.image,
-            [u, v],
-        );
-        assert!(!observation.pinned, "a tilt is not a verdict");
-        let measurement = observation.track.as_ref().expect("a track slot");
+        assert!(!after.pinned, "a tilt is not a verdict");
+        let measurement = after.track.as_ref().expect("a track slot");
         assert_eq!(measurement.plain_zncc, None);
+        assert_eq!(measurement.blur_matched_zncc, None);
         assert_eq!(measurement.reason, None);
     }
 
@@ -5778,51 +5724,95 @@ fn a_tilt_is_the_least_rotation_and_rebuilds_every_sighting_on_the_turned_axes()
     assert_eq!(patch_frame_of(&again).u_axis, patch_frame.u_axis);
 }
 
-/// A sighting whose own piece of the patch swings out behind its camera is left
-/// with no keypoint, rather than with the one it had before the square turned.
+/// A keypoint far off the centre's projection is a sighting's own error, and a
+/// tilt leaves it there however far the square turns: the centre the keypoint
+/// marks has not moved.
 #[test]
-fn a_tilt_that_swings_a_sighting_behind_its_camera_leaves_no_keypoint() {
+fn a_tilt_leaves_a_keypoint_far_off_the_centre_where_it_is() {
     let scene = Scene::new();
     let edited = edited_fixture(&scene, WORLD);
     let (bench, label) = bench_with_point(&edited, 0);
     let mut track = unpinned(track_of(&bench, &label));
     let was = patch_frame_of(&track);
 
-    // Image 0 sees the patch's content far out along `+u` -- many half-lengths,
-    // so the offset is a piece of world several units long. Off its sensor,
-    // which is not the question a projection answers here: what matters is that
-    // the place is in front of the camera before the turn and behind it after.
+    // Image 0 sees the patch far out along `+u`, many half-lengths from the
+    // centre's projection. Under a rule that kept the offset on the patch's
+    // plane, a steep turn toward `-u` would swing that piece of plane behind the
+    // camera and lose the sighting.
     let (camera, pose) = view(&edited, 0);
     let far = corner_pixel(&was, &camera, &pose, 100.0, 0.0);
+    let far = [far[0] as f32, far[1] as f32];
     track.observations[0]
         .track
         .as_mut()
         .expect("a track slot")
-        .keypoint = Some([far[0] as f32, far[1] as f32]);
-    let (reach, _) = plane_offsets(&track, &edited)[0];
-    assert!(
-        reach > 4.0,
-        "the sighting should sit further out than the cameras stand off the plane: {reach}",
-    );
+        .keypoint = Some(far);
+    let kept = track.observations[1]
+        .track
+        .as_ref()
+        .and_then(|m| m.keypoint);
 
-    // Turned down toward `-u`, which takes `+u` and that sighting's own place
-    // with it, through the plane the cameras stand in.
     let (sin, cos) = 89.0_f64.to_radians().sin_cos();
     let (next, report) = tilt_patch(&track, &edited, was.normal() * cos - was.u_axis * sin)
         .expect("a finite direction");
     assert!(report.changed);
-    assert_eq!(report.placed, 1, "only the centred sighting should survive");
+    assert_eq!(
+        report.placed,
+        track.observations.len(),
+        "every sighting should keep its keypoint"
+    );
 
-    let lost = next.observations[0].track.as_ref().expect("a track slot");
-    assert_eq!(lost.keypoint, None);
-    assert_eq!(lost.reason, Some(Unmeasured::NoProjection));
-    assert!(!next.observations[0].pinned);
-    assert!(next.observations[1]
+    let measurement = next.observations[0].track.as_ref().expect("a track slot");
+    assert_eq!(measurement.keypoint, Some(far));
+    assert_eq!(measurement.reason, None);
+    assert_eq!(
+        next.observations[1].track.as_ref().and_then(|m| m.keypoint),
+        kept
+    );
+}
+
+/// A sighting never localized has no gap to keep, so every patch step puts it
+/// at the projection of the centre as the step leaves it: a translation along
+/// the normal at the moved centre's, and a tilt at the centre's own.
+#[test]
+fn a_sighting_never_localized_takes_the_projection_of_the_new_centre() {
+    let scene = Scene::new();
+    let edited = edited_with_columns(&scene, WORLD);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let mut track = unpinned(track_of(&bench, &label));
+    off_centre(&mut track);
+    track.observations[1]
         .track
-        .as_ref()
+        .as_mut()
         .expect("a track slot")
-        .keypoint
-        .is_some());
+        .keypoint = None;
+    let was = patch_frame_of(&track);
+    let localized = track.observations[0].site().expect("a sighting");
+
+    let (moved, report) = translate_patch(&track, &edited, Vector3::new(0.0, 0.0, -0.37))
+        .expect("a finite displacement");
+    assert_eq!(report.placed, track.observations.len());
+    let centre = patch_frame_of(&moved);
+    let (camera, pose) = view(&edited, moved.observations[1].image as usize);
+    let want = corner_pixel(&centre, &camera, &pose, 0.0, 0.0);
+    let got = moved.observations[1].site().expect("placed at the centre");
+    assert!(
+        (got[0] - want[0]).abs() < 1e-3 && (got[1] - want[1]).abs() < 1e-3,
+        "the sighting never localized should be at {want:?}, it is at {got:?}",
+    );
+
+    let (sin, cos) = 20.0_f64.to_radians().sin_cos();
+    let (turned, report) =
+        tilt_patch(&track, &edited, was.normal() * cos + was.u_axis * sin).expect("a direction");
+    assert_eq!(report.placed, track.observations.len());
+    let want = corner_pixel(&was, &camera, &pose, 0.0, 0.0);
+    let got = turned.observations[1].site().expect("placed at the centre");
+    assert!(
+        (got[0] - want[0]).abs() < 1e-3 && (got[1] - want[1]).abs() < 1e-3,
+        "the sighting never localized should be at {want:?}, it is at {got:?}",
+    );
+    // The localized one beside it stays where it was.
+    assert_eq!(turned.observations[0].site(), Some(localized));
 }
 
 /// The cap is the whole point of the gesture: the normal can be swung until a

@@ -4972,27 +4972,19 @@ normal that was named.
 
 **At the track stage the patch is the thing every sighting is a view of**, so
 the two tools that move its centre -- the translation and a resize that names a
-moved edge -- carry **every** observation's keypoint by that same displacement,
-and the outline moves in every image at once. Along the plane where the
-displacement is tangential, which leaves the plane where it is; with the plane
-where it runs along the normal, which takes it along, so there the outlines move
-by *different* amounts and that spread is the parallax the old depth was wrong
-by. A resize that names **no** moved edge holds the centre, so it moves no point
-of the plane and touches no sighting at all. Carried, not reprojected: each
-sighting keeps its own offset from where the centre projects, which is where
-that photograph sees the patch's content against where the geometry puts its
-middle, and is what the tiles are cut on. The sighting the call came through
-lands under the pixel it named, because its plane point plus the displacement
-*is* the plane point under that pixel. A **spin** moves no point either and so
-touches no sighting, letting each in-plane offset turn under it, which is what
-re-aligning the sampling square over a surface that did not move means. A
-**tilt** moves no point but takes the plane out from under them, so there is
-nothing to carry: each sighting's own in-plane offset is read on the patch as it
-stood and rebuilt on the turned axes, and what survives is the pair rather than
-the point. That one rule -- a sighting follows the centre, and is rebuilt only
-when the plane turns under it -- is most of why the spin and the tilt are two
-steps. It is what makes the gestures worth having: a patch can be slid, turned,
-sized and aimed until it covers the piece of surface a person means. None of
+moved edge -- move **every** observation's keypoint by its own photograph's
+displacement of the centre's projection, and the outline moves in every image at
+once. Where the displacement runs along the plane the photographs see nearly the
+same displacement; where it runs along the normal they see *different* ones, and
+that spread is the parallax the old depth was wrong by. A keypoint marks where
+its photograph sees the patch's centre, so each sighting keeps its gap from
+where the centre projects, the gap being that sighting's own error, which a
+move has no grounds to correct. The sighting the call came through lands under
+the pixel it named, because the pixel is read less that sighting's gap. A resize
+that names **no** moved edge, a **spin** and a **tilt** all leave the centre
+where it was, so they move no keypoint. The gestures are what make a patch
+workable: it can be slid, turned, sized and aimed until it covers the piece of
+surface a person means. None of
 them pins anything, because where the patch is says nothing about whether a
 sighting belongs to it. `sight_bench_observation` is the one that moves a single
 sighting: the cluster stage's dot, where there is no shared geometry, the track

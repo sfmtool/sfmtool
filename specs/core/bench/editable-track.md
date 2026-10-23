@@ -333,8 +333,8 @@ pub fn split(
 // Placing a sighting, and moving, sizing and turning the patch, by hand.
 
 /// Which photograph a pixel of a gesture is in, and so which square it is
-/// read against: an observation's image, the patch re-anchored on its
-/// keypoint, or any image by its index, the patch as it stands.
+/// read against: an observation's image, the patch centred on its keypoint,
+/// or any image by its index, the patch as it stands.
 pub enum Viewpoint {
     Observation(usize),
     Image(u32),
@@ -2259,20 +2259,29 @@ them worth having -- a patch can be worked until it covers the piece of surface
 a person means. The cluster stage has no shared geometry at all, only one affine
 shape per sighting, so there each gesture is that sighting's own.
 
-**A sighting follows the centre, and is rebuilt only when the plane turns under
-it.** The track's position *is* the patch's centre, so every sighting of that
-point is carried by the centre's own displacement and keeps its in-plane offset
-`(a_i, b_i)`: that is what a translation does, and it is equally what a resize
-from an edge does, which moves the centre because it holds the far one. A spin
-and a resize about the centre move no point of the plane at all and so touch no
-sighting -- a spin leaves every keypoint where it is and lets `(a_i, b_i)` turn
-under it, which is what re-aligning the sampling square over a surface that did
-not move means. A tilt moves no point either, but takes the plane out from under
-them, so there is nothing to carry and the offsets are what is kept, each point
-rebuilt as `c + a_i u' + b_i v'`. That one rule is most of why `spin_patch` and
-`tilt_patch` stay two steps rather than becoming one rotation about two axes:
-a single step would have to choose a single rule and would be wrong for the
-other axis.
+**A keypoint marks where its photograph sees the patch's centre, and follows
+the centre's projection in that photograph.** The track's position *is* the
+patch's centre, and a keypoint is where one photograph sees it. A gap between a
+keypoint and the centre's projection is an error of that sighting -- the tile
+shifted in the photograph -- and not content lying at an offset on the patch, so
+a patch step keeps the gap, in that image's own pixels: with `P` the image's
+projection, `c` the centre before the step and `c'` after it, the keypoint `k`
+becomes `k + (P(c') - P(c))`. A translation moves the centre and so moves every
+keypoint, each by its own photograph's displacement of the centre's projection;
+so does a resize from an edge, which moves the centre because it holds the far
+one. A spin, a tilt and a resize about the centre leave the centre where it was,
+and so move no keypoint at all. A sighting that has never been localized has no
+gap to keep and takes `P(c')`, and so does a localized one whose old centre did
+not project into its photograph, there being no gap to read. One the new centre
+no longer projects into is left with no keypoint and `Unmeasured::NoProjection`
+as its reason, which is the truth about it.
+
+Since neither turn moves a keypoint, the rule is no longer a reason for
+`spin_patch` and `tilt_patch` to be two steps. They stay two because they are two
+different statements with different limits: a spin keeps the plane and the face
+and changes only which way up the square sits, so it needs no camera and has no
+cap, while a tilt changes which way the surface faces, is stopped
+`MAX_TILT_DEG` from any observation, and so reads every observation's camera.
 
 **`translate_patch` moves the patch by `by`**, read on the patch's **own
 orthonormal axes** `[u, v, n]` in scene units. `u` and `v` slide it across its
@@ -2287,15 +2296,13 @@ and that spread is the parallax the old depth was wrong by. `u` and `v` are unit
 vectors and the half-extent is stated separately, so `by` is in the world's own
 units rather than in half-lengths.
 
-**Every** observation's keypoint is carried by that displacement and keeps its
-own in-plane offset from the centre: that offset is where the photograph sees the
-patch's content against where the geometry puts its middle, and it is what the
-tile is cut on, so resetting the keypoints to the centre's projection would
-scramble the correlation the next reading scores. A sighting that has never been
-localized has no offset to keep and takes the projection of the new centre; one
-the moved centre no longer projects into is left with no keypoint and
-`Unmeasured::NoProjection` as its reason, which is the truth about it. The axes,
-the normal and the size are untouched. Nothing is pinned: where the patch is
+**Every** observation's keypoint moves by its own photograph's displacement of
+the centre's projection, `P(c') - P(c)`, and so keeps its gap from that
+projection: the move says where the patch is, and has no grounds to correct a
+sighting's own error. A sighting that has never been localized takes `P(c')`;
+one the moved centre no longer projects into is left with no keypoint and
+`Unmeasured::NoProjection` as its reason. The axes, the normal and the size are
+untouched. Nothing is pinned: where the patch is
 says nothing about whether any sighting belongs to it.
 
 **A sighting carried off its photograph is turned `out` and unpinned**, by
@@ -2317,14 +2324,14 @@ a moved centre whose squared distance from the origin is not finite is refused
 as `BadPlace`.
 
 **`translate_patch_to_pixel` is that step named as a pixel.** A person dragging the
-outline in a photograph names a place by pointing at it, so the pixel is read
-against the outline as drawn, and the offset of the meeting from *that* outline's
-centre, read on `u` and `v` alone, is the `by` `translate_patch` is then given.
-**`Viewpoint` says which outline that is.** An observation's image draws the
-patch re-anchored on that sighting, so through `Viewpoint::Observation` the
-sighting the drag came through lands under the pointer, its plane point plus the
-displacement being the plane point under the pixel, and every other sighting
-moves with the patch. An image the track has no sighting in draws the patch as it
+outline in a photograph names a place by pointing at it, and the offset from
+the patch's centre of where the pixel the step reads meets the plane, read on
+`u` and `v` alone, is the `by` `translate_patch` is then given. **`Viewpoint`
+says which pixel that is.** Through `Viewpoint::Observation` it is the pointer
+less that sighting's gap from the centre's projection, `pixel - (k - P(c))`: the
+step keeps the gap, so once the centre projects there the sighting the drag came
+through lands under the pointer, and every other sighting moves with the
+patch. An image the track has no sighting in draws the patch as it
 stands (the viewer's ghost outline), so through `Viewpoint::Image` the patch's own
 centre lands under the pointer; any image with a camera is accepted, one the
 track observes included, the variant saying only that no keypoint anchors the
@@ -2366,8 +2373,8 @@ holds the **opposite** one, which is the gesture -- a person pulling an edge
 expects the other three where the geometry puts them, not the far edge running
 away -- so with the dragged edge at `+h` from the centre and the far one at `-h`,
 the new half-length `h'` moves the centre by `h' - h` along that edge's own
-direction, and every sighting is carried along the plane by that same
-displacement, keeping its own offset, exactly as a translation's are. The
+direction, and every keypoint moves by its own photograph's displacement of the
+centre's projection, exactly as a translation's do. The
 track's position follows the centre. Nothing is pinned either way. A **bearing**
 (`w == 0`) with an edge named is handled by renormalizing the moved centre and
 dividing the half-length by the same factor, which leaves every corner the same
@@ -2375,16 +2382,15 @@ direction, so the far edge is held there too.
 
 **`resize_patch_to_pixel` is that step named as a pixel**, and it is the gesture
 and the **one step that spans both stages**, a pixel being meaningful at either
-where a world half-length is not. *What the outline shows is what is resized*: at
-the track stage the outline drawn from a `Viewpoint::Observation` is the patch
-re-anchored on that observation's own sighting, which is where a person sees the
-patch in that photograph, and the one drawn from a `Viewpoint::Image` is the patch
-as it stands. That square is the one the pixel is read against, and the offset of
-the meeting along the dragged edge's axis, read from its centre, gives the
-half-length `(p + h) / 2` that `resize_patch` is then handed with that edge. So
-the outline moves under the pointer in the image the edge was dragged in, the far
-edge really does hold still there, and the outline in every other image moves with
-the patch. At the cluster stage the outline is one sighting's parallelogram, so
+where a world half-length is not. At the track stage the pixel is read as
+`translate_patch_to_pixel` reads one: through a `Viewpoint::Observation` less
+that sighting's gap from the centre's projection, which is the patch's square as
+that photograph sees it, and through a `Viewpoint::Image` as it is, against the
+patch as it stands. The offset of the meeting along the dragged edge's axis, read
+from the centre, gives the half-length `(p + h) / 2` that `resize_patch` is then
+handed with that edge. So in the image the edge was dragged in, the square seen
+through the sighting's gap has its dragged edge under the pointer and its far
+edge where it was, and in every other image it moves with the patch. At the cluster stage the outline is one sighting's parallelogram, so
 only a `Viewpoint::Observation` names one and a `Viewpoint::Image` is refused as
 `WrongStage`. The arithmetic is core's rather than each caller's, and there is
 one implementation of the resize, so a tool call, a drag in a photograph and a
@@ -2402,17 +2408,13 @@ a half turn every rotation about an axis in the patch's plane is equally least,
 so the patch's own `u` is taken as the direction the arc leaves in, which holds
 `v` and reverses `u` and `n`.
 
-The centre and the half-lengths do not move, and each keypoint becomes the
-projection of `c + a_i u' + b_i v'`: every observation keeps the in-plane offset
-`(a_i, b_i)` it was measured at, read on the patch as it stood **before** the
-turn and rebuilt on the turned axes. That is not the rigid carry a translation makes
--- the pair is kept and the point is built again -- but it preserves the same
-thing, which is where each photograph sees the patch's content against where
-the geometry puts its middle. A sighting the turned patch no longer projects
-into is left with no keypoint and `Unmeasured::NoProjection`. Nothing is
-pinned: which way the patch faces says nothing about whether a sighting belongs
-to it. A sighting the turn carries off its photograph is turned `out` and
-unpinned, as a translation's is.
+**The centre and the half-lengths do not move, and so no keypoint does.** A
+keypoint marks where its photograph sees the patch's centre, and a turn about
+the centre leaves that pixel where it was; a keypoint's gap from the centre's
+projection is that sighting's own error, which a turn has no grounds to change.
+A sighting never localized takes the centre's projection, as under every patch
+step. Nothing is pinned: which way the patch faces says nothing about whether a
+sighting belongs to it.
 
 **A tilt stops `MAX_TILT_DEG` from any observation.** With `e_i` the unit
 vector from the centre to observation `i`'s camera centre, a normal is *allowed*
@@ -2446,7 +2448,7 @@ refused as `BadNormal`, the way a displacement that is not one is refused as
 rotated as a pair by a rotation whose axis *is* the normal, so both keep their
 lengths, the patch keeps its handedness and it keeps the plane and the face it
 had; what changes is which way up the square sits. The centre is untouched, so a
-spin moves no sighting.
+spin moves no keypoint.
 
 **`shape_observation` sets one cluster-stage sighting's affine shape**,
 which is what a corner drag there hands it: the shape turned about the sighting.
@@ -4145,15 +4147,18 @@ lens, where they hold exactly and within the lens's inverse-map tolerance
 respectively; the bearing's edge resize and the turn are run under the lens.
 - A slide lands the centre under the pointer in the image it was dragged in.
   The displacement lies in the patch's own plane, with the normal, the axes and
-  the size untouched; every sighting keeps its own in-plane offset from where
-  the centre projects; nothing is pinned.
+  the size untouched; with every keypoint first put a few pixels off the
+  centre's projection, each keeps its gap from where the centre projects;
+  nothing is pinned.
 - A pixel named in an image rather than through an observation is read against
   the patch as it stands, and a cluster refuses it.
 - A single-keypoint move writes the keypoint, pins that observation and drops
   what was read at the old pixel; moving a cluster sighting keeps the shape it
   is read at.
 - An edge resize puts the dragged edge on the pixel the call named and keeps
-  the far edge on the pixel it was already on, with the frame square. The resize
+  the far edge on the pixel it was already on, both seen through the dragged
+  sighting's gap, with the frame square, and moves every keypoint by its own
+  photograph's displacement of the centre's projection. The resize
   is arithmetic in the patch's plane, so the lens tolerance is the only error.
   The same holds for a bearing (`w == 0`), whose centre is renormalized. A
   resize about the centre moves both edges and drops what was read over the old
@@ -4186,10 +4191,9 @@ respectively; the bearing's edge resize and the turn are run under the lens.
   length and a cluster are each refused in their own words.
 - A translation along the normal moves the centre exactly the distance asked
   along the outward normal and leaves the axes, the half-length and the plane's
-  orientation where they were. With every sighting first put somewhere of its
-  own on the plane, each keeps its `(a_i, b_i)` and each keypoint comes back as
-  the projection of `c' + a_i u + b_i v`, computed from the pair read before the
-  move; the sightings move by different amounts.
+  orientation where they were. With every keypoint first put a few pixels off
+  the centre's projection, each comes back as `k + P(c') - P(c)`, computed from
+  the two centres; the sightings move by different amounts.
 - A patch pushed out past the cameras leaves every sighting with no keypoint and
   `NoProjection`, turned `out` and unpinned, and drops the bitmap and the
   measurements; a slide that carries some sightings off their photographs turns
@@ -4198,18 +4202,18 @@ respectively; the bearing's edge resize and the turn are run under the lens.
   distance that is not a finite number, a bearing and a cluster are refused.
 - A tilt is the least rotation: its axis is perpendicular to both normals, so
   `u` and `v` keep their components along it and no spin comes with the turn.
-  The centre and both half-lengths are untouched, and each sighting keeps its
-  `(a_i, b_i)`, its keypoint coming back as the projection of
-  `c + a_i u' + b_i v'` computed from the pair read before the turn and the axes
-  read after it.
+  The centre and both half-lengths are untouched, and with every keypoint first
+  put a few pixels off the centre's projection, every keypoint comes back
+  exactly as it was, with the measurements dropped.
 - A tilt asked 89 degrees over stops with its normal exactly `MAX_TILT_DEG`
   from the observation the report names, with no observation past the cap and
   the normal asked for still in the report. A track facing 85 degrees off one
   camera and 69 off the other, so starting outside one cap, is turned back
   inside without being stopped.
-- A sighting whose own piece of the patch swings behind its camera is left with
-  no keypoint and `NoProjection`, turned `out` and unpinned, while the centred
-  one survives; the bitmap and the measurements go and nothing is pinned. A
+- A keypoint many half-lengths off the centre's projection stays where it is
+  through an 89-degree request. A sighting never localized takes the projection
+  of the moved centre under a translation along the normal, and the centre's own
+  projection under a tilt, while a localized one beside it keeps its keypoint. A
   direction that is not one, a
   track at infinity and a cluster are refused, and a tilt onto the normal the
   patch already shows reports `changed: false`.

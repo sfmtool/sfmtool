@@ -771,8 +771,9 @@ pub(super) fn shape_bench_observation(
 ///
 /// `half_length` is in the reconstruction's own units and `moved_edge` says what
 /// becomes of the sightings: named, that edge moves and the far one is held, so
-/// the centre shifts and every sighting is carried with it; omitted, both edges
-/// move about a held centre and no sighting is touched.
+/// the centre shifts and every keypoint moves with the centre's projection in
+/// its own photograph; omitted, both edges move about a held centre and no
+/// keypoint moves.
 ///
 /// The pixel form is the gesture, and it is what makes the answer exact: the
 /// pixel is unprojected onto the patch's own plane, so the edge really lands
@@ -902,9 +903,8 @@ fn insert_viewpoint(reply: &mut Value, viewpoint: Viewpoint) {
 /// The wire's half of the 3D viewport's arrowhead drag, and the second gesture
 /// no photograph can make: a sighting says which ray the patch lies along and
 /// nothing about which way the surface under it faces. The turn is the least
-/// rotation onto `normal`, so no spin about the normal comes with it, and every
-/// sighting keeps the in-plane offset it was measured at, rebuilt on the turned
-/// axes. It stops `MAX_TILT_DEG` from any observation's camera, which is where a
+/// rotation onto `normal`, so no spin about the normal comes with it, and the
+/// centre does not move, so no keypoint does. It stops `MAX_TILT_DEG` from any observation's camera, which is where a
 /// photograph would be looking along the surface rather than at it, and the
 /// sentence says which observation stopped it. A track at infinity is refused:
 /// its normal is its own bearing.

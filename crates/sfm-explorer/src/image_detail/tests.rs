@@ -2415,10 +2415,10 @@ fn outline_at(
 /// Each sighting's offset from where the patch's centre projects, in its own
 /// image's pixels.
 ///
-/// **What a move of the patch must not disturb**: the gap between where a
-/// photograph sees the patch's content and where the geometry puts its middle
-/// is what the tile is cut on, so a step that reset every keypoint to the
-/// centre's projection would zero all of them and scramble the correlation.
+/// **What a move of the patch must not disturb**: a keypoint marks where its
+/// photograph sees the patch's centre, so its gap from the centre's projection
+/// is that sighting's own error, and every patch step keeps it in the
+/// photograph.
 fn projection_offsets(
     node: &SceneNode,
     track: &sfmtool_core::bench::EditableTrack,
@@ -2576,10 +2576,9 @@ fn dragging_the_dot_slides_the_patch_and_every_sighting_follows_it() {
         offset.dot(&before_patch_frame.normal()).abs() < 1e-12,
         "the patch left its own plane: {offset:?}",
     );
-    // Every sighting moved with the patch and **kept its own offset** from
-    // where the centre projects: the keypoints were carried along the plane,
-    // not reset to the centre, because that offset is what the tiles are cut
-    // on.
+    // Every sighting moved with the patch and **kept its own gap** from where
+    // the centre projects: each keypoint moved by its photograph's displacement
+    // of the centre's projection, rather than being reset to the centre.
     for (offset, now) in offsets
         .iter()
         .zip(projection_offsets(&state.scene[0], &moved))
@@ -2655,9 +2654,9 @@ fn dragging_an_edge_resizes_the_patch_so_it_reprojects_under_the_release_point()
         resized.half_extent[0], resized.half_extent[1],
         "a patch frame is square"
     );
-    // A resize moves the centre, so every sighting is carried by the same
-    // displacement and keeps its own offset, exactly as a slide's are; nothing
-    // is pinned.
+    // A resize moves the centre, so every keypoint moves by its own
+    // photograph's displacement of the centre and keeps its gap, exactly as a
+    // slide's do; nothing is pinned.
     for (offset, now) in offsets
         .iter()
         .zip(projection_offsets(&state.scene[0], &after))
