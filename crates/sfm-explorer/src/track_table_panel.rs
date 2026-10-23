@@ -442,6 +442,23 @@ impl RowList {
     }
 }
 
+/// The label of the box that keeps only the points the selected image
+/// observes. It does not name the image, so a long image name does not push
+/// the header onto a second line; the hover text names it.
+const SEEN_IN_SELECTED_IMAGE: &str = "Seen in selected image";
+
+/// The hover text of the [`SEEN_IN_SELECTED_IMAGE`] box: what it keeps, and
+/// the selected image's name, or that no image of the reconstruction is
+/// selected and the box filters nothing.
+fn seen_in_selected_image_hover(image_name: Option<&str>) -> String {
+    match image_name {
+        Some(name) => format!("Keep only the points seen in the selected image, {name}."),
+        None => "Keep only the points seen in the selected image. No image of this \
+                 reconstruction is selected, so this filters nothing."
+            .to_string(),
+    }
+}
+
 /// The name of the picture size's dropdown, which is also the label drawn
 /// before it.
 const SIZE_NAME: &str = "Size";
@@ -987,22 +1004,14 @@ impl TrackTablePanel {
                     .get(index as usize)
                     .map(|image| image.name.clone())
             });
-            let label = match &image_name {
-                Some(name) => format!("Only points seen in {name}"),
-                None => "Only points seen in the selected image".to_string(),
-            };
-            let mut text = egui::RichText::new(label);
+            // A fixed label, so the line does not grow with the image's name;
+            // the hover text names the image.
+            let mut text = egui::RichText::new(SEEN_IN_SELECTED_IMAGE);
             if image_name.is_none() && self.query.seen_in_selected_image {
                 text = text.weak();
             }
             ui.checkbox(&mut self.query.seen_in_selected_image, text)
-                .on_hover_text(match &image_name {
-                    Some(_) => "Keep only the points the selected image observes.",
-                    None => {
-                        "Keep only the points the selected image observes. No image of this \
-                         reconstruction is selected, so this filters nothing."
-                    }
-                });
+                .on_hover_text(seen_in_selected_image_hover(image_name.as_deref()));
         });
     }
 

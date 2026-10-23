@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Headless tests for the Track Table's Patch column, the *Size* dropdown and
-//! the texture cache the picture cells draw from.
+//! the header line it sits on, and the texture cache the picture cells draw
+//! from.
 
 use std::sync::Arc;
 
@@ -549,4 +550,78 @@ fn the_size_dropdown_is_named_and_a_click_on_an_entry_picks_its_size() {
         assert_eq!(dropdown.value(), Some(text));
         assert_eq!(width(dropdown), default_width, "the same width at {text}");
     }
+}
+
+/// The strings of the header line, each with the middle of its row, painted
+/// in a window `width` points wide.
+fn header_rows(
+    ctx: &egui::Context,
+    panel: &mut TrackTablePanel,
+    state: &mut AppState,
+    width: f32,
+) -> Vec<(String, f32)> {
+    let raw = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(width, 400.0),
+        )),
+        ..Default::default()
+    };
+    let label = state.scene[0].label.clone();
+    let header = [
+        label.as_str(),
+        "40 of 40 points",
+        "Columns",
+        "Size",
+        "64 pt",
+        "Seen in selected image",
+    ];
+    let texts = painted_text_rects(ctx, raw, |ui| panel.show(ui, state));
+    header
+        .iter()
+        .map(|&text| {
+            let painted = texts
+                .iter()
+                .find(|t| t.text == text)
+                .unwrap_or_else(|| panic!("{text:?} was not painted"));
+            (text.to_string(), painted.rect.center().y)
+        })
+        .collect()
+}
+
+/// With a long reconstruction label and an image selected, the header line,
+/// from the label to the selected-image box, fits on one line at 700 pt, a
+/// narrow panel. The box is named by its label in the accessibility tree,
+/// which is the name `get_widgets` lists it under. In a window too narrow for
+/// the line it wraps, and the *Size* label stays beside its dropdown.
+#[test]
+fn the_header_fits_on_one_line_and_size_stays_with_its_dropdown_when_it_wraps() {
+    use egui::accesskit::Role;
+    let (mut state, id) = state_with_bitmaps();
+    state.scene[0].label = "seoul_bull_sculpture_ground_truth".into();
+    let (ctx, mut panel) = shown(&mut state);
+    state.select_image(Some(crate::scene::ImageRef::new(id, 0)));
+
+    let rows = header_rows(&ctx, &mut panel, &mut state, 700.0);
+    let first = rows[0].1;
+    for (text, y) in &rows {
+        assert!(
+            (y - first).abs() < 4.0,
+            "{text:?} is off the line: {rows:?}"
+        );
+    }
+
+    let rows = header_rows(&ctx, &mut panel, &mut state, 450.0);
+    let y = |text: &str| rows.iter().find(|(t, _)| t == text).unwrap().1;
+    assert!(
+        y("Seen in selected image") > y(&state.scene[0].label) + 4.0,
+        "the line wraps at 450 pt: {rows:?}"
+    );
+    assert!((y("Size") - y("64 pt")).abs() < 4.0, "{rows:?}");
+
+    ctx.enable_accesskit();
+    accessible_frame(&ctx, &mut panel, &mut state, Vec::new());
+    let nodes = accessible_frame(&ctx, &mut panel, &mut state, Vec::new());
+    let checkbox = only(&nodes, Role::CheckBox);
+    assert_eq!(checkbox.label(), Some("Seen in selected image"));
 }

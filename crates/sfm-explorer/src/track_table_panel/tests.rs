@@ -599,6 +599,52 @@ fn the_selected_image_box_keeps_the_points_that_image_sees() {
     assert_eq!(panel.rows(), seen.as_slice());
 }
 
+/// The box's label is the same whether or not an image is selected, so the
+/// header does not grow with an image's name; its hover text names the
+/// selected image, or says that none is selected and the box filters nothing.
+#[test]
+fn the_selected_image_box_names_the_image_in_its_hover_text() {
+    let (mut state, id) = state();
+    let (ctx, mut panel) = shown(&mut state);
+    // A tooltip waits out `tooltip_delay`, which a headless frame has no wall
+    // clock to pass.
+    ctx.all_styles_mut(|style| {
+        style.interaction.tooltip_delay = 0.0;
+        style.interaction.tooltip_grace_time = 0.0;
+    });
+    let mut hovered = |state: &mut AppState| {
+        let at = painted_at(&ctx, &mut panel, state, "Seen in selected image");
+        let mut texts = Vec::new();
+        for _ in 0..3 {
+            let mut raw = input(1200.0);
+            raw.events = vec![egui::Event::PointerMoved(at)];
+            texts = painted_texts(&ctx, raw, |ui| panel.show(ui, state));
+        }
+        texts
+    };
+    let texts = hovered(&mut state);
+    assert!(
+        texts.iter().any(|t| t
+            == "Keep only the points seen in the selected image. No image of this \
+                reconstruction is selected, so this filters nothing."),
+        "{texts:?}"
+    );
+
+    state.select_image(Some(ImageRef::new(id, 0)));
+    let name = state.scene[0].recon().image_set.images[0].name.clone();
+    let texts = hovered(&mut state);
+    assert!(
+        texts.iter().any(|t| t == "Seen in selected image"),
+        "{texts:?}"
+    );
+    assert!(
+        !texts.iter().any(|t| t.starts_with("Only points seen")),
+        "{texts:?}"
+    );
+    let hover = format!("Keep only the points seen in the selected image, {name}.");
+    assert!(texts.contains(&hover), "{texts:?}");
+}
+
 // -- The heading row and the columns ------------------------------------------
 
 /// A first click on Error puts the worst rows first; a second reverses them;

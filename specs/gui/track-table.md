@@ -66,8 +66,7 @@ Panels menu opens it.
 ```
 ┌ Track Table ───────────────────────────────────────────────────────────────────────┐
 │ dino  1,204 of 9,941 points  · 3 with repeat observations  [Columns]               │
-│   Size [64 pt ▾]                                                                   │
-│ ☐ Only points seen in IMG_0042.jpg                                                 │
+│   Size [64 pt ▾]  ☐ Seen in selected image                                         │
 ├────────┬────────┬────────┬─────────┬─────────────┬────────────┬──────────┬────────┤
 │ Point  │ Crop   │ Patch  │ Track ▼ │ Repeat obs. │ Error (px) │ Distance │        │
 │        │        │        │[3 ][   ]│[    ][    ] │[   ][1.5]  │[   ][   ]│        │
@@ -135,11 +134,26 @@ decoded.
   column never filters or orders the rows without the person seeing it. Its
   checkbox is greyed, and its hover text says why. The menu stays open while
   boxes are ticked.
-- **Only points seen in the selected image** keeps the points with an
-  observation in the image selected in this reconstruction, and the label
-  names that image. With no image of the reconstruction selected the box
-  filters nothing, its label is dimmed while it is ticked, and its hover text
-  says so.
+- **Seen in selected image**, the last item of the header line, keeps the
+  points with an observation in the image selected in this reconstruction.
+  Its label is the same whatever is selected, so a long image name does not
+  push the header onto a second line, and `get_widgets` lists the box as a
+  `check_box` named `Seen in selected image` in every case. The hover text
+  names the image (*Keep only the points seen in the selected image,
+  IMG_0042.jpg.*). With no image of the reconstruction selected the
+  box filters nothing, its label is dimmed while it is ticked, and its hover
+  text says so.
+- **The header line** is one `horizontal_wrapped` row: the reconstruction's
+  label, the count and the repeat count after it, a spinner and *Updating…*
+  while the rows are out of date, *Columns*, *Size* and *Seen in selected
+  image*. With a label as long as `seoul_bull_sculpture_ground_truth`, no
+  repeat observations and the rows up to date, it is about 640 pt wide, so it
+  fits on one line in a panel about 690 pt wide, which is the Track Table's
+  width in a 1280 pt window. The repeat count adds about 170 pt and
+  *Updating…* about 100 pt, so either takes the line onto a second one in a
+  panel that narrow, and both together do in the default panel of about
+  860 pt. When the line wraps, the *Size* label stays beside its dropdown
+  (§ "The Patch column").
 - **The heading row** sorts by the column clicked. The first click on a
   column sorts the bad end first where the column has one:
   `repeat_observations`, `rms_error_px` and
@@ -555,7 +569,7 @@ the job still read the cache only for the version at the cursor.
 ## The query is panel state
 
 The bounds, the sort, the visible columns (the picture columns among them) and the
-"seen in the selected image" box are UI state of the panel
+*Seen in selected image* box are UI state of the panel
 (`TrackTableQuery`), like the Image Detail display settings. They are not held
 in a version, cost no undo step and are not saved with the reconstruction or in
 the layout file. A single query is used for whichever reconstruction is
@@ -675,7 +689,9 @@ with one point at infinity:
   five frames, a hover and an image selection, and a change of the query, the
   version or the cached columns does;
 - the selected-image box keeps the points that image observes and filters
-  nothing with no image selected;
+  nothing with no image selected; its label is *Seen in selected image* with
+  or without a selected image, and its hover text names the image or says
+  none is selected;
 - a click on the Error heading sorts worst first, a second reverses, and a
   click on Point restores point order; a column holding a bound or the sort
   cannot be hidden; a column the reconstruction cannot supply is left out and
@@ -718,6 +734,9 @@ point, one of them all zero:
   its value, a click on it lists the four sizes in order, and a click on one
   picks it; it is narrower than egui's default combo box and the same width
   at every size;
+- with a long label and an image selected, the header line's strings share
+  one row at 700 pt; at 450 pt it wraps, and *Size* stays on its dropdown's
+  row; the box is named *Seen in selected image* in the AccessKit tree;
 - after an edit, out-of-date rows make no pictures: a row drawn before keeps
   its picture and a row not drawn before waits, and the new version's
   pictures are made once its table lands;
