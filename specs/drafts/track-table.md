@@ -54,7 +54,7 @@ up the view a person sees.
 
 ```
 ┌ Track Table ─ dino ───────────────────────────────────────────────────────────────────┐
-│ 1,204 of 9,941 points  [Columns]  Size [──●──] ☐ Only points seen in selected image   │
+│ 1,204 of 9,941 points  [Columns]  Size [64 pt ▾]  ☐ Seen in selected image            │
 │ ☐ Filter the 3D view: (•) Dim ( ) Hide                                                │
 ├────────┬────────┬────────┬─────────┬─────────┬────────────┬───────────────┬───────────┤
 │ Point  │ Crop   │ Patch  │ Track ▼ │Distance │ Error (px) │ Ray angle (°) │ Cond.     │

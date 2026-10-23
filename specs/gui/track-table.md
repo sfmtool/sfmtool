@@ -147,13 +147,10 @@ decoded.
   label, the count and the repeat count after it, a spinner and *Updating…*
   while the rows are out of date, *Columns*, *Size* and *Seen in selected
   image*. With a label as long as `seoul_bull_sculpture_ground_truth`, no
-  repeat observations and the rows up to date, it is about 640 pt wide, so it
-  fits on one line in a panel about 690 pt wide, which is the Track Table's
-  width in a 1280 pt window. The repeat count adds about 170 pt and
-  *Updating…* about 100 pt, so either takes the line onto a second one in a
-  panel that narrow, and both together do in the default panel of about
-  860 pt. When the line wraps, the *Size* label stays beside its dropdown
-  (§ "The Patch column").
+  repeat observations and the rows up to date, it fits on one line in the
+  Track Table's panel of a 1280 pt window. The repeat count and *Updating…*
+  each lengthen it and can take it onto a second line. When the line wraps,
+  the *Size* label stays beside its dropdown (§ "The Patch column").
 - **The heading row** sorts by the column clicked. The first click on a
   column sorts the bad end first where the column has one:
   `repeat_observations`, `rms_error_px` and
