@@ -880,7 +880,7 @@ fn the_role<'a>(widgets: &'a Value, role: &str, name: &str) -> &'a Value {
 /// A control with no label of its own is named by the labels its
 /// `labelled_by` relation points at, joined with a space in the relation's
 /// order; one with its own label keeps it; and the name is the one a refusal
-/// or an Action Log row describes the widget by.
+/// describes the widget by.
 #[test]
 fn a_control_is_named_by_its_own_label_or_else_by_the_labels_it_is_labelled_by() {
     let mut harness = Harness::new();
