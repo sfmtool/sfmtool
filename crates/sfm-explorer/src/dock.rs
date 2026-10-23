@@ -1471,7 +1471,7 @@ impl TabContext<'_> {
 /// show-when-a-mode-is-active rule, and the intrinsics layer's checkbox and
 /// gear, which are always shown because that layer composes with every mode
 /// including `None`.
-fn show_overlay_toolbar(
+pub(crate) fn show_overlay_toolbar(
     ui: &mut egui::Ui,
     settings: &mut FeatureDisplaySettings,
     intrinsics: &mut IntrinsicsDisplaySettings,
@@ -1512,7 +1512,9 @@ fn show_overlay_toolbar_row(
     proposal: Option<&crate::camera_model_proposal::CameraModelProposal>,
 ) {
     ui.horizontal(|ui| {
-        ui.label("Overlay:");
+        // Each dropdown is `labelled_by` the label before it, which names it
+        // for a screen reader and in `get_widgets`.
+        let label = ui.label("Overlay:");
         egui::ComboBox::from_id_salt("overlay_mode")
             .selected_text(settings.overlay_mode.label())
             .width(100.0)
@@ -1520,11 +1522,13 @@ fn show_overlay_toolbar_row(
                 for mode in OverlayMode::ALL {
                     ui.selectable_value(&mut settings.overlay_mode, mode, mode.label());
                 }
-            });
+            })
+            .response
+            .labelled_by(label.id);
 
         if settings.overlay_mode != OverlayMode::None {
             ui.separator();
-            ui.label("Max:");
+            let label = ui.label("Max:");
             egui::ComboBox::from_id_salt("max_features")
                 .selected_text(match settings.max_features {
                     Some(n) => format!("{n}"),
@@ -1540,7 +1544,9 @@ fn show_overlay_toolbar_row(
                         );
                     }
                     ui.selectable_value(&mut settings.max_features, None, "All");
-                });
+                })
+                .response
+                .labelled_by(label.id);
 
             ui.separator();
             let mut has_size_filter =

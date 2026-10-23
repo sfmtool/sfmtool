@@ -66,6 +66,7 @@ impl TabViewer for Tabs<'_> {
                         let _ = ui.selectable_label(true, "One");
                         let _ = ui.selectable_label(false, "Two");
                     });
+                labelled_controls(ui);
             }
             other => {
                 ui.label(format!("{} body", other.title()));
@@ -203,6 +204,46 @@ impl Harness {
     fn demo_row(&self) -> egui::Id {
         crate::scene_graph::row_id(self.state.scene[0].id, "node_label")
     }
+}
+
+/// Controls named in each of the ways the listing reads a name, drawn under
+/// the Background Tasks panel's combo box.
+fn labelled_controls(ui: &mut egui::Ui) {
+    // Named only by the label beside it.
+    ui.horizontal(|ui| {
+        let label = ui.label("Mode");
+        egui::ComboBox::from_id_salt("test_labelled_combo")
+            .selected_text("Fast")
+            .show_ui(ui, |ui| {
+                let _ = ui.selectable_label(true, "Fast");
+            })
+            .response
+            .labelled_by(label.id);
+    });
+    // Named by two labels, one on each side, in the relation's order.
+    ui.horizontal(|ui| {
+        let before = ui.label("Check every");
+        let mut minutes = 5_u32;
+        let value = ui.add(egui::DragValue::new(&mut minutes));
+        let after = ui.label("minutes");
+        value.labelled_by(before.id).labelled_by(after.id);
+    });
+    // A name of its own, and a label it is linked to as well.
+    ui.horizontal(|ui| {
+        let label = ui.label("Shown text");
+        let mut text = String::new();
+        let edit = ui.text_edit_singleline(&mut text);
+        edit.widget_info(|| {
+            let mut info = egui::WidgetInfo::text_edit(true, "", "", "");
+            info.label = Some("Own name".to_string());
+            info
+        });
+        edit.labelled_by(label.id);
+    });
+    // egui's slider with text: the slider carries the text as its own label,
+    // and links its number box to the text's label.
+    let mut gain = 1.0_f32;
+    ui.add(egui::Slider::new(&mut gain, 0.0..=2.0).text("Gain"));
 }
 
 /// The listing of `panel`, whole.
@@ -820,6 +861,134 @@ fn a_screenshot_with_a_crop_and_widgets_defers_with_both() {
     assert_eq!(
         entry.text,
         "screenshot window crop 10,20 300×200 300×200 with widgets"
+    );
+}
+
+// ── Names ───────────────────────────────────────────────────────────────
+
+/// The entry of `role` named `name`, the only one.
+#[track_caller]
+fn the_role<'a>(widgets: &'a Value, role: &str, name: &str) -> &'a Value {
+    let found: Vec<&Value> = named(widgets, name)
+        .into_iter()
+        .filter(|entry| entry["role"] == json!(role))
+        .collect();
+    assert_eq!(found.len(), 1, "one {role} {name:?} in {widgets:#}");
+    found[0]
+}
+
+/// A control with no label of its own is named by the labels its
+/// `labelled_by` relation points at, joined with a space in the relation's
+/// order; one with its own label keeps it; and the name is the one a refusal
+/// or an Action Log row describes the widget by.
+#[test]
+fn a_control_is_named_by_its_own_label_or_else_by_the_labels_it_is_labelled_by() {
+    let mut harness = Harness::new();
+    let frame = harness.settle();
+    let panel = listing(&frame, Some(Tab::BackgroundTasks));
+    let widgets = &panel["widgets"];
+
+    let combo = the_role(widgets, "combo_box", "Mode");
+    assert_eq!(combo["value"], json!("Fast"));
+    assert_eq!(combo["path"], json!(["Mode"]));
+    let id = u64::from_str_radix(combo["widget"].as_str().unwrap(), 16).unwrap();
+    let widget = frame.find_value(id).expect("the combo box");
+    assert_eq!(
+        frame.describe(widget),
+        "\"Mode\" in the Background Tasks panel"
+    );
+
+    the_role(widgets, "spin_button", "Check every minutes");
+
+    // Its own label wins over the label it is linked to, as in AccessKit.
+    the_role(widgets, "text_input", "Own name");
+    assert!(
+        named(widgets, "Shown text")
+            .iter()
+            .all(|entry| entry["role"] == json!("label")),
+        "{widgets:#}"
+    );
+
+    // The slider's number box takes the slider's text, through egui's own
+    // relation.
+    the_role(widgets, "slider", "Gain");
+    the_role(widgets, "spin_button", "Gain");
+
+    // The unlabelled combo box above them stays unnamed.
+    let unnamed: Vec<&Value> = widgets
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|entry| entry["role"] == json!("combo_box") && entry["name"].is_null())
+        .collect();
+    assert_eq!(unnamed.len(), 1, "{widgets:#}");
+    assert_eq!(unnamed[0]["value"], json!("One"));
+}
+
+/// The real Image Detail toolbar's dropdowns are listed under the labels drawn
+/// before them, with the choice each shows as its value.
+#[test]
+fn the_image_detail_toolbar_s_dropdowns_are_named_by_their_labels() {
+    use crate::image_detail::ImageDetail;
+    use crate::scene::CameraRef;
+    use crate::state::{FeatureDisplaySettings, IntrinsicsDisplaySettings, OverlayMode};
+
+    let node = SceneNode::from_path(
+        std::path::Path::new("/runs/demo.sfmr"),
+        SfmrReconstruction::demo(16),
+    );
+    let camera = &node.recon().image_set.cameras[0];
+    let mut settings = FeatureDisplaySettings {
+        overlay_mode: OverlayMode::Features,
+        ..Default::default()
+    };
+    let mut intrinsics = IntrinsicsDisplaySettings::default();
+    let mut detail = ImageDetail::new();
+    let ctx = egui::Context::default();
+    ctx.enable_accesskit();
+    let dock = egui_dock::DockState::new(Vec::new());
+    let mut frame = None;
+    for _ in 0..2 {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SCREEN)),
+            ..Default::default()
+        };
+        let mut output = ctx.run_ui(input, |root_ui| {
+            egui::CentralPanel::default().show(root_ui, |ui| {
+                crate::dock::show_overlay_toolbar(
+                    ui,
+                    &mut settings,
+                    &mut intrinsics,
+                    &mut detail,
+                    Some((CameraRef::new(node.id, 0), camera)),
+                    None,
+                );
+            });
+        });
+        output.textures_delta.clear();
+        frame = Some(WidgetFrame::capture(
+            &ctx,
+            output.platform_output.accesskit_update.as_ref(),
+            &dock,
+            [SCREEN.x as u32, SCREEN.y as u32],
+        ));
+    }
+    let window = listing(&frame.expect("a frame"), None);
+    let widgets = &window["widgets"];
+    let combos: Vec<(Value, Value)> = widgets
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|entry| entry["role"] == json!("combo_box"))
+        .map(|entry| (entry["name"].clone(), entry["value"].clone()))
+        .collect();
+    assert_eq!(
+        combos,
+        [
+            (json!("Overlay:"), json!("Features")),
+            (json!("Max:"), json!("All")),
+        ],
+        "{widgets:#}"
     );
 }
 

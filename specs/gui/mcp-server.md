@@ -2577,8 +2577,29 @@ clicked.
   accessibility node, or one whose role is `Unknown`, has role `null`: it can
   still be clicked, but nothing in the tree says what it is. The Scene tree's
   row rectangles and the dock's tab close buttons are examples.
-- **`name`**: the AccessKit label, or `null`. For a label widget it is the
-  label's text, which egui puts in the node's value.
+- **`name`**: the name a screen reader is given for the widget, or `null`,
+  computed in the order AccessKit computes it (`Node::write_label` in
+  `accesskit_consumer`). It is the node's own AccessKit label where it has one;
+  for a label widget, the label's text, which egui puts in the node's value.
+  A node with neither takes the names of the nodes its AccessKit `labelled_by`
+  relation points at, in the relation's order, joined with a space. egui
+  records that relation with `Response::labelled_by` and leaves the control's
+  own label empty, so a control named by a separate label is listed under the
+  label's text: Image Detail's overlay dropdown is the `combo_box` named
+  `Overlay:`, with the mode it shows as its `value`. egui's slider with text
+  links its number box to its text the same way, so a slider and its
+  `spin_button` share a name, and `role` tells them apart. Where a node has
+  its own label and the relation as well, its own label wins, because that is
+  AccessKit's rule and so the name the platform's accessibility tree carries
+  for the same build (ARIA's name computation would put the relation first).
+  A labelling node lends only its own name, not one it takes from a relation
+  of its own. The name is computed once, in `Tree::name` in
+  [widgets.rs](../../crates/sfm-explorer/src/mcp/widgets.rs), and everything
+  that names a widget reads it there: the
+  listing's `name` and `path`, a pointer tool's `hit`, the `on "…"` of an
+  Action Log row, and the refusals that describe a widget (`"Overlay:" in the
+  Image Detail panel` rather than `an unnamed combo box in the Image Detail
+  panel`).
 - **`rect_px`**: the widget's interaction rectangle after clipping, in the
   target's pixels, each edge rounded on its own as the panel crop rounds. A
   widget that is clipped out entirely is left out.

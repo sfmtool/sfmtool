@@ -60,7 +60,9 @@ pub(super) fn settings_popup(
     if change.is_some() {
         ui.checkbox(&mut settings.axes_on_current_model, AXES_ON_CURRENT);
         ui.horizontal(|ui| {
-            ui.label("Field");
+            // `labelled_by` the label, which names the dropdown for a screen
+            // reader and in `get_widgets`.
+            let label = ui.label("Field");
             egui::ComboBox::from_id_salt("intrinsics_field")
                 .selected_text(settings.field.label())
                 .width(140.0)
@@ -68,7 +70,9 @@ pub(super) fn settings_popup(
                     for mode in FieldMode::ALL {
                         ui.selectable_value(&mut settings.field, mode, mode.label());
                     }
-                });
+                })
+                .response
+                .labelled_by(label.id);
         });
     }
     // The change field draws only while a proposal is open on the camera; the
@@ -116,7 +120,7 @@ pub(super) fn settings_popup(
     });
 
     ui.horizontal(|ui| {
-        ui.label("Grid density");
+        let label = ui.label("Grid density");
         egui::ComboBox::from_id_salt("intrinsics_grid_cols")
             .selected_text(format!("{}", settings.grid_cols))
             .width(64.0)
@@ -124,7 +128,9 @@ pub(super) fn settings_popup(
                 for cols in IntrinsicsDisplaySettings::GRID_LADDER {
                     ui.selectable_value(&mut settings.grid_cols, cols, format!("{cols}"));
                 }
-            });
+            })
+            .response
+            .labelled_by(label.id);
     });
 
     if let Some(change) = change {

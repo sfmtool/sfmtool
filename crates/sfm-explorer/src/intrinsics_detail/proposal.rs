@@ -47,7 +47,7 @@ pub(super) fn show_proposal(
     // (the camera's own value, the default and its button) moves to the next
     // line rather than past the panel's edge, so every control stays on
     // screen and can be reached.
-    row(ui, "Model", |ui| {
+    row(ui, "Model", |ui, label| {
         let mut chosen = inputs.camera_model;
         egui::ComboBox::from_id_salt("camera_model_proposal_model")
             .selected_text(proposal.target_label(chosen))
@@ -55,7 +55,9 @@ pub(super) fn show_proposal(
                 for &target in &proposal.targets {
                     ui.selectable_value(&mut chosen, target, proposal.target_label(target));
                 }
-            });
+            })
+            .response
+            .labelled_by(label);
         if chosen != inputs.camera_model {
             // A new target starts at its own defaults: the count it takes
             // from this camera, and the default angle and domain.
@@ -64,7 +66,7 @@ pub(super) fn show_proposal(
     });
 
     if CameraModelProposal::has_spline(inputs.camera_model) {
-        row(ui, "Coefficients", |ui| {
+        row(ui, "Coefficients", |ui, label| {
             let mut count = inputs.coeff_count.unwrap_or(8);
             // A value the wire gave outside the range is shown as it is, not
             // clamped: drawing the field must not change the request.
@@ -73,6 +75,7 @@ pub(super) fn show_proposal(
                     .range(SPLINE_COEFF_COUNT_RANGE)
                     .clamp_existing_to_range(false),
             )
+            .labelled_by(label)
             .on_hover_text(
                 "The spline's coefficient count. The fit is the closest monotone curve to \
                  the current one; bundle adjustment with the lens distortion released then \
@@ -90,7 +93,7 @@ pub(super) fn show_proposal(
     // and none given there is no angle to show, and the field is left out
     // rather than showing a made-up one.
     if !refit || inputs.theta_fit_deg.is_some() {
-        row(ui, "Fit to θ (°)", |ui| {
+        row(ui, "Fit to θ (°)", |ui, label| {
             let Some(shown_theta) = proposal.shown_theta_fit_deg() else {
                 ui.weak("no default angle");
                 return;
@@ -108,6 +111,7 @@ pub(super) fn show_proposal(
                     .speed(0.1)
                     .fixed_decimals(1),
             )
+            .labelled_by(label)
             .on_hover_text(
                 "The largest incidence angle the fit samples. It starts at the current model's \
                  trusted bound, or its observations' extent for a model without one, and can \
@@ -126,7 +130,7 @@ pub(super) fn show_proposal(
     }
 
     if CameraModelProposal::has_spline(inputs.camera_model) {
-        row(ui, "Spline domain (°)", |ui| {
+        row(ui, "Spline domain (°)", |ui, label| {
             let max = if inputs.camera_model == "SFMTOOL_PINHOLE" {
                 89.9
             } else {
@@ -142,6 +146,7 @@ pub(super) fn show_proposal(
                     .speed(0.1)
                     .fixed_decimals(1),
             )
+            .labelled_by(label)
             .on_hover_text(
                 "Where the spline's domain ends, as an incidence angle. Past it the model is a \
                  straight line bundle adjustment cannot bend.",
@@ -258,10 +263,14 @@ pub(crate) const DEFAULT: &str = "Default";
 
 /// One row of the strip: its name, then `add`'s widgets, wrapping onto the
 /// next line where the panel is too narrow for them.
-fn row(ui: &mut egui::Ui, name: &str, add: impl FnOnce(&mut egui::Ui)) {
+///
+/// `add` is given the id of the name's label, for the row's control to be
+/// `labelled_by`: that names the control for a screen reader and in
+/// `get_widgets`.
+fn row(ui: &mut egui::Ui, name: &str, add: impl FnOnce(&mut egui::Ui, egui::Id)) {
     ui.horizontal_wrapped(|ui| {
-        part(ui, name);
-        add(ui);
+        let label = part(ui, name);
+        add(ui, label.id);
     });
 }
 

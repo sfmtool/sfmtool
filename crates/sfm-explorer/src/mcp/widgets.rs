@@ -12,8 +12,8 @@
 //!   rectangle, `Sense` and `enabled` flag), read from `prev_pass` because
 //!   `Context::run_ui` swaps the finished pass there when it ends;
 //! - the frame's AccessKit `TreeUpdate`, which carries each widget's role,
-//!   label, toggled state and value under `Id::accesskit_id`, and the parent
-//!   links that make up a widget's `path`;
+//!   label, `labelled_by` relation, toggled state and value under
+//!   `Id::accesskit_id`, and the parent links that make up a widget's `path`;
 //! - egui's layer order and area memory, which say which layers are popups and
 //!   windows and where they are.
 //!
@@ -83,7 +83,8 @@ pub(crate) struct Widget {
 }
 
 impl Widget {
-    /// The AccessKit label, if it has one.
+    /// The widget's name, if it has one: its AccessKit label, or the text of
+    /// the labels it is labelled by (`Tree::name`).
     pub(crate) fn name(&self) -> Option<&str> {
         self.name.as_deref()
     }
@@ -309,7 +310,7 @@ impl WidgetFrame {
                     continue;
                 }
                 let role = node.map(|node| node.role()).filter(|r| *r != Role::Unknown);
-                let raw_name = node.and_then(node_name);
+                let raw_name = node.and_then(|node| tree.name(node));
                 // egui gives most `Ui`s a node of their own, as a generic
                 // container, so that its children have a parent in the tree.
                 // One with no name and nothing to click is still layout.
@@ -991,9 +992,10 @@ fn sense_name(sense: egui::Sense) -> &'static str {
     }
 }
 
-/// A node's name: its label, or for a label widget its text, which egui puts
-/// in the value.
-fn node_name(node: &accesskit::Node) -> Option<String> {
+/// The name a node carries itself: its label, or for a label widget its text,
+/// which egui puts in the value. `Tree::name` falls back from it to the names
+/// of the nodes the node is labelled by.
+fn own_name(node: &accesskit::Node) -> Option<String> {
     let name = match node.role() {
         Role::Label => node.value().or_else(|| node.label()),
         _ => node.label(),
@@ -1038,6 +1040,34 @@ impl<'a> Tree<'a> {
         self.nodes.get(&id.accesskit_id()).copied()
     }
 
+    /// A node's name, in the order AccessKit computes the name it hands a
+    /// screen reader (`Node::write_label` in `accesskit_consumer`): the node's
+    /// own name where it has one, and otherwise the own names of the nodes its
+    /// `labelled_by` relation points at, in the relation's order, joined with a
+    /// space.
+    ///
+    /// egui's `Response::labelled_by` records that relation and leaves the
+    /// control's own label empty, so a combo box named by the label drawn
+    /// beside it is named here by that label's text. The node's own label wins
+    /// over the relation because that is AccessKit's rule, and so the name
+    /// here is the one the platform's accessibility tree carries for this
+    /// build; ARIA's name computation would put `aria-labelledby` first. A
+    /// labelling node lends only its own name, not one it takes from a
+    /// relation of its own, as in AccessKit, and a node the frame did not
+    /// draw lends nothing.
+    fn name(&self, node: &accesskit::Node) -> Option<String> {
+        if let Some(own) = own_name(node) {
+            return Some(own);
+        }
+        let parts: Vec<String> = node
+            .labelled_by()
+            .iter()
+            .filter_map(|id| self.nodes.get(id))
+            .filter_map(|label| own_name(label))
+            .collect();
+        (!parts.is_empty()).then(|| parts.join(" "))
+    }
+
     /// The names of a widget's named ancestors, outermost first, and its own.
     fn path(&self, id: egui::Id, own: Option<&str>) -> Vec<String> {
         let mut path: Vec<String> = Vec::new();
@@ -1048,7 +1078,7 @@ impl<'a> Tree<'a> {
             let Some(parent) = self.parents.get(&current) else {
                 break;
             };
-            if let Some(name) = self.nodes.get(parent).and_then(|node| node_name(node)) {
+            if let Some(name) = self.nodes.get(parent).and_then(|node| self.name(node)) {
                 let name = name
                     .strip_suffix(SUBMENU_ARROW)
                     .map(|stripped| stripped.trim_end().to_string())
