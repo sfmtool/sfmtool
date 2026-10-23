@@ -1063,7 +1063,8 @@ fn type_text_fills_go_to_point_and_enter_selects_the_point() {
     let last = harness.state.action_log.entries().last().unwrap();
     assert_eq!(
         last.text,
-        "type_text 1 character into the text input in Go to Point"
+        "type_text 1 character into the text input \"Point index, or full ID with hash:\" in Go to \
+         Point"
     );
 
     // Into whatever has focus, which is still the field.
@@ -1181,6 +1182,8 @@ fn type_text_sets_the_load_demo_data_number_of_points() {
         .expect("the number of points")
         .clone();
     assert_eq!(entry["value"], json!("1000"), "{entry:#}");
+    // Named by the label before it.
+    assert_eq!(entry["name"], json!("Number of points:"), "{entry:#}");
 
     let reply = harness.ok(
         "type_text",
@@ -1191,7 +1194,7 @@ fn type_text_sets_the_load_demo_data_number_of_points() {
     let last = harness.state.action_log.entries().last().unwrap();
     assert_eq!(
         last.text,
-        "type_text 3 characters into the number box in Load Demo Data"
+        "type_text 3 characters into the number box \"Number of points:\" in Load Demo Data"
     );
 }
 

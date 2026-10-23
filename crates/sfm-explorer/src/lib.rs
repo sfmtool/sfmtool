@@ -62,6 +62,7 @@ mod track_table;
 mod track_table_panel;
 mod track_view;
 mod viewer_3d;
+mod widget_name;
 mod window;
 
 use std::sync::Arc;

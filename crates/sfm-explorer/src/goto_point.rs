@@ -273,17 +273,21 @@ impl GotoPointDialog {
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
-                ui.label("Point index, or full ID with hash:");
+                // The field is `labelled_by` this label, which names it for a
+                // screen reader and in `get_widgets`.
+                let label = ui.label("Point index, or full ID with hash:");
                 // An explicit id rather than the auto-generated one, so
                 // `select_all` can address the widget's stored cursor state
                 // without depending on the response id matching it.
                 let field_id = egui::Id::new("goto_point_input");
-                let edit = ui.add(
-                    egui::TextEdit::singleline(&mut self.input)
-                        .id(field_id)
-                        .hint_text("12345   or   pt3d_a1b2c3d4_12345")
-                        .desired_width(280.0),
-                );
+                let edit = ui
+                    .add(
+                        egui::TextEdit::singleline(&mut self.input)
+                            .id(field_id)
+                            .hint_text("12345   or   pt3d_a1b2c3d4_12345")
+                            .desired_width(280.0),
+                    )
+                    .labelled_by(label.id);
                 if std::mem::take(&mut self.focus_pending) {
                     edit.request_focus();
                 }

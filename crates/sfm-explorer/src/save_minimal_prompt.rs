@@ -99,13 +99,16 @@ impl SaveMinimalPrompt {
                     pending.path.display()
                 ));
                 ui.add_space(8.0);
-                ui.label("Workspace path recorded in the copy:");
-                let edit = ui.add(
-                    egui::TextEdit::singleline(&mut pending.workspace_path)
-                        .id(egui::Id::new("save_minimal_workspace_path"))
-                        .hint_text("(none recorded)")
-                        .desired_width(320.0),
-                );
+                // The field is `labelled_by` this label, which names it.
+                let label = ui.label("Workspace path recorded in the copy:");
+                let edit = ui
+                    .add(
+                        egui::TextEdit::singleline(&mut pending.workspace_path)
+                            .id(egui::Id::new("save_minimal_workspace_path"))
+                            .hint_text("(none recorded)")
+                            .desired_width(320.0),
+                    )
+                    .labelled_by(label.id);
                 if std::mem::take(&mut pending.focus_pending) {
                     edit.request_focus();
                 }

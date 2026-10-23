@@ -24,6 +24,7 @@ use crate::state::{AppState, FeatureDisplaySettings, IntrinsicsDisplaySettings, 
 use crate::track_table_panel::TrackTablePanel;
 use crate::track_view::{TrackBodyResponse, TrackView};
 use crate::viewer_3d::Viewer3D;
+use crate::widget_name::set_widget_name;
 
 #[cfg(test)]
 mod tests;
@@ -1552,18 +1553,22 @@ fn show_overlay_toolbar_row(
             let mut has_size_filter =
                 settings.min_feature_size.is_some() || settings.max_feature_size.is_some();
             ui.checkbox(&mut has_size_filter, "Min/max size:");
-            ui.add(
+            // The checkbox's text names the pair, so each box has a name of
+            // its own that says which bound it is.
+            let min = ui.add(
                 egui::DragValue::new(&mut settings.min_feature_size_value)
                     .range(0.0..=1000.0)
                     .speed(0.2)
                     .suffix("px"),
             );
-            ui.add(
+            set_widget_name(&min, "minimum size (px)");
+            let max = ui.add(
                 egui::DragValue::new(&mut settings.max_feature_size_value)
                     .range(0.5..=1000.0)
                     .speed(0.5)
                     .suffix("px"),
             );
+            set_widget_name(&max, "maximum size (px)");
             if has_size_filter {
                 settings.min_feature_size = Some(settings.min_feature_size_value);
                 settings.max_feature_size = Some(settings.max_feature_size_value);

@@ -584,6 +584,11 @@ checkbox is ticked:
   max displacement 12.4 px
 ```
 
+The scale list follows a checkbox rather than a label, so it has a name of its
+own in the accessibility tree and `get_widgets`: the checkbox's text and
+`scale`, `Distortion field scale` (`Change field scale` with the change field
+shown). `Grid density` and `Field` are named by the labels before them.
+
 When `camera.has_distortion()` is false, the `Distortion field` row is replaced
 by a disabled `No distortion` line, so the control never sits there inviting a
 click that does nothing.

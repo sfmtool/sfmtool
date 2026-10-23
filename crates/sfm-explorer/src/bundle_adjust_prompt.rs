@@ -408,8 +408,11 @@ impl BundleAdjustPrompt {
 /// fills the box. The drop-down names the preset the box states, or `Custom`.
 fn schedule_row(ui: &mut egui::Ui, text: &mut String) {
     ui.horizontal(|ui| {
-        ui.label("Schedule");
+        // The box is `labelled_by` the label, which names it; the drop-down
+        // has no text beside it, so it has a name of its own.
+        let label = ui.label("Schedule");
         ui.add(egui::TextEdit::singleline(text).desired_width(180.0))
+            .labelled_by(label.id)
             .on_hover_text(
                 "The adjustment's rounds, each (trim px, loss scale). Before a round, every \
                  observation whose reprojection error is at or over its trim is left out of \
@@ -422,7 +425,7 @@ fn schedule_row(ui: &mut egui::Ui, text: &mut String) {
             .iter()
             .find(|(_, preset)| stated.as_deref() == Some(*preset))
             .map_or("Custom", |(name, _)| *name);
-        egui::ComboBox::from_id_salt("bundle_adjust_schedule_preset")
+        let presets = egui::ComboBox::from_id_salt("bundle_adjust_schedule_preset")
             .selected_text(selected)
             .show_ui(ui, |ui| {
                 for (name, preset) in SCHEDULE_PRESETS {
@@ -430,7 +433,9 @@ fn schedule_row(ui: &mut egui::Ui, text: &mut String) {
                         *text = schedule_text(preset);
                     }
                 }
-            });
+            })
+            .response;
+        crate::widget_name::set_widget_name(&presets, "Schedule preset");
     });
 }
 

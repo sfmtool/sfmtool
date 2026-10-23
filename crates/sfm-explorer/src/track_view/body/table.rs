@@ -62,10 +62,12 @@ use super::zncc_hover::{show_zncc_hover, zncc_hover_text, ZnccHoverText, ZnccHov
 use super::{
     bar_box, max_self_similarity_radius, measurements, percent, provenance_text, radius_number,
     row_ellipse, row_grids, row_radius, row_surface, self_similarity_cell_color,
-    self_similarity_ellipse_text, significant, zncc_cell_color, BodyMode, BoxHover, BoxesMoved,
-    Judgement, RowGrids, TrackBody, TrackBodyResponse, MAX_PROJECTION_ERROR_LABEL,
-    MAX_PROJECTION_ERROR_TIP, MAX_SELF_SIMILARITY_LABEL, MAX_SELF_SIMILARITY_TIP, MAX_SHIFT_LABEL,
-    MAX_SHIFT_TIP, MIN_ZNCC_LABEL, MIN_ZNCC_MIDDLE_LABEL, MIN_ZNCC_MIDDLE_TIP, MIN_ZNCC_TIP,
+    self_similarity_ellipse_text, significant, zncc_cell_color, BodyMode, BoxHover, BoxName,
+    BoxesMoved, Judgement, RowGrids, TrackBody, TrackBodyResponse, MAX_PROJECTION_ERROR_LABEL,
+    MAX_PROJECTION_ERROR_NAME, MAX_PROJECTION_ERROR_TIP, MAX_SELF_SIMILARITY_LABEL,
+    MAX_SELF_SIMILARITY_NAME, MAX_SELF_SIMILARITY_TIP, MAX_SHIFT_LABEL, MAX_SHIFT_NAME,
+    MAX_SHIFT_TIP, MIN_ZNCC_LABEL, MIN_ZNCC_MIDDLE_LABEL, MIN_ZNCC_MIDDLE_NAME,
+    MIN_ZNCC_MIDDLE_TIP, MIN_ZNCC_NAME, MIN_ZNCC_TIP,
 };
 use crate::scene::{ImageRef, ReconId};
 use crate::state::AppState;
@@ -2517,7 +2519,9 @@ fn draw_threshold_row(
         ui.visuals().weak_text_color(),
     );
     // Each box with the column it sits in, the line of that column's cell it
-    // stands beside, the text after it and that text's hover. The ZNCC bars
+    // stands beside, the text after it, its own name (the text after it is a
+    // unit and a reading's name, which does not say what the box sets) and
+    // the hover text. The ZNCC bars
     // read in percent, as the ZNCC cell does; the track stores them on the 0
     // to 1 scale. Listed left to right and top to bottom, which is the order
     // Tab moves through them.
@@ -2536,6 +2540,7 @@ fn draw_threshold_row(
             0,
             percent(egui::DragValue::new(zncc_bar)),
             MIN_ZNCC_LABEL,
+            MIN_ZNCC_NAME,
             MIN_ZNCC_TIP,
         ),
         // The bar on the middle reading; 0 turns it off.
@@ -2544,6 +2549,7 @@ fn draw_threshold_row(
             1,
             percent(egui::DragValue::new(middle_bar)),
             MIN_ZNCC_MIDDLE_LABEL,
+            MIN_ZNCC_MIDDLE_NAME,
             MIN_ZNCC_MIDDLE_TIP,
         ),
         // In patch-grid px, the unit of the self-similarity column; at the
@@ -2556,6 +2562,7 @@ fn draw_threshold_row(
                 .speed(0.02)
                 .max_decimals(1),
             MAX_SELF_SIMILARITY_LABEL,
+            MAX_SELF_SIMILARITY_NAME,
             MAX_SELF_SIMILARITY_TIP,
         ),
         // In patch-grid px, and also the radius the evaluation looks for each
@@ -2568,6 +2575,7 @@ fn draw_threshold_row(
                 .speed(0.05)
                 .max_decimals(1),
             MAX_SHIFT_LABEL,
+            MAX_SHIFT_NAME,
             MAX_SHIFT_TIP,
         ),
         // In source-image px, the unit of the projection error's first line.
@@ -2579,11 +2587,12 @@ fn draw_threshold_row(
                 .speed(0.05)
                 .max_decimals(1),
             MAX_PROJECTION_ERROR_LABEL,
+            MAX_PROJECTION_ERROR_NAME,
             MAX_PROJECTION_ERROR_TIP,
         ),
     ];
     let mut moved = BoxesMoved::default();
-    for (x, line_index, value, label, tip) in boxes {
+    for (x, line_index, value, label, name, tip) in boxes {
         let min = egui::pos2(
             rect.min.x + x,
             rect.min.y + line_index as f32 * (line + gap),
@@ -2595,7 +2604,7 @@ fn draw_threshold_row(
                 .layout(egui::Layout::left_to_right(egui::Align::Center)),
         );
         cell_ui.set_clip_rect(clip);
-        moved.merge(bar_box(&mut cell_ui, value, hover));
+        moved.merge(bar_box(&mut cell_ui, value, BoxName::Own(name), hover));
         cell_ui
             .add_enabled(hover.enabled(), egui::Label::new(label))
             .on_hover_text(tip);

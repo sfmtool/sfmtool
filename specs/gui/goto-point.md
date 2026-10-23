@@ -70,7 +70,9 @@ non-resizable, matching the existing *Load Demo Data* dialog:
 ```
 
 (Shaded = selected. With no point selected the field shows the previous query,
-or the hint `12345   or   pt3d_a1b2c3d4_12345` when there is none.)
+or the hint `12345   or   pt3d_a1b2c3d4_12345` when there is none. The field
+is linked to the label above it, so a screen reader and `get_widgets` name it
+`Point index, or full ID with hash:`.)
 
 | Interaction | Effect |
 |-------------|--------|

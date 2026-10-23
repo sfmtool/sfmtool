@@ -136,12 +136,14 @@ pub(super) fn show(root_ui: &mut egui::Ui, parts: &mut UiParts<'_>, requests: &m
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(root_ui.ctx(), |ui| {
                 ui.horizontal(|ui| {
-                    ui.label("Number of points:");
+                    // `labelled_by` the label, which names the box.
+                    let label = ui.label("Number of points:");
                     ui.add(
                         egui::DragValue::new(&mut app_state.demo_num_points)
                             .range(1..=100_000)
                             .speed(10.0),
-                    );
+                    )
+                    .labelled_by(label.id);
                 });
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {

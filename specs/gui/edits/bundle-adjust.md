@@ -125,7 +125,9 @@ observations the solve keeps.
     and Bundle Adjust moves the points back and forth on every step. Under this
     preset the alternation settles.
 
-  The drop-down shows the preset the box states, or `Custom`. The box opens
+  The drop-down shows the preset the box states, or `Custom`. The box is
+  named by its `Schedule` label in the accessibility tree and `get_widgets`,
+  and the drop-down, with no text beside it, is named `Schedule preset`. The box opens
   with the schedule last run on this node in this session, from the dialog or
   the wire, so a second adjustment of the node repeats the first unless it is
   changed; a node not adjusted this session opens with the default. A schedule

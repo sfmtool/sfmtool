@@ -2588,7 +2588,17 @@ clicked.
   label's text: Image Detail's overlay dropdown is the `combo_box` named
   `Overlay:`, with the mode it shows as its `value`. egui's slider with text
   links its number box to its text the same way, so a slider and its
-  `spin_button` share a name, and `role` tells them apart. Where a node has
+  `spin_button` share a name, and `role` tells them apart. The viewer links
+  each of its controls that has a label beside it to that label in this way
+  (the Go to Point field is the `text_input` named `Point index, or full ID
+  with hash:`). A control that no visible text names is given a name of its
+  own, which says what it sets and carries the unit where the control shows
+  one: Track View's threshold boxes, followed only by a unit and a reading's
+  name, are `minimum ZNCC whole (%)` to `maximum Proj. err (px)`, and Image
+  Detail's two size boxes are `minimum size (px)` and `maximum size (px)`
+  (the panels' specs list them: [track-view.md](track-view.md) § "The
+  thresholds", [multi-panel-image-browser.md](multi-panel-image-browser.md) §
+  "Feature Filtering", [camera-intrinsics.md](camera-intrinsics.md)). Where a node has
   its own label and the relation as well, its own label wins, because that is
   AccessKit's rule and so the name the platform's accessibility tree carries
   for the same build (ARIA's name computation would put the relation first).
@@ -3118,10 +3128,11 @@ when the call named one, and of the window otherwise.
 
 **In the Action Log**, kind `Input`: `press_key Ctrl+Z`, `press_key I over
 image_detail` (and `over image_detail 210,160` when the call gave `at_px`),
-`type_text 16 characters into the text input in Go to Point`, and `type_text 4
-characters into the number box in the Track View panel` for a number box. A
-text input or number box often has no name of its own, so the row names the
-dialog or panel it sits in, and the field's name as well where it has one. The
+`type_text 16 characters into the text input "Point index, or full ID with
+hash:" in Go to Point`, and `type_text 2 characters into the number box
+"minimum ZNCC whole (%)" in the Track View panel` for a number box. The row
+names the dialog or panel the field sits in, and the field's name after its
+kind; a field with no name is `the text input` or `the number box` alone. The
 typed text itself is not recorded, because the log is visible to anyone
 watching the window and the text could be a path the person did not mean to show. A `type_text` with
 `widget` writes this one row and no row for the click that focused the input.
@@ -6130,6 +6141,12 @@ where a test hands no host over.
   window, a crop outside the target naming its size, a crop with no area and
   `widgets: true` beside `hud: false`; and a screenshot with a crop and a
   listing defers with both and says so in its caption and its row.
+- **The viewer's controls are named**, in `mcp::tests::names`, which draws the
+  real Image Detail toolbar and its gear popup, Track View's body with a track
+  on the bench and with its Rename field open, and the Go to Point, Bundle
+  Adjust and Save As Minimal dialogs, and reads the names their number boxes,
+  dropdowns, text inputs and icon buttons are listed under; none of the
+  number boxes, dropdowns and text inputs drawn there is unnamed.
 - **The input tools reach what a person's input reaches**, in `mcp::tests::input`,
   which runs each call a step per frame through the same `PendingInput` the
   viewer runs, in real egui passes that draw the viewer's own menu bar,

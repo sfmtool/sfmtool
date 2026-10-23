@@ -11,6 +11,7 @@
 
 use super::{CameraLayer, ChangeLayer};
 use crate::state::{FieldMode, IntrinsicsDisplaySettings};
+use crate::widget_name::set_widget_name;
 use sfmtool_core::camera::CameraIntrinsics;
 
 /// The gear that opens the settings popup. Spelled once so the glyph test can
@@ -97,11 +98,14 @@ pub(super) fn settings_popup(
             "Distortion field"
         };
         ui.checkbox(&mut settings.distortion, label);
+        // Named for the field it scales: the checkbox before it names the
+        // field, not the dropdown.
+        let name = format!("{label} scale");
         let auto_label = auto.map_or_else(
             || "Auto".to_owned(),
             |scale| format!("Auto ({TIMES}{})", scale_text(scale)),
         );
-        egui::ComboBox::from_id_salt("intrinsics_distortion_scale")
+        let scale = egui::ComboBox::from_id_salt("intrinsics_distortion_scale")
             .selected_text(match settings.distortion_scale {
                 Some(scale) => format!("{TIMES}{}", scale_text(scale)),
                 None => auto_label.clone(),
@@ -116,7 +120,9 @@ pub(super) fn settings_popup(
                         format!("{TIMES}{}", scale_text(scale)),
                     );
                 }
-            });
+            })
+            .response;
+        set_widget_name(&scale, &name);
     });
 
     ui.horizontal(|ui| {

@@ -262,6 +262,7 @@ mod find_points;
 mod input;
 mod layout;
 mod logged;
+mod names;
 mod read;
 mod render;
 mod server;

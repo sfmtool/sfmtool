@@ -5,6 +5,10 @@
 //! mode: copy it, and go to a point by ID. Shared so the Viewed header and the
 //! Edited header offer the same controls in the same place.
 
+/// The go-to-point button's name in the accessibility tree and `get_widgets`:
+/// the title of the dialog it opens.
+const GOTO_NAME: &str = "Go to Point";
+
 /// A small "go to point" button drawn as a right-pointing arrow into a bar.
 /// Returns true if clicked.
 ///
@@ -51,12 +55,17 @@ pub(crate) fn goto_button(ui: &mut egui::Ui) -> bool {
         );
     }
 
+    // Named for the dialog it opens, since no text is drawn on it.
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), GOTO_NAME)
+    });
     let clicked = response.clicked();
     response.on_hover_text("Go to a point by index or ID");
     clicked
 }
 
-/// A small "copy to clipboard" button drawn as two overlapping rectangles.
+/// A small "copy to clipboard" button drawn as two overlapping rectangles,
+/// named `tooltip` in the accessibility tree as well as hovered with it.
 /// Returns true if clicked.
 pub(crate) fn copy_button(ui: &mut egui::Ui, tooltip: &str) -> bool {
     let icon_size = ui.text_style_height(&egui::TextStyle::Body);
@@ -90,6 +99,10 @@ pub(crate) fn copy_button(ui: &mut egui::Ui, tooltip: &str) -> bool {
             .rect_stroke(front, 1.0, stroke, egui::StrokeKind::Outside);
     }
 
+    // Named by its hover text, since no text is drawn on it.
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), tooltip)
+    });
     let clicked = response.clicked();
     response.on_hover_text(tooltip);
     clicked

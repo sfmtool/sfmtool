@@ -1089,6 +1089,20 @@ point that is off rather than bad sightings.
 The text after each box has hover text saying what the bar is and what a row
 past it is.
 
+**The boxes' names.** The text after a box is a unit and a reading's name,
+which does not say what the box sets, so each box carries a name of its own in
+the accessibility tree, the name `get_widgets` lists it under
+([mcp-server.md](mcp-server.md) § "`get_widgets`"): the bound, the column's
+words and the unit. They are `minimum ZNCC whole (%)`, `minimum ZNCC mid (%)`,
+`maximum Self-similarity whole (px)`, `maximum Shift (px)` and `maximum Proj.
+err (px)`, the same at either stage. The geometry search box is named by the
+label before it, `geometry search min relative ZNCC (%)`. Outside the
+thresholds, the *per axis* and *overlap* boxes are named `pieces per axis` and
+`piece overlap (%)`, since their text is a suffix inside the value; the field
+*Rename* opens is `item name`; and the header's two icon buttons are named
+`Copy Point ID` and `Go to Point`, after their hover text and the dialog the
+second opens.
+
 The sixth box, *geometry search min relative ZNCC (%)*, is
 `geometry_search_min_relative_zncc`: the fraction of the track's own
 self-agreement a photograph's ZNCC has to reach for *Find matches by geometry*

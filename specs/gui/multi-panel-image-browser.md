@@ -885,6 +885,9 @@ mode selector:
 - **Min/max size**: single checkbox + two drag values (min: 0.0–1000 px, max: 0.5–1000 px). The drag values
   are always visible and editable; the checkbox controls whether both size filters are
   applied. Values persist when unchecked so users can toggle without losing their settings.
+  The checkbox's text names the pair, so each box has a name of its own in the
+  accessibility tree and `get_widgets`: `minimum size (px)` and `maximum size (px)`.
+  The two dropdowns are named by the labels before them, `Overlay:` and `Max:`.
 - **Tracked only**: checkbox. When enabled, only features with a track observation are
   drawn. In Features mode, untracked features are hidden. In heatmap modes, untracked
   features are always hidden (they have no metric). This is independent of the size

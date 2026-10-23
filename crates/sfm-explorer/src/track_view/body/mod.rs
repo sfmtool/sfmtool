@@ -57,6 +57,7 @@ use crate::bench::{NormalStep, SplitSettings};
 use crate::scene::{ImageRef, PointRef, ReconId, SceneNode};
 use crate::state::AppState;
 use crate::track_view::EDIT_LABEL;
+use crate::widget_name::set_widget_name;
 
 mod crop;
 mod patch;
@@ -846,25 +847,31 @@ impl TrackBody {
     /// they say nothing while those cannot run.
     fn show_split_settings(&mut self, ui: &mut egui::Ui, greyed: bool) {
         use sfmtool_core::bench::normal::{MAX_OVERLAP, MAX_PIECES, MIN_PIECES};
+        // Each box is named for what it sets, since the text that says so is
+        // a suffix inside its value.
         ui.add_enabled_ui(!greyed, |ui| {
-            ui.add(
+            let pieces = ui.add(
                 egui::DragValue::new(&mut self.split_settings.pieces)
                     .range(MIN_PIECES..=MAX_PIECES)
                     .suffix(" per axis"),
-            )
-            .on_hover_text(
+            );
+            set_widget_name(&pieces, PIECES_NAME);
+            pieces.on_hover_text(
                 "How many pieces the patch is cut into along each of its two axes: a row \
                  of that many along each axis for Finite Diff Normal, a grid of that many \
                  by that many for Grid Plane Normal",
             );
-            ui.add(
+            let overlap = ui.add(
                 egui::DragValue::new(&mut self.split_settings.overlap_percent)
                     .range(0.0..=MAX_OVERLAP * 100.0)
                     .speed(1.0)
                     .max_decimals(0)
                     .suffix("% overlap"),
-            )
-            .on_hover_text("How much neighbouring pieces overlap, as a share of a piece's side");
+            );
+            set_widget_name(&overlap, OVERLAP_NAME);
+            overlap.on_hover_text(
+                "How much neighbouring pieces overlap, as a share of a piece's side",
+            );
         });
     }
 
@@ -962,6 +969,9 @@ impl TrackBody {
             Some((item, text)) => {
                 let item = item.clone();
                 let field = ui.add(egui::TextEdit::singleline(text).desired_width(140.0));
+                // Named for what it holds, since the Rename button it replaces
+                // is gone while it is open.
+                set_widget_name(&field, RENAME_NAME);
                 let commit = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                 let typed = text.clone();
                 if commit || ui.button("Set").clicked() {
@@ -1885,6 +1895,10 @@ fn red_to_green(t: f64) -> egui::Color32 {
 /// aim at the text drawn.
 const MIN_ZNCC_LABEL: &str = "% whole";
 
+/// The minimum-ZNCC box's name in the accessibility tree and `get_widgets`,
+/// in the words of its column and the text after it.
+const MIN_ZNCC_NAME: &str = "minimum ZNCC whole (%)";
+
 /// The minimum-ZNCC box's hover text.
 const MIN_ZNCC_TIP: &str = "The lowest whole-patch ZNCC a sighting may have. A row whose \
     whole ZNCC is under it is painted out.";
@@ -1892,10 +1906,23 @@ const MIN_ZNCC_TIP: &str = "The lowest whole-patch ZNCC a sighting may have. A r
 /// The text after the minimum-middle-ZNCC box, under the one above.
 const MIN_ZNCC_MIDDLE_LABEL: &str = "% mid";
 
+/// The minimum-middle-ZNCC box's name.
+const MIN_ZNCC_MIDDLE_NAME: &str = "minimum ZNCC mid (%)";
+
 /// The minimum-middle-ZNCC box's hover text.
 const MIN_ZNCC_MIDDLE_TIP: &str = "The lowest middle ZNCC a sighting may have, read over the \
     centred square half the patch's width. A row whose middle ZNCC is under it is painted out. \
     0 turns the bar off.";
+
+/// The name of the box for how many pieces the patch is cut into along each
+/// axis.
+const PIECES_NAME: &str = "pieces per axis";
+
+/// The name of the box for how much neighbouring pieces overlap.
+const OVERLAP_NAME: &str = "piece overlap (%)";
+
+/// The name of the field *Rename* opens.
+const RENAME_NAME: &str = "item name";
 
 /// The geometry search box's label, above the table: its bar judges no
 /// column, so it does not sit in the threshold row.
@@ -1942,6 +1969,16 @@ impl BoxHover<'_> {
     }
 }
 
+/// What names a threshold box in the accessibility tree and `get_widgets`.
+#[derive(Clone, Copy)]
+pub(super) enum BoxName<'a> {
+    /// A name of its own, for a box that the text beside it does not name:
+    /// the threshold row's boxes are followed by a unit and a reading's name.
+    Own(&'a str),
+    /// The label drawn beside it, which names it.
+    LabelledBy(egui::Id),
+}
+
 /// How the boxes moved on one frame.
 #[derive(Default)]
 pub(super) struct BoxesMoved {
@@ -1967,11 +2004,19 @@ impl BoxesMoved {
 pub(super) fn bar_box(
     ui: &mut egui::Ui,
     value: egui::DragValue<'_>,
+    name: BoxName<'_>,
     hover: BoxHover<'_>,
 ) -> BoxesMoved {
     // A typed value lands when the field is left, not per keystroke, so
     // typing "90" is one change and not two.
     let r = ui.add_enabled(hover.enabled(), value.update_while_editing(false));
+    let r = match name {
+        BoxName::Own(name) => {
+            set_widget_name(&r, name);
+            r
+        }
+        BoxName::LabelledBy(label) => r.labelled_by(label),
+    };
     let r = match hover {
         BoxHover::Refused(why) => r.on_disabled_hover_text(why),
         BoxHover::Tip(tip) => r.on_hover_text(tip),
@@ -1993,13 +2038,15 @@ fn geometry_search_box(
     hover: BoxHover<'_>,
 ) -> BoxesMoved {
     ui.horizontal(|ui| {
-        ui.add_enabled(hover.enabled(), egui::Label::new(GEOMETRY_SEARCH_LABEL))
+        let label = ui
+            .add_enabled(hover.enabled(), egui::Label::new(GEOMETRY_SEARCH_LABEL))
             .on_hover_text(GEOMETRY_SEARCH_TIP);
         bar_box(
             ui,
             percent(egui::DragValue::new(
                 &mut bars.geometry_search_min_relative_zncc,
             )),
+            BoxName::LabelledBy(label.id),
             hover,
         )
     })
@@ -2021,6 +2068,9 @@ const VIEWED_BARS_TIP: &str = "Judges the readings and the Verdict column by thi
 /// a fit may move a sighting.
 const MAX_SHIFT_LABEL: &str = "px";
 
+/// The shift box's name.
+const MAX_SHIFT_NAME: &str = "maximum Shift (px)";
+
 /// The shift box's hover text.
 const MAX_SHIFT_TIP: &str = "The largest shift a sighting may have, in patch-grid px: how \
     far the correlation peak may sit from where the sighting is. The evaluation looks for each \
@@ -2031,6 +2081,9 @@ const MAX_SHIFT_TIP: &str = "The largest shift a sighting may have, in patch-gri
 /// the name of the self-similarity cell's first line. The box is the largest
 /// ZNCC self-similarity radius an observation's whole tile may have.
 const MAX_SELF_SIMILARITY_LABEL: &str = "px whole";
+
+/// The self-similarity box's name.
+const MAX_SELF_SIMILARITY_NAME: &str = "maximum Self-similarity whole (px)";
 
 /// The self-similarity box's hover text.
 const MAX_SELF_SIMILARITY_TIP: &str = "The largest ZNCC self-similarity radius a sighting's \
@@ -2043,6 +2096,9 @@ const MAX_SELF_SIMILARITY_TIP: &str = "The largest ZNCC self-similarity radius a
 /// the *Proj. err* cell's first line. The box is the largest reprojection
 /// error an observation may have.
 const MAX_PROJECTION_ERROR_LABEL: &str = "px";
+
+/// The projection error box's name.
+const MAX_PROJECTION_ERROR_NAME: &str = "maximum Proj. err (px)";
 
 /// The projection error box's hover text.
 const MAX_PROJECTION_ERROR_TIP: &str = "The largest reprojection error a sighting may have, in \
