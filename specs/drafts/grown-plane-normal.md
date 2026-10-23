@@ -411,7 +411,7 @@ The step follows the prototype run with `SPOT_RULE=anchor JUDGE=precision KP_STA
 
 ## Determinism and precision
 
-Photograph samples are `f32`, read bilinearly from `u8` pyramid levels; the ZNCC sums, the residuals, the tilt, the shifts and the plane are `f64`. The candidates are held in order of their angle from the reference, ties by observation index; the selection's picks and the pairs break their ties by fixed rules (§ [The selection](#the-selection), § [Wide pairs](#wide-pairs)); every search and fit is deterministic, and nothing runs in parallel, so the output is the same on every run. No content hash depends on it.
+Photograph samples are `f32`, read bilinearly from `u8` pyramid levels; the ZNCC sums, the residuals, the tilt, the shifts and the plane are `f64`. The candidates are held in order of their angle from the reference, ties by observation index; the selection's picks and the pairs break their ties by fixed rules (§ [The selection](#the-selection), § [Wide pairs](#wide-pairs)); every fit is deterministic, and nothing runs in parallel, so the output is the same on every run. No content hash depends on it.
 
 ## Parameters
 
@@ -998,7 +998,7 @@ The form kept and the step before by their shares under 1°, 2° and 5° and the
 
 **The points that moved most.** 23 points moved by more than 5°: 12 ended closer to the stored normal and 11 further. On bull 61, 81, 172 and 182 and Kerry Park 57, 360 and 375 a view joined from a searched first window, and its plane pulled the result away from the stored normal: without it these points end 10.4° to 62.5° closer to it. Seven points whose keypoints were off by more than the growth recovers now join no view, and keep their starting normal: Kerry Park 229, 242 and 246, and dino 483, 485, 500 and 575; with the search they ended 0.7° to 6.0° from the stored normal, and without it 33° to 64°.
 
-**The judged points.** The 13 points decided in a later review by eye end where they ended, among them the five on which the stored normal was judged right and the step misses it, except Kerry Park 69, which moves from 4.7° to 4.2° from the normal judged right. The calibration of σ barely moves: the dino's median ratio of the error to the weakest σ goes from 0.78 to 0.76, and the 28 judged-reliable points' stays at 0.92.
+**The judged points.** The blind review of 2026-10-21 showed, for each of 30 points where the grown normal and the stored normal differ by more than 5°, the two as plane A and plane B at random, and asked which looks right. Its 13 decided points end where they ended, among them the five on which the stored normal was judged right and the step misses it, except Kerry Park 69, which moves from 4.7° to 4.2° from the normal judged right. The calibration of σ barely moves: the dino's median ratio of the error to the weakest σ goes from 0.78 to 0.76, and the 28 judged-reliable points' stays at 0.92.
 
 **Time.** The step without the search took 132.4 s of step time against 146.3 s with it, 9.5% less, in the same batch.
 

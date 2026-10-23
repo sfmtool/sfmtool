@@ -662,15 +662,14 @@ fn a_view_whose_keypoint_is_off_past_the_growth_is_left_out() {
         .find(|p| p.observation == off)
         .expect("picked");
     let starts: Vec<_> = entry.attempts.iter().map(|a| a.tilt_start).collect();
-    if pick.rung == 1 {
-        assert_eq!(
-            starts,
-            [GrownPlaneTiltStart::Combined, GrownPlaneTiltStart::Starting],
-            "{entry:#?}"
-        );
-    } else {
-        assert_eq!(starts.len(), 1, "{entry:#?}");
-    }
+    // On the second rung, so a refusal from the combined plane is grown
+    // once more from the starting plane.
+    assert_eq!(pick.rung, 1, "{:#?}", sequence.picks);
+    assert_eq!(
+        starts,
+        [GrownPlaneTiltStart::Combined, GrownPlaneTiltStart::Starting],
+        "{entry:#?}"
+    );
     assert!(
         entry.attempts.iter().all(|a| a.refusal.is_some()),
         "{entry:#?}"
