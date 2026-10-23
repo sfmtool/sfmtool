@@ -860,8 +860,8 @@ fn turn_and_read(
 }
 
 /// [`turn_and_read`] with `write` run on the turned track before it is read
-/// back: for a step that writes keypoints of its own, which the turn would
-/// otherwise carry off the pixels the step found.
+/// back: for a step that writes keypoints of its own, found by its own search
+/// rather than kept where the turn leaves them.
 #[allow(clippy::too_many_arguments)]
 fn read_back(
     track: &EditableTrack,

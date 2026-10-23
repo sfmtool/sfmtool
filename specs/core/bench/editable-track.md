@@ -2270,15 +2270,16 @@ becomes `k + (P(c') - P(c))`. A translation moves the centre and so moves every
 keypoint, each by its own photograph's displacement of the centre's projection;
 so does a resize from an edge, which moves the centre because it holds the far
 one. A spin, a tilt and a resize about the centre leave the centre where it was,
-and so move no keypoint at all. A sighting that has never been localized has no
-gap to keep and takes `P(c')`, and so does a localized one whose old centre did
-not project into its photograph, there being no gap to read. One the new centre
+and so move no keypoint at all. Under a translation, a resize from an edge and a
+tilt, a sighting that has never been localized has no gap to keep and takes
+`P(c')`, and so does a localized one whose old centre did not project into its
+photograph, there being no gap to read; a spin and a resize about the centre
+leave a sighting never localized as it was. One the new centre
 no longer projects into is left with no keypoint and `Unmeasured::NoProjection`
 as its reason, which is the truth about it.
 
-Since neither turn moves a keypoint, the rule is no longer a reason for
-`spin_patch` and `tilt_patch` to be two steps. They stay two because they are two
-different statements with different limits: a spin keeps the plane and the face
+Neither turn moves a keypoint. `spin_patch` and `tilt_patch` are two steps
+because they are two different statements with different limits: a spin keeps the plane and the face
 and changes only which way up the square sits, so it needs no camera and has no
 cap, while a tilt changes which way the surface faces, is stopped
 `MAX_TILT_DEG` from any observation, and so reads every observation's camera.
@@ -2412,8 +2413,8 @@ so the patch's own `u` is taken as the direction the arc leaves in, which holds
 keypoint marks where its photograph sees the patch's centre, and a turn about
 the centre leaves that pixel where it was; a keypoint's gap from the centre's
 projection is that sighting's own error, which a turn has no grounds to change.
-A sighting never localized takes the centre's projection, as under every patch
-step. Nothing is pinned: which way the patch faces says nothing about whether a
+A sighting never localized takes the centre's projection, as under a
+translation. Nothing is pinned: which way the patch faces says nothing about whether a
 sighting belongs to it.
 
 **A tilt stops `MAX_TILT_DEG` from any observation.** With `e_i` the unit

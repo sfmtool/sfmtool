@@ -2172,7 +2172,8 @@ pub struct TiltReport {
 /// leaves the centre where it was, so each photograph still sees it at the same
 /// pixel; a keypoint's gap from the centre's projection is that sighting's own
 /// error, which a turn has no grounds to change. A sighting never localized
-/// takes the centre's projection, as under every patch step.
+/// takes the centre's projection, as under a translation. ([`spin_patch`] and a
+/// resize about the centre leave such a sighting unlocalized.)
 ///
 /// **The turn stops [`MAX_TILT_DEG`] from any observation.** With `e_i` the
 /// unit vector from the centre to observation `i`'s camera centre, a normal is

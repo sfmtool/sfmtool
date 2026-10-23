@@ -4478,7 +4478,7 @@ fn off_centre(track: &mut EditableTrack) {
 }
 
 /// The outline a person sees at `observation`: the patch re-anchored on that
-/// sighting, which is the patch frame both the layer and the resize read.
+/// sighting, which is the patch frame the viewer's layer draws.
 fn outline_of(
     track: &EditableTrack,
     edited: &EditedReconstruction,

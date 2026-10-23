@@ -160,7 +160,7 @@ pub(crate) struct DiscVertex {
     pub(crate) color: [f32; 4],
 }
 
-/// One observation's mark: where that photograph sees the patch's content.
+/// One observation's mark: where that photograph sees the patch's centre.
 ///
 /// The segment runs from the patch frame's centre to `q_i`, the point of the
 /// patch frame's plane the observation's keypoint ray meets, and the circle is
@@ -458,7 +458,7 @@ pub(crate) enum Handle {
     /// so it does not change character halfway through.
     Arrowhead(Tilt),
     /// One observation's circle. It edits nothing -- where a photograph sees the
-    /// patch's content is that photograph's answer and not a thing to drag --
+    /// patch's centre is that photograph's answer and not a thing to drag --
     /// but a click on it selects that row in Track View, as clicking a mark in
     /// the Image Detail panel does.
     Circle {
