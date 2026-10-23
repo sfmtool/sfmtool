@@ -1,7 +1,7 @@
 # Track Table
 
-**Status:** Draft. Amends [gui/track-table.md](../gui/track-table.md) (the
-computed columns and Filter the 3D view),
+**Status:** Draft. Amends [gui/track-table.md](../gui/track-table.md) (Filter
+the 3D view),
 [gui/mcp-server.md](../gui/mcp-server.md) (the panel-query tools) and
 [gui/point-cloud-rendering.md](../gui/point-cloud-rendering.md) (the
 non-goal "Point colouring and filtering by quality").
@@ -18,8 +18,11 @@ the picture cells draw from ([gui/track-table.md](../gui/track-table.md)
 § "The Patch column"), and so are its Crop picture column, the reference picks
 that give a point with no stored reference its photograph, and the
 `find_points` refusal of the picture columns
-([gui/track-table.md](../gui/track-table.md) § "The Crop column"). This draft
-holds what remains.
+([gui/track-table.md](../gui/track-table.md) § "The Crop column"), and so are
+its computed columns, which the table job computes as a second run after the
+stored ones, only once a visible column, a bound or the sort needs them
+([gui/track-table.md](../gui/track-table.md) § "Computing the columns"). This
+draft holds what remains.
 
 Decided:
 
@@ -27,9 +30,8 @@ Decided:
   are pictures, **Crop** and **Patch**, both shown by default (built,
   [gui/track-table.md](../gui/track-table.md) § "The Crop column").
 - The computed columns of the first version are the maximum ray angle, the
-  condition number and the inverse-depth z. The quiet table job computes them
-  as a second run after the stored columns
-  ([gui/track-table.md](../gui/track-table.md) § "Computing the columns").
+  condition number and the inverse-depth z (built,
+  [gui/track-table.md](../gui/track-table.md) § "Computing the columns").
 - The table can reach the 3D viewer through an optional toggle that dims or
   hides the points its filters reject.
 - Bulk edits on the matched rows are designed for but not built:
@@ -42,11 +44,11 @@ Not decided: see § "Open questions".
 
 The Track Table panel ([gui/track-table.md](../gui/track-table.md)) lists
 every point of a reconstruction as one row, with the stored per-point numbers
-and two pictures of each point as its columns, sorted and filtered by a person.
-This draft adds the three computed columns that say how well a point is
-triangulated, a toggle that applies the table's filter to the 3D view, and a
-pair of wire tools that read and write the panel's query, so an agent can set
-up the view a person sees.
+and two pictures of each point as its columns, and the computed columns that
+say how well a point is triangulated, sorted and filtered by a person. This
+draft adds a toggle that applies the table's filter to the 3D view, and a pair
+of wire tools that read and write the panel's query, so an agent can set up
+the view a person sees.
 
 ## Part 2: what the panel adds
 
@@ -63,45 +65,14 @@ up the view a person sees.
 │ #9873  │ ░▓▓▓▓░ │ ▓▓▓▓▓▓ │    57   │   4.17  │    0.820   │     41.2      │    3.1    │
 │        │ ░▓▓▓▓░ │ ▓▓▓▓▓▓ │         │         │            │               │           │
 ├────────┼────────┼────────┼─────────┼─────────┼────────────┼───────────────┼───────────┤
-│ #830   │ ░░░░░░ │ ▓▓▓▓▓▓ │    18   │     ∞   │    0.610   │     22.7      │    …      │
+│ #830   │ ░░░░░░ │ ▓▓▓▓▓▓ │    18   │     ∞   │    0.610   │     22.7      │    1.8    │
 │        │ ░░░░░░ │ ▓▓▓▓▓▓ │         │         │            │               │           │
 └────────┴────────┴────────┴─────────┴─────────┴────────────┴───────────────┴───────────┘
 ```
 
-- **The default columns** become Point, Crop, Patch, Track, Error, Distance
-  and Ray angle, with Repeat obs. shown by itself as it is now. The Columns
-  menu lists the computed columns beside the stored ones.
-- **The heading rule** for the computed columns: a first click on
-  `condition_number` or `inverse_depth_z` sorts descending, and on
-  `max_ray_angle_deg` ascending, the bad end first. The panel's sort rule for
-  `TrackTableColumn` already says so.
 - **The query** gains the 3D toggle (§ "Filtering the 3D view") as panel
   state, beside the bounds, the sort, the visible columns and the selected-image
   box.
-
-### Computing the computed columns
-
-The quiet table job, *Track Table columns*, computes the stored columns
-([gui/track-table.md](../gui/track-table.md) § "Computing the columns"). It
-runs the computed ones as a second run, so the table is usable while the slow
-columns are still being computed. Computed columns are computed only once a
-visible column, a bound or the sort needs them.
-
-**Progress.** `TrackTable::compute` reports the stored columns and then the
-computed ones, each with its own share of the job's range, so its fraction
-follows the work.
-
-**Waiting behind fast work.** The job is quiet, so it waits behind any
-asked-for fast-queue task: an Open that renders display bitmaps, a Find nearby
-tracks, a bench Fit. While one runs, a column that is not ready yet stays `…`,
-as the live evaluation does in Track View.
-
-A sort or a bound on a computed column that is not ready yet leaves the row
-order as it is, and says *sorting when Ray angle is ready* in the header,
-rather than ordering the rows by partial values. The panel today leaves a
-bound or the sort on a column the cache does not hold yet unapplied, applies
-the rest of the query, and says *Filtering and sorting when … is ready*; for
-the stored columns, which land together, nobody sees the difference.
 
 ### Filtering the 3D view
 
@@ -174,9 +145,10 @@ hover and the quiet table job, step 3b, the Patch column, the Size slider
 (since replaced by the Size dropdown) and `stored_patch_image` moved into
 `patch_pictures`, a module both panels use, and step 4, the Crop column with
 the crop moved into `patch_pictures` and made to take values, the requests
-that wait for the scroll to stop and the reference picks, are built ([gui/track-table.md](../gui/track-table.md)).
+that wait for the scroll to stop and the reference picks, and step 5, the
+computed columns filled by the quiet table job as a second run, are built
+([gui/track-table.md](../gui/track-table.md)).
 
-- **5. The computed columns in the panel**, filled by the quiet table job.
 - **6. Filter the 3D view** (dim and hide).
 - **7. `get_track_table_query` / `set_track_table_query`.**
 

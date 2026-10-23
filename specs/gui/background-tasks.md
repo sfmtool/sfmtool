@@ -42,7 +42,8 @@ proposal's current generation
 ([edits/switch-camera-model.md](edits/switch-camera-model.md) § "The
 proposal's job"). `Track Table columns` is the Track Table panel's table job:
 it computes the stored track table columns the track table cache lacks for the
-node the panel shows ([track-table.md](track-table.md) § "Computing the
+node the panel shows, and once it holds them, as a second run, the computed
+columns the panel shows, bounds or sorts by ([track-table.md](track-table.md) § "Computing the
 columns"). `Track Table reference picks` picks the reference observation of
 each visible point that stores none, for the Track Table's *Crop* column
 ([track-table.md](track-table.md) § "The reference photograph"). The open polls the
@@ -243,7 +244,7 @@ job that switches an open proposal's camera and, for its preview,
 retriangulates its tracks ([edits/switch-camera-model.md](edits/switch-camera-model.md)
 § "The proposal's job"); `Track Table columns`, the Track Table panel's
 table job, which computes the stored track table columns the track table cache
-lacks for the node the panel shows ([track-table.md](track-table.md)
+lacks for the node the panel shows, and then the computed ones the panel needs ([track-table.md](track-table.md)
 § "Computing the columns"); and `Track Table reference picks`, which runs the
 reference-view rule for each point on screen in the Track Table that stores no
 reference observation, one point after another, so its *Crop* cell knows which

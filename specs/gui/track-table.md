@@ -30,11 +30,13 @@ points. Track View ([track-view.md](track-view.md)) shows one track; this panel
 lists all of them.
 
 The panel shows the stored columns, the ones read straight off the
-reconstruction, and two picture columns: **Crop**, the point's reference
+reconstruction, the computed columns that say how well a point is triangulated
+(the largest ray angle, the condition number and the inverse-depth z, computed
+after the stored ones and only when shown, bounded or sorted by; § "Computing
+the columns"), and two picture columns: **Crop**, the point's reference
 photograph cut around its patch (§ "The Crop column"), and **Patch**, its patch
-bitmap (§ "The Patch column"). The computed columns (the largest ray angle, the
-condition number and the inverse-depth z), applying the filter to the 3D view
-and the wire tools that read and write the panel's query are proposed in
+bitmap (§ "The Patch column"). Applying the filter to the 3D view and the wire
+tools that read and write the panel's query are proposed in
 [drafts/track-table.md](../drafts/track-table.md).
 
 ## Placement
@@ -64,19 +66,19 @@ Panels menu opens it.
 ## What it shows
 
 ```
-┌ Track Table ───────────────────────────────────────────────────────────────────────┐
-│ dino  1,204 of 9,941 points  · 3 with repeat observations  [Columns]               │
-│   Size [64 pt ▾]  ☐ Seen in selected image                                         │
-├────────┬────────┬────────┬─────────┬─────────────┬────────────┬──────────┬────────┤
-│ Point  │ Crop   │ Patch  │ Track ▼ │ Repeat obs. │ Error (px) │ Distance │        │
-│        │        │        │[3 ][   ]│[    ][    ] │[   ][1.5]  │[   ][   ]│        │
-├────────┼────────┼────────┼─────────┼─────────────┼────────────┼──────────┼────────┤
-│ #9873  │ ░▓▓▓▓░ │ ▓▓▓▓▓▓ │      57 │           2 │      0.820 │     4.17 │        │
-│        │ ░▓▓▓▓░ │ ▓▓▓▓▓▓ │         │             │            │          │        │
-├────────┼────────┼────────┼─────────┼─────────────┼────────────┼──────────┼────────┤
-│ #830   │ ┌────┐ │ ▓▓▓▓▓▓ │      18 │           0 │      0.610 │        ∞ │        │
-│        │ └────┘ │ ▓▓▓▓▓▓ │         │             │            │          │        │
-└────────┴────────┴────────┴─────────┴─────────────┴────────────┴──────────┴────────┘
+┌ Track Table ─────────────────────────────────────────────────────────────────────────────┐
+│ dino  1,204 of 9,941 points  · 3 with repeat observations  [Columns]                     │
+│   Size [64 pt ▾]  ☐ Seen in selected image                                               │
+├────────┬────────┬────────┬─────────┬─────────────┬────────────┬──────────┬───────────────┤
+│ Point  │ Crop   │ Patch  │ Track ▼ │ Repeat obs. │ Error (px) │ Distance │ Ray angle (°) │
+│        │        │        │[3 ][   ]│[    ][    ] │[   ][1.5]  │[   ][   ]│ [   ][    ]   │
+├────────┼────────┼────────┼─────────┼─────────────┼────────────┼──────────┼───────────────┤
+│ #9873  │ ░▓▓▓▓░ │ ▓▓▓▓▓▓ │      57 │           2 │      0.820 │     4.17 │          41.2 │
+│        │ ░▓▓▓▓░ │ ▓▓▓▓▓▓ │         │             │            │          │               │
+├────────┼────────┼────────┼─────────┼─────────────┼────────────┼──────────┼───────────────┤
+│ #830   │ ┌────┐ │ ▓▓▓▓▓▓ │      18 │           0 │      0.610 │        ∞ │          22.7 │
+│        │ └────┘ │ ▓▓▓▓▓▓ │         │             │            │          │               │
+└────────┴────────┴────────┴─────────┴─────────────┴────────────┴──────────┴───────────────┘
 ```
 
 The second row's crop is an empty frame because its photograph is still being
@@ -96,7 +98,8 @@ decoded.
 - **The columns** are the Point column, which is always shown and is the row's
   key, `#` and the point index, the Crop and Patch picture columns where the
   reconstruction can supply them (§ "The Crop column", § "The Patch column"),
-  and the stored track table columns the reconstruction can supply. A column the reconstruction cannot supply
+  and the track table columns the reconstruction can supply, stored and
+  computed. A column the reconstruction cannot supply
   (`TrackTableColumn::is_available` false, such as `normal_confidence` on a
   file with no such stored column) is left out: it has no heading, no bounds
   and no entry in the Columns menu.
@@ -112,15 +115,31 @@ decoded.
   | Normal conf. | `normal_confidence` | a whole number, 0 to 255 |
   | Lowest ZNCC | `lowest_zncc` | two decimals |
   | Self-sim. radius | `largest_zncc_self_similarity_radius` | three significant digits, at most three decimals |
+  | Ray angle (°) | `max_ray_angle_deg` | three significant digits, at most three decimals; `0` for a point at infinity |
+  | Cond. | `condition_number` | three significant digits, at most three decimals, and from 10⁵ on in scientific notation (`1.23e7`); `-` for a point at infinity |
+  | Inv. depth z | `inverse_depth_z` | as Cond.; `∞` where the depth uncertainty is 0; `-` for a point at infinity |
+
+  The last three are the computed columns
+  ([core/analysis/track-table.md](../core/analysis/track-table.md) § "The
+  columns"). Their hover texts say what makes a value bad and what a point at
+  infinity holds: its sightings cast one ray, so its widest pair is 0°, and
+  its triangulation has no depth to be uncertain about, so it has no condition
+  number and no inverse-depth z. A condition number or an inverse-depth z can
+  run to many orders of magnitude, so a large one is written in scientific
+  notation and its cell stays as narrow as the others.
 
   A point with no value in a column (a NaN in the table: a point at infinity's
-  `x`) shows `-`. A column the cache does not hold yet shows `…`. The number
+  `x`) shows `-`. A column the cache does not hold yet shows `…` in every
+  row, as a computed column does while the table job computes it
+  (§ "Computing the columns"). The number
   cells are right-aligned. There is no column that flags a point at infinity:
   its Distance is `∞`, so a sort by Distance gathers the points at infinity at
   one end and a minimum of `inf` keeps only them.
 - **Columns**, a menu, lists every column the reconstruction can supply with a
-  checkbox, the picture columns first, Crop then Patch, as they are drawn. The
-  default set is Crop, Patch, Track, Error and Distance. **Repeat obs. shows
+  checkbox, the picture columns first, Crop then Patch, as they are drawn,
+  then the stored columns, then the computed ones, in the order their
+  headings are drawn. The default set is Crop, Patch, Track, Error, Distance
+  and Ray angle. **Repeat obs. shows
   itself**: until the person ticks or unticks it in this menu, it is shown
   exactly while the reconstruction on show has a point with repeat
   observations, so a defect is not hidden behind a column nobody thought to
@@ -153,9 +172,12 @@ decoded.
   the *Size* label stays beside its dropdown (§ "The Patch column").
 - **The heading row** sorts by the column clicked. The first click on a
   column sorts the bad end first where the column has one:
-  `repeat_observations`, `rms_error_px` and
+  `repeat_observations`, `rms_error_px`, `condition_number` and
   `largest_zncc_self_similarity_radius` descending, `track_length`,
-  `lowest_zncc` and `normal_confidence` ascending. Every other column sorts
+  `max_ray_angle_deg`, `inverse_depth_z`, `lowest_zncc` and
+  `normal_confidence` ascending. The inverse-depth z is the depth over its
+  uncertainty, and a small one is a point that cannot be told from one at
+  infinity, so its bad end is its small values. Every other column sorts
   ascending first, Distance among them, which puts the points at infinity, at
   `∞`, after every finite distance; a second click puts them first. A second
   click on the same heading reverses the order. A triangle after the heading marks the sorted column, pointing up for
@@ -196,9 +218,19 @@ decoded.
   state"), so it can name a column the newly selected reconstruction cannot
   supply. Its bound and its sort are kept and do not filter or order, and the
   line under the header says *Not filtering or sorting by Normal conf.: dino
-  cannot supply it. The bounds are kept for a reconstruction that can.* A bound
-  or the sort on a column the cache does not hold yet is not applied either, and
-  the line says *Filtering and sorting when {heading} is ready.*
+  cannot supply it. The bounds are kept for a reconstruction that can.*
+- **A query waits for a column that is not ready.** A bound or the sort on a
+  column the cache does not hold yet, such as a computed column while the
+  table job computes it, is not applied, and the line under the header says
+  what waits for which column: *Sorting when Ray angle (°) is ready.*,
+  *Filtering when Cond. is ready.*, or *Filtering and sorting when Ray angle
+  (°), Cond. are ready.* when both wait. Rows already listed for the version
+  on show stay as they are, rather than being ordered or filtered by part of
+  the query, and a change of a bound or the sort made meanwhile waits with
+  them; the whole query applies in the frame the columns land. With no rows
+  listed yet for the version, as when its stored columns first land, the rows
+  are listed by the rest of the query, so the table is usable while the
+  column is computed. The line's hover text says the same.
 
 ## The Patch column
 
@@ -522,6 +554,15 @@ query changed while the rows were out of date: a new sort, new bounds or a
 change of the selected-image box set meanwhile scrolls to the top on landing,
 as it does at any other time.
 
+The old rows keep the computed values they showed, read from the old table,
+dimmed with the rest. Nothing is computed for the new version beyond its
+stored columns until they land: the job computes those first, as it does on a
+first open, and the computed columns the query needs follow as the second run.
+So a table sorted by Ray angle comes back in two steps after an edit: once the
+new stored columns land the rows are listed by the rest of the query, with
+*Sorting when Ray angle (°) is ready.*, and once the new ray angles land they
+are sorted by them (§ "What it shows").
+
 The old rows are read from the old version's table, which the track table
 cache still holds: a node's entry is replaced only when a table for another
 serial is merged (`TrackTableCache::latest` reads it whatever its serial).
@@ -584,19 +625,45 @@ columns* (`Operation::TRACK_TABLE_COLUMNS`;
 [background-tasks.md](background-tasks.md) § "Quiet tasks").
 
 - **It starts when the panel is drawn.** Each frame the panel draws, it names
-  the node it shows (`AppState::want_track_table_columns`), and the frame
-  clears that before the dock draws (`AppState::hide_track_table`), as Track
-  View does for the viewed track. Twice per frame, before the MCP drain and again
-  after the egui pass, `AppState::drive_track_table_columns` queues the job
-  when the cache lacks a stored column that node can supply. A hidden panel
-  costs nothing.
+  the node it shows and the computed columns its query needs
+  (`AppState::want_track_table_columns`), and the frame clears that before
+  the dock draws (`AppState::hide_track_table`), as Track View does for the
+  viewed track. Twice per frame, before the MCP drain and again after the egui
+  pass, `AppState::drive_track_table_columns` queues the job when the cache
+  lacks a stored column that node can supply or a computed column the panel
+  needs. A hidden panel costs nothing.
+- **The stored columns first, the computed ones as a second run.** A job
+  computes either the stored columns the cache lacks or, once it holds them
+  all, the computed columns the panel needs that it lacks, never both
+  (`job::columns_to_compute`). The stored columns read data the
+  reconstruction holds; a computed one loops over every pair of a track's rays
+  or triangulates it, per point, which on a reconstruction of millions of
+  points takes far longer. So the rows, the stored values and the pictures are
+  on screen and can be sorted, bounded and clicked while the computed columns
+  are computed, their cells `…` meanwhile. A first job of computed columns
+  alone gets the whole of its progress range, so `TrackTable::compute`'s
+  split of the range between the stored and the computed pass
+  ([core/analysis/track-table.md](../core/analysis/track-table.md)
+  § "Implementation notes") is not needed here; nothing draws a quiet task's
+  fraction either.
+- **A computed column is computed only when the query needs it**: when it is
+  shown, or holds a bound or the sort (`TrackTableQuery::needed_computed`).
+  Ray angle is shown by default, so it is computed for a table opened with the
+  default columns; the condition number and the inverse-depth z are computed
+  the first time one is ticked in the Columns menu, and a table nobody ticks
+  them in never pays for them. Each run computes the columns needed then; a
+  column ticked while a run is under way is computed by the run after it. A
+  run still waiting in the queue whose columns are no longer the ones needed
+  is replaced.
 - **It computes only what the cache lacks.** The job runs
-  `TrackTable::compute` for the missing stored columns of the value at the
-  cursor when it was queued, and the GUI thread merges that table into the
-  cached one with `TrackTable::merge`, as *Find points* does
+  `TrackTable::compute` for its columns of the value at the cursor when it was
+  queued, and the GUI thread merges that table into the cached one with
+  `TrackTable::merge`, as *Find points* does
   ([core/analysis/track-table.md](../core/analysis/track-table.md) § "Merging
-  tables"). A column either of them computed is kept, so a column `find_points`
-  computed is not computed again for the panel, and the reverse.
+  tables"). The arrays already held are kept, not copied. A column either of
+  them computed is kept, so a column `find_points` computed, a computed one
+  among them, is not computed again for the panel, and a `find_points` call
+  for a column the panel's job computed answers in the frame.
 - **An edit cancels it.** When the document serial at its node's cursor moves
   while the job runs (an edit, an undo, a redo, a slow task landing its
   version) or the node is closed, the job is asked to stop through its
@@ -640,7 +707,7 @@ the frame the selection changed.
 
 | Parameter | Value | Meaning |
 |---|---|---|
-| `DEFAULT_COLUMNS` | Track, Error (px), Distance | The value columns shown before any is hidden or shown. Repeat obs. is shown as well while the reconstruction has a point with repeat observations and the person has not ticked or unticked it. The Crop and Patch columns are shown by default too, where the reconstruction can supply them. |
+| `DEFAULT_COLUMNS` | Track, Error (px), Distance, Ray angle (°) | The value columns shown before any is hidden or shown. Repeat obs. is shown as well while the reconstruction has a point with repeat observations and the person has not ticked or unticked it. The Crop and Patch columns are shown by default too, where the reconstruction can supply them. |
 | `POINT_WIDTH` | 72 pt | The Point column's width. |
 | `MIN_VALUE_WIDTH` | 84 pt | The narrowest a value column is, room for its two bound boxes; a wider heading widens its column. |
 | `PICTURE_SIZES` | 16, 32, 64, 128 pt | The sizes the *Size* dropdown offers. |
@@ -649,6 +716,7 @@ the frame the selection changed.
 | Row height | the picture size + 2 × `PICTURE_PAD`, or the body text height + 6 pt where that is taller, while a picture column is shown; the body text height + 6 pt while none is | Every row's height. |
 | `HOVER_SCALE`, `MAX_HOVER_SIZE` | 3, 256 pt | A picture's hover view is three times the picture size, at most 256 pt. |
 | `TEXTURE_CAPACITY` | 1024 | The pictures the texture cache holds before it releases the ones drawn longest ago, down to three quarters of it. Crops and patches count together. |
+| `SCIENTIFIC_FROM` | 10⁵ | The magnitude from which a condition number or an inverse-depth z is written in scientific notation. |
 | `SCROLL_SETTLE_S` | 0.15 s | How long the rows on screen stay the same before the Crop cells ask for photographs and picks (§ "Requests wait for the scroll to stop"). |
 | Crop outline | 1 pt light grey over 2.5 pt dark | The stroke over a crop in a cell (`CELL_OUTLINE`). |
 
@@ -662,8 +730,8 @@ with one point at infinity:
 - the panel is the tenth tab, titled Track Table, wire name `track_table`, and
   the default layout puts it last in the centre node with the 3D Viewer
   raised;
-- the panel's first frame queues the job, which fills the cache with every
-  stored column the node can supply and no computed one; a column *Find
+- the panel's first frame queues the job, whose first run fills the cache with
+  every stored column the node can supply and no computed one; a column *Find
   points* already cached is kept, the same array, and the panel and
   `find_points` read one table; a hidden panel queues nothing;
 - an edit while the job runs asks it to stop, nothing is merged for the serial
@@ -674,7 +742,8 @@ with one point at infinity:
 - a bound keeps the rows inside it, both ends inclusive, and a row with no
   value fails it; a box that is not a number sets no bound; sorting puts the
   no-value row last in either order;
-- the default columns are Track, Error and Distance; the point at infinity's
+- the default columns are Track, Error, Distance and Ray angle; the point at
+  infinity's
   Distance is `∞`, last ascending and first descending, dropped by a finite
   maximum and kept alone by a minimum of `inf`;
 - with two points holding repeat observations, Repeat obs. is shown without
@@ -706,6 +775,36 @@ with one point at infinity:
   position while the value columns' headings move;
 - the cell text of a point at infinity (`-` for X, `∞` for Distance), the
   grouping of counts and the significant digits.
+
+[track_table_panel/tests/computed.rs](../../crates/sfm-explorer/src/track_table_panel/tests/computed.rs)
+runs the computed columns over the same reconstruction:
+
+- with no computed column shown, bounded or sorted by, the job stops after the
+  stored columns; ticking Cond. queues a second run of that column alone,
+  which merges beside the stored columns and keeps their arrays;
+- with the default columns the first run is the stored columns and the second
+  the ray angle alone;
+- while the second run is held, every row is drawn with `…` in its Ray angle
+  cell, and the values replace them when it lands;
+- a sort on Ray angle while it is computed leaves the rows in the order they
+  had and says *Sorting when Ray angle (°) is ready.*; a bound on Cond. and a
+  bound on Error set meanwhile wait with it, the line becomes *Filtering and
+  sorting when Ray angle (°), Cond. are ready.* and then *Filtering when Cond.
+  is ready.*, and once both have landed the rows are the query's whole answer;
+  a first table with a sort on Ray angle lists its rows by the rest of the
+  query and says the sort waits;
+- an edit while the second run computes asks it to stop and merges nothing,
+  the old rows keep their ray angles on show, and the next run is the new
+  version's stored columns, the computed ones after it;
+- a computed column *Find points* cached is not computed again and its array
+  is kept;
+- the first click on Ray angle and Inv. depth z sorts ascending and on Cond.
+  descending, and the hover text says the click puts the worst first;
+- a point at infinity shows `0` for Ray angle and `-` for Cond. and Inv. depth
+  z, and a large value is written as `1.23e5`.
+
+The MCP tests hold that a `find_points` call ordered by `max_ray_angle_deg`
+answers in the frame from the column the panel's job computed.
 
 [track_table_panel/tests/pictures.rs](../../crates/sfm-explorer/src/track_table_panel/tests/pictures.rs)
 runs the Patch column over the same reconstruction given an 8 × 8 bitmap per
@@ -796,8 +895,8 @@ the panel among the ten.
 
 ## Non-goals
 
-- The computed columns, Filter the 3D view and
-  `get_track_table_query` / `set_track_table_query` are not built.
+- Filter the 3D view and `get_track_table_query` /
+  `set_track_table_query` are not built.
   They are proposed in [drafts/track-table.md](../drafts/track-table.md).
 - The picture columns are not returned on the wire: `find_points` refuses
   `crop` and `patch` ([mcp-server.md](mcp-server.md) § "`find_points`"), and

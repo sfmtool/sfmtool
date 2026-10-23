@@ -928,6 +928,7 @@ cache and the operation it starts are in
   reconstruction and its document serial
   (`AppState::track_tables`, a `TrackTableCache`). The Track Table panel reads
   the same cache, and its quiet table job fills it with the stored columns
+  and the computed ones the panel needs
   ([track-table.md](track-table.md) § "Computing the columns"), so a column
   either computed serves both, and the panel and a call with the same bounds see
   the same points. A call does not start the panel's job; a running one is asked
