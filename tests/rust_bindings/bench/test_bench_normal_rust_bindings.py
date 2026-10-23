@@ -256,7 +256,6 @@ GROWN_VIEW_KEYS = {
     "reference": {"kind", "keypoint"},
     "joined": {
         "kind",
-        "start",
         "shift",
         "grid_zncc",
         "distance",
@@ -264,21 +263,22 @@ GROWN_VIEW_KEYS = {
         "was",
         "keypoint",
     },
-    "shift_only": {"kind", "start", "shift", "grid_zncc", "was", "keypoint"},
+    "shift_only": {"kind", "shift", "grid_zncc", "was", "keypoint"},
     "left_out": {"kind", "reason", "distance", "held_zncc"},
     "not_attempted": {"kind"},
 }
-GROWN_STARTS = {"no_search", "keypoint", "widened", "no_keypoint"}
-GROWN_REFUSALS = {"under_floor", "stopped_early", "too_far", "held_under_floor"}
+GROWN_REFUSALS = {
+    "under_floor",
+    "stopped_early",
+    "too_far",
+    "held_under_floor",
+    "no_keypoint",
+}
 
 # Every keyword of ``grown_plane_normal`` but the fit's, at the Rust default.
 GROWN_DEFAULTS = {
     "spot_window": 7,
     "window_fractions": [1 / 8, 1 / 5, 1 / 3, 1 / 2],
-    "keypoint_search_px": 3.0,
-    "min_keypoint_zncc": 0.7,
-    "spot_search_px": 12.0,
-    "spot_search_step_px": 0.5,
     "zncc_tolerance": 0.01,
     "max_agreement_distance": 3.0,
     "min_held_zncc": 0.5,
@@ -335,7 +335,6 @@ class TestGrownPlaneNormal:
             e["observation"] for e in seq["trace"]
         }
         for view in joined:
-            assert view["start"] in GROWN_STARTS
             assert view["shift"].shape == (2,)
             assert isinstance(view["grid_zncc"], float)
         for view in views:
@@ -354,14 +353,11 @@ class TestGrownPlaneNormal:
                 "combined_sigma_deg",
             }
             assert entry["outcome"] in {"matched", "left_out"}
-            # From the combined plane, then (on the second rung, where that
-            # is refused) from the starting plane at the keypoint-implied
-            # shift and then from the search; a retry after the combination
-            # is the search alone, or nothing where it lands on the implied
-            # shift.
-            assert len(entry["attempts"]) <= 3
+            # From the combined plane, then, on the second rung where that
+            # is refused, from the starting plane; both at the
+            # keypoint-implied shift, with no search.
+            assert 1 <= len(entry["attempts"]) <= 2
             for attempt in entry["attempts"]:
-                assert attempt["start"] in GROWN_STARTS
                 assert attempt["stage_zncc"].dtype == np.float64
                 assert attempt["shift"].shape == (2,)
                 assert np.linalg.norm(attempt["normal"]) == pytest.approx(1.0)
@@ -502,7 +498,6 @@ class TestGrownPlaneNormal:
         for name, value in [
             ("spot_window", 0),
             ("window_fractions", [0.25, 0.0]),
-            ("spot_search_step_px", 0.0),
             ("min_coverage", 1.5),
             ("zncc_tolerance", -1.0),
             ("target_sigma_deg", 0.0),
@@ -515,6 +510,17 @@ class TestGrownPlaneNormal:
         ]:
             with pytest.raises(ValueError, match=name):
                 grown_plane_normal(fitted, edited, images, **{name: value})
+
+    def test_the_search_keywords_are_not_taken(self, fitted, edited, images):
+        # The step trusts the keypoints and has no shift search to set.
+        for name in [
+            "keypoint_search_px",
+            "min_keypoint_zncc",
+            "spot_search_px",
+            "spot_search_step_px",
+        ]:
+            with pytest.raises(TypeError, match=name):
+                grown_plane_normal(fitted, edited, images, **{name: 1.0})
 
     def test_a_cluster_is_refused(self, edited, images):
         _, track = create_cluster(Bench(), 4, "IMG_0042", (142.0, 197.5), radius_px=7.5)

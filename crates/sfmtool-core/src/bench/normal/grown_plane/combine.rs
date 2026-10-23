@@ -14,7 +14,7 @@
 
 use nalgebra::{DMatrix, Matrix2, Vector2};
 
-use super::{GrownPlaneAttempt, GrownPlaneRefusal, Sequence};
+use super::{GrownPlaneRefusal, Sequence};
 use crate::progress::Progress;
 use crate::progress_note;
 
@@ -37,8 +37,6 @@ pub(super) struct Estimate {
     /// which moves its shift to another plane; `None` where nothing could be
     /// read.
     pub(super) normal: Option<DMatrix<f64>>,
-    /// The growth it came from.
-    pub(super) attempt: GrownPlaneAttempt,
 }
 
 /// One pair of views' own plane, matched against each other.

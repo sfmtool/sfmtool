@@ -401,7 +401,6 @@ def run_grown(row, track, edited, ds, grown_options, to_cam, gt):
                 "combined_sigma_deg": entry["combined_sigma_deg"],
                 "attempts": [
                     {
-                        "start": a["start"],
                         "tilt_start": a["tilt_start"],
                         "stage_zncc": a["stage_zncc"].tolist(),
                         "shift": a["shift"].tolist(),

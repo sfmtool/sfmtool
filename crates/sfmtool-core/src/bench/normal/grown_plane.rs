@@ -8,15 +8,18 @@
 //! The reference view's working grid is the template. For every other `in`
 //! view the plane predicts where each grid sample lands in that view's
 //! photograph (`render`); the step fits the plane's tilt and the view's image
-//! shift so that the view's samples agree with the reference's by ZNCC. Within
-//! a view it starts a small window at the grid's centre from the shift the
-//! view's keypoint implies, and only where that growth is refused, from an
-//! exhaustive shift search about that shift; it grows the window outward,
-//! fitting tilt and shift by Levenberg–Marquardt (`solve`) at each size, and
-//! ends with a fit of the whole grid on the robust cell score. A growth stops
-//! early, refused, at a window stage whose score shows it will not reach the
-//! floor. Each growth gives the view's own plane and its information about
-//! the tilt.
+//! shift so that the view's samples agree with the reference's by ZNCC. The
+//! step trusts the keypoints it is given: within a view it starts a small
+//! window at the grid's centre from the shift the view's keypoint implies and
+//! never searches for another shift, so a view whose keypoint is off by more
+//! than the growth recovers is left out. Fitting the keypoints is a separate
+//! step the caller runs. The growth widens the window outward, fitting tilt
+//! and shift by Levenberg–Marquardt (`solve`) at each size, and ends with a
+//! fit of the whole grid on the robust cell score. A growth stops early,
+//! refused, at a window stage whose score shows it will not reach the floor.
+//! Each growth gives the view's own plane and its information about the tilt.
+//! A view with no keypoint, or whose anchor does not project into it, has no
+//! shift to start from and is left out without a growth.
 //!
 //! A selection of views, picked near to far by their angle from the
 //! reference, is grown against the reference, the first from the starting
@@ -41,7 +44,7 @@ use nalgebra::{Matrix2, Vector3};
 use crate::patch::keypoint_localize::resolve_reference;
 use crate::patch::normal_refine::ProjectedImage;
 use crate::patch::reference_view::ReferenceViewOptions;
-use crate::progress::{Phase, Progress};
+use crate::progress::Progress;
 use crate::progress_note;
 use crate::reconstruction::edited::EditedReconstruction;
 
@@ -106,20 +109,6 @@ pub struct GrownPlaneNormalOptions {
     /// the first window's half-width is dropped, and `1/2` covers the whole
     /// grid. `[1/8, 1/5, 1/3, 1/2]`, which is 6, 10, 16, 24 on a 48 grid.
     pub window_fractions: Vec<f64>,
-    /// The first window's search for the view's shift about the shift the
-    /// view's keypoint implies, run when the growth from that shift itself
-    /// is refused: its bound, image px. 3.
-    pub keypoint_search_px: f64,
-    /// The search widens to [`Self::spot_search_px`] when no shift within
-    /// [`Self::keypoint_search_px`] reaches this ZNCC, or the best is on its
-    /// edge. 0.7.
-    pub min_keypoint_zncc: f64,
-    /// The widened search's bound about the keypoint-implied shift, image px:
-    /// also the whole search of a view with no keypoint, which runs about zero
-    /// shift. 12.
-    pub spot_search_px: f64,
-    /// The step of both searches, image px. 0.5.
-    pub spot_search_step_px: f64,
     /// The ZNCC difference noise can produce, `τ`: an estimate's information
     /// about the tilt becomes the covariance `2τ·I⁻¹`. 0.01.
     pub zncc_tolerance: f64,
@@ -188,10 +177,6 @@ impl Default for GrownPlaneNormalOptions {
             working_resolution: None,
             spot_window: 7,
             window_fractions: vec![1.0 / 8.0, 1.0 / 5.0, 1.0 / 3.0, 1.0 / 2.0],
-            keypoint_search_px: 3.0,
-            min_keypoint_zncc: 0.7,
-            spot_search_px: 12.0,
-            spot_search_step_px: 0.5,
             zncc_tolerance: 0.01,
             max_agreement_distance: 3.0,
             min_held_zncc: 0.5,
@@ -216,13 +201,13 @@ impl Default for GrownPlaneNormalOptions {
 
 impl GrownPlaneNormalOptions {
     /// Whether the settings are ones the step takes: a first window of at
-    /// least one sample, finite fractions above zero, finite search bounds of
-    /// at least zero, a positive search step, a positive
-    /// tolerance and target `σ`, a weak-turn bound of at least zero (infinite
-    /// allowed) and a finite turn-to-`σ` ratio of at least zero, at least one
-    /// selected view, a first rung of finite angles of at least zero with its
-    /// aim within its bounds, a finite rung ratio above 1, a coverage in `0 ..= 1` and a finite damping of at
-    /// least zero. The error names the first setting that fails.
+    /// least one sample, finite fractions above zero, a positive tolerance
+    /// and target `σ`, a weak-turn bound of at least zero (infinite allowed)
+    /// and a finite turn-to-`σ` ratio of at least zero, at least one selected
+    /// view, a first rung of finite angles of at least zero with its aim
+    /// within its bounds, a finite rung ratio above 1, a coverage in `0 ..= 1`
+    /// and a finite damping of at least zero. The error names the first
+    /// setting that fails.
     pub fn check(&self) -> Result<(), NormalError> {
         let bad = |name| Err(NormalError::BadGrownPlaneOption(name));
         let positive = |v: f64| v.is_finite() && v > 0.0;
@@ -231,15 +216,6 @@ impl GrownPlaneNormalOptions {
         }
         if !self.window_fractions.iter().all(|&f| positive(f)) {
             return bad("window_fractions");
-        }
-        if !(self.keypoint_search_px.is_finite() && self.keypoint_search_px >= 0.0) {
-            return bad("keypoint_search_px");
-        }
-        if !(self.spot_search_px.is_finite() && self.spot_search_px >= 0.0) {
-            return bad("spot_search_px");
-        }
-        if !positive(self.spot_search_step_px) {
-            return bad("spot_search_step_px");
         }
         if !positive(self.zncc_tolerance) {
             return bad("zncc_tolerance");
@@ -311,27 +287,6 @@ pub enum GrownPlaneTiltStart {
     Combined,
 }
 
-/// How a view's first window found its shift.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GrownPlaneStart {
-    /// It took the shift the view's keypoint implies, with no search; the
-    /// growing windows fit the shift from there. Every view with a keypoint
-    /// whose anchor projects into it is grown this way first.
-    NoSearch,
-    /// The search within [`GrownPlaneNormalOptions::keypoint_search_px`] of
-    /// the shift its keypoint implies, run after the growth from that shift
-    /// itself was refused.
-    Keypoint,
-    /// The search about the keypoint found no shift reaching
-    /// [`GrownPlaneNormalOptions::min_keypoint_zncc`], or its best was on the
-    /// edge, so it widened to [`GrownPlaneNormalOptions::spot_search_px`]
-    /// about the same keypoint-implied shift.
-    Widened,
-    /// The view has no keypoint, or the anchor does not project into it, so
-    /// the whole search ran about zero shift.
-    NoKeypoint,
-}
-
 /// Why a view's growth, a view or a pair was not kept.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GrownPlaneRefusal {
@@ -351,18 +306,20 @@ pub enum GrownPlaneRefusal {
     StoppedEarly,
     /// A pair one of whose views was left out.
     ViewLeftOut,
+    /// The view has no keypoint, or the anchor does not project into it, so
+    /// there is no keypoint-implied shift to grow it from. It is not grown,
+    /// picked or fitted for its shift alone.
+    NoKeypoint,
 }
 
 /// One growth of one view against the reference, and how it was judged.
 #[derive(Debug, Clone, PartialEq)]
 pub struct GrownPlaneAttempt {
-    /// How the first window found its shift.
-    pub start: GrownPlaneStart,
     /// Which plane the windows started from.
     pub tilt_start: GrownPlaneTiltStart,
-    /// Each stage's score: the first window's ZNCC at its starting shift (the
-    /// keypoint-implied one, or the search's best), each later window's ZNCC
-    /// after its fit, and the whole grid's robust score after the last fit.
+    /// Each stage's score: the first window's ZNCC at the keypoint-implied
+    /// shift, each later window's ZNCC after its fit, and the whole grid's
+    /// robust score after the last fit.
     /// A growth that stopped early ([`GrownPlaneRefusal::StoppedEarly`])
     /// ends at the window stage it stopped at, with no whole-grid score.
     pub stage_zncc: Vec<f64>,
@@ -402,16 +359,10 @@ pub struct GrownPlaneTry {
     pub image: u32,
     /// Its angle from the reference as seen from the patch centre, degrees.
     pub angle_deg: f64,
-    /// Its growths, in the order made, up to the first that was taken: from
-    /// the combined plane first where a view had been kept before it, at the
-    /// keypoint-implied shift; then, where none had been kept or a pick of
-    /// the second rung was refused there, from the starting plane, at the
-    /// keypoint-implied shift and from the stage-1 search after. A
-    /// search that lands on the keypoint-implied shift itself is not grown
-    /// again, since that growth was the one just refused, and a view with no
-    /// implied shift is grown from the search alone. A try made because the
-    /// combination left out the view's growth with no search holds the
-    /// searched growth alone.
+    /// Its growths, in the order made, each from the keypoint-implied shift:
+    /// from the combined plane first where a view had been kept before it;
+    /// then, where none had been kept or a pick of the second rung was
+    /// refused there, from the starting plane. One or two growths.
     pub attempts: Vec<GrownPlaneAttempt>,
     pub outcome: GrownPlaneTryOutcome,
     /// The combined plane's outward normal after the try, world frame: the
@@ -484,9 +435,9 @@ pub enum GrownPlaneView {
     /// where it had none. `None` when the step did not turn the patch and
     /// nothing was written.
     Reference { keypoint: Option<[f64; 2]> },
-    /// Its own plane is in the final plane. `start` is that of the growth
-    /// that was kept; `distance` and `held_zncc` are its plane's distance
-    /// from the final plane and its score there. `shift` is its growth's shift
+    /// Its own plane is in the final plane. `distance` and `held_zncc` are
+    /// its kept growth's plane's distance from the final plane and its score
+    /// there. `shift` is its growth's shift
     /// moved to the final plane by its own normal matrix, and `grid_zncc` its
     /// robust grid score there, the same value as `held_zncc`: the
     /// combination's last held check read it at the final plane and that
@@ -496,7 +447,6 @@ pub enum GrownPlaneView {
     /// written. Where the turn was not made, `shift` is its growth's own
     /// shift, not moved.
     Joined {
-        start: GrownPlaneStart,
         shift: [f64; 2],
         grid_zncc: f64,
         distance: Option<f64>,
@@ -504,21 +454,21 @@ pub enum GrownPlaneView {
         was: Option<[f64; 2]>,
         keypoint: Option<[f64; 2]>,
     },
-    /// Not picked by the selection: its shift alone
-    /// was fitted at the final plane, from its first window, over a mid-size
-    /// window and then for two iterations over the whole grid, and it is not
-    /// in the plane. `keypoint` is written when `grid_zncc` reaches
+    /// Not picked by the selection: its shift alone was fitted at the final
+    /// plane from its keypoint-implied shift, over a mid-size window and then
+    /// for two iterations over the whole grid, and it is not in the plane.
+    /// `keypoint` is written when `grid_zncc` reaches
     /// [`GrownPlaneNormalOptions::min_held_zncc`] and the pixel is on the
     /// photograph, and is `None` otherwise.
     ShiftOnly {
-        start: GrownPlaneStart,
         shift: [f64; 2],
         grid_zncc: f64,
         was: Option<[f64; 2]>,
         keypoint: Option<[f64; 2]>,
     },
-    /// Left out, with the refusal, distance and held score that left it out.
-    /// The step writes no keypoint for it.
+    /// Left out, with the refusal, distance and held score that left it out:
+    /// [`GrownPlaneRefusal::NoKeypoint`] for a view with no keypoint-implied
+    /// shift, under every outcome. The step writes no keypoint for it.
     LeftOut {
         reason: GrownPlaneRefusal,
         distance: Option<f64>,
@@ -703,16 +653,22 @@ impl std::fmt::Display for GrownPlaneSequence {
 /// axes through that anchor; each view adds an image shift.
 ///
 /// A view is grown from a plane, the starting plane or the combined plane
-/// of the views kept before it: a 7×7 window at the grid's centre starts from the shift the view's keypoint implies, the window grows
-/// by [`GrownPlaneNormalOptions::window_fractions`] with tilt and shift fitted
+/// of the views kept before it: a 7×7 window at the grid's centre starts from
+/// the shift the view's keypoint implies, the window grows by
+/// [`GrownPlaneNormalOptions::window_fractions`] with tilt and shift fitted
 /// at each size, and a last fit takes the whole grid on the robust cell
 /// score. A growth stops, refused, at a window stage from the second fitted
 /// on that scores under [`GrownPlaneNormalOptions::min_held_zncc`] less 0.25.
-/// A growth from the starting plane under the floor is made again with its
-/// first window's shift found by an exhaustive search about that shift; a
-/// view with no keypoint is grown from the search alone. Each
-/// growth gives the view's own plane and its information about the tilt, the
-/// Schur complement of its normal matrix.
+/// Each growth gives the view's own plane and its information about the
+/// tilt, the Schur complement of its normal matrix.
+///
+/// The step trusts the keypoints it is given and searches for no other
+/// shift: a view whose keypoint is off by more than the growing windows
+/// recover is refused and left out. A caller whose keypoints may be off fits
+/// them first with a separate step, such as [`fit()`](crate::bench::fit()). A
+/// view with no keypoint, or whose anchor does not project into it, has no
+/// shift to start from; it is left out as
+/// [`GrownPlaneRefusal::NoKeypoint`] and never grown.
 ///
 /// The views grown are a selection, picked one at a time near to far in
 /// rungs of angle from the reference: the view nearest
@@ -725,7 +681,8 @@ impl std::fmt::Display for GrownPlaneSequence {
 /// most raises the weakest information measured so far. Each later pick is
 /// grown from the combined plane of the views kept so far, from its
 /// keypoint-implied shift; a pick of the second rung refused there is grown
-/// again from the starting plane, and a pick of a later rung is not. A rung
+/// again from the starting plane, at the same shift, and a pick of a later
+/// rung is not. A rung
 /// waits until one of its views is kept. The selection stops when the combined plane's weakest `σ`
 /// reaches
 /// [`GrownPlaneNormalOptions::target_sigma_deg`] or
@@ -735,13 +692,12 @@ impl std::fmt::Display for GrownPlaneSequence {
 /// [`GrownPlaneNormalOptions::max_agreement_distance`] from the mean by the
 /// Mahalanobis distance is left out, worst first, the mean read again, and
 /// every kept view must still score the floor at the final plane at its shift
-/// moved there. A view left out whose growth had no search is grown once more
-/// from the search, and the planes are combined again. Then up to
+/// moved there. Then up to
 /// [`GrownPlaneNormalOptions::max_pairs`] of the widest pairs of kept views
 /// are matched against each other and their planes added to the mean. Every
-/// view not picked has its shift alone fitted at the final plane: over the
-/// second fitted window's samples, then for two iterations over the whole
-/// grid.
+/// view not picked has its shift alone fitted at the final plane from its
+/// keypoint-implied shift: over the second fitted window's samples, then for
+/// two iterations over the whole grid.
 ///
 /// When at least one view joined, the turn to the final plane is judged: a
 /// turn of at least [`GrownPlaneNormalOptions::weak_turn_deg`] under
@@ -767,8 +723,8 @@ impl std::fmt::Display for GrownPlaneSequence {
 /// `selection` for each pick, `mean` for each combination of planes, `pairs`
 /// with a `pair fit` per pair, `shift-only fit` for each view not picked,
 /// and `turn and write` under the step; `growth` under each try; and
-/// `keypoint search`, `widened search`, `window stage`, `whole-grid stage`
-/// and `judge` under each growth, each noted with what it reached. The
+/// `window stage`, `whole-grid stage` and `judge` under each growth, each
+/// noted with what it reached. The
 /// result is the same with detail on or off.
 ///
 /// # Example
@@ -837,7 +793,7 @@ pub fn grown_plane_normal(
     )
     .map(|k| rows[k]);
 
-    let views = vec![GrownPlaneView::NotAttempted; track.observations.len()];
+    let mut views = vec![GrownPlaneView::NotAttempted; track.observations.len()];
     let Some(reference) = reference else {
         progress_note!(setup, "no reference");
         drop(setup);
@@ -892,19 +848,31 @@ pub fn grown_plane_normal(
     let live = live_cells(&grid.cells, &reference_samples);
     let radii = window_radii(side, options);
 
-    // The candidates: every other row, nearest the reference in angle first,
-    // ties by row.
+    // The candidates: every other row with a keypoint-implied shift, nearest
+    // the reference in angle first, ties by row. A row with none is left out
+    // here, never grown.
     let centre = patch_frame.center.coords;
     let ref_direction =
         (ref_view.cam_from_world.inverse_translation_origin().coords - centre).try_normalize(1e-12);
     let mut candidates: Vec<Candidate<'_>> = rows
         .iter()
         .filter(|&&row| row != reference)
-        .map(|&row| {
+        .filter_map(|&row| {
             let observation = &track.observations[row];
             let view = &images[observation.image as usize];
             let image = ViewImage::new(view, &grid.anchored_patch_frame, side);
             let keypoint = seed_of(observation);
+            let Some(kp_shift) = keypoint.and_then(|kp| {
+                grid.anchor_pixel(&image)
+                    .map(|at| [kp[0] - at[0], kp[1] - at[1]])
+            }) else {
+                views[row] = GrownPlaneView::LeftOut {
+                    reason: GrownPlaneRefusal::NoKeypoint,
+                    distance: None,
+                    held_zncc: None,
+                };
+                return None;
+            };
             let direction = (view.cam_from_world.inverse_translation_origin().coords - centre)
                 .try_normalize(1e-12);
             let angle_deg = match (ref_direction, direction) {
@@ -924,12 +892,8 @@ pub fn grown_plane_normal(
                 }
                 _ => [0.0; 2],
             };
-            let kp_shift = keypoint.and_then(|kp| {
-                grid.anchor_pixel(&image)
-                    .map(|at| [kp[0] - at[0], kp[1] - at[1]])
-            });
             let scale_px = grid.scale_px(&image);
-            Candidate {
+            Some(Candidate {
                 row,
                 image_index: observation.image,
                 image,
@@ -939,7 +903,7 @@ pub fn grown_plane_normal(
                 direction,
                 offset_direction,
                 scale_px,
-            }
+            })
         })
         .collect();
     candidates.sort_by(|a, b| a.angle_deg.total_cmp(&b.angle_deg));
@@ -949,8 +913,9 @@ pub fn grown_plane_normal(
         .collect();
     progress_note!(
         setup,
-        "grid {side}, {} other views, {} windows",
+        "grid {side}, {} other views, {} with no keypoint, {} windows",
         candidates.len(),
+        rows.len() - 1 - candidates.len(),
         radii.len()
     );
     drop(setup);
@@ -1085,7 +1050,6 @@ fn record_views(
                 held,
                 final_shift,
             } => GrownPlaneView::Joined {
-                start: estimate.attempt.start,
                 shift: final_shift.unwrap_or(estimate.shift),
                 grid_zncc: held.unwrap_or(f64::NAN),
                 distance: *distance,
@@ -1093,12 +1057,7 @@ fn record_views(
                 was: candidate.keypoint,
                 keypoint: None,
             },
-            Fate::ShiftOnly {
-                start,
-                shift,
-                grid_zncc,
-            } => GrownPlaneView::ShiftOnly {
-                start: *start,
+            Fate::ShiftOnly { shift, grid_zncc } => GrownPlaneView::ShiftOnly {
                 shift: *shift,
                 grid_zncc: *grid_zncc,
                 was: candidate.keypoint,
@@ -1203,16 +1162,6 @@ fn tilt_start_word(from: GrownPlaneTiltStart) -> &'static str {
     }
 }
 
-/// How a growth's first window found its shift, in a detail phase's note.
-fn start_word(start: GrownPlaneStart) -> &'static str {
-    match start {
-        GrownPlaneStart::NoSearch => "no search",
-        GrownPlaneStart::Keypoint => "keypoint search",
-        GrownPlaneStart::Widened => "widened search",
-        GrownPlaneStart::NoKeypoint => "no keypoint",
-    }
-}
-
 /// Whether a growth was taken, and why not, in a detail phase's note.
 fn verdict_words(refusal: Option<GrownPlaneRefusal>) -> &'static str {
     match refusal {
@@ -1222,13 +1171,8 @@ fn verdict_words(refusal: Option<GrownPlaneRefusal>) -> &'static str {
         Some(GrownPlaneRefusal::HeldUnderFloor) => "refused held under the floor",
         Some(GrownPlaneRefusal::ViewLeftOut) => "refused, a view left out",
         Some(GrownPlaneRefusal::StoppedEarly) => "refused, stopped early",
+        Some(GrownPlaneRefusal::NoKeypoint) => "refused, no keypoint",
     }
-}
-
-/// Whether two shifts are the same to within rounding, image px: a search
-/// lattice point that is meant to be the keypoint-implied shift itself.
-fn same_shift(a: [f64; 2], b: [f64; 2]) -> bool {
-    (a[0] - b[0]).abs() < 1e-9 && (a[1] - b[1]).abs() < 1e-9
 }
 
 /// Whether `pixel` lies on `view`'s photograph, `[0, width) × [0, height)`.
@@ -1264,8 +1208,8 @@ struct Candidate<'a> {
     keypoint: Option<[f64; 2]>,
     /// The keypoint less the anchor's projection: the shift the keypoint
     /// implies, the same at every tilt since every plane passes through the
-    /// anchor.
-    kp_shift: Option<[f64; 2]>,
+    /// anchor. A row with no such shift is not a candidate.
+    kp_shift: [f64; 2],
     angle_deg: f64,
     /// The unit direction from the patch centre to its camera.
     direction: Option<Vector3<f64>>,
@@ -1315,7 +1259,6 @@ enum Fate {
         final_shift: Option<[f64; 2]>,
     },
     ShiftOnly {
-        start: GrownPlaneStart,
         shift: [f64; 2],
         grid_zncc: f64,
     },
@@ -1378,7 +1321,6 @@ impl Sequence<'_, '_, '_> {
             shift: grown.attempt.shift,
             information,
             normal,
-            attempt: grown.attempt.clone(),
         }
     }
 
@@ -1417,12 +1359,7 @@ impl Sequence<'_, '_, '_> {
                     held: *held,
                     final_shift: Some(self.moved_shift(estimate, tilt)),
                 },
-                Fate::ShiftOnly {
-                    start,
-                    shift,
-                    grid_zncc,
-                } => Fate::ShiftOnly {
-                    start: *start,
+                Fate::ShiftOnly { shift, grid_zncc } => Fate::ShiftOnly {
                     shift: *shift,
                     grid_zncc: *grid_zncc,
                 },
@@ -1440,71 +1377,33 @@ impl Sequence<'_, '_, '_> {
             .collect()
     }
 
-    /// The growths of candidate `i` from the plane `from`, each judged on
-    /// its own, up to the first that passes the floor: from the
-    /// keypoint-implied shift with no search where `unsearched` and the view
-    /// has one, then from the stage-1 search at that plane, unless the search
-    /// lands on the implied shift or `first_only` and a growth was made
-    /// already. Each growth opens a `growth` phase on `phase`.
-    fn growths(
+    /// The growth of candidate `i` from the plane `from`, from its
+    /// keypoint-implied shift, judged on its own, in a `growth` phase on
+    /// `phase`.
+    fn growth(
         &self,
         i: usize,
-        unsearched: bool,
         from: (GrownPlaneTiltStart, [f64; 2]),
-        first_only: bool,
         phase: &Progress<'_>,
-    ) -> Result<Vec<Judged>, NormalError> {
-        let candidate = &self.candidates[i];
+    ) -> Result<Judged, NormalError> {
+        let shift = self.candidates[i].kp_shift;
         let rows = self.grid.window(self.radii[0]);
-        let tilt = from.1;
-        let mut judged = Vec::new();
-        let try_from = |first, judged: &mut Vec<Judged>, growth: &mut Phase<'_>| {
-            let renders_before = self.renders[i].renders();
-            let grown = self.grow(i, from, first, growth)?;
-            let j = self.judge(i, grown, growth);
-            let attempt = &j.grown.attempt;
-            let taken = attempt.refusal.is_none();
-            progress_note!(
-                *growth,
-                "{}, {}: first window ZNCC {:.3}, grid ZNCC {:.3}, {}, {} renders",
-                tilt_start_word(attempt.tilt_start),
-                start_word(attempt.start),
-                attempt.stage_zncc[0],
-                attempt.grid_zncc,
-                verdict_words(attempt.refusal),
-                self.renders[i].renders() - renders_before
-            );
-            judged.push(j);
-            Ok::<bool, NormalError>(taken)
-        };
-        if unsearched {
-            if let Some(shift) = candidate.kp_shift {
-                let mut growth = phase.detail_phase("growth");
-                let z = self.spot_zncc(i, tilt, &rows, shift);
-                if try_from(
-                    (z, shift, GrownPlaneStart::NoSearch),
-                    &mut judged,
-                    &mut growth,
-                )? || first_only
-                {
-                    return Ok(judged);
-                }
-            }
-        }
         let mut growth = phase.detail_phase("growth");
-        let first = self.search_first_window(i, tilt, &rows, &growth);
-        // A search that lands on the implied shift would repeat the growth
-        // with no search, refused or never wanted.
-        if candidate.kp_shift.is_some_and(|s| same_shift(s, first.1)) {
-            progress_note!(
-                growth,
-                "{}: the search landed on the implied shift, not grown",
-                start_word(first.2)
-            );
-            return Ok(judged);
-        }
-        try_from(first, &mut judged, &mut growth)?;
-        Ok(judged)
+        let z = self.spot_zncc(i, from.1, &rows, shift);
+        let renders_before = self.renders[i].renders();
+        let grown = self.grow(i, from, (z, shift), &growth)?;
+        let j = self.judge(i, grown, &growth);
+        let attempt = &j.grown.attempt;
+        progress_note!(
+            growth,
+            "{}: first window ZNCC {:.3}, grid ZNCC {:.3}, {}, {} renders",
+            tilt_start_word(attempt.tilt_start),
+            attempt.stage_zncc[0],
+            attempt.grid_zncc,
+            verdict_words(attempt.refusal),
+            self.renders[i].renders() - renders_before
+        );
+        Ok(j)
     }
 
     /// Judge a growth of candidate `i` on its own, in a `judge` phase: taken
@@ -1525,7 +1424,6 @@ impl Sequence<'_, '_, '_> {
                 shift: grown.attempt.shift,
                 information: Matrix2::zeros(),
                 normal: None,
-                attempt: grown.attempt.clone(),
             };
             return Judged { grown, estimate };
         }
@@ -1543,15 +1441,11 @@ impl Sequence<'_, '_, '_> {
             self.renders[i].renders() - renders_before
         );
         drop(phase);
-        let estimate = Estimate {
-            attempt: grown.attempt.clone(),
-            ..estimate
-        };
         Judged { grown, estimate }
     }
 
     /// Grow candidate `i` from the plane `from`, from the first window's
-    /// ZNCC, shift and start in `first`: the growing windows, and the whole
+    /// ZNCC and shift in `first`: the growing windows, and the whole
     /// grid's robust fit. A window stage from [`EARLY_REFUSAL_FROM_STAGE`] on
     /// that scores under the floor less [`EARLY_REFUSAL_MARGIN`] ends the
     /// growth there, refused ([`GrownPlaneRefusal::StoppedEarly`]).
@@ -1559,11 +1453,11 @@ impl Sequence<'_, '_, '_> {
         &self,
         i: usize,
         from: (GrownPlaneTiltStart, [f64; 2]),
-        first: (f64, [f64; 2], GrownPlaneStart),
+        first: (f64, [f64; 2]),
         progress: &Progress<'_>,
     ) -> Result<Grown, NormalError> {
         let render = &self.renders[i];
-        let (z1, shift, start) = first;
+        let (z1, shift) = first;
         let (tilt_start, t0) = from;
         let mut p = vec![t0[0], t0[1], shift[0], shift[1]];
         let mut stage_zncc = vec![z1];
@@ -1593,7 +1487,6 @@ impl Sequence<'_, '_, '_> {
                 return Ok(Grown {
                     tilt,
                     attempt: GrownPlaneAttempt {
-                        start,
                         tilt_start,
                         stage_zncc,
                         shift: [p[2], p[3]],
@@ -1621,7 +1514,6 @@ impl Sequence<'_, '_, '_> {
         Ok(Grown {
             tilt,
             attempt: GrownPlaneAttempt {
-                start,
                 tilt_start,
                 stage_zncc,
                 shift: [p[2], p[3]],
@@ -1640,67 +1532,6 @@ impl Sequence<'_, '_, '_> {
         let mut samples = Samples::new(self.grid.side * self.grid.side, render.view.channels);
         render.view.sample(&pixels, rows, shift, &mut samples);
         render::zncc(self.reference, &samples, rows, self.options.min_coverage)
-    }
-
-    /// The first window's shift at the plane `tilt` by the exhaustive search
-    /// about the keypoint-implied shift, widened about the same shift when it
-    /// finds nothing, or about zero shift for a view with no keypoint; its
-    /// ZNCC, the shift and how it was found.
-    fn search_first_window(
-        &self,
-        i: usize,
-        tilt: [f64; 2],
-        rows: &[usize],
-        progress: &Progress<'_>,
-    ) -> (f64, [f64; 2], GrownPlaneStart) {
-        let render = &self.renders[i];
-        let pixels = self.grid.project(render.view, tilt, rows);
-        let mut samples = Samples::new(self.grid.side * self.grid.side, render.view.channels);
-        let step = self.options.spot_search_step_px;
-        let mut search = |name: &'static str, centre: [f64; 2], reach: f64, about: &str| {
-            let mut phase = progress.detail_phase(name);
-            let n = (2.0 * reach / step + 1e-9).floor() as i64;
-            let mut best = (f64::NEG_INFINITY, centre);
-            for iy in 0..=n {
-                for ix in 0..=n {
-                    let shift = [
-                        centre[0] - reach + ix as f64 * step,
-                        centre[1] - reach + iy as f64 * step,
-                    ];
-                    render.view.sample(&pixels, rows, shift, &mut samples);
-                    let z = render::zncc(self.reference, &samples, rows, self.options.min_coverage);
-                    if z > best.0 {
-                        best = (z, shift);
-                    }
-                }
-            }
-            progress_note!(
-                phase,
-                "\u{b1}{reach} px about {about}: best ZNCC {:.3} at ({:.2}, {:.2}) px from it, {} shifts",
-                best.0,
-                best.1[0] - centre[0],
-                best.1[1] - centre[1],
-                (n + 1) * (n + 1)
-            );
-            best
-        };
-        let wide = self.options.spot_search_px;
-        match self.candidates[i].kp_shift {
-            Some(base) => {
-                let reach = self.options.keypoint_search_px;
-                let (z, t) = search("keypoint search", base, reach, "the implied shift");
-                let off = (t[0] - base[0]).abs().max((t[1] - base[1]).abs());
-                if z >= self.options.min_keypoint_zncc && off < reach - 1e-9 {
-                    return (z, t, GrownPlaneStart::Keypoint);
-                }
-                let (z, t) = search("widened search", base, wide, "the implied shift");
-                (z, t, GrownPlaneStart::Widened)
-            }
-            None => {
-                let (z, t) = search("widened search", [0.0; 2], wide, "zero shift");
-                (z, t, GrownPlaneStart::NoKeypoint)
-            }
-        }
     }
 }
 

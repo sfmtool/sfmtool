@@ -25,8 +25,8 @@ use sfmtool_core::bench::{
     GridPlaneDetail, GridPlaneFitModel, GridPlaneIteration, GridPlaneNormalOptions,
     GridPlaneOutcome, GridPlaneRender, GridPlaneTile, GridPlaneView, GrownPlaneAttempt,
     GrownPlaneNormalOptions, GrownPlaneOutcome, GrownPlanePair, GrownPlanePick, GrownPlaneRefusal,
-    GrownPlaneSequence, GrownPlaneStart, GrownPlaneTiltStart, GrownPlaneTryOutcome, GrownPlaneView,
-    NormalEstimate, NormalReport, PieceLayout,
+    GrownPlaneSequence, GrownPlaneTiltStart, GrownPlaneTryOutcome, GrownPlaneView, NormalEstimate,
+    NormalReport, PieceLayout,
 };
 use sfmtool_core::patch::cell_plane_normals::{CellPlaneStatus, NormalDeterminacy};
 use sfmtool_core::patch::cluster_refine::{CellStatus, LoopStop};
@@ -465,16 +465,6 @@ fn tilt_start_name(from: GrownPlaneTiltStart) -> &'static str {
     }
 }
 
-/// The word for how a grown-plane view's first window found its shift.
-fn start_name(start: GrownPlaneStart) -> &'static str {
-    match start {
-        GrownPlaneStart::NoSearch => "no_search",
-        GrownPlaneStart::Keypoint => "keypoint",
-        GrownPlaneStart::Widened => "widened",
-        GrownPlaneStart::NoKeypoint => "no_keypoint",
-    }
-}
-
 /// The word for why a grown-plane growth did not join.
 fn refusal_name(refusal: GrownPlaneRefusal) -> &'static str {
     match refusal {
@@ -483,6 +473,7 @@ fn refusal_name(refusal: GrownPlaneRefusal) -> &'static str {
         GrownPlaneRefusal::HeldUnderFloor => "held_under_floor",
         GrownPlaneRefusal::ViewLeftOut => "view_left_out",
         GrownPlaneRefusal::StoppedEarly => "stopped_early",
+        GrownPlaneRefusal::NoKeypoint => "no_keypoint",
     }
 }
 
@@ -505,7 +496,6 @@ fn maybe_vector<'py, const N: usize>(
 /// The dict form of one growth of one view.
 fn attempt_dict<'py>(py: Python<'py>, attempt: &GrownPlaneAttempt) -> PyResult<Bound<'py, PyDict>> {
     let d = PyDict::new(py);
-    d.set_item("start", start_name(attempt.start))?;
     d.set_item("tilt_start", tilt_start_name(attempt.tilt_start))?;
     d.set_item(
         "stage_zncc",
@@ -529,7 +519,6 @@ fn grown_view_dict<'py>(py: Python<'py>, view: &GrownPlaneView) -> PyResult<Boun
             d.set_item("keypoint", maybe_vector(py, *keypoint))?;
         }
         GrownPlaneView::Joined {
-            start,
             shift,
             grid_zncc,
             distance,
@@ -538,7 +527,6 @@ fn grown_view_dict<'py>(py: Python<'py>, view: &GrownPlaneView) -> PyResult<Boun
             keypoint,
         } => {
             d.set_item("kind", "joined")?;
-            d.set_item("start", start_name(*start))?;
             d.set_item("shift", PyArray1::from_vec(py, shift.to_vec()))?;
             d.set_item("grid_zncc", *grid_zncc)?;
             d.set_item("distance", *distance)?;
@@ -547,14 +535,12 @@ fn grown_view_dict<'py>(py: Python<'py>, view: &GrownPlaneView) -> PyResult<Boun
             d.set_item("keypoint", maybe_vector(py, *keypoint))?;
         }
         GrownPlaneView::ShiftOnly {
-            start,
             shift,
             grid_zncc,
             was,
             keypoint,
         } => {
             d.set_item("kind", "shift_only")?;
-            d.set_item("start", start_name(*start))?;
             d.set_item("shift", PyArray1::from_vec(py, shift.to_vec()))?;
             d.set_item("grid_zncc", *grid_zncc)?;
             d.set_item("was", maybe_vector(py, *was))?;
@@ -1086,18 +1072,19 @@ fn grid_plane_normal(
 /// The reference and the working grid are :func:`grid_plane_normal`'s. A view
 /// is grown against the reference from the starting plane: a
 /// ``spot_window``-sample window (default 7) at the grid's centre starts from
-/// the shift the view's keypoint implies, with no search; where that growth
-/// is refused, it finds the shift by a search within ``keypoint_search_px``
-/// (default 3.0) of that shift, widened to ``spot_search_px`` (default 12.0) when no shift reaches
-/// ``min_keypoint_zncc`` (default 0.7) or the best is on the edge, in steps
-/// of ``spot_search_step_px`` (default 0.5); the window then grows through
+/// the shift the view's keypoint implies; the window then grows through
 /// half-widths of ``window_fractions`` of the grid's side (default
 /// ``[1/8, 1/5, 1/3, 1/2]``, ``1/2`` covering the whole grid), with tilt and
 /// shift fitted by Levenberg-Marquardt at each size (``max_iterations``,
 /// default 20, ``initial_damping``, default 1e-3, and ``min_improvement``,
 /// default 1e-6), on a Jacobian read from the image gradients of the render
 /// it is linearised at. Each growth gives the view's own plane and its
-/// information about the tilt.
+/// information about the tilt. The step trusts the keypoints it is given and
+/// searches for no other shift: a view whose keypoint is off by more than the
+/// growth recovers is left out, so a caller whose keypoints may be off runs
+/// :func:`fit` first. A view with no keypoint, or whose anchor does not
+/// project into it, is left out with reason ``"no_keypoint"`` and never
+/// grown.
 ///
 /// The views grown are a selection, picked one at a time near to far by
 /// their angle from the reference, in rungs, until the combined weakest ``σ``
@@ -1111,14 +1098,16 @@ fn grid_plane_normal(
 /// the view whose information, predicted from its geometry, most raises the
 /// weakest measured so far. Each later pick is grown from the combined plane
 /// so far; a pick of the second rung refused there is grown again from the
-/// starting plane, and a pick of a later rung is not. Their planes are combined by a robust
+/// starting plane, at the same keypoint-implied shift, and a pick of a later
+/// rung is not. Their planes are combined by a robust
 /// information-weighted mean, never by fitting the views together, leaving
 /// out the furthest estimate past ``max_agreement_distance`` (default 3.0)
 /// by the Mahalanobis distance until none is, and then any view under
 /// ``min_held_zncc`` at the mean. Up to ``max_pairs`` (default 3) of the
 /// widest pairs of kept views are then matched against each other and
 /// combined with the views' planes by the robust mean, and the shift alone
-/// of every view not picked is fitted at the final plane. ``zncc_tolerance``
+/// of every view not picked is fitted at the final plane from its
+/// keypoint-implied shift. ``zncc_tolerance``
 /// (default 0.01) turns information into a covariance, ``min_coverage``
 /// (default 0.6) is the share of a ZNCC's samples that must land on the
 /// photograph, and
@@ -1166,23 +1155,23 @@ fn grid_plane_normal(
 ///
 /// ``views`` has one dict per observation, ``kind`` naming what the step made
 /// of it: ``"reference"`` with ``keypoint`` (the one written, or ``None``);
-/// ``"joined"`` with ``start`` (``"no_search"``, ``"keypoint"``,
-/// ``"widened"`` or ``"no_keypoint"``), ``distance`` and ``held_zncc`` (its
+/// ``"joined"`` with ``distance`` and ``held_zncc`` (its
 /// plane's distance from the final plane and its score there), ``shift``
 /// (``(2,)``, image px, moved to the final plane) and
 /// ``grid_zncc`` at the final plane, ``was`` (the keypoint before the step,
 /// or ``None``) and ``keypoint`` (the one written, or ``None`` off the
-/// photograph); ``"shift_only"`` with ``start``, ``shift``, ``grid_zncc``,
+/// photograph); ``"shift_only"`` with ``shift``, ``grid_zncc``,
 /// ``was`` and ``keypoint`` (``None`` under the floor or off the photograph);
 /// ``"left_out"`` with ``reason`` (``"under_floor"``, ``"stopped_early"``,
-/// ``"too_far"`` or ``"held_under_floor"``), ``distance`` and ``held_zncc``; or
+/// ``"too_far"``, ``"held_under_floor"`` or ``"no_keypoint"``), ``distance``
+/// and ``held_zncc``; or
 /// ``"not_attempted"``. ``trace`` has one dict per try in the order made:
 /// ``observation``, ``image``, ``angle_deg`` (from the reference, seen from
 /// the patch centre), ``outcome`` (``"matched"`` or ``"left_out"``),
 /// ``combined_normal`` (the plane of the views picked so far, this one among
 /// them, or ``None`` for a try that left the view out or came after the
 /// selection), ``combined_sigma_deg`` (``NaN`` then) and ``attempts``, each
-/// with ``start``, ``stage_zncc`` (a float64 array, one score per stage,
+/// with ``stage_zncc`` (a float64 array, one score per stage,
 /// ending at the window stage a growth stopped early at), ``shift``,
 /// ``normal`` (the growth's own plane), ``grid_zncc`` and ``sigma_deg`` (its
 /// own weakest ``σ``), both ``NaN`` for a growth that stopped early,
@@ -1221,10 +1210,6 @@ fn grid_plane_normal(
     working_resolution = None,
     spot_window = None,
     window_fractions = None,
-    keypoint_search_px = None,
-    min_keypoint_zncc = None,
-    spot_search_px = None,
-    spot_search_step_px = None,
     zncc_tolerance = None,
     max_agreement_distance = None,
     min_held_zncc = None,
@@ -1257,10 +1242,6 @@ fn grown_plane_normal(
     working_resolution: Option<u32>,
     spot_window: Option<u32>,
     window_fractions: Option<Vec<f64>>,
-    keypoint_search_px: Option<f64>,
-    min_keypoint_zncc: Option<f64>,
-    spot_search_px: Option<f64>,
-    spot_search_step_px: Option<f64>,
     zncc_tolerance: Option<f64>,
     max_agreement_distance: Option<f64>,
     min_held_zncc: Option<f64>,
@@ -1289,10 +1270,6 @@ fn grown_plane_normal(
         working_resolution,
         spot_window: spot_window.unwrap_or(defaults.spot_window),
         window_fractions: window_fractions.unwrap_or_else(|| defaults.window_fractions.clone()),
-        keypoint_search_px: keypoint_search_px.unwrap_or(defaults.keypoint_search_px),
-        min_keypoint_zncc: min_keypoint_zncc.unwrap_or(defaults.min_keypoint_zncc),
-        spot_search_px: spot_search_px.unwrap_or(defaults.spot_search_px),
-        spot_search_step_px: spot_search_step_px.unwrap_or(defaults.spot_search_step_px),
         zncc_tolerance: zncc_tolerance.unwrap_or(defaults.zncc_tolerance),
         max_agreement_distance: max_agreement_distance.unwrap_or(defaults.max_agreement_distance),
         min_held_zncc: min_held_zncc.unwrap_or(defaults.min_held_zncc),
