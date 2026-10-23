@@ -18,6 +18,8 @@ use crate::reconstruction::{
     SfmrReconstruction,
 };
 
+mod observation_quality;
+
 /// The demo reconstruction of `n` points, each seen by two adjacent cameras
 /// of an arc of eight.
 fn demo(n: usize) -> SfmrReconstruction {
@@ -67,7 +69,7 @@ fn wire_names_are_unique_and_round_trip() {
 }
 
 #[test]
-fn only_the_ray_angle_and_the_diagnostics_are_computed() {
+fn the_computed_columns_are_the_ones_that_project_triangulate_or_read() {
     let computed: Vec<TrackTableColumn> = TrackTableColumn::ALL
         .into_iter()
         .filter(|c| c.cost() == ColumnCost::Computed)
@@ -75,11 +77,20 @@ fn only_the_ray_angle_and_the_diagnostics_are_computed() {
     assert_eq!(
         computed,
         [
+            TrackTableColumn::BackFacingObservations,
+            TrackTableColumn::LargestErrorPx,
+            TrackTableColumn::ReferenceZnccSelfSimilarityRadius,
+            TrackTableColumn::ReferenceZnccSelfSimilarityElongation,
             TrackTableColumn::MaxRayAngleDeg,
+            TrackTableColumn::LargestViewingAngleDeg,
             TrackTableColumn::ConditionNumber,
             TrackTableColumn::InverseDepthZ
         ]
     );
+    // The enum's order is ALL's, which the slots are indexed by.
+    for (k, column) in TrackTableColumn::ALL.into_iter().enumerate() {
+        assert_eq!(column.ordinal(), k, "{column:?}");
+    }
     let f64_columns: Vec<TrackTableColumn> = TrackTableColumn::ALL
         .into_iter()
         .filter(|c| c.is_f64())

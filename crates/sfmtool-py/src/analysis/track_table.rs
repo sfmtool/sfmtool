@@ -34,13 +34,18 @@ fn all_names() -> String {
 /// on each call and never stored.
 ///
 /// Each column is one value per point under a fixed name: ``track_length``,
-/// ``repeat_observations``, ``rms_error_px``, ``x``, ``y``, ``z``,
-/// ``centroid_distance``, ``normal_confidence``, ``lowest_zncc``,
-/// ``largest_zncc_self_similarity_radius``, ``max_ray_angle_deg``,
-/// ``condition_number`` and ``inverse_depth_z``. These are the numbers the
-/// viewer shows for the same points. A point with no value in a column (a
-/// point at infinity has no ``x``) holds NaN there; a point at infinity's
-/// ``centroid_distance`` is ``inf``.
+/// ``repeat_observations``, ``back_facing_observations``, ``rms_error_px``,
+/// ``largest_error_px``, ``x``, ``y``, ``z``, ``centroid_distance``,
+/// ``normal_confidence``, ``lowest_zncc``,
+/// ``lowest_blur_matched_bitmap_zncc``,
+/// ``largest_zncc_self_similarity_radius``,
+/// ``reference_zncc_self_similarity_radius``,
+/// ``reference_zncc_self_similarity_elongation``, ``max_ray_angle_deg``,
+/// ``largest_viewing_angle_deg``, ``condition_number`` and
+/// ``inverse_depth_z``. These are the numbers the viewer shows for the same
+/// points. A point with no value in a column (a point at infinity has no
+/// ``x``, a point with no patch frame no ``largest_viewing_angle_deg``) holds
+/// NaN there; a point at infinity's ``centroid_distance`` is ``inf``.
 ///
 /// Args:
 ///     recon: An :class:`SfmrReconstruction`, or an
@@ -57,8 +62,13 @@ fn all_names() -> String {
 ///     ValueError: where a name is not a column, or names a column the
 ///         reconstruction cannot supply (``normal_confidence`` without that
 ///         column, ``lowest_zncc`` without observation confidences,
+///         ``lowest_blur_matched_bitmap_zncc`` and
 ///         ``largest_zncc_self_similarity_radius`` without observation
-///         readings, ``centroid_distance`` with no posed image).
+///         readings, the two ``reference_zncc_self_similarity_`` columns
+///         without readings or patch bitmaps, ``largest_error_px`` without
+///         inline keypoints, ``largest_viewing_angle_deg`` and
+///         ``back_facing_observations`` without patch frames,
+///         ``centroid_distance`` with no posed image).
 ///     TypeError: where ``recon`` is neither reconstruction type.
 #[pyfunction]
 #[pyo3(signature = (recon, columns = None))]

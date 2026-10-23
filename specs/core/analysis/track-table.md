@@ -11,7 +11,11 @@ those named values. The table is computed on demand from one version of a
 reconstruction and never stored: no file format holds it. A query over the
 table then answers questions such as "which are the worst points?" or "which
 points does this image see, and which of them are badly triangulated?" by
-returning the matching point indexes in a chosen order.
+returning the matching point indexes in a chosen order. Besides the
+triangulation, the columns say how well each observation fits the point (the
+largest reprojection error, the lowest score against the stored patch bitmap)
+and how good the point's patch is (how distinctive it is as its reference view
+sees it, and how obliquely its views see it).
 
 The definitions live in one place so that every surface that quotes a number
 quotes the same one. The viewer's Track View header and its Image Detail heat
@@ -26,9 +30,11 @@ table ([gui/mcp-server.md](../../gui/mcp-server.md) § "`find_points`").
 The table and the query live in
 [track_table.rs](../../../crates/sfmtool-core/src/analysis/track_table.rs),
 with the query in
-[track_table/query.rs](../../../crates/sfmtool-core/src/analysis/track_table/query.rs)
-and the per-point triangulation numbers in
-[track_table/track_geometry.rs](../../../crates/sfmtool-core/src/analysis/track_table/track_geometry.rs),
+[track_table/query.rs](../../../crates/sfmtool-core/src/analysis/track_table/query.rs),
+the per-point triangulation numbers in
+[track_table/track_geometry.rs](../../../crates/sfmtool-core/src/analysis/track_table/track_geometry.rs)
+and the columns read per observation in
+[track_table/observation_quality.rs](../../../crates/sfmtool-core/src/analysis/track_table/observation_quality.rs),
 all re-exported from `sfmtool_core::analysis::track_table`. The table is
 bound as `sfmtool.analysis.track_table`.
 
@@ -36,16 +42,18 @@ bound as `sfmtool.analysis.track_table`.
 /// One named per-point value. The wire name is the stable identifier.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum TrackTableColumn {
-    TrackLength, RepeatObservations, RmsErrorPx, X, Y, Z, CentroidDistance,
-    NormalConfidence, LowestZncc, LargestZnccSelfSimilarityRadius,
-    MaxRayAngleDeg, ConditionNumber, InverseDepthZ,
+    TrackLength, RepeatObservations, BackFacingObservations, RmsErrorPx,
+    LargestErrorPx, X, Y, Z, CentroidDistance, NormalConfidence, LowestZncc,
+    LowestBlurMatchedBitmapZncc, LargestZnccSelfSimilarityRadius,
+    ReferenceZnccSelfSimilarityRadius, ReferenceZnccSelfSimilarityElongation,
+    MaxRayAngleDeg, LargestViewingAngleDeg, ConditionNumber, InverseDepthZ,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum ColumnCost { Stored, Computed }
 
 impl TrackTableColumn {
-    pub const ALL: [TrackTableColumn; 13];
+    pub const ALL: [TrackTableColumn; 19];
     pub fn wire_name(self) -> &'static str;
     pub fn from_wire_name(name: &str) -> Option<Self>;
     pub fn cost(self) -> ColumnCost;
@@ -209,21 +217,32 @@ not computed again. The viewer's track table cache does this
 
 A column belongs to one of two **cost classes**. A **stored** column is read
 from data the reconstruction already holds, in O(1) or O(track length) per
-point. A **computed** column costs a triangulation or a pass over every pair of
-observations, per point. The class decides only where a caller runs the work;
-it makes no difference to what a column means.
+point. A **computed** column costs a triangulation, a pass over every pair of
+observations, a projection or a viewing angle of every observation, or a
+self-similarity reading of a patch bitmap, per point. The class decides only
+where a caller runs the work; it makes no difference to what a column means.
+The class is the column's, not the reconstruction's: the two reference
+columns are computed though most of their values may come from a stored
+reading, because a point without one reads its bitmap, which is the costliest
+work the table does.
 
 | Wire name | Class | Definition | Point at infinity | Absent when |
 |---|---|---|---|---|
 | `track_length` | stored | number of observations in the track | defined | never |
 | `repeat_observations` | stored | the track's observations beyond one per image: `track_length` less the number of distinct images among them. Anything but 0 is a defect in the reconstruction, one image holding several observations of the point, which a GLOMAP solve can produce; it is kept so that it can be found and fixed | defined | never |
+| `back_facing_observations` | computed | the number of the track's observations whose viewing angle (as `largest_viewing_angle_deg` reads it) is `90°` or more: **back-facing**, edge on or from behind, where no patch is drawn and which the reference-view rule never picks. Anything but 0 says the point's normal is likely wrong | defined | the reconstruction has no patch frames; no value for a point whose frame is zero |
 | `rms_error_px` | stored | `Point3D::rms_reprojection_error`, the stored per-point RMS reprojection error in pixels, as its doc comment defines it; the viewer's `get_point` reports the same number as `rms_error_px`. A file holds what its writer stored | defined | never |
+| `largest_error_px` | computed | the largest reprojection error among the track's observations, in pixels: each observation's inline keypoint against the point's projection into its image through its camera (`observation_reprojection_error`, the per-observation error the RMS is the root mean square of). An observation whose point does not project, behind its camera or outside its lens's domain, is skipped, as the RMS skips it. The RMS of a long track hides one bad observation; this does not | defined: projected along the stored direction, with no translation | the reconstruction has no inline keypoints; no value for a track none of whose observations projects |
 | `x`, `y`, `z` | stored | the point's position in the stored frame, in the reconstruction's world-space unit (scene units where none is declared) | no value | never |
 | `centroid_distance` | stored | distance from the posed cameras' centroid, the number `ImageSet::placement_scale` gives, in the unit of `x` | `+∞` | the reconstruction has no posed image |
 | `normal_confidence` | stored | the stored `normal_confidence` byte, 0 to 255 | defined | the reconstruction has no `normal_confidence` column |
 | `lowest_zncc` | stored | the lowest stored per-observation ZNCC in the track, read from `observation_confidence` as `byte / 255` over the non-zero bytes only | no value when no observation of the track was measured | the reconstruction has no `observation_confidence` column |
+| `lowest_blur_matched_bitmap_zncc` | stored | the lowest blur-matched ZNCC against the point's stored patch bitmap among the track's observation readings, `ObservationReading::blur_matched_bitmap_zncc`, skipping the rows whose score was not read (NaN). It is the score Track View's *ZNCC* column prints and its bars judge, `-1` to `1`, and the reference observation's own row scores `1` | defined | the reconstruction has no observation readings; no value for a track with no score read |
 | `largest_zncc_self_similarity_radius` | stored | the largest ZNCC self-similarity radius among the track's observation readings: the semi-major axis of the stored ellipse, `ellipse_axes[0]`, in patch px, skipping unmeasured rows | no value when every row is unmeasured | the reconstruction has no observation readings |
+| `reference_zncc_self_similarity_radius` | computed | the ZNCC self-similarity radius of the point's patch as its **reference view** sees it, in patch px: the semi-major axis of the **reference reading**'s ellipse (§ "The reference reading"). Large for a patch with little texture, which no view localizes well, where `largest_zncc_self_similarity_radius` is the worst view's | defined | the reconstruction has neither observation readings nor patch bitmaps; no value for a point with neither a measured reading at its reference observation nor a bitmap with data |
+| `reference_zncc_self_similarity_elongation` | computed | the reference reading's ellipse's semi-major axis over its semi-minor axis, `1` for a circle: large for an edge, which slides along itself and is fixed only across it | defined | as `reference_zncc_self_similarity_radius` |
 | `max_ray_angle_deg` | computed | the largest angle between two of the track's viewing rays, the rays from each observing camera's centre to the stored point (`compute_max_ray_angle_deg`) | 0 | never |
+| `largest_viewing_angle_deg` | computed | the most oblique view of the point's patch: the largest **viewing angle** over the track's observations, in degrees, as Track View's *Reference* column prints it (§ "The viewing angle") | defined: the angle to the bearing, the same from every camera | the reconstruction has no patch frames; no value for a point whose frame is zero |
 | `condition_number` | computed | condition number of the point's triangulation from those rays (`compute_point_diagnostics`) | no value | never |
 | `inverse_depth_z` | computed | inverse-depth z-score from the same triangulation, with per-ray angular noise `max(rms_error_px, 1) / f` | no value | never |
 
@@ -241,6 +260,61 @@ rather than reporting 0 for a track with one unmeasured observation.
 **An unmeasured reading** is a row whose semi-major axis is NaN
 (`ObservationReading::is_measured` is false), which is what
 `ObservationReading::NOT_MEASURED` holds.
+
+**The two lowest scores.** `lowest_zncc` and `lowest_blur_matched_bitmap_zncc`
+read different stored scores. `observation_confidence` is one byte per
+observation that a writer such as cluster refinement or the bench commit
+records for the view's agreement, clamped to `0 ..= 1` and with `0` for
+unmeasured; the readings' `blur_matched_bitmap_zncc` is the render's ZNCC
+against the point's own stored bitmap after the sharper of the two is blurred
+to the other's sharpness, as an `f32` that can be negative. A file can carry
+either, both or neither, and where both exist they need not agree.
+
+**The reference reading** is the ZNCC self-similarity ellipse of the point's
+patch as its reference view sees it, from one of two sources, per point:
+
+- **The stored reading**, where the reconstruction holds observation readings,
+  the point's reference observation is not `-1` and that observation's row is
+  measured: that row's `ellipse_axes`. It is the reading of the reference
+  observation's own render, the patch re-anchored on its keypoint at the
+  readings' patch resolution with the readings' sampler, which is the render
+  a bitmap writer stores as the point's patch bitmap (the **reference
+  render**).
+- **The bitmap reading** otherwise: the whole-bitmap overlap reading of the
+  point's stored patch bitmap, `zncc_self_similarity_radius` over the whole
+  `R × R` grid with `SelfSimilarityParams::default()` (the settings every
+  observation reading and the `embed-patches` and `xform` culls take), a
+  sample whose alpha is `0` carrying no data. A zero row (no bitmap for the
+  point) and a bitmap under 3 px a side have no reading.
+
+The two agree wherever the bitmap is the render the stored row was read on:
+the reading of an observation's render is `read_view_tile`'s whole-tile
+reading of the tile's samples and data flags, and the stored bitmap holds
+those same samples, with alpha `0` where the tile has no data, so the bitmap
+reading repeats it to the `f32` the row stores. They differ where a writer
+changed the point's frame, keypoint or reference after the readings were
+taken without reading again, which a writer that keeps readings does not do
+(`ObservationReadings::merge_read` keeps a row only under the same options).
+The stored reading comes first because it needs no work. A point whose stored
+reference is `-1` has a bitmap that is the render of none of its observations
+(a fused mean an older file stores, or the render of an observation since
+removed); its bitmap is still what every later render is aligned to, so it is
+read. In SfM Explorer a file with patch frames and no bitmaps is drawn with
+display bitmaps rendered at the open, which the table reads as it reads stored
+ones.
+
+**The viewing angle** of an observation is `normal_refine::viewing_angle` of
+the point's patch frame (`PointView::patch_frame`, `w = 0` for a point at
+infinity) seen from the observation's camera: the angle between the patch's
+outward normal and the direction from its centre to the camera, `0` facing
+it, `90` edge on and up to `180` from behind. As Track View reads it, the
+patch is re-anchored on the observation's inline keypoint where there is one
+and the keypoint's ray meets the patch's plane
+(`OrientedPatch::anchored_at_keypoint`), and read at the stored centre
+otherwise, as a render without a keypoint is; the two differ by about the
+angle between the keypoint's ray and the point's, the reprojection error over
+the focal length. A camera on the patch's centre has no angle and is skipped.
+For a point at infinity the direction to every camera is minus the bearing.
 
 **Availability of the readings** is read as
 `EditedReconstruction::observation_reading_options().is_some()`, which is true
@@ -299,7 +373,18 @@ effect within one block. A point's values are written into a fixed array of
 one slot per column and scattered into the column vectors after the block,
 which keeps each column's rows in `live_indexes()` order without a lock. The
 condition number and the inverse-depth z come from one triangulation, which a
-point computes once when both are asked for.
+point computes once when both are asked for; `largest_viewing_angle_deg` and
+`back_facing_observations` share one pass over the observations' angles, and
+the two reference columns one reference reading.
+
+The bitmap reading is the costliest work per point: one overlap reading of
+the `R × R` bitmap over the `(2r + 1)²` shifts. At `R = 24` and `r = 3` it
+takes about 13 µs per point on one thread (measured on a dino solve of 9,549
+points with embedded patches: 121 ms on one thread, 10 ms on 32), so the
+bitmap fallback for 10⁶ points is about 13 s of CPU, spread over the rayon
+pool. A block of 8192 such points takes about 0.1 s on one thread, which keeps
+a cancel prompt without a finer poll. Where the stored reading serves every
+point the two reference columns take 3 ms for the same solve.
 
 The stored columns are filled in one pass and the computed ones in a second,
 each in its own share of the progress range (a tenth and nine tenths when
@@ -354,13 +439,26 @@ that scripts and tests read exactly the numbers the viewer shows. It lives in
 
 The Rust tests in
 [track_table/tests.rs](../../../crates/sfmtool-core/src/analysis/track_table/tests.rs)
+and
+[track_table/tests/observation_quality.rs](../../../crates/sfmtool-core/src/analysis/track_table/tests/observation_quality.rs)
 build small reconstructions from the demo reconstruction and check each column
 against the stored data or the per-point function it is defined by: a point
 at infinity (no position or diagnostics, a distance of `+∞`, a ray angle of
 0), an image holding two observations of one point (one repeat observation),
 absent optional columns, unmeasured
 `observation_confidence` bytes and unmeasured readings, and deleted and added
-points. They check the query's inclusive bounds, NaN against a bound, a bound with
+points. The columns read per observation are checked as well: the largest
+error against keypoints moved off their projections, a bearing's included;
+the viewing angles against Track View's reading with and without keypoints,
+a patch facing away from both its cameras counting two back-facing
+observations, a point with no frame having no value, and a bearing's angle
+near 0; the lowest blur-matched score skipping unread scores; the reference
+reading from the stored row at the reference observation, and from the bitmap
+where the reference is `-1`, its row is unmeasured, or the file holds no
+readings, with a stored row made from a bitmap's reading equal to that
+bitmap's, a texture, an edge (more elongated) and a flat patch (the cap's
+circle), and a zero row having no value; and a sort and a bound on
+`back_facing_observations` putting the frameless points last. They check the query's inclusive bounds, NaN against a bound, a bound with
 neither end, `+∞` against a `min` and a finite `max`, `seen_in_image`, ties in
 both sort orders, `+∞` sorting as the largest value ahead of the no-value
 rows, no-value rows last in both orders and both refusals; that `merge`
@@ -376,14 +474,17 @@ The binding's tests in
 check the names, dtypes and rows against the seoul_bull ground truth's own
 arrays (a distance of `inf` exactly at the points at infinity), a moved
 observation's repeat, the column selection and its refusals, and an edited
-reconstruction.
+reconstruction; the largest error against
+`compute_observation_reprojection_errors`, the viewing angles on its patch
+frames and their absence without them, the lowest blur-matched score and the
+reference reading against readings it is given, and the bitmap fallback
+against `zncc_self_similarity_parts_stack` of the same bitmaps.
 
 ## Non-goals
 
-The per-observation reprojection error (the largest error in a track, say) is
-not a column: for a `sift_files` reconstruction without inline keypoints it
-needs every image's `.sift` file read. It can be added as a computed column
-that is absent when the reconstruction has no keypoints.
+`largest_error_px` reads inline keypoints only: for a `sift_files`
+reconstruction without them it would need every image's `.sift` file read, so
+the column is absent there rather than reading files.
 
 Core does not cache or store the table. A caller that computes it for one version
 keeps it for as long as that version is current.
