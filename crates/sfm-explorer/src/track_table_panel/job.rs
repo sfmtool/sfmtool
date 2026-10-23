@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The Track Table panel's **table job**: the stored columns of the track
-//! table, computed off the GUI thread for the node the panel shows.
+//! table, and then the computed columns the panel needs, computed off the GUI
+//! thread for the node the panel shows.
 //!
 //! See `specs/gui/track-table.md` § "Computing the columns". The job is a
 //! **quiet task** in the fast queue ([`Operation::TRACK_TABLE_COLUMNS`],
@@ -11,18 +12,28 @@
 //! driver owns no thread and follows the camera model proposal's
 //! (`crate::camera_model_proposal::job`):
 //!
-//! - **Its inputs** are the node the panel showed in this frame and the
-//!   document serial at that node's cursor. The panel says which node it shows
-//!   each time it draws ([`AppState::want_track_table_columns`]), and the frame
-//!   clears that before the dock draws ([`AppState::hide_track_table`]), so a
-//!   hidden panel asks for nothing. Twice per frame, before the MCP drain and
-//!   after the egui pass, [`AppState::drive_track_table_columns`] queues a job when the track table
-//!   cache lacks a stored column the node can supply.
+//! - **Its inputs** are the node the panel showed in this frame, the document
+//!   serial at that node's cursor and the columns the job computes. Each time
+//!   it draws, the panel says which node it shows and which computed columns a
+//!   visible column, a bound or the sort needs
+//!   ([`AppState::want_track_table_columns`]), and the frame clears that
+//!   before the dock draws ([`AppState::hide_track_table`]), so a hidden panel
+//!   asks for nothing. Twice per frame, before the MCP drain and after the
+//!   egui pass, [`AppState::drive_track_table_columns`] queues a job when the
+//!   track table cache lacks a stored column the node can supply, or, once it
+//!   holds them all, a computed column the panel needs.
+//! - **The stored columns come first.** A job computes either the missing
+//!   stored columns or the missing computed ones the panel needs, never both
+//!   ([`columns_to_compute`]), so the table is usable while the computed
+//!   columns, which cost a pass over every pair of rays or a triangulation per
+//!   point, are still being computed. A computed column that no visible
+//!   column, bound or sort needs is not computed.
 //! - **One job is queued at a time.** A job runs [`TrackTable::compute`] for
-//!   the missing columns of the value at the cursor when it was queued, and
-//!   sends the table back. The GUI thread merges it into the cache with
+//!   its columns of the value at the cursor when it was queued, and sends the
+//!   table back. The GUI thread merges it into the cache with
 //!   [`TrackTable::merge`], as *Find points* does, so a column either of them
-//!   computed is kept. A table for a serial the node has left is dropped.
+//!   computed is kept. A table for a serial the node has left is dropped. A
+//!   waiting job whose columns are no longer the ones needed is replaced.
 //! - **An edit cancels it.** When the document serial at its node's cursor
 //!   moves while the job runs, or the node is closed, the job is asked to stop
 //!   through its `Progress`, and the next is queued once it has reported back.
@@ -51,6 +62,14 @@ struct Inputs {
     document: VersionSerial,
 }
 
+/// What the Track Table panel asked for in this frame: the node it shows and
+/// the computed columns a visible column, a bound or the sort needs, in
+/// [`TrackTableColumn::ALL`] order.
+struct Wanted {
+    node: ReconId,
+    computed: Vec<TrackTableColumn>,
+}
+
 /// What comes back on a job's channel.
 enum Message {
     /// The columns, computed for the job's inputs.
@@ -65,6 +84,8 @@ enum Message {
 struct Queued {
     /// What it was queued on.
     inputs: Inputs,
+    /// The columns it computes.
+    columns: Vec<TrackTableColumn>,
     /// The quiet task it runs as.
     task: u64,
     /// Where it sends the table. The channel ends when the task's work has
@@ -75,9 +96,10 @@ struct Queued {
 /// The table job's state on [`AppState`].
 #[derive(Default)]
 pub(crate) struct TrackTableJobs {
-    /// The node the Track Table panel showed in this frame, or `None` while it
-    /// is hidden or shows no reconstruction.
-    wanted: Option<ReconId>,
+    /// The node the Track Table panel showed in this frame, with the computed
+    /// columns it needs, or `None` while it is hidden or shows no
+    /// reconstruction.
+    wanted: Option<Wanted>,
     /// The job queued as a quiet task, waiting or running, if there is one.
     queued: Option<Queued>,
     /// A gate the next job's work waits at before it starts, so a test can
@@ -92,6 +114,12 @@ impl TrackTableJobs {
     pub(super) fn queued_task(&self) -> Option<u64> {
         self.queued.as_ref().map(|queued| queued.task)
     }
+
+    /// The columns the queued job computes, if one is queued.
+    #[cfg(test)]
+    pub(super) fn queued_columns(&self) -> Option<&[TrackTableColumn]> {
+        self.queued.as_ref().map(|queued| queued.columns.as_slice())
+    }
 }
 
 /// The stored columns `node`'s value at its cursor can supply that `held`
@@ -104,6 +132,30 @@ pub(super) fn missing_stored_columns(
         .into_iter()
         .filter(|c| c.cost() == ColumnCost::Stored)
         .filter(|c| c.is_available(edited))
+        .filter(|&c| !held.is_some_and(|table| table.has(c)))
+        .collect()
+}
+
+/// The columns the next job computes for `edited`, given the table `held`
+/// for its version and the computed columns the panel needs, `computed`: the
+/// stored columns it can supply that `held` lacks, or, once it holds them all,
+/// the columns of `computed` it lacks. Empty when there is nothing to compute.
+///
+/// The stored columns go first so that the table is usable while the
+/// computed ones, which cost far more per point, are still being computed.
+pub(super) fn columns_to_compute(
+    edited: &sfmtool_core::EditedReconstruction,
+    held: Option<&TrackTable>,
+    computed: &[TrackTableColumn],
+) -> Vec<TrackTableColumn> {
+    let stored = missing_stored_columns(edited, held);
+    if !stored.is_empty() {
+        return stored;
+    }
+    computed
+        .iter()
+        .copied()
+        .filter(|c| c.cost() == ColumnCost::Computed && c.is_available(edited))
         .filter(|&c| !held.is_some_and(|table| table.has(c)))
         .collect()
 }
@@ -144,10 +196,15 @@ pub(crate) fn job_stops_when_cancelled() -> bool {
 }
 
 impl AppState {
-    /// Say that the Track Table panel shows `node` in this frame, so the table
-    /// job keeps its columns current.
-    pub(super) fn want_track_table_columns(&mut self, node: ReconId) {
-        self.track_table_jobs.wanted = Some(node);
+    /// Say that the Track Table panel shows `node` in this frame and needs the
+    /// computed columns `computed`, so the table job keeps the stored columns
+    /// and those current.
+    pub(super) fn want_track_table_columns(
+        &mut self,
+        node: ReconId,
+        computed: Vec<TrackTableColumn>,
+    ) {
+        self.track_table_jobs.wanted = Some(Wanted { node, computed });
     }
 
     /// Forget which node the Track Table panel showed, and which points it
@@ -182,7 +239,11 @@ impl AppState {
                 }
                 return changed;
             }
-            if wanted.as_ref().map(|(inputs, _)| *inputs) == Some(queued.inputs) {
+            // Waiting: kept while it is still the job needed, replaced when
+            // the node, its serial or the columns needed have changed.
+            if wanted.as_ref().is_some_and(|(inputs, columns)| {
+                *inputs == queued.inputs && *columns == queued.columns
+            }) {
                 return changed;
             }
         }
@@ -201,10 +262,13 @@ impl AppState {
 
     /// The inputs of the job the panel needs, with the columns it computes,
     /// or `None` when the panel is hidden or the cache already holds every
-    /// stored column the node can supply.
+    /// stored column the node can supply and every computed column the panel
+    /// needs.
     fn track_table_job_inputs(&self) -> Option<(Inputs, Vec<TrackTableColumn>)> {
-        let node = self.node(self.track_table_jobs.wanted?)?;
-        let columns = missing_stored_columns(node.edited(), self.track_table(node.id));
+        let wanted = self.track_table_jobs.wanted.as_ref()?;
+        let node = self.node(wanted.node)?;
+        let columns =
+            columns_to_compute(node.edited(), self.track_table(node.id), &wanted.computed);
         if columns.is_empty() {
             return None;
         }
@@ -229,7 +293,7 @@ impl AppState {
         let label = node.label.clone();
         let (sender, messages) = std::sync::mpsc::channel();
         let dropped = sender.clone();
-        let work = work(edited, columns, sender, self.wake.clone());
+        let work = work(edited, columns.clone(), sender, self.wake.clone());
         #[cfg(test)]
         let hold = self.track_table_jobs.hold_next.take();
         let run = move |progress: &Progress<'_>| {
@@ -254,6 +318,7 @@ impl AppState {
         };
         self.track_table_jobs.queued = Some(Queued {
             inputs,
+            columns,
             task,
             messages,
         });
@@ -301,10 +366,11 @@ impl AppState {
     }
 
     /// Run the table job until the cache holds every stored column of the
-    /// node the panel last asked for, blocking on the fast queue: the test
+    /// node the panel last asked for and every computed column it needed,
+    /// blocking on the fast queue: the test
     /// seam, as `settle_camera_model_proposal_job` is for the proposal.
     #[cfg(test)]
-    pub(super) fn settle_track_table_columns(&mut self) {
+    pub(crate) fn settle_track_table_columns(&mut self) {
         loop {
             self.drive_track_table_columns();
             if self.track_table_jobs.queued.is_none() {

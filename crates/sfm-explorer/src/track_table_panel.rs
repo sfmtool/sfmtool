@@ -2,8 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The Track Table panel: every live point of the selected reconstruction as
-//! one row, with the stored track table columns, sortable by a click on a
-//! heading and filtered by a minimum and a maximum per column.
+//! one row, with the track table columns, sortable by a click on a heading
+//! and filtered by a minimum and a maximum per column. The stored columns are
+//! computed first and the computed ones a visible column, a bound or the sort
+//! needs after them ([`job`]); a cell of a column not computed yet shows `…`.
 //!
 //! See `specs/gui/track-table.md`. The panel reads the track table cache
 //! ([`crate::track_table`]) that `find_points` reads, and its quiet table job
@@ -64,13 +66,14 @@ const COLUMN_COUNT: usize = TrackTableColumn::ALL.len();
 
 /// The columns shown before any are hidden or shown: the point is always
 /// shown, and of the stored columns the track's length, its error and its
-/// distance, which is `∞` for a point at infinity. Repeat obs. is shown as
-/// well while the reconstruction has a point with repeat observations
-/// ([`TrackTableQuery::is_shown`]).
-const DEFAULT_COLUMNS: [TrackTableColumn; 3] = [
+/// distance, which is `∞` for a point at infinity, and of the computed ones
+/// the ray angle. Repeat obs. is shown as well while the reconstruction has a
+/// point with repeat observations ([`TrackTableQuery::is_shown`]).
+const DEFAULT_COLUMNS: [TrackTableColumn; 4] = [
     TrackTableColumn::TrackLength,
     TrackTableColumn::RmsErrorPx,
     TrackTableColumn::CentroidDistance,
+    TrackTableColumn::MaxRayAngleDeg,
 ];
 
 /// The width of the Point column.
@@ -92,27 +95,29 @@ pub(crate) const SCROLL_SETTLE_S: f64 = 0.15;
 
 impl SortRule for TrackTableColumn {
     /// The columns whose large values are the bad end: the repeat
-    /// observations, the error, the condition number, the inverse-depth z and
-    /// the self-similarity radius.
+    /// observations, the error, the condition number and the self-similarity
+    /// radius.
     fn worst_first_descending(self) -> bool {
         matches!(
             self,
             TrackTableColumn::RepeatObservations
                 | TrackTableColumn::RmsErrorPx
                 | TrackTableColumn::ConditionNumber
-                | TrackTableColumn::InverseDepthZ
                 | TrackTableColumn::LargestZnccSelfSimilarityRadius
         )
     }
 }
 
 /// Whether a column's bad end is its small values, so that its first click,
-/// which orders it increasing, puts the worst rows first.
+/// which orders it increasing, puts the worst rows first. The inverse-depth z
+/// is among them: it is the depth over its uncertainty, and a small one is a
+/// point that cannot be told from one at infinity.
 fn worst_first_ascending(column: TrackTableColumn) -> bool {
     matches!(
         column,
         TrackTableColumn::TrackLength
             | TrackTableColumn::MaxRayAngleDeg
+            | TrackTableColumn::InverseDepthZ
             | TrackTableColumn::LowestZncc
             | TrackTableColumn::NormalConfidence
     )
@@ -171,11 +176,23 @@ fn column_description(column: TrackTableColumn) -> &'static str {
              in patch px. A track with no measured reading has no value."
         }
         TrackTableColumn::MaxRayAngleDeg => {
-            "The largest angle between two of the track's viewing rays, in degrees."
+            "The largest angle between two of the track's viewing rays, the rays from each \
+             observing camera's centre to the point, in degrees. A small angle leaves the \
+             point's depth poorly fixed. A point at infinity is at 0: every sighting of a \
+             direction casts the same ray. Computed after the stored columns."
         }
-        TrackTableColumn::ConditionNumber => "The condition number of the point's triangulation.",
+        TrackTableColumn::ConditionNumber => {
+            "The condition number of the point's triangulation from its viewing rays. A large \
+             one means the rays are close to parallel and the position is poorly fixed. A \
+             point at infinity, or a track with fewer than two usable rays, has no value. \
+             Computed after the stored columns."
+        }
         TrackTableColumn::InverseDepthZ => {
-            "The inverse-depth z-score of the point's triangulation."
+            "The point's depth over its one-sigma depth uncertainty, from the same \
+             triangulation, with each ray's noise its error (at least 1 px) over the focal \
+             length. Below about 3 to 4 the point cannot be told from one at infinity. A point \
+             at infinity, or a track with fewer than two usable rays, has no value. Computed \
+             after the stored columns."
         }
     }
 }
@@ -189,10 +206,11 @@ fn column_index(column: TrackTableColumn) -> usize {
         .expect("every column is in ALL")
 }
 
-/// Whether the panel offers `column` for `edited`: a stored column the
-/// reconstruction can supply. The computed columns are not shown yet.
+/// Whether the panel offers `column` for `edited`: a column the
+/// reconstruction can supply. Every computed column is offered for every
+/// reconstruction.
 fn offered(column: TrackTableColumn, edited: &EditedReconstruction) -> bool {
-    column.cost() == ColumnCost::Stored && column.is_available(edited)
+    column.is_available(edited)
 }
 
 /// One column's two bound boxes, as typed.
@@ -302,6 +320,18 @@ impl TrackTableQuery {
             || (column == TrackTableColumn::RepeatObservations
                 && !self.repeat_observations_chosen
                 && (repeats || self.holds(column)))
+    }
+
+    /// The computed columns the table job has to compute for this query: the
+    /// ones shown, and the ones holding a bound or the sort (which are shown
+    /// too), in [`TrackTableColumn::ALL`] order. A computed column none of
+    /// those needs is never computed for the panel.
+    fn needed_computed(&self) -> Vec<TrackTableColumn> {
+        TrackTableColumn::ALL
+            .into_iter()
+            .filter(|&c| c.cost() == ColumnCost::Computed)
+            .filter(|&c| self.shown.contains(&c) || self.holds(c))
+            .collect()
     }
 
     /// The columns drawn, in [`TrackTableColumn::ALL`] order
@@ -525,8 +555,27 @@ struct Unapplied {
     /// Columns holding a bound or the sort that the reconstruction cannot
     /// supply: kept, and applied again once one that can is selected.
     unsupplied: Vec<TrackTableColumn>,
-    /// Columns holding a bound or the sort that the cache does not hold yet.
-    pending: Vec<TrackTableColumn>,
+    /// Columns holding a bound that the cache does not hold yet.
+    pending_bounds: Vec<TrackTableColumn>,
+    /// The sort's column, when the cache does not hold it yet.
+    pending_sort: Option<TrackTableColumn>,
+}
+
+impl Unapplied {
+    /// Whether a bound or the sort waits for a column the cache does not hold
+    /// yet.
+    fn is_pending(&self) -> bool {
+        !self.pending_bounds.is_empty() || self.pending_sort.is_some()
+    }
+
+    /// The columns a bound or the sort waits for, in
+    /// [`TrackTableColumn::ALL`] order.
+    fn pending(&self) -> Vec<TrackTableColumn> {
+        TrackTableColumn::ALL
+            .into_iter()
+            .filter(|c| self.pending_bounds.contains(c) || self.pending_sort == Some(*c))
+            .collect()
+    }
 }
 
 /// The picture size the *Size* dropdown sets, in points: the side of each
@@ -661,29 +710,33 @@ impl TrackTablePanel {
     ) -> (RowInputs, Unapplied) {
         let edited = node.edited();
         let mut unapplied = Unapplied::default();
-        let mut usable = |column: TrackTableColumn| {
-            if !offered(column, edited) {
-                unapplied.unsupplied.push(column);
-                false
-            } else if !table.has(column) {
-                unapplied.pending.push(column);
-                false
-            } else {
-                true
-            }
-        };
         let mut bounds = Vec::new();
         for column in TrackTableColumn::ALL {
             let text = self.query.bound(column);
             if !text.is_set() {
                 continue;
             }
-            if usable(column) {
+            if !offered(column, edited) {
+                unapplied.unsupplied.push(column);
+            } else if !table.has(column) {
+                unapplied.pending_bounds.push(column);
+            } else {
                 bounds.extend(text.parsed(column));
             }
         }
         let order_by = self.query.sort.and_then(|sort| {
-            usable(sort.column).then_some((
+            let usable = if !offered(sort.column, edited) {
+                if !unapplied.unsupplied.contains(&sort.column) {
+                    unapplied.unsupplied.push(sort.column);
+                }
+                false
+            } else if !table.has(sort.column) {
+                unapplied.pending_sort = Some(sort.column);
+                false
+            } else {
+                true
+            };
+            usable.then_some((
                 sort.column,
                 if sort.descending {
                     SortOrder::Descending
@@ -720,10 +773,13 @@ impl TrackTablePanel {
             });
             return;
         };
-        state.want_track_table_columns(id);
         let before = self.query.clone();
         #[cfg_attr(not(test), allow(unused_mut))]
         let mut asked = self.show_node(ui, state, id);
+        // After the frame's edits of the query, so a column ticked or a
+        // heading clicked in this frame is computed from the drive that
+        // follows the egui pass.
+        state.want_track_table_columns(id, self.query.needed_computed());
         // The rows are computed from the query at the top of a frame, so an
         // edit this frame made shows in the next one, which is asked for here
         // rather than left to the next input event.
@@ -775,11 +831,22 @@ impl TrackTablePanel {
         // The rows first, so the header counts the rows this frame draws. Out
         // of date, they are not computed again: the old table's rows and the
         // new version's observations do not go together, so a change of the
-        // query waits for the new table.
+        // query waits for the new table. While a bound or the sort waits for a
+        // column the cache does not hold yet, rows already computed for this
+        // version stay as they are rather than being ordered or filtered by
+        // part of the query; with none, as when the table first lands, the
+        // rest of the query is applied.
         let mut reordered = false;
         let unapplied = table.map(|table| {
             let (inputs, unapplied) = self.row_inputs(node, table, selected_image);
-            if !stale {
+            let waiting = unapplied.is_pending()
+                && self.rows.error.is_none()
+                && self
+                    .rows
+                    .inputs
+                    .as_ref()
+                    .is_some_and(|old| old.node == id && old.document == inputs.document);
+            if !stale && !waiting {
                 reordered = self.rows.refresh(edited, table, inputs);
             }
             unapplied
@@ -1275,20 +1342,47 @@ fn show_unapplied(ui: &mut egui::Ui, node: &SceneNode, unapplied: &Unapplied) {
             .weak(),
         );
     }
-    if !unapplied.pending.is_empty() {
-        ui.label(
-            egui::RichText::new(format!(
-                "Filtering and sorting when {} {} ready.",
-                titles(&unapplied.pending),
-                if unapplied.pending.len() == 1 {
-                    "is"
+    if unapplied.is_pending() {
+        let pending = unapplied.pending();
+        ui.label(egui::RichText::new(waiting_text(unapplied)).weak())
+            .on_hover_text(format!(
+                "{} {} still being computed. Until then the rows are not filtered or sorted by \
+                 {}: rows already listed stay as they are, and a change of the bounds or the \
+                 sort applies once {} ready.",
+                titles(&pending),
+                if pending.len() == 1 { "is" } else { "are" },
+                if pending.len() == 1 { "it" } else { "them" },
+                if pending.len() == 1 {
+                    "it is"
                 } else {
-                    "are"
-                }
-            ))
-            .weak(),
-        );
+                    "they are"
+                },
+            ));
     }
+}
+
+/// The line that says the query waits for columns the cache does not hold
+/// yet: *Sorting when Ray angle (°) is ready.*, *Filtering when … is ready.*
+/// or *Filtering and sorting when … are ready.*, by what waits.
+fn waiting_text(unapplied: &Unapplied) -> String {
+    let pending = unapplied.pending();
+    let doing = match (
+        !unapplied.pending_bounds.is_empty(),
+        unapplied.pending_sort.is_some(),
+    ) {
+        (true, true) => "Filtering and sorting",
+        (true, false) => "Filtering",
+        _ => "Sorting",
+    };
+    format!(
+        "{doing} when {} {} ready.",
+        pending
+            .iter()
+            .map(|&c| column_title(c))
+            .collect::<Vec<_>>()
+            .join(", "),
+        if pending.len() == 1 { "is" } else { "are" }
+    )
 }
 
 /// One column the table draws.
@@ -1918,9 +2012,12 @@ fn crop_absent_hover(absent: Absent) -> &'static str {
 }
 
 /// One cell's text: `…` for a column the cache does not hold yet, `-` for a
-/// point with no value, a whole number for a count, `∞` for an infinite value
+/// point with no value (the condition number and the inverse-depth z of a
+/// point at infinity), a whole number for a count, `∞` for an infinite value
 /// (the distance of a point at infinity), and three significant digits
-/// otherwise. Positions keep up to three decimals however large they are.
+/// otherwise, in scientific notation for a large condition number or
+/// inverse-depth z. Positions keep up to three decimals however large they
+/// are.
 fn cell_text(table: &TrackTable, column: TrackTableColumn, row: usize) -> String {
     if column.is_f64() {
         return match table.values_f64(column) {
@@ -1940,7 +2037,25 @@ fn cell_text(table: &TrackTable, column: TrackTableColumn, row: usize) -> String
         | TrackTableColumn::RepeatObservations
         | TrackTableColumn::NormalConfidence => format!("{}", v as i64),
         TrackTableColumn::LowestZncc => format!("{v:.2}"),
+        TrackTableColumn::ConditionNumber | TrackTableColumn::InverseDepthZ => {
+            compact(f64::from(v))
+        }
         _ => significant(f64::from(v), 3, 3),
+    }
+}
+
+/// From this magnitude on, [`compact`] writes a value in scientific notation.
+const SCIENTIFIC_FROM: f64 = 1e5;
+
+/// A value that can run to many orders of magnitude, as a condition number
+/// and an inverse-depth z can: three significant digits, written as `1.23e7`
+/// from [`SCIENTIFIC_FROM`] on so the cell stays narrow; `∞` for an infinite
+/// value.
+fn compact(v: f64) -> String {
+    if v.is_finite() && v.abs() >= SCIENTIFIC_FROM {
+        format!("{v:.2e}")
+    } else {
+        significant(v, 3, 3)
     }
 }
 

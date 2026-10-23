@@ -20,8 +20,9 @@
 //! serial the node has since left is dropped with a failed row.
 //!
 //! The Track Table panel reads the same cache, and its quiet table job
-//! (`crate::track_table_panel::job`) fills it with the stored columns the same
-//! way, so the panel and `find_points` share every column either computed.
+//! (`crate::track_table_panel::job`) fills it with the stored columns and the
+//! computed ones the panel needs the same way, so the panel and `find_points`
+//! share every column either computed.
 
 use sfmtool_core::analysis::track_table::{
     query_points, TrackTable, TrackTableColumn, TrackTableMergeError, TrackTableQueryError,

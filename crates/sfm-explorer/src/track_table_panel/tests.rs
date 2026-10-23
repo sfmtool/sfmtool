@@ -21,6 +21,7 @@ use crate::state::AppState;
 use crate::table_sort::TableSort;
 use crate::test_support::{painted_text_rects, painted_texts, run_frame_headless};
 
+mod computed;
 mod crop;
 mod pictures;
 
@@ -108,7 +109,7 @@ fn painted_at(
         .center()
 }
 
-/// The stored columns the cache holds for `id` at its cursor.
+/// The columns the cache holds for `id` at its cursor.
 fn held(state: &AppState, id: ReconId) -> Vec<TrackTableColumn> {
     let table = state.track_table(id).expect("a cached table");
     TrackTableColumn::ALL
@@ -174,8 +175,9 @@ fn with_no_node_selected_the_panel_says_so() {
 
 // -- The table job ----------------------------------------------------------
 
-/// The panel's first frame queues the job, and its table fills the cache with
-/// every stored column the node can supply and none of the computed ones.
+/// The panel's first frame queues the job, and its first table fills the
+/// cache with every stored column the node can supply and none of the
+/// computed ones.
 #[test]
 fn the_table_job_fills_the_cache_with_the_stored_columns() {
     let (mut state, id) = state();
@@ -198,14 +200,20 @@ fn the_table_job_fills_the_cache_with_the_stored_columns() {
         state.drive_track_table_columns(),
         "the first frame queues it"
     );
-    state.settle_track_table_columns();
     let edited = state.scene[0].edited().clone();
     let expected: Vec<TrackTableColumn> = super::job::missing_stored_columns(&edited, None);
     assert!(!expected.is_empty());
+    assert_eq!(
+        state.track_table_jobs.queued_columns(),
+        Some(expected.as_slice())
+    );
+    state.wait_for_track_table_job();
     assert_eq!(held(&state, id), expected);
+    // The default Ray angle column is computed by a second run.
+    state.settle_track_table_columns();
     assert!(
         !state.drive_track_table_columns(),
-        "nothing is queued once every stored column is held"
+        "nothing is queued once every column needed is held"
     );
     assert_eq!(state.track_table_jobs.queued_task(), None);
     assert_eq!(state.scene[0].history.versions().len(), 1, "a read");
@@ -254,7 +262,7 @@ fn the_job_merges_beside_what_find_points_cached() {
 #[test]
 fn a_hidden_panel_queues_no_job() {
     let (mut state, id) = state();
-    state.want_track_table_columns(id);
+    state.want_track_table_columns(id, Vec::new());
     state.hide_track_table();
     assert!(!state.drive_track_table_columns());
     assert_eq!(state.track_table_jobs.queued_task(), None);
@@ -309,7 +317,7 @@ fn a_table_that_lands_for_an_old_serial_is_dropped() {
     let (mut state, id) = state();
     let (open, hold) = mpsc::channel();
     state.track_table_jobs.hold_next = Some(hold);
-    state.want_track_table_columns(id);
+    state.want_track_table_columns(id, Vec::new());
     state.drive_track_table_columns();
     let old = state.scene[0].history.current_version().document_serial;
     state
@@ -360,7 +368,7 @@ fn a_slow_task_queued_on_its_node_leaves_the_running_job_alone() {
     let (mut state, id) = state();
     let (open_job, hold_job) = mpsc::channel();
     state.track_table_jobs.hold_next = Some(hold_job);
-    state.want_track_table_columns(id);
+    state.want_track_table_columns(id, Vec::new());
     state.drive_track_table_columns();
     let task = state.track_table_jobs.queued_task().expect("queued");
     assert!(
@@ -402,7 +410,7 @@ fn find_points_queued_while_the_job_runs_cancels_it_and_it_runs_again_behind() {
     let (mut state, id) = state();
     let (open_job, hold_job) = mpsc::channel();
     state.track_table_jobs.hold_next = Some(hold_job);
-    state.want_track_table_columns(id);
+    state.want_track_table_columns(id, Vec::new());
     state.drive_track_table_columns();
     let task = state.track_table_jobs.queued_task().expect("queued");
     assert!(state.quiet_task_running(task));
@@ -563,7 +571,7 @@ fn a_frame_with_an_unchanged_query_does_not_recompute_the_row_list() {
     state
         .start_find_points(
             id,
-            vec![TrackTableColumn::MaxRayAngleDeg],
+            vec![TrackTableColumn::ConditionNumber],
             TrackTableQueryOptions::default(),
         )
         .expect("a read");
@@ -714,23 +722,32 @@ fn state_with_repeats(points: &[u32]) -> (AppState, ReconId) {
 
 /// The value columns' headings the panel painted.
 fn headings(texts: &[String]) -> Vec<&str> {
-    ["Track", "Repeat obs.", "Error (px)", "Distance", "X"]
-        .into_iter()
-        .filter(|title| texts.iter().any(|t| t == title))
-        .collect()
+    [
+        "Track",
+        "Repeat obs.",
+        "Error (px)",
+        "Distance",
+        "Ray angle (\u{b0})",
+        "Cond.",
+        "Inv. depth z",
+        "X",
+    ]
+    .into_iter()
+    .filter(|title| texts.iter().any(|t| t == title))
+    .collect()
 }
 
-/// The default columns are Track, Error and Distance; Repeat obs. stays out
-/// while no point has a repeat observation, and the header says nothing of
-/// them.
+/// The default columns are Track, Error, Distance and Ray angle; Repeat obs.
+/// stays out while no point has a repeat observation, and the header says
+/// nothing of them.
 #[test]
-fn the_default_columns_are_track_error_and_distance() {
+fn the_default_columns_are_track_error_distance_and_ray_angle() {
     let (mut state, _) = state();
     let (ctx, mut panel) = shown(&mut state);
     let texts = painted_texts(&ctx, input(1200.0), |ui| panel.show(ui, &mut state));
     assert_eq!(
         headings(&texts),
-        ["Track", "Error (px)", "Distance"],
+        ["Track", "Error (px)", "Distance", "Ray angle (\u{b0})"],
         "{texts:?}"
     );
     assert!(
@@ -786,7 +803,13 @@ fn repeat_observations_show_themselves_and_their_count() {
     let texts = painted_texts(&ctx, input(1200.0), |ui| panel.show(ui, &mut state));
     assert_eq!(
         headings(&texts),
-        ["Track", "Repeat obs.", "Error (px)", "Distance"],
+        [
+            "Track",
+            "Repeat obs.",
+            "Error (px)",
+            "Distance",
+            "Ray angle (\u{b0})"
+        ],
         "{texts:?}"
     );
     assert!(
@@ -837,6 +860,7 @@ fn the_persons_choice_of_repeat_observations_wins() {
             column,
             TrackTableColumn::RmsErrorPx,
             TrackTableColumn::CentroidDistance,
+            TrackTableColumn::MaxRayAngleDeg,
         ]
     );
 
@@ -1003,7 +1027,7 @@ fn a_point_at_infinity_prints_no_position_and_an_infinite_distance() {
         "0"
     );
     assert_eq!(
-        cell_text(table, TrackTableColumn::MaxRayAngleDeg, row),
+        cell_text(table, TrackTableColumn::ConditionNumber, row),
         "\u{2026}",
         "a column the cache does not hold yet"
     );

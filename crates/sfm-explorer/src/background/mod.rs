@@ -714,8 +714,9 @@ impl Operation {
 
     /// The Track Table panel's table job
     /// ([`crate::track_table_panel::job`]): the stored columns the track table
-    /// cache does not hold yet, computed for the version at the cursor of the
-    /// node the panel shows. A quiet task.
+    /// cache does not hold yet, or once it holds them, the computed columns the
+    /// panel needs, computed for the version at the cursor of the node the
+    /// panel shows. A quiet task.
     ///
     /// It locks nothing, since it pushes no version: it keeps its answer in the
     /// cache, keyed by the document serial it read, so it runs on a node a slow

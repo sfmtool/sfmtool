@@ -587,3 +587,45 @@ fn a_run_whose_cached_sort_column_was_replaced_meanwhile_is_refused_not_a_panic(
         Ok(_) => panic!("the table lacks track_length, so the call is refused"),
     }
 }
+
+/// The columns the Track Table panel's table job computed, the ray angle among
+/// them, answer a call in the frame: the panel and `find_points` read one
+/// cache.
+#[test]
+fn a_computed_column_the_track_table_panel_filled_answers_in_the_frame() {
+    let (mut state, mut viewer) = editable();
+    let id = state.scene[0].id;
+    let ctx = egui::Context::default();
+    let mut panel = crate::track_table_panel::TrackTablePanel::new();
+    let mut frame = |state: &mut AppState| {
+        crate::test_support::run_frame_headless(&ctx, egui::RawInput::default(), |ui| {
+            panel.show(ui, state)
+        });
+    };
+    frame(&mut state);
+    state.settle_track_table_columns();
+    assert!(state
+        .track_table(id)
+        .is_some_and(|table| table.has(TrackTableColumn::MaxRayAngleDeg)));
+    let reply = match find(
+        &mut state,
+        &mut viewer,
+        json!({
+            "order_by": { "column": "max_ray_angle_deg" },
+            "columns": ["max_ray_angle_deg"],
+            "limit": 500,
+        }),
+    ) {
+        Outcome::Done(Ok(ToolOutput::Json(value))) => value,
+        Outcome::Done(Err(e)) => panic!("refused: {e}"),
+        _ => panic!("the panel's columns answer in the frame"),
+    };
+    let angles: Vec<f64> = reply["points"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["max_ray_angle_deg"].as_f64().unwrap())
+        .collect();
+    assert!(!angles.is_empty());
+    assert!(angles.windows(2).all(|w| w[0] <= w[1]), "{angles:?}");
+}
