@@ -1183,7 +1183,7 @@ fn fit_round(
             Some(&seeds),
             super::evaluate::track_reference(track, round),
             &options.localize,
-            progress,
+            &phase,
         )?;
         progress_note!(phase, "{} views", localized.views.len());
         localized

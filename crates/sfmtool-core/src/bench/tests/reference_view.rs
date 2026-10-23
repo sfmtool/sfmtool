@@ -2208,3 +2208,53 @@ fn dropping_the_out_rows_follows_the_reference_or_drops_it_with_the_bitmap() {
     );
     assert!(unscored(&dropped), "no score outlives the bitmap");
 }
+
+/// A reading's `localize` phase holds the localizer's renders: under a
+/// detailed [`PhaseLog`](crate::progress::PhaseLog), `localize` is recorded
+/// with its close, and every render the localizer opens is one depth below it
+/// and inside its time span, so a profile counts those renders as part of the
+/// localizer.
+#[test]
+fn a_readings_localizer_renders_are_recorded_under_localize() {
+    use crate::progress::{Event, PhaseLog};
+
+    let truth = GroundTruth::load();
+    let views = truth.views();
+    let offsets = &truth.recon.point_set.observation_offsets;
+    let point = (0..truth.recon.point_count())
+        .find(|&p| offsets[p + 1] - offsets[p] >= MIN_TRACK)
+        .expect("the ground truth has a long track") as u32;
+    let edited = EditedReconstruction::new(Arc::new(truth.recon.clone()));
+    let (bench, report) = create_track(
+        &Bench::new(),
+        &edited,
+        point,
+        &CreateTrackOptions::default(),
+    )
+    .expect("the point is live");
+    let track = bench.track(&report.label).expect("just put on");
+    let options = EvaluateOptions::default();
+
+    let log = PhaseLog::new();
+    let sink = |event: Event<'_>| log.record(event);
+    let progress = Progress::to(&sink).detailed(true);
+    evaluate(track, &edited, &views, &options, &progress).expect("the track reads");
+    let phases = log.phases();
+
+    let localize: Vec<_> = phases.iter().filter(|p| p.name == "localize").collect();
+    assert_eq!(localize.len(), 1, "{phases:#?}");
+    let localize = localize[0];
+    let (start, end) = (localize.start, localize.start + localize.took);
+    let inside: Vec<_> = phases
+        .iter()
+        .filter(|p| p.start >= start && p.start <= end && p.depth > localize.depth)
+        .collect();
+    assert!(
+        inside.iter().any(|p| p.name.starts_with("render ")),
+        "no render inside localize: {phases:#?}"
+    );
+    for p in &inside {
+        assert_eq!(p.depth, localize.depth + 1, "{p:#?}");
+        assert!(p.start + p.took <= end, "{p:#?} ends after localize");
+    }
+}

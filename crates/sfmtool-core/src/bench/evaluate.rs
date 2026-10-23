@@ -1592,13 +1592,13 @@ fn evaluate_track(
             &patch_frame,
             &plan.first,
             options,
-            progress,
+            &phase,
             &mut readings,
             &mut reasons,
         )?;
         rounds += 1;
         for &i in &plan.contested {
-            progress.check_cancel()?;
+            phase.check_cancel()?;
             let round = plan.contested_round(track, i);
             read_round(
                 track,
@@ -1606,7 +1606,7 @@ fn evaluate_track(
                 &patch_frame,
                 &round,
                 options,
-                progress,
+                &phase,
                 &mut readings,
                 &mut reasons,
             )?;

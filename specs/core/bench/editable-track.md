@@ -2714,7 +2714,9 @@ by the track's `max_zncc_self_similarity_radius` and never by a
 The evaluation reports its phases through `progress` as `refine` and
 `self-similarity` at the cluster stage, `localize`, `self-similarity` and
 `reference view` and `bitmap scores` at the track stage; a detailed
-`progress` times member coherence's renders inside `reference view`.
+`progress` times the localizer's tile renders inside `localize`, the
+self-similarity tiles' renders inside `self-similarity` and member
+coherence's renders inside `reference view`.
 
 **At the track stage** the reading is **one round** of
 [`localize_patch_keypoints`](../patch/patch-keypoint-localization.md) over the
