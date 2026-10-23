@@ -1577,7 +1577,8 @@ Panel, through `test_support::run_frame_headless`:
   cancelled paints `cancelled` on its idle line and its title line, and one that
   failed paints `failed` on both; a task taken out of its queue is recorded as
   cancelled; and at 227 px a cancelled task's idle line holds the word, the
-  node and the cost without overlapping.
+  node and the cost without overlapping, for costs from `<1 ms` to `150.0 s`
+  set on its record rather than measured.
 - A chosen task that was refused before it reported a stage paints its title
   line, `failed` on it and on its idle line, and its refusal under the title;
   a task cancelled while it waited, once chosen, paints its title line,

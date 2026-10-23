@@ -2298,16 +2298,24 @@ fn an_idle_line_says_whether_its_task_was_cancelled_or_failed() {
     gate.open();
     state.finish_background_tasks();
 
-    // At the default width the word, the cost and the node all fit.
+    // At the default width the word, the cost and the node all fit, whatever
+    // the cost reads. It is set here rather than measured, since what the task
+    // took is the scheduler's choice: with three digits of milliseconds the
+    // button cut to fit came out a fraction of a point wider than its room,
+    // and the line read `d…` until the node was given a point of slack.
     ended_as(&mut state, id, Operation::BUNDLE_ADJUST, || {
         Finished::Cancelled
     });
     state.finished_tasks.back_mut().expect("it finished").label = "dino".to_string();
     let width = 227.0;
-    let spans = painted_spans(&mut state, width);
-    let line = line_led_by(&spans, "Slow", width);
-    assert!(line.iter().any(|t| t == CANCELLED), "{line:?}");
-    assert!(line.iter().any(|t| t == "dino"), "{line:?}");
+    for ms in [0, 5, 50, 150, 999, 1_500, 15_000, 150_000] {
+        state.finished_tasks.back_mut().expect("it finished").took =
+            std::time::Duration::from_millis(ms);
+        let spans = painted_spans(&mut state, width);
+        let line = line_led_by(&spans, "Slow", width);
+        assert!(line.iter().any(|t| t == CANCELLED), "{ms} ms: {line:?}");
+        assert!(line.iter().any(|t| t == "dino"), "{ms} ms: {line:?}");
+    }
 }
 
 /// Once a cancel is asked for, a running task says it is stopping until it

@@ -426,7 +426,7 @@ fn show_running(ui: &mut egui::Ui, state: &AppState, id: u64, asked: &mut Asked)
         // that gives way.
         let gap = ui.spacing().item_spacing.x;
         let room = ui.available_width();
-        let node_keeps = text_width(ui, &label).min(room * NODE_SHARE);
+        let node_keeps = node_keeps(ui, &label, room);
         let word_fits = room - text_width(ui, STOPPING) - gap
             >= name_widths(ui, name, Name::Button).1 + gap + node_keeps;
         if stopping && word_fits {
@@ -597,7 +597,7 @@ fn name_and_node(
     let room = ui.available_width();
     let gap = ui.spacing().item_spacing.x;
     let (wanted, least) = name_widths(ui, name, drawn_as);
-    let node_keeps = text_width(ui, label).min(room * NODE_SHARE);
+    let node_keeps = node_keeps(ui, label, room);
     // The operation keeps its first few letters before the node takes its
     // share: a name cut to a bare ellipsis says nothing about what is running.
     let name_room = wanted
@@ -610,6 +610,20 @@ fn name_and_node(
         draw_name,
     );
     show_node(ui, label);
+}
+
+/// The room a queue line keeps for the node's name out of `room`: its whole
+/// width, or [`NODE_SHARE`] of `room` where that is less, and a point of
+/// slack.
+///
+/// The slack covers the operation's name running over its room: a button cut
+/// to fit the room it was handed can come out a fraction of a point wider than
+/// that room, since egui places its glyphs on whole pixels, and without the
+/// slack that fraction came off the node: a cancelled adjustment's idle line at 227 px
+/// read `Bundle adjust d…` whenever its cost had three digits of
+/// milliseconds, and `dino` at any other cost.
+fn node_keeps(ui: &egui::Ui, label: &str, room: f32) -> f32 {
+    text_width(ui, label).min(room * NODE_SHARE) + 1.0
 }
 
 /// How wide the operation's name is drawn whole, and the least it is drawn
