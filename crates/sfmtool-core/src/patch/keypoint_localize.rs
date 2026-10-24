@@ -65,6 +65,8 @@ pub use reference::{NoTemplate, TemplateKind, TrackReferences, ViewScore, ViewSe
 pub use seed::keypoint_grid_offset;
 
 pub(crate) use align::resolve_reference;
+pub(super) use seed::seed_frame;
+#[cfg(test)]
 pub(super) use seed::seed_offset;
 
 // Search machinery, re-exported into this module's namespace for the sibling
@@ -306,7 +308,7 @@ pub(super) fn project(view: &ProjectedImage<'_>, p: &Point3<f64>, w: f64) -> Opt
     (px >= 0.0 && py >= 0.0 && px < iw && py < ih).then_some((px, py))
 }
 
-/// The patch centre re-anchored on the plane by an in-plane offset `(au, av)` in
+/// The centre of `patch` moved within its own plane by an offset `(au, av)` in
 /// patch-grid px: `X_p + au·wpp_u·û − av·wpp_v·v̂`. Grid rows count *downward*
 /// from `+v̂` (they map to `−v_axis`, matching `WarpMap::from_patch`), so a
 /// positive `av` steps along `−v̂`.
@@ -323,8 +325,9 @@ pub(crate) fn shifted_center(
 /// Render one view's context tile / cache with the patch centre at in-plane
 /// offset `(au, av)` (patch-grid px). The context patch spans `context_res / R`
 /// times the core extent, rendered at `context_res`, so each context pixel equals
-/// one core pixel in world units. The localizer calls it **once per view**
-/// with `(au, av)` at the view's starting keypoint: the core at shift `(0, 0)`
+/// one core pixel in world units. The localizer calls it **once per view**, on
+/// the view's frame slid onto its starting keypoint (`seed_frame`) with
+/// `(au, av) = (0, 0)`: the core at shift `(0, 0)`
 /// then sits at tile offset `(context_res − R) / 2`.
 ///
 /// **The buffers are reserved before the render, and fallibly.** Their side is

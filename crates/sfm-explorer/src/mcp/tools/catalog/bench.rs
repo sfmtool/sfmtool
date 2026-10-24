@@ -278,9 +278,9 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           so this moves the patch and not a sighting: the centre moves, the axes \
                           and the size are kept, and every observation's keypoint is carried in \
                           3D: a keypoint marks where its photograph sees the patch's centre, so \
-                          that photograph sees the patch slid along its plane onto the keypoint's \
-                          ray, and the point that ray meets the plane moves with the patch and \
-                          is projected again. Name where it goes in \
+                          that photograph sees the patch slid across its line of sight onto the \
+                          keypoint's ray, and that slid centre moves with the patch and is \
+                          projected again. Name where it goes in \
                           exactly one of two ways. `by` is [u, v, n] on the patch's OWN \
                           orthonormal axes, in the reconstruction's scene units: u and v slide it \
                           across its own plane, n moves it along its outward normal, and both \
@@ -290,8 +290,8 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           and the sightings then move by DIFFERENT amounts in their photographs, \
                           that spread being the parallax the old depth was wrong by. Or name a \
                           `pixel` and the photograph it is in, as exactly one of `observation` \
-                          (the outline there is the patch slid along its plane onto that \
-                          sighting's keypoint's ray, and the sighting lands under the pixel) or \
+                          (the outline there is the patch slid across its line of sight onto \
+                          that sighting's keypoint's ray, and the sighting lands under the pixel) or \
                           `camera_image` (an index or an \
                           .sfmr relative path; the outline there is the patch as it stands, and \
                           its own centre lands under the pixel; it is the only form that reaches \
@@ -395,8 +395,8 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           is the edge drag on the Image Detail panel's bench layer: the pixel is \
                           unprojected onto the patch's own plane, so the edge lands there exactly \
                           through whatever distortion the lens has. The photograph is exactly \
-                          one of `observation`, whose outline is the patch slid along its plane \
-                          onto that sighting's keypoint's ray, or \
+                          one of `observation`, whose outline is the patch slid across its line \
+                          of sight onto that sighting's keypoint's ray, or \
                           `camera_image`, whose outline is the patch as it stands \
                           (the ghost outline of an image the track has no sighting in). \
                           A patch is square, so a resize is one scale and not two. Nothing \

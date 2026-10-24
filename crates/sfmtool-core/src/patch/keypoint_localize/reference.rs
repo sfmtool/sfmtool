@@ -28,7 +28,7 @@ use super::align::Template;
 use super::search::{search_shift, search_shift_plus_descent, SearchScratch};
 use super::{
     extract_core, member_self_similarity_radius, project, render_context, resolve_reference,
-    seed_offset, shifted_center, KeypointLocalizeParams, LocalizeError,
+    seed_frame, shifted_center, KeypointLocalizeParams, LocalizeError,
 };
 use crate::patch::cloud::OrientedPatch;
 use crate::patch::keypoint_subpixel::ReferenceTemplate;
@@ -204,14 +204,15 @@ impl TrackReferences {
         let mut raws: Vec<(usize, Vec<f32>)> = Vec::with_capacity(references.len());
         for (k, (&image, &kp)) in references.iter().zip(keypoints).enumerate() {
             let view = &views[image as usize];
-            let Some(off) = seed_offset(patch, view, kp, wpp[0], wpp[1]) else {
+            let (patch_frame, followed) = seed_frame(patch, view, Some(kp));
+            if !followed {
                 continue;
-            };
+            }
             let Ok(tile) = render_context(
-                patch,
+                &patch_frame,
                 view,
-                off[0],
-                off[1],
+                0.0,
+                0.0,
                 wpp[0],
                 wpp[1],
                 resolution,
@@ -394,14 +395,12 @@ impl TrackReferences {
         out.projection = [proj.0, proj.1];
         let r = self.resolution as usize;
         let margin = params.search.ceil().max(1.0) as i64;
-        let start = seed
-            .and_then(|kp| seed_offset(patch, view, kp, self.wpp[0], self.wpp[1]))
-            .unwrap_or([0.0, 0.0]);
+        let (patch_frame, _) = seed_frame(patch, view, seed);
         let tile = render_context(
-            patch,
+            &patch_frame,
             view,
-            start[0],
-            start[1],
+            0.0,
+            0.0,
             self.wpp[0],
             self.wpp[1],
             self.resolution,
@@ -464,13 +463,7 @@ impl TrackReferences {
         }
         out.peak_zncc = sh.peak;
         out.at_edge = on_edge(sh.ix, sh.iy);
-        let center = shifted_center(
-            patch,
-            start[0] + sh.dx,
-            start[1] + sh.dy,
-            self.wpp[0],
-            self.wpp[1],
-        );
+        let center = shifted_center(&patch_frame, sh.dx, sh.dy, self.wpp[0], self.wpp[1]);
         out.keypoint = project(view, &center, patch.w).map(|(x, y)| [x, y]);
         Ok(out)
     }
@@ -480,7 +473,7 @@ impl TrackReferences {
     ///
     /// The same measurement [`Self::build`] took of each reference, so the
     /// numbers are comparable with [`Self::zncc`] and [`Self::pair_zncc`].
-    /// `None` when the keypoint does not unproject onto the patch or the core
+    /// `None` when the slide refuses the keypoint (`seed_frame`) or the core
     /// leaves the frame.
     pub fn score(
         &self,
@@ -491,12 +484,15 @@ impl TrackReferences {
     ) -> Option<ViewScore> {
         let r = self.resolution as usize;
         let n = self.support.pixels.len();
-        let off = seed_offset(patch, view, keypoint, self.wpp[0], self.wpp[1])?;
+        let (patch_frame, followed) = seed_frame(patch, view, Some(keypoint));
+        if !followed {
+            return None;
+        }
         let tile = render_context(
-            patch,
+            &patch_frame,
             view,
-            off[0],
-            off[1],
+            0.0,
+            0.0,
             self.wpp[0],
             self.wpp[1],
             self.resolution,

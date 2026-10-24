@@ -1678,7 +1678,7 @@ plane, so the edge lands there through whatever distortion the lens has and the
 opposite edge is left where it was. **The photograph is exactly one of
 `observation` and `camera_image`**, and the two name different squares, which
 is why a call carrying both is refused. An `observation` names that sighting's
-outline, the patch slid along its plane onto its keypoint's ray. A
+outline, the patch slid across its line of sight onto its keypoint's ray. A
 `camera_image`, by index or by
 name, names the patch as it stands seen in that image, which is Image Detail's
 ghost outline, and it is the only form that reaches an image the track has no

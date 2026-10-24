@@ -379,8 +379,8 @@ impl Layer {
     /// One outline for the image rather than one per observation, because there
     /// is one patch: two sightings in a photograph are two readings of where
     /// it lands, not two squares. Its colour is `in` when either is, so an
-    /// image the track is `in` reads as `in`. It is the patch slid along its
-    /// plane until its centre sits on that sighting's keypoint's ray
+    /// image the track is `in` reads as `in`. It is the patch slid across its
+    /// line of sight until its centre sits on that sighting's keypoint's ray
     /// ([`geometry::SeenSquare`]): a keypoint marks where this photograph sees
     /// the patch's centre, so a gap between it and the centre's projection
     /// means the photograph sees the patch slid there. That is the square the
@@ -391,9 +391,9 @@ impl Layer {
     /// The normal stands out of the slid centre, so it leaves the sighting's
     /// dot: the arrow belongs to the square drawn, and one standing out of the
     /// hollow centre instead would part from its own outline by the projection
-    /// offset. The slid patch is the patch moved across its own plane, so its
-    /// normal line is parallel to the patch's and a depth or a facing read off
-    /// either is the same. Every handle reads the pointer against the slid
+    /// offset. The slid patch is a parallel copy of the patch, so its normal
+    /// line is parallel to the patch's, and a facing or a change of depth read
+    /// off either is the same. Every handle reads the pointer against the slid
     /// patch, so the square a person looks at is the one the pointer is read
     /// against.
     fn build_track_stage(

@@ -1430,7 +1430,7 @@ fn the_bench_layer_outlines_the_patch_where_its_corners_project() {
         ],
     );
     let photograph = pixels(640, 480);
-    // The outline is the patch slid along its plane onto this image's
+    // The outline is the patch slid onto this image's
     // keypoint's ray, so each corner is the slid patch's corner projected.
     // (`with_a_gap_the_outline_is_the_patch_slid_onto_the_keypoints_ray` checks
     // it with a gap that is not nothing.)
@@ -2394,7 +2394,7 @@ fn version_labels(state: &crate::state::AppState, id: crate::scene::ReconId) -> 
         .collect()
 }
 
-/// The patch as one sighting's photograph sees it, slid along its plane onto
+/// The patch as one sighting's photograph sees it, slid onto
 /// the sighting's keypoint's ray: the outline the layer draws there, and the
 /// geometry every handle of it is placed by.
 fn outline_at(
@@ -4044,7 +4044,7 @@ fn gapped_oblique_fixture() -> (SceneNode, sfmtool_core::bench::EditableTrack) {
 
 /// Where the `(s, t)` point of `track`'s patch is seen in observation 0's
 /// photograph, worked out here rather than through the layer's code: the
-/// patch slid along its plane until its centre sits on the keypoint's ray
+/// patch slid until its centre sits on the keypoint's ray
 /// (`OrientedPatch::anchored_at_keypoint`), projected.
 fn seen_by_hand(
     node: &SceneNode,
@@ -4149,8 +4149,8 @@ fn off_the_plus_u_edge(point: [f64; 2], square: impl Fn(f64, f64) -> [f64; 2]) -
         .fold(f64::INFINITY, f64::min)
 }
 
-/// With a gap, the outline a member image draws is the patch slid along its
-/// plane onto the keypoint's ray, which is the square the tile is cut through,
+/// With a gap, the outline a member image draws is the patch slid
+/// onto the keypoint's ray, which is the square the tile is cut through,
 /// and the normal's arrow leaves the keypoint: a keypoint marks where the
 /// photograph sees the patch's centre, so the photograph sees the patch slid
 /// there. It is not the patch's projection shifted in 2D by the gap, which on

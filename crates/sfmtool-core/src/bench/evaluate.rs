@@ -1689,38 +1689,49 @@ fn evaluate_track(
                     measurement.reprojection_error = finite(error);
                     measurement.ray_angle_deg = finite(angle);
                 }
-                let tile = render_view_tile(
-                    &patch_frame,
-                    view,
-                    Some(pixel),
-                    resolution,
-                    options.localize.sampler,
-                    &phase,
-                );
-                let similarity = view_tile_self_similarity(&tile);
-                measurement.zncc_self_similarity_radius = similarity.radius;
-                measurement.zncc_self_similarity_radius_middle = similarity.middle;
-                measurement.zncc_self_similarity_radius_grid = similarity.grid;
-                measurement.zncc_self_similarity_ellipse = similarity.ellipse;
-                measurement.zncc_self_similarity_ellipse_middle = similarity.ellipse_middle;
-                measurement.zncc_self_similarity_ellipse_grid = similarity.ellipse_grid;
-                measurement.zncc_self_similarity_surface = similarity.surface;
-                measurement.zncc_self_similarity_tolerance = similarity.tolerance;
-                measurement.viewing_angle_deg = tile.viewing_angle.map(|a| a.angle_deg);
-                measurement.tilt_direction_deg =
-                    tile.viewing_angle.and_then(|a| a.tilt_direction_deg);
-                measurement.zoom = tile
-                    .jacobian
-                    .map(crate::patch::observation_reading::zoom_of_jacobian);
-                measurement.reading_options =
-                    Some(crate::reconstruction::observation_reading_options(
-                        options.localize.sampler,
+                // A keypoint off the photograph names no place on it, so there
+                // is no tile to read there and the row keeps its `OffSensor`
+                // reason. (Where the slide refuses such a keypoint the tile
+                // would be the patch as it stands, which is not where the row
+                // points.)
+                let on_sensor = pixel[0] >= 0.0
+                    && pixel[1] >= 0.0
+                    && pixel[0] < f64::from(view.camera.width)
+                    && pixel[1] < f64::from(view.camera.height);
+                if on_sensor {
+                    let tile = render_view_tile(
+                        &patch_frame,
+                        view,
+                        Some(pixel),
                         resolution,
-                        MemberCoherenceParams::default().window,
-                    ));
-                measurement.coverage = Some(tile.coverage);
-                measurement.clipped_share = tile.clipped_share;
-                kept_tiles.push((i, tile));
+                        options.localize.sampler,
+                        &phase,
+                    );
+                    let similarity = view_tile_self_similarity(&tile);
+                    measurement.zncc_self_similarity_radius = similarity.radius;
+                    measurement.zncc_self_similarity_radius_middle = similarity.middle;
+                    measurement.zncc_self_similarity_radius_grid = similarity.grid;
+                    measurement.zncc_self_similarity_ellipse = similarity.ellipse;
+                    measurement.zncc_self_similarity_ellipse_middle = similarity.ellipse_middle;
+                    measurement.zncc_self_similarity_ellipse_grid = similarity.ellipse_grid;
+                    measurement.zncc_self_similarity_surface = similarity.surface;
+                    measurement.zncc_self_similarity_tolerance = similarity.tolerance;
+                    measurement.viewing_angle_deg = tile.viewing_angle.map(|a| a.angle_deg);
+                    measurement.tilt_direction_deg =
+                        tile.viewing_angle.and_then(|a| a.tilt_direction_deg);
+                    measurement.zoom = tile
+                        .jacobian
+                        .map(crate::patch::observation_reading::zoom_of_jacobian);
+                    measurement.reading_options =
+                        Some(crate::reconstruction::observation_reading_options(
+                            options.localize.sampler,
+                            resolution,
+                            MemberCoherenceParams::default().window,
+                        ));
+                    measurement.coverage = Some(tile.coverage);
+                    measurement.clipped_share = tile.clipped_share;
+                    kept_tiles.push((i, tile));
+                }
             }
             if measurement.seed_shift_px.is_some() {
                 measured += 1;
@@ -1847,9 +1858,9 @@ fn read_round(
             continue;
         }
         let peak = localized.keypoints[slot];
-        // The shift is read on the patch's plane, in grid px, the unit of the
-        // bar and of the self-similarity radius: both ends through the same
-        // unprojection the localizer seeds from.
+        // The shift is read between the patch slid onto each end, in grid px,
+        // the unit of the bar and of the self-similarity radius: both ends
+        // through the same slide the localizer seeds from.
         let view = &images[image as usize];
         let shift = match seeds[at] {
             Some(seed) => grid_distance(patch_frame, view, seed, peak, &params),
@@ -1923,8 +1934,10 @@ pub(super) fn round_cache_bytes(
         .fold(0usize, |total, bytes| total.saturating_add(bytes))
 }
 
-/// The distance from `from` to `to`, two pixels of `view`, on `patch_frame`'s plane
-/// in patch-grid px, or `NaN` where either does not reach the plane.
+/// The distance from `from` to `to`, two pixels of `view`, in patch-grid px:
+/// between the centres of `patch_frame` slid onto each, which lie in the plane
+/// through the centre facing the camera ([`keypoint_grid_offset`]), or `NaN`
+/// where the slide refuses either.
 pub(super) fn grid_distance(
     patch_frame: &OrientedPatch,
     view: &ProjectedImage<'_>,

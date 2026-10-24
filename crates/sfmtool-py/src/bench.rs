@@ -1166,9 +1166,9 @@ fn set_reference(
 /// patch and every observation is a view of it, so the centre moves in-plane,
 /// the half-vectors and the normal are kept, and every observation's keypoint
 /// is carried in 3D. A keypoint marks where its photograph sees the patch's
-/// centre, so that photograph sees the patch slid along its plane onto the
-/// keypoint's ray; the point that ray meets the plane moves with the patch and
-/// is projected again. A sighting never localized takes the projection of the
+/// centre, so that photograph sees the patch slid onto the
+/// keypoint's ray; that slid centre moves with the patch and is projected
+/// again. A sighting never localized takes the projection of the
 /// moved centre. Nothing is pinned -- a
 /// translation says where the patch is, not whether a sighting belongs to it --
 /// and the measurements and the bitmap go, because all of them were read at a

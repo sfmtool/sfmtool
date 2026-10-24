@@ -333,8 +333,9 @@ pub fn split(
 // Placing a sighting, and moving, sizing and turning the patch, by hand.
 
 /// Which photograph a pixel of a gesture is in, and so which square it is
-/// read against: an observation's image, the patch slid along its plane onto
-/// its keypoint's ray, or any image by its index, the patch as it stands.
+/// read against: an observation's image, the patch slid across its line of
+/// sight onto its keypoint's ray, or any image by its index, the patch as it
+/// stands.
 pub enum Viewpoint {
     Observation(usize),
     Image(u32),
@@ -2263,17 +2264,21 @@ shape per sighting, so there each gesture is that sighting's own.
 **A keypoint marks where its photograph sees the patch's centre.** The
 track's position *is* the patch's centre, and a keypoint is where one
 photograph sees it. A gap between a keypoint and the centre's projection means
-that photograph sees the patch **slid along its own plane** until its centre
-sits on the keypoint's ray, at `q_i`, the point where that ray meets the plane
-(`OrientedPatch::anchored_at_keypoint`). The slid patch is the square that
+that photograph sees the patch **slid across its line of sight** until its
+centre sits on the keypoint's ray, at `q_i`, the point where that ray meets the
+plane through the centre facing that camera
+(`OrientedPatch::anchored_at_keypoint`, [patch-cloud.md](../patch/patch-cloud.md)).
+The slid patch keeps the patch's axes and size, so it is a parallel copy of the
+patch, in general off its plane. The slid patch is the square that
 photograph shows, with the perspective the photograph really has. Its
 projection is what the viewer draws over the photograph, what a pointer on that
 outline is read against, and what the view's tile is cut through: the tile
 through `OrientedPatch::seen_at_keypoint`, and the hand edits through
 `OrientedPatch::anchored_at_keypoint`, which gives the same patch. Where the
-keypoint's ray misses the plane or meets it behind the camera, under any lens
-model, there is no slid patch: the tile and the outline are the patch as it
-stands, and a hand edit through that sighting is refused as `NoProjection`. So
+keypoint's ray points at or past a right angle from the line of sight to the
+centre, which only a ray-path lens can see, there is no slid patch: the tile and
+the outline are the patch as it stands, and a hand edit through that sighting is
+refused as `NoProjection`. So
 the outline, the reading and the tile are one square
 ([`../../gui/multi-panel-image-browser.md`](../../gui/multi-panel-image-browser.md)
 § "The handles").
@@ -2287,11 +2292,15 @@ the far one; each sighting's slid point moves with the patch, so with `P_i` the
 image's projection the keypoint becomes `P_i(q_i + d)`, with `q_i` read on the
 patch as it stood before the step. Under every patch step a sighting that has
 never been localized has no slid point and takes `P_i(c')`, the projection of
-the centre as the step leaves it. A keypoint whose ray misses the plane, or meets
-it behind its camera, has no `q_i`: under a step that keeps the centre it keeps
+the centre as the step leaves it. A keypoint the slide refuses has no `q_i`:
+under a step that keeps the centre it keeps
 its keypoint, and under one that moves the centre it is left with no keypoint
 and `Unmeasured::NoProjection` as its reason, as is one whose carried point no
-longer projects into its photograph. That is the truth about it.
+longer projects into its photograph. That is the truth about it. After a move
+the moved patch's own slid point for the new keypoint lies on the ray through
+`q_i + d` at the depth of the plane facing the camera through `c + d`, a fraction
+of about `|q_i − c|·|d| / depth²` of the depth from `q_i + d`, so a redrawn slid
+square is the carried one to within that rescaling.
 
 Neither turn moves a keypoint. `spin_patch` and `tilt_patch` are two steps
 because they are two different statements with different limits: a spin keeps the plane and the face
@@ -2315,7 +2324,7 @@ units rather than in half-lengths.
 
 **Every** observation's slid point is carried by the displacement: its
 keypoint becomes `P_i(q_i + d)`. The move says where the patch is, and each
-photograph still sees the patch slid by the same amount along its plane. A
+photograph still sees the patch slid by about the same amount. A
 sighting that has never been localized takes `P_i(c')`; one with no `q_i`, or
 whose carried point no longer projects, is left with no keypoint and
 `Unmeasured::NoProjection` as its reason. The axes, the normal and the size are
@@ -2349,14 +2358,16 @@ as `BadPlace`.
 
 **`translate_patch_to_pixel` is that step named as a pixel.** A person dragging the
 outline in a photograph names a place by pointing at it, so the pixel is read
-against the square drawn there: its ray meets the patch's plane, and the offset
-of the meeting from that square's centre, read on `u` and `v` alone, is the `by`
+against the square drawn there: its ray meets that square's plane, which is
+parallel to the patch's, and the offset of the meeting from that square's
+centre, read on `u` and `v` alone, is the `by`
 `translate_patch` is then given. **`Viewpoint` says which square that is.**
 Through `Viewpoint::Observation` it is the patch slid onto that sighting's
 keypoint's ray, centred at `q_i`, so the move carries `q_i` onto the pointer's
 ray and that sighting lands under the pointer, while every other sighting's slid
-point moves with the patch. A keypoint whose ray does not meet the plane in front
-of its camera names no square, and the drag is refused as `NoProjection`. An image
+point moves with the patch. A keypoint the slide refuses names no square, and
+neither does a pointer whose ray meets the square's plane behind its camera; the
+drag is refused as `NoProjection`. An image
 the track has no sighting in draws the patch as it stands (the viewer's ghost
 outline), so through `Viewpoint::Image` the patch's own centre lands under the
 pointer; any image with a camera is accepted, one the track observes included,
@@ -2415,8 +2426,8 @@ stands. The offset of the meeting along the dragged edge's axis, read from that
 square's centre, gives the half-length `(p + h) / 2` that `resize_patch` is then
 handed with that edge. The slid point moves with the centre, so in the image the
 edge was dragged in the redrawn slid square has its dragged edge under the
-pointer and its far edge where it was, and in every other image it moves with
-the patch. At the cluster stage the outline is one sighting's parallelogram, so
+pointer and its far edge where it was, to within the rescaling above, and in
+every other image it moves with the patch. At the cluster stage the outline is one sighting's parallelogram, so
 only a `Viewpoint::Observation` names one and a `Viewpoint::Image` is refused as
 `WrongStage`. The arithmetic is core's rather than each caller's, and there is
 one implementation of the resize, so a tool call, a drag in a photograph and a
@@ -2511,7 +2522,7 @@ hand the track back exactly as it was; the two that **pin** -- a verdict set aga
 by hand, a sighting placed where it already sits -- still pin, because a pin is
 the person's ruling on the row and not the thing the tolerance is about. The
 comparison is not exact, and cannot be: a pixel is turned
-into a ray, met with the patch's own plane and projected back, and the round trip
+into a ray, met with a square's plane and projected back, and the round trip
 returns the place it started from to within the arithmetic's last bits. An exact
 `!=` therefore reads every re-statement of where the patch already is as a move.
 So each step judges in the units of the value it moves -- a centre within `1e-6`

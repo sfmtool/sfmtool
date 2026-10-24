@@ -1976,4 +1976,5 @@ class TestNoEffectAndTheClamp:
         _, report = sight_observation(track, edited, 0, (-500.0, -500.0))
         assert report["clamped"]
         assert tuple(report["clamped_from"]) == (-500.0, -500.0)
-        assert tuple(report["pixel"]) == (0.0, 0.0)
+        # The corner, brought a millionth of a pixel inside it.
+        assert tuple(report["pixel"]) == (1e-6, 1e-6)

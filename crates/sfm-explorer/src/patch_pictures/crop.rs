@@ -113,7 +113,7 @@ pub(crate) struct CropPicture {
 }
 
 /// Where a patch lands in one photograph: the boundary of `patch_frame` slid
-/// along its plane onto `keypoint`'s ray, projected through `camera` at `pose`
+/// across its line of sight onto `keypoint`'s ray, projected through `camera` at `pose`
 /// ([`geometry::SeenSquare`]), the square Image Detail draws there and the
 /// tile is cut through; its two axes measured along their bend; and `target`,
 /// what `projection_of` names, projected with the patch frame's `w`.

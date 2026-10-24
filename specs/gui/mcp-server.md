@@ -5084,7 +5084,7 @@ unprojected onto the patch's own plane, so an edge lands there exactly through
 whatever distortion the lens has, and because a patch is square the whole square
 follows one scale. **A pixel form names its photograph as exactly one of
 `observation` and `camera_image`.** An `observation` means that sighting's
-outline, the patch slid along its plane onto its keypoint's ray, and the pixel
+outline, the patch slid across its line of sight onto its keypoint's ray, and the pixel
 is in its image. A
 `camera_image`, an index or an `.sfmr` relative path as everywhere else, means
 the patch as it stands seen in that image: Image Detail's ghost outline, and the
@@ -5143,8 +5143,9 @@ normal that was named.
 the two tools that move its centre -- the translation and a resize that names a
 moved edge -- carry **every** observation's sighting with the patch, and the
 outline moves in every image at once. A keypoint marks where its photograph
-sees the patch's centre, so that photograph sees the patch slid along its plane
-onto the keypoint's ray, at `q_i` where the ray meets the plane; a move by `d`
+sees the patch's centre, so that photograph sees the patch slid across its line
+of sight onto the keypoint's ray, at `q_i` where the ray meets the plane through
+the centre facing that camera; a move by `d`
 puts the keypoint at the projection of `q_i + d`. Where the displacement runs
 along the plane the photographs see nearly the same displacement; where it runs
 along the normal they see *different* ones, and that spread is the parallax the

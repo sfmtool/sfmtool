@@ -126,7 +126,7 @@ pub struct KeypointRefinement {
     /// [`KeypointSubpixelParams::render_bitmaps`] is set: the view whose tile
     /// [`Self::representative`] is. `None` where there was none (fewer than
     /// two views, no view the reference-view rule finds eligible, or the
-    /// reference's core is out of frame at its keypoint or does not map onto
-    /// the patch plane), in which case no view moves.
+    /// reference's core is out of frame at its keypoint or the slide refuses
+    /// that keypoint), in which case no view moves.
     pub reference: Option<usize>,
 }

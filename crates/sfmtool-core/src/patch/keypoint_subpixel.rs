@@ -67,7 +67,7 @@
 
 use crate::camera::image::ImageF32WithGrad;
 use crate::patch::cloud::{OrientedPatch, PatchCloud};
-use crate::patch::keypoint_localize::{project, resolve_reference, seed_offset, shifted_center};
+use crate::patch::keypoint_localize::{project, resolve_reference, seed_frame, shifted_center};
 use crate::patch::normal_refine::{build_support, ProjectedImage, Support};
 use crate::progress::{Cancelled, Progress};
 use rayon::prelude::*;
@@ -115,12 +115,15 @@ struct ViewState {
     /// The view's starting keypoint as given, source px (`None` starts at the
     /// projection).
     keypoint: Option<[f64; 2]>,
-    /// Seed offset `(au, av)` in patch-grid px (the keypoint at refine start).
-    seed: [f64; 2],
-    /// Whether `seed` is where `keypoint` is: no keypoint was given, or it maps
-    /// onto the patch plane. When it does not, `seed` is the projection.
+    /// The patch slid onto `keypoint` (`seed_frame`): the frame every render
+    /// of the view is cut through and every offset is read on, from its centre.
+    patch_frame: OrientedPatch,
+    /// Whether `patch_frame` is at `keypoint`: no keypoint was given, or the slide
+    /// followed its ray. When it did not, `patch_frame` is the patch, at the
+    /// projection.
     seed_is_keypoint: bool,
-    /// Current offset `(au, av)` in patch-grid px.
+    /// Current offset `(au, av)` from `patch_frame`'s centre in patch-grid px; the
+    /// seed is `(0, 0)`.
     off: [f64; 2],
     /// The view's projection of the point `project_i(X_p)`, source px.
     proj: [f64; 2],
@@ -229,9 +232,7 @@ fn refine_patch_keypoints_impl(
             continue;
         };
         let seed = patch_keypoints.and_then(|seeds| seeds[k]);
-        let unprojected = seed.map(|kp| seed_offset(patch, view, kp, wpp_u, wpp_v));
-        let seed_is_keypoint = !matches!(unprojected, Some(None));
-        let off = unprojected.flatten().unwrap_or([0.0, 0.0]);
+        let (patch_frame, seed_is_keypoint) = seed_frame(patch, view, seed);
         let sampler = params.sampler.for_observation(
             patch,
             view.camera,
@@ -242,9 +243,9 @@ fn refine_patch_keypoints_impl(
         states.push(ViewState {
             idx: i,
             keypoint: seed,
-            seed: off,
+            patch_frame,
             seed_is_keypoint,
-            off,
+            off: [0.0; 2],
             proj: [proj.0, proj.1],
             score: f64::NAN,
             sampler,
@@ -276,9 +277,9 @@ fn refine_patch_keypoints_impl(
         .map(|st| {
             let _phase = render_phase(progress, st.sampler, 1);
             try_render_refine_tile(
-                patch,
+                &st.patch_frame,
                 &views[st.idx as usize],
-                st.seed,
+                [0.0; 2],
                 wpp_u,
                 wpp_v,
                 resolution,
@@ -317,13 +318,13 @@ fn refine_patch_keypoints_impl(
 
     // The template `T`: the reference's core at its own keypoint,
     // z-normalized with `√w` folded in. Never blurred. A reference whose
-    // keypoint does not map onto the patch plane has no core there.
+    // keypoint the slide refuses has no core there.
     let template: Option<Vec<f32>> = match anchor {
         Some(a) if !states[a].seed_is_keypoint => None,
         Some(a) => {
             let st = &states[a];
             core_value(
-                patch,
+                &st.patch_frame,
                 &views[st.idx as usize],
                 tiles[a].as_ref(),
                 st.off[0],
@@ -344,7 +345,7 @@ fn refine_patch_keypoints_impl(
         None => None,
     };
     // As in the localizer, a reference whose core cannot be rendered at its
-    // keypoint (out of frame, flat, or off the patch plane) is no reference:
+    // keypoint (out of frame, flat, or refused by the slide) is no reference:
     // nothing is aligned, every view keeps its seed unscored, and no stored
     // bitmap is rendered.
     if template.is_none() {
@@ -361,7 +362,6 @@ fn refine_patch_keypoints_impl(
                 continue;
             }
             refine_one_view(
-                patch,
                 &views[states[si].idx as usize],
                 tiles[si].as_ref(),
                 &mut states[si],
@@ -466,7 +466,6 @@ impl GnScratch {
 /// reuses `g` as the value core for the normal equations.
 #[allow(clippy::too_many_arguments)]
 fn refine_one_view(
-    patch: &OrientedPatch,
     view: &ProjectedImage<'_>,
     tile: Option<&RefineTile>,
     st: &mut ViewState,
@@ -488,6 +487,8 @@ fn refine_one_view(
     } = scratch;
     let n = support.pixels.len();
     let sampler = st.sampler;
+    // Every offset is read on the view's own frame, slid onto its seed.
+    let patch = &st.patch_frame.clone();
 
     // Score at a candidate offset; `None` if the core left the frame.
     let score_at = |off: [f64; 2], g: &mut [f32], zbuf: &mut [f32]| -> Option<f64> {
@@ -537,8 +538,7 @@ fn refine_one_view(
         let mut accepted = false;
         for _ in 0..params.line_search_max.max(1) {
             let cand = [cur[0] + alpha * step[0], cur[1] + alpha * step[1]];
-            let du = cand[0] - st.seed[0];
-            let dv = cand[1] - st.seed[1];
+            let (du, dv) = (cand[0], cand[1]);
             if (du * du + dv * dv).sqrt() <= params.max_offset_px {
                 prof::count(&prof::N_LINE_SEARCH, 1);
                 if let Some(s) = score_at(cand, g, zbuf) {
@@ -580,12 +580,12 @@ fn finalize(
     let mut out = KeypointRefinement::default();
     for (si, st) in states.iter().enumerate() {
         let view = &views[st.idx as usize];
-        let center = shifted_center(patch, st.off[0], st.off[1], wpp_u, wpp_v);
+        let center = shifted_center(&st.patch_frame, st.off[0], st.off[1], wpp_u, wpp_v);
         let projected = project(view, &center, patch.w).unwrap_or((st.proj[0], st.proj[1]));
         // The reference's keypoint, and any view's that did not move (no
         // template, or the guard kept its seed), is returned exactly as it was
         // given rather than through a round trip onto the plane.
-        let unmoved = Some(si) == anchor || (st.off == st.seed && st.seed_is_keypoint);
+        let unmoved = Some(si) == anchor || (st.off == [0.0; 2] && st.seed_is_keypoint);
         let (kx, ky) = match (unmoved, st.keypoint) {
             (true, Some([x, y])) => (x, y),
             _ => projected,
@@ -666,7 +666,10 @@ pub fn refine_view_against_reference(
             if view.pyramid.level(0).channels() as usize != channels {
                 return None;
             }
-            let off = seed_offset(patch, view, keypoint, wpp_u, wpp_v)?;
+            let (patch_frame, followed) = seed_frame(patch, view, Some(keypoint));
+            if !followed {
+                return None;
+            }
             let sampler = params.sampler.for_observation(
                 patch,
                 view.camera,
@@ -675,8 +678,18 @@ pub fn refine_view_against_reference(
                 resolution,
             );
             if !core_value(
-                patch, view, None, off[0], off[1], wpp_u, wpp_v, resolution, sampler, &support,
-                channels, &mut raw,
+                &patch_frame,
+                view,
+                None,
+                0.0,
+                0.0,
+                wpp_u,
+                wpp_v,
+                resolution,
+                sampler,
+                &support,
+                channels,
+                &mut raw,
             ) {
                 return None;
             }
@@ -685,13 +698,16 @@ pub fn refine_view_against_reference(
     znorm_core(&raw, &support, channels, &mut tmpl);
 
     let proj = project(target_view, &patch.center, patch.w)?;
-    let seed = seed_offset(patch, target_view, target_keypoint, wpp_u, wpp_v)?;
+    let (patch_frame, followed) = seed_frame(patch, target_view, Some(target_keypoint));
+    if !followed {
+        return None;
+    }
     let mut state = ViewState {
         idx: target,
         seed_is_keypoint: true,
         keypoint: Some(target_keypoint),
-        seed,
-        off: seed,
+        patch_frame,
+        off: [0.0; 2],
         proj: [proj.0, proj.1],
         score: f64::NAN,
         sampler: params.sampler.for_observation(
@@ -705,9 +721,9 @@ pub fn refine_view_against_reference(
     let mut scratch = GnScratch::new(channels * n);
     let pad = (params.max_offset_px.max(0.0).ceil() as u32).max(1) + 2;
     let tile = try_render_refine_tile(
-        patch,
+        &state.patch_frame,
         target_view,
-        seed,
+        [0.0; 2],
         wpp_u,
         wpp_v,
         resolution,
@@ -716,7 +732,6 @@ pub fn refine_view_against_reference(
         &mut scratch.img,
     );
     refine_one_view(
-        patch,
         target_view,
         tile.as_ref(),
         &mut state,
@@ -732,7 +747,7 @@ pub fn refine_view_against_reference(
     if !state.score.is_finite() {
         return None;
     }
-    let center = shifted_center(patch, state.off[0], state.off[1], wpp_u, wpp_v);
+    let center = shifted_center(&state.patch_frame, state.off[0], state.off[1], wpp_u, wpp_v);
     project(target_view, &center, patch.w).map(|(x, y)| ([x, y], state.score))
 }
 

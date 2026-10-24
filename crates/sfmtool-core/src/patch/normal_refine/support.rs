@@ -9,7 +9,6 @@
 use nalgebra::Vector3;
 
 use crate::patch::cloud::OrientedPatch;
-use crate::patch::keypoint_localize;
 
 use super::params::{PatchWindow, ProjectedImage, Sampler, SamplerChoice, FLAT_NORM_SQ_EPS};
 
@@ -327,19 +326,19 @@ pub(super) fn repose_patch(base: &OrientedPatch, n: &Vector3<f64>) -> OrientedPa
     p
 }
 
-/// The patch to render into `view`: when `keypoint` is given, recenter `patch`
-/// in-plane so it projects at that keypoint (falling back to `patch` if the ray
-/// is degenerate); otherwise `patch` unchanged.
+/// The patch to render into `view`: when `keypoint` is given, `patch` slid
+/// onto the keypoint's ray ([`OrientedPatch::keypoint_slide_offset`]), falling
+/// back to `patch` where the slide refuses it; otherwise `patch` unchanged.
 ///
-/// Borrows `patch` in the no-keypoint hot path (and on a degenerate ray), so a
-/// refinement without keypoints allocates nothing extra. With a keypoint, the
-/// `wpp` factors cancel in the `seed_offset → shifted_center` round trip, so they
-/// are passed as `1.0`.
+/// Borrows `patch` in the no-keypoint hot path (and on a refused slide), so a
+/// refinement without keypoints allocates nothing extra. The slid centre is
+/// where the keypoint's ray meets the plane through the centre facing the
+/// camera, which does not depend on the patch's normal, so every candidate
+/// normal a refinement tries for this view is rendered about the same point.
 ///
-// TODO(perf): the keypoint's world ray in `seed_offset` is invariant across
-// candidate normals (only the ray∩plane intersection depends on the plane), but
-// it is recomputed every candidate/level here. If keypoint-anchored refine ever
-// becomes hot, precompute the per-view world ray once per refine call.
+// TODO(perf): that slid centre is invariant across candidate normals, but it is
+// recomputed every candidate/level here. If keypoint-anchored refine ever
+// becomes hot, compute it once per view per refine call.
 pub(in crate::patch) fn view_render_patch<'a>(
     patch: &'a OrientedPatch,
     view: &ProjectedImage<'_>,
@@ -349,12 +348,15 @@ pub(in crate::patch) fn view_render_patch<'a>(
     let Some(kp) = keypoint else {
         return Cow::Borrowed(patch);
     };
-    let Some([au, av]) = keypoint_localize::seed_offset(patch, view, kp, 1.0, 1.0) else {
+    let Some(offset) = patch.keypoint_slide_offset(view.camera, view.cam_from_world, kp) else {
         return Cow::Borrowed(patch);
     };
-    let center = keypoint_localize::shifted_center(patch, au, av, 1.0, 1.0);
-    let mut shifted =
-        OrientedPatch::from_center_normal(center, patch.normal(), patch.v_axis, patch.half_extent);
+    let mut shifted = OrientedPatch::from_center_normal(
+        patch.center + offset,
+        patch.normal(),
+        patch.v_axis,
+        patch.half_extent,
+    );
     shifted.w = patch.w;
     Cow::Owned(shifted)
 }

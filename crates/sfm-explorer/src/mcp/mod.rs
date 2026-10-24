@@ -941,8 +941,8 @@ pub(crate) enum PinRows {
 /// Which photograph a pixel form names its pixel in: the wire's spelling of
 /// `sfmtool_core::bench::Viewpoint`.
 ///
-/// Either an observation, whose image shows the patch slid along its plane onto
-/// its keypoint's ray, or a camera image in either of its two spellings, which
+/// Either an observation, whose image shows the patch slid across its line of
+/// sight onto its keypoint's ray, or a camera image in either of its two spellings, which
 /// shows the
 /// patch as it stands: the ghost outline's square in an image the track has no
 /// sighting in. The camera image is resolved against the node when the call

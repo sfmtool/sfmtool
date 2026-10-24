@@ -538,8 +538,8 @@ committed structure; the strokes are thicker than a feature ellipse's.
 What is drawn is the track's own geometry rather than a symbol for it, and
 differs by stage:
 
-- At the **track stage**, the square boundary of the patch **slid along its
-  own plane until its centre sits on this image's keypoint's ray**
+- At the **track stage**, the square boundary of the patch **slid across its
+  line of sight until its centre sits on this image's keypoint's ray**
   (`bench::geometry::SeenSquare`, through `OrientedPatch::seen_at_keypoint`),
   sampled, each sample pushed through the camera's own forward projection, and
   drawn as a closed polyline. A keypoint marks where its photograph sees the
@@ -547,9 +547,9 @@ differs by stage:
   means this photograph sees the patch slid there, and projecting the slid
   patch gives the square with the perspective the photograph really has. It is
   the square Track View's tile is cut through, so the outline over the
-  photograph and the tile beside it are one square. Where the keypoint's ray
-  does not meet the plane the outline is the patch as it stands, as the tile
-  is. The patch's own projection is the hollow centre the offset segments run
+  photograph and the tile beside it are one square. Where the slide refuses
+  the keypoint's ray (at or past a right angle to the line of sight, which only
+  a ray-path lens sees) the outline is the patch as it stands, as the tile is. The patch's own projection is the hollow centre the offset segments run
   to. The outline is the curve a distorting lens really maps that square to,
   rather than the quadrilateral through its four corners:
   `OrientedPatch::boundary` supplies the samples
@@ -713,9 +713,10 @@ and every reading of it -- the dot, an edge, a corner, the normal's segment and
 the arrowhead -- and the core pixel steps read the same slid patch
 (`OrientedPatch::anchored_at_keypoint`), so a dragged edge or corner lands under
 the pointer on the outline as it is redrawn, through whatever distortion the
-lens has and at any slant. A sighting whose keypoint's ray meets the plane behind
-its camera, under any lens model, has no slid square: its outline is the patch
-as it stands, and the core steps refuse a drag through it. The
+lens has and at any slant, to within the rescaling a moved centre gives the
+redrawn slid square ([editable-track.md](../core/bench/editable-track.md)). A
+sighting whose keypoint's ray the slide refuses has no slid square: its outline
+is the patch as it stands, and the core steps refuse a drag through it. The
 normal's two handles read the same ray against the geometry the 3D viewer's do
 (the normal's line, and the plane the arrowhead's gesture reads), on the slid
 patch: the pixel is unprojected through the lens model's own inverse into a ray
@@ -728,8 +729,9 @@ fisheye's pixel names the ray its lens really images there.
 At the track stage the patch is shared, so all three gestures change the
 outline in **every** image. The two that move its centre -- the slide and the
 resize -- also move the track's point and **carry every sighting's slid point
-with the patch in 3D**: with `q_i` where the keypoint's ray meets the plane and
-`d` the centre's displacement, the keypoint becomes the projection of
+with the patch in 3D**: with `q_i` the slid patch's centre, where the
+keypoint's ray meets the plane through the centre facing that camera, and `d`
+the centre's displacement, the keypoint becomes the projection of
 `q_i + d`. The pointer is read against the slid square of the sighting the
 gesture came through, so that sighting lands under the pointer, and the others
 move with the patch. A turn moves the centre nowhere and the slid point is

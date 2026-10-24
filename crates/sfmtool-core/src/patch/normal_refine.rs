@@ -147,8 +147,8 @@ fn refine_patch_normal_impl(
     let w_full = window_weights(params.window, resolution);
     // The fronto cache is keypoint-aware: `prerender` renders each view's base at
     // its keypoint-anchored center and `eval_phi` recenters candidates to match
-    // (the offset is held at the seed normal — a second-order approximation inside
-    // the cache's resampling budget), so keypoints use the same `params.cache`
+    // (the slid centre does not depend on the normal, so holding the offset is
+    // exact), so keypoints use the same `params.cache`
     // (no special-casing in coarse_to_fine).
 
     let unrefined = |valid_view_count: u32| NormalRefineResult {

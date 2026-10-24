@@ -1966,8 +1966,8 @@ pipeline today, a learned detector later — does not change its meaning.
 Because the observed point also carries an oriented patch (the version-3 `(u, v)`
 frame, [Per-point patch frame](#per-point-patch-frame-optional-version-3)), the
 keypoint additionally fixes that observation's patch geometrically: the patch is
-the point's surfel re-anchored within its own plane so that its centre projects
-to the keypoint in this view. An `embedded_patches` file therefore requires the
+the point's surfel moved across the line of sight from this view's camera so that
+its centre projects to the keypoint in this view. An `embedded_patches` file therefore requires the
 patch frame (`has_uv_frames = true`). A writer refuses to write an
 `embedded_patches` file without it, and a reader and a verifier refuse one whose
 `has_uv_frames` is `false` or absent.
@@ -1978,24 +1978,28 @@ For observation `j` with `i = image_indexes[j]`, `p = point_indexes[j]`,
 intrinsics + world→camera pose `(R_i, t_i)`:
 
 1. The surfel lies in the **patch plane** `Π_p` through `X_p` with normal `n`.
-2. The keypoint selects the per-view **anchor** `A_j` — the point on `Π_p` that
-   projects to `k`. Unproject `k` to a world ray (camera centre
-   `o = −R_iᵀ t_i`, direction `d = R_iᵀ · pixel_to_ray(k)`, which inverts
-   distortion for all camera models), then intersect with `Π_p`:
-   `λ = ((X_p − o) · n) / (d · n)`, `A_j = o + λd`.
+2. The keypoint selects the per-view **anchor** `A_j` — the point that projects
+   to `k` on the plane through `X_p` perpendicular to the line of sight
+   `X_p − o`. Unproject `k` to a world ray (camera centre `o = −R_iᵀ t_i`,
+   direction `d = R_iᵀ · pixel_to_ray(k)`, which inverts distortion for all
+   camera models), then intersect with that plane:
+   `λ = |X_p − o|² / (d · (X_p − o))`, `A_j = o + λd`.
 3. The observation's patch is the surfel centred at `A_j` carrying the point's
    frame, `{ A_j + s·u + t·v : (s, t) ∈ [−1, 1]² }`, rendered into image `i` by
    projecting each grid sample through the camera model.
 
 Setting `k = project_i(X_p)` gives `A_j = X_p` — the patch centred on the point,
 the implicit `sift_files`/v3 behaviour — so a keypoint is exactly a per-view
-in-plane shift of the surfel centre, `δ_j = k − project_i(X_p)`. The patch
+shift of the surfel centre across the line of sight, `δ_j = k − project_i(X_p)`,
+and the observation's patch is the surfel translated by `A_j − X_p`, parallel to
+`Π_p`. The patch
 **bitmaps** (`patch_bitmaps_y_x_rgba`, if present) live in the surfel's own
 `(s, t)` frame and are unaffected by the anchor.
 
-Edge cases: the anchor is ill-conditioned for **grazing views** (`|d · n|` near
-zero) — a consumer needing the anchor MAY fall back to `A_j = X_p`; the keypoint
-itself stays a valid 2D observation. For a **point at infinity** (`w = 0`) the
+Edge cases: there is no anchor when `d · (X_p − o) <= 0`, a ray at or past a
+right angle to the line of sight, which only a wide-angle model can produce — a
+consumer needing the anchor MAY fall back to `A_j = X_p`; the keypoint itself
+stays a valid 2D observation. For a **point at infinity** (`w = 0`) the
 patch is a region of the direction sphere rather than a plane (see the patch-frame
 section), and the anchor is defined analogously on that frame.
 

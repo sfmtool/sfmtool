@@ -414,7 +414,7 @@ cuts a row's crop with,
 ([track-view.md](track-view.md) § "The observation table").
 
 - **What it shows** is Track View's crop rule applied to the point's reference
-  observation: the patch frame (with the point's `w`) slid along its plane onto
+  observation: the patch frame (with the point's `w`) slid across its line of sight onto
   that observation's keypoint's ray, its boundary projected through the camera's
   own model, the bounding box of the outline widened by one photograph pixel and
   made square, read at most 128 texels a side. The outline is drawn over it.

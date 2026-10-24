@@ -453,12 +453,12 @@ pub(crate) fn pixel_ray(
     Some((pose.inverse_translation_origin(), unit(direction)?))
 }
 
-/// The patch as one photograph sees it: the patch slid along its own plane
-/// until its centre sits on a sighting's keypoint's ray.
+/// The patch as one photograph sees it: the patch slid across its line of
+/// sight until its centre sits on a sighting's keypoint's ray.
 ///
 /// A keypoint marks where its photograph sees the patch's centre, so a gap
 /// between the keypoint and the projection of the centre means that photograph
-/// sees the patch slid along its plane onto the keypoint's ray. Projecting
+/// sees the patch slid onto the keypoint's ray. Projecting
 /// that slid patch gives the square with the perspective the photograph really
 /// has, its centre on the keypoint. It is the square the view's tile is cut
 /// through: both come from `OrientedPatch::seen_at_keypoint`, so the outline
@@ -495,10 +495,9 @@ impl SeenSquare {
     /// sighting's keypoint's ray.
     ///
     /// The sighting is placed by `Observation::site`, the pixel the core pixel
-    /// steps read. A sighting with no place, and one whose ray does not meet
-    /// the plane, is seen as the patch as it stands, as the tile is cut; the
-    /// core pixel steps refuse a drag through such a sighting, and through one
-    /// whose ray meets the plane behind its camera.
+    /// steps read. A sighting with no place, and one whose ray the slide
+    /// refuses, is seen as the patch as it stands, as the tile is cut; the
+    /// core pixel steps refuse a drag through such a sighting.
     pub(crate) fn of_observation(
         patch: &OrientedPatch,
         camera: &CameraIntrinsics,

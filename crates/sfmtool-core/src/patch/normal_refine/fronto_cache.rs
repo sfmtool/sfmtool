@@ -34,7 +34,6 @@ use super::znorm::znormalize_into;
 use crate::camera::remap::remap_bilinear;
 use crate::camera::WarpMap;
 use crate::patch::cloud::OrientedPatch;
-use crate::patch::keypoint_localize::{seed_offset, shifted_center};
 
 /// Replicate-padded border (base pixels) around each fronto base. A tilted
 /// candidate's footprint *mostly* shrinks inside the fronto base, but a
@@ -62,11 +61,10 @@ struct FrontoBase {
     a0_inv: SMatrix<f64, 3, 3>,
     /// World-space offset of this view's surfel center from `base.center`,
     /// anchoring the base on the view's stored keypoint (zero when none). Computed
-    /// once at the seed normal in [`prerender`]; [`eval_phi`] recenters each
-    /// candidate patch by it so base and candidate stay registered. Holding it at
-    /// the seed normal (rather than recomputing per candidate, as the exact path
-    /// does) is a second-order approximation well inside the cache's resampling
-    /// budget.
+    /// once in [`prerender`]; [`eval_phi`] recenters each candidate patch by it
+    /// so base and candidate stay registered. The slide onto the keypoint crosses
+    /// the line of sight and does not depend on the normal, so holding it is
+    /// exact: it is the offset the exact path computes for every candidate.
     center_offset: Vector3<f64>,
 }
 
@@ -212,13 +210,14 @@ pub(super) fn prerender(
             continue;
         }
         // Anchor on this view's stored keypoint (when given): the surfel center
-        // for this view is the keypoint's ray ∩ the *seed* surfel plane, held fixed
-        // across candidates. Render the fronto base — and later recenter every
-        // candidate (`eval_phi`) — from that point so they stay registered.
+        // for this view is the patch slid onto the keypoint's ray, held fixed
+        // across candidates. The slide crosses the line of sight and does not
+        // depend on the normal, so every candidate's own slid centre is this
+        // one. Render the fronto base — and later recenter every candidate
+        // (`eval_phi`) — from that point so they stay registered.
         let center_offset = view_keypoints
             .and_then(|k| k[vi])
-            .and_then(|kp| seed_offset(&seed_patch, view, kp, 1.0, 1.0))
-            .map(|[au, av]| shifted_center(&seed_patch, au, av, 1.0, 1.0) - base.center)
+            .and_then(|kp| seed_patch.keypoint_slide_offset(view.camera, view.cam_from_world, kp))
             .unwrap_or_else(Vector3::zeros);
         let center_pt = base.center + center_offset;
         // Patch plane faces this camera (least foreshortening → most resolution).

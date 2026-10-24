@@ -166,21 +166,40 @@ impl OrientedPatch {
     /// cheirality is enforced by the projection).
     pub fn is_front_facing(&self, cam_from_world: &RigidTransform) -> bool;
 
-    /// This patch re-centred in its own plane — on its tangent sphere for a
-    /// point at infinity — so that its centre projects exactly onto `keypoint`
-    /// in the given view. `w`, both axes and both half-extents are preserved;
-    /// only `center` moves, by an in-plane vector for a finite patch and to the
-    /// re-normalized direction `normalize(d + a·û + b·v̂)` at infinity, which
-    /// keeps `center` the unit direction rendering reads it as. `None` when the
-    /// keypoint's ray cannot meet the patch: parallel to the plane, meeting it
-    /// behind the camera under any lens model, or pointing away from a
-    /// direction patch.
+    /// This patch moved so that its centre lies on `keypoint`'s ray and
+    /// projects exactly onto `keypoint` in the given view. A finite patch's
+    /// centre `c` moves within the plane through `c` that faces the camera
+    /// centre `C`, to `q = C + r·((c − C)·v)/(r·v)` with `v = (c − C)/|c − C|`
+    /// and `r` the keypoint's ray; at infinity it moves on the tangent sphere
+    /// to the re-normalized direction `normalize(d + a·û + b·v̂)`, which keeps
+    /// `center` the unit direction rendering reads it as. `w`, both axes and
+    /// both half-extents are preserved. `None` when `r·v <= 0` (the ray is at
+    /// or past a right angle to the line of sight), or the ray points away from
+    /// a direction patch.
     pub fn anchored_at_keypoint(
         &self,
         camera: &CameraIntrinsics,
         cam_from_world: &RigidTransform,
         keypoint: [f64; 2],
     ) -> Option<OrientedPatch>;
+
+    /// The move `anchored_at_keypoint` makes, `q − c`, in world units.
+    pub fn keypoint_slide_offset(
+        &self,
+        camera: &CameraIntrinsics,
+        cam_from_world: &RigidTransform,
+        keypoint: [f64; 2],
+    ) -> Option<Vector3<f64>>;
+
+    /// Where `pixel`'s ray meets this patch's own plane, less the centre: how
+    /// a pointer is read against a square. `None` when the ray is parallel to
+    /// the plane or meets it behind the camera.
+    pub fn keypoint_plane_offset(
+        &self,
+        camera: &CameraIntrinsics,
+        cam_from_world: &RigidTransform,
+        pixel: [f64; 2],
+    ) -> Option<Vector3<f64>>;
 
     /// The patch as the view sees it: `anchored_at_keypoint` where that gives
     /// a patch, and the patch itself where there is no keypoint or
@@ -199,14 +218,15 @@ The `up_hint` resolves the one remaining degree of freedom (rotation about the
 normal). For visualization a stable, view-independent choice (e.g. world up, or
 the first observing camera's up axis) keeps a track's patches mutually aligned.
 
-`anchored_at_keypoint` is stated in world units on the patch's own axes, with no
-grid resolution in the signature, because the callers that need it are otherwise
-unrelated: keypoint localization scales the same offset into its search grid's
-steps (`seed_offset`), while the Explorer's per-observation patch tiles
-([track-view.md](../../gui/track-view.md)) warp straight through
-the returned frame so a track's tiles show the pixels that were aligned rather
-than the point's geometric projection. Both share one unprojection, so a seed and
-a rendered tile cannot disagree about where a keypoint puts the patch:
+`anchored_at_keypoint` is stated in world units, with no grid resolution in the
+signature, because the callers that need it are otherwise unrelated: keypoint
+localization renders each view's search through the frame it returns
+(`seed_frame`) and states its offsets from that frame's centre, while the
+Explorer's per-observation patch tiles ([track-view.md](../../gui/track-view.md))
+warp straight through the returned frame so a track's tiles show the pixels that
+were aligned rather than the point's geometric projection. Both use one slide,
+so a seed and a rendered tile cannot disagree about where a keypoint puts the
+patch:
 
 ```rust
 // Render an observation's tile through the frame that view sees the patch in,
@@ -216,8 +236,14 @@ let map = WarpMap::from_patch(&seen, camera, &cam_from_world, 64);
 ```
 
 A keypoint marks where its photograph sees the patch's centre, so the anchored
-frame is the patch slid along its own plane until its centre sits on the
-keypoint's ray: the square that photograph sees.
+frame is the patch slid until its centre sits on the keypoint's ray: the square
+that photograph sees. The slide crosses the line of sight from the camera to the
+centre, so the centre keeps its depth along that line and moves as little as the
+gap asks, whatever the patch's obliquity; the slid square is a parallel copy of
+the patch, off its plane wherever the move has a part along the normal. Because
+the move is stated against the line of sight and not against the plane, it does
+not depend on the normal: turning the patch about its centre leaves every slid
+centre where it was.
 `seen_at_keypoint` is that square with the fallback. A view's tile render
 (`render_view_tile`, which the bench's evaluation scores) and the Explorer's
 outline both read it, and every other render that anchors on a keypoint makes
@@ -229,18 +255,28 @@ The bench's hand edits ([editable-track.md](../bench/editable-track.md) §
 against the patch as it stands would not be read against the square the
 photograph shows.
 
-One rule decides where there is a slid square: the keypoint's ray meets the
-plane in front of the camera, under every lens model (for a direction patch, the
-ray points toward `d`). A ray that meets the plane behind the camera is refused
-whether the lens is a perspective, fisheye or equirectangular one, because a
-patch slid onto a point behind the camera is not a square the photograph saw.
-Such a ray happens with a perspective lens too, for example when a keypoint is
-read against a patch that has been moved or turned since it was measured, or
-when a descriptor search places a candidate. So where the hand edits refuse a
-sighting, its tile and its outline are the unslid patch, and where they accept
-one, the tile, the outline and the reading are the same slid patch.
-`keypoint_plane_offset`, the unprojection under all of these, makes the test, so
-a pointer read against a patch is refused on the same terms.
+One rule decides where there is a slid square: the keypoint's ray points less
+than a right angle from the line of sight to the centre (`r·v > 0`), under every
+lens model (for a direction patch, the ray points toward `d`). Only a ray-path
+lens, a fisheye or an equirectangular one, can see past that angle, and a ray
+there never meets the facing plane in front of the camera. A ray that meets the
+patch's own plane behind the camera, as happens when a keypoint is read against
+a patch that has been turned nearly edge on since it was measured, is slid like
+any other. So where the hand edits refuse a sighting, its tile and its outline
+are the unslid patch, and where they accept one, the tile, the outline and the
+reading are the same slid patch. A pointer is then read against that square's
+own plane, parallel to the patch's, through `keypoint_plane_offset`, which
+refuses a pointer whose ray meets the square's plane behind the camera.
+
+The slide being off the patch's plane has one cost to the kernels that search
+for a keypoint (keypoint localization, sub-pixel refinement): each renders a
+view once, wider than the patch, through the frame slid onto its starting
+keypoint, and reads every shift it tries as a sub-window of that render, which
+is the frame moved within its own plane. The patch slid onto the shifted
+keypoint sits on the same ray at the depth of the plane facing the camera, so a
+sub-window at a shift of `d` is that square rescaled by about
+`|d|·sin θ / depth` (`θ` the viewing angle). Each fit renders afresh at the
+keypoint its localization found before refining it.
 
 `from_affine_shape_at_depth` is the one place the correspondence between a
 keypoint's local **affine shape** and a patch frame is stated in the

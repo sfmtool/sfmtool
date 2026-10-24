@@ -93,17 +93,17 @@ half-length states the whole of its size.
   of Image Detail's offset segment: there the patch's projection is the hollow
   circle and the keypoint the dot, here the patch's centre is the dot and the
   keypoint the circle. The observation's keypoint is a ray from its camera, and
-  that ray names a place `q_i` on the patch's plane through
-  `OrientedPatch::keypoint_plane_offset`, the same unprojection every other
-  reading of a keypoint against a patch goes through. The mark is the segment
-  `c -> q_i` plus a hollow circle at `q_i`, of the same radius `h / 8` and the
-  same 24 segments, drawn in the plane. A track with sixteen observations shows
-  sixteen segments and sixteen circles. An observation with no keypoint, or one
-  whose ray cannot meet the plane in front of its own camera, draws no mark at
-  all and leaves a gap in the list rather than a mark that means nothing. A
-  mark draws no square: `q_i` is the centre of the square that photograph sees,
-  the patch slid along its plane until its centre sits there, which Image
-  Detail draws and the tile is cut through.
+  that ray names a place `q_i`, the centre of the patch slid onto it through
+  `OrientedPatch::keypoint_slide_offset`, the same slide every other reading of
+  a keypoint against a patch goes through: where the ray meets the plane through
+  the centre facing that camera. The mark is the segment `c -> q_i` plus a
+  hollow circle at `q_i`, of the same radius `h / 8` and the same 24 segments,
+  drawn parallel to the patch. A track with sixteen observations shows sixteen
+  segments and sixteen circles. An observation with no keypoint, or one whose
+  ray the slide refuses, draws no mark at all and leaves a gap in the list
+  rather than a mark that means nothing. A mark draws no square: `q_i` is the
+  centre of the square that photograph sees, the patch slid until its centre
+  sits there, which Image Detail draws and the tile is cut through.
 
 When exactly one observation is selected ([bench.md](bench.md) § "The
 selected observations"), its circle is drawn 1.6 times the others'. That is the one thing the figure says about the selection, and it is

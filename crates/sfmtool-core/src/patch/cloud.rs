@@ -500,26 +500,30 @@ impl OrientedPatch {
         (cam_center - self.center).dot(&self.normal()) > 0.0
     }
 
-    /// This patch re-centred in its own plane (or, for a point at infinity, on
-    /// its tangent sphere) so that its centre projects exactly onto `keypoint`
-    /// in the view described by `camera` and `cam_from_world`.
+    /// This patch moved, keeping its axes and size, so that its centre lies on
+    /// `keypoint`'s ray in the view described by `camera` and `cam_from_world`
+    /// and projects exactly onto `keypoint`.
     ///
-    /// `w`, both axes and both half-extents are preserved; only
-    /// [`center`](Self::center) moves — by an in-plane vector on `u_axis` /
-    /// `v_axis` for a finite patch, and to the re-normalized direction
-    /// `normalize(d + a·û + b·v̂)` for a point at infinity, which keeps `center`
-    /// the unit direction that rendering and projection read it as.
+    /// For a finite patch the centre `c` moves within the plane through `c`
+    /// that faces the camera centre `C`: with `v = (c − C)/|c − C|` and `r` the
+    /// keypoint's ray, the moved centre is `q = C + r·((c − C)·v)/(r·v)`. The
+    /// move `q − c` is perpendicular to the line of sight to the centre, so it
+    /// is as short as the gap allows whatever the patch's obliquity, and the
+    /// moved patch is a parallel copy of the patch, off its plane wherever the
+    /// move has a part along the normal. For a point at infinity the centre
+    /// moves on the tangent sphere to the re-normalized direction
+    /// `normalize(d + a·û + b·v̂)`, which keeps `center` the unit direction that
+    /// rendering and projection read it as. Only [`center`](Self::center)
+    /// moves; `w`, both axes and both half-extents are preserved.
     ///
-    /// The offset is world-space and expressed on the patch's own axes, with no
-    /// grid resolution in the signature, so any caller holding a view and a
-    /// measured keypoint gets the frame that view actually sees the patch
-    /// content in — a photometric renderer as much as a registration loop, which
-    /// would otherwise each carry their own copy of this unprojection.
+    /// The offset is world-space ([`Self::keypoint_slide_offset`]), with no grid
+    /// resolution in the signature, so any caller holding a view and a measured
+    /// keypoint gets the frame that view actually sees the patch content in.
     ///
-    /// `None` when the keypoint's ray cannot meet the patch: parallel to the
-    /// plane, meeting it behind the camera (under every lens model), or pointing
-    /// away from a direction patch. A patch slid onto a point behind the camera
-    /// is no square the photograph saw, so there is nothing to anchor to.
+    /// `None` when the keypoint's ray points away from the facing plane
+    /// (`r·v <= 0`, a ray at or past a right angle to the line of sight), when
+    /// the camera centre is the patch centre, or when the ray points away from
+    /// a direction patch.
     ///
     /// ```
     /// # use sfmtool_core::camera::CameraIntrinsics;
@@ -532,7 +536,7 @@ impl OrientedPatch {
     /// #     keypoint: [f64; 2],
     /// # ) {
     /// // Render this observation's tile through the keypoint-anchored frame,
-    /// // falling back to the geometric one when the ray cannot meet the patch.
+    /// // falling back to the geometric one when the ray cannot be followed.
     /// let anchored = patch.anchored_at_keypoint(camera, cam_from_world, keypoint);
     /// let frame = anchored.as_ref().unwrap_or(patch);
     /// # let _ = frame;
@@ -544,7 +548,7 @@ impl OrientedPatch {
         cam_from_world: &RigidTransform,
         keypoint: [f64; 2],
     ) -> Option<Self> {
-        let offset = self.keypoint_plane_offset(camera, cam_from_world, keypoint)?;
+        let offset = self.keypoint_slide_offset(camera, cam_from_world, keypoint)?;
         let mut out = self.clone();
         out.center = self.center + offset;
         if self.w == 0.0 {
@@ -569,8 +573,8 @@ impl OrientedPatch {
     ///
     /// A keypoint marks where its photograph sees the patch's centre, so a gap
     /// between the keypoint and the centre's projection means that photograph
-    /// sees the patch slid along its own plane until its centre sits on the
-    /// keypoint's ray. This is that slid patch. It is the one square a view's
+    /// sees the patch slid across its line of sight until its centre sits on
+    /// the keypoint's ray. This is that slid patch. It is the one square a view's
     /// tile is cut through and the outline a viewer draws over the photograph,
     /// so the two come from this function and cannot differ. The bench's hand
     /// edits read a pointer on that outline against the same slid patch through
@@ -597,31 +601,67 @@ impl OrientedPatch {
             .unwrap_or_else(|| self.clone())
     }
 
-    /// The world-space offset from `center` to where `keypoint`'s back-projected
+    /// The world-space offset from `center` to the centre of the patch slid onto
+    /// `keypoint`'s ray, the move [`Self::anchored_at_keypoint`] makes.
+    ///
+    /// For a finite patch it is `q − c` with `q = C + r·((c − C)·v)/(r·v)`, `C`
+    /// the camera centre, `r` the keypoint's world ray and `v` the unit
+    /// direction from `C` to the centre `c`: the point where the ray meets the
+    /// plane through `c` facing the camera. The offset is perpendicular to `v`,
+    /// and in general it is **not** in the patch's plane. For a direction patch
+    /// (`w == 0`) it is [`Self::keypoint_plane_offset`], whose tangent plane
+    /// already faces every camera.
+    ///
+    /// `None` when `r·v <= 0`, when the camera centre is the patch centre, when
+    /// the meeting is not finite, or, for a direction patch, on
+    /// [`Self::keypoint_plane_offset`]'s refusal.
+    pub fn keypoint_slide_offset(
+        &self,
+        camera: &CameraIntrinsics,
+        cam_from_world: &RigidTransform,
+        keypoint: [f64; 2],
+    ) -> Option<Vector3<f64>> {
+        if self.w == 0.0 {
+            return self.keypoint_plane_offset(camera, cam_from_world, keypoint);
+        }
+        let ray_cam = camera.pixel_to_ray(keypoint[0], keypoint[1]);
+        let dir = cam_from_world.to_rotation_matrix().transpose()
+            * Vector3::new(ray_cam[0], ray_cam[1], ray_cam[2]);
+        let eye = cam_from_world.inverse_translation_origin();
+        let sight = self.center - eye;
+        let depth = sight.norm();
+        if !(depth.is_finite() && depth > 0.0) {
+            return None;
+        }
+        let along = dir.dot(&(sight / depth));
+        if !(along.is_finite() && along > 0.0) {
+            return None;
+        }
+        let offset = (eye + dir * (depth / along)) - self.center;
+        offset.iter().all(|c| c.is_finite()).then_some(offset)
+    }
+
+    /// The world-space offset from `center` to where `pixel`'s back-projected
     /// ray meets this patch: the in-plane hit point for a finite patch, and
     /// `a·û + b·v̂` with `a = (ray·û)/(ray·d)`, `b = (ray·v̂)/(ray·d)` for a
     /// direction patch (`w == 0`), whose sum with `d` is the ray's own bearing.
     /// `None` when the ray is parallel to the plane, meets it behind the camera,
     /// or points away from a direction patch.
     ///
-    /// The shared body of [`Self::anchored_at_keypoint`] and the keypoint
-    /// localizer's seed offset, which scales it into patch-grid steps. `None` on
-    /// the three refusals `anchored_at_keypoint` documents.
-    ///
-    /// Public because it is also how a **pointer** is read against a patch: a
-    /// viewer dragging the projected outline unprojects the pointer onto the
-    /// patch's own plane and reads the offset on its axes, which is this and
-    /// nothing else. Stating it once is what keeps the outline a person drags
-    /// and the frame the drag produces exactly consistent -- an unprojection
-    /// written a second time would agree only to the accuracy of its own
-    /// algebra.
+    /// This is how a **pointer** is read against a square: a viewer dragging a
+    /// projected outline unprojects the pointer onto that square's own plane
+    /// and reads the offset on its axes. Called on the slid patch
+    /// ([`Self::anchored_at_keypoint`]) it reads a pixel against the square a
+    /// photograph shows, in that square's own plane, which is parallel to the
+    /// patch's. Stating the unprojection once keeps the outline a person drags
+    /// and the frame the drag produces exactly consistent.
     pub fn keypoint_plane_offset(
         &self,
         camera: &CameraIntrinsics,
         cam_from_world: &RigidTransform,
-        keypoint: [f64; 2],
+        pixel: [f64; 2],
     ) -> Option<Vector3<f64>> {
-        let ray_cam = camera.pixel_to_ray(keypoint[0], keypoint[1]);
+        let ray_cam = camera.pixel_to_ray(pixel[0], pixel[1]);
         let r = cam_from_world.to_rotation_matrix();
         // World ray direction: R^T · ray_cam (camera-to-world rotation).
         let dir = r.transpose() * Vector3::new(ray_cam[0], ray_cam[1], ray_cam[2]);

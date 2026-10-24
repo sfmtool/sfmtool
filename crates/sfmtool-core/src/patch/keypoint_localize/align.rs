@@ -13,7 +13,7 @@
 use super::search::{search_shift, search_shift_plus_descent, SearchScratch};
 use super::{
     below_absolute_floor, extract_core, member_self_similarity_radius, prof, project,
-    render_context, seed_offset, shifted_center, ContextTile, KeypointLocalization,
+    render_context, seed_frame, shifted_center, ContextTile, KeypointLocalization,
     KeypointLocalizeParams, LocalizeError, SearchStrategy,
 };
 use crate::camera::sampler::Sampler;
@@ -99,16 +99,18 @@ struct AlignedView {
     idx: u32,
     /// The view's starting keypoint, as given (`None` starts at the projection).
     seed: Option<[f64; 2]>,
-    /// The starting offset on the patch grid, `[u, v]` in grid px.
-    start: [f64; 2],
-    /// Whether `start` is where `seed` is: no seed was given, or it maps onto
-    /// the patch plane. When it does not, `start` is the projection instead.
+    /// The patch slid onto `seed` ([`seed_frame`]): the frame the view's tiles
+    /// are rendered through and its offsets are read on.
+    patch_frame: OrientedPatch,
+    /// Whether `patch_frame` is at `seed`: no seed was given, or the seed's ray could
+    /// be followed. When it could not, `patch_frame` is the patch and the view starts
+    /// at the projection instead.
     start_is_seed: bool,
     /// The point's projection into the view, source px.
     proj: [f64; 2],
     /// The sampler every render of the view uses.
     sampler: Sampler,
-    /// The final offset on the patch grid, `[u, v]` in grid px.
+    /// The final offset from `patch_frame`'s centre on its grid, `[u, v]` in grid px.
     off: [f64; 2],
     /// The plain ZNCC against the template at the integer peak.
     zncc: f64,
@@ -210,9 +212,7 @@ pub(super) fn align_to_reference(
             continue;
         };
         let seed = patch_keypoints.and_then(|seeds| seeds[slot]);
-        let unprojected = seed.map(|kp| seed_offset(patch, view, kp, wpp_u, wpp_v));
-        let start_is_seed = !matches!(unprojected, Some(None));
-        let start = unprojected.flatten().unwrap_or([0.0, 0.0]);
+        let (patch_frame, start_is_seed) = seed_frame(patch, view, seed);
         let sampler = params.sampler.for_observation(
             patch,
             view.camera,
@@ -223,11 +223,11 @@ pub(super) fn align_to_reference(
         states.push(AlignedView {
             idx: i,
             seed,
-            start,
+            patch_frame,
             start_is_seed,
             proj: [proj.0, proj.1],
             sampler,
-            off: start,
+            off: [0.0; 2],
             zncc: f64::NAN,
             placed: false,
             localizable: true,
@@ -259,7 +259,7 @@ pub(super) fn align_to_reference(
     progress.check_cancel()?;
 
     // The template, never blurred. The reference's tile is rendered at its
-    // keypoint; one whose keypoint does not map onto the patch plane has no
+    // keypoint; one whose keypoint the slide refuses has no
     // tile there, and so no template.
     let template = match anchor {
         Some(a) if !states[a].start_is_seed => None,
@@ -268,10 +268,10 @@ pub(super) fn align_to_reference(
             prof::count(&prof::N_RENDER, 1);
             let tile = prof::RENDER.time(|| {
                 render_context(
-                    patch,
+                    &st.patch_frame,
                     &views[st.idx as usize],
-                    st.start[0],
-                    st.start[1],
+                    0.0,
+                    0.0,
                     wpp_u,
                     wpp_v,
                     resolution,
@@ -314,8 +314,14 @@ pub(super) fn align_to_reference(
     // that aborts.
     scratch.try_reserve_grids((2 * margin + 1) as usize)?;
     let context_res = resolution + 2 * margin as u32;
-    // The context tile is centred on the view's start, so the `(0, 0)` shift
-    // reads its core at `margin`.
+    // The context tile is centred on the view's frame, slid onto its start, so
+    // the `(0, 0)` shift reads its core at `margin`. The other shifts read the
+    // same render: a sub-window at `d` is the frame moved by `d` within its own
+    // plane, where the patch slid onto that sub-window's keypoint sits on the
+    // same ray at the depth of the plane facing the camera. The two differ in
+    // scale by about `|d|·sin θ / depth` (`θ` the viewing angle), a fraction of a
+    // grid px at the window's edge; the sub-pixel refinement that follows a fit
+    // renders afresh at the keypoint this finds.
     let c0 = margin as usize;
     let mut member_scratch: Vec<f32> = Vec::new();
     for (si, st) in states.iter_mut().enumerate() {
@@ -329,10 +335,10 @@ pub(super) fn align_to_reference(
         prof::count(&prof::N_RENDER, 1);
         let tile = prof::RENDER.time(|| {
             render_context(
-                patch,
+                &st.patch_frame,
                 view,
-                st.start[0],
-                st.start[1],
+                0.0,
+                0.0,
                 wpp_u,
                 wpp_v,
                 resolution,
@@ -362,7 +368,7 @@ pub(super) fn align_to_reference(
             c0,
             params.search_strategy,
         ) {
-            st.off = [st.start[0] + d[0], st.start[1] + d[1]];
+            st.off = d;
             st.zncc = peak;
             st.placed = true;
         }
@@ -474,14 +480,14 @@ fn finish(
         .map(|st| {
             let view = &views[st.idx as usize];
             let is_anchor = Some(st.idx) == anchor;
-            let keypoint = if is_anchor || (st.placed && st.off == st.start && st.start_is_seed) {
+            let keypoint = if is_anchor || (st.placed && st.off == [0.0; 2] && st.start_is_seed) {
                 // The reference's keypoint, and any view's that did not move
                 // (there was nothing to align it to), is returned exactly as
-                // it was given rather than through a round trip onto the
-                // plane.
+                // it was given rather than through a round trip through its
+                // frame.
                 Some(st.seed.unwrap_or(st.proj))
             } else if st.placed {
-                let center = shifted_center(patch, st.off[0], st.off[1], wpp_u, wpp_v);
+                let center = shifted_center(&st.patch_frame, st.off[0], st.off[1], wpp_u, wpp_v);
                 project(view, &center, patch.w).map(|(x, y)| [x, y])
             } else {
                 None

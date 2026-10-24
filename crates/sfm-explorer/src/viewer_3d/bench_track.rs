@@ -8,12 +8,13 @@
 //! patch frame as a square in the world, its outward normal standing off it, and
 //! one mark per observation saying where that photograph sees the patch's
 //! centre against where the patch frame's centre is. One difference from Image
-//! Detail is deliberate -- there the outline is the patch **slid along its
-//! plane onto that image's keypoint's ray**, because the panel shows the square
-//! that photograph sees; here there is no one photograph, and the patch frame
-//! drawn is the patch itself, at its centre. A mark is `q_i`, the point of the
-//! plane the keypoint's ray meets, which is the centre of the square that
-//! photograph sees; it draws no square, and it edits nothing.
+//! Detail is deliberate -- there the outline is the patch **slid across its
+//! line of sight onto that image's keypoint's ray**, because the panel shows
+//! the square that photograph sees; here there is no one photograph, and the
+//! patch frame drawn is the patch itself, at its centre. A mark is `q_i`, where
+//! the keypoint's ray meets the plane through the centre facing that camera,
+//! which is the centre of the square that photograph sees; it draws no square,
+//! and it edits nothing.
 //!
 //! What this module produces is a
 //! [`Figure`](crate::viewer_3d::bench_track::Figure): world points, world
@@ -287,12 +288,11 @@ pub(crate) fn figure(bench: &BenchTrack<'_>, eye: Point3<f64>) -> Option<Figure>
         .filter_map(|(observation, sighting)| {
             let site = sighting.site()?;
             let (camera, pose) = geometry::view_of(image_set, sighting.image as usize)?;
-            // The one unprojection, core's own: the keypoint's ray meets the
-            // patch frame's plane and what it named is read off that meeting. A
-            // ray that cannot meet the plane in front of its camera --
-            // including a bearing pointing away from a direction patch -- says
-            // so here.
-            let offset = patch_frame.keypoint_plane_offset(&camera, &pose, site)?;
+            // The one slide, core's own: the centre of the patch slid onto the
+            // keypoint's ray, the square that photograph shows. A ray the
+            // slide refuses -- including a bearing pointing away from a
+            // direction patch -- draws no mark.
+            let offset = patch_frame.keypoint_slide_offset(&camera, &pose, site)?;
             let q = patch_frame.center.coords + offset;
             let color = rgba(verdict_color(sighting.verdict));
             let radius = if bench.selected == Some(observation) {

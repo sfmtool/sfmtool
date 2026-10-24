@@ -248,10 +248,10 @@ pub(super) struct TileContext {
 ///
 /// What is projected is what the row's *Proj. err* column measures to: the
 /// track's triangulated point, or before there is one the patch's own centre.
-/// The projected pixel is read onto the widened patch frame's plane through
-/// `OrientedPatch::keypoint_plane_offset`, the reading the tile's own anchoring
-/// uses, so the marker sits on the part of the photograph the picture shows at
-/// that pixel.
+/// The projected pixel is read onto the widened patch frame's own plane, the
+/// plane the picture is rendered on, through
+/// `OrientedPatch::keypoint_plane_offset`, so the marker sits on the part of the
+/// photograph the picture shows at that pixel.
 pub(super) fn context(
     recon: &SfmrReconstruction,
     track: &EditableTrack,

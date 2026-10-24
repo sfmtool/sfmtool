@@ -1762,8 +1762,9 @@ tile is still the middle of the picture texel for texel.
 
 **The track-stage tile's patch frame is re-anchored on the observation's keypoint**
 (`OrientedPatch::anchored_at_keypoint`, [patch-cloud.md](../core/patch/patch-cloud.md)):
-the patch centre slides within its own plane, on its tangent sphere for a point
-at infinity, until it projects onto the keypoint this observation carries. The
+the patch centre slides across its line of sight from this observation's
+camera, on its tangent sphere for a point at infinity, until it projects onto
+the keypoint this observation carries. The
 tile is a photometric comparison, so it is anchored where the keypoint localizer
 aligned the pixels rather than at the point's geometric projection. The tiles of
 a well-localized track then match each other whatever discrepancy the geometry
@@ -1846,7 +1847,7 @@ it. The crop is the photograph itself, cut around the outline Image Detail's
 bench layer strokes for the row, with that outline over it in the row's
 verdict colour and none of the layer's other marks: no dot, no normal, no SIFT
 features. At the track stage the outline is the boundary of the patch slid
-along its plane onto the ray of where the observation sits, projected through
+across its line of sight onto the ray of where the observation sits, projected through
 the camera's own model (`crate::bench::geometry::SeenSquare::outline`, the
 function Image Detail strokes), so on a fisheye the edges show as the curves
 they are. The tile beside it is cut through the same slid patch

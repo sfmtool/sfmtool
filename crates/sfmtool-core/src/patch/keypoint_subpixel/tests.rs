@@ -209,12 +209,10 @@ fn consensus_sharpness(
     patch: &OrientedPatch,
     views: &[ProjectedImage<'_>],
     patch_views: &[u32],
-    offsets: &[[f64; 2]],
+    keypoints: &[Option<[f64; 2]>],
     p: &KeypointSubpixelParams,
 ) -> f64 {
     let r = p.resolution as usize;
-    let wpp_u = 2.0 * patch.half_extent[0] / p.resolution as f64;
-    let wpp_v = 2.0 * patch.half_extent[1] / p.resolution as f64;
     // Full-grid support (uniform), so the consensus image covers the whole R×R.
     let n = r * r;
     let channels = views[patch_views[0] as usize].pyramid.level(0).channels() as usize;
@@ -222,7 +220,10 @@ fn consensus_sharpness(
     let mut sum = vec![0f64; n * channels];
     let mut count = 0;
     for (k, &i) in patch_views.iter().enumerate() {
-        let center = shifted_center(patch, offsets[k][0], offsets[k][1], wpp_u, wpp_v);
+        let view = &views[i as usize];
+        let center = patch
+            .seen_at_keypoint(view.camera, view.cam_from_world, keypoints[k])
+            .center;
         let mut cp = OrientedPatch::from_center_normal(
             center,
             patch.normal(),
@@ -593,26 +594,13 @@ fn consensus_sharpens_after_refinement() {
     let patch_views = vec![0u32, 1, 2, 3, 4];
 
     let p = params();
-    let seed_offsets = vec![[0.0, 0.0]; 5];
-    let before = consensus_sharpness(&patch, &views, &patch_views, &seed_offsets, &p);
+    let before = consensus_sharpness(&patch, &views, &patch_views, &[None; 5], &p);
 
-    // Recover the per-view offsets by refining, then convert keypoint offsets back to
-    // patch-grid px for the after-consensus (the refiner reports source-px offsets;
-    // here we re-derive grid offsets from the refined δ via a second refine that
-    // exposes them — instead we re-run and read the keypoints, converting through the
-    // known src_per_grid mapping along x/y).
+    // Refine, then render each view through the patch slid onto its refined
+    // keypoint, the frame production renders a view's tile through.
     let res = refine_patch_keypoints(&patch, &views, &patch_views, None, Some(0), &p);
-    let mut after_offsets = vec![[0.0, 0.0]; 5];
-    let wpp_u = 2.0 * patch.half_extent[0] / p.resolution as f64;
-    let wpp_v = 2.0 * patch.half_extent[1] / p.resolution as f64;
-    for (k, &i) in patch_views.iter().enumerate() {
-        // Convert each refined source-px keypoint back to a patch-grid offset with
-        // the same inverse mapping production uses (`seed_offset`), so this stays
-        // correct for any patch frame rather than baking in a fixed u/v→x/y layout.
-        after_offsets[k] = seed_offset(&patch, &views[i as usize], res.keypoints[k], wpp_u, wpp_v)
-            .unwrap_or([0.0, 0.0]);
-    }
-    let after = consensus_sharpness(&patch, &views, &patch_views, &after_offsets, &p);
+    let after_keypoints: Vec<Option<[f64; 2]>> = res.keypoints.iter().map(|&k| Some(k)).collect();
+    let after = consensus_sharpness(&patch, &views, &patch_views, &after_keypoints, &p);
 
     assert!(
         after >= before * 0.999,

@@ -120,7 +120,7 @@ pub use steps::{
     DuplicateReport, Edge, ObservationSeed, PinReport, ReferenceReport, ResizeReport, ShapeReport,
     SightReport, SpinReport, SplitError, SplitReport, ThresholdReport, TiltReport, TiltStop,
     TrackEditError, TranslateReport, TranslateToPixelReport, UnpinReport, VerdictReport, Viewpoint,
-    MAX_TILT_DEG,
+    CLAMP_INSET_PX, MAX_TILT_DEG,
 };
 pub use track::{
     ClusterMeasurement, ClusterPayload, ClusterTemplate, EditableTrack, Observation, Origin,

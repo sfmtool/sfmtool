@@ -494,16 +494,33 @@ fn anchoring_a_finite_patch_re_projects_onto_the_keypoint() {
 
     let anchored = patch
         .anchored_at_keypoint(&cam, &pose, keypoint)
-        .expect("the displaced ray meets the patch plane");
+        .expect("the displaced ray is followed");
 
-    // The centre moved, and it moved *in the plane* — the offset carries no
-    // component along the normal, so the patch still sits on the same surface.
+    // The centre moved across the line of sight: the move is perpendicular to
+    // the direction from the camera to the centre, so the centre keeps its
+    // depth along that line, and it is not in the patch's plane.
     let shift = anchored.center - patch.center;
+    let sight = (patch.center - pose.inverse_translation_origin()).normalize();
     assert!(shift.norm() > 1e-6, "the centre did not move: {shift:?}");
     assert!(
-        shift.dot(&patch.normal()).abs() < 1e-9,
-        "the centre left the plane by {}",
-        shift.dot(&patch.normal())
+        shift.dot(&sight).abs() < 1e-12,
+        "the move has {} along the line of sight",
+        shift.dot(&sight)
+    );
+    assert!(
+        shift.dot(&patch.normal()).abs() > 1e-6,
+        "an oblique patch's slid centre leaves its plane"
+    );
+    // It is the shortest move onto the ray: no longer than the move along the
+    // patch's own plane.
+    let along_plane = patch
+        .keypoint_plane_offset(&cam, &pose, keypoint)
+        .expect("the ray meets the plane in front");
+    assert!(shift.norm() <= along_plane.norm() + 1e-12);
+    assert_eq!(
+        patch.keypoint_slide_offset(&cam, &pose, keypoint),
+        Some(shift),
+        "anchored_at_keypoint moves the centre by keypoint_slide_offset"
     );
 
     let re = project_center(&anchored, &cam, &pose);
@@ -511,6 +528,31 @@ fn anchoring_a_finite_patch_re_projects_onto_the_keypoint() {
         (re[0] - keypoint[0]).abs() < 1e-6 && (re[1] - keypoint[1]).abs() < 1e-6,
         "re-projected to {re:?}, expected {keypoint:?}"
     );
+    assert_eq!(anchored.u_axis, patch.u_axis);
+    assert_eq!(anchored.v_axis, patch.v_axis);
+    assert_eq!(anchored.half_extent, patch.half_extent);
+}
+
+/// The slide is stated against the line of sight and not against the patch's
+/// plane, so turning the patch about its centre does not move the centre a
+/// keypoint slides it to.
+#[test]
+fn the_slid_centre_does_not_depend_on_the_normal() {
+    let cam = pinhole(600.0, 320.0, 240.0, 640, 480);
+    let pose = tilted_pose();
+    let patch = oblique_patch();
+    let turned = OrientedPatch::from_center_normal(
+        patch.center,
+        Vector3::new(-0.6, 0.1, 1.0),
+        Vector3::new(0.0, 1.0, 0.0),
+        patch.half_extent,
+    );
+    let projection = project_center(&patch, &cam, &pose);
+    let keypoint = [projection[0] - 11.0, projection[1] + 4.0];
+    let a = patch.anchored_at_keypoint(&cam, &pose, keypoint).unwrap();
+    let b = turned.anchored_at_keypoint(&cam, &pose, keypoint).unwrap();
+    assert!((a.center - b.center).norm() < 1e-12);
+    assert_eq!(b.u_axis, turned.u_axis);
 }
 
 #[test]
@@ -632,19 +674,28 @@ fn a_perspective_keypoint_behind_the_camera(
     (cam, pose, patch, keypoint)
 }
 
-/// Under a perspective camera, as under a ray-path one, a keypoint whose ray
-/// meets the plane behind the camera has no slid patch:
-/// `anchored_at_keypoint` refuses it, and `seen_at_keypoint` gives the patch as
-/// it stands, which has a whole tile and a whole outline in that photograph.
+/// A keypoint whose ray meets the patch's plane behind a perspective camera is
+/// still slid: the slide follows the ray to the plane through the centre that
+/// faces the camera, which a ray in front of the camera always meets, at the
+/// centre's own depth along the line of sight. Reading a pixel against the
+/// patch's plane (`keypoint_plane_offset`, how a pointer is read) still refuses
+/// it.
 #[test]
-fn a_perspective_keypoint_whose_ray_meets_the_plane_behind_the_camera_is_not_slid() {
+fn a_perspective_keypoint_whose_ray_meets_the_plane_behind_the_camera_is_slid() {
     let (cam, pose, patch, keypoint) = a_perspective_keypoint_behind_the_camera();
 
-    assert!(patch.anchored_at_keypoint(&cam, &pose, keypoint).is_none());
     assert!(patch.keypoint_plane_offset(&cam, &pose, keypoint).is_none());
-
     let seen = patch.seen_at_keypoint(&cam, &pose, Some(keypoint));
-    assert_eq!(seen, patch, "the view sees the patch as it stands");
+    assert_eq!(
+        Some(&seen),
+        patch.anchored_at_keypoint(&cam, &pose, keypoint).as_ref(),
+        "the view sees the slid patch"
+    );
+    let eye = pose.inverse_translation_origin();
+    let sight = (patch.center - eye).normalize();
+    assert!(((seen.center - eye).dot(&sight) - (patch.center - eye).norm()).abs() < 1e-9);
+    let re = project_center(&seen, &cam, &pose);
+    assert!((re[0] - keypoint[0]).abs() < 1e-6 && (re[1] - keypoint[1]).abs() < 1e-6);
 
     // A real tile: every texel of the warp lands on the photograph's plane in
     // front of the camera.
@@ -662,6 +713,45 @@ fn a_perspective_keypoint_whose_ray_meets_the_plane_behind_the_camera_is_not_sli
             "corner ({s}, {t}) does not project"
         );
     }
+}
+
+/// Under a fisheye a keypoint's ray can point more than a right angle from the
+/// line of sight to the centre. It never meets the plane facing the camera in
+/// front of it, so the slide refuses it and the view sees the patch as it
+/// stands.
+#[test]
+fn a_fisheye_keypoint_past_a_right_angle_from_the_line_of_sight_is_not_slid() {
+    let cam = CameraIntrinsics {
+        model: CameraModel::EquidistantFisheye {
+            focal_length: 100.0,
+            principal_point_x: 240.0,
+            principal_point_y: 240.0,
+        },
+        width: 480,
+        height: 480,
+    };
+    let pose = RigidTransform::identity();
+    let patch = OrientedPatch::from_center_normal(
+        Point3::new(0.0, 0.0, -5.0),
+        Vector3::new(0.0, 0.0, 1.0),
+        Vector3::new(0.0, 1.0, 0.0),
+        [0.4, 0.4],
+    );
+    // 100 degrees off the axis, which is the line of sight here.
+    let past = [240.0 + 100.0 * 100f64.to_radians(), 240.0];
+    // 80 degrees off it, which the slide follows.
+    let short = [240.0 + 100.0 * 80f64.to_radians(), 240.0];
+
+    assert!(patch.keypoint_slide_offset(&cam, &pose, past).is_none());
+    assert!(patch.anchored_at_keypoint(&cam, &pose, past).is_none());
+    assert_eq!(patch.seen_at_keypoint(&cam, &pose, Some(past)), patch);
+    let slid = patch
+        .anchored_at_keypoint(&cam, &pose, short)
+        .expect("a ray short of a right angle is followed");
+    assert!(
+        (slid.center.z + 5.0).abs() < 1e-9,
+        "the slid centre keeps its depth"
+    );
 }
 
 // ---------------------------------------------------------------------------
