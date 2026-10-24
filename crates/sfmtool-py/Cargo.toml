@@ -42,7 +42,7 @@ nalgebra = "0.35"
 # Default features, so the `mcp` feature is on and `sfm explorer --mcp` works
 # from a wheel.
 sfm-explorer = { path = "../sfm-explorer" }
-openjd-expr = "0.9.0"
+openjd-expr = "0.12.0"
 
 # Rustdoc lints are denied workspace-wide (see the root Cargo.toml).
 [lints]
