@@ -113,7 +113,8 @@ opened here; a build replaces it with one that records both.
 
 The cluster patches' state is derived when the file is opened or built, and
 again when either of two things has moved since: the node's image set (a
-version that adds, removes, renames or reorders an image), or the index open
+version that adds, removes, renames or reorders an image, or that moves the
+workspace definition's `feature_prefix_dir`), or the index open
 beside the node (a different path, a different content hash, or a change
 between current and stale). The index's open, build, close and re-derivation
 each ask the cluster patches again. The facts the verdict needs, the file's
@@ -215,10 +216,10 @@ renames over the target only once the file is whole.
 
 The index is read out of the node's `.sift` files, so a node whose images have
 none cannot have its index files built. *Build SIFT Files* is the remedy, and it
-sits directly above *Build Index Files* in every Scene tree menu that offers
-that entry. Track View's row menu, which also offers *Build Index Files*, does
-not carry it. It is one background task, `Build SIFT files`, from the slow queue
-([background-tasks.md](background-tasks.md)), which runs
+sits directly above *Build Index Files* in every menu that offers that entry:
+the Scene tree's four, and Track View's row menu, where *Build Index Files*
+stands in for the search. It is one background task, `Build SIFT files`, from
+the slow queue ([background-tasks.md](background-tasks.md)), which runs
 `sfmtool_core::features::sift::build_sift_files`
 ([core/features/sift.md](../core/features/sift.md) § "Building `.sift`
 files") over every image's photograph, `<workspace>/<image name>`, with the
@@ -426,11 +427,14 @@ on an `sfmtool` node writing every file at the node's own prefix, pushing no
 version, reporting the node in `Polled::installed` and making *Build Index
 Files* live, and a second build skipping every file; a switch pushing one
 version with the default options and prefix, leaving `.sfm-workspace.json`
-as it was, and undone by Undo; a cancelled switch pushing nothing; and an
+as it was, and undone by Undo; a cancelled switch pushing nothing; an
 open index going stale, without being opened again, when a build rewrites a
-`.sift` file under it. The entry's place above *Build Index Files* is tested in
+`.sift` file under it; and an open index judged again when the switch is
+undone, stale over the old prefix and current again after the redo. The
+entry's place above *Build Index Files* is tested in
 [scene_graph/tests.rs](../../crates/sfm-explorer/src/scene_graph/tests.rs) and
-the tool in [mcp/tests/render.rs](../../crates/sfm-explorer/src/mcp/tests/render.rs).
+[track_view/body/tests.rs](../../crates/sfm-explorer/src/track_view/body/tests.rs),
+and the tool in [mcp/tests/render.rs](../../crates/sfm-explorer/src/mcp/tests/render.rs).
 
 ## Non-goals
 

@@ -116,6 +116,7 @@ pub struct TrackBodyResponse {
     pub duplicate: bool,
     pub commit: bool,
     pub surface_tiling_off: bool,          // the Surface Tiling Mode box cleared
+    pub build_sift_files: bool,            // a row's Build SIFT Files, above the index build
     pub build_index_files: bool,           // a row's Build/Rebuild Index Files
     pub search_descriptors: Option<usize>,  // Find matches by SIFT query
     pub search_geometry: Option<usize>,     // Find matches by geometry; track stage only
@@ -2056,7 +2057,12 @@ In Edited mode only:
   from is one sighting's patch. With no index beside the node, or a stale one,
   the entry is the remedy instead, *Build Index Files* or *Rebuild Search
   Files*, which starts the build of the node's index files and runs no search
-  ([`sift-index.md`](sift-index.md) § "The search entry"). At the track stage
+  ([`sift-index.md`](sift-index.md) § "The search entry"). Directly above it
+  stands *Build SIFT Files* (*Switch SIFT Extraction to sfmtool and Build SIFT
+  Files* on a node whose `.sfmr` records another feature tool), with the same
+  label, gate and behaviour as in the Scene tree, so a build greyed because no
+  `.sift` file could be found has its remedy beside it
+  ([`index-files.md`](index-files.md) § "Building the .sift files"). At the track stage
   the menu also carries *Find matches by geometry*, which projects the patch into
   every camera and appends each newly admitted image, unpinned and `out`, with
   `sweep` provenance

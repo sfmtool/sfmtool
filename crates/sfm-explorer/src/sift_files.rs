@@ -42,6 +42,27 @@ pub(crate) const BUILD_SIFT_FILES: &str = "Build SIFT Files";
 pub(crate) const SWITCH_AND_BUILD_SIFT_FILES: &str =
     "Switch SIFT Extraction to sfmtool and Build SIFT Files";
 
+/// What the entry's hover says, in every menu that offers it: what the build
+/// does, and first, when `switch_from` names the tool the node records, what
+/// the switch does.
+pub(crate) fn build_sift_files_hover(switch_from: Option<&str>) -> String {
+    let build = "Extract SIFT features from every photograph of this reconstruction with the \
+                 sfmtool feature tool, and write each image's .sift file in the workspace, \
+                 where Build Index Files reads them. An image whose .sift file is up to date is \
+                 skipped. Runs on a worker thread and can be cancelled.";
+    match switch_from {
+        None => build.to_string(),
+        Some(from) => format!(
+            "This reconstruction records '{from}' as its SIFT extraction, and only the sfmtool \
+             tool can build .sift files here. First switch the record to sfmtool with its \
+             default options, in this reconstruction only: the workspace's \
+             .sfm-workspace.json is not changed. Then: {build} The switch is a version once \
+             every file is built; Undo (Ctrl+Z) puts the old record back, and a save writes \
+             the new one into the .sfmr."
+        ),
+    }
+}
+
 /// Whether `node`'s workspace definition extracts with the `sfmtool` tool, the
 /// one tool the viewer can build `.sift` files with.
 fn extracts_with_sfmtool(node: &SceneNode) -> bool {

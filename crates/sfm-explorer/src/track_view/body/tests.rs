@@ -6369,3 +6369,53 @@ fn surface_tiling_mode_holds_the_lock_on_and_leaves_it_ticked_when_cleared() {
         "the lock cannot be cleared after the mode is"
     );
 }
+
+/// Where the row's menu offers the index build, the `.sift` build sits
+/// directly above it, named for the switch of the fixture's feature tool, and
+/// choosing it asks for that build and no other.
+#[test]
+fn a_row_s_menu_offers_the_sift_files_build_above_the_index_build() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut state, id, _) = crate::sift_index::tests::searchable(dir.path());
+    cache_photographs(&mut state, id);
+    // The features of one image, extracted again after the build, so the
+    // index is stale and the row offers the rebuild in place of the search.
+    {
+        let recon = state.node(id).expect("loaded").recon();
+        crate::sift_index::tests::write_sift(
+            &recon.sift_path_for_image(2),
+            &recon.image_set.images[2].name,
+            &vec![vec![5u8; 128]; 3],
+            &[[10.0, 20.0], [30.0, 40.0], [50.0, 60.0]],
+        );
+    }
+    let path = state.sift_index(id).expect("built").path.clone();
+    state.open_sift_index(id, path).expect("it opens");
+
+    let (mut panel, ctx) = settled(&state);
+    let texts = row_menu(&mut panel, &ctx, &state);
+    let at = |entry: &str| {
+        texts
+            .iter()
+            .position(|t| t == entry)
+            .unwrap_or_else(|| panic!("{entry} is not in the row's menu: {texts:?}"))
+    };
+    assert_eq!(
+        at(crate::sift_files::SWITCH_AND_BUILD_SIFT_FILES) + 1,
+        at(crate::index_files::REBUILD_INDEX_FILES),
+        "{texts:?}"
+    );
+
+    let entry = menu_entry_pos(
+        &mut panel,
+        &ctx,
+        &state,
+        crate::sift_files::SWITCH_AND_BUILD_SIFT_FILES,
+    );
+    let response = at_pointer(&mut panel, &ctx, &state, entry, true);
+    assert!(response.build_sift_files, "the entry started no build");
+    assert!(
+        !response.build_index_files,
+        "the entry started the index build"
+    );
+}

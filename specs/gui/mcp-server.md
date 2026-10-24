@@ -226,10 +226,15 @@ and press the viewer's widgets the way a person's eyes, mouse and keyboard do
 
 Every tool is annotated: the eighteen reads and `screenshot` carry
 `readOnlyHint: true`, the seventy-five writes `destructiveHint: false` (none of
-them touches a file on disk: `close_reconstruction` unloads, it does not
-delete; `set_window_layout` changes the window and the dock, not the layout file
-the menu saves; an **edit** makes a new version of a loaded value, which the
-human can undo), and every one of them `openWorldHint: false`. Every
+them deletes or overwrites a file the person made: `close_reconstruction`
+unloads, it does not delete; `set_window_layout` changes the window and the
+dock, not the layout file the menu saves; an **edit** makes a new version of a
+loaded value, which the human can undo. Two of them do write files on disk:
+`build_index_files` writes the node's SIFT index and cluster patches beside its
+`.sfmr`, replacing the ones there, and `build_sift_files` writes the images'
+`.sift` files in the workspace, rewriting only those older than their
+photographs. Both files can be built again from the photographs), and every one
+of them `openWorldHint: false`. Every
 `inputSchema` is closed (`additionalProperties: false`).
 
 **Seven tools are annotated `destructiveHint: true`**, and a client that

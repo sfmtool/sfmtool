@@ -284,8 +284,10 @@ fn show_convert_entry(ui: &mut egui::Ui, node: &SceneNode, out: &mut TreeOutput)
 /// The two builds, in the order they have to run: the `.sift` files, then the
 /// index files read from them.
 ///
-/// Together on every Scene tree menu that offers the index-files build, because
-/// a build greyed for want of `.sift` files has its remedy directly above it.
+/// Together on every Scene tree menu that offers the index-files build, and
+/// drawn as the same pair in Track View's row menu
+/// (`track_view::body::table`), because a build greyed for want of `.sift`
+/// files has its remedy directly above it.
 fn show_build_entries(ui: &mut egui::Ui, id: ReconId, rows: &IndexFilesRows, out: &mut TreeOutput) {
     show_build_sift_files_entry(ui, id, rows, out);
     show_build_index_files_entry(ui, id, rows, out);
@@ -304,21 +306,7 @@ fn show_build_sift_files_entry(
     out: &mut TreeOutput,
 ) {
     let refusal = rows.sift_build_refusal.clone();
-    let build = "Extract SIFT features from every photograph of this reconstruction with the \
-                 sfmtool feature tool, and write each image's .sift file in the workspace, \
-                 where Build Index Files reads them. An image whose .sift file is up to date is \
-                 skipped. Runs on a worker thread and can be cancelled.";
-    let hover = match &rows.sift_switch_from {
-        None => build.to_string(),
-        Some(from) => format!(
-            "This reconstruction records '{from}' as its SIFT extraction, and only the sfmtool \
-             tool can build .sift files here. First switch the record to sfmtool with its \
-             default options, in this reconstruction only: the workspace's \
-             .sfm-workspace.json is not changed. Then: {build} The switch is a version once \
-             every file is built; Undo (Ctrl+Z) puts the old record back, and a save writes \
-             the new one into the .sfmr."
-        ),
-    };
+    let hover = crate::sift_files::build_sift_files_hover(rows.sift_switch_from.as_deref());
     let entry = ui
         .add_enabled(refusal.is_none(), egui::Button::new(rows.sift_build_label))
         .on_disabled_hover_text(refusal.unwrap_or_default())

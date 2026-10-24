@@ -395,7 +395,8 @@ fixed-height for virtualization.
   with no images or no workspace directory, and, for the switch, a node whose
   observations are `.sift` feature indexes
   (`AppState::build_sift_files_refusal`). It sits directly above `Build Index
-  Files` in every Scene tree menu that offers that entry.
+  Files` in every menu that offers that entry, Track View's row menu included
+  ([track-view.md](track-view.md)).
 - **`Build Index Files`** builds the node's two index files beside its
   `.sfmr` and opens them, on a worker thread: the SIFT index over every `.sift`
   file of the node, then the cluster patches made from that index

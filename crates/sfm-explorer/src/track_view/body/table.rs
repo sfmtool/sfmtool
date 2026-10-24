@@ -1457,6 +1457,26 @@ impl TrackBody {
                     }
                 }
                 _ => {
+                    // The `.sift` build directly above the index build, which
+                    // is greyed for want of `.sift` files where it is needed.
+                    let switch_from = state.sift_extraction_switch_from(id);
+                    let button = egui::Button::new(state.sift_files_build_label(id));
+                    let clicked = match state.build_sift_files_refusal(id) {
+                        None => ui
+                            .add(button)
+                            .on_hover_text(crate::sift_files::build_sift_files_hover(
+                                switch_from.as_deref(),
+                            ))
+                            .clicked(),
+                        Some(why) => {
+                            ui.add_enabled(false, button).on_disabled_hover_text(why);
+                            false
+                        }
+                    };
+                    if clicked {
+                        response.build_sift_files = true;
+                        ui.close();
+                    }
                     let text = state.index_files_build_label(id);
                     // The staleness sentence where there is one, so the entry
                     // says what is wrong as well as what to do about it.

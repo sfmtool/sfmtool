@@ -267,3 +267,28 @@ fn an_open_index_is_judged_again_after_a_build() {
     );
     assert_eq!(state.sift_index_state(id), IndexFileState::Stale);
 }
+
+/// Undoing the switch moves where the node's `.sift` files are, so an open
+/// index built over the files the switch pointed at is judged again on the
+/// next look: stale after the undo, where no file is, and current after the
+/// redo.
+#[test]
+fn undoing_the_switch_judges_an_open_index_again() {
+    use crate::index_files::IndexFileState;
+    let dir = tempfile::tempdir().unwrap();
+    let (mut state, id) = state_in(dir.path(), "colmap");
+    state.start_build_sift_files(id).expect("it starts");
+    state.finish_background_tasks();
+    state.start_build_index_files(id).expect("it can index");
+    state.finish_background_tasks();
+    assert_eq!(state.sift_index_state(id), IndexFileState::Current);
+
+    state.undo(id).expect("the switch is undone");
+    state.refresh_index_files(id);
+    assert_eq!(state.sift_index_state(id), IndexFileState::Stale);
+    assert!(state.sift_index_search_refusal(id).is_some());
+
+    state.redo(id).expect("the switch is redone");
+    state.refresh_index_files(id);
+    assert_eq!(state.sift_index_state(id), IndexFileState::Current);
+}

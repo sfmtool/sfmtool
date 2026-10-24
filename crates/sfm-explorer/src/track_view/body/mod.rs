@@ -182,6 +182,9 @@ pub(crate) struct TrackBodyResponse {
     /// The *Surface Tiling Mode* box was cleared: end the sequence under way,
     /// if there is one (`AppState::stop_surface_tiling`).
     pub(crate) surface_tiling_off: bool,
+    /// A row's *Build SIFT Files* (or the switch and the build), offered
+    /// directly above the index build.
+    pub(crate) build_sift_files: bool,
     /// A row's *Build Index Files* / *Rebuild Index Files*: the entry a row
     /// offers where the search would be when the node's index is absent or out
     /// of date.

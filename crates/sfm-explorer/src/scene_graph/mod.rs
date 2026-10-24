@@ -196,8 +196,8 @@ pub struct SceneGraphResponse {
     /// the frame.
     pub prune_covered_observations: Option<ReconId>,
     /// `Build SIFT Files` / `Switch SIFT Extraction to sfmtool and Build SIFT
-    /// Files` chosen, from any menu that offers the index-files build. Extracts
-    /// features from every photograph of the node, so
+    /// Files` chosen, from any Scene tree menu that offers the index-files
+    /// build. Extracts features from every photograph of the node, so
     /// `AppState::start_build_sift_files` sends it to a worker after the frame.
     pub build_sift_files: Option<ReconId>,
     /// `Build Index Files` / `Rebuild Index Files` chosen, from a Search

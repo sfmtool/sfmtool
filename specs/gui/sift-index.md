@@ -86,15 +86,18 @@ they reach for agree.
 ### When the question is asked
 
 The state is derived when an index is opened or built, and again when a version
-lands on the node whose image set differs from the one it was derived
-against. It is held per node and **never computed per frame**: a version that
-moves geometry, poses or the bench leaves the corpus's claim about the node
-exactly as true as it was, and only one that adds, removes, renames or reorders
-an image can change the answer.
+lands on the node whose image set, or whose workspace definition's
+`feature_prefix_dir`, differs from the one it was derived against. It is held
+per node and **never computed per frame**: a version that moves geometry, poses
+or the bench leaves the corpus's claim about the node exactly as true as it
+was, and only one that adds, removes, renames or reorders an image, or moves
+where its `.sift` files are (the switch *Build SIFT Files* makes, and its undo
+and redo), can change the answer.
 
 It is **not** re-derived when a `.sift` file changes on disk under a running
-viewer. *Rebuild Index Files* and re-opening the file are the two ways to ask
-again.
+viewer, except after a *Build SIFT Files* lands
+([index-files.md](index-files.md) § "Building the .sift files"). Otherwise
+*Rebuild Index Files* and re-opening the file are the two ways to ask again.
 
 Whenever the index's state or identity changes -- it is opened, built, closed,
 or re-derived -- the cluster patches are judged again against it, because they
@@ -318,7 +321,8 @@ impl AppState {
     pub(crate) fn sift_index_path(&self, id: ReconId) -> Option<PathBuf>;
 
     /// Open the node's index if nothing has looked yet, and re-derive the
-    /// state when a version has moved the image set. Called through
+    /// state when a version has moved the image set or the
+    /// `feature_prefix_dir`. Called through
     /// `refresh_index_files`.
     pub(crate) fn refresh_sift_index(&mut self, id: ReconId);
     pub(crate) fn open_sift_index(&mut self, id: ReconId, path: PathBuf)

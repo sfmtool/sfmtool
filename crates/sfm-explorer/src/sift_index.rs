@@ -181,13 +181,14 @@ impl AppState {
         self.action_log.set_actor(standing);
     }
 
-    /// Re-derive the state of an open index when the node's image set has
-    /// moved under it.
+    /// Re-derive the state of an open index when the node's image set, or the
+    /// directory its `.sift` files are in, has moved under it.
     ///
-    /// The version serial is the cheap question and the image names are the
-    /// real one: a version that edits geometry leaves the corpus's claim about
-    /// the node exactly as true as it was, and only one that adds, removes or
-    /// renames an image can change the answer. The `.sift` files on disk are
+    /// The version serial is the cheap question and the image names and the
+    /// `feature_prefix_dir` are the real one: a version that edits geometry
+    /// leaves the corpus's claim about the node exactly as true as it was, and
+    /// only one that adds, removes or renames an image, or moves where its
+    /// `.sift` files are, can change the answer. The `.sift` files on disk are
     /// **not** re-read outside this; a rebuild and a re-open are the two ways to
     /// ask about them again.
     fn recheck_sift_index(&mut self, id: ReconId) {
@@ -791,16 +792,24 @@ fn corpus_images(forest: &LazyKdForestU8) -> usize {
         .map_or(0, |table| table.names.len())
 }
 
-/// A digest of a reconstruction's image set, as the thing a staleness verdict
-/// is about.
+/// A digest of a reconstruction's image set and of where its `.sift` files
+/// are, as the thing a staleness verdict is about.
 ///
 /// Touches no file, so a version that lands on a node costs this and nothing
-/// else: only an image set that has gained, lost, renamed or reordered an image can
-/// change what the index's three tests answer, and that is exactly what this
-/// value moves on.
+/// else: only an image set that has gained, lost, renamed or reordered an
+/// image, or a version that moved the workspace definition's
+/// `feature_prefix_dir` (the switch *Build SIFT Files* makes, and its undo),
+/// can change what the index's three tests answer, and that is exactly what
+/// this value moves on.
 pub(crate) fn image_fingerprint(recon: &SfmrReconstruction) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    recon
+        .metadata
+        .workspace
+        .contents
+        .feature_prefix_dir
+        .hash(&mut hasher);
     recon.image_set.images.len().hash(&mut hasher);
     for image in &recon.image_set.images {
         image.name.hash(&mut hasher);
