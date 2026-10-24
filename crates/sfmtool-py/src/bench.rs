@@ -491,7 +491,7 @@ fn observation_to_dict<'py>(py: Python<'py>, o: &Observation) -> PyResult<Bound<
 /// A plain value. Every step gives back a new one and leaves this object
 /// exactly as it was, so a caller that keeps both can go back to the one it
 /// had.
-#[pyclass(name = "EditableTrack", module = "sfmtool.bench", skip_from_py_object)]
+#[pyclass(name = "EditableTrack", module = "sfmtool.bench")]
 #[derive(Clone)]
 pub struct PyEditableTrack {
     pub(crate) inner: Arc<EditableTrack>,
@@ -774,7 +774,7 @@ impl PyEditableTrack {
 ///
 /// A plain value: every operation returns the next bench and leaves this object
 /// as it was. Items the operation did not touch are shared, not copied.
-#[pyclass(name = "Bench", module = "sfmtool.bench", skip_from_py_object)]
+#[pyclass(name = "Bench", module = "sfmtool.bench")]
 #[derive(Clone, Default)]
 pub struct PyBench {
     pub(crate) inner: Bench,

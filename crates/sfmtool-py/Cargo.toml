@@ -29,10 +29,10 @@ sfmtool-sfmr-format = { path = "../sfmtool-sfmr-format" }
 sfmtool-colmap = { path = "../sfmtool-colmap" }
 sfmtool-matches-format = { path = "../sfmtool-matches-format" }
 sfmtool-camrig-format = { path = "../sfmtool-camrig-format" }
-pyo3 = { version = "0.29", features = ["extension-module", "multiple-pymethods"] }
+pyo3 = { version = "0.30", features = ["extension-module", "multiple-pymethods"] }
 rayon = "1.12"
 image = "0.25"
-numpy = { version = "0.29", features = ["half"] }
+numpy = { version = "0.30", features = ["half"] }
 half = "2"
 ndarray = "0.17"
 serde = { version = "1", features = ["derive"] }

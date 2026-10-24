@@ -310,12 +310,7 @@ fn record_to_dict<'py>(py: Python<'py>, r: &PointRecord) -> PyResult<Bound<'py, 
 ///   :meth:`forward` and :meth:`inverse`.
 /// - ``"chain"``: the steps one edit took, as a list of ``PointMap``, applied
 ///   in order.
-#[pyclass(
-    name = "PointMap",
-    module = "sfmtool.reconstruction",
-    frozen,
-    skip_from_py_object
-)]
+#[pyclass(name = "PointMap", module = "sfmtool.reconstruction", frozen)]
 #[derive(Clone)]
 pub struct PyPointMap {
     inner: PointMap,
