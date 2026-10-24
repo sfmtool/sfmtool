@@ -145,6 +145,35 @@ pub(crate) struct FoundPoints {
     pub(crate) matched: Vec<u32>,
 }
 
+/// The sentence that says `label` cannot supply `columns`, which it names by
+/// their wire names, and lists the columns `edited` can supply. `find_points`
+/// refuses a call naming such a column with it, and the Track Table panel opens
+/// its note on a bound or a sort it cannot apply with it, so the two say the
+/// same thing in the same words.
+pub(crate) fn cannot_supply_sentence(
+    label: &str,
+    columns: &[TrackTableColumn],
+    edited: &sfmtool_core::EditedReconstruction,
+) -> String {
+    let named = columns
+        .iter()
+        .map(|c| c.wire_name())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let supplied = TrackTableColumn::ALL
+        .into_iter()
+        .filter(|c| c.is_available(edited))
+        .map(TrackTableColumn::wire_name)
+        .collect::<Vec<_>>()
+        .join(", ");
+    let noun = if columns.len() == 1 {
+        "column"
+    } else {
+        "columns"
+    };
+    format!("{label} cannot supply the {noun} {named}: the columns it can supply are {supplied}.")
+}
+
 /// The row a query writes: how many points matched out of how many.
 fn found_sentence(matched: usize, live: usize, label: &str) -> String {
     format!("Found {matched} of {live} points in {label}")

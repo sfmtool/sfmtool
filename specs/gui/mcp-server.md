@@ -113,8 +113,8 @@ place.
 
 ## The tool surface
 
-Ninety-eight tools. Eighteen read -- seventeen that answer with JSON, and
-`screenshot`, which closes the loop by handing back a picture -- seventy-three
+One hundred tools. Nineteen read -- eighteen that answer with JSON, and
+`screenshot`, which closes the loop by handing back a picture -- seventy-four
 write, six send input, and one writes a file. `get_widgets` and the six input
 tools, `click`, `hover`, `drag`, `scroll`, `press_key` and `type_text`, read
 and press the viewer's widgets the way a person's eyes, mouse and keyboard do
@@ -136,6 +136,7 @@ and press the viewer's widgets the way a person's eyes, mouse and keyboard do
 | `get_image_detail_display` | read | The Image Detail panel's controls — the feature overlay and its filters, and the intrinsics layer — as one document |
 | `get_image_detail_view` | read | Where that panel is looking: the photograph, the zoom, and the rectangle of it on screen |
 | `get_viewer_3d_display` | read | The 3D viewport's display controls — the HUD's layer toggles, sizes, Maintain Z-up and the rest of its checkboxes and sliders — as one flat document |
+| `get_track_table_query` | read | The Track Table panel's query — its bounds, sort, columns shown, *Seen in selected image* box and *Filter the 3D view* — as one document, with the reconstruction it applies to |
 | `get_reconstruction_history` | read | One reconstruction's versions, its cursor, and what a save would find |
 | `get_background_tasks` | read | What each background queue is running, how far along it is and what it has spent its time on, what waits in each queue, and what each queue's last task cost; or one task by its id |
 | `open_reconstruction` | write | Load an `.sfmr` into the scene as a new node, always appending, filling in the thumbnails and patch bitmaps the file lacks, on a worker thread |
@@ -153,6 +154,7 @@ and press the viewer's widgets the way a person's eyes, mouse and keyboard do
 | `set_image_detail_display` | write | Change any of the Image Detail panel's controls, leaving the rest alone |
 | `set_image_detail_view` | write | Point that panel at a pixel, a rectangle, a point's observation, a feature, a bench observation, or the whole photograph |
 | `set_viewer_3d_display` | write | Change any of the 3D viewport's display controls, leaving the rest alone |
+| `set_track_table_query` | write | Change any field of the Track Table panel's query, leaving the rest alone, and open the panel when it is closed |
 | `set_view` | write | Frame the scene, look through a camera image, bring a point or a bench observation to the middle of the view, set the viewport camera outright, or move, turn and orbit it from where it stands |
 | `set_window_layout` | write | Apply a window layout document: the window portion, the panel portion, or both |
 | `show_panel` | write | Open a panel at its home position, or raise it if it is open |
@@ -221,8 +223,8 @@ and press the viewer's widgets the way a person's eyes, mouse and keyboard do
 | `press_key` | input | Press and release one key, with modifiers, optionally with the pointer moved over a panel first |
 | `type_text` | input | Type a string into the focused text input or number box, or into one named by its widget id |
 
-Every tool is annotated: the seventeen reads and `screenshot` carry
-`readOnlyHint: true`, the seventy-three writes `destructiveHint: false` (none of
+Every tool is annotated: the eighteen reads and `screenshot` carry
+`readOnlyHint: true`, the seventy-four writes `destructiveHint: false` (none of
 them touches a file on disk: `close_reconstruction` unloads, it does not
 delete; `set_window_layout` changes the window and the dock, not the layout file
 the menu saves; an **edit** makes a new version of a loaded value, which the
@@ -1023,7 +1025,10 @@ cache and the operation it starts are in
   ([track-table.md](track-table.md) § "The Crop column"). A column the
   reconstruction cannot supply, `normal_confidence` on a file with no such
   stored column for one, is refused with *"{label} cannot supply the column
-  normal_confidence: the columns it can supply are …"*. A bound whose `min` is
+  normal_confidence: the columns it can supply are …"*
+  (`track_table::cannot_supply_sentence`), the sentence the Track Table
+  panel's note on such a column opens with ([track-table.md](track-table.md)
+  § "What it shows"). A bound whose `min` is
   above its `max` is refused, *"find_points wants each bound's min to be at most
   its max — got min 5 and max 3 for track_length."*. A string for `min` or
   `max` other than `"inf"` is refused, *"find_points.bounds wants min to be a
@@ -1043,6 +1048,125 @@ calls take three calls:
 - `{seen_in_camera_image: 2, bounds: [{column: "track_length", min: 16, max: 20}]}`
 - `{seen_in_camera_image: 56, bounds: [{column: "track_length", min: 4, max: 4}]}`
 - `{order_by: {column: "track_length", descending: true}, limit: 1}`
+
+### `get_track_table_query` / `set_track_table_query`
+
+These two read and write the Track Table panel's query
+([track-table.md](track-table.md) § "The query is panel state") as one
+document, so an agent can set up the table a person sees, and the 3D view it
+filters, before a `screenshot`, without clicking through the boxes. The
+handlers are
+[mcp/track_table_query.rs](../../crates/sfm-explorer/src/mcp/track_table_query.rs),
+and the document and the merge are
+[track_table_panel/wire.rs](../../crates/sfm-explorer/src/track_table_panel/wire.rs).
+
+`get_track_table_query` takes no arguments and returns the document, with the
+label of the reconstruction the panel shows:
+
+```jsonc
+{
+  "track_table_query": {
+    "bounds": [ { "column": "track_length", "min": 3.0 },
+                { "column": "centroid_distance", "min": "inf" } ],
+    "order_by": { "column": "rms_error_px", "descending": true },   // or null: point order
+    "columns": ["crop", "patch", "track_length", "rms_error_px",
+                "centroid_distance", "max_ray_angle_deg"],
+    "seen_in_selected_camera_image": false,
+    "filter_3d": "off"                       // "off" | "dim" | "hide"
+  },
+  "reconstruction_label": "dino"             // the selected one, or null with none loaded
+}
+```
+
+`set_track_table_query` takes any subset of the same five fields and leaves
+every omitted one alone, as `set_viewer_3d_display` does:
+
+```jsonc
+{ "bounds": [ { "column": "rms_error_px", "max": 1.5 } ], "filter_3d": "dim" }
+{ "order_by": null }
+{ "columns": ["crop", "track_length", "max_ray_angle_deg"] }
+```
+
+The reply is the whole document, exactly as `get_track_table_query` would
+return it.
+
+- **One vocabulary with `find_points`.** `bounds` and `order_by` take the
+  columns, the ends and the sort `find_points` takes, through the same parsers
+  (`Args::column_bounds`, `Args::order_by`): `min` and `max` are each a number
+  or `"inf"` for `+∞`, both inclusive, and `order_by` is
+  `{column, descending?}`, ascending unless `descending` is true. So the
+  panel's rows under a query set here are the points a `find_points` call with
+  the same `bounds` and `order_by` matches, in the same order, for the
+  reconstruction the panel shows. A bound reads the number alone, so a capped
+  self-similarity radius (`3+`) is dropped by a `max` of `2.5` here as it is
+  there.
+- **What each field does.** `bounds` replaces every bound box: each column
+  named gets its `min` and `max`, written into the boxes as a person would type
+  them (`1.5`, `inf`), and every other column's boxes are cleared, so `[]`
+  clears them all. A bound with neither end clears its column. `order_by: null`
+  puts the rows back in point order, as a click on the Point heading does.
+  `columns` names the columns the query shows and hides the rest, and takes the
+  picture columns `crop` and `patch` beside every track table column; it
+  decides every defect count too, as a tick or an untick in the Columns menu
+  does, so a defect count it leaves out no longer shows itself.
+  `seen_in_selected_camera_image` is the *Seen in selected image* box, which
+  keeps the points of the camera image selected in the reconstruction the
+  panel shows. `filter_3d` is *Filter the 3D view*: `"off"` clears the box,
+  and `"dim"` and `"hide"` tick it with that choice.
+- **The panel's rule for hidden columns holds.** A column that holds a bound
+  or the sort is never hidden. Without `columns`, a bound or a sort that lands
+  on a hidden column shows it; with `columns`, leaving out such a column is
+  refused, *"set_track_table_query cannot leave the column rms_error_px out of
+  columns: it holds a bound or the sort. List it in columns, or clear its bound
+  and the sort, so that a hidden column never filters or orders the rows."*.
+- **What the get reports.** `bounds` lists, in `TrackTableColumn::ALL` order,
+  each column whose boxes set an end, with only the ends they set; a box whose
+  text is not a number sets no bound and is left out. `columns` is the query's
+  columns, the picture columns first: a defect count that shows itself because
+  the reconstruction on show has a defect in it is not listed until a
+  `columns` names it, and a column the reconstruction cannot supply is listed
+  and not drawn. The reply says nothing of the rows: the panel computes them
+  on its next frame, and `find_points` with the same bounds counts them.
+- **Which reconstruction.** The query is one for whichever reconstruction is
+  selected, as the panel's is, so a call names no reconstruction and the query
+  carries over when another is selected. `reconstruction_label` names the one
+  it applies to now. A column that reconstruction cannot supply is accepted,
+  since the query is kept for one that can, and the panel says it is not
+  applied ([track-table.md](track-table.md) § "What it shows").
+- **The panel need not be open.** The panel keeps its query in its own state
+  and publishes it on `AppState` (`AppState::track_table_query`, a
+  `PublishedQuery`) at the end of every frame, drawn or not
+  (`TrackTablePanel::after_dock`). The get reads that copy, and the set writes
+  the merged query there, where the panel takes it at the start of its next
+  frame. A call that finds the panel closed opens it as `show_panel` does, with
+  the `Opened Track Table panel` row; a call that finds it open leaves it where
+  it is, raised or behind another tab, where *Filter the 3D view* still holds.
+- **Refusals are atomic.** At the parse: a column name that is neither a track
+  table column nor a picture column, in `bounds` and `order_by` with
+  `find_points`' sentence under this tool's name and in `columns` with *"…
+  the Track Table's columns are crop, patch, track_length, …"*; a picture
+  column as a bound or a sort, *"set_track_table_query does not bound or sort
+  by the column "crop": a picture column holds no numbers, so it can only be
+  shown, in columns. The columns it bounds and sorts by are track_length, …"*,
+  of the shape of `find_points`' refusal of one; two bounds on one column,
+  since the panel holds one minimum and one maximum per column; a `min` above
+  its `max` and a string other than `"inf"`, in `find_points`' words; a
+  `filter_3d` other than the three; and a call naming nothing. After the
+  parse, the one refusal is a `columns` that leaves out a held column. A call
+  refused changes nothing.
+- **The Action Log.** The get writes its `Query` row. Every control the set
+  changed is one `Display` row, as the agent, in the words of the panel's
+  controls; a control that did not change writes nothing:
+
+  | Field | Text |
+  |-------|------|
+  | `bounds` | `Track Table: minimum Error (px) 1.5` / `Track Table: maximum Distance cleared`, one row per box that changed, named as `get_widgets` names the box |
+  | `order_by` | `Track Table: sorted by Error (px), decreasing` / `… increasing` / `Track Table: sorted by point` |
+  | `columns` | `Track Table: Columns Patch, Track, Error (px)`, the headings the query then shows, once per call |
+  | `seen_in_selected_camera_image` | `Track Table: Seen in selected image {on|off}` |
+  | `filter_3d` | `Track Table: Filter the 3D view on, Dim` / `… on, Hide` / `Track Table: Filter the 3D view off` |
+
+  The panel's own controls write no rows, so these are the agent's alone.
 
 ### `open_reconstruction` / `close_reconstruction`
 
@@ -5781,6 +5905,24 @@ where a test hands no host over.
   found cached, is refused with "call find_points again". The cache's keying,
   its merge of a second run, its replacement after an edit, the dropped run that lands after one, and the close that drops it
   are in `track_table::tests`.
+- **`get_track_table_query` / `set_track_table_query`**, in
+  `mcp::tests::track_table_query`: the get answers with the default query and
+  the selected reconstruction's label, under a `Query` row; a set changes the
+  fields it names and keeps the rest, its reply is the get's, `bounds` replaces
+  every box and `[]` clears them, and a `null` `order_by` is point order;
+  `filter_3d` takes `"off"`, `"dim"` and `"hide"` and refuses any other value;
+  `columns` sets the columns shown, picture columns among them, a new bound on
+  a hidden column shows it without `columns`, and a `columns` that leaves out a
+  column holding a bound is refused whole; an unknown column is refused in
+  `bounds`, `order_by` and `columns`, a picture column as a bound or a sort, two
+  bounds on one column, a `min` above its `max`, a string other than `"inf"` and
+  an empty call each with its sentence; every changed control is one `Display`
+  row as the agent in the panel's words, and an unchanged one writes none; a
+  set opens a closed panel, which takes the query on its next frame, and leaves
+  an open one where it is; and with a query set over the wire, the points the
+  panel keeps in the 3D view are the points a `find_points` call with the same
+  bounds matches. `track_table_panel::tests` holds that the panel publishes a
+  person's edit of its query and takes a set while it is not drawn.
 - **Solo**: it moves rather than accumulating, leaves the selection alone, and
   keeps `visible` and `drawn` distinguishable.
 - **A refusal is atomic**: an unknown tint lists the palette and leaves the
@@ -6154,7 +6296,7 @@ where a test hands no host over.
   and the panel list in the prose above are asserted against `catalog()` and
   `Tab::ALL`, because a number written out in words is the first thing to go
   stale.
-- **The catalog is ninety-eight tools**, eighteen of them reads, six of the
+- **The catalog is one hundred tools**, nineteen of them reads, six of the
   `Input` kind and one of the `Save` kind, those seven carrying
   `destructiveHint: true`;
   `set_window_layout`'s schema advertises `sfm_explorer_layout`, `window` and

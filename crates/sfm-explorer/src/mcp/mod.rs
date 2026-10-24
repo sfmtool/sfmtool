@@ -54,6 +54,7 @@ mod panel_rect;
 mod read;
 pub(crate) mod server;
 pub(crate) mod tools;
+mod track_table_query;
 mod view;
 mod viewer_3d_display;
 mod widgets;
@@ -212,6 +213,16 @@ pub(crate) enum Command {
     /// brush while a camera is in hand.
     SetViewer3dDisplay {
         change: Viewer3dDisplayChange,
+    },
+    /// The Track Table panel's query: its bounds, sort, columns shown,
+    /// selected-image box and filter of the 3D view, as one document.
+    GetTrackTableQuery,
+    /// The fields of the Track Table panel's query the call named, every
+    /// column already named by its wire name, merged into the query by
+    /// [`apply_with_window`], which refuses only a column that holds a bound
+    /// or the sort and that `columns` leaves out.
+    SetTrackTableQuery {
+        change: crate::track_table_panel::TrackTableQueryChange,
     },
     /// Whether the operations to come record their finer stages.
     GetTimingDetail,
@@ -1442,6 +1453,8 @@ pub(crate) fn apply_with_window(
         Command::SetViewer3dDisplay { change } => {
             done(viewer_3d_display::set(state, viewer, &change))
         }
+        Command::GetTrackTableQuery => done(track_table_query::get(state)),
+        Command::SetTrackTableQuery { change } => done(track_table_query::set(state, &change)),
         Command::GetTimingDetail => done(display::get_timing_detail(state)),
         Command::SetTimingDetail { enabled } => done(display::set_timing_detail(state, enabled)),
         Command::SetView { view, animate } => done(view::set_view(state, viewer, view, animate)),

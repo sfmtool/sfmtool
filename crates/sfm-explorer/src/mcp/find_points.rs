@@ -64,10 +64,20 @@ pub(super) fn column_names(columns: impl IntoIterator<Item = TrackTableColumn>) 
 /// picture column of the Track Table panel is refused with its own sentence:
 /// it is a column of the panel and holds no numbers, so a person or an agent
 /// sees it in the panel's screenshot rather than in a reply.
+/// `set_track_table_query` refuses one as a bound or a sort key with a
+/// sentence of the same shape, since it can show a picture column but has
+/// nothing to bound or sort it by.
 pub(super) fn parse_column(tool: &str, name: &str) -> Result<TrackTableColumn, ToolError> {
     TrackTableColumn::from_wire_name(name).ok_or_else(|| {
         let columns = column_names(TrackTableColumn::ALL);
-        if crate::track_table_panel::picture_column_names().contains(&name) {
+        let picture = crate::track_table_panel::picture_column_names().contains(&name);
+        if picture && tool == super::track_table_query::SET_TOOL {
+            ToolError::new(format!(
+                "{tool} does not bound or sort by the column {name:?}: a picture column holds \
+                 no numbers, so it can only be shown, in columns. The columns it bounds and \
+                 sorts by are {columns}."
+            ))
+        } else if picture {
             ToolError::new(format!(
                 "{tool} does not take the column {name:?}: picture columns belong to the Track \
                  Table panel only, and screenshot {{\"panel_name\": \"track_table\"}} shows them. \
@@ -166,15 +176,10 @@ fn prepare(
         .chain(columns.iter().copied());
     for column in named {
         if !column.is_available(node.edited()) {
-            return Err(ToolError::new(format!(
-                "{} cannot supply the column {}: the columns it can supply are {}.",
-                node.label,
-                column.wire_name(),
-                column_names(
-                    TrackTableColumn::ALL
-                        .into_iter()
-                        .filter(|c| c.is_available(node.edited()))
-                )
+            return Err(ToolError::new(crate::track_table::cannot_supply_sentence(
+                &node.label,
+                &[column],
+                node.edited(),
             )));
         }
     }

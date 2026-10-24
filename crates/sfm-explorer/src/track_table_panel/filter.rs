@@ -107,7 +107,18 @@ impl TrackTablePanel {
     /// the box is ticked it computes the row list again when its inputs
     /// change and asks for the columns its query needs, as a drawn one does,
     /// and publishes the set.
+    ///
+    /// Whether or not it drew, the panel takes a query a
+    /// `set_track_table_query` call left and publishes its own here, so a
+    /// call made while it is closed or behind another tab is not lost.
     pub(crate) fn after_dock(&mut self, state: &mut AppState, open: bool) {
+        self.take_published_query(state);
+        self.filter_after_dock(state, open);
+        self.publish_query(state);
+    }
+
+    /// The part of [`Self::after_dock`] that keeps the 3D view's filter.
+    fn filter_after_dock(&mut self, state: &mut AppState, open: bool) {
         let drawn = std::mem::take(&mut self.drawn_this_frame);
         if !open || !self.query.filter_3d {
             self.kept = None;

@@ -470,6 +470,80 @@ pub(super) fn specs() -> Vec<ToolSpec> {
             schema: object(&crate::mcp::viewer_3d_display::properties(), &[]),
         },
         ToolSpec {
+            name: "set_track_table_query",
+            description: "Change the Track Table panel's query, leaving every field the call \
+                          omits alone; the reply is the whole document, as get_track_table_query \
+                          returns it. bounds replaces every bound box: each column named gets \
+                          its min and max, a number or \"inf\" for +infinity as find_points \
+                          takes them, and every other column's boxes are cleared, so [] clears \
+                          them all. order_by sorts by one column, and null puts the rows back in \
+                          point order. columns names the columns shown, the picture columns \
+                          crop and patch among them, and hides the rest, the defect counts \
+                          included; a column holding a bound or the sort cannot be left out, \
+                          and without columns a column a new bound or sort lands on is shown. \
+                          seen_in_selected_camera_image ticks or clears Seen in selected image, \
+                          and filter_3d is off, dim or hide for Filter the 3D view. The column \
+                          names are find_points' and the panel's; a name that is neither, a \
+                          picture column as a bound or a sort, two bounds on one column, a min \
+                          above its max and a call naming nothing are refused whole. A column \
+                          the reconstruction cannot supply is accepted, since the query is kept \
+                          for whichever reconstruction is selected, and the panel says what it \
+                          cannot apply. The panel need not be open: a closed one is opened, and \
+                          it takes the query on its next frame. Each changed control writes one \
+                          Action Log entry in the panel's words.",
+            kind: Write,
+            schema: object(
+                &[
+                    (
+                        "bounds",
+                        track_table_bounds_schema(
+                            "The bounds the panel's boxes hold, at most one per column. Every \
+                             column not named has its boxes cleared.",
+                        ),
+                    ),
+                    ("order_by", {
+                        let mut schema = track_table_order_by_schema();
+                        schema["type"] = json!(["object", "null"]);
+                        schema["description"] =
+                            json!("The column the rows are sorted by, or null for point order.");
+                        schema
+                    }),
+                    (
+                        "columns",
+                        json!({
+                            "type": "array",
+                            "items": {
+                                "type": "string",
+                                "enum": crate::track_table_panel::panel_column_names(),
+                            },
+                            "description":
+                                "The columns shown, by name: crop and patch, the picture \
+                                 columns, and any track table column. Every column not named \
+                                 is hidden. The Point column is always shown.",
+                        }),
+                    ),
+                    (
+                        "seen_in_selected_camera_image",
+                        flag(
+                            "Keep only the points seen in the camera image selected in the \
+                             reconstruction the panel shows: the Seen in selected image box.",
+                        ),
+                    ),
+                    (
+                        "filter_3d",
+                        json!({
+                            "type": "string",
+                            "enum": ["off", "dim", "hide"],
+                            "description":
+                                "Filter the 3D view: off, or dim or hide the points of the \
+                                 reconstruction the panel shows that its rows do not list.",
+                        }),
+                    ),
+                ],
+                &[],
+            ),
+        },
+        ToolSpec {
             name: "set_timing_detail",
             description: "Record the finer stages inside each operation, or stop recording them. \
                           This is the level the next operation is timed at; get_action_log's \

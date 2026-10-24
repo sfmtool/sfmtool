@@ -26,9 +26,14 @@ mod filter;
 pub(crate) mod job;
 pub(crate) mod picks;
 mod pictures;
+#[cfg(feature = "mcp")]
+mod wire;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(feature = "mcp")]
+pub(crate) use wire::{panel_column_names, Filter3dChoice, PanelColumn, TrackTableQueryChange};
 
 use sfmtool_core::analysis::track_table::{
     query_points, ColumnBounds, ColumnCost, SortOrder, TrackTable, TrackTableColumn,
@@ -523,6 +528,24 @@ impl TrackTableQuery {
     }
 }
 
+/// The panel's query where the wire reaches it, on `AppState`: the query as
+/// the panel last published it, and whether `set_track_table_query` has
+/// written one there since for the panel to take.
+///
+/// The panel keeps its query in its own state, since its widgets edit it in
+/// place while they borrow the scene, and `App` owns the panel where the MCP
+/// drain has only `AppState`. So the panel publishes its query here at the end
+/// of every frame it runs, drawn or not ([`TrackTablePanel::after_dock`]), and
+/// takes the query a call left here at the start of the next one. A call made
+/// while the panel is closed is kept for when it opens.
+#[derive(Debug, Default)]
+pub(crate) struct PublishedQuery {
+    /// The query as of the last frame, or as the last call left it.
+    query: TrackTableQuery,
+    /// Whether a call has written `query` since the panel last took it.
+    set_over_wire: bool,
+}
+
 /// What the row list was computed from. Compared once per frame, which costs
 /// nothing beside running the query again over a million rows.
 #[derive(Debug, Clone, PartialEq)]
@@ -927,8 +950,31 @@ impl TrackTablePanel {
         (inputs, unapplied)
     }
 
+    /// Take the query a `set_track_table_query` call left on `AppState`, if
+    /// one did since the last frame.
+    fn take_published_query(&mut self, state: &mut AppState) {
+        let published = &mut state.track_table_query;
+        if std::mem::take(&mut published.set_over_wire) {
+            self.query = published.query.clone();
+        }
+    }
+
+    /// Publish the query to `AppState`, where the wire reads it.
+    fn publish_query(&self, state: &mut AppState) {
+        if state.track_table_query.query != self.query {
+            state.track_table_query.query = self.query.clone();
+        }
+    }
+
     /// Draw the panel for the selected reconstruction.
     pub(crate) fn show(&mut self, ui: &mut egui::Ui, state: &mut AppState) {
+        self.take_published_query(state);
+        self.show_selected(ui, state);
+        self.publish_query(state);
+    }
+
+    /// The frame of [`Self::show`] between taking and publishing the query.
+    fn show_selected(&mut self, ui: &mut egui::Ui, state: &mut AppState) {
         self.drawn_this_frame = true;
         let Some(id) =
             crate::scene::selected_node(&state.scene, state.selected_recon).map(|n| n.id)
@@ -1528,20 +1574,7 @@ fn show_unapplied(ui: &mut egui::Ui, node: &SceneNode, unapplied: &Unapplied) {
             .join(", ")
     };
     if !unapplied.unsupplied.is_empty() {
-        ui.label(
-            egui::RichText::new(format!(
-                "Not filtering or sorting by {}: {} cannot supply {}. The bounds are kept for a \
-                 reconstruction that can.",
-                titles(&unapplied.unsupplied),
-                node.label,
-                if unapplied.unsupplied.len() == 1 {
-                    "it"
-                } else {
-                    "them"
-                }
-            ))
-            .weak(),
-        );
+        ui.label(egui::RichText::new(unsupplied_text(node, &unapplied.unsupplied)).weak());
     }
     if unapplied.is_pending() {
         let pending = unapplied.pending();
@@ -1560,6 +1593,24 @@ fn show_unapplied(ui: &mut egui::Ui, node: &SceneNode, unapplied: &Unapplied) {
                 },
             ));
     }
+}
+
+/// The line that says the query names columns the reconstruction on show
+/// cannot supply. It opens with the sentence `find_points` refuses such a
+/// column with, which names the columns by their wire names and lists the
+/// ones the reconstruction can supply
+/// ([`crate::track_table::cannot_supply_sentence`]), and goes on to say that
+/// the bounds and the sort on them are kept.
+fn unsupplied_text(node: &SceneNode, unsupplied: &[TrackTableColumn]) -> String {
+    format!(
+        "{} Not filtering or sorting by {}; the bounds are kept for a reconstruction that can.",
+        crate::track_table::cannot_supply_sentence(&node.label, unsupplied, node.edited()),
+        unsupplied
+            .iter()
+            .map(|&c| column_title(c))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
 }
 
 /// The line that says the query waits for columns the cache does not hold

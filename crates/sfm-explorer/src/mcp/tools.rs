@@ -295,6 +295,13 @@ pub(crate) fn parse(
         "set_viewer_3d_display" => Command::SetViewer3dDisplay {
             change: super::viewer_3d_display::parse_change(&args)?,
         },
+        "get_track_table_query" => Command::GetTrackTableQuery,
+        // The column names and the bound syntax are `find_points`', checked
+        // here; what is left for `apply` is the one refusal that depends on
+        // the query already held.
+        "set_track_table_query" => Command::SetTrackTableQuery {
+            change: super::track_table_query::parse_change(&args)?,
+        },
         "get_timing_detail" => Command::GetTimingDetail,
         // Required rather than a toggle, for the reason `solo_reconstruction`
         // takes the state it wants: an agent issuing a toggle cannot know the
@@ -1180,7 +1187,7 @@ impl Args<'_> {
         ToolError::new(format!("{} {complaint}", self.tool))
     }
 
-    fn wrong_type(&self, key: &str, expected: &str, got: &Value) -> ToolError {
+    pub(super) fn wrong_type(&self, key: &str, expected: &str, got: &Value) -> ToolError {
         self.error(format!(
             "wants {key} to be {expected} — got {}.",
             describe(got)
@@ -1656,7 +1663,7 @@ impl Args<'_> {
 
     /// `find_points`' bounds: a list of `{column, min?, max?}`, each column a
     /// track table column's wire name, and a `min` above its `max` refused.
-    fn column_bounds(
+    pub(super) fn column_bounds(
         &self,
         key: &str,
     ) -> Result<Vec<sfmtool_core::analysis::track_table::ColumnBounds>, ToolError> {
@@ -1668,16 +1675,14 @@ impl Args<'_> {
         let array = value
             .as_array()
             .ok_or_else(|| self.wrong_type(key, expected, value))?;
+        let path = format!("{}.{key}", self.tool);
         array
             .iter()
             .map(|element| {
                 let map = element
                     .as_object()
                     .ok_or_else(|| self.wrong_type(key, expected, value))?;
-                let inner = Args {
-                    tool: "find_points.bounds",
-                    map,
-                };
+                let inner = Args { tool: &path, map };
                 inner.reject_unknown_nested()?;
                 let column = inner
                     .optional_string("column")?
@@ -1713,7 +1718,7 @@ impl Args<'_> {
     }
 
     /// `find_points`' sort: `{column, descending?}`, ascending by default.
-    fn order_by(
+    pub(super) fn order_by(
         &self,
         key: &str,
     ) -> Result<
@@ -1735,10 +1740,8 @@ impl Args<'_> {
                 value,
             )
         })?;
-        let inner = Args {
-            tool: "find_points.order_by",
-            map,
-        };
+        let path = format!("{}.{key}", self.tool);
+        let inner = Args { tool: &path, map };
         inner.reject_unknown_nested()?;
         let column = inner
             .optional_string("column")?

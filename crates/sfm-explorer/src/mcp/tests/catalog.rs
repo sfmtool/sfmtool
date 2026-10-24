@@ -67,6 +67,17 @@ fn representative_tool_calls() -> Vec<(&'static str, Value)> {
             "set_viewer_3d_display",
             json!({ "point_size_log2": 1.5, "show_target_indicator": true }),
         ),
+        ("get_track_table_query", json!({})),
+        (
+            "set_track_table_query",
+            json!({
+                "bounds": [{ "column": "centroid_distance", "min": "inf" }],
+                "order_by": { "column": "rms_error_px", "descending": true },
+                "columns": ["crop", "track_length", "rms_error_px", "centroid_distance"],
+                "seen_in_selected_camera_image": true,
+                "filter_3d": "dim",
+            }),
+        ),
         (
             "set_image_detail_view",
             json!({ "reconstruction_label": "alpha", "pixel": [142.0, 197.5], "zoom": 4.0 }),
@@ -1168,6 +1179,7 @@ fn only_the_reads_are_annotated_read_only() {
             "get_image_detail_display",
             "get_image_detail_view",
             "get_viewer_3d_display",
+            "get_track_table_query",
             "get_reconstruction_history",
             "get_bench",
             "get_bench_track",
@@ -1176,15 +1188,15 @@ fn only_the_reads_are_annotated_read_only() {
             "get_widgets",
         ]
     );
-    // Seventeen JSON reads, the one read that hands back a picture, seventy-three
+    // Eighteen JSON reads, the one read that hands back a picture, seventy-four
     // writes, six input tools, and the one that writes a file.
-    assert_eq!(catalog.len(), 98, "the catalog has grown or shrunk");
+    assert_eq!(catalog.len(), 100, "the catalog has grown or shrunk");
     assert_eq!(
         catalog
             .iter()
             .filter(|spec| spec.kind == ToolKind::Write)
             .count(),
-        73
+        74
     );
     // One tool can overwrite a file by name, and six can press what a person
     // can press, File ▸ Save included; those seven are the ones annotated
@@ -1389,6 +1401,7 @@ fn spelled(n: usize) -> String {
         0..=19 => UNITS[n].to_string(),
         20..=99 if n.is_multiple_of(10) => TENS[n / 10].to_string(),
         20..=99 => format!("{}-{}", TENS[n / 10], UNITS[n % 10]),
+        100 => "one hundred".to_string(),
         _ => panic!("no word for {n}: the spec would not spell it out either"),
     }
 }

@@ -192,41 +192,9 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                     ("reconstruction_label", reconstruction_label_schema()),
                     (
                         "bounds",
-                        json!({
-                            "type": "array",
-                            "description":
-                                "Bounds every returned point passes, one per column.",
-                            "items": object(
-                                &[
-                                    (
-                                        "min",
-                                        json!({
-                                            "description":
-                                                "The least value kept, inclusive: a number, or \
-                                                 \"inf\" for +infinity. Omit for no lower bound.",
-                                            "anyOf": [
-                                                { "type": "number" },
-                                                { "type": "string", "enum": ["inf"] },
-                                            ],
-                                        }),
-                                    ),
-                                    (
-                                        "max",
-                                        json!({
-                                            "description":
-                                                "The greatest value kept, inclusive: a number, \
-                                                 or \"inf\" for +infinity. Omit for no upper \
-                                                 bound.",
-                                            "anyOf": [
-                                                { "type": "number" },
-                                                { "type": "string", "enum": ["inf"] },
-                                            ],
-                                        }),
-                                    ),
-                                ],
-                                &[("column", track_table_column_schema())],
-                            ),
-                        }),
+                        track_table_bounds_schema(
+                            "Bounds every returned point passes, one per column.",
+                        ),
                     ),
                     (
                         "seen_in_camera_image",
@@ -240,16 +208,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                             ],
                         }),
                     ),
-                    (
-                        "order_by",
-                        object(
-                            &[(
-                                "descending",
-                                flag("Sort the largest values first. Defaults to false."),
-                            )],
-                            &[("column", track_table_column_schema())],
-                        ),
-                    ),
+                    ("order_by", track_table_order_by_schema()),
                     (
                         "columns",
                         json!({
@@ -413,6 +372,23 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           left drag does (navigate or eraser_brush). These decide what a \
                           screenshot of the viewer_3d panel shows. The field of view is in \
                           get_scene's view block instead.",
+            kind: Read,
+            schema: object(&[], &[]),
+        },
+        ToolSpec {
+            name: "get_track_table_query",
+            description: "The Track Table panel's query, as one document: bounds (the panel's \
+                          minimum and maximum boxes, as find_points takes them), order_by (the \
+                          sorted column, or null for point order), columns (the columns the \
+                          query shows, the picture columns crop and patch among them), \
+                          seen_in_selected_camera_image (the Seen in selected image box) and \
+                          filter_3d (off, dim or hide: the Filter the 3D view box and its \
+                          choice). The query applies to the reconstruction the panel shows, the \
+                          selected one, whose label the reply gives as reconstruction_label, \
+                          and is kept when another reconstruction is selected. It decides what a \
+                          screenshot of the track_table panel shows, and with filter_3d which \
+                          points the viewer_3d panel dims or hides. find_points with the same \
+                          bounds and order_by returns the panel's rows.",
             kind: Read,
             schema: object(&[], &[]),
         },

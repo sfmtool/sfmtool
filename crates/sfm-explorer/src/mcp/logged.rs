@@ -53,6 +53,8 @@ impl Command {
             Command::SetImageDetailView { .. } => "set_image_detail_view",
             Command::GetViewer3dDisplay => "get_viewer_3d_display",
             Command::SetViewer3dDisplay { .. } => "set_viewer_3d_display",
+            Command::GetTrackTableQuery => "get_track_table_query",
+            Command::SetTrackTableQuery { .. } => "set_track_table_query",
             Command::GetTimingDetail => "get_timing_detail",
             Command::SetTimingDetail { .. } => "set_timing_detail",
             Command::SetView { .. } => "set_view",
@@ -356,6 +358,7 @@ impl Command {
             | Command::GetImageDetailDisplay
             | Command::GetImageDetailView
             | Command::GetViewer3dDisplay
+            | Command::GetTrackTableQuery
             | Command::GetTimingDetail
             | Command::GetReconstructionHistory { .. }
             | Command::GetBackgroundTasks { .. }
@@ -454,6 +457,7 @@ impl Command {
             Command::SetImageDetailDisplay { .. }
             | Command::SetImageDetailView { .. }
             | Command::SetViewer3dDisplay { .. }
+            | Command::SetTrackTableQuery { .. }
             | Command::SetTimingDetail { .. } => Kind::Display,
             // A proposal is viewer state, as a camera held in hand is; its
             // rows are `View` rows until Apply writes an `Edit`.
@@ -539,6 +543,7 @@ pub(crate) fn query_text(state: &AppState, viewer: &Viewer3D, command: &Command)
         Command::GetImageDetailDisplay => "get_image_detail_display".to_string(),
         Command::GetImageDetailView => "get_image_detail_view".to_string(),
         Command::GetViewer3dDisplay => "get_viewer_3d_display".to_string(),
+        Command::GetTrackTableQuery => "get_track_table_query".to_string(),
         Command::GetTimingDetail => "get_timing_detail".to_string(),
         Command::GetReconstructionHistory {
             reconstruction_label,

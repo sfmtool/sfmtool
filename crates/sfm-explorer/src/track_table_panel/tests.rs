@@ -914,13 +914,63 @@ fn a_column_the_reconstruction_cannot_supply_is_left_out() {
         .min = "100".into();
     let texts = painted_texts(&ctx, input(1200.0), |ui| panel.show(ui, &mut state));
     assert!(!texts.iter().any(|t| t == "Normal conf."), "{texts:?}");
-    assert!(
-        texts
-            .iter()
-            .any(|t| t.starts_with("Not filtering or sorting by Normal conf.")),
-        "{texts:?}"
+    // The note opens with the sentence `find_points` refuses such a column
+    // with, which lists the columns the reconstruction can supply.
+    let label = &state.scene[0].label;
+    let refusal = crate::track_table::cannot_supply_sentence(
+        label,
+        &[TrackTableColumn::NormalConfidence],
+        &edited,
     );
+    assert!(
+        refusal.starts_with(&format!(
+            "{label} cannot supply the column normal_confidence: the columns it can supply are \
+             track_length, "
+        )),
+        "{refusal}"
+    );
+    let note = format!(
+        "{refusal} Not filtering or sorting by Normal conf.; the bounds are kept for a \
+         reconstruction that can."
+    );
+    assert!(texts.contains(&note), "{texts:?}");
     assert_eq!(panel.rows().len(), POINTS);
+}
+
+/// The panel publishes its query where the wire reads it, and takes the one
+/// a `set_track_table_query` call left there on its next frame, drawn or not.
+#[cfg(feature = "mcp")]
+#[test]
+fn the_panel_publishes_its_query_and_takes_one_set_over_the_wire() {
+    let (mut state, _) = state();
+    let (ctx, mut panel) = shown(&mut state);
+    panel.query.bound_mut(TrackTableColumn::RmsErrorPx).max = "0.95".into();
+    frame(&ctx, &mut panel, &mut state);
+    let document = state.track_table_query.document();
+    assert_eq!(
+        document["bounds"],
+        serde_json::json!([{ "column": "rms_error_px", "max": 0.95 }])
+    );
+    let change = crate::track_table_panel::TrackTableQueryChange {
+        seen_in_selected_camera_image: Some(true),
+        ..Default::default()
+    };
+    state
+        .track_table_query
+        .set("set_track_table_query", &change)
+        .unwrap();
+    // Not drawn: the frame's after-dock step takes it.
+    panel.after_dock(&mut state, true);
+    assert!(panel.query.seen_in_selected_image);
+    assert_eq!(panel.query.bound(TrackTableColumn::RmsErrorPx).max, "0.95");
+    // A person's edit after it is published again, not undone by the call.
+    panel.query.seen_in_selected_image = false;
+    frame(&ctx, &mut panel, &mut state);
+    assert!(!panel.query.seen_in_selected_image);
+    assert_eq!(
+        state.track_table_query.document()["seen_in_selected_camera_image"],
+        serde_json::json!(false)
+    );
 }
 
 /// The header names the reconstruction and counts matched rows against live

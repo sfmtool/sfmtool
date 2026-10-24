@@ -40,8 +40,9 @@ of back-facing observations), and two picture columns: **Crop**, the point's ref
 photograph cut around its patch (§ "The Crop column"), and **Patch**, its patch
 bitmap (§ "The Patch column"). A box under the header applies the table's
 filter to the 3D Viewer, dimming or hiding the points it does not list
-(§ "Filtering the 3D view"). The wire tools that read and write the panel's
-query are proposed in [drafts/track-table.md](../drafts/track-table.md).
+(§ "Filtering the 3D view"). `get_track_table_query` and
+`set_track_table_query` read and write the panel's query over the wire
+(§ "The query is panel state").
 
 ## Placement
 
@@ -275,8 +276,14 @@ decoded.
   is one for whichever reconstruction is selected (§ "The query is panel
   state"), so it can name a column the newly selected reconstruction cannot
   supply. Its bound and its sort are kept and do not filter or order, and the
-  line under the header says *Not filtering or sorting by Normal conf.: dino
-  cannot supply it. The bounds are kept for a reconstruction that can.*
+  line under the header says so. It opens with the sentence `find_points`
+  refuses such a column with, which names the column by its wire name and
+  lists the columns the reconstruction can supply
+  (`track_table::cannot_supply_sentence`; [mcp-server.md](mcp-server.md)
+  § "`find_points`"), and goes on in the panel's headings: *dino cannot supply
+  the column normal_confidence: the columns it can supply are track_length, …,
+  inverse_depth_z. Not filtering or sorting by Normal conf.; the bounds are
+  kept for a reconstruction that can.*
 - **A query waits for a column that is not ready.** A bound or the sort on a
   column the cache does not hold yet, such as a computed column while the
   table job computes it, is not applied, and the line under the header says
@@ -721,8 +728,10 @@ and the published value, `Filter3d` on `AppState::filter_3d`, in
   change of *Dim* or *Hide* writes no mask.
 - **Names.** `get_widgets` lists the box as a `check_box` named `Filter the 3D
   view` and the choices as radio buttons named `Dim` and `Hide`, each with its
-  state, so an agent sets the filter with `click`. Nothing else on the wire
-  reports it: a screenshot of the 3D Viewer shows the stats line.
+  state, so an agent can set the filter with `click`, or with
+  `set_track_table_query`'s `filter_3d` (§ "The query is panel state"), which
+  `get_track_table_query` reports. A screenshot of the 3D Viewer shows the
+  stats line.
 
 How the renderer carries the set, as a bit of each point's mask word, and
 draws the dimmed points, is in
@@ -739,6 +748,18 @@ in a version, cost no undo step and are not saved with the reconstruction or in
 the layout file. A single query is used for whichever reconstruction is
 selected. The picture size the *Size* dropdown sets is panel state beside the
 query and is not saved either.
+
+**The wire reads and writes it.** `get_track_table_query` and
+`set_track_table_query` ([mcp-server.md](mcp-server.md)
+§ "`get_track_table_query` / `set_track_table_query`") carry the query as one
+document, with the columns by the wire names `find_points` takes and the
+bounds in its syntax. The panel keeps the query in its own state and
+publishes it to `AppState::track_table_query` (`PublishedQuery`) at the end of
+each frame, drawn or not; a set leaves the merged query there, and the panel
+takes it at the start of its next frame, so a query set while the panel is
+closed or behind another tab is the one it shows. A set opens a closed panel.
+The bounds a set writes go into the boxes as a person would type them, so the
+panel shows them and parses them as it does any other.
 
 ## Computing the columns
 
@@ -897,8 +918,12 @@ with one point at infinity:
 - a click on the Error heading sorts worst first, a second reverses, and a
   click on Point restores point order; a column holding a bound or the sort
   cannot be hidden; a column the reconstruction cannot supply is left out and
-  its bound is said and filters nothing; the header counts matched rows against
+  its bound filters nothing and is said in a note that opens with
+  `find_points`' refusal of the column; the header counts matched rows against
   live points;
+- the panel publishes a person's edit of its query to `AppState`, takes a
+  query `set_track_table_query` left there on a frame it is not drawn, and a
+  person's edit after it is published in turn;
 - a click on a row selects its point; hovering a row hovers its point and
   leaving clears it once; a selection made elsewhere scrolls its row into
   view, and a new sort scrolls back to the top;
@@ -1087,11 +1112,12 @@ the panel among the ten.
 
 ## Non-goals
 
-- `get_track_table_query` / `set_track_table_query` are not built. They are
-  proposed in [drafts/track-table.md](../drafts/track-table.md). Until then
-  an agent sets *Filter the 3D view* with `click` on the box and the choices
-  `get_widgets` lists, and reads its effect off the 3D Viewer's stats line in
-  a screenshot.
+- Bulk edits on the matched rows. The query's result is the list of point
+  indexes `delete_points` takes, and a *Remove matching points* button that
+  deletes them as one version is proposed in
+  [drafts/track-table-remove-matching-points.md](../drafts/track-table-remove-matching-points.md).
+- The panel's own controls write no Action Log rows; only
+  `set_track_table_query` records a change of the query.
 - The filter of the 3D view reaches no panel but the 3D Viewer. Image Detail
   draws every tracked feature whatever the table lists (§ "Open questions").
 - Colouring the cloud by a column. The filter dims or hides, and the colours

@@ -88,6 +88,56 @@ fn track_table_column_schema() -> Value {
     })
 }
 
+/// A list of bounds on track table columns, `{column, min?, max?}` each, as
+/// `find_points` and `set_track_table_query` take them.
+fn track_table_bounds_schema(description: &str) -> Value {
+    json!({
+        "type": "array",
+        "description": description,
+        "items": object(
+            &[
+                (
+                    "min",
+                    json!({
+                        "description":
+                            "The least value kept, inclusive: a number, or \"inf\" for \
+                             +infinity. Omit for no lower bound.",
+                        "anyOf": [
+                            { "type": "number" },
+                            { "type": "string", "enum": ["inf"] },
+                        ],
+                    }),
+                ),
+                (
+                    "max",
+                    json!({
+                        "description":
+                            "The greatest value kept, inclusive: a number, or \"inf\" for \
+                             +infinity. Omit for no upper bound.",
+                        "anyOf": [
+                            { "type": "number" },
+                            { "type": "string", "enum": ["inf"] },
+                        ],
+                    }),
+                ),
+            ],
+            &[("column", track_table_column_schema())],
+        ),
+    })
+}
+
+/// A sort by one track table column, `{column, descending?}`, as
+/// `find_points` and `set_track_table_query` take it.
+fn track_table_order_by_schema() -> Value {
+    object(
+        &[(
+            "descending",
+            flag("Sort the largest values first. Defaults to false."),
+        )],
+        &[("column", track_table_column_schema())],
+    )
+}
+
 /// A pixel in one camera image's own pixel coordinates.
 fn pixel_schema() -> Value {
     json!({

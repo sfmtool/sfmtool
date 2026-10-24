@@ -928,6 +928,12 @@ pub struct AppState {
     /// viewport's stats line. See [`crate::filter_3d`].
     pub(crate) filter_3d: Option<crate::filter_3d::Filter3d>,
 
+    /// The Track Table panel's query where `get_track_table_query` reads it
+    /// and `set_track_table_query` leaves a new one for the panel to take.
+    /// Panel state, not part of any version and not saved. See
+    /// [`crate::track_table_panel::PublishedQuery`].
+    pub(crate) track_table_query: crate::track_table_panel::PublishedQuery,
+
     /// The bars Track View's threshold boxes hold while it shows the viewed
     /// track. They judge the readings drawn and change no verdict; a put of
     /// the viewed point carries them onto the new track when they differ from
@@ -1062,6 +1068,7 @@ impl AppState {
             track_table_jobs: Default::default(),
             reference_picks: Default::default(),
             filter_3d: None,
+            track_table_query: Default::default(),
             viewed_thresholds: Default::default(),
         }
     }
