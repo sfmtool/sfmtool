@@ -127,7 +127,7 @@ fn the_endpoint_completes_a_handshake_and_advertises_its_tools() {
     );
     // The viewer introduces itself, not the SDK. `ServerConfig::new` fills
     // `serverInfo` from `rmcp`'s own build environment, so a handler that does
-    // not set it announces `{"name":"rmcp","version":"3.4.0"}` — which is what
+    // not set it announces `{"name":"rmcp","version":"3.7.0"}` — which is what
     // a client lists the server as and what a human reads in a failure report.
     assert_eq!(
         result["serverInfo"]["name"],
@@ -256,7 +256,8 @@ fn a_malformed_argument_is_a_protocol_error() {
 }
 
 /// The newest revision a real client asks for. The server may negotiate *down*
-/// from this — `rmcp` 3.2's own `LATEST` is 2025-11-25 — which is the point:
+/// from this — 2026-07-28 has no `initialize`, so `rmcp` 3.7 answers one that
+/// names it with 2025-11-25 — which is the point:
 /// the test asks the way a current client asks and then works with whatever
 /// comes back, so an SDK bump changes what is exercised without breaking it.
 const NEWEST_PROTOCOL_VERSION: &str = "2026-07-28";
