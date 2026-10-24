@@ -669,3 +669,69 @@ fn the_max_error_bounds_and_sorts_like_any_column() {
         assert!((got - f64::from(*value)).abs() < 1e-4, "{got} vs {value}");
     }
 }
+
+/// A self-similarity column comes with its lower-bound flag under its name
+/// and `_is_at_least`, the radius at the cap flagged; the number is what
+/// sorts, so the capped row comes first worst first, and a column that can
+/// be no lower bound has no flag.
+#[test]
+fn a_self_similarity_column_carries_its_lower_bound_flag() {
+    use sfmtool_core::camera::sampler::{Sampler, SamplerChoice};
+    use sfmtool_core::patch::normal_refine::PatchWindow;
+    use sfmtool_core::reconstruction::{
+        observation_reading_options, ObservationReading, ObservationReadings,
+    };
+    let mut recon = sfmtool_core::SfmrReconstruction::demo(3);
+    let options = observation_reading_options(
+        SamplerChoice::Fixed(Sampler::Bilinear),
+        24,
+        PatchWindow::Uniform,
+    );
+    let mut readings = ObservationReadings::not_measured(recon.point_set.tracks.len(), options);
+    let rows: [([f32; 2], [bool; 2]); 3] = [
+        ([1.25, 0.5], [false, false]),
+        ([3.0, 0.5], [true, false]),
+        ([2.5, 0.5], [true, false]),
+    ];
+    for (p, &(axes, is_at_least)) in rows.iter().enumerate() {
+        let start = recon.point_set.observation_offsets[p];
+        for k in start..start + recon.observations_for_point(p).len() {
+            readings.rows[k] = ObservationReading {
+                ellipse_axes: axes,
+                ellipse_axes_is_at_least: is_at_least,
+                ..ObservationReading::NOT_MEASURED
+            };
+        }
+    }
+    recon.point_set.observation_readings = Some(readings);
+    recon.rebuild_derived_fields();
+    let mut state = AppState::new();
+    state.append_node(crate::scene::SceneNode::demo(recon));
+    let id = state.scene[0].id;
+    state.select_recon(id);
+    let mut viewer = Viewer3D::new();
+    let reply = answered(
+        &mut state,
+        &mut viewer,
+        json!({
+            "order_by": { "column": "max_zncc_self_similarity_radius", "descending": true },
+            "columns": ["max_zncc_self_similarity_radius", "track_length"],
+        }),
+    );
+    assert_eq!(indexes(&reply), [1, 2, 0], "{reply}");
+    let points = reply["points"].as_array().unwrap();
+    let flags: Vec<&Value> = points
+        .iter()
+        .map(|p| &p["max_zncc_self_similarity_radius_is_at_least"])
+        .collect();
+    assert_eq!(
+        flags,
+        [&json!(true), &json!(true), &json!(false)],
+        "{reply}"
+    );
+    assert_eq!(points[0]["max_zncc_self_similarity_radius"], json!(3.0));
+    assert!(
+        points[0].get("track_length_is_at_least").is_none(),
+        "{reply}"
+    );
+}

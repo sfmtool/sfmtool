@@ -339,6 +339,82 @@ fn max_self_similarity_radius_skips_unmeasured_readings() {
     assert_eq!(v[2], 3.0);
 }
 
+/// The largest radius is a lower bound where any measured reading's major
+/// axis is flagged, the largest's or another's, and never where it has no
+/// value; an unmeasured row's flag is not read.
+#[test]
+fn max_self_similarity_radius_is_a_lower_bound_where_any_reading_is() {
+    let mut recon = demo(4);
+    let options = observation_reading_options(
+        SamplerChoice::Fixed(Sampler::Bilinear),
+        24,
+        PatchWindow::Uniform,
+    );
+    let mut readings = ObservationReadings::not_measured(8, options);
+    let measured = |axes: [f32; 2], is_at_least: [bool; 2]| ObservationReading {
+        ellipse_axes: axes,
+        ellipse_axes_is_at_least: is_at_least,
+        ..ObservationReading::NOT_MEASURED
+    };
+    // Point 0: exact readings.
+    readings.rows[0] = measured([1.5, 0.5], [false, false]);
+    readings.rows[1] = measured([1.0, 0.5], [false, false]);
+    // Point 1: the cap, flagged as every reading at the cap is.
+    readings.rows[2] = measured([3.0, 1.0], [true, false]);
+    readings.rows[3] = measured([1.0, 0.5], [false, false]);
+    // Point 2: the largest is exact, a smaller one flagged below the cap.
+    readings.rows[4] = measured([2.0, 1.0], [false, false]);
+    readings.rows[5] = measured([1.25, 1.0], [true, true]);
+    // Point 3: an unmeasured row carrying a flag is skipped.
+    readings.rows[6] = ObservationReading {
+        ellipse_axes_is_at_least: [true, true],
+        ..ObservationReading::NOT_MEASURED
+    };
+    readings.rows[7] = measured([0.75, 0.5], [false, false]);
+    recon.point_set.observation_readings = Some(readings);
+    let recon = edited(recon);
+    let table = compute(&recon, &[TrackTableColumn::MaxZnccSelfSimilarityRadius]);
+    let v = table
+        .values(TrackTableColumn::MaxZnccSelfSimilarityRadius)
+        .unwrap();
+    assert_eq!(v, [1.5, 3.0, 2.0, 0.75]);
+    assert_eq!(
+        table
+            .is_at_least(TrackTableColumn::MaxZnccSelfSimilarityRadius)
+            .unwrap(),
+        [false, true, true, false]
+    );
+    // A merge moves the flags with the values.
+    let mut merged = compute(&recon, &[TrackTableColumn::TrackLength]);
+    merged.merge(table.clone()).unwrap();
+    assert_eq!(
+        merged.is_at_least(TrackTableColumn::MaxZnccSelfSimilarityRadius),
+        table.is_at_least(TrackTableColumn::MaxZnccSelfSimilarityRadius)
+    );
+}
+
+#[test]
+fn only_the_self_similarity_columns_carry_lower_bounds() {
+    let flagged: Vec<TrackTableColumn> = TrackTableColumn::ALL
+        .into_iter()
+        .filter(|c| c.has_lower_bounds())
+        .collect();
+    assert_eq!(
+        flagged,
+        [
+            TrackTableColumn::MaxZnccSelfSimilarityRadius,
+            TrackTableColumn::ReferenceZnccSelfSimilarityRadius,
+            TrackTableColumn::ReferenceZnccSelfSimilarityElongation,
+        ]
+    );
+    let table = compute(&edited(demo(3)), &TrackTableColumn::ALL);
+    for c in TrackTableColumn::ALL {
+        if !c.has_lower_bounds() {
+            assert!(table.is_at_least(c).is_none(), "{c:?}");
+        }
+    }
+}
+
 #[test]
 fn deleted_points_have_no_row() {
     let mut recon = edited(demo(5));

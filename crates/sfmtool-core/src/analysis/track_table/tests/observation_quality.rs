@@ -14,7 +14,9 @@ use super::*;
 use crate::geometry::RigidTransform;
 use crate::patch::normal_refine::viewing_angle;
 use crate::patch::observation_reading::observation_reading;
-use crate::patch::self_similarity::{zncc_self_similarity_radius, PatchTile, SelfSimilarityParams};
+use crate::patch::self_similarity::{
+    zncc_self_similarity_radius, PatchTile, SelfSimilarityEllipse, SelfSimilarityParams,
+};
 use crate::patch::stored_bitmap::stored_bitmap_planes;
 use crate::reconstruction::data::observation_reprojection_residual;
 use crate::reconstruction::ObservationSource;
@@ -308,6 +310,11 @@ fn bitmaps(n: usize) -> Array4<u8> {
 
 /// The reading of point `p`'s bitmap in `b`, as the bitmap fallback reads it.
 fn bitmap_axes(b: &Array4<u8>, p: usize) -> [f64; 2] {
+    bitmap_ellipse(b, p).axes
+}
+
+/// The ellipse of point `p`'s bitmap in `b`, as the bitmap fallback reads it.
+fn bitmap_ellipse(b: &Array4<u8>, p: usize) -> SelfSimilarityEllipse {
     let planes = stored_bitmap_planes(b.index_axis(Axis(0), p)).unwrap();
     let side = planes.side;
     zncc_self_similarity_radius(
@@ -322,7 +329,6 @@ fn bitmap_axes(b: &Array4<u8>, p: usize) -> [f64; 2] {
         &SelfSimilarityParams::default(),
     )
     .ellipse
-    .axes
 }
 
 #[test]
@@ -350,21 +356,86 @@ fn the_reference_reading_falls_back_to_the_bitmap() {
     let elongation = table
         .values(TrackTableColumn::ReferenceZnccSelfSimilarityElongation)
         .unwrap();
+    let radius_at_least = table
+        .is_at_least(TrackTableColumn::ReferenceZnccSelfSimilarityRadius)
+        .unwrap();
+    let elongation_at_least = table
+        .is_at_least(TrackTableColumn::ReferenceZnccSelfSimilarityElongation)
+        .unwrap();
     for p in [0usize, 1, 3, 4] {
-        let [major, minor] = bitmap_axes(&b, p);
+        let ellipse = bitmap_ellipse(&b, p);
+        let [major, minor] = ellipse.axes;
+        let [major_at_least, minor_at_least] = ellipse.axes_is_at_least;
         assert_eq!(radius[p], major as f32, "point {p}");
-        assert_eq!(elongation[p], (major / minor) as f32, "point {p}");
+        // The radius carries the reading's flag on its major axis.
+        assert_eq!(radius_at_least[p], major_at_least, "point {p}");
+        if minor_at_least {
+            assert!(elongation[p].is_nan(), "point {p}");
+            assert!(!elongation_at_least[p], "point {p}");
+        } else {
+            assert_eq!(elongation[p], (major / minor) as f32, "point {p}");
+            assert_eq!(elongation_at_least[p], major_at_least, "point {p}");
+        }
     }
-    // The texture fixes the patch both ways, the stripes only across them,
-    // and a flat patch in no direction: its ellipse is the cap's circle.
+    // The texture fixes the patch both ways, exactly; the stripes only
+    // across them, sliding along them to the cap, so their elongation is a
+    // lower bound; a flat patch in no direction: its ellipse is the cap's
+    // circle, both axes flagged, so its elongation is unknown.
     assert!(radius[0] < 1.5, "{}", radius[0]);
+    assert!(!radius_at_least[0] && !elongation_at_least[0]);
     assert!(elongation[1] > 2.0 * elongation[0], "{elongation:?}");
+    assert!(radius_at_least[1] && elongation_at_least[1]);
     assert_eq!(radius[3], 3.0);
-    assert_eq!(elongation[3], 1.0);
-    // A zero row has no reading.
+    assert!(radius_at_least[3]);
+    assert!(elongation[3].is_nan() && !elongation_at_least[3]);
+    // A zero row has no reading, and no flag.
     assert!(radius[2].is_nan() && elongation[2].is_nan());
+    assert!(!radius_at_least[2] && !elongation_at_least[2]);
     // A point at infinity reads its bitmap as any other.
     assert_eq!(radius[4], radius[3]);
+}
+
+/// The stored reading's flags carry to the reference columns: the radius
+/// takes the major axis's, and the elongation is exact where both axes are,
+/// a lower bound where only the major axis is flagged, and has no value
+/// where the minor axis is.
+#[test]
+fn the_stored_reading_flags_the_reference_columns() {
+    let mut recon = demo(4);
+    let options = observation_reading_options(
+        SamplerChoice::Fixed(Sampler::Bilinear),
+        24,
+        PatchWindow::Uniform,
+    );
+    let mut readings = ObservationReadings::not_measured(8, options);
+    let measured = |axes: [f32; 2], is_at_least: [bool; 2]| ObservationReading {
+        ellipse_axes: axes,
+        ellipse_axes_is_at_least: is_at_least,
+        ..ObservationReading::NOT_MEASURED
+    };
+    readings.rows[0] = measured([2.0, 0.5], [false, false]);
+    // An edge: the major axis at the cap, the width across it exact.
+    readings.rows[2] = measured([3.0, 0.5], [true, false]);
+    // A minor axis that may be longer: the ratio may be smaller.
+    readings.rows[4] = measured([2.0, 1.0], [false, true]);
+    // A flat patch: both axes at the cap.
+    readings.rows[6] = measured([3.0, 3.0], [true, true]);
+    recon.point_set.observation_readings = Some(readings);
+    recon.point_set.reference_observations = Some(vec![0, 0, 0, 0]);
+    let recon = edited(recon);
+    let columns = [
+        TrackTableColumn::ReferenceZnccSelfSimilarityRadius,
+        TrackTableColumn::ReferenceZnccSelfSimilarityElongation,
+    ];
+    let table = compute(&recon, &columns);
+    let [radius, elongation] = columns.map(|c| table.values(c).unwrap());
+    let [radius_at_least, elongation_at_least] = columns.map(|c| table.is_at_least(c).unwrap());
+    assert_eq!(radius, [2.0, 3.0, 2.0, 3.0]);
+    assert_eq!(radius_at_least, [false, true, false, true]);
+    assert_eq!(elongation[0], 4.0);
+    assert_eq!(elongation[1], 6.0);
+    assert!(elongation[2].is_nan() && elongation[3].is_nan());
+    assert_eq!(elongation_at_least, [false, true, false, false]);
 }
 
 #[test]
@@ -408,11 +479,14 @@ fn the_stored_reading_at_the_reference_observation_comes_first() {
         .unwrap();
     assert_eq!(radius[0], 1.25);
     assert_eq!(elongation[0], 2.5);
+    // Point 1's bitmap is the stripes, read exactly across them; point 3's
+    // is flat, whose minor axis reads the cap and leaves no elongation.
     for p in [1usize, 3] {
-        let [major, minor] = bitmap_axes(&b, p);
-        assert_eq!(radius[p], major as f32, "point {p}");
-        assert_eq!(elongation[p], (major / minor) as f32, "point {p}");
+        assert_eq!(radius[p], bitmap_axes(&b, p)[0] as f32, "point {p}");
     }
+    let [major, minor] = bitmap_axes(&b, 1);
+    assert_eq!(elongation[1], (major / minor) as f32);
+    assert!(elongation[3].is_nan());
     // Point 2's reference row is unmeasured and its bitmap a zero row.
     assert!(radius[2].is_nan());
 }

@@ -61,6 +61,8 @@ impl TrackTableColumn {
     pub fn is_f64(self) -> bool;
     /// Whether `recon` can supply this column at all.
     pub fn is_available(self, recon: &EditedReconstruction) -> bool;
+    /// The three self-similarity columns, whose values can be lower bounds.
+    pub fn has_lower_bounds(self) -> bool;
 }
 
 /// Column values for every live point of one version, one row per track keyed
@@ -79,6 +81,9 @@ impl TrackTable {
     pub fn has(&self, column: TrackTableColumn) -> bool;
     pub fn values(&self, column: TrackTableColumn) -> Option<&[f32]>;
     pub fn values_f64(&self, column: TrackTableColumn) -> Option<&[f64]>;
+    /// Per row of a column with `has_lower_bounds`, whether the true value
+    /// may be larger than the one held.
+    pub fn is_at_least(&self, column: TrackTableColumn) -> Option<&[bool]>;
     /// Move `other`'s columns into the ones this table does not hold.
     pub fn merge(&mut self, other: TrackTable) -> Result<(), TrackTableMergeError>;
 }
@@ -238,9 +243,9 @@ work the table does.
 | `normal_confidence` | stored | the stored `normal_confidence` byte, 0 to 255 | defined | the reconstruction has no `normal_confidence` column |
 | `min_zncc` | stored | the lowest stored per-observation ZNCC in the track, read from `observation_confidence` as `byte / 255` over the non-zero bytes only | no value when no observation of the track was measured | the reconstruction has no `observation_confidence` column |
 | `min_blur_matched_bitmap_zncc` | stored | the lowest blur-matched ZNCC against the point's stored patch bitmap among the track's observation readings, `ObservationReading::blur_matched_bitmap_zncc`, skipping the rows whose score was not read (NaN). It is the score Track View's *ZNCC* column prints and its bars judge, `-1` to `1`, and the reference observation's own row scores `1` | defined | the reconstruction has no observation readings; no value for a track with no score read |
-| `max_zncc_self_similarity_radius` | stored | the largest ZNCC self-similarity radius among the track's observation readings: the semi-major axis of the stored ellipse, `ellipse_axes[0]`, in patch px, skipping unmeasured rows | no value when every row is unmeasured | the reconstruction has no observation readings |
-| `reference_zncc_self_similarity_radius` | computed | the ZNCC self-similarity radius of the point's patch as its **reference view** sees it, in patch px: the semi-major axis of the **reference reading**'s ellipse (§ "The reference reading"). Large for a patch with little texture, which no view localizes well, where `max_zncc_self_similarity_radius` is the worst view's | defined | the reconstruction has neither observation readings nor patch bitmaps; no value for a point with neither a measured reading at its reference observation nor a bitmap with data |
-| `reference_zncc_self_similarity_elongation` | computed | the reference reading's ellipse's semi-major axis over its semi-minor axis, `1` for a circle: large for an edge, which slides along itself and is fixed only across it | defined | as `reference_zncc_self_similarity_radius` |
+| `max_zncc_self_similarity_radius` | stored | the largest ZNCC self-similarity radius among the track's observation readings: the semi-major axis of the stored ellipse, `ellipse_axes[0]`, in patch px, skipping unmeasured rows. A lower bound where any measured row's major axis is flagged (§ "Lower bounds") | no value when every row is unmeasured | the reconstruction has no observation readings |
+| `reference_zncc_self_similarity_radius` | computed | the ZNCC self-similarity radius of the point's patch as its **reference view** sees it, in patch px: the semi-major axis of the **reference reading**'s ellipse (§ "The reference reading"). Large for a patch with little texture, which no view localizes well, where `max_zncc_self_similarity_radius` is the worst view's. A lower bound where the reading's major axis is flagged | defined | the reconstruction has neither observation readings nor patch bitmaps; no value for a point with neither a measured reading at its reference observation nor a bitmap with data |
+| `reference_zncc_self_similarity_elongation` | computed | the reference reading's ellipse's semi-major axis over its semi-minor axis, `1` for a circle: large for an edge, which slides along itself and is fixed only across it. A lower bound where only the major axis is flagged; no value where the minor axis is | defined | as `reference_zncc_self_similarity_radius`; no value for a point whose reading's minor axis is flagged, a flat patch's among them |
 | `max_ray_angle_deg` | computed | the largest angle between two of the track's viewing rays, the rays from each observing camera's centre to the stored point (`compute_max_ray_angle_deg`) | 0 | never |
 | `max_viewing_angle_deg` | computed | the most oblique view of the point's patch: the largest **viewing angle** over the track's observations, in degrees, as Track View's *Reference* column prints it (§ "The viewing angle") | defined: the angle to the bearing, the same from every camera | the reconstruction has no patch frames; no value for a point whose frame is zero |
 | `condition_number` | computed | condition number of the point's triangulation from those rays (`compute_point_diagnostics`) | no value | never |
@@ -250,6 +255,38 @@ A column that is **absent** for a whole reconstruction is reported by
 `TrackTableColumn::is_available`, and `compute` skips it rather than failing, so
 `has` is false for it. **No value** for a single point is a NaN in its
 column.
+
+**Lower bounds.** A self-similarity ellipse flags each axis whose true
+length may be larger than the reading shows, `axes_is_at_least`
+([core/patch/zncc-self-similarity-radius.md](../patch/zncc-self-similarity-radius.md)
+§ "Lower bounds"): at the cap, `max_radius` (3, "3 or further"), and below
+it where the region runs off the square of shifts searched or a gap with no
+reading could hide more of it. The three self-similarity columns carry a flag
+per row beside their values, `TrackTable::is_at_least`, read from those
+flags rather than from a comparison with the cap, so a value below the cap
+that the reading cannot vouch for is marked too. The stored reading's flags
+are its `ellipse_axes_is_at_least`; the bitmap reading computes the ellipse
+and its flags together.
+
+- `reference_zncc_self_similarity_radius` takes the reference reading's
+  major-axis flag.
+- `max_zncc_self_similarity_radius` is flagged where any measured row's major
+  axis is, the largest's or another's: a flagged row's true radius may be
+  larger than the largest shown, whatever its own value.
+- `reference_zncc_self_similarity_elongation` is exact where both axes are,
+  and a lower bound where only the major axis is flagged, since a longer major
+  axis makes the ratio larger; this is an edge at the cap, read exactly
+  across it. Where the minor axis is flagged the ratio may be smaller, and
+  with the major axis flagged too it may be anything, so the column has no
+  value there rather than a number with no bound on either side; a flat
+  patch, whose axes both read the cap, is one.
+
+A row with no value is never flagged. The flag qualifies the number and
+changes nothing else: a sort orders the number, so a radius of `3` at the cap
+is still the largest, and a bound compares the number shown. A `max` of `2.5`
+drops a capped row, which is right since its true radius is at least `3`; a
+`min` of `3.5` drops it too, although its true radius may be larger, since
+the reading cannot say whether it is.
 
 **The `observation_confidence` byte.** A measured observation stores
 `round(255 · clamp(z, 0, 1))` of its ZNCC `z`, so the column's range is 0 to
@@ -275,7 +312,8 @@ patch as its reference view sees it, from one of two sources, per point:
 
 - **The stored reading**, where the reconstruction holds observation readings,
   the point's reference observation is not `-1` and that observation's row is
-  measured: that row's `ellipse_axes`. It is the reading of the reference
+  measured: that row's `ellipse_axes`, with its `ellipse_axes_is_at_least`.
+  It is the reading of the reference
   observation's own render, the patch re-anchored on its keypoint at the
   readings' patch resolution with the readings' sampler, which is the render
   a bitmap writer stores as the point's patch bitmap (the **reference
@@ -413,7 +451,10 @@ order, and a test can compare whole results exactly.
 `sfmtool.analysis.track_table(recon, columns=None)` returns a dict that maps
 each computed column's wire name to an `(n,)` NumPy array, `float32`, or
 `float64` for `x`, `y` and `z`, plus `"point_index"`, the `(n,)` `uint32`
-point index of each row. `recon` is an `SfmrReconstruction` (wrapped as an
+point index of each row, and for each computed self-similarity column an
+`(n,)` `bool` array under its name followed by `_is_at_least`
+(`max_zncc_self_similarity_radius_is_at_least`), the column's
+`TrackTable::is_at_least` (§ "Lower bounds"). `recon` is an `SfmrReconstruction` (wrapped as an
 `EditedReconstruction` for the call) or an `EditedReconstruction`, read
 through its edits. With `columns=None` it computes every column the
 reconstruction can supply. A point at infinity's `centroid_distance` is
@@ -457,7 +498,10 @@ reading from the stored row at the reference observation, and from the bitmap
 where the reference is `-1`, its row is unmeasured, or the file holds no
 readings, with a stored row made from a bitmap's reading equal to that
 bitmap's, a texture, an edge (more elongated) and a flat patch (the cap's
-circle), and a zero row having no value; and a sort and a bound on
+circle), and a zero row having no value; the lower-bound flags from the
+stored rows and the bitmap reading, the elongation exact, a lower bound or
+with no value by its axes' flags, the largest radius flagged by any measured
+row's flag, and `merge` moving the flags with their column; and a sort and a bound on
 `back_facing_observations` putting the frameless points last. They check the query's inclusive bounds, NaN against a bound, a bound with
 neither end, `+∞` against a `min` and a finite `max`, `seen_in_image`, ties in
 both sort orders, `+∞` sorting as the largest value ahead of the no-value
@@ -477,7 +521,8 @@ observation's repeat, the column selection and its refusals, and an edited
 reconstruction; the largest error against
 `compute_observation_reprojection_errors`, the viewing angles on its patch
 frames and their absence without them, the lowest blur-matched score and the
-reference reading against readings it is given, and the bitmap fallback
+reference reading against readings it is given, the `_is_at_least` arrays
+from flagged readings and from the bitmap fallback, and the bitmap fallback
 against `zncc_self_similarity_parts_stack` of the same bitmaps.
 
 ## Non-goals

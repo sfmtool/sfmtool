@@ -885,6 +885,9 @@ cache and the operation it starts are in
   "points": [
     { "id": "pt3d_2db7e1f4_9873", "index": 9873,
       "track_length": 57, "repeat_observations": 0, "rms_error_px": 0.82 },
+    // a self-similarity column brings its flag:
+    // "max_zncc_self_similarity_radius": 3.0,
+    // "max_zncc_self_similarity_radius_is_at_least": true
     …
   ]
 }
@@ -927,6 +930,20 @@ cache and the operation it starts are in
   `max_zncc_self_similarity_radius` are also `apply_bench_track_thresholds`
   arguments), and the two `reference_` columns are the reference view's
   self-similarity. Any of them can be bounded, sorted by and returned.
+- **A lower bound carries a flag.** Each returned value of
+  `max_zncc_self_similarity_radius`, `reference_zncc_self_similarity_radius`
+  and `reference_zncc_self_similarity_elongation` is followed in its point by
+  a boolean under the column's name with `_is_at_least` after it, the core
+  table's `TrackTable::is_at_least`: `true` where the true value may be larger
+  than the one sent, a radius at the cap of 3 ("3 or further") or one whose
+  region ran off the square searched or met a gap, and `false` where the value
+  is exact or `null` ([core/analysis/track-table.md](../core/analysis/track-table.md)
+  § "Lower bounds"). The elongation is `null` where its short axis is flagged.
+  The flag is sent only for a returned column, and a bound or a sort reads the
+  number alone: a `max` of `2.5` drops a capped row, and so does a `min` of
+  `3.5`, though its true radius may be larger. The tool's description says
+  so. The number stays a number rather than becoming a string such as
+  `"3+"`, so a reply sorts and compares as the table does.
 - **The values returned** are the columns `columns` names, each once, in the
   order named. Without `columns` they are the bound columns and the sorted
   column, in that order, followed by `track_length` and `rms_error_px`, each
@@ -5750,7 +5767,10 @@ where a test hands no host over.
   a descending sort keeps it and puts it first; `repeat_observations` counts
   an observation moved into an image its track already has; a bound and a
   descending sort on `max_error_px` match and order the points as core's
-  table of that column does, with its values; the refusals name
+  table of that column does, with its values; a returned
+  `max_zncc_self_similarity_radius` brings its `_is_at_least` flag, `true` at
+  the cap and for a value flagged below it, and sorts the capped row first
+  descending, and `track_length` brings none; the refusals name
   an unknown column, a column the reconstruction cannot supply with the ones
   it can, a `min` above a `max`, a bound string other than `"inf"` and an
   image out of range; a waiting *Find points* is listed by `get_scene`,

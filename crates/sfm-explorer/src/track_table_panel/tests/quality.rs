@@ -214,3 +214,72 @@ fn with_no_back_facing_observation_the_column_stays_hidden() {
         "{painted:?}"
     );
 }
+
+/// The self-similarity cells mark a lower bound with a `+`, as Track View
+/// does: `3+` for a radius at the cap, the number and a `+` for one flagged
+/// below it, the plain number for an exact one; the elongation takes a `+`
+/// where only the long axis is flagged and has no value where the short one
+/// is. A point's reading is its first observation's (its reference) and the
+/// largest radius reads both.
+#[test]
+fn a_lower_bound_prints_with_a_plus() {
+    let mut recon = SfmrReconstruction::demo(5);
+    let n = recon.point_set.points.len();
+    recon.point_set.reference_observations = Some(vec![0; n]);
+    let options = observation_reading_options(
+        SamplerChoice::Fixed(Sampler::Bilinear),
+        24,
+        PatchWindow::Uniform,
+    );
+    let mut readings = ObservationReadings::not_measured(recon.point_set.tracks.len(), options);
+    let rows: [([f32; 2], [bool; 2]); 5] = [
+        // Exact.
+        ([1.25, 0.5], [false, false]),
+        // An edge at the cap, exact across.
+        ([3.0, 0.5], [true, false]),
+        // Flagged below the cap, exact across.
+        ([2.4142, 0.5], [true, false]),
+        // A flat patch: both axes at the cap.
+        ([3.0, 3.0], [true, true]),
+        // The short axis alone flagged.
+        ([2.0, 1.0], [false, true]),
+    ];
+    for (p, &(axes, is_at_least)) in rows.iter().enumerate() {
+        let start = recon.point_set.observation_offsets[p];
+        for k in start..start + recon.observations_for_point(p).len() {
+            readings.rows[k] = ObservationReading {
+                ellipse_axes: axes,
+                ellipse_axes_is_at_least: is_at_least,
+                ..ObservationReading::NOT_MEASURED
+            };
+        }
+    }
+    recon.point_set.observation_readings = Some(readings);
+    recon.rebuild_derived_fields();
+    let edited = sfmtool_core::EditedReconstruction::new(std::sync::Arc::new(recon));
+    let columns = [
+        TrackTableColumn::MaxZnccSelfSimilarityRadius,
+        TrackTableColumn::ReferenceZnccSelfSimilarityRadius,
+        TrackTableColumn::ReferenceZnccSelfSimilarityElongation,
+    ];
+    let table = sfmtool_core::analysis::track_table::TrackTable::compute(
+        &edited,
+        &columns,
+        &sfmtool_core::progress::Progress::none(),
+    )
+    .unwrap();
+    let text = |column, row| cell_text(&table, column, row);
+    for column in &columns[..2] {
+        assert_eq!(text(*column, 0), "1.25", "{column:?}");
+        assert_eq!(text(*column, 1), "3+", "{column:?}");
+        assert_eq!(text(*column, 2), "2.41+", "{column:?}");
+        assert_eq!(text(*column, 3), "3+", "{column:?}");
+        assert_eq!(text(*column, 4), "2.00", "{column:?}");
+    }
+    let elongation = TrackTableColumn::ReferenceZnccSelfSimilarityElongation;
+    assert_eq!(text(elongation, 0), "2.50");
+    assert_eq!(text(elongation, 1), "6.00+");
+    assert_eq!(text(elongation, 2), "4.83+");
+    assert_eq!(text(elongation, 3), "-");
+    assert_eq!(text(elongation, 4), "-");
+}

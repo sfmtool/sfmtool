@@ -47,6 +47,17 @@ fn all_names() -> String {
 /// ``x``, a point with no patch frame no ``max_viewing_angle_deg``) holds
 /// NaN there; a point at infinity's ``centroid_distance`` is ``inf``.
 ///
+/// The three self-similarity columns can hold lower bounds: a radius at the
+/// cap of the reading, 3 patch px, reads "3 or further", and a reading whose
+/// region ran off the square of shifts searched or met a gap may be larger
+/// than it reads. Each comes with a companion ``bool`` array under its name
+/// followed by ``_is_at_least`` (``max_zncc_self_similarity_radius_is_at_least``),
+/// true where the true value may be larger; false where the value is exact
+/// or NaN. The elongation is NaN where its short axis may be longer than it
+/// reads (a flat patch, both axes at the cap), since the ratio is then not
+/// known. The values themselves are the numbers read, which sort and compare
+/// as they are.
+///
 /// Args:
 ///     recon: An :class:`SfmrReconstruction`, or an
 ///         :class:`EditedReconstruction` read through its edits.
@@ -56,7 +67,9 @@ fn all_names() -> String {
 /// Returns:
 ///     A dict mapping each computed column's name to an (n,) array,
 ///     ``float32``, or ``float64`` for ``x``, ``y`` and ``z``, plus
-///     ``point_index``, the (n,) ``uint32`` point index of each row, ascending.
+///     ``point_index``, the (n,) ``uint32`` point index of each row,
+///     ascending, and an (n,) ``bool`` ``<column>_is_at_least`` array for
+///     each computed self-similarity column.
 ///
 /// Raises:
 ///     ValueError: where a name is not a column, or names a column the
@@ -133,6 +146,12 @@ fn track_table<'py>(
             out.set_item(column.wire_name(), PyArray1::from_slice(py, values))?;
         } else if let Some(values) = table.values_f64(column) {
             out.set_item(column.wire_name(), PyArray1::from_slice(py, values))?;
+        }
+        if let Some(flags) = table.is_at_least(column) {
+            out.set_item(
+                format!("{}_is_at_least", column.wire_name()),
+                PyArray1::from_slice(py, flags),
+            )?;
         }
     }
     Ok(out)

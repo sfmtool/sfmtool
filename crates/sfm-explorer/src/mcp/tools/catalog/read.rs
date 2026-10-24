@@ -157,7 +157,14 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           a bench bar of the same name. The two \
                           reference_ columns are the self-similarity of the point's patch as \
                           its reference view sees it, in patch px and as the ellipse's long \
-                          axis over its short one (large for an edge). A bound keeps the points whose \
+                          axis over its short one (large for an edge). Each of the three \
+                          self-similarity columns returned comes with a companion boolean, \
+                          its name followed by _is_at_least, true where the value is a lower \
+                          bound and the true value may be larger (a radius at the cap of 3, \
+                          which reads 3 or further, or one whose region ran off the square \
+                          searched or met a gap); the elongation is null where its short axis \
+                          may be longer than it reads, as a flat patch's is. Sorts and bounds \
+                          compare the number whatever the flag says. A bound keeps the points whose \
                           value is at least min and at most max, both inclusive; a point with \
                           no value in a column fails any bound on it and sorts last whichever \
                           way the sort runs. A value is null where the point has none: x, y, z, \

@@ -122,9 +122,9 @@ decoded.
   | Normal conf. | `normal_confidence` | a whole number, 0 to 255 |
   | Min. ZNCC | `min_zncc` | two decimals |
   | Min. bitmap ZNCC | `min_blur_matched_bitmap_zncc` | two decimals |
-  | Self-sim. radius | `max_zncc_self_similarity_radius` | three significant digits, at most three decimals |
+  | Self-sim. radius | `max_zncc_self_similarity_radius` | three significant digits, at most three decimals; a lower bound with a `+` after it, `3+` at the cap and `2.41+` below it |
   | Ref. self-sim. radius | `reference_zncc_self_similarity_radius` | as Self-sim. radius |
-  | Ref. elongation | `reference_zncc_self_similarity_elongation` | as Self-sim. radius; `1` for a round ellipse |
+  | Ref. elongation | `reference_zncc_self_similarity_elongation` | three significant digits, at most three decimals; `1` for a round ellipse; a lower bound with a `+` after it (`6.00+`); `-` where the short axis is flagged, a flat patch's among them |
   | Ray angle (°) | `max_ray_angle_deg` | three significant digits, at most three decimals; `0` for a point at infinity |
   | Viewing angle (°) | `max_viewing_angle_deg` | as Ray angle; `-` for a point with no patch frame |
   | Cond. | `condition_number` | three significant digits, at most three decimals, and from 10⁵ on in scientific notation (`1.23e7`); `-` for a point at infinity |
@@ -155,10 +155,26 @@ decoded.
     the reference observation or from the patch bitmap, and that a large
     radius is a patch with little texture.
   - *Ref. elongation*: the same ellipse's long axis over its short one, 1 for
-    a patch that slides as far every way and large for an edge.
+    a patch that slides as far every way and large for an edge, a `+` where
+    the long axis may be longer, and no value where the short one may be.
   - *Viewing angle (°)*: the most oblique view of the patch, the angle between
     its normal and the direction to an observing camera as Track View's
     *Reference* column shows it, 0 facing and 90 edge on.
+
+  **A lower bound** in the three self-similarity columns, a row the core
+  table flags with `TrackTable::is_at_least`
+  ([core/analysis/track-table.md](../core/analysis/track-table.md) § "Lower
+  bounds"), prints with a `+` after it, as Track View's *Self-similarity*
+  cell and its ellipse hover mark one: `3+` for a radius at the largest the
+  reading searches, which reads "3 or further", and the number with a `+`
+  for a radius or an elongation the reading flags below that (`2.41+`,
+  `6.00+`), where the region ran off the square of shifts searched or met a
+  gap. The flag, not a comparison with 3, decides, so the cell agrees with
+  Track View's hover. An elongation whose short axis is flagged has no value
+  and prints `-`. The headings' hover texts of the three columns say what
+  the `+` means and that the column sorts and bounds by the number shown: a
+  `3+` row is still the largest worst first, a maximum of `2.5` drops it,
+  and a minimum of `3.5` drops it too, though its true radius may be larger.
 
   A point with no value in a column (a NaN in the table: a point at infinity's
   `x`) shows `-`. A column the cache does not hold yet shows `…` in every
@@ -878,6 +894,9 @@ readings:
   its first click puts the three points first;
 - with none, the column is computed and stays hidden, and the header says
   nothing of it;
+- a self-similarity radius prints `3+` at the cap, `2.41+` flagged below
+  it and `1.25` exact, and an elongation `6.00+` for an edge at the cap with
+  an exact short axis and `-` where the short axis is flagged;
 - each defect count shows itself by its own defects, unticking one leaves the
   other showing itself, and an unticked Back-facing obs. is no longer computed
   for the panel.

@@ -38,6 +38,15 @@ ALL_COLUMNS = (
     "inverse_depth_z",
 )
 
+#: The columns that can hold lower bounds, each returned with a bool
+#: ``<column>_is_at_least`` array beside it.
+LOWER_BOUND_COLUMNS = (
+    "max_zncc_self_similarity_radius",
+    "reference_zncc_self_similarity_radius",
+    "reference_zncc_self_similarity_elongation",
+)
+FLAG_KEYS = {f"{name}_is_at_least" for name in LOWER_BOUND_COLUMNS}
+
 #: The options every reading in these tests stands under.
 READING_OPTIONS = {
     "resolution": 24,
@@ -79,7 +88,7 @@ def recon(seoul_bull_ground_truth_sfmr):
 def test_every_supplied_column_is_returned_with_its_dtype(recon):
     table = track_table(recon)
     n = recon.point_count
-    assert set(table) <= set(ALL_COLUMNS) | {"point_index"}
+    assert set(table) <= set(ALL_COLUMNS) | FLAG_KEYS | {"point_index"}
     for name in ("track_length", "rms_error_px", "x", "max_ray_angle_deg"):
         assert name in table
     assert table["point_index"].dtype == np.uint32
@@ -88,6 +97,9 @@ def test_every_supplied_column_is_returned_with_its_dtype(recon):
         assert values.shape == (n,), name
         if name in ("x", "y", "z"):
             assert values.dtype == np.float64, name
+        elif name in FLAG_KEYS:
+            assert values.dtype == np.bool_, name
+            assert name.removesuffix("_is_at_least") in table, name
         elif name != "point_index":
             assert values.dtype == np.float32, name
 
@@ -280,6 +292,57 @@ def test_the_reference_reading_falls_back_to_the_bitmap(recon):
     )
     # A zero row has no reading.
     assert np.isnan(table["reference_zncc_self_similarity_radius"][1])
+    # The radius carries the reading's flag on its major axis.
+    flags = reading["ellipse_axes_is_at_least"].astype(bool)
+    np.testing.assert_array_equal(
+        table["reference_zncc_self_similarity_radius_is_at_least"],
+        flags[:, 0] & ~np.isnan(reading["ellipse_axes"][:, 0]),
+    )
+
+
+def test_lower_bounds_carry_from_the_stored_readings(recon):
+    """The radius takes the major axis's flag; the elongation is a lower
+    bound where only the major axis is flagged and NaN where the minor is."""
+    m = recon.observation_count
+    readings = _readings(m)
+    axes = readings["zncc_self_similarity_ellipse_axes"]
+    flags = readings["zncc_self_similarity_ellipse_axes_is_at_least"]
+    # Every point takes its first observation as its reference.
+    references = np.zeros(recon.point_count, np.int32)
+    changed = recon.clone_with_changes(
+        observation_readings=readings, reference_observations=references
+    )
+    track_points = changed.track_point_indexes
+    offsets = np.concatenate([[0], np.cumsum(np.bincount(track_points))])
+    references = changed.reference_observations
+    referenced = [p for p in range(changed.point_count) if references[p] >= 0]
+    edge, unknown, exact = referenced[:3]
+    edge_row = offsets[edge] + references[edge]
+    axes[edge_row] = [3.0, 0.5]
+    flags[edge_row] = [1, 0]
+    unknown_row = offsets[unknown] + references[unknown]
+    axes[unknown_row] = [3.0, 3.0]
+    flags[unknown_row] = [1, 1]
+    changed = recon.clone_with_changes(
+        observation_readings=readings, reference_observations=references
+    )
+    table = track_table(changed, list(LOWER_BOUND_COLUMNS))
+    radius_flag = table["reference_zncc_self_similarity_radius_is_at_least"]
+    elongation = table["reference_zncc_self_similarity_elongation"]
+    elongation_flag = table["reference_zncc_self_similarity_elongation_is_at_least"]
+    assert table["reference_zncc_self_similarity_radius"][edge] == 3.0
+    assert radius_flag[edge] and elongation_flag[edge]
+    assert elongation[edge] == 6.0
+    assert radius_flag[unknown] and not elongation_flag[unknown]
+    assert np.isnan(elongation[unknown])
+    assert not radius_flag[exact] and not elongation_flag[exact]
+    # The largest radius is a lower bound where any of its readings is.
+    flagged = np.zeros(changed.point_count, bool)
+    flagged[track_points[flags[:, 0] != 0]] = True
+    np.testing.assert_array_equal(
+        table["max_zncc_self_similarity_radius_is_at_least"], flagged
+    )
+    assert table["max_zncc_self_similarity_radius"][edge] == 3.0
 
 
 def test_other_types_are_refused():

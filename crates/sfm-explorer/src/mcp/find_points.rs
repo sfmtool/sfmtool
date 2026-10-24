@@ -249,8 +249,16 @@ fn changed_since(node: &SceneNode) -> ToolError {
     ))
 }
 
+/// The key of a column's lower-bound flag in a returned point: its wire name
+/// followed by `_is_at_least`, as the glossary names a flag after the value
+/// it qualifies.
+fn is_at_least_key(column: TrackTableColumn) -> String {
+    format!("{}_is_at_least", column.wire_name())
+}
+
 /// The reply: the counts, and one row per matched point in the page with its
-/// id, its index and the asked-for values.
+/// id, its index and the asked-for values, each value of a column that can be
+/// a lower bound followed by its flag ([`TrackTable::is_at_least`]).
 fn points_reply(
     node: &SceneNode,
     table: &TrackTable,
@@ -274,6 +282,9 @@ fn points_reply(
             entry.insert("index".into(), json!(index));
             for &column in &page.columns {
                 entry.insert(column.wire_name().into(), value(table, column, row));
+                if let Some(flags) = table.is_at_least(column) {
+                    entry.insert(is_at_least_key(column), json!(flags[row]));
+                }
             }
             Value::Object(entry)
         })

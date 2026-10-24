@@ -105,8 +105,16 @@ pub(super) fn min_blur_matched_bitmap_zncc(view: &PointView<'_>) -> f64 {
         .unwrap_or(f64::NAN)
 }
 
-/// The `[semi-major, semi-minor]` axes of the ZNCC self-similarity ellipse of
-/// the point's patch as its reference view sees it, in patch-grid px; NaN in
+/// The `[semi-major, semi-minor]` axes of a self-similarity ellipse, in
+/// patch-grid px, and per axis whether the true length may be larger.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub(super) struct Axes {
+    pub(super) lengths: [f64; 2],
+    pub(super) is_at_least: [bool; 2],
+}
+
+/// The axes of the ZNCC self-similarity ellipse of the point's patch as its
+/// reference view sees it, with their lower-bound flags; NaN and `false` in
 /// both where there is no reading.
 ///
 /// The stored reading at the point's reference observation, where the
@@ -118,32 +126,44 @@ pub(super) fn min_blur_matched_bitmap_zncc(view: &PointView<'_>) -> f64 {
 /// `embed-patches` cull use ([`SelfSimilarityParams::default`]), a sample
 /// whose alpha is `0` carrying no data. A bitmap with no sample carrying data
 /// (a zero row) or under 3 px a side has no reading.
-pub(super) fn reference_self_similarity_axes(view: &PointView<'_>) -> [f64; 2] {
+pub(super) fn reference_self_similarity_axes(view: &PointView<'_>) -> Axes {
     let stored = view
         .observation_readings()
         .zip(view.reference_observation())
         .and_then(|(rows, reference)| rows.get(usize::try_from(reference).ok()?))
         .filter(|row| row.is_measured());
     if let Some(row) = stored {
-        return row.ellipse_axes.map(f64::from);
+        return Axes {
+            lengths: row.ellipse_axes.map(f64::from),
+            is_at_least: row.ellipse_axes_is_at_least,
+        };
     }
     view.patch_bitmap()
         .and_then(stored_bitmap_planes)
         .filter(|planes| planes.side >= 3 && planes.data.iter().any(|&d| d))
-        .map_or([f64::NAN; 2], |planes| {
-            let side = planes.side;
-            zncc_self_similarity_radius(
-                &PatchTile {
-                    values: &planes.values,
-                    channels: planes.channels.min(3),
-                    width: side,
-                    height: side,
-                },
-                Some(&planes.data),
-                [0, 0, side, side],
-                &SelfSimilarityParams::default(),
-            )
-            .ellipse
-            .axes
-        })
+        .map_or(
+            Axes {
+                lengths: [f64::NAN; 2],
+                is_at_least: [false; 2],
+            },
+            |planes| {
+                let side = planes.side;
+                let ellipse = zncc_self_similarity_radius(
+                    &PatchTile {
+                        values: &planes.values,
+                        channels: planes.channels.min(3),
+                        width: side,
+                        height: side,
+                    },
+                    Some(&planes.data),
+                    [0, 0, side, side],
+                    &SelfSimilarityParams::default(),
+                )
+                .ellipse;
+                Axes {
+                    lengths: ellipse.axes,
+                    is_at_least: ellipse.axes_is_at_least,
+                }
+            },
+        )
 }

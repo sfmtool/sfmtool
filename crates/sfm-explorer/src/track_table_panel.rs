@@ -238,21 +238,33 @@ fn column_description(column: TrackTableColumn) -> &'static str {
         }
         TrackTableColumn::MaxZnccSelfSimilarityRadius => {
             "The largest ZNCC self-similarity radius among the track's observation readings, \
-             in patch px. A track with no measured reading has no value."
+             in patch px up to 3. A + marks a lower bound, as in Track View: 3+ is the \
+             largest radius the reading searches and reads 3 or further, and a smaller value \
+             with a + is one where some reading's region ran off the square of shifts \
+             searched or met a gap, so the true radius may be larger. The column sorts and \
+             bounds by the number shown, so a minimum over 3 drops a 3+ row whose true \
+             radius may be larger. A track with no measured reading has no value."
         }
         TrackTableColumn::ReferenceZnccSelfSimilarityRadius => {
             "How far the point's patch, as its reference view sees it, can slide over itself \
              and still match itself, in patch px up to 3: the ZNCC self-similarity radius of \
              the stored reading at the reference observation, or of the patch bitmap where \
              there is none. A large radius is a patch with little texture, which nothing \
-             localizes well. A point with neither has no value. Computed after the stored \
-             columns."
+             localizes well. A + marks a lower bound, as in Track View: 3+ reads 3 or \
+             further, and a smaller value with a + is one whose region ran off the square of \
+             shifts searched or met a gap, so the true radius may be larger; the column sorts \
+             and bounds by the number shown. A point with neither has no value. Computed \
+             after the stored columns."
         }
         TrackTableColumn::ReferenceZnccSelfSimilarityElongation => {
             "The same reading's self-similarity ellipse, its long axis over its short one: 1 \
              for a patch that slides as far every way, large for an edge, which slides along \
-             itself and is fixed only across it. A point with no reading has no value. \
-             Computed after the stored columns."
+             itself and is fixed only across it. A + marks a lower bound: the long axis may \
+             be longer than it reads, as an edge's reaching 3 is, so the ratio may be larger. \
+             Where the short axis may be longer than it reads, as a flat patch's at 3 is, the \
+             ratio may be smaller, or anything at all where the long axis may be longer too, \
+             so the point has no value, as a point with no reading has none. Computed after \
+             the stored columns."
         }
         TrackTableColumn::MaxRayAngleDeg => {
             "The largest angle between two of the track's viewing rays, the rays from each \
@@ -2139,8 +2151,9 @@ fn crop_absent_hover(absent: Absent) -> &'static str {
 /// point at infinity), a whole number for a count, `∞` for an infinite value
 /// (the distance of a point at infinity), and three significant digits
 /// otherwise, in scientific notation for a large condition number or
-/// inverse-depth z. Positions keep up to three decimals however large they
-/// are.
+/// inverse-depth z, with a `+` after a self-similarity value that is a lower
+/// bound ([`lower_bound_text`]). Positions keep up to three decimals however
+/// large they are.
 fn cell_text(table: &TrackTable, column: TrackTableColumn, row: usize) -> String {
     if column.is_f64() {
         return match table.values_f64(column) {
@@ -2166,7 +2179,25 @@ fn cell_text(table: &TrackTable, column: TrackTableColumn, row: usize) -> String
         TrackTableColumn::ConditionNumber | TrackTableColumn::InverseDepthZ => {
             compact(f64::from(v))
         }
+        _ if table.is_at_least(column).is_some_and(|flags| flags[row]) => {
+            lower_bound_text(column, f64::from(v))
+        }
         _ => significant(f64::from(v), 3, 3),
+    }
+}
+
+/// A value that is a lower bound, with a `+` after it as Track View marks
+/// one: `3+` for a radius at the largest the reading searches, which reads
+/// "that far or further", and otherwise the number to three significant
+/// digits with the `+` after it (`2.41+`, an elongation's `8.12+`).
+fn lower_bound_text(column: TrackTableColumn, v: f64) -> String {
+    let cap =
+        f64::from(sfmtool_core::patch::self_similarity::SelfSimilarityParams::default().max_radius);
+    let is_radius = column != TrackTableColumn::ReferenceZnccSelfSimilarityElongation;
+    if is_radius && v >= cap {
+        format!("{cap:.0}+")
+    } else {
+        format!("{}+", significant(v, 3, 3))
     }
 }
 

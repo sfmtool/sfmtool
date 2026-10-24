@@ -80,16 +80,20 @@ pub enum TrackTableColumn {
     MinBlurMatchedBitmapZncc,
     /// The largest ZNCC self-similarity radius among the track's measured
     /// observation readings, in patch px; no value when none is measured,
-    /// absent without readings.
+    /// absent without readings. A lower bound where any measured reading's
+    /// radius is ([`TrackTable::is_at_least`]).
     MaxZnccSelfSimilarityRadius,
     /// The ZNCC self-similarity radius of the point's patch as its reference
     /// view sees it, in patch px: the stored reading at the reference
     /// observation where there is one, else the reading of the stored patch
-    /// bitmap. Absent with neither readings nor bitmaps.
+    /// bitmap. Absent with neither readings nor bitmaps. A lower bound where
+    /// the reading's major axis is ([`TrackTable::is_at_least`]).
     ReferenceZnccSelfSimilarityRadius,
     /// The elongation of the same reading's ellipse, its semi-major axis over
     /// its semi-minor axis, `1` for a circle; large for an edge, which slides
-    /// along itself and is fixed only across it.
+    /// along itself and is fixed only across it. No value where the minor
+    /// axis may be longer than it reads, which leaves the ratio unknown; a
+    /// lower bound where only the major axis may be.
     ReferenceZnccSelfSimilarityElongation,
     /// The largest angle between two of the track's viewing rays, in degrees,
     /// `0` at infinity ([`compute_max_ray_angle_deg`]).
@@ -241,6 +245,19 @@ impl TrackTableColumn {
         }
     }
 
+    /// Whether a value of the column can be a lower bound, the true value
+    /// possibly larger, so that the table carries a flag per row beside it
+    /// ([`TrackTable::is_at_least`]): the two self-similarity radii and the
+    /// elongation, read off ellipses whose axes carry `axes_is_at_least`.
+    pub fn has_lower_bounds(self) -> bool {
+        matches!(
+            self,
+            TrackTableColumn::MaxZnccSelfSimilarityRadius
+                | TrackTableColumn::ReferenceZnccSelfSimilarityRadius
+                | TrackTableColumn::ReferenceZnccSelfSimilarityElongation
+        )
+    }
+
     /// The column's position in [`Self::ALL`].
     fn ordinal(self) -> usize {
         self as usize
@@ -252,13 +269,16 @@ impl TrackTableColumn {
 /// [`EditedReconstruction::live_indexes`] order. Holds only the columns it
 /// was asked for that the reconstruction could supply.
 ///
-/// "No value" for a single point is a NaN. The table is computed on demand by
-/// [`Self::compute`] and never stored.
+/// "No value" for a single point is a NaN. A column whose values can be lower
+/// bounds ([`TrackTableColumn::has_lower_bounds`]) carries a flag per row
+/// beside its values ([`Self::is_at_least`]). The table is computed on demand
+/// by [`Self::compute`] and never stored.
 #[derive(Clone, Debug, Default)]
 pub struct TrackTable {
     point_indexes: Vec<u32>,
     values_f32: [Option<Vec<f32>>; COLUMN_COUNT],
     values_f64: [Option<Vec<f64>>; COLUMN_COUNT],
+    is_at_least: [Option<Vec<bool>>; COLUMN_COUNT],
 }
 
 /// Why [`TrackTable::merge`] refused a table: its rows are not this table's,
@@ -370,12 +390,15 @@ impl TrackTable {
             } else {
                 self.values_f32[column.ordinal()] = Some(Vec::with_capacity(n));
             }
+            if column.has_lower_bounds() {
+                self.is_at_least[column.ordinal()] = Some(Vec::with_capacity(n));
+            }
         }
         let total = n as u64;
         progress.count(0, Some(total), "points");
         for (block_index, block) in self.point_indexes.chunks(BLOCK).enumerate() {
             progress.check_cancel()?;
-            let rows: Vec<[f64; COLUMN_COUNT]> = block
+            let rows: Vec<RowValues> = block
                 .par_iter()
                 .map(|&index| {
                     let view = context
@@ -389,10 +412,13 @@ impl TrackTable {
                 let k = column.ordinal();
                 if column.is_f64() {
                     let values = self.values_f64[k].as_mut().expect("allocated above");
-                    values.extend(rows.iter().map(|row| row[k]));
+                    values.extend(rows.iter().map(|row| row.values[k]));
                 } else {
                     let values = self.values_f32[k].as_mut().expect("allocated above");
-                    values.extend(rows.iter().map(|row| row[k] as f32));
+                    values.extend(rows.iter().map(|row| row.values[k] as f32));
+                }
+                if let Some(flags) = self.is_at_least[k].as_mut() {
+                    flags.extend(rows.iter().map(|row| row.is_at_least[k]));
                 }
             }
             let done = (block_index * BLOCK + block.len()) as u64;
@@ -425,6 +451,20 @@ impl TrackTable {
         self.values_f64[column.ordinal()].as_deref()
     }
 
+    /// Per row of a column whose values can be lower bounds
+    /// ([`TrackTableColumn::has_lower_bounds`]), whether the true value may be
+    /// larger than the one held: `true` where the reading the value comes from
+    /// flags the axis it is read off (`axes_is_at_least`), which is set at the
+    /// largest radius searched, where the region runs off the square of shifts
+    /// searched, and where a gap with no reading could hide more of it.
+    /// `false` where the value is exact and where there is no value. `None`
+    /// when the column was not filled or has no flags.
+    ///
+    /// The values sort and bound by their number whatever the flag says.
+    pub fn is_at_least(&self, column: TrackTableColumn) -> Option<&[bool]> {
+        self.is_at_least[column.ordinal()].as_deref()
+    }
+
     /// Move `other`'s columns into the columns this table does not hold yet.
     ///
     /// The column arrays are moved, not copied. A column this table already
@@ -451,6 +491,7 @@ impl TrackTable {
         let TrackTable {
             values_f32,
             values_f64,
+            is_at_least,
             ..
         } = other;
         for (mine, theirs) in self.values_f32.iter_mut().zip(values_f32) {
@@ -459,6 +500,11 @@ impl TrackTable {
             }
         }
         for (mine, theirs) in self.values_f64.iter_mut().zip(values_f64) {
+            if mine.is_none() {
+                *mine = theirs;
+            }
+        }
+        for (mine, theirs) in self.is_at_least.iter_mut().zip(is_at_least) {
             if mine.is_none() {
                 *mine = theirs;
             }
@@ -478,13 +524,19 @@ impl TrackTable {
     }
 }
 
-/// The values of `columns` for one point, at their ordinals; every other slot
-/// is NaN.
+/// One point's values, at their columns' ordinals, and the lower-bound flag of
+/// each; every slot not computed is NaN and `false`.
+struct RowValues {
+    values: [f64; COLUMN_COUNT],
+    is_at_least: [bool; COLUMN_COUNT],
+}
+
+/// The values of `columns` for one point.
 fn point_values(
     context: &Context<'_>,
     view: &PointView<'_>,
     columns: &[TrackTableColumn],
-) -> [f64; COLUMN_COUNT] {
+) -> RowValues {
     let image_set = &context.recon.base.image_set;
     let point = view.point();
     let at_infinity = point.is_at_infinity();
@@ -493,9 +545,13 @@ fn point_values(
     // The viewing angles and the reference reading each serve two columns,
     // so a point reads them once.
     let mut angles: Option<Option<(f64, f64)>> = None;
-    let mut reference: Option<[f64; 2]> = None;
-    let mut row = [f64::NAN; COLUMN_COUNT];
+    let mut reference: Option<observation_quality::Axes> = None;
+    let mut row = RowValues {
+        values: [f64::NAN; COLUMN_COUNT],
+        is_at_least: [false; COLUMN_COUNT],
+    };
     for &column in columns {
+        let mut is_at_least = false;
         let value = match column {
             TrackTableColumn::TrackLength => view.observations().len() as f64,
             TrackTableColumn::RepeatObservations => {
@@ -536,16 +592,26 @@ fn point_values(
             TrackTableColumn::MinBlurMatchedBitmapZncc => {
                 observation_quality::min_blur_matched_bitmap_zncc(view)
             }
-            TrackTableColumn::ReferenceZnccSelfSimilarityRadius => reference
-                .get_or_insert_with(|| observation_quality::reference_self_similarity_axes(view))
-                [0],
-            TrackTableColumn::ReferenceZnccSelfSimilarityElongation => {
-                let [major, minor] = *reference.get_or_insert_with(|| {
+            TrackTableColumn::ReferenceZnccSelfSimilarityRadius => {
+                let axes = reference.get_or_insert_with(|| {
                     observation_quality::reference_self_similarity_axes(view)
                 });
-                major / minor
+                is_at_least = axes.is_at_least[0];
+                axes.lengths[0]
             }
-            TrackTableColumn::MaxZnccSelfSimilarityRadius => max_self_similarity_radius(view),
+            TrackTableColumn::ReferenceZnccSelfSimilarityElongation => {
+                let axes = reference.get_or_insert_with(|| {
+                    observation_quality::reference_self_similarity_axes(view)
+                });
+                let (value, flag) = elongation(axes);
+                is_at_least = flag;
+                value
+            }
+            TrackTableColumn::MaxZnccSelfSimilarityRadius => {
+                let (value, flag) = max_self_similarity_radius(view);
+                is_at_least = flag;
+                value
+            }
             TrackTableColumn::MaxRayAngleDeg => {
                 f64::from(compute_max_ray_angle_deg(image_set, view))
             }
@@ -560,9 +626,27 @@ fn point_values(
                     .1,
             ),
         };
-        row[column.ordinal()] = value;
+        row.values[column.ordinal()] = value;
+        row.is_at_least[column.ordinal()] = is_at_least && !value.is_nan();
     }
     row
+}
+
+/// The elongation of a reading's ellipse, its semi-major axis over its
+/// semi-minor axis, and whether it is a lower bound.
+///
+/// The ratio is exact where both axes are. Where only the major axis may be
+/// longer, the ratio may be larger, so it is a lower bound. Where the minor
+/// axis may be longer, the ratio may be smaller or, with the major axis also
+/// flagged, anything, so it has no value: a flat patch, whose axes both read
+/// the cap, is one.
+fn elongation(axes: &observation_quality::Axes) -> (f64, bool) {
+    let [major, minor] = axes.lengths;
+    let [major_at_least, minor_at_least] = axes.is_at_least;
+    if minor_at_least {
+        return (f64::NAN, false);
+    }
+    (major / minor, major_at_least)
 }
 
 /// The lowest measured `observation_confidence` byte of the track, over 255:
@@ -574,14 +658,17 @@ fn min_zncc(view: &PointView<'_>) -> f64 {
 }
 
 /// The largest semi-major axis of the self-similarity ellipse among the
-/// track's measured readings.
-fn max_self_similarity_radius(view: &PointView<'_>) -> f64 {
-    view.observation_readings()
-        .and_then(|rows| {
-            rows.iter()
-                .filter(|r| r.is_measured())
-                .map(|r| f64::from(r.ellipse_axes[0]))
-                .reduce(f64::max)
-        })
-        .unwrap_or(f64::NAN)
+/// track's measured readings, and whether it is a lower bound. It is where any
+/// measured reading's major axis is flagged, whatever that reading's own
+/// value: its true radius may be larger than the largest shown.
+fn max_self_similarity_radius(view: &PointView<'_>) -> (f64, bool) {
+    let mut largest = f64::NAN;
+    let mut is_at_least = false;
+    for row in view.observation_readings().into_iter().flatten() {
+        if row.is_measured() {
+            largest = largest.max(f64::from(row.ellipse_axes[0]));
+            is_at_least |= row.ellipse_axes_is_at_least[0];
+        }
+    }
+    (largest, is_at_least)
 }
