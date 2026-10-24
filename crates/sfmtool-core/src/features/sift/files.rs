@@ -13,7 +13,7 @@
 //! `specs/cli/image-feature/sift-command.md` § Extraction-orchestration
 //! pipelining): `K` threads each decode an image, hash it and make its
 //! thumbnail, then run the extraction and the write on the rayon pool, so the
-//! threads add no runnable work to the pool's while they wait on it.
+//! threads compete with the pool's threads for no cores while they wait on it.
 
 use std::fmt;
 use std::io::Read;
@@ -471,7 +471,11 @@ fn xxh128_of_file(path: &Path) -> std::io::Result<(String, u64)> {
 /// [`CONCURRENT_IMAGES_ENV_VAR`] value when it is a whole number, otherwise the
 /// core count capped by memory at the size of `first_image`.
 fn default_concurrent_images(first_image: &Path, progress: &Progress) -> usize {
-    if let Ok(value) = std::env::var(CONCURRENT_IMAGES_ENV_VAR) {
+    // An empty value counts as unset, as it does for the Python backend.
+    if let Some(value) = std::env::var(CONCURRENT_IMAGES_ENV_VAR)
+        .ok()
+        .filter(|v| !v.is_empty())
+    {
         match value.trim().parse::<i64>() {
             Ok(n) => return n.max(1) as usize,
             Err(_) => progress_warn!(

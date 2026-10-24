@@ -13,7 +13,7 @@ use numpy::{
     PyUntypedArrayMethods,
 };
 use pyo3::prelude::*;
-use pyo3::types::{PyBool, PyDict};
+use pyo3::types::PyDict;
 
 use sfmtool_core::features::sift::{
     self, affine_shape_from_similarity, describe_keypoints as core_describe_keypoints,
@@ -116,8 +116,9 @@ pub(super) fn feature_options_from_dict(dict: &Bound<'_, PyDict>) -> PyResult<se
             .map_err(|_| pyo3::exceptions::PyValueError::new_err("params keys must be strings"))?;
         let json = if value.is_none() {
             serde_json::Value::Null
-        } else if value.is_instance_of::<PyBool>() {
-            serde_json::Value::Bool(value.extract()?)
+        } else if let Ok(v) = value.extract::<bool>() {
+            // A Python or numpy bool; PyO3 refuses an int here.
+            serde_json::Value::Bool(v)
         } else if let Ok(v) = value.extract::<u64>() {
             serde_json::Value::from(v)
         } else if let Ok(v) = value.extract::<i64>() {

@@ -660,7 +660,7 @@ object and parsed by `SiftParams::from_feature_options`, so a key means the same
 to these bindings, to a workspace's `.sfm-workspace.json` and to
 `build_sift_files`.
 
-This output is exactly what `src/sfmtool/sift/` consumes, so the
+The output of `extract_sift` is exactly what `src/sfmtool/sift/` consumes, so the
 `extract_sfmtool.py` backend sits alongside `extract_opencv.py` /
 `extract_colmap.py` and writes via the existing `sfmtool-sift-format` path. The
 affine shapes pass straight through — no conversion needed, unlike the OpenCV

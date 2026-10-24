@@ -48,6 +48,8 @@ class TestParamValidation:
         assert extract_sift(img)[0].shape[1] == 2
         # A valid magnification/clamp override is accepted.
         extract_sift(img, {"descriptor_magnification": 4.0, "descriptor_clamp": 0.3})
+        # numpy scalars are read as the Python values they stand for.
+        extract_sift(img, {"double_image": np.False_, "octave_layers": np.int64(3)})
 
 
 class TestMaxDescribed:
