@@ -1453,7 +1453,9 @@ impl AppState {
     /// half-length is the honest number and no photograph is picked to stand
     /// in for it. `at` is an **observation** index, not an image:
     /// the size a person reads off an outline is the size of the outline drawn
-    /// at that sighting, which is the patch re-anchored on it.
+    /// at that sighting, which is the patch's projection shifted by the
+    /// sighting's gap ([`geometry::SeenSquare`]), and a shift in the
+    /// photograph changes no length in it.
     fn patch_size_phrase(&self, id: ReconId, track: &EditableTrack, at: Option<usize>) -> String {
         let px = at.and_then(|index| {
             let observation = track.observations.get(index)?;
@@ -1463,9 +1465,13 @@ impl AppState {
             let half = match track.stage_kind() {
                 StageKind::Track => {
                     let patch_frame = track.track()?.patch_frame.as_ref()?;
-                    let anchored =
-                        geometry::anchored_patch_frame(patch_frame, &camera, &pose, observation);
-                    geometry::half_width_px(&anchored, &camera, &pose)?
+                    let square = geometry::SeenSquare::of_observation(
+                        patch_frame,
+                        &camera,
+                        &pose,
+                        observation,
+                    );
+                    geometry::half_width_px(&square.patch, &camera, &pose)?
                 }
                 StageKind::Cluster => sfmtool_core::bench::half_width_px(
                     observation.shape()?,

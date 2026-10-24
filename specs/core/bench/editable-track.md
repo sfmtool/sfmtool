@@ -407,6 +407,7 @@ pub const MAX_TILT_DEG: f64 = 80.0;
 
 pub fn spin_patch(
     track: &EditableTrack,
+    edited: &EditedReconstruction,
     angle_rad: f64,                      // about the outward normal
 ) -> Result<(EditableTrack, SpinReport), TrackEditError>;
 
@@ -2270,19 +2271,35 @@ becomes `k + (P(c') - P(c))`. A translation moves the centre and so moves every
 keypoint, each by its own photograph's displacement of the centre's projection;
 so does a resize from an edge, which moves the centre because it holds the far
 one. A spin, a tilt and a resize about the centre leave the centre where it was,
-and so move no keypoint at all. Under a translation, a resize from an edge and a
-tilt, a sighting that has never been localized has no gap to keep and takes
-`P(c')`, and so does a localized one whose old centre did not project into its
-photograph, there being no gap to read; a spin and a resize about the centre
-leave a sighting never localized as it was. One the new centre
+and so move no keypoint at all. Under every patch step a sighting that has
+never been localized has no gap to keep and takes `P(c')`, and so does a
+localized one whose old centre did not project into its photograph, there being
+no gap to read. One the new centre
 no longer projects into is left with no keypoint and `Unmeasured::NoProjection`
 as its reason, which is the truth about it.
 
+**What a photograph sees of the patch is its projection shifted by the gap.**
+Since a keypoint marks the centre, the square a photograph shows is every point
+of the patch at its own projection plus that sighting's gap, which puts the
+square's centre on the keypoint. It is not the patch moved in 3D until its
+centre sits on the keypoint's ray (`OrientedPatch::anchored_at_keypoint`): the
+two agree on a patch facing the camera and part on one seen at a slant, by more
+the larger the gap. The pixel steps read a pointer through an observation
+against the first, and so does the viewer's outline
+([`../../gui/multi-panel-image-browser.md`](../../gui/multi-panel-image-browser.md)
+§ "The handles"). **A tile is cut from the second.** Every tile a bench reading
+scores -- the evaluation's, the fit's, the bitmap render's -- is rendered
+through the patch moved onto the keypoint's ray, so on an oblique patch with a
+gap the tile and the outline drawn over the photograph are not the same square.
+Whether tiles should be cut from the gap-shifted square too is an open
+question; moving them changes every score read off a tile.
+
 Neither turn moves a keypoint. `spin_patch` and `tilt_patch` are two steps
 because they are two different statements with different limits: a spin keeps the plane and the face
-and changes only which way up the square sits, so it needs no camera and has no
-cap, while a tilt changes which way the surface faces, is stopped
-`MAX_TILT_DEG` from any observation, and so reads every observation's camera.
+and changes only which way up the square sits, so it has no cap, while a tilt
+changes which way the surface faces and is stopped `MAX_TILT_DEG` from any
+observation. Both read the observations' cameras, to place a sighting never
+localized at the centre's projection.
 
 **`translate_patch` moves the patch by `by`**, read on the patch's **own
 orthonormal axes** `[u, v, n]` in scene units. `u` and `v` slide it across its
@@ -2307,7 +2324,7 @@ untouched. Nothing is pinned: where the patch is
 says nothing about whether any sighting belongs to it.
 
 **A sighting carried off its photograph is turned `out` and unpinned**, by
-every step that moves the patch (this one, the resize and the tilt). Off means
+every patch step (this one, the resize, the tilt and the spin). Off means
 a keypoint outside `[0, width) x [0, height)` or no keypoint at all. The
 keypoint is kept, so the row still says where the patch went, but it names no
 place on the photograph, and a `.sfmr` file refuses it; a pin, even an `in` one
@@ -2367,9 +2384,10 @@ alone would be a stretched template rather than a larger one.
 
 **`moved_edge` is the discriminator for what becomes of the sightings**, which
 is why it is a parameter of the step rather than a convenience left to the
-caller. `None` moves **both** edges about a held centre: nothing on the patch
-moves but its size, so no sighting is touched at all, and this is the form a
-caller that knows the size it wants asks for. `Some(edge)` moves that edge and
+caller. `None` moves **both** edges about a held centre: the centre does not
+move, so no keypoint does and only a sighting never localized is placed, at the
+centre's projection, and this is the form a caller that knows the size it wants
+asks for. `Some(edge)` moves that edge and
 holds the **opposite** one, which is the gesture -- a person pulling an edge
 expects the other three where the geometry puts them, not the far edge running
 away -- so with the dragged edge at `+h` from the centre and the far one at `-h`,
@@ -2449,7 +2467,8 @@ refused as `BadNormal`, the way a displacement that is not one is refused as
 rotated as a pair by a rotation whose axis *is* the normal, so both keep their
 lengths, the patch keeps its handedness and it keeps the plane and the face it
 had; what changes is which way up the square sits. The centre is untouched, so a
-spin moves no keypoint.
+spin moves no keypoint; a sighting never localized takes the centre's
+projection, as under every patch step.
 
 **`shape_observation` sets one cluster-stage sighting's affine shape**,
 which is what a corner drag there hands it: the shape turned about the sighting.

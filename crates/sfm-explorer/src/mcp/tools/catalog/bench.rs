@@ -289,8 +289,9 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           and the sightings then move by DIFFERENT amounts in their photographs, \
                           that spread being the parallax the old depth was wrong by. Or name a \
                           `pixel` and the photograph it is in, as exactly one of `observation` \
-                          (the outline there is the patch re-anchored on that sighting, and the \
-                          sighting lands under the pixel) or `camera_image` (an index or an \
+                          (the outline there is the patch's projection shifted by that \
+                          sighting's gap from the centre's projection, and the sighting lands \
+                          under the pixel) or `camera_image` (an index or an \
                           .sfmr relative path; the outline there is the patch as it stands, and \
                           its own centre lands under the pixel; it is the only form that reaches \
                           an image the track has no sighting in). Nothing is pinned: where the \
@@ -387,12 +388,15 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           (\"+u\", \"-u\", \"+v\", \"-v\"), that edge moves and the opposite one \
                           is held, so the centre shifts and every keypoint moves with the \
                           centre's projection in its own photograph; omitted, both edges move \
-                          about a held centre and no keypoint moves at all. Or name an `edge`, a `pixel` and the photograph it is in, which \
+                          about a held centre and no keypoint moves at all. Either way a \
+                          sighting never localized takes the new centre's projection. Or name an \
+                          `edge`, a `pixel` and the photograph it is in, which \
                           is the edge drag on the Image Detail panel's bench layer: the pixel is \
                           unprojected onto the patch's own plane, so the edge lands there exactly \
                           through whatever distortion the lens has. The photograph is exactly \
-                          one of `observation`, whose outline is the patch re-anchored on that \
-                          sighting, or `camera_image`, whose outline is the patch as it stands \
+                          one of `observation`, whose outline is the patch's projection shifted \
+                          by that sighting's gap from the centre's projection, or \
+                          `camera_image`, whose outline is the patch as it stands \
                           (the ghost outline of an image the track has no sighting in). \
                           A patch is square, so a resize is one scale and not two. Nothing \
                           is pinned. A cluster-stage track is refused: use resize_bench_shape.",
@@ -492,8 +496,9 @@ pub(super) fn specs() -> Vec<ToolSpec> {
             description: "Turn a bench track's patch about its own outward normal -- the corner \
                           drag on the Image Detail panel's bench layer at the track stage. The \
                           square turns in place, keeping its centre, its size and the face it \
-                          shows, so what changes is only which way up it sits and no sighting \
-                          moves at all. That is what makes it a different step from a tilt, \
+                          shows, so what changes is only which way up it sits and no keypoint \
+                          moves; a sighting never localized takes the centre's projection. \
+                          That is what makes it a different step from a tilt, \
                           which turns the normal itself. A cluster-stage track is refused: it \
                           has no patch to turn, only one affine shape per sighting, so use \
                           spin_bench_shape.",

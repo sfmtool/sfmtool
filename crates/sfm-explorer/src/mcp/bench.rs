@@ -773,14 +773,16 @@ pub(super) fn shape_bench_observation(
 /// becomes of the sightings: named, that edge moves and the far one is held, so
 /// the centre shifts and every keypoint moves with the centre's projection in
 /// its own photograph; omitted, both edges move about a held centre and no
-/// keypoint moves.
+/// keypoint moves. Either way a sighting never localized takes the new centre's
+/// projection.
 ///
 /// The pixel form is the gesture, and it is what makes the answer exact: the
 /// pixel is unprojected onto the patch's own plane, so the edge really lands
 /// there through whatever distortion the lens has. An `observation` says the
-/// outline meant is the patch re-anchored on that sighting and the pixel is in
-/// its image; a `camera_image` says it is the patch as it stands, seen in that
-/// image, which is the ghost outline's edge drag.
+/// outline meant is the patch's projection shifted by that sighting's gap from
+/// the centre's projection and the pixel is in its image; a `camera_image` says
+/// it is the patch as it stands, seen in that image, which is the ghost
+/// outline's edge drag.
 ///
 /// A cluster-stage track is refused: there is no world geometry to give a world
 /// half-length to, and its parallelograms are `resize_bench_shape`'s.
@@ -940,7 +942,8 @@ pub(super) fn tilt_bench_patch(
 /// `spin_bench_patch`: the track-stage patch turned about its own normal.
 ///
 /// The square turns in place, keeping its centre, its size and the face it
-/// shows, so no sighting moves at all. A cluster-stage track is refused: it has
+/// shows, so no keypoint moves; a sighting never localized takes the centre's
+/// projection. A cluster-stage track is refused: it has
 /// no patch to turn, only one affine shape per sighting, which is
 /// `spin_bench_shape`'s.
 pub(super) fn spin_bench_patch(

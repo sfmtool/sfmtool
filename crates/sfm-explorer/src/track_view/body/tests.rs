@@ -4506,10 +4506,10 @@ fn a_crop_s_hover_view_gives_the_axes_in_photograph_pixels() {
     let recon = state.node(id).expect("loaded").recon();
     let (camera, pose) =
         crate::bench::geometry::view_of(&recon.image_set, row.image as usize).expect("a view");
-    let patch_frame = crate::bench::geometry::anchored_patch_frame(&patch, &camera, &pose, row);
+    let square = crate::bench::geometry::SeenSquare::of_observation(&patch, &camera, &pose, row);
     let across = |s: f64, t: f64| {
-        let (xyz, w) = patch_frame.corner_homogeneous(s, t);
-        camera.project_homogeneous(&pose, xyz, w).expect("projects")
+        let (xyz, w) = square.patch.corner_homogeneous(s, t);
+        square.project(&camera, &pose, xyz, w).expect("projects")
     };
     let chord = |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).hypot(a[1] - b[1]);
     let want = [

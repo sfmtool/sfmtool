@@ -11,9 +11,9 @@
 //! normal or the SIFT overlays. The functions here take the values the
 //! outline is made of, not a track, so a panel that reads a point straight off
 //! the reconstruction builds no track to draw one: [`patch_outline`] is the
-//! patch frame re-anchored where the observation sits, its boundary projected
-//! through the camera's own model
-//! ([`crate::bench::geometry::project_outline`]), and [`cluster_outline`] a
+//! patch's boundary projected through the camera's own model and shifted by the
+//! observation's gap from the centre's projection
+//! ([`crate::bench::geometry::SeenSquare`]), and [`cluster_outline`] a
 //! cluster-stage observation's own parallelogram
 //! ([`crate::bench::geometry::parallelogram`]). The crop is the bounding box
 //! of that outline widened by [`CROP_MARGIN_PX`] on every side and rounded out
@@ -112,15 +112,17 @@ pub(crate) struct CropPicture {
     pub(crate) projection_of: Option<ProjectionOf>,
 }
 
-/// Where a patch lands in one photograph: `patch_frame` re-anchored where
-/// the observation sits, at `keypoint`, its boundary projected through
-/// `camera` at `pose`, its two axes measured along their bend, and `target`,
-/// what `projection_of` names, projected with the patch frame's `w`.
+/// Where a patch lands in one photograph: `patch_frame`'s boundary projected
+/// through `camera` at `pose` and shifted by the observation's gap, `keypoint`
+/// less the projection of the centre ([`geometry::SeenSquare`]), the square
+/// Image Detail draws there; its two axes measured along their bend; and
+/// `target`, what `projection_of` names, projected with the patch frame's `w`
+/// and not shifted.
 ///
 /// The patch frame keeps its own `w`, so the patch of a point at infinity, a
 /// bearing's patch tangent to the direction sphere, projects homogeneously as
-/// its point does. Where the keypoint's ray does not meet the patch's plane
-/// the outline is the patch as it stands.
+/// its point does. Where the centre does not project there is no gap to read
+/// and the outline is the patch as it stands.
 pub(crate) fn patch_outline(
     patch_frame: &OrientedPatch,
     camera: &CameraIntrinsics,
@@ -129,10 +131,8 @@ pub(crate) fn patch_outline(
     target: Point3<f64>,
     projection_of: ProjectionOf,
 ) -> Outline {
-    let anchored = patch_frame
-        .anchored_at_keypoint(camera, pose, keypoint)
-        .unwrap_or_else(|| patch_frame.clone());
-    let (samples, per_edge) = geometry::project_outline(&anchored, camera, pose);
+    let square = geometry::SeenSquare::at_keypoint(patch_frame, camera, pose, Some(keypoint));
+    let (samples, per_edge) = square.outline(camera, pose);
     // Each axis sampled as densely as the edges beside it, so a fisheye's bent
     // axis is measured along its bend.
     let axis = |along: fn(f64) -> (f64, f64)| {
@@ -140,8 +140,8 @@ pub(crate) fn patch_outline(
         let mut points = Vec::with_capacity(n + 1);
         for i in 0..=n {
             let (s, t) = along(2.0 * i as f64 / n as f64 - 1.0);
-            let (xyz, w) = anchored.corner_homogeneous(s, t);
-            points.push(camera.project_homogeneous(pose, xyz, w)?);
+            let (xyz, w) = patch_frame.corner_homogeneous(s, t);
+            points.push(square.project(camera, pose, xyz, w)?);
         }
         Some(polyline_length(&points))
     };

@@ -6,8 +6,8 @@ photographs, and the oriented square of surface those observations are views of.
 The 3D viewer draws the track focused on that bench where it stands in
 the world, as scene geometry rather than as a symbol floating over the viewport.
 What it draws is the square itself, the direction that square faces, and one
-mark per photograph saying where that photograph sees the square's content
-against where the geometry puts its middle. Every one of those marks is also a
+mark per photograph saying where that photograph sees the square's centre
+against where the geometry puts it. Every one of those marks is also a
 handle, so the figure a person is looking at is the figure they take hold of and
 there is no second picture of the patch to keep in step with the first.
 
@@ -100,7 +100,11 @@ half-length states the whole of its size.
   same 24 segments, drawn in the plane. A track with sixteen observations shows
   sixteen segments and sixteen circles. An observation with no keypoint, or one
   whose ray cannot meet the plane in front of its own camera, draws no mark at
-  all and leaves a gap in the list rather than a mark that means nothing.
+  all and leaves a gap in the list rather than a mark that means nothing. A
+  mark draws no square: `q_i` shows the size and direction of that sighting's
+  gap from the centre's projection as a place on the patch, while the square a
+  photograph sees, which Image Detail draws, is the patch's projection shifted
+  in the photograph by the gap.
 
 When exactly one observation is selected ([bench.md](bench.md) § "The
 selected observations"), its circle is drawn 1.6 times the others'. That is the one thing the figure says about the selection, and it is

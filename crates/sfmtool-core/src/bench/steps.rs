@@ -1509,8 +1509,9 @@ fn same_length(value: f64, was: f64) -> bool {
 /// **`moved_edge` says what becomes of the sightings**, which is why it is a
 /// parameter of the step rather than a convenience left to the caller:
 ///
-/// - `None` moves **both** edges about a held centre. Nothing on the patch
-///   moves but its size, so no sighting is touched at all: this is the form a
+/// - `None` moves **both** edges about a held centre. The centre does not
+///   move, so no keypoint does, and only a sighting never localized is placed,
+///   at the centre's projection, as under every patch step: this is the form a
 ///   caller that knows the size it wants asks for.
 /// - `Some(edge)` moves that edge and holds the **opposite** one, which is the
 ///   gesture -- a person pulling an edge expects the other three where the
@@ -1559,14 +1560,14 @@ pub fn resize_patch(
     }
 
     let Some(edge) = moved_edge else {
-        // Both edges move about a held centre, so no point of the patch's plane
-        // goes anywhere and there is no sighting to carry.
+        // Both edges move about a held centre, so no keypoint moves: only a
+        // sighting never localized is placed, at the centre's projection.
         let mut next = track.clone();
         {
             let (_, patch) = track_payload_mut(&mut next);
             patch.half_extent = [half_length, half_length];
         }
-        keep_keypoints_only(&mut next);
+        follow_centre(&mut next, edited, patch, patch.center);
         return Ok((
             next,
             ResizeReport {
@@ -2401,28 +2402,34 @@ pub struct SpinReport {
 /// square sits on that plane, which is what a person turning the outline in the
 /// Image Detail panel is saying.
 ///
-/// The centre is untouched, so a turn moves no sighting: a corner drag spins
-/// the square in place while every keypoint stays where it is. The stored
-/// bitmap and the track measurements are dropped for the reason a resize drops
-/// them -- both were read over the square as it stood, and the square has
-/// turned under them.
+/// The centre is untouched, so a turn moves no keypoint: a corner drag spins
+/// the square in place while every keypoint stays where it is. A sighting never
+/// localized takes the centre's projection, as under every patch step, which is
+/// why the step reads the cameras. The stored bitmap and the track
+/// measurements are dropped for the reason a resize drops them -- both were
+/// read over the square as it stood, and the square has turned under them.
 pub fn spin_patch(
     track: &EditableTrack,
+    edited: &EditedReconstruction,
     angle_rad: f64,
 ) -> Result<(EditableTrack, SpinReport), TrackEditError> {
     if !angle_rad.is_finite() {
         return Err(TrackEditError::BadAngle(angle_rad));
     }
-    patch_frame_of(track)?;
+    let patch = patch_frame_of(track)?;
     let mut next = track.clone();
     let changed = angle_rad.abs() > NO_EFFECT_RAD;
     if changed {
-        keep_keypoints_only(&mut next);
-        let (_, patch_frame) = track_payload_mut(&mut next);
-        let axis = nalgebra::Unit::new_normalize(patch_frame.normal());
-        let rotation = nalgebra::Rotation3::from_axis_angle(&axis, angle_rad);
-        patch_frame.u_axis = rotation * patch_frame.u_axis;
-        patch_frame.v_axis = rotation * patch_frame.v_axis;
+        {
+            let (_, patch_frame) = track_payload_mut(&mut next);
+            let axis = nalgebra::Unit::new_normalize(patch_frame.normal());
+            let rotation = nalgebra::Rotation3::from_axis_angle(&axis, angle_rad);
+            patch_frame.u_axis = rotation * patch_frame.u_axis;
+            patch_frame.v_axis = rotation * patch_frame.v_axis;
+        }
+        // The centre does not move, so no keypoint does: only a sighting never
+        // localized is placed, at the centre's projection.
+        follow_centre(&mut next, edited, patch, patch.center);
     }
     Ok((
         next,
@@ -2646,8 +2653,8 @@ fn track_payload_mut(
 /// in the photograph -- and not content lying at an offset on the patch. That
 /// gap is kept, in pixels of the same image: with `p` the projection of the
 /// centre as it stood (`was`) and `p'` that of `centre`, the keypoint `k`
-/// becomes `k + (p' - p)`. A centre that has not moved, as under a tilt, moves
-/// no keypoint at all.
+/// becomes `k + (p' - p)`. A centre that has not moved, as under a tilt, a
+/// spin or a resize about the centre, moves no keypoint at all.
 ///
 /// A sighting that has never been localized has no gap to keep and takes `p'`,
 /// the only place the patch says it could be; so does a localized one whose
@@ -2745,24 +2752,6 @@ fn on_photograph(camera: &crate::camera::CameraIntrinsics, pixel: [f64; 2]) -> b
         && pixel[1] >= 0.0
         && pixel[0] < f64::from(camera.width)
         && pixel[1] < f64::from(camera.height)
-}
-
-/// Drop every track measurement but the keypoint it was read at.
-///
-/// What a change to the patch invalidates, stated once: the ZNCC, both
-/// distances, the reprojection residual, the self-similarity and the reason were
-/// all read over the square as it stood and against the position it stood at,
-/// and neither holds after the patch has been resized, moved or turned. Where
-/// each sighting sits is not one of those things, so it stays.
-fn keep_keypoints_only(track: &mut EditableTrack) {
-    for observation in &mut track.observations {
-        if let Some(measurement) = &observation.track {
-            observation.track = Some(TrackMeasurement {
-                keypoint: measurement.keypoint,
-                ..TrackMeasurement::default()
-            });
-        }
-    }
 }
 
 /// The camera and the pose of one image of the reconstruction.

@@ -539,11 +539,19 @@ differs by stage:
 
 - At the **track stage**, the patch's square boundary sampled and each sample
   pushed through the camera's own forward projection, drawn as a closed
-  polyline. The patch is first re-anchored on this image's keypoint
-  (`OrientedPatch::anchored_at_keypoint`), as the tile in Track View is
-  rendered, so the outline sits where the sighting is in this photograph; the
-  patch's own projection is the hollow centre the offset segments run to. The outline is therefore the curve a distorting lens really maps
-  that square to, rather than the quadrilateral through its four corners:
+  polyline, and the whole of it then **shifted in the photograph by the
+  sighting's gap**, its keypoint less the projection of the patch's centre
+  (`bench::geometry::SeenSquare`). A keypoint marks where its photograph sees
+  the patch's centre, so the gap is an error of that sighting, a shift of the
+  whole square in the photograph, and not the patch standing somewhere else in
+  the world: the outline is the patch's own projection moved by the gap, which
+  puts its centre on the keypoint and keeps its shape, and not the patch moved
+  in 3D until its centre sits on the keypoint's ray. On a patch facing the
+  camera the two agree; on one seen at a slant they part, by more the larger
+  the gap and the steeper the slant. The patch's own projection is the hollow
+  centre the offset segments run to. The outline is the curve a distorting lens
+  really maps that square to, rather than the quadrilateral through its four
+  corners:
   `OrientedPatch::boundary` supplies the samples
   ([`../core/patch/patch-cloud.md`](../core/patch/patch-cloud.md)), eight per
   edge and more when the projection is large. A sample behind the camera or
@@ -562,13 +570,11 @@ differs by stage:
 - Also at the **track stage**, the patch's **normal**: the 3D viewer's segment
   and arrowhead ([`viewer-3d-bench-layer.md`](viewer-3d-bench-layer.md) § "What
   is drawn") built in the world and projected into this photograph, in the
-  outline's colour and the offset segments' 1.5 px width. It leaves the centre
-  of the square drawn, which in a member image is the re-anchored centre and so
-  the sighting's dot, not the hollow centre: the arrow belongs to the outline,
-  and one leaving the hollow centre would part from its own square by the
-  projection offset. The anchored square is the patch moved across its own
-  plane, so its normal line is parallel to the patch's and a depth or a facing
-  read off either is the same. The arrow is `2h` long in world units, the 3D
+  outline's colour and the offset segments' 1.5 px width. It is shifted by the
+  same gap as the outline, so it leaves the centre of the square drawn, which in
+  a member image is the sighting's dot, not the hollow centre: the arrow belongs
+  to the outline, and one leaving the hollow centre would part from its own
+  square by the projection offset. The arrow is `2h` long in world units, the 3D
   viewer's `NORMAL_LENGTH`, its barbs `0.5h` back and `0.2h` to either side
   along `n x (eye - tip)` with this photograph's camera centre as the eye, so it
   is the patch's size, foreshortens with the view exactly as the square does,
@@ -593,8 +599,8 @@ differs by stage:
 **The ghost outline.** An image counts as the track's when it holds an
 observation of any verdict, so an `out` sighting is drawn as above. In an image with **no** observation, the track stage still has a patch
 standing in the world, and the layer draws where this camera sees it: the
-patch's own square, not re-anchored on anything since there is no keypoint
-here, sampled and projected as the member outline is and in the same stroke,
+patch's own square, shifted by nothing since there is no keypoint here to read
+a gap from, sampled and projected as the member outline is and in the same stroke,
 in the `in` colour at 80% opacity (`GHOST_OPACITY`, 0.8). The patch can then
 be followed across every photograph of the capture, and the transparency says
 this image is not one of its sightings. With Track View's *Lock* ticked the
@@ -696,17 +702,30 @@ offset of that meeting on the patch's axes
 (`OrientedPatch::keypoint_plane_offset`). So an edge put under the pointer
 *reprojects onto the pointer*, through whatever distortion the lens has, and a
 turn is the angle swept on the patch's own surface rather than the foreshortened
-one swept on screen. The patch frame the pointer is read against is the one drawn: the
-patch re-anchored on the observation whose outline it is, or for the ghost the
-patch itself, which is what `sfmtool_core::bench::Viewpoint` names to the two
-pixel steps (`Observation` and `Image`). The normal's two handles read the same
-ray against the geometry the 3D viewer's do (the normal's line, and the plane
-the arrowhead's gesture reads): the pixel is unprojected through the lens
-model's own inverse into a ray from this photograph's camera centre
+one swept on screen. The square the pointer is read against is the one drawn:
+through an observation's outline the pointer is read **less that sighting's
+gap**, against the patch itself, and through the ghost it is read as it is,
+which is what `sfmtool_core::bench::Viewpoint` names to the two pixel steps
+(`Observation` and `Image`). One function, `bench::geometry::SeenSquare`, gives
+both the drawing and every reading of it -- the dot, an edge, a corner, the
+normal's segment and the arrowhead -- so a dragged edge or corner lands under
+the pointer on the outline as it is redrawn, through whatever distortion the
+lens has and at any slant. The normal's two handles read the same ray against
+the geometry the 3D viewer's do (the normal's line, and the plane the
+arrowhead's gesture reads): the pixel, less the gap, is unprojected through the
+lens model's own inverse into a ray from this photograph's camera centre
 (`bench::geometry::pixel_ray`), which is the one difference from the 3D viewer,
 whose ray is its own camera's. A photograph taken from the side of the patch is
 therefore as good a vantage for depth and facing as the 3D view is, and a
 fisheye's pixel names the ray its lens really images there.
+
+**The tile is cut from another square.** Track View's tile, and every score
+read off it, is rendered through the patch moved in 3D until its centre sits on
+the keypoint's ray (`OrientedPatch::anchored_at_keypoint`), not through the
+gap-shifted square this layer draws. The two agree on a patch facing the camera
+and part on one seen at a slant. Whether the tile should be cut from the
+gap-shifted square too is an open question, since moving it changes every score
+read off a tile.
 
 At the track stage the patch is shared, so all three gestures change the
 outline in **every** image. The two that move its centre -- the slide and the
@@ -732,9 +751,9 @@ its turn, every other sighting keeps its own, and the step is the one the
 cluster stage's dot already is (`sight_observation`), so the sighting is pinned
 and the measurements read at its old pixel are dropped. This is how a keypoint
 that settled on the wrong detail is put right without dragging the rest of the
-track after it. In this photograph the outline follows the dot, being the patch
-re-anchored on the keypoint, while the hollow centre stays where the patch
-projects, so the segment between them grows by the drag.
+track after it. In this photograph the outline follows the dot, being the patch's
+projection shifted by the keypoint's gap, while the hollow centre stays where
+the patch projects, so the segment between them grows by the drag.
 
 A track-stage sighting has a place of its own and no shape, depth or facing of
 its own; its size, its turn and its normal are the patch's. So while the lock is

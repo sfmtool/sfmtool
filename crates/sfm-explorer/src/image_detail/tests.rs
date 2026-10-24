@@ -1430,8 +1430,10 @@ fn the_bench_layer_outlines_the_patch_where_its_corners_project() {
         ],
     );
     let photograph = pixels(640, 480);
-    // The outline is the patch frame re-anchored on this image's keypoint, as
-    // the tile is rendered, so the corners are the anchored patch frame's.
+    // The outline is the patch's projection shifted by this image's keypoint's
+    // gap from the centre's projection, so each corner is its projection plus
+    // that gap. (`with_a_gap_the_outline_is_the_patch_s_projection_shifted_by_it`
+    // checks it with a gap that is not nothing.)
     let keypoint = track
         .observations
         .iter()
@@ -1440,15 +1442,18 @@ fn the_bench_layer_outlines_the_patch_where_its_corners_project() {
         .and_then(|m| m.keypoint)
         .map(|k| [f64::from(k[0]), f64::from(k[1])])
         .expect("a track from a point carries its keypoints");
-    let anchored = patch_frame.anchored_at_keypoint(camera, &pose, keypoint);
-    let patch_frame = anchored.as_ref().unwrap_or(patch_frame);
+    let project = |xyz: nalgebra::Vector3<f64>, w: f64| {
+        let p = pose.transform_point_homogeneous(xyz, w);
+        camera
+            .ray_to_pixel([p.x, p.y, p.z])
+            .expect("the demo's patch corners are in front of the camera")
+    };
+    let centre = project(patch_frame.center.coords, patch_frame.w);
+    let gap = [keypoint[0] - centre.0, keypoint[1] - centre.1];
     for (s, t) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
         let (xyz, w) = patch_frame.corner_homogeneous(s, t);
-        let p = pose.transform_point_homogeneous(xyz, w);
-        let (u, v) = camera
-            .ray_to_pixel([p.x, p.y, p.z])
-            .expect("the demo's patch corners are in front of the camera");
-        let expected = to_panel(&photograph, [u, v]);
+        let (u, v) = project(xyz, w);
+        let expected = to_panel(&photograph, [u + gap[0], v + gap[1]]);
         let nearest = outline
             .iter()
             .map(|point| (*point - expected).length())
@@ -2388,14 +2393,15 @@ fn version_labels(state: &crate::state::AppState, id: crate::scene::ReconId) -> 
         .collect()
 }
 
-/// The patch re-anchored on one sighting: the outline the layer draws there,
-/// and the geometry every handle of it is placed by.
+/// The patch as one sighting's photograph sees it, its projection shifted by
+/// the sighting's gap: the outline the layer draws there, and the geometry
+/// every handle of it is placed by.
 fn outline_at(
     node: &SceneNode,
     track: &sfmtool_core::bench::EditableTrack,
     observation: usize,
 ) -> (
-    sfmtool_core::patch::cloud::OrientedPatch,
+    crate::bench::geometry::SeenSquare,
     sfmtool_core::camera::CameraIntrinsics,
     sfmtool_core::geometry::RigidTransform,
 ) {
@@ -2407,9 +2413,9 @@ fn outline_at(
         .track()
         .and_then(|payload| payload.patch_frame.as_ref())
         .expect("a track from a point carries the stored patch");
-    let anchored =
-        crate::bench::geometry::anchored_patch_frame(patch_frame, &camera, &pose, sighting);
-    (anchored, camera, pose)
+    let square =
+        crate::bench::geometry::SeenSquare::of_observation(patch_frame, &camera, &pose, sighting);
+    (square, camera, pose)
 }
 
 /// Each sighting's offset from where the patch's centre projects, in its own
@@ -2445,6 +2451,21 @@ fn projection_offsets(
         .collect()
 }
 
+/// Where the `(s, t)` corner of the square a sighting's photograph sees lands,
+/// in source-image px: the patch's projection plus the sighting's gap.
+fn seen_pixel(
+    square: &crate::bench::geometry::SeenSquare,
+    camera: &sfmtool_core::camera::CameraIntrinsics,
+    pose: &sfmtool_core::geometry::RigidTransform,
+    s: f64,
+    t: f64,
+) -> [f64; 2] {
+    let (xyz, w) = square.patch.corner_homogeneous(s, t);
+    square
+        .project(camera, pose, xyz, w)
+        .expect("the demo's patch is in front")
+}
+
 /// Where a patch's `(s, t)` corner lands, in source-image px.
 fn patch_pixel(
     patch: &sfmtool_core::patch::cloud::OrientedPatch,
@@ -2464,13 +2485,13 @@ fn hovering_an_edge_of_the_outline_asks_for_the_resize_cursor_its_orientation_na
     let (state, id, label) = bench_state();
     let track = on_bench(&state, id, &label);
     let node = &state.scene[0];
-    let (patch_frame, camera, pose) = outline_at(node, &track, 0);
-    let centre = patch_pixel(&patch_frame, &camera, &pose, 0.0, 0.0);
+    let (square, camera, pose) = outline_at(node, &track, 0);
+    let centre = seen_pixel(&square, &camera, &pose, 0.0, 0.0);
 
     // The `+u` edge of this fixture's patch runs all but horizontally on
     // screen, so it is the edge you move up and down.
-    let across = patch_pixel(&patch_frame, &camera, &pose, 1.0, 0.0);
-    let along = patch_pixel(&patch_frame, &camera, &pose, 0.0, 1.0);
+    let across = seen_pixel(&square, &camera, &pose, 1.0, 0.0);
+    let along = seen_pixel(&square, &camera, &pose, 0.0, 1.0);
     let steepness = |edge: [f64; 2]| ((edge[1] - centre[1]) / (edge[0] - centre[0])).abs();
     assert!(
         steepness(across) < 0.4 && steepness(along) > 2.5,
@@ -2493,7 +2514,7 @@ fn hovering_an_edge_of_the_outline_asks_for_the_resize_cursor_its_orientation_na
     // the sector a diagonal cursor answers for, a slope between `tan 22.5°`
     // and `tan 67.5°`.
     for (s, t) in [(1.0, 1.0), (1.0, -1.0)] {
-        let corner = patch_pixel(&patch_frame, &camera, &pose, s, t);
+        let corner = seen_pixel(&square, &camera, &pose, s, t);
         let radius = [corner[0] - centre[0], corner[1] - centre[1]];
         let slope = (radius[1] / radius[0]).abs();
         assert!(
@@ -2608,11 +2629,11 @@ fn dragging_the_dot_slides_the_patch_and_every_sighting_follows_it() {
 fn dragging_an_edge_resizes_the_patch_so_it_reprojects_under_the_release_point() {
     let (mut state, id, label) = bench_state();
     let track = on_bench(&state, id, &label);
-    let (patch_frame, camera, pose) = outline_at(&state.scene[0], &track, 0);
-    let centre = patch_pixel(&patch_frame, &camera, &pose, 0.0, 0.0);
-    let from = patch_pixel(&patch_frame, &camera, &pose, 1.0, 0.0);
-    let to = patch_pixel(&patch_frame, &camera, &pose, 2.0, 0.0);
-    let far_before = patch_pixel(&patch_frame, &camera, &pose, -1.0, 0.0);
+    let (square, camera, pose) = outline_at(&state.scene[0], &track, 0);
+    let centre = seen_pixel(&square, &camera, &pose, 0.0, 0.0);
+    let from = seen_pixel(&square, &camera, &pose, 1.0, 0.0);
+    let to = seen_pixel(&square, &camera, &pose, 2.0, 0.0);
+    let far_before = seen_pixel(&square, &camera, &pose, -1.0, 0.0);
     let offsets = projection_offsets(&state.scene[0], &track);
 
     let edit = bench_drag(&state.scene[0], 0, &track, centre, from, to, false)
@@ -2670,15 +2691,16 @@ fn dragging_an_edge_resizes_the_patch_so_it_reprojects_under_the_release_point()
         after.observations.iter().all(|o| o.pinned),
         "a resize leaves the pins a point's rows arrive with"
     );
-    // Against the outline as it is redrawn -- the patch re-anchored on the
-    // sighting the edge was dragged in, which is what the person sees.
+    // Against the outline as it is redrawn -- the patch's projection shifted by
+    // the gap of the sighting the edge was dragged in, which is what the person
+    // sees.
     let (redrawn, _, _) = outline_at(&state.scene[0], &after, 0);
-    let landed = patch_pixel(&redrawn, &camera, &pose, 1.0, 0.0);
+    let landed = seen_pixel(&redrawn, &camera, &pose, 1.0, 0.0);
     assert!(
         (landed[0] - to[0]).abs() < 1e-3 && (landed[1] - to[1]).abs() < 1e-3,
         "the dragged edge should land on {to:?}, it landed on {landed:?}",
     );
-    let far_after = patch_pixel(&redrawn, &camera, &pose, -1.0, 0.0);
+    let far_after = seen_pixel(&redrawn, &camera, &pose, -1.0, 0.0);
     assert!(
         (far_after[0] - far_before[0]).abs() < 1e-3 && (far_after[1] - far_before[1]).abs() < 1e-3,
         "the far edge moved from {far_before:?} to {far_after:?}",
@@ -2689,12 +2711,12 @@ fn dragging_an_edge_resizes_the_patch_so_it_reprojects_under_the_release_point()
 fn dragging_a_corner_turns_the_patch_and_pushes_one_version() {
     let (mut state, id, label) = bench_state();
     let track = on_bench(&state, id, &label);
-    let (patch_frame, camera, pose) = outline_at(&state.scene[0], &track, 0);
-    let centre = patch_pixel(&patch_frame, &camera, &pose, 0.0, 0.0);
-    let from = patch_pixel(&patch_frame, &camera, &pose, 1.0, 1.0);
+    let (square, camera, pose) = outline_at(&state.scene[0], &track, 0);
+    let centre = seen_pixel(&square, &camera, &pose, 0.0, 0.0);
+    let from = seen_pixel(&square, &camera, &pose, 1.0, 1.0);
     // A quarter turn in the patch's own plane: the `(1, 1)` corner's offset
     // rotated onto the `(-1, 1)` corner's.
-    let to = patch_pixel(&patch_frame, &camera, &pose, -1.0, 1.0);
+    let to = seen_pixel(&square, &camera, &pose, -1.0, 1.0);
 
     let edit = bench_drag(&state.scene[0], 0, &track, centre, from, to, false)
         .edit
@@ -2780,9 +2802,9 @@ fn escape_cancels_a_drag_and_a_drag_that_ends_where_it_started_pushes_nothing() 
 fn a_press_on_a_handle_takes_the_gesture_before_egui_would_call_it_a_drag() {
     let (mut state, id, label) = bench_state();
     let track = on_bench(&state, id, &label);
-    let (patch_frame, camera, pose) = outline_at(&state.scene[0], &track, 0);
-    let centre = patch_pixel(&patch_frame, &camera, &pose, 0.0, 0.0);
-    let edge = patch_pixel(&patch_frame, &camera, &pose, 1.0, 0.0);
+    let (square, camera, pose) = outline_at(&state.scene[0], &track, 0);
+    let centre = seen_pixel(&square, &camera, &pose, 0.0, 0.0);
+    let edge = seen_pixel(&square, &camera, &pose, 1.0, 0.0);
     // Two panel pixels, then thirty: the first is under egui's drag threshold
     // and is exactly what used to be spent panning the photograph.
     let steps = [egui::vec2(2.0, 0.0), egui::vec2(30.0, 0.0)];
@@ -2903,11 +2925,11 @@ fn with_the_lock_off_the_dot_moves_one_sighting_and_leaves_the_patch_and_the_res
 fn with_the_lock_off_the_outline_takes_no_drag_at_the_track_stage() {
     let (mut state, id, label) = bench_state();
     let track = on_bench(&state, id, &label);
-    let (patch_frame, camera, pose) = outline_at(&state.scene[0], &track, 0);
-    let centre = patch_pixel(&patch_frame, &camera, &pose, 0.0, 0.0);
-    let edge = patch_pixel(&patch_frame, &camera, &pose, 1.0, 0.0);
-    let corner = patch_pixel(&patch_frame, &camera, &pose, 1.0, 1.0);
-    let beyond = patch_pixel(&patch_frame, &camera, &pose, 2.0, 0.0);
+    let (square, camera, pose) = outline_at(&state.scene[0], &track, 0);
+    let centre = seen_pixel(&square, &camera, &pose, 0.0, 0.0);
+    let edge = seen_pixel(&square, &camera, &pose, 1.0, 0.0);
+    let corner = seen_pixel(&square, &camera, &pose, 1.0, 1.0);
+    let beyond = seen_pixel(&square, &camera, &pose, 2.0, 0.0);
     for grabbed in [edge, corner] {
         let dragged = unlocked_drag(&state.scene[0], 0, &track, centre, grabbed, beyond);
         assert!(
@@ -3045,8 +3067,8 @@ fn the_held_dot_previews_what_its_release_does_in_both_lock_states() {
 fn a_press_off_the_handles_still_pans_and_a_press_that_does_not_move_edits_nothing() {
     let (state, id, label) = bench_state();
     let track = on_bench(&state, id, &label);
-    let (patch_frame, camera, pose) = outline_at(&state.scene[0], &track, 0);
-    let centre = patch_pixel(&patch_frame, &camera, &pose, 0.0, 0.0);
+    let (square, camera, pose) = outline_at(&state.scene[0], &track, 0);
+    let centre = seen_pixel(&square, &camera, &pose, 0.0, 0.0);
     let steps = [egui::vec2(2.0, 0.0), egui::vec2(30.0, 0.0)];
 
     // Far outside the outline, which is a couple of source pixels across.
@@ -3069,7 +3091,7 @@ fn a_press_off_the_handles_still_pans_and_a_press_that_does_not_move_edits_nothi
     );
 
     // And a press on the edge that never moves leaves the track alone.
-    let edge = patch_pixel(&patch_frame, &camera, &pose, 1.0, 0.0);
+    let edge = seen_pixel(&square, &camera, &pose, 1.0, 0.0);
     let still = gesture(&state.scene[0], 0, &track, centre, edge, &[], false, true);
     assert!(still.edit.is_none(), "a click edited the track");
     assert_eq!(still.panned, egui::Vec2::ZERO);
@@ -3256,6 +3278,22 @@ fn ghost_state() -> (crate::state::AppState, crate::scene::ReconId, String, usiz
 }
 
 /// Where a world point lands in one image, in its own px.
+/// Where `point` is seen on `square` in `image`: its projection plus the
+/// square's gap, which is where the layer draws a point of a member outline's
+/// normal.
+fn seen_of(
+    node: &SceneNode,
+    image: usize,
+    square: &crate::bench::geometry::SeenSquare,
+    point: nalgebra::Point3<f64>,
+) -> [f64; 2] {
+    let (camera, pose) = crate::bench::geometry::view_of(&node.edited().base.image_set, image)
+        .expect("the demo's images have cameras");
+    square
+        .project(&camera, &pose, point.coords, 1.0)
+        .expect("in front of the camera")
+}
+
 fn pixel_of(node: &SceneNode, image: usize, point: nalgebra::Point3<f64>) -> [f64; 2] {
     let (camera, pose) = crate::bench::geometry::view_of(&node.edited().base.image_set, image)
         .expect("the demo's images have cameras");
@@ -3534,7 +3572,7 @@ fn dragging_the_ghost_edge_and_corner_resizes_and_spins_the_patch() {
 }
 
 /// The normal is drawn out of the outline's centre in a member image (the
-/// sighting's, the outline being anchored there) and out of the patch's own
+/// sighting's, the outline being shifted there by its gap) and out of the patch's own
 /// centre in the ghost, as a segment and a two-barbed head.
 #[test]
 fn the_normal_is_drawn_in_member_images_and_in_the_locked_ghost() {
@@ -3571,8 +3609,14 @@ fn the_normal_is_drawn_in_member_images_and_in_the_locked_ghost() {
             .iter()
             .find(|path| path.len() == 2)
             .unwrap_or_else(|| panic!("lock {lock}: no normal in the member image: {arrow:?}"));
-        let tail = to_panel(&photograph, pixel_of(node, member, square.center));
-        let tip = to_panel(&photograph, pixel_of(node, member, tip_of(&square)));
+        let tail = to_panel(
+            &photograph,
+            seen_of(node, member, &square, square.patch.center),
+        );
+        let tip = to_panel(
+            &photograph,
+            seen_of(node, member, &square, tip_of(&square.patch)),
+        );
         assert!(
             (segment[0] - tail).length() < 0.01,
             "the normal leaves {:?}, not {tail:?}",
@@ -3621,7 +3665,7 @@ fn the_normal_is_hidden_end_on_absent_at_the_cluster_stage_and_not_offered_unloc
     });
     let layer = layer_at(&node, member, &end_on, true).expect("a member image");
     let (square, _, _) = outline_at(&node, &end_on, 0);
-    let tip = pos(pixel_of(&node, member, tip_of(&square)));
+    let tip = pos(seen_of(&node, member, &square, tip_of(&square.patch)));
     assert!(
         !matches!(
             layer.hit(tip),
@@ -3653,11 +3697,11 @@ fn the_normal_is_hidden_end_on_absent_at_the_cluster_stage_and_not_offered_unloc
     });
     assert_eq!(lines(&oblique), 1, "an oblique normal was not drawn");
     let (square, _, _) = outline_at(&node, &oblique, 0);
-    let tip_px = pixel_of(&node, member, tip_of(&square));
+    let tip_px = seen_of(&node, member, &square, tip_of(&square.patch));
     // Near the tip, where the segment has left the square: inside it an edge
     // it crosses is tried first and takes the press.
     let middle_px = {
-        let a = pixel_of(&node, member, square.center);
+        let a = seen_of(&node, member, &square, square.patch.center);
         [
             a[0] * 0.08 + tip_px[0] * 0.92,
             a[1] * 0.08 + tip_px[1] * 0.92,
@@ -3723,11 +3767,11 @@ fn dragging_the_arrowhead_tilts_toward_the_pointer_and_the_segment_moves_along_t
     let (square, _, pose) = outline_at(node, &track, 0);
     let eye = pose.inverse_translation_origin();
     assert!(
-        !crate::bench::geometry::normal_is_end_on(&square, eye),
+        !crate::bench::geometry::normal_is_end_on(&square.patch, eye),
         "the fixture's normal should be seen from the side in the member image",
     );
-    let centre = pixel_of(node, member, square.center);
-    let tip = pixel_of(node, member, tip_of(&square));
+    let centre = seen_of(node, member, &square, square.patch.center);
+    let tip = seen_of(node, member, &square, tip_of(&square.patch));
     // Across the arrow on screen, a sixth of its length.
     let along = [tip[0] - centre[0], tip[1] - centre[1]];
     let to = [tip[0] - along[1] / 6.0, tip[1] + along[0] / 6.0];
@@ -3739,12 +3783,12 @@ fn dragging_the_arrowhead_tilts_toward_the_pointer_and_the_segment_moves_along_t
     };
     let turned = nalgebra::Vector3::from(normal).normalize();
     assert!(
-        turned.dot(&square.normal()) < 1.0 - 1e-9,
+        turned.dot(&square.patch.normal()) < 1.0 - 1e-9,
         "the normal did not turn"
     );
     let new_tip = {
-        let length = crate::bench::geometry::NORMAL_LENGTH * square.half_extent[0];
-        pixel_of(node, member, square.center + turned * length)
+        let length = crate::bench::geometry::NORMAL_LENGTH * square.patch.half_extent[0];
+        seen_of(node, member, &square, square.patch.center + turned * length)
     };
     let distance = |a: [f64; 2]| (a[0] - to[0]).hypot(a[1] - to[1]);
     assert!(
@@ -3767,8 +3811,8 @@ fn dragging_the_arrowhead_tilts_toward_the_pointer_and_the_segment_moves_along_t
     let (released, _, _) = outline_at(node, &tilted, 0);
     let panel = gesture_panel(centre);
     let expected = [
-        panel(pixel_of(node, member, released.center)),
-        panel(pixel_of(node, member, tip_of(&released))),
+        panel(seen_of(node, member, &released, released.patch.center)),
+        panel(seen_of(node, member, &released, tip_of(&released.patch))),
     ];
     let held = dragged
         .held_paths
@@ -3785,8 +3829,8 @@ fn dragging_the_arrowhead_tilts_toward_the_pointer_and_the_segment_moves_along_t
 
     // The segment, grabbed part way along and pulled toward the tip.
     let (square, _, _) = outline_at(node, &tilted, 0);
-    let centre = pixel_of(node, member, square.center);
-    let tip = pixel_of(node, member, tip_of(&square));
+    let centre = seen_of(node, member, &square, square.patch.center);
+    let tip = seen_of(node, member, &square, tip_of(&square.patch));
     let from = [
         centre[0] * 0.5 + tip[0] * 0.5,
         centre[1] * 0.5 + tip[1] * 0.5,
@@ -3952,5 +3996,297 @@ fn a_trackpad_pinch_zooms_the_photograph_by_its_factor() {
         (detail.zoom - 1.2).abs() < 1e-5,
         "zoomed to {}",
         detail.zoom
+    );
+}
+
+// ── The square a sighting's photograph sees, with a gap ─────────────────
+
+/// The gap [`gapped_oblique_fixture`] puts between observation 0's keypoint and
+/// the projection of the patch's centre, in image px.
+const GAP_PX: [f64; 2] = [6.0, -4.0];
+
+/// [`bench_track_fixture`] with its patch turned 70 degrees off image 0's line
+/// of sight, sized to about 25 px across in that image, and observation 0's
+/// keypoint moved off the centre's projection by [`GAP_PX`].
+///
+/// The fixture's own keypoints are the exact projections, so a square shifted
+/// by the gap and the patch moved in 3D onto the keypoint's ray are the same
+/// square there and no test can tell them apart. On an oblique patch with a
+/// gap of several pixels they differ by more than half a pixel, which is what
+/// this fixture is for.
+fn gapped_oblique_fixture() -> (SceneNode, sfmtool_core::bench::EditableTrack) {
+    let (node, track) = bench_track_fixture();
+    let image = track.observations[0].image as usize;
+    let (camera, pose) = crate::bench::geometry::view_of(&node.edited().base.image_set, image)
+        .expect("the demo's images have cameras");
+    let eye = pose.inverse_translation_origin();
+    let mut track = with_patch_frame(&track, |patch_frame| {
+        let patch = patch_frame.as_mut().expect("the fixture has a patch frame");
+        let mut turned = leaning(patch, eye, 70.0);
+        let half_px = crate::bench::geometry::half_width_px(&turned, &camera, &pose)
+            .expect("the turned patch projects");
+        let scale = 12.5 / half_px;
+        turned.half_extent = [turned.half_extent[0] * scale, turned.half_extent[1] * scale];
+        *patch = turned;
+    });
+    let patch = patch_frame(&track);
+    let centre = camera
+        .project_homogeneous(&pose, patch.center.coords, patch.w)
+        .expect("the centre projects");
+    track.observations[0]
+        .track
+        .as_mut()
+        .expect("a track slot")
+        .keypoint = Some([
+        (centre[0] + GAP_PX[0]) as f32,
+        (centre[1] + GAP_PX[1]) as f32,
+    ]);
+    (node, track)
+}
+
+/// Where the `(s, t)` point of `track`'s patch is seen in observation 0's
+/// photograph, worked out here rather than through the layer's code: its
+/// projection plus the keypoint's gap from the centre's projection.
+fn seen_by_hand(
+    node: &SceneNode,
+    track: &sfmtool_core::bench::EditableTrack,
+    s: f64,
+    t: f64,
+) -> [f64; 2] {
+    let sighting = &track.observations[0];
+    let (camera, pose) =
+        crate::bench::geometry::view_of(&node.edited().base.image_set, sighting.image as usize)
+            .expect("the demo's images have cameras");
+    let patch = patch_frame(track);
+    let project = |s: f64, t: f64| {
+        let (xyz, w) = patch.corner_homogeneous(s, t);
+        camera
+            .project_homogeneous(&pose, xyz, w)
+            .expect("the patch is in front of the camera")
+    };
+    let centre = project(0.0, 0.0);
+    let keypoint = sighting.site().expect("a sighting");
+    let point = project(s, t);
+    [
+        point[0] + keypoint[0] - centre[0],
+        point[1] + keypoint[1] - centre[1],
+    ]
+}
+
+/// Where the `(s, t)` point of the patch moved in 3D until its centre sits on
+/// observation 0's keypoint ray would be drawn: the square the layer must
+/// **not** draw, kept to show the fixture tells the two apart.
+fn reanchored_pixel(
+    node: &SceneNode,
+    track: &sfmtool_core::bench::EditableTrack,
+    s: f64,
+    t: f64,
+) -> [f64; 2] {
+    let sighting = &track.observations[0];
+    let (camera, pose) =
+        crate::bench::geometry::view_of(&node.edited().base.image_set, sighting.image as usize)
+            .expect("the demo's images have cameras");
+    let anchored = patch_frame(track)
+        .anchored_at_keypoint(&camera, &pose, sighting.site().expect("a sighting"))
+        .expect("the keypoint's ray meets the plane");
+    patch_pixel(&anchored, &camera, &pose, s, t)
+}
+
+/// Every bench path the panel draws for `track` in observation 0's image, in
+/// [`to_panel`]'s panel px.
+fn drawn_paths(
+    node: &SceneNode,
+    track: &sfmtool_core::bench::EditableTrack,
+) -> Vec<Vec<egui::Pos2>> {
+    bench_shapes(
+        node,
+        track.observations[0].image as usize,
+        BenchMenu {
+            busy: None,
+            view_only: None,
+            focused_track: Some(track),
+            lock: true,
+            create_track: None,
+        },
+    )
+}
+
+/// The longest of [`drawn_paths`], which is the outline.
+fn drawn_outline(node: &SceneNode, track: &sfmtool_core::bench::EditableTrack) -> Vec<egui::Pos2> {
+    drawn_paths(node, track)
+        .into_iter()
+        .max_by_key(|path| path.len())
+        .expect("the layer drew an outline")
+}
+
+/// How far `pixel` is from the nearest drawn point of `outline`, in panel px.
+fn nearest_drawn(outline: &[egui::Pos2], pixel: [f64; 2]) -> f32 {
+    let expected = to_panel(&pixels(640, 480), pixel);
+    outline
+        .iter()
+        .map(|point| (*point - expected).length())
+        .fold(f32::INFINITY, f32::min)
+}
+
+/// The distance from `point` to the edge `s = 1` of a square, sampled densely
+/// along `t`, in image px.
+fn off_the_plus_u_edge(point: [f64; 2], square: impl Fn(f64, f64) -> [f64; 2]) -> f64 {
+    (0..=4000)
+        .map(|i| {
+            let on = square(1.0, -1.0 + 2.0 * f64::from(i) / 4000.0);
+            (on[0] - point[0]).hypot(on[1] - point[1])
+        })
+        .fold(f64::INFINITY, f64::min)
+}
+
+/// With a gap, the outline a member image draws is the patch's projection
+/// shifted by that gap, and the normal's arrow leaves the keypoint: a keypoint
+/// marks where the photograph sees the patch's centre, so the gap shifts the
+/// whole square in the photograph. It is not the patch moved in 3D onto the
+/// keypoint's ray, which on this oblique patch is more than half a pixel away.
+#[test]
+fn with_a_gap_the_outline_is_the_patch_s_projection_shifted_by_it() {
+    let (node, track) = gapped_oblique_fixture();
+    let outline = drawn_outline(&node, &track);
+    let mut reanchored_off = 0.0f64;
+    for (s, t) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
+        let want = seen_by_hand(&node, &track, s, t);
+        let nearest = nearest_drawn(&outline, want);
+        assert!(
+            nearest < 0.01,
+            "the outline misses the shifted corner ({s}, {t}) at {want:?} by {nearest}",
+        );
+        let other = reanchored_pixel(&node, &track, s, t);
+        reanchored_off = reanchored_off.max((other[0] - want[0]).hypot(other[1] - want[1]));
+    }
+    assert!(
+        reanchored_off > 0.3,
+        "the fixture should tell the two squares apart, they differ by {reanchored_off} px",
+    );
+
+    // The normal's segment, the one two-point path, leaves the keypoint.
+    let paths = drawn_paths(&node, &track);
+    let segment = paths
+        .iter()
+        .find(|path| path.len() == 2)
+        .expect("the oblique patch's normal is drawn");
+    let keypoint = track.observations[0].site().expect("a sighting");
+    let off = nearest_drawn(&segment[..1], keypoint);
+    assert!(
+        off < 0.01,
+        "the normal leaves {:?}, {off} panel px from the keypoint",
+        segment[0],
+    );
+}
+
+/// An edge dragged on the gap-shifted outline lands under the pointer on the
+/// outline as it is redrawn, with the far edge where it was.
+#[test]
+fn with_a_gap_a_dragged_edge_lands_under_the_pointer_on_the_redrawn_outline() {
+    let (node, track) = gapped_oblique_fixture();
+    let image = track.observations[0].image as usize;
+    let centre = seen_by_hand(&node, &track, 0.0, 0.0);
+    let from = seen_by_hand(&node, &track, 1.0, 0.0);
+    let to = seen_by_hand(&node, &track, 1.5, 0.2);
+    let far_before = seen_by_hand(&node, &track, -1.0, 0.0);
+
+    let edit = bench_drag(&node, image, &track, centre, from, to, false)
+        .edit
+        .expect("the edge was dragged");
+    assert!(
+        matches!(
+            edit,
+            crate::bench::PatchEdit::ResizeToPixel {
+                viewpoint: sfmtool_core::bench::Viewpoint::Observation(0),
+                edge: sfmtool_core::bench::Edge::PlusU,
+                ..
+            }
+        ),
+        "the drag named something else: {edit:?}",
+    );
+    let (after, _) = crate::bench::geometry::apply(&track, node.edited(), &edit)
+        .expect("a pixel the ray reaches");
+
+    // A few thousandths of a pixel: the pointer crosses the panel as an `f32`
+    // and the keypoint the resize moves is an `f32` slot.
+    let off = off_the_plus_u_edge(to, |s, t| seen_by_hand(&node, &after, s, t));
+    assert!(
+        off < 5e-3,
+        "the dragged edge passes {off} px from the pointer"
+    );
+    let far_after = seen_by_hand(&node, &after, -1.0, 0.0);
+    assert!(
+        (far_after[0] - far_before[0]).hypot(far_after[1] - far_before[1]) < 5e-3,
+        "the far edge moved from {far_before:?} to {far_after:?}",
+    );
+    // The outline the panel redraws is that square.
+    let redrawn = drawn_outline(&node, &after);
+    for (s, t) in [(1.0, -1.0), (1.0, 1.0), (-1.0, 1.0), (-1.0, -1.0)] {
+        let nearest = nearest_drawn(&redrawn, seen_by_hand(&node, &after, s, t));
+        assert!(
+            nearest < 0.01,
+            "the redrawn corner ({s}, {t}) is {nearest} panel px off"
+        );
+    }
+    // The square moved in 3D onto the keypoint's ray would have left the edge
+    // away from the pointer.
+    let anchored = off_the_plus_u_edge(to, |s, t| reanchored_pixel(&node, &after, s, t));
+    assert!(
+        anchored > 0.1,
+        "the fixture should tell the two squares apart: {anchored} px"
+    );
+}
+
+/// A corner dragged on the gap-shifted outline to where that corner, turned in
+/// the patch's plane, is drawn turns the patch by exactly that angle, and the
+/// redrawn corner lands under the pointer.
+#[test]
+fn with_a_gap_a_turned_corner_lands_under_the_pointer_on_the_redrawn_outline() {
+    let (node, track) = gapped_oblique_fixture();
+    let image = track.observations[0].image as usize;
+    let patch = patch_frame(&track);
+    let centre = seen_by_hand(&node, &track, 0.0, 0.0);
+    let from = seen_by_hand(&node, &track, 1.0, 1.0);
+    // The `(1, 1)` corner turned by 25 degrees about the outward normal is the
+    // patch point `(cos - sin, sin + cos)` on the patch's own axes.
+    let angle = 25.0_f64.to_radians();
+    let (sin, cos) = angle.sin_cos();
+    let to = seen_by_hand(&node, &track, cos - sin, sin + cos);
+
+    let edit = bench_drag(&node, image, &track, centre, from, to, false)
+        .edit
+        .expect("the corner was dragged");
+    let crate::bench::PatchEdit::Spin { angle_rad } = edit else {
+        panic!("the drag named something else: {edit:?}");
+    };
+    assert!(
+        (angle_rad - angle).abs() < 1e-3,
+        "the turn read {} degrees, the pointer named 25",
+        angle_rad.to_degrees(),
+    );
+    let (after, _) =
+        crate::bench::geometry::apply(&track, node.edited(), &edit).expect("a finite angle");
+    assert_eq!(
+        after.observations[0].site(),
+        track.observations[0].site(),
+        "a spin moves no keypoint"
+    );
+    assert!((patch_frame(&after).normal() - patch.normal()).norm() < 1e-12);
+
+    let landed = seen_by_hand(&node, &after, 1.0, 1.0);
+    assert!(
+        (landed[0] - to[0]).hypot(landed[1] - to[1]) < 5e-3,
+        "the turned corner landed on {landed:?}, the pointer is at {to:?}",
+    );
+    // The outline the panel redraws has that corner on the pointer.
+    let nearest = nearest_drawn(&drawn_outline(&node, &after), to);
+    assert!(
+        nearest < 0.02,
+        "the redrawn corner is {nearest} panel px from the pointer"
+    );
+    let anchored = reanchored_pixel(&node, &after, 1.0, 1.0);
+    assert!(
+        (anchored[0] - to[0]).hypot(anchored[1] - to[1]) > 0.1,
+        "the fixture should tell the two squares apart",
     );
 }

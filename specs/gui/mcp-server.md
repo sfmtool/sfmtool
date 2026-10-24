@@ -4916,7 +4916,8 @@ unprojected onto the patch's own plane, so an edge lands there exactly through
 whatever distortion the lens has, and because a patch is square the whole square
 follows one scale. **A pixel form names its photograph as exactly one of
 `observation` and `camera_image`.** An `observation` means that sighting's
-outline, the patch re-anchored on its keypoint, and the pixel is in its image. A
+outline, the patch's projection shifted by its keypoint's gap from the centre's
+projection, and the pixel is in its image. A
 `camera_image`, an index or an `.sfmr` relative path as everywhere else, means
 the patch as it stands seen in that image: Image Detail's ghost outline, and the
 only way to reach an image the track has no sighting in. Both at once is refused

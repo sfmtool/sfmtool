@@ -2225,9 +2225,9 @@ fn translate_target(args: &Args<'_>) -> Result<super::TranslateTarget, ToolError
 /// `camera_image`, or `None` when the call named neither.
 ///
 /// Both at once is refused here, with a sentence naming the two, rather than
-/// one quietly winning: they name different squares, the patch re-anchored on
-/// a sighting and the patch as it stands, so a call carrying both has no one
-/// answer.
+/// one quietly winning: they name different squares, the patch's projection
+/// shifted by a sighting's gap and the patch as it stands, so a call carrying
+/// both has no one answer.
 fn pixel_viewpoint(args: &Args<'_>) -> Result<Option<super::ViewpointSel>, ToolError> {
     let observation = args.optional_usize("observation")?;
     let camera_image = match args.map.get("camera_image") {
@@ -2237,8 +2237,8 @@ fn pixel_viewpoint(args: &Args<'_>) -> Result<Option<super::ViewpointSel>, ToolE
     match (observation, camera_image) {
         (Some(_), Some(_)) => Err(args.error(
             "was given both observation and camera_image. The first reads the pixel against \
-             the patch re-anchored on that sighting and the second against the patch as it \
-             stands, so give one."
+             the patch's projection shifted by that sighting's gap and the second against \
+             the patch as it stands, so give one."
                 .to_string(),
         )),
         (Some(observation), None) => Ok(Some(super::ViewpointSel::Observation(observation))),

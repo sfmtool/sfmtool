@@ -113,9 +113,9 @@ const EDGE_HIT_WIDTH: f32 = 8.0;
 ///
 /// Every outline handle names the [`Viewpoint`] its outline was drawn from,
 /// which is the square the pointer is read against: an observation's, the
-/// patch re-anchored on that sighting at the track stage and its own shape at
-/// the cluster stage, or this image's own, the patch as it stands, for the
-/// ghost.
+/// patch's projection shifted by that sighting's gap at the track stage
+/// ([`geometry::SeenSquare`]) and its own shape at the cluster stage, or this
+/// image's own, the patch as it stands, for the ghost.
 ///
 /// Not `Eq`, the arrowhead carrying the axis its swing turns about: the gesture
 /// is decided at the press and travels with the drag, as the 3D viewport's
@@ -252,8 +252,9 @@ struct Outline {
     /// Samples per edge, so corner `k` is sample `k * per_edge`.
     per_edge: usize,
     /// Where the square it outlines is centred on screen, which is what a
-    /// corner spins about: the sighting for an anchored outline and at the
-    /// cluster stage, the patch's own projection for the ghost.
+    /// corner spins about: the sighting for a member outline, which the gap
+    /// puts the square's centre on, and at the cluster stage, the patch's own
+    /// projection for the ghost.
     pivot: Option<Pos2>,
 }
 
@@ -372,26 +373,25 @@ impl Layer {
         Some(layer)
     }
 
-    /// The track stage: the patch's outline once, anchored on the sighting the
+    /// The track stage: the patch's outline once, centred on the sighting the
     /// strongest verdict names, with the normal standing out of its centre.
     ///
     /// One outline for the image rather than one per observation, because there
     /// is one patch: two sightings in a photograph are two readings of where
     /// it lands, not two squares. Its colour is `in` when either is, so an
-    /// image the track is `in` reads as `in`. It is drawn through
-    /// the patch frame re-anchored on that sighting, as the tile is rendered: the
-    /// sighting is where the patch sits in this photograph, and the geometric
-    /// projection is where the 3D says it should, which the hollow centre and
-    /// the projection-offset segment show separately.
+    /// image the track is `in` reads as `in`. It is the patch's projection
+    /// shifted by that sighting's gap ([`geometry::SeenSquare`]): a keypoint
+    /// marks where this photograph sees the patch's centre, so the gap is a
+    /// shift of the whole square in the photograph. The geometric projection is
+    /// where the 3D says the centre should be, which the hollow centre and the
+    /// projection-offset segment show separately.
     ///
-    /// The normal leaves the **anchored** centre, which is the sighting's dot,
-    /// for the reason the outline is anchored: the arrow belongs to the square
-    /// drawn, and one standing out of the hollow centre instead would part from
-    /// its own outline by the projection offset. The anchored patch frame is the
-    /// patch moved across its own plane, so its normal line is parallel to the
-    /// patch's and the two gestures read the same depth and the same facing off
-    /// either; the square a person looks at is the one the pointer is read
-    /// against.
+    /// The normal is projected and shifted by the same gap, so it leaves the
+    /// sighting's dot: the arrow belongs to the square drawn, and one standing
+    /// out of the hollow centre instead would part from its own outline by the
+    /// projection offset. Every handle reads the pointer less the same gap
+    /// against the patch itself, so the square a person looks at is the one the
+    /// pointer is read against.
     fn build_track_stage(
         &mut self,
         track: &EditableTrack,
@@ -420,7 +420,7 @@ impl Layer {
             return;
         };
         let color = verdict_color(strongest);
-        let (samples, per_edge) = geometry::project_outline(&square, camera, pose);
+        let (samples, per_edge) = square.outline(camera, pose);
         let pivot = self
             .sightings
             .iter()
@@ -495,10 +495,9 @@ impl Layer {
     /// An image counts as the track's when it holds an observation of any
     /// verdict, so an `out` sighting keeps the member drawing
     /// and only an image with none gets the ghost. What is projected is the
-    /// patch **itself**, not a patch frame re-anchored on a keypoint, because
-    /// there is no keypoint here to anchor on: the ghost is where the 3D places
-    /// the square, which is also where the hollow centre of a member image
-    /// sits.
+    /// patch **itself**, with no gap, because there is no keypoint here to read
+    /// one from: the ghost is where the 3D places the square, and its centre is
+    /// where the hollow centre of a member image sits.
     ///
     /// There is nothing to draw, and so no ghost, at the cluster stage (no
     /// shared geometry exists to project), at a track stage with no patch frame
@@ -537,7 +536,8 @@ impl Layer {
         }
         let centre = camera.project_homogeneous(&pose, patch.center.coords, patch.w)?;
         let viewpoint = Viewpoint::Image(img_idx as u32);
-        let (samples, per_edge) = geometry::project_outline(patch, &camera, &pose);
+        let square = geometry::SeenSquare::as_it_stands(patch);
+        let (samples, per_edge) = square.outline(&camera, &pose);
         let color = ghost_color();
         let centre = to_panel(centre);
         Some(Layer {
@@ -554,7 +554,7 @@ impl Layer {
             outline_handles: lock,
             ghost_centre: lock.then_some(centre),
             normal: if lock {
-                normal_arrow(patch, viewpoint, &camera, &pose, color, to_panel)
+                normal_arrow(&square, viewpoint, &camera, &pose, color, to_panel)
             } else {
                 None
             },
@@ -853,8 +853,8 @@ impl Layer {
         let read_square = |outline: Viewpoint| {
             let (camera, pose) = geometry::view_of(image_set, drag.image)?;
             let square = square_of(track, outline, &camera, &pose)?;
-            let from = geometry::pixel_ray(&camera, &pose, drag.from)?;
-            let to = geometry::pixel_ray(&camera, &pose, drag.to)?;
+            let from = square.ray(&camera, &pose, drag.from)?;
+            let to = square.ray(&camera, &pose, drag.to)?;
             Some((square, camera, pose, from, to))
         };
         match drag.handle {
@@ -887,8 +887,7 @@ impl Layer {
             Handle::Corner { outline, .. } => match (&track.stage, outline) {
                 (Stage::Track(_), _) => {
                     let (square, camera, pose, _, _) = read_square(outline)?;
-                    let angle_rad =
-                        geometry::turn_between(&square, &camera, &pose, drag.from, drag.to)?;
+                    let angle_rad = square.turn_between(&camera, &pose, drag.from, drag.to)?;
                     Some(PatchEdit::Spin { angle_rad })
                 }
                 (Stage::Cluster(_), Viewpoint::Observation(observation)) => {
@@ -907,17 +906,19 @@ impl Layer {
             // at its tip does not jump the patch out to where the tip was.
             Handle::Normal { outline } => {
                 let (square, _, _, from, to) = read_square(outline)?;
-                let start = geometry::normal_line_point(&square, from.0, from.1)?;
-                let now = geometry::normal_line_point(&square, to.0, to.1)?;
+                let patch = &square.patch;
+                let start = geometry::normal_line_point(patch, from.0, from.1)?;
+                let now = geometry::normal_line_point(patch, to.0, to.1)?;
                 Some(PatchEdit::Translate {
-                    by: [0.0, 0.0, (now - start).dot(&square.normal())],
+                    by: [0.0, 0.0, (now - start).dot(&patch.normal())],
                 })
             }
             Handle::Arrowhead { outline, tilt } => {
                 let (square, _, _, from, to) = read_square(outline)?;
-                let start = geometry::tilt_point(&square, tilt, from.0, from.1)?;
-                let now = geometry::tilt_point(&square, tilt, to.0, to.1)?;
-                let normal = geometry::tilt_normal(&square, tilt, start, now)?;
+                let patch = &square.patch;
+                let start = geometry::tilt_point(patch, tilt, from.0, from.1)?;
+                let now = geometry::tilt_point(patch, tilt, to.0, to.1)?;
+                let normal = geometry::tilt_normal(patch, tilt, start, now)?;
                 Some(PatchEdit::Tilt {
                     normal: [normal.x, normal.y, normal.z],
                 })
@@ -932,30 +933,35 @@ pub(super) fn ghost_color() -> Color32 {
 }
 
 /// The square an outline drawn from `viewpoint` shows in a view, at the track
-/// stage: the patch re-anchored on the observation's keypoint, or the patch
-/// itself for an image. `None` at the cluster stage, for a track with no
-/// patch frame, and for an observation index past the end.
+/// stage: the patch's projection shifted by the observation's gap, or the
+/// patch as it stands for an image ([`geometry::SeenSquare`]). `None` at the
+/// cluster stage, for a track with no patch frame, and for an observation
+/// index past the end.
 ///
 /// The one place both the drawing and the drag decide it, so the square a
-/// pointer is read against is the square drawn.
+/// pointer is read against is the square drawn: the outline and the arrow are
+/// drawn through [`geometry::SeenSquare::outline`] and
+/// [`geometry::SeenSquare::project`], and every handle reads the pointer
+/// through [`geometry::SeenSquare::ray`] or
+/// [`geometry::SeenSquare::turn_between`], which take the same gap off.
 fn square_of(
     track: &EditableTrack,
     viewpoint: Viewpoint,
     camera: &CameraIntrinsics,
     pose: &RigidTransform,
-) -> Option<OrientedPatch> {
+) -> Option<geometry::SeenSquare> {
     let Stage::Track(payload) = &track.stage else {
         return None;
     };
     let patch = payload.patch_frame.as_ref()?;
     Some(match viewpoint {
-        Viewpoint::Observation(observation) => geometry::anchored_patch_frame(
+        Viewpoint::Observation(observation) => geometry::SeenSquare::of_observation(
             patch,
             camera,
             pose,
             track.observations.get(observation)?,
         ),
-        Viewpoint::Image(_) => patch.clone(),
+        Viewpoint::Image(_) => geometry::SeenSquare::as_it_stands(patch),
     })
 }
 
@@ -970,7 +976,7 @@ fn square_of(
 /// the tail, the tip or a barb falls behind the camera or outside the lens
 /// model's domain, an arrow drawn in part saying nothing about where it points.
 fn normal_arrow(
-    square: &OrientedPatch,
+    square: &geometry::SeenSquare,
     viewpoint: Viewpoint,
     camera: &CameraIntrinsics,
     pose: &RigidTransform,
@@ -978,19 +984,20 @@ fn normal_arrow(
     to_panel: &impl Fn([f64; 2]) -> Pos2,
 ) -> Option<Arrow> {
     let eye = pose.inverse_translation_origin();
-    if geometry::normal_is_end_on(square, eye) {
+    let patch = &square.patch;
+    if geometry::normal_is_end_on(patch, eye) {
         return None;
     }
     let arrow = geometry::arrow(
-        square.center,
-        square.normal(),
-        geometry::NORMAL_LENGTH * square.half_extent[0],
+        patch.center,
+        patch.normal(),
+        geometry::NORMAL_LENGTH * patch.half_extent[0],
         eye,
-        square.u_axis,
+        patch.u_axis,
     );
     let at = |point: nalgebra::Point3<f64>| {
-        camera
-            .project_homogeneous(pose, point.coords, 1.0)
+        square
+            .project(camera, pose, point.coords, 1.0)
             .map(to_panel)
     };
     Some(Arrow {
@@ -999,7 +1006,7 @@ fn normal_arrow(
         tip: at(arrow.tip)?,
         barbs: [at(arrow.barbs[0])?, at(arrow.barbs[1])?],
         color,
-        tilt: geometry::tilt_gesture(square, eye),
+        tilt: geometry::tilt_gesture(patch, eye),
     })
 }
 

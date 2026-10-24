@@ -1996,7 +1996,7 @@ fn a_patch_step_drops_the_bitmap_and_keeps_the_reference() {
     let mut track = track_of(&bench, &label);
     payload_of(&mut track).reference = Some(1);
     payload_of(&mut track).bitmap = Some(Array3::zeros((4, 4, 4)));
-    let (spun, report) = spin_patch(&track, 0.3).expect("a finite angle");
+    let (spun, report) = spin_patch(&track, &edited, 0.3).expect("a finite angle");
     assert!(report.changed);
     assert_eq!(spun.track().unwrap().reference, Some(1));
     assert!(spun.track().unwrap().bitmap.is_none());
@@ -4477,21 +4477,24 @@ fn off_centre(track: &mut EditableTrack) {
     }
 }
 
-/// The outline a person sees at `observation`: the patch re-anchored on that
-/// sighting, which is the patch frame the viewer's layer draws.
+/// The patch frame whose projection is the outline a person sees at
+/// `observation`, for a sighting with no gap.
+///
+/// The viewer draws the patch's projection shifted by the sighting's gap from
+/// the centre's projection. The callers' keypoints are the centre's exact
+/// projection, so the gap is nothing and the outline is the patch's own
+/// projection; this checks that rather than assuming it.
 fn outline_of(
     track: &EditableTrack,
     edited: &EditedReconstruction,
     observation: usize,
 ) -> OrientedPatch {
-    let sighting = &track.observations[observation];
-    let (camera, pose) = view(edited, sighting.image as usize);
-    track
-        .track()
-        .and_then(|payload| payload.patch_frame.as_ref())
-        .expect("a track from a point carries the stored patch")
-        .anchored_at_keypoint(&camera, &pose, sighting.site().expect("a sighting"))
-        .expect("the fixture's keypoint is the exact projection")
+    let gap = projection_offsets(track, edited)[observation];
+    assert!(
+        gap[0].hypot(gap[1]) < 1e-3,
+        "the fixture's keypoint is meant to be the exact projection: gap {gap:?}",
+    );
+    patch_frame_of(track)
 }
 
 #[test]
@@ -5164,7 +5167,7 @@ fn a_move_that_carries_a_sighting_off_its_photograph_turns_it_out_and_unpins_it(
 /// **One implementation of each edit.** The pixel form is the unprojection in
 /// front of the step itself, so a pointer and the displacement it names have to
 /// leave the patch in the same position -- the pixel form acting on the outline
-/// re-anchored on one sighting, and the step on the patch itself.
+/// drawn at one sighting, and the step on the patch itself.
 #[test]
 fn a_pixel_gesture_is_the_step_the_pointer_named() {
     let scene = Scene::new();
@@ -5773,7 +5776,8 @@ fn a_tilt_leaves_a_keypoint_far_off_the_centre_where_it_is() {
 
 /// A sighting never localized has no gap to keep, so every patch step puts it
 /// at the projection of the centre as the step leaves it: a translation along
-/// the normal at the moved centre's, and a tilt at the centre's own.
+/// the normal and a resize from an edge at the moved centre's, and a tilt, a
+/// spin and a resize about the centre at the centre's own.
 #[test]
 fn a_sighting_never_localized_takes_the_projection_of_the_new_centre() {
     let scene = Scene::new();
@@ -5813,6 +5817,45 @@ fn a_sighting_never_localized_takes_the_projection_of_the_new_centre() {
     );
     // The localized one beside it stays where it was.
     assert_eq!(turned.observations[0].site(), Some(localized));
+
+    // A spin and a resize about the centre leave the centre where it was, so
+    // they place it at the centre's own projection too, and move the localized
+    // one nowhere.
+    assert_eq!(
+        track.observations[1].site(),
+        None,
+        "the fixture's row is unplaced"
+    );
+    let (spun, report) = spin_patch(&track, &edited, 0.4).expect("a finite angle");
+    assert!(report.changed);
+    let (sized, report) =
+        resize_patch(&track, &edited, was.half_extent[0] * 1.5, None).expect("a positive half");
+    assert!(report.changed);
+    for (step, next) in [("spin", &spun), ("resize about the centre", &sized)] {
+        let got = next.observations[1]
+            .site()
+            .unwrap_or_else(|| panic!("the {step} left the sighting never localized unplaced"));
+        assert!(
+            (got[0] - want[0]).abs() < 1e-3 && (got[1] - want[1]).abs() < 1e-3,
+            "after the {step} the sighting never localized should be at {want:?}, it is at {got:?}",
+        );
+        assert_eq!(next.observations[0].site(), Some(localized), "the {step}");
+        let measurement = next.observations[1].track.as_ref().expect("a track slot");
+        assert_eq!(measurement.reason, None, "the {step}");
+    }
+
+    // A resize from an edge moves the centre, so it places it at the moved
+    // centre's projection.
+    let (grown, _) = resize_patch(&track, &edited, was.half_extent[0] * 1.5, Some(Edge::PlusU))
+        .expect("a positive half");
+    let centre = patch_frame_of(&grown);
+    let (camera, pose) = view(&edited, grown.observations[1].image as usize);
+    let want = corner_pixel(&centre, &camera, &pose, 0.0, 0.0);
+    let got = grown.observations[1].site().expect("placed at the centre");
+    assert!(
+        (got[0] - want[0]).abs() < 1e-3 && (got[1] - want[1]).abs() < 1e-3,
+        "after an edge resize the sighting never localized should be at {want:?}, it is at {got:?}",
+    );
 }
 
 /// The cap is the whole point of the gesture: the normal can be swung until a
@@ -6016,7 +6059,7 @@ fn a_turn_keeps_the_axes_and_the_normal_and_lands_the_corner_under_the_release_p
         [u, v]
     };
 
-    let (next, report) = spin_patch(&track, angle).expect("a finite angle");
+    let (next, report) = spin_patch(&track, &edited, angle).expect("a finite angle");
     assert!(report.changed);
     assert!((report.degrees - angle.to_degrees()).abs() < 1e-12);
     let after = next
@@ -6042,8 +6085,8 @@ fn a_turn_keeps_the_axes_and_the_normal_and_lands_the_corner_under_the_release_p
         (landed[0] - expected[0]).abs() < 1e-6 && (landed[1] - expected[1]).abs() < 1e-6,
         "the turned corner should land on {expected:?}, it landed on {landed:?}",
     );
-    assert!(!spin_patch(&track, 0.0).expect("no turn").1.changed);
-    assert!(spin_patch(&track, f64::NAN).is_err());
+    assert!(!spin_patch(&track, &edited, 0.0).expect("no turn").1.changed);
+    assert!(spin_patch(&track, &edited, f64::NAN).is_err());
 }
 
 #[test]
@@ -6153,7 +6196,7 @@ fn the_patch_steps_refuse_the_stage_they_do_not_belong_to() {
         Err(TrackEditError::WrongStage { .. })
     ));
     assert!(matches!(
-        spin_patch(&cluster, 0.1),
+        spin_patch(&cluster, &edited, 0.1),
         Err(TrackEditError::WrongStage { .. })
     ));
 
@@ -6996,7 +7039,7 @@ fn moving_sizing_and_turning_a_bearing_keeps_its_direction_on_the_unit_sphere() 
     unit(&patch_frame, "a centred resize");
     assert_eq!(patch_frame.center, before.center);
 
-    let (turned, _) = spin_patch(&track, 0.3).expect("a finite angle");
+    let (turned, _) = spin_patch(&track, &edited, 0.3).expect("a finite angle");
     let patch_frame = patch_frame_of(&turned);
     unit(&patch_frame, "a turn");
     assert_eq!(patch_frame.center, before.center);
@@ -7661,7 +7704,7 @@ fn a_patch_edit_that_changes_nothing_reports_no_effect() {
     assert_eq!(again, bigger);
 
     // A turn under a nanoradian is no turn.
-    let (still, turn) = spin_patch(&track, 1e-12).expect("a finite angle");
+    let (still, turn) = spin_patch(&track, &edited, 1e-12).expect("a finite angle");
     assert!(!turn.changed, "a nanoradian is not a gesture");
     assert_eq!(still, track);
 

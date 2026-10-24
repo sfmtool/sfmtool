@@ -544,8 +544,9 @@ alone: a row that has to be undone for nothing is worse than no row.
 **A size is reported in the pixels of the sighting it was named at.** A world
 half-length says nothing to someone looking at a photograph, so the resize's
 sentence states the patch's half-width in that observation's own image -- the
-patch re-anchored on it, projected -- and falls back to the world number only
-when the patch does not project there.
+outline drawn there, the patch's projection shifted by the sighting's gap, whose
+size is the projection's -- and falls back to the world number only when the
+patch does not project there.
 
 **A fit's sentence says which representation the rays earned, and why.** The
 finite-versus-bearing decision is the step's real outcome on a distant track
@@ -1677,7 +1678,8 @@ plane, so the edge lands there through whatever distortion the lens has and the
 opposite edge is left where it was. **The photograph is exactly one of
 `observation` and `camera_image`**, and the two name different squares, which
 is why a call carrying both is refused. An `observation` names that sighting's
-outline, the patch re-anchored on its keypoint. A `camera_image`, by index or by
+outline, the patch's projection shifted by its keypoint's gap from the centre's
+projection. A `camera_image`, by index or by
 name, names the patch as it stands seen in that image, which is Image Detail's
 ghost outline, and it is the only form that reaches an image the track has no
 sighting in. The reply carries whichever it was. `spin_bench_patch` turns the

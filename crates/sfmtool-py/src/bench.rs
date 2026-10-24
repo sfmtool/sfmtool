@@ -1394,7 +1394,8 @@ fn sight_observation(
 /// is the discriminator for what becomes of the sightings: named, that edge
 /// moves and the far one is held, so the centre shifts and every keypoint moves
 /// by its own photograph's displacement of the centre's projection; omitted,
-/// both edges move about a held centre and no keypoint moves.
+/// both edges move about a held centre and no keypoint moves. Either way a
+/// sighting never localized takes the new centre's projection.
 ///
 /// Returns ``(EditableTrack, report)``.
 #[pyfunction]
@@ -1463,16 +1464,19 @@ fn resize_patch_to_pixel(
 /// Both axes are rotated by a rotation whose axis is the normal, so they keep
 /// their lengths and the patch keeps its plane and the face it shows: what
 /// changes is which way up the square sits. The centre is untouched, so no
-/// sighting moves.
+/// keypoint moves; a sighting never localized takes the centre's projection
+/// through its image's camera in ``edited``, as under every patch step.
 ///
 /// Returns ``(EditableTrack, report)`` with ``degrees`` and ``changed``.
 #[pyfunction]
 fn spin_patch(
     py: Python<'_>,
     track: &PyEditableTrack,
+    edited: &PyEditedReconstruction,
     angle_rad: f64,
 ) -> PyResult<(PyEditableTrack, Py<PyDict>)> {
-    let (next, report) = core_spin_patch(&track.inner, angle_rad).map_err(refused)?;
+    let (next, report) =
+        core_spin_patch(&track.inner, &edited.inner, angle_rad).map_err(refused)?;
     let d = PyDict::new(py);
     d.set_item("degrees", report.degrees)?;
     d.set_item("changed", report.changed)?;
