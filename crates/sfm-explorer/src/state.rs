@@ -780,8 +780,8 @@ pub struct AppState {
     /// GPU or window behind it. See [`crate::layout`].
     pub(crate) dock: DockState<Tab>,
 
-    /// The slow queue: the whole-reconstruction edits and Build index files, one
-    /// at a time.
+    /// The slow queue: the whole-reconstruction edits, Build SIFT files and Build
+    /// index files, one at a time.
     ///
     /// A field of the state rather than of `App`, so that the busy check is
     /// where every method that would need it already is: an edit, a cursor

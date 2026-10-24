@@ -43,7 +43,8 @@ mod simd;
 pub use feature_options::FeatureOptionsError;
 pub use files::{
     build_sift_files, BuildSiftFilesError, BuildSiftFilesOptions, BuildSiftFilesReport,
-    CONCURRENT_IMAGES_ENV_VAR, SIFT_ZSTD_LEVEL, WORKSPACE_CONFIG_FILE,
+    CONCURRENT_IMAGES_ENV_VAR, SFMTOOL_FEATURE_TOOL, SFMTOOL_FEATURE_TYPE, SIFT_ZSTD_LEVEL,
+    WORKSPACE_CONFIG_FILE,
 };
 pub use gray::{gray_from_rgb, parse_gray_formula, GrayFormula, DEFAULT_GRAY_FORMULA};
 pub use scale_space::ScaleSpace;

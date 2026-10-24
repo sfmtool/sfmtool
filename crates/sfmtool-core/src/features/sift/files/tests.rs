@@ -55,6 +55,24 @@ fn options_come_from_the_workspace_file() {
     );
 }
 
+/// The defaults are what `sfm ws init` wrote into seoul_bull's workspace file,
+/// down to the hash in the prefix directory.
+#[test]
+fn the_sfmtool_defaults_are_those_ws_init_writes() {
+    let (dir, _) = workspace_with_images(0);
+    let written = BuildSiftFilesOptions::from_workspace(dir.path()).unwrap();
+    let defaults = BuildSiftFilesOptions::sfmtool_defaults();
+    assert_eq!(defaults.feature_options, written.feature_options);
+    assert_eq!(defaults.feature_prefix_dir, written.feature_prefix_dir);
+    assert_eq!(defaults.concurrent_images, None);
+    let config: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(dir.path().join(WORKSPACE_CONFIG_FILE)).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(config["feature_tool"], SFMTOOL_FEATURE_TOOL);
+    assert_eq!(config["feature_type"], SFMTOOL_FEATURE_TYPE);
+}
+
 #[test]
 fn a_workspace_of_another_feature_tool_is_refused() {
     let dir = tempfile::tempdir().unwrap();

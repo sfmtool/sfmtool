@@ -53,6 +53,7 @@ mod save_minimal_prompt;
 mod scene;
 mod scene_graph;
 mod scene_renderer;
+mod sift_files;
 mod sift_index;
 mod state;
 mod table_sort;

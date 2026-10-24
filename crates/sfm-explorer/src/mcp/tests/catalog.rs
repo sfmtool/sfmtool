@@ -394,6 +394,10 @@ fn representative_tool_calls() -> Vec<(&'static str, Value)> {
             json!({ "reconstruction_label": "alpha" }),
         ),
         (
+            "build_sift_files",
+            json!({ "reconstruction_label": "alpha" }),
+        ),
+        (
             "build_index_files",
             json!({ "reconstruction_label": "alpha" }),
         ),
@@ -1188,15 +1192,15 @@ fn only_the_reads_are_annotated_read_only() {
             "get_widgets",
         ]
     );
-    // Eighteen JSON reads, the one read that hands back a picture, seventy-four
+    // Eighteen JSON reads, the one read that hands back a picture, seventy-five
     // writes, six input tools, and the one that writes a file.
-    assert_eq!(catalog.len(), 100, "the catalog has grown or shrunk");
+    assert_eq!(catalog.len(), 101, "the catalog has grown or shrunk");
     assert_eq!(
         catalog
             .iter()
             .filter(|spec| spec.kind == ToolKind::Write)
             .count(),
-        74
+        75
     );
     // One tool can overwrite a file by name, and six can press what a person
     // can press, File ▸ Save included; those seven are the ones annotated
@@ -1279,12 +1283,14 @@ fn the_spec_s_counts_are_the_catalog_s_and_the_panels() {
     // have to be one number. They were "twenty-three" and "the twenty-two".
     // `create_track_at_pixel` and `find_nearby_tracks` are of the family
     // without the word: what they produce is points, and the bench is where
-    // the tracks wait on them.
+    // the tracks wait on them. So is `build_sift_files`, which makes the
+    // `.sift` files the index files are read from.
     let bench = catalog
         .iter()
         .filter(|spec| {
             spec.name.contains("bench")
                 || spec.name.contains("index_files")
+                || spec.name == "build_sift_files"
                 || spec.name == "create_track_at_pixel"
                 || spec.name == "find_nearby_tracks"
         })
@@ -1402,6 +1408,7 @@ fn spelled(n: usize) -> String {
         20..=99 if n.is_multiple_of(10) => TENS[n / 10].to_string(),
         20..=99 => format!("{}-{}", TENS[n / 10], UNITS[n % 10]),
         100 => "one hundred".to_string(),
+        101..=119 => format!("one hundred and {}", UNITS[n - 100]),
         _ => panic!("no word for {n}: the spec would not spell it out either"),
     }
 }

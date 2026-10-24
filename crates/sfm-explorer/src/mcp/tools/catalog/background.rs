@@ -9,7 +9,8 @@ pub(super) fn specs() -> Vec<ToolSpec> {
         ToolSpec {
             name: "get_background_tasks",
             description: "What the viewer is busy with. Background tasks run from two queues, \
-                          slow (the whole-reconstruction edits and Build index files) and fast \
+                          slow (the whole-reconstruction edits, Build SIFT files and Build index \
+                          files) and fast \
                           (opening files and the other bench steps); each runs one task at a \
                           time and the two run at the same time, and a task started while its \
                           queue is busy waits behind the ones already waiting there. With no \

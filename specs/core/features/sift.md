@@ -684,6 +684,7 @@ pub struct BuildSiftFilesOptions {
 }
 impl BuildSiftFilesOptions {
     pub fn from_workspace(workspace_dir: &Path) -> Result<Self, BuildSiftFilesError>;
+    pub fn sfmtool_defaults() -> Self; // what `sfm ws init --feature-tool sfmtool` writes
     pub fn sift_path_for_image(&self, image_path: &Path) -> PathBuf;
 }
 pub fn build_sift_files(
@@ -712,6 +713,18 @@ workspace mode, and refuses a workspace whose `feature_tool` is not `sfmtool`
 with `BuildSiftFilesError::UnsupportedFeatureTool`: the COLMAP and OpenCV tools
 are external programs the Python package drives, and this crate does not run
 them.
+
+`sfmtool_defaults` is the options a workspace initialized with the `sfmtool`
+tool and no other choice records: the default `feature_options` of
+`get_default_sfmtool_feature_options`, and the `feature_prefix_dir`
+`features/sift-sfmtool-<hash>`, where the hash is the XXH128 that
+`get_feature_tool_xxh128` takes of the compact JSON of `feature_tool`
+(`SFMTOOL_FEATURE_TOOL`), `feature_type` (`SFMTOOL_FEATURE_TYPE`,
+`sift-sfmtool`) and `feature_options` with the keys sorted. A caller that
+switches a reconstruction's recorded feature tool to `sfmtool`, as the viewer's
+*Build SIFT Files* does, takes them, so its files land where such a workspace
+puts them; a test holds them to the `.sfm-workspace.json` that `sfm ws init`
+wrote for seoul_bull.
 
 What it writes matches the Python `sfmtool` backend byte for byte, which
 `tests/rust_bindings/sift/test_build_sift_files_rust_bindings.py` checks by

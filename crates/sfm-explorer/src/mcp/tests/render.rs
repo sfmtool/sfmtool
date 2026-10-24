@@ -1254,6 +1254,43 @@ fn the_index_files_and_the_search_are_on_the_wire() {
     );
 }
 
+/// `build_sift_files` over the wire: a node whose workspace definition names
+/// `colmap` is switched to `sfmtool` and gets every `.sift` file, the reply
+/// saying a version was pushed, and *Build index files* is then live.
+#[test]
+fn build_sift_files_switches_and_builds_on_the_wire() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut state, id) = crate::sift_files::tests::state_with_photographs(dir.path());
+    let label = state.node(id).expect("loaded").label.clone();
+    let mut viewer = Viewer3D::new();
+    viewer.panel_size = [1280, 720];
+    assert!(state.build_index_files_refusal(id).is_some());
+
+    let reply = worked(
+        &mut state,
+        &mut viewer,
+        "build_sift_files",
+        json!({ "reconstruction_label": label }),
+    );
+    assert_eq!(reply["changed"], json!(true), "{reply}");
+    let task = call(&mut state, &mut viewer, "get_background_tasks", json!({}))["slow"]
+        ["last_finished"]
+        .clone();
+    assert_eq!(task["operation"], json!("Build SIFT files"), "{task}");
+    assert_eq!(
+        state
+            .node(id)
+            .expect("loaded")
+            .recon()
+            .metadata
+            .workspace
+            .contents
+            .feature_tool,
+        "sfmtool"
+    );
+    assert_eq!(state.build_index_files_refusal(id), None);
+}
+
 /// `build_index_files` over the wire: a node with an index and no cluster
 /// patches gets its cluster patches from the index that is open, and the reply
 /// is the handle an agent polls; once it lands both files read current.

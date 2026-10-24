@@ -1290,6 +1290,11 @@ impl TabContext<'_> {
                 &sfmtool_core::reconstruction::prune_covered::PruneCoveredOptions::default(),
             );
         }
+        if let Some(id) = response.build_sift_files {
+            // A refusal to begin is logged by the starter, in the words its own
+            // gate uses.
+            let _ = self.state.start_build_sift_files(id);
+        }
         if let Some(id) = response.build_index_files {
             // A refusal to begin is logged by the starter, in the words its own
             // gate uses.

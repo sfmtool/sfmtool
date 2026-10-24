@@ -650,6 +650,12 @@ pub(crate) enum Command {
         /// The `.matches`, or `None` for the node's own cluster-patches path.
         cluster_patches_path: Option<String>,
     },
+    /// Build the `.sift` files of the node's images, on a worker, switching its
+    /// workspace definition to the sfmtool feature tool first when it names
+    /// another.
+    BuildSiftFiles {
+        reconstruction_label: String,
+    },
     /// Build the node's SIFT index and cluster patches, on a worker.
     BuildIndexFiles {
         reconstruction_label: String,
@@ -1944,6 +1950,9 @@ pub(crate) fn apply_with_window(
             sift_index_path.as_deref(),
             cluster_patches_path.as_deref(),
         )),
+        Command::BuildSiftFiles {
+            reconstruction_label,
+        } => bench::build_sift_files(state, &reconstruction_label),
         Command::BuildIndexFiles {
             reconstruction_label,
         } => bench::build_index_files(state, &reconstruction_label),

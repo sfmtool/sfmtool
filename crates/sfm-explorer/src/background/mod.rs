@@ -118,11 +118,12 @@ pub(crate) struct Operation {
 /// Each queue runs one task at a time, and the two run at the same time
 /// (`specs/gui/background-tasks.md` § "Two queues"). The slow queue holds the
 /// operations whose cost grows with the whole reconstruction and that use
-/// every core: the whole-reconstruction edits and Build index files. The fast
-/// queue holds opening files, the other bench steps and the quiet tasks.
+/// every core: the whole-reconstruction edits, Build SIFT files and Build index
+/// files. The fast queue holds opening files, the other bench steps and the
+/// quiet tasks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Queue {
-    /// The whole-reconstruction edits and Build index files.
+    /// The whole-reconstruction edits, Build SIFT files and Build index files.
     Slow,
     /// Opening files, the other bench steps and the quiet tasks.
     Fast,
@@ -594,6 +595,26 @@ impl Operation {
         quiet: false,
     };
 
+    /// The `.sift` files of a node's images built in its workspace with the
+    /// `sfmtool` feature tool, after a switch of the node's workspace
+    /// definition to that tool when it names another
+    /// ([`crate::sift_files`]).
+    ///
+    /// Cancellable because `build_sift_files` reads the flag before each image
+    /// starts and again before its extraction and its write, and hands back
+    /// `BuildSiftFilesError::Cancelled`. The files written before the stop
+    /// stay, and a cancelled build pushes no switch. Its kind is `Bench`, the
+    /// kind of the index files it feeds; a run that pushed a switch writes its
+    /// row as an `Edit`, since that version changed the reconstruction.
+    pub(crate) const BUILD_SIFT_FILES: Operation = Operation {
+        name: "Build SIFT files",
+        cancellable: true,
+        kind: Kind::Bench,
+        queue: Queue::Slow,
+        locks: true,
+        quiet: false,
+    };
+
     /// A track built at one pixel of a posed photograph by the track-at-pixel
     /// cascade, then put on the node's bench and committed
     /// ([`crate::bench::track_at_pixel`]).
@@ -762,7 +783,7 @@ impl Operation {
     /// declaration nothing checks is a declaration that rots.
     // Read by those tests alone, which is what it is for.
     #[cfg(test)]
-    pub(crate) const ALL: [Operation; 23] = [
+    pub(crate) const ALL: [Operation; 24] = [
         Operation::OPEN,
         Operation::BUNDLE_ADJUST,
         Operation::TO_EMBEDDED_PATCHES,
@@ -778,6 +799,7 @@ impl Operation {
         Operation::BENCH_GRID_PLANE_NORMAL,
         Operation::BENCH_SEARCH,
         Operation::BENCH_GEOMETRY_SEARCH,
+        Operation::BUILD_SIFT_FILES,
         Operation::BUILD_INDEX_FILES,
         Operation::CREATE_TRACK_AT_PIXEL,
         Operation::FIND_NEARBY_TRACKS,
@@ -975,7 +997,8 @@ pub(crate) enum Finished {
     /// nothing here to do" has run successfully, and pushing a version that
     /// changes nothing would put a row in the history a reader cannot tell from
     /// one that did something. So the sentence is recorded and the document is
-    /// left alone.
+    /// left alone. A `.sift` build that switched nothing ends here too: the
+    /// files it wrote are the workspace's, not the document's.
     NoChange(String),
     /// The operation was asked to stop, and did.
     Cancelled,
@@ -1160,8 +1183,9 @@ pub(crate) struct Polled {
     /// Whether anything arrived, so the frame knows to redraw.
     pub(crate) changed: bool,
     /// The nodes finished operations gave a new version to, whose panel caches
-    /// are now about a value they no longer hold. Two at most, since each
-    /// queue lands at most one task per poll.
+    /// are now about a value they no longer hold, and the nodes a finished
+    /// `.sift` build wrote files for, whose caches are about files that have
+    /// changed. Two at most, since each queue lands at most one task per poll.
     pub(crate) installed: Vec<ReconId>,
 }
 
@@ -1893,6 +1917,9 @@ impl AppState {
     /// operation started rather than from the frame that installed it. Without
     /// that instant a ninety-five second solve would report the six
     /// milliseconds of the frame that pushed its version.
+    ///
+    /// Answers with the node whose panel caches no longer describe it: the one
+    /// a version was pushed on, or the one a `.sift` build wrote files for.
     fn finish(&mut self, task: BackgroundTask, finished: Finished) -> Option<ReconId> {
         let BackgroundTask {
             id,
@@ -2145,6 +2172,20 @@ impl AppState {
             }
             Finished::Failed(message) => Err(message),
         };
+        // A `.sift` build wrote files the node's caches read, however it
+        // ended, so those caches are asked again and the frame drops the
+        // panels' as it does after a version. A run that pushed its switch
+        // writes its row as the edit that version made.
+        let mut sift_files_built = None;
+        if operation.name == Operation::BUILD_SIFT_FILES.name {
+            if installed.is_some() {
+                kind = Kind::Edit;
+            }
+            if let Some(node) = locked.filter(|&node| self.scene.iter().any(|n| n.id == node)) {
+                self.sift_files_built(node);
+                sift_files_built = Some(node);
+            }
+        }
         // Timed from `started` whichever way it went. A cancelled solve spent
         // the seconds it ran for, and a kernel that refused spent whatever it
         // spent before deciding to; the frame that collected the answer is not
@@ -2198,7 +2239,7 @@ impl AppState {
             outcome,
             cancelled,
         });
-        installed
+        installed.or(sift_files_built)
     }
 
     /// Drive the task `id` to its end, applying what it reports.

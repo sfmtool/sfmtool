@@ -16,14 +16,16 @@ two run at the same time (§ "Two queues"), so a bundle adjustment of one
 reconstruction does not stop a person opening another file or fitting a track
 on another reconstruction's bench. A task started while its queue is busy
 **waits** behind the tasks already waiting there, and starts when they have
-landed. The nineteen operations are `Open`, which reads files and
+landed. The twenty operations are `Open`, which reads files and
 makes them nodes (§ "Opening a file"); the six whole-value edits, `Bundle
 adjust`, `Convert to embedded patches`, `Retriangulate all points`, `Refit all
 points`, `Switch camera model` and `Prune covered observations`; `Add image to
 tracks`; the ten the bench runs, `Fit track`, `Set track stage`, `Fit normal`, `Finite
 difference normal`, `Grid plane normal`, `Search descriptors`, `Geometry
 search`, `Build index files`, `Create track at pixel` and `Find nearby tracks`
-([bench.md](bench.md)); and `Find points`, which computes the track table
+([bench.md](bench.md)); `Build SIFT files`, which builds the `.sift` files the
+index files are read from ([index-files.md](index-files.md) § "Building the
+.sift files"); and `Find points`, which computes the track table
 columns a `find_points` call needs and the track table cache lacks
 ([mcp-server.md](mcp-server.md) § "`find_points`"). `Switch camera model` is a camera model proposal's
 Apply: the switch of one camera followed by the retriangulation of the tracks
@@ -63,7 +65,9 @@ half, between the images it reads, as each leaf of the forest is placed, and
 between batches of the blocks it writes, and in its cluster-patches half in
 front of every query of the self-join, between the photographs it decodes and
 between batches of the clusters it refines ([index-files.md](index-files.md)).
-Find points polls it between blocks of points as it computes the columns.
+The `.sift` build polls it before each image starts and again before its
+extraction and its write. Find points polls it between blocks of points as it
+computes the columns.
 
 This covers the worker and what makes it safe, the panel, what the rest of the
 viewer may do meanwhile, what is written when a task ends, and the wire.
@@ -164,6 +168,7 @@ pub(crate) struct Operation {
 | Switch camera model | slow | yes | no |
 | Prune covered observations | slow | yes | no |
 | Add image to tracks | slow | yes | no |
+| Build SIFT files | slow | yes | no |
 | Build index files | slow | yes | no |
 | Open | fast | no (it makes a new node) | no |
 | Fit track, Set track stage, Fit normal, Finite difference normal, Grid plane normal, Search descriptors, Geometry search, Create track at pixel, Find nearby tracks | fast | yes | no |
@@ -174,7 +179,8 @@ pub(crate) struct Operation {
 | Track Table reference picks | fast | no; it pushes no version (the panel keeps its picks), and it runs on a locked node (§ "Quiet tasks") | yes |
 
 The **slow queue** holds the operations whose cost grows with the whole
-reconstruction and that use every core, Build index files among them; the
+reconstruction and that use every core, Build SIFT files and Build index files
+among them; the
 **fast queue** holds opening files, the other bench steps and the quiet
 tasks. The queue is fixed rather than estimated from the
 reconstruction's size, so the same operation always waits behind the same work,

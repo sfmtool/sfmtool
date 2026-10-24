@@ -1074,6 +1074,29 @@ pub(super) fn specs() -> Vec<ToolSpec> {
             ),
         },
         ToolSpec {
+            name: "build_sift_files",
+            description: "Build the .sift file of every image of one reconstruction in its \
+                          workspace, at <image dir>/<feature_prefix_dir>/<image name>.sift, \
+                          which is where build_index_files reads them. Extracts with the \
+                          sfmtool feature tool and the feature options the reconstruction's \
+                          workspace definition records, as sfm sift --extract does, and skips \
+                          an image whose .sift file is at least as new as the image. When the \
+                          definition names another feature tool (colmap, opencv), it is first \
+                          switched to sfmtool with that tool's default options and the \
+                          feature_prefix_dir sfm ws init derives for them, in the viewer's \
+                          copy of the reconstruction only: the workspace's .sfm-workspace.json \
+                          is not changed. The switch is pushed as one version once every file \
+                          is built, so Undo puts the old definition back and a save writes the \
+                          new one into the .sfmr; a cancelled or failed build pushes none and \
+                          keeps the files it wrote. Refused when the reconstruction has no \
+                          images or its workspace directory is not there, and refused to \
+                          switch when its observations are .sift feature indexes. It reads \
+                          every photograph, so it runs on a worker thread and answers as \
+                          fit_bench_track does.",
+            kind: Write,
+            schema: object(&[], &[("reconstruction_label", edited_label_schema())]),
+        },
+        ToolSpec {
             name: "build_index_files",
             description: "Build one reconstruction's index files beside its .sfmr and open \
                           them: a SIFT index over every .sift file of the node \

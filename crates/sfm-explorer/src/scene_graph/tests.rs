@@ -3783,6 +3783,9 @@ fn the_sift_index_row_s_menu_offers_the_build_the_open_and_the_close() {
         );
     }
 
+    // Drawn once more at the width the click runs at: the long `.sift`
+    // build entry widens the menu, which moves with the panel's width.
+    run_frame(&mut panel, &ctx, &mut state, Vec::new());
     let response = click(
         &mut panel,
         &ctx,
@@ -3839,6 +3842,9 @@ fn the_sift_index_row_s_menu_builds_the_first_files() {
             .any(|t| t == crate::index_files::BUILD_INDEX_FILES),
         "the build entry is not in the row's menu: {texts:?}"
     );
+    // Drawn once more at the width the click runs at: the long `.sift`
+    // build entry widens the menu, which moves with the panel's width.
+    run_frame(&mut panel, &ctx, &mut state, Vec::new());
     let response = click(
         &mut panel,
         &ctx,
@@ -4063,4 +4069,34 @@ fn a_proposal_greys_the_other_cameras_entry_and_the_nodes_edits() {
         response.retriangulate_all_points, None,
         "a node with a proposal open offered another edit"
     );
+}
+
+/// On a node with no `.sift` file the group row's menu offers the `.sift`
+/// build directly above the index-files build it makes possible, named for
+/// the switch of the fixture's feature tool, and choosing it asks the dock for
+/// one.
+#[test]
+fn the_sift_files_build_sits_above_the_index_files_build() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut state, id) = crate::sift_index::tests::state_in(dir.path());
+    let (mut panel, ctx) = settled(&mut state);
+
+    open_context_menu(&mut panel, &ctx, &mut state, row_id(id, "index_files_row"));
+    let texts = painted_at_width(&mut panel, &ctx, &mut state, INDEX_ROW_WIDTH);
+    let at = |entry: &str| {
+        texts
+            .iter()
+            .position(|t| t == entry)
+            .unwrap_or_else(|| panic!("{entry} is not in the group row's menu: {texts:?}"))
+    };
+    assert_eq!(
+        at(crate::sift_files::SWITCH_AND_BUILD_SIFT_FILES) + 1,
+        at(crate::index_files::BUILD_INDEX_FILES),
+        "{texts:?}"
+    );
+    // Drawn once more at the width the click runs at, so the long entry is
+    // where the click aims.
+    run_frame(&mut panel, &ctx, &mut state, Vec::new());
+    let response = click(&mut panel, &ctx, &mut state, row_id(id, "build_sift_files"));
+    assert_eq!(response.build_sift_files, Some(id));
 }

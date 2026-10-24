@@ -307,8 +307,8 @@ fixed-height for virtualization.
   loaded node — see "Node Transforms and Alignment"), `Reset Transform`,
   `Bake Transform`, `Tint ▸` (Original / palette of distinguishable colors),
   `Bundle Adjust...`, `Retriangulate All Points`, `Refit All Points`,
-  `Prune Covered Observations`, `Build Index Files`, `Convert to Embedded
-  Patches`, `Close`.
+  `Prune Covered Observations`, `Build SIFT Files`, `Build Index Files`,
+  `Convert to Embedded Patches`, `Close`.
   While a camera model proposal is open on the node
   ([edits/switch-camera-model.md](edits/switch-camera-model.md)), the entries
   that edit it (`Reset Transform`, `Bake Transform`, `Bundle Adjust...`,
@@ -383,6 +383,19 @@ fixed-height for virtualization.
   `prune_covered_observations` and the operation itself also ask, so the greyed
   entry and a call that asks anyway give one answer. A prune that finds nothing
   covered pushes no version and says so in the Action Log.
+- **`Build SIFT Files`** builds every image's `.sift` file in the node's
+  workspace with the sfmtool feature tool, on a worker thread, skipping the
+  files that are up to date, so that `Build Index Files` below it has
+  something to read ([index-files.md](index-files.md) § "Building the .sift
+  files"). On a node whose `.sfmr` records another feature tool it reads
+  *`Switch SIFT Extraction to sfmtool and Build SIFT Files`*, and switches
+  that record in the viewer, pushed as a version once the files are built;
+  the workspace's `.sfm-workspace.json` is not written. It is live when every
+  file is already there, and greyed with the reason on a busy node, a node
+  with no images or no workspace directory, and, for the switch, a node whose
+  observations are `.sift` feature indexes
+  (`AppState::build_sift_files_refusal`). It sits directly above `Build Index
+  Files` in every menu that offers that entry.
 - **`Build Index Files`** builds the node's two index files beside its
   `.sfmr` and opens them, on a worker thread: the SIFT index over every `.sift`
   file of the node, then the cluster patches made from that index
@@ -610,7 +623,8 @@ the sentence naming the first discrepancy when it is stale; with no file open
 it says so and names where a build would write one. The menus: the group row
 carries `Build Index Files` (reading `Rebuild Index Files` when either file
 is open) and `Close Index Files`; each child carries the same two with an
-`Open...` for its own kind of file between them. Each entry is greyed with its
+`Open...` for its own kind of file between them, and every one of these menus
+carries `Build SIFT Files` directly above the build. Each entry is greyed with its
 own sentence while the node is busy. `Open...` reports the gesture and nothing
 else, and `dock.rs` puts up the file chooser: that is what keeps the panel a
 pure egui function a headless frame can run. The rows and everything behind them are
@@ -644,7 +658,8 @@ pub struct SceneGraphResponse {
     /// stays `Copy`; the panel also keeps it for `take_bench_edit`.
     pub edit_bench_item: Option<(ReconId, usize)>,
     pub discard_bench_item: Option<(ReconId, usize)>,
-    /// The Index Files rows' menus, and the build entry on the node's own.
+    /// The Index Files rows' menus, and the two build entries on the node's own.
+    pub build_sift_files: Option<ReconId>,
     pub build_index_files: Option<ReconId>,
     pub open_sift_index: Option<ReconId>,
     pub open_cluster_patches: Option<ReconId>,

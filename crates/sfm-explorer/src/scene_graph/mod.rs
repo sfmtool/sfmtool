@@ -195,6 +195,11 @@ pub struct SceneGraphResponse {
     /// `AppState::start_prune_covered_observations` sends it to a worker after
     /// the frame.
     pub prune_covered_observations: Option<ReconId>,
+    /// `Build SIFT Files` / `Switch SIFT Extraction to sfmtool and Build SIFT
+    /// Files` chosen, from any menu that offers the index-files build. Extracts
+    /// features from every photograph of the node, so
+    /// `AppState::start_build_sift_files` sends it to a worker after the frame.
+    pub build_sift_files: Option<ReconId>,
     /// `Build Index Files` / `Rebuild Index Files` chosen, from a Search
     /// Files row's menu or from the reconstruction row's. Reads every `.sift`
     /// file and photograph of the node, so `AppState::start_build_index_files`
@@ -622,6 +627,14 @@ pub(super) struct IndexFilesRows {
     pub(super) build_label: &'static str,
     /// Why a build cannot start, or `None` when it can.
     pub(super) build_refusal: Option<String>,
+    /// What the `.sift` build entry above the build is called: a build, or a
+    /// switch of the feature tool and a build.
+    pub(super) sift_build_label: &'static str,
+    /// The tool the node's workspace definition names, which the switch
+    /// entry's hover says it replaces. `None` when it is already `sfmtool`.
+    pub(super) sift_switch_from: Option<String>,
+    /// Why the `.sift` build cannot start, or `None` when it can.
+    pub(super) sift_build_refusal: Option<String>,
     /// Why closing would do nothing, or `None` when there is a file to close.
     pub(super) close_refusal: Option<String>,
     /// Whether the build is the operation running right now.
@@ -702,6 +715,9 @@ impl IndexFilesRows {
             patches: patches_row,
             build_label: state.index_files_build_label(id),
             build_refusal: state.build_index_files_refusal(id),
+            sift_build_label: state.sift_files_build_label(id),
+            sift_switch_from: state.sift_extraction_switch_from(id),
+            sift_build_refusal: state.build_sift_files_refusal(id),
             close_refusal: (!open)
                 .then(|| "No index file is open beside this reconstruction.".to_string()),
             building: state.building_index_files(id),

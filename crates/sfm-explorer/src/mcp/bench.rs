@@ -1432,6 +1432,22 @@ pub(super) fn close_index_files(state: &mut AppState, label: &str) -> JsonReply 
     }))
 }
 
+/// `build_sift_files`: the `.sift` files of the node's images, built in its
+/// workspace on a worker thread, after a switch of its workspace definition to
+/// the sfmtool feature tool when it names another.
+pub(super) fn build_sift_files(state: &mut AppState, label: &str) -> Outcome {
+    let id = match resolve_reconstruction(state, Some(label)) {
+        Ok(id) => id,
+        Err(error) => return Outcome::Done(Err(error)),
+    };
+    match state.start_build_sift_files(id) {
+        Err(message) => Outcome::Done(Err(ToolError::new(message))),
+        Ok(task) => edit::started_or(state, task, super::Answer::Version(id), |state| {
+            Ok(json!({ "reconstruction_label": node_label(state, id) }))
+        }),
+    }
+}
+
 /// `build_index_files`: the node's SIFT index and its cluster patches,
 /// written beside its `.sfmr` and opened, on a worker thread.
 pub(super) fn build_index_files(state: &mut AppState, label: &str) -> Outcome {

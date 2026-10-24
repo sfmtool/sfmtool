@@ -696,6 +696,7 @@ fn each_operation_declares_the_spec_s_queue_lock_and_quiet_value() {
         ("Switch camera model", Slow, true, false),
         ("Prune covered observations", Slow, true, false),
         ("Add image to tracks", Slow, true, false),
+        ("Build SIFT files", Slow, true, false),
         ("Build index files", Slow, true, false),
         ("Open", Fast, false, false),
         ("Fit track", Fast, true, false),
@@ -1099,7 +1100,22 @@ fn real_task(operation: Operation) -> RealTask {
                 _workspace: None,
             }
         }
-        // The index-files build, over the same workspace fixture: it reads
+        // The `.sift` build, over a workspace with a photograph per image and
+        // no `.sift` file: it would extract every one of them.
+        "Build SIFT files" => {
+            let workspace = tempfile::tempdir().expect("a temporary directory");
+            let (state, id) = crate::sift_files::tests::state_with_photographs(workspace.path());
+            let job = state
+                .build_sift_files_job(id)
+                .expect("the fixture has photographs in its workspace");
+            RealTask {
+                state,
+                id,
+                job: Some(job),
+                _workspace: Some(workspace),
+            }
+        }
+        // The index-files build, over the search's workspace fixture: it reads
         // every `.sift` file and photograph of the node and writes a `.kdf`
         // and a `.matches` beside its `.sfmr`.
         "Build index files" => {

@@ -113,8 +113,8 @@ place.
 
 ## The tool surface
 
-One hundred tools. Nineteen read -- eighteen that answer with JSON, and
-`screenshot`, which closes the loop by handing back a picture -- seventy-four
+One hundred and one tools. Nineteen read -- eighteen that answer with JSON, and
+`screenshot`, which closes the loop by handing back a picture -- seventy-five
 write, six send input, and one writes a file. `get_widgets` and the six input
 tools, `click`, `hover`, `drag`, `scroll`, `press_key` and `type_text`, read
 and press the viewer's widgets the way a person's eyes, mouse and keyboard do
@@ -211,6 +211,7 @@ and press the viewer's widgets the way a person's eyes, mouse and keyboard do
 | `search_bench_track_descriptors` | write | Find the photographs holding the patch around one observation, and add each, unpinned and `out`, on a worker thread |
 | `search_bench_track_geometry` | write | Project a track's surfel into every camera, and add each photograph that matches it, unpinned and `out`, on a worker thread |
 | `open_index_files` | write | Open one reconstruction's index files, its SIFT index and its cluster patches, from its own paths or from files the caller names |
+| `build_sift_files` | write | Build the `.sift` file of every image of one reconstruction in its workspace with the sfmtool feature tool, after switching its recorded feature tool to sfmtool in the viewer only when it names another, on a worker thread |
 | `build_index_files` | write | Build one reconstruction's SIFT index and, from it, its cluster patches, beside its `.sfmr`, and open both, on a worker thread |
 | `close_index_files` | write | Let go of the index files open beside one reconstruction |
 | `save_reconstruction` | write file | Write the version at the cursor to disk, or with `minimal` a minimal copy of it, with `workspace_path` stating the workspace path it records |
@@ -224,7 +225,7 @@ and press the viewer's widgets the way a person's eyes, mouse and keyboard do
 | `type_text` | input | Type a string into the focused text input or number box, or into one named by its widget id |
 
 Every tool is annotated: the eighteen reads and `screenshot` carry
-`readOnlyHint: true`, the seventy-four writes `destructiveHint: false` (none of
+`readOnlyHint: true`, the seventy-five writes `destructiveHint: false` (none of
 them touches a file on disk: `close_reconstruction` unloads, it does not
 delete; `set_window_layout` changes the window and the dock, not the layout file
 the menu saves; an **edit** makes a new version of a loaded value, which the
@@ -4528,7 +4529,7 @@ image of which carries a pose projects nothing.
 
 ### The bench family
 
-Thirty-six tools that read and work the **bench** beside a node
+Thirty-seven tools that read and work the **bench** beside a node
 ([bench.md](bench.md)): the place where a track is held and judged before it is
 written into the reconstruction. Every one of them is one `AppState` call from
 `crate::bench` -- the same call a Track View gesture or the Image
@@ -5058,7 +5059,7 @@ walk is accepted with `sight_bench_observation`**, passing `walked_to` as the
 the observation and drops the measurements read at the seed. No tool of its own
 carries it, because what it writes is exactly what that tool writes.
 
-**Eight of the thirty-six are the patch a track is**, and they are the
+**Eight of the thirty-seven are the patch a track is**, and they are the
 wire's half of the handles the two panels offer
 ([multi-panel-image-browser.md](multi-panel-image-browser.md) § "The bench
 layer"). **Each is named for the part it acts on** -- the patch, one sighting,
@@ -5167,7 +5168,7 @@ creates one, which is what it must do; otherwise the second commit would delete
 what the first wrote. The copy is the focused item and the reply names it, as a
 split's does.
 
-**Four of the thirty-six are about the index files**, the node's SIFT index and
+**Four of the thirty-seven are about the index files**, the node's SIFT index and
 its cluster patches, which are the node's rather than any track's:
 `open_index_files` opens both, from the node's own paths or from a
 `sift_index_path` and a `cluster_patches_path` of the caller's;
@@ -5182,6 +5183,15 @@ has nothing to take back and the reply is the `index_files` object rather
 than a version. These are the only names the operation has on the wire: the
 names it had when it built the index alone are refused as unknown tools, with
 no alias, as `point_track` is (§ "`panel`").
+
+**One more of the family makes the `.sift` files the index files are read
+from**: `build_sift_files` builds every image's `.sift` file in the node's
+workspace with the sfmtool feature tool, skipping the files that are up to
+date ([index-files.md](index-files.md) § "Building the .sift files"). On a node
+whose recorded feature tool is another, it first switches that record, in the
+viewer only, to sfmtool with its default options, and pushes the switch as a
+version once every file is built; the reply is the version, as every edit's
+is, with `changed: true` only then.
 
 **The reply says which of three states each file is in**, because a file that
 is open is not necessarily this reconstruction's: the index is `current` when
@@ -6297,7 +6307,7 @@ where a test hands no host over.
   and the panel list in the prose above are asserted against `catalog()` and
   `Tab::ALL`, because a number written out in words is the first thing to go
   stale.
-- **The catalog is one hundred tools**, nineteen of them reads, six of the
+- **The catalog is one hundred and one tools**, nineteen of them reads, six of the
   `Input` kind and one of the `Save` kind, those seven carrying
   `destructiveHint: true`;
   `set_window_layout`'s schema advertises `sfm_explorer_layout`, `window` and

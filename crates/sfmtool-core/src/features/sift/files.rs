@@ -50,8 +50,13 @@ pub const SIFT_ZSTD_LEVEL: i32 = 5;
 /// Python backend uses the same figure.
 const BYTES_PER_SOURCE_PIXEL: u64 = 192;
 
-/// The feature tool [`build_sift_files`] extracts with.
-const FEATURE_TOOL: &str = "sfmtool";
+/// The feature tool [`build_sift_files`] extracts with, as a workspace's
+/// `feature_tool` names it.
+pub const SFMTOOL_FEATURE_TOOL: &str = "sfmtool";
+
+/// The `feature_type` a workspace of the [`SFMTOOL_FEATURE_TOOL`] records, and
+/// the start of the last component of its `feature_prefix_dir`.
+pub const SFMTOOL_FEATURE_TYPE: &str = "sift-sfmtool";
 
 /// How [`build_sift_files`] extracts and where it writes.
 #[derive(Debug, Clone)]
@@ -110,7 +115,7 @@ impl BuildSiftFilesOptions {
         let feature_tool = field("feature_tool")?
             .as_str()
             .ok_or_else(|| workspace_error("has a 'feature_tool' that is not a string".into()))?;
-        if !feature_tool.eq_ignore_ascii_case(FEATURE_TOOL) {
+        if !feature_tool.eq_ignore_ascii_case(SFMTOOL_FEATURE_TOOL) {
             return Err(BuildSiftFilesError::UnsupportedFeatureTool {
                 feature_tool: feature_tool.to_owned(),
             });
@@ -124,6 +129,58 @@ impl BuildSiftFilesOptions {
             feature_prefix_dir: PathBuf::from(feature_prefix_dir),
             concurrent_images: None,
         })
+    }
+
+    /// The options `sfm ws init --feature-tool sfmtool` writes into a new
+    /// workspace when given no other choice: the `sfmtool` tool's default
+    /// `feature_options`, and the `feature_prefix_dir`
+    /// `features/sift-sfmtool-<hash>` derived from them, with the default
+    /// concurrency.
+    ///
+    /// The options are the ones `get_default_sfmtool_feature_options` in
+    /// `sfmtool.sift.extract_sfmtool` returns, and the hash is the one
+    /// `get_feature_tool_xxh128` in `sfmtool.sift.file` computes: the XXH128
+    /// of the compact JSON of `feature_tool`, `feature_type` and
+    /// `feature_options` with every object's keys sorted. So a caller that
+    /// switches a workspace's feature tool to `sfmtool` writes its files where
+    /// a workspace initialized that way puts them.
+    pub fn sfmtool_defaults() -> Self {
+        let feature_options = serde_json::json!({
+            "octave_layers": 3,
+            "sigma": 1.6,
+            "blur_radius_factor": 2.25,
+            "input_sigma": 0.5,
+            "double_image": true,
+            "contrast_threshold": 0.0067,
+            "edge_threshold": 10.0,
+            "max_num_features": 8192,
+            "orientation_bins": 36,
+            "peak_ratio": 0.8,
+            "descriptor_width": 4,
+            "descriptor_bins": 8,
+            "descriptor_magnification": 3.0,
+            "descriptor_clamp": 0.2,
+            "gray_formula": super::DEFAULT_GRAY_FORMULA,
+        });
+        // `serde_json` keeps an object's keys sorted (its `preserve_order`
+        // feature is off) and writes compact JSON, so this is Python's
+        // `json.dumps(..., sort_keys=True, separators=(",", ":"))` of the same
+        // values. A test holds the result to the prefix of a workspace that
+        // `sfm ws init` wrote.
+        let canonical = serde_json::json!({
+            "feature_tool": SFMTOOL_FEATURE_TOOL,
+            "feature_type": SFMTOOL_FEATURE_TYPE,
+            "feature_options": feature_options,
+        })
+        .to_string();
+        let hash = xxhash_rust::xxh3::xxh3_128(canonical.as_bytes());
+        Self {
+            feature_options,
+            feature_prefix_dir: PathBuf::from(format!(
+                "features/{SFMTOOL_FEATURE_TYPE}-{hash:032x}"
+            )),
+            concurrent_images: None,
+        }
     }
 
     /// The `.sift` path of the image at `image_path`:
@@ -418,7 +475,7 @@ fn build_one(
     };
     let data = SiftData {
         feature_tool_metadata: FeatureToolMetadata {
-            feature_tool: FEATURE_TOOL.to_owned(),
+            feature_tool: SFMTOOL_FEATURE_TOOL.to_owned(),
             feature_type: "sift".to_owned(),
             feature_options: options.feature_options.clone(),
         },

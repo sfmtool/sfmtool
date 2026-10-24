@@ -117,6 +117,7 @@ impl Command {
             Command::SearchBenchTrackDescriptors { .. } => "search_bench_track_descriptors",
             Command::SearchBenchTrackGeometry { .. } => "search_bench_track_geometry",
             Command::OpenIndexFiles { .. } => "open_index_files",
+            Command::BuildSiftFiles { .. } => "build_sift_files",
             Command::BuildIndexFiles { .. } => "build_index_files",
             Command::CloseIndexFiles { .. } => "close_index_files",
             Command::GetBackgroundTasks { .. } => "get_background_tasks",
@@ -426,10 +427,12 @@ impl Command {
             | Command::SetBenchTrackStage { .. }
             | Command::SearchBenchTrackDescriptors { .. }
             | Command::SearchBenchTrackGeometry { .. }
-            // The three that are about the index rather than about a track:
-            // nothing on the bench moves, and the row belongs beside the search
-            // that will use them.
+            // The four that are about the index files and the .sift files they
+            // are read from rather than about a track: nothing on the bench
+            // moves, and the row belongs beside the search that will use them.
+            // A .sift build that pushes its switch writes its row as an `Edit`.
             | Command::OpenIndexFiles { .. }
+            | Command::BuildSiftFiles { .. }
             | Command::BuildIndexFiles { .. }
             | Command::CloseIndexFiles { .. } => Kind::Bench,
             Command::SelectReconstruction { .. }

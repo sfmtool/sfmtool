@@ -144,7 +144,9 @@ said about it.
 the cluster patches from it, each at the node's own path, replacing what is
 there, and opens both. It is live on a node that has been saved, whose images
 have at least one `.sift` file, and that nothing is running on
-(`AppState::build_index_files_refusal`).
+(`AppState::build_index_files_refusal`). A node whose images have no `.sift`
+file gets them from *Build SIFT Files*, the entry above it (§ "Building the
+.sift files").
 
 **A current index is kept when the cluster patches are the file that is
 missing or out of date.** When the index open beside the node is at the node's
@@ -209,6 +211,61 @@ decoded fails the cluster half naming its file. The cluster patches that were
 there before are left as they were, because the write is the last step and
 renames over the target only once the file is whole.
 
+## Building the .sift files
+
+The index is read out of the node's `.sift` files, so a node whose images have
+none cannot have its index files built. *Build SIFT Files* is the remedy, and it
+sits directly above *Build Index Files* in every menu that offers that entry.
+It is one background task, `Build SIFT files`, from the slow queue
+([background-tasks.md](background-tasks.md)), which runs
+`sfmtool_core::features::sift::build_sift_files`
+([core/features/sift.md](../core/features/sift.md) § "Building `.sift`
+files") over every image's photograph, `<workspace>/<image name>`, with the
+task's progress, so the Background Tasks panel shows its count of images and
+its Cancel stops it before the next image. Each file goes to
+`<workspace>/<image dir>/<feature_prefix_dir>/<image name>.sift`, which is
+where `SfmrReconstruction::sift_path_for_image` and so *Build Index Files* look
+for it. An image whose `.sift` file is at least as new as the photograph is
+skipped, so the entry is live when every file is already there: running it
+then writes nothing.
+
+**The options are the node's own.** The feature options and the
+`feature_prefix_dir` come from the workspace definition the node's `.sfmr`
+records (`metadata.workspace.contents`), not from the workspace's
+`.sfm-workspace.json`, so the files land where this node looks for them.
+
+**Only the `sfmtool` feature tool can build here.** On a node whose definition
+names another tool (`colmap`, `opencv`, or the demo's `none`), the entry reads
+*Switch SIFT Extraction to sfmtool and Build SIFT Files*, and the build first
+switches the definition the viewer holds to `feature_tool: "sfmtool"`,
+`feature_type: "sift-sfmtool"`, the tool's default `feature_options`, and the
+`feature_prefix_dir` that `sfm ws init --feature-tool sfmtool` derives from
+them, `features/sift-sfmtool-<hash>`, the hash being the XXH128 of the sorted
+compact JSON of the tool, the type and the options
+(`BuildSiftFilesOptions::sfmtool_defaults`). The workspace's
+`.sfm-workspace.json` is not written. The switch is pushed as one version,
+*"Switched the SIFT extraction of ‹label› to sfmtool"*, only once every file
+is built; Undo puts the old definition back, and a save writes the new one
+into the `.sfmr`. A build that is cancelled or fails pushes no switch, and the
+files it wrote stay, so the next build skips them.
+
+**When it is refused.** It is greyed, with the sentence the starter and the
+wire also give (`AppState::build_sift_files_refusal`), on a busy node, on a
+node with no images, on a node whose workspace directory is not there, and,
+for the switch only, on a node whose observations are `.sift` feature indexes:
+those indexes name features of the files the node was made from, and the
+files at the new prefix directory hold other features.
+
+**What it refreshes.** However the build ends, an open SIFT index of the node
+is classified again, since whether it is current depends on the `.sift`
+files' content hashes, and that asks the cluster patches again too. The node
+is also reported to the frame in `Polled::installed`, as a node with a new
+version is, so Track View drops its cached answer to whether there are
+`.sift` files to index and Image Detail drops its feature overlay. Its Action
+Log row is a `Bench` row, *"Built the .sift files of ‹label›: N written and M
+already up to date, in ‹prefix›"*, or an `Edit` row naming the switch when it
+pushed one.
+
 ## The Scene tree rows
 
 The node's last group row is **Index Files**, open by default, with the two
@@ -227,7 +284,9 @@ size when current, `stale` in the warning colour, `none` dimmed, and
 the sentence naming the first discrepancy, or where a build would write it. The
 group row's menu carries *Build Index Files* and *Close Index Files*; each
 child's carries those two with an *Open...* for its own kind of file between
-them, a `.kdf` for the index and a `.matches` for the cluster patches. A file
+them, a `.kdf` for the index and a `.matches` for the cluster patches. Every
+one of these menus, and the reconstruction row's, carries *Build SIFT Files*
+directly above *Build Index Files* (§ "Building the .sift files"). A file
 opened by hand is adopted whatever its state, and its row says why a stale one
 will not do.
 
@@ -268,6 +327,26 @@ impl AppState {
 }
 ```
 
+The `.sift` build is in
+[sift_files.rs](../../crates/sfm-explorer/src/sift_files.rs):
+
+```rust
+pub(crate) const BUILD_SIFT_FILES: &str = "Build SIFT Files";
+pub(crate) const SWITCH_AND_BUILD_SIFT_FILES: &str =
+    "Switch SIFT Extraction to sfmtool and Build SIFT Files";
+
+impl AppState {
+    pub(crate) fn sift_files_build_label(&self, id: ReconId) -> &'static str;
+    /// The tool a build would switch away from, or `None` on an sfmtool node.
+    pub(crate) fn sift_extraction_switch_from(&self, id: ReconId) -> Option<String>;
+    pub(crate) fn build_sift_files_refusal(&self, id: ReconId) -> Option<String>;
+    pub(crate) fn start_build_sift_files(&mut self, id: ReconId) -> Result<Option<u64>, String>;
+    pub(crate) fn build_sift_files_job(&self, id: ReconId) -> Result<Job, String>;
+    /// What the task's landing calls, however the build ended.
+    pub(crate) fn sift_files_built(&mut self, id: ReconId);
+}
+```
+
 `open_index_files` requires a named file to open and refuses the step when it
 does not; a file that is not named is opened when it is at the node's own path
 and reads `none` otherwise, and the step is refused when neither file opened.
@@ -280,6 +359,9 @@ None of the three, and not the build, is a version.
 The operation and its files have one set of names on the wire
 ([mcp-server.md](mcp-server.md)):
 
+- `build_sift_files` `{ reconstruction_label }` starts the `.sift` build on a
+  worker and answers as `fit_bench_track` does, with the version the switch
+  pushed or `changed: false` when there was none.
 - `build_index_files` `{ reconstruction_label }` starts the build on a worker
   and answers as `fit_bench_track` does.
 - `open_index_files` `{ reconstruction_label, sift_index_path?,
@@ -333,6 +415,21 @@ nothing to do. The rows are tested in
 wire in [mcp/tests/render.rs](../../crates/sfm-explorer/src/mcp/tests/render.rs)
 (the `index_files` object on `get_bench` and `get_scene`, the three tools, and
 a build over a node whose cluster patches are missing keeping its index).
+
+The `.sift` build is tested in
+[sift_files/tests.rs](../../crates/sfm-explorer/src/sift_files/tests.rs), over
+a node whose workspace holds a seoul_bull photograph per image: the label
+reading the switch on a `colmap` node and the build on an `sfmtool` one; the
+refusals without a workspace and for a switch over feature indexes; a build
+on an `sfmtool` node writing every file at the node's own prefix, pushing no
+version, reporting the node in `Polled::installed` and making *Build Index
+Files* live, and a second build skipping every file; a switch pushing one
+version with the default options and prefix, leaving `.sfm-workspace.json`
+as it was, and undone by Undo; a cancelled switch pushing nothing; and an
+open index going stale, without being opened again, when a build rewrites a
+`.sift` file under it. The entry's place above *Build Index Files* is tested in
+[scene_graph/tests.rs](../../crates/sfm-explorer/src/scene_graph/tests.rs) and
+the tool in [mcp/tests/render.rs](../../crates/sfm-explorer/src/mcp/tests/render.rs).
 
 ## Non-goals
 

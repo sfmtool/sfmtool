@@ -668,6 +668,9 @@ pub(crate) fn parse(
             sift_index_path: args.optional_string("sift_index_path")?,
             cluster_patches_path: args.optional_string("cluster_patches_path")?,
         },
+        "build_sift_files" => Command::BuildSiftFiles {
+            reconstruction_label: args.required_string("reconstruction_label")?,
+        },
         "build_index_files" => Command::BuildIndexFiles {
             reconstruction_label: args.required_string("reconstruction_label")?,
         },
