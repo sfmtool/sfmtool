@@ -111,9 +111,7 @@ pub fn render_view_tile(
     progress: &Progress<'_>,
 ) -> ViewTile {
     let resolution = resolution.max(2);
-    let patch_frame = keypoint
-        .and_then(|kp| patch.anchored_at_keypoint(view.camera, view.cam_from_world, kp))
-        .unwrap_or_else(|| patch.clone());
+    let patch_frame = patch.seen_at_keypoint(view.camera, view.cam_from_world, keypoint);
     let jacobian = patch_grid_jacobian(&patch_frame, view.camera, view.cam_from_world, resolution);
     let sampler = sampler.for_jacobian(jacobian);
     let channels = view.pyramid.level(0).channels() as usize;

@@ -5,11 +5,11 @@
 //! values the shared crop functions ([`crate::patch_pictures::crop`]) take,
 //! taken off the track and one of its observations.
 //!
-//! At the track stage the outline is the track's patch frame projected and
-//! shifted by the gap between where the observation sits
-//! ([`crate::bench::observation_site`]) and the centre's projection, the square
-//! Image Detail draws there, with the track's point projected, or before it is
-//! triangulated its patch's centre. At the
+//! At the track stage the outline is the track's patch frame slid onto the ray
+//! of where the observation sits ([`crate::bench::observation_site`]) and
+//! projected, the square Image Detail draws there and the tile is cut through,
+//! with the track's point projected, or before it is triangulated its patch's
+//! centre. At the
 //! cluster stage it is the observation's own parallelogram at the cluster's
 //! radius.
 

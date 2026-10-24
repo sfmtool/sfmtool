@@ -264,9 +264,7 @@ pub(super) fn anchored(
     view: &ProjectedImage<'_>,
     keypoint: Option<[f64; 2]>,
 ) -> OrientedPatch {
-    keypoint
-        .and_then(|kp| patch_frame.anchored_at_keypoint(view.camera, view.cam_from_world, kp))
-        .unwrap_or_else(|| patch_frame.clone())
+    patch_frame.seen_at_keypoint(view.camera, view.cam_from_world, keypoint)
 }
 
 /// One view's photograph as the step reads it: one pyramid level, chosen once.

@@ -179,8 +179,8 @@ fn pixel_view_schema() -> Value {
         "description":
             "The camera image the pixel is in, by index or by .sfmr relative path, in place \
              of observation: the pixel is read against the patch as it stands (the ghost \
-             outline Image Detail draws where the track has no sighting), not shifted by a \
-             keypoint's gap. Give this or observation, not both.",
+             outline Image Detail draws where the track has no sighting), not slid onto a \
+             keypoint's ray. Give this or observation, not both.",
         "anyOf": [
             { "type": "integer", "minimum": 0 },
             { "type": "string" },

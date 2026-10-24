@@ -1165,18 +1165,19 @@ fn set_reference(
 /// This moves the **patch**, not one sighting: a track-stage track has one
 /// patch and every observation is a view of it, so the centre moves in-plane,
 /// the half-vectors and the normal are kept, and every observation's keypoint
-/// moves by its own photograph's displacement of the centre's projection. A
-/// keypoint marks where its photograph sees the patch's centre, so its gap from
-/// the centre's projection is that sighting's own error, and the move keeps it
-/// in the photograph. A sighting never localized takes the projection of the
+/// is carried in 3D. A keypoint marks where its photograph sees the patch's
+/// centre, so that photograph sees the patch slid along its plane onto the
+/// keypoint's ray; the point that ray meets the plane moves with the patch and
+/// is projected again. A sighting never localized takes the projection of the
 /// moved centre. Nothing is pinned -- a
 /// translation says where the patch is, not whether a sighting belongs to it --
 /// and the measurements and the bitmap go, because all of them were read at a
 /// place the patch has left. A sighting the moved centre no longer projects
 /// into is left with no keypoint and ``NoProjection`` as its reason.
 ///
-/// The pointer is read less that observation's gap from the centre's
-/// projection, so that sighting lands under ``pixel``.
+/// The pointer is read against the patch slid onto that observation's
+/// keypoint's ray, the outline drawn there, so that sighting lands under
+/// ``pixel``.
 /// :func:`sight_observation` is the step for **one** keypoint.
 ///
 /// A pixel off the photograph names no place on it, so it is brought to the
@@ -1229,10 +1230,10 @@ fn translate_patch_to_pixel(
 ///
 /// ``u`` and ``v`` slide it across its own plane and ``n`` moves it along its
 /// outward normal, the one direction no photograph can name; a mixed ``by``
-/// does both. Every keypoint moves by its own photograph's displacement of the
-/// centre's projection, keeping its gap from that projection; a sighting never
-/// localized takes the moved centre's projection, and one the moved centre no
-/// longer projects into is left with no keypoint. The axes, the normal and the size are
+/// does both. Every keypoint is carried in 3D: the point its ray meets the
+/// plane moves by the displacement and is projected again. A sighting never
+/// localized takes the moved centre's projection, and one whose carried point
+/// no longer projects is left with no keypoint. The axes, the normal and the size are
 /// untouched and nothing is pinned.
 ///
 /// Returns ``(EditableTrack, report)`` carrying ``by``, ``center``, ``moved``,
@@ -1392,8 +1393,8 @@ fn sight_observation(
 ///
 /// ``moved_edge`` is ``"+u"``, ``"-u"``, ``"+v"``, ``"-v"`` or ``None``, and it
 /// is the discriminator for what becomes of the sightings: named, that edge
-/// moves and the far one is held, so the centre shifts and every keypoint moves
-/// by its own photograph's displacement of the centre's projection; omitted,
+/// moves and the far one is held, so the centre shifts and every keypoint is
+/// carried with it in 3D, as :func:`translate_patch` carries them; omitted,
 /// both edges move about a held centre and no keypoint moves. Either way a
 /// sighting never localized takes the new centre's projection.
 ///

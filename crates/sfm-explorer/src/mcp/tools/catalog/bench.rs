@@ -276,10 +276,11 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           viewer. A \
                           track-stage track has one patch and every observation is a view of it, \
                           so this moves the patch and not a sighting: the centre moves, the axes \
-                          and the size are kept, and every observation's keypoint moves by its \
-                          own photograph's displacement of the centre's projection: a keypoint \
-                          marks where its photograph sees the patch's centre, so its gap from the \
-                          centre's projection is kept. Name where it goes in \
+                          and the size are kept, and every observation's keypoint is carried in \
+                          3D: a keypoint marks where its photograph sees the patch's centre, so \
+                          that photograph sees the patch slid along its plane onto the keypoint's \
+                          ray, and the point that ray meets the plane moves with the patch and \
+                          is projected again. Name where it goes in \
                           exactly one of two ways. `by` is [u, v, n] on the patch's OWN \
                           orthonormal axes, in the reconstruction's scene units: u and v slide it \
                           across its own plane, n moves it along its outward normal, and both \
@@ -289,9 +290,9 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           and the sightings then move by DIFFERENT amounts in their photographs, \
                           that spread being the parallax the old depth was wrong by. Or name a \
                           `pixel` and the photograph it is in, as exactly one of `observation` \
-                          (the outline there is the patch's projection shifted by that \
-                          sighting's gap from the centre's projection, and the sighting lands \
-                          under the pixel) or `camera_image` (an index or an \
+                          (the outline there is the patch slid along its plane onto that \
+                          sighting's keypoint's ray, and the sighting lands under the pixel) or \
+                          `camera_image` (an index or an \
                           .sfmr relative path; the outline there is the patch as it stands, and \
                           its own centre lands under the pixel; it is the only form that reaches \
                           an image the track has no sighting in). Nothing is pinned: where the \
@@ -386,16 +387,16 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           ways. `half_length` is a world half-length in the reconstruction's own \
                           units, and `moved_edge` says what becomes of the sightings: named \
                           (\"+u\", \"-u\", \"+v\", \"-v\"), that edge moves and the opposite one \
-                          is held, so the centre shifts and every keypoint moves with the \
-                          centre's projection in its own photograph; omitted, both edges move \
+                          is held, so the centre shifts and every keypoint is carried with it in \
+                          3D, as translate_bench_patch carries them; omitted, both edges move \
                           about a held centre and no keypoint moves at all. Either way a \
                           sighting never localized takes the new centre's projection. Or name an \
                           `edge`, a `pixel` and the photograph it is in, which \
                           is the edge drag on the Image Detail panel's bench layer: the pixel is \
                           unprojected onto the patch's own plane, so the edge lands there exactly \
                           through whatever distortion the lens has. The photograph is exactly \
-                          one of `observation`, whose outline is the patch's projection shifted \
-                          by that sighting's gap from the centre's projection, or \
+                          one of `observation`, whose outline is the patch slid along its plane \
+                          onto that sighting's keypoint's ray, or \
                           `camera_image`, whose outline is the patch as it stands \
                           (the ghost outline of an image the track has no sighting in). \
                           A patch is square, so a resize is one scale and not two. Nothing \

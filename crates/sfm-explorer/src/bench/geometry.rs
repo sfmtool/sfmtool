@@ -62,7 +62,7 @@ pub(crate) enum PatchEdit {
     /// the ghost outline's centre mark.
     TranslateToPixel {
         /// The image the pixel is in, and the square it is read against: an
-        /// observation's, the patch's projection shifted by its gap
+        /// observation's, the patch slid onto its keypoint's ray
         /// ([`SeenSquare`]), or an image's, the patch as it stands.
         viewpoint: Viewpoint,
         /// Where, in that image's own px.
@@ -453,58 +453,52 @@ pub(crate) fn pixel_ray(
     Some((pose.inverse_translation_origin(), unit(direction)?))
 }
 
-/// The patch as one photograph sees it: the patch's projection, shifted in
-/// that photograph by a sighting's **gap**, the keypoint less the projection
-/// of the patch's centre.
+/// The patch as one photograph sees it: the patch slid along its own plane
+/// until its centre sits on a sighting's keypoint's ray.
 ///
 /// A keypoint marks where its photograph sees the patch's centre, so a gap
-/// between the two is an error of that sighting, a shift of the whole tile in
-/// the photograph, and not the patch standing somewhere else in the world.
-/// What the photograph sees is therefore every point of the patch at its own
-/// projection plus the gap, which puts the square's centre on the keypoint and
-/// keeps its shape exactly the projection's. It is not the patch moved in 3D
-/// until its centre sits on the keypoint's ray: on a patch seen at a slant the
-/// two squares differ, by more the larger the gap and the steeper the slant.
+/// between the keypoint and the projection of the centre means that photograph
+/// sees the patch slid along its plane onto the keypoint's ray. Projecting
+/// that slid patch gives the square with the perspective the photograph really
+/// has, its centre on the keypoint. It is the square the view's tile is cut
+/// through: both come from `OrientedPatch::seen_at_keypoint`, so the outline
+/// drawn over the photograph and the tile beside it are one square.
 ///
 /// **The one square both the drawing and the reading use.** Image Detail
-/// strokes [`Self::outline`] and places the normal's arrow with
-/// [`Self::project`]; every handle of it reads a pointer through
-/// [`Self::on_patch`] or [`Self::ray`], which take the gap off before the pixel
-/// is met with the patch. The core pixel steps
-/// (`sfmtool_core::bench::translate_patch_to_pixel`,
-/// `resize_patch_to_pixel`) read a pointer through an observation less the
-/// same gap, `observation.site()` less the centre's projection, so a gesture
-/// lands under the pointer on the square drawn. The patch steps keep each gap,
-/// so the square redrawn after an edit is read the same way.
+/// strokes [`Self::outline`] and builds the normal's arrow out of the slid
+/// centre; every handle of it reads a pointer through [`Self::ray`] or
+/// [`Self::turn_between`] against [`Self::patch`], the slid patch. The core
+/// pixel steps (`sfmtool_core::bench::translate_patch_to_pixel`,
+/// `resize_patch_to_pixel`) read a pointer through an observation against the
+/// same slid patch (`OrientedPatch::slid_onto_keypoint`), and carry every
+/// sighting's slid point with the patch, so a gesture lands under the pointer
+/// on the square redrawn after it.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct SeenSquare {
-    /// The patch frame as it stands.
+    /// The patch frame as this photograph sees it: slid onto the sighting's
+    /// keypoint's ray, or the patch as it stands where there is no sighting, no
+    /// place for it, or no meeting of its ray with the plane, as the tile is
+    /// cut.
     pub(crate) patch: OrientedPatch,
-    /// The shift in the photograph's own pixels: the sighting's keypoint less
-    /// the projection of the patch's centre, or zero where there is no
-    /// sighting, no place for it, or no projection of the centre to read a
-    /// gap against.
-    pub(crate) gap: [f64; 2],
 }
 
 impl SeenSquare {
-    /// The patch as a photograph with no sighting of it sees it: its own
-    /// projection, with no gap. The ghost outline's square.
+    /// The patch as a photograph with no sighting of it sees it: as it stands.
+    /// The ghost outline's square.
     pub(crate) fn as_it_stands(patch: &OrientedPatch) -> Self {
         Self {
             patch: patch.clone(),
-            gap: [0.0, 0.0],
         }
     }
 
-    /// The patch as `observation`'s photograph sees it, shifted by that
-    /// sighting's gap.
+    /// The patch as `observation`'s photograph sees it, slid onto that
+    /// sighting's keypoint's ray.
     ///
     /// The sighting is placed by `Observation::site`, the pixel the core pixel
-    /// steps read the gap from. A sighting with no place takes no gap, and so
-    /// does one whose photograph does not see the patch's centre, there being
-    /// no projection to read a gap against; that square is the patch as it
-    /// stands.
+    /// steps read. A sighting with no place, and one whose ray does not meet
+    /// the plane, is seen as the patch as it stands, as the tile is cut; the
+    /// core pixel steps refuse a drag through such a sighting, and through one
+    /// whose ray meets the plane behind its camera.
     pub(crate) fn of_observation(
         patch: &OrientedPatch,
         camera: &CameraIntrinsics,
@@ -523,20 +517,13 @@ impl SeenSquare {
         pose: &RigidTransform,
         keypoint: Option<[f64; 2]>,
     ) -> Self {
-        let gap = keypoint
-            .and_then(|keypoint| {
-                let centre = camera.project_homogeneous(pose, patch.center.coords, patch.w)?;
-                Some([keypoint[0] - centre[0], keypoint[1] - centre[1]])
-            })
-            .unwrap_or([0.0, 0.0]);
         Self {
-            patch: patch.clone(),
-            gap,
+            patch: patch.seen_at_keypoint(camera, pose, keypoint),
         }
     }
 
-    /// Where a point `(xyz, w)` of the patch's world is seen: its projection
-    /// plus the gap. `None` where it does not project.
+    /// Where a point `(xyz, w)` of the slid patch's world is seen: its
+    /// projection. `None` where it does not project.
     pub(crate) fn project(
         &self,
         camera: &CameraIntrinsics,
@@ -544,52 +531,40 @@ impl SeenSquare {
         xyz: Vector3<f64>,
         w: f64,
     ) -> Option<[f64; 2]> {
-        let pixel = camera.project_homogeneous(pose, xyz, w)?;
-        Some([pixel[0] + self.gap[0], pixel[1] + self.gap[1]])
+        camera.project_homogeneous(pose, xyz, w)
     }
 
     /// The square's boundary as the photograph sees it: [`project_outline`]
-    /// of the patch, every sample moved by the gap.
+    /// of the slid patch.
     pub(crate) fn outline(
         &self,
         camera: &CameraIntrinsics,
         pose: &RigidTransform,
     ) -> (Vec<Option<[f64; 2]>>, usize) {
-        let (samples, per_edge) = project_outline(&self.patch, camera, pose);
-        let shifted = samples
-            .into_iter()
-            .map(|sample| sample.map(|p| [p[0] + self.gap[0], p[1] + self.gap[1]]))
-            .collect();
-        (shifted, per_edge)
+        project_outline(&self.patch, camera, pose)
     }
 
-    /// The pixel of the patch's own projection a pointer on this square stands
-    /// for: the pointer less the gap.
-    pub(crate) fn on_patch(&self, pixel: [f64; 2]) -> [f64; 2] {
-        [pixel[0] - self.gap[0], pixel[1] - self.gap[1]]
-    }
-
-    /// The ray a pointer on this square names: [`pixel_ray`] of the pixel
-    /// [`Self::on_patch`] gives, which is the ray to meet with the patch.
+    /// The ray a pointer on this square names, [`pixel_ray`] of the pixel, to
+    /// be met with the slid patch.
     pub(crate) fn ray(
         &self,
         camera: &CameraIntrinsics,
         pose: &RigidTransform,
         pixel: [f64; 2],
     ) -> Option<(Point3<f64>, Vector3<f64>)> {
-        pixel_ray(camera, pose, self.on_patch(pixel))
+        pixel_ray(camera, pose, pixel)
     }
 
     /// The turn, in radians about the patch's outward normal, that carries the
     /// in-plane direction a pointer at `from` names on this square onto the one
     /// at `to` names.
     ///
-    /// Both pixels have the gap taken off and are unprojected onto the patch's
-    /// plane and read on its axes, so the angle is the one in the **patch**,
-    /// not the one on screen: a patch seen at a slant turns by what the person
-    /// aimed at on its own surface rather than by the foreshortened angle the
-    /// pointer swept. A corner dragged to where the turned corner is drawn
-    /// therefore lands under the pointer.
+    /// Both pixels are unprojected onto the patch's plane and read on its axes
+    /// about the slid centre, so the angle is the one in the **patch**, not the
+    /// one on screen: a patch seen at a slant turns by what the person aimed at
+    /// on its own surface rather than by the foreshortened angle the pointer
+    /// swept. A spin keeps every keypoint and so the slid centre, so a corner
+    /// dragged to where the turned corner is drawn lands under the pointer.
     pub(crate) fn turn_between(
         &self,
         camera: &CameraIntrinsics,
@@ -597,8 +572,8 @@ impl SeenSquare {
         from: [f64; 2],
         to: [f64; 2],
     ) -> Option<f64> {
-        let start = in_plane(&self.patch, camera, pose, self.on_patch(from))?;
-        let now = in_plane(&self.patch, camera, pose, self.on_patch(to))?;
+        let start = in_plane(&self.patch, camera, pose, from)?;
+        let now = in_plane(&self.patch, camera, pose, to)?;
         Some(wrapped(now.1.atan2(now.0) - start.1.atan2(start.0)))
     }
 }
@@ -620,7 +595,7 @@ pub(crate) const CORNERS: [(f64, f64); 4] = [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.
 /// The density follows the size of the projection: the corners are projected
 /// first to measure it, and the edges then sampled finely enough that the
 /// distortion shows as a curve rather than as a polygon. What a photograph
-/// with a sighting draws is this outline moved by the sighting's gap
+/// with a sighting draws is this outline of the patch slid onto its keypoint's ray
 /// ([`SeenSquare::outline`]): Image Detail strokes that and Track View crops the
 /// photograph around it, so the two draw one curve.
 pub(crate) fn project_outline(

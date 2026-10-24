@@ -167,9 +167,7 @@ pub(super) fn render_patch_frame(
     cam_from_world: &RigidTransform,
     keypoint: Option<[f64; 2]>,
 ) -> OrientedPatch {
-    keypoint
-        .and_then(|kp| patch_frame.anchored_at_keypoint(camera, cam_from_world, kp))
-        .unwrap_or_else(|| patch_frame.clone())
+    patch_frame.seen_at_keypoint(camera, cam_from_world, keypoint)
 }
 
 /// What a track's bitmap is, for the header's patch slot to say.

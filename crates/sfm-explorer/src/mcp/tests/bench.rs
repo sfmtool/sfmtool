@@ -311,10 +311,11 @@ fn the_patch_tools_slide_resize_and_turn_and_each_is_one_version() {
     assert_eq!(version_count(&state), before + 1);
 
     // The tool moved the patch, not the one observation it was aimed through:
-    // every sighting moved, and each kept its own gap from where the centre
-    // projects. The fixture's keypoints are each point's exact projection, so
-    // every gap is zero and stays zero -- what is asserted is that the move
-    // preserved them rather than that they were reset.
+    // every sighting moved, its slid point carried with the patch. The
+    // fixture's keypoints are each point's exact projection, so every slid
+    // point is the centre and every keypoint stays the centre's projection --
+    // what is asserted is that the move carried them rather than that they were
+    // reset.
     let sightings = call(
         &mut state,
         &mut viewer,
@@ -415,8 +416,8 @@ fn the_patch_tools_slide_resize_and_turn_and_each_is_one_version() {
     );
     assert_eq!(version_count(&state), before + 2);
 
-    // The claim, on the outline as it is **redrawn** -- the patch's projection
-    // shifted by the gap of the sighting whose edge was dragged, which is what
+    // The claim, on the outline as it is **redrawn** -- the patch slid onto
+    // the ray of the sighting whose edge was dragged, which is what
     // a person sees:
     // that edge lands on the pixel the call named, the far edge has not moved,
     // and the patch frame is still square. A thousandth of a pixel, because the
