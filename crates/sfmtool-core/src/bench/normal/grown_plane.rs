@@ -6,11 +6,13 @@
 //! and the views' planes combined by their information.
 //!
 //! The reference view's working grid is the template. For every other `in`
-//! view the plane predicts where each grid sample lands in that view's
-//! photograph (`render`); the step fits the plane's tilt and the view's image
-//! shift so that the view's samples agree with the reference's by ZNCC. The
-//! step trusts the keypoints it is given: within a view it starts a small
-//! window at the grid's centre from the shift the view's keypoint implies and
+//! view the plane, carried onto the patch that view sees (the patch slid onto
+//! its keypoint, `OrientedPatch::anchored_at_keypoint`), predicts where each
+//! grid sample lands in that view's photograph (`render`); the step fits the
+//! plane's tilt and the view's image shift so that the view's samples agree
+//! with the reference's by ZNCC. The step trusts the keypoints it is given:
+//! within a view it starts a small window at the grid's centre at the view's
+//! keypoint, where its slid patch's centre projects, and
 //! never searches for another shift, so a view whose keypoint is off by more
 //! than the growth recovers is left out. Fitting the keypoints is a separate
 //! step the caller runs. The growth widens the window outward, fitting tilt
@@ -650,7 +652,10 @@ impl std::fmt::Display for GrownPlaneSequence {
 /// rows, one row per image. Its working grid is the starting patch frame re-anchored
 /// on its keypoint, [`GrownPlaneNormalOptions::working_resolution`] samples a
 /// side. The plane is the starting normal tilted by `(a, b)` along the patch frame's
-/// axes through that anchor; each view adds an image shift.
+/// axes through that anchor. Each other view reads the same tilted patch slid
+/// onto its own keypoint, centred where its keypoint's ray meets the plane
+/// through the patch centre facing that camera, which no tilt moves, and adds
+/// an image shift, zero where the growth starts.
 ///
 /// A view is grown from a plane, the starting plane or the combined plane
 /// of the views kept before it: a 7×7 window at the grid's centre starts from
@@ -842,7 +847,7 @@ pub fn grown_plane_normal(
         }
     } as usize;
     let grid = Grid::new(&patch_frame, ref_view, ref_keypoint, side);
-    let ref_image = ViewImage::new(ref_view, &grid.anchored_patch_frame, side);
+    let ref_image = ViewImage::new(ref_view, &grid.anchored_patch_frame, side, Vector3::zeros());
     let reference_samples =
         ViewRender::new(&grid, &ref_image).render([0.0; 2], [0.0; 2], &grid.all());
     let live = live_cells(&grid.cells, &reference_samples);
@@ -860,8 +865,11 @@ pub fn grown_plane_normal(
         .filter_map(|&row| {
             let observation = &track.observations[row];
             let view = &images[observation.image as usize];
-            let image = ViewImage::new(view, &grid.anchored_patch_frame, side);
             let keypoint = seed_of(observation);
+            // The patch this view sees: the starting patch slid onto its
+            // keypoint, read through the same tilts about its own centre.
+            let seen = anchored(&patch_frame, view, keypoint);
+            let image = ViewImage::new(view, &seen, side, seen.center.coords - grid.anchor);
             let Some(kp_shift) = keypoint.and_then(|kp| {
                 grid.anchor_pixel(&image)
                     .map(|at| [kp[0] - at[0], kp[1] - at[1]])
@@ -1079,8 +1087,9 @@ fn record_views(
 
 /// The keypoints the step writes after the turn, as `(row, pixel)`: the
 /// reference's as it was before the step (the anchor's projection where it
-/// had none), each joined view's at the anchor's projection plus its shift at
-/// the final plane, the pixel its score there was read around, and each
+/// had none), each joined view's at the projection of its slid patch's centre
+/// plus its shift at the final plane, the pixel its score there was read
+/// around, and each
 /// shift-only view's the same way where its score reaches `floor`. A pixel
 /// off its photograph is not written. Each is recorded in `views` too.
 fn keypoint_writes(
@@ -1206,9 +1215,12 @@ struct Candidate<'a> {
     image: ViewImage<'a>,
     /// Its keypoint before the step.
     keypoint: Option<[f64; 2]>,
-    /// The keypoint less the anchor's projection: the shift the keypoint
-    /// implies, the same at every tilt since every plane passes through the
-    /// anchor. A row with no such shift is not a candidate.
+    /// The keypoint less the projection of the view's slid patch's centre:
+    /// zero, up to rounding, where the slide followed the keypoint, and the
+    /// keypoint's gap from the unslid centre's projection where the slide
+    /// refused it and the view reads the patch as it stands. The same at every
+    /// tilt, since no tilt moves that centre. A row with no keypoint is not a
+    /// candidate.
     kp_shift: [f64; 2],
     angle_deg: f64,
     /// The unit direction from the patch centre to its camera.

@@ -5,12 +5,20 @@
 //! the scores [`grown_plane_normal`](super::grown_plane_normal) reads from it.
 //!
 //! Every sample of the working grid is a ray from the reference camera through
-//! a point of the starting patch frame re-anchored on the reference keypoint. A plane
-//! through the anchor, the starting normal tilted by `(a, b)` along the patch frame's
-//! `u` and `v` axes, cuts each ray at one world point, which is projected into
-//! a view through its own lens model and sampled from one level of the view's
-//! pyramid, after the view's image shift is added. The reference itself is
-//! rendered the same way at no tilt and no shift; its rays meet every plane at
+//! a point of the starting patch frame slid onto the reference keypoint. A plane
+//! through the anchor, the reference's slid centre, with the starting normal
+//! tilted by `(a, b)` along the patch frame's `u` and `v` axes, cuts each ray at
+//! one world point: the sample's place on the reference's slid patch at that
+//! normal. Each other view sees the same patch slid onto its own keypoint
+//! (`OrientedPatch::anchored_at_keypoint`), centred at `q_i` with the same
+//! normal and size, so the sample's place on that view's patch is the world
+//! point moved by `q_i − anchor`, the view's [`ViewImage::offset`]. That point
+//! is projected into the view through its own lens model and sampled from one
+//! level of the view's pyramid, after the view's image shift is added. `q_i`
+//! is where the keypoint's ray meets the plane through the centre facing the
+//! camera, which does not depend on the normal, so the offset is worked out
+//! once per view and holds at every tilt. The reference itself is rendered the
+//! same way at no tilt, no offset and no shift; its rays meet every plane at
 //! the reference pixels, so its tile is the same at every tilt.
 
 use std::cell::{Cell, RefCell, RefMut};
@@ -136,7 +144,8 @@ impl Grid {
     }
 
     /// Where each of `rows` lands in `view`'s photograph, full-resolution px,
-    /// through the plane at `tilt`, before any shift; `None` where the ray
+    /// through the plane at `tilt`, moved onto the view's own slid patch by
+    /// its [`ViewImage::offset`], before any shift; `None` where the ray
     /// meets the plane behind the reference camera or not at all, or the
     /// point does not project.
     pub(super) fn project(
@@ -158,8 +167,11 @@ impl Grid {
                 if !(lambda > 0.0 && lambda.is_finite()) {
                     return None;
                 }
-                view.camera
-                    .project_homogeneous(view.cam_from_world, self.origin + d * lambda, 1.0)
+                view.camera.project_homogeneous(
+                    view.cam_from_world,
+                    self.origin + d * lambda + view.offset,
+                    1.0,
+                )
             })
             .collect()
     }
@@ -168,7 +180,9 @@ impl Grid {
     /// at `tilt`: `[[∂x/∂a, ∂x/∂b], [∂y/∂a, ∂y/∂b]]`, full-resolution px per
     /// tilt unit, indexed by sample over the whole grid. The sample's ray is
     /// fixed and the plane turns about the anchor, so its world point
-    /// `o + λ·d` moves along the ray with `λ = ((A − o)·n) / (d·n)`; the pixel
+    /// `o + λ·d` moves along the ray with `λ = ((A − o)·n) / (d·n)`, and the
+    /// view's point, that one moved by the view's constant offset, moves with
+    /// it; the pixel
     /// follows through the view's pose and its lens model's Jacobian
     /// (`pixel_jacobian`, analytic where the model has one). Zero for every
     /// sample [`Self::project`] gives no pixel, and for every sample not in
@@ -203,7 +217,7 @@ impl Grid {
             }
             let p_cam = view
                 .cam_from_world
-                .transform_point_homogeneous(self.origin + d * lambda, 1.0);
+                .transform_point_homogeneous(self.origin + d * lambda + view.offset, 1.0);
             if !view.camera.model.needs_ray_path() && p_cam.z >= 0.0 {
                 continue;
             }
@@ -221,8 +235,9 @@ impl Grid {
         out
     }
 
-    /// `view`'s photograph px per world unit at the anchor: the square root
-    /// of the area scale of the projection of the starting patch frame there, read
+    /// `view`'s photograph px per world unit at the view's slid centre (the
+    /// anchor moved by the view's offset): the square root of the area scale
+    /// of the projection of the starting patch frame there, read
     /// by a central difference of a hundredth of the patch frame's half-extent
     /// along each axis. `NaN` where the anchor's neighbourhood does not
     /// project.
@@ -230,7 +245,7 @@ impl Grid {
         let h = 0.01 * self.anchored_patch_frame.half_extent[0].max(1e-12);
         let at = |d: Vector3<f64>| {
             view.camera
-                .project_homogeneous(view.cam_from_world, self.anchor + d, 1.0)
+                .project_homogeneous(view.cam_from_world, self.anchor + view.offset + d, 1.0)
         };
         let (Some(up), Some(un), Some(vp), Some(vn)) = (
             at(self.u * h),
@@ -250,10 +265,12 @@ impl Grid {
         self.side as f64 / (2.0 * self.anchored_patch_frame.half_extent[0])
     }
 
-    /// Where the anchor lands in `view`'s photograph, full-resolution px.
+    /// Where the view's slid centre (the anchor moved by the view's offset)
+    /// lands in `view`'s photograph, full-resolution px: the view's keypoint,
+    /// where the slide followed it.
     pub(super) fn anchor_pixel(&self, view: &ViewImage<'_>) -> Option<[f64; 2]> {
         view.camera
-            .project_homogeneous(view.cam_from_world, self.anchor, 1.0)
+            .project_homogeneous(view.cam_from_world, self.anchor + view.offset, 1.0)
     }
 }
 
@@ -277,15 +294,23 @@ pub(super) struct ViewImage<'a> {
     scale: f64,
     /// Channels scored: the photograph's, an alpha channel dropped.
     pub(super) channels: usize,
+    /// The move from the grid's anchor to the centre of the patch this view
+    /// sees, `q_i − anchor`: zero for the reference.
+    pub(super) offset: Vector3<f64>,
 }
 
 impl<'a> ViewImage<'a> {
     /// `view` read at the level the bilinear-mip rule picks for the map from a
-    /// working grid of `side` samples over `patch_frame` into the photograph,
-    /// at the grid's centre: `round(log2 σ_major)` for the map's larger
-    /// singular value, clamped to the pyramid; level 0 where the centre does
-    /// not project.
-    pub(super) fn new(view: &ProjectedImage<'a>, patch_frame: &OrientedPatch, side: usize) -> Self {
+    /// working grid of `side` samples over `patch_frame`, the patch this view
+    /// sees, into the photograph, at the grid's centre: `round(log2 σ_major)`
+    /// for the map's larger singular value, clamped to the pyramid; level 0
+    /// where the centre does not project. `offset` is [`Self::offset`].
+    pub(super) fn new(
+        view: &ProjectedImage<'a>,
+        patch_frame: &OrientedPatch,
+        side: usize,
+        offset: Vector3<f64>,
+    ) -> Self {
         let jacobian = patch_grid_jacobian(patch_frame, view.camera, view.cam_from_world, side);
         let level = jacobian
             .map(|j| bilinear_mip_level(singular_values_2x2(j)[0]) as usize)
@@ -298,10 +323,11 @@ impl<'a> ViewImage<'a> {
             level: image,
             scale: (1u64 << level) as f64,
             channels: (image.channels() as usize).clamp(1, 3),
+            offset,
         }
     }
 
-    /// `view` read at pyramid level `level`.
+    /// `view` read at pyramid level `level`, with no offset.
     #[cfg(test)]
     pub(super) fn at_level(view: &ProjectedImage<'a>, level: usize) -> Self {
         let image = view.pyramid.level(level);
@@ -311,6 +337,7 @@ impl<'a> ViewImage<'a> {
             level: image,
             scale: (1u64 << level) as f64,
             channels: (image.channels() as usize).clamp(1, 3),
+            offset: Vector3::zeros(),
         }
     }
 

@@ -694,9 +694,10 @@ fn a_view_whose_keypoint_is_off_past_the_growth_is_left_out() {
 
 /// A view the selection does not pick, holding a keypoint 6 px off the
 /// content along one axis and 2 px along the other, has its shift alone
-/// fitted from the shift that keypoint implies, and from nowhere else: the
-/// fit stays near that shift, under the floor, and no keypoint is written
-/// for the view, which keeps the keypoint the turn gives it.
+/// fitted from that keypoint, through the patch slid onto it, and from
+/// nowhere else: the fit stays near the keypoint, under the floor, and no
+/// keypoint is written for the view, which keeps the keypoint the turn gives
+/// it.
 #[test]
 fn a_shift_only_fit_keeps_the_keypoint_implied_shift() {
     let mut centres = vec![centre(0.0, 0.0)];
@@ -751,13 +752,14 @@ fn a_shift_only_fit_keeps_the_keypoint_implied_shift() {
         } => {
             assert!(*grid_zncc < options.min_held_zncc, "{grid_zncc}");
             assert_eq!(*keypoint, None);
-            // Nearer the keypoint-implied shift than the content, which
-            // sits at zero shift.
-            let from_implied = distance_px(*shift, implied);
-            let from_content = distance_px(*shift, [0.0; 2]);
+            // The shift is read from the view's keypoint, where the patch
+            // slid onto it is centred, so the content sits at minus the
+            // keypoint's offset. The fit stays nearer the keypoint.
+            let from_keypoint = distance_px(*shift, [0.0; 2]);
+            let from_content = distance_px(*shift, [-implied[0], -implied[1]]);
             assert!(
-                from_implied < from_content,
-                "{shift:?}: {from_implied:.2} px from the implied shift"
+                from_keypoint < from_content,
+                "{shift:?}: {from_keypoint:.2} px from the keypoint"
             );
         }
         other => panic!("shift only, not {other:?}"),

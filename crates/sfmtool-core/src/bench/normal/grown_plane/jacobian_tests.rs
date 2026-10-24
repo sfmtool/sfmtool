@@ -177,7 +177,7 @@ fn the_analytic_jacobian_follows_a_difference_of_renders() {
         let grid = Grid::new(&patch_frame, &views[0], None, side);
         let images: Vec<ViewImage<'_>> = views
             .iter()
-            .map(|v| ViewImage::new(v, &grid.anchored_patch_frame, side))
+            .map(|v| ViewImage::new(v, &grid.anchored_patch_frame, side, Vector3::zeros()))
             .collect();
         let renders: Vec<ViewRender<'_, '_>> =
             images.iter().map(|i| ViewRender::new(&grid, i)).collect();
@@ -252,7 +252,7 @@ fn the_information_is_read_through_the_sobel_gradient() {
     let grid = Grid::new(&patch_frame, &views[0], None, side);
     let images: Vec<ViewImage<'_>> = views
         .iter()
-        .map(|v| ViewImage::new(v, &grid.anchored_patch_frame, side))
+        .map(|v| ViewImage::new(v, &grid.anchored_patch_frame, side, Vector3::zeros()))
         .collect();
     let renders: Vec<ViewRender<'_, '_>> =
         images.iter().map(|i| ViewRender::new(&grid, i)).collect();
@@ -305,7 +305,7 @@ fn a_grid_partly_off_the_photograph_differences_like_its_residual() {
     let grid = Grid::new(&patch_frame, &views[0], None, side);
     let images: Vec<ViewImage<'_>> = views
         .iter()
-        .map(|v| ViewImage::new(v, &grid.anchored_patch_frame, side))
+        .map(|v| ViewImage::new(v, &grid.anchored_patch_frame, side, Vector3::zeros()))
         .collect();
     let renders: Vec<ViewRender<'_, '_>> =
         images.iter().map(|i| ViewRender::new(&grid, i)).collect();
@@ -657,7 +657,7 @@ fn the_pixels_tilt_derivative_follows_the_projection() {
         let grid = Grid::new(&patch_frame, &views[0], None, side);
         let rows = grid.all();
         for view in &views[1..] {
-            let image = ViewImage::new(view, &grid.anchored_patch_frame, side);
+            let image = ViewImage::new(view, &grid.anchored_patch_frame, side, Vector3::zeros());
             let tilt = [0.06, -0.04];
             let analytic = grid.pixel_tilt_derivatives(&image, tilt, &rows);
             let h = 1e-6;
@@ -679,6 +679,59 @@ fn the_pixels_tilt_derivative_follows_the_projection() {
             }
             assert!(largest > 1.0, "{model}: the pixels move with the tilt");
             assert!(worst < 1e-6 * largest, "{model}: {worst} of {largest}");
+        }
+    }
+}
+
+/// A view reads the patch slid onto its own keypoint: with a keypoint well off
+/// the centre's projection, its slid centre projects onto the keypoint, and at
+/// no tilt each of its samples is the slid patch's own grid point,
+/// so its render is that patch's tile, whatever the reference's keypoint.
+#[test]
+fn a_view_reads_the_patch_slid_onto_its_own_keypoint() {
+    for model in ["pinhole", "simple_radial_fisheye"] {
+        let scene = scene(model);
+        let views = scene.views();
+        let patch_frame = patch_frame();
+        let side = 24;
+        let grid = Grid::new(&patch_frame, &views[0], None, side);
+        let view = &views[1];
+        let centre = view
+            .camera
+            .project_homogeneous(view.cam_from_world, patch_frame.center.coords, 1.0)
+            .expect("the centre projects");
+        let keypoint = [centre[0] + 9.0, centre[1] - 6.0];
+        let seen = super::render::anchored(&patch_frame, view, Some(keypoint));
+        assert!(
+            (seen.center - patch_frame.center).norm() > 1e-6,
+            "{model}: slid"
+        );
+        let image = ViewImage::new(view, &seen, side, seen.center.coords - grid.anchor);
+        let at = grid.anchor_pixel(&image).expect("the slid centre projects");
+        assert!(
+            (at[0] - keypoint[0]).abs() < 1e-6 && (at[1] - keypoint[1]).abs() < 1e-6,
+            "{model}: {at:?} vs {keypoint:?}"
+        );
+        let rows = grid.all();
+        let pixels = grid.project(&image, [0.0, 0.0], &rows);
+        let wpp = 2.0 * grid.anchored_patch_frame.half_extent[0] / side as f64;
+        let half = side as f64 / 2.0;
+        for &k in &rows {
+            let (row, col) = (k / side, k % side);
+            let (gx, gy) = (col as f64 + 0.5 - half, row as f64 + 0.5 - half);
+            let want = view.camera.project_homogeneous(
+                view.cam_from_world,
+                crate::patch::keypoint_localize::shifted_center(&seen, gx, gy, wpp, wpp).coords,
+                1.0,
+            );
+            let got = pixels[k];
+            match (want, got) {
+                (Some(w), Some(g)) => assert!(
+                    (w[0] - g[0]).abs() < 1e-6 && (w[1] - g[1]).abs() < 1e-6,
+                    "{model}: sample {k} at {g:?}, the slid patch's point at {w:?}"
+                ),
+                (w, g) => assert_eq!(w.is_some(), g.is_some(), "{model}: sample {k}"),
+            }
         }
     }
 }
