@@ -5164,6 +5164,140 @@ fn a_move_that_carries_a_sighting_off_its_photograph_turns_it_out_and_unpins_it(
     );
 }
 
+/// A spin, a tilt and a resize about the centre move no keypoint, so they leave
+/// every row's verdict and pin as they were -- even an `in` a person pinned on
+/// a sighting whose keypoint is already off its photograph, and even an
+/// observation whose image the reconstruction cannot name, which keeps its
+/// keypoint rather than losing it to `NoProjection`.
+#[test]
+fn a_step_that_moves_no_keypoint_keeps_a_pinned_in_row_off_its_photograph() {
+    let scene = Scene::new();
+    let edited = edited_fixture(&scene, WORLD);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let mut track = track_of(&bench, &label);
+    let was = patch_frame_of(&track);
+
+    let off = [-40.0_f32, -25.0];
+    track.observations[0]
+        .track
+        .as_mut()
+        .expect("a track slot")
+        .keypoint = Some(off);
+    assert!(track.observations[0].pinned);
+    assert_eq!(track.observations[0].verdict, Verdict::In);
+
+    let (sin, cos) = 10.0_f64.to_radians().sin_cos();
+    let steps: [(&str, EditableTrack); 3] = [
+        (
+            "spin",
+            spin_patch(&track, &edited, 0.4).expect("an angle").0,
+        ),
+        (
+            "tilt",
+            tilt_patch(&track, &edited, was.normal() * cos - was.u_axis * sin)
+                .expect("a direction")
+                .0,
+        ),
+        (
+            "resize",
+            resize_patch(&track, &edited, was.half_extent[0] * 1.5, None)
+                .expect("a size")
+                .0,
+        ),
+    ];
+    for (name, next) in steps {
+        for (before, now) in track.observations.iter().zip(&next.observations) {
+            assert_eq!(
+                (now.verdict, now.pinned),
+                (before.verdict, before.pinned),
+                "the {name} changed a row it did not move: {now:?}",
+            );
+            assert_eq!(
+                now.track.as_ref().and_then(|m| m.keypoint),
+                before.track.as_ref().and_then(|m| m.keypoint),
+                "the {name} moved a keypoint",
+            );
+        }
+    }
+
+    // An image index the reconstruction has no row for: a still centre does
+    // not read the image, so the keypoint stays and nothing changes.
+    let mut unnamed = track.clone();
+    unnamed.observations[1].image = u32::MAX;
+    let kept = unnamed.observations[1]
+        .track
+        .as_ref()
+        .and_then(|m| m.keypoint);
+    assert!(kept.is_some());
+    let (spun, _) = spin_patch(&unnamed, &edited, 0.4).expect("an angle");
+    let (resized, _) =
+        resize_patch(&unnamed, &edited, was.half_extent[0] * 1.5, None).expect("a size");
+    for (name, next) in [("spin", spun), ("resize", resized)] {
+        let row = &next.observations[1];
+        let measurement = row.track.as_ref().expect("a track slot");
+        assert_eq!(
+            measurement.keypoint, kept,
+            "the {name} dropped the keypoint"
+        );
+        assert_eq!(measurement.reason, None);
+        assert_eq!((row.verdict, row.pinned), (Verdict::In, true), "{name}");
+    }
+}
+
+/// A translate that carries a pinned `in` keypoint from on its photograph to
+/// off it turns that row `out` and lifts its pin.
+#[test]
+fn a_translate_that_carries_a_keypoint_off_its_photograph_turns_it_out() {
+    let scene = Scene::new();
+    let edited = edited_fixture(&scene, WORLD);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let mut track = track_of(&bench, &label);
+    let was = patch_frame_of(&track);
+
+    // How far image 0 sees the centre move under this translate.
+    let by = Vector3::new(0.2, 0.0, 0.0);
+    let moved_to = was.center + was.u_axis * by.x;
+    let (camera, pose) = view(&edited, track.observations[0].image as usize);
+    let from = camera
+        .project_homogeneous(&pose, was.center.coords, was.w)
+        .expect("the centre projects");
+    let to = camera
+        .project_homogeneous(&pose, moved_to.coords, was.w)
+        .expect("the moved centre projects");
+    let dx = to[0] - from[0];
+    assert!(dx.abs() > 2.0 && dx.abs() < f64::from(camera.width), "{dx}");
+    // A keypoint on the photograph that the move's shift carries past the
+    // edge it moves toward.
+    let x = if dx < 0.0 {
+        -dx / 2.0
+    } else {
+        f64::from(camera.width) - dx / 2.0
+    };
+    let y = f64::from(camera.height) / 2.0;
+    track.observations[0]
+        .track
+        .as_mut()
+        .expect("a track slot")
+        .keypoint = Some([x as f32, y as f32]);
+    assert_eq!(
+        (track.observations[0].verdict, track.observations[0].pinned),
+        (Verdict::In, true)
+    );
+
+    let (next, _) = translate_patch(&track, &edited, by).expect("a move");
+    let row = &next.observations[0];
+    let k = row
+        .track
+        .as_ref()
+        .and_then(|m| m.keypoint)
+        .expect("the keypoint is kept");
+    assert!(
+        f64::from(k[0]) < 0.0 || f64::from(k[0]) >= f64::from(camera.width),
+        "{k:?}"
+    );
+    assert_eq!((row.verdict, row.pinned), (Verdict::Out, false));
+}
+
 /// **One implementation of each edit.** The pixel form is the unprojection in
 /// front of the step itself, so a pointer and the displacement it names have to
 /// leave the patch in the same position -- the pixel form acting on the outline

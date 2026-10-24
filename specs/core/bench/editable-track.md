@@ -2323,13 +2323,20 @@ one the moved centre no longer projects into is left with no keypoint and
 untouched. Nothing is pinned: where the patch is
 says nothing about whether any sighting belongs to it.
 
-**A sighting carried off its photograph is turned `out` and unpinned**, by
-every patch step (this one, the resize, the tilt and the spin). Off means
-a keypoint outside `[0, width) x [0, height)` or no keypoint at all. The
-keypoint is kept, so the row still says where the patch went, but it names no
-place on the photograph, and a `.sfmr` file refuses it; a pin, even an `in` one
-a person set, was a ruling on a place the sighting has left. A row turned out
-this way has its reference-view standing restated as a painting's would be.
+**A sighting a patch step moves off its photograph is turned `out` and
+unpinned.** Off means a keypoint outside `[0, width) x [0, height)` or no
+keypoint at all. A step moves a sighting when it changes its keypoint, drops
+it, or gives it one it did not have -- a sighting never localized placed at
+`P(c')` is moved -- or when the centre moves under a sighting never localized.
+The keypoint is kept, so the row still says where the patch went, but it names
+no place on the photograph, and a `.sfmr` file refuses it; a pin, even an `in`
+one a person set, was a ruling on a place the sighting has left. A row turned
+out this way has its reference-view standing restated as a painting's would be.
+**A sighting the step does not move keeps its verdict and its pin**, whether or
+not its keypoint is on the photograph. So a spin, a tilt and a resize about the
+centre change no localized row's verdict or pin, and they keep each such
+keypoint without reading its image, so an observation whose image the
+reconstruction cannot name keeps its keypoint too.
 
 Two refusals, each attached to the part of `by` that earns it. A **bearing**
 (`w == 0`) has its moved centre renormalized, which leaves every corner the

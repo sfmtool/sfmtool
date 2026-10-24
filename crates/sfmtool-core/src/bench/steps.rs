@@ -2664,13 +2664,18 @@ fn track_payload_mut(
 /// is left with no keypoint and the reason that says so, rather than with a
 /// stale one.
 ///
-/// **A sighting carried off its photograph, or to no pixel at all, is turned
-/// `out` and unpinned.** A keypoint is kept, so the row still says where the
-/// patch went, but a pixel
-/// outside `[0, width) x [0, height)` is no place on the photograph and cannot
-/// be committed; a pin, even an `in` one a person set, was a ruling on a place
-/// the sighting has left. A row turned `out` here takes the reference-view
-/// restatement a painting gives one.
+/// **A sighting the step moves off its photograph, or to no pixel at all, is
+/// turned `out` and unpinned.** A keypoint is kept, so the row still says where
+/// the patch went, but a pixel outside `[0, width) x [0, height)` is no place
+/// on the photograph and cannot be committed; a pin, even an `in` one a person
+/// set, was a ruling on a place the sighting has left. The step moves a
+/// sighting when it changes, drops or first gives its keypoint, or when the
+/// centre moves under one never localized. **A sighting the step does not move
+/// keeps its verdict and its pin**, whether or not its keypoint is on the
+/// photograph: a keypoint under a still centre is kept without reading its
+/// image at all, so not even an image the reconstruction cannot name changes
+/// that row. A row turned `out` here takes the reference-view restatement a
+/// painting gives one.
 ///
 /// Returns how many keypoints were written, which is how many photographs still
 /// hold the patch.
@@ -2685,39 +2690,52 @@ fn follow_centre(
     let mut turned_out = false;
     for observation in &mut track.observations {
         let keypoint = observation.track.as_ref().and_then(|m| m.keypoint);
-        let mut off_photograph = false;
-        let landed =
-            view_of(edited, observation.image)
-                .ok()
-                .and_then(|(camera, cam_from_world)| {
+        // The pixel the step leaves this sighting at, and whether that pixel
+        // is on the photograph. `None` for the second means the photograph
+        // was not read, which only a keypoint the step does not move skips.
+        let (landed, on) = match keypoint {
+            // The centre has not moved, so neither has where any photograph
+            // sees it. Nothing about this sighting is read, so even an image
+            // the reconstruction cannot name keeps its keypoint.
+            Some(keypoint) if still => {
+                (Some([f64::from(keypoint[0]), f64::from(keypoint[1])]), None)
+            }
+            _ => match view_of(edited, observation.image) {
+                Ok((camera, cam_from_world)) => {
                     let project = |at: Point3<f64>| {
                         camera.project_homogeneous(&cam_from_world, at.coords, was.w)
                     };
                     let pixel = match keypoint {
-                        // The centre has not moved, so neither has where any
-                        // photograph sees it.
-                        Some(keypoint) if still => {
-                            Some([f64::from(keypoint[0]), f64::from(keypoint[1])])
-                        }
-                        Some(keypoint) => {
-                            let to = project(centre)?;
-                            Some(match project(was.center) {
-                                Some(from) => [
-                                    f64::from(keypoint[0]) + (to[0] - from[0]),
-                                    f64::from(keypoint[1]) + (to[1] - from[1]),
-                                ],
-                                // No gap can be read against a centre the
-                                // photograph did not see.
-                                None => to,
-                            })
-                        }
+                        Some(keypoint) => project(centre).map(|to| match project(was.center) {
+                            Some(from) => [
+                                f64::from(keypoint[0]) + (to[0] - from[0]),
+                                f64::from(keypoint[1]) + (to[1] - from[1]),
+                            ],
+                            // No gap can be read against a centre the
+                            // photograph did not see.
+                            None => to,
+                        }),
                         // Never localized, so there is no gap to keep.
                         None => project(centre),
                     };
-                    off_photograph = !pixel.is_some_and(|pixel| on_photograph(&camera, pixel));
-                    pixel
-                });
-        if off_photograph {
+                    (
+                        pixel,
+                        Some(pixel.is_some_and(|p| on_photograph(&camera, p))),
+                    )
+                }
+                Err(_) => (None, Some(false)),
+            },
+        };
+        // The off-photograph rule judges only a sighting the step moved: one
+        // whose keypoint changed, was lost or was first given, or one never
+        // localized whose centre moved. A row the step leaves where it was
+        // keeps its verdict and its pin, on the photograph or not.
+        let moved = match (keypoint, landed) {
+            (Some(k), Some(p)) => k != [p[0] as f32, p[1] as f32],
+            (None, None) => !still,
+            _ => true,
+        };
+        if moved && on == Some(false) {
             observation.pinned = false;
             if observation.verdict == Verdict::In {
                 observation.verdict = Verdict::Out;
