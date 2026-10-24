@@ -328,6 +328,34 @@ fn set_opens_a_closed_panel_which_takes_the_query() {
     let (mut state, mut viewer) = two_reconstructions();
     state.hide_panel(Tab::TrackTable);
     assert!(!state.is_panel_open(Tab::TrackTable));
+    // A call refused after the parse neither opens the panel nor writes a
+    // row beyond its failed one.
+    use sfmtool_core::analysis::track_table::{ColumnBounds, TrackTableColumn};
+    let held = crate::track_table_panel::TrackTableQueryChange {
+        bounds: Some(vec![ColumnBounds {
+            column: TrackTableColumn::RmsErrorPx,
+            min: None,
+            max: Some(1.5),
+        }]),
+        ..Default::default()
+    };
+    state
+        .track_table_query
+        .set("set_track_table_query", &held)
+        .unwrap();
+    let before = rows(&state).len();
+    refused_call(
+        &mut state,
+        &mut viewer,
+        "set_track_table_query",
+        json!({ "columns": ["track_length"], "filter_3d": "hide" }),
+    );
+    assert!(!state.is_panel_open(Tab::TrackTable));
+    let written = rows(&state).split_off(before);
+    assert!(
+        written.len() == 1 && written[0].1,
+        "only the failed call's row: {written:?}"
+    );
     set(&mut state, &mut viewer, json!({ "filter_3d": "dim" }));
     assert!(state.is_panel_open(Tab::TrackTable));
     assert!(rows(&state)

@@ -223,6 +223,12 @@ the visible-target one cannot be (finding 3).
 > over the same cache `find_points` reads (`specs/gui/track-table.md`); its
 > picture and computed columns remain in `specs/drafts/track-table.md`.
 > PR #1010._
+>
+> _Status (2026-10-24): **Done** — the Track Table's picture and computed
+> columns are built, and `get_track_table_query` / `set_track_table_query` read
+> and write its query (`specs/gui/mcp-server.md`); only Remove matching points
+> remains, in `specs/drafts/track-table-remove-matching-points.md`. Branch
+> `track-table-query-tools`._
 
 To reproduce the tutorial's screenshots an agent needs "a track of about 18
 observations seen in image 3", "a 4-observation track through image 57" and

@@ -973,6 +973,30 @@ fn the_panel_publishes_its_query_and_takes_one_set_over_the_wire() {
     );
 }
 
+/// A defect count that shows itself is not in the get's `columns`, and a
+/// `columns` that leaves it out decides it, as an untick in the Columns menu
+/// does, so it no longer shows itself.
+#[cfg(feature = "mcp")]
+#[test]
+fn a_set_columns_decides_the_defect_counts() {
+    let back = TrackTableColumn::BackFacingObservations;
+    let mut published = super::PublishedQuery::default();
+    assert!(published.query.is_shown(back, &[back]));
+    assert!(!published.document()["columns"]
+        .as_array()
+        .unwrap()
+        .contains(&serde_json::json!(back.wire_name())));
+    let change = crate::track_table_panel::TrackTableQueryChange {
+        columns: Some(vec![crate::track_table_panel::PanelColumn::from_wire_name(
+            "track_length",
+        )
+        .unwrap()]),
+        ..Default::default()
+    };
+    published.set("set_track_table_query", &change).unwrap();
+    assert!(!published.query.is_shown(back, &[back]));
+}
+
 /// The header names the reconstruction and counts matched rows against live
 /// points.
 #[test]

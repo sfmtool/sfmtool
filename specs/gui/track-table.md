@@ -923,7 +923,8 @@ with one point at infinity:
   live points;
 - the panel publishes a person's edit of its query to `AppState`, takes a
   query `set_track_table_query` left there on a frame it is not drawn, and a
-  person's edit after it is published in turn;
+  person's edit after it is published in turn, and a `columns` set that leaves
+  out a defect count stops it showing itself;
 - a click on a row selects its point; hovering a row hovers its point and
   leaving clears it once; a selection made elsewhere scrolls its row into
   view, and a new sort scrolls back to the top;

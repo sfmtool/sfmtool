@@ -5918,11 +5918,12 @@ where a test hands no host over.
   bounds on one column, a `min` above its `max`, a string other than `"inf"` and
   an empty call each with its sentence; every changed control is one `Display`
   row as the agent in the panel's words, and an unchanged one writes none; a
-  set opens a closed panel, which takes the query on its next frame, and leaves
-  an open one where it is; and with a query set over the wire, the points the
+  set opens a closed panel, which takes the query on its next frame, a refused
+  one leaves it closed, and a set leaves an open one where it is; and with a query set over the wire, the points the
   panel keeps in the 3D view are the points a `find_points` call with the same
   bounds matches. `track_table_panel::tests` holds that the panel publishes a
-  person's edit of its query and takes a set while it is not drawn.
+  person's edit of its query and takes a set while it is not drawn, and that a
+  `columns` leaving out a defect count decides it.
 - **Solo**: it moves rather than accumulating, leaves the selection alone, and
   keeps `visible` and `drawn` distinguishable.
 - **A refusal is atomic**: an unknown tint lists the palette and leaves the
