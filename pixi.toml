@@ -95,7 +95,7 @@ ui-test = "bash scripts/display_env.sh cargo test -p sfm-explorer --features ui-
 python = ">=3.14.7,<3.15"
 
 [feature.lint.pypi-dependencies]
-ruff = ">=0.16.6, <0.17"
+ruff = ">=0.17.2, <0.18"
 
 # Task tables live in their own features, separate from the dependencies they
 # use, and each such feature belongs to EXACTLY ONE environment. `pixi run
