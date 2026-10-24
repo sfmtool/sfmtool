@@ -122,8 +122,10 @@ fn place(in: VertexInput) -> VertexOutput {
         // so the camera translation drops out — no parallax — then pin depth
         // just in front of the far plane, exactly like infinity point splats.
         let clip_c = uniforms.view_proj * vec4<f32>(corner, 0.0);
-        if clip_c.w <= 0.0 {
-            // Direction points behind the camera: emit a clipped vertex.
+        if recon.show_infinity == 0.0 || clip_c.w <= 0.0 {
+            // Hidden by the "points at infinity" toggle, as the point's splat
+            // is (points.wgsl), or pointing behind the camera: emit a clipped
+            // vertex either way, so the surfel neither draws nor picks.
             out.clip_pos = vec4<f32>(0.0, 0.0, -1.0, 1.0);
             return out;
         }

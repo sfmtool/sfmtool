@@ -20,7 +20,8 @@ struct ReconUniforms {
     // Node tint: rgb is the palette color, a its strength. a == 0 = original.
     tint_color: vec4<f32>,
     // Effective "points at infinity" visibility for this node: the global HUD
-    // toggle AND the node's own ∞ mini-toggle. Only points.wgsl reads it.
+    // toggle AND the node's own ∞ mini-toggle. points.wgsl reads it for the
+    // splats and patch.wgsl for the surfels of points at infinity.
     show_infinity: f32,
     // The camera model proposal's preview blend on this node: 0 draws the
     // stored positions, 1 the targets. Read only by the `vs_preview` entry

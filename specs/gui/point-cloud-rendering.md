@@ -630,10 +630,14 @@ transform.
 ### UI — shipped
 
 - **Visibility toggle** — "Points at ∞" in the HUD's Layers section, default
-  on (`AppState::show_points_at_infinity`). It is a `show_infinity` flag in
-  `PointUniforms` that makes the vertex shader emit a clipped vertex, *not* a
-  filtered upload: `instance_index` has to stay equal to the global
-  `recon.points` index or picking, hover and selection break.
+  on (`AppState::show_points_at_infinity`), ANDed with each node's own ∞
+  mini-toggle. It is a `show_infinity` flag in the per-node `ReconUniforms`
+  that makes the vertex shader emit a clipped vertex, *not* a filtered upload:
+  `instance_index` has to stay equal to the global `recon.points` index or
+  picking, hover and selection break. The patch shader reads the same flag, so
+  turning it off hides the surfels of points at infinity with their splats,
+  and neither answers a pick
+  ([patch-rendering.md § Points at infinity](patch-rendering.md#points-at-infinity)).
 - **Count readout** — the top-left scene stats read
   `N points (M at infinity) | K images | F fps`, dropping the parenthetical
   when `metadata.infinity_point_count` is zero. While the Track Table filters

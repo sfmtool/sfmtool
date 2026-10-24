@@ -319,6 +319,25 @@ fn the_wgsl_filter_values_match_the_rust_ones() {
 }
 
 #[test]
+fn the_infinity_toggle_reaches_both_the_splats_and_the_surfels() {
+    // "Points at ∞" is one per-recon uniform, `show_infinity`, and both passes
+    // that draw a point at infinity have to read it: the splat in points.wgsl
+    // and the surfel in patch.wgsl. A shader that skips it keeps drawing, and
+    // answering picks for, points the toggle hides.
+    for (name, source) in [
+        ("points.wgsl", include_str!("../../shaders/points.wgsl")),
+        ("patch.wgsl", include_str!("../../shaders/patch.wgsl")),
+    ] {
+        assert!(
+            source
+                .lines()
+                .any(|l| l.trim() == "if recon.show_infinity == 0.0 || clip_c.w <= 0.0 {"),
+            "{name} does not clip a point at infinity when `show_infinity` is 0"
+        );
+    }
+}
+
+#[test]
 fn the_wgsl_preview_flags_and_failure_colour_match_the_rust_ones() {
     // The proposal job writes the flags into the preview buffers and the
     // failure colour is named once beside the tint palette; the point and

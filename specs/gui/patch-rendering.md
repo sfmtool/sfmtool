@@ -358,6 +358,12 @@ translation — the same no-parallax guarantee as the infinity point splats and
 the background image mesh. No special data handling: `points[i].w` already flags
 these rows and `recon.patches` re-marks them on load.
 
+The "Points at ∞" toggle covers these surfels as well as the splats. `patch.wgsl`
+reads the same per-node `ReconUniforms::show_infinity` that `points.wgsl` does
+and, when it is 0, collapses a `w = 0` surfel to a clipped vertex, so the
+surfel neither draws nor writes its point's pick id. Finite surfels are
+unaffected.
+
 ---
 
 ## Picking, hover, selection
