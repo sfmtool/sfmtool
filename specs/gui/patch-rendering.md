@@ -95,9 +95,11 @@ explicitly so picking resolves to the original point.
 
 ### Vertex shader (`shaders/patch.wgsl`)
 
-Given the static unit quad already used by the other instanced pipelines
-(`QuadVertex { position: [f32; 2] }` in slot 0, corners at `±1`,
-`pipelines/points.rs:124-143`):
+Given the unit quad the point pipeline also reads (the splat corner buffer,
+`SplatCorner { position: [f32; 2], dimmed: u32 }` in slot 0, corners at `±1`,
+whose `dimmed` marks the Track Table filter's dimmed draw; see
+[point-cloud-rendering.md](point-cloud-rendering.md) § "The Track Table's
+filter"):
 
 ```wgsl
 // s, t in [-1, 1] from the unit quad corner

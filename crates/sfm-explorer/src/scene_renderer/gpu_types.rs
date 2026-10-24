@@ -499,11 +499,6 @@ pub(super) const fn gbuffer_targets(
     ]
 }
 
-/// Slot 0 of every instanced scene pipeline: the static unit quad in
-/// `PointPipelineResources::quad_vertex_buffer`, which points, frustum edges,
-/// image quads, patches, the target indicator and track rays all expand their
-/// instances from. One buffer, so one layout — the stride is
-/// [`QuadVertex`]'s and the pipelines do not get a say in it.
 /// One corner of the quad the point and patch pipelines expand each instance
 /// into, with the draw it belongs to: `0` for the first draw, `1` for the
 /// Track Table filter's dimmed draw (`render::DIMMED_DRAW`).
@@ -562,6 +557,12 @@ pub(super) const SPLAT_CORNER_LAYOUT: wgpu::VertexBufferLayout<'static> =
         ],
     };
 
+/// Slot 0 of the instanced scene pipelines other than the point and patch
+/// ones: the static unit quad in `PointPipelineResources::quad_vertex_buffer`,
+/// which frustum edges, image quads, the target indicator, track rays and the
+/// bench track expand their instances from. One buffer, so one layout — the
+/// stride is [`QuadVertex`]'s and the pipelines do not get a say in it. The
+/// point and patch pipelines read [`SPLAT_CORNER_LAYOUT`] instead.
 pub(super) const QUAD_VERTEX_LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
     array_stride: size_of::<QuadVertex>() as u64,
     step_mode: wgpu::VertexStepMode::Vertex,

@@ -138,8 +138,7 @@ filter, and every point is drawn.
   after every node's surfels, the nodes the filter dims again with corners
   `4..8` (`DIMMED_DRAW`). The draw is vertex data rather than read off
   `vertex_index`, because DX12's vertex id does not count the draw's first
-  vertex, while every backend fetches vertex data from it; the first capture
-  run, which read `vertex_index`, drew no dimmed point on Windows. The vertex
+  vertex, while every backend fetches vertex data from it. The vertex
   shaders decide with `in_this_draw` in
   [common.wgsl](../../crates/sfm-explorer/src/shaders/common.wgsl): the first
   draws every point but the rejected ones, the second the rejected ones alone,
