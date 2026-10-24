@@ -35,16 +35,16 @@ fn all_names() -> String {
 ///
 /// Each column is one value per point under a fixed name: ``track_length``,
 /// ``repeat_observations``, ``back_facing_observations``, ``rms_error_px``,
-/// ``largest_error_px``, ``x``, ``y``, ``z``, ``centroid_distance``,
-/// ``normal_confidence``, ``lowest_zncc``,
-/// ``lowest_blur_matched_bitmap_zncc``,
-/// ``largest_zncc_self_similarity_radius``,
+/// ``max_error_px``, ``x``, ``y``, ``z``, ``centroid_distance``,
+/// ``normal_confidence``, ``min_zncc``,
+/// ``min_blur_matched_bitmap_zncc``,
+/// ``max_zncc_self_similarity_radius``,
 /// ``reference_zncc_self_similarity_radius``,
 /// ``reference_zncc_self_similarity_elongation``, ``max_ray_angle_deg``,
-/// ``largest_viewing_angle_deg``, ``condition_number`` and
+/// ``max_viewing_angle_deg``, ``condition_number`` and
 /// ``inverse_depth_z``. These are the numbers the viewer shows for the same
 /// points. A point with no value in a column (a point at infinity has no
-/// ``x``, a point with no patch frame no ``largest_viewing_angle_deg``) holds
+/// ``x``, a point with no patch frame no ``max_viewing_angle_deg``) holds
 /// NaN there; a point at infinity's ``centroid_distance`` is ``inf``.
 ///
 /// Args:
@@ -61,12 +61,12 @@ fn all_names() -> String {
 /// Raises:
 ///     ValueError: where a name is not a column, or names a column the
 ///         reconstruction cannot supply (``normal_confidence`` without that
-///         column, ``lowest_zncc`` without observation confidences,
-///         ``lowest_blur_matched_bitmap_zncc`` and
-///         ``largest_zncc_self_similarity_radius`` without observation
+///         column, ``min_zncc`` without observation confidences,
+///         ``min_blur_matched_bitmap_zncc`` and
+///         ``max_zncc_self_similarity_radius`` without observation
 ///         readings, the two ``reference_zncc_self_similarity_`` columns
-///         without readings or patch bitmaps, ``largest_error_px`` without
-///         inline keypoints, ``largest_viewing_angle_deg`` and
+///         without readings or patch bitmaps, ``max_error_px`` without
+///         inline keypoints, ``max_viewing_angle_deg`` and
 ///         ``back_facing_observations`` without patch frames,
 ///         ``centroid_distance`` with no posed image).
 ///     TypeError: where ``recon`` is neither reconstruction type.

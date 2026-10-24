@@ -56,7 +56,7 @@ pub enum TrackTableColumn {
     /// The largest reprojection error among the track's observations, in
     /// pixels, each observation's inline keypoint against the point's
     /// projection; absent without inline keypoints.
-    LargestErrorPx,
+    MaxErrorPx,
     /// The stored position's x, in the stored frame. No value at infinity.
     X,
     /// The stored position's y. No value at infinity.
@@ -73,15 +73,15 @@ pub enum TrackTableColumn {
     /// The lowest stored per-observation ZNCC in the track, `byte / 255` over
     /// the non-zero `observation_confidence` bytes; no value when no
     /// observation was measured, absent without the column.
-    LowestZncc,
+    MinZncc,
     /// The lowest blur-matched ZNCC against the stored bitmap among the
     /// track's observation readings (`blur_matched_bitmap_zncc`); no value
     /// when no score was read, absent without readings.
-    LowestBlurMatchedBitmapZncc,
+    MinBlurMatchedBitmapZncc,
     /// The largest ZNCC self-similarity radius among the track's measured
     /// observation readings, in patch px; no value when none is measured,
     /// absent without readings.
-    LargestZnccSelfSimilarityRadius,
+    MaxZnccSelfSimilarityRadius,
     /// The ZNCC self-similarity radius of the point's patch as its reference
     /// view sees it, in patch px: the stored reading at the reference
     /// observation where there is one, else the reading of the stored patch
@@ -97,7 +97,7 @@ pub enum TrackTableColumn {
     /// The largest viewing angle of the point's patch over the track's
     /// observations, in degrees, as Track View measures it; no value for a
     /// point with no patch frame, absent without patch frames.
-    LargestViewingAngleDeg,
+    MaxViewingAngleDeg,
     /// Condition number of the point's triangulation
     /// ([`compute_point_diagnostics`]). No value at infinity.
     ConditionNumber,
@@ -128,19 +128,19 @@ impl TrackTableColumn {
         TrackTableColumn::RepeatObservations,
         TrackTableColumn::BackFacingObservations,
         TrackTableColumn::RmsErrorPx,
-        TrackTableColumn::LargestErrorPx,
+        TrackTableColumn::MaxErrorPx,
         TrackTableColumn::X,
         TrackTableColumn::Y,
         TrackTableColumn::Z,
         TrackTableColumn::CentroidDistance,
         TrackTableColumn::NormalConfidence,
-        TrackTableColumn::LowestZncc,
-        TrackTableColumn::LowestBlurMatchedBitmapZncc,
-        TrackTableColumn::LargestZnccSelfSimilarityRadius,
+        TrackTableColumn::MinZncc,
+        TrackTableColumn::MinBlurMatchedBitmapZncc,
+        TrackTableColumn::MaxZnccSelfSimilarityRadius,
         TrackTableColumn::ReferenceZnccSelfSimilarityRadius,
         TrackTableColumn::ReferenceZnccSelfSimilarityElongation,
         TrackTableColumn::MaxRayAngleDeg,
-        TrackTableColumn::LargestViewingAngleDeg,
+        TrackTableColumn::MaxViewingAngleDeg,
         TrackTableColumn::ConditionNumber,
         TrackTableColumn::InverseDepthZ,
     ];
@@ -152,17 +152,15 @@ impl TrackTableColumn {
             TrackTableColumn::RepeatObservations => "repeat_observations",
             TrackTableColumn::BackFacingObservations => "back_facing_observations",
             TrackTableColumn::RmsErrorPx => "rms_error_px",
-            TrackTableColumn::LargestErrorPx => "largest_error_px",
+            TrackTableColumn::MaxErrorPx => "max_error_px",
             TrackTableColumn::X => "x",
             TrackTableColumn::Y => "y",
             TrackTableColumn::Z => "z",
             TrackTableColumn::CentroidDistance => "centroid_distance",
             TrackTableColumn::NormalConfidence => "normal_confidence",
-            TrackTableColumn::LowestZncc => "lowest_zncc",
-            TrackTableColumn::LowestBlurMatchedBitmapZncc => "lowest_blur_matched_bitmap_zncc",
-            TrackTableColumn::LargestZnccSelfSimilarityRadius => {
-                "largest_zncc_self_similarity_radius"
-            }
+            TrackTableColumn::MinZncc => "min_zncc",
+            TrackTableColumn::MinBlurMatchedBitmapZncc => "min_blur_matched_bitmap_zncc",
+            TrackTableColumn::MaxZnccSelfSimilarityRadius => "max_zncc_self_similarity_radius",
             TrackTableColumn::ReferenceZnccSelfSimilarityRadius => {
                 "reference_zncc_self_similarity_radius"
             }
@@ -170,7 +168,7 @@ impl TrackTableColumn {
                 "reference_zncc_self_similarity_elongation"
             }
             TrackTableColumn::MaxRayAngleDeg => "max_ray_angle_deg",
-            TrackTableColumn::LargestViewingAngleDeg => "largest_viewing_angle_deg",
+            TrackTableColumn::MaxViewingAngleDeg => "max_viewing_angle_deg",
             TrackTableColumn::ConditionNumber => "condition_number",
             TrackTableColumn::InverseDepthZ => "inverse_depth_z",
         }
@@ -185,11 +183,11 @@ impl TrackTableColumn {
     pub fn cost(self) -> ColumnCost {
         match self {
             TrackTableColumn::BackFacingObservations
-            | TrackTableColumn::LargestErrorPx
+            | TrackTableColumn::MaxErrorPx
             | TrackTableColumn::ReferenceZnccSelfSimilarityRadius
             | TrackTableColumn::ReferenceZnccSelfSimilarityElongation
             | TrackTableColumn::MaxRayAngleDeg
-            | TrackTableColumn::LargestViewingAngleDeg
+            | TrackTableColumn::MaxViewingAngleDeg
             | TrackTableColumn::ConditionNumber
             | TrackTableColumn::InverseDepthZ => ColumnCost::Computed,
             _ => ColumnCost::Stored,
@@ -218,17 +216,17 @@ impl TrackTableColumn {
                 .iter()
                 .any(|image| is_posed(&image.quaternion_wxyz, &image.translation_xyz)),
             TrackTableColumn::NormalConfidence => recon.has_normal_confidence(),
-            TrackTableColumn::LowestZncc => recon.has_observation_confidence(),
-            TrackTableColumn::LowestBlurMatchedBitmapZncc
-            | TrackTableColumn::LargestZnccSelfSimilarityRadius => {
+            TrackTableColumn::MinZncc => recon.has_observation_confidence(),
+            TrackTableColumn::MinBlurMatchedBitmapZncc
+            | TrackTableColumn::MaxZnccSelfSimilarityRadius => {
                 recon.observation_reading_options().is_some()
             }
             TrackTableColumn::ReferenceZnccSelfSimilarityRadius
             | TrackTableColumn::ReferenceZnccSelfSimilarityElongation => {
                 recon.has_patch_bitmaps() || recon.observation_reading_options().is_some()
             }
-            TrackTableColumn::LargestErrorPx => recon.has_keypoints(),
-            TrackTableColumn::BackFacingObservations | TrackTableColumn::LargestViewingAngleDeg => {
+            TrackTableColumn::MaxErrorPx => recon.has_keypoints(),
+            TrackTableColumn::BackFacingObservations | TrackTableColumn::MaxViewingAngleDeg => {
                 recon.has_patch_frames()
             }
             TrackTableColumn::TrackLength
@@ -509,13 +507,11 @@ fn point_values(
                 (length - images.len()) as f64
             }
             TrackTableColumn::RmsErrorPx => f64::from(point.rms_reprojection_error),
-            TrackTableColumn::LargestErrorPx => {
-                observation_quality::largest_error_px(image_set, view)
-            }
+            TrackTableColumn::MaxErrorPx => observation_quality::max_error_px(image_set, view),
             TrackTableColumn::BackFacingObservations => angles
                 .get_or_insert_with(|| observation_quality::viewing_angles(image_set, view))
                 .map_or(f64::NAN, |(_, count)| count),
-            TrackTableColumn::LargestViewingAngleDeg => angles
+            TrackTableColumn::MaxViewingAngleDeg => angles
                 .get_or_insert_with(|| observation_quality::viewing_angles(image_set, view))
                 .map_or(f64::NAN, |(largest, _)| largest),
             TrackTableColumn::X => finite(point.position.x),
@@ -536,9 +532,9 @@ fn point_values(
             TrackTableColumn::NormalConfidence => {
                 view.normal_confidence().map_or(f64::NAN, f64::from)
             }
-            TrackTableColumn::LowestZncc => lowest_zncc(view),
-            TrackTableColumn::LowestBlurMatchedBitmapZncc => {
-                observation_quality::lowest_blur_matched_bitmap_zncc(view)
+            TrackTableColumn::MinZncc => min_zncc(view),
+            TrackTableColumn::MinBlurMatchedBitmapZncc => {
+                observation_quality::min_blur_matched_bitmap_zncc(view)
             }
             TrackTableColumn::ReferenceZnccSelfSimilarityRadius => reference
                 .get_or_insert_with(|| observation_quality::reference_self_similarity_axes(view))
@@ -549,9 +545,7 @@ fn point_values(
                 });
                 major / minor
             }
-            TrackTableColumn::LargestZnccSelfSimilarityRadius => {
-                largest_self_similarity_radius(view)
-            }
+            TrackTableColumn::MaxZnccSelfSimilarityRadius => max_self_similarity_radius(view),
             TrackTableColumn::MaxRayAngleDeg => {
                 f64::from(compute_max_ray_angle_deg(image_set, view))
             }
@@ -573,7 +567,7 @@ fn point_values(
 
 /// The lowest measured `observation_confidence` byte of the track, over 255:
 /// a `0` byte says the observation was never measured, so it is skipped.
-fn lowest_zncc(view: &PointView<'_>) -> f64 {
+fn min_zncc(view: &PointView<'_>) -> f64 {
     view.observation_confidence()
         .and_then(|bytes| bytes.iter().copied().filter(|&b| b != 0).min())
         .map_or(f64::NAN, |b| f64::from(b) / 255.0)
@@ -581,7 +575,7 @@ fn lowest_zncc(view: &PointView<'_>) -> f64 {
 
 /// The largest semi-major axis of the self-similarity ellipse among the
 /// track's measured readings.
-fn largest_self_similarity_radius(view: &PointView<'_>) -> f64 {
+fn max_self_similarity_radius(view: &PointView<'_>) -> f64 {
     view.observation_readings()
         .and_then(|rows| {
             rows.iter()

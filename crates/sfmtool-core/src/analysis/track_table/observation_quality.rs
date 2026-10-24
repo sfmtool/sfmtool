@@ -22,7 +22,7 @@ use crate::RotQuaternion;
 /// whose point does not project (behind the camera, or outside the lens's
 /// domain) is skipped, as the stored RMS error skips it; NaN when none
 /// projects or the reconstruction holds no inline keypoints.
-pub(super) fn largest_error_px(image_set: &ImageSet, view: &PointView<'_>) -> f64 {
+pub(super) fn max_error_px(image_set: &ImageSet, view: &PointView<'_>) -> f64 {
     let point = view.point();
     let at_infinity = point.is_at_infinity();
     let mut largest = f64::NAN;
@@ -94,7 +94,7 @@ pub(super) fn viewing_angles(image_set: &ImageSet, view: &PointView<'_>) -> Opti
 /// The lowest blur-matched ZNCC against the stored bitmap among the track's
 /// observation readings, skipping the rows whose score was not read (NaN);
 /// NaN when none was read or the reconstruction holds no readings.
-pub(super) fn lowest_blur_matched_bitmap_zncc(view: &PointView<'_>) -> f64 {
+pub(super) fn min_blur_matched_bitmap_zncc(view: &PointView<'_>) -> f64 {
     view.observation_readings()
         .and_then(|rows| {
             rows.iter()

@@ -21,19 +21,19 @@ ALL_COLUMNS = (
     "repeat_observations",
     "back_facing_observations",
     "rms_error_px",
-    "largest_error_px",
+    "max_error_px",
     "x",
     "y",
     "z",
     "centroid_distance",
     "normal_confidence",
-    "lowest_zncc",
-    "lowest_blur_matched_bitmap_zncc",
-    "largest_zncc_self_similarity_radius",
+    "min_zncc",
+    "min_blur_matched_bitmap_zncc",
+    "max_zncc_self_similarity_radius",
     "reference_zncc_self_similarity_radius",
     "reference_zncc_self_similarity_elongation",
     "max_ray_angle_deg",
-    "largest_viewing_angle_deg",
+    "max_viewing_angle_deg",
     "condition_number",
     "inverse_depth_z",
 )
@@ -146,7 +146,7 @@ def test_named_columns_only(recon):
 
 def test_unknown_column_is_refused(recon):
     with pytest.raises(ValueError, match="not a track table column"):
-        track_table(recon, ["min_zncc"])
+        track_table(recon, ["zncc"])
 
 
 def test_absent_column_is_refused_when_named_and_skipped_otherwise(recon):
@@ -156,7 +156,7 @@ def test_absent_column_is_refused_when_named_and_skipped_otherwise(recon):
         track_table(bare, ["normal_confidence"])
 
 
-def test_lowest_zncc_reads_measured_bytes_only(recon):
+def test_min_zncc_reads_measured_bytes_only(recon):
     m = recon.observation_count
     confidence = np.zeros(m, dtype=np.uint8)
     track_points = recon.track_point_indexes
@@ -166,7 +166,7 @@ def test_lowest_zncc_reads_measured_bytes_only(recon):
     second = np.flatnonzero(track_points == 1)
     confidence[second] = 255
     changed = recon.clone_with_changes(observation_confidence=confidence)
-    lowest = track_table(changed, ["lowest_zncc"])["lowest_zncc"]
+    lowest = track_table(changed, ["min_zncc"])["min_zncc"]
     assert lowest[0] == pytest.approx(51 / 255)
     assert lowest[1] == 1.0
     # Point 2 has every byte zero: nothing was measured.
@@ -181,8 +181,8 @@ def test_an_edited_reconstruction_is_read_through_its_edits(recon):
     assert len(table["track_length"]) == recon.point_count - 2
 
 
-def test_largest_error_is_the_worst_observation(recon):
-    table = track_table(recon, ["rms_error_px", "largest_error_px"])
+def test_max_error_is_the_worst_observation(recon):
+    table = track_table(recon, ["rms_error_px", "max_error_px"])
     track_points = recon.track_point_indexes
     largest = np.full(recon.point_count, np.nan)
     for image in range(recon.image_count):
@@ -190,17 +190,17 @@ def test_largest_error_is_the_worst_observation(recon):
         rows_errors = recon.compute_observation_reprojection_errors(image)
         rows = rows_errors[:, 0].astype(int)
         np.fmax.at(largest, track_points[rows], rows_errors[:, 1].astype(np.float64))
-    np.testing.assert_allclose(table["largest_error_px"], largest, rtol=1e-5)
+    np.testing.assert_allclose(table["max_error_px"], largest, rtol=1e-5)
     # The largest of a set of errors is at least their RMS.
-    assert (table["largest_error_px"] >= table["rms_error_px"] * (1 - 1e-5)).all()
+    assert (table["max_error_px"] >= table["rms_error_px"] * (1 - 1e-5)).all()
 
 
 def test_viewing_angles_need_patch_frames(recon):
     table = track_table(
         recon,
-        ["track_length", "largest_viewing_angle_deg", "back_facing_observations"],
+        ["track_length", "max_viewing_angle_deg", "back_facing_observations"],
     )
-    angle = table["largest_viewing_angle_deg"]
+    angle = table["max_viewing_angle_deg"]
     back = table["back_facing_observations"]
     # Every point of the ground truth carries a patch frame.
     framed = np.isfinite(angle)
@@ -212,7 +212,7 @@ def test_viewing_angles_need_patch_frames(recon):
     # A patch seen from behind is seen at 90 degrees or more.
     assert (angle[back > 0] >= 90).all()
     bare = recon.clone_with_changes(patches=None)
-    assert "largest_viewing_angle_deg" not in track_table(bare)
+    assert "max_viewing_angle_deg" not in track_table(bare)
     with pytest.raises(ValueError, match="back_facing_observations"):
         track_table(bare, ["back_facing_observations"])
 
@@ -224,7 +224,7 @@ def test_readings_supply_the_bitmap_zncc_and_the_reference_reading(recon):
     table = track_table(
         changed,
         [
-            "lowest_blur_matched_bitmap_zncc",
+            "min_blur_matched_bitmap_zncc",
             "reference_zncc_self_similarity_radius",
             "reference_zncc_self_similarity_elongation",
         ],
@@ -233,7 +233,7 @@ def test_readings_supply_the_bitmap_zncc_and_the_reference_reading(recon):
     scores = readings["blur_matched_bitmap_zncc"]
     lowest = np.full(changed.point_count, np.inf)
     np.minimum.at(lowest, track_points, scores)
-    np.testing.assert_array_equal(table["lowest_blur_matched_bitmap_zncc"], lowest)
+    np.testing.assert_array_equal(table["min_blur_matched_bitmap_zncc"], lowest)
     # The reference reading is the row of the reference observation.
     offsets = np.concatenate([[0], np.cumsum(np.bincount(track_points))])
     references = changed.reference_observations

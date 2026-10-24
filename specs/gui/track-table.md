@@ -116,21 +116,21 @@ decoded.
   | Repeat obs. | `repeat_observations` | a whole number, `0` for a sound track |
   | Back-facing obs. | `back_facing_observations` | a whole number, `0` for a sound track; `-` for a point with no patch frame |
   | Error (px) | `rms_error_px` | three significant digits, at most three decimals |
-  | Largest error (px) | `largest_error_px` | as Error |
+  | Max. error (px) | `max_error_px` | as Error |
   | X, Y, Z | `x`, `y`, `z` | four significant digits, every whole digit kept, at most three decimals |
   | Distance | `centroid_distance` | three significant digits, at most three decimals; `∞` for a point at infinity |
   | Normal conf. | `normal_confidence` | a whole number, 0 to 255 |
-  | Lowest ZNCC | `lowest_zncc` | two decimals |
-  | Lowest bitmap ZNCC | `lowest_blur_matched_bitmap_zncc` | two decimals |
-  | Self-sim. radius | `largest_zncc_self_similarity_radius` | three significant digits, at most three decimals |
+  | Min. ZNCC | `min_zncc` | two decimals |
+  | Min. bitmap ZNCC | `min_blur_matched_bitmap_zncc` | two decimals |
+  | Self-sim. radius | `max_zncc_self_similarity_radius` | three significant digits, at most three decimals |
   | Ref. self-sim. radius | `reference_zncc_self_similarity_radius` | as Self-sim. radius |
   | Ref. elongation | `reference_zncc_self_similarity_elongation` | as Self-sim. radius; `1` for a round ellipse |
   | Ray angle (°) | `max_ray_angle_deg` | three significant digits, at most three decimals; `0` for a point at infinity |
-  | Viewing angle (°) | `largest_viewing_angle_deg` | as Ray angle; `-` for a point with no patch frame |
+  | Viewing angle (°) | `max_viewing_angle_deg` | as Ray angle; `-` for a point with no patch frame |
   | Cond. | `condition_number` | three significant digits, at most three decimals, and from 10⁵ on in scientific notation (`1.23e7`); `-` for a point at infinity |
   | Inv. depth z | `inverse_depth_z` | as Cond.; `∞` where the depth uncertainty is 0; `-` for a point at infinity |
 
-  Back-facing obs., Largest error, the two Ref. columns, Ray angle, Viewing
+  Back-facing obs., Max. error, the two Ref. columns, Ray angle, Viewing
   angle, Cond. and Inv. depth z are the computed columns
   ([core/analysis/track-table.md](../core/analysis/track-table.md) § "The
   columns"). Their hover texts say what makes a value bad and what a point at
@@ -145,11 +145,11 @@ decoded.
     of 90° or more, edge on or from behind, where no patch is drawn and which
     the reference-view rule never picks, so that anything but 0 says the
     patch's normal is likely wrong.
-  - *Largest error (px)*: the worst observation's reprojection error, which
+  - *Max. error (px)*: the worst observation's reprojection error, which
     one bad observation in a long track sets and barely moves the RMS.
-  - *Lowest bitmap ZNCC*: the lowest blur-matched score against the stored
+  - *Min. bitmap ZNCC*: the lowest blur-matched score against the stored
     patch bitmap, the score Track View's *ZNCC* column shows and its bars
-    judge, and that *Lowest ZNCC* reads another stored score.
+    judge, and that *Min. ZNCC* reads another stored score.
   - *Ref. self-sim. radius*: how far the patch, as its reference view sees it,
     slides over itself and still matches itself, from the stored reading at
     the reference observation or from the patch bitmap, and that a large
@@ -209,13 +209,13 @@ decoded.
 - **The heading row** sorts by the column clicked. The first click on a
   column sorts the bad end first where the column has one:
   `repeat_observations`, `back_facing_observations`, `rms_error_px`,
-  `largest_error_px`, `condition_number`,
-  `largest_zncc_self_similarity_radius`,
+  `max_error_px`, `condition_number`,
+  `max_zncc_self_similarity_radius`,
   `reference_zncc_self_similarity_radius`,
   `reference_zncc_self_similarity_elongation` and
-  `largest_viewing_angle_deg` descending, `track_length`,
-  `max_ray_angle_deg`, `inverse_depth_z`, `lowest_zncc`,
-  `lowest_blur_matched_bitmap_zncc` and `normal_confidence` ascending. The inverse-depth z is the depth over its
+  `max_viewing_angle_deg` descending, `track_length`,
+  `max_ray_angle_deg`, `inverse_depth_z`, `min_zncc`,
+  `min_blur_matched_bitmap_zncc` and `normal_confidence` ascending. The inverse-depth z is the depth over its
   uncertainty, and a small one is a point that cannot be told from one at
   infinity, so its bad end is its small values. Every other column sorts
   ascending first, Distance among them, which puts the points at infinity, at
@@ -867,7 +867,7 @@ runs the quality columns over the demo reconstruction given a patch frame on
 every point, some facing away from both their cameras, and observation
 readings:
 
-- the six headings are *Back-facing obs.*, *Largest error (px)*, *Lowest
+- the six headings are *Back-facing obs.*, *Max. error (px)*, *Min.
   bitmap ZNCC*, *Ref. self-sim. radius*, *Ref. elongation* and *Viewing angle
   (°)*, and the first click on each puts the bad end first, ascending for the
   score and descending for the others;
@@ -884,7 +884,7 @@ readings:
 
 The MCP tests hold that a `find_points` call ordered by `max_ray_angle_deg`
 answers in the frame from the column the panel's job computed, and that a
-bound and a sort on `largest_error_px` return core's values in its order.
+bound and a sort on `max_error_px` return core's values in its order.
 
 [track_table_panel/tests/pictures.rs](../../crates/sfm-explorer/src/track_table_panel/tests/pictures.rs)
 runs the Patch column over the same reconstruction given an 8 × 8 bitmap per
@@ -1003,8 +1003,8 @@ the panel among the ten.
   when a file's errors may be stale, is undecided.
 - **Does the query persist?** It could be kept in the layout file, or
   per-session only, as it is now.
-- **`lowest_zncc` beside `lowest_blur_matched_bitmap_zncc`.** The first reads
+- **`min_zncc` beside `min_blur_matched_bitmap_zncc`.** The first reads
   `observation_confidence` and the second the readings' blur-matched score
   against the stored bitmap, which is the number Track View's bars judge.
-  Whether `lowest_zncc` is still worth a column where both exist is
+  Whether `min_zncc` is still worth a column where both exist is
   undecided.

@@ -909,21 +909,24 @@ cache and the operation it starts are in
   live points the table has rows for.
 - **The columns** are every track table column by its wire name, in core's
   order: `track_length`, `repeat_observations`, `back_facing_observations`,
-  `rms_error_px`, `largest_error_px`, `x`, `y`, `z`, `centroid_distance`,
-  `normal_confidence`, `lowest_zncc`, `lowest_blur_matched_bitmap_zncc`,
-  `largest_zncc_self_similarity_radius`,
+  `rms_error_px`, `max_error_px`, `x`, `y`, `z`, `centroid_distance`,
+  `normal_confidence`, `min_zncc`, `min_blur_matched_bitmap_zncc`,
+  `max_zncc_self_similarity_radius`,
   `reference_zncc_self_similarity_radius`,
   `reference_zncc_self_similarity_elongation`, `max_ray_angle_deg`,
-  `largest_viewing_angle_deg`, `condition_number` and `inverse_depth_z`, each
+  `max_viewing_angle_deg`, `condition_number` and `inverse_depth_z`, each
   defined in [core/analysis/track-table.md](../core/analysis/track-table.md)
   § "The columns". The tool's description names them all, with a sentence on
   each column a reader could take for another: `back_facing_observations` is a
-  defect count as `repeat_observations` is, `largest_error_px` is the worst
+  defect count as `repeat_observations` is, `max_error_px` is the worst
   observation where `rms_error_px` is the track's RMS,
-  `lowest_blur_matched_bitmap_zncc` reads the stored blur-matched score
-  against the bitmap where `lowest_zncc` reads `observation_confidence`, and
-  the two `reference_` columns are the reference view's self-similarity. Any
-  of them can be bounded, sorted by and returned.
+  `min_blur_matched_bitmap_zncc` reads the stored blur-matched score
+  against the bitmap where `min_zncc` reads `observation_confidence`, a
+  `min_` or `max_` column is the minimum or maximum over the track's
+  observations and not a bench bar of the same name (`min_zncc` and
+  `max_zncc_self_similarity_radius` are also `apply_bench_track_thresholds`
+  arguments), and the two `reference_` columns are the reference view's
+  self-similarity. Any of them can be bounded, sorted by and returned.
 - **The values returned** are the columns `columns` names, each once, in the
   order named. Without `columns` they are the bound columns and the sorted
   column, in that order, followed by `track_length` and `rms_error_px`, each
@@ -934,8 +937,8 @@ cache and the operation it starts are in
   infinity has `null` for `x`, `y`, `z`, `condition_number` and
   `inverse_depth_z` and `0` for `max_ray_angle_deg`, as the core table defines
   them, a track no observation of which was measured has `null` for
-  `lowest_zncc`, and a point with no patch frame has `null` for
-  `largest_viewing_angle_deg` and `back_facing_observations`. JSON has no infinity either, so the `+∞` a point at infinity
+  `min_zncc`, and a point with no patch frame has `null` for
+  `max_viewing_angle_deg` and `back_facing_observations`. JSON has no infinity either, so the `+∞` a point at infinity
   has for `centroid_distance` is sent as the string `"inf"`, which is a value,
   not "no value". A count and a byte (`track_length`, `repeat_observations`,
   `back_facing_observations`, `normal_confidence`) are integers. The positions are the `f64`
@@ -5753,7 +5756,7 @@ where a test hands no host over.
   `"inf"` keeps it alone, a finite `max` drops it, and a `max` of `"inf"` with
   a descending sort keeps it and puts it first; `repeat_observations` counts
   an observation moved into an image its track already has; a bound and a
-  descending sort on `largest_error_px` match and order the points as core's
+  descending sort on `max_error_px` match and order the points as core's
   table of that column does, with its values; the refusals name
   an unknown column, a column the reconstruction cannot supply with the ones
   it can, a `min` above a `max`, a bound string other than `"inf"` and an

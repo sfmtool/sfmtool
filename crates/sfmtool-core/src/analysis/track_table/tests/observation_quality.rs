@@ -150,11 +150,11 @@ fn the_new_columns_are_absent_without_their_data() {
     let recon = edited(demo(4));
     for c in [
         TrackTableColumn::BackFacingObservations,
-        TrackTableColumn::LargestErrorPx,
-        TrackTableColumn::LowestBlurMatchedBitmapZncc,
+        TrackTableColumn::MaxErrorPx,
+        TrackTableColumn::MinBlurMatchedBitmapZncc,
         TrackTableColumn::ReferenceZnccSelfSimilarityRadius,
         TrackTableColumn::ReferenceZnccSelfSimilarityElongation,
-        TrackTableColumn::LargestViewingAngleDeg,
+        TrackTableColumn::MaxViewingAngleDeg,
     ] {
         assert!(!c.is_available(&recon), "{c:?}");
         assert!(!compute(&recon, &[c]).has(c), "{c:?}");
@@ -162,7 +162,7 @@ fn the_new_columns_are_absent_without_their_data() {
 }
 
 #[test]
-fn the_largest_error_is_the_worst_observation_and_defined_at_infinity() {
+fn the_max_error_is_the_worst_observation_and_defined_at_infinity() {
     // Observation 2k + 1 is moved 3 px, 4 px for point 1's.
     let offset = |row: usize| match row {
         3 => [0.0, 4.0],
@@ -172,9 +172,9 @@ fn the_largest_error_is_the_worst_observation_and_defined_at_infinity() {
     let (recon, bearing) = demo_with_bearing(8);
     assert_ne!(bearing, 1);
     let recon = edited(with_keypoints(recon, offset));
-    assert!(TrackTableColumn::LargestErrorPx.is_available(&recon));
-    let table = compute(&recon, &[TrackTableColumn::LargestErrorPx]);
-    let v = table.values(TrackTableColumn::LargestErrorPx).unwrap();
+    assert!(TrackTableColumn::MaxErrorPx.is_available(&recon));
+    let table = compute(&recon, &[TrackTableColumn::MaxErrorPx]);
+    let v = table.values(TrackTableColumn::MaxErrorPx).unwrap();
     assert_eq!(v.len(), 8);
     for (p, &value) in v.iter().enumerate() {
         let expected = if p == 1 { 4.0 } else { 3.0 };
@@ -196,17 +196,15 @@ fn viewing_angles_are_track_views_and_count_the_back_facing_views() {
         } else {
             edited(base.clone())
         };
-        assert!(TrackTableColumn::LargestViewingAngleDeg.is_available(&recon));
+        assert!(TrackTableColumn::MaxViewingAngleDeg.is_available(&recon));
         let table = compute(
             &recon,
             &[
-                TrackTableColumn::LargestViewingAngleDeg,
+                TrackTableColumn::MaxViewingAngleDeg,
                 TrackTableColumn::BackFacingObservations,
             ],
         );
-        let largest = table
-            .values(TrackTableColumn::LargestViewingAngleDeg)
-            .unwrap();
+        let largest = table.values(TrackTableColumn::MaxViewingAngleDeg).unwrap();
         let back = table
             .values(TrackTableColumn::BackFacingObservations)
             .unwrap();
@@ -240,7 +238,7 @@ fn viewing_angles_are_track_views_and_count_the_back_facing_views() {
 }
 
 #[test]
-fn lowest_blur_matched_bitmap_zncc_skips_unread_scores() {
+fn min_blur_matched_bitmap_zncc_skips_unread_scores() {
     let mut recon = demo(4);
     let options = observation_reading_options(
         SamplerChoice::Fixed(Sampler::Bilinear),
@@ -264,9 +262,9 @@ fn lowest_blur_matched_bitmap_zncc_skips_unread_scores() {
     readings.rows[7] = scored(0.75);
     recon.point_set.observation_readings = Some(readings);
     let recon = edited(with_bearing(recon, 3));
-    let table = compute(&recon, &[TrackTableColumn::LowestBlurMatchedBitmapZncc]);
+    let table = compute(&recon, &[TrackTableColumn::MinBlurMatchedBitmapZncc]);
     let v = table
-        .values(TrackTableColumn::LowestBlurMatchedBitmapZncc)
+        .values(TrackTableColumn::MinBlurMatchedBitmapZncc)
         .unwrap();
     assert_eq!(v[0], 0.62);
     assert!(v[1].is_nan());

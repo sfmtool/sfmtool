@@ -84,10 +84,10 @@ fn texts(state: &mut AppState, panel: &mut TrackTablePanel, ctx: &egui::Context)
 fn the_quality_columns_have_short_headings() {
     for (column, title) in [
         (TrackTableColumn::BackFacingObservations, "Back-facing obs."),
-        (TrackTableColumn::LargestErrorPx, "Largest error (px)"),
+        (TrackTableColumn::MaxErrorPx, "Max. error (px)"),
         (
-            TrackTableColumn::LowestBlurMatchedBitmapZncc,
-            "Lowest bitmap ZNCC",
+            TrackTableColumn::MinBlurMatchedBitmapZncc,
+            "Min. bitmap ZNCC",
         ),
         (
             TrackTableColumn::ReferenceZnccSelfSimilarityRadius,
@@ -98,7 +98,7 @@ fn the_quality_columns_have_short_headings() {
             "Ref. elongation",
         ),
         (
-            TrackTableColumn::LargestViewingAngleDeg,
+            TrackTableColumn::MaxViewingAngleDeg,
             "Viewing angle (\u{b0})",
         ),
     ] {
@@ -112,14 +112,14 @@ fn the_quality_columns_have_short_headings() {
 fn the_first_click_on_a_quality_column_puts_the_bad_end_first() {
     for (column, descending) in [
         (TrackTableColumn::BackFacingObservations, true),
-        (TrackTableColumn::LargestErrorPx, true),
-        (TrackTableColumn::LowestBlurMatchedBitmapZncc, false),
+        (TrackTableColumn::MaxErrorPx, true),
+        (TrackTableColumn::MinBlurMatchedBitmapZncc, false),
         (TrackTableColumn::ReferenceZnccSelfSimilarityRadius, true),
         (
             TrackTableColumn::ReferenceZnccSelfSimilarityElongation,
             true,
         ),
-        (TrackTableColumn::LargestViewingAngleDeg, true),
+        (TrackTableColumn::MaxViewingAngleDeg, true),
     ] {
         assert_eq!(
             TableSort::first_click(column),
@@ -175,7 +175,7 @@ fn back_facing_observations_show_themselves_and_their_count() {
     );
     // Observations 0 and 1 of point 0 score 1 and 0.99.
     assert_eq!(
-        cell_text(table, TrackTableColumn::LowestBlurMatchedBitmapZncc, 0),
+        cell_text(table, TrackTableColumn::MinBlurMatchedBitmapZncc, 0),
         "0.99"
     );
 

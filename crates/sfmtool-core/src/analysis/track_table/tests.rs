@@ -61,10 +61,11 @@ fn wire_names_are_unique_and_round_trip() {
             Some(column)
         );
     }
-    assert_eq!(TrackTableColumn::from_wire_name("min_zncc"), None);
+    assert_eq!(TrackTableColumn::from_wire_name("zncc"), None);
+    assert_eq!(TrackTableColumn::MinZncc.wire_name(), "min_zncc");
     assert_eq!(
-        TrackTableColumn::LargestZnccSelfSimilarityRadius.wire_name(),
-        "largest_zncc_self_similarity_radius"
+        TrackTableColumn::MaxZnccSelfSimilarityRadius.wire_name(),
+        "max_zncc_self_similarity_radius"
     );
 }
 
@@ -78,11 +79,11 @@ fn the_computed_columns_are_the_ones_that_project_triangulate_or_read() {
         computed,
         [
             TrackTableColumn::BackFacingObservations,
-            TrackTableColumn::LargestErrorPx,
+            TrackTableColumn::MaxErrorPx,
             TrackTableColumn::ReferenceZnccSelfSimilarityRadius,
             TrackTableColumn::ReferenceZnccSelfSimilarityElongation,
             TrackTableColumn::MaxRayAngleDeg,
-            TrackTableColumn::LargestViewingAngleDeg,
+            TrackTableColumn::MaxViewingAngleDeg,
             TrackTableColumn::ConditionNumber,
             TrackTableColumn::InverseDepthZ
         ]
@@ -251,17 +252,17 @@ fn absent_columns_are_skipped() {
     let recon = edited(demo(6));
     for c in [
         TrackTableColumn::NormalConfidence,
-        TrackTableColumn::LowestZncc,
-        TrackTableColumn::LargestZnccSelfSimilarityRadius,
+        TrackTableColumn::MinZncc,
+        TrackTableColumn::MaxZnccSelfSimilarityRadius,
     ] {
         assert!(!c.is_available(&recon), "{c:?}");
     }
     assert!(TrackTableColumn::CentroidDistance.is_available(&recon));
     let table = compute(&recon, &TrackTableColumn::ALL);
     assert!(!table.has(TrackTableColumn::NormalConfidence));
-    assert!(!table.has(TrackTableColumn::LowestZncc));
-    assert!(!table.has(TrackTableColumn::LargestZnccSelfSimilarityRadius));
-    assert!(table.values(TrackTableColumn::LowestZncc).is_none());
+    assert!(!table.has(TrackTableColumn::MinZncc));
+    assert!(!table.has(TrackTableColumn::MaxZnccSelfSimilarityRadius));
+    assert!(table.values(TrackTableColumn::MinZncc).is_none());
     assert!(table.has(TrackTableColumn::TrackLength));
 }
 
@@ -295,14 +296,14 @@ fn normal_confidence_is_the_stored_byte() {
 }
 
 #[test]
-fn lowest_zncc_skips_unmeasured_observations() {
+fn min_zncc_skips_unmeasured_observations() {
     let mut recon = demo(4);
     // Two observations per point, in point order.
     recon.point_set.observation_confidence = Some(vec![0, 128, 0, 0, 200, 100, 255, 255]);
     let recon = edited(with_bearing(recon.clone(), 3));
-    assert!(TrackTableColumn::LowestZncc.is_available(&recon));
-    let table = compute(&recon, &[TrackTableColumn::LowestZncc]);
-    let v = table.values(TrackTableColumn::LowestZncc).unwrap();
+    assert!(TrackTableColumn::MinZncc.is_available(&recon));
+    let table = compute(&recon, &[TrackTableColumn::MinZncc]);
+    let v = table.values(TrackTableColumn::MinZncc).unwrap();
     assert_eq!(v[0], (128.0f64 / 255.0) as f32);
     assert!(v[1].is_nan(), "no observation of point 1 was measured");
     assert_eq!(v[2], (100.0f64 / 255.0) as f32);
@@ -311,7 +312,7 @@ fn lowest_zncc_skips_unmeasured_observations() {
 }
 
 #[test]
-fn largest_self_similarity_radius_skips_unmeasured_readings() {
+fn max_self_similarity_radius_skips_unmeasured_readings() {
     let mut recon = demo(3);
     let options = observation_reading_options(
         SamplerChoice::Fixed(Sampler::Bilinear),
@@ -328,10 +329,10 @@ fn largest_self_similarity_radius_skips_unmeasured_readings() {
     readings.rows[5] = measured([3.0, 0.25]);
     recon.point_set.observation_readings = Some(readings);
     let recon = edited(recon);
-    assert!(TrackTableColumn::LargestZnccSelfSimilarityRadius.is_available(&recon));
-    let table = compute(&recon, &[TrackTableColumn::LargestZnccSelfSimilarityRadius]);
+    assert!(TrackTableColumn::MaxZnccSelfSimilarityRadius.is_available(&recon));
+    let table = compute(&recon, &[TrackTableColumn::MaxZnccSelfSimilarityRadius]);
     let v = table
-        .values(TrackTableColumn::LargestZnccSelfSimilarityRadius)
+        .values(TrackTableColumn::MaxZnccSelfSimilarityRadius)
         .unwrap();
     assert_eq!(v[0], 1.5);
     assert!(v[1].is_nan(), "every reading of point 1 is unmeasured");

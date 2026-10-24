@@ -43,10 +43,10 @@ bound as `sfmtool.analysis.track_table`.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum TrackTableColumn {
     TrackLength, RepeatObservations, BackFacingObservations, RmsErrorPx,
-    LargestErrorPx, X, Y, Z, CentroidDistance, NormalConfidence, LowestZncc,
-    LowestBlurMatchedBitmapZncc, LargestZnccSelfSimilarityRadius,
+    MaxErrorPx, X, Y, Z, CentroidDistance, NormalConfidence, MinZncc,
+    MinBlurMatchedBitmapZncc, MaxZnccSelfSimilarityRadius,
     ReferenceZnccSelfSimilarityRadius, ReferenceZnccSelfSimilarityElongation,
-    MaxRayAngleDeg, LargestViewingAngleDeg, ConditionNumber, InverseDepthZ,
+    MaxRayAngleDeg, MaxViewingAngleDeg, ConditionNumber, InverseDepthZ,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -230,19 +230,19 @@ work the table does.
 |---|---|---|---|---|
 | `track_length` | stored | number of observations in the track | defined | never |
 | `repeat_observations` | stored | the track's observations beyond one per image: `track_length` less the number of distinct images among them. Anything but 0 is a defect in the reconstruction, one image holding several observations of the point, which a GLOMAP solve can produce; it is kept so that it can be found and fixed | defined | never |
-| `back_facing_observations` | computed | the number of the track's observations whose viewing angle (as `largest_viewing_angle_deg` reads it) is `90°` or more: **back-facing**, edge on or from behind, where no patch is drawn and which the reference-view rule never picks. Anything but 0 says the point's normal is likely wrong | defined | the reconstruction has no patch frames; no value for a point whose frame is zero |
+| `back_facing_observations` | computed | the number of the track's observations whose viewing angle (as `max_viewing_angle_deg` reads it) is `90°` or more: **back-facing**, edge on or from behind, where no patch is drawn and which the reference-view rule never picks. Anything but 0 says the point's normal is likely wrong | defined | the reconstruction has no patch frames; no value for a point whose frame is zero |
 | `rms_error_px` | stored | `Point3D::rms_reprojection_error`, the stored per-point RMS reprojection error in pixels, as its doc comment defines it; the viewer's `get_point` reports the same number as `rms_error_px`. A file holds what its writer stored | defined | never |
-| `largest_error_px` | computed | the largest reprojection error among the track's observations, in pixels: each observation's inline keypoint against the point's projection into its image through its camera (`observation_reprojection_error`, the per-observation error the RMS is the root mean square of). An observation whose point does not project, behind its camera or outside its lens's domain, is skipped, as the RMS skips it. The RMS of a long track hides one bad observation; this does not | defined: projected along the stored direction, with no translation | the reconstruction has no inline keypoints; no value for a track none of whose observations projects |
+| `max_error_px` | computed | the largest reprojection error among the track's observations, in pixels: each observation's inline keypoint against the point's projection into its image through its camera (`observation_reprojection_error`, the per-observation error the RMS is the root mean square of). An observation whose point does not project, behind its camera or outside its lens's domain, is skipped, as the RMS skips it. The RMS of a long track hides one bad observation; this does not | defined: projected along the stored direction, with no translation | the reconstruction has no inline keypoints; no value for a track none of whose observations projects |
 | `x`, `y`, `z` | stored | the point's position in the stored frame, in the reconstruction's world-space unit (scene units where none is declared) | no value | never |
 | `centroid_distance` | stored | distance from the posed cameras' centroid, the number `ImageSet::placement_scale` gives, in the unit of `x` | `+∞` | the reconstruction has no posed image |
 | `normal_confidence` | stored | the stored `normal_confidence` byte, 0 to 255 | defined | the reconstruction has no `normal_confidence` column |
-| `lowest_zncc` | stored | the lowest stored per-observation ZNCC in the track, read from `observation_confidence` as `byte / 255` over the non-zero bytes only | no value when no observation of the track was measured | the reconstruction has no `observation_confidence` column |
-| `lowest_blur_matched_bitmap_zncc` | stored | the lowest blur-matched ZNCC against the point's stored patch bitmap among the track's observation readings, `ObservationReading::blur_matched_bitmap_zncc`, skipping the rows whose score was not read (NaN). It is the score Track View's *ZNCC* column prints and its bars judge, `-1` to `1`, and the reference observation's own row scores `1` | defined | the reconstruction has no observation readings; no value for a track with no score read |
-| `largest_zncc_self_similarity_radius` | stored | the largest ZNCC self-similarity radius among the track's observation readings: the semi-major axis of the stored ellipse, `ellipse_axes[0]`, in patch px, skipping unmeasured rows | no value when every row is unmeasured | the reconstruction has no observation readings |
-| `reference_zncc_self_similarity_radius` | computed | the ZNCC self-similarity radius of the point's patch as its **reference view** sees it, in patch px: the semi-major axis of the **reference reading**'s ellipse (§ "The reference reading"). Large for a patch with little texture, which no view localizes well, where `largest_zncc_self_similarity_radius` is the worst view's | defined | the reconstruction has neither observation readings nor patch bitmaps; no value for a point with neither a measured reading at its reference observation nor a bitmap with data |
+| `min_zncc` | stored | the lowest stored per-observation ZNCC in the track, read from `observation_confidence` as `byte / 255` over the non-zero bytes only | no value when no observation of the track was measured | the reconstruction has no `observation_confidence` column |
+| `min_blur_matched_bitmap_zncc` | stored | the lowest blur-matched ZNCC against the point's stored patch bitmap among the track's observation readings, `ObservationReading::blur_matched_bitmap_zncc`, skipping the rows whose score was not read (NaN). It is the score Track View's *ZNCC* column prints and its bars judge, `-1` to `1`, and the reference observation's own row scores `1` | defined | the reconstruction has no observation readings; no value for a track with no score read |
+| `max_zncc_self_similarity_radius` | stored | the largest ZNCC self-similarity radius among the track's observation readings: the semi-major axis of the stored ellipse, `ellipse_axes[0]`, in patch px, skipping unmeasured rows | no value when every row is unmeasured | the reconstruction has no observation readings |
+| `reference_zncc_self_similarity_radius` | computed | the ZNCC self-similarity radius of the point's patch as its **reference view** sees it, in patch px: the semi-major axis of the **reference reading**'s ellipse (§ "The reference reading"). Large for a patch with little texture, which no view localizes well, where `max_zncc_self_similarity_radius` is the worst view's | defined | the reconstruction has neither observation readings nor patch bitmaps; no value for a point with neither a measured reading at its reference observation nor a bitmap with data |
 | `reference_zncc_self_similarity_elongation` | computed | the reference reading's ellipse's semi-major axis over its semi-minor axis, `1` for a circle: large for an edge, which slides along itself and is fixed only across it | defined | as `reference_zncc_self_similarity_radius` |
 | `max_ray_angle_deg` | computed | the largest angle between two of the track's viewing rays, the rays from each observing camera's centre to the stored point (`compute_max_ray_angle_deg`) | 0 | never |
-| `largest_viewing_angle_deg` | computed | the most oblique view of the point's patch: the largest **viewing angle** over the track's observations, in degrees, as Track View's *Reference* column prints it (§ "The viewing angle") | defined: the angle to the bearing, the same from every camera | the reconstruction has no patch frames; no value for a point whose frame is zero |
+| `max_viewing_angle_deg` | computed | the most oblique view of the point's patch: the largest **viewing angle** over the track's observations, in degrees, as Track View's *Reference* column prints it (§ "The viewing angle") | defined: the angle to the bearing, the same from every camera | the reconstruction has no patch frames; no value for a point whose frame is zero |
 | `condition_number` | computed | condition number of the point's triangulation from those rays (`compute_point_diagnostics`) | no value | never |
 | `inverse_depth_z` | computed | inverse-depth z-score from the same triangulation, with per-ray angular noise `max(rms_error_px, 1) / f` | no value | never |
 
@@ -254,14 +254,14 @@ column.
 **The `observation_confidence` byte.** A measured observation stores
 `round(255 · clamp(z, 0, 1))` of its ZNCC `z`, so the column's range is 0 to
 1 with negative scores at 0, and a `0` byte means the observation was never
-measured, not that it scored 0. That is why `lowest_zncc` skips zero bytes
+measured, not that it scored 0. That is why `min_zncc` skips zero bytes
 rather than reporting 0 for a track with one unmeasured observation.
 
 **An unmeasured reading** is a row whose semi-major axis is NaN
 (`ObservationReading::is_measured` is false), which is what
 `ObservationReading::NOT_MEASURED` holds.
 
-**The two lowest scores.** `lowest_zncc` and `lowest_blur_matched_bitmap_zncc`
+**The two lowest scores.** `min_zncc` and `min_blur_matched_bitmap_zncc`
 read different stored scores. `observation_confidence` is one byte per
 observation that a writer such as cluster refinement or the bench commit
 records for the view's agreement, clamped to `0 ..= 1` and with `0` for
@@ -373,7 +373,7 @@ effect within one block. A point's values are written into a fixed array of
 one slot per column and scattered into the column vectors after the block,
 which keeps each column's rows in `live_indexes()` order without a lock. The
 condition number and the inverse-depth z come from one triangulation, which a
-point computes once when both are asked for; `largest_viewing_angle_deg` and
+point computes once when both are asked for; `max_viewing_angle_deg` and
 `back_facing_observations` share one pass over the observations' angles, and
 the two reference columns one reference reading.
 
@@ -482,7 +482,7 @@ against `zncc_self_similarity_parts_stack` of the same bitmaps.
 
 ## Non-goals
 
-`largest_error_px` reads inline keypoints only: for a `sift_files`
+`max_error_px` reads inline keypoints only: for a `sift_files`
 reconstruction without them it would need every image's `.sift` file read, so
 the column is absent there rather than reading files.
 
