@@ -156,7 +156,7 @@ ipython = "ipython"
 # deliberate commit that rebuilds the site and diffs the output. Bump the whole
 # window (`>=0.0.N, <0.0.N+1`) rather than widening it.
 [feature.docs.pypi-dependencies]
-zensical = ">=0.0.62, <0.0.63"
+zensical = ">=0.0.72, <0.0.73"
 
 [feature.docs.tasks]
 docs-serve = "zensical serve"
