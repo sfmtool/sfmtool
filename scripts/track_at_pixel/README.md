@@ -11,7 +11,7 @@ contract and its open questions are in
 ## How the evaluation works
 
 1. Take a ground-truth reconstruction (today `seoul_bull`, meaning
-   `test-data/images/seoul_bull_sculpture/seoul_bull_sculpture_ground_truth.sfmr`).
+   `test-data/images/seoul_bull_sculpture/seoul_bull_sculpture_ground_truth_v01.sfmr`).
 2. Remove one point from it. It is deleted from the `EditedReconstruction` the
    candidate is given (index-stable) and filtered out of every neighbourhood
    query.
@@ -89,7 +89,7 @@ can appear up to five times. To compare the run with the ground truth, load
 them into one Explorer window and toggle between them:
 
 ```bash
-pixi run gui -- test-data/images/seoul_bull_sculpture/seoul_bull_sculpture_ground_truth.sfmr <run>/tracks-full.sfmr <run>/tracks-empty.sfmr
+pixi run gui -- test-data/images/seoul_bull_sculpture/seoul_bull_sculpture_ground_truth_v01.sfmr <run>/tracks-full.sfmr <run>/tracks-empty.sfmr
 ```
 
 ## Results on seoul_bull

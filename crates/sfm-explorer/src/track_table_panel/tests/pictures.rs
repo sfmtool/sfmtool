@@ -598,7 +598,7 @@ fn header_rows(
 fn the_header_fits_on_one_line_and_size_stays_with_its_dropdown_when_it_wraps() {
     use egui::accesskit::Role;
     let (mut state, id) = state_with_bitmaps();
-    state.scene[0].label = "seoul_bull_sculpture_ground_truth".into();
+    state.scene[0].label = "seoul_bull_sculpture_ground_truth_v01".into();
     let (ctx, mut panel) = shown(&mut state);
     state.select_image(Some(crate::scene::ImageRef::new(id, 0)));
 

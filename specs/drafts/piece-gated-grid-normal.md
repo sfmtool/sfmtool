@@ -255,7 +255,7 @@ Rendering with a fixed bilinear sampler instead of the sampler rule's choice cha
 **Setup.**
 
 - **Script.** [scripts/track_at_pixel/normal_sources/grid_plane_eval.py](../../scripts/track_at_pixel/normal_sources/grid_plane_eval.py), through the `sfmtool.bench` bindings `create_track`, `tilt_patch`, `fit`, `finite_difference_normal` and `grid_plane_normal`. `prepare` copies each ground truth into the track-at-pixel cache workspace in the system temporary directory; nothing is written beside `test-data`.
-- **Points.** Every finite point seen in two or more images: all 266 of `seoul_bull_sculpture_ground_truth.sfmr` and all 382 of `kerry_park_ground_truth.sfmr`. No sample.
+- **Points.** Every finite point seen in two or more images: all 266 of `seoul_bull_sculpture_ground_truth_v01.sfmr` and all 382 of `kerry_park_ground_truth_v01.sfmr`. No sample.
 - **Start.** Each point is put on the bench from the ground truth (its position, its sightings at their stored keypoints, its stored half-extent), its patch turned with `tilt_patch` to the mean viewing direction of its sightings (the `mean_view` of `normal_diag.py`), and then given one bench `fit`. Both steps run from that one fitted track. The fit is kept because it is what precedes the Grid Plane Normal in Surface Tiling Mode's sequence and it gives both steps keypoints localized at the start's frame. A fit does not change the normal, so the start's error is the mean view's. It moved the centre a median 0.11 (`seoul_bull`) and 0.09 (`kerry_park`) half-extents off the ground-truth position, and no fit made a point a direction. A control run without the fit (`--no-fit`) is below.
 - **Errors.** The angle between a step's normal and the ground-truth normal, both turned to face the first sighting's camera, folded to 0–90°, as in `normal_diag.py`. The ground-truth normal is `u × v` of the ground truth's stored patch frame. A step that leaves the normal keeps the start's error.
 - **Time.** Wall time of each binding call, single-threaded, the photographs held in one prebuilt `ImagePyramidSet`. Medians vary by about 20% between repeated runs.
@@ -265,7 +265,7 @@ Rendering with a fixed bilinear sampler instead of the sampler rule's choice cha
   ```bash
   pixi run -e test python scripts/track_at_pixel/normal_sources/grid_plane_eval.py seoul_bull --out OUT/seoul_bull
   pixi run -e test python scripts/track_at_pixel/normal_sources/grid_plane_eval.py \
-      test-data/images/kerry_park/kerry_park_ground_truth.sfmr --out OUT/kerry_park
+      test-data/images/kerry_park/kerry_park_ground_truth_v01.sfmr --out OUT/kerry_park
   # the two controls, each on both datasets: the same commands with
   #   --start ground_truth
   #   --no-fit
@@ -367,7 +367,7 @@ Each row of the script's JSONL carries the point's ground-truth position and nor
 - **Estimators.** *new*: the normal the step left (it differs from the start only on `Turned` points). *first plane*: the normal the first render's turn would reach, read from the trace; it does not depend on the acceptance rule, so it is reported once per bound. With `update_tolerance_px` very large it is what the step itself returns, as the diagnostic ran it.
 - **Baseline bins.** Under 5°, 5–10°, 10–20°, 20–40°, 40° and over. `seoul_bull` has 67, 58, 14, 30 and 97 points in them; `kerry_park` 12, 21, 48, 100 and 201.
 - **Commit and machine.** Commit `a26e3483` for the step, the binding and the run script, `3d52abc2` for the summary script; Intel Core i9-14900HX, 64 GB, Windows 11, release build.
-- **Commands.** From the repository root, for each dataset (`seoul_bull`, and `test-data/images/kerry_park/kerry_park_ground_truth.sfmr` as `kerry_park`), bound `B` in 2, 4, 6 and acceptance `A` in `windowed_zncc`, `none`:
+- **Commands.** From the repository root, for each dataset (`seoul_bull`, and `test-data/images/kerry_park/kerry_park_ground_truth_v01.sfmr` as `kerry_park`), bound `B` in 2, 4, 6 and acceptance `A` in `windowed_zncc`, `none`:
 
   ```bash
   pixi run -e test python scripts/track_at_pixel/normal_sources/grid_plane_eval.py DATASET \

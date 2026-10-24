@@ -440,7 +440,7 @@ calling a true bearing finite.
   `Λ ≥ bearing_cost − cost(X)`, so the cost at the weighted linear midpoint
   `(Σ AᵢᵀAᵢ)⁻¹ Σ AᵢᵀAᵢ cᵢ` (the point minimising `Σ ‖Aᵢ (X − cᵢ)‖²`), when it
   lies in front of every camera, gives a rigorous lower bound on `Λ`. On the
-  [Kerry Park ground truth](../../../test-data/images/kerry_park/kerry_park_ground_truth.sfmr)
+  [Kerry Park ground truth](../../../test-data/images/kerry_park/kerry_park_ground_truth_v01.sfmr)
   it is what calls 12 of the 382 finite points finite.
   For near-parallel rays the midpoint is a poor point and the bound is small,
   and the score decides.
@@ -750,7 +750,7 @@ println!("{sigma_px:.4} px, {} outliers left out", noise.outlier_count);
   ([bundle-adjustment.md](../geometry/bundle-adjustment.md) § "Free points:
   inverse depth and the storage decision").
 
-On the [Kerry Park ground truth](../../../test-data/images/kerry_park/kerry_park_ground_truth.sfmr)
+On the [Kerry Park ground truth](../../../test-data/images/kerry_park/kerry_park_ground_truth_v01.sfmr)
 it is 0.2142 px over 3,571 observations with none left out; on the in-repo seoul bull ground truth,
 0.4677 px over 1,229, four left out as outliers.
 
@@ -1076,7 +1076,7 @@ pixel gives, and no closer to any of their centres than the minimum depth.
   finite and positive is `InvalidNoiseLevel`, and pixels that cannot be read
   (a `sift_files` file without its `.sift` files) are `Reconstruction`.
 
-On the [Kerry Park ground truth](../../../test-data/images/kerry_park/kerry_park_ground_truth.sfmr)
+On the [Kerry Park ground truth](../../../test-data/images/kerry_park/kerry_park_ground_truth_v01.sfmr)
 it changes nothing. On a copy of it with its finite points 298, 294 and 295
 stored as bearings, each at the bearing the score fits (`w = 0`, the normal
 zeroed and the error recomputed), it promotes those three to 482, 995 and

@@ -85,16 +85,20 @@ reports and reproductions where possible.
 
 Two datasets also carry a reference reconstruction, in metres:
 
-- `seoul_bull_sculpture/seoul_bull_sculpture_ground_truth.sfmr` — all 17
+- `seoul_bull_sculpture/seoul_bull_sculpture_ground_truth_v01.sfmr` — all 17
   images; the scale comes from three GPS fixes.
-- `kerry_park/kerry_park_ground_truth.sfmr` — all 48 images, with the rig; the
-  scale and orientation come from eight GPS fixes (X east, Y north).
+- `kerry_park/kerry_park_ground_truth_v01.sfmr` — all 48 images, with the
+  rig; the scale and orientation come from eight GPS fixes (X east, Y north).
+
+The `_v01` suffix is a version, so a file name always means the same content:
+a later correction, such as one found with SfM Explorer, goes into a new
+version (`_v02`, …) rather than overwriting this one.
 
 Each directory has a `.sfm-workspace.json`, so the file opens in place:
 
 ```bash
-pixi run gui -- test-data/images/seoul_bull_sculpture/seoul_bull_sculpture_ground_truth.sfmr
-pixi run gui -- test-data/images/kerry_park/kerry_park_ground_truth.sfmr
+pixi run gui -- test-data/images/seoul_bull_sculpture/seoul_bull_sculpture_ground_truth_v01.sfmr
+pixi run gui -- test-data/images/kerry_park/kerry_park_ground_truth_v01.sfmr
 ```
 
 They are minimal files with embedded patches and need no `.sift` files. The

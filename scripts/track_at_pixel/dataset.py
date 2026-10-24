@@ -34,7 +34,7 @@ REPO = Path(__file__).resolve().parents[2]
 # their features are extracted.
 DATASETS = {
     "seoul_bull": REPO
-    / "test-data/images/seoul_bull_sculpture/seoul_bull_sculpture_ground_truth.sfmr",
+    / "test-data/images/seoul_bull_sculpture/seoul_bull_sculpture_ground_truth_v01.sfmr",
 }
 
 

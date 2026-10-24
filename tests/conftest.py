@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 
 TEST_DATA_DIR = Path(__file__).parent.parent / "test-data"
 SEOUL_BULL_DIR = TEST_DATA_DIR / "images" / "seoul_bull_sculpture"
-SEOUL_BULL_GROUND_TRUTH = SEOUL_BULL_DIR / "seoul_bull_sculpture_ground_truth.sfmr"
+SEOUL_BULL_GROUND_TRUTH = SEOUL_BULL_DIR / "seoul_bull_sculpture_ground_truth_v01.sfmr"
 
 
 @pytest.fixture
@@ -849,7 +849,7 @@ def seoul_bull_sfmr_only(seoul_bull_workspace_once: Path, tmp_path_factory) -> P
 
 
 KERRY_PARK_DIR = TEST_DATA_DIR / "images" / "kerry_park"
-KERRY_PARK_GROUND_TRUTH = KERRY_PARK_DIR / "kerry_park_ground_truth.sfmr"
+KERRY_PARK_GROUND_TRUTH = KERRY_PARK_DIR / "kerry_park_ground_truth_v01.sfmr"
 KERRY_PARK_FRAME_COUNT = 24
 KERRY_PARK_SENSORS = ("fisheye_left", "fisheye_right")
 # The reconstruction fixtures don't need all 24 frames. The kerry_park capture is

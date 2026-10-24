@@ -114,8 +114,8 @@ The binaries are `$S/tb/release/examples/align_vs_congealing` and
 ## Run
 
 ```bash
-SEOUL=$W/test-data/images/seoul_bull_sculpture/seoul_bull_sculpture_ground_truth.sfmr
-KERRY=$W/test-data/images/kerry_park/kerry_park_ground_truth.sfmr
+SEOUL=$W/test-data/images/seoul_bull_sculpture/seoul_bull_sculpture_ground_truth_v01.sfmr
+KERRY=$W/test-data/images/kerry_park/kerry_park_ground_truth_v01.sfmr
 for ds in seoul kerry; do
   [ $ds = seoul ] && F=$SEOUL || F=$KERRY
   for mode in displaced stored; do

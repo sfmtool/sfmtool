@@ -1308,7 +1308,7 @@ points stored in the other representation than the caller handed in.
 The decision changes representations without refitting the poses. A point the
 solve left at `ρ > 0` and the decision stores as a bearing leaves poses that
 were fitted to it as a finite point: re-solving the result of the clean
-[Kerry Park ground truth](../../../test-data/images/kerry_park/kerry_park_ground_truth.sfmr)
+[Kerry Park ground truth](../../../test-data/images/kerry_park/kerry_park_ground_truth_v01.sfmr)
 with the crossing off, every point held in the representation the decision
 stored, lowers its cost by 17.3 noise units and takes the scores of the six
 far points the decision made finite

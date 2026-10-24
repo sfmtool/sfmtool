@@ -245,15 +245,19 @@ empty-handed". Name the thing and say what it does.
   `seoul_bull_sculpture` (17 @ 270×480), `dino_dog_toy` (85 @ 2040×1536),
   `seattle_backyard` (26 @ 360×640), `kerry_park` (24 rig frames × 2 fisheyes
   @ 480×480, with `rig_config.json`). Bootstrap with `scripts/init_dataset_*.sh`.
-  `seoul_bull_sculpture` also holds `seoul_bull_sculpture_ground_truth.sfmr`,
-  a reference reconstruction of its 17 images, in metres. A
+  `seoul_bull_sculpture` also holds
+  `seoul_bull_sculpture_ground_truth_v01.sfmr`, a reference reconstruction of
+  its 17 images, in metres. A
   `.sfm-workspace.json` beside the images makes that directory its workspace,
   so it opens in place (`pixi run gui --
-  test-data/images/seoul_bull_sculpture/seoul_bull_sculpture_ground_truth.sfmr`).
+  test-data/images/seoul_bull_sculpture/seoul_bull_sculpture_ground_truth_v01.sfmr`).
   It is a minimal file with embedded patches, so it needs no `.sift` files; its
   scale comes from three GPS fixes. `kerry_park` likewise holds
-  `kerry_park_ground_truth.sfmr`, all 48 images with the rig, in metres with X
-  east and Y north from eight GPS fixes, and its own marker. The
+  `kerry_park_ground_truth_v01.sfmr`, all 48 images with the rig, in metres
+  with X east and Y north from eight GPS fixes, and its own marker. The `_v01`
+  suffix is a version, so a file name always means the same content: a later
+  correction, such as one found with SfM Explorer, goes into a new version
+  (`_v02`, …) rather than overwriting this one. The
   `seoul_bull_workspace` and `kerry_park_workspace` fixtures triangulate at
   these poses rather than solving; only the tests of a solve itself use
   `kerry_park_solve_once` / `kerry_park_camrig_workspace`, which run COLMAP in a

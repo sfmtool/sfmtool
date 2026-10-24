@@ -2095,7 +2095,7 @@ fn a_drag_across_the_viewport_orbits_the_camera() {
 fn a_brush_stroke_deletes_the_points_it_passes_over() {
     let path = concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../test-data/images/seoul_bull_sculpture/seoul_bull_sculpture_ground_truth.sfmr"
+        "/../../test-data/images/seoul_bull_sculpture/seoul_bull_sculpture_ground_truth_v01.sfmr"
     );
     let viewer = McpViewer::launched(ui_test_lock(), None, &["--no-default-layout", path]);
     let deadline = Instant::now() + CONTENT_TIMEOUT;

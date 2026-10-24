@@ -15,7 +15,7 @@
 set -e
 OUT=${1:?usage: sweep_median_gate.sh <out dir> [shards]}
 SHARDS=${2:-14}
-KERRY=test-data/images/kerry_park/kerry_park_ground_truth.sfmr
+KERRY=test-data/images/kerry_park/kerry_park_ground_truth_v01.sfmr
 for ds in seoul_bull kerry; do
   if [ "$ds" = seoul_bull ]; then D=seoul_bull; else D=$KERRY; fi
   for g in -1 0.6 0.65 0.7 0.75 0.8; do

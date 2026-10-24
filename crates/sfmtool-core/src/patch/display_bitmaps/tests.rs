@@ -12,8 +12,9 @@ use super::{render_display_patch_bitmaps, render_patch_bitmap_column, DISPLAY_PY
 /// The Seoul bull ground truth: patch frames and inline keypoints, no bitmap
 /// column, and its 17 photographs checked in beside it.
 fn seoul_bull() -> SfmrReconstruction {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../test-data/images/seoul_bull_sculpture/seoul_bull_sculpture_ground_truth.sfmr");
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(
+        "../../test-data/images/seoul_bull_sculpture/seoul_bull_sculpture_ground_truth_v01.sfmr",
+    );
     SfmrReconstruction::load(&path, &Progress::none()).expect("the ground truth loads")
 }
 

@@ -220,7 +220,7 @@ decoded.
 - **The header line** is one `horizontal_wrapped` row: the reconstruction's
   label, the count and the defect counts after it, a spinner and *Updating…*
   while the rows are out of date, *Columns*, *Size* and *Seen in selected
-  image*. With a label as long as `seoul_bull_sculpture_ground_truth`, no
+  image*. With a label as long as `seoul_bull_sculpture_ground_truth_v01`, no
   repeat observations and the rows up to date, it fits on one line in the
   Track Table's panel of a 1280 pt window. A defect count and *Updating…*
   each lengthen it and can take it onto a second line. When the line wraps,

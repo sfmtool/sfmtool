@@ -201,7 +201,7 @@ class TestResolveReconImageIndex:
         workspace = (
             Path(__file__).resolve().parents[2] / "test-data" / "images" / "kerry_park"
         )
-        recon = SfmrReconstruction.load(workspace / "kerry_park_ground_truth.sfmr")
+        recon = SfmrReconstruction.load(workspace / "kerry_park_ground_truth_v01.sfmr")
         names = list(recon.image_names)
         for sensor in ("fisheye_left", "fisheye_right"):
             image = workspace / sensor / "frame_01.jpg"

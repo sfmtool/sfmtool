@@ -68,7 +68,7 @@ kept of those matched, and its wall time.
 The 16 hand-picked points of the grown-plane draft are ``dino_dog_toy`` (the
 candidate ground truth, given by its path) ``0 1 528 672 810 933``,
 ``seoul_bull`` ``120 50 236 32``, and ``kerry_park``
-(``test-data/images/kerry_park/kerry_park_ground_truth.sfmr``)
+(``test-data/images/kerry_park/kerry_park_ground_truth_v01.sfmr``)
 ``85 200 228 342 91 242``.
 """
 

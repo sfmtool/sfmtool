@@ -58,13 +58,13 @@ DATASETS = {
             "seoul_gt",
             "seoul_bull ground truth",
             REPO
-            / "test-data/images/seoul_bull_sculpture/seoul_bull_sculpture_ground_truth.sfmr",
+            / "test-data/images/seoul_bull_sculpture/seoul_bull_sculpture_ground_truth_v01.sfmr",
             True,
         ),
         Dataset(
             "kerry_gt",
             "kerry_park ground truth",
-            REPO / "test-data/images/kerry_park/kerry_park_ground_truth.sfmr",
+            REPO / "test-data/images/kerry_park/kerry_park_ground_truth_v01.sfmr",
             True,
         ),
         Dataset(

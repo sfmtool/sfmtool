@@ -141,7 +141,7 @@ condition number, being purely geometric, looks normal.
 Both parts are cheap: the score is closed-form per track, and the only fits are
 the listed rows.
 
-On the [Kerry Park ground truth](../../../test-data/images/kerry_park/kerry_park_ground_truth.sfmr)
+On the [Kerry Park ground truth](../../../test-data/images/kerry_park/kerry_park_ground_truth_v01.sfmr)
 (391 points, 9 at infinity) the report lists no disagreement: the measured
 noise is 0.2142 px over 3,571 observations with none left out (0.2142 px for
 each of the two lenses), every one of the 382 finite points is called finite,

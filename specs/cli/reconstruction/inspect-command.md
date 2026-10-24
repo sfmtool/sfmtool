@@ -222,7 +222,7 @@ The default output is a compact label/value block. The fields per type:
   is fitted and nothing in the file changes; the disagreements are what
   `sfm xform --classify-points-at-infinity` would change, less the points it
   declines to (see [analyze-command.md](analyze-command.md)). On the
-  [Kerry Park ground truth](../../../test-data/images/kerry_park/kerry_park_ground_truth.sfmr)
+  [Kerry Park ground truth](../../../test-data/images/kerry_park/kerry_park_ground_truth_v01.sfmr)
   with its finite points 298, 294 and 295 stored as bearings, the copy
   described in [analyze-command.md](analyze-command.md) § "The point-or-bearing test":
 

@@ -22,7 +22,7 @@ GROUND_TRUTH = (
     / "test-data"
     / "images"
     / "seoul_bull_sculpture"
-    / "seoul_bull_sculpture_ground_truth.sfmr"
+    / "seoul_bull_sculpture_ground_truth_v01.sfmr"
 )
 IMAGE = 3
 

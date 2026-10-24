@@ -56,7 +56,7 @@ impl GroundTruth {
         let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../test-data/images/seoul_bull_sculpture");
         let recon = SfmrReconstruction::load(
-            &dir.join("seoul_bull_sculpture_ground_truth.sfmr"),
+            &dir.join("seoul_bull_sculpture_ground_truth_v01.sfmr"),
             &Progress::none(),
         )
         .expect("the ground truth loads");
