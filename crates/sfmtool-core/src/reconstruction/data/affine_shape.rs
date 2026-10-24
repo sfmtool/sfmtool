@@ -42,26 +42,25 @@ pub fn patch_affine_shape(
     // Where to evaluate the frame. For a point at infinity the patch is
     // tangent to the direction sphere: the anchor is the stored direction
     // and corners are directions (projected with `w = 0`). For a finite
-    // point the anchor is where the keypoint's back-projected ray meets the
-    // patch plane (fall back to the point centre for a grazing view).
+    // point the anchor is the centre of the patch slid onto the keypoint's
+    // ray: where that ray meets the plane through the point facing the camera
+    // (`OrientedPatch::anchored_at_keypoint`), falling back to the point
+    // itself for a ray at or past a right angle to the line of sight.
     let anchor = if point.is_at_infinity() {
         point.position.coords
     } else {
-        let normal = u.cross(&v);
-        let n_norm = normal.norm();
-        if n_norm == 0.0 {
+        if u.cross(&v).norm() == 0.0 {
             return None;
         }
-        let normal = normal / n_norm;
         let center = image.camera_center();
         let ray_cam = camera.pixel_to_ray(keypoint_xy[0] as f64, keypoint_xy[1] as f64);
         let ray_world = r.transpose() * Vector3::new(ray_cam[0], ray_cam[1], ray_cam[2]);
-        let denom = ray_world.dot(&normal);
-        if denom.abs() < 1e-9 {
+        let sight = point.position.coords - center.coords;
+        let along = ray_world.dot(&sight);
+        if !(along.is_finite() && along > 0.0) {
             point.position.coords
         } else {
-            let lambda = (point.position.coords - center.coords).dot(&normal) / denom;
-            center.coords + lambda * ray_world
+            center.coords + ray_world * (sight.norm_squared() / along)
         }
     };
 
@@ -93,8 +92,10 @@ impl SfmrReconstruction {
     /// footprint: an overlay recovers scale from the column norms, orientation
     /// from their angle, and anisotropy from their ratio.
     ///
-    /// `keypoint_xy` anchors the frame in-plane (the patch-plane point that
-    /// projects to it); a grazing view falls back to the point centre. A point
+    /// `keypoint_xy` anchors the frame on the patch slid onto its ray (the
+    /// point of the plane facing the camera that projects to it); a ray at or
+    /// past a right angle to the line of sight falls back to the point
+    /// centre. A point
     /// at infinity is handled too: its patch is tangent to the direction sphere,
     /// so the frame is evaluated at the stored direction and its corners project
     /// as directions (the camera translation folds out), giving a roughly
