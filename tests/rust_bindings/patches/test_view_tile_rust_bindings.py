@@ -59,8 +59,9 @@ def test_anchoring_on_a_keypoint_moves_the_tile_and_reads_the_angle_there():
     tile = patch.render_view_tile(
         _pinhole(), _identity(), _photograph(), keypoint=(42.0, 24.0), resolution=16
     )
-    # The anchored patch stays in its plane and its centre projects onto the
-    # keypoint, 10 px right of the principal point: 10 / 60 of the depth.
+    # The slid patch keeps its depth on the plane facing the camera, which is
+    # its own here, and its centre projects onto the keypoint, 10 px right of
+    # the principal point: 10 / 60 of the depth.
     center = tile["patch_frame"].center
     assert center[2] == pytest.approx(-4.0)
     assert abs(center[0]) == pytest.approx(4.0 * 10.0 / 60.0)

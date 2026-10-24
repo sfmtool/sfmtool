@@ -52,7 +52,7 @@ from _viz_common import (
     draw_text,
     infinity_first_sample,
     new_canvas,
-    plane_hit,
+    slid_center,
     rotation_matrices,
     run_over_recons,
     sharpness,
@@ -204,7 +204,7 @@ def render_row(meta, trk, recon, cloud, images, geom, args):
             images[v], cam, t[v], quats[v], center, normal, u_axis, he_ctx, ctx, w
         )
         if v in kept_set:
-            hit = plane_hit(cam, rot[v], t[v], kept_kpt[v], center, normal, w)
+            hit = slid_center(cam, rot[v], t[v], kept_kpt[v], center, w)
             c = center if hit is None else hit
             off = (c - center) if hit is not None else np.zeros(3)
             acc = (float(off @ u_axis) / wpp_u, float(off @ v_axis) / wpp_v)
@@ -230,7 +230,7 @@ def render_row(meta, trk, recon, cloud, images, geom, args):
                 images[v], cam, t[v], quats[v], center, normal, u_axis, he, res, w
             )
         )
-        hit = plane_hit(cam, rot[v], t[v], kept_kpt[v], center, normal, w)
+        hit = slid_center(cam, rot[v], t[v], kept_kpt[v], center, w)
         c = center if hit is None else hit
         after_cores.append(
             render_patch(images[v], cam, t[v], quats[v], c, normal, u_axis, he, res, w)

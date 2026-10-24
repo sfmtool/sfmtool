@@ -48,7 +48,7 @@ from _viz_common import (
     gauss_window,
     infinity_first_sample,
     new_canvas,
-    plane_hit,
+    slid_center,
     rotation_matrices,
     run_over_recons,
     sharpness,
@@ -160,9 +160,7 @@ def render_rows(recon, cloud, images, args):
                     pw,
                 )
             )
-            hit = plane_hit(
-                cams[int(cam_idx[i])], rot[i], t[i], kpts[k], center, normal, pw
-            )
+            hit = slid_center(cams[int(cam_idx[i])], rot[i], t[i], kpts[k], center, pw)
             c = center if hit is None else hit
             after.append(
                 render_at(

@@ -209,24 +209,26 @@ def sharpness(img) -> float:
     return float((gx * gx + gy * gy).mean())
 
 
-def plane_hit(cam, rot, t, kpt, center, normal, w=1.0):
-    """Unproject keypoint `kpt` to a re-anchored patch center.
+def slid_center(cam, rot, t, kpt, center, w=1.0):
+    """The centre of the patch slid onto keypoint `kpt`'s ray, as the bench
+    slides it (``OrientedPatch.anchored_at_keypoint``).
 
-    Finite patch (`w == 1`): the world point where the view's ray meets the
-    patch plane (point `center`, `normal`). Point at infinity (`w == 0`): every
-    ray to it is parallel to its direction, so the re-anchored "center" is simply
-    the world ray direction the keypoint points along."""
+    Finite patch (`w == 1`): where the view's ray meets the plane through
+    `center` facing the camera, so the centre keeps its depth along the line of
+    sight; `None` for a ray at or past a right angle to it. Point at infinity
+    (`w == 0`): every ray to it is parallel to its direction, so the slid
+    "center" is simply the world ray direction the keypoint points along."""
     ray_cam = np.asarray(cam.pixel_to_ray(float(kpt[0]), float(kpt[1])))
     dir_world = rot.T @ ray_cam
     if w == 0.0:
         n = float(np.linalg.norm(dir_world))
         return dir_world / n if n > 0.0 else None
     cam_center = -rot.T @ t
-    denom = float(dir_world @ normal)
-    if abs(denom) < 1e-12:
+    sight = np.asarray(center, float) - cam_center
+    along = float(dir_world @ sight)
+    if along <= 0.0:
         return None
-    s = float((center - cam_center) @ normal) / denom
-    return cam_center + s * dir_world
+    return cam_center + dir_world * (float(sight @ sight) / along)
 
 
 # ===== Montage drawing =====
