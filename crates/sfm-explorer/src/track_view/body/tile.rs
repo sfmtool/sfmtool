@@ -218,8 +218,8 @@ pub(super) struct TileContext {
     pub(super) patch_box: egui::Rect,
     /// Where the observation sits: the patch's centre, which is the
     /// picture's. `None` only at the track stage, where the keypoint's ray
-    /// does not meet the patch's plane and the tile falls back to the patch as
-    /// it stands.
+    /// does not meet the patch's plane in front of the camera and the tile falls
+    /// back to the patch as it stands.
     pub(super) keypoint: Option<egui::Pos2>,
     /// Where the track's point projects, read onto the patch's plane as the
     /// picture shows it. It can lie outside the picture. `None` at the cluster

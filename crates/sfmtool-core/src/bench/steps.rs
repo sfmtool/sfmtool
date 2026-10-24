@@ -654,18 +654,19 @@ pub enum TrackEditError {
 ///
 /// A pixel is a ray, and a ray names a place only against a square. The two
 /// variants are the two squares a photograph shows: an observation's image
-/// shows the patch **centred on that sighting's keypoint**, which is where the
-/// photograph sees the patch's centre, while an image with no sighting of the
-/// track shows the patch **as it stands**, there being no keypoint to centre it
-/// on. Through an observation the pointer is read less the sighting's gap from
-/// the centre's projection, the gap every patch step keeps, and through an image
-/// it is read as it is. [`translate_patch_to_pixel`] and
-/// [`resize_patch_to_pixel`] take one of these, so a drag of either outline is
-/// the same step read against the square that outline is.
+/// shows the patch **slid along its own plane until its centre sits on that
+/// sighting's keypoint's ray** (`OrientedPatch::anchored_at_keypoint`), the
+/// keypoint being where the photograph sees the patch's centre, while an image
+/// with no sighting of the track shows the patch **as it stands**, there being
+/// no keypoint to slide it onto. The slid patch is the square the view's tile is
+/// cut through and the outline the viewer draws there.
+/// [`translate_patch_to_pixel`] and [`resize_patch_to_pixel`] take one of
+/// these, so a drag of either outline is the same step read against the square
+/// that outline is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Viewpoint {
-    /// The image this observation is in, the patch centred on its keypoint.
-    /// The observation is named by its position in the track's list.
+    /// The image this observation is in, the patch slid onto its keypoint's
+    /// ray. The observation is named by its position in the track's list.
     Observation(usize),
     /// This image, by its index in the reconstruction's image set, with the
     /// patch read as it stands. Any image with a camera will do, one the track
@@ -1517,8 +1518,8 @@ fn same_length(value: f64, was: f64) -> bool {
 ///   gesture -- a person pulling an edge expects the other three where the
 ///   geometry puts them, not the far edge running away. The centre therefore
 ///   moves by `half_length - was` along that edge's own direction, and every
-///   keypoint moves by its own photograph's displacement of the centre's
-///   projection, exactly as a translation's do. Nothing is pinned. A
+///   keypoint is carried by that displacement in 3D, exactly as a
+///   translation's are ([`translate_patch`]). Nothing is pinned. A
 ///   **bearing** (`w == 0`) is handled by renormalizing the moved centre and
 ///   dividing the half-length by the same factor, which leaves every corner the
 ///   same direction and so holds the far edge there too.
@@ -1567,7 +1568,7 @@ pub fn resize_patch(
             let (_, patch) = track_payload_mut(&mut next);
             patch.half_extent = [half_length, half_length];
         }
-        follow_centre(&mut next, edited, patch, patch.center);
+        follow_centre(&mut next, edited, patch, Vector3::zeros(), patch.center);
         return Ok((
             next,
             ResizeReport {
@@ -1612,7 +1613,7 @@ pub fn resize_patch(
         // already left.
         *position = Some(center);
     }
-    follow_centre(&mut next, edited, patch, center);
+    follow_centre(&mut next, edited, patch, displacement, center);
     Ok((
         next,
         ResizeReport {
@@ -1642,16 +1643,16 @@ pub fn resize_patch(
 ///
 /// **The square the pointer is read against is the patch as that photograph
 /// sees it.** At the track stage, from a [`Viewpoint::Observation`] that is the
-/// patch's projection shifted by the sighting's gap from the centre's
-/// projection, which puts the square's centre on the keypoint, and from a
-/// [`Viewpoint::Image`] it is the patch's projection as it stands. The offset of
-/// the meeting along the dragged edge's axis, read from that square's centre,
-/// is what gives the half-length
+/// patch slid along its plane onto the sighting's keypoint's ray
+/// (`OrientedPatch::anchored_at_keypoint`), and from a [`Viewpoint::Image`] it
+/// is the patch as it stands. The pointer's ray meets that square's plane, which
+/// is the patch's own, and the offset of the meeting along the dragged edge's
+/// axis, read from that square's centre, is what gives the half-length
 /// [`resize_patch`] is then handed with this edge as its `moved_edge`, so the
-/// patch's centre moves by the edge's shift and the track's
-/// position follows it. Every keypoint moves by its own photograph's
-/// displacement of the centre's projection, so the dot and the outline move
-/// together. Nothing is pinned.
+/// patch's centre moves by the edge's shift and the track's position follows
+/// it. Every keypoint is carried by the same displacement in 3D, so the slid
+/// square of the sighting the edge was dragged through moves by it too and its
+/// dragged edge lands under the pointer. Nothing is pinned.
 ///
 /// At the **cluster stage** there is no geometry, so the same arithmetic runs
 /// in that image's pixels: the sighting's affine shape is scaled by one scalar,
@@ -1809,25 +1810,22 @@ pub struct TranslateToPixelReport {
 /// **This moves the patch, not one sighting.** A track-stage track has one
 /// patch and every observation is a view of it, so dragging the mark in one
 /// photograph is a statement about where that patch is: the centre moves, the
-/// half-vectors and the normal are kept, and **every** observation's keypoint
-/// moves with the centre's projection in its own photograph, so the outline
-/// moves in every image at once. That is what makes the gesture worth having: a patch
+/// half-vectors and the normal are kept, and **every** observation's slid
+/// point moves with the patch, so the outline moves in every image at once. That is what makes the gesture worth having: a patch
 /// can be slid, turned and sized until it covers the piece of surface a person
 /// means, and each photograph shows where it lands.
 ///
-/// The pointer is read against the sighting it was named through. From a
-/// [`Viewpoint::Observation`] it is read less that sighting's gap from the
-/// centre's projection, the gap the move keeps, so that sighting lands under
-/// the pointer. From a
-/// [`Viewpoint::Image`] it is read against the patch as it stands, so the
-/// patch's own centre lands under the pointer: the gesture of an image the track has no sighting
-/// in, where a view from another side can make the patch's place plain. The
-/// move is in-plane by construction (a ray-plane meeting minus a point on the
-/// plane), so the normal and the plane are untouched. **Every** observation's
-/// keypoint moves by its own photograph's displacement of the centre's
-/// projection, which keeps its gap from that projection: a keypoint marks
-/// where its photograph sees the patch's centre, and a gap is an error of that
-/// sighting that the move has no grounds to correct.
+/// The pointer is read against the square drawn in the photograph it was named
+/// in. From a [`Viewpoint::Observation`] that is the patch slid along its plane
+/// onto the sighting's keypoint's ray, and the offset is from the slid centre
+/// to where the pointer's ray meets the plane, so that sighting lands under the
+/// pointer. From a [`Viewpoint::Image`] it is read against the patch as it
+/// stands, so the patch's own centre lands under the pointer: the gesture of an
+/// image the track has no sighting in, where a view from another side can make
+/// the patch's place plain. The move is in-plane by construction (a ray-plane
+/// meeting minus a point on the plane), so the normal and the plane are
+/// untouched. **Every** observation's keypoint is carried by the move in 3D, as
+/// [`translate_patch`] says.
 ///
 /// **Nothing is pinned.** A translation says where the patch is and not whether
 /// any sighting belongs to it, which is what a pin protects from the threshold
@@ -1856,10 +1854,9 @@ pub fn translate_patch_to_pixel(
     let by = Vector3::new(offset.dot(&patch.u_axis), offset.dot(&patch.v_axis), 0.0);
     let (next, slid) = translate_patch(track, edited, by)?;
     // Where the pointer's square now sits. For a sighting that is its new
-    // keypoint, which the move put on the pixel: the centre now projects where
-    // the pointer less the sighting's gap meets the plane, and the gap is kept.
-    // For the patch as it stands it is the centre, which the move put on the
-    // pixel itself.
+    // keypoint, which the move put on the pixel: its slid point was carried by
+    // the offset onto the pointer's ray. For the patch as it stands it is the
+    // centre, which the move put on the pixel itself.
     let landed = match (viewpoint, pointed.site) {
         (Viewpoint::Observation(observation), Some(_)) if slid.changed => next.observations
             [observation]
@@ -1929,19 +1926,19 @@ pub struct TranslateReport {
 /// is in the world's own units and not in half-lengths: it is the unit every
 /// other length in this module is already in.
 ///
-/// **What every sighting keeps is its gap from the centre's projection, in its
-/// own photograph.** A keypoint marks where that photograph sees the patch's
-/// centre, so a gap between the two is an error of the sighting, not content at
-/// an offset on the patch. With `c' = c + by.x u + by.y v + by.z n`, each
-/// keypoint `k` becomes `k + (P(c') - P(c))`, `P` being that image's
-/// projection: the keypoint moves by the photograph's own displacement of the
-/// centre. Along the plane the photographs see nearly the same displacement;
-/// along the normal they see *different* ones, and that spread is the parallax
-/// the old depth was wrong by. A sighting never localized takes `P(c')`. A
-/// sighting the moved centre no longer projects into is left with no
-/// keypoint and
-/// [`Unmeasured::NoProjection`], which is
-/// the truth about it.
+/// **Every sighting's slid point is carried in 3D.** A keypoint marks where its
+/// photograph sees the patch's centre, so a gap between the keypoint and the
+/// centre's projection means that photograph sees the patch slid along its
+/// plane until its centre sits on the keypoint's ray, at `q_i`, the point that
+/// ray meets the plane. With the displacement `d = by.x u + by.y v + by.z n`,
+/// each keypoint becomes `P_i(q_i + d)`, `P_i` being that image's projection:
+/// the slid patch moves with the patch. Along the plane the photographs see
+/// nearly the same displacement; along the normal they see *different* ones,
+/// and that spread is the parallax the old depth was wrong by. A sighting never
+/// localized takes `P_i(c')`. A keypoint whose ray misses the plane, or meets it
+/// behind its camera, has no `q_i` to carry, and neither does one the carried
+/// point no longer projects from; each is left with no keypoint and
+/// [`Unmeasured::NoProjection`], which is the truth about it.
 ///
 /// The axes, the normal and the size are untouched. The bitmap and the
 /// measurements go, as they do for a resize, and **nothing is pinned**: where the
@@ -2019,7 +2016,7 @@ pub fn translate_patch(
         // `w = 1`, the unit bearing at `w = 0`.
         *position = Some(center);
     }
-    let placed = follow_centre(&mut next, edited, patch, center);
+    let placed = follow_centre(&mut next, edited, patch, displacement, center);
     Ok((
         next,
         TranslateReport {
@@ -2042,24 +2039,26 @@ struct Pointed {
     pixel: [f64; 2],
     /// The pixel asked for, when the clamp moved it.
     clamped_from: Option<[f64; 2]>,
-    /// The in-plane offset from the patch's centre of where the pointer meets
-    /// the plane, read as described at [`pointed_at`].
+    /// The in-plane offset from the drawn square's centre of where the pointer
+    /// meets the plane, read as described at [`pointed_at`].
     offset: Vector3<f64>,
 }
 
-/// The in-plane offset from the patch's centre that a pointer named.
+/// The in-plane offset a pointer named, from the centre of the square drawn in
+/// its photograph.
 ///
 /// The one reduction of a pixel gesture to the step behind it, which both
 /// [`translate_patch_to_pixel`] and [`resize_patch_to_pixel`] make. Through an
-/// observation the pointer is first moved by the sighting's gap from the
-/// centre's projection, `pixel - (k - P(c))`, since every patch step keeps that
-/// gap in the photograph: the pointer names where the sighting should be, and
-/// the centre's projection then has to be the pointer less the gap. That pixel's
-/// ray meets the patch's plane, and the meeting less the centre is the offset.
-/// In an image named as such there is no sighting and no gap, and the pointer's
-/// own ray is read. Both steps want exactly that out of it: a slide moves the
-/// centre by the offset, and a resize reads the offset along the dragged edge's
-/// axis.
+/// observation the square is the patch slid along its plane onto the
+/// sighting's keypoint's ray (`OrientedPatch::anchored_at_keypoint`), the
+/// square the view's tile is cut through and the viewer draws; in an image
+/// named as such it is the patch as it stands. The pointer's ray meets the
+/// square's plane, which is the patch's own, and the meeting less the square's
+/// centre is the offset. Both steps want exactly that out of it: a slide moves
+/// the centre by the offset, which carries the sighting's slid point onto the
+/// pointer's ray, and a resize reads the offset along the dragged edge's axis.
+/// A keypoint whose ray cannot meet the plane names no square to read against,
+/// and is refused as [`TrackEditError::NoProjection`].
 fn pointed_at(
     track: &EditableTrack,
     edited: &EditedReconstruction,
@@ -2080,24 +2079,21 @@ fn pointed_at(
     let (camera, cam_from_world) = view_of(edited, image)?;
     let (clamped_from, pixel) = clamp_to_photograph(&camera, pixel);
     let refused = || TrackEditError::NoProjection { viewpoint };
-    // The pixel on the patch's own projection that the pointer stands for: the
-    // pointer itself for an image named as such, and the pointer less the
-    // sighting's gap from the centre's projection for an observation, that gap
-    // being what the step keeps in this photograph.
-    let read_at = match site {
+    // The square drawn in this photograph: the patch slid onto the sighting's
+    // keypoint's ray for an observation, and the patch as it stands for an
+    // image named as such.
+    let slid;
+    let square = match site {
         Some(site) => {
-            let centre = camera
-                .project_homogeneous(&cam_from_world, patch.center.coords, patch.w)
+            slid = patch
+                .anchored_at_keypoint(&camera, &cam_from_world, site)
                 .ok_or_else(refused)?;
-            [
-                pixel[0] - (site[0] - centre[0]),
-                pixel[1] - (site[1] - centre[1]),
-            ]
+            &slid
         }
-        None => pixel,
+        None => patch,
     };
-    let offset = patch
-        .keypoint_plane_offset(&camera, &cam_from_world, read_at)
+    let offset = square
+        .keypoint_plane_offset(&camera, &cam_from_world, pixel)
         .ok_or_else(refused)?;
     Ok(Pointed {
         image,
@@ -2171,10 +2167,8 @@ pub struct TiltReport {
 /// **The centre and the half-lengths do not move, and so no keypoint does.** A
 /// keypoint marks where its photograph sees the patch's centre, and the turn
 /// leaves the centre where it was, so each photograph still sees it at the same
-/// pixel; a keypoint's gap from the centre's projection is that sighting's own
-/// error, which a turn has no grounds to change. A sighting never localized
-/// takes the centre's projection, as under a translation. ([`spin_patch`] and a
-/// resize about the centre leave such a sighting unlocalized.)
+/// pixel: it sees the turned patch slid onto the same ray. A sighting never
+/// localized takes the centre's projection, as under every patch step.
 ///
 /// **The turn stops [`MAX_TILT_DEG`] from any observation.** With `e_i` the
 /// unit vector from the centre to observation `i`'s camera centre, a normal is
@@ -2244,7 +2238,13 @@ pub fn tilt_patch(
     }
     // The centre does not move, so no keypoint does: only a sighting never
     // localized is placed, at the centre's projection.
-    let placed = follow_centre(&mut next, edited, patch_frame, patch_frame.center);
+    let placed = follow_centre(
+        &mut next,
+        edited,
+        patch_frame,
+        Vector3::zeros(),
+        patch_frame.center,
+    );
     Ok((
         next,
         TiltReport {
@@ -2429,7 +2429,7 @@ pub fn spin_patch(
         }
         // The centre does not move, so no keypoint does: only a sighting never
         // localized is placed, at the centre's projection.
-        follow_centre(&mut next, edited, patch, patch.center);
+        follow_centre(&mut next, edited, patch, Vector3::zeros(), patch.center);
     }
     Ok((
         next,
@@ -2644,25 +2644,29 @@ fn track_payload_mut(
     )
 }
 
-/// Move every sighting with the patch's centre, in its own photograph, and drop
-/// every measurement read before the patch moved.
+/// Carry every sighting with the patch, and drop every measurement read before
+/// the patch moved.
 ///
 /// The rule every step that moves or turns the patch shares. A keypoint marks
 /// where its photograph sees the patch's **centre**, so a gap between a keypoint
-/// and the centre's projection is an error of that sighting -- the tile shifted
-/// in the photograph -- and not content lying at an offset on the patch. That
-/// gap is kept, in pixels of the same image: with `p` the projection of the
-/// centre as it stood (`was`) and `p'` that of `centre`, the keypoint `k`
-/// becomes `k + (p' - p)`. A centre that has not moved, as under a tilt, a
-/// spin or a resize about the centre, moves no keypoint at all.
+/// and the centre's projection means that photograph sees the patch slid along
+/// its own plane until its centre sits on the keypoint's ray, at `q_i`, the
+/// point that ray meets the plane (`OrientedPatch::anchored_at_keypoint`, read
+/// on the patch as it stood, `was`). The slid patch moves with the patch: with
+/// `displacement` the centre's move `d`, the keypoint becomes `P_i(q_i + d)`,
+/// `P_i` being that image's projection. A step that does not move the centre, a
+/// tilt, a spin or a resize about the centre, passes a zero `displacement` and
+/// moves no keypoint at all, since `q_i` is worked out from the keypoint each
+/// time and the keypoint's ray stays where it was.
 ///
-/// A sighting that has never been localized has no gap to keep and takes `p'`,
-/// the only place the patch says it could be; so does a localized one whose
-/// old centre did not project, there being no gap that can be read. (A
+/// A sighting that has never been localized has no slid point and takes the
+/// projection of `centre`, the only place the patch says it could be. (A
 /// **bearing**'s moved centre is renormalized by its step, which is the same
-/// direction and so the same pixel.) One the new centre no longer projects into
-/// is left with no keypoint and the reason that says so, rather than with a
-/// stale one.
+/// direction and so the same pixel; its `q_i + d` is a direction too.) A
+/// keypoint whose ray misses the plane or meets it behind its camera has no
+/// `q_i` to carry, and is left with no keypoint and the reason that says so
+/// when the step moves the centre, as is one whose carried point no longer
+/// projects; under a still centre it keeps its keypoint.
 ///
 /// **A sighting the step moves off its photograph, or to no pixel at all, is
 /// turned `out` and unpinned.** A keypoint is kept, so the row still says where
@@ -2683,9 +2687,10 @@ fn follow_centre(
     track: &mut EditableTrack,
     edited: &EditedReconstruction,
     was: &OrientedPatch,
+    displacement: Vector3<f64>,
     centre: Point3<f64>,
 ) -> usize {
-    let still = centre == was.center;
+    let still = displacement == Vector3::zeros();
     let mut placed = 0;
     let mut turned_out = false;
     for observation in &mut track.observations {
@@ -2694,9 +2699,9 @@ fn follow_centre(
         // is on the photograph. `None` for the second means the photograph
         // was not read, which only a keypoint the step does not move skips.
         let (landed, on) = match keypoint {
-            // The centre has not moved, so neither has where any photograph
-            // sees it. Nothing about this sighting is read, so even an image
-            // the reconstruction cannot name keeps its keypoint.
+            // The centre has not moved, so neither has the slid point the
+            // keypoint's ray meets. Nothing about this sighting is read, so
+            // even an image the reconstruction cannot name keeps its keypoint.
             Some(keypoint) if still => {
                 (Some([f64::from(keypoint[0]), f64::from(keypoint[1])]), None)
             }
@@ -2706,16 +2711,13 @@ fn follow_centre(
                         camera.project_homogeneous(&cam_from_world, at.coords, was.w)
                     };
                     let pixel = match keypoint {
-                        Some(keypoint) => project(centre).map(|to| match project(was.center) {
-                            Some(from) => [
-                                f64::from(keypoint[0]) + (to[0] - from[0]),
-                                f64::from(keypoint[1]) + (to[1] - from[1]),
-                            ],
-                            // No gap can be read against a centre the
-                            // photograph did not see.
-                            None => to,
-                        }),
-                        // Never localized, so there is no gap to keep.
+                        // The slid point, carried with the patch.
+                        Some(keypoint) => {
+                            let at = [f64::from(keypoint[0]), f64::from(keypoint[1])];
+                            was.anchored_at_keypoint(&camera, &cam_from_world, at)
+                                .and_then(|slid| project(slid.center + displacement))
+                        }
+                        // Never localized, so there is no slid point.
                         None => project(centre),
                     };
                     (

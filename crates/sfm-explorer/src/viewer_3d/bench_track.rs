@@ -8,13 +8,12 @@
 //! patch frame as a square in the world, its outward normal standing off it, and
 //! one mark per observation saying where that photograph sees the patch's
 //! centre against where the patch frame's centre is. One difference from Image
-//! Detail is deliberate -- there the outline is the patch's projection
-//! **shifted by that image's keypoint's gap** from the centre's projection,
-//! because the panel shows where the sighting is in that photograph; here there
-//! is no photograph to shift in, and the patch frame drawn is the patch itself,
-//! at its centre. A mark is the point of the plane the keypoint's ray meets,
-//! which shows how large each gap is and which way it points as a place on the
-//! patch; it draws no square, and it edits nothing.
+//! Detail is deliberate -- there the outline is the patch **slid along its
+//! plane onto that image's keypoint's ray**, because the panel shows the square
+//! that photograph sees; here there is no one photograph, and the patch frame
+//! drawn is the patch itself, at its centre. A mark is `q_i`, the point of the
+//! plane the keypoint's ray meets, which is the centre of the square that
+//! photograph sees; it draws no square, and it edits nothing.
 //!
 //! What this module produces is a
 //! [`Figure`](crate::viewer_3d::bench_track::Figure): world points, world

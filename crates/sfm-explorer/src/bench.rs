@@ -1453,9 +1453,8 @@ impl AppState {
     /// half-length is the honest number and no photograph is picked to stand
     /// in for it. `at` is an **observation** index, not an image:
     /// the size a person reads off an outline is the size of the outline drawn
-    /// at that sighting, which is the patch's projection shifted by the
-    /// sighting's gap ([`geometry::SeenSquare`]), and a shift in the
-    /// photograph changes no length in it.
+    /// at that sighting, which is the patch slid onto the sighting's
+    /// keypoint's ray ([`geometry::SeenSquare`]).
     fn patch_size_phrase(&self, id: ReconId, track: &EditableTrack, at: Option<usize>) -> String {
         let px = at.and_then(|index| {
             let observation = track.observations.get(index)?;

@@ -1430,10 +1430,10 @@ fn the_bench_layer_outlines_the_patch_where_its_corners_project() {
         ],
     );
     let photograph = pixels(640, 480);
-    // The outline is the patch's projection shifted by this image's keypoint's
-    // gap from the centre's projection, so each corner is its projection plus
-    // that gap. (`with_a_gap_the_outline_is_the_patch_s_projection_shifted_by_it`
-    // checks it with a gap that is not nothing.)
+    // The outline is the patch slid along its plane onto this image's
+    // keypoint's ray, so each corner is the slid patch's corner projected.
+    // (`with_a_gap_the_outline_is_the_patch_slid_onto_the_keypoints_ray` checks
+    // it with a gap that is not nothing.)
     let keypoint = track
         .observations
         .iter()
@@ -1448,12 +1448,13 @@ fn the_bench_layer_outlines_the_patch_where_its_corners_project() {
             .ray_to_pixel([p.x, p.y, p.z])
             .expect("the demo's patch corners are in front of the camera")
     };
-    let centre = project(patch_frame.center.coords, patch_frame.w);
-    let gap = [keypoint[0] - centre.0, keypoint[1] - centre.1];
+    let slid = patch_frame
+        .anchored_at_keypoint(camera, &pose, keypoint)
+        .expect("the keypoint's ray meets the plane");
     for (s, t) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
-        let (xyz, w) = patch_frame.corner_homogeneous(s, t);
+        let (xyz, w) = slid.corner_homogeneous(s, t);
         let (u, v) = project(xyz, w);
-        let expected = to_panel(&photograph, [u + gap[0], v + gap[1]]);
+        let expected = to_panel(&photograph, [u, v]);
         let nearest = outline
             .iter()
             .map(|point| (*point - expected).length())
@@ -2393,9 +2394,9 @@ fn version_labels(state: &crate::state::AppState, id: crate::scene::ReconId) -> 
         .collect()
 }
 
-/// The patch as one sighting's photograph sees it, its projection shifted by
-/// the sighting's gap: the outline the layer draws there, and the geometry
-/// every handle of it is placed by.
+/// The patch as one sighting's photograph sees it, slid along its plane onto
+/// the sighting's keypoint's ray: the outline the layer draws there, and the
+/// geometry every handle of it is placed by.
 fn outline_at(
     node: &SceneNode,
     track: &sfmtool_core::bench::EditableTrack,
@@ -2421,10 +2422,9 @@ fn outline_at(
 /// Each sighting's offset from where the patch's centre projects, in its own
 /// image's pixels.
 ///
-/// **What a move of the patch must not disturb**: a keypoint marks where its
-/// photograph sees the patch's centre, so its gap from the centre's projection
-/// is that sighting's own error, and every patch step keeps it in the
-/// photograph.
+/// The fixture's keypoints are the centre's exact projections, so every
+/// sighting's slid point is the centre itself, and a move that carries the slid
+/// points with the patch keeps every offset at nothing.
 fn projection_offsets(
     node: &SceneNode,
     track: &sfmtool_core::bench::EditableTrack,
@@ -2452,7 +2452,7 @@ fn projection_offsets(
 }
 
 /// Where the `(s, t)` corner of the square a sighting's photograph sees lands,
-/// in source-image px: the patch's projection plus the sighting's gap.
+/// in source-image px: the slid patch's corner, projected.
 fn seen_pixel(
     square: &crate::bench::geometry::SeenSquare,
     camera: &sfmtool_core::camera::CameraIntrinsics,
@@ -2597,9 +2597,9 @@ fn dragging_the_dot_slides_the_patch_and_every_sighting_follows_it() {
         offset.dot(&before_patch_frame.normal()).abs() < 1e-12,
         "the patch left its own plane: {offset:?}",
     );
-    // Every sighting moved with the patch and **kept its own gap** from where
-    // the centre projects: each keypoint moved by its photograph's displacement
-    // of the centre's projection, rather than being reset to the centre.
+    // Every sighting moved with the patch: each slid point, here the centre
+    // itself, was carried by the move, so each keypoint is still where the
+    // centre projects.
     for (offset, now) in offsets
         .iter()
         .zip(projection_offsets(&state.scene[0], &moved))
@@ -2675,9 +2675,8 @@ fn dragging_an_edge_resizes_the_patch_so_it_reprojects_under_the_release_point()
         resized.half_extent[0], resized.half_extent[1],
         "a patch frame is square"
     );
-    // A resize moves the centre, so every keypoint moves by its own
-    // photograph's displacement of the centre and keeps its gap, exactly as a
-    // slide's do; nothing is pinned.
+    // A resize moves the centre, so every slid point is carried with it,
+    // exactly as a slide's are; nothing is pinned.
     for (offset, now) in offsets
         .iter()
         .zip(projection_offsets(&state.scene[0], &after))
@@ -2691,9 +2690,8 @@ fn dragging_an_edge_resizes_the_patch_so_it_reprojects_under_the_release_point()
         after.observations.iter().all(|o| o.pinned),
         "a resize leaves the pins a point's rows arrive with"
     );
-    // Against the outline as it is redrawn -- the patch's projection shifted by
-    // the gap of the sighting the edge was dragged in, which is what the person
-    // sees.
+    // Against the outline as it is redrawn -- the patch slid onto the ray of
+    // the sighting the edge was dragged in, which is what the person sees.
     let (redrawn, _, _) = outline_at(&state.scene[0], &after, 0);
     let landed = seen_pixel(&redrawn, &camera, &pose, 1.0, 0.0);
     assert!(
@@ -3278,8 +3276,8 @@ fn ghost_state() -> (crate::state::AppState, crate::scene::ReconId, String, usiz
 }
 
 /// Where a world point lands in one image, in its own px.
-/// Where `point` is seen on `square` in `image`: its projection plus the
-/// square's gap, which is where the layer draws a point of a member outline's
+/// Where `point`, a point of the slid patch's world, is seen in `image`: its
+/// projection, which is where the layer draws a point of a member outline's
 /// normal.
 fn seen_of(
     node: &SceneNode,
@@ -3572,7 +3570,7 @@ fn dragging_the_ghost_edge_and_corner_resizes_and_spins_the_patch() {
 }
 
 /// The normal is drawn out of the outline's centre in a member image (the
-/// sighting's, the outline being shifted there by its gap) and out of the patch's own
+/// sighting's, the outline being the patch slid onto its ray) and out of the patch's own
 /// centre in the ghost, as a segment and a two-barbed head.
 #[test]
 fn the_normal_is_drawn_in_member_images_and_in_the_locked_ghost() {
@@ -4009,11 +4007,11 @@ const GAP_PX: [f64; 2] = [6.0, -4.0];
 /// of sight, sized to about 25 px across in that image, and observation 0's
 /// keypoint moved off the centre's projection by [`GAP_PX`].
 ///
-/// The fixture's own keypoints are the exact projections, so a square shifted
-/// by the gap and the patch moved in 3D onto the keypoint's ray are the same
-/// square there and no test can tell them apart. On an oblique patch with a
-/// gap of several pixels they differ by more than half a pixel, which is what
-/// this fixture is for.
+/// The fixture's own keypoints are the exact projections, so the patch slid in
+/// 3D onto the keypoint's ray and the patch's projection shifted by the gap in
+/// 2D are the same square there and no test can tell them apart. On an oblique
+/// patch with a gap of several pixels they differ by more than half a pixel,
+/// which is what this fixture is for.
 fn gapped_oblique_fixture() -> (SceneNode, sfmtool_core::bench::EditableTrack) {
     let (node, track) = bench_track_fixture();
     let image = track.observations[0].image as usize;
@@ -4045,8 +4043,9 @@ fn gapped_oblique_fixture() -> (SceneNode, sfmtool_core::bench::EditableTrack) {
 }
 
 /// Where the `(s, t)` point of `track`'s patch is seen in observation 0's
-/// photograph, worked out here rather than through the layer's code: its
-/// projection plus the keypoint's gap from the centre's projection.
+/// photograph, worked out here rather than through the layer's code: the
+/// patch slid along its plane until its centre sits on the keypoint's ray
+/// (`OrientedPatch::anchored_at_keypoint`), projected.
 fn seen_by_hand(
     node: &SceneNode,
     track: &sfmtool_core::bench::EditableTrack,
@@ -4057,26 +4056,16 @@ fn seen_by_hand(
     let (camera, pose) =
         crate::bench::geometry::view_of(&node.edited().base.image_set, sighting.image as usize)
             .expect("the demo's images have cameras");
-    let patch = patch_frame(track);
-    let project = |s: f64, t: f64| {
-        let (xyz, w) = patch.corner_homogeneous(s, t);
-        camera
-            .project_homogeneous(&pose, xyz, w)
-            .expect("the patch is in front of the camera")
-    };
-    let centre = project(0.0, 0.0);
-    let keypoint = sighting.site().expect("a sighting");
-    let point = project(s, t);
-    [
-        point[0] + keypoint[0] - centre[0],
-        point[1] + keypoint[1] - centre[1],
-    ]
+    let slid = patch_frame(track)
+        .anchored_at_keypoint(&camera, &pose, sighting.site().expect("a sighting"))
+        .expect("the keypoint's ray meets the plane");
+    patch_pixel(&slid, &camera, &pose, s, t)
 }
 
-/// Where the `(s, t)` point of the patch moved in 3D until its centre sits on
-/// observation 0's keypoint ray would be drawn: the square the layer must
-/// **not** draw, kept to show the fixture tells the two apart.
-fn reanchored_pixel(
+/// Where the `(s, t)` point of observation 0's tile is, in its photograph: the
+/// square the tile is cut through (`OrientedPatch::seen_at_keypoint`, which
+/// every tile render reads), projected.
+fn tile_pixel(
     node: &SceneNode,
     track: &sfmtool_core::bench::EditableTrack,
     s: f64,
@@ -4086,10 +4075,31 @@ fn reanchored_pixel(
     let (camera, pose) =
         crate::bench::geometry::view_of(&node.edited().base.image_set, sighting.image as usize)
             .expect("the demo's images have cameras");
-    let anchored = patch_frame(track)
-        .anchored_at_keypoint(&camera, &pose, sighting.site().expect("a sighting"))
-        .expect("the keypoint's ray meets the plane");
-    patch_pixel(&anchored, &camera, &pose, s, t)
+    let cut = patch_frame(track).seen_at_keypoint(&camera, &pose, sighting.site());
+    patch_pixel(&cut, &camera, &pose, s, t)
+}
+
+/// Where the `(s, t)` point of the patch's projection shifted in 2D by the
+/// keypoint's gap from the centre's projection would be drawn: the square the
+/// layer must **not** draw, kept to show the fixture tells the two apart.
+fn shifted_pixel(
+    node: &SceneNode,
+    track: &sfmtool_core::bench::EditableTrack,
+    s: f64,
+    t: f64,
+) -> [f64; 2] {
+    let sighting = &track.observations[0];
+    let (camera, pose) =
+        crate::bench::geometry::view_of(&node.edited().base.image_set, sighting.image as usize)
+            .expect("the demo's images have cameras");
+    let patch = patch_frame(track);
+    let centre = patch_pixel(&patch, &camera, &pose, 0.0, 0.0);
+    let keypoint = sighting.site().expect("a sighting");
+    let point = patch_pixel(&patch, &camera, &pose, s, t);
+    [
+        point[0] + keypoint[0] - centre[0],
+        point[1] + keypoint[1] - centre[1],
+    ]
 }
 
 /// Every bench path the panel draws for `track` in observation 0's image, in
@@ -4139,29 +4149,35 @@ fn off_the_plus_u_edge(point: [f64; 2], square: impl Fn(f64, f64) -> [f64; 2]) -
         .fold(f64::INFINITY, f64::min)
 }
 
-/// With a gap, the outline a member image draws is the patch's projection
-/// shifted by that gap, and the normal's arrow leaves the keypoint: a keypoint
-/// marks where the photograph sees the patch's centre, so the gap shifts the
-/// whole square in the photograph. It is not the patch moved in 3D onto the
-/// keypoint's ray, which on this oblique patch is more than half a pixel away.
+/// With a gap, the outline a member image draws is the patch slid along its
+/// plane onto the keypoint's ray, which is the square the tile is cut through,
+/// and the normal's arrow leaves the keypoint: a keypoint marks where the
+/// photograph sees the patch's centre, so the photograph sees the patch slid
+/// there. It is not the patch's projection shifted in 2D by the gap, which on
+/// this oblique patch is more than half a pixel away.
 #[test]
-fn with_a_gap_the_outline_is_the_patch_s_projection_shifted_by_it() {
+fn with_a_gap_the_outline_is_the_patch_slid_onto_the_keypoints_ray() {
     let (node, track) = gapped_oblique_fixture();
     let outline = drawn_outline(&node, &track);
-    let mut reanchored_off = 0.0f64;
+    let mut shifted_off = 0.0f64;
     for (s, t) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
         let want = seen_by_hand(&node, &track, s, t);
         let nearest = nearest_drawn(&outline, want);
         assert!(
             nearest < 0.01,
-            "the outline misses the shifted corner ({s}, {t}) at {want:?} by {nearest}",
+            "the outline misses the slid corner ({s}, {t}) at {want:?} by {nearest}",
         );
-        let other = reanchored_pixel(&node, &track, s, t);
-        reanchored_off = reanchored_off.max((other[0] - want[0]).hypot(other[1] - want[1]));
+        let tile = tile_pixel(&node, &track, s, t);
+        assert!(
+            (tile[0] - want[0]).hypot(tile[1] - want[1]) < 1e-9,
+            "the tile's corner ({s}, {t}) is at {tile:?}, the outline's at {want:?}",
+        );
+        let other = shifted_pixel(&node, &track, s, t);
+        shifted_off = shifted_off.max((other[0] - want[0]).hypot(other[1] - want[1]));
     }
     assert!(
-        reanchored_off > 0.3,
-        "the fixture should tell the two squares apart, they differ by {reanchored_off} px",
+        shifted_off > 0.3,
+        "the fixture should tell the two squares apart, they differ by {shifted_off} px",
     );
 
     // The normal's segment, the one two-point path, leaves the keypoint.
@@ -4179,8 +4195,8 @@ fn with_a_gap_the_outline_is_the_patch_s_projection_shifted_by_it() {
     );
 }
 
-/// An edge dragged on the gap-shifted outline lands under the pointer on the
-/// outline as it is redrawn, with the far edge where it was.
+/// An edge dragged on the slid outline lands under the pointer on the outline
+/// as it is redrawn, with the far edge where it was.
 #[test]
 fn with_a_gap_a_dragged_edge_lands_under_the_pointer_on_the_redrawn_outline() {
     let (node, track) = gapped_oblique_fixture();
@@ -4228,18 +4244,18 @@ fn with_a_gap_a_dragged_edge_lands_under_the_pointer_on_the_redrawn_outline() {
             "the redrawn corner ({s}, {t}) is {nearest} panel px off"
         );
     }
-    // The square moved in 3D onto the keypoint's ray would have left the edge
-    // away from the pointer.
-    let anchored = off_the_plus_u_edge(to, |s, t| reanchored_pixel(&node, &after, s, t));
+    // The patch's projection shifted in 2D by the gap would have left the
+    // edge away from the pointer.
+    let shifted = off_the_plus_u_edge(to, |s, t| shifted_pixel(&node, &after, s, t));
     assert!(
-        anchored > 0.1,
-        "the fixture should tell the two squares apart: {anchored} px"
+        shifted > 0.1,
+        "the fixture should tell the two squares apart: {shifted} px"
     );
 }
 
-/// A corner dragged on the gap-shifted outline to where that corner, turned in
-/// the patch's plane, is drawn turns the patch by exactly that angle, and the
-/// redrawn corner lands under the pointer.
+/// A corner dragged on the slid outline to where that corner, turned in the
+/// patch's plane about the slid centre, is drawn turns the patch by exactly
+/// that angle, and the redrawn corner lands under the pointer.
 #[test]
 fn with_a_gap_a_turned_corner_lands_under_the_pointer_on_the_redrawn_outline() {
     let (node, track) = gapped_oblique_fixture();
@@ -4284,9 +4300,9 @@ fn with_a_gap_a_turned_corner_lands_under_the_pointer_on_the_redrawn_outline() {
         nearest < 0.02,
         "the redrawn corner is {nearest} panel px from the pointer"
     );
-    let anchored = reanchored_pixel(&node, &after, 1.0, 1.0);
+    let shifted = shifted_pixel(&node, &after, 1.0, 1.0);
     assert!(
-        (anchored[0] - to[0]).hypot(anchored[1] - to[1]) > 0.1,
+        (shifted[0] - to[0]).hypot(shifted[1] - to[1]) > 0.1,
         "the fixture should tell the two squares apart",
     );
 }

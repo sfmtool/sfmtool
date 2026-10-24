@@ -4442,8 +4442,9 @@ fn corner_pixel(
 /// pixels: the gap between where that photograph sees the patch's centre and
 /// where the geometry puts it.
 ///
-/// **What a move of the patch must not disturb.** The gap is that sighting's
-/// own error, and every patch step keeps it in the photograph.
+/// A tilt, a spin and a resize about the centre keep every keypoint, and so
+/// every gap; a translation carries each sighting's slid point in 3D, which
+/// keeps a gap of nothing at nothing.
 fn projection_offsets(track: &EditableTrack, edited: &EditedReconstruction) -> Vec<[f64; 2]> {
     track
         .observations
@@ -4480,10 +4481,10 @@ fn off_centre(track: &mut EditableTrack) {
 /// The patch frame whose projection is the outline a person sees at
 /// `observation`, for a sighting with no gap.
 ///
-/// The viewer draws the patch's projection shifted by the sighting's gap from
-/// the centre's projection. The callers' keypoints are the centre's exact
-/// projection, so the gap is nothing and the outline is the patch's own
-/// projection; this checks that rather than assuming it.
+/// The viewer draws the patch slid along its plane onto the sighting's
+/// keypoint's ray ([`slid_of`]). The callers' keypoints are the centre's exact
+/// projection, so the slid patch is the patch itself; this checks that rather
+/// than assuming it.
 fn outline_of(
     track: &EditableTrack,
     edited: &EditedReconstruction,
@@ -4495,6 +4496,55 @@ fn outline_of(
         "the fixture's keypoint is meant to be the exact projection: gap {gap:?}",
     );
     patch_frame_of(track)
+}
+
+/// The patch as observation `observation`'s photograph sees it: slid along its
+/// plane until its centre sits on that sighting's keypoint's ray, at `q_i`. The
+/// square the tile is cut through, the viewer draws there and a pointer there is
+/// read against.
+fn slid_of(
+    track: &EditableTrack,
+    edited: &EditedReconstruction,
+    observation: usize,
+) -> OrientedPatch {
+    let row = &track.observations[observation];
+    let (camera, pose) = view(edited, row.image as usize);
+    patch_frame_of(track)
+        .anchored_at_keypoint(&camera, &pose, row.site().expect("a sighting"))
+        .expect("the keypoint's ray meets the plane in front of the camera")
+}
+
+/// Where each sighting's slid point lands once the patch moves by
+/// `displacement`, `P_i(q_i + d)`, worked out from the track before the step
+/// rather than from anything the step did.
+fn carried_pixels(
+    track: &EditableTrack,
+    edited: &EditedReconstruction,
+    displacement: Vector3<f64>,
+) -> Vec<[f64; 2]> {
+    (0..track.observations.len())
+        .map(|k| {
+            let (camera, pose) = view(edited, track.observations[k].image as usize);
+            let mut moved = slid_of(track, edited, k);
+            moved.center += displacement;
+            corner_pixel(&moved, &camera, &pose, 0.0, 0.0)
+        })
+        .collect()
+}
+
+/// Turn the track's patch `degrees` about its own `u` axis, keeping its centre
+/// and every keypoint, so the photographs see it at a slant and a gap between a
+/// keypoint and the centre's projection is a slide of a foreshortened square.
+fn oblique(track: &mut EditableTrack, degrees: f64) {
+    let Stage::Track(payload) = &mut track.stage else {
+        panic!("a track-stage track");
+    };
+    let patch = payload.patch_frame.as_mut().expect("a patch frame");
+    let turn = nalgebra::Rotation3::from_axis_angle(
+        &nalgebra::Unit::new_normalize(patch.u_axis),
+        degrees.to_radians(),
+    );
+    patch.v_axis = turn * patch.v_axis;
 }
 
 #[test]
@@ -4603,12 +4653,11 @@ fn moving_a_cluster_sighting_moves_its_seed_and_keeps_the_shape_it_is_read_at() 
 /// invert the radial term, which is why the two are run with different
 /// tolerances rather than with one loose enough for both.
 ///
-/// The square the dragged photograph shows is the patch's projection moved by
-/// that sighting's gap from the centre's projection, the gap every patch step
-/// keeps. The exact assertions are about the **patch frame** the step wrote,
-/// seen through that gap as read before the step; the keypoint the step wrote
-/// beside it is an `f32` slot, which is what the looser bound on the keypoints
-/// below allows for.
+/// The square the dragged photograph shows is the patch slid along its plane
+/// onto that sighting's keypoint's ray. The exact assertions are about that
+/// slid square moved by the step's own displacement; the redrawn outline, read
+/// back through the `f32` keypoint the step wrote, is held to a thousandth of a
+/// pixel.
 #[test]
 fn a_resize_from_an_edge_lands_that_edge_under_the_pixel_and_leaves_the_far_one_alone() {
     let scene = Scene::new();
@@ -4620,21 +4669,17 @@ fn a_resize_from_an_edge_lands_that_edge_under_the_pixel_and_leaves_the_far_one_
 fn resize_edge_case(edited: &EditedReconstruction, tolerance: f64) {
     let (bench, label) = bench_with_point(edited, 0);
     let mut track = unpinned(track_of(&bench, &label));
+    oblique(&mut track, 50.0);
     off_centre(&mut track);
 
     let sighting = track.observations[1].image as usize;
     let (camera, pose) = view(edited, sighting);
     let unanchored = patch_frame_of(&track);
-    let offsets = projection_offsets(&track, edited);
-    let gap = offsets[1];
-    let seen = |patch: &OrientedPatch, s: f64, t: f64| {
-        let pixel = corner_pixel(patch, &camera, &pose, s, t);
-        [pixel[0] + gap[0], pixel[1] + gap[1]]
-    };
+    let before = slid_of(&track, edited, 1);
     // The far edge's midpoint, which the resize promises not to move.
-    let far_before = seen(&unanchored, -1.0, 0.0);
+    let far_before = corner_pixel(&before, &camera, &pose, -1.0, 0.0);
     // Aim well outside the outline, along the `+u` edge's own direction.
-    let out = seen(&unanchored, 2.3, 0.0);
+    let out = corner_pixel(&before, &camera, &pose, 2.3, 0.0);
 
     let (next, report) =
         resize_patch_to_pixel(&track, edited, Viewpoint::Observation(1), Edge::PlusU, out)
@@ -4656,45 +4701,48 @@ fn resize_edge_case(edited: &EditedReconstruction, tolerance: f64) {
         report.half - report.was,
     );
 
-    // The claim, on the exact patch frame the step wrote: seen through the
-    // dragged sighting's gap, its dragged edge is on the pointer and its far
-    // edge where it was.
-    let dragged = seen(&after, 1.0, 0.0);
+    // The claim, on the exact square the step's own numbers describe: the slid
+    // square moved by the same displacement, its dragged edge on the pointer and
+    // its far edge where it was.
+    let drawn = OrientedPatch {
+        center: before.center + moved,
+        half_extent: after.half_extent,
+        ..before.clone()
+    };
+    let dragged = corner_pixel(&drawn, &camera, &pose, 1.0, 0.0);
     assert!(
         (dragged[0] - out[0]).abs() < tolerance && (dragged[1] - out[1]).abs() < tolerance,
         "the dragged edge should land on {out:?}, it landed on {dragged:?}",
     );
-    let far_after = seen(&after, -1.0, 0.0);
+    let far_after = corner_pixel(&drawn, &camera, &pose, -1.0, 0.0);
     assert!(
         (far_after[0] - far_before[0]).abs() < tolerance
             && (far_after[1] - far_before[1]).abs() < tolerance,
         "the far edge moved from {far_before:?} to {far_after:?}",
     );
-
-    // **Every keypoint moved by its own photograph's displacement of the
-    // centre's projection**, so every sighting keeps its gap from that
-    // projection. And nothing is pinned, because where the patch is says
-    // nothing about whether a sighting belongs to it.
-    for ((before, now), (offset, kept)) in track
-        .observations
-        .iter()
-        .zip(&next.observations)
-        .zip(offsets.iter().zip(projection_offsets(&next, edited)))
-    {
-        let (camera, pose) = view(edited, before.image as usize);
-        let from = corner_pixel(&unanchored, &camera, &pose, 0.0, 0.0);
-        let to = corner_pixel(&after, &camera, &pose, 0.0, 0.0);
-        let site = before.site().expect("a sighting");
-        let want = [site[0] + to[0] - from[0], site[1] + to[1] - from[1]];
-        let got = now.site().expect("a sighting");
+    // And on the outline as it is really redrawn, the patch slid onto the
+    // keypoint the step wrote: the same, to a thousandth of a pixel.
+    let redrawn = slid_of(&next, edited, 1);
+    for (s, name) in [(1.0, "dragged"), (-1.0, "far")] {
+        let want = if s > 0.0 { out } else { far_before };
+        let got = corner_pixel(&redrawn, &camera, &pose, s, 0.0);
         assert!(
             (got[0] - want[0]).abs() < 1e-3 && (got[1] - want[1]).abs() < 1e-3,
-            "image {} should sight the resized patch at {want:?}, it sights {got:?}",
-            before.image,
+            "the redrawn {name} edge should be at {want:?}, it is at {got:?}",
         );
+    }
+
+    // **Every slid point was carried by the centre's displacement in 3D**, each
+    // keypoint becoming `P_i(q_i + d)`. And nothing is pinned, because where
+    // the patch is says nothing about whether a sighting belongs to it.
+    let want = carried_pixels(&track, edited, moved);
+    for (k, now) in next.observations.iter().enumerate() {
+        let got = now.site().expect("a sighting");
         assert!(
-            (kept[0] - offset[0]).abs() < 1e-3 && (kept[1] - offset[1]).abs() < 1e-3,
-            "a resize changed a sighting's gap: {offset:?} became {kept:?}",
+            (got[0] - want[k][0]).abs() < 1e-3 && (got[1] - want[k][1]).abs() < 1e-3,
+            "image {} should sight the resized patch at {:?}, it sights {got:?}",
+            now.image,
+            want[k],
         );
     }
     assert!(next.observations.iter().all(|o| !o.pinned));
@@ -4719,6 +4767,7 @@ fn sliding_the_patch_lands_the_dot_under_the_pointer_and_moves_every_sighting() 
 fn translate_case(edited: &EditedReconstruction, tolerance: f64) {
     let (bench, label) = bench_with_point(edited, 0);
     let mut track = unpinned(track_of(&bench, &label));
+    oblique(&mut track, 50.0);
     off_centre(&mut track);
     // A measurement to be dropped, and a pin the slide must not invent.
     track.observations[1]
@@ -4731,15 +4780,11 @@ fn translate_case(edited: &EditedReconstruction, tolerance: f64) {
     let image = track.observations[dragged].image as usize;
     let (camera, pose) = view(edited, image);
     let was = patch_frame_of(&track);
-    let offsets = projection_offsets(&track, edited);
-    let gap = offsets[dragged];
+    let seen = slid_of(&track, edited, dragged);
     // Aim at a place on the square this photograph shows that is not its
     // centre, so the slide is a real move: the `(0.7, 0.4)` point of the
-    // square, seen through the sighting's gap.
-    let target = {
-        let pixel = corner_pixel(&was, &camera, &pose, 0.7, 0.4);
-        [pixel[0] + gap[0], pixel[1] + gap[1]]
-    };
+    // patch slid onto the sighting's keypoint's ray.
+    let target = corner_pixel(&seen, &camera, &pose, 0.7, 0.4);
 
     let (next, report) =
         translate_patch_to_pixel(&track, edited, Viewpoint::Observation(dragged), target)
@@ -4769,8 +4814,8 @@ fn translate_case(edited: &EditedReconstruction, tolerance: f64) {
     );
     assert_eq!(next.track().and_then(|p| p.bitmap.clone()), None);
 
-    // **The dot the drag came through lands under the pointer.** The centre
-    // now projects at the pointer less the sighting's gap, and the gap is kept.
+    // **The dot the drag came through lands under the pointer.** Its slid
+    // point was carried onto the pointer's ray.
     let landed = next.observations[dragged].site().expect("a sighting");
     assert!(
         (landed[0] - target[0]).abs() < 1e-3 && (landed[1] - target[1]).abs() < 1e-3,
@@ -4779,21 +4824,25 @@ fn translate_case(edited: &EditedReconstruction, tolerance: f64) {
     assert_eq!(report.pixel, landed);
     // Exactly, before the `f32` keypoint slot rounds it.
     let exact = {
-        let pixel = corner_pixel(&patch_frame, &camera, &pose, 0.0, 0.0);
-        [pixel[0] + gap[0], pixel[1] + gap[1]]
+        let mut moved = seen.clone();
+        moved.center += offset;
+        corner_pixel(&moved, &camera, &pose, 0.0, 0.0)
     };
     assert!(
         (exact[0] - target[0]).abs() < tolerance && (exact[1] - target[1]).abs() < tolerance,
-        "the moved centre seen through the gap should be at {target:?}, it is at {exact:?}",
+        "the carried slid centre should be at {target:?}, it is at {exact:?}",
     );
 
-    // **Every sighting keeps its own gap from the centre's projection.** A
-    // keypoint marks where its photograph sees the patch's centre, so the gap is
-    // that sighting's own error, which a slide has no grounds to correct.
-    for (offset, now) in offsets.iter().zip(projection_offsets(&next, edited)) {
+    // **Every sighting's slid point is carried by the slide in 3D**, each
+    // keypoint becoming `P_i(q_i + d)`.
+    let want = carried_pixels(&track, edited, offset);
+    for (k, now) in next.observations.iter().enumerate() {
+        let got = now.site().expect("a sighting");
         assert!(
-            (now[0] - offset[0]).abs() < 1e-3 && (now[1] - offset[1]).abs() < 1e-3,
-            "a slide changed a sighting's gap: {offset:?} became {now:?}",
+            (got[0] - want[k][0]).abs() < 1e-3 && (got[1] - want[k][1]).abs() < 1e-3,
+            "image {} should sight the slid patch at {:?}, it sights {got:?}",
+            now.image,
+            want[k],
         );
     }
     for observation in &next.observations {
@@ -5066,8 +5115,9 @@ fn a_translation_across_the_plane_moves_the_centre_and_every_sighting() {
         Some(patch_frame.center)
     );
     assert_eq!(next.track().and_then(|p| p.bitmap.clone()), None);
-    // Every sighting kept its own gap from where the centre projects, and none
-    // of them was ruled on.
+    // Every keypoint was the centre's exact projection, so its slid point is
+    // the centre, carried with it: each is still the centre's projection, and
+    // none of them was ruled on.
     for (offset, now) in offsets.iter().zip(projection_offsets(&next, &edited)) {
         assert!(
             (now[0] - offset[0]).abs() < 1e-3 && (now[1] - offset[1]).abs() < 1e-3,
@@ -5566,11 +5616,12 @@ fn centre_pixels(
 }
 
 /// The one edit no photograph can name: the patch's depth. The centre travels
-/// the distance asked for along the outward normal, and each keypoint moves by
-/// its own photograph's displacement of the centre's projection, so every
-/// sighting keeps its gap from that projection.
+/// the distance asked for along the outward normal, and each sighting's slid
+/// point travels with it: on a patch seen at a slant, with every keypoint a few
+/// pixels off the centre's projection, each keypoint comes back as
+/// `P_i(q_i + d)`, which is not the 2D rule `k + P_i(c + d) - P_i(c)`.
 #[test]
-fn a_translation_along_the_normal_moves_each_keypoint_with_its_photographs_centre() {
+fn a_translation_along_the_normal_carries_each_slid_point_in_3d() {
     let scene = Scene::new();
     let edited = edited_with_columns(&scene, WORLD);
     let (bench, label) = bench_with_point(&edited, 0);
@@ -5586,9 +5637,11 @@ fn a_translation_along_the_normal_moves_each_keypoint_with_its_photographs_centr
         track.track().and_then(|p| p.bitmap.as_ref()).is_some(),
         "the column fixture should carry a patch bitmap to drop"
     );
+    oblique(&mut track, 55.0);
     off_centre(&mut track);
     let was = patch_frame_of(&track);
     let from = centre_pixels(&track, &edited, &was);
+    let carried = carried_pixels(&track, &edited, was.normal() * -0.37);
 
     let distance = -0.37;
     let (next, report) = translate_patch(&track, &edited, Vector3::new(0.0, 0.0, distance))
@@ -5615,32 +5668,43 @@ fn a_translation_along_the_normal_moves_each_keypoint_with_its_photographs_centr
     );
     assert_eq!(next.track().and_then(|p| p.bitmap.clone()), None);
 
-    // Every keypoint moved by its own photograph's displacement of the centre's
-    // projection -- worked out here from the two centres rather than from
-    // anything the step did.
+    // Every keypoint is its slid point carried by the displacement,
+    // `P_i(q_i + d)`, worked out from the track before the step. The 2D rule,
+    // the keypoint moved by its photograph's displacement of the centre's
+    // projection, is a different pixel on this oblique patch: by more than a
+    // tenth of a pixel in some photograph.
     let to = centre_pixels(&next, &edited, &patch_frame);
+    let mut largest_parting: f64 = 0.0;
     for (k, (before, after)) in track
         .observations
         .iter()
         .zip(&next.observations)
         .enumerate()
     {
-        let site = before.site().expect("a sighting");
-        let want = [
-            site[0] + to[k][0] - from[k][0],
-            site[1] + to[k][1] - from[k][1],
-        ];
+        let want = carried[k];
         let got = after.site().expect("a sighting");
         assert!(
             (got[0] - want[0]).abs() < 1e-3 && (got[1] - want[1]).abs() < 1e-3,
             "image {} should sight the moved patch at {want:?}, it sights {got:?}",
             after.image,
         );
+        let site = before.site().expect("a sighting");
+        let in_2d = [
+            site[0] + to[k][0] - from[k][0],
+            site[1] + to[k][1] - from[k][1],
+        ];
+        largest_parting = largest_parting.max((got[0] - in_2d[0]).hypot(got[1] - in_2d[1]));
         assert!(!after.pinned, "an offset is not a verdict");
         let measurement = after.track.as_ref().expect("a track slot");
         assert_eq!(measurement.plain_zncc, None);
         assert_eq!(measurement.reason, None);
     }
+
+    assert!(
+        largest_parting > 0.1,
+        "the 3D carry and the 2D rule agree to {largest_parting} px, so this fixture \
+         does not tell them apart",
+    );
 
     // **The sightings moved by different amounts**, which is the whole of the
     // gesture: the spread is the parallax the old depth was wrong by, and a
@@ -5908,7 +5972,78 @@ fn a_tilt_leaves_a_keypoint_far_off_the_centre_where_it_is() {
     );
 }
 
-/// A sighting never localized has no gap to keep, so every patch step puts it
+/// A perspective sighting whose keypoint's ray meets the patch's plane behind
+/// its camera has no slid patch. Its tile and outline are the patch as it
+/// stands (`OrientedPatch::seen_at_keypoint`), and a drag through it is refused
+/// as `NoProjection`, not read against a square behind the camera.
+#[test]
+fn a_drag_through_a_perspective_sighting_whose_ray_meets_the_plane_behind_its_camera_is_refused() {
+    let scene = Scene::new();
+    let edited = edited_fixture(&scene, WORLD);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let track = unpinned(track_of(&bench, &label));
+    let was = patch_frame_of(&track);
+
+    // Turn the patch nearly edge on to image 0, so part of that photograph
+    // looks at its plane behind the camera. A tilt keeps every keypoint.
+    let (sin, cos) = 89.0_f64.to_radians().sin_cos();
+    let (mut track, _) = tilt_patch(&track, &edited, was.normal() * cos - was.u_axis * sin)
+        .expect("a finite direction");
+    let patch = patch_frame_of(&track);
+    let image = track.observations[0].image as usize;
+    let (camera, pose) = view(&edited, image);
+    assert!(
+        !camera.model.needs_ray_path(),
+        "the fixture's camera is a perspective one"
+    );
+
+    // A pixel of image 0 whose ray meets the plane behind the camera.
+    let eye = pose.inverse_translation_origin();
+    let n = patch.normal();
+    let behind = (0..IMG_H)
+        .flat_map(|y| (0..IMG_W).map(move |x| [f64::from(x) + 0.5, f64::from(y) + 0.5]))
+        .find(|px| {
+            let r = camera.pixel_to_ray(px[0], px[1]);
+            let dir = pose.to_rotation_matrix().transpose() * Vector3::new(r[0], r[1], r[2]);
+            (patch.center - eye).dot(&n) / dir.dot(&n) < 0.0
+        })
+        .expect("the tilted plane is behind the camera somewhere in image 0");
+    track.observations[0]
+        .track
+        .as_mut()
+        .expect("a track slot")
+        .keypoint = Some([behind[0] as f32, behind[1] as f32]);
+
+    assert!(patch.anchored_at_keypoint(&camera, &pose, behind).is_none());
+    assert_eq!(
+        patch.seen_at_keypoint(&camera, &pose, Some(behind)),
+        patch,
+        "the tile and the outline are the patch as it stands"
+    );
+
+    let target = corner_pixel(&patch, &camera, &pose, 0.0, 0.0);
+    assert_eq!(
+        translate_patch_to_pixel(&track, &edited, Viewpoint::Observation(0), target).err(),
+        Some(TrackEditError::NoProjection {
+            viewpoint: Viewpoint::Observation(0)
+        })
+    );
+    assert_eq!(
+        resize_patch_to_pixel(
+            &track,
+            &edited,
+            Viewpoint::Observation(0),
+            Edge::PlusU,
+            target
+        )
+        .err(),
+        Some(TrackEditError::NoProjection {
+            viewpoint: Viewpoint::Observation(0)
+        })
+    );
+}
+
+/// A sighting never localized has no slid point to carry, so every patch step puts it
 /// at the projection of the centre as the step leaves it: a translation along
 /// the normal and a resize from an edge at the moved centre's, and a tilt, a
 /// spin and a resize about the centre at the centre's own.

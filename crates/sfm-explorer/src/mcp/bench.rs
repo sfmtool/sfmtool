@@ -771,16 +771,16 @@ pub(super) fn shape_bench_observation(
 ///
 /// `half_length` is in the reconstruction's own units and `moved_edge` says what
 /// becomes of the sightings: named, that edge moves and the far one is held, so
-/// the centre shifts and every keypoint moves with the centre's projection in
-/// its own photograph; omitted, both edges move about a held centre and no
-/// keypoint moves. Either way a sighting never localized takes the new centre's
-/// projection.
+/// the centre shifts and every keypoint is carried with it in 3D, the point its
+/// ray meets the plane moving with the centre; omitted, both edges move about a
+/// held centre and no keypoint moves. Either way a sighting never localized
+/// takes the new centre's projection.
 ///
 /// The pixel form is the gesture, and it is what makes the answer exact: the
 /// pixel is unprojected onto the patch's own plane, so the edge really lands
 /// there through whatever distortion the lens has. An `observation` says the
-/// outline meant is the patch's projection shifted by that sighting's gap from
-/// the centre's projection and the pixel is in its image; a `camera_image` says
+/// outline meant is the patch slid along its plane onto that sighting's
+/// keypoint's ray and the pixel is in its image; a `camera_image` says
 /// it is the patch as it stands, seen in that image, which is the ghost
 /// outline's edge drag.
 ///

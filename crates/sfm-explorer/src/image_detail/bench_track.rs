@@ -113,7 +113,7 @@ const EDGE_HIT_WIDTH: f32 = 8.0;
 ///
 /// Every outline handle names the [`Viewpoint`] its outline was drawn from,
 /// which is the square the pointer is read against: an observation's, the
-/// patch's projection shifted by that sighting's gap at the track stage
+/// patch slid onto that sighting's keypoint's ray at the track stage
 /// ([`geometry::SeenSquare`]) and its own shape at the cluster stage, or this
 /// image's own, the patch as it stands, for the ghost.
 ///
@@ -252,8 +252,8 @@ struct Outline {
     /// Samples per edge, so corner `k` is sample `k * per_edge`.
     per_edge: usize,
     /// Where the square it outlines is centred on screen, which is what a
-    /// corner spins about: the sighting for a member outline, which the gap
-    /// puts the square's centre on, and at the cluster stage, the patch's own
+    /// corner spins about: the sighting for a member outline, the slid patch's
+    /// centre being on its ray, and at the cluster stage, the patch's own
     /// projection for the ghost.
     pivot: Option<Pos2>,
 }
@@ -379,19 +379,23 @@ impl Layer {
     /// One outline for the image rather than one per observation, because there
     /// is one patch: two sightings in a photograph are two readings of where
     /// it lands, not two squares. Its colour is `in` when either is, so an
-    /// image the track is `in` reads as `in`. It is the patch's projection
-    /// shifted by that sighting's gap ([`geometry::SeenSquare`]): a keypoint
-    /// marks where this photograph sees the patch's centre, so the gap is a
-    /// shift of the whole square in the photograph. The geometric projection is
-    /// where the 3D says the centre should be, which the hollow centre and the
-    /// projection-offset segment show separately.
+    /// image the track is `in` reads as `in`. It is the patch slid along its
+    /// plane until its centre sits on that sighting's keypoint's ray
+    /// ([`geometry::SeenSquare`]): a keypoint marks where this photograph sees
+    /// the patch's centre, so a gap between it and the centre's projection
+    /// means the photograph sees the patch slid there. That is the square the
+    /// tile is cut through. The geometric projection is where the 3D says the
+    /// centre should be, which the hollow centre and the projection-offset
+    /// segment show separately.
     ///
-    /// The normal is projected and shifted by the same gap, so it leaves the
-    /// sighting's dot: the arrow belongs to the square drawn, and one standing
-    /// out of the hollow centre instead would part from its own outline by the
-    /// projection offset. Every handle reads the pointer less the same gap
-    /// against the patch itself, so the square a person looks at is the one the
-    /// pointer is read against.
+    /// The normal stands out of the slid centre, so it leaves the sighting's
+    /// dot: the arrow belongs to the square drawn, and one standing out of the
+    /// hollow centre instead would part from its own outline by the projection
+    /// offset. The slid patch is the patch moved across its own plane, so its
+    /// normal line is parallel to the patch's and a depth or a facing read off
+    /// either is the same. Every handle reads the pointer against the slid
+    /// patch, so the square a person looks at is the one the pointer is read
+    /// against.
     fn build_track_stage(
         &mut self,
         track: &EditableTrack,
@@ -495,8 +499,8 @@ impl Layer {
     /// An image counts as the track's when it holds an observation of any
     /// verdict, so an `out` sighting keeps the member drawing
     /// and only an image with none gets the ghost. What is projected is the
-    /// patch **itself**, with no gap, because there is no keypoint here to read
-    /// one from: the ghost is where the 3D places the square, and its centre is
+    /// patch **itself**, not slid, because there is no keypoint here to slide
+    /// it onto: the ghost is where the 3D places the square, and its centre is
     /// where the hollow centre of a member image sits.
     ///
     /// There is nothing to draw, and so no ghost, at the cluster stage (no
@@ -933,17 +937,17 @@ pub(super) fn ghost_color() -> Color32 {
 }
 
 /// The square an outline drawn from `viewpoint` shows in a view, at the track
-/// stage: the patch's projection shifted by the observation's gap, or the
-/// patch as it stands for an image ([`geometry::SeenSquare`]). `None` at the
-/// cluster stage, for a track with no patch frame, and for an observation
-/// index past the end.
+/// stage: the patch slid onto the observation's keypoint's ray, or the patch
+/// as it stands for an image ([`geometry::SeenSquare`]). `None` at the cluster
+/// stage, for a track with no patch frame, and for an observation index past
+/// the end.
 ///
 /// The one place both the drawing and the drag decide it, so the square a
 /// pointer is read against is the square drawn: the outline and the arrow are
-/// drawn through [`geometry::SeenSquare::outline`] and
-/// [`geometry::SeenSquare::project`], and every handle reads the pointer
-/// through [`geometry::SeenSquare::ray`] or
-/// [`geometry::SeenSquare::turn_between`], which take the same gap off.
+/// drawn from [`geometry::SeenSquare::outline`] and the slid patch's own
+/// centre and normal, and every handle reads the pointer against that same
+/// slid patch, through [`geometry::SeenSquare::ray`] or
+/// [`geometry::SeenSquare::turn_between`].
 fn square_of(
     track: &EditableTrack,
     viewpoint: Viewpoint,

@@ -11,9 +11,9 @@
 //! normal or the SIFT overlays. The functions here take the values the
 //! outline is made of, not a track, so a panel that reads a point straight off
 //! the reconstruction builds no track to draw one: [`patch_outline`] is the
-//! patch's boundary projected through the camera's own model and shifted by the
-//! observation's gap from the centre's projection
-//! ([`crate::bench::geometry::SeenSquare`]), and [`cluster_outline`] a
+//! boundary of the patch slid onto the observation's keypoint's ray, projected
+//! through the camera's own model ([`crate::bench::geometry::SeenSquare`]), and
+//! [`cluster_outline`] a
 //! cluster-stage observation's own parallelogram
 //! ([`crate::bench::geometry::parallelogram`]). The crop is the bounding box
 //! of that outline widened by [`CROP_MARGIN_PX`] on every side and rounded out
@@ -112,17 +112,16 @@ pub(crate) struct CropPicture {
     pub(crate) projection_of: Option<ProjectionOf>,
 }
 
-/// Where a patch lands in one photograph: `patch_frame`'s boundary projected
-/// through `camera` at `pose` and shifted by the observation's gap, `keypoint`
-/// less the projection of the centre ([`geometry::SeenSquare`]), the square
-/// Image Detail draws there; its two axes measured along their bend; and
-/// `target`, what `projection_of` names, projected with the patch frame's `w`
-/// and not shifted.
+/// Where a patch lands in one photograph: the boundary of `patch_frame` slid
+/// along its plane onto `keypoint`'s ray, projected through `camera` at `pose`
+/// ([`geometry::SeenSquare`]), the square Image Detail draws there and the
+/// tile is cut through; its two axes measured along their bend; and `target`,
+/// what `projection_of` names, projected with the patch frame's `w`.
 ///
 /// The patch frame keeps its own `w`, so the patch of a point at infinity, a
 /// bearing's patch tangent to the direction sphere, projects homogeneously as
-/// its point does. Where the centre does not project there is no gap to read
-/// and the outline is the patch as it stands.
+/// its point does. Where the keypoint's ray does not meet the patch's plane in
+/// front of the camera the outline is the patch as it stands.
 pub(crate) fn patch_outline(
     patch_frame: &OrientedPatch,
     camera: &CameraIntrinsics,
@@ -140,7 +139,7 @@ pub(crate) fn patch_outline(
         let mut points = Vec::with_capacity(n + 1);
         for i in 0..=n {
             let (s, t) = along(2.0 * i as f64 / n as f64 - 1.0);
-            let (xyz, w) = patch_frame.corner_homogeneous(s, t);
+            let (xyz, w) = square.patch.corner_homogeneous(s, t);
             points.push(square.project(camera, pose, xyz, w)?);
         }
         Some(polyline_length(&points))

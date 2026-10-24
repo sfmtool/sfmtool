@@ -4954,8 +4954,8 @@ unprojected onto the patch's own plane, so an edge lands there exactly through
 whatever distortion the lens has, and because a patch is square the whole square
 follows one scale. **A pixel form names its photograph as exactly one of
 `observation` and `camera_image`.** An `observation` means that sighting's
-outline, the patch's projection shifted by its keypoint's gap from the centre's
-projection, and the pixel is in its image. A
+outline, the patch slid along its plane onto its keypoint's ray, and the pixel
+is in its image. A
 `camera_image`, an index or an `.sfmr` relative path as everywhere else, means
 the patch as it stands seen in that image: Image Detail's ghost outline, and the
 only way to reach an image the track has no sighting in. Both at once is refused
@@ -5011,17 +5011,17 @@ normal that was named.
 
 **At the track stage the patch is the thing every sighting is a view of**, so
 the two tools that move its centre -- the translation and a resize that names a
-moved edge -- move **every** observation's keypoint by its own photograph's
-displacement of the centre's projection, and the outline moves in every image at
-once. Where the displacement runs along the plane the photographs see nearly the
-same displacement; where it runs along the normal they see *different* ones, and
-that spread is the parallax the old depth was wrong by. A keypoint marks where
-its photograph sees the patch's centre, so each sighting keeps its gap from
-where the centre projects, the gap being that sighting's own error, which a
-move has no grounds to correct. The sighting the call came through lands under
-the pixel it named, because the pixel is read less that sighting's gap. A resize
-that names **no** moved edge, a **spin** and a **tilt** all leave the centre
-where it was, so they move no keypoint. The gestures are what make a patch
+moved edge -- carry **every** observation's sighting with the patch, and the
+outline moves in every image at once. A keypoint marks where its photograph
+sees the patch's centre, so that photograph sees the patch slid along its plane
+onto the keypoint's ray, at `q_i` where the ray meets the plane; a move by `d`
+puts the keypoint at the projection of `q_i + d`. Where the displacement runs
+along the plane the photographs see nearly the same displacement; where it runs
+along the normal they see *different* ones, and that spread is the parallax the
+old depth was wrong by. The sighting the call came through lands under the
+pixel it named, because the pixel is read against that sighting's slid square.
+A resize that names **no** moved edge, a **spin** and a **tilt** all leave the
+centre where it was, so they move no keypoint. The gestures are what make a patch
 workable: it can be slid, turned, sized and aimed until it covers the piece of
 surface a person means. None of
 them pins anything, because where the patch is says nothing about whether a
