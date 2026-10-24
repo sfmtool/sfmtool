@@ -130,7 +130,9 @@ edges and corners (`viewer_3d/overlay.rs::draw_info_overlay`):
 
 - **Scene stats** (top-left): `N points (M at infinity) | K images | F fps`.
   The parenthetical appears only when the reconstruction carries `w = 0`
-  points; the frame rate only while the HUD's Debug > Frame rate toggle is on
+  points; `(S shown)` follows the point count while the Track Table
+  filters the 3D view ([track-table.md](track-table.md) § "Filtering the 3D
+  view"); the frame rate only while the HUD's Debug > Frame rate toggle is on
   (it is, by default).
 - **Camera position** (top-centre): `Pos: [x, y, z]`, on the stats line's row
   while at least 12 px separates the two. In a narrower view it drops to the

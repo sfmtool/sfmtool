@@ -95,8 +95,88 @@ press would paint, and the preview's is the paler one because nothing has been
 done yet. The eraser brush that sets `3` and `4` is specified in
 [edits/eraser-brush.md](edits/eraser-brush.md).
 
+A live point the Track Table's *Filter the 3D view* rejects carries one more
+bit over whichever word it takes, `MASK_REJECTED` (`0x100`), so a rejected
+point under the brush keeps its red; the shaders read the word as
+`alive & MASK_WORD` (`0xFF`). A deleted point's word never carries it. See
+§ "The Track Table's filter".
+
 `SceneRenderer::update_point_mask` writes the words; see
 [document-model.md](document-model.md) § "Change detection by identity".
+
+### The Track Table's filter
+
+The Track Table's *Filter the 3D view* box ([track-table.md](track-table.md)
+§ "Filtering the 3D view") dims or hides the points of the reconstruction it
+shows that its rows do not list. The panel publishes the set it keeps,
+`KeptPoints` in [filter_3d.rs](../../crates/sfm-explorer/src/filter_3d.rs),
+one bit per point index, for one version of the node. The frame's mask upload
+hands it to `update_point_mask` in `PointMarks::kept`, with
+`PointMarks::filter_hides`, only for the node the table shows and only when the
+set was built for the version at the node's cursor; otherwise the node gets no
+filter, and every point is drawn.
+
+- **The set is a bit of the mask word**, not a buffer of its own. The word is
+  already there, one per point and one per surfel slot, stepping beside the
+  instances, so the filter costs no GPU memory and no vertex slot, and it
+  reaches the surfels and the overlay's additions by the writer that already
+  covers them. The bundle keeps the set it last wrote (`masked_kept`) and
+  compares the next one by pointer. A new set, the filter coming or going, or
+  a new base writes every word of the node once; an unchanged one writes
+  nothing. The panel builds a new set only when its row list is computed
+  again, so a frame costs one pointer comparison.
+- **Dim or hide is a uniform.** `ReconUniforms::filter_mode`, in the padding
+  after `preview_s`, is `FILTER_DIM` (0) or `FILTER_HIDE` (1); switching
+  between them writes no word. It is read only where a word carries the bit,
+  which is only on the filtered node.
+- **Two draws.** The point and patch pipelines read their corners from the
+  splat corner buffer (`SPLAT_CORNERS` in `gpu_types.rs`), the unit quad's
+  four corners twice, each carrying which draw it is of at `@location(15)`.
+  The point pass and the surfel pass draw every node with corners `0..4`
+  (`FIRST_DRAW` in
+  [render.rs](../../crates/sfm-explorer/src/scene_renderer/render.rs)), then,
+  after every node's surfels, the nodes the filter dims again with corners
+  `4..8` (`DIMMED_DRAW`). The draw is vertex data rather than read off
+  `vertex_index`, because DX12's vertex id does not count the draw's first
+  vertex, while every backend fetches vertex data from it; the first capture
+  run, which read `vertex_index`, drew no dimmed point on Windows. The vertex
+  shaders decide with `in_this_draw` in
+  [common.wgsl](../../crates/sfm-explorer/src/shaders/common.wgsl): the first
+  draws every point but the rejected ones, the second the rejected ones alone,
+  at `DIM_ALPHA` (0.25), and a rejected point under Hide is a clipped vertex
+  in both, so it draws nothing and answers no pick. Drawing the dimmed points
+  last means a kept point is never behind a dimmed one that was drawn first
+  and won the depth test: a kept point behind a dimmed one shows through it,
+  and a dimmed one behind a kept one fails the test. Both draws write depth
+  and pick ids, so a dimmed point is picked where it is in front. The second
+  draw costs a vertex pass over the filtered node's points while Dim is on.
+- **Selected and hovered points are exempt.** A rejected point whose global
+  pick index is the selected or the hovered one is drawn by the first draw at
+  full strength. The splats read the two indexes from `PointUniforms`; the
+  surfels from `PatchUniforms::selected_point_index` and
+  `hovered_point_index`, in the padding before `camera_pos`.
+- **A point at infinity** is drawn from the same instance buffer by the same
+  vertex shader, which reads the word before it branches on the kind, so it is
+  dimmed or hidden as a finite point is.
+- **The EDL pass keeps the dim alpha.** Pass 1's colour target holds
+  premultiplied colour, and the EDL pass returns the shaded colour as it is,
+  with the glow scaled by the alpha, rather than multiplying by the alpha
+  again, which would draw a dimmed point at its square.
+
+The constants are written once on each side, `MASK_REJECTED` in
+[upload/overlay.rs](../../crates/sfm-explorer/src/scene_renderer/upload/overlay.rs),
+`FILTER_*` in `gpu_types.rs`, `DIMMED_DRAW` in `render.rs` and `DIM_ALPHA` in
+`filter_3d.rs`, and `the_wgsl_filter_values_match_the_rust_ones` in
+`scene_renderer/pipelines/tests.rs` holds them to `common.wgsl`. The upload
+tests in `scene_renderer/upload/tests.rs` hold that the bit marks exactly the
+live points the set leaves out, a deleted one never, a rejected brush mark
+keeping its word; that the same set writes nothing, Hide writes nothing and
+sets the uniform, a set built again rewrites every word and dropping the
+filter clears them; that another node's words and uniforms are untouched; that
+a point at infinity takes the bit; and that a new base and a fresh additions
+buffer take it. The `noop` backend runs no draw, so which draw a word lands in
+and the pick through a hidden point were checked in a release build on the
+Seoul Bull and Kerry Park ground truths.
 
 ### The overlay's additions
 
@@ -203,7 +283,9 @@ The fragment shader:
 2. Replaces the point's colour, first match wins: the brush's red or pale red
    for mask word `3` or `4`, the selection's yellow for the selected point, the
    hover's cyan for the hovered point or mask word `2` (see "Per-Point Data")
-3. Outputs premultiplied RGBA color to the color target
+3. Outputs premultiplied RGBA color to the color target, at alpha 1, or at
+   the Track Table filter's `DIM_ALPHA` in its dimmed draw (see "The Track
+   Table's filter")
 4. Outputs positive linear view-space depth to the depth target
 5. Outputs `PICK_TAG_POINT | instance_index` to the pick target
 
@@ -460,6 +542,13 @@ Pass 1b: Frustum wireframes  (see camera-views.md)
 Pass 1c: Image quads  (see camera-views.md)
   → writes: color, linear depth (0.0), pick ID, hw depth
 
+Pass 1d: Patch surfels
+  → writes: color, linear depth (0.0), pick ID, hw depth
+
+Pass 1e: The Track Table filter's dimmed splats and surfels
+  → only while the filter dims; vertices 4..8 of the same pipelines
+  → writes: color at DIM_ALPHA, linear depth, pick ID, hw depth
+
 Pass 2:  EDL post-process
   → reads: color + linear depth
   → applies: edge darkening + supernova glow
@@ -548,7 +637,11 @@ transform.
   `recon.points` index or picking, hover and selection break.
 - **Count readout** — the top-left scene stats read
   `N points (M at infinity) | K images | F fps`, dropping the parenthetical
-  when `metadata.infinity_point_count` is zero.
+  when `metadata.infinity_point_count` is zero. While the Track Table filters
+  the 3D view on a drawn node, `(S shown)` follows the point count: every
+  drawn point less the filtered node's rejected ones. Until the table has rows
+  for the version in view it reads `(all shown until the Track Table
+  updates)` (`viewer_3d/overlay.rs::scene_stats_text`).
 - **Infinity point size slider** — `infinity_point_px` in the HUD's Size
   section ("∞ (px)"), range 1–16 px, default 3. Separate from the world-unit
   `point_size_log2` slider. The 1–16 px range proved fine in practice; the
@@ -556,11 +649,13 @@ transform.
 
 ## Non-goals
 
-- **Point colouring and filtering by quality.** Points carry their RGB colour and
-  nothing else; there is no mode that colours the cloud by reprojection error,
-  track length or triangulation angle, and no filter over those metrics. The
-  equivalent per-feature overlays exist on the Image Detail panel instead, where
-  a metric can be read against the image it came from.
+- **Point colouring by quality.** Points carry their RGB colour and nothing
+  else; there is no mode that colours the cloud by reprojection error, track
+  length, triangulation angle or any other track table column. The cloud is
+  filtered by the Track Table's query instead (§ "The Track Table's filter"),
+  which dims or hides the points it does not list and leaves the colours of
+  the rest alone. The equivalent per-feature overlays exist on the Image
+  Detail panel, where a metric can be read against the image it came from.
 - **Level of detail.** Every point in a loaded reconstruction is uploaded and
   drawn every frame. Nothing decimates the cloud at distance, so the practical
   ceiling is what one instanced draw sustains rather than what an LOD scheme

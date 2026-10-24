@@ -1,10 +1,8 @@
 # Track Table
 
-**Status:** Draft. Amends [gui/track-table.md](../gui/track-table.md) (Filter
-the 3D view),
-[gui/mcp-server.md](../gui/mcp-server.md) (the panel-query tools) and
-[gui/point-cloud-rendering.md](../gui/point-cloud-rendering.md) (the
-non-goal "Point colouring and filtering by quality").
+**Status:** Draft. Amends [gui/mcp-server.md](../gui/mcp-server.md) (the
+panel-query tools) and [gui/track-table.md](../gui/track-table.md) (their
+non-goal).
 Part 1, the track table and its query in core, is built and filed as
 [core/analysis/track-table.md](../core/analysis/track-table.md). The
 `find_points` read, the track table cache it reads, `TrackTable::merge` and
@@ -21,8 +19,11 @@ that give a point with no stored reference its photograph, and the
 ([gui/track-table.md](../gui/track-table.md) § "The Crop column"), and so are
 its computed columns, which the table job computes as a second run after the
 stored ones, only once a visible column, a bound or the sort needs them
-([gui/track-table.md](../gui/track-table.md) § "Computing the columns"). This
-draft holds what remains.
+([gui/track-table.md](../gui/track-table.md) § "Computing the columns"), and
+so is *Filter the 3D view*, which dims or hides the points the table does not
+list ([gui/track-table.md](../gui/track-table.md) § "Filtering the 3D view",
+[gui/point-cloud-rendering.md](../gui/point-cloud-rendering.md) § "The Track
+Table's filter"). This draft holds what remains.
 
 Decided:
 
@@ -32,68 +33,24 @@ Decided:
 - The computed columns of the first version are the maximum ray angle, the
   condition number and the inverse-depth z (built,
   [gui/track-table.md](../gui/track-table.md) § "Computing the columns").
-- The table can reach the 3D viewer through an optional toggle that dims or
-  hides the points its filters reject.
+- The table reaches the 3D viewer through an optional toggle that dims or
+  hides the points its filters reject (built,
+  [gui/track-table.md](../gui/track-table.md) § "Filtering the 3D view").
 - Bulk edits on the matched rows are designed for but not built:
   "Remove matching points" is named as a later step, and the query's result
   is shaped so that it can feed `delete_points`.
-
-Not decided: see § "Open questions".
 
 ## Purpose
 
 The Track Table panel ([gui/track-table.md](../gui/track-table.md)) lists
 every point of a reconstruction as one row, with the stored per-point numbers
 and two pictures of each point as its columns, and the computed columns that
-say how well a point is triangulated, sorted and filtered by a person. This
-draft adds a toggle that applies the table's filter to the 3D view, and a pair
-of wire tools that read and write the panel's query, so an agent can set up
-the view a person sees.
+say how well a point is triangulated, sorted and filtered by a person, and can
+dim or hide in the 3D Viewer the points it does not list. This draft adds a
+pair of wire tools that read and write the panel's query, so an agent can set
+up the view a person sees.
 
-## Part 2: what the panel adds
-
-### What it shows
-
-```
-┌ Track Table ─ dino ───────────────────────────────────────────────────────────────────┐
-│ 1,204 of 9,941 points  [Columns]  Size [64 pt ▾]  ☐ Seen in selected image            │
-│ ☐ Filter the 3D view: (•) Dim ( ) Hide                                                │
-├────────┬────────┬────────┬─────────┬─────────┬────────────┬───────────────┬───────────┤
-│ Point  │ Crop   │ Patch  │ Track ▼ │Distance │ Error (px) │ Ray angle (°) │ Cond.     │
-│        │        │        │ [3 ][  ]│ [  ][  ]│ [   ][1.5 ]│ [2  ][    ]   │ [  ][  ]  │
-├────────┼────────┼────────┼─────────┼─────────┼────────────┼───────────────┼───────────┤
-│ #9873  │ ░▓▓▓▓░ │ ▓▓▓▓▓▓ │    57   │   4.17  │    0.820   │     41.2      │    3.1    │
-│        │ ░▓▓▓▓░ │ ▓▓▓▓▓▓ │         │         │            │               │           │
-├────────┼────────┼────────┼─────────┼─────────┼────────────┼───────────────┼───────────┤
-│ #830   │ ░░░░░░ │ ▓▓▓▓▓▓ │    18   │     ∞   │    0.610   │     22.7      │    1.8    │
-│        │ ░░░░░░ │ ▓▓▓▓▓▓ │         │         │            │               │           │
-└────────┴────────┴────────┴─────────┴─────────┴────────────┴───────────────┴───────────┘
-```
-
-- **The query** gains the 3D toggle (§ "Filtering the 3D view") as panel
-  state, beside the bounds, the sort, the visible columns and the selected-image
-  box.
-
-### Filtering the 3D view
-
-**Filter the 3D view** applies the table's matched set to the selected
-reconstruction's point cloud:
-
-- **Dim** draws the rejected points at a reduced alpha, and they can still be
-  picked.
-- **Hide** leaves them out of the draw and out of picking.
-
-Selected and hovered points are always drawn at full strength, so a click in
-the table never selects a point that cannot be seen. The mask is a per-point
-bit buffer uploaded beside the node's point instances. It is rebuilt when the
-matched set changes and dropped when the toggle is cleared. Other
-reconstructions are not affected. The HUD's stats line adds *(N shown)* while
-the toggle is on.
-
-This revises the point-cloud-rendering non-goal. The 3D cloud is filtered by
-the table's query. Colouring the cloud by a column stays a non-goal.
-
-## Part 3: the wire
+## Part 2: the wire
 
 ### `find_points` (read)
 
@@ -119,7 +76,7 @@ can set up the view a person sees, for a screenshot recipe (bug bash finding
 17), without clicking through the boxes. The panel does not have to be open
 for its query to be set. The panel opens with it.
 
-## Part 4: later, Remove matching points
+## Part 3: later, Remove matching points
 
 A **Remove matching points** button, and a `delete_matching_points` tool or a
 `find_points`-then-`delete_points` recipe, would delete every matched point as
@@ -146,14 +103,9 @@ hover and the quiet table job, step 3b, the Patch column, the Size slider
 `patch_pictures`, a module both panels use, and step 4, the Crop column with
 the crop moved into `patch_pictures` and made to take values, the requests
 that wait for the scroll to stop and the reference picks, and step 5, the
-computed columns filled by the quiet table job as a second run, are built
-([gui/track-table.md](../gui/track-table.md)).
+computed columns filled by the quiet table job as a second run, and step 6,
+*Filter the 3D view*, its dim and hide drawn through a bit of each point's
+mask word, are built ([gui/track-table.md](../gui/track-table.md)). Whether
+Image Detail follows the filter is an open question there.
 
-- **6. Filter the 3D view** (dim and hide).
 - **7. `get_track_table_query` / `set_track_table_query`.**
-
-## Open questions
-
-- **Does Image Detail follow the 3D filter?** Dimming the tracked features of
-  rejected points in Image Detail would extend the same toggle to a second
-  panel. This draft limits the toggle to the 3D viewer.

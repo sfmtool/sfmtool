@@ -38,9 +38,10 @@ reprojection error) and how good its patch is (the reference view's
 self-similarity radius and elongation, the largest viewing angle and the count
 of back-facing observations), and two picture columns: **Crop**, the point's reference
 photograph cut around its patch (§ "The Crop column"), and **Patch**, its patch
-bitmap (§ "The Patch column"). Applying the filter to the 3D view and the wire
-tools that read and write the panel's query are proposed in
-[drafts/track-table.md](../drafts/track-table.md).
+bitmap (§ "The Patch column"). A box under the header applies the table's
+filter to the 3D Viewer, dimming or hiding the points it does not list
+(§ "Filtering the 3D view"). The wire tools that read and write the panel's
+query are proposed in [drafts/track-table.md](../drafts/track-table.md).
 
 ## Placement
 
@@ -72,6 +73,7 @@ Panels menu opens it.
 ┌ Track Table ─────────────────────────────────────────────────────────────────────────────┐
 │ dino  1,204 of 9,941 points  · 3 with repeat observations  [Columns]                     │
 │   Size [64 pt ▾]  ☐ Seen in selected image                                               │
+│ ☐ Filter the 3D view  (•) Dim  ( ) Hide                                                  │
 ├────────┬────────┬────────┬─────────┬─────────────┬────────────┬──────────┬───────────────┤
 │ Point  │ Crop   │ Patch  │ Track ▼ │ Repeat obs. │ Error (px) │ Distance │ Ray angle (°) │
 │        │        │        │[3 ][   ]│[    ][    ] │[   ][1.5]  │[   ][   ]│ [   ][    ]   │
@@ -663,10 +665,75 @@ the job still read the cache only for the version at the cursor.
   another panel hovers is drawn with the hover fill, its text in the strong
   colour so it keeps its contrast over the lighter fill.
 
+## Filtering the 3D view
+
+**Filter the 3D view**, a box on the line under the header with the choice
+*Dim* or *Hide* beside it, applies the table's matched set to the selected
+reconstruction's point cloud in the 3D Viewer. The matched set is the points
+of the row list, the ones that pass the bounds and the selected-image box; the
+sort plays no part. The line and what it publishes are in
+[track_table_panel/filter.rs](../../crates/sfm-explorer/src/track_table_panel/filter.rs),
+and the published value, `Filter3d` on `AppState::filter_3d`, in
+[filter_3d.rs](../../crates/sfm-explorer/src/filter_3d.rs).
+
+- **Dim** draws the points the table does not list at `DIM_ALPHA`, 0.25,
+  after every point it lists, so a listed point behind a dimmed one shows
+  through it and a dimmed one never hides a listed one. A dimmed point can
+  still be picked, hovered and erased where it is in front.
+- **Hide** leaves them out of the draw and out of picking: a click, a hover
+  or the eraser brush passes through to what is behind.
+- **The selected and hovered points are always drawn at full strength**,
+  whatever the filter says of them, so a point selected in Track View, Image
+  Detail or the Scene tree is never invisible, and a click in the table, which
+  lists only matched points, never selects one that cannot be seen.
+- **Their surfels go with them.** The filter reaches a point's patch surfel as
+  it reaches its splat, and a point at infinity as a finite one.
+- **Only the node the table shows is filtered.** Every other reconstruction is
+  drawn as it would be with the box clear. Selecting another reconstruction
+  moves the filter to it with the table.
+- **The stats line counts what is shown.** While the box is ticked the 3D
+  Viewer's stats line goes on after the point count with how many points are
+  drawn at full strength: every drawn point less the points of the filtered
+  node the table does not list, *9941 points (1204 shown) | 85 images*
+  ([point-cloud-rendering.md](point-cloud-rendering.md) § "UI — shipped").
+- **After an edit every point is drawn until the new rows are listed.** A row
+  list belongs to one version, and an edit, an undo or a redo can renumber
+  points, so the set built for the version before is never applied to the
+  version after. While the rows on show are out of date (§ "After an edit"),
+  and before the first table of a reconstruction lands, the 3D view draws
+  every point and the stats line says *(all shown until the Track Table
+  updates)*. The set for the new version replaces it in the frame its rows
+  are listed. Keeping the old set for the points still present would need
+  each one looked up in the new version, which is the work the table job is
+  doing.
+- **It holds while the panel is behind another tab.** In the default layout
+  the table shares its node with the 3D Viewer and is behind it, so while the
+  box is ticked the panel keeps its row list current on frames it is not drawn
+  in (`TrackTablePanel::after_dock`): it computes the rows again when their
+  inputs change, as for an image selected in Image Browser, and names its node
+  to the table job, which then runs as it does for a drawn panel. A closed
+  panel filters nothing; its box stays ticked for when it opens again.
+- **The set is built when the rows change, never per frame.** The panel builds
+  the set (`KeptPoints`, a bit per point index) from the row list in the frame
+  the row list is computed again, and publishes the same `Arc` on every other
+  frame. The renderer compares it by pointer and writes the node's mask again
+  only for a new one, once, or when the box is cleared, which drops it. A
+  change of *Dim* or *Hide* writes no mask.
+- **Names.** `get_widgets` lists the box as a `check_box` named `Filter the 3D
+  view` and the choices as radio buttons named `Dim` and `Hide`, each with its
+  state, so an agent sets the filter with `click`. Nothing else on the wire
+  reports it: a screenshot of the 3D Viewer shows the stats line.
+
+How the renderer carries the set, as a bit of each point's mask word, and
+draws the dimmed points, is in
+[point-cloud-rendering.md](point-cloud-rendering.md) § "The Track Table's
+filter".
+
 ## The query is panel state
 
-The bounds, the sort, the visible columns (the picture columns among them) and the
-*Seen in selected image* box are UI state of the panel
+The bounds, the sort, the visible columns (the picture columns among them), the
+*Seen in selected image* box and the *Filter the 3D view* box with its *Dim*
+or *Hide* are UI state of the panel
 (`TrackTableQuery`), like the Image Detail display settings. They are not held
 in a version, cost no undo step and are not saved with the reconstruction or in
 the layout file. A single query is used for whichever reconstruction is
@@ -787,6 +854,7 @@ the frame the selection changed.
 | `SCIENTIFIC_FROM` | 10⁵ | The magnitude from which a condition number or an inverse-depth z is written in scientific notation. |
 | `SCROLL_SETTLE_S` | 0.15 s | How long the rows on screen stay the same before the Crop cells ask for photographs and picks (§ "Requests wait for the scroll to stop"). |
 | Crop outline | 1 pt light grey over 2.5 pt dark | The stroke over a crop in a cell (`CELL_OUTLINE`). |
+| `DIM_ALPHA` | 0.25 | The alpha a point *Filter the 3D view* dims is drawn at (§ "Filtering the 3D view"). |
 
 ## Testing
 
@@ -989,14 +1057,45 @@ declared queue, lock and quiet value to [background-tasks.md](background-tasks.m
 and their work to its claim to stop when cancelled; the MCP tests hold the
 `find_points` refusal of the picture columns.
 
+[track_table_panel/tests/filter_3d.rs](../../crates/sfm-explorer/src/track_table_panel/tests/filter_3d.rs)
+runs *Filter the 3D view* over the demo reconstruction:
+
+- the box starts clear and nothing is published; ticked, the set is the
+  matched rows, Dim by default, for the version in view; cleared, it is
+  dropped;
+- the set follows the bounds and the selected-image box but not the sort: a
+  sort keeps the same `Arc`, a frame with nothing changed builds no set, and
+  a new bound or a new selected image builds another; Dim or Hide builds
+  none;
+- after an edit no set is published until the new rows land, and then the
+  deleted point is out of it; a set never answers for another version;
+- open behind another tab, the panel computes the rows again and names its
+  node to the table job, through an edit too; closed, it publishes nothing
+  and the box stays ticked;
+- the stats line reads *40 points (1 at infinity) (11 shown)* under a bound,
+  and *(all shown until the Track Table updates)* after an edit;
+- the box and the two choices are named *Filter the 3D view*, *Dim* and
+  *Hide* in the AccessKit tree with their states, and a click on each sets
+  the query.
+
+The renderer's half, the mask bit, the dimmed draw and the shader constants,
+is tested as [point-cloud-rendering.md](point-cloud-rendering.md) § "The
+Track Table's filter" says.
+
 The layout tests in `layout::tests` and the MCP layout and catalog tests count
 the panel among the ten.
 
 ## Non-goals
 
-- Filter the 3D view and `get_track_table_query` /
-  `set_track_table_query` are not built.
-  They are proposed in [drafts/track-table.md](../drafts/track-table.md).
+- `get_track_table_query` / `set_track_table_query` are not built. They are
+  proposed in [drafts/track-table.md](../drafts/track-table.md). Until then
+  an agent sets *Filter the 3D view* with `click` on the box and the choices
+  `get_widgets` lists, and reads its effect off the 3D Viewer's stats line in
+  a screenshot.
+- The filter of the 3D view reaches no panel but the 3D Viewer. Image Detail
+  draws every tracked feature whatever the table lists (§ "Open questions").
+- Colouring the cloud by a column. The filter dims or hides, and the colours
+  stay the points' own.
 - The picture columns are not returned on the wire: `find_points` refuses
   `crop` and `patch` ([mcp-server.md](mcp-server.md) § "`find_points`"), and
   an agent sees them with `screenshot {"panel_name": "track_table"}`.
@@ -1006,6 +1105,9 @@ the panel among the ten.
 
 ## Open questions
 
+- **Does Image Detail follow the 3D filter?** Dimming the tracked features of
+  rejected points in Image Detail would extend the same toggle to a second
+  panel. The toggle reaches the 3D Viewer only.
 - **The quiet order.** Whether the table's columns should go ahead of the
   focused item's evaluation while the table is the panel in view.
 - **Errors in older files** can disagree with the RMS the column describes.

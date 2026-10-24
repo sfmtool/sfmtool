@@ -253,7 +253,9 @@ reads `N points (M at infinity) | K images | F fps`, dropping the parenthetical
 when the reconstruction has no `w = 0` points and the fps when the Debug toggle
 is off. Since [scene-graph.md](scene-graph.md) the counts are summed
 over the *visible* nodes and the line leads with `R reconstructions | ` once
-more than one is contributing.
+more than one is contributing. While the Track Table filters the 3D view,
+`(S shown)` follows the point count
+([point-cloud-rendering.md](point-cloud-rendering.md) § "UI — shipped").
 
 The Layers toggles are **master switches** across every loaded node: effective
 visibility of a layer is the AND of the toggle here, the node's master eye, and
