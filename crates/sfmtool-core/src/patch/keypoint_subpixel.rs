@@ -374,6 +374,20 @@ fn refine_patch_keypoints_impl(
                 params,
                 &mut scratch,
             );
+            reanchor(
+                patch,
+                &views[states[si].idx as usize],
+                &mut states[si],
+                &support,
+                tmpl,
+                channels,
+                resolution,
+                wpp_u,
+                wpp_v,
+                pad,
+                params,
+                &mut scratch,
+            );
         }
     }
 
@@ -566,6 +580,87 @@ fn refine_one_view(
     st.score = best_score;
 }
 
+/// An offset, in grid px, past which the refiner renders the view again through
+/// the patch slid onto the keypoint it reached and refines once more from
+/// there.
+///
+/// The view's tile is rendered once and read at every offset the solve tries,
+/// each read being the frame moved within its own plane; the patch slid onto
+/// that keypoint sits on the same ray at another depth, and the tile's corners
+/// part from it by a measured p95 of 0.003 to 0.010 px for offsets under 1 grid
+/// px and 0.025 to 0.10 px from 1 to 2, on the three ground truths.
+const REANCHOR_MIN_OFFSET: f64 = 0.5;
+
+/// Where `st`'s refined offset is past [`REANCHOR_MIN_OFFSET`], render its tile
+/// again through the patch slid onto the keypoint it reached and solve again
+/// from there, within what is left of `max_offset_px` of its seed. The second
+/// solve keeps its result only where it scores; otherwise the first stands.
+#[allow(clippy::too_many_arguments)]
+fn reanchor(
+    patch: &OrientedPatch,
+    view: &ProjectedImage<'_>,
+    st: &mut ViewState,
+    support: &Support,
+    tmpl: &[f32],
+    channels: usize,
+    resolution: u32,
+    wpp_u: f64,
+    wpp_v: f64,
+    pad: u32,
+    params: &KeypointSubpixelParams,
+    scratch: &mut GnScratch,
+) {
+    let moved = st.off[0].hypot(st.off[1]);
+    if !(st.score.is_finite() && moved > REANCHOR_MIN_OFFSET) {
+        return;
+    }
+    let centre = shifted_center(&st.patch_frame, st.off[0], st.off[1], wpp_u, wpp_v);
+    let Some((x, y)) = project(view, &centre, patch.w) else {
+        return;
+    };
+    let (frame, followed) = seed_frame(patch, view, Some([x, y]));
+    if !followed {
+        return;
+    }
+    let tile = try_render_refine_tile(
+        &frame,
+        view,
+        [0.0; 2],
+        wpp_u,
+        wpp_v,
+        resolution,
+        pad,
+        st.sampler,
+        &mut scratch.img,
+    );
+    let kept = (st.patch_frame.clone(), st.off, st.score, st.keypoint);
+    // The frame slid onto the reached keypoint stands as the view's start: a
+    // zero offset from it is that keypoint.
+    st.patch_frame = frame;
+    st.off = [0.0; 2];
+    st.keypoint = Some([x, y]);
+    let left = KeypointSubpixelParams {
+        max_offset_px: (params.max_offset_px - moved).max(REANCHOR_MIN_OFFSET),
+        ..params.clone()
+    };
+    refine_one_view(
+        view,
+        tile.as_ref(),
+        st,
+        support,
+        tmpl,
+        channels,
+        resolution,
+        wpp_u,
+        wpp_v,
+        &left,
+        scratch,
+    );
+    if !st.score.is_finite() {
+        (st.patch_frame, st.off, st.score, st.keypoint) = kept;
+    }
+}
+
 /// Build the result from the final view states: the refined keypoint
 /// `project_i(center_v)`, its offset from the projection (source px), and the
 /// final ECC score, per view (input order preserved).
@@ -741,6 +836,20 @@ pub fn refine_view_against_reference(
         resolution,
         wpp_u,
         wpp_v,
+        params,
+        &mut scratch,
+    );
+    reanchor(
+        patch,
+        target_view,
+        &mut state,
+        &support,
+        &tmpl,
+        channels,
+        resolution,
+        wpp_u,
+        wpp_v,
+        pad,
         params,
         &mut scratch,
     );

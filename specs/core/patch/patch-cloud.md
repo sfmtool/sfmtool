@@ -201,6 +201,19 @@ impl OrientedPatch {
         pixel: [f64; 2],
     ) -> Option<Vector3<f64>>;
 
+    /// The centre of the square the view sees once this patch's centre has
+    /// moved by `displacement`, carrying the slide `keypoint` names: the
+    /// slide's move kept with the patch, less its part along the new line of
+    /// sight, so the moved patch slid onto the carried point's projection is
+    /// centred on it exactly. What a patch step carries each sighting by.
+    pub fn carried_slide_center(
+        &self,
+        camera: &CameraIntrinsics,
+        cam_from_world: &RigidTransform,
+        keypoint: [f64; 2],
+        displacement: Vector3<f64>,
+    ) -> Option<Point3<f64>>;
+
     /// The patch as the view sees it: `anchored_at_keypoint` where that gives
     /// a patch, and the patch itself where there is no keypoint or
     /// `anchored_at_keypoint` refuses. The square a view's tile is cut through
@@ -274,9 +287,17 @@ view once, wider than the patch, through the frame slid onto its starting
 keypoint, and reads every shift it tries as a sub-window of that render, which
 is the frame moved within its own plane. The patch slid onto the shifted
 keypoint sits on the same ray at the depth of the plane facing the camera, so a
-sub-window at a shift of `d` is that square rescaled by about
-`|d|·sin θ / depth` (`θ` the viewing angle). Each fit renders afresh at the
-keypoint its localization found before refining it.
+sub-window at a shift of `d` departs from it by about `|d|·sin θ / depth` of
+the depth (`θ` the viewing angle). The departure grows with the shift, and
+somewhat with the keypoint's gap. Measured at the tile's corners on the three
+ground truths, its 95th percentile is 0.006 to 0.019 px under 1 grid px of
+shift, 0.05 to 0.16 px from 1 to 3 and 0.12 to 0.55 px from 3 to 10. So the
+localizer renders a view again through the patch slid onto the keypoint its
+search found when the shift is over 1 grid px, and searches again within 2 grid
+px of it; the sub-pixel refiner does the same past half a grid px of offset,
+solving again from the new render within what is left of its offset bound.
+A shift or offset under those bounds leaves a departure of a few hundredths of
+a pixel.
 
 `from_affine_shape_at_depth` is the one place the correspondence between a
 keypoint's local **affine shape** and a patch frame is stated in the

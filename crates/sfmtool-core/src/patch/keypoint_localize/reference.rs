@@ -24,7 +24,7 @@
 //! the template blur-matched, as the bench reads a row against the stored
 //! bitmap, and keeps only the pairwise ZNCCs from here for its pair rule.
 
-use super::align::Template;
+use super::align::{Template, REANCHOR_MARGIN, REANCHOR_MIN_SHIFT};
 use super::search::{search_shift, search_shift_plus_descent, SearchScratch};
 use super::{
     extract_core, member_self_similarity_radius, project, render_context, resolve_reference,
@@ -465,6 +465,53 @@ impl TrackReferences {
         out.at_edge = on_edge(sh.ix, sh.iy);
         let center = shifted_center(&patch_frame, sh.dx, sh.dy, self.wpp[0], self.wpp[1]);
         out.keypoint = project(view, &center, patch.w).map(|(x, y)| [x, y]);
+        // As the localizer does: past `REANCHOR_MIN_SHIFT` the shift was read
+        // as a sub-window of a render about the seed, so the view is rendered
+        // again through the patch slid onto the keypoint found and searched
+        // within `REANCHOR_MARGIN` of it.
+        if let Some(found) = out
+            .keypoint
+            .filter(|_| sh.dx.hypot(sh.dy) > REANCHOR_MIN_SHIFT)
+        {
+            let (frame, followed) = seed_frame(patch, view, Some(found));
+            if followed {
+                let tile = render_context(
+                    &frame,
+                    view,
+                    0.0,
+                    0.0,
+                    self.wpp[0],
+                    self.wpp[1],
+                    self.resolution,
+                    self.resolution + 2 * REANCHOR_MARGIN as u32,
+                    params.sampler.for_observation(
+                        patch,
+                        view.camera,
+                        view.cam_from_world,
+                        Some(found),
+                        self.resolution,
+                    ),
+                    &Progress::none(),
+                )?;
+                let c = REANCHOR_MARGIN as usize;
+                if let Some(again) = search_shift(
+                    &tile,
+                    &mut scratch,
+                    &self.support,
+                    mask,
+                    kept,
+                    r,
+                    REANCHOR_MARGIN,
+                    c,
+                    c,
+                ) {
+                    out.peak_zncc = again.peak;
+                    let center =
+                        shifted_center(&frame, again.dx, again.dy, self.wpp[0], self.wpp[1]);
+                    out.keypoint = project(view, &center, patch.w).map(|(x, y)| [x, y]);
+                }
+            }
+        }
         Ok(out)
     }
 

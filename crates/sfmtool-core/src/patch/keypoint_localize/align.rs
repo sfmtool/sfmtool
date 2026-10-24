@@ -318,10 +318,11 @@ pub(super) fn align_to_reference(
     // the `(0, 0)` shift reads its core at `margin`. The other shifts read the
     // same render: a sub-window at `d` is the frame moved by `d` within its own
     // plane, where the patch slid onto that sub-window's keypoint sits on the
-    // same ray at the depth of the plane facing the camera. The two differ in
-    // scale by about `|d|·sin θ / depth` (`θ` the viewing angle), a fraction of a
-    // grid px at the window's edge; the sub-pixel refinement that follows a fit
-    // renders afresh at the keypoint this finds.
+    // same ray at the depth of the plane facing the camera. The two differ by
+    // about `|d|·sin θ / depth` of the depth (`θ` the viewing angle), which
+    // grows with the shift: past `REANCHOR_MIN_SHIFT` the view is rendered
+    // again through the patch slid onto the keypoint the search found, and
+    // searched again within `REANCHOR_MARGIN` of it (`reanchor`).
     let c0 = margin as usize;
     let mut member_scratch: Vec<f32> = Vec::new();
     for (si, st) in states.iter_mut().enumerate() {
@@ -371,6 +372,22 @@ pub(super) fn align_to_reference(
             st.off = d;
             st.zncc = peak;
             st.placed = true;
+            if d[0].hypot(d[1]) > REANCHOR_MIN_SHIFT {
+                reanchor(
+                    patch,
+                    view,
+                    st,
+                    wpp_u,
+                    wpp_v,
+                    resolution,
+                    &mut scratch,
+                    &support,
+                    &template,
+                    r,
+                    params,
+                    progress,
+                )?;
+            }
         }
     }
 
@@ -403,6 +420,83 @@ pub(super) fn align_to_reference(
     );
     out.reference = reference.filter(|idx| out.views.contains(idx));
     Ok(out)
+}
+
+/// A search shift, in grid px, past which the localizer renders the view again
+/// through the patch slid onto the keypoint it found and searches there.
+///
+/// A shift read as a sub-window of one render is the frame moved within its own
+/// plane; the patch slid onto that keypoint sits on the same ray at another
+/// depth, and the tile's corners part from it by a measured p95 of 0.006 to
+/// 0.019 px for shifts under 1 grid px, 0.05 to 0.16 px from 1 to 3, and 0.12
+/// to 0.55 px from 3 to 10, on the three ground truths.
+pub(super) const REANCHOR_MIN_SHIFT: f64 = 1.0;
+
+/// The half-width, in grid px, of the search made again about a found keypoint.
+pub(super) const REANCHOR_MARGIN: i64 = 2;
+
+/// Render `st`'s view again through the patch slid onto the keypoint its
+/// search found and search `±REANCHOR_MARGIN` about it, taking that frame and
+/// shift where the search finds a peak. One render and one small search per
+/// view; the shift left is under `REANCHOR_MARGIN`, where the sub-window's
+/// departure from the slid patch is a few hundredths of a pixel.
+#[allow(clippy::too_many_arguments)]
+fn reanchor(
+    patch: &OrientedPatch,
+    view: &ProjectedImage<'_>,
+    st: &mut AlignedView,
+    wpp_u: f64,
+    wpp_v: f64,
+    resolution: u32,
+    scratch: &mut SearchScratch,
+    support: &Support,
+    template: &Template,
+    r: usize,
+    params: &KeypointLocalizeParams,
+    progress: &Progress<'_>,
+) -> Result<(), LocalizeError> {
+    let centre = shifted_center(&st.patch_frame, st.off[0], st.off[1], wpp_u, wpp_v);
+    let Some((x, y)) = project(view, &centre, patch.w) else {
+        return Ok(());
+    };
+    let (frame, followed) = seed_frame(patch, view, Some([x, y]));
+    if !followed {
+        return Ok(());
+    }
+    prof::count(&prof::N_RENDER, 1);
+    let tile = prof::RENDER.time(|| {
+        render_context(
+            &frame,
+            view,
+            0.0,
+            0.0,
+            wpp_u,
+            wpp_v,
+            resolution,
+            resolution + 2 * REANCHOR_MARGIN as u32,
+            st.sampler,
+            progress,
+        )
+    })?;
+    let c0 = REANCHOR_MARGIN as usize;
+    if let Some((d, peak)) = search_tile(
+        &tile,
+        scratch,
+        support,
+        template,
+        r,
+        REANCHOR_MARGIN,
+        c0,
+        params.search_strategy,
+    ) {
+        // The frame is now the one slid onto this keypoint, which stands as
+        // the view's start: a zero shift from it is that keypoint.
+        st.patch_frame = frame;
+        st.seed = Some([x, y]);
+        st.off = d;
+        st.zncc = peak;
+    }
+    Ok(())
 }
 
 /// Search one context tile against the template over `±margin` around the
