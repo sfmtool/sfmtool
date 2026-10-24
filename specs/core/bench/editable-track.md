@@ -2289,18 +2289,22 @@ the centre where it was, and `q_i` is worked out from the keypoint each time, so
 they move no keypoint at all. A translation moves the centre by a displacement
 `d`, and so does a resize from an edge, which moves the centre because it holds
 the far one; each sighting's slid point moves with the patch, so with `P_i` the
-image's projection the keypoint becomes `P_i(q_i + d)`, with `q_i` read on the
-patch as it stood before the step. Under every patch step a sighting that has
+image's projection the keypoint becomes `P_i(q_i')`, with the slide's move
+`o_i = q_i − c` read on the patch as it stood before the step and carried with
+it, less its part along the new line of sight `v_i'` from the camera to the moved
+centre: `q_i' = c + d + o_i − v_i'·(o_i·v_i')` (`OrientedPatch::carried_slide_center`). That point is in
+the plane facing the camera through the moved centre, so the moved patch slid
+onto the new keypoint is the carried square exactly. Under every patch step a sighting that has
 never been localized has no slid point and takes `P_i(c')`, the projection of
 the centre as the step leaves it. A keypoint the slide refuses has no `q_i`:
 under a step that keeps the centre it keeps
 its keypoint, and under one that moves the centre it is left with no keypoint
 and `Unmeasured::NoProjection` as its reason, as is one whose carried point no
-longer projects into its photograph. That is the truth about it. After a move
-the moved patch's own slid point for the new keypoint lies on the ray through
-`q_i + d` at the depth of the plane facing the camera through `c + d`, a fraction
-of about `|q_i − c|·|d| / depth²` of the depth from `q_i + d`, so a redrawn slid
-square is the carried one to within that rescaling.
+longer projects into its photograph. That is the truth about it. Carrying
+`q_i + d` instead would leave the redrawn slid square off the carried one by a
+rescaling of `o_i·v_i'` along the ray: 0.13 px at an edge at the 95th percentile
+on the Seoul bull with 50 px gaps and a drag of one patch width, 1.2 px on Kerry
+Park's fisheyes.
 
 Neither turn moves a keypoint. `spin_patch` and `tilt_patch` are two steps
 because they are two different statements with different limits: a spin keeps the plane and the face
@@ -2323,7 +2327,7 @@ vectors and the half-extent is stated separately, so `by` is in the world's own
 units rather than in half-lengths.
 
 **Every** observation's slid point is carried by the displacement: its
-keypoint becomes `P_i(q_i + d)`. The move says where the patch is, and each
+keypoint becomes `P_i(q_i')`. The move says where the patch is, and each
 photograph still sees the patch slid by about the same amount. A
 sighting that has never been localized takes `P_i(c')`; one with no `q_i`, or
 whose carried point no longer projects, is left with no keypoint and
@@ -4186,7 +4190,7 @@ respectively; the bearing's edge resize and the turn are run under the lens.
   dragged in, on a patch turned 50 degrees and with every keypoint first put a
   few pixels off the centre's projection. The displacement lies in the patch's
   own plane, with the normal, the axes and the size untouched; every keypoint
-  comes back as its slid point carried by the displacement, `P_i(q_i + d)`;
+  comes back as its slid point carried by the displacement, `P_i(q_i')`;
   nothing is pinned.
 - A pixel named in an image rather than through an observation is read against
   the patch as it stands, and a cluster refuses it.
@@ -4233,7 +4237,7 @@ respectively; the bearing's edge resize and the turn are run under the lens.
   along the outward normal and leaves the axes, the half-length and the plane's
   orientation where they were. On a patch turned 55 degrees, with every keypoint
   first put a few pixels off the centre's projection, each comes back as
-  `P_i(q_i + d)`, computed from the slid points before the move, and in some
+  `P_i(q_i')`, computed from the slid points before the move, and in some
   photograph it parts from `k + P_i(c') - P_i(c)` by more than a tenth of a
   pixel; the sightings move by different amounts.
 - A patch pushed out past the cameras leaves every sighting with no keypoint and

@@ -731,8 +731,8 @@ outline in **every** image. The two that move its centre -- the slide and the
 resize -- also move the track's point and **carry every sighting's slid point
 with the patch in 3D**: with `q_i` the slid patch's centre, where the
 keypoint's ray meets the plane through the centre facing that camera, and `d`
-the centre's displacement, the keypoint becomes the projection of
-`q_i + d`. The pointer is read against the slid square of the sighting the
+the centre's displacement, the keypoint becomes the projection of the slid
+centre carried by `d` (`OrientedPatch::carried_slide_center`). The pointer is read against the slid square of the sighting the
 gesture came through, so that sighting lands under the pointer, and the others
 move with the patch. A turn moves the centre nowhere and the slid point is
 worked out from the keypoint each time, so every keypoint stays where it is. None of the three pins anything: where the

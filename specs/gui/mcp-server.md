@@ -5146,7 +5146,8 @@ outline moves in every image at once. A keypoint marks where its photograph
 sees the patch's centre, so that photograph sees the patch slid across its line
 of sight onto the keypoint's ray, at `q_i` where the ray meets the plane through
 the centre facing that camera; a move by `d`
-puts the keypoint at the projection of `q_i + d`. Where the displacement runs
+puts the keypoint at the projection of that slid centre carried with the patch
+(`OrientedPatch::carried_slide_center`). Where the displacement runs
 along the plane the photographs see nearly the same displacement; where it runs
 along the normal they see *different* ones, and that spread is the parallax the
 old depth was wrong by. The sighting the call came through lands under the

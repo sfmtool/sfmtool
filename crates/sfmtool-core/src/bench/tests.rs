@@ -4515,18 +4515,24 @@ fn slid_of(
 }
 
 /// Where each sighting's slid point lands once the patch moves by
-/// `displacement`, `P_i(q_i + d)`, worked out from the track before the step
-/// rather than from anything the step did.
+/// `displacement`, worked out from the track before the step rather than from
+/// anything the step did: the slide's move `o = q_i − c` carried with the
+/// centre, less its part along the new line of sight `v'`, so
+/// `P_i(c + d + o − v'·(o·v'))`.
 fn carried_pixels(
     track: &EditableTrack,
     edited: &EditedReconstruction,
     displacement: Vector3<f64>,
 ) -> Vec<[f64; 2]> {
+    let patch = patch_frame_of(track);
     (0..track.observations.len())
         .map(|k| {
             let (camera, pose) = view(edited, track.observations[k].image as usize);
+            let slide = slid_of(track, edited, k).center - patch.center;
             let mut moved = slid_of(track, edited, k);
-            moved.center += displacement;
+            moved.center = patch.center + displacement;
+            let sight = (moved.center - pose.inverse_translation_origin()).normalize();
+            moved.center += slide - sight * slide.dot(&sight);
             corner_pixel(&moved, &camera, &pose, 0.0, 0.0)
         })
         .collect()
@@ -4702,43 +4708,54 @@ fn resize_edge_case(edited: &EditedReconstruction, tolerance: f64) {
     );
 
     // The claim, on the exact square the step's own numbers describe: the slid
-    // square moved by the same displacement, its dragged edge on the pointer and
-    // its far edge where it was.
+    // square carried by the same displacement (the slide's move kept with the
+    // patch, less its part along the new line of sight), its dragged edge on
+    // the pointer. Its far edge stays where it was to within that change of the
+    // line of sight, which moves the carried centre by a part of the slide's
+    // move along the old line of sight's change.
+    let slide = before.center - unanchored.center;
+    let moved_centre = unanchored.center + moved;
+    let sight = (moved_centre - pose.inverse_translation_origin()).normalize();
     let drawn = OrientedPatch {
-        center: before.center + moved,
+        center: moved_centre + slide - sight * slide.dot(&sight),
         half_extent: after.half_extent,
         ..before.clone()
     };
+    // Along the dragged axis to `tolerance`, which is all a size can set: the
+    // pointer read against the carried square meets its plane at the edge's
+    // distance along `+u`. Across it, the change of the line of sight moves
+    // the carried square by a few ten-thousandths of a pixel here.
     let dragged = corner_pixel(&drawn, &camera, &pose, 1.0, 0.0);
+    let reach = drawn
+        .keypoint_plane_offset(&camera, &pose, out)
+        .expect("the pointer meets the square's plane")
+        .dot(&drawn.u_axis);
     assert!(
-        (dragged[0] - out[0]).abs() < tolerance && (dragged[1] - out[1]).abs() < tolerance,
+        (reach - drawn.half_extent[0]).abs() < tolerance.max(1e-9) * drawn.half_extent[0]
+            && (dragged[0] - out[0]).hypot(dragged[1] - out[1]) < 1e-3,
         "the dragged edge should land on {out:?}, it landed on {dragged:?}",
     );
     let far_after = corner_pixel(&drawn, &camera, &pose, -1.0, 0.0);
     assert!(
-        (far_after[0] - far_before[0]).abs() < tolerance
-            && (far_after[1] - far_before[1]).abs() < tolerance,
+        (far_after[0] - far_before[0]).abs() < 1e-2 && (far_after[1] - far_before[1]).abs() < 1e-2,
         "the far edge moved from {far_before:?} to {far_after:?}",
     );
     // And on the outline as it is really redrawn, the patch slid onto the
-    // keypoint the step wrote: the same, to a hundredth of a pixel. The slid
-    // centre for the written keypoint is on the ray through `q_i + d` but at
-    // the depth of the plane facing the camera through the moved centre, a
-    // fraction of about `|q_i - c|·|d| / depth²` of the depth from it, which
-    // rescales the redrawn square by that fraction about its centre.
+    // keypoint the step wrote: the carried square itself, to the `f32`
+    // keypoint's rounding.
     let redrawn = slid_of(&next, edited, 1);
-    for (s, name) in [(1.0, "dragged"), (-1.0, "far")] {
-        let want = if s > 0.0 { out } else { far_before };
+    for s in [1.0, -1.0] {
+        let want = corner_pixel(&drawn, &camera, &pose, s, 0.0);
         let got = corner_pixel(&redrawn, &camera, &pose, s, 0.0);
         assert!(
-            (got[0] - want[0]).abs() < 1e-2 && (got[1] - want[1]).abs() < 1e-2,
-            "the redrawn {name} edge should be at {want:?}, it is at {got:?}",
+            (got[0] - want[0]).abs() < 1e-3 && (got[1] - want[1]).abs() < 1e-3,
+            "the redrawn edge {s} should be at {want:?}, it is at {got:?}",
         );
     }
 
-    // **Every slid point was carried by the centre's displacement in 3D**, each
-    // keypoint becoming `P_i(q_i + d)`. And nothing is pinned, because where
-    // the patch is says nothing about whether a sighting belongs to it.
+    // **Every slid point was carried by the centre's displacement in 3D**
+    // (`carried_pixels`). And nothing is pinned, because where the patch is
+    // says nothing about whether a sighting belongs to it.
     let want = carried_pixels(&track, edited, moved);
     for (k, now) in next.observations.iter().enumerate() {
         let got = now.site().expect("a sighting");
@@ -4826,10 +4843,15 @@ fn translate_case(edited: &EditedReconstruction, tolerance: f64) {
         "the dot should land on {target:?}, it landed on {landed:?}",
     );
     assert_eq!(report.pixel, landed);
-    // Exactly, before the `f32` keypoint slot rounds it.
+    // Exactly, before the `f32` keypoint slot rounds it: the slid square
+    // carried by the move (the slide's move kept with the patch, less its
+    // part along the new line of sight) is centred on the pointer.
     let exact = {
+        let slide = seen.center - was.center;
         let mut moved = seen.clone();
-        moved.center += offset;
+        moved.center = was.center + offset;
+        let sight = (moved.center - pose.inverse_translation_origin()).normalize();
+        moved.center += slide - sight * slide.dot(&sight);
         corner_pixel(&moved, &camera, &pose, 0.0, 0.0)
     };
     assert!(
@@ -4837,8 +4859,8 @@ fn translate_case(edited: &EditedReconstruction, tolerance: f64) {
         "the carried slid centre should be at {target:?}, it is at {exact:?}",
     );
 
-    // **Every sighting's slid point is carried by the slide in 3D**, each
-    // keypoint becoming `P_i(q_i + d)`.
+    // **Every sighting's slid point is carried by the slide in 3D**
+    // (`carried_pixels`).
     let want = carried_pixels(&track, edited, offset);
     for (k, now) in next.observations.iter().enumerate() {
         let got = now.site().expect("a sighting");
@@ -5623,7 +5645,7 @@ fn centre_pixels(
 /// the distance asked for along the outward normal, and each sighting's slid
 /// point travels with it: on a patch seen at a slant, with every keypoint a few
 /// pixels off the centre's projection, each keypoint comes back as
-/// `P_i(q_i + d)`, which is not the 2D rule `k + P_i(c + d) - P_i(c)`.
+/// `P_i(q_i')` (`carried_pixels`), which is not the 2D rule `k + P_i(c + d) - P_i(c)`.
 #[test]
 fn a_translation_along_the_normal_carries_each_slid_point_in_3d() {
     let scene = Scene::new();
@@ -5673,7 +5695,7 @@ fn a_translation_along_the_normal_carries_each_slid_point_in_3d() {
     assert_eq!(next.track().and_then(|p| p.bitmap.clone()), None);
 
     // Every keypoint is its slid point carried by the displacement,
-    // `P_i(q_i + d)`, worked out from the track before the step. The 2D rule,
+    // `P_i(q_i')` (`carried_pixels`), worked out from the track before the step. The 2D rule,
     // the keypoint moved by its photograph's displacement of the centre's
     // projection, is a different pixel on this oblique patch: by more than a
     // tenth of a pixel in some photograph.

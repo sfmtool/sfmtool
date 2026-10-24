@@ -601,6 +601,37 @@ impl OrientedPatch {
             .unwrap_or_else(|| self.clone())
     }
 
+    /// The centre of the square the view sees once this patch's centre has
+    /// moved by `displacement`, carrying the slide its `keypoint` names: the
+    /// slide's move `o` ([`Self::keypoint_slide_offset`]) kept with the
+    /// patch, less its part along the new line of sight `v'` from the camera
+    /// to the moved centre `c'`, so `c' + o − v'·(o·v')`.
+    ///
+    /// That point lies in the plane through `c'` facing the camera, so the
+    /// moved patch slid onto the keypoint it projects to is centred exactly
+    /// there: carrying a keypoint as the projection of this point and sliding
+    /// again give the same square. Carrying `q + d` instead, the slid centre
+    /// moved by the displacement, would not, since `q + d` is off that plane
+    /// by `o·v'`. For a direction patch (`w == 0`) the slid direction moved
+    /// by the displacement, `q + d`, which a renormalized centre makes the
+    /// same direction. `None` where the slide refuses the keypoint.
+    pub fn carried_slide_center(
+        &self,
+        camera: &CameraIntrinsics,
+        cam_from_world: &RigidTransform,
+        keypoint: [f64; 2],
+        displacement: Vector3<f64>,
+    ) -> Option<Point3<f64>> {
+        if self.w == 0.0 {
+            let slid = self.anchored_at_keypoint(camera, cam_from_world, keypoint)?;
+            return Some(slid.center + displacement);
+        }
+        let offset = self.keypoint_slide_offset(camera, cam_from_world, keypoint)?;
+        let moved = self.center + displacement;
+        let sight = (moved - cam_from_world.inverse_translation_origin()).try_normalize(1e-12)?;
+        Some(moved + offset - sight * offset.dot(&sight))
+    }
+
     /// The world-space offset from `center` to the centre of the patch slid onto
     /// `keypoint`'s ray, the move [`Self::anchored_at_keypoint`] makes.
     ///

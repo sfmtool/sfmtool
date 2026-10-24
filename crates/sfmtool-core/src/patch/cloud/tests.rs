@@ -715,6 +715,47 @@ fn a_perspective_keypoint_whose_ray_meets_the_plane_behind_the_camera_is_slid() 
     }
 }
 
+/// A slide carried with a moved patch is the one the moved patch shows: the
+/// moved patch slid onto the carried centre's projection is centred on it, to
+/// the arithmetic's last bits, where the slid centre moved by the displacement
+/// would be off it by the change of the line of sight.
+#[test]
+fn a_carried_slide_is_the_slide_the_moved_patch_shows() {
+    let cam = pinhole(600.0, 320.0, 240.0, 640, 480);
+    let pose = tilted_pose();
+    let patch = oblique_patch();
+    let projection = project_center(&patch, &cam, &pose);
+    let keypoint = [projection[0] + 40.0, projection[1] - 25.0];
+    let displacement = patch.u_axis * 0.8 - patch.v_axis * 0.5;
+    let carried = patch
+        .carried_slide_center(&cam, &pose, keypoint, displacement)
+        .expect("the slide follows the keypoint");
+    let mut moved = patch.clone();
+    moved.center = patch.center + displacement;
+    let landed = {
+        let p = pose.transform_point(&carried);
+        let (x, y) = cam.ray_to_pixel([p.x, p.y, p.z]).expect("in front");
+        [x, y]
+    };
+    let again = moved
+        .anchored_at_keypoint(&cam, &pose, landed)
+        .expect("the moved patch is slid onto it");
+    assert!(
+        (again.center - carried).norm() < 1e-9,
+        "{:?} vs {carried:?}",
+        again.center
+    );
+    let naive = patch
+        .anchored_at_keypoint(&cam, &pose, keypoint)
+        .unwrap()
+        .center
+        + displacement;
+    assert!(
+        (naive - carried).norm() > 1e-6,
+        "the naive carry differs here"
+    );
+}
+
 /// Under a fisheye a keypoint's ray can point more than a right angle from the
 /// line of sight to the centre. It never meets the plane facing the camera in
 /// front of it, so the slide refuses it and the view sees the patch as it
