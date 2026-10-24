@@ -284,8 +284,8 @@ fn show_convert_entry(ui: &mut egui::Ui, node: &SceneNode, out: &mut TreeOutput)
 /// The two builds, in the order they have to run: the `.sift` files, then the
 /// index files read from them.
 ///
-/// Together on every menu that offers the index-files build, because a build
-/// greyed for want of `.sift` files has its remedy directly above it.
+/// Together on every Scene tree menu that offers the index-files build, because
+/// a build greyed for want of `.sift` files has its remedy directly above it.
 fn show_build_entries(ui: &mut egui::Ui, id: ReconId, rows: &IndexFilesRows, out: &mut TreeOutput) {
     show_build_sift_files_entry(ui, id, rows, out);
     show_build_index_files_entry(ui, id, rows, out);

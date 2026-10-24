@@ -215,8 +215,9 @@ renames over the target only once the file is whole.
 
 The index is read out of the node's `.sift` files, so a node whose images have
 none cannot have its index files built. *Build SIFT Files* is the remedy, and it
-sits directly above *Build Index Files* in every menu that offers that entry.
-It is one background task, `Build SIFT files`, from the slow queue
+sits directly above *Build Index Files* in every Scene tree menu that offers
+that entry. Track View's row menu, which also offers *Build Index Files*, does
+not carry it. It is one background task, `Build SIFT files`, from the slow queue
 ([background-tasks.md](background-tasks.md)), which runs
 `sfmtool_core::features::sift::build_sift_files`
 ([core/features/sift.md](../core/features/sift.md) § "Building `.sift`
