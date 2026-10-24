@@ -160,7 +160,7 @@ pub(crate) const FALLBACK_SAMPLER: Sampler = Sampler::BilinearMip;
 /// re-anchored so its centre projects onto `keypoint`, or the stored geometric
 /// patch frame when the observation has no keypoint to anchor on or the
 /// keypoint's ray cannot meet the patch (parallel to its plane, behind the
-/// camera under a ray-path model, or pointing away from a direction patch).
+/// camera under any lens model, or pointing away from a direction patch).
 pub(super) fn render_patch_frame(
     patch_frame: &OrientedPatch,
     camera: &CameraIntrinsics,

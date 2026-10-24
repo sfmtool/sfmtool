@@ -603,6 +603,67 @@ fn anchoring_a_direction_patch_whose_axes_lean_off_its_bearing_lands_on_the_keyp
     assert!((anchored.center.coords.norm() - 1.0).abs() < 1e-12);
 }
 
+/// A steep patch seen by a perspective camera, and a keypoint whose ray meets
+/// the patch's plane behind that camera: the keypoint is 150 px to one side of
+/// the centre's projection, where the plane, nearly edge on, crosses behind the
+/// camera centre. Returns the camera, the pose, the patch and that keypoint.
+fn a_perspective_keypoint_behind_the_camera(
+) -> (CameraIntrinsics, RigidTransform, OrientedPatch, [f64; 2]) {
+    let cam = pinhole(600.0, 320.0, 240.0, 640, 480);
+    let pose = RigidTransform::identity();
+    let patch = OrientedPatch::from_center_normal(
+        Point3::new(0.0, 0.0, -5.0),
+        Vector3::new(1.0, 0.0, 0.1),
+        Vector3::new(0.0, 1.0, 0.0),
+        [0.4, 0.4],
+    );
+    assert!(patch.is_front_facing(&pose));
+    let [cx, cy] = project_center(&patch, &cam, &pose);
+    let eye = pose.inverse_translation_origin();
+    let n = patch.normal();
+    let keypoint = [[cx + 150.0, cy], [cx - 150.0, cy]]
+        .into_iter()
+        .find(|kp| {
+            let r = cam.pixel_to_ray(kp[0], kp[1]);
+            let dir = pose.to_rotation_matrix().transpose() * Vector3::new(r[0], r[1], r[2]);
+            (patch.center - eye).dot(&n) / dir.dot(&n) < 0.0
+        })
+        .expect("one side's ray meets the plane behind the camera");
+    (cam, pose, patch, keypoint)
+}
+
+/// Under a perspective camera, as under a ray-path one, a keypoint whose ray
+/// meets the plane behind the camera has no slid patch:
+/// `anchored_at_keypoint` refuses it, and `seen_at_keypoint` gives the patch as
+/// it stands, which has a whole tile and a whole outline in that photograph.
+#[test]
+fn a_perspective_keypoint_whose_ray_meets_the_plane_behind_the_camera_is_not_slid() {
+    let (cam, pose, patch, keypoint) = a_perspective_keypoint_behind_the_camera();
+
+    assert!(patch.anchored_at_keypoint(&cam, &pose, keypoint).is_none());
+    assert!(patch.keypoint_plane_offset(&cam, &pose, keypoint).is_none());
+
+    let seen = patch.seen_at_keypoint(&cam, &pose, Some(keypoint));
+    assert_eq!(seen, patch, "the view sees the patch as it stands");
+
+    // A real tile: every texel of the warp lands on the photograph's plane in
+    // front of the camera.
+    let map = WarpMap::from_patch(&seen, &cam, &pose, 16);
+    for row in 0..map.height() {
+        for col in 0..map.width() {
+            assert!(map.is_valid(col, row), "texel ({col}, {row}) is blank");
+        }
+    }
+    // A real outline: all four corners project.
+    for (s, t) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
+        let (corner, w) = seen.corner_homogeneous(s, t);
+        assert!(
+            cam.project_homogeneous(&pose, corner, w).is_some(),
+            "corner ({s}, {t}) does not project"
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // `PatchCloud::from_tracks` (the array-fed counterpart of `from_reconstruction`)
 // ---------------------------------------------------------------------------

@@ -173,7 +173,7 @@ impl OrientedPatch {
     /// re-normalized direction `normalize(d + a·û + b·v̂)` at infinity, which
     /// keeps `center` the unit direction rendering reads it as. `None` when the
     /// keypoint's ray cannot meet the patch: parallel to the plane, meeting it
-    /// behind the camera under a ray-path model, or pointing away from a
+    /// behind the camera under any lens model, or pointing away from a
     /// direction patch.
     pub fn anchored_at_keypoint(
         &self,
@@ -182,26 +182,16 @@ impl OrientedPatch {
         keypoint: [f64; 2],
     ) -> Option<OrientedPatch>;
 
-    /// The patch as the view sees it: `anchored_at_keypoint` where the
-    /// keypoint's ray meets the patch, and the patch itself where there is no
-    /// keypoint or the ray cannot meet it. The square a view's tile is cut
-    /// through and the outline the Explorer draws over the photograph.
+    /// The patch as the view sees it: `anchored_at_keypoint` where that gives
+    /// a patch, and the patch itself where there is no keypoint or
+    /// `anchored_at_keypoint` refuses. The square a view's tile is cut through
+    /// and the outline the Explorer draws over the photograph.
     pub fn seen_at_keypoint(
         &self,
         camera: &CameraIntrinsics,
         cam_from_world: &RigidTransform,
         keypoint: Option<[f64; 2]>,
     ) -> OrientedPatch;
-
-    /// `anchored_at_keypoint`, refused as well where the keypoint's ray meets a
-    /// finite patch's plane behind the camera under any lens model. What the
-    /// bench's hand edits read a pointer against and carry a sighting by.
-    pub fn slid_onto_keypoint(
-        &self,
-        camera: &CameraIntrinsics,
-        cam_from_world: &RigidTransform,
-        keypoint: [f64; 2],
-    ) -> Option<OrientedPatch>;
 }
 ```
 
@@ -233,11 +223,24 @@ keypoint's ray: the square that photograph sees.
 outline both read it, and every other render that anchors on a keypoint makes
 the same fallback, so the tile and the outline drawn over the photograph are one
 square.
-`slid_onto_keypoint` is the same square for the bench's hand edits
-([editable-track.md](../bench/editable-track.md) § "Placing, sizing and turning
-by hand"), which refuse rather than fall back: a pointer read against the patch
-as it stands, or a slid point behind the camera carried with a move, would not
-be the square the photograph shows.
+The bench's hand edits ([editable-track.md](../bench/editable-track.md) §
+"Placing, sizing and turning by hand") read the same square through
+`anchored_at_keypoint` itself, and refuse rather than fall back: a pointer read
+against the patch as it stands would not be read against the square the
+photograph shows.
+
+One rule decides where there is a slid square: the keypoint's ray meets the
+plane in front of the camera, under every lens model (for a direction patch, the
+ray points toward `d`). A ray that meets the plane behind the camera is refused
+whether the lens is a perspective, fisheye or equirectangular one, because a
+patch slid onto a point behind the camera is not a square the photograph saw.
+Such a ray happens with a perspective lens too, for example when a keypoint is
+read against a patch that has been moved or turned since it was measured, or
+when a descriptor search places a candidate. So where the hand edits refuse a
+sighting, its tile and its outline are the unslid patch, and where they accept
+one, the tile, the outline and the reading are the same slid patch.
+`keypoint_plane_offset`, the unprojection under all of these, makes the test, so
+a pointer read against a patch is refused on the same terms.
 
 `from_affine_shape_at_depth` is the one place the correspondence between a
 keypoint's local **affine shape** and a patch frame is stated in the

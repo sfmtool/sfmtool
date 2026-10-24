@@ -655,7 +655,7 @@ pub enum TrackEditError {
 /// A pixel is a ray, and a ray names a place only against a square. The two
 /// variants are the two squares a photograph shows: an observation's image
 /// shows the patch **slid along its own plane until its centre sits on that
-/// sighting's keypoint's ray** (`OrientedPatch::slid_onto_keypoint`), the
+/// sighting's keypoint's ray** (`OrientedPatch::anchored_at_keypoint`), the
 /// keypoint being where the photograph sees the patch's centre, while an image
 /// with no sighting of the track shows the patch **as it stands**, there being
 /// no keypoint to slide it onto. The slid patch is the square the view's tile is
@@ -1644,7 +1644,7 @@ pub fn resize_patch(
 /// **The square the pointer is read against is the patch as that photograph
 /// sees it.** At the track stage, from a [`Viewpoint::Observation`] that is the
 /// patch slid along its plane onto the sighting's keypoint's ray
-/// (`OrientedPatch::slid_onto_keypoint`), and from a [`Viewpoint::Image`] it
+/// (`OrientedPatch::anchored_at_keypoint`), and from a [`Viewpoint::Image`] it
 /// is the patch as it stands. The pointer's ray meets that square's plane, which
 /// is the patch's own, and the offset of the meeting along the dragged edge's
 /// axis, read from that square's centre, is what gives the half-length
@@ -2050,7 +2050,7 @@ struct Pointed {
 /// The one reduction of a pixel gesture to the step behind it, which both
 /// [`translate_patch_to_pixel`] and [`resize_patch_to_pixel`] make. Through an
 /// observation the square is the patch slid along its plane onto the
-/// sighting's keypoint's ray (`OrientedPatch::slid_onto_keypoint`), the
+/// sighting's keypoint's ray (`OrientedPatch::anchored_at_keypoint`), the
 /// square the view's tile is cut through and the viewer draws; in an image
 /// named as such it is the patch as it stands. The pointer's ray meets the
 /// square's plane, which is the patch's own, and the meeting less the square's
@@ -2086,7 +2086,7 @@ fn pointed_at(
     let square = match site {
         Some(site) => {
             slid = patch
-                .slid_onto_keypoint(&camera, &cam_from_world, site)
+                .anchored_at_keypoint(&camera, &cam_from_world, site)
                 .ok_or_else(refused)?;
             &slid
         }
@@ -2651,7 +2651,7 @@ fn track_payload_mut(
 /// where its photograph sees the patch's **centre**, so a gap between a keypoint
 /// and the centre's projection means that photograph sees the patch slid along
 /// its own plane until its centre sits on the keypoint's ray, at `q_i`, the
-/// point that ray meets the plane (`OrientedPatch::slid_onto_keypoint`, read
+/// point that ray meets the plane (`OrientedPatch::anchored_at_keypoint`, read
 /// on the patch as it stood, `was`). The slid patch moves with the patch: with
 /// `displacement` the centre's move `d`, the keypoint becomes `P_i(q_i + d)`,
 /// `P_i` being that image's projection. A step that does not move the centre, a
@@ -2714,7 +2714,7 @@ fn follow_centre(
                         // The slid point, carried with the patch.
                         Some(keypoint) => {
                             let at = [f64::from(keypoint[0]), f64::from(keypoint[1])];
-                            was.slid_onto_keypoint(&camera, &cam_from_world, at)
+                            was.anchored_at_keypoint(&camera, &cam_from_world, at)
                                 .and_then(|slid| project(slid.center + displacement))
                         }
                         // Never localized, so there is no slid point.

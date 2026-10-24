@@ -711,10 +711,11 @@ keypoint's ray**, and through the ghost the patch as it stands, which is what
 and `Image`). One type, `bench::geometry::SeenSquare`, gives both the drawing
 and every reading of it -- the dot, an edge, a corner, the normal's segment and
 the arrowhead -- and the core pixel steps read the same slid patch
-(`OrientedPatch::slid_onto_keypoint`), so a dragged edge or corner lands under
+(`OrientedPatch::anchored_at_keypoint`), so a dragged edge or corner lands under
 the pointer on the outline as it is redrawn, through whatever distortion the
 lens has and at any slant. A sighting whose keypoint's ray meets the plane behind
-its camera has no slid square, and the core steps refuse a drag through it. The
+its camera, under any lens model, has no slid square: its outline is the patch
+as it stands, and the core steps refuse a drag through it. The
 normal's two handles read the same ray against the geometry the 3D viewer's do
 (the normal's line, and the plane the arrowhead's gesture reads), on the slid
 patch: the pixel is unprojected through the lens model's own inverse into a ray

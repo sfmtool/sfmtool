@@ -4510,7 +4510,7 @@ fn slid_of(
     let row = &track.observations[observation];
     let (camera, pose) = view(edited, row.image as usize);
     patch_frame_of(track)
-        .slid_onto_keypoint(&camera, &pose, row.site().expect("a sighting"))
+        .anchored_at_keypoint(&camera, &pose, row.site().expect("a sighting"))
         .expect("the keypoint's ray meets the plane in front of the camera")
 }
 
@@ -5969,6 +5969,77 @@ fn a_tilt_leaves_a_keypoint_far_off_the_centre_where_it_is() {
     assert_eq!(
         next.observations[1].track.as_ref().and_then(|m| m.keypoint),
         kept
+    );
+}
+
+/// A perspective sighting whose keypoint's ray meets the patch's plane behind
+/// its camera has no slid patch. Its tile and outline are the patch as it
+/// stands (`OrientedPatch::seen_at_keypoint`), and a drag through it is refused
+/// as `NoProjection`, not read against a square behind the camera.
+#[test]
+fn a_drag_through_a_perspective_sighting_whose_ray_meets_the_plane_behind_its_camera_is_refused() {
+    let scene = Scene::new();
+    let edited = edited_fixture(&scene, WORLD);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let track = unpinned(track_of(&bench, &label));
+    let was = patch_frame_of(&track);
+
+    // Turn the patch nearly edge on to image 0, so part of that photograph
+    // looks at its plane behind the camera. A tilt keeps every keypoint.
+    let (sin, cos) = 89.0_f64.to_radians().sin_cos();
+    let (mut track, _) = tilt_patch(&track, &edited, was.normal() * cos - was.u_axis * sin)
+        .expect("a finite direction");
+    let patch = patch_frame_of(&track);
+    let image = track.observations[0].image as usize;
+    let (camera, pose) = view(&edited, image);
+    assert!(
+        !camera.model.needs_ray_path(),
+        "the fixture's camera is a perspective one"
+    );
+
+    // A pixel of image 0 whose ray meets the plane behind the camera.
+    let eye = pose.inverse_translation_origin();
+    let n = patch.normal();
+    let behind = (0..IMG_H)
+        .flat_map(|y| (0..IMG_W).map(move |x| [f64::from(x) + 0.5, f64::from(y) + 0.5]))
+        .find(|px| {
+            let r = camera.pixel_to_ray(px[0], px[1]);
+            let dir = pose.to_rotation_matrix().transpose() * Vector3::new(r[0], r[1], r[2]);
+            (patch.center - eye).dot(&n) / dir.dot(&n) < 0.0
+        })
+        .expect("the tilted plane is behind the camera somewhere in image 0");
+    track.observations[0]
+        .track
+        .as_mut()
+        .expect("a track slot")
+        .keypoint = Some([behind[0] as f32, behind[1] as f32]);
+
+    assert!(patch.anchored_at_keypoint(&camera, &pose, behind).is_none());
+    assert_eq!(
+        patch.seen_at_keypoint(&camera, &pose, Some(behind)),
+        patch,
+        "the tile and the outline are the patch as it stands"
+    );
+
+    let target = corner_pixel(&patch, &camera, &pose, 0.0, 0.0);
+    assert_eq!(
+        translate_patch_to_pixel(&track, &edited, Viewpoint::Observation(0), target).err(),
+        Some(TrackEditError::NoProjection {
+            viewpoint: Viewpoint::Observation(0)
+        })
+    );
+    assert_eq!(
+        resize_patch_to_pixel(
+            &track,
+            &edited,
+            Viewpoint::Observation(0),
+            Edge::PlusU,
+            target
+        )
+        .err(),
+        Some(TrackEditError::NoProjection {
+            viewpoint: Viewpoint::Observation(0)
+        })
     );
 }
 

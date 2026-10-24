@@ -470,15 +470,15 @@ pub(crate) fn pixel_ray(
 /// [`Self::turn_between`] against [`Self::patch`], the slid patch. The core
 /// pixel steps (`sfmtool_core::bench::translate_patch_to_pixel`,
 /// `resize_patch_to_pixel`) read a pointer through an observation against the
-/// same slid patch (`OrientedPatch::slid_onto_keypoint`), and carry every
+/// same slid patch (`OrientedPatch::anchored_at_keypoint`), and carry every
 /// sighting's slid point with the patch, so a gesture lands under the pointer
 /// on the square redrawn after it.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct SeenSquare {
     /// The patch frame as this photograph sees it: slid onto the sighting's
     /// keypoint's ray, or the patch as it stands where there is no sighting, no
-    /// place for it, or no meeting of its ray with the plane, as the tile is
-    /// cut.
+    /// place for it, or no meeting of its ray with the plane in front of the camera,
+    /// as the tile is cut.
     pub(crate) patch: OrientedPatch,
 }
 

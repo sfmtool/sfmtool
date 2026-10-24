@@ -56,7 +56,7 @@ pub fn keypoint_grid_offset(
 /// [`OrientedPatch::anchored_at_keypoint`]'s — the same offset the renderer
 /// re-anchors a frame by — so a seed and a re-anchored frame can never disagree
 /// about where a keypoint puts the patch. `None` on each of that method's
-/// refusals (ray parallel to the plane, a ray-path hit behind the camera, a ray
+/// refusals (ray parallel to the plane, a hit behind the camera, a ray
 /// pointing away from a direction patch), and on a degenerate patch whose zero
 /// extent makes `wpp` zero: seeding at the projection (`acc = 0`) beats
 /// propagating a NaN/inf offset.

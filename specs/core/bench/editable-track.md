@@ -2270,8 +2270,10 @@ photograph shows, with the perspective the photograph really has. Its
 projection is what the viewer draws over the photograph, what a pointer on that
 outline is read against, and what the view's tile is cut through: the tile
 through `OrientedPatch::seen_at_keypoint`, and the hand edits through
-`OrientedPatch::slid_onto_keypoint`, which gives the same patch and refuses
-where the ray meets the plane behind the camera. So the outline, the reading
+`OrientedPatch::anchored_at_keypoint`, which gives the same patch. Where the
+keypoint's ray misses the plane or meets it behind the camera, under any lens
+model, there is no slid patch: the tile and the outline are the patch as it
+stands, and a hand edit through that sighting is refused as `NoProjection`. So the outline, the reading
 and the tile are one square
 ([`../../gui/multi-panel-image-browser.md`](../../gui/multi-panel-image-browser.md)
 § "The handles").

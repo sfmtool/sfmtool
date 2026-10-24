@@ -517,8 +517,9 @@ impl OrientedPatch {
     /// would otherwise each carry their own copy of this unprojection.
     ///
     /// `None` when the keypoint's ray cannot meet the patch: parallel to the
-    /// plane, meeting it behind the camera under a ray-path (fisheye /
-    /// equirectangular) model, or pointing away from a direction patch.
+    /// plane, meeting it behind the camera (under every lens model), or pointing
+    /// away from a direction patch. A patch slid onto a point behind the camera
+    /// is no square the photograph saw, so there is nothing to anchor to.
     ///
     /// ```
     /// # use sfmtool_core::camera::CameraIntrinsics;
@@ -563,17 +564,18 @@ impl OrientedPatch {
 
     /// The patch as the view described by `camera` and `cam_from_world` sees it,
     /// given that view's keypoint: [`Self::anchored_at_keypoint`] where the
-    /// keypoint's ray meets the patch, and the patch itself where there is no
-    /// keypoint or the ray cannot meet it.
+    /// keypoint's ray meets the patch in front of the camera, and the patch
+    /// itself where there is no keypoint or `anchored_at_keypoint` refuses.
     ///
     /// A keypoint marks where its photograph sees the patch's centre, so a gap
     /// between the keypoint and the centre's projection means that photograph
     /// sees the patch slid along its own plane until its centre sits on the
     /// keypoint's ray. This is that slid patch. It is the one square a view's
     /// tile is cut through and the outline a viewer draws over the photograph,
-    /// so the two come from this function and cannot differ. A pointer on that
-    /// outline is read against the same slid patch through
-    /// [`Self::slid_onto_keypoint`], which refuses where this falls back.
+    /// so the two come from this function and cannot differ. The bench's hand
+    /// edits read a pointer on that outline against the same slid patch through
+    /// [`Self::anchored_at_keypoint`] directly, and refuse where this falls
+    /// back, so a sighting whose outline is the unslid patch refuses a drag.
     ///
     /// ```
     /// # use sfmtool_core::camera::CameraIntrinsics;
@@ -595,42 +597,12 @@ impl OrientedPatch {
             .unwrap_or_else(|| self.clone())
     }
 
-    /// [`Self::anchored_at_keypoint`], refused as well where the keypoint's ray
-    /// meets a finite patch's plane behind the camera, under every lens model.
-    ///
-    /// `anchored_at_keypoint` makes that test only under a ray-path model,
-    /// because its callers' cheirality gates already keep a measured keypoint's
-    /// hit in front of a perspective camera. A keypoint placed by hand, or one
-    /// read against a patch that has been moved or turned since it was
-    /// measured, has no such gate, and a patch slid onto a point behind the
-    /// camera is no square the photograph saw. The bench's hand edits read a
-    /// pointer against the slid patch, and carry each sighting's slid centre,
-    /// through this, so a sighting with no such square refuses a drag and loses
-    /// its keypoint to a move. Where it returns a patch, that patch is the one
-    /// [`Self::seen_at_keypoint`] returns, the tile's and the drawn outline's.
-    pub fn slid_onto_keypoint(
-        &self,
-        camera: &CameraIntrinsics,
-        cam_from_world: &RigidTransform,
-        keypoint: [f64; 2],
-    ) -> Option<Self> {
-        let slid = self.anchored_at_keypoint(camera, cam_from_world, keypoint)?;
-        if self.w != 0.0 {
-            let eye = cam_from_world.inverse_translation_origin();
-            let ray = camera.pixel_to_ray(keypoint[0], keypoint[1]);
-            let ray = cam_from_world.to_rotation_matrix().transpose()
-                * Vector3::new(ray[0], ray[1], ray[2]);
-            if (slid.center - eye).dot(&ray) <= 0.0 {
-                return None;
-            }
-        }
-        Some(slid)
-    }
-
     /// The world-space offset from `center` to where `keypoint`'s back-projected
     /// ray meets this patch: the in-plane hit point for a finite patch, and
     /// `a·û + b·v̂` with `a = (ray·û)/(ray·d)`, `b = (ray·v̂)/(ray·d)` for a
     /// direction patch (`w == 0`), whose sum with `d` is the ray's own bearing.
+    /// `None` when the ray is parallel to the plane, meets it behind the camera,
+    /// or points away from a direction patch.
     ///
     /// The shared body of [`Self::anchored_at_keypoint`] and the keypoint
     /// localizer's seed offset, which scales it into patch-grid steps. `None` on
@@ -682,12 +654,13 @@ impl OrientedPatch {
                 return None;
             }
             let s = (self.center - cam_c).dot(&n) / denom;
-            // The plane must be hit FORWARD along the bearing. Under a
-            // perspective camera the caller's cheirality gates already guarantee
-            // `s > 0`, so this only ever bites on a ray-path model, where a
-            // periphery bearing can meet the plane behind the camera centre — a
-            // mirrored "hit" that is not an observation of this patch at all.
-            if camera.model.needs_ray_path() && s <= 0.0 {
+            // The plane must be hit FORWARD along the bearing, under every lens
+            // model. A hit behind the camera centre is a mirrored "hit" that is
+            // not an observation of this patch at all: a ray-path periphery
+            // bearing can make one, and so can a perspective keypoint read
+            // against a patch that has been moved or turned since it was
+            // measured, or one a descriptor search placed.
+            if s <= 0.0 {
                 return None;
             }
             let hit = cam_c + dir * s;
