@@ -530,7 +530,8 @@ jobs:
   # Linux coverage jobs, but without LLVM coverage instrumentation (much
   # faster to build) since coverage line numbers are platform-independent and
   # Linux already produces them. macos-latest runners are Apple Silicon (arm64),
-  # matching the osx-arm64 pixi platform.
+  # matching the `osx-arm64-macos13` pixi platform (the osx-arm64 subdir with
+  # macOS 13.3 declared as the minimum).
   #
   # Split in two because the halves need nothing from each other: the Rust
   # suite never loads the Python extension, and pytest never runs a Rust test

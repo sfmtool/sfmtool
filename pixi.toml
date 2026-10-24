@@ -5,16 +5,23 @@
 authors = ["Mark <399551+mwiebe@users.noreply.github.com>"]
 channels = ["conda-forge"]
 name = "sfmtool"
-# The bare subdirs are the CUDA-free platforms every normal environment uses.
-# The `*-cuda` named platforms attach the `__cuda` virtual package (Pixi's
-# rich-platform replacement for the deprecated `[system-requirements]` table)
-# and are opted into only by the `cuda` feature/environment. Non-CUDA
-# environments pin the bare subdirs via the `cpu` feature so the named CUDA
-# platforms never leak a `cuda*` pycolmap build into them.
+# `win-64`, `linux-64` and `osx-arm64-macos13` are the CUDA-free platforms
+# every normal environment uses. `osx-arm64-macos13` is the `osx-arm64` subdir
+# with macOS 13.3 declared as the minimum: pycolmap 4.2.1 on macOS needs
+# libfaiss 1.14.3, which requires macOS 13.3. A bare `osx-arm64` entry declares
+# macOS 13.0, which leaves the solver with pycolmap 4.1.1, whose builds do not pin
+# the libopenimageio version they were built against, so the lock can pair
+# them with a libopenimageio they fail to load. The `*-cuda` named platforms
+# attach the `__cuda` virtual package and are opted into only by the `cuda`
+# feature/environment. Named platforms are Pixi's replacement for the
+# deprecated `[system-requirements]` table, and a name must differ from its
+# subdir. Non-CUDA environments pin the CUDA-free platforms via the `cpu`
+# feature so the named CUDA platforms never leak a `cuda*` pycolmap build into
+# them.
 platforms = [
     "win-64",
     "linux-64",
-    "osx-arm64",
+    { name = "osx-arm64-macos13", platform = "osx-arm64", macos = "13.3" },
     { name = "win-64-cuda", platform = "win-64", cuda = "12.9" },
     { name = "linux-64-cuda", platform = "linux-64", cuda = "12.9" },
 ]
@@ -155,13 +162,15 @@ zensical = ">=0.0.62, <0.0.63"
 docs-serve = "zensical serve"
 docs-build = "zensical build"
 
-# Pins every non-CUDA environment to the bare CUDA-free subdirs. A feature's
+# Pins every non-CUDA environment to the CUDA-free platforms, whose macOS entry
+# is `osx-arm64-macos13` (macOS 13.3 or later, for pycolmap 4.2.1; see the
+# workspace `platforms` comment). A feature's
 # `platforms` can only name workspace platforms (not inline rich tables), so the
 # `__cuda` virtual package has to live on named workspace platforms; without
 # this pin the unrestricted features would inherit those named platforms and
 # Pixi would resolve the CUDA pycolmap build for `default`, `test`, etc.
 [feature.cpu]
-platforms = ["win-64", "linux-64", "osx-arm64"]
+platforms = ["win-64", "linux-64", "osx-arm64-macos13"]
 
 # CUDA-enabled pycolmap is only published for Linux and Windows, so restrict the
 # cuda feature (and any environment that uses it) to the `*-cuda` named
