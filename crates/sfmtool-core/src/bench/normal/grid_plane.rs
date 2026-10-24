@@ -700,11 +700,11 @@ impl<'a, 'v> Cells<'a, 'v> {
                 let jacobian = reference.and_then(|r| {
                     let observation = &track.observations[r];
                     let view = &images[observation.image as usize];
-                    let anchored_patch_frame = seed_of(observation)
-                        .and_then(|kp| {
-                            patch_frame.anchored_at_keypoint(view.camera, view.cam_from_world, kp)
-                        })
-                        .unwrap_or_else(|| patch_frame.clone());
+                    let anchored_patch_frame = patch_frame.seen_at_keypoint(
+                        view.camera,
+                        view.cam_from_world,
+                        seed_of(observation),
+                    );
                     patch_grid_jacobian(
                         &anchored_patch_frame,
                         view.camera,
@@ -965,9 +965,8 @@ impl<'a, 'v> Cells<'a, 'v> {
         margin: usize,
     ) -> Option<Render> {
         let r = self.layout.resolution;
-        let anchored_patch_frame = keypoint
-            .and_then(|kp| patch_frame.anchored_at_keypoint(view.camera, view.cam_from_world, kp))
-            .unwrap_or_else(|| patch_frame.clone());
+        let anchored_patch_frame =
+            patch_frame.seen_at_keypoint(view.camera, view.cam_from_world, keypoint);
         let jacobian =
             patch_grid_jacobian(&anchored_patch_frame, view.camera, view.cam_from_world, r);
         let sampler = self.options.fit.refine.sampler.for_jacobian(jacobian);
