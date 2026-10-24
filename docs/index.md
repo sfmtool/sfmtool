@@ -97,7 +97,7 @@ pip install sfmtool
 
 Wheels are published for Python 3.14 on x86-64 Linux, x86-64 Windows and Apple silicon
 macOS. Anywhere else, including Intel macOS, pip builds sfmtool from the source distribution, which
-needs a Rust toolchain at version 1.97 or newer.
+needs a Rust toolchain at version 1.98 or newer.
 
 See the [getting started tutorial](tutorials/getting-started.md) for a full
 walkthrough.

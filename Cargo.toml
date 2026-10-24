@@ -19,7 +19,7 @@ resolver = "2"
 
 # Minimum supported Rust version, inherited by every crate via
 # `rust-version.workspace = true`. This is not the toolchain we develop against
-# (pixi.toml pins that, currently 1.98) — it is the floor for people who build
+# (pixi.toml pins that, currently 1.99) — it is the floor for people who build
 # from the PyPI *sdist*, which compiles this whole workspace with whatever rustc
 # they happen to have.
 #
@@ -30,14 +30,16 @@ resolver = "2"
 # needed 1.95 for the `cfg_select!` in its build script while declaring no
 # rust-version at all — and openjd-expr 0.9.0 declares 1.96, so the next routine
 # upgrade would have forced a bump anyway. Keeping one release of headroom means
-# the next GUI-stack minor does not immediately force another.
+# the next GUI-stack minor does not immediately force another. The floor moved
+# from 1.97 to 1.98 when the development toolchain moved to 1.99, to keep that
+# one release of headroom; no dependency then declared a rust-version above 1.96.
 #
 # Because a dependency can raise the real floor without declaring it, metadata
 # inspection is not a substitute for compiling: `.github/workflows/ci.yml` has an
 # `msrv` job that builds the workspace with exactly this rustc, reading the
 # version from right here.
 [workspace.package]
-rust-version = "1.97"
+rust-version = "1.98"
 
 # Test binaries are optimized. This crate's tests are not I/O harnesses — they
 # run the real numerics (RANSAC, bundle adjustment, rotation averaging, SIFT

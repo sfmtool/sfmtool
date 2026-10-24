@@ -454,9 +454,9 @@ backlog and keep them honest as findings get addressed:
   start.
 - The `xform` sub-commands are specced under
   `specs/cli/reconstruction/xform/` rather than as top-level commands.
-- Python 3.14 and Rust 1.98 are pinned in `pixi.toml`. That is the *development*
+- Python 3.14 and Rust 1.99 are pinned in `pixi.toml`. That is the *development*
   toolchain, and it is deliberately not the same thing as the MSRV: the workspace
-  declares `rust-version = "1.97"` in `[workspace.package]` (inherited by every
+  declares `rust-version = "1.98"` in `[workspace.package]` (inherited by every
   crate in the workspace), because the PyPI sdist compiles this workspace on the
   user's own rustc. Wheels are published for x86-64 Linux, x86-64 Windows and
   Apple-silicon macOS, so everyone else (for example Intel Macs, other Linux

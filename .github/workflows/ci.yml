@@ -59,7 +59,7 @@ jobs:
       actions: write
     steps:
       - uses: actions/checkout@v7
-      - uses: prefix-dev/setup-pixi@v0.10.2
+      - uses: prefix-dev/setup-pixi@v0.11.2
         with:
           environments: lint
           # No env cache: restoring one costs more than building it. Measured
@@ -207,9 +207,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       # Only the pixi binary is needed; `pixi exec` builds the throwaway MSRV
-      # environment. Installing a project environment would just pull the 1.98
+      # environment. Installing a project environment would just pull the 1.99
       # toolchain this job exists to avoid.
-      - uses: prefix-dev/setup-pixi@v0.10.2
+      - uses: prefix-dev/setup-pixi@v0.11.2
         with:
           run-install: false
       - name: Restore cargo home
@@ -345,7 +345,7 @@ jobs:
           # generation it saves holds only what that key builds.
           key: ${{ runner.os }}-cargo-coverage-rust-target-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/Cargo.toml') }}
           restore-keys: ${{ github.event_name == 'pull_request' && format('{0}-cargo-coverage-rust-target-', runner.os) || '' }}
-      - uses: prefix-dev/setup-pixi@v0.10.2
+      - uses: prefix-dev/setup-pixi@v0.11.2
         with:
           environments: test-ci
           # No env cache: installing test-ci here takes 19s and restoring it 21s,
@@ -451,7 +451,7 @@ jobs:
           # and "Rust caches" above prune-caches.
           key: ${{ runner.os }}-cargo-coverage-python-target-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/Cargo.toml') }}
           restore-keys: ${{ github.event_name == 'pull_request' && format('{0}-cargo-coverage-python-target-', runner.os) || '' }}
-      - uses: prefix-dev/setup-pixi@v0.10.2
+      - uses: prefix-dev/setup-pixi@v0.11.2
         with:
           environments: test-ci
           # No env cache: installing test-ci here takes 19s and restoring it 21s,
@@ -595,7 +595,7 @@ jobs:
           # generation it saves holds only what that key builds.
           key: ${{ runner.os }}-cargo-test-target-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/Cargo.toml') }}
           restore-keys: ${{ github.event_name == 'pull_request' && format('{0}-cargo-test-target-', runner.os) || '' }}
-      - uses: prefix-dev/setup-pixi@v0.10.2
+      - uses: prefix-dev/setup-pixi@v0.11.2
         with:
           environments: test-ci
           # No env cache, on either platform. Windows `test-ci` is the one
@@ -743,7 +743,7 @@ jobs:
           # above prune-caches.
           key: ${{ runner.os }}-cargo-pyext-target-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/Cargo.toml') }}
           restore-keys: ${{ github.event_name == 'pull_request' && format('{0}-cargo-pyext-target-', runner.os) || '' }}
-      - uses: prefix-dev/setup-pixi@v0.10.2
+      - uses: prefix-dev/setup-pixi@v0.11.2
         with:
           environments: test-ci
           # No env cache, on either platform. Windows `test-ci` is the one
@@ -820,7 +820,7 @@ jobs:
       actions: write
     steps:
       - uses: actions/checkout@v7
-      - uses: prefix-dev/setup-pixi@v0.10.2
+      - uses: prefix-dev/setup-pixi@v0.11.2
         with:
           environments: ui
           # No env cache: the ui env installs in 5s and restores in 4s.
@@ -906,7 +906,7 @@ jobs:
       actions: write
     steps:
       - uses: actions/checkout@v7
-      - uses: prefix-dev/setup-pixi@v0.10.2
+      - uses: prefix-dev/setup-pixi@v0.11.2
         with:
           environments: ui
           # No env cache: the ui env installs in 3s and restores in 4s.
@@ -993,7 +993,7 @@ jobs:
       actions: write
     steps:
       - uses: actions/checkout@v7
-      - uses: prefix-dev/setup-pixi@v0.10.2
+      - uses: prefix-dev/setup-pixi@v0.11.2
         with:
           environments: ui
           # No env cache: the ui env installs in 4s and restores in 8s.

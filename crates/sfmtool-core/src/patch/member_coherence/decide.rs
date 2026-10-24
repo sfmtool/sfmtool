@@ -275,8 +275,8 @@ pub fn decide_member_coherence(
     // `zncc_coarse`. Exoneration asks whether the disagreement SURVIVES the loss
     // of one octave, so it reads the finest coarse table; sharpness measures how
     // much of the deficit is detail, so it reads the coarsest for the widest span.
-    let exon_scale: Option<Vec<f64>> = matrix.zncc_coarse.first().map(&slice_scale);
-    let sharp_scale: Option<Vec<f64>> = matrix.zncc_coarse.last().map(&slice_scale);
+    let exon_scale: Option<Vec<f64>> = matrix.zncc_coarse.first().map(slice_scale);
+    let sharp_scale: Option<Vec<f64>> = matrix.zncc_coarse.last().map(slice_scale);
     // Pass 1 at the absolute bar, then the one tighten pass off that block's own
     // coherence. `effective_bar == params.bar` short-circuits the re-sweep, which
     // is what makes `self_bar_k = 0` bit-for-bit the absolute rule.
