@@ -15,7 +15,7 @@ artifact; this report carries every finding from it.
 | label in the viewer | file | kind |
 |---|---|---|
 | `dino` | a fresh `sfm solve -g images/ --max-features 2000` of the 85 `test-data/images/dino_dog_toy` images, run in a scratch workspace outside the repo exactly as the tutorial says (9,941 points, 72,901 observations); the viewer opened a copy in `sfmr/bugbash-2026-10-05-54254/dino.sfmr` beside it | `sift_files`, later converted to embedded patches on the copy |
-| `seoul_bull_sculpture_ground_truth` | `test-data/images/seoul_bull_sculpture/seoul_bull_sculpture_ground_truth.sfmr`, opened in place with `open_reconstruction` and never edited or saved | 17 images, embedded patches, metres, Z up |
+| `seoul_bull_sculpture_ground_truth_v01` | `test-data/images/seoul_bull_sculpture/seoul_bull_sculpture_ground_truth_v01.sfmr`, opened in place with `open_reconstruction` and never edited or saved | 17 images, embedded patches, metres, Z up |
 
 Severity is a judgement: **high** loses or corrupts data, **medium** blocks a
 feature or gives a wrong answer, **low** is a wrong message, display or schema
@@ -61,7 +61,7 @@ than defects; they carry **docs** in place of a severity.
 turn right 35°" the caller has to read `get_scene`'s view block, compute the
 new position and a rotated forward vector itself, and send the look-at form.
 
-Repro on `seoul_bull_sculpture_ground_truth`:
+Repro on `seoul_bull_sculpture_ground_truth_v01`:
 
 1. `set_view {look_through: {camera_image: 5}}`.
 2. Compute, client side, camera 5's centre moved −2 m along its forward
@@ -296,7 +296,7 @@ line and parks the pointer outside the window before the frame is drawn.
 
 With the 3D Viewer about 400 px wide (the three-column layout the tutorial
 asks for), the stats line `9941 points | 85 images | 60 fps` is drawn over the
-`Pos: [x, y, z]` readout, and on `seoul_bull_sculpture_ground_truth`
+`Pos: [x, y, z]` readout, and on `seoul_bull_sculpture_ground_truth_v01`
 `280 points (14 at infinity) | 17 images | 60 fps` overlaps it the same way.
 The tutorial's own screenshots show the same overlap, so it predates this
 build.
@@ -380,7 +380,7 @@ to tell they got there. Give each step four parts:
 - **Agent**: the MCP calls, in a collapsed block.
 
 A worked card, run during this bash on
-`seoul_bull_sculpture_ground_truth`:
+`seoul_bull_sculpture_ground_truth_v01`:
 
 - **Do**: double-click thumbnail 5 to look through that photo, step back
   about 2 m and up about 1 m (hold S, then R), and turn right about 35°.
@@ -396,8 +396,8 @@ A worked card, run during this bash on
 ## 16. Use a ground-truth reconstruction for the GUI tutorial (docs)
 
 Distances and angles in a step card only mean something in a reconstruction
-with a known scale and up direction. `seoul_bull_sculpture_ground_truth.sfmr`
-and `kerry_park_ground_truth.sfmr` are in metres with Z up. The dino has no
+with a known scale and up direction. `seoul_bull_sculpture_ground_truth_v01.sfmr`
+and `kerry_park_ground_truth_v01.sfmr` are in metres with Z up. The dino has no
 ground truth, and its solves come out tilted and at an arbitrary scale
 (finding 7). Make one: level it with the mean camera up vector (about 20 lines
 during this bash) and scale it from one measured length, such as the table
