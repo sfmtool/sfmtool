@@ -75,8 +75,8 @@ pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> PatchPipelineR
     });
 
     let instance_layouts = [
-        // Slot 0: quad corners (per-vertex), reuses point quad buffer
-        Some(QUAD_VERTEX_LAYOUT),
+        // Slot 0: the splat corners (per-vertex), the point pipeline's buffer
+        Some(SPLAT_CORNER_LAYOUT),
         // Slot 1: patch instances (per-instance)
         Some(wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<PatchInstance>() as u64,

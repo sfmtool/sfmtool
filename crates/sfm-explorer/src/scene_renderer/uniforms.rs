@@ -109,7 +109,14 @@ pub(super) fn recon_uniforms(
         show_infinity: f32::from(show_infinity && bundle.display.show_points_at_infinity),
         // The camera model proposal's preview blend, 0 on a node with no preview.
         preview_s: bundle.preview.as_ref().map_or(0.0, |preview| preview.s),
-        _pad: [0.0; 2],
+        // Dim or hide, for the points the Track Table's filter rejects; read
+        // only where a mask word carries the bit.
+        filter_mode: if bundle.filter_hides {
+            FILTER_HIDE
+        } else {
+            FILTER_DIM
+        },
+        _pad: 0.0,
     }
 }
 
@@ -246,7 +253,8 @@ impl SceneRenderer {
                         patch_scale: 2.0f32.powf(patch_size_log2),
                         patch_opacity,
                         alpha_cutoff: patch_alpha_cutoff,
-                        _pad0: [0.0; 2],
+                        selected_point_index: global_point(selected_point),
+                        hovered_point_index: global_point(hovered_point),
                         camera_pos: [cam_pos.x as f32, cam_pos.y as f32, cam_pos.z as f32],
                         _pad1: 0.0,
                     }),

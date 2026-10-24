@@ -26,6 +26,9 @@ struct ReconUniforms {
     // stored positions, 1 the targets. Read only by the `vs_preview` entry
     // points of points.wgsl and patch.wgsl.
     preview_s: f32,
+    // How a point whose mask word carries MASK_REJECTED is drawn: FILTER_DIM
+    // or FILTER_HIDE. Read only where a word carries the bit.
+    filter_mode: u32,
 }
 
 // Pick ID tags (bits 31..30), matching `PICK_TAG_*` in
@@ -51,6 +54,38 @@ const MASK_ALIVE: u32 = 0x00000001u;
 const MASK_HIGHLIGHTED: u32 = 0x00000002u;
 const MASK_PAINTED: u32 = 0x00000003u;
 const MASK_UNDER_BRUSH: u32 = 0x00000004u;
+
+// The bit a live point's mask word carries, over its word, when the Track
+// Table's *Filter the 3D view* rejects the point (`MASK_REJECTED` in
+// `scene_renderer/upload/overlay.rs`), and the mask that leaves the word
+// itself.
+const MASK_REJECTED: u32 = 0x00000100u;
+const MASK_WORD: u32 = 0x000000FFu;
+
+// `ReconUniforms::filter_mode`, matching `FILTER_*` in
+// `scene_renderer/gpu_types.rs`: a rejected point is dimmed (drawn at
+// DIM_ALPHA by the second draw, after the kept points) or hidden (a clipped
+// vertex, which draws nothing and answers no pick).
+const FILTER_DIM: u32 = 0x00000000u;
+const FILTER_HIDE: u32 = 0x00000001u;
+// The alpha a dimmed point is drawn at, `DIM_ALPHA` in `filter_3d.rs`.
+const DIM_ALPHA: f32 = 0.25;
+
+// Whether a point is drawn by this draw, given its mask word, whether this is
+// the dimmed draw and whether the point is the selected or hovered one, which
+// the filter never dims or hides. The point and patch passes draw the unit
+// quad's corners twice, from the splat corner buffer (`SPLAT_CORNERS` in
+// `scene_renderer/gpu_types.rs`), whose corners carry which draw they are of
+// at `@location(15)`: the first draw, of every point the filter keeps, and the
+// dimmed draw after it, of the dimmed points alone, so a dimmed point is drawn
+// over the kept ones and never hides one behind it.
+fn in_this_draw(word: u32, dimmed_draw: bool, highlighted: bool, filter_mode: u32) -> bool {
+    let rejected = (word & MASK_REJECTED) != 0u && !highlighted;
+    if !rejected {
+        return !dimmed_draw;
+    }
+    return dimmed_draw && filter_mode == FILTER_DIM;
+}
 
 // The eraser brush's colours, which replace a point's own outright as the
 // selection's yellow and the hover's cyan do. A saturated red for a point the

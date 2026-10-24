@@ -15,6 +15,10 @@ struct Uniforms {
     patch_scale: f32,      // user scale multiplier on the stored half-vecs
     patch_opacity: f32,    // global opacity multiplier
     alpha_cutoff: f32,     // coverage discard threshold on bitmap alpha
+    // Global pick indices of the selected and hovered points, 0xFFFFFFFF =
+    // none: the Track Table's filter never dims or hides their surfels.
+    selected_point_index: u32,
+    hovered_point_index: u32,
     camera_pos: vec3<f32>, // world-space camera position (front-face culling)
 }
 
@@ -35,6 +39,9 @@ struct VertexInput {
     @location(5) atlas_layer: u32,        // instance: compacted atlas cell index
     @location(6) point_index: u32,        // instance: recon.points index (picking)
     @location(7) alive: u32,              // instance: the point's mask word (common.wgsl)
+    // 1 for a corner of the Track Table filter's dimmed draw, 0 for the first
+    // draw's (common.wgsl).
+    @location(15) dimmed_draw: u32,
 }
 
 struct VertexOutput {
@@ -50,17 +57,30 @@ struct VertexOutput {
     // has taken this surfel: its blend `s` where its point loses its
     // position, 0 otherwise.
     @location(4) @interpolate(flat) failure: f32,
+    // 1, or DIM_ALPHA for a surfel whose point the Track Table's filter dims.
+    @location(5) @interpolate(flat) alpha: f32,
 }
 
 fn place(in: VertexInput) -> VertexOutput {
     var out: VertexOutput;
-    out.mark = in.alive;
+    let word = in.alive & MASK_WORD;
+    out.mark = word;
     out.failure = 0.0;
+    out.alpha = 1.0;
     // A deleted point's surfel collapses to a clipped vertex, the same way a
-    // back-facing one does below.
-    if in.alive == MASK_DELETED {
+    // back-facing one does below. So does one that is not this draw's, by the
+    // splats' rule (points.wgsl): a surfel the Track Table's filter rejects is
+    // drawn only by the dimmed draw, unless its point is selected or hovered.
+    let global = recon.point_pick_base + in.point_index;
+    let highlighted = global == uniforms.selected_point_index
+        || global == uniforms.hovered_point_index;
+    if word == MASK_DELETED
+        || !in_this_draw(in.alive, in.dimmed_draw != 0u, highlighted, recon.filter_mode) {
         out.clip_pos = vec4<f32>(0.0, 0.0, -1.0, 1.0);
         return out;
+    }
+    if in.dimmed_draw != 0u {
+        out.alpha = DIM_ALPHA;
     }
     // Map patch coordinate to bitmap UV. Columns run with +u: s=-1 -> u=0.
     // Rows run *against* +v: the bitmap was baked with its top scanline toward
@@ -202,8 +222,10 @@ fn fs_main(in: VertexOutput) -> FragOutput {
         rgb = BRUSH_UNDER_COLOR;
     }
     // Premultiplied alpha: hard coverage from the discard above; the global
-    // patch_opacity uniform is the only translucency source.
-    out.color = vec4<f32>(rgb * uniforms.patch_opacity, uniforms.patch_opacity);
+    // patch_opacity uniform is the translucency source, and the filter's dim
+    // alpha on top of it.
+    let opacity = uniforms.patch_opacity * in.alpha;
+    out.color = vec4<f32>(rgb * opacity, opacity);
     out.linear_depth = 0.0; // EDL passthrough — textured surface, no edge darkening
     // A non-interactive node reads as background rather than passing the pick
     // through to whatever it occludes.

@@ -2411,7 +2411,7 @@ fn the_stats_overlay_sums_visible_nodes_and_leads_with_the_count() {
     let one_node_points = state.scene[0].recon().point_set.points.len();
     let one_node_images = state.scene[0].recon().image_set.images.len();
 
-    let text = scene_stats_text(&state.scene, None, false, 60.0);
+    let text = scene_stats_text(&state.scene, None, None, false, 60.0);
     assert_eq!(
         text,
         format!(
@@ -2424,7 +2424,7 @@ fn the_stats_overlay_sums_visible_nodes_and_leads_with_the_count() {
     // Hiding a node takes it out of the totals — and with one left, the
     // reconstruction count leads no more.
     state.scene[1].visible = false;
-    let text = scene_stats_text(&state.scene, None, false, 60.0);
+    let text = scene_stats_text(&state.scene, None, None, false, 60.0);
     assert_eq!(
         text,
         format!("{one_node_points} points (3 at infinity) | {one_node_images} images")
@@ -2444,7 +2444,7 @@ fn the_stats_overlay_counts_only_the_soloed_node() {
 
     state.toggle_solo(second);
     assert_eq!(
-        scene_stats_text(&state.scene, state.solo, false, 60.0),
+        scene_stats_text(&state.scene, state.solo, None, false, 60.0),
         format!("{points} points | {images} images"),
         "the stats line still counted the nodes the solo is hiding"
     );
@@ -2452,7 +2452,7 @@ fn the_stats_overlay_counts_only_the_soloed_node() {
     // A soloed node whose own eye is off is drawn by nobody.
     state.scene[1].visible = false;
     assert_eq!(
-        scene_stats_text(&state.scene, state.solo, false, 60.0),
+        scene_stats_text(&state.scene, state.solo, None, false, 60.0),
         "0 points | 0 images"
     );
 }

@@ -261,6 +261,7 @@ impl TabContext<'_> {
                 node,
                 &self.state.scene,
                 self.state.solo,
+                self.state.filter_3d.as_ref(),
                 self.state.selected_image,
                 self.state.show_grid,
                 self.state.length_scale,

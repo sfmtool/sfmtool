@@ -93,7 +93,8 @@ impl SceneRenderer {
         // viewport statements rather than document ones, and the rebuild must
         // not drop them any more than it drops the deleted set.
         let base_count = edited.base_point_count() as u32;
-        let (highlighted, painted, under_brush) = self
+        // The Track Table's filter bit likewise.
+        let (highlighted, painted, under_brush, kept, filter_hides) = self
             .recons
             .get(&id)
             .map(|bundle| {
@@ -101,6 +102,8 @@ impl SceneRenderer {
                     bundle.masked_highlighted.clone(),
                     bundle.masked_painted.clone(),
                     bundle.masked_under_brush.clone(),
+                    bundle.masked_kept.clone(),
+                    bundle.filter_hides,
                 )
             })
             .unwrap_or_default();
@@ -108,6 +111,8 @@ impl SceneRenderer {
             highlighted: &highlighted,
             painted: &painted,
             under_brush: &under_brush,
+            kept: kept.as_ref(),
+            filter_hides,
         };
         let alive: Vec<u32> = (0..instances.len() as u32)
             .map(|k| super::overlay::mask_word(base_count + k, &edited.deleted_points, marks))

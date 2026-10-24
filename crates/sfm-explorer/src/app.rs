@@ -629,6 +629,17 @@ impl App {
             if let Some(under_brush) = under_brush {
                 marks.under_brush = under_brush;
             }
+            // The Track Table's filter, on the node it shows and only with a
+            // kept set built for the version in view: point indexes can shift
+            // across an edit, so until the table's new rows land every point
+            // is drawn (`crate::filter_3d`).
+            if let Some(filter) = self.state.filter_3d.as_ref().filter(|f| f.node == id) {
+                let document = node.history.current_version().document_serial;
+                if let Some(kept) = filter.kept_for(document) {
+                    marks.kept = Some(kept);
+                    marks.filter_hides = filter.mode == crate::filter_3d::Filter3dMode::Hide;
+                }
+            }
             let mut phase = uploads.phase("deleted mask");
             let written = self.scene_renderer.update_point_mask(
                 queue,
@@ -1119,6 +1130,10 @@ impl App {
                 };
                 DockArea::new(&mut dock).show_inside(ui, &mut tab_context);
                 app_state.dock = dock;
+                // The Track Table's filter of the 3D view holds while the
+                // table is open behind another tab, and goes with a close.
+                let table_open = app_state.is_panel_open(dock::Tab::TrackTable);
+                track_table.after_dock(app_state, table_open);
                 // The tab responses that end in a layout operation are applied
                 // here, with the dock back in the state: the two panels' point
                 // gestures (Edit on Bench raises Track View), Image Detail's

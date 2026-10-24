@@ -104,7 +104,8 @@ fn the_recon_uniforms_struct_matches_its_wgsl_layout() {
             tint_color: [0.0; 4],
             show_infinity: 1.0,
             preview_s: 0.0,
-            _pad: [0.0; 2],
+            filter_mode: 0,
+            _pad: 0.0,
         }),
     );
     assert_eq!(std::mem::size_of::<ReconUniforms>() % 16, 0);
@@ -260,6 +261,61 @@ fn the_wgsl_mask_words_match_the_rust_ones() {
             "{name} differs between common.wgsl and upload/overlay.rs"
         );
     }
+}
+
+#[test]
+fn the_wgsl_filter_values_match_the_rust_ones() {
+    // The Track Table's filter crosses the boundary as a bit of the mask word,
+    // a mode in the node's uniforms, the vertex range of the dimmed draw and
+    // the alpha the shaders draw it at; each is written once on each side.
+    use super::super::gpu_types::{FILTER_DIM, FILTER_HIDE};
+    use super::super::render::{DIMMED_DRAW, FIRST_DRAW};
+    use super::super::upload::MASK_REJECTED;
+    let common = include_str!("../../shaders/common.wgsl");
+    for (name, rust_value) in [
+        ("MASK_REJECTED", MASK_REJECTED),
+        ("FILTER_DIM", FILTER_DIM),
+        ("FILTER_HIDE", FILTER_HIDE),
+    ] {
+        assert_eq!(
+            wgsl_u32_const(common, name),
+            rust_value,
+            "{name} differs between common.wgsl and the renderer"
+        );
+    }
+    // The bit sits above every word, so a rejected point keeps its word.
+    assert_eq!(
+        wgsl_u32_const(common, "MASK_WORD") & MASK_REJECTED,
+        0,
+        "MASK_WORD keeps the filter bit"
+    );
+    // Both draws are the unit quad's four corners, each marked as its own
+    // draw's, which the two shaders read at the same location.
+    use super::super::gpu_types::{DIMMED_DRAW_LOCATION, SPLAT_CORNERS};
+    for (first, dimmed) in FIRST_DRAW.zip(DIMMED_DRAW.clone()) {
+        let (first, dimmed) = (
+            SPLAT_CORNERS[first as usize],
+            SPLAT_CORNERS[dimmed as usize],
+        );
+        assert_eq!(first.position, dimmed.position);
+        assert_eq!((first.dimmed, dimmed.dimmed), (0, 1));
+    }
+    assert_eq!(DIMMED_DRAW.end as usize, SPLAT_CORNERS.len());
+    let input = format!("@location({DIMMED_DRAW_LOCATION}) dimmed_draw: u32,");
+    for (name, source) in [
+        ("points.wgsl", include_str!("../../shaders/points.wgsl")),
+        ("patch.wgsl", include_str!("../../shaders/patch.wgsl")),
+    ] {
+        assert!(
+            source.lines().any(|l| l.trim() == input),
+            "{name} does not declare `{input}`"
+        );
+    }
+    let line = format!("const DIM_ALPHA: f32 = {};", crate::filter_3d::DIM_ALPHA);
+    assert!(
+        common.lines().any(|l| l.trim() == line),
+        "common.wgsl does not declare `{line}`"
+    );
 }
 
 #[test]

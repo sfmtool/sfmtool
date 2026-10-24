@@ -145,6 +145,7 @@ impl Viewer3D {
         rect: Rect,
         scene: &[SceneNode],
         solo: Option<crate::scene::ReconId>,
+        filter_3d: Option<&crate::filter_3d::Filter3d>,
         show_controls_help: bool,
         show_fps: bool,
         status_message: Option<&str>,
@@ -159,7 +160,7 @@ impl Viewer3D {
         // if it is wanted. Points at infinity are called out separately — they
         // are directions rather than locations, so a lone total hides how much
         // of the cloud has no position at all.
-        let stats = scene_stats_text(scene, solo, show_fps, fps);
+        let stats = scene_stats_text(scene, solo, filter_3d, show_fps, fps);
         let stats = painter.layout_no_wrap(stats, font.clone(), text_color);
         let stats_pos = Pos2::new(rect.left() + 10.0, rect.top() + STATS_TOP);
         let stats_right = stats_pos.x + stats.size().x;
@@ -295,14 +296,21 @@ impl Viewer3D {
 /// (`scene::is_visible`): the node's eye AND the solo override. Soloing one of
 /// two loaded files therefore drops the line back to that file's own totals,
 /// with no leading count — which is exactly what is on screen.
+///
+/// While the Track Table filters the 3D view (`filter`) on a drawn node, the
+/// point count goes on with how many points the filter leaves at full
+/// strength, *(N shown)*: every drawn point less the filtered node's points
+/// that the table does not list. While the table has no rows for the version
+/// in view it says every point is shown until they land.
 pub(crate) fn scene_stats_text(
     scene: &[SceneNode],
     solo: Option<crate::scene::ReconId>,
+    filter: Option<&crate::filter_3d::Filter3d>,
     show_fps: bool,
     fps: f64,
 ) -> String {
     let totals = visible_stats(scene, solo);
-    let points = if totals.points_at_infinity > 0 {
+    let mut points = if totals.points_at_infinity > 0 {
         format!(
             "{} points ({} at infinity)",
             totals.points, totals.points_at_infinity
@@ -310,6 +318,23 @@ pub(crate) fn scene_stats_text(
     } else {
         format!("{} points", totals.points)
     };
+    let filtered = filter.and_then(|filter| {
+        let node = node_by_id(scene, filter.node)?;
+        crate::scene::is_visible(node, solo).then_some((filter, node))
+    });
+    if let Some((filter, node)) = filtered {
+        let document = node.history.current_version().document_serial;
+        match filter.kept_for(document) {
+            Some(kept) => {
+                let rejected = node.point_count().saturating_sub(kept.count());
+                points.push_str(&format!(
+                    " ({} shown)",
+                    totals.points.saturating_sub(rejected)
+                ));
+            }
+            None => points.push_str(" (all shown until the Track Table updates)"),
+        }
+    }
     let mut text = String::new();
     if totals.recons > 1 {
         text.push_str(&format!("{} reconstructions | ", totals.recons));

@@ -922,6 +922,12 @@ pub struct AppState {
     /// any version. See [`crate::track_table_panel::picks`].
     pub(crate) reference_picks: crate::track_table_panel::picks::ReferencePicks,
 
+    /// What the Track Table's *Filter the 3D view* box asks of the 3D view,
+    /// or `None` while the box is clear or the panel is closed. Written by
+    /// the panel each frame, read by the frame's mask upload and the
+    /// viewport's stats line. See [`crate::filter_3d`].
+    pub(crate) filter_3d: Option<crate::filter_3d::Filter3d>,
+
     /// The bars Track View's threshold boxes hold while it shows the viewed
     /// track. They judge the readings drawn and change no verdict; a put of
     /// the viewed point carries them onto the new track when they differ from
@@ -1055,6 +1061,7 @@ impl AppState {
             track_tables: Default::default(),
             track_table_jobs: Default::default(),
             reference_picks: Default::default(),
+            filter_3d: None,
             viewed_thresholds: Default::default(),
         }
     }

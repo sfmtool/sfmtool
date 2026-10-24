@@ -622,6 +622,11 @@ fn the_header_fits_on_one_line_and_size_stays_with_its_dropdown_when_it_wraps() 
     ctx.enable_accesskit();
     accessible_frame(&ctx, &mut panel, &mut state, Vec::new());
     let nodes = accessible_frame(&ctx, &mut panel, &mut state, Vec::new());
-    let checkbox = only(&nodes, Role::CheckBox);
-    assert_eq!(checkbox.label(), Some("Seen in selected image"));
+    assert!(
+        nodes
+            .iter()
+            .any(|node| node.role() == Role::CheckBox
+                && node.label() == Some("Seen in selected image")),
+        "no check box named Seen in selected image"
+    );
 }

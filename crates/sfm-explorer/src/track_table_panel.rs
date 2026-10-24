@@ -22,6 +22,7 @@
 //! on screen once the scroll position has stopped changing
 //! ([`SCROLL_SETTLE_S`]).
 
+mod filter;
 pub(crate) mod job;
 pub(crate) mod picks;
 mod pictures;
@@ -41,6 +42,7 @@ use sfmtool_core::camera::PeekedPhotograph;
 use sfmtool_core::EditedReconstruction;
 
 use crate::document::VersionSerial;
+use crate::filter_3d::{Filter3dMode, KeptPoints};
 use crate::patch_pictures::crop;
 use crate::patch_pictures::marks::ProjectionOf;
 use crate::scene::{PointRef, ReconId, SceneNode};
@@ -375,6 +377,10 @@ struct TrackTableQuery {
     /// the reconstruction on show has a point whose count is not 0; after,
     /// `shown` alone decides, so the panel never undoes the person's choice.
     chosen_defects: Vec<TrackTableColumn>,
+    /// Whether the 3D view is filtered by the rows ([`filter`]).
+    filter_3d: bool,
+    /// What the 3D view does with the points the rows leave out.
+    filter_3d_mode: Filter3dMode,
 }
 
 impl Default for TrackTableQuery {
@@ -386,6 +392,8 @@ impl Default for TrackTableQuery {
             pictures: PictureColumn::ALL.to_vec(),
             seen_in_selected_image: false,
             chosen_defects: Vec::new(),
+            filter_3d: false,
+            filter_3d_mode: Filter3dMode::Dim,
         }
     }
 }
@@ -775,6 +783,16 @@ pub(crate) struct TrackTablePanel {
     /// Whether the pointer was over the rows in the last frame, so that
     /// leaving them clears the hover once rather than every frame.
     had_pointer: bool,
+    /// The kept set last published to the 3D view, with the node and the row
+    /// list's [`RowList::recomputed`] count it was built at, so it is built
+    /// again only when the rows are ([`filter`]).
+    kept: Option<(ReconId, u64, Arc<KeptPoints>)>,
+    /// Whether the panel drew in this frame, which the frame reads after the
+    /// dock with [`Self::after_dock`].
+    drawn_this_frame: bool,
+    /// Whether rows computed again while the panel was hidden put other rows
+    /// first, so the panel scrolls to the top when it next draws.
+    scroll_to_top: bool,
     /// The rows the last frame drew, each with its rectangle.
     #[cfg(test)]
     drawn: Vec<(u32, egui::Rect)>,
@@ -786,6 +804,18 @@ pub(crate) struct TrackTablePanel {
     /// order, over every frame.
     #[cfg(test)]
     requested_photographs: Vec<usize>,
+}
+
+/// What [`TrackTablePanel::refresh_rows`] found.
+struct Refreshed {
+    /// Whether the rows on show are of the version before an edit.
+    stale: bool,
+    /// What of the query the table on show cannot apply, or `None` with no
+    /// table to show.
+    unapplied: Option<Unapplied>,
+    /// Whether the rows were computed again for a moved query or node, which
+    /// puts other rows at the top.
+    reordered: bool,
 }
 
 /// What the panel's frame asked the state for, applied once the node it drew
@@ -899,9 +929,11 @@ impl TrackTablePanel {
 
     /// Draw the panel for the selected reconstruction.
     pub(crate) fn show(&mut self, ui: &mut egui::Ui, state: &mut AppState) {
+        self.drawn_this_frame = true;
         let Some(id) =
             crate::scene::selected_node(&state.scene, state.selected_recon).map(|n| n.id)
         else {
+            state.filter_3d = None;
             ui.centered_and_justified(|ui| {
                 ui.label("No reconstruction loaded");
             });
@@ -918,6 +950,9 @@ impl TrackTablePanel {
             self.query.needed_computed(),
             self.query.ordering_computed(),
         );
+        // After the frame's edits of the query too, so a box ticked in this
+        // frame filters the 3D view drawn after it.
+        self.publish_filter_3d(state, id);
         // The rows are computed from the query at the top of a frame, so an
         // edit this frame made shows in the next one, which is asked for here
         // rather than left to the next input event.
@@ -942,9 +977,10 @@ impl TrackTablePanel {
         }
     }
 
-    /// The panel body for the node `id`, which is loaded.
-    fn show_node(&mut self, ui: &mut egui::Ui, state: &AppState, id: ReconId) -> Asked {
-        let mut asked = Asked::default();
+    /// Compute the row list for the node `id`, which is loaded, again when
+    /// its inputs moved and the rows can be: the part of a frame that does
+    /// not draw, which [`Self::after_dock`] runs for a hidden panel too.
+    fn refresh_rows(&mut self, state: &AppState, id: ReconId) -> Refreshed {
         let node = state.node(id).expect("the selected node is loaded");
         let edited = node.edited();
         let selected_image = state
@@ -989,8 +1025,38 @@ impl TrackTablePanel {
             }
             unapplied
         });
+        Refreshed {
+            stale,
+            unapplied,
+            reordered,
+        }
+    }
+
+    /// The panel body for the node `id`, which is loaded.
+    fn show_node(&mut self, ui: &mut egui::Ui, state: &AppState, id: ReconId) -> Asked {
+        let mut asked = Asked::default();
+        let Refreshed {
+            stale,
+            unapplied,
+            reordered,
+        } = self.refresh_rows(state, id);
+        let reordered = reordered || std::mem::take(&mut self.scroll_to_top);
+        let node = state.node(id).expect("the selected node is loaded");
+        let edited = node.edited();
+        let selected_image = state
+            .selected_image
+            .and_then(|image| image.index_in(id))
+            .map(|index| index as u32);
+        // Out of date, the table on show is the one the row list was computed
+        // from, which the cache still holds (`refresh_rows`).
+        let table = if stale {
+            state.track_tables.latest(id).map(|(_, table)| table)
+        } else {
+            state.track_table(id)
+        };
 
         self.show_header(ui, node, table, stale, selected_image);
+        self.show_filter_line(ui, node);
         if let Some(unapplied) = &unapplied {
             show_unapplied(ui, node, unapplied);
         }

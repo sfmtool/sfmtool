@@ -2547,6 +2547,7 @@ fn mask_word_ranks_deleted_then_painted_then_under_the_brush_then_highlighted() 
         highlighted: &all,
         under_brush: &from_1,
         painted: &from_2,
+        ..super::PointMarks::none()
     };
     let words: Vec<u32> = (0..4).map(|i| mask_word(i, &only_0, marks)).collect();
     // 0 is deleted; 1 is under the brush and highlighted; 2 and 3 are painted.
@@ -2580,6 +2581,195 @@ fn mask_entries_are_written_as_contiguous_runs() {
     );
     assert_eq!(contiguous_runs(&[(0, 5)]), vec![(0, vec![5])]);
     assert!(contiguous_runs(&[]).is_empty());
+}
+
+// ── The Track Table's filter of the 3D view ─────────────────────────────
+//
+// The filter rides in the mask word as `MASK_REJECTED`, its mode in the
+// node's uniforms. See `specs/gui/point-cloud-rendering.md` § "Per-Point
+// Data" and `crate::filter_3d`.
+
+/// Marks that carry the kept set `kept`, dimming or hiding what it leaves
+/// out.
+fn filtered(kept: &Arc<crate::filter_3d::KeptPoints>, hides: bool) -> super::PointMarks<'_> {
+    super::PointMarks {
+        kept: Some(kept),
+        filter_hides: hides,
+        ..super::PointMarks::none()
+    }
+}
+
+/// Every live point outside the kept set takes the bit over its own word, a
+/// deleted one never does, and the set is written once: the same `Arc` again
+/// writes nothing, a switch to Hide writes nothing and changes the uniform,
+/// a new set rewrites every word, and dropping the filter clears every bit.
+#[test]
+fn the_filter_bit_marks_the_live_points_the_kept_set_leaves_out() {
+    use super::super::gpu_types::{FILTER_DIM, FILTER_HIDE};
+    use super::overlay::{MASK_ALIVE, MASK_DELETED, MASK_PAINTED, MASK_REJECTED};
+    use crate::filter_3d::KeptPoints;
+    use std::collections::HashSet;
+    let (device, queue) = device();
+    let recon = demo(8);
+    let mut r = SceneRenderer::new();
+    r.upload_points(&device, RECON, &recon, &SILENT);
+    let deleted: HashSet<u32> = [1].into_iter().collect();
+    let painted: HashSet<u32> = [3].into_iter().collect();
+    let words = |r: &SceneRenderer| -> Vec<u32> {
+        (0..8).map(|i| r.masked_word(RECON, i).unwrap()).collect()
+    };
+    let (a, d, x) = (MASK_ALIVE, MASK_DELETED, MASK_ALIVE | MASK_REJECTED);
+
+    let kept = Arc::new(KeptPoints::from_points(&[5, 0, 2]));
+    let marks = super::PointMarks {
+        painted: &painted,
+        ..filtered(&kept, false)
+    };
+    assert_eq!(r.update_point_mask(&queue, RECON, &deleted, marks), 8);
+    assert_eq!(
+        words(&r),
+        [a, d, a, MASK_PAINTED | MASK_REJECTED, x, a, x, x],
+        "a rejected point keeps the brush's word under the bit"
+    );
+    assert!(bundle(&r).draws_dimmed());
+    assert_eq!(
+        recon_uniforms(bundle(&r), 1.0, true).filter_mode,
+        FILTER_DIM
+    );
+    assert_eq!(
+        r.update_point_mask(&queue, RECON, &deleted, marks),
+        0,
+        "the same set again writes nothing"
+    );
+
+    let hides = super::PointMarks {
+        painted: &painted,
+        ..filtered(&kept, true)
+    };
+    assert_eq!(
+        r.update_point_mask(&queue, RECON, &deleted, hides),
+        0,
+        "dim or hide is a uniform, not a word"
+    );
+    assert!(!bundle(&r).draws_dimmed());
+    assert_eq!(
+        recon_uniforms(bundle(&r), 1.0, true).filter_mode,
+        FILTER_HIDE
+    );
+
+    let other = Arc::new(KeptPoints::from_points(&[5, 0, 2]));
+    assert_eq!(
+        r.update_point_mask(&queue, RECON, &deleted, filtered(&other, true)),
+        8,
+        "a set built again is written again, though its bits are the same"
+    );
+
+    assert_eq!(
+        r.update_point_mask(&queue, RECON, &deleted, super::PointMarks::none()),
+        8
+    );
+    assert_eq!(words(&r), [a, d, a, a, a, a, a, a]);
+    assert!(bundle(&r).masked_kept.is_none());
+    assert!(!bundle(&r).draws_dimmed());
+}
+
+/// The filter is on the node the Track Table shows; another node's mask and
+/// uniforms are left as they were.
+#[test]
+fn the_filter_leaves_other_nodes_alone() {
+    use super::overlay::{MASK_ALIVE, MASK_REJECTED};
+    use crate::filter_3d::KeptPoints;
+    use std::collections::HashSet;
+    let (device, queue) = device();
+    let mut r = SceneRenderer::new();
+    upload_node(&mut r, &device, RECON, 6);
+    upload_node(&mut r, &device, OTHER, 6);
+    let empty = HashSet::new();
+    let kept = Arc::new(KeptPoints::from_points(&[0]));
+    r.update_point_mask(&queue, RECON, &empty, filtered(&kept, false));
+    assert_eq!(
+        r.update_point_mask(&queue, OTHER, &empty, super::PointMarks::none()),
+        0
+    );
+    assert_eq!(r.masked_word(RECON, 1), Some(MASK_ALIVE | MASK_REJECTED));
+    for i in 0..6 {
+        assert_eq!(r.masked_word(OTHER, i), Some(MASK_ALIVE));
+    }
+    assert!(bundle_of(&r, RECON).draws_dimmed());
+    assert!(!bundle_of(&r, OTHER).draws_dimmed());
+}
+
+/// A point at infinity takes the bit as a finite point does: it is drawn from
+/// the same instance buffer by the same vertex shader, which reads the bit
+/// before it branches on the kind.
+#[test]
+fn the_filter_bit_marks_a_point_at_infinity() {
+    use super::overlay::{MASK_ALIVE, MASK_REJECTED};
+    use crate::filter_3d::KeptPoints;
+    let (device, queue) = device();
+    let mut recon = demo(4);
+    let point = &mut recon.point_set.points[2];
+    point.position = nalgebra::Point3::from(point.position.coords.normalize());
+    point.w = 0.0;
+    let mut r = SceneRenderer::new();
+    r.upload_points(&device, RECON, &recon, &SILENT);
+    let empty = std::collections::HashSet::new();
+    let kept = Arc::new(KeptPoints::from_points(&[0, 1, 3]));
+    r.update_point_mask(&queue, RECON, &empty, filtered(&kept, true));
+    assert_eq!(r.masked_word(RECON, 2), Some(MASK_ALIVE | MASK_REJECTED));
+    let kept = Arc::new(KeptPoints::from_points(&[2]));
+    r.update_point_mask(&queue, RECON, &empty, filtered(&kept, true));
+    assert_eq!(r.masked_word(RECON, 2), Some(MASK_ALIVE));
+    assert_eq!(r.masked_word(RECON, 0), Some(MASK_ALIVE | MASK_REJECTED));
+}
+
+/// A new base starts its words afresh, so the filter still on is written over
+/// every point by the next mask update; and the overlay's additions start
+/// with the bit where the kept set leaves them out.
+#[test]
+fn a_new_base_and_new_additions_take_the_filter_bit() {
+    use super::overlay::{MASK_ALIVE, MASK_REJECTED};
+    use crate::filter_3d::KeptPoints;
+    let (device, queue) = device();
+    let mut r = SceneRenderer::new();
+    let base = Arc::new(with_patches(demo(10), 8, &[true; 10], None, None));
+    let loaded = sfmtool_core::EditedReconstruction::new(Arc::clone(&base));
+    sync(&mut r, &device, &queue, RECON, &loaded);
+    let kept = Arc::new(KeptPoints::from_points(&[0, 1, 2, 3, 4]));
+    let empty = std::collections::HashSet::new();
+    assert_eq!(
+        r.update_point_mask(&queue, RECON, &empty, filtered(&kept, false)),
+        10
+    );
+
+    // Point 3 replaced: the addition, index 10, is not in the kept set, and
+    // its fresh buffer starts with the bit rather than waiting for a write.
+    let mut edited = loaded.clone();
+    let record = moved_record(&edited, 3);
+    assert_eq!(edited.replace_point(3, record).expect("a live point"), 10);
+    r.upload_additions(&device, &queue, RECON, &edited);
+    assert_eq!(r.masked_word(RECON, 10), Some(MASK_ALIVE | MASK_REJECTED));
+    let kept_with_addition = Arc::new(KeptPoints::from_points(&[0, 1, 2, 4, 10]));
+    assert_eq!(
+        r.update_point_mask(
+            &queue,
+            RECON,
+            &edited.deleted_points,
+            filtered(&kept_with_addition, false)
+        ),
+        11,
+        "every base row and the addition's"
+    );
+    assert_eq!(r.masked_word(RECON, 10), Some(MASK_ALIVE));
+
+    // A new base clears the record of what was written.
+    let fresh = demo(10);
+    r.upload_points(&device, RECON, &fresh, &SILENT);
+    assert!(bundle(&r).masked_kept.is_none());
+    assert_eq!(
+        r.update_point_mask(&queue, RECON, &empty, filtered(&kept, false)),
+        10
+    );
 }
 
 // ── detail stages ─────────────────────────────────────────────

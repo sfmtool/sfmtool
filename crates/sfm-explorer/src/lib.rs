@@ -32,6 +32,7 @@ mod dock;
 mod document;
 mod edit_history_panel;
 mod elide;
+mod filter_3d;
 mod goto_point;
 mod image_browser;
 mod image_detail;

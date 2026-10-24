@@ -118,6 +118,7 @@ fn run_bench_frame(
                 node,
                 &state.scene,
                 state.solo,
+                None,
                 state.selected_image,
                 state.show_grid,
                 state.length_scale,

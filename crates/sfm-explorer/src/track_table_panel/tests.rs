@@ -23,6 +23,7 @@ use crate::test_support::{painted_text_rects, painted_texts, run_frame_headless}
 
 mod computed;
 mod crop;
+mod filter_3d;
 mod pictures;
 mod quality;
 

@@ -54,6 +54,7 @@ fn top_text(width: f32, status: Option<&str>) -> Vec<PaintedText> {
             rect,
             &[],
             None,
+            None,
             false,
             true,
             status,

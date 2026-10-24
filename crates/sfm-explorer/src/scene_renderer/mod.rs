@@ -90,6 +90,9 @@ pub struct SceneRenderer {
     /// preview is on, which reads its preview buffer.
     point_preview_pipeline: Option<wgpu::RenderPipeline>,
     quad_vertex_buffer: Option<wgpu::Buffer>,
+    /// The point and patch passes' quad, twice over, with the draw each
+    /// corner is of (`gpu_types::SPLAT_CORNERS`).
+    splat_corner_buffer: Option<wgpu::Buffer>,
     point_uniform_buffer: Option<wgpu::Buffer>,
     point_bind_group_layout: Option<wgpu::BindGroupLayout>,
 
@@ -217,6 +220,7 @@ impl SceneRenderer {
             point_pipeline: None,
             point_preview_pipeline: None,
             quad_vertex_buffer: None,
+            splat_corner_buffer: None,
             point_uniform_buffer: None,
             point_bind_group_layout: None,
             edl_pipeline: None,
@@ -527,6 +531,7 @@ impl SceneRenderer {
         self.point_pipeline = Some(pt.pipeline);
         self.point_preview_pipeline = Some(pt.preview_pipeline);
         self.quad_vertex_buffer = Some(pt.quad_vertex_buffer);
+        self.splat_corner_buffer = Some(pt.splat_corner_buffer);
         self.point_uniform_buffer = Some(pt.uniform_buffer);
         self.point_bind_group_layout = Some(pt.bind_group_layout);
 

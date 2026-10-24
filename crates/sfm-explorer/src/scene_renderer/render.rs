@@ -1,8 +1,139 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
+use std::ops::Range;
+
 use super::recon::ReconResources;
 use super::SceneRenderer;
+
+/// The vertices of the first draw of the point and patch passes, of the
+/// splat corner buffer (`gpu_types::SPLAT_CORNERS`): the unit quad's four
+/// corners, for every point the Track Table's filter keeps and every point of
+/// a node it is not on.
+pub(super) const FIRST_DRAW: Range<u32> = 0..4;
+/// The vertices of the dimmed draw: the same four corners again, marked as
+/// the dimmed draw's, for the points the filter dims and nothing else.
+pub(super) const DIMMED_DRAW: Range<u32> = 4..8;
+
+impl SceneRenderer {
+    /// Draw every drawn node's point splats as the draw of `vertices`: the
+    /// first draw of every node, or, with `dimmed_only`, the dimmed draw of
+    /// the nodes the Track Table's filter dims.
+    fn draw_points<'p>(
+        &self,
+        pass: &mut wgpu::RenderPass<'p>,
+        vertices: Range<u32>,
+        dimmed_only: bool,
+    ) {
+        if let (Some(pipeline), Some(preview_pipeline), Some(corners)) = (
+            &self.point_pipeline,
+            &self.point_preview_pipeline,
+            &self.splat_corner_buffer,
+        ) {
+            pass.set_vertex_buffer(0, corners.slice(..));
+            for bundle in self
+                .drawn(|b| b.display.show_points)
+                .filter(|b| !dimmed_only || b.draws_dimmed())
+            {
+                // The node a camera model proposal's preview is on is
+                // drawn through the variant that reads its preview
+                // buffer in slot 3; every other node as before.
+                let preview = bundle.preview.as_ref();
+                pass.set_pipeline(if preview.is_some() {
+                    preview_pipeline
+                } else {
+                    pipeline
+                });
+                if let (Some(instance_buf), Some(alive_buf)) =
+                    (&bundle.point_instance_buffer, &bundle.point_alive_buffer)
+                {
+                    if bundle.point_count > 0 {
+                        pass.set_bind_group(0, &bundle.point_bind_group, &[]);
+                        pass.set_vertex_buffer(1, instance_buf.slice(..));
+                        pass.set_vertex_buffer(2, alive_buf.slice(..));
+                        if let Some(preview) = preview {
+                            pass.set_vertex_buffer(3, preview.points.slice(..));
+                        }
+                        pass.draw(vertices.clone(), 0..bundle.point_count);
+                    }
+                }
+                // The overlay's additions, after the base's and with
+                // the same global uniforms; their own bind group
+                // carries only the shifted pick base.
+                if let Some(additions) = &bundle.additions {
+                    if additions.point_count > 0 {
+                        pass.set_bind_group(0, &additions.bind_group, &[]);
+                        pass.set_vertex_buffer(1, additions.point_instance_buffer.slice(..));
+                        pass.set_vertex_buffer(2, additions.point_alive_buffer.slice(..));
+                        if let Some(preview) = preview {
+                            let Some(rows) = preview.additions.as_ref() else {
+                                continue;
+                            };
+                            pass.set_vertex_buffer(3, rows.slice(..));
+                        }
+                        pass.draw(vertices.clone(), 0..additions.point_count);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Draw every drawn node's patch surfels as the draw of `vertices`, by
+    /// the rule of [`Self::draw_points`].
+    fn draw_patches<'p>(
+        &self,
+        pass: &mut wgpu::RenderPass<'p>,
+        vertices: Range<u32>,
+        dimmed_only: bool,
+    ) {
+        if let (Some(pipeline), Some(preview_pipeline), Some(corners)) = (
+            &self.patch_pipeline,
+            &self.patch_preview_pipeline,
+            &self.splat_corner_buffer,
+        ) {
+            pass.set_vertex_buffer(0, corners.slice(..));
+            for bundle in self
+                .drawn(|b| b.display.show_patches)
+                .filter(|b| !dimmed_only || b.draws_dimmed())
+            {
+                // The base's atlas, then the additions' own: two draws
+                // in one pass, and nothing in the shader tells them
+                // apart. Each atlas draws from its own uniform block,
+                // and under a camera model proposal's preview reads its
+                // own surfel preview buffer through the variant
+                // pipeline.
+                let preview = bundle.preview.as_ref();
+                let atlases = [
+                    (bundle.patch.as_ref(), preview.map(|p| p.patches.as_ref())),
+                    (
+                        bundle.additions.as_ref().and_then(|a| a.patch.as_ref()),
+                        preview.map(|p| p.addition_patches.as_ref()),
+                    ),
+                ];
+                for (patch, rows) in atlases {
+                    let Some(patch) = patch.filter(|patch| patch.count > 0) else {
+                        continue;
+                    };
+                    match rows {
+                        None => pass.set_pipeline(pipeline),
+                        Some(Some(rows)) => {
+                            pass.set_pipeline(preview_pipeline);
+                            pass.set_vertex_buffer(3, rows.slice(..));
+                        }
+                        // Unreachable while the rows are built from
+                        // the same bundle; drawn as nothing rather
+                        // than read past a buffer.
+                        Some(None) => continue,
+                    }
+                    pass.set_bind_group(0, &patch.bind_group, &[]);
+                    pass.set_vertex_buffer(1, patch.instance_buffer.slice(..));
+                    pass.set_vertex_buffer(2, patch.alive_buffer.slice(..));
+                    pass.draw(vertices.clone(), 0..patch.count);
+                }
+            }
+        }
+    }
+}
 
 impl SceneRenderer {
     /// Render the target indicator onto the EDL output texture.
@@ -244,57 +375,7 @@ impl SceneRenderer {
             let bundles = |layer: fn(&ReconResources) -> bool| self.drawn(layer);
 
             if show_points {
-                if let (Some(pipeline), Some(preview_pipeline), Some(quad_vb)) = (
-                    &self.point_pipeline,
-                    &self.point_preview_pipeline,
-                    &self.quad_vertex_buffer,
-                ) {
-                    pass.set_vertex_buffer(0, quad_vb.slice(..));
-                    for bundle in bundles(|b| b.display.show_points) {
-                        // The node a camera model proposal's preview is on is
-                        // drawn through the variant that reads its preview
-                        // buffer in slot 3; every other node as before.
-                        let preview = bundle.preview.as_ref();
-                        pass.set_pipeline(if preview.is_some() {
-                            preview_pipeline
-                        } else {
-                            pipeline
-                        });
-                        if let (Some(instance_buf), Some(alive_buf)) =
-                            (&bundle.point_instance_buffer, &bundle.point_alive_buffer)
-                        {
-                            if bundle.point_count > 0 {
-                                pass.set_bind_group(0, &bundle.point_bind_group, &[]);
-                                pass.set_vertex_buffer(1, instance_buf.slice(..));
-                                pass.set_vertex_buffer(2, alive_buf.slice(..));
-                                if let Some(preview) = preview {
-                                    pass.set_vertex_buffer(3, preview.points.slice(..));
-                                }
-                                pass.draw(0..4, 0..bundle.point_count);
-                            }
-                        }
-                        // The overlay's additions, after the base's and with
-                        // the same global uniforms; their own bind group
-                        // carries only the shifted pick base.
-                        if let Some(additions) = &bundle.additions {
-                            if additions.point_count > 0 {
-                                pass.set_bind_group(0, &additions.bind_group, &[]);
-                                pass.set_vertex_buffer(
-                                    1,
-                                    additions.point_instance_buffer.slice(..),
-                                );
-                                pass.set_vertex_buffer(2, additions.point_alive_buffer.slice(..));
-                                if let Some(preview) = preview {
-                                    let Some(rows) = preview.additions.as_ref() else {
-                                        continue;
-                                    };
-                                    pass.set_vertex_buffer(3, rows.slice(..));
-                                }
-                                pass.draw(0..4, 0..additions.point_count);
-                            }
-                        }
-                    }
-                }
+                self.draw_points(&mut pass, FIRST_DRAW, false);
             }
 
             // ── Pass 1b: Frustum wireframes ──
@@ -367,49 +448,21 @@ impl SceneRenderer {
             // PICK_TAG_POINT | point pick index so clicks select the patch's
             // point.
             if show_patches {
-                if let (Some(pipeline), Some(preview_pipeline), Some(quad_vb)) = (
-                    &self.patch_pipeline,
-                    &self.patch_preview_pipeline,
-                    &self.quad_vertex_buffer,
-                ) {
-                    pass.set_vertex_buffer(0, quad_vb.slice(..));
-                    for bundle in bundles(|b| b.display.show_patches) {
-                        // The base's atlas, then the additions' own: two draws
-                        // in one pass, and nothing in the shader tells them
-                        // apart. Each atlas draws from its own uniform block,
-                        // and under a camera model proposal's preview reads its
-                        // own surfel preview buffer through the variant
-                        // pipeline.
-                        let preview = bundle.preview.as_ref();
-                        let atlases = [
-                            (bundle.patch.as_ref(), preview.map(|p| p.patches.as_ref())),
-                            (
-                                bundle.additions.as_ref().and_then(|a| a.patch.as_ref()),
-                                preview.map(|p| p.addition_patches.as_ref()),
-                            ),
-                        ];
-                        for (patch, rows) in atlases {
-                            let Some(patch) = patch.filter(|patch| patch.count > 0) else {
-                                continue;
-                            };
-                            match rows {
-                                None => pass.set_pipeline(pipeline),
-                                Some(Some(rows)) => {
-                                    pass.set_pipeline(preview_pipeline);
-                                    pass.set_vertex_buffer(3, rows.slice(..));
-                                }
-                                // Unreachable while the rows are built from
-                                // the same bundle; drawn as nothing rather
-                                // than read past a buffer.
-                                Some(None) => continue,
-                            }
-                            pass.set_bind_group(0, &patch.bind_group, &[]);
-                            pass.set_vertex_buffer(1, patch.instance_buffer.slice(..));
-                            pass.set_vertex_buffer(2, patch.alive_buffer.slice(..));
-                            pass.draw(0..4, 0..patch.count);
-                        }
-                    }
-                }
+                self.draw_patches(&mut pass, FIRST_DRAW, false);
+            }
+
+            // ── Pass 1e: The Track Table filter's dimmed draw ──
+            // The points and surfels the filter dims, at its dim alpha, after
+            // every node's first draw, so a point the filter keeps is never
+            // hidden behind a dimmed one drawn before it: a kept point behind
+            // a dimmed one shows through it, and a dimmed one behind a kept
+            // one fails the depth test. Both draws write depth and pick ids,
+            // so a dimmed point is still picked where it is in front.
+            if show_points {
+                self.draw_points(&mut pass, DIMMED_DRAW, true);
+            }
+            if show_patches {
+                self.draw_patches(&mut pass, DIMMED_DRAW, true);
             }
         }
 

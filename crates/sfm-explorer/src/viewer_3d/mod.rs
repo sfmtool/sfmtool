@@ -690,6 +690,8 @@ impl Viewer3D {
         // The soloed node, if any — the stats line counts what is drawn, and
         // a solo is half of what decides that.
         solo: Option<ReconId>,
+        // What the Track Table asks of the 3D view, which the stats line counts.
+        filter_3d: Option<&crate::filter_3d::Filter3d>,
         // The image selection, which `Z` looks through and the overlays draw.
         // Read-only: nothing the viewport draws moves it, and the keys that do
         // move it go through `AppState::select_image` at the app level.
@@ -929,6 +931,7 @@ impl Viewer3D {
             rect,
             scene,
             solo,
+            filter_3d,
             show_controls_help,
             show_fps,
             status_message,

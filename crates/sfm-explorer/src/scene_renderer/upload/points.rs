@@ -111,6 +111,9 @@ impl SceneRenderer {
         bundle.masked_highlighted.clear();
         bundle.masked_painted.clear();
         bundle.masked_under_brush.clear();
+        // A fresh mask holds no filter bit either, so a filter still on is
+        // written over every point by the next mask update.
+        bundle.masked_kept = None;
         bundle.point_count = instances.len() as u32;
         // An addition's index is relative to the base's point count and its
         // instances hold edited indexes, so a new base invalidates both. The

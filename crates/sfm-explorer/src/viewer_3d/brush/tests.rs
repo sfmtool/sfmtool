@@ -124,6 +124,7 @@ impl Rig {
                     node,
                     &state.scene,
                     state.solo,
+                    None,
                     state.selected_image,
                     false,
                     state.length_scale,

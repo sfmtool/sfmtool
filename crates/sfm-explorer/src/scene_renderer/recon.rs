@@ -23,6 +23,7 @@ use ndarray::Array4;
 use sfmtool_core::{Se3Transform, SfmrReconstruction};
 
 use super::gpu_types::FALLBACK_POINT_SIZE;
+use crate::filter_3d::KeptPoints;
 use crate::scene::NodeTint;
 
 /// The patch (surfel) half of a bundle: present only when the reconstruction
@@ -225,6 +226,16 @@ pub(super) struct ReconResources {
     /// Which indexes the mask currently marks as under the eraser brush's
     /// circle. Diffed the same way.
     pub masked_under_brush: HashSet<u32>,
+    /// The Track Table's kept set the mask's filter bit was last written
+    /// from, or `None` while no filter is on this node. Compared by pointer:
+    /// the panel builds a new set only when its matched rows change, so the
+    /// same `Arc` means the same bits, and a different one is a rewrite of
+    /// every word.
+    pub masked_kept: Option<Arc<KeptPoints>>,
+    /// Whether the filter on this node hides the points it rejects rather
+    /// than dims them, mirrored into `ReconUniforms::filter_mode`. Read only
+    /// while `masked_kept` is set.
+    pub filter_hides: bool,
 
     // ── points ──
     pub point_instance_buffer: Option<wgpu::Buffer>,
@@ -344,6 +355,8 @@ impl ReconResources {
             masked_highlighted: HashSet::new(),
             masked_painted: HashSet::new(),
             masked_under_brush: HashSet::new(),
+            masked_kept: None,
+            filter_hides: false,
             point_instance_buffer: None,
             point_alive_buffer: None,
             point_count: 0,
@@ -390,7 +403,15 @@ impl ReconResources {
             highlighted: &self.masked_highlighted,
             painted: &self.masked_painted,
             under_brush: &self.masked_under_brush,
+            kept: self.masked_kept.as_ref(),
+            filter_hides: self.filter_hides,
         }
+    }
+
+    /// Whether this node's points and surfels take the second, dimmed draw:
+    /// a filter is on it and dims what it rejects.
+    pub(super) fn draws_dimmed(&self) -> bool {
+        self.masked_kept.is_some() && !self.filter_hides
     }
 
     /// Every surfel atlas this bundle holds, in draw order: the base's, then

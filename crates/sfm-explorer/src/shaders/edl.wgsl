@@ -163,7 +163,10 @@ fn fs_edl(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     let supernova = supernova_lighting(in.uv, center_depth);
 
     // Supernova brightens all point pixels near the target, blowing out to white.
+    // The colour is already premultiplied by Pass 1's blend, so only the glow
+    // takes the alpha: a point the Track Table's filter dims, the one splat
+    // drawn with an alpha below 1, keeps its DIM_ALPHA rather than its square.
     let shaded_rgb = color.rgb * shade_factor;
-    let lit_rgb = shaded_rgb + vec3<f32>(supernova);
-    return vec4<f32>(lit_rgb * alpha, alpha);
+    let lit_rgb = shaded_rgb + vec3<f32>(supernova) * alpha;
+    return vec4<f32>(lit_rgb, alpha);
 }

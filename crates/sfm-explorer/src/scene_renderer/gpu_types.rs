@@ -55,8 +55,21 @@ pub(super) struct ReconUniforms {
     /// stored positions, 1 the targets. Read only by the preview variants of
     /// the point and patch pipelines, so 0 on every other node.
     pub preview_s: f32,
-    pub _pad: [f32; 2],
+    /// How a point whose mask word carries `MASK_REJECTED` is drawn:
+    /// `FILTER_DIM` or `FILTER_HIDE` (`shaders/common.wgsl`). Only read where a
+    /// word carries the bit, which is only on the node the Track Table filters.
+    pub filter_mode: u32,
+    pub _pad: f32,
 }
+
+/// [`ReconUniforms::filter_mode`] for a node whose rejected points are dimmed:
+/// drawn at the filter's dim alpha by a second draw after the kept ones.
+/// Matches `FILTER_DIM` in `shaders/common.wgsl`.
+pub(super) const FILTER_DIM: u32 = 0;
+/// [`ReconUniforms::filter_mode`] for a node whose rejected points are hidden:
+/// a clipped vertex, so they draw nothing and answer no pick. Matches
+/// `FILTER_HIDE` in `shaders/common.wgsl`.
+pub(super) const FILTER_HIDE: u32 = 1;
 
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
@@ -212,7 +225,11 @@ pub(super) struct PatchUniforms {
     pub patch_opacity: f32,
     /// Coverage discard threshold on the bitmap alpha (per-pixel confidence).
     pub alpha_cutoff: f32,
-    pub _pad0: [f32; 2],
+    /// The selected and hovered points' global pick indexes, as in
+    /// `PointUniforms`: a surfel of either is drawn whatever the Track Table's
+    /// filter says of its point.
+    pub selected_point_index: u32,
+    pub hovered_point_index: u32,
     /// Camera world position, for front-face culling of patch surfels.
     pub camera_pos: [f32; 3],
     pub _pad1: f32,
@@ -487,6 +504,64 @@ pub(super) const fn gbuffer_targets(
 /// image quads, patches, the target indicator and track rays all expand their
 /// instances from. One buffer, so one layout — the stride is
 /// [`QuadVertex`]'s and the pipelines do not get a say in it.
+/// One corner of the quad the point and patch pipelines expand each instance
+/// into, with the draw it belongs to: `0` for the first draw, `1` for the
+/// Track Table filter's dimmed draw (`render::DIMMED_DRAW`).
+///
+/// The draw is vertex data rather than read off `vertex_index`, because a
+/// backend need not add the draw's first vertex to `vertex_index` (DX12's
+/// `SV_VertexID` does not), while every backend fetches vertex data from it.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub(super) struct SplatCorner {
+    pub position: [f32; 2],
+    pub dimmed: u32,
+}
+
+/// The splat corner buffer's contents: the unit quad's four corners as a
+/// triangle strip for the first draw, then the same four for the dimmed draw.
+pub(super) const SPLAT_CORNERS: [SplatCorner; 8] = {
+    const CORNERS: [[f32; 2]; 4] = [[-1.0, -1.0], [1.0, -1.0], [-1.0, 1.0], [1.0, 1.0]];
+    let mut corners = [SplatCorner {
+        position: [0.0; 2],
+        dimmed: 0,
+    }; 8];
+    let mut i = 0;
+    while i < 8 {
+        corners[i] = SplatCorner {
+            position: CORNERS[i % 4],
+            dimmed: (i / 4) as u32,
+        };
+        i += 1;
+    }
+    corners
+};
+
+/// The shader location of [`SplatCorner::dimmed`] in `points.wgsl` and
+/// `patch.wgsl`, the last one a pipeline may use, clear of both shaders'
+/// instance attributes.
+pub(super) const DIMMED_DRAW_LOCATION: u32 = 15;
+
+/// The vertex layout of [`SplatCorner`], slot 0 of the point and patch
+/// pipelines.
+pub(super) const SPLAT_CORNER_LAYOUT: wgpu::VertexBufferLayout<'static> =
+    wgpu::VertexBufferLayout {
+        array_stride: size_of::<SplatCorner>() as u64,
+        step_mode: wgpu::VertexStepMode::Vertex,
+        attributes: &[
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x2,
+                offset: 0,
+                shader_location: 0,
+            },
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Uint32,
+                offset: 8,
+                shader_location: DIMMED_DRAW_LOCATION,
+            },
+        ],
+    };
+
 pub(super) const QUAD_VERTEX_LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
     array_stride: size_of::<QuadVertex>() as u64,
     step_mode: wgpu::VertexStepMode::Vertex,

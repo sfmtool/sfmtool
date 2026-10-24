@@ -43,8 +43,12 @@ struct VertexInput {
     // calling it out, 3 = it is in the reconstruction and the eraser brush has
     // painted it, 4 = it is in the reconstruction and under the eraser brush's
     // circle. Its own buffer, written where an edit or a mark moved and
-    // nowhere else, so neither rewrites the instance buffer.
+    // nowhere else, so neither rewrites the instance buffer. A live point the
+    // Track Table's filter rejects carries MASK_REJECTED over its word.
     @location(3) alive: u32,
+    // 1 for a corner of the Track Table filter's dimmed draw, 0 for the first
+    // draw's (common.wgsl).
+    @location(15) dimmed_draw: u32,
 }
 
 struct VertexOutput {
@@ -58,22 +62,36 @@ struct VertexOutput {
     // fragment shader): which of the viewport's colours, if any, replaces the
     // point's own.
     @location(4) @interpolate(flat) mark: u32,
+    // 1, or DIM_ALPHA for a point the Track Table's filter dims.
+    @location(5) @interpolate(flat) alpha: f32,
 }
 
 fn place(in: VertexInput) -> VertexOutput {
     var out: VertexOutput;
     out.uv = in.quad_pos;
-    out.mark = in.alive;
+    let word = in.alive & MASK_WORD;
+    out.mark = word;
+    out.alpha = 1.0;
 
     // A deleted point emits a clipped vertex, so it draws nothing, occludes
     // nothing and answers no pick — the same treatment a hidden point at
-    // infinity gets below.
-    if in.alive == MASK_DELETED {
+    // infinity gets below. So does a point that is not this draw's: a point
+    // the Track Table's filter rejects is drawn only by the dimmed draw, and
+    // by neither while it hides them, unless it is the selected or hovered
+    // point. That covers a point at infinity too, which takes the same word.
+    let global = recon.point_pick_base + in.instance_index;
+    let highlighted = global == uniforms.selected_point_index
+        || global == uniforms.hovered_point_index;
+    if word == MASK_DELETED
+        || !in_this_draw(in.alive, in.dimmed_draw != 0u, highlighted, recon.filter_mode) {
         out.clip_pos = vec4<f32>(0.0, 0.0, -1.0, 1.0);
         out.view_depth = 0.0;
         out.color = vec3<f32>(0.0);
-        out.point3d_index = recon.point_pick_base + in.instance_index;
+        out.point3d_index = global;
         return out;
+    }
+    if in.dimmed_draw != 0u {
+        out.alpha = DIM_ALPHA;
     }
 
     // Unpack color from u32 (R in low byte, then G, B), then tint. The
@@ -211,7 +229,9 @@ fn fs_main(in: VertexOutput) -> FragOutput {
     } else if in.point3d_index == uniforms.hovered_point_index || in.mark == MASK_HIGHLIGHTED {
         color = vec3<f32>(0.0, 1.0, 1.0);
     }
-    out.color = vec4<f32>(color, 1.0);
+    // Premultiplied, like the pipeline's blend: a dimmed point lets
+    // 1 - DIM_ALPHA of what is behind it through.
+    out.color = vec4<f32>(color * in.alpha, in.alpha);
     out.depth = in.view_depth;
     // A non-interactive node reads as background rather than passing the pick
     // through to whatever it occludes.

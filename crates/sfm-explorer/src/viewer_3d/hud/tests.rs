@@ -209,6 +209,7 @@ fn draw(ui: &mut egui::Ui, viewer: &mut Viewer3D, state: &mut AppState, grab_key
             node,
             &state.scene,
             state.solo,
+            None,
             state.selected_image,
             state.show_grid,
             state.length_scale,

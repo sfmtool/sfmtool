@@ -20,6 +20,8 @@ pub(in crate::scene_renderer) struct PointPipelineResources {
     /// buffer, blended toward each point's target by the node's `preview_s`.
     pub preview_pipeline: wgpu::RenderPipeline,
     pub quad_vertex_buffer: wgpu::Buffer,
+    /// The point and patch pipelines' slot 0: [`SPLAT_CORNERS`].
+    pub splat_corner_buffer: wgpu::Buffer,
     pub uniform_buffer: wgpu::Buffer,
     pub bind_group_layout: wgpu::BindGroupLayout,
 }
@@ -65,8 +67,8 @@ pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> PointPipelineR
     });
 
     let instance_layouts = [
-        // Slot 0: quad vertices (per-vertex)
-        Some(QUAD_VERTEX_LAYOUT),
+        // Slot 0: the splat corners (per-vertex), with the draw each is of
+        Some(SPLAT_CORNER_LAYOUT),
         // Slot 1: point instances (per-instance)
         Some(wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<PointInstance>() as u64,
@@ -168,6 +170,14 @@ pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> PointPipelineR
         usage: wgpu::BufferUsages::VERTEX,
     });
 
+    // The corners the point and patch passes draw, twice over: the first
+    // draw takes 0..4 and the Track Table filter's dimmed draw 4..8.
+    let splat_corner_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("splat corners"),
+        contents: bytemuck::cast_slice(&SPLAT_CORNERS),
+        usage: wgpu::BufferUsages::VERTEX,
+    });
+
     // Point uniform buffer
     let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("point uniforms"),
@@ -180,6 +190,7 @@ pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> PointPipelineR
         pipeline,
         preview_pipeline,
         quad_vertex_buffer,
+        splat_corner_buffer,
         uniform_buffer,
         bind_group_layout,
     }
