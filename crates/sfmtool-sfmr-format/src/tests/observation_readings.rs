@@ -292,8 +292,9 @@ fn the_tracks_hash_is_over_the_entries_in_sorted_name_order() {
     let mut archive = zip::ZipArchive::new(std::fs::File::open(&path).unwrap()).unwrap();
     let mut names: Vec<String> = archive
         .file_names()
+        .map(Result::unwrap)
         .filter(|n| n.starts_with("tracks/"))
-        .map(str::to_string)
+        .map(String::from)
         .collect();
     names.sort();
     assert_eq!(names.len(), 5 + 8, "{names:?}");

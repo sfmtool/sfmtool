@@ -19,7 +19,7 @@ sfmtool-progress = { path = "../sfmtool-progress" }
 sfmtool-sift-format = { path = "../sfmtool-sift-format" }
 thiserror = "2"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
-zip = { version = "8", default-features = false, features = ["deflate"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
 zstd = "0.14"
 
 [target.'cfg(windows)'.dependencies]

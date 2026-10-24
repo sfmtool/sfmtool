@@ -217,13 +217,12 @@ pub fn kdf_summary(path: &Path, max_metadata_bytes: usize) -> Result<KdfSummary,
     let mut json_entries: Vec<(usize, String)> = Vec::new();
     for i in 0..archive.len() {
         let entry = archive.by_index(i)?;
+        let name = entry.name()?.into_owned();
         if entry.is_dir() {
             return Err(KdfError::InvalidFormat(format!(
-                "directory ZIP entry is forbidden: {}",
-                entry.name()
+                "directory ZIP entry is forbidden: {name}"
             )));
         }
-        let name = entry.name().to_string();
         if name == "metadata.json.zst" {
             metadata_index = Some(i);
         }

@@ -120,7 +120,7 @@ fn read_stored(path: &Path) -> StoredEntries {
             let mut entry = archive.by_index(i).unwrap();
             let mut stored = Vec::new();
             entry.read_to_end(&mut stored).unwrap();
-            (entry.name().to_string(), stored)
+            (entry.name().unwrap().into_owned(), stored)
         })
         .collect()
 }

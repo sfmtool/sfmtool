@@ -376,7 +376,7 @@ fn test_archive_uses_stored_compression() {
             entry.compression(),
             zip::CompressionMethod::Stored,
             "entry '{}' uses {:?}, expected Stored",
-            entry.name(),
+            entry.name().unwrap(),
             entry.compression(),
         );
     }

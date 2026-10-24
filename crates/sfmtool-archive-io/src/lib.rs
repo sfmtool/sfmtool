@@ -268,7 +268,7 @@ impl DecodedEntries {
             if entry.is_dir() {
                 continue;
             }
-            let name = entry.name().to_string();
+            let name = entry.name()?.into_owned();
             // STORE method throughout, so the stored size is what we read.
             let mut compressed = Vec::with_capacity(entry.compressed_size() as usize);
             entry.read_to_end(&mut compressed)?;

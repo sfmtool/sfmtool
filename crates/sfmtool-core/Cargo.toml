@@ -80,7 +80,7 @@ approx = "0.5"
 criterion = { version = "0.8", features = ["html_reports"] }
 # Used by the .sfmr v4→v5 upgrade-on-load tests to author version-4 fixture
 # bytes (rewriting the archive's metadata.json.zst version field).
-zip = { version = "8", default-features = false, features = ["deflate"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
 zstd = "0.14"
 tempfile = "3"
 

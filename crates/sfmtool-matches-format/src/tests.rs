@@ -981,7 +981,10 @@ fn load_archive_entries(src: &std::path::Path) -> Vec<(String, Vec<u8>)> {
 
     let file = std::fs::File::open(src).unwrap();
     let mut archive = zip::ZipArchive::new(file).unwrap();
-    let names: Vec<String> = archive.file_names().map(String::from).collect();
+    let names: Vec<String> = archive
+        .file_names()
+        .map(|s| s.unwrap().into_owned())
+        .collect();
     let mut entries = Vec::new();
     for name in names {
         if name == "content_hash.json.zst" {
@@ -2143,7 +2146,7 @@ fn test_archive_uses_stored_compression() {
             entry.compression(),
             zip::CompressionMethod::Stored,
             "entry '{}' uses {:?}, expected Stored",
-            entry.name(),
+            entry.name().unwrap(),
             entry.compression(),
         );
     }
@@ -2164,7 +2167,7 @@ fn test_cluster_archive_uses_stored_compression() {
             entry.compression(),
             zip::CompressionMethod::Stored,
             "entry '{}' uses {:?}, expected Stored",
-            entry.name(),
+            entry.name().unwrap(),
             entry.compression(),
         );
     }
@@ -3156,7 +3159,7 @@ fn archive_entry_names_pin_call_sites() {
         let f = std::fs::File::open(&path).unwrap();
         let mut zip = zip::ZipArchive::new(f).unwrap();
         let mut got: Vec<String> = (0..zip.len())
-            .map(|i| zip.by_index(i).unwrap().name().to_string())
+            .map(|i| zip.by_index(i).unwrap().name().unwrap().into_owned())
             .collect();
         got.sort();
 

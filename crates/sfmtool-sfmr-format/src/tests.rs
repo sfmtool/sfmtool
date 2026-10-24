@@ -735,7 +735,10 @@ fn test_unsupported_future_version_rejected() {
     let dst = dir.join("future.sfmr");
     let archive_file = std::fs::File::open(&src).unwrap();
     let mut archive = zip::ZipArchive::new(archive_file).unwrap();
-    let names: Vec<String> = archive.file_names().map(|s| s.to_string()).collect();
+    let names: Vec<String> = archive
+        .file_names()
+        .map(|s| s.unwrap().into_owned())
+        .collect();
     let out = std::fs::File::create(&dst).unwrap();
     let mut zip = zip::ZipWriter::new(out);
     let stored =
@@ -791,6 +794,7 @@ fn pre_v10_images_digest(current: &std::path::Path) -> u128 {
     let mut archive = zip::ZipArchive::new(file).unwrap();
     let mut named: Vec<(String, String)> = archive
         .file_names()
+        .map(Result::unwrap)
         .filter_map(|name| {
             let then = match name.strip_prefix("derived/") {
                 Some(rest) => format!("images/{rest}"),
@@ -825,7 +829,10 @@ fn rewrite_v2_as_v1(v2_path: &std::path::Path, v1_path: &std::path::Path) {
 
     let v2 = std::fs::File::open(v2_path).unwrap();
     let mut archive = zip::ZipArchive::new(v2).unwrap();
-    let names: Vec<String> = archive.file_names().map(|s| s.to_string()).collect();
+    let names: Vec<String> = archive
+        .file_names()
+        .map(|s| s.unwrap().into_owned())
+        .collect();
 
     let out = std::fs::File::create(v1_path).unwrap();
     let mut zip = zip::ZipWriter::new(out);
@@ -1286,7 +1293,10 @@ fn rewrite_without_meta_key(
 
     let file = std::fs::File::open(src).unwrap();
     let mut archive = zip::ZipArchive::new(file).unwrap();
-    let names: Vec<String> = archive.file_names().map(|s| s.to_string()).collect();
+    let names: Vec<String> = archive
+        .file_names()
+        .map(|s| s.unwrap().into_owned())
+        .collect();
 
     let out = std::fs::File::create(dst).unwrap();
     let mut zip = zip::ZipWriter::new(out);
@@ -1343,7 +1353,10 @@ fn rewrite_entries(
 
     let file = std::fs::File::open(src).unwrap();
     let mut archive = zip::ZipArchive::new(file).unwrap();
-    let names: Vec<String> = archive.file_names().map(|s| s.to_string()).collect();
+    let names: Vec<String> = archive
+        .file_names()
+        .map(|s| s.unwrap().into_owned())
+        .collect();
 
     let out = std::fs::File::create(dst).unwrap();
     let mut zip = zip::ZipWriter::new(out);
@@ -2407,7 +2420,10 @@ fn write_version_11_with_patch_frames(path: &std::path::Path, dir: &std::path::P
     write_sfmr(&current, &mut make_framed_test_data(vec![1, 2, 0, -1, 0])).unwrap();
     let file = std::fs::File::open(&current).unwrap();
     let mut archive = zip::ZipArchive::new(file).unwrap();
-    let names: Vec<String> = archive.file_names().map(|s| s.to_string()).collect();
+    let names: Vec<String> = archive
+        .file_names()
+        .map(|s| s.unwrap().into_owned())
+        .collect();
     let out = std::fs::File::create(path).unwrap();
     let mut zip = zip::ZipWriter::new(out);
     let stored =
@@ -2689,7 +2705,10 @@ fn test_frames_without_rigs_rejected() {
     // Copy the archive without its `rigs/` entries.
     let stripped = dir.join("frames_only.sfmr");
     let mut archive = zip::ZipArchive::new(std::fs::File::open(&path).unwrap()).unwrap();
-    let names: Vec<String> = archive.file_names().map(|s| s.to_string()).collect();
+    let names: Vec<String> = archive
+        .file_names()
+        .map(|s| s.unwrap().into_owned())
+        .collect();
     let mut zip = zip::ZipWriter::new(std::fs::File::create(&stripped).unwrap());
     let stored =
         zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
@@ -2747,7 +2766,7 @@ fn test_archive_uses_stored_compression() {
             entry.compression(),
             zip::CompressionMethod::Stored,
             "entry '{}' uses {:?}, expected Stored",
-            entry.name(),
+            entry.name().unwrap(),
             entry.compression(),
         );
     }
@@ -3394,7 +3413,7 @@ fn archive_entry_names_pin_call_sites() {
     let f = std::fs::File::open(&path).unwrap();
     let mut zip = zip::ZipArchive::new(f).unwrap();
     let mut got: Vec<String> = (0..zip.len())
-        .map(|i| zip.by_index(i).unwrap().name().to_string())
+        .map(|i| zip.by_index(i).unwrap().name().unwrap().into_owned())
         .collect();
     got.sort();
 
@@ -3519,7 +3538,10 @@ fn a_corrupted_derived_entry_still_fails_verification() {
     // and every stored hash alone.
     let source = std::fs::File::open(&good).unwrap();
     let mut archive = zip::ZipArchive::new(source).unwrap();
-    let names: Vec<String> = archive.file_names().map(|s| s.to_string()).collect();
+    let names: Vec<String> = archive
+        .file_names()
+        .map(|s| s.unwrap().into_owned())
+        .collect();
     let out = std::fs::File::create(&bad).unwrap();
     let mut zip = zip::ZipWriter::new(out);
     let stored =
@@ -3586,7 +3608,7 @@ fn verification_reports_multiple_section_mismatches_in_order() {
         zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i).unwrap();
-        let name = entry.name().to_string();
+        let name = entry.name().unwrap().into_owned();
         if name == "content_hash.json.zst" {
             sfmtool_archive_io::write_json_entry(&mut zip, &name, &hashes, 3).unwrap();
         } else {
@@ -3746,7 +3768,7 @@ fn a_file_written_before_the_split_keeps_its_timestamp_and_its_hashes() {
         zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i).unwrap();
-        let name = entry.name().to_string();
+        let name = entry.name().unwrap().into_owned();
         if name == "metadata.json.zst"
             || name == "written.json.zst"
             || name == "content_hash.json.zst"
@@ -3955,8 +3977,9 @@ fn images_digest(path: &std::path::Path) -> u128 {
     let mut archive = zip::ZipArchive::new(file).unwrap();
     let mut names: Vec<String> = archive
         .file_names()
+        .map(Result::unwrap)
         .filter(|n| n.starts_with("images/"))
-        .map(str::to_string)
+        .map(String::from)
         .collect();
     names.sort();
     let mut hasher = xxhash_rust::xxh3::Xxh3::new();
@@ -3975,7 +3998,10 @@ fn images_digest(path: &std::path::Path) -> u128 {
 fn archive_names(path: &std::path::Path) -> Vec<String> {
     let file = std::fs::File::open(path).unwrap();
     let archive = zip::ZipArchive::new(file).unwrap();
-    archive.file_names().map(str::to_string).collect()
+    archive
+        .file_names()
+        .map(|s| s.unwrap().into_owned())
+        .collect()
 }
 
 /// `make_test_data` with a thumbnail column whose rows differ, so a round trip

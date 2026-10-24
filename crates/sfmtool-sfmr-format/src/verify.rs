@@ -77,7 +77,7 @@ pub fn verify_sfmr(path: &Path) -> Result<(bool, Vec<String>), SfmrError> {
             &stored,
             &mut errors,
         )?);
-    } else if crate::read::has_frames_entry(archive.file_names()) {
+    } else if crate::read::has_frames_entry(&archive)? {
         errors.push(
             "the frames/ section is present without a rigs/ section; the two must be \
              present together"

@@ -205,7 +205,7 @@ fn corruption_in_lazy_descriptor_is_deferred_until_access() {
     let mut output = zip::ZipWriter::new(std::fs::File::create(&corrupt).unwrap());
     for i in 0..input.len() {
         let mut entry = input.by_index(i).unwrap();
-        let name = entry.name().to_string();
+        let name = entry.name().unwrap().into_owned();
         let mut raw = Vec::new();
         entry.read_to_end(&mut raw).unwrap();
         // The descriptor corpus is one entry of per-block frames, so damaging

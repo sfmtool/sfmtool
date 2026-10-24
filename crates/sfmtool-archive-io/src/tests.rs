@@ -421,7 +421,7 @@ fn decoded_entries_are_byte_identical_to_the_entry_at_a_time_reads() {
     // must agree with the free functions built on it.
     let mut archive = mixed_archive();
     let names: Vec<String> = (0..archive.len())
-        .map(|i| archive.by_index(i).unwrap().name().to_string())
+        .map(|i| archive.by_index(i).unwrap().name().unwrap().into_owned())
         .collect();
 
     let decoded = DecodedEntries::read_all(&mut archive).unwrap();

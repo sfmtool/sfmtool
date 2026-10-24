@@ -234,14 +234,14 @@ impl<S: KdfScalar> KdfFile<S> {
         let mut directory_bytes = 0usize;
         for i in 0..archive.len() {
             let entry = archive.by_index(i)?;
+            let name = entry.name()?.into_owned();
             if entry.is_dir() {
                 return Err(KdfError::InvalidFormat(format!(
-                    "directory ZIP entry is forbidden: {}",
-                    entry.name()
+                    "directory ZIP entry is forbidden: {name}"
                 )));
             }
             directory_bytes = directory_bytes
-                .checked_add(entry.name().len() + 64)
+                .checked_add(name.len() + 64)
                 .ok_or_else(|| {
                     KdfError::ResourceLimit("ZIP directory accounting overflow".into())
                 })?;
@@ -252,17 +252,15 @@ impl<S: KdfScalar> KdfFile<S> {
             }
             if entry.compression() != zip::CompressionMethod::Stored {
                 return Err(KdfError::InvalidFormat(format!(
-                    "ZIP entry is not STORE: {}",
-                    entry.name()
+                    "ZIP entry is not STORE: {name}"
                 )));
             }
             if entries
-                .insert(entry.name().to_owned(), entry.compressed_size())
+                .insert(name.clone(), entry.compressed_size())
                 .is_some()
             {
                 return Err(KdfError::InvalidFormat(format!(
-                    "duplicate ZIP entry: {}",
-                    entry.name()
+                    "duplicate ZIP entry: {name}"
                 )));
             }
         }

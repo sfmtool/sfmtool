@@ -933,7 +933,10 @@ fn rewrite_sfmr_version(src: &Path, dst: &Path, version: u32) {
 
     let archive_file = std::fs::File::open(src).unwrap();
     let mut archive = zip::ZipArchive::new(archive_file).unwrap();
-    let names: Vec<String> = archive.file_names().map(|s| s.to_string()).collect();
+    let names: Vec<String> = archive
+        .file_names()
+        .map(|s| s.unwrap().into_owned())
+        .collect();
     let out = std::fs::File::create(dst).unwrap();
     let mut zip_out = zip::ZipWriter::new(out);
     let stored =

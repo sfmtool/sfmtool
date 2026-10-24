@@ -759,7 +759,7 @@ fn archive_uses_stored_compression() {
             entry.compression(),
             zip::CompressionMethod::Stored,
             "entry '{}' is not STORE",
-            entry.name()
+            entry.name().unwrap()
         );
     }
     std::fs::remove_dir_all(&dir).ok();

@@ -198,7 +198,10 @@ pub fn verify_matches(path: &Path) -> Result<(bool, Vec<String>), MatchesError> 
     // Backbone / flag / entry consistency. A file that fails these is
     // structurally incoherent, so report and stop before section hashing
     // (which assumes the flagged sections exist).
-    let entry_names: Vec<String> = archive.file_names().map(String::from).collect();
+    let entry_names = archive
+        .file_names()
+        .map(|name| name.map(String::from))
+        .collect::<Result<Vec<String>, _>>()?;
     let structural = structure_errors(&metadata, &entry_names);
     if !structural.is_empty() {
         errors.extend(structural);
@@ -941,7 +944,10 @@ fn verify_cluster_patches_section<R: std::io::Read + Seek>(
             None
         }
     };
-    let entry_names: Vec<String> = archive.file_names().map(String::from).collect();
+    let entry_names = archive
+        .file_names()
+        .map(|name| name.map(String::from))
+        .collect::<Result<Vec<String>, _>>()?;
     let mut cell_names: Vec<&String> = entry_names
         .iter()
         .filter(|n| n.starts_with("cluster_patches/member_cell_"))
