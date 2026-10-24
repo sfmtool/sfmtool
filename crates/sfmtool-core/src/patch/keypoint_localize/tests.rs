@@ -2175,8 +2175,9 @@ fn project_unclipped_reaches_past_ninety_degrees_on_a_ray_path_model() {
 
 /// `seed_offset` intersects the observed bearing with the patch plane. Past 90°
 /// a bearing can meet the plane *behind* the camera centre — a mirrored hit
-/// that is not an observation of the patch — so the ray-path arm rejects a
-/// backward intersection instead of returning a plausible-looking offset.
+/// that is not an observation of the patch — so it rejects a backward
+/// intersection, under every lens model, instead of returning a
+/// plausible-looking offset. This test exercises the ray-path case.
 #[test]
 fn seed_offset_rejects_a_backward_plane_hit_on_a_ray_path_model() {
     let equi = CameraIntrinsics {
