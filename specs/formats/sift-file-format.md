@@ -260,7 +260,11 @@ Python as `sfmtool.THUMBNAIL_SIZE` for the extractors that produce the pixels.
 
 The three extraction backends of [`sfm sift`](../cli/image-feature/sift-command.md)
 (`colmap`, `opencv` and `sfmtool`) sort their features by descending size and
-resize the thumbnail with OpenCV's `INTER_AREA`.
+resize the thumbnail with OpenCV's `INTER_AREA`. The Rust writer for the
+`sfmtool` tool, `build_sift_files` in
+[`sfmtool-core`](../../crates/sfmtool-core/src/features/sift/files.rs), writes
+the same files as that backend, its thumbnail resize following `INTER_AREA`'s
+arithmetic (see [SIFT § Building `.sift` files](../core/features/sift.md#building-sift-files)).
 
 ## Using CLI commands to pull apart a .sift file
 

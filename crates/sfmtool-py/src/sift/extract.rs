@@ -13,12 +13,12 @@ use numpy::{
     PyUntypedArrayMethods,
 };
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::types::{PyBool, PyDict};
 
 use sfmtool_core::features::sift::{
     self, affine_shape_from_similarity, describe_keypoints as core_describe_keypoints,
-    detect_keypoints, extract_sift_partial as core_extract_sift_partial, gray, QueryKeypoint,
-    SiftKeypoint, SiftParams,
+    detect_keypoints, extract_sift_partial as core_extract_sift_partial, gray, FeatureOptionsError,
+    QueryKeypoint, SiftKeypoint, SiftParams,
 };
 
 /// Build the `(positions, affine_shapes)` numpy arrays shared by both entry
@@ -84,126 +84,62 @@ fn image_to_gray(
 
 /// Apply a Python dict of overrides onto `SiftParams::default()`.
 ///
-/// Keys map onto [`SiftParams`] fields by name; `gray_formula` is a string that
-/// is parsed into [`SiftParams::image_to_gray`]. An unknown key or a value of
-/// the wrong type raises `PyValueError`.
+/// The dict is read as the `feature_options` JSON object and handed to
+/// [`SiftParams::from_feature_options`], the reader `build_sift_files` uses for
+/// a workspace's options, so the two read every key alike. An unknown key or a
+/// value of the wrong type raises `PyValueError`.
 fn parse_sift_params(params: Option<&Bound<'_, PyDict>>) -> PyResult<SiftParams> {
-    let mut out = SiftParams::default();
-    let Some(dict) = params else {
-        return Ok(out);
+    let options = match params {
+        Some(dict) => feature_options_from_dict(dict)?,
+        None => serde_json::Value::Null,
     };
+    SiftParams::from_feature_options(&options).map_err(feature_options_error)
+}
 
+/// The `ValueError` for feature options the core refused, naming the key as
+/// `params['key']`.
+pub(super) fn feature_options_error(e: FeatureOptionsError) -> PyErr {
+    let message = match &e.key {
+        Some(key) => format!("params['{key}'] {}", e.problem),
+        None => e.problem.clone(),
+    };
+    pyo3::exceptions::PyValueError::new_err(message)
+}
+
+/// A dict of feature options as the JSON object a workspace records: `None`,
+/// `bool`, `int`, `float` and `str` values, string keys.
+pub(super) fn feature_options_from_dict(dict: &Bound<'_, PyDict>) -> PyResult<serde_json::Value> {
+    let mut map = serde_json::Map::new();
     for (key, value) in dict.iter() {
         let key: String = key
             .extract()
             .map_err(|_| pyo3::exceptions::PyValueError::new_err("params keys must be strings"))?;
-
-        macro_rules! extract_field {
-            ($field:ident, $ty:ty) => {{
-                out.$field = value.extract::<$ty>().map_err(|_| {
+        let json = if value.is_none() {
+            serde_json::Value::Null
+        } else if value.is_instance_of::<PyBool>() {
+            serde_json::Value::Bool(value.extract()?)
+        } else if let Ok(v) = value.extract::<u64>() {
+            serde_json::Value::from(v)
+        } else if let Ok(v) = value.extract::<i64>() {
+            serde_json::Value::from(v)
+        } else if let Ok(v) = value.extract::<f64>() {
+            serde_json::Number::from_f64(v)
+                .map(Into::into)
+                .ok_or_else(|| {
                     pyo3::exceptions::PyValueError::new_err(format!(
-                        "params['{}'] has the wrong type",
-                        key
+                        "params['{key}'] must be a finite number"
                     ))
-                })?;
-            }};
-        }
-
-        match key.as_str() {
-            "octave_layers" => extract_field!(octave_layers, u32),
-            "sigma" => extract_field!(sigma, f64),
-            "blur_radius_factor" => extract_field!(blur_radius_factor, f64),
-            "input_sigma" => extract_field!(input_sigma, f64),
-            "double_image" => extract_field!(double_image, bool),
-            "contrast_threshold" => extract_field!(contrast_threshold, f64),
-            "edge_threshold" => extract_field!(edge_threshold, f64),
-            "max_num_features" => {
-                // `None` means unlimited; an integer caps the feature count.
-                out.max_num_features = if value.is_none() {
-                    None
-                } else {
-                    Some(value.extract::<usize>().map_err(|_| {
-                        pyo3::exceptions::PyValueError::new_err(format!(
-                            "params['{}'] must be a non-negative integer or None",
-                            key
-                        ))
-                    })?)
-                };
-            }
-            "orientation_bins" => extract_field!(orientation_bins, u32),
-            "peak_ratio" => extract_field!(peak_ratio, f64),
-            "descriptor_width" => extract_field!(descriptor_width, u32),
-            "descriptor_bins" => extract_field!(descriptor_bins, u32),
-            "descriptor_magnification" => extract_field!(descriptor_magnification, f64),
-            "descriptor_clamp" => extract_field!(descriptor_clamp, f64),
-            "gray_formula" => {
-                let formula: String = value.extract().map_err(|_| {
-                    pyo3::exceptions::PyValueError::new_err(
-                        "params['gray_formula'] must be a string",
-                    )
-                })?;
-                out.image_to_gray = gray::parse_gray_formula(&formula).map_err(|e| {
-                    pyo3::exceptions::PyValueError::new_err(format!(
-                        "params['gray_formula']: {}",
-                        e
-                    ))
-                })?;
-            }
-            other => {
-                return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                    "unknown params key '{}'",
-                    other
-                )));
-            }
-        }
+                })?
+        } else if let Ok(v) = value.extract::<String>() {
+            serde_json::Value::String(v)
+        } else {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "params['{key}'] has the wrong type"
+            )));
+        };
+        map.insert(key, json);
     }
-
-    // Reject degenerate values that would otherwise panic deep in the pipeline
-    // (e.g. `orientation_bins = 0` → `rem_euclid(0)`, `octave_layers = 0` →
-    // `k = 2^∞` → a huge kernel allocation) so callers get a clean error.
-    let bad = |name: &str, msg: &str| {
-        Err(pyo3::exceptions::PyValueError::new_err(format!(
-            "params['{name}'] {msg}"
-        )))
-    };
-    if out.octave_layers < 1 {
-        return bad("octave_layers", "must be >= 1");
-    }
-    if out.orientation_bins < 1 {
-        return bad("orientation_bins", "must be >= 1");
-    }
-    if !(out.sigma.is_finite() && out.sigma > 0.0) {
-        return bad("sigma", "must be a positive, finite number");
-    }
-    if !(out.blur_radius_factor.is_finite() && out.blur_radius_factor > 0.0) {
-        return bad("blur_radius_factor", "must be a positive, finite number");
-    }
-    if !(out.input_sigma.is_finite() && out.input_sigma >= 0.0) {
-        return bad("input_sigma", "must be a non-negative, finite number");
-    }
-    if !(out.descriptor_magnification.is_finite() && out.descriptor_magnification > 0.0) {
-        return bad(
-            "descriptor_magnification",
-            "must be a positive, finite number",
-        );
-    }
-    if !(out.descriptor_clamp.is_finite() && out.descriptor_clamp > 0.0) {
-        return bad("descriptor_clamp", "must be a positive, finite number");
-    }
-
-    // The sfmtool descriptor emits a fixed 128-D vector, so the grid dimensions
-    // are not configurable. Reject non-default values rather than silently
-    // ignoring them. (`descriptor_magnification` / `descriptor_clamp` are
-    // honored, so they need no such guard.)
-    if out.descriptor_width != 4 || out.descriptor_bins != 8 {
-        return Err(pyo3::exceptions::PyValueError::new_err(format!(
-            "descriptor_width and descriptor_bins are fixed at 4 and 8 (the sfmtool \
-             descriptor produces a 128-D vector); got {} and {}",
-            out.descriptor_width, out.descriptor_bins
-        )));
-    }
-
-    Ok(out)
+    Ok(serde_json::Value::Object(map))
 }
 
 /// Detect and orient SIFT keypoints (no descriptors).

@@ -17,7 +17,9 @@ it possible to describe a keypoint the detector did not find
 (`describe_keypoints`, see
 [§ Describing a keypoint nothing detected](#describing-a-keypoint-nothing-detected)).
 
-This spec covers the library functions in sfmtool-core, which are independent of any on-disk layout.
+This spec covers the library functions in sfmtool-core. All but one are independent of any
+on-disk layout; the exception is `build_sift_files`, which writes a workspace's `.sift` files
+the way `sfm sift --extract` does (see [§ Building `.sift` files](#building-sift-files)).
 Their interface follows COLMAP's conventions rather than OpenCV's: keypoint coordinates use
 COLMAP's pixel-center convention (the upper-left pixel's center is `(0.5, 0.5)`), and each
 keypoint's geometry is a 2×2 affine shape matrix `[[a11, a12], [a21, a22]]`, exactly as
@@ -634,6 +636,8 @@ sfmtool-core/src/features/sift/
 ├── orientation.rs  # 36-bin gradient histogram + multi-peak assignment
 ├── descriptor.rs   # 4x4x8 trilinear-interpolated descriptor + normalize/clamp/quantize
 ├── gray.rs         # GrayFormula: the colour-to-gray conversion and its value domain
+├── feature_options.rs # SiftParams::from_feature_options: a workspace's feature_options object -> SiftParams
+├── files.rs        # build_sift_files: extract and write a set of images' .sift files
 └── simd.rs         # runtime-dispatched AVX2+FMA / SSE2 kernels the stages above share
 ```
 
@@ -649,6 +653,12 @@ Each of those modules carries a `tests.rs` beside it, in a directory of its own 
 - `extract_sift(image, params=None, max_described=None) -> (positions (N,2) f32, affine_shapes (N,2,2) f32, descriptors (K,128) u8)` — the binding for `extract_sift_partial`: `K = min(max_described, N)`, and `K = N` when `max_described` is `None`
 - `describe_keypoints(image, positions (N,2) f32, affine_shapes (N,2,2) f32, params=None) -> descriptors (N,128) u8` -- the binding for `describe_keypoints`, taking exactly the arrays `extract_sift` returns and raising `ValueError` on a refused keypoint or a shape mismatch
 - `affine_shapes_from_similarity(scales (N,) f32, orientations (N,) f32) -> affine_shapes (N,2,2) f32` -- the similarity-to-shape conversion, so a caller holding a size and an angle does not restate it
+- `build_sift_files(image_paths, feature_options, feature_prefix_dir, *, concurrent_images=None) -> (sift_paths, extracted, skipped)` -- the binding for `build_sift_files` ([files.rs](../../../crates/sfmtool-py/src/sift/files.rs)), raising `ValueError` for invalid options and `OSError` naming the image or file that failed
+
+The `params` dict the first three take is read as the `feature_options` JSON
+object and parsed by `SiftParams::from_feature_options`, so a key means the same
+to these bindings, to a workspace's `.sfm-workspace.json` and to
+`build_sift_files`.
 
 This output is exactly what `src/sfmtool/sift/` consumes, so the
 `extract_sfmtool.py` backend sits alongside `extract_opencv.py` /
@@ -656,6 +666,103 @@ This output is exactly what `src/sfmtool/sift/` consumes, so the
 affine shapes pass straight through — no conversion needed, unlike the OpenCV
 backend, which derives them from its `KeyPoint`s via
 `opencv_keypoint_to_affine_shape`.
+
+## Building `.sift` files
+
+`build_sift_files` is `sfm sift --extract` for a workspace whose feature tool
+is `sfmtool`, in Rust, so a Rust caller such as the viewer can build a
+reconstruction's `.sift` files without the Python package. It is in
+[files.rs](../../../crates/sfmtool-core/src/features/sift/files.rs), with the
+options reader in
+[feature_options.rs](../../../crates/sfmtool-core/src/features/sift/feature_options.rs):
+
+```rust
+pub struct BuildSiftFilesOptions {
+    pub feature_options: serde_json::Value, // the workspace's feature_options object
+    pub feature_prefix_dir: PathBuf,        // the workspace's feature_prefix_dir
+    pub concurrent_images: Option<usize>,   // None: the default below
+}
+impl BuildSiftFilesOptions {
+    pub fn from_workspace(workspace_dir: &Path) -> Result<Self, BuildSiftFilesError>;
+    pub fn sift_path_for_image(&self, image_path: &Path) -> PathBuf;
+}
+pub fn build_sift_files(
+    image_paths: &[PathBuf],
+    options: &BuildSiftFilesOptions,
+    progress: &Progress,
+) -> Result<BuildSiftFilesReport, BuildSiftFilesError>;
+
+impl SiftParams {
+    pub fn from_feature_options(options: &serde_json::Value) -> Result<SiftParams, FeatureOptionsError>;
+}
+```
+
+```rust
+let options = BuildSiftFilesOptions::from_workspace(&workspace_dir)?;
+let report = build_sift_files(&image_paths, &options, &progress)?;
+// report.sift_paths, report.extracted, report.skipped
+```
+
+The options carry the workspace's own `feature_options` object rather than a
+`SiftParams`, because the object is what each file records: a `.sift` file's
+`feature_tool_metadata.feature_options` is that object as the workspace wrote
+it, and a `SiftParams` does not convert back to it. `from_workspace` reads it,
+and `feature_prefix_dir`, from `.sfm-workspace.json` the way `sfm sift` does in
+workspace mode, and refuses a workspace whose `feature_tool` is not `sfmtool`
+with `BuildSiftFilesError::UnsupportedFeatureTool`: the COLMAP and OpenCV tools
+are external programs the Python package drives, and this crate does not run
+them.
+
+What it writes matches the Python `sfmtool` backend byte for byte, which
+`tests/rust_bindings/sift/test_build_sift_files_rust_bindings.py` checks by
+comparing the content hashes of the files the two write for the same images:
+
+- The path is `<image dir>/<feature_prefix_dir>/<image name>.sift`, and every
+  output directory is made first.
+- An image whose `.sift` is at least as new as the image, by modification time,
+  is skipped.
+- `feature_tool_metadata` is `feature_tool: "sfmtool"`, `feature_type: "sift"`
+  and the options object. `metadata` names the image by its file name and
+  records the XXH128 and size of the image file and the decoded width and
+  height.
+- The image is decoded by `ImageU8::read_rgb` (EXIF orientation ignored), made
+  gray by the options' gray formula, and extracted by `extract_sift`, whose
+  features are already sorted by descending size.
+- The thumbnail is `reconstruction::thumbnail::thumbnail_from_rgb`, which
+  follows OpenCV's `INTER_AREA` arithmetic and so equals the
+  `cv2.resize(..., INTER_AREA)` row the Python backend stores, for any
+  photograph at least 128 pixels on each side. A smaller photograph is enlarged
+  on its short axis, which OpenCV does by bilinear interpolation, and its
+  thumbnail can differ from the Python one by a few levels.
+- The file is written by `sfmtool_sift_format::write_sift` at zstd level 5.
+
+It runs images concurrently in the way the Python backend does (see
+[`sfm sift` § Extraction-orchestration
+pipelining](../../cli/image-feature/sift-command.md#extraction-orchestration-pipelining)):
+`K` scoped threads each take the next image, decode it, hash it and make its
+thumbnail, then run the gray conversion, the extraction and the write inside
+`rayon::scope`, which puts that work on the global rayon pool while the thread
+waits. The pool therefore keeps one thread per core, and the threads outside it
+run only the decode, the hash and the thumbnail, as the Python worker threads
+do. `K` is
+`concurrent_images` when given, then the `SFMTOOL_SIFT_EXTRACT_WORKERS`
+environment variable the Python backend also reads, and otherwise the core
+count capped so that `K` images at 192 bytes per source pixel of the first
+image fit in half of physical memory (or at most 4 when the first image's size
+cannot be read).
+
+It reports a `build_sift_files` phase, a message saying how many images were
+up to date, a status naming each image as it starts, and a count of images
+written against those to write. Cancellation is checked before each image
+starts and again before its extraction and its write, so a cancelled build
+leaves only whole files behind. An image that fails stops the build: no further
+image starts, the ones in flight finish, and the error names the first failing
+image in input order. Invalid options are refused before any directory is made.
+
+The Python `sfmtool` backend does not call `build_sift_files`. It shares the
+pipeline in `image_files_to_sift_files` with the COLMAP and OpenCV backends,
+and its own concurrency code is tested and benchmarked separately; the
+byte-for-byte test above is what keeps the two writers in agreement.
 
 ## Testing & validation
 
@@ -672,6 +779,13 @@ backend, which derives them from its `KeyPoint`s via
   gradient.
 - **PyO3 surface test** (`tests/rust_bindings/sift/test_sift_extract_rust_bindings.py`) exercising the bindings and
   round-tripping through `sfmtool-sift-format`.
+- **`.sift` building:** Rust tests in `features/sift/files/tests.rs` build files
+  for seoul_bull images copied into a temporary workspace and check their
+  contents, the up-to-date skip, progress, cancellation and error order; the
+  PyO3 test `tests/rust_bindings/sift/test_build_sift_files_rust_bindings.py`
+  checks that `build_sift_files` and the Python `sfmtool` backend write files
+  with equal content hashes, including thumbnails on OpenCV's integer and 2 x 2
+  reduction paths.
 - **Describe-at-a-detection** (Rust, and mirrored in the PyO3 surface test):
   describing every detected keypoint at its own position, shape and size returns
   the extractor's descriptors byte for byte, by both query forms; a keypoint

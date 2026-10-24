@@ -10,6 +10,11 @@ be specified per invocation.
 The command is implemented in
 [`src/sfmtool/_commands/sift.py`](../../../src/sfmtool/_commands/sift.py), with
 extraction in [`src/sfmtool/sift/extract.py`](../../../src/sfmtool/sift/extract.py).
+For a workspace whose feature tool is `sfmtool`, the Rust function
+`build_sift_files` in
+[`sfmtool-core`](../../../crates/sfmtool-core/src/features/sift/files.rs) writes
+the same files `--extract` writes, for a Rust caller such as the viewer (see
+[SIFT § Building `.sift` files](../../core/features/sift.md#building-sift-files)).
 
 To inspect an existing `.sift` file, use `sfm inspect <FILE.sift>`.
 
@@ -90,6 +95,12 @@ is missing is reported as an error and the command continues with the next
 image.
 
 ## Extraction-orchestration pipelining
+
+The Rust `build_sift_files` runs its images concurrently on the same plan:
+decode on threads of its own, extraction and save on the rayon pool, and the
+same choice of how many images at once
+([SIFT § Building `.sift` files](../../core/features/sift.md#building-sift-files)).
+The measurements below are of the Python backend.
 
 The Python extraction backend (`extract_sift_with_sfmtool`) processes images in
 three stages: load+decode (`sfmtool.fileio.read_image_rgb`, see

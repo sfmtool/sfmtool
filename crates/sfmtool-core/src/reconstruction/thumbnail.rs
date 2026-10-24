@@ -6,12 +6,16 @@
 //!
 //! A `.sfmr` thumbnail row is the source photograph resized to
 //! [`THUMBNAIL_SIZE`] x [`THUMBNAIL_SIZE`] by area averaging, stretched to the
-//! square (see `specs/formats/sfmr-file-format.md`). [`resize_area`] is that
-//! resize for any Rust caller. It matches OpenCV's `INTER_AREA` in method, each
-//! output pixel the coverage-weighted mean of the source pixels under it, but
-//! not bit for bit, so a caller that must reproduce stored rows exactly (such
-//! as `sfm xform --add-thumbnails`) uses the extractors' own OpenCV path
-//! instead. The viewer uses this one for display thumbnails.
+//! square (see `specs/formats/sfmr-file-format.md`). [`resize_area`] is an area
+//! resize for any size. It matches OpenCV's `INTER_AREA` in method, each output
+//! pixel the coverage-weighted mean of the source pixels under it, but not bit
+//! for bit. [`thumbnail_from_rgb`] is the thumbnail resize itself: for a
+//! photograph at least [`THUMBNAIL_SIZE`] on each side it follows OpenCV's
+//! `INTER_AREA` arithmetic step for step, so its row is the one the Python SIFT
+//! extractors and `sfm xform --add-thumbnails` make with `cv2.resize`, byte for
+//! byte. The Rust `.sift` writer
+//! [`build_sift_files`](crate::features::sift::build_sift_files) and the
+//! viewer's display thumbnails use it.
 //!
 //! [`verified_sift_thumbnail`] reads the row an image's `.sift` already holds,
 //! checked against the reconstruction's record of that file. A caller filling
@@ -109,13 +113,142 @@ pub fn resize_area(
 }
 
 /// The `THUMBNAIL_SIZE` x `THUMBNAIL_SIZE` RGB thumbnail row of an RGB
-/// photograph `width` x `height`, by [`resize_area`].
+/// photograph `width` x `height`.
+///
+/// When neither side is shorter than [`THUMBNAIL_SIZE`], the row equals
+/// OpenCV's `cv2.resize(rgb, (128, 128), interpolation=cv2.INTER_AREA)` byte
+/// for byte, which is how the Python extractors make a `.sift` thumbnail. An
+/// integer reduction on both axes is the block sum times `1/area`, rounded half
+/// to even, except that a 2 x 2 reduction rounds half up as OpenCV's vector path
+/// does; any other reduction is OpenCV's coverage-weighted sum in `f32`, in its
+/// order of operations. A photograph shorter than the thumbnail on a side is
+/// enlarged on that axis, which OpenCV does by bilinear interpolation; such a
+/// photograph goes through [`resize_area`] instead and does not match OpenCV.
 ///
 /// # Panics
 ///
 /// As [`resize_area`], with three channels.
 pub fn thumbnail_from_rgb(pixels: &[u8], width: usize, height: usize) -> Vec<u8> {
-    resize_area(pixels, width, height, 3, THUMBNAIL_SIZE, THUMBNAIL_SIZE)
+    if width >= THUMBNAIL_SIZE && height >= THUMBNAIL_SIZE {
+        assert_eq!(
+            pixels.len(),
+            width * height * 3,
+            "pixels must hold width * height * channels bytes"
+        );
+        reduce_like_inter_area(pixels, width, height, THUMBNAIL_SIZE, THUMBNAIL_SIZE)
+    } else {
+        resize_area(pixels, width, height, 3, THUMBNAIL_SIZE, THUMBNAIL_SIZE)
+    }
+}
+
+/// OpenCV's `cvRound` of an `f32`, saturated to a byte: round half to even.
+fn round_to_u8(value: f32) -> u8 {
+    value.round_ties_even().clamp(0.0, 255.0) as u8
+}
+
+/// One axis of OpenCV's area reduction: `(dst index, src index, weight)` in
+/// the order `computeResizeAreaTab` lists them, for a reduction by `scale`
+/// (`src_len / dst_len` as OpenCV computes it, at least 1).
+fn inter_area_taps(src_len: usize, dst_len: usize, scale: f64) -> Vec<(usize, usize, f32)> {
+    let mut taps = Vec::with_capacity(src_len * 2);
+    for d in 0..dst_len {
+        let fs1 = d as f64 * scale;
+        let fs2 = fs1 + scale;
+        let cell = scale.min(src_len as f64 - fs1);
+        let s2 = (fs2.floor() as usize).min(src_len - 1);
+        let s1 = (fs1.ceil() as usize).min(s2);
+        if s1 as f64 - fs1 > 1e-3 {
+            taps.push((d, s1 - 1, ((s1 as f64 - fs1) / cell) as f32));
+        }
+        for s in s1..s2 {
+            taps.push((d, s, (1.0 / cell) as f32));
+        }
+        if fs2 - s2 as f64 > 1e-3 {
+            taps.push((d, s2, ((fs2 - s2 as f64).min(1.0).min(cell) / cell) as f32));
+        }
+    }
+    taps
+}
+
+/// A 3-channel reduction (`dst <= src` on both axes) with OpenCV's `INTER_AREA`
+/// arithmetic; see [`thumbnail_from_rgb`] for what that is.
+fn reduce_like_inter_area(
+    pixels: &[u8],
+    width: usize,
+    height: usize,
+    dst_width: usize,
+    dst_height: usize,
+) -> Vec<u8> {
+    const CN: usize = 3;
+    // cv::resize takes the scale as the reciprocal of dst / src, which is not
+    // always the same double as src / dst.
+    let scale_x = 1.0 / (dst_width as f64 / width as f64);
+    let scale_y = 1.0 / (dst_height as f64 / height as f64);
+    let iscale_x = scale_x.round();
+    let iscale_y = scale_y.round();
+    let mut out = vec![0u8; dst_width * dst_height * CN];
+
+    if (scale_x - iscale_x).abs() < f64::EPSILON && (scale_y - iscale_y).abs() < f64::EPSILON {
+        // OpenCV's `resizeAreaFast`: the integer block sum times 1/area.
+        let (sx, sy) = (iscale_x as usize, iscale_y as usize);
+        let inv_area = 1.0f32 / (sx * sy) as f32;
+        for dy in 0..dst_height {
+            for dx in 0..dst_width {
+                for c in 0..CN {
+                    let mut sum = 0u32;
+                    for y in dy * sy..(dy + 1) * sy {
+                        let row = &pixels[y * width * CN..(y + 1) * width * CN];
+                        for x in dx * sx..(dx + 1) * sx {
+                            sum += u32::from(row[x * CN + c]);
+                        }
+                    }
+                    out[(dy * dst_width + dx) * CN + c] = if sx == 2 && sy == 2 {
+                        // The 2 x 2 vector path: (sum + 2) >> 2.
+                        ((sum + 2) >> 2) as u8
+                    } else {
+                        round_to_u8(sum as f32 * inv_area)
+                    };
+                }
+            }
+        }
+        return out;
+    }
+
+    // OpenCV's `ResizeArea_Invoker`: each source row is reduced horizontally
+    // into `buf`, then added into its output row's `sum` with that row's
+    // weight, in the order the tables list the taps.
+    let x_taps = inter_area_taps(width, dst_width, scale_x);
+    let y_taps = inter_area_taps(height, dst_height, scale_y);
+    let row_len = dst_width * CN;
+    let mut buf = vec![0f32; row_len];
+    let mut sum = vec![0f32; row_len];
+    let mut current = y_taps.first().map_or(0, |t| t.0);
+    for &(dy, sy, beta) in &y_taps {
+        let src = &pixels[sy * width * CN..(sy + 1) * width * CN];
+        buf.fill(0.0);
+        for &(dx, sx, alpha) in &x_taps {
+            for c in 0..CN {
+                buf[dx * CN + c] += f32::from(src[sx * CN + c]) * alpha;
+            }
+        }
+        if dy != current {
+            let dst = &mut out[current * row_len..(current + 1) * row_len];
+            for ((d, s), b) in dst.iter_mut().zip(sum.iter_mut()).zip(&buf) {
+                *d = round_to_u8(*s);
+                *s = beta * b;
+            }
+            current = dy;
+        } else {
+            for (s, b) in sum.iter_mut().zip(&buf) {
+                *s += beta * b;
+            }
+        }
+    }
+    let dst = &mut out[current * row_len..(current + 1) * row_len];
+    for (d, s) in dst.iter_mut().zip(&sum) {
+        *d = round_to_u8(*s);
+    }
+    out
 }
 
 /// Image `index`'s thumbnail from its `.sift` file, when that file verifiably
@@ -254,6 +387,51 @@ mod tests {
         let out = thumbnail_from_rgb(&pixels, 270, 480);
         assert_eq!(out.len(), THUMBNAIL_SIZE * THUMBNAIL_SIZE * 3);
         assert!(out.chunks(3).all(|p| p == [7, 128, 250]));
+    }
+
+    /// `w` x `h` RGB noise from a 32-bit xorshift, one byte per step from its
+    /// top eight bits.
+    fn noise(w: usize, h: usize, seed: u32) -> Vec<u8> {
+        let mut x = seed;
+        (0..w * h * 3)
+            .map(|_| {
+                x ^= x << 13;
+                x ^= x >> 17;
+                x ^= x << 5;
+                (x >> 24) as u8
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_thumbnail_equals_opencv_inter_area_byte_for_byte() {
+        // The hashes are xxh3_64 of `cv2.resize(img, (128, 128),
+        // interpolation=cv2.INTER_AREA)` (OpenCV 5.0.0) for the same noise,
+        // made in numpy with this generator: the fractional reduction
+        // (270 x 480, 2040 x 1536, 641 x 129), the integer one (384 x 512), the
+        // 2 x 2 vector path (256 x 256) and the identity (128 x 128).
+        let cases = [
+            (270, 480, "4fee12c3d05c540c"),
+            (2040, 1536, "4b3bee0740a62628"),
+            (384, 512, "da01e889f60f1dad"),
+            (256, 256, "5ba3dc6192213ca9"),
+            (128, 128, "e24a9a816e37998d"),
+            (641, 129, "2ff2ab4aef589a29"),
+        ];
+        for (w, h, expected) in cases {
+            let seed = 0x9E37_79B9u32 ^ (w * 31 + h) as u32;
+            let row = thumbnail_from_rgb(&noise(w, h, seed), w, h);
+            let hash = format!("{:016x}", xxhash_rust::xxh3::xxh3_64(&row));
+            assert_eq!(hash, expected, "{w} x {h}");
+        }
+    }
+
+    #[test]
+    fn a_thumbnail_of_a_small_photograph_still_fills_the_square() {
+        // Shorter than the thumbnail on one side: the resize_area path.
+        let pixels = noise(300, 100, 7);
+        let row = thumbnail_from_rgb(&pixels, 300, 100);
+        assert_eq!(row, resize_area(&pixels, 300, 100, 3, 128, 128));
     }
 
     #[test]

@@ -25,14 +25,26 @@
 //! the 128-D descriptor, with the orientation/descriptor sampling and the
 //! Gaussian blur SIMD-accelerated (see `simd` and the parallelism/SIMD section
 //! of `specs/core/features/sift.md`).
+//!
+//! [`SiftParams::from_feature_options`] reads the `feature_options` object a
+//! workspace records for the `sfmtool` feature tool, and [`build_sift_files`]
+//! writes the `.sift` files of a set of images with it, as
+//! `sfm sift --extract` does.
 
 mod descriptor;
 mod detect;
+mod feature_options;
+mod files;
 pub mod gray;
 mod orientation;
 mod scale_space;
 mod simd;
 
+pub use feature_options::FeatureOptionsError;
+pub use files::{
+    build_sift_files, BuildSiftFilesError, BuildSiftFilesOptions, BuildSiftFilesReport,
+    CONCURRENT_IMAGES_ENV_VAR, SIFT_ZSTD_LEVEL, WORKSPACE_CONFIG_FILE,
+};
 pub use gray::{gray_from_rgb, parse_gray_formula, GrayFormula, DEFAULT_GRAY_FORMULA};
 pub use scale_space::ScaleSpace;
 

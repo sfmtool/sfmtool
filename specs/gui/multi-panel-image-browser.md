@@ -430,9 +430,10 @@ column ([display_thumbnails.rs](../../crates/sfm-explorer/src/display_thumbnails
   2. **The photograph** at `workspace_dir.join(name)`, the path Image Detail reads
      full-resolution images from, decoded by `ImageU8::read_rgb` (no EXIF
      orientation applied, matching the SIFT extractors) and resized to 128 x 128 by area
-     averaging with `sfmtool_core::reconstruction::thumbnail::thumbnail_from_rgb`. That
-     resize matches the format's in method rather than bit for bit, which is all a
-     display needs.
+     averaging with `sfmtool_core::reconstruction::thumbnail::thumbnail_from_rgb`. For
+     a photograph at least 128 pixels on each side that resize follows OpenCV's
+     `INTER_AREA` arithmetic, so the row equals the one an extractor stores in the
+     `.sift`.
   3. **A flat placeholder**, the neutral mid-grey `PLACEHOLDER_GREY` (128), for an image
      neither source can supply; its path is logged.
 

@@ -2180,8 +2180,14 @@ describes. Other parts of this spec are implemented by:
   `sfm undistort` all resize with OpenCV's `INTER_AREA`, and a `.sfmr` writer
   that reads `.sift` files copies their rows. `sfm xform --add-thumbnails`
   builds rows from the photographs through the extractors' own resize, so they
-  match the `.sift` rows byte for byte; `sfmtool-core`'s `resize_area` averages
-  the same way but does not match `INTER_AREA` bit for bit.
+  match the `.sift` rows byte for byte. In Rust,
+  `reconstruction::thumbnail::thumbnail_from_rgb`
+  ([source](../../crates/sfmtool-core/src/reconstruction/thumbnail.rs)) follows
+  `INTER_AREA`'s arithmetic and gives the same rows for a photograph at least
+  128 pixels on each side; it is the resize of the Rust `.sift` writer
+  `build_sift_files` and of the viewer's display thumbnails. `resize_area`, the
+  area resize for any size, averages the same way but does not match
+  `INTER_AREA` bit for bit.
 - Observation readings: the columns are `ObservationReadingColumns` and a row
   is `ObservationReading`, with the options in `ObservationReadingOptions`
   ([source](../../crates/sfmtool-sfmr-format/src/observation_readings.rs)); in

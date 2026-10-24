@@ -6,6 +6,7 @@
 import sfmtool._sfmtool.sift as sift
 
 _EXPECTED_FUNCTIONS = (
+    "build_sift_files",
     "detect_sift_keypoints",
     "extract_sift",
 )

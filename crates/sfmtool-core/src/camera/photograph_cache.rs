@@ -64,7 +64,7 @@ fn budget_from(env_megabytes: Option<&str>, physical_bytes: Option<u64>) -> u64 
 }
 
 #[cfg(windows)]
-fn physical_memory_bytes() -> Option<u64> {
+pub(crate) fn physical_memory_bytes() -> Option<u64> {
     use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
     // SAFETY: MEMORYSTATUSEX is plain data, so all zeroes is a valid value, and
     // GlobalMemoryStatusEx only writes into the struct it is handed, whose
@@ -81,7 +81,7 @@ fn physical_memory_bytes() -> Option<u64> {
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-fn physical_memory_bytes() -> Option<u64> {
+pub(crate) fn physical_memory_bytes() -> Option<u64> {
     // SAFETY: sysconf takes an integer name and returns an integer; it touches
     // no memory of ours.
     let (pages, page_size) = unsafe {
@@ -98,7 +98,7 @@ fn physical_memory_bytes() -> Option<u64> {
 }
 
 #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
-fn physical_memory_bytes() -> Option<u64> {
+pub(crate) fn physical_memory_bytes() -> Option<u64> {
     None
 }
 
