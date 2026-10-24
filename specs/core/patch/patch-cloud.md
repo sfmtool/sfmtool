@@ -181,6 +181,27 @@ impl OrientedPatch {
         cam_from_world: &RigidTransform,
         keypoint: [f64; 2],
     ) -> Option<OrientedPatch>;
+
+    /// The patch as the view sees it: `anchored_at_keypoint` where the
+    /// keypoint's ray meets the patch, and the patch itself where there is no
+    /// keypoint or the ray cannot meet it. The square a view's tile is cut
+    /// through and the outline the Explorer draws over the photograph.
+    pub fn seen_at_keypoint(
+        &self,
+        camera: &CameraIntrinsics,
+        cam_from_world: &RigidTransform,
+        keypoint: Option<[f64; 2]>,
+    ) -> OrientedPatch;
+
+    /// `anchored_at_keypoint`, refused as well where the keypoint's ray meets a
+    /// finite patch's plane behind the camera under any lens model. What the
+    /// bench's hand edits read a pointer against and carry a sighting by.
+    pub fn slid_onto_keypoint(
+        &self,
+        camera: &CameraIntrinsics,
+        cam_from_world: &RigidTransform,
+        keypoint: [f64; 2],
+    ) -> Option<OrientedPatch>;
 }
 ```
 
@@ -198,11 +219,25 @@ than the point's geometric projection. Both share one unprojection, so a seed an
 a rendered tile cannot disagree about where a keypoint puts the patch:
 
 ```rust
-// Render an observation's tile through the frame that view sees the content in,
+// Render an observation's tile through the frame that view sees the patch in,
 // falling back to the stored geometry when the ray cannot meet the patch.
-let anchored = patch.anchored_at_keypoint(camera, &cam_from_world, [1024.3, 512.7]);
-let map = WarpMap::from_patch(anchored.as_ref().unwrap_or(&patch), camera, &cam_from_world, 64);
+let seen = patch.seen_at_keypoint(camera, &cam_from_world, Some([1024.3, 512.7]));
+let map = WarpMap::from_patch(&seen, camera, &cam_from_world, 64);
 ```
+
+A keypoint marks where its photograph sees the patch's centre, so the anchored
+frame is the patch slid along its own plane until its centre sits on the
+keypoint's ray: the square that photograph sees.
+`seen_at_keypoint` is that square with the fallback. A view's tile render
+(`render_view_tile`, which the bench's evaluation scores) and the Explorer's
+outline both read it, and every other render that anchors on a keypoint makes
+the same fallback, so the tile and the outline drawn over the photograph are one
+square.
+`slid_onto_keypoint` is the same square for the bench's hand edits
+([editable-track.md](../bench/editable-track.md) § "Placing, sizing and turning
+by hand"), which refuse rather than fall back: a pointer read against the patch
+as it stands, or a slid point behind the camera carried with a move, would not
+be the square the photograph shows.
 
 `from_affine_shape_at_depth` is the one place the correspondence between a
 keypoint's local **affine shape** and a patch frame is stated in the

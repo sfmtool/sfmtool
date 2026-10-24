@@ -101,10 +101,9 @@ half-length states the whole of its size.
   sixteen segments and sixteen circles. An observation with no keypoint, or one
   whose ray cannot meet the plane in front of its own camera, draws no mark at
   all and leaves a gap in the list rather than a mark that means nothing. A
-  mark draws no square: `q_i` shows the size and direction of that sighting's
-  gap from the centre's projection as a place on the patch, while the square a
-  photograph sees, which Image Detail draws, is the patch's projection shifted
-  in the photograph by the gap.
+  mark draws no square: `q_i` is the centre of the square that photograph sees,
+  the patch slid along its plane until its centre sits there, which Image
+  Detail draws and the tile is cut through.
 
 When exactly one observation is selected ([bench.md](bench.md) § "The
 selected observations"), its circle is drawn 1.6 times the others'. That is the one thing the figure says about the selection, and it is

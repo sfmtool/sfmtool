@@ -1845,13 +1845,12 @@ tile is the patch warped square, which hides how the lens and the view bend
 it. The crop is the photograph itself, cut around the outline Image Detail's
 bench layer strokes for the row, with that outline over it in the row's
 verdict colour and none of the layer's other marks: no dot, no normal, no SIFT
-features. At the track stage the outline is the patch's boundary projected
-through the camera's own model and shifted by the gap between where the
-observation sits and the projection of the patch's centre
-(`crate::bench::geometry::SeenSquare::outline`, the function Image Detail
-strokes), so on a fisheye the edges show as the curves they are. The tile beside
-it is rendered through the patch moved in 3D onto the keypoint's ray, which on a
-patch seen at a slant is not quite this square
+features. At the track stage the outline is the boundary of the patch slid
+along its plane onto the ray of where the observation sits, projected through
+the camera's own model (`crate::bench::geometry::SeenSquare::outline`, the
+function Image Detail strokes), so on a fisheye the edges show as the curves
+they are. The tile beside it is cut through the same slid patch
+(`OrientedPatch::seen_at_keypoint`), so the crop's outline is the tile's square
 ([`multi-panel-image-browser.md`](multi-panel-image-browser.md) § "The
 handles"). At the cluster stage it is the
 observation's parallelogram (`geometry::parallelogram`). The crop is the
