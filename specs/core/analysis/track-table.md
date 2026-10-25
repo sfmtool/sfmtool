@@ -346,8 +346,8 @@ the point's patch frame (`PointView::patch_frame`, `w = 0` for a point at
 infinity) seen from the observation's camera: the angle between the patch's
 outward normal and the direction from its centre to the camera, `0` facing
 it, `90` edge on and up to `180` from behind. As Track View reads it, the
-patch is re-anchored on the observation's inline keypoint where there is one
-and the keypoint's ray meets the patch's plane
+patch is slid across its line of sight onto the observation's inline
+keypoint's ray where there is one and the slide follows it
 (`OrientedPatch::anchored_at_keypoint`), and read at the stored centre
 otherwise, as a render without a keypoint is; the two differ by about the
 angle between the keypoint's ray and the point's, the reprojection error over

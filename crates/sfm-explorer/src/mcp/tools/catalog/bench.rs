@@ -393,8 +393,9 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           sighting never localized takes the new centre's projection. Or name an \
                           `edge`, a `pixel` and the photograph it is in, which \
                           is the edge drag on the Image Detail panel's bench layer: the pixel is \
-                          unprojected onto the patch's own plane, so the edge lands there exactly \
-                          through whatever distortion the lens has. The photograph is exactly \
+                          unprojected onto the plane of the square drawn in that photograph, \
+                          parallel to the patch's, so the edge lands there through whatever \
+                          distortion the lens has. The photograph is exactly \
                           one of `observation`, whose outline is the patch slid across its line \
                           of sight onto that sighting's keypoint's ray, or \
                           `camera_image`, whose outline is the patch as it stands \

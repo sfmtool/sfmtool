@@ -28,7 +28,7 @@ pub(in crate::patch) struct LevelContext {
 }
 
 /// Per-pixel validity of `patch` in `view` (window support only). When
-/// `keypoint` is given, the patch is recentered in-plane so the mask matches
+/// `keypoint` is given, the patch is slid onto its ray so the mask matches
 /// where pixels are actually sampled (the keypoint-anchored render).
 pub(super) fn view_valid_mask(
     patch: &OrientedPatch,

@@ -193,7 +193,7 @@ For one point with patch views `G`:
    the view is chosen once, at that keypoint.
 3. **Resolve the reference** and render the template, as above. Where nothing
    renders to align to (the reference's tile leaves the frame or is flat at its
-   keypoint, its keypoint does not map onto the patch plane, or the rule finds
+   keypoint, the slide refuses its keypoint, or the rule finds
    no eligible view), there is no reference: every view, the given reference included,
    keeps its starting keypoint exactly as given, unscored, and still faces the
    `max_shift_px` gate. The refiner does the

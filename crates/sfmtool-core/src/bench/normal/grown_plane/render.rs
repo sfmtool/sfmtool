@@ -72,8 +72,8 @@ pub(super) struct Grid {
 
 impl Grid {
     /// The grid of `side` samples a side over `patch_frame` re-anchored on the
-    /// reference's `keypoint` (on `patch_frame` itself where there is none or its
-    /// ray misses the plane), seen from the reference view `reference`.
+    /// reference's `keypoint` (on `patch_frame` itself where there is none or the
+    /// slide refuses it), seen from the reference view `reference`.
     pub(super) fn new(
         patch_frame: &OrientedPatch,
         reference: &ProjectedImage<'_>,
@@ -275,7 +275,7 @@ impl Grid {
 }
 
 /// `patch_frame` re-anchored on `keypoint` in `view`, or `patch_frame` itself where there
-/// is no keypoint or its ray misses the plane.
+/// is no keypoint or the slide refuses it.
 pub(super) fn anchored(
     patch_frame: &OrientedPatch,
     view: &ProjectedImage<'_>,

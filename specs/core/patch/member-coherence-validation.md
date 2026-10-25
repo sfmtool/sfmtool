@@ -165,7 +165,7 @@ blur-matched one reads higher on the pairs it blurs.
 
 ### Members are sampled at their keypoints, not at the reprojection
 
-Each member's render is **recentred in-plane so it is anchored at that member's
+Each member's render is **slid across its line of sight so it is anchored at that member's
 stored keypoint** — the sub-pixel location the feature actually occupies in that
 image — rather than at the pixel the point's current geometry reprojects to. The
 same anchors build the per-member validity mask, so the frozen common support is

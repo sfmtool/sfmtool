@@ -28,7 +28,7 @@
 //!
 //! **Members are sampled at their stored keypoints** when the caller supplies
 //! them ([`track_keypoints_from_reconstruction`](super::track_keypoints_from_reconstruction)):
-//! each member's render is recentered in-plane so it is anchored where that
+//! each member's render is slid across its line of sight so it is anchored where that
 //! image's feature actually *is*, not where the current geometry reprojects the
 //! point. See
 //! [`member_zncc_matrix`].

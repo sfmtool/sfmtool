@@ -953,8 +953,8 @@ impl<'a, 'v> Cells<'a, 'v> {
     }
 
     /// One view's context tile at `patch_frame`: the patch re-anchored on
-    /// `keypoint` (on the patch frame itself where there is none or its ray misses
-    /// the plane), widened by `margin` grid px on every side, and drawn
+    /// `keypoint` (on the patch frame itself where there is none or the slide
+    /// refuses it), widened by `margin` grid px on every side, and drawn
     /// through its plane with the sampler the fit's bitmap render picks from
     /// the view's Jacobian. `None` when no sample lands on the photograph.
     fn render(

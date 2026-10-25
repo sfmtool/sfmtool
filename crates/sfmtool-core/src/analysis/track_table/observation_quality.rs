@@ -53,9 +53,9 @@ pub(super) fn max_error_px(image_set: &ImageSet, view: &PointView<'_>) -> f64 {
 /// (back-facing); `None` for a point with no patch frame.
 ///
 /// Each angle is the one Track View shows for the row
-/// ([`viewing_angle`]): read at the patch re-anchored on the observation's
-/// keypoint where the observation has one and its ray meets the patch's
-/// plane, and at the patch's stored centre otherwise, as a render without a
+/// ([`viewing_angle`]): read at the patch slid onto the observation's
+/// keypoint's ray where the observation has one and the slide follows it,
+/// and at the patch's stored centre otherwise, as a render without a
 /// keypoint is. An observation whose camera sits on the patch's centre has no
 /// angle and is skipped. The largest is NaN when no observation has an angle.
 pub(super) fn viewing_angles(image_set: &ImageSet, view: &PointView<'_>) -> Option<(f64, f64)> {

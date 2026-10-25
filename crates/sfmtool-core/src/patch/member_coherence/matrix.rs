@@ -67,8 +67,8 @@ fn normal_refine_shim(params: &MemberCoherenceParams) -> NormalRefineParams {
 ///
 /// `member_keypoints`, when given, is parallel to the **input** `members` slice
 /// (one entry per listed member, deduplicated alongside it) and carries that
-/// member's stored source-pixel keypoint. Each member's patch is then recentered
-/// in-plane so it renders **anchored at that keypoint** — the appearance the
+/// member's stored source-pixel keypoint. Each member's patch is then slid
+/// across its line of sight so it renders **anchored at that keypoint** — the appearance the
 /// matcher actually matched — instead of at the point's reprojection. The
 /// per-member validity mask is built through the same recentered render
 /// (`build_level_context` takes the same anchors), so the frozen common support

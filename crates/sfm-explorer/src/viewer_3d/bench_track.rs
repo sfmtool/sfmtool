@@ -173,8 +173,8 @@ pub(crate) struct DiscVertex {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Mark {
     /// Which observation it is, by its position in the track's list -- which is
-    /// not this mark's own position, an observation whose ray misses the
-    /// patch frame drawing none. It is the row a click on the circle selects.
+    /// not this mark's own position, an observation whose ray the slide
+    /// refuses drawing none. It is the row a click on the circle selects.
     pub(crate) observation: usize,
     /// Centre to `q_i`.
     pub(crate) segment: Stroke,

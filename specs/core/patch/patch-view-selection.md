@@ -48,7 +48,7 @@ would wrongly include.
 ### Track-view anchoring (opt-in)
 
 Steps 2 and 3's *track-view* half can be **anchored at the track views' stored
-keypoints**: each track view's render is recentred in-plane so it samples where
+keypoints**: each track view's render is slid across its line of sight so it samples where
 that image's feature actually is, rather than where the point currently
 reprojects. The reference is then fused from what was matched, and each track
 view's own returned score is taken through the same anchored render, so a track

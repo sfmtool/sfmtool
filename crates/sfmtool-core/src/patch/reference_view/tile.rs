@@ -29,7 +29,7 @@ pub struct ViewTile {
     pub valid: Vec<bool>,
     /// The patch frame the tile is rendered through: the patch re-anchored on
     /// the keypoint ([`OrientedPatch::anchored_at_keypoint`]), or the patch
-    /// itself where there is no keypoint or its ray misses the patch's plane.
+    /// itself where there is no keypoint or the slide refuses it.
     pub patch_frame: OrientedPatch,
     /// The Jacobian of the warp at the tile's centre, in image px per grid px
     /// ([`patch_grid_jacobian`]), where the centre projects.

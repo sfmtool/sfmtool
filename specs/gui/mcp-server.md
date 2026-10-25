@@ -5080,7 +5080,8 @@ sizes it, again by one of two: a world `half_length` with an optional
 `moved_edge`, or an `edge` (`"+u"`, `"-u"`, `"+v"`, `"-v"`) and a `pixel` with
 the photograph it is in, with the **opposite edge left where it is**.
 `spin_bench_patch` turns it by `angle_deg` about its own normal. The pixel is
-unprojected onto the patch's own plane, so an edge lands there exactly through
+unprojected onto the plane of the square drawn in that photograph, parallel to
+the patch's, so an edge lands there exactly through
 whatever distortion the lens has, and because a patch is square the whole square
 follows one scale. **A pixel form names its photograph as exactly one of
 `observation` and `camera_image`.** An `observation` means that sighting's

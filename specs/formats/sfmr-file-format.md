@@ -1845,10 +1845,11 @@ sorts), present or absent together, flagged by `has_observation_readings`:
   reading of another render. A consumer that needs the current render's
   reading and has the photographs compares the row's angle, tilt and zoom
   with the current geometry and reads again where they differ.
-- **The fallback render.** Where the keypoint's ray cannot meet the patch's
-  plane in front of the camera, the render uses the stored patch without
-  re-anchoring, and `d̂` is the ray to the patch's centre. Such a view is at or
-  past grazing, so its cosine is near zero or negative either way.
+- **The fallback render.** Where the observation has no anchor (its
+  keypoint's ray is at or past a right angle to the line of sight to the
+  point, [The embedded-patch feature relationship](#the-embedded-patch-feature-relationship)),
+  the render uses the stored patch without re-anchoring, and `d̂` is the ray
+  to the patch's centre.
 - **Not measured.** `NaN` in the axes means the observation was not measured:
   its angles and zoom are then `NaN` and its flags `0`. `NaN` in a score means
   the score was not read, as where the point has no stored bitmap: such a row
@@ -2031,8 +2032,9 @@ the semi-axes and rotation) can therefore treat an `embedded_patches`
 observation exactly like a `sift_files` one.
 
 This is an approximation valid over the patch footprint: for wide-baseline or
-strongly distorted views the true footprint is not an exact ellipse. For a
-**grazing view** the anchor falls back to `A_j = X_p`, so the shape degrades to
+strongly distorted views the true footprint is not an exact ellipse. Where
+there is **no anchor** (a ray at or past a right angle to the line of sight)
+the anchor falls back to `A_j = X_p`, so the shape degrades to
 the frame projected at the point centre. For a **point at infinity** (`w = 0`)
 there is no anchor plane: the frame is tangent to the direction sphere, so `A_j`
 and the two half-axis tips are projected as *directions* (`w = 0` folds out the

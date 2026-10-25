@@ -1673,8 +1673,8 @@ ways** to say what they want. A translation takes `by`, a displacement
 `pixel` with the photograph it is in, which its centre lands under. A resize
 takes a world `half_length` with an optional `moved_edge`, or an `edge` and a
 `pixel` with the photograph it is in. The pixel forms are the gestures, and they
-are what make the answer exact: the pixel is unprojected onto the patch's own
-plane, so the edge lands there through whatever distortion the lens has and the
+are what make the answer exact: the pixel is unprojected onto the plane of the
+square drawn in that photograph, parallel to the patch's, so the edge lands there through whatever distortion the lens has and the
 opposite edge is left where it was. **The photograph is exactly one of
 `observation` and `camera_image`**, and the two name different squares, which
 is why a call carrying both is refused. An `observation` names that sighting's

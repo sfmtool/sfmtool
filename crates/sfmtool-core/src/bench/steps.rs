@@ -2649,8 +2649,8 @@ const CARRY_TOLERANCE: f64 = 1e-12;
 /// A miss this small, in image px, ends a translation's Newton steps.
 const CARRY_TOLERANCE_PX: f64 = 1e-9;
 
-/// The step, as a fraction of the patch's half-length, a translation's Newton
-/// step reads the carried centre's pixel derivative over.
+/// The step, as a fraction of the patch's half-length, over which a pixel
+/// gesture's Newton steps read their derivative by a difference.
 const CARRY_STEP: f64 = 1e-6;
 
 /// How far inside the photograph's edge [`clamp_to_photograph`] puts a pixel it

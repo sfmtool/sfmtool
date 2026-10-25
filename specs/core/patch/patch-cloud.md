@@ -270,9 +270,10 @@ photograph shows.
 
 One rule decides where there is a slid square: the keypoint's ray points less
 than a right angle from the line of sight to the centre (`r·v > 0`), under every
-lens model (for a direction patch, the ray points toward `d`). Only a ray-path
-lens, a fisheye or an equirectangular one, can see past that angle, and a ray
-there never meets the facing plane in front of the camera. A ray that meets the
+lens model (for a direction patch, the ray points toward `d`). Seeing past that
+angle takes a field of view wider than a right angle, as a fisheye or an
+equirectangular lens has, or a centre behind the camera, and a ray there never
+meets the facing plane in front of the camera. A ray that meets the
 patch's own plane behind the camera, as happens when a keypoint is read against
 a patch that has been turned nearly edge on since it was measured, is slid like
 any other. So where the hand edits refuse a sighting, its tile and its outline

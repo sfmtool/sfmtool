@@ -2276,7 +2276,8 @@ outline is read against, and what the view's tile is cut through: the tile
 through `OrientedPatch::seen_at_keypoint`, and the hand edits through
 `OrientedPatch::anchored_at_keypoint`, which gives the same patch. Where the
 keypoint's ray points at or past a right angle from the line of sight to the
-centre, which only a ray-path lens can see, there is no slid patch: the tile and
+centre, which takes a field of view wider than a right angle, as a fisheye
+has, or a centre behind the camera, there is no slid patch: the tile and
 the outline are the patch as it stands, and a hand edit through that sighting is
 refused as `NoProjection`. So
 the outline, the reading and the tile are one square

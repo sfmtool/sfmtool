@@ -183,8 +183,8 @@ Part 6). Since `T` does not depend on the offsets, the views are independent of
 each other, and each is refined **once**. Where there is nothing to align to
 (fewer than two views project, the point has no reference observation and the
 reference-view rule finds no eligible view, the reference's core is out of
-frame or flat at its keypoint, or its keypoint does not map onto the patch
-plane), every view keeps its seed, unscored, and there is no reference: the
+frame or flat at its keypoint, or the slide refuses its keypoint), every
+view keeps its seed, unscored, and there is no reference: the
 localizer does the same, so such a point comes out of both kernels with
 `reference` `None`, and it has no stored bitmap.
 
