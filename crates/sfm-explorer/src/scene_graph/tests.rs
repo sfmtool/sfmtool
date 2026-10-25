@@ -1524,11 +1524,11 @@ fn the_align_options_are_remembered_and_travel_with_the_request() {
 }
 
 #[test]
-fn the_point_mode_is_disabled_without_feature_indexes_in_both_nodes() {
+fn the_point_mode_is_offered_when_a_node_has_no_feature_indexes() {
     let mut state = misaligned_pair();
-    let b = state.scene[1].id;
-    // Node A carries embedded keypoints, so there is no feature index for a
-    // point correspondence to be keyed on.
+    let (a, b) = (state.scene[0].id, state.scene[1].id);
+    // Node A carries embedded keypoints, so the fit matches points by keypoint
+    // position rather than by feature index; the menu does not grey it out.
     let tracks = state.scene[0].recon().point_set.tracks.len();
     let images = state.scene[0].recon().image_set.images.len();
     state.scene[0].recon_mut().point_set.observations = ObservationSource::EmbeddedPatches {
@@ -1541,11 +1541,12 @@ fn the_point_mode_is_disabled_without_feature_indexes_in_both_nodes() {
     click(&mut panel, &ctx, &mut state, row_id(b, "align_points"));
     let response = click(&mut panel, &ctx, &mut state, row_id(b, "align_to_run_a"));
 
-    let (.., options) = response.align_node.expect("the target is still clickable");
+    let (source, target, options) = response.align_node.expect("the target is clickable");
+    assert_eq!((source, target), (b, a));
     assert_eq!(
         options.source,
-        AlignSource::Cameras,
-        "the disabled Points radio still switched the mode"
+        AlignSource::Points,
+        "the Points radio did not switch the mode"
     );
 }
 

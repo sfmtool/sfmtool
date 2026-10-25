@@ -241,6 +241,105 @@ pub fn find_point_correspondences_py(
     ))
 }
 
+/// Find corresponding 3D points between two reconstructions by keypoint
+/// position in shared images.
+///
+/// Observations of each shared image pair are matched by mutual nearest
+/// keypoint within `pixel_threshold` pixels; each match votes for its
+/// `(source point, target point)` pair, and the votes are resolved greedily,
+/// most votes first, into a one-to-one mapping of pairs with at least
+/// `min_votes` votes. `source_keypoints_xy` and `target_keypoints_xy` are
+/// `(M, 2)` arrays parallel to the track columns.
+///
+/// Returns (source_ids, target_ids) as two 1D uint32 numpy arrays, in the
+/// order the pairs were accepted. Pairs with a point at infinity are kept;
+/// the caller drops them.
+#[pyfunction]
+#[pyo3(
+    name = "find_point_correspondences_by_coordinate",
+    signature = (
+        source_track_image_indexes,
+        source_keypoints_xy,
+        source_track_point_indexes,
+        target_track_image_indexes,
+        target_keypoints_xy,
+        target_track_point_indexes,
+        shared_images_source,
+        shared_images_target,
+        pixel_threshold = 2.0,
+        min_votes = 2,
+    )
+)]
+#[allow(clippy::too_many_arguments)]
+pub fn find_point_correspondences_by_coordinate_py(
+    py: Python<'_>,
+    source_track_image_indexes: PyReadonlyArray1<u32>,
+    source_keypoints_xy: PyReadonlyArray2<f64>,
+    source_track_point_indexes: PyReadonlyArray1<u32>,
+    target_track_image_indexes: PyReadonlyArray1<u32>,
+    target_keypoints_xy: PyReadonlyArray2<f64>,
+    target_track_point_indexes: PyReadonlyArray1<u32>,
+    shared_images_source: PyReadonlyArray1<u32>,
+    shared_images_target: PyReadonlyArray1<u32>,
+    pixel_threshold: f64,
+    min_votes: usize,
+) -> PyResult<(Py<PyAny>, Py<PyAny>)> {
+    use sfmtool_core::reconstruction::point_correspondence::{
+        find_point_correspondences_by_coordinate, CoordinateCorrespondenceOptions,
+    };
+
+    let src_img = to_contiguous!(source_track_image_indexes);
+    let src_pts = to_contiguous!(source_track_point_indexes);
+    let tgt_img = to_contiguous!(target_track_image_indexes);
+    let tgt_pts = to_contiguous!(target_track_point_indexes);
+    let shared_src = to_contiguous!(shared_images_source);
+    let shared_tgt = to_contiguous!(shared_images_target);
+    let rows = |name: &str, xy: &PyReadonlyArray2<f64>, n: usize| -> PyResult<Vec<[f64; 2]>> {
+        let a = xy.as_array();
+        if a.ncols() != 2 || a.nrows() != n {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "{name} must have shape ({n}, 2), one row per observation; got {:?}",
+                a.shape()
+            )));
+        }
+        Ok(a.rows().into_iter().map(|r| [r[0], r[1]]).collect())
+    };
+    let src_xy = rows("source_keypoints_xy", &source_keypoints_xy, src_img.len())?;
+    let tgt_xy = rows("target_keypoints_xy", &target_keypoints_xy, tgt_img.len())?;
+    if src_pts.len() != src_img.len()
+        || tgt_pts.len() != tgt_img.len()
+        || shared_src.len() != shared_tgt.len()
+    {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "the track columns of each side, and the two shared-image arrays, must have equal lengths",
+        ));
+    }
+
+    let result = find_point_correspondences_by_coordinate(
+        &src_img,
+        &src_xy,
+        &src_pts,
+        &tgt_img,
+        &tgt_xy,
+        &tgt_pts,
+        &shared_src,
+        &shared_tgt,
+        &CoordinateCorrespondenceOptions {
+            pixel_threshold,
+            min_votes,
+        },
+    );
+
+    Ok((
+        numpy::PyArray1::from_vec(py, result.source_ids)
+            .into_any()
+            .unbind(),
+        numpy::PyArray1::from_vec(py, result.target_ids)
+            .into_any()
+            .unbind(),
+    ))
+}
+
 // ── Track Filtering ─────────────────────────────────────────────────────
 
 /// Filter tracks by point mask and remap point IDs.
@@ -397,6 +496,10 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(estimate_alignment_py, m)?)?;
     m.add_function(wrap_pyfunction!(ransac_alignment_py, m)?)?;
     m.add_function(wrap_pyfunction!(find_point_correspondences_py, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        find_point_correspondences_by_coordinate_py,
+        m
+    )?)?;
     m.add_function(wrap_pyfunction!(merge_points_and_tracks_py, m)?)?;
     m.add_function(wrap_pyfunction!(filter_tracks_by_point_mask_py, m)?)?;
     Ok(())

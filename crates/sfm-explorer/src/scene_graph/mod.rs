@@ -345,7 +345,6 @@ impl SceneGraphPanel {
             .map(|n| AlignTarget {
                 id: n.id,
                 label: n.label.clone(),
-                feature_indexed: n.recon().feature_indexes().is_some(),
             })
             .collect();
         self.hits.clear();
@@ -466,9 +465,6 @@ fn show_mcp_header(_ui: &mut egui::Ui, _state: &AppState) {}
 struct AlignTarget {
     id: ReconId,
     label: String,
-    /// Whether it carries `sift_files` observations — the feature indexes the
-    /// point mode matches on.
-    feature_indexed: bool,
 }
 
 /// What one frame of the tree produced.

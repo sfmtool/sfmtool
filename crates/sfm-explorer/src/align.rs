@@ -18,13 +18,19 @@
 //! displayed frame is the caller's job (see [`crate::state::AppState::align_node`]).
 
 pub use sfmtool_core::analysis::alignment::{
-    align_reconstructions, AlignFit, AlignOptions, AlignSource,
+    align_reconstructions, AlignFit, AlignOptions, AlignSource, PointMatching,
 };
 
-/// `Aligned run_b → run_a: 214/243 cameras, RMS 0.031`.
+/// `Aligned run_b → run_a: 214/243 cameras, RMS 0.031`, with
+/// ` by keypoint position` after the noun when the point mode matched by
+/// keypoint position rather than by feature index.
 pub fn success_message(source_label: &str, target_label: &str, fit: &AlignFit) -> String {
+    let matching = match fit.point_matching {
+        Some(PointMatching::KeypointPosition) => " by keypoint position",
+        Some(PointMatching::FeatureIndex) | None => "",
+    };
     format!(
-        "Aligned {source_label} → {target_label}: {}/{} {}, RMS {:.3}",
+        "Aligned {source_label} → {target_label}: {}/{} {}{matching}, RMS {:.3}",
         fit.inliers,
         fit.correspondences,
         fit.source.noun(),

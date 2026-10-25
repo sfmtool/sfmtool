@@ -7,4 +7,6 @@ pub mod reconstructions;
 
 pub use least_squares::{estimate_alignment, AlignmentParams};
 pub use ransac::ransac_alignment;
-pub use reconstructions::{align_reconstructions, AlignFit, AlignOptions, AlignSource};
+pub use reconstructions::{
+    align_reconstructions, AlignFit, AlignOptions, AlignSource, PointMatching,
+};

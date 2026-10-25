@@ -11,6 +11,7 @@ _EXPECTED_FUNCTIONS = (
     "estimate_alignment",
     "ransac_alignment",
     "find_point_correspondences",
+    "find_point_correspondences_by_coordinate",
     "merge_points_and_tracks",
     "filter_tracks_by_point_mask",
     "triangulate_batch",

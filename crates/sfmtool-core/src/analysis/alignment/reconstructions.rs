@@ -19,12 +19,18 @@
 //!   typical comparison case. Correspondence counts are in the tens or
 //!   hundreds, far too few for RANSAC to have anything to consense over, so
 //!   this mode relies on the trimmed refit alone.
-//! - **Points**: [`find_point_correspondences`] matches 3D points through
-//!   shared feature observations in shared images, yielding orders of magnitude
-//!   more correspondences — enough for RANSAC. Needs feature-indexed
-//!   observations ([`ObservationSource::SiftFiles`](crate::ObservationSource))
-//!   in *both* reconstructions, because the match identity is
-//!   `(image, feature index)`.
+//! - **Points**: 3D points matched through their observations in shared
+//!   images, yielding orders of magnitude more correspondences — enough for
+//!   RANSAC. When both reconstructions have feature indexes
+//!   ([`ObservationSource::SiftFiles`](crate::ObservationSource)),
+//!   [`find_point_correspondences`] matches observations by
+//!   `(image, feature index)`. Otherwise
+//!   [`find_point_correspondences_by_coordinate`] matches them by keypoint
+//!   position, with its default 2 px and 2 votes. The positions are the inline
+//!   `keypoints_xy` column (every `embedded_patches` reconstruction, and a
+//!   `sift_files` one that carries the optional copy), or else the `.sift`
+//!   positions the feature indexes name, read from the workspace for the
+//!   shared images only. [`AlignFit::point_matching`] says which was used.
 //!
 //! Points at infinity are excluded from both: a `w = 0` point stores a unit
 //! bearing, not a location, and would drag a positional fit toward the origin.
@@ -39,7 +45,10 @@
 use std::collections::HashMap;
 
 use crate::analysis::alignment::{estimate_alignment, ransac_alignment, AlignmentParams};
-use crate::reconstruction::point_correspondence::find_point_correspondences;
+use crate::reconstruction::point_correspondence::{
+    find_point_correspondences, find_point_correspondences_by_coordinate,
+    CoordinateCorrespondenceOptions, PointCorrespondenceResult,
+};
 use crate::{Se3Transform, SfmrReconstruction};
 
 /// Refit iterations for the trimmed least-squares fit. One initial fit over
@@ -90,8 +99,29 @@ pub enum AlignSource {
     /// Camera centres of same-named images.
     #[default]
     Cameras,
-    /// 3D points matched through shared feature observations.
+    /// 3D points matched through their observations in shared images.
     Points,
+}
+
+/// How the point mode matched the two reconstructions' observations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PointMatching {
+    /// By `(image, feature index)`: both reconstructions have feature indexes.
+    FeatureIndex,
+    /// By mutual nearest keypoint position in each shared image: at least one
+    /// of the two has no feature indexes.
+    KeypointPosition,
+}
+
+impl PointMatching {
+    /// How the matching is named in a report: `by feature index` or
+    /// `by keypoint position`.
+    pub fn phrase(self) -> &'static str {
+        match self {
+            PointMatching::FeatureIndex => "by feature index",
+            PointMatching::KeypointPosition => "by keypoint position",
+        }
+    }
 }
 
 impl AlignSource {
@@ -139,6 +169,8 @@ pub struct AlignFit {
     pub rms: f64,
     /// Which mode produced them.
     pub source: AlignSource,
+    /// How the point mode matched observations; `None` for the camera mode.
+    pub point_matching: Option<PointMatching>,
 }
 
 /// Fit the similarity taking `source` onto `target`.
@@ -244,25 +276,47 @@ fn camera_correspondences(
     out
 }
 
-/// The three parallel track columns [`find_point_correspondences`] joins on.
-fn track_columns(recon: &SfmrReconstruction) -> Option<(Vec<u32>, &[u32], Vec<u32>)> {
-    let feature_indexes = recon.feature_indexes()?;
-    let images = recon
-        .point_set
-        .tracks
-        .iter()
-        .map(|t| t.image_index)
-        .collect();
-    let points = recon
-        .point_set
-        .tracks
-        .iter()
-        .map(|t| t.point_index)
-        .collect();
-    Some((images, feature_indexes, points))
+/// The image and point columns of the tracks, the two parallel columns both
+/// matchers join on beside their own per-observation key.
+fn track_columns(recon: &SfmrReconstruction) -> (Vec<u32>, Vec<u32>) {
+    let tracks = &recon.point_set.tracks;
+    (
+        tracks.iter().map(|t| t.image_index).collect(),
+        tracks.iter().map(|t| t.point_index).collect(),
+    )
 }
 
-/// 3D point pairs matched through shared feature observations in shared images.
+/// Where each observation of `recon` sits in its image, one row per track
+/// entry, for the keypoint-position matcher.
+///
+/// The inline `keypoints_xy` when the reconstruction carries it; otherwise the
+/// `.sift` positions of the images in `shared` (an image's `.sift` file is read
+/// only when it is shared), with `NaN` rows elsewhere, which match nothing.
+fn keypoint_positions(
+    recon: &SfmrReconstruction,
+    shared: impl Iterator<Item = u32>,
+    side: &str,
+) -> Result<Vec<[f64; 2]>, String> {
+    let mut wanted = vec![false; recon.image_set.images.len()];
+    for image in shared {
+        wanted[image as usize] = true;
+    }
+    let pixels = recon.observation_pixels(&wanted).map_err(|e| {
+        format!(
+            "the {side} reconstruction has no inline keypoints, and matching points \
+             by keypoint position could not read its .sift files: {e}"
+        )
+    })?;
+    Ok(pixels
+        .rows()
+        .into_iter()
+        .map(|r| [r[0] as f64, r[1] as f64])
+        .collect())
+}
+
+/// 3D point pairs matched through their observations in shared images, and
+/// which matching found them: by feature index when both reconstructions have
+/// feature indexes, by keypoint position otherwise.
 ///
 /// Pairs where either side is a point at infinity are dropped: a `w = 0` point's
 /// stored position is a unit bearing, and feeding it to a positional fit would
@@ -270,28 +324,52 @@ fn track_columns(recon: &SfmrReconstruction) -> Option<(Vec<u32>, &[u32], Vec<u3
 fn point_correspondences(
     source: &SfmrReconstruction,
     target: &SfmrReconstruction,
-) -> Result<Correspondences, String> {
+) -> Result<(Correspondences, PointMatching), String> {
     let shared = shared_images(source, target);
     if shared.is_empty() {
         return Err("the two reconstructions share no image names".to_string());
     }
-    let (source_images, source_features, source_points) = track_columns(source)
-        .ok_or("the source reconstruction has no feature indexes (embedded_patches)")?;
-    let (target_images, target_features, target_points) = track_columns(target)
-        .ok_or("the target reconstruction has no feature indexes (embedded_patches)")?;
-
+    let (source_images, source_points) = track_columns(source);
+    let (target_images, target_points) = track_columns(target);
     let shared_source: Vec<u32> = shared.iter().map(|&(s, _)| s).collect();
     let shared_target: Vec<u32> = shared.iter().map(|&(_, t)| t).collect();
-    let matched = find_point_correspondences(
-        &source_images,
-        source_features,
-        &source_points,
-        &target_images,
-        target_features,
-        &target_points,
-        &shared_source,
-        &shared_target,
-    );
+
+    let (matched, matching): (PointCorrespondenceResult, PointMatching) =
+        match (source.feature_indexes(), target.feature_indexes()) {
+            (Some(source_features), Some(target_features)) => (
+                find_point_correspondences(
+                    &source_images,
+                    source_features,
+                    &source_points,
+                    &target_images,
+                    target_features,
+                    &target_points,
+                    &shared_source,
+                    &shared_target,
+                ),
+                PointMatching::FeatureIndex,
+            ),
+            _ => {
+                let source_xy =
+                    keypoint_positions(source, shared_source.iter().copied(), "source")?;
+                let target_xy =
+                    keypoint_positions(target, shared_target.iter().copied(), "target")?;
+                (
+                    find_point_correspondences_by_coordinate(
+                        &source_images,
+                        &source_xy,
+                        &source_points,
+                        &target_images,
+                        &target_xy,
+                        &target_points,
+                        &shared_source,
+                        &shared_target,
+                        &CoordinateCorrespondenceOptions::default(),
+                    ),
+                    PointMatching::KeypointPosition,
+                )
+            }
+        };
 
     let mut out = Correspondences {
         source: Vec::new(),
@@ -311,11 +389,12 @@ fn point_correspondences(
     }
     if out.is_empty() {
         return Err(format!(
-            "no finite 3D point correspondences across the {} shared image(s)",
+            "no finite 3D point correspondences {} across the {} shared image(s)",
+            matching.phrase(),
             shared.len()
         ));
     }
-    Ok(out)
+    Ok((out, matching))
 }
 
 // ── Fits ────────────────────────────────────────────────────────────────
@@ -413,6 +492,7 @@ fn fit_by_cameras(
         correspondences: n,
         transform,
         source: AlignSource::Cameras,
+        point_matching: None,
     })
 }
 
@@ -421,7 +501,7 @@ fn fit_by_points(
     target: &SfmrReconstruction,
     estimate_scale: bool,
 ) -> Result<AlignFit, String> {
-    let c = point_correspondences(source, target)?;
+    let (c, matching) = point_correspondences(source, target)?;
     let n = c.len();
     if n < MIN_POINT_CORRESPONDENCES {
         return Err(format!(
@@ -476,6 +556,7 @@ fn fit_by_points(
         correspondences: n,
         transform,
         source: AlignSource::Points,
+        point_matching: Some(matching),
     })
 }
 

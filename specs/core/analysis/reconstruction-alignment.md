@@ -8,7 +8,8 @@ transform** (rotation `R`, translation `t`, uniform scale `s`, together an
 counterparts. The point-based alignment pipeline is:
 
 1. Find corresponding 3D point pairs between the two reconstructions via
-   shared feature observations — see
+   their observations in shared images, by feature index or by keypoint
+   position — see
    [point-correspondence.md](../reconstruction/point-correspondence.md). Pairs involving a
    point at infinity are dropped up front (a `w = 0` point stores a bearing
    direction, not a metric location, and would corrupt the fit).
@@ -66,17 +67,27 @@ fitted — two points leave the rotation about the line joining them free. No
 RANSAC: a few hundred centres are too few for a consensus sample to beat
 fitting them all and trimming the worst away.
 
-**Correspondences by points** — `find_point_correspondences` over the shared
-images (see [point-correspondence.md](../reconstruction/point-correspondence.md)), which needs
-feature-indexed observations (`sift_files`) on *both* sides; pairs touching a
-point at infinity are dropped, as in `sfm align`. Fewer than 10
+**Correspondences by points** — observations in the shared images matched
+into 3D point pairs (see
+[point-correspondence.md](../reconstruction/point-correspondence.md)). When both
+sides have feature indexes (`sift_files`), `find_point_correspondences` matches
+them by feature index. Otherwise `find_point_correspondences_by_coordinate`
+matches them by keypoint position with its default options (2 px, 2 votes).
+Each side's positions come from `observation_pixels`: the inline
+`keypoints_xy` column when the reconstruction carries one (always for
+`embedded_patches`), else the `.sift` positions its feature indexes name, read
+from the workspace for the shared images only. A `.sift` file that cannot be
+read fails the fit with a reason naming the side and the file. Pairs touching
+a point at infinity are dropped afterwards, as in `sfm align`. Fewer than 10
 correspondences, before or after RANSAC, is refused (`sfm align`'s
 `min_points`).
 
 `AlignFit` carries the fitted `transform` (source's native coordinates →
 target's native coordinates; composing it into a frame either reconstruction
 is *displayed* in is the caller's job), the correspondence count, the inlier
-count, the RMS residual over the inliers, and which mode produced them. Every
+count, the RMS residual over the inliers, which mode produced them, and, for
+the point mode, `point_matching`: `PointMatching::FeatureIndex` or
+`PointMatching::KeypointPosition` (`None` for the camera mode). Every
 failure the modes name — no shared images, too few correspondences, a
 degenerate configuration, an SVD that would not converge — comes back as an
 `Err` string a caller can show verbatim, leaving the source where it was.
@@ -191,6 +202,8 @@ deterministic seeds.
 pair built the way the GUI spec asks for: reconstruction B is reconstruction A
 put through a *known* similarity, so the assertions are about where B's points
 and cameras land rather than about the transform's components (which sidesteps
-the quaternion sign ambiguity). It covers both modes' round trips, that the
-landed cameras face the way the target's do, rigid vs similarity, the
-exclusion of points at infinity, and each refusal path.
+the quaternion sign ambiguity). It covers both modes' round trips, the point
+mode by feature index and by keypoint position (an `embedded_patches` pair, a
+mixed pair, and the checked-in Seoul bull ground truth against a moved copy of
+itself), that the landed cameras face the way the target's do, rigid vs
+similarity, the exclusion of points at infinity, and each refusal path.

@@ -471,11 +471,6 @@ fn show_tint_menu(ui: &mut egui::Ui, node: &mut SceneNode, out: &mut TreeOutput)
     out.hit(row_id(id, "tint_menu"), menu.response);
 }
 
-/// Why the point mode is unavailable, shown on hover over the greyed option.
-const POINTS_DISABLED_HINT: &str =
-    "Point correspondences are matched by feature index, so both reconstructions \
-     need `sift_files` observations. One of these carries embedded patches instead.";
-
 /// `Align to ▸`: the fit's two options, then one entry per other loaded node.
 ///
 /// Options above targets rather than a popup per target: there are two of them,
@@ -491,9 +486,6 @@ fn show_align_menu(ui: &mut egui::Ui, node: &SceneNode, out: &mut TreeOutput) {
         return;
     }
 
-    let source_indexed = node.recon().feature_indexes().is_some();
-    let any_target_indexed = others.iter().any(|t| t.feature_indexed);
-    let points_available = source_indexed && any_target_indexed;
     let id = node.id;
 
     let menu = ui.menu_button("Align to", |ui| {
@@ -507,12 +499,9 @@ fn show_align_menu(ui: &mut egui::Ui, node: &SceneNode, out: &mut TreeOutput) {
             "Camera Poses",
         );
         out.hit(row_id(id, "align_cameras"), cameras);
-        let points = ui
-            .add_enabled_ui(points_available, |ui| {
-                ui.radio_value(&mut out.align_options.source, AlignSource::Points, "Points")
-            })
-            .inner
-            .on_disabled_hover_text(POINTS_DISABLED_HINT);
+        // Always available: the fit matches points by feature index when both
+        // nodes have them and by keypoint position otherwise.
+        let points = ui.radio_value(&mut out.align_options.source, AlignSource::Points, "Points");
         out.hit(row_id(id, "align_points"), points);
 
         ui.separator();
@@ -523,15 +512,8 @@ fn show_align_menu(ui: &mut egui::Ui, node: &SceneNode, out: &mut TreeOutput) {
         out.hit(row_id(id, "align_rigid"), rigid);
 
         ui.separator();
-        let by_points = out.align_options.source == AlignSource::Points;
         for target in &others {
-            // A target can be individually unusable even when the mode is
-            // selectable: one other node may carry feature indexes and another
-            // not.
-            let usable = !by_points || (source_indexed && target.feature_indexed);
-            let button = ui
-                .add_enabled(usable, egui::Button::new(&target.label))
-                .on_disabled_hover_text(POINTS_DISABLED_HINT);
+            let button = ui.button(&target.label);
             let button = out.hit(row_id(id, &format!("align_to_{}", target.label)), button);
             if button.clicked() {
                 out.response.align_node = Some((id, target.id, *out.align_options));

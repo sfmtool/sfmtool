@@ -215,7 +215,7 @@ Paths in the *Source* column are relative to
 | Source | Exposes | Spec |
 |--------|---------|------|
 | [analysis/core.rs](../crates/sfmtool-py/src/analysis/core.rs) | `estimate_alignment`, `ransac_alignment` | [reconstruction-alignment.md](core/analysis/reconstruction-alignment.md) |
-| | `find_point_correspondences`, `merge_points_and_tracks` | [point-correspondence.md](core/reconstruction/point-correspondence.md) |
+| | `find_point_correspondences`, `find_point_correspondences_by_coordinate`, `merge_points_and_tracks` | [point-correspondence.md](core/reconstruction/point-correspondence.md) |
 | | `compute_narrow_track_mask` | [batch-triangulation-api.md](core/reconstruction/batch-triangulation-api.md) |
 | | `filter_tracks_by_point_mask` | [xform-command.md](cli/reconstruction/xform/xform-command.md) |
 | | `apply_se3_to_camera_poses` | none |

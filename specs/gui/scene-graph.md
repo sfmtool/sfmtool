@@ -1075,13 +1075,19 @@ fit does:
   positions. Here the fit is over camera **centres** only, per this spec — the
   same `estimate_alignment` the point mode uses, so the two modes differ in
   what they correspond and in nothing else.
-- **Correspondences by points**: `find_point_correspondences` matches 3D
-  points through shared feature observations in shared images, yielding a much
-  larger set; points at infinity are excluded from the fit (their stored
+- **Correspondences by points**: 3D points matched through their
+  observations in shared images, yielding a much larger set. When both nodes
+  have feature indexes (`sift_files`), `find_point_correspondences` matches
+  observations by feature index. Otherwise
+  `find_point_correspondences_by_coordinate` matches them by keypoint position
+  (mutual nearest keypoint within 2 px, at least 2 supporting images, as
+  `sfm compare --by-coordinate` does), so an `embedded_patches` node aligns by
+  points too. The positions are a node's inline keypoints, or else the `.sift`
+  positions of the shared images, read from its workspace; a `sift_files` node
+  with neither inline keypoints nor its `.sift` files fails with a reason
+  saying so. Points at infinity are excluded from the fit (their stored
   position is a bearing, not a location — the same `_finite_pair_mask` rule
-  `sfm align` applies). Requires feature-indexed observations (`sift_files`
-  source) in both nodes — the menu option is disabled, with a hover
-  explanation, otherwise. Fewer than 10 correspondences, before or after
+  `sfm align` applies). Fewer than 10 correspondences, before or after
   RANSAC, is refused (`sfm align`'s `min_points`).
 - **Estimation**: `ransac_alignment` for inlier selection on point
   correspondences, then `estimate_alignment` with trimmed refit
@@ -1104,17 +1110,22 @@ it fits the two clouds' *poses* onto one another, which under the tree's
 vocabulary a bare "Cameras" — an intrinsics record — no longer says. They
 live on the panel and persist between opens, and they sit *above* the target
 list in the one `Align to ▸` submenu rather than in a popup per target — two
-radio pairs do not earn a third level of nesting. A target whose node lacks
-feature indexes is greyed individually when Points is selected, so a scene
-mixing `sift_files` and `embedded_patches` nodes stays usable.
+radio pairs do not earn a third level of nesting. Both modes and every target
+are always enabled: the point mode matches by feature index or by keypoint
+position, and a pair it cannot match fails with the reason in the status line.
 The fit runs synchronously — by-cameras is trivially small, and by-points
-RANSAC over ~10⁵ correspondences is tens of milliseconds; if datasets outgrow
-that it moves to a background thread without UI change.
+RANSAC over ~10⁵ correspondences is tens of milliseconds. A keypoint-position
+match of a `sift_files` node without inline keypoints also reads one `.sift`
+file per shared image on that thread. If datasets outgrow that, the fit moves
+to a background thread without UI change.
 
 Outcome feedback is recorded in the Action Log and shown in the status line,
 with correspondence count, inliers, and post-fit RMS residual:
-`Aligned run_b → run_a: 214/243 cameras, RMS 0.031`. On failure (no shared
-images, too few correspondences, degenerate geometry, SVD failure) the
+`Aligned run_b → run_a: 214/243 cameras, RMS 0.031`. A point fit matched by
+keypoint position says so after the noun:
+`Aligned v02 → v01: 215/223 points by keypoint position, RMS 0.234`. On
+failure (no shared images, too few correspondences, keypoint positions that
+cannot be read, degenerate geometry, SVD failure) the
 transform is left untouched and the reason recorded as a **failed** entry:
 `Align run_b → run_a failed: <reason>`. The status line is the most recent
 non-query entry (see [action-log.md](action-log.md)), painted in the viewport

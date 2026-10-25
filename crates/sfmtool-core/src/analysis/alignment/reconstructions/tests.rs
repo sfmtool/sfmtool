@@ -54,14 +54,39 @@ fn renamed(recon: &SfmrReconstruction, prefix: &str) -> SfmrReconstruction {
     out
 }
 
-/// Swap in embedded keypoints, which carry no feature index — the case the
-/// point mode cannot match on.
+/// One keypoint per observation of a demo reconstruction, on a 10 px grid
+/// laid out by feature index. The demo's feature index is its point index, so
+/// every point sits at the same pixel in each image that sees it, and no two
+/// points of one image are within the 2 px matching threshold of each other.
+fn grid_keypoints(recon: &SfmrReconstruction) -> ndarray::Array2<f32> {
+    let features = recon.feature_indexes().expect("a demo has feature indexes");
+    let mut xy = ndarray::Array2::<f32>::zeros((features.len(), 2));
+    for (row, &f) in features.iter().enumerate() {
+        xy[[row, 0]] = 5.0 + 10.0 * (f % 32) as f32;
+        xy[[row, 1]] = 5.0 + 10.0 * (f / 32) as f32;
+    }
+    xy
+}
+
+/// Swap in embedded keypoints, which carry no feature index, so the point mode
+/// has to match by keypoint position.
 fn embedded(recon: &SfmrReconstruction) -> SfmrReconstruction {
     let mut out = recon.clone();
     out.point_set.observations = ObservationSource::EmbeddedPatches {
-        keypoints_xy: ndarray::Array2::<f32>::from_elem((out.point_set.tracks.len(), 2), 100.0),
+        keypoints_xy: grid_keypoints(recon),
         image_file_hashes: vec![[0u8; 16]; out.image_set.images.len()],
     };
+    out
+}
+
+/// Give a `sift_files` reconstruction the optional inline copy of its
+/// keypoints.
+fn with_inline_keypoints(recon: &SfmrReconstruction) -> SfmrReconstruction {
+    let mut out = recon.clone();
+    let xy = grid_keypoints(recon);
+    if let ObservationSource::SiftFiles { keypoints_xy, .. } = &mut out.point_set.observations {
+        *keypoints_xy = Some(xy);
+    }
     out
 }
 
@@ -163,6 +188,124 @@ fn aligning_by_points_recovers_a_known_similarity() {
     assert_eq!(fit.correspondences, 64);
     assert_eq!(fit.inliers, 64);
     assert!(fit.rms < 1e-9);
+    assert_eq!(fit.point_matching, Some(PointMatching::FeatureIndex));
+}
+
+#[test]
+fn an_embedded_patches_pair_aligns_by_keypoint_position() {
+    let a = embedded(&SfmrReconstruction::demo(64));
+    let b = transformed(&a, &known_similarity());
+
+    let fit = align_reconstructions(&b, &a, options(AlignSource::Points, true)).expect("a fit");
+
+    assert_eq!(fit.point_matching, Some(PointMatching::KeypointPosition));
+    // Each point is seen at the same pixel in two shared images: two votes,
+    // the matcher's default minimum.
+    assert_eq!(fit.correspondences, 64);
+    assert_eq!(fit.inliers, 64);
+    assert!(
+        worst_point_error(&b, &a, &fit.transform) < 1e-9,
+        "worst point error {}",
+        worst_point_error(&b, &a, &fit.transform),
+    );
+}
+
+#[test]
+fn a_mixed_pair_aligns_by_keypoint_position_when_the_sift_files_side_has_inline_keypoints() {
+    let a = with_inline_keypoints(&SfmrReconstruction::demo(64));
+    let b = embedded(&transformed(&a, &known_similarity()));
+
+    for (source, target) in [(&b, &a), (&a, &b)] {
+        let fit = align_reconstructions(source, target, options(AlignSource::Points, true))
+            .expect("a fit");
+        assert_eq!(fit.point_matching, Some(PointMatching::KeypointPosition));
+        assert_eq!(fit.correspondences, 64);
+        assert!(worst_point_error(source, target, &fit.transform) < 1e-9);
+    }
+}
+
+#[test]
+fn a_mixed_pair_whose_sift_files_side_has_no_keypoint_positions_says_what_is_missing() {
+    // The demo carries feature indexes but no inline keypoints, and its `.sift`
+    // files do not exist, so there is no position to match the embedded side's
+    // keypoints against.
+    let a = SfmrReconstruction::demo(64);
+    let b = embedded(&transformed(&a, &known_similarity()));
+
+    let err =
+        align_reconstructions(&b, &a, options(AlignSource::Points, true)).expect_err("no .sift");
+    assert!(
+        err.contains("target reconstruction has no inline keypoints") && err.contains(".sift"),
+        "{err}"
+    );
+
+    // The camera mode is unaffected: it never looks at observations.
+    assert!(align_reconstructions(&b, &a, options(AlignSource::Cameras, true)).is_ok());
+}
+
+#[test]
+fn the_infinity_points_are_left_out_of_a_fit_by_keypoint_position() {
+    let mut a = embedded(&SfmrReconstruction::demo(64));
+    a.point_set.points[0].w = 0.0;
+    a.point_set.points[0].position = Point3::new(0.0, 0.0, 1.0);
+    let b = transformed(&a, &known_similarity());
+
+    let fit = align_reconstructions(&b, &a, options(AlignSource::Points, true)).expect("a fit");
+
+    assert_eq!(fit.point_matching, Some(PointMatching::KeypointPosition));
+    assert_eq!(
+        fit.correspondences, 63,
+        "the point at infinity was fed to the fit"
+    );
+}
+
+#[test]
+fn keypoints_that_match_nothing_are_reported_by_keypoint_position() {
+    let a = embedded(&SfmrReconstruction::demo(64));
+    let mut b = transformed(&a, &known_similarity());
+    if let ObservationSource::EmbeddedPatches { keypoints_xy, .. } = &mut b.point_set.observations {
+        keypoints_xy.mapv_inplace(|v| v + 1000.0);
+    }
+
+    let err =
+        align_reconstructions(&b, &a, options(AlignSource::Points, true)).expect_err("no matches");
+    assert!(err.contains("by keypoint position"), "{err}");
+}
+
+/// The ground truth checked in beside the Seoul bull photographs: an
+/// `embedded_patches` file, so it has no feature indexes.
+fn seoul_bull() -> SfmrReconstruction {
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(
+        "../../test-data/images/seoul_bull_sculpture/seoul_bull_sculpture_ground_truth_v01.sfmr",
+    );
+    SfmrReconstruction::load(&path, &crate::progress::Progress::none()).expect("it loads")
+}
+
+#[test]
+fn the_seoul_bull_ground_truth_aligns_by_points_to_a_moved_copy_of_itself() {
+    let a = seoul_bull();
+    assert!(a.feature_indexes().is_none());
+    let b = transformed(&a, &known_similarity());
+
+    let fit = align_reconstructions(&b, &a, options(AlignSource::Points, true)).expect("a fit");
+
+    assert_eq!(fit.point_matching, Some(PointMatching::KeypointPosition));
+    let finite = a
+        .point_set
+        .points
+        .iter()
+        .filter(|p| !p.is_at_infinity())
+        .count();
+    // Each finite point of this file matches its own copy: none is seen in
+    // only one image, and no two observations of one image are close enough to
+    // take each other's place.
+    assert_eq!(fit.correspondences, finite);
+    assert!(
+        (fit.transform.scale - 0.5).abs() < 1e-6,
+        "scale {}",
+        fit.transform.scale
+    );
+    assert!(fit.rms < 1e-6, "RMS {}", fit.rms);
 }
 
 #[test]
@@ -246,19 +389,6 @@ fn too_few_shared_cameras_is_reported_rather_than_fitted() {
     let err =
         align_reconstructions(&b, &a, options(AlignSource::Cameras, true)).expect_err("too few");
     assert!(err.contains("only 2 shared image(s)"), "{err}");
-}
-
-#[test]
-fn the_point_mode_refuses_a_reconstruction_without_feature_indexes() {
-    let a = SfmrReconstruction::demo(64);
-    let b = embedded(&transformed(&a, &known_similarity()));
-
-    let err =
-        align_reconstructions(&b, &a, options(AlignSource::Points, true)).expect_err("no indexes");
-    assert!(err.contains("feature indexes"), "{err}");
-
-    // The camera mode is unaffected: it never looks at observations.
-    assert!(align_reconstructions(&b, &a, options(AlignSource::Cameras, true)).is_ok());
 }
 
 #[test]

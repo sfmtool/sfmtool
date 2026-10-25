@@ -4,11 +4,19 @@
 //! Point correspondence finding between SfM reconstructions.
 //!
 //! Finds corresponding 3D points between two reconstructions by analyzing
-//! shared feature observations across images.
+//! shared feature observations across images: by feature index with
+//! [`find_point_correspondences`], or by keypoint position with
+//! [`find_point_correspondences_by_coordinate`].
 
 use std::collections::{HashMap, HashSet};
 
 use crate::SfmrReconstruction;
+
+mod by_coordinate;
+
+pub use by_coordinate::{
+    find_point_correspondences_by_coordinate, CoordinateCorrespondenceOptions,
+};
 
 /// Result of finding point correspondences between two reconstructions.
 pub struct PointCorrespondenceResult {

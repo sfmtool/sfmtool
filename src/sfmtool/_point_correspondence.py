@@ -3,13 +3,12 @@
 
 """Shared utilities for finding corresponding 3D points between SfM reconstructions."""
 
-from collections import defaultdict
-
 import numpy as np
 
 from ._sfmtool.reconstruction import SfmrReconstruction
 from ._sfmtool.analysis import (
     find_point_correspondences as _rust_find_point_correspondences,
+    find_point_correspondences_by_coordinate as _rust_find_point_correspondences_by_coordinate,
 )
 from ._sfmtool.fileio import read_sift_partial
 from .sift.file import get_sift_path_from_recon
@@ -193,43 +192,46 @@ def _vote_point_correspondences(
     greedily into a one-to-one mapping (strongest-supported pairs first), keeping
     only pairs with at least ``min_votes`` supporting images.
 
+    Equally near keypoints resolve to the one listed first for that image, and
+    pairs with equal votes are taken in the order their first vote was cast.
+
     This is the pure, sift-free core of
     :func:`find_point_correspondences_by_coordinate` and is unit-testable with
-    synthetic observation dicts.
+    synthetic observation dicts. The matching itself is the Rust
+    ``find_point_correspondences_by_coordinate`` binding; this flattens the
+    dicts into the track-column layout it takes.
     """
-    pair_votes: dict[tuple[int, int], int] = defaultdict(int)
 
-    for src_img, tgt_img in shared_images:
-        if src_img not in source_by_image or tgt_img not in target_by_image:
-            continue
-        src_xy, src_pids = source_by_image[src_img]
-        tgt_xy, tgt_pids = target_by_image[tgt_img]
-        if len(src_xy) == 0 or len(tgt_xy) == 0:
-            continue
+    def flatten(by_image):
+        images, xy, pids = [], [], []
+        for img_idx, (img_xy, img_pids) in by_image.items():
+            n = len(img_pids)
+            images.append(np.full(n, img_idx, dtype=np.uint32))
+            xy.append(np.asarray(img_xy, dtype=np.float64).reshape(n, 2))
+            pids.append(np.asarray(img_pids).astype(np.uint32))
+        if not images:
+            return (
+                np.zeros(0, dtype=np.uint32),
+                np.zeros((0, 2), dtype=np.float64),
+                np.zeros(0, dtype=np.uint32),
+            )
+        return np.concatenate(images), np.concatenate(xy), np.concatenate(pids)
 
-        # Pairwise squared distances (observation counts per image are small).
-        d2 = np.sum((src_xy[:, None, :] - tgt_xy[None, :, :]) ** 2, axis=2)  # (M, N)
-        src_to_tgt = np.argmin(d2, axis=1)
-        tgt_to_src = np.argmin(d2, axis=0)
-        thresh2 = pixel_threshold * pixel_threshold
-
-        for si, tj in enumerate(src_to_tgt):
-            # Mutual nearest neighbor, within the pixel threshold.
-            if tgt_to_src[tj] == si and d2[si, tj] <= thresh2:
-                pair_votes[(int(src_pids[si]), int(tgt_pids[tj]))] += 1
-
-    # Resolve to a one-to-one mapping: assign strongest-supported pairs first.
-    ordered = sorted(pair_votes.items(), key=lambda kv: kv[1], reverse=True)
-    correspondences: dict[int, int] = {}
-    used_targets: set[int] = set()
-    for (src_pid, tgt_pid), votes in ordered:
-        if votes < min_votes:
-            break
-        if src_pid in correspondences or tgt_pid in used_targets:
-            continue
-        correspondences[src_pid] = tgt_pid
-        used_targets.add(tgt_pid)
-    return correspondences
+    src_images, src_xy, src_pids = flatten(source_by_image)
+    tgt_images, tgt_xy, tgt_pids = flatten(target_by_image)
+    source_ids, target_ids = _rust_find_point_correspondences_by_coordinate(
+        src_images,
+        src_xy,
+        src_pids,
+        tgt_images,
+        tgt_xy,
+        tgt_pids,
+        np.array([s for s, _ in shared_images], dtype=np.uint32),
+        np.array([t for _, t in shared_images], dtype=np.uint32),
+        pixel_threshold=float(pixel_threshold),
+        min_votes=max(int(min_votes), 0),
+    )
+    return dict(zip(source_ids.tolist(), target_ids.tolist()))
 
 
 def find_point_correspondences_by_coordinate(

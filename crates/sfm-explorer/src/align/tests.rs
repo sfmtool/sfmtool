@@ -19,6 +19,7 @@ fn the_success_message_reads_the_way_the_spec_writes_it() {
         inliers: 214,
         rms: 0.0312,
         source: AlignSource::Cameras,
+        point_matching: None,
     };
     assert_eq!(
         success_message("run_b", "run_a", &fit),
@@ -34,10 +35,27 @@ fn a_point_mode_fit_is_reported_in_points() {
         inliers: 9_988,
         rms: 0.0025,
         source: AlignSource::Points,
+        point_matching: Some(PointMatching::FeatureIndex),
     };
     assert_eq!(
         success_message("b", "a", &fit),
         "Aligned b → a: 9988/10412 points, RMS 0.003"
+    );
+}
+
+#[test]
+fn a_fit_matched_by_keypoint_position_says_so() {
+    let fit = AlignFit {
+        transform: Se3Transform::identity(),
+        correspondences: 223,
+        inliers: 212,
+        rms: 0.0041,
+        source: AlignSource::Points,
+        point_matching: Some(PointMatching::KeypointPosition),
+    };
+    assert_eq!(
+        success_message("v02", "v01", &fit),
+        "Aligned v02 → v01: 212/223 points by keypoint position, RMS 0.004"
     );
 }
 

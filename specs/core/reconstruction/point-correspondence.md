@@ -43,9 +43,9 @@ image pairs, and:
 Returns parallel `source_ids` / `target_ids` vectors. Because the key is the
 feature *index*, both reconstructions must reference the **same `.sift`
 files** — two solves of the same workspace qualify; reconstructions built
-with different feature backends do not (see the coordinate-based alternative
-below). `embedded_patches` reconstructions have no feature-index column and
-cannot use this path.
+with different feature backends do not. `embedded_patches` reconstructions
+have no feature-index column and cannot use this path; the keypoint-position
+matcher below serves both cases.
 
 ### Python wrapper (`_point_correspondence.py`)
 
@@ -56,18 +56,60 @@ anchor a similarity fit or positional comparison). Returns the
 `{source_id: target_id}` dict plus the two `(N, 3)` position arrays. Zero
 correspondences (or zero finite ones) is a `ValueError`.
 
-### Coordinate-based alternative (`find_point_correspondences_by_coordinate`)
+## Keypoint-position correspondence (`find_point_correspondences_by_coordinate`)
 
 For reconstructions from **different feature backends** (e.g. COLMAP SIFT vs
 the sfmtool extractor) the same scene keypoint lands at nearly the same
-pixel but under a different feature index. The pure-Python fallback matches
-observations in shared images by **mutual nearest 2D keypoint** within
-`pixel_threshold` px (default 2.0), reading keypoint positions from each
-workspace's `.sift` files. Each per-image match votes for its
-`(source_point, target_point)` pair; votes are resolved greedily
-(strongest-supported first) into a one-to-one mapping, keeping pairs with at
-least `min_votes` supporting images (default 2). The same
-points-at-infinity filter applies.
+pixel but under a different feature index, and an `embedded_patches`
+reconstruction has no feature index at all. This matcher keys on the pixel
+instead. The kernel lives in
+[point_correspondence/by_coordinate.rs](../../../crates/sfmtool-core/src/reconstruction/point_correspondence/by_coordinate.rs),
+bound as `sfmtool.analysis.find_point_correspondences_by_coordinate`:
+
+```rust
+pub fn find_point_correspondences_by_coordinate(
+    source_track_image_indexes: &[u32],
+    source_keypoints_xy: &[[f64; 2]],
+    source_track_point_indexes: &[u32],
+    target_track_image_indexes: &[u32],
+    target_keypoints_xy: &[[f64; 2]],
+    target_track_point_indexes: &[u32],
+    shared_images_source: &[u32],
+    shared_images_target: &[u32],
+    options: &CoordinateCorrespondenceOptions, // pixel_threshold 2.0, min_votes 2
+) -> PointCorrespondenceResult
+```
+
+It takes the same layout as the feature-index finder, with one keypoint
+position per observation in place of the feature index, so a caller holding
+track columns passes them unchanged.
+
+1. For every shared image pair, the two sides' observations of that image are
+   matched by **mutual nearest keypoint**: each is the other's nearest
+   keypoint, at most `pixel_threshold` px apart. The search sorts one image's
+   keypoints by `x` and scans only those within the threshold in `x`, so an
+   image with thousands of observations is not compared all against all.
+2. Each match casts one vote for its `(source_point, target_point)` pair.
+3. The votes are resolved greedily into a **one-to-one** mapping, most votes
+   first, keeping pairs with at least `min_votes` votes and skipping a pair
+   whose source or target point is already taken.
+
+The result is deterministic: among equally near keypoints the one listed
+first for its image wins, and pairs with equal votes are taken in the order
+their first vote was cast (shared pairs in the order given, source
+observations in row order). The pairs come back in the order they were
+accepted. A non-finite position matches nothing. The function knows point ids
+only, so a pair with a point at infinity is kept and the caller drops it.
+
+### Python wrapper
+
+`find_point_correspondences_by_coordinate(source_recon, target_recon,
+shared_images, pixel_threshold=2.0, min_votes=2)` in `_point_correspondence.py`
+gathers each side's observation positions per image (the embedded keypoints
+of an `embedded_patches` reconstruction, else the positions in the workspace's
+`.sift` files) and hands them to `_vote_point_correspondences`, which flattens
+them into track columns and calls the binding. Then the same
+points-at-infinity filter as the feature-index wrapper applies.
 
 ## Multi-way grouping for `sfm merge` (`merge/correspondences.py`)
 
@@ -128,6 +170,7 @@ records this as a strict `xfail`
 | `sfm merge` | `merge/reconstructions.py` → grouping + the `merge_points_and_tracks` binding → PnP pose refinement |
 | `sfm xform --align-to` | `xform/_align_to.py` → pairwise finder → similarity fit |
 | `sfm compare` | `compare/_core.py` → pairwise finder (feature-index or coordinate-based) |
+| SfM Explorer `Align to ▸` (Points) | `align_reconstructions` in [reconstructions.rs](../../../crates/sfmtool-core/src/analysis/alignment/reconstructions.rs) → feature-index finder when both sides have feature indexes, keypoint-position finder otherwise ([reconstruction-alignment.md](../analysis/reconstruction-alignment.md)) |
 
 See [`specs/cli/reconstruction/align-command.md`](../../cli/reconstruction/align-command.md) and
 [`specs/cli/reconstruction/merge-command.md`](../../cli/reconstruction/merge-command.md) for the CLI
@@ -138,5 +181,10 @@ surfaces.
 Sibling `tests.rs` under `reconstruction/point_correspondence/` covers the
 nested-map construction, first-occurrence semantics, union-find transitive
 merging, observation-key collisions, and the `embedded_patches` rejection.
-Python-side behavior (infinity filtering, coordinate voting) is covered in
-`tests/` via the align/merge/compare test modules.
+`point_correspondence/by_coordinate/tests.rs` covers the keypoint-position
+matcher: the threshold, mutual nearest keypoints, vote counting, the
+one-to-one resolution and its tie orders, non-finite positions, and agreement
+with an all-pairs reference on about 1,500 observations a side.
+Python-side behavior (infinity filtering, coordinate voting through the
+binding) is covered in `tests/` via the align/merge/compare test modules and
+`tests/test_point_correspondence_coordinate.py`.
