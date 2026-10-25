@@ -52,6 +52,7 @@ from _viz_common import (
     draw_text,
     infinity_first_sample,
     new_canvas,
+    plane_point,
     slid_center,
     rotation_matrices,
     run_over_recons,
@@ -204,9 +205,10 @@ def render_row(meta, trk, recon, cloud, images, geom, args):
             images[v], cam, t[v], quats[v], center, normal, u_axis, he_ctx, ctx, w
         )
         if v in kept_set:
-            hit = slid_center(cam, rot[v], t[v], kept_kpt[v], center, w)
-            c = center if hit is None else hit
-            off = (c - center) if hit is not None else np.zeros(3)
+            # The marker is the keypoint pixel read against the plane the
+            # context tile is rendered on: the unslid patch's.
+            hit = plane_point(cam, rot[v], t[v], kept_kpt[v], center, normal, w)
+            off = (hit - center) if hit is not None else np.zeros(3)
             acc = (float(off @ u_axis) / wpp_u, float(off @ v_axis) / wpp_v)
             border = YELLOW if v in trk else GREEN
             kind = "trk" if v in trk else "add"

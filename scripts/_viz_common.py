@@ -231,6 +231,26 @@ def slid_center(cam, rot, t, kpt, center, w=1.0):
     return cam_center + dir_world * (float(sight @ sight) / along)
 
 
+def plane_point(cam, rot, t, kpt, center, normal, w=1.0):
+    """Where keypoint `kpt`'s ray meets the plane through `center` with
+    `normal`: how a pixel is read against a tile rendered on that plane.
+
+    For a point at infinity (`w == 0`) the tile is on the tangent sphere and
+    the reading is the ray's own direction, as in :func:`slid_center`. `None`
+    where the ray is parallel to the plane or meets it behind the camera."""
+    ray_cam = np.asarray(cam.pixel_to_ray(float(kpt[0]), float(kpt[1])))
+    dir_world = rot.T @ ray_cam
+    if w == 0.0:
+        n = float(np.linalg.norm(dir_world))
+        return dir_world / n if n > 0.0 else None
+    cam_center = -rot.T @ t
+    denom = float(dir_world @ normal)
+    if abs(denom) < 1e-12:
+        return None
+    s = float((np.asarray(center, float) - cam_center) @ normal) / denom
+    return cam_center + s * dir_world if s > 0.0 else None
+
+
 # ===== Montage drawing =====
 
 #: Background grey every montage canvas is filled with.
