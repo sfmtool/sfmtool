@@ -149,6 +149,7 @@ Paths in the *Source* column are relative to
 | Source | Exposes | Spec |
 |--------|---------|------|
 | [sift/extract.rs](../crates/sfmtool-py/src/sift/extract.rs) | `extract_sift`, `detect_sift_keypoints`, `describe_keypoints`, `affine_shapes_from_similarity` | [sift.md](core/features/sift.md) |
+| [sift/files.rs](../crates/sfmtool-py/src/sift/files.rs) | `build_sift_files` | [sift.md](core/features/sift.md) § "Building `.sift` files" |
 
 ### `reconstruction`
 
