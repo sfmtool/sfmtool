@@ -167,9 +167,10 @@ of the last round runs them before it returns CLEAN. One failure is excused:
 on Windows, the `ui_basic` real-mouse test
 `a_real_right_click_opens_the_reconstruction_rows_context_menu` failing with
 "could not aim at the viewer's own window", as it does on a locked desktop.
-When that is the only failure and every other `ui_basic` test passed, push
-and open the PR anyway; name the test and the reason in your report and in
-the PR's Testing section, and say that CI's `ui-test-windows` job runs it.
+When that is the only failure and every other `ui_basic` test passed, it
+does not block the push or the PR; name the test and the reason in your
+report and in the PR's Testing section, and say that CI's `ui-test-windows`
+job runs it.
 Any other suite that did not run or failed blocks the push.
 
 Report to the user, or return to the calling skill:
@@ -378,9 +379,9 @@ and hosts the pictures:
 >    with "could not aim at the viewer's own window" (a locked desktop) is
 >    not SUBSTANTIVE and does not stop you returning CLEAN, as long as every
 >    other `ui_basic` test passed. Report it as not run, not as a pass; CI's
->    `ui-test-windows` job runs it. If you already have a SUBSTANTIVE finding, you
->    may skip the long suites, since the next round's auditor runs them; say
->    which you skipped. Never push.
+>    `ui-test-windows` job runs it. If you already have a SUBSTANTIVE
+>    finding, you may skip the long suites, since the next round's auditor
+>    runs them; say which you skipped. Never push.
 > 5. Classify each issue:
 >    - **SIMPLE**: a wrong count or number, a wording or style slip, a broken
 >      link, a wrap, a small factual correction in a sentence, a missing
