@@ -444,7 +444,8 @@ pub(super) const REANCHOR_MARGIN: i64 = 2;
 /// view's start on both axes, the window the first search covered, so the
 /// search never reaches past `±search`. One render and one small search per
 /// view; the shift left is under `REANCHOR_MARGIN`, where the sub-window's
-/// departure from the slid patch is a few hundredths of a pixel.
+/// departure from the slid patch is at most the bounds [`REANCHOR_MIN_SHIFT`]
+/// states for shifts under 3 grid px.
 #[allow(clippy::too_many_arguments)]
 fn reanchor(
     patch: &OrientedPatch,
