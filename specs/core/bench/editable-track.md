@@ -3064,8 +3064,8 @@ the starting frame, so every render of the loop is on one grid; `Some(n)`
 sets it instead.
 
 Each pass renders every `in` view once at the track's current frame, as a
-*context tile*: the patch re-anchored in its plane on the view's keypoint
-(`OrientedPatch::anchored_at_keypoint`), widened by `cell_shift_bound_px`
+*context tile*: the patch slid onto the view's keypoint
+(`OrientedPatch::seen_at_keypoint`), widened by `cell_shift_bound_px`
 rounded up on every side, and drawn through its plane by
 `WarpMap::from_patch` with the sampler `fit.refine.sampler` picks from the
 view's Jacobian, the render path of the keypoint localizer's context tiles. A
@@ -3085,7 +3085,14 @@ photograph, and turned into a ray whose noise floor is
 `plane.cell_shift_precision_grid_px` grid px carried into the photograph by
 the largest singular value of the render map's local Jacobian there, floored
 at `plane.ray_noise_floor_px`. The reference gives a ray through each cell
-centre whose template is textured. The cell plane kernel
+centre whose template is textured. A cell's shift is not a new keypoint: the
+view's keypoint, and so the square the view sees, stay as they are, and the
+shift says where on that one square the cell's content lies. Every position a
+cell is read at is therefore a place on the square the slide gives the view,
+which the context tile renders exactly, and a cell's ray is the ray through
+the photograph pixel of that place. The localizer differs because its shift
+moves the keypoint, which names another slid square, one that a shift within
+the first render only approximates. The cell plane kernel
 ([cell-plane-normals.md](../patch/cell-plane-normals.md)) triangulates the
 cells and fits the weighted, robust plane with its `NormalDeterminacy`.
 

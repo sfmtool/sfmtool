@@ -7,7 +7,7 @@
 //! in.
 //!
 //! Each `in` view is rendered once at the track's current patch frame as a context
-//! tile: the patch re-anchored in its plane on the view's keypoint and drawn
+//! tile: the patch slid onto the view's keypoint and drawn
 //! through that plane ([`WarpMap::from_patch`]) on the working grid plus a
 //! margin of the cell search bound, the render the keypoint localizer makes
 //! for its context tiles. The reference view's render, without the margin,
