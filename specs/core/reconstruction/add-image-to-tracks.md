@@ -183,7 +183,12 @@ For a point `p` with existing observations in images `J`, and the target image
    the "+"-descent from the projection, and the local maximum it climbs to is
    taken when it is inside the window: a repeated texture can put a stronger
    correlation a period away, and the projection is the evidence for which
-   period is meant.
+   period is meant. A peak more than 1 grid px from the start is searched again
+   on a render through the patch slid onto its keypoint, within 2 grid px of
+   it and inside the first window, as the localizer does
+   ([patch-keypoint-localization.md](../patch/patch-keypoint-localization.md));
+   that peak is `peak_at_edge` where its total shift rounds to the window's
+   edge, and a peak the ascent took is not moved onto the edge by it.
 4. **Sub-pixel.** With `subpixel`, the keypoint is refined by the ECC
    Gauss-Newton solve against the same template
    (`TrackReferences::refine_template`), moving only the target, with the

@@ -3256,3 +3256,34 @@ fn the_localizer_and_a_reference_search_read_a_shift_near_the_edge_alike() {
         "5.6 grid px rounds to the edge of a window of 6"
     );
 }
+
+/// A single search's peak is on the edge only where its integer peak is at
+/// `±margin`: a peak one cell inside whose sub-pixel step reaches 0.5 or more
+/// toward the edge is not, as the ascent reads it. After a second search the
+/// total shift is read against the window, and a peak the ascent placed is
+/// never read at the edge: a second peak there is not taken.
+#[test]
+fn a_peak_one_cell_inside_is_not_on_the_edge_and_an_ascended_peak_stays_off_it() {
+    let at = |dx: f64, ix: i64| ShiftResult {
+        dx,
+        dy: 0.0,
+        ix,
+        iy: 0,
+        peak: 0.9,
+    };
+    // Margin 6: integer peak 5, sub-pixel step +0.7.
+    let inside = at(5.7, 5);
+    assert!(!inside.on_edge(6));
+    assert!(at(6.0, 6).on_edge(6));
+    assert!(at(-5.6, -6).on_edge(6));
+    // A second search's small step from there rounds to the edge.
+    let again = at(0.1, 0);
+    assert_eq!(second_search_reading(&inside, &again, 6, false), Some(true));
+    assert_eq!(second_search_reading(&inside, &again, 6, true), None);
+    // Off the edge, an ascended peak's second search is taken.
+    let near = at(4.2, 4);
+    assert_eq!(second_search_reading(&near, &again, 6, true), Some(false));
+    // Past the window, never.
+    let far = at(0.9, 1);
+    assert_eq!(second_search_reading(&inside, &far, 6, false), None);
+}

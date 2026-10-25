@@ -72,6 +72,8 @@ pub(super) use seed::seed_offset;
 // Search machinery, re-exported into this module's namespace for the sibling
 // test module's `use super::*`.
 #[cfg(test)]
+use reference::second_search_reading;
+#[cfg(test)]
 use search::{search_shift, search_shift_plus_descent, window_reading, SearchScratch, ShiftResult};
 
 // Correlation kernels re-exported into this module's namespace only for the

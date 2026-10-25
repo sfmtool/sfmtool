@@ -146,16 +146,27 @@ pub(super) struct ShiftResult {
     pub(super) peak: f64,
 }
 
+impl ShiftResult {
+    /// Whether the integer peak sits on the edge of the `±margin` window
+    /// searched, where the true maximum may lie outside it. A peak one cell
+    /// inside is not on the edge, whatever its sub-pixel step.
+    pub(super) fn on_edge(&self, margin: i64) -> bool {
+        self.ix.abs() == margin || self.iy.abs() == margin
+    }
+}
+
 /// Where a view's total sub-pixel shift from its start, `total` in grid px,
-/// lies in the `±margin` window its search covers: `None` past the window on
-/// either axis, otherwise whether it lies on the window's edge, the shift
-/// rounding to `margin` on either axis, where the true peak may lie outside.
+/// after a search made again at the keypoint the first search found (the two
+/// shifts summed), lies in the `±margin` window the first search covered:
+/// `None` past the window on either axis, otherwise whether it lies on the
+/// window's edge, the shift rounding to `margin` on either axis, where the
+/// true peak may lie outside.
 ///
-/// The one reading of a shift against the window, for a peak found by one
-/// search or by a search made again at the keypoint the first found (the two
-/// shifts summed): the localizer and [`super::TrackReferences::search`] take
-/// a second search's peak only where this is `Some`, and the latter reports
-/// its `at_edge` from it.
+/// The one reading of a second search's peak against the window: the
+/// localizer and [`super::TrackReferences::search`] take that peak only where
+/// this is `Some`, and the latter reports its `at_edge` from it. A single
+/// search's peak is on the edge where its integer peak is at `±margin`
+/// ([`ShiftResult::on_edge`]).
 pub(super) fn window_reading(total: [f64; 2], margin: i64) -> Option<bool> {
     let reach = margin as f64;
     if !(total[0].abs() <= reach && total[1].abs() <= reach) {

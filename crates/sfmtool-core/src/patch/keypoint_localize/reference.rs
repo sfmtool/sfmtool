@@ -25,7 +25,9 @@
 //! bitmap, and keeps only the pairwise ZNCCs from here for its pair rule.
 
 use super::align::{Template, REANCHOR_MARGIN, REANCHOR_MIN_SHIFT};
-use super::search::{search_shift, search_shift_plus_descent, window_reading, SearchScratch};
+use super::search::{
+    search_shift, search_shift_plus_descent, window_reading, SearchScratch, ShiftResult,
+};
 use super::{
     extract_core, member_self_similarity_radius, project, render_context, resolve_reference,
     seed_frame, shifted_center, KeypointLocalizeParams, LocalizeError,
@@ -443,8 +445,7 @@ impl TrackReferences {
         ) else {
             return Ok(out);
         };
-        let on_edge = |ix: i64, iy: i64| ix.abs() == margin || iy.abs() == margin;
-        if ascend_on_edge && on_edge(sh.ix, sh.iy) {
+        if ascend_on_edge && sh.on_edge(margin) {
             if let Some(local) = search_shift_plus_descent(
                 &tile,
                 &mut scratch,
@@ -456,22 +457,21 @@ impl TrackReferences {
                 c0,
                 c0,
             ) {
-                if !on_edge(local.ix, local.iy) {
+                if !local.on_edge(margin) {
                     sh = local;
                     out.ascended = true;
                 }
             }
         }
         out.peak_zncc = sh.peak;
-        out.at_edge = window_reading([sh.dx, sh.dy], margin).unwrap_or(true);
+        out.at_edge = sh.on_edge(margin);
         let center = shifted_center(&patch_frame, sh.dx, sh.dy, self.wpp[0], self.wpp[1]);
         out.keypoint = project(view, &center, patch.w).map(|(x, y)| [x, y]);
         // As the localizer does: past `REANCHOR_MIN_SHIFT` the shift was read
         // as a sub-window of a render about the seed, so the view is rendered
         // again through the patch slid onto the keypoint found and searched
-        // within `REANCHOR_MARGIN` of it. The second peak is taken where it is
-        // still within `±margin` of the start, the window searched, and then
-        // `at_edge` says whether it lies on that window's edge.
+        // within `REANCHOR_MARGIN` of it. The second peak is taken where
+        // `second_search_reading` takes it, and `at_edge` is its reading.
         if let Some(found) = out
             .keypoint
             .filter(|_| sh.dx.hypot(sh.dy) > REANCHOR_MIN_SHIFT)
@@ -508,8 +508,8 @@ impl TrackReferences {
                     c,
                     c,
                 ) {
-                    let total = [sh.dx + again.dx, sh.dy + again.dy];
-                    if let Some(at_edge) = window_reading(total, margin) {
+                    if let Some(at_edge) = second_search_reading(&sh, &again, margin, out.ascended)
+                    {
                         out.peak_zncc = again.peak;
                         out.at_edge = at_edge;
                         let center =
@@ -644,4 +644,23 @@ fn dot(a: &[f32], b: &[f32]) -> f64 {
         .zip(b)
         .map(|(&x, &y)| f64::from(x) * f64::from(y))
         .sum()
+}
+
+/// Whether `TrackReferences::search` takes a second search's peak `again`,
+/// made at the keypoint the first search's peak `first` found, and if so
+/// whether it lies on the edge of the `±margin` window the first covered.
+///
+/// `None` where the total shift is past that window ([`window_reading`]), and
+/// where the first peak came from the ascent (`ascended`) and the second lies
+/// on the window's edge: the ascent is taken only off the edge, so a view it
+/// placed is never reported at the edge, which would refuse a peak the ascent
+/// accepted. Otherwise `Some(at_edge)`, the total read by [`window_reading`].
+pub(super) fn second_search_reading(
+    first: &ShiftResult,
+    again: &ShiftResult,
+    margin: i64,
+    ascended: bool,
+) -> Option<bool> {
+    let at_edge = window_reading([first.dx + again.dx, first.dy + again.dy], margin)?;
+    (!(ascended && at_edge)).then_some(at_edge)
 }
