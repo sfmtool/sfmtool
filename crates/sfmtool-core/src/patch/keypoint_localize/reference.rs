@@ -25,7 +25,7 @@
 //! bitmap, and keeps only the pairwise ZNCCs from here for its pair rule.
 
 use super::align::{Template, REANCHOR_MARGIN, REANCHOR_MIN_SHIFT};
-use super::search::{search_shift, search_shift_plus_descent, SearchScratch};
+use super::search::{search_shift, search_shift_plus_descent, window_reading, SearchScratch};
 use super::{
     extract_core, member_self_similarity_radius, project, render_context, resolve_reference,
     seed_frame, shifted_center, KeypointLocalizeParams, LocalizeError,
@@ -463,7 +463,7 @@ impl TrackReferences {
             }
         }
         out.peak_zncc = sh.peak;
-        out.at_edge = on_edge(sh.ix, sh.iy);
+        out.at_edge = window_reading([sh.dx, sh.dy], margin).unwrap_or(true);
         let center = shifted_center(&patch_frame, sh.dx, sh.dy, self.wpp[0], self.wpp[1]);
         out.keypoint = project(view, &center, patch.w).map(|(x, y)| [x, y]);
         // As the localizer does: past `REANCHOR_MIN_SHIFT` the shift was read
@@ -508,10 +508,10 @@ impl TrackReferences {
                     c,
                     c,
                 ) {
-                    let (ix, iy) = (sh.ix + again.ix, sh.iy + again.iy);
-                    if ix.abs() <= margin && iy.abs() <= margin {
+                    let total = [sh.dx + again.dx, sh.dy + again.dy];
+                    if let Some(at_edge) = window_reading(total, margin) {
                         out.peak_zncc = again.peak;
-                        out.at_edge = on_edge(ix, iy);
+                        out.at_edge = at_edge;
                         let center =
                             shifted_center(&frame, again.dx, again.dy, self.wpp[0], self.wpp[1]);
                         out.keypoint = project(view, &center, patch.w).map(|(x, y)| [x, y]);

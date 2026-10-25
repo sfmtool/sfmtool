@@ -3179,3 +3179,80 @@ fn search_shift_plus_descent_takes_a_diagonal_step() {
     );
     assert!(plus.peak > start);
 }
+
+/// One reading of a shift against the `±margin` window: the total sub-pixel
+/// shift, a second search's added to the first's, is inside or past the
+/// window on either axis, and on its edge where it rounds to `margin`.
+#[test]
+fn a_total_shift_is_read_against_the_window_one_way() {
+    // A first search's 5.4 plus a second's 0.8 is past a window of 6, though
+    // the integer peaks (5 and 1) sum to 6.
+    assert_eq!(window_reading([5.4 + 0.8, 0.0], 6), None);
+    assert_eq!(window_reading([5.4, 0.0], 6), Some(false));
+    assert_eq!(window_reading([0.2, -5.6], 6), Some(true));
+    assert_eq!(window_reading([-6.0, 0.0], 6), Some(true));
+    assert_eq!(window_reading([6.01, 0.0], 6), None);
+    assert_eq!(window_reading([0.0, 0.0], 6), Some(false));
+}
+
+/// A view whose content sits 5.6 grid px off, near the edge of a window of 6,
+/// is searched, rendered again at the keypoint found and searched again by the
+/// localizer and by `TrackReferences::search` under the one window rule: both
+/// reach the same keypoint, on the content, and the reference search reports
+/// it on the window's edge.
+#[test]
+fn the_localizer_and_a_reference_search_read_a_shift_near_the_edge_alike() {
+    let planted = [5.6, 0.0];
+    let scene = four_view_scene([[0.0; 2], [0.0; 2], [0.0; 2], planted], [texture; 4]);
+    let views = scene.views();
+    let patch = plane_patch();
+    let p = KeypointLocalizeParams {
+        max_shift_px: f64::MAX,
+        ..params()
+    };
+    let seeds: Vec<Option<[f64; 2]>> = (0..4).map(|k| Some(projection(&views, k))).collect();
+    let localized =
+        localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], Some(&seeds), Some(0), &p);
+    let k = localized
+        .views
+        .iter()
+        .position(|&v| v == 3)
+        .expect("view 3 kept");
+    let by_localizer = localized.keypoints[k];
+
+    let references = TrackReferences::build(
+        &patch,
+        &views,
+        &[0, 1],
+        &[projection(&views, 0), projection(&views, 1)],
+        Some(0),
+        None,
+        &p,
+    )
+    .expect("two textured references");
+    let found = references
+        .search(&patch, &views[3], Some(projection(&views, 3)), false, &p)
+        .expect("a search");
+    let by_reference = found.keypoint.expect("a keypoint");
+
+    // Within the quadratic step's accuracy of the content, and of each other.
+    let truth = true_keypoint(&views, 3, planted);
+    assert!(
+        dist(by_localizer, truth) < 0.25,
+        "{by_localizer:?} vs {truth:?}"
+    );
+    assert!(
+        dist(by_reference, truth) < 0.25,
+        "{by_reference:?} vs {truth:?}"
+    );
+    // A peak taken past the window would part the two by the second search's
+    // shift.
+    assert!(
+        dist(by_localizer, by_reference) < 0.25,
+        "{by_localizer:?} vs {by_reference:?}"
+    );
+    assert!(
+        found.at_edge,
+        "5.6 grid px rounds to the edge of a window of 6"
+    );
+}

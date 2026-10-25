@@ -72,7 +72,7 @@ pub(super) use seed::seed_offset;
 // Search machinery, re-exported into this module's namespace for the sibling
 // test module's `use super::*`.
 #[cfg(test)]
-use search::{search_shift, search_shift_plus_descent, SearchScratch, ShiftResult};
+use search::{search_shift, search_shift_plus_descent, window_reading, SearchScratch, ShiftResult};
 
 // Correlation kernels re-exported into this module's namespace only for the
 // sibling test module's `use super::*`; production callers reach them through

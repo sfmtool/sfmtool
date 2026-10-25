@@ -10,7 +10,7 @@
 //! reference-view rule finds no eligible view, there is nothing to align to.
 //! See `specs/core/patch/patch-keypoint-localization.md`.
 
-use super::search::{search_shift, search_shift_plus_descent, SearchScratch};
+use super::search::{search_shift, search_shift_plus_descent, window_reading, SearchScratch};
 use super::{
     below_absolute_floor, extract_core, member_self_similarity_radius, prof, project,
     render_context, seed_frame, shifted_center, ContextTile, KeypointLocalization,
@@ -493,8 +493,7 @@ fn reanchor(
         c0,
         params.search_strategy,
     ) {
-        let reach = margin as f64;
-        if (st.off[0] + d[0]).abs() > reach || (st.off[1] + d[1]).abs() > reach {
+        if window_reading([st.off[0] + d[0], st.off[1] + d[1]], margin).is_none() {
             return Ok(());
         }
         // The frame is now the one slid onto this keypoint, which stands as

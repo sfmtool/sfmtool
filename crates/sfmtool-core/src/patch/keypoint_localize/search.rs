@@ -146,6 +146,24 @@ pub(super) struct ShiftResult {
     pub(super) peak: f64,
 }
 
+/// Where a view's total sub-pixel shift from its start, `total` in grid px,
+/// lies in the `±margin` window its search covers: `None` past the window on
+/// either axis, otherwise whether it lies on the window's edge, the shift
+/// rounding to `margin` on either axis, where the true peak may lie outside.
+///
+/// The one reading of a shift against the window, for a peak found by one
+/// search or by a search made again at the keypoint the first found (the two
+/// shifts summed): the localizer and [`super::TrackReferences::search`] take
+/// a second search's peak only where this is `Some`, and the latter reports
+/// its `at_edge` from it.
+pub(super) fn window_reading(total: [f64; 2], margin: i64) -> Option<bool> {
+    let reach = margin as f64;
+    if !(total[0].abs() <= reach && total[1].abs() <= reach) {
+        return None;
+    }
+    Some(total.iter().any(|t| t.abs().round() >= reach))
+}
+
 /// Integer windowed-ZNCC translation search of one view's context tile against
 /// `sc.tmpl`, refined to sub-pixel by a quadratic fit over the 3×3 neighbourhood
 /// of the integer peak (`subpixel_peak`). Returns a
