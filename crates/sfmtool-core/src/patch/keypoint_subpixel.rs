@@ -640,8 +640,12 @@ fn reanchor(
     st.patch_frame = frame;
     st.off = [0.0; 2];
     st.keypoint = Some([x, y]);
+    // The second solve moves from the reached keypoint, so what it may move is
+    // what is left of the bound: the two moves together stay within
+    // `max_offset_px` of the seed. With nothing left it only scores the new
+    // render at the reached keypoint.
     let left = KeypointSubpixelParams {
-        max_offset_px: (params.max_offset_px - moved).max(REANCHOR_MIN_OFFSET),
+        max_offset_px: (params.max_offset_px - moved).max(0.0),
         ..params.clone()
     };
     refine_one_view(

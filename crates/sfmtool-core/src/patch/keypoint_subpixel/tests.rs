@@ -726,6 +726,47 @@ fn never_overshoots_beyond_max_offset() {
     }
 }
 
+/// A view planted 3 grid px off with a bound of 1 grid px reaches the bound in
+/// its first solve, past the offset that renders it again, and the solve made
+/// again from the reached keypoint may only use what is left of the bound: the
+/// view ends within `max_offset_px` of its seed.
+#[test]
+fn a_second_solve_stays_within_max_offset_of_the_seed() {
+    let ox = 3.0 * wpp();
+    let centers = [
+        [0.4, 0.0, 0.0],
+        [-0.4, 0.0, 0.0],
+        [0.0, 0.4, 0.0],
+        [0.0, -0.4, 0.0],
+    ];
+    let offs = [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [ox, 0.0]];
+    let texs = vec![texture as fn(f64, f64) -> f64; 4];
+    let scene = Scene::new(&centers, &offs, &texs);
+    let views = scene.views();
+    let patch = plane_patch();
+
+    let bounded = KeypointSubpixelParams {
+        max_offset_px: 1.0,
+        ..params()
+    };
+    let res = refine_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, Some(0), &bounded);
+    let k = res
+        .views
+        .iter()
+        .position(|&i| i == 3)
+        .expect("the planted view");
+    let proj = project(&views[3], &patch.center, patch.w).unwrap();
+    let grid = (res.keypoints[k][0] - proj.0).hypot(res.keypoints[k][1] - proj.1) / src_per_grid();
+    assert!(
+        grid > REANCHOR_MIN_OFFSET,
+        "the first solve moves {grid:.4} grid px, past the offset that renders again"
+    );
+    assert!(
+        grid <= 1.0 + 1e-6,
+        "the view moved {grid:.4} grid px, past max_offset_px=1.0"
+    );
+}
+
 // ── Membership / shape invariants ────────────────────────────────────────────
 
 #[test]
