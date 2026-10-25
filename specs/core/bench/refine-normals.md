@@ -292,7 +292,7 @@ time (a one-thread rayon pool) is one run.
 | Keypoints written | 1129 | 3020 |
 | Median turn | 17.0° | 5.2° |
 
-A refinement costs about 6 to 8 ms of one thread per observation, five to six
+A refinement costs about 6 to 8 ms of one thread per observation, about six
 times a refit's, and runs about 15 to 18 times faster on the 32-thread pool. A
 capture of 250 000 observations would take on the order of two minutes on this
 machine, on top of decoding its photographs; that figure is an extrapolation,
