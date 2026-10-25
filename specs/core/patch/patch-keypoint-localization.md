@@ -263,11 +263,15 @@ interpolation blur cannot compound. A read at shift `d` is the view's frame
 moved by `d` within its own plane. The patch slid onto the keypoint that shift
 names sits on the same ray, at the depth of the plane through `X_p` facing the
 camera, so the read departs from it by about `|d|·sin θ / depth` of the depth
-(`θ` the viewing angle). Measured at the tile's corners on the three ground
-truths, its 95th percentile is 0.005 to 0.05 px for shifts under 1 grid px,
-0.03 to 0.28 px from 1 to 3, and 0.08 to 0.76 px from 3 to 10, growing a little
-with the keypoint's gap. Past 1 grid px the view is rendered again through the
-patch slid onto the found keypoint, and the shift left is under 2 grid px.
+(`θ` the viewing angle). It grows with the shift, and a little with the
+keypoint's gap. Measured at the tile's corners on the Seoul bull, Kerry Park and
+dino ground truths, with their keypoints as stored and with keypoints moved 3 to
+25 px off the points' projections by rotating the cameras, by sliding the points
+within their planes and by taking the nearest SIFT detections, its 95th
+percentile, on each of those, is at most 0.05 px for shifts under 1 grid px,
+0.28 px from 1 to 3 and 0.76 px from 3 to 10. Past 1 grid px the view is
+rendered again through the patch slid onto the found keypoint, and the shift
+left is under 2 grid px.
 
 **A starting keypoint is not clipped.** The tile is centred on it, so the search
 reaches `±search` grid px around wherever it starts, the search made again at

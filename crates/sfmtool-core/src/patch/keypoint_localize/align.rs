@@ -428,9 +428,11 @@ pub(super) fn align_to_reference(
 ///
 /// A shift read as a sub-window of one render is the frame moved within its own
 /// plane; the patch slid onto that keypoint sits on the same ray at another
-/// depth, and the tile's corners part from it by a measured p95 of 0.006 to
-/// 0.019 px for shifts under 1 grid px, 0.05 to 0.16 px from 1 to 3, and 0.12
-/// to 0.55 px from 3 to 10, on the three ground truths.
+/// depth. At the tile's corners the two part by at most 0.05 px at the 95th
+/// percentile for shifts under 1 grid px, 0.28 px from 1 to 3 and 0.76 px from
+/// 3 to 10, as measured on three ground truths with their keypoints as stored
+/// and moved 3 to 25 px off the projections
+/// (`specs/core/patch/patch-keypoint-localization.md`).
 pub(super) const REANCHOR_MIN_SHIFT: f64 = 1.0;
 
 /// The half-width, in grid px, of the search made again about a found keypoint.

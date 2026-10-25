@@ -290,9 +290,11 @@ is the frame moved within its own plane. The patch slid onto the shifted
 keypoint sits on the same ray at the depth of the plane facing the camera, so a
 sub-window at a shift of `d` departs from it by about `|d|·sin θ / depth` of
 the depth (`θ` the viewing angle). The departure grows with the shift, and
-somewhat with the keypoint's gap. Measured at the tile's corners on the three
-ground truths, its 95th percentile is 0.006 to 0.019 px under 1 grid px of
-shift, 0.05 to 0.16 px from 1 to 3 and 0.12 to 0.55 px from 3 to 10. So the
+somewhat with the keypoint's gap; its measured size is in
+[patch-keypoint-localization.md](patch-keypoint-localization.md) and
+[keypoint-subpixel-refinement.md](keypoint-subpixel-refinement.md), up to
+0.28 px at the tile's corners at the 95th percentile for shifts from 1 to 3
+grid px and 0.76 px from 3 to 10. So the
 localizer renders a view again through the patch slid onto the keypoint its
 search found when the shift is over 1 grid px, and searches again within 2 grid
 px of it; the sub-pixel refiner does the same past half a grid px of offset,

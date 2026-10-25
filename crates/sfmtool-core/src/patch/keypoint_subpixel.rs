@@ -586,9 +586,11 @@ fn refine_one_view(
 ///
 /// The view's tile is rendered once and read at every offset the solve tries,
 /// each read being the frame moved within its own plane; the patch slid onto
-/// that keypoint sits on the same ray at another depth, and the tile's corners
-/// part from it by a measured p95 of 0.003 to 0.010 px for offsets under 1 grid
-/// px and 0.025 to 0.10 px from 1 to 2, on the three ground truths.
+/// that keypoint sits on the same ray at another depth. At the tile's corners
+/// the two part by at most 0.021 px at the 95th percentile for offsets under 1
+/// grid px and 0.16 px from 1 to 2, as measured on three ground truths with
+/// their keypoints as stored and moved 3 to 25 px off the projections
+/// (`specs/core/patch/keypoint-subpixel-refinement.md`).
 const REANCHOR_MIN_OFFSET: f64 = 0.5;
 
 /// Where `st`'s refined offset is past [`REANCHOR_MIN_OFFSET`], render its tile

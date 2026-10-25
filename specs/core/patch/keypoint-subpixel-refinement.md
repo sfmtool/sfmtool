@@ -224,9 +224,13 @@ For each view other than the reference, from its seed:
    scores at least what the first reached; otherwise the first stands, so the
    refinement still never ends below its seed. (The first solve reads every
    offset as a shift of one render within the frame's plane, where the patch
-   slid onto that offset's keypoint sits on the same ray at another depth; the
-   departure's 95th percentile is 0.002 to 0.02 px under 1 grid px of offset
-   and 0.03 to 0.16 px from 1 to 2 on the three ground truths.)
+   slid onto that offset's keypoint sits on the same ray at another depth.
+   Measured at the tile's corners on the Seoul bull, Kerry Park and dino
+   ground truths, with their keypoints as stored and with keypoints moved 3 to
+   25 px off the points' projections by rotating the cameras, by sliding the
+   points within their planes and by taking the nearest SIFT detections, the
+   departure's 95th percentile, on each of those, is at most 0.021 px under 1
+   grid px of offset and 0.16 px from 1 to 2.)
 
 Output per view: the refined `δ_v` mapped to `keypoint_v` by projecting the
 centre of its frame moved by `δ_v`, as the localizer does
