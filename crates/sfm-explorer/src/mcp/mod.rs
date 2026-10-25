@@ -84,6 +84,9 @@ pub(crate) struct CameraReleaseOverride {
     /// Release its lens distortion, or `None` for the call's
     /// `release_distortion`.
     pub(crate) release_distortion: Option<bool>,
+    /// Release its principal point, or `None` for the call's
+    /// `release_principal_point`.
+    pub(crate) release_principal_point: Option<bool>,
 }
 
 /// Everything the MCP surface can ask the viewer to do. One variant per tool.
@@ -339,15 +342,16 @@ pub(crate) enum Command {
         reconstruction_label: String,
         camera_image: CameraImageSel,
     },
-    /// Bundle-adjust one node. `release_focal` and `release_distortion` are
-    /// the release every camera takes; `cameras` overrides them camera by
-    /// camera. `free_points_cross` is the adjustment's `free_points` switch,
+    /// Bundle-adjust one node. `release_focal`, `release_distortion` and
+    /// `release_principal_point` are the release every camera takes; `cameras`
+    /// overrides them camera by camera. `free_points_cross` is the adjustment's `free_points` switch,
     /// and `schedule` its trim schedule, `None` for the core function's
     /// default.
     BundleAdjust {
         reconstruction_label: String,
         release_focal: bool,
         release_distortion: bool,
+        release_principal_point: bool,
         cameras: Vec<CameraReleaseOverride>,
         free_points_cross: bool,
         schedule: Option<Vec<sfmtool_core::geometry::BaSchedule>>,
@@ -1577,6 +1581,7 @@ pub(crate) fn apply_with_window(
             reconstruction_label,
             release_focal,
             release_distortion,
+            release_principal_point,
             cameras,
             free_points_cross,
             schedule,
@@ -1586,6 +1591,7 @@ pub(crate) fn apply_with_window(
             sfmtool_core::reconstruction::bundle_adjust::CameraRelease {
                 focal: release_focal,
                 distortion: release_distortion,
+                principal_point: release_principal_point,
             },
             &cameras,
             sfmtool_core::BundleAdjustOptions {

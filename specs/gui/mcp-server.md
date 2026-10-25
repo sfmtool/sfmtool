@@ -3972,6 +3972,7 @@ The two bulk edits.
 //                 "release_distortion": true,
 //                 "cameras": [{ "camera_intrinsics_index": 1, "release_focal": false,
 //                               "release_distortion": false }] }
+// bundle_adjust { "reconstruction_label": "seoul_bull", "release_principal_point": true }
 // bundle_adjust { "reconstruction_label": "seoul_bull", "free_points_cross": false }
 // bundle_adjust { "reconstruction_label": "dino_dog_toy", "release_focal": true,
 //                 "schedule": [[null, 1000]] }
@@ -3996,15 +3997,17 @@ the wire: its four entries are the tools `resect_camera_image`,
 
 `bundle_adjust` is the node's own solver run over the value on screen
 ([edits/bundle-adjust.md](edits/bundle-adjust.md)), with the decisions the
-dialog collects, camera by camera: whether each camera's focal is released, and
+dialog collects, camera by camera: whether each camera's focal is released,
 whether its lens distortion (`k1` on `SIMPLE_RADIAL_FISHEYE`, the spline on
-`SFMTOOL_FISHEYE` and `SFMTOOL_PINHOLE`) is released with it. `release_focal`
-and `release_distortion` are the defaults every camera of the node's image set
-takes, and `cameras` overrides them: a list of `{ camera_intrinsics_index,
-release_focal?, release_distortion? }`, one entry per camera that differs, each
-naming its camera by the index `get_camera_intrinsics` and `get_camera_image`
-report, and a field it leaves out taking the call's default. A camera with
-neither is held. An entry naming a camera the node does not have, or one camera
+`SFMTOOL_FISHEYE` and `SFMTOOL_PINHOLE`) is released with it, and whether its
+principal point is released, which any model can do with or without its focal.
+`release_focal`, `release_distortion` and `release_principal_point` are the
+defaults every camera of the node's image set takes, each `false` when left
+out, and `cameras` overrides them: a list of `{ camera_intrinsics_index,
+release_focal?, release_distortion?, release_principal_point? }`, one entry per
+camera that differs, each naming its camera by the index `get_camera_intrinsics`
+and `get_camera_image` report, and a field it leaves out taking the call's
+default. A camera with none of the three is held. An entry naming a camera the node does not have, or one camera
 twice, is refused before anything starts, and a camera no posed image uses is
 not in the solve, so what it is given is ignored. `free_points_cross` is the
 dialog's crossing checkbox: by default every free point is solved in inverse
@@ -4034,11 +4037,14 @@ model whose focal the adjustment cannot solve, a distortion on a model with
 none of the three kinds, and a distortion without the same camera's focal. So a
 rig that mixes an `OPENCV_FISHEYE` camera with spline cameras is adjusted with
 the defaults on and a `cameras` entry holding the `OPENCV_FISHEYE`. The
-version's label says what each camera released -- `, focal and lens distortion
+version's label says what each camera released, in the order focal, principal
+point, lens distortion -- `, focal, principal point and lens distortion
 released` when every camera released the same, ` on every camera` added over
 several, and `, camera 0 focal and lens distortion released, camera 1 held`
 when they differ. The report's focal clause names each released camera's focal
-before and after, and its free-point clause what the storage decision did,
+before and after, its principal-point clause each released camera's principal
+point before and after, `, principal point (1020.0, 768.0) → (1013.1, 787.2)`,
+and its free-point clause what the storage decision did,
 `, free points decided at 0.412 px: 3 to finite, 25 to directions`.
 
 **`bundle_adjust` runs on a worker thread**, so the window stays usable while it

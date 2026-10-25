@@ -155,7 +155,7 @@ fn check_releases(
 /// Staged bundle adjustment for images taken through one or more cameras.
 ///
 /// Jointly refines world-to-camera poses, world points, and optionally each
-/// camera's focal length and distortion by minimizing soft-L1 pixel
+/// camera's focal length, distortion and principal point by minimizing soft-L1 pixel
 /// reprojection error over a trim schedule with inter-round retriangulation
 /// (canonical frame; the camera looks along −Z). Every observation is read
 /// through the camera of its own image. The algorithm, and the reasons behind
@@ -204,6 +204,9 @@ fn check_releases(
 ///         spline (at least two coefficients and a positive
 ///         ``bspline_theta_max`` / ``bspline_rho_max``). Exclusive with
 ///         ``opt_k1``.
+///     opt_pp: Release each camera's principal point, on any model; it needs
+///         no focal release beside it. A candidate step that would put a
+///         principal point outside its image is rejected.
 ///     schedule: [(trim_px, loss_scale), ...] staged rounds
 ///         (default [(50, 5), (12, 2), (4, 1)]); must not be empty.
 ///     max_iters: LM iteration budget per round (default 60).
@@ -255,6 +258,7 @@ fn check_releases(
     opt_f=false,
     opt_k1=false,
     opt_bspline=false,
+    opt_pp=false,
     schedule=vec![(50.0, 5.0), (12.0, 2.0), (4.0, 1.0)],
     max_iters=60,
     min_track=2,
@@ -281,6 +285,7 @@ pub fn bundle_adjust<'py>(
     opt_f: bool,
     opt_k1: bool,
     opt_bspline: bool,
+    opt_pp: bool,
     schedule: Vec<(f64, f64)>,
     max_iters: usize,
     min_track: usize,
@@ -462,6 +467,7 @@ pub fn bundle_adjust<'py>(
             opt_f,
             opt_k1,
             opt_bspline,
+            opt_pp,
             &stages,
             max_iters,
             min_track,

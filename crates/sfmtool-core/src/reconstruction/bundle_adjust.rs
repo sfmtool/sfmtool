@@ -69,9 +69,15 @@ pub struct BundleAdjustOptions {
     ///   of the image (both leave the slope of the radial map on the axis at
     ///   one), and a distortion released against a held focal could only bend
     ///   the periphery around a scale it cannot fix.
+    /// - [`CameraRelease::principal_point`] is accepted on every model, with or
+    ///   without the focal: every model projects as `u = fx·x_d + cx` with a
+    ///   distorted coordinate that does not read the principal point, so the
+    ///   kernel's columns for it are exact everywhere. A step that would put
+    ///   it off the image is rejected. It carries no prior: one pair of
+    ///   numbers fitted from every image of the camera.
     ///
-    /// A camera with neither is held, so a rig can release some cameras and
-    /// hold the rest, and one whose model can release nothing is simply held.
+    /// A camera with none of the three is held, so a rig can release some
+    /// cameras and hold the rest.
     /// With every camera held the solve still runs, and refines the poses and
     /// the points alone.
     pub releases: Vec<CameraRelease>,
@@ -350,6 +356,15 @@ pub struct CameraAdjustment {
     /// Whether its lens distortion was released: `k1` on a
     /// `SIMPLE_RADIAL_FISHEYE`, the spline on a spline model.
     pub distortion_released: bool,
+    /// Whether its principal point was released.
+    pub principal_point_released: bool,
+    /// Its principal point before the solve, `[cx, cy]` in pixels.
+    pub principal_point_before: [f64; 2],
+    /// Its principal point after the solve, which is the one before it unless
+    /// the principal point was released. The report states the shift rather
+    /// than how well the data determine it: a principal point that moved far is
+    /// one a person should look at.
+    pub principal_point_after: [f64; 2],
     /// The outermost of the observations of its images, measured under the
     /// camera the solve returned. Only the observations: the adjustment reads
     /// nothing off disk, so the features detected in the images' `.sift` files
@@ -361,7 +376,8 @@ pub struct CameraAdjustment {
 ///
 /// Every posed image's pose, every live point's position and, as
 /// [`BundleAdjustOptions::releases`] states camera by camera, each camera's
-/// focal and its `k1` or radial spline are refined together
+/// focal, its `k1` or radial spline, and its principal point are refined
+/// together
 /// against every observation that carries a pixel, by the staged robust solve in
 /// [`crate::geometry::bundle_adjust()`]. The posed images may be taken through
 /// any number of the image set's cameras; each keeps its own lens in the solve, and a
@@ -637,6 +653,7 @@ pub fn bundle_adjust(
         false,
         false,
         false,
+        false,
         &[],
         options.max_iters,
         options.min_track,
@@ -668,6 +685,9 @@ pub fn bundle_adjust(
         // One request, both kernel rungs: `k1` and the spline live on different
         // models, and the kernel decides each per camera.
         true,
+        true,
+        // The principal point, which each camera's release narrows like the
+        // rest.
         true,
         &options.schedule,
         options.max_iters,
@@ -707,8 +727,9 @@ pub fn bundle_adjust(
     }
     // Each camera in the solve takes the one the kernel returned, which is
     // itself at its solved focal where its focal was released, with its solved
-    // `k1` or spline where its distortion was, and itself unchanged otherwise:
-    // nothing else about any lens moves.
+    // `k1` or spline where its distortion was, at its solved principal point
+    // where that was, and itself unchanged otherwise: nothing else about any
+    // lens moves.
     for (&c, solved_camera) in used.iter().zip(&solved.cameras) {
         out.image_set.cameras[c as usize] = solved_camera.clone();
     }
@@ -726,6 +747,9 @@ pub fn bundle_adjust(
             focal_after: solved.cameras[j].focal_lengths().0,
             focal_released: releases[j].focal,
             distortion_released: releases[j].distortion,
+            principal_point_released: releases[j].principal_point,
+            principal_point_before: source_cameras[j].principal_point().into(),
+            principal_point_after: solved.cameras[j].principal_point().into(),
             outermost_observed: outermost[j].observed,
         })
         .collect();

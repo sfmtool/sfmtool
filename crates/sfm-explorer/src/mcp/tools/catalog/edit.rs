@@ -431,11 +431,12 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           operation_id, and the outcome is then read out of get_action_log or \
                           stopped with cancel_background_tasks. Needs inline keypoints. Each \
                           camera the posed images use is solved through its own lens, and what \
-                          each camera releases is decided camera by camera: release_focal and \
-                          release_distortion are the defaults every camera takes, and cameras \
-                          overrides them for the cameras it names. A camera with neither is held. \
-                          The label says what each camera released, and the report names each \
-                          released camera's focal before and after. By default every free point \
+                          each camera releases is decided camera by camera: release_focal, \
+                          release_distortion and release_principal_point are the defaults every \
+                          camera takes, and cameras overrides them for the cameras it names. A \
+                          camera with none of them is held. The label says what each camera \
+                          released, and the report names each released camera's focal and \
+                          principal point before and after. By default every free point \
                           is solved in inverse depth and stored as a position or a direction by \
                           the point-or-bearing test at the end of the solve, and the report says \
                           at what noise level and how many crossed each way; \
@@ -466,6 +467,18 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                              the spline can change the scale at the centre of the image, and \
                              for a camera the posed images use whose model has no such \
                              distortion; hold such a camera through cameras. Defaults to false.",
+                        ),
+                    ),
+                    (
+                        "release_principal_point",
+                        flag(
+                            "The default for every camera: solve its principal point, the pixel \
+                             its optical axis passes through, as well as the poses and points. \
+                             Accepted on every camera model, with or without the focal. A step \
+                             that would put the principal point off the image is rejected. With \
+                             a narrow field of view the data barely tell a principal-point shift \
+                             from a turn of every image, so read how far it moved in the report. \
+                             Defaults to false.",
                         ),
                     ),
                     (
@@ -508,7 +521,8 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                         json!({
                             "type": "array",
                             "description":
-                                "Per-camera overrides of release_focal and release_distortion. \
+                                "Per-camera overrides of release_focal, release_distortion and \
+                                 release_principal_point. \
                                  Each entry names a camera by camera_intrinsics_index, the index \
                                  get_camera_intrinsics and get_camera_image report, and states \
                                  what it releases; a field left out takes the call's default. A \
@@ -526,6 +540,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                                     },
                                     "release_focal": flag("Solve this camera's focal length. Omit for the call's release_focal."),
                                     "release_distortion": flag("Solve this camera's lens distortion, together with its focal. Omit for the call's release_distortion."),
+                                    "release_principal_point": flag("Solve this camera's principal point. Omit for the call's release_principal_point."),
                                 },
                                 "required": ["camera_intrinsics_index"],
                                 "additionalProperties": false,

@@ -7,7 +7,8 @@ A reconstruction whose cameras are all COLMAP models goes through pycolmap. One
 with a camera of an sfmtool spline model (`SFMTOOL_FISHEYE`, `SFMTOOL_PINHOLE`),
 which pycolmap does not know, goes through sfmtool's own reconstruction-level
 bundle adjustment with the focal and the lens distortion released (the spline,
-and k1 on any SIMPLE_RADIAL_FISHEYE camera beside it).
+and k1 on any SIMPLE_RADIAL_FISHEYE camera beside it), and the principal point
+too where ``release_principal_point`` is set.
 
 Either path releases every camera's lens by default. ``cameras=`` limits the
 release to the cameras it names and holds the rest.
@@ -74,8 +75,7 @@ class BundleAdjustTransform:
     Args:
         release_focal: Whether a released camera's focal may move.
         release_principal_point: Whether a released camera's principal point
-            may move. Only the pycolmap path can move it; sfmtool's adjustment
-            always holds it.
+            may move, on either path. ``--bundle-adjust`` leaves it ``False``.
         release_distortion: Whether a released camera's lens distortion may
             move. sfmtool's adjustment releases it only together with the
             focal, and only where the camera model has distortion it can free.
@@ -136,18 +136,21 @@ class BundleAdjustTransform:
 
         The solve needs a pixel per observation (inline keypoints) and a camera
         model whose focal it can release for every posed image; it raises
-        ``ValueError`` naming what does not hold. The principal point stays
-        where it is, as it does in every sfmtool solve.
+        ``ValueError`` naming what does not hold. A released camera's
+        principal point moves too where ``release_principal_point`` is set,
+        on any model.
         """
         print(
             "  Running bundle adjustment (sfmtool; a camera has a spline model, "
             "which pycolmap cannot refine)..."
         )
-        # Each released camera frees its focal and, where its model has any the
-        # solve can free, its lens distortion; a held camera frees neither.
+        # Each released camera frees its focal, its principal point when asked
+        # and, where its model has any the solve can free, its lens distortion;
+        # a held camera frees none of them.
         releases = [
             {
                 "focal": released and self.release_focal,
+                "principal_point": released and self.release_principal_point,
                 "distortion": released
                 and self.release_focal
                 and self.release_distortion
@@ -174,14 +177,24 @@ class BundleAdjustTransform:
                 name
                 for name, flag in (
                     ("focal", camera["focal_released"]),
+                    ("principal point", camera["principal_point_released"]),
                     ("distortion", camera["distortion_released"]),
                 )
                 if flag
             ]
+            principal_point = ""
+            if camera["principal_point_released"]:
+                (bx, by), (ax, ay) = (
+                    camera["principal_point_before"],
+                    camera["principal_point_after"],
+                )
+                principal_point = (
+                    f"; principal point ({bx:.1f}, {by:.1f}) -> ({ax:.1f}, {ay:.1f})"
+                )
             print(
                 f"    Camera {camera['camera']} ({camera['images']} images): focal "
-                f"{camera['focal_before']:.3f} -> {camera['focal_after']:.3f}; "
-                f"released: {', '.join(released) or 'none'}"
+                f"{camera['focal_before']:.3f} -> {camera['focal_after']:.3f}"
+                f"{principal_point}; released: {', '.join(released) or 'none'}"
             )
         result = adjusted.materialize()[0]
         # How far out the photographs reach, under the adjusted cameras: the

@@ -416,6 +416,33 @@ def test_bundle_adjust_cameras_releases_those_and_holds_the_rest(
     assert result.cameras[1] != rig.cameras[1]
 
 
+def test_bundle_adjust_releases_the_principal_point_on_the_sfmtool_path(
+    seoul_bull_ground_truth_sfmr, capsys
+):
+    """``release_principal_point`` reaches sfmtool's adjustment, which moves
+    the principal point and prints its change; by default it is held."""
+    from sfmtool.xform import BundleAdjustTransform
+
+    recon = SfmrReconstruction.load(seoul_bull_ground_truth_sfmr)
+    switched, _ = recon.switch_camera_model("SFMTOOL_FISHEYE", coeff_count=6)
+    pp = ("principal_point_x", "principal_point_y")
+
+    def principal_point(r):
+        p = r.cameras[0].to_dict()["parameters"]
+        return tuple(p[k] for k in pp)
+
+    capsys.readouterr()
+    held = BundleAdjustTransform().apply(switched)
+    assert "released: focal, distortion" in capsys.readouterr().out
+    assert principal_point(held) == principal_point(switched)
+
+    released = BundleAdjustTransform(release_principal_point=True).apply(switched)
+    out = capsys.readouterr().out
+    assert "released: focal, principal point, distortion" in out
+    assert "; principal point (" in out
+    assert principal_point(released) != principal_point(switched)
+
+
 def test_bundle_adjust_cameras_holds_a_camera_the_solve_cannot_release(
     seoul_bull_ground_truth_sfmr,
 ):

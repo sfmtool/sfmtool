@@ -1250,6 +1250,117 @@ fn a_released_focal_is_named_in_the_label_and_the_entry() {
     assert!(last.contains(", focal "), "{last}");
 }
 
+/// One camera's report, released as stated, for the wording tests.
+fn adjustment(
+    camera: usize,
+    focal: bool,
+    principal_point: bool,
+    distortion: bool,
+) -> sfmtool_core::CameraAdjustment {
+    sfmtool_core::CameraAdjustment {
+        camera,
+        images: 3,
+        focal_before: 1000.0,
+        focal_after: if focal { 1002.5 } else { 1000.0 },
+        focal_released: focal,
+        distortion_released: distortion,
+        principal_point_released: principal_point,
+        principal_point_before: [1020.0, 768.0],
+        principal_point_after: if principal_point {
+            [1013.1, 787.2]
+        } else {
+            [1020.0, 768.0]
+        },
+        outermost_observed: None,
+    }
+}
+
+#[test]
+fn the_label_names_each_released_part_in_order() {
+    use super::release_clause;
+    assert_eq!(
+        release_clause(&[adjustment(0, true, true, false)]),
+        ", focal and principal point released"
+    );
+    assert_eq!(
+        release_clause(&[adjustment(0, true, true, true)]),
+        ", focal, principal point and lens distortion released"
+    );
+    assert_eq!(
+        release_clause(&[adjustment(0, false, true, false)]),
+        ", principal point released"
+    );
+    assert_eq!(
+        release_clause(&[adjustment(0, true, false, true)]),
+        ", focal and lens distortion released"
+    );
+    assert_eq!(
+        release_clause(&[
+            adjustment(0, false, true, false),
+            adjustment(1, false, true, false)
+        ]),
+        ", principal point released on every camera"
+    );
+    assert_eq!(
+        release_clause(&[
+            adjustment(0, false, true, false),
+            adjustment(1, true, false, false)
+        ]),
+        ", camera 0 principal point released, camera 1 focal released"
+    );
+}
+
+#[test]
+fn the_entry_names_each_released_principal_point_s_change() {
+    use super::principal_point_changes;
+    assert_eq!(
+        principal_point_changes(&[adjustment(0, false, true, false)]),
+        ", principal point (1020.0, 768.0) → (1013.1, 787.2)"
+    );
+    assert_eq!(
+        principal_point_changes(&[adjustment(0, true, false, false)]),
+        ""
+    );
+    assert_eq!(
+        principal_point_changes(&[
+            adjustment(0, false, false, false),
+            adjustment(1, false, true, false)
+        ]),
+        ", camera 1 principal point (1020.0, 768.0) → (1013.1, 787.2)"
+    );
+}
+
+#[test]
+fn a_released_principal_point_is_named_in_the_label_and_the_entry() {
+    // The demo camera is a two-focal PINHOLE: its focal cannot be released,
+    // and its principal point can.
+    let (mut state, id) = adjustable_state();
+    let before = state.scene[0].recon().image_set.cameras[0].principal_point();
+    let options = sfmtool_core::BundleAdjustOptions::uniform(
+        1,
+        sfmtool_core::reconstruction::bundle_adjust::CameraRelease {
+            principal_point: true,
+            ..sfmtool_core::reconstruction::bundle_adjust::CameraRelease::HELD
+        },
+    );
+
+    state.start_bundle_adjust(id, &options).expect("well posed");
+    state.finish_background_tasks();
+
+    assert_eq!(
+        state.scene[0].history.current_version().label,
+        "Bundle adjusted run_a, principal point released"
+    );
+    let last = texts(&state).last().expect("one entry").clone();
+    let after = state.scene[0].recon().image_set.cameras[0].principal_point();
+    let expected = format!(
+        ", principal point ({:.1}, {:.1}) → ({:.1}, {:.1})",
+        before.0, before.1, after.0, after.1
+    );
+    assert!(last.contains(&expected), "{last} lacks {expected}");
+    assert!(!last.contains(", focal "), "{last}");
+}
+
 #[test]
 fn an_undo_puts_every_pose_back() {
     let (mut state, id) = adjustable_state();

@@ -680,6 +680,32 @@ fn path_tells_two_buttons_of_one_name_apart() {
     assert!(sentence.ends_with("dialogs are open."), "{sentence}");
 }
 
+/// The Bundle Adjust dialog's camera row carries its three release
+/// checkboxes, and the principal point's is enabled on a camera whose focal
+/// cannot be released: the demo's two-focal `PINHOLE`.
+#[test]
+fn the_bundle_adjust_row_offers_the_principal_point_on_any_model() {
+    let mut harness = Harness::new();
+    let demo = harness.state.scene[0].id;
+    harness.state.open_bundle_adjust(demo);
+    // A new window widens to its row over its first few frames; until then the
+    // row's last checkbox is clipped out of it.
+    harness.settle();
+    harness.settle();
+    let frame = harness.settle();
+    let window = listing(&frame, None);
+    let dialogs = window["dialogs"].as_array().unwrap();
+    let widgets = &dialogs[0]["widgets"];
+    let enabled = |name: &str| {
+        let found = named(widgets, name);
+        assert_eq!(found.len(), 1, "{name}: {window:#}");
+        found[0]["enabled"].clone()
+    };
+    assert_eq!(enabled("Release focal length"), json!(false));
+    assert_eq!(enabled("Release lens distortion"), json!(false));
+    assert_eq!(enabled("Release principal point"), json!(true));
+}
+
 // ── What the input tools will resolve through ───────────────────────────
 
 /// A widget id finds its rectangle in any target, and a point finds the

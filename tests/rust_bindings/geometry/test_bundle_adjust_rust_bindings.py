@@ -190,6 +190,25 @@ def test_opt_f_recovers_focal():
     assert abs(_focal(out) - 500.0) < 5.0, _focal(out)
 
 
+def _pp(out, j=0):
+    """The solved principal point of camera ``j``."""
+    p = out["cameras"][j].parameters
+    return p["principal_point_x"], p["principal_point_y"]
+
+
+def test_opt_pp_moves_the_principal_point_and_holds_the_focal():
+    s = _scene(n_img=8, n_pt=60)
+    start = s["cam"].to_dict()
+    start["parameters"]["principal_point_x"] = 330.0
+    s["cam"] = CameraIntrinsics.from_dict(start)  # observed through 320
+    held = _run(dict(s, points=s["points"].copy()))
+    assert _pp(held) == (330.0, 240.0)
+    out = _run(s, opt_pp=True)
+    cx, _ = _pp(out)
+    assert abs(cx - 320.0) < abs(330.0 - 320.0) / 2, cx
+    assert _focal(out) == 500.0
+
+
 def test_nan_points_readmitted_by_retriangulation():
     s = _scene()
     s["points"][::2] = np.nan

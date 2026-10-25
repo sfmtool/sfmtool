@@ -588,6 +588,9 @@ fn two_cameras_are_adjusted_each_through_its_own_lens() {
                 focal_after: FOCAL,
                 focal_released: false,
                 distortion_released: false,
+                principal_point_released: false,
+                principal_point_before: [320.0, 240.0],
+                principal_point_after: [320.0, 240.0],
                 outermost_observed: report.cameras[0].outermost_observed,
             },
             CameraAdjustment {
@@ -597,6 +600,9 @@ fn two_cameras_are_adjusted_each_through_its_own_lens() {
                 focal_after: 620.0,
                 focal_released: false,
                 distortion_released: false,
+                principal_point_released: false,
+                principal_point_before: [327.0, 235.0],
+                principal_point_after: [327.0, 235.0],
                 outermost_observed: report.cameras[1].outermost_observed,
             },
         ]
@@ -1052,6 +1058,9 @@ fn report_bits(report: &BundleAdjustReport) -> Vec<u64> {
             camera.focal_before.to_bits(),
             camera.focal_after.to_bits(),
             u64::from(camera.focal_released),
+            u64::from(camera.principal_point_released),
+            camera.principal_point_after[0].to_bits(),
+            camera.principal_point_after[1].to_bits(),
         ]);
     }
     bits
@@ -1461,6 +1470,7 @@ fn a_distortion_release_without_the_focal_is_refused() {
             CameraRelease {
                 focal: false,
                 distortion: true,
+                principal_point: false,
             },
         ]);
         let error = bundle_adjust(&truth, &options, &Progress::none()).err();
@@ -1670,4 +1680,129 @@ fn a_release_list_of_the_wrong_length_is_refused() {
             })
         );
     }
+}
+
+// ── The principal-point release ─────────────────────────────────────────────
+
+/// How far a camera's principal point stands from `target`, in pixels.
+fn pp_error(camera: &CameraIntrinsics, target: (f64, f64)) -> f64 {
+    let (cx, cy) = camera.principal_point();
+    (cx - target.0).hypot(cy - target.1)
+}
+
+/// The principal point alone.
+const PRINCIPAL_POINT: CameraRelease = CameraRelease {
+    focal: false,
+    distortion: false,
+    principal_point: true,
+};
+
+#[test]
+fn a_released_principal_point_is_written_back_and_reported() {
+    let truth = truth();
+    let mut source = perturbed();
+    // A principal point 8 px right of and 4 px above the one the observations
+    // were made through.
+    let planted = (IMG_W as f64 / 2.0, IMG_H as f64 / 2.0);
+    source.image_set.cameras[0] =
+        source.image_set.cameras[0].with_principal_point(planted.0 + 8.0, planted.1 - 4.0);
+    let start_error = pp_error(&source.image_set.cameras[0], planted);
+
+    let options = BundleAdjustOptions::uniform(1, PRINCIPAL_POINT);
+    let (out, report) = bundle_adjust(&source, &options, &Progress::none()).expect("well posed");
+
+    let camera = &report.cameras[0];
+    assert!(camera.principal_point_released);
+    assert!(!camera.focal_released);
+    assert_eq!(
+        camera.principal_point_before,
+        [planted.0 + 8.0, planted.1 - 4.0]
+    );
+    // Written back: the value's camera is the reported one.
+    let (cx, cy) = out.image_set.cameras[0].principal_point();
+    assert_eq!([cx, cy], camera.principal_point_after);
+    // Moved toward the truth. The fixture's field is about 28 degrees across, in
+    // which a shift of the principal point and a turn of every camera differ
+    // only toward the edges, so it is not recovered exactly.
+    let end_error = pp_error(&out.image_set.cameras[0], planted);
+    assert!(
+        end_error < 0.5 * start_error,
+        "{start_error} px off before, {end_error} px after: {report:?}"
+    );
+    // Nothing else about the lens moved.
+    assert_eq!(
+        out.image_set.cameras[0],
+        source.image_set.cameras[0].with_principal_point(cx, cy)
+    );
+    assert_eq!(
+        truth.image_set.cameras[0].focal_lengths(),
+        out.image_set.cameras[0].focal_lengths()
+    );
+}
+
+#[test]
+fn a_held_principal_point_comes_back_exactly() {
+    let mut source = perturbed();
+    source.image_set.cameras[0] = source.image_set.cameras[0].with_principal_point(328.0, 236.0);
+    let options = BundleAdjustOptions::uniform(1, CameraRelease::FOCAL);
+    let (out, report) = bundle_adjust(&source, &options, &Progress::none()).expect("well posed");
+    let camera = &report.cameras[0];
+    assert!(!camera.principal_point_released);
+    assert_eq!(camera.principal_point_before, [328.0, 236.0]);
+    assert_eq!(camera.principal_point_after, [328.0, 236.0]);
+    assert_eq!(out.image_set.cameras[0].principal_point(), (328.0, 236.0));
+}
+
+#[test]
+fn two_cameras_release_each_its_own_principal_point() {
+    let truth = two_camera_truth();
+    let mut source = perturb(truth.clone());
+    let planted: Vec<(f64, f64)> = truth
+        .image_set
+        .cameras
+        .iter()
+        .map(CameraIntrinsics::principal_point)
+        .collect();
+    source.image_set.cameras[0] =
+        source.image_set.cameras[0].with_principal_point(planted[0].0 + 6.0, planted[0].1);
+    source.image_set.cameras[1] =
+        source.image_set.cameras[1].with_principal_point(planted[1].0, planted[1].1 - 6.0);
+    // Camera 0 releases its principal point alone, camera 1 with its focal.
+    let options = releasing(&[
+        PRINCIPAL_POINT,
+        CameraRelease {
+            focal: true,
+            ..PRINCIPAL_POINT
+        },
+    ]);
+
+    let (out, report) = bundle_adjust(&source, &options, &Progress::none()).expect("well posed");
+
+    for (j, &target) in planted.iter().enumerate() {
+        let camera = &report.cameras[j];
+        assert!(camera.principal_point_released, "camera {j}");
+        assert_eq!(
+            out.image_set.cameras[j].principal_point(),
+            (
+                camera.principal_point_after[0],
+                camera.principal_point_after[1]
+            ),
+            "camera {j}"
+        );
+        let end_error = pp_error(&out.image_set.cameras[j], target);
+        assert!(
+            end_error < 3.0,
+            "camera {j}: {end_error} px off, {report:?}"
+        );
+    }
+    // Each moved along its own planted axis.
+    let [x0, _] = report.cameras[0].principal_point_after;
+    let [_, y1] = report.cameras[1].principal_point_after;
+    assert!(x0 < planted[0].0 + 6.0, "camera 0's cx did not move back");
+    assert!(y1 > planted[1].1 - 6.0, "camera 1's cy did not move back");
+    // Camera 0's focal is held.
+    assert_eq!(
+        out.image_set.cameras[0].focal_lengths(),
+        source.image_set.cameras[0].focal_lengths()
+    );
 }

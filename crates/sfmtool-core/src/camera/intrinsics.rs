@@ -787,6 +787,95 @@ impl CameraIntrinsics {
         coeffs.extend_from_slice(bspline);
         out
     }
+
+    /// This camera with its principal point at `(cx, cy)`, every other
+    /// parameter unchanged. Every model carries a principal point, so none is
+    /// left out: the bundle adjustment's principal-point release builds each
+    /// candidate camera through this.
+    pub(crate) fn with_principal_point(&self, cx: f64, cy: f64) -> CameraIntrinsics {
+        let mut out = self.clone();
+        match &mut out.model {
+            CameraModel::Pinhole {
+                principal_point_x,
+                principal_point_y,
+                ..
+            }
+            | CameraModel::SimplePinhole {
+                principal_point_x,
+                principal_point_y,
+                ..
+            }
+            | CameraModel::SimpleRadial {
+                principal_point_x,
+                principal_point_y,
+                ..
+            }
+            | CameraModel::Radial {
+                principal_point_x,
+                principal_point_y,
+                ..
+            }
+            | CameraModel::OpenCV {
+                principal_point_x,
+                principal_point_y,
+                ..
+            }
+            | CameraModel::OpenCVFisheye {
+                principal_point_x,
+                principal_point_y,
+                ..
+            }
+            | CameraModel::EquidistantFisheye {
+                principal_point_x,
+                principal_point_y,
+                ..
+            }
+            | CameraModel::SfmtoolFisheye {
+                principal_point_x,
+                principal_point_y,
+                ..
+            }
+            | CameraModel::SfmtoolPinhole {
+                principal_point_x,
+                principal_point_y,
+                ..
+            }
+            | CameraModel::SimpleRadialFisheye {
+                principal_point_x,
+                principal_point_y,
+                ..
+            }
+            | CameraModel::RadialFisheye {
+                principal_point_x,
+                principal_point_y,
+                ..
+            }
+            | CameraModel::ThinPrismFisheye {
+                principal_point_x,
+                principal_point_y,
+                ..
+            }
+            | CameraModel::RadTanThinPrismFisheye {
+                principal_point_x,
+                principal_point_y,
+                ..
+            }
+            | CameraModel::FullOpenCV {
+                principal_point_x,
+                principal_point_y,
+                ..
+            }
+            | CameraModel::Equirectangular {
+                principal_point_x,
+                principal_point_y,
+                ..
+            } => {
+                *principal_point_x = cx;
+                *principal_point_y = cy;
+            }
+        }
+        out
+    }
 }
 
 #[cfg(test)]

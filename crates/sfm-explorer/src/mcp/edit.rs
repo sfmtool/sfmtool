@@ -443,6 +443,9 @@ pub(super) fn bundle_adjust(
         *slot = sfmtool_core::reconstruction::bundle_adjust::CameraRelease {
             focal: entry.release_focal.unwrap_or(defaults.focal),
             distortion: entry.release_distortion.unwrap_or(defaults.distortion),
+            principal_point: entry
+                .release_principal_point
+                .unwrap_or(defaults.principal_point),
         };
     }
     options.releases = releases;

@@ -615,11 +615,43 @@ class TestSwitchCameraModel:
         )
         assert [c["focal_released"] for c in report["cameras"]] == [True, False]
 
+    def test_a_released_principal_point_is_reported_and_written_back(self, embedded):
+        before = embedded.materialize()[0].cameras[0].to_dict()["parameters"]
+        adjusted, report = embedded.bundle_adjust(opt_pp=True)
+        camera = report["cameras"][0]
+        assert camera["principal_point_released"]
+        assert not camera["focal_released"]
+        assert tuple(camera["principal_point_before"]) == (
+            before["principal_point_x"],
+            before["principal_point_y"],
+        )
+        after = adjusted.materialize()[0].cameras[0].to_dict()["parameters"]
+        assert tuple(camera["principal_point_after"]) == (
+            after["principal_point_x"],
+            after["principal_point_y"],
+        )
+        assert after["focal_length"] == before["focal_length"]
+
+        # Held, the two are the same and the camera comes back as it went in.
+        _, held = embedded.bundle_adjust(releases=[{}])
+        camera = held["cameras"][0]
+        assert not camera["principal_point_released"]
+        assert camera["principal_point_before"] == camera["principal_point_after"]
+
+    def test_the_principal_point_is_released_on_any_model(self, embedded):
+        # OPENCV_FISHEYE can release neither its focal nor its distortion.
+        opencv, _ = embedded.switch_camera_model("OPENCV_FISHEYE")
+        _, report = opencv.bundle_adjust(releases=[{"principal_point": True}])
+        assert report["cameras"][0]["principal_point_released"]
+
     def test_a_bad_release_list_is_refused(self, embedded):
         switched, _ = embedded.switch_camera_model("SFMTOOL_FISHEYE", coeff_count=6)
         with pytest.raises(ValueError, match="2 entries and the reconstruction has 1"):
             switched.bundle_adjust(releases=[{}, {}])
-        with pytest.raises(ValueError, match="'focus'"):
+        with pytest.raises(
+            ValueError,
+            match="'focus'; an entry takes 'focal', 'distortion' and 'principal_point'",
+        ):
             switched.bundle_adjust(releases=[{"focus": True}])
         with pytest.raises(ValueError, match="camera 0 .* together with its focal"):
             switched.bundle_adjust(releases=[{"distortion": True}])

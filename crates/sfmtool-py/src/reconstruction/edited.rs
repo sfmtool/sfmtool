@@ -803,8 +803,8 @@ impl PyEditedReconstruction {
     /// Bundle-adjust this version, and give back the answer as its successor.
     ///
     /// Every posed image's pose, every point's position and, where a camera's
-    /// release says so, that camera's focal and its k1 or radial spline are
-    /// refined together against every observation that carries a pixel (see
+    /// release says so, that camera's focal, its k1 or radial spline, and its
+    /// principal point are refined together against every observation that carries a pixel (see
     /// ``specs/core/reconstruction/bundle-adjust.md``). The posed images may be
     /// taken through any number of cameras, each solved through its own lens.
     /// A free point goes in as the position or direction it is and, unless
@@ -826,9 +826,14 @@ impl PyEditedReconstruction {
     ///         naming the camera, when ``opt_f`` is off or a camera's model has
     ///         no such distortion; pass ``releases`` to release some cameras
     ///         and hold the others.
+    ///     opt_pp: Release the principal point of every camera the posed
+    ///         images use (default ``False``). Accepted on every camera model,
+    ///         with or without ``opt_f``; a step that would put a principal
+    ///         point off its image is rejected.
     ///     releases: One entry per camera of the image set, in camera index order,
-    ///         each a dict ``{"focal": bool, "distortion": bool}`` (a missing
-    ///         key is ``False``). Overrides ``opt_f`` and ``opt_distortion``.
+    ///         each a dict ``{"focal": bool, "distortion": bool,
+    ///         "principal_point": bool}`` (a missing key is ``False``).
+    ///         Overrides ``opt_f``, ``opt_distortion`` and ``opt_pp``.
     ///         A camera with neither is held; an entry for a camera no posed
     ///         image uses is ignored. Every refusal ``opt_f`` and
     ///         ``opt_distortion`` raise applies to each entry and names the
@@ -853,7 +858,10 @@ impl PyEditedReconstruction {
     ///     ``cameras``, a list with one dict per camera in the solve, in
     ///     camera index order: ``camera`` (its index), ``images`` (the
     ///     posed images taken through it), ``focal_before``, ``focal_after``,
-    ///     ``focal_released``, ``distortion_released`` and
+    ///     ``focal_released``, ``distortion_released``,
+    ///     ``principal_point_released``, ``principal_point_before`` and
+    ///     ``principal_point_after`` (each ``(cx, cy)`` in pixels; the after
+    ///     is the before unless the principal point was released) and
     ///     ``outermost_observed``, the camera's outermost
     ///     observation under the solved camera (a dict of ``radius_px``,
     ///     ``theta_deg``, ``image`` and ``xy``, or ``None``). It also carries
@@ -870,12 +878,13 @@ impl PyEditedReconstruction {
     /// camera, ``switch_camera_model`` to its own spline model with
     /// ``coeff_count`` and ``spline_domain_deg``.
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (*, opt_f=false, opt_distortion=false, releases=None, schedule=None, max_iters=60, min_track=2, min_obs=12, free_points_cross=true))]
+    #[pyo3(signature = (*, opt_f=false, opt_distortion=false, opt_pp=false, releases=None, schedule=None, max_iters=60, min_track=2, min_obs=12, free_points_cross=true))]
     fn bundle_adjust(
         &self,
         py: Python<'_>,
         opt_f: bool,
         opt_distortion: bool,
+        opt_pp: bool,
         releases: Option<Vec<Bound<'_, PyDict>>>,
         schedule: Option<Vec<(f64, f64)>>,
         max_iters: usize,
@@ -894,6 +903,7 @@ impl PyEditedReconstruction {
                 CameraRelease {
                     focal: opt_f,
                     distortion: opt_distortion,
+                    principal_point: opt_pp,
                 };
                 value.image_set.cameras.len()
             ],
@@ -937,6 +947,9 @@ impl PyEditedReconstruction {
             c.set_item("focal_after", camera.focal_after)?;
             c.set_item("focal_released", camera.focal_released)?;
             c.set_item("distortion_released", camera.distortion_released)?;
+            c.set_item("principal_point_released", camera.principal_point_released)?;
+            c.set_item("principal_point_before", camera.principal_point_before)?;
+            c.set_item("principal_point_after", camera.principal_point_after)?;
             c.set_item(
                 "outermost_observed",
                 super::switch_camera_model::reach_to_py(py, camera.outermost_observed.as_ref())?,
@@ -1034,8 +1047,8 @@ fn row_map_forward(map: &RowMap, index_bound: u32) -> Vec<i64> {
         .collect()
 }
 
-/// One entry of ``bundle_adjust``'s ``releases``: a dict of ``focal`` and
-/// ``distortion``, each a bool and ``False`` where missing. Any other key
+/// One entry of ``bundle_adjust``'s ``releases``: a dict of ``focal``,
+/// ``distortion`` and ``principal_point``, each a bool and ``False`` where missing. Any other key
 /// raises, so a misspelt release is not silently a held camera.
 fn camera_release_from_py(index: usize, entry: &Bound<'_, PyDict>) -> PyResult<CameraRelease> {
     let mut release = CameraRelease::HELD;
@@ -1049,10 +1062,11 @@ fn camera_release_from_py(index: usize, entry: &Bound<'_, PyDict>) -> PyResult<C
         match key.as_str() {
             "focal" => release.focal = flag,
             "distortion" => release.distortion = flag,
+            "principal_point" => release.principal_point = flag,
             _ => {
                 return Err(PyValueError::new_err(format!(
-                    "releases[{index}] has the key '{key}'; an entry takes 'focal' and \
-                     'distortion'"
+                    "releases[{index}] has the key '{key}'; an entry takes 'focal', \
+                     'distortion' and 'principal_point'"
                 )))
             }
         }

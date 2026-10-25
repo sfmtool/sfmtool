@@ -690,7 +690,7 @@ fn bundle_adjust_parses_its_camera_entries() {
         "reconstruction_label": "a",
         "release_focal": true,
         "cameras": [
-            { "camera_intrinsics_index": 1, "release_distortion": true },
+            { "camera_intrinsics_index": 1, "release_distortion": true, "release_principal_point": true },
             { "camera_intrinsics_index": 0, "release_focal": false, "release_distortion": false }
         ]
     })
@@ -709,11 +709,13 @@ fn bundle_adjust_parses_its_camera_entries() {
                 camera_intrinsics_index: 1,
                 release_focal: None,
                 release_distortion: Some(true),
+                release_principal_point: Some(true),
             },
             super::super::CameraReleaseOverride {
                 camera_intrinsics_index: 0,
                 release_focal: Some(false),
                 release_distortion: Some(false),
+                release_principal_point: None,
             },
         ]
     );
@@ -2538,6 +2540,7 @@ fn the_editing_defaults_are_what_the_schemas_say() {
             reconstruction_label: "a".to_string(),
             release_focal: true,
             release_distortion: false,
+            release_principal_point: false,
             cameras: Vec::new(),
             free_points_cross: true,
             schedule: None,
@@ -2556,6 +2559,22 @@ fn the_editing_defaults_are_what_the_schemas_say() {
             reconstruction_label: "a".to_string(),
             release_focal: true,
             release_distortion: true,
+            release_principal_point: false,
+            cameras: Vec::new(),
+            free_points_cross: true,
+            schedule: None,
+        }
+    );
+    assert_eq!(
+        parse(
+            "bundle_adjust",
+            json!({ "reconstruction_label": "a", "release_principal_point": true })
+        ),
+        Command::BundleAdjust {
+            reconstruction_label: "a".to_string(),
+            release_focal: false,
+            release_distortion: false,
+            release_principal_point: true,
             cameras: Vec::new(),
             free_points_cross: true,
             schedule: None,
@@ -2570,6 +2589,7 @@ fn the_editing_defaults_are_what_the_schemas_say() {
             reconstruction_label: "a".to_string(),
             release_focal: false,
             release_distortion: false,
+            release_principal_point: false,
             cameras: Vec::new(),
             free_points_cross: false,
             schedule: None,

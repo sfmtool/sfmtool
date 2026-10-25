@@ -425,7 +425,10 @@ adjusted by sfmtool's own reconstruction-level bundle adjustment instead
 ([`../../../core/reconstruction/bundle-adjust.md`](../../../core/reconstruction/bundle-adjust.md)),
 with every camera's focal released, and the lens distortion released on each
 camera whose model has some the solve can release: the spline, and `k1` on a
-`SIMPLE_RADIAL_FISHEYE` camera beside it. That path needs inline keypoints (an
+`SIMPLE_RADIAL_FISHEYE` camera beside it. The principal point is held on both
+paths: `--bundle-adjust` has no key for it, though the transform behind it,
+`BundleAdjustTransform`, takes `release_principal_point` and passes it to
+either solver. That path needs inline keypoints (an
 `embedded_patches` reconstruction) and a camera model whose focal it can release
 for every posed image whose camera is released, and stops with the adjustment's
 own refusal, naming the camera, otherwise; a rig with one spline camera and one

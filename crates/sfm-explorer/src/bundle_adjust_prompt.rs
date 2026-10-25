@@ -6,10 +6,11 @@
 //!
 //! See `specs/gui/edits/bundle-adjust.md`. The adjustment takes its decisions
 //! about the lens from the user, camera by camera -- whether each camera's
-//! focal length is released, and whether with it the lens distortion the
-//! adjustment can free -- one about the points: whether a point may cross
-//! between a position and a direction -- and the trim schedule. That is the
-//! whole dialog: one row of two checkboxes per camera, the crossing checkbox,
+//! focal length is released, whether with it the lens distortion the
+//! adjustment can free, and whether its principal point is -- one about the
+//! points: whether a point may cross between a position and a direction -- and
+//! the trim schedule. That is the whole dialog: one row of three checkboxes per
+//! camera, the crossing checkbox,
 //! the schedule's text box with its presets, `Run` and `Cancel`. Everything
 //! else about the solve is the core function's defaults. A spline
 //! camera's coefficient count and domain are not the adjustment's to change:
@@ -129,8 +130,9 @@ pub(crate) fn parse_schedule(text: &str) -> Result<Vec<BaSchedule>, String> {
 }
 
 /// One camera the posed images use, as its row in the dialog shows it: which
-/// camera, how many posed images it takes, and why either of its checkboxes is
-/// greyed.
+/// camera, how many posed images it takes, and why its focal or distortion
+/// checkbox is greyed. Its principal-point checkbox is never greyed, since
+/// every model can release its principal point.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct CameraGate {
     /// The camera's index among the image set's cameras.
@@ -244,11 +246,12 @@ pub struct BundleAdjustPrompt {
     last_schedule: HashMap<ReconId, Vec<BaSchedule>>,
 }
 
-/// One camera row's two checkboxes, as the user left them.
+/// One camera row's three checkboxes, as the user left them.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 struct RowState {
     focal: bool,
     distortion: bool,
+    principal_point: bool,
 }
 
 /// The question being asked: which node, what the controls say, and why each
@@ -268,7 +271,8 @@ struct Pending {
 
 impl Pending {
     /// What camera row `j` releases: what its checkboxes say, less anything its
-    /// model cannot release, and the distortion only with the focal.
+    /// model cannot release, and the distortion only with the focal. The
+    /// principal point is released on any model, with or without the focal.
     fn release(&self, j: usize) -> CameraRelease {
         let gate = &self.gates.cameras[j];
         let row = self.rows[j];
@@ -276,6 +280,7 @@ impl Pending {
         CameraRelease {
             focal,
             distortion: focal && row.distortion && gate.distortion_refusal.is_none(),
+            principal_point: row.principal_point,
         }
     }
 
@@ -440,16 +445,17 @@ fn schedule_row(ui: &mut egui::Ui, text: &mut String) {
 }
 
 /// The camera rows: per camera the posed images use, its index, model and
-/// image count, and its "Release focal length" and "Release lens distortion"
-/// checkboxes.
+/// image count, and its "Release focal length", "Release lens distortion" and
+/// "Release principal point" checkboxes.
 ///
 /// A checkbox the camera's model cannot take is greyed, with the reason as its
 /// hover text. The distortion checkbox is also greyed while the same row's
 /// focal is clear, and cleared when the focal is: neither k1 nor the spline
 /// can change the scale at the centre of the image, which is the focal's job.
+/// The principal-point checkbox is enabled on every model and needs no focal.
 fn camera_rows(ui: &mut egui::Ui, pending: &mut Pending) {
     egui::Grid::new("bundle_adjust_cameras")
-        .num_columns(3)
+        .num_columns(4)
         .spacing([12.0, 4.0])
         .show(ui, |ui| {
             for (gate, row) in pending.gates.cameras.iter().zip(pending.rows.iter_mut()) {
@@ -487,6 +493,13 @@ fn camera_rows(ui: &mut egui::Ui, pending: &mut Pending) {
                              SFMTOOL_PINHOLE.",
                         );
                 });
+                ui.checkbox(&mut row.principal_point, "Release principal point")
+                    .on_hover_text(
+                        "Solve this camera's principal point, the pixel its optical axis passes \
+                         through, along with the poses and the points. With a narrow field of \
+                         view the data barely tell it from a turn of every image, so check how \
+                         far it moved.",
+                    );
                 ui.end_row();
             }
         });

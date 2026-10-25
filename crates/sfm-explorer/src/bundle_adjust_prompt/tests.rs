@@ -137,7 +137,10 @@ fn enter_runs_it_with_every_camera_held_and_the_points_crossing_which_is_the_def
         3,
         "one row per camera the posed images use"
     );
-    assert!(pending.rows.iter().all(|r| !r.focal && !r.distortion));
+    assert!(pending
+        .rows
+        .iter()
+        .all(|r| !r.focal && !r.distortion && !r.principal_point));
 
     assert_eq!(
         frame(&mut prompt, press(egui::Key::Enter)),
@@ -164,6 +167,7 @@ fn each_row_releases_its_own_camera_and_the_rest_are_held() {
         p.rows[0] = RowState {
             focal: true,
             distortion: true,
+            principal_point: false,
         };
         p.rows[2].focal = true;
     });
@@ -179,13 +183,40 @@ fn a_release_the_camera_s_model_cannot_take_is_never_answered() {
         p.rows[1] = RowState {
             focal: true,
             distortion: true,
+            principal_point: false,
         };
         p.rows[2] = RowState {
             focal: true,
             distortion: true,
+            principal_point: false,
         };
     });
     assert_eq!(answer.releases, vec![HELD, HELD, HELD, FOCAL]);
+}
+
+#[test]
+fn the_principal_point_is_answered_on_every_model_and_needs_no_focal() {
+    // Camera 0 ticks the principal point alone; camera 1, the OPENCV_FISHEYE
+    // that can release neither its focal nor its distortion, ticks it too;
+    // camera 3 ticks it with its focal.
+    let answer = rig_answer(|p| {
+        p.rows[0].principal_point = true;
+        p.rows[1].principal_point = true;
+        p.rows[2] = RowState {
+            focal: true,
+            distortion: false,
+            principal_point: true,
+        };
+    });
+    let pp = CameraRelease {
+        principal_point: true,
+        ..HELD
+    };
+    let focal_and_pp = CameraRelease {
+        principal_point: true,
+        ..FOCAL
+    };
+    assert_eq!(answer.releases, vec![pp, pp, HELD, focal_and_pp]);
 }
 
 #[test]

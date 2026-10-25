@@ -165,6 +165,41 @@ fn focal_changes(cameras: &[sfmtool_core::CameraAdjustment]) -> String {
     }
 }
 
+/// The Action Log's principal-point clause for one adjustment: each released
+/// camera's principal point before and after, and nothing when no principal
+/// point was released.
+///
+/// A solve over one camera reads `, principal point (1020.0, 768.0) →
+/// (1013.1, 787.2)`, and one over several names each camera by its index,
+/// `, camera 0 principal point (1020.0, 768.0) → (1013.1, 787.2)`, as the
+/// focal's clause does.
+fn principal_point_changes(cameras: &[sfmtool_core::CameraAdjustment]) -> String {
+    let point = |[x, y]: [f64; 2]| format!("({x:.1}, {y:.1})");
+    let released: Vec<&sfmtool_core::CameraAdjustment> = cameras
+        .iter()
+        .filter(|c| c.principal_point_released)
+        .collect();
+    match released.as_slice() {
+        [] => String::new(),
+        [one] if cameras.len() == 1 => format!(
+            ", principal point {} → {}",
+            point(one.principal_point_before),
+            point(one.principal_point_after)
+        ),
+        several => several
+            .iter()
+            .map(|c| {
+                format!(
+                    ", camera {} principal point {} → {}",
+                    c.camera,
+                    point(c.principal_point_before),
+                    point(c.principal_point_after)
+                )
+            })
+            .collect(),
+    }
+}
+
 /// The Action Log entry's schedule clause: `, schedule (inf, 1000)` when the
 /// adjustment ran a schedule other than the core function's default, and
 /// nothing when it ran the default.
@@ -218,25 +253,35 @@ fn free_point_clause(decision: Option<&sfmtool_core::geometry::FreePointDecision
 /// camera's lens.
 ///
 /// Nothing when every camera was held, since `Bundle adjusted <node>` alone
-/// already says only poses and points moved. When every camera released the
-/// same thing, one phrase: `, focal released` over one camera, and `, focal
-/// released on every camera` over several. When the cameras differ, each is
-/// named by its index, `, camera 0 focal and lens distortion released,
-/// camera 1 held`, because the label is the one line that says which lens
-/// moved.
+/// already says only poses and points moved. A camera's released parts are
+/// named in the order focal, principal point, lens distortion: `, focal and
+/// principal point released`, `, focal, principal point and lens distortion
+/// released`. When every camera released the same thing, one phrase: `, focal
+/// released` over one camera, and `, focal released on every camera` over
+/// several. When the cameras differ, each is named by its index, `, camera 0
+/// focal and lens distortion released, camera 1 held`, because the label is
+/// the one line that says which lens moved.
 fn release_clause(cameras: &[sfmtool_core::CameraAdjustment]) -> String {
-    let words = |c: &sfmtool_core::CameraAdjustment| match (c.focal_released, c.distortion_released)
-    {
-        (true, true) => "focal and lens distortion released",
-        (true, false) => "focal released",
-        (false, true) => "lens distortion released",
-        (false, false) => "held",
+    let words = |c: &sfmtool_core::CameraAdjustment| {
+        let parts: Vec<&str> = [
+            (c.focal_released, "focal"),
+            (c.principal_point_released, "principal point"),
+            (c.distortion_released, "lens distortion"),
+        ]
+        .into_iter()
+        .filter_map(|(released, part)| released.then_some(part))
+        .collect();
+        match parts.as_slice() {
+            [] => "held".to_string(),
+            [one] => format!("{one} released"),
+            [rest @ .., last] => format!("{} and {last} released", rest.join(", ")),
+        }
     };
     let Some(first) = cameras.first().map(words) else {
         return String::new();
     };
     if cameras.iter().all(|c| words(c) == first) {
-        return match (first, cameras.len()) {
+        return match (first.as_str(), cameras.len()) {
             ("held", _) => String::new(),
             (w, 1) => format!(", {w}"),
             (w, _) => format!(", {w} on every camera"),
@@ -1641,6 +1686,7 @@ impl AppState {
                 format!("Bundle adjusted {label}{}", release_clause(&report.cameras));
             let schedule = schedule_clause(&options.schedule);
             let focal = focal_changes(&report.cameras);
+            let principal_point = principal_point_changes(&report.cameras);
             let free_points = free_point_clause(report.free_point_decision.as_ref());
             let deleted = if report.points_deleted > 0 {
                 format!(", {} points deleted", report.points_deleted)
@@ -1648,7 +1694,7 @@ impl AppState {
                 String::new()
             };
             let text = format!(
-                "{version_label}: {} images, {} points, {} observations, median residual {:.3} → {:.3} px{schedule}{focal}{free_points}{deleted}",
+                "{version_label}: {} images, {} points, {} observations, median residual {:.3} → {:.3} px{schedule}{focal}{principal_point}{free_points}{deleted}",
                 report.images,
                 report.points,
                 report.observations,

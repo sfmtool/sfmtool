@@ -73,13 +73,15 @@ impl BundleAdjustOptions {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct CameraRelease {
     pub focal: bool,
-    pub distortion: bool, // k1, or the radial spline
+    pub distortion: bool,      // k1, or the radial spline
+    pub principal_point: bool, // (cx, cy), on any model
 }
 
 impl CameraRelease {
-    pub const HELD: CameraRelease;                 // neither
+    pub const HELD: CameraRelease;                 // nothing
     pub const FOCAL: CameraRelease;                // the focal alone
-    pub const FOCAL_AND_DISTORTION: CameraRelease; // both
+    pub const FOCAL_AND_DISTORTION: CameraRelease; // the focal and the distortion
+    pub const ALL: CameraRelease;                  // all three
 }
 
 pub struct BundleAdjustReport {
@@ -101,6 +103,9 @@ pub struct CameraAdjustment {
     pub focal_after: f64,
     pub focal_released: bool,      // what its release asked for, and so what moved
     pub distortion_released: bool,
+    pub principal_point_released: bool,
+    pub principal_point_before: [f64; 2], // [cx, cy], px
+    pub principal_point_after: [f64; 2],  // the before unless released
     pub outermost_observed: Option<KeypointReach>, // under the solved camera
 }
 
@@ -165,7 +170,8 @@ kernel's camera list.
 **A camera with nothing released is held, and a solve with every camera held
 still runs.** Holding a lens is a choice, not an error: the solve refines the
 poses and the points against the lenses as they are, and the report's entries
-say `focal_released: false` and `distortion_released: false`. That is also the
+say `focal_released: false`, `distortion_released: false` and
+`principal_point_released: false`. That is also the
 default, because a lens that moves is a different claim about the capture than
 a pose that does, and the caller should be the one making it.
 
@@ -203,7 +209,19 @@ and slope there. A distortion released against a held focal could only bend the
 periphery around a scale it cannot fix, so a camera whose release has the
 distortion without the focal is refused (`DistortionWithoutFocal`, naming it).
 
-**The kernel is handed the choice, not re-told it.** The kernel's three flags
+**The principal point is released on any model, and needs no focal.** Every
+model projects as `u = fx·x_d + cx` with a distorted coordinate that does not
+read the principal point, so the kernel's columns for it are exact everywhere,
+and it is not a scale, so it is not tied to the focal: a `PINHOLE` or an
+`OPENCV_FISHEYE`, whose focal cannot be released, releases its principal point
+all the same. It has no refusal of its own. It carries no prior: it is one pair
+of numbers fitted from every image of the camera, kept on the image by the
+kernel's step guard. On a narrow field it is barely told apart from a turn of
+every image ([`../geometry/bundle-adjustment.md`](../geometry/bundle-adjustment.md)
+§ "The principal-point release"), so the report states how far it moved,
+`principal_point_before` and `principal_point_after`, for a person to judge.
+
+**The kernel is handed the choice, not re-told it.** The kernel's four flags
 are requests to every camera; `BaCameras::releases` narrows them per camera
 ([`../geometry/bundle-adjustment.md`](../geometry/bundle-adjustment.md)). This
 function passes every flag on and each camera's checked release in that list,
@@ -246,9 +264,9 @@ the camera whose domain the next adjustment would edit. Only the observations:
 the adjustment reads nothing off disk, so the features detected in the images'
 `.sift` files are for a caller to read with `outermost_keypoints`.
 
-**The report is per camera.** Each camera in the solve has its own focal, so
-the report carries one `CameraAdjustment` per camera rather than one focal for
-the whole solve. Per-camera residual medians are not in it: the
+**The report is per camera.** Each camera in the solve has its own focal and
+principal point, so the report carries one `CameraAdjustment` per camera rather
+than one of each for the whole solve. Per-camera residual medians are not in it: the
 overall medians are the ones a caller reports in one line, and a caller wanting
 more runs the kernel.
 
@@ -391,9 +409,10 @@ on it.
 - **The cameras.** Each camera in the solve is replaced by the camera the
   kernel returned for it: itself at its solved focal where its release has the
   focal, with its solved `k1` or spline where its release has the distortion,
-  and itself unchanged where it was held. Nothing else about any lens moves: the principal
-  point, and every other model's distortion, stay where they are. Releasing the
-  principal point, and a focal and principal point adjusted per image, is
+  at its solved principal point where its release has the principal point, and
+  itself unchanged where it was held. Nothing else about any lens moves: every
+  other model's distortion stays where it is. A focal and principal point
+  adjusted per image, rather than shared by every image of a camera, are
   proposed in [per-image-intrinsics.md](../../drafts/per-image-intrinsics.md).
 - **Positions and representations.** Each point in the solve takes its solved
   coordinate, and `w` follows the kernel's returned representation.
@@ -500,7 +519,7 @@ would leave the frame carrying the gauge drift of the solve.
 
 | Parameter | Default | Meaning |
 |-----------|---------|---------|
-| `releases` | empty: every camera held | One `CameraRelease` per camera of the image set: `focal` releases that camera's focal, `distortion` its `k1` or spline and needs `focal`. |
+| `releases` | empty: every camera held | One `CameraRelease` per camera of the image set: `focal` releases that camera's focal, `distortion` its `k1` or spline and needs `focal`, `principal_point` its principal point on any model. |
 | `schedule` | `DEFAULT_SCHEDULE`, `[(50, 5), (12, 2), (4, 1)]` | The staged trim schedule, `(trim_px, loss_scale)` per round; `trim_px` may be `f64::INFINITY`. |
 | `max_iters` | `60` | LM iteration budget per round. |
 | `min_track` | `2` | Trim survivors a point needs to stay in a round's solve. |
@@ -514,19 +533,22 @@ here so a caller sees what it is getting.
 ## Python bindings
 
 `EditedReconstruction.bundle_adjust(*, opt_f=False, opt_distortion=False,
-releases=None, schedule=None, max_iters=60, min_track=2, min_obs=12,
-free_points_cross=True)` returns `(EditedReconstruction, report)`.
-`free_points_cross=False` is `FreePointPolicy::NO_CROSS`. `opt_f` and
-`opt_distortion` are the release given to every camera of the image set.
-`releases`, when given, replaces them: a list with one dict per camera in the image
-set, in camera index order, each `{"focal": bool, "distortion": bool}`, a missing
-key meaning `False`; an unknown key or a value that is not a bool is a
-`ValueError`. It materialises the version's value when its
+opt_pp=False, releases=None, schedule=None, max_iters=60, min_track=2,
+min_obs=12, free_points_cross=True)` returns `(EditedReconstruction, report)`.
+`free_points_cross=False` is `FreePointPolicy::NO_CROSS`. `opt_f`,
+`opt_distortion` and `opt_pp` are the release given to every camera of the
+image set. `releases`, when given, replaces them: a list with one dict per
+camera in the image set, in camera index order, each `{"focal": bool,
+"distortion": bool, "principal_point": bool}`, a missing key meaning `False`; an
+unknown key is a `ValueError` naming the three keys an entry takes, and a value
+that is not a bool is one too. It materialises the version's value when its
 overlay is not empty, runs the function over it, and wraps the answer as a new
 base with an empty overlay, so the Python surface is the viewer's edit exactly.
 The report is the fields above as a dict, `cameras` a list with one dict per
-camera in the solve carrying the `CameraAdjustment` fields (`outermost_observed` a dict of
-`radius_px`, `theta_deg`, `image` and `xy`, or `None`), `free_point_decision`
+camera in the solve carrying the `CameraAdjustment` fields
+(`principal_point_before` and `principal_point_after` each a `(cx, cy)` pair,
+`outermost_observed` a dict of `radius_px`, `theta_deg`, `image` and `xy`, or
+`None`), `free_point_decision`
 the dict the kernel binding reports (`sigma_px`, `observation_count`,
 `outlier_count`, `decided`, `converged`, `to_finite`, `to_direction`,
 `unscored`) or
@@ -594,6 +616,11 @@ fixture needs no pixels, because the adjustment reads none. What it pins:
   measured from its principal point.
 - The focal released on two cameras finding each its own planted focal and
   moving nothing else about either lens.
+- A released principal point, planted 9 px off, moving more than halfway back,
+  written into the camera, reported before and after, and nothing else about
+  the lens moving; a held one reported unchanged and coming back exactly; two
+  cameras, one releasing its principal point alone and one with its focal,
+  each moving back along its own planted axis to within 3 px.
 - A camera no posed image uses (one nothing references, one only an unposed
   image uses) coming back untouched, left out of the report, and its entry in
   the release list ignored even where its model could not take it.
@@ -614,7 +641,9 @@ Bindings (`tests/rust_bindings/reconstruction/test_edited_reconstruction_rust_bi
 call's shape over a real reconstruction -- the poses moving, the residual median
 not getting worse, the report's populations and its per-camera entries, the value
 that came back being a new base with no overlay, and the object it came from
-untouched -- and the no-keypoints refusal.
+untouched -- the no-keypoints refusal, a released principal point reported
+and written back, a principal point released on an `OPENCV_FISHEYE`, and the
+unknown-key refusal naming the three keys.
 
 ## Non-goals
 

@@ -74,7 +74,8 @@ pub struct BaCameras<'a> {
 /// What one camera may release; `Default` and `HELD` release nothing.
 pub struct CameraRelease {
     pub focal: bool,
-    pub distortion: bool, // k1 or the spline, whichever the model carries
+    pub distortion: bool,      // k1 or the spline, whichever the model carries
+    pub principal_point: bool, // (cx, cy), on any model
 }
 
 impl<'a> BaCameras<'a> {
@@ -98,6 +99,7 @@ pub fn bundle_adjust(
     opt_f: bool,
     opt_k1: bool,
     opt_bspline: bool,
+    opt_pp: bool,
     schedule: &[BaSchedule],             // default 50/5 → 12/2 → 4/1
     max_iters: usize,                    // LM iterations per round
     min_track: usize,                    // trim survivors per point (2)
@@ -120,7 +122,7 @@ let out = bundle_adjust(
     &BaCameras::shared(&cam, quats.len()),
     &mut quats, &mut trans, &mut points, &uv, &obs_img, &obs_pt,
     None, None, FreePointPolicy::default(), None, DEFAULT_PROTECTED_LOSS_SCALE,
-    true, false, false, &DEFAULT_SCHEDULE, 60, 2, 12, &Progress::none(),
+    true, false, false, false, &DEFAULT_SCHEDULE, 60, 2, 12, &Progress::none(),
 );
 let solved_focal = out.cameras[0].focal_lengths().0;
 ```
@@ -133,23 +135,25 @@ kernel's other shape checks. `image_camera` is a `Cow` so that
 `BaCameras::shared` can own the all-zero column it builds, while a caller with a
 column of its own lends it (`image_camera: column.as_slice().into()`).
 
-**Why `releases` narrows the flags rather than replacing them.** The three
+**Why `releases` narrows the flags rather than replacing them.** The four
 flags are the kernel's whole-solve switches, and every caller that has one
 decision for every camera keeps passing them as it always has, with `releases:
 None`. A caller that decides camera by camera -- the reconstruction-level
 adjustment, whose caller states a release per camera -- passes every flag on
 and one `CameraRelease` per camera, and camera `j` releases its focal under
-`opt_f && releases[j].focal`, its `k1` under `opt_k1 && releases[j].distortion`
-and its spline under `opt_bspline && releases[j].distortion`, each still only
-where its model admits it. A list whose length is not `n_cam` is a caller error
+`opt_f && releases[j].focal`, its `k1` under `opt_k1 && releases[j].distortion`,
+its spline under `opt_bspline && releases[j].distortion` and its principal point
+under `opt_pp && releases[j].principal_point`, each still only where its model
+admits it. With `releases: None` every camera takes the flags as they are
+(`CameraRelease::ALL`). A list whose length is not `n_cam` is a caller error
 and panics with the other shape checks.
 
 **Why the result returns cameras.** A caller wants each solved camera back to
 write into its own image set. The result carries the whole `CameraIntrinsics` per
 input camera, in order: the input camera with its released parameters replaced
 by the solved ones (the focal under `opt_f`, `k1` under `opt_k1`, the spline
-under `opt_bspline`, where its model admits the release), and equal to the input
-camera otherwise. A caller copies it rather than reassembling it from scalars.
+under `opt_bspline`, where its model admits the release, and the principal point
+under `opt_pp`), and equal to the input camera otherwise. A caller copies it rather than reassembling it from scalars.
 
 `progress` is where the rounds and the LM iterations inside them are reported: a
 phase per schedule round with an iteration count under it, so a caller knows
@@ -291,8 +295,9 @@ cost = Σ_i s² · ρ(r_i² / s²),   ρ(z) = 2·(√(1 + z) − 1),   s = loss_
   (`R ← exp(δθ)·R`, `t ← t + δt`); per touched point `X ← X + δX`; and per
   camera, when `opt_f`, its focal `f_j ← f_j + δf_j`; when `opt_k1`, its
   radial coefficient `k1_j ← k1_j + δk1_j`; when `opt_bspline`, its
-  spline `c_j,i ← c_j,i + δc_j,i`. The three flags are requests to every
-  camera, each decided on that camera's own model (below and "Several
+  spline `c_j,i ← c_j,i + δc_j,i`; when `opt_pp`, its principal point
+  `(cx_j, cy_j) ← (cx_j + δcx_j, cy_j + δcy_j)`. The four flags are requests
+  to every camera, each decided on that camera's own model (below and "Several
   cameras"). Focal optimization requires a
   single-focal model whose projection multiplies `f` onto a distorted
   coordinate that does not itself depend on `f` — `SIMPLE_PINHOLE`
@@ -331,8 +336,8 @@ cost = Σ_i s² · ρ(r_i² / s²),   ρ(z) = 2·(√(1 + z) − 1),   s = loss_
   anything shorter evaluates as the identity and has nothing to release).
   The released block is the camera's whole coefficient vector `c₀..c_{N−1}`,
   shared by every image that camera took like its `f` and `k1`, so with one
-  camera the reduced camera system is `[f, k1, c₀..c_{N−1} | 6·n_im]`, width
-  `2 + N + 6·n_im` (see "Several cameras" for more). `opt_k1` and
+  camera the reduced camera system is `[f, k1, c₀..c_{N−1}, cx, cy | 6·n_im]`,
+  width `4 + N + 6·n_im` (see "Several cameras" for more). `opt_k1` and
   `opt_bspline` are mutually exclusive on any one camera: no model carries both
   parameters, so the binding rejects the combination (checked before the model
   gates, so the caller sees the real reason) and the core degrades each on its
@@ -461,10 +466,43 @@ cost = Σ_i s² · ρ(r_i² / s²),   ρ(z) = 2·(√(1 + z) − 1),   s = loss_
   a step, so the spline stops short of the continuation rather than folding.
   What the damping ladder does with a candidate that fails the guard is the
   next item.
+- **The principal-point release.** `opt_pp` releases each camera's principal
+  point, on every model. Every model projects as `u = fx·x_d + cx`,
+  `v = fy·y_d + cy` with a distorted coordinate `(x_d, y_d)` read off the ray
+  alone, so `∂(u, v)/∂(cx, cy)` is the identity, exact at every incidence angle
+  and for a direction as for a finite point. It is not a scale, so it needs no
+  focal release beside it, and on a two-focal model, whose focal cannot be
+  released, it is released all the same. The camera's lens block carries `cx`
+  and `cy` after its spline slots (`[f, k1, c₀..c_{N−1}, cx, cy]`), so the
+  focal, `k1` and spline slots keep their places; unreleased, the two slots are
+  pinned like an unreleased focal. The `k1` step guard's imaged field is
+  measured about the principal point the round starts from.
+
+  *The near-degeneracy.* A principal-point shift and a small rotation of every
+  image of the camera move the image almost alike: in a pinhole camera a shift
+  of `δ` pixels in `cx` and a rotation of `δ/f` about the camera's y axis differ
+  only by a term of order `δ·x²/f²` at image coordinate `x`, plus whatever the
+  distortion adds, since the distortion centre moves with the principal point
+  and not with the rotation. So the principal point is determined by the
+  field's width and by the distortion: well on a wide field or a strongly
+  distorted lens, barely on a narrow undistorted one. The release has no prior.
+  It is one pair of numbers fitted from every image of the camera, the
+  Marquardt damping `λ·diag(JᵀJ)` keeps a step along a weak direction short,
+  and the step guard below keeps it on the sensor. On a 60° field a principal
+  point planted 2% of the width off centre is recovered to within 0.05 px from
+  noise-free observations; on a 5° field the solve converges with the principal
+  point on the image and a residual no higher than with it held, and recovers
+  nothing in particular, which the data cannot support. The kernel reports no
+  conditioning for it; the reconstruction-level adjustment reports how far it
+  moved.
 - **Step guards and the held-distortion retry.** Inside the damping ladder
   each camera's candidate lens is checked. A focal that is not finite and
-  above `1e-6`, or a `k1` or spline coefficient that is not finite, rejects the
-  whole step, which is re-damped. A finite `k1` that folds the imaged field (it
+  above `1e-6`, a principal point that is not finite or lies off the image
+  (`cx` outside `[0, width]` or `cy` outside `[0, height]`; no physical lens
+  has its optical axis off the sensor, and a solve heading there is following
+  a degenerate direction rather than the data), or a `k1` or spline
+  coefficient that is not finite, rejects the whole step, which is
+  re-damped. A finite `k1` that folds the imaged field (it
   fails `k1_step_admissible`) or a finite spline that breaks monotonicity does
   not: the same rung solves the step again at the same `λ` with that camera's
   distortion slots (the `k1` slot, or every spline slot) pinned in the reduced
@@ -472,7 +510,8 @@ cost = Σ_i s² · ρ(r_i² / s²),   ρ(z) = 2·(√(1 + z) − 1),   s = loss_
   pinning uses. Pinning a slot after the Schur elimination is the same as
   removing that variable from the damped system, so the back-substituted
   points are the exact solution with the distortion held, and the focal, the
-  poses, the points and every other camera's lens still move. The held
+  principal point, the poses, the points and every other camera's lens still
+  move. The held
   candidate is checked again: a held spline is the current, admissible one,
   but a held `k1` is re-checked because `k1_step_admissible` reads the
   candidate focal, and its failure rejects the whole step; a camera whose
@@ -515,7 +554,8 @@ cost = Σ_i s² · ρ(r_i² / s²),   ρ(z) = 2·(√(1 + z) − 1),   s = loss_
   exposes this pair per camera, as a `CameraRelease` of `focal` and
   `distortion` for each camera, which it passes as `BaCameras::releases` with
   every flag on, so each camera frees whichever of `k1` and the spline its model
-  has, and refuses the distortion without the focal. That is how the
+  has, and refuses the distortion without the focal. The same `CameraRelease`
+  carries `principal_point`, which stands apart from this staging. That is how the
   viewer's Bundle Adjust dialog, the MCP `bundle_adjust` tool and `sfm xform
   --bundle-adjust` on a spline camera reach it.
 - **Jacobian.** The projection block `∂(u, v)/∂p_cam` — analytic from
@@ -535,7 +575,8 @@ cost = Σ_i s² · ρ(r_i² / s²),   ρ(z) = 2·(√(1 + z) − 1),   s = loss_
   whose point is behind the camera / outside the model domain contributes
   residual `(1e6, 0)` with a zero Jacobian row — penalized, never
   steering. The shared-parameter columns are analytic too: `(u − cx)/f`
-  for the focal, `f·θ³·(ûx, ûy)` for `k1`, and
+  for the focal, the identity for the principal point, `f·θ³·(ûx, ûy)` for
+  `k1`, and
   `∂(u, v)/∂cᵢ = f·Bᵢ(d)·(ûx, ûy)` for spline coefficient `i` over the
   model's radial coordinate `d` (`θ` for `SFMTOOL_FISHEYE`, `ρ = ρ_xy/rz`
   for `SFMTOOL_PINHOLE`), all with `d` and `û` read from the ray in the
@@ -547,7 +588,7 @@ cost = Σ_i s² · ρ(r_i² / s²),   ρ(z) = 2·(√(1 + z) − 1),   s = loss_
   columns unchanged — it projects through the very same map, at `R·d`
   instead of `R·X + t`. Cubic local support means at most four spline
   columns are non-zero at one observation, so the per-observation camera
-  block stays fixed-width (`[f, k1, 4 active coefficients, 6 pose]`)
+  block stays fixed-width (`[f, k1, 4 active coefficients, (cx, cy,) 6 pose]`)
   however long the spline is; the observation's own knot span decides
   which coefficient slots those four columns scatter into, and an active
   basis function from the gauge-anchored pair has no coefficient and no
@@ -564,7 +605,8 @@ cost = Σ_i s² · ρ(r_i² / s²),   ρ(z) = 2·(√(1 + z) − 1),   s = loss_
   the reference focal.
 - **Schur complement.** Points are eliminated: per-point 3×3 blocks are
   inverted directly and the reduced camera system (one lens block
-  `[f_j?, k1_j?, c_j,0..c_j,N_j−1?]` per camera, then `6·n_im`, dense) is
+  `[f_j?, k1_j?, c_j,0..c_j,N_j−1?, cx_j?, cy_j?]` per camera, then `6·n_im`,
+  dense) is
   solved by LU; point updates back-substitute. Unreleased lens slots (and a
   released spline's coefficient slots that lost their support within the
   round, every coefficient slot of a released spline with fewer than two
@@ -613,29 +655,46 @@ list and, per image, the index of the camera that took it.
 The reduced system has one lens block per camera, then the poses:
 
 ```
-[ f₀?, k1₀?, c₀,₀..c₀,N₀−1? | f₁?, k1₁?, c₁,₀..c₁,N₁−1? | … | 6·n_im ]
+[ f₀?, k1₀?, c₀,₀..c₀,N₀−1?, cx₀?, cy₀? | f₁?, k1₁?, c₁,₀..c₁,N₁−1?, cx₁?, cy₁? | … | 6·n_im ]
 ```
 
-Camera `j`'s block has a focal slot, a `k1` slot and `N_j` spline slots, where
-`N_j` is the length of its spline when its spline is released and `0`
-otherwise. The system's width is `Σ_j (2 + N_j) + 6·n_im`. An observation of image `i`
+Camera `j`'s block has a focal slot, a `k1` slot, `N_j` spline slots and the
+principal point's two slots, where `N_j` is the length of its spline when its
+spline is released and `0` otherwise. The principal point comes after the
+spline so that the focal, `k1` and first spline slot keep fixed offsets
+(`F_SLOT`, `K1_SLOT`, `BSPLINE_SLOT0`) within the block. The system's width is
+`Σ_j (4 + N_j) + 6·n_im`. An observation of image `i`
 writes its lens columns into the block of camera `image_camera[i]` and into no
 other camera's block, so two cameras' lens parameters couple only through the
 poses and points they both observe. A few cameras add a few slots beside the
 `6·n_im` pose slots, so the dense solve costs what it does with one.
 
-The per-observation camera block keeps its fixed width. The spline
-instantiation (`2 + 4 + 6` columns) is used whenever any camera releases a
-spline; in it, a spline column that carries no coefficient (one of the
-gauge-anchored pair, or any spline column of a camera whose spline is not
+The per-observation camera block keeps a fixed width, one of four, each a
+compile-time instantiation of the solve: `2 + 6` columns when no camera
+releases a spline or a principal point, `2 + 4 + 6` when some camera releases a
+spline, and each of those with the principal point's two columns before the
+pose (`4 + 6`, `4 + 4 + 6`) when some camera releases its principal point. In
+the spline instantiations a spline column that carries no coefficient (one of
+the gauge-anchored pair, or any spline column of a camera whose spline is not
 released) points at the observing camera's own `k1` slot and is exactly zero,
-so it adds exact zeros there whether or not that slot is released.
+so it adds exact zeros there whether or not that slot is released. In the
+principal-point instantiations a camera whose principal point is not released
+has zero columns there, pointing at its own pinned `cx`, `cy` slots.
+
+The principal point's columns are in the block only when a principal point is
+released, rather than always, because the Schur elimination's cost grows with
+the square of the block's width over every pair of observations of every
+point: carrying them in every solve makes the kernel's own tests about 40%
+slower, solves that release no principal point included. A solve that releases
+none computes exactly what it would if the lens blocks had no `cx`, `cy` slots
+at all: those slots are pinned identity rows that no observation reaches, and
+they change no other entry of the reduced system or of its solution.
 
 Every rule the single block follows applies to each block separately:
 
-- **Release gates, per camera.** `opt_f`, `opt_k1` and `opt_bspline` are
-  requests to every camera, narrowed per camera by `BaCameras::releases` where
-  it is given. A camera whose model the release is not exact for keeps that
+- **Release gates, per camera.** `opt_f`, `opt_k1`, `opt_bspline` and
+  `opt_pp` are requests to every camera, narrowed per camera by
+  `BaCameras::releases` where it is given. A camera whose model the release is not exact for keeps that
   parameter fixed, so a `SIMPLE_PINHOLE` and an `OPENCV_FISHEYE` in one solve
   under `opt_f` release the pinhole's focal and hold the fisheye's, and a camera
   whose entry releases nothing is held whatever the flags say.
@@ -644,8 +703,9 @@ Every rule the single block follows applies to each block separately:
   whose images has a kept observation in the round. Such a camera is not
   stepped, and comes back exactly as it went in.
 - **Step guards.** A candidate step is rejected, and re-damped, when any
-  camera's candidate focal is not finite and above `1e-6`, or its distortion
-  step is not finite. A camera whose `k1` folds inside its own imaged field
+  camera's candidate focal is not finite and above `1e-6`, its principal point
+  is not finite or lies off its own image, or its distortion step is not
+  finite. A camera whose `k1` folds inside its own imaged field
   (the largest pixel radius of its own kept observations about its own
   principal point), or whose spline breaks monotonicity on its own domain, has
   its distortion held for a retry of the step, and only that camera's: the
@@ -670,7 +730,7 @@ that took it.
 ### Parity
 
 With one camera and every image on it, the layout above reduces to
-`[f, k1, c₀..c_{N−1} | 6·n_im]` and every per-camera read reads that camera, so
+`[f, k1, c₀..c_{N−1}, cx, cy | 6·n_im]` and every per-camera read reads that camera, so
 the solve is the one the sections before "Several cameras" describe, bit for bit
 on every output: poses, points, residual norms, representation and the returned
 camera.
@@ -716,6 +776,7 @@ bundle_adjust(
     opt_bspline=False,         # every camera SFMTOOL_FISHEYE or
                                # SFMTOOL_PINHOLE with a defined spline;
                                # exclusive with opt_k1
+    opt_pp=False,              # any camera model
     schedule=[(50.0, 5.0), (12.0, 2.0), (4.0, 1.0)],
     max_iters=60,
     min_track=2,
@@ -731,8 +792,8 @@ bundle_adjust(
 `cameras` in the result holds one `CameraIntrinsics` per input camera, in
 order: the kernel's returned cameras, each the input camera with its released
 parameters replaced by the solved ones. A caller reads a solved focal as
-`out["cameras"][j].focal_lengths[0]` and a solved `k1` or spline from the
-camera's `parameters`.
+`out["cameras"][j].focal_lengths[0]` and a solved `k1`, spline or principal
+point from the camera's `parameters`.
 
 The binding holds every camera to every release it is asked for: a release that
 some camera's model does not admit raises a `ValueError` naming that camera,
@@ -913,6 +974,19 @@ Python's point of view).
     of 0.000 and reported convergence there. The end slope itself is not
     bounded away from 0 on this family; the measurements say why
     ([`bundle-adjustment-measurements.md`](bundle-adjustment-measurements.md#a-weakly-supported-spline-tail)).
+- **The principal-point release**: on every model, the `cx` and `cy` columns
+  match a central difference of the projection in the principal point to
+  `10⁻⁶`, and point at the camera's `cx` and `cy` slots; on a distortion-free
+  `SIMPLE_PINHOLE` scene whose points fill a 60° field, a principal point
+  planted 2% of the width off centre is recovered to within 0.05 px from the
+  centre with the focal held and noise-free observations; the same scene
+  narrowed to a 5° field converges with the principal point on the image and
+  a median residual no higher than with it held; the guard accepts the
+  image's edges and rejects a non-finite or off-image principal point, and a
+  solve pulled toward a principal point 40 px left of the image ends with it
+  still on the image; in a solve with every flag on, a camera whose release
+  has only the principal point recovers its own and keeps its focal, and a
+  held camera beside it comes back bit for bit.
 - **Directions carry the `k1` release**: on a scene whose finite cloud sits near the
   optical axis (no `θ³` signal) and whose far field is marked at infinity,
   `opt_k1` recovers the planted curvature — and the same solve with the
@@ -1729,10 +1803,9 @@ validation, and outputs are unchanged.
   parameterization.
 - Per-observation camera models: an observation's camera is its image's.
 - Optimizing distortion beyond the `k1` of `SIMPLE_RADIAL_FISHEYE` and the
-  spline of `SFMTOOL_FISHEYE` / `SFMTOOL_PINHOLE`, or the principal point;
-  `opt_f`/`opt_k1`/`opt_bspline` cover each camera's focal and those two radial
-  releases only. Releasing the principal point, shared per camera and adjusted
-  per image, is proposed in
+  spline of `SFMTOOL_FISHEYE` / `SFMTOOL_PINHOLE`; `opt_k1`/`opt_bspline`
+  cover those two radial releases only. A focal and principal point adjusted
+  per image, rather than shared by every image of a camera, are proposed in
   [per-image-intrinsics.md](../../drafts/per-image-intrinsics.md).
 - Gauge fixing and covariance estimation. The kernel holds no pose fixed to
   set the gauge and reports no uncertainty. A caller that wants a gauge states
@@ -1746,6 +1819,14 @@ validation, and outputs are unchanged.
 
 ## Open questions
 
+- **The conditioning of a released principal point.** On a narrow field the
+  data barely tell a principal-point shift from a turn of every image, and the
+  reconstruction-level report states only how far the principal point moved.
+  Whether it should carry the solved principal point's standard deviation, read
+  from the final linearization's reduced system with the gauge's null space
+  projected out (the system is singular along the gauge, so this needs a
+  pseudo-inverse), so that a narrow-field solve can say its principal point is
+  not determined, is open; covariance estimation is otherwise a non-goal.
 - **A damped distortion step beside the held one.** The held-distortion retry
   pins the distortion outright, so when the full step crosses the guard by
   overshooting rather than because the optimum lies past the limit, the
