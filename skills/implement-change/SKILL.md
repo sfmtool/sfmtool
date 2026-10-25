@@ -370,7 +370,9 @@ and hosts the pictures:
 >    A failing suite is SUBSTANTIVE unless the fix is SIMPLE. A Windows
 >    real-mouse `ui_basic` failure ("could not aim at the viewer's own
 >    window", from a locked desktop) is an environment failure: report it as
->    not run, not as a pass. Never push.
+>    not run, not as a pass. If you already have a SUBSTANTIVE finding, you
+>    may skip the long suites, since the next round's auditor runs them; say
+>    which you skipped. Never push.
 > 5. Classify each issue:
 >    - **SIMPLE**: a wrong count or number, a wording or style slip, a broken
 >      link, a wrap, a small factual correction in a sentence, a missing

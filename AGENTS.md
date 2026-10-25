@@ -38,8 +38,8 @@ run them in full on the last commit:
 
 - Python changes → `pixi run fmt && pixi run check` and the relevant tests
 - Rust changes → `pixi run cargo fmt`, `pixi run cargo clippy --workspace
-  --all-targets --features sfm-explorer/ui-tests`, `pixi run cargo test
-  --workspace` and `pixi run doc`
+  --all-targets --features sfm-explorer/ui-tests -- -D warnings`,
+  `pixi run cargo test --workspace` and `pixi run doc`
 - Changes under `crates/sfmtool-py/` or to anything re-exported through it →
   `pixi run maturin develop --release` (the `.so` does **not** rebuild
   automatically despite the editable Python install), then the full

@@ -48,7 +48,7 @@ Run the checks that match what you changed.
 | You changed…                          | Run                                             |
 | ------------------------------------- | ----------------------------------------------- |
 | Anything in `src/sfmtool/` or tests   | `pixi run fmt && pixi run check`                |
-| Anything in `crates/`                 | `pixi run cargo fmt && pixi run cargo clippy --workspace` |
+| Anything in `crates/`                 | `pixi run cargo fmt`, `pixi run cargo clippy --workspace --all-targets --features sfm-explorer/ui-tests -- -D warnings`, `pixi run cargo test --workspace` and `pixi run doc` |
 | Anything re-exported via `sfmtool-py` | `pixi run maturin develop --release`, then the full `pixi run test` |
 | Anything in `crates/sfm-explorer/`    | `pixi run -e ui ui-test` as well                |
 

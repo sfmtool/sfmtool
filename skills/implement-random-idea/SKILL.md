@@ -56,8 +56,9 @@ Break the spec into small, individually testable steps. For each step:
 2. Add or update tests.
 3. Run the relevant format/lint/test commands per `CLAUDE.md`:
    - Python: `pixi run fmt && pixi run check && pixi run test`
-   - Rust: `pixi run cargo fmt && pixi run cargo clippy --workspace && pixi run cargo test --workspace`
-   - If Rust changed and Python uses it: `pixi run maturin develop --release`
+   - Rust: `pixi run cargo fmt && pixi run cargo clippy --workspace --all-targets --features sfm-explorer/ui-tests -- -D warnings && pixi run cargo test --workspace && pixi run doc`
+   - If Rust changed and Python uses it: `pixi run maturin develop --release` before `pixi run test`
+   - `sfm-explorer`: also `pixi run -e ui ui-test`
 4. Review the diff (or have a subagent review it): tests present and meaningful? Code readable? Matches spec? No dead code, no unjustified comments, no premature abstractions?
 
 Between steps, re-check against the spec. If something doesn't fit, pause and decide: adjust the code, or adjust the spec (and record why). Do not paper over a spec mismatch.
