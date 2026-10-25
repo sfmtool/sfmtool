@@ -247,7 +247,8 @@ and hosts the pictures:
 - **Toolchain.** Use `pixi run cargo …`. A system `cargo` may be an older
   Rust and report clippy warnings the project's toolchain does not.
 - **Sign-off.** Every commit carries a DCO `Signed-off-by:` trailer
-  (`git commit -s`); see `CONTRIBUTING.md`. Both briefs say so.
+  (`git commit -s`); see `CONTRIBUTING.md`. The implementer and auditor
+  briefs say so, and the screenshot commit in § "Screenshots" carries one.
 
 ## Implementer brief
 
