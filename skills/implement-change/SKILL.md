@@ -161,6 +161,14 @@ test -z "$(git status --porcelain)"   # the agents commit their own work
 git push -u <fork> <branch>           # only when asked to push
 ```
 
+Push only once the suites the change requires (the implementer brief's
+**Checks** list) have passed in full on the branch's last commit. The auditor
+of the last round runs them before it returns CLEAN. If its report says a
+suite did not run or failed for the environment, such as the Windows
+`ui_basic` real-mouse test on a locked desktop, name that suite and the reason
+in your report and in the PR's Testing section, rather than counting it as a
+pass.
+
 Report to the user, or return to the calling skill:
 
 - the branch, and which remote's `main` it was cut from, repeating the warning
@@ -288,15 +296,31 @@ and hosts the pictures:
 > **Later rounds:** if you are given an auditor's findings, fix each one or
 > explain precisely why it is wrong, commit, and change nothing else.
 >
-> **Checks** (all must pass): the spec-link test
-> (`pixi run test -- tests/test_spec_links.py`) when specs or source citations
-> change; `pixi run fmt && pixi run check` plus the relevant tests for Python;
-> `pixi run cargo fmt --all`, the relevant `pixi run cargo test -p <crate>`,
-> `pixi run cargo clippy -p <crate> --all-targets` (add
-> `--features sfm-explorer/ui-tests` for `sfm-explorer`, or its `ui_basic`
-> tests are skipped) and `pixi run doc` for Rust;
-> `pixi run maturin develop --release` first when Rust changes and Python tests
-> need it. If a link fails for lack of disk space, delete
+> **Checks** (all must pass). Choose them by what the change touches, not by
+> which test files you edited: some tests check every menu entry or every
+> binding file, so they fail on a change that never touched them.
+>
+> - Specs or source citations: `pixi run test -- tests/test_spec_links.py`.
+> - Python: `pixi run fmt && pixi run check` and the relevant tests.
+> - Any Rust: `pixi run cargo fmt --all`,
+>   `pixi run cargo clippy --workspace --all-targets --features
+>   sfm-explorer/ui-tests -- -D warnings` (the feature, or clippy skips the
+>   `ui_basic` tests), `pixi run cargo test --workspace` and `pixi run doc`.
+> - `crates/sfmtool-py/`, or anything re-exported through it:
+>   `pixi run maturin develop --release`, then the full `pixi run test`. The
+>   layout and registration tests (`tests/test_module_layout.py`, the
+>   `test_*_registration.py` modules) check invariants across files that a
+>   subset misses.
+> - `sfm-explorer` (anything the viewer draws, any MCP tool):
+>   `pixi run -e ui ui-test` as well. On Windows its real-mouse test
+>   `a_real_right_click_opens_the_reconstruction_rows_context_menu` fails with
+>   "could not aim at the viewer's own window" when the desktop is locked or
+>   another window covers the viewer. Report that as an environment failure,
+>   not a pass.
+>
+> Narrower runs are fine while you work, but the suites above must pass on
+> your final commit. Report any suite you did not run in
+> full, and why. If a link fails for lack of disk space, delete
 > `target/debug/incremental`. Leave no background processes running.
 >
 > **Final answer:** DECISION (DONE or DECLINE, and for a decline which kind),
@@ -336,9 +360,17 @@ and hosts the pictures:
 >    a change to anything the viewer draws, an image a CLI command writes, or
 >    a docs page is visible however small, such as a new menu entry or a
 >    renamed label.
-> 4. Run the checks that apply (the spec-link test; ruff and tests for Python;
->    `pixi run cargo` fmt, test, clippy and `pixi run doc` for Rust). Never
->    push.
+> 4. Run the checks that the **Checks** list in the implementer brief
+>    (`skills/implement-change/SKILL.md`) requires for what the diff touches,
+>    in full, on the branch's last commit, after any "Audit fix:" commits of
+>    your own. Choose them by what the diff touches, not by which test files
+>    it edits: a full `pixi run test` after a `sfmtool-py` change,
+>    `pixi run -e ui ui-test` after a `sfm-explorer` change, and
+>    `cargo test` and `cargo clippy` with `--workspace` after any Rust change.
+>    A failing suite is SUBSTANTIVE unless the fix is SIMPLE. A Windows
+>    real-mouse `ui_basic` failure ("could not aim at the viewer's own
+>    window", from a locked desktop) is an environment failure: report it as
+>    not run, not as a pass. Never push.
 > 5. Classify each issue:
 >    - **SIMPLE**: a wrong count or number, a wording or style slip, a broken
 >      link, a wrap, a small factual correction in a sentence, a missing

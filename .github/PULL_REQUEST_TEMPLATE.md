@@ -44,7 +44,7 @@ can screenshot a single panel.
 - [ ] Python changes: `pixi run fmt && pixi run check`
 - [ ] Rust changes: `pixi run cargo fmt && pixi run cargo clippy --workspace`
 - [ ] Rust changes touching `sfmtool-py` re-exports: ran `pixi run maturin develop --release`
-- [ ] Tests pass locally (`pixi run test`, `pixi run cargo test --workspace` as applicable)
+- [ ] Tests pass locally: the full suites that apply (`pixi run test`, `pixi run cargo test --workspace`, `pixi run -e ui ui-test`), not a subset; if one did not run, say which and why
 - [ ] Updated the relevant spec under `specs/` if behavior changed, or added a new spec if this introduces new behavior
 
 ## License

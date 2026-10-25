@@ -49,7 +49,8 @@ Run the checks that match what you changed.
 | ------------------------------------- | ----------------------------------------------- |
 | Anything in `src/sfmtool/` or tests   | `pixi run fmt && pixi run check`                |
 | Anything in `crates/`                 | `pixi run cargo fmt && pixi run cargo clippy --workspace` |
-| Anything re-exported via `sfmtool-py` | `pixi run maturin develop --release` *before* re-running Python tests |
+| Anything re-exported via `sfmtool-py` | `pixi run maturin develop --release`, then the full `pixi run test` |
+| Anything in `crates/sfm-explorer/`    | `pixi run -e ui ui-test` as well                |
 
 The native extension `sfmtool._sfmtool` is **not** rebuilt by the editable
 Python install — `maturin develop` is required after any Rust edit that
