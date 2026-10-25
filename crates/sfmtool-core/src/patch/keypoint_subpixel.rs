@@ -594,7 +594,8 @@ const REANCHOR_MIN_OFFSET: f64 = 0.5;
 /// Where `st`'s refined offset is past [`REANCHOR_MIN_OFFSET`], render its tile
 /// again through the patch slid onto the keypoint it reached and solve again
 /// from there, within what is left of `max_offset_px` of its seed. The second
-/// solve keeps its result only where it scores; otherwise the first stands.
+/// solve's result is kept only where it scores at least what the first
+/// reached, so the refinement still never ends below its seed.
 #[allow(clippy::too_many_arguments)]
 fn reanchor(
     patch: &OrientedPatch,
@@ -656,7 +657,9 @@ fn reanchor(
         &left,
         scratch,
     );
-    if !st.score.is_finite() {
+    // The never-worse guard across the two solves: where the second does not
+    // score at least what the first reached, the first stands.
+    if !(st.score.is_finite() && st.score >= kept.2) {
         (st.patch_frame, st.off, st.score, st.keypoint) = kept;
     }
 }
