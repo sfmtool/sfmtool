@@ -256,9 +256,10 @@ def find_point_correspondences_by_coordinate(
     are resolved into a one-to-one point mapping requiring at least ``min_votes``
     supporting images.
 
-    Both reconstructions must have their workspace ``.sift`` files available
-    (resolved via ``recon.workspace_dir``), as with the SIFT-reading ``xform``
-    filters.
+    An ``embedded_patches`` reconstruction supplies its embedded keypoints. A
+    ``sift_files`` reconstruction must have its workspace ``.sift`` files
+    available (resolved via ``recon.workspace_dir``), as with the SIFT-reading
+    ``xform`` filters.
 
     Args:
         source_recon: Source SfmrReconstruction object
