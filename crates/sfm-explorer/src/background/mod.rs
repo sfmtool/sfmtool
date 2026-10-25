@@ -412,6 +412,24 @@ impl Operation {
         quiet: false,
     };
 
+    /// Every finite point of one node turned to its grown-plane normal, as
+    /// Track View's *Grown Plane Normal* and *Commit* do for one track
+    /// (`specs/gui/edits/refine-all-normals.md`).
+    ///
+    /// Cancellable because the photographs are decoded with the flag polled
+    /// between them, and `sfmtool_core::bench::refine_normals` polls it in
+    /// front of each stage and of each point's step and hands back
+    /// `RefineNormalsError::Cancelled` rather than a value some of whose
+    /// points were turned.
+    pub(crate) const REFINE_ALL_NORMALS: Operation = Operation {
+        name: "Refine all normals",
+        cancellable: true,
+        kind: Kind::Edit,
+        queue: Queue::Slow,
+        locks: true,
+        quiet: false,
+    };
+
     /// One camera of one node switched to the camera model its proposal was
     /// fitted to, and the tracks its images observe retriangulated through the
     /// new model, as one version: the camera model proposal's Apply
@@ -783,12 +801,13 @@ impl Operation {
     /// declaration nothing checks is a declaration that rots.
     // Read by those tests alone, which is what it is for.
     #[cfg(test)]
-    pub(crate) const ALL: [Operation; 24] = [
+    pub(crate) const ALL: [Operation; 25] = [
         Operation::OPEN,
         Operation::BUNDLE_ADJUST,
         Operation::TO_EMBEDDED_PATCHES,
         Operation::RETRIANGULATE_ALL_POINTS,
         Operation::REFIT_ALL_POINTS,
+        Operation::REFINE_ALL_NORMALS,
         Operation::SWITCH_CAMERA_MODEL,
         Operation::PRUNE_COVERED_OBSERVATIONS,
         Operation::ADD_IMAGE_TO_TRACKS,

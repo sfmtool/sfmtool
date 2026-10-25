@@ -39,10 +39,13 @@
 //! of behind it. The step itself calls its own, so the two answers cannot
 //! drift.
 //!
-//! One function runs those steps over a whole reconstruction rather than one
+//! Two functions run bench steps over a whole reconstruction rather than one
 //! track: [`refit_points`](refit_points::refit_points()), which fits every
 //! point as a track put on the bench from it and writes each answer a commit
-//! would write into a copy of the value, at the point's own row.
+//! would write into a copy of the value, at the point's own row; and
+//! [`refine_normals`](refine_normals::refine_normals()), which does the same
+//! with the grown-plane normal step in place of the fit, for every finite
+//! point.
 
 pub mod classify;
 pub mod commit;
@@ -51,6 +54,7 @@ pub mod fit;
 pub mod geometry_search;
 pub mod nearby;
 pub mod normal;
+pub mod refine_normals;
 pub mod refit_points;
 pub mod search;
 pub mod stage;
@@ -100,6 +104,10 @@ pub use normal::{
     GrownPlanePair, GrownPlanePick, GrownPlanePrecision, GrownPlaneRefusal, GrownPlaneSequence,
     GrownPlaneTiltStart, GrownPlaneTry, GrownPlaneTryOutcome, GrownPlaneView, NormalError,
     NormalEstimate, NormalReport, PieceLayout, BENCH_MIN_CELL_ZNCC,
+};
+pub use refine_normals::{
+    refine_normals, NormalLeftUnchanged, RefineNormalsError, RefineNormalsOptions,
+    RefineNormalsOutcome, RefineNormalsReport, RefinedNormal,
 };
 pub use refit_points::{
     refit_points, RefitOutcome, RefitPoint, RefitPointsError, RefitPointsOptions,

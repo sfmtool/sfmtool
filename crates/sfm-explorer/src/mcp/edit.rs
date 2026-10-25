@@ -27,8 +27,8 @@
 //!   current rather than one that was made.
 //!
 //! [`bundle_adjust`], [`convert_to_embedded_patches`],
-//! [`retriangulate_all_points`] and [`refit_all_points`] are the exceptions to
-//! the first sentence, and it
+//! [`retriangulate_all_points`], [`refit_all_points`] and [`refine_all_normals`]
+//! are the exceptions to the first sentence, and it
 //! is the operations' doing rather than the surface's: each runs on a worker, so
 //! the call starts it and the frame answers it, with the version it pushed or
 //! with a handle to an operation that is still going
@@ -250,6 +250,29 @@ pub(super) fn refit_all_points(state: &mut AppState, label: &str) -> super::Outc
     };
     let since = state.action_log.revision();
     match state.start_refit_all_points(id) {
+        Err(message) => super::Outcome::Done(Err(ToolError::new(message))),
+        Ok(started) => started_or(state, started, super::Answer::Version(id), |state| {
+            unchanged_reply(state, id, since)
+        }),
+    }
+}
+
+/// `refine_all_normals`: start the refinement of every finite point's normal,
+/// and answer with its version or with a handle, whichever the clock reaches
+/// first.
+///
+/// It replies the way [`refit_all_points`] does: every point is a bench
+/// normal step, so any node of real size outlives [`REPLY_DIRECTLY_WITHIN`]
+/// and answers with a [`BackgroundReply`] the frame resolves. A refusal to
+/// begin is immediate and in `AppState`'s own words, which are the greyed menu
+/// entry's.
+pub(super) fn refine_all_normals(state: &mut AppState, label: &str) -> super::Outcome {
+    let id = match resolve_reconstruction(state, Some(label)) {
+        Ok(id) => id,
+        Err(error) => return super::Outcome::Done(Err(error)),
+    };
+    let since = state.action_log.revision();
+    match state.start_refine_all_normals(id) {
         Err(message) => super::Outcome::Done(Err(ToolError::new(message))),
         Ok(started) => started_or(state, started, super::Answer::Version(id), |state| {
             unchanged_reply(state, id, since)

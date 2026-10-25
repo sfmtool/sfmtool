@@ -743,6 +743,8 @@ cached against the track's `Arc` and the node's version, since asking it builds
 a point record. *Fit* followed by *Commit*, with every observation kept, has a
 whole-reconstruction form: `Refit All Points` on the Scene Graph's
 reconstruction menu ([edits/refit-all-points.md](edits/refit-all-points.md)).
+So does *Grown Plane Normal* followed by *Commit*: `Refine All Normals`, on the
+same menu ([edits/refine-all-normals.md](edits/refine-all-normals.md)).
 
 In **Viewed mode** the toolbar is the evaluation state alone. The viewed track
 is on no bench, so there is nothing for *Fit*, *Stage*, *Split*, *Duplicate*,

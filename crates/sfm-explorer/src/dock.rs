@@ -1289,6 +1289,9 @@ impl TabContext<'_> {
         if let Some(id) = response.refit_all_points {
             let _ = self.state.start_refit_all_points(id);
         }
+        if let Some(id) = response.refine_all_normals {
+            let _ = self.state.start_refine_all_normals(id);
+        }
         if let Some(id) = response.prune_covered_observations {
             let _ = self.state.start_prune_covered_observations(
                 id,

@@ -54,6 +54,7 @@ pub(super) fn node_context_menu(ui: &mut egui::Ui, node: &mut SceneNode, out: &m
     show_bundle_adjust_entry(ui, node, out);
     show_retriangulate_entry(ui, node, out);
     show_refit_entry(ui, node, out);
+    show_refine_normals_entry(ui, node, out);
     show_prune_covered_entry(ui, node, out);
     // Above the conversion because it is where a person looks first: the
     // reconstruction row is the row they have in hand when they find a search
@@ -216,6 +217,41 @@ fn show_refit_entry(ui: &mut egui::Ui, node: &SceneNode, out: &mut TreeOutput) {
     }
 }
 
+/// What the entry that refines the normal of every point of a node is called,
+/// in the menu and in the tests that aim at it.
+pub(crate) const REFINE_ALL_NORMALS: &str = "Refine All Normals";
+
+/// `Refine All Normals`: every finite point of the node turned to its
+/// grown-plane normal, as Track View's *Grown Plane Normal* does with every
+/// observation kept, and committed.
+///
+/// Directly under [`show_refit_entry`], since it is the same kind of run over
+/// the bench's steps: that one moves each point and keeps the way it faces,
+/// this one turns each patch and keeps its centre. Greyed rather than hidden
+/// when it cannot run, on the gate the job and the wire ask
+/// (`state::edits::refine_refusal`).
+fn show_refine_normals_entry(ui: &mut egui::Ui, node: &SceneNode, out: &mut TreeOutput) {
+    let refusal = crate::state::edits::refine_refusal(node, out.edit_refusal(node.id));
+    let entry = ui
+        .add_enabled(refusal.is_none(), egui::Button::new(REFINE_ALL_NORMALS))
+        .on_disabled_hover_text(refusal.unwrap_or_default())
+        .on_hover_text(
+            "Turn every finite point's patch to its grown-plane normal, as Track View's Grown \
+             Plane Normal does with every observation kept: rewrite the keypoints of the views \
+             the step uses and render each patch bitmap again, as one version. Moves no camera \
+             and no point's centre, and skips points at infinity. Reads every photograph the \
+             points observe. Runs on a worker thread and can be cancelled; Undo (Ctrl+Z) puts \
+             the points back.",
+        );
+    if out
+        .hit(row_id(node.id, "refine_all_normals"), entry)
+        .clicked()
+    {
+        out.response.refine_all_normals = Some(node.id);
+        ui.close();
+    }
+}
+
 /// What the entry that retires a node's covered observations is called, in the
 /// menu and in the tests that aim at it.
 pub(crate) const PRUNE_COVERED_OBSERVATIONS: &str = "Prune Covered Observations";
@@ -223,10 +259,10 @@ pub(crate) const PRUNE_COVERED_OBSERVATIONS: &str = "Prune Covered Observations"
 /// `Prune Covered Observations`: every observation of the node a finer tracked
 /// one covers, handed over to the feature that supersedes it.
 ///
-/// Sits directly under [`show_refit_entry`], after the two entries that re-read
-/// the points, because it is what a reviewer reaches for with them: they
-/// re-read what each track says, and this decides which tracks should still be
-/// saying it. Greyed rather than hidden when it cannot run, on `AppState`'s own
+/// Sits directly under [`show_refine_normals_entry`], after the three entries
+/// that re-read the points, because it is what a reviewer reaches for with
+/// them: they re-read what each track says, and this decides which tracks
+/// should still be saying it. Greyed rather than hidden when it cannot run, on `AppState`'s own
 /// sentence.
 fn show_prune_covered_entry(ui: &mut egui::Ui, node: &SceneNode, out: &mut TreeOutput) {
     let refusal = crate::state::edits::prune_covered_refusal(node, out.edit_refusal(node.id));

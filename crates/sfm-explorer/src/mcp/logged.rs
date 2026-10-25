@@ -72,6 +72,7 @@ impl Command {
             Command::RetriangulatePoint { .. } => "retriangulate_point",
             Command::RetriangulateAllPoints { .. } => "retriangulate_all_points",
             Command::RefitAllPoints { .. } => "refit_all_points",
+            Command::RefineAllNormals { .. } => "refine_all_normals",
             Command::PruneCoveredObservations { .. } => "prune_covered_observations",
             Command::DeleteCameraImage { .. } => "delete_camera_image",
             Command::MoveCameraImage { .. } => "move_camera_image",
@@ -155,6 +156,9 @@ impl Command {
                 reconstruction_label,
             }
             | Command::RefitAllPoints {
+                reconstruction_label,
+            }
+            | Command::RefineAllNormals {
                 reconstruction_label,
             }
             | Command::DeleteCameraImage {
@@ -380,6 +384,7 @@ impl Command {
             | Command::RetriangulatePoint { .. }
             | Command::RetriangulateAllPoints { .. }
             | Command::RefitAllPoints { .. }
+            | Command::RefineAllNormals { .. }
             | Command::PruneCoveredObservations { .. }
             | Command::DeleteCameraImage { .. }
             | Command::MoveCameraImage { .. }

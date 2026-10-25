@@ -307,13 +307,14 @@ fixed-height for virtualization.
   loaded node — see "Node Transforms and Alignment"), `Reset Transform`,
   `Bake Transform`, `Tint ▸` (Original / palette of distinguishable colors),
   `Bundle Adjust...`, `Retriangulate All Points`, `Refit All Points`,
-  `Prune Covered Observations`, `Build SIFT Files`, `Build Index Files`,
+  `Refine All Normals`, `Prune Covered Observations`, `Build SIFT Files`,
+  `Build Index Files`,
   `Convert to Embedded Patches`, `Close`.
   While a camera model proposal is open on the node
   ([edits/switch-camera-model.md](edits/switch-camera-model.md)), the entries
   that edit it (`Reset Transform`, `Bake Transform`, `Bundle Adjust...`,
-  `Retriangulate All Points`, `Refit All Points`, `Prune Covered Observations`,
-  `Convert to Embedded Patches`) are greyed with *"Apply or cancel the camera
+  `Retriangulate All Points`, `Refit All Points`, `Refine All Normals`, `Prune
+  Covered Observations`, `Convert to Embedded Patches`) are greyed with *"Apply or cancel the camera
   model proposal first."*, after a busy node's sentence; `Close` applies the
   proposal first.
   **`Solo` is not in the menu** — it is the row's `S` (see "Comparison
@@ -367,6 +368,21 @@ fixed-height for virtualization.
   Whether every photograph can be read and whether the noise level can be
   measured are not asked by the gate, which runs every frame the menu is open;
   the operation refuses both on the worker.
+- **`Refine All Normals`** turns the patch of every finite point of the node
+  to its grown-plane normal, as Track View's *Grown Plane Normal* does for one
+  track with every observation kept, and commits it, as the node's next
+  version and on a worker thread ([background-tasks.md](background-tasks.md),
+  [edits/refine-all-normals.md](edits/refine-all-normals.md)). It rewrites the
+  keypoints of the views the step uses and renders each patch bitmap again,
+  moves no camera, no lens and no point's centre, skips points at infinity,
+  deletes no point and creates none, and reads every photograph the points
+  observe. It sits directly under `Refit All Points`, which moves each point
+  and keeps the way it faces where this turns each patch and keeps its centre.
+  It is greyed for the refit's reasons in the refit's order, in sentences that
+  name its own work; the gate is `state::edits::refine_refusal`, which the
+  wire's `refine_all_normals` and the operation itself also ask. Whether every
+  photograph can be read is not asked by the gate; the operation refuses it on
+  the worker.
 - **`Prune Covered Observations`** retires every observation of the node a
   finer tracked one covers in the same photograph, and drops the points left
   with fewer than two, as the node's next version and on a worker thread
@@ -374,8 +390,8 @@ fixed-height for virtualization.
   [edits/prune-covered-observations.md](edits/prune-covered-observations.md)).
   It re-solves nothing and moves nothing; the surviving points are renumbered,
   so the panel caches for the node are dropped when the version lands. It sits
-  directly under `Refit All Points`, after the two entries that re-read the
-  points, because it is what a reviewer reaches for with them. It is **live
+  directly under `Refine All Normals`, after the three entries that re-read
+  the points, because it is what a reviewer reaches for with them. It is **live
   only on a node whose points carry a patch frame, whose observations carry a
   pixel, that has a posed image, and that nothing is running on**, and greyed
   with the reason otherwise. The gate is `state::edits::prune_covered_refusal`,
@@ -1420,10 +1436,16 @@ bundle from `retain_nodes` on the next frame.
   on a busy one.
 - **The reconstruction row's `Refit All Points`**, through the same whole
   frames: live on an embedded_patches node with patch frames, drawn directly
-  **under** `Retriangulate All Points` and **above** `Prune Covered
-  Observations`, and reporting the node the menu was opened on while another
+  **under** `Retriangulate All Points` and **above** `Refine All Normals`, and
+  reporting the node the menu was opened on while another
   node is selected; drawn and dead, with the gate's sentence, on a `sift_files`
   node, on a node with no patch frames and on a busy one.
+- **The reconstruction row's `Refine All Normals`**, through the same whole
+  frames: live on an embedded_patches node with patch frames, drawn directly
+  **under** `Refit All Points` and **above** `Prune Covered Observations`, and
+  reporting the node the menu was opened on while another node is selected;
+  drawn and dead, with the gate's sentence, on a `sift_files` node, on a node
+  with no patch frames and on a busy one.
 - **The reconstruction row's hover** names the node's file, and says the node
   came from none where it has no path; both hover the **name**, the part of the
   row the tooltip has to reach.

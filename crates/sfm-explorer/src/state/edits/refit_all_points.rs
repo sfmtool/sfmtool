@@ -23,7 +23,7 @@ use crate::scene::ReconId;
 use crate::state::{AppState, NOT_LOADED};
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 /// Why every point of `node` cannot be refit, or `None` when it can.
 ///
@@ -42,24 +42,38 @@ mod tests;
 /// [`super::retriangulate_refusal`] is one: the menu is drawn inside a walk that
 /// has given up its borrow of the state.
 pub(crate) fn refit_refusal(node: &crate::scene::SceneNode, busy: Option<&str>) -> Option<String> {
+    whole_value_bench_refusal(
+        node,
+        busy,
+        "This reconstruction's observations are .sift feature indexes with no inline \
+         keypoints, and a refit rewrites a keypoint per observation. Convert to Embedded \
+         Patches first.",
+        "This reconstruction's points carry no patch frame, and a fit registers a point's \
+         frame into every image that sees it.",
+    )
+}
+
+/// The gate a whole-value run of a bench step over every point shares, Refit
+/// All Points' and Refine All Normals' alike: the busy sentence, then
+/// `no_keypoints` where the observations carry no inline keypoint, then
+/// `no_frames` where the points carry no patch frame, then no posed image.
+/// Each run's own function supplies the two sentences that name what it
+/// does, so the order of the reasons and the posed-image sentence are one.
+pub(crate) fn whole_value_bench_refusal(
+    node: &crate::scene::SceneNode,
+    busy: Option<&str>,
+    no_keypoints: &str,
+    no_frames: &str,
+) -> Option<String> {
     if let Some(why) = busy {
         return Some(why.to_string());
     }
     let edited = node.history.current();
     if !edited.has_keypoints() {
-        return Some(
-            "This reconstruction's observations are .sift feature indexes with no inline \
-             keypoints, and a refit rewrites a keypoint per observation. Convert to Embedded \
-             Patches first."
-                .to_string(),
-        );
+        return Some(no_keypoints.to_string());
     }
     if !edited.has_patch_frames() {
-        return Some(
-            "This reconstruction's points carry no patch frame, and a fit registers a point's \
-             frame into every image that sees it."
-                .to_string(),
-        );
+        return Some(no_frames.to_string());
     }
     (edited.posed_lens_count() == 0)
         .then(|| "No image of this reconstruction carries a pose.".to_string())
@@ -95,7 +109,7 @@ fn left_as_they_were(error: Option<&FitError>) -> (usize, &'static str) {
 }
 
 /// `n` and the noun, plural unless `n` is one.
-fn counted(n: usize, one: &str, many: &str) -> String {
+pub(crate) fn counted(n: usize, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })
 }
 
@@ -174,8 +188,8 @@ fn refit_summary(report: &RefitPointsReport) -> String {
 }
 
 /// Every image some live point of `edited` observes, ascending: the
-/// photographs a refit reads.
-fn observed_images(edited: &EditedReconstruction) -> Vec<usize> {
+/// photographs a refit reads, and those a refinement of every normal reads.
+pub(crate) fn observed_images(edited: &EditedReconstruction) -> Vec<usize> {
     let mut seen = vec![false; edited.image_count()];
     for index in edited.live_indexes() {
         if let Some(point) = edited.point(index) {

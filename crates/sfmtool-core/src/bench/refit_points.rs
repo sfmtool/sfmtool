@@ -523,7 +523,7 @@ pub fn refit_points(
 
 /// The refusals of the whole run, read off the value and the views before
 /// anything is copied.
-fn check_preconditions(
+pub(super) fn check_preconditions(
     recon: &SfmrReconstruction,
     images: &[ProjectedImage<'_>],
 ) -> Result<(), RefitPointsError> {
@@ -737,7 +737,7 @@ fn refit_one(
 ///
 /// Panics if a record's images are not its stored track's, or its bitmap is
 /// not the column's shape.
-fn write_in_place(out: &mut SfmrReconstruction, writes: Vec<(usize, PointRecord)>) {
+pub(super) fn write_in_place(out: &mut SfmrReconstruction, writes: Vec<(usize, PointRecord)>) {
     let PointSet {
         points,
         tracks,

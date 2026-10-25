@@ -556,7 +556,9 @@ From Python a track naming an image past the image set cannot reach the run:
   a track should have is the bench's work.
 - **Turning the patch.** The fit keeps the way the patch faces. The normal
   steps, *Finite Diff Normal*, *Grid Plane Normal* and *Grown Plane Normal*,
-  are per-track bench steps.
+  are per-track bench steps, and the grown-plane one has a run over every
+  finite point of its own, [`refine-normals.md`](refine-normals.md), which
+  shares this run's preconditions and writer.
 - **Refitting a list of points.** The run is over every point; one point is
   *Fit* and *Commit* on the bench.
 - **Refitting a held point.** The value owns its coordinate. Realigning a held

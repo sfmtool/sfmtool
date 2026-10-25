@@ -28,12 +28,12 @@ use crate::camera::CameraModel;
 
 /// A half-length that projects to 16 px in a view facing the plane from the
 /// scenes' distance, as in the grid plane normal's tests.
-const HALF: f64 = 0.4;
+pub(super) const HALF: f64 = 0.4;
 
 /// Every camera's distance from the point.
 const DISTANCE: f64 = 4.0;
 
-fn camera() -> CameraIntrinsics {
+pub(super) fn camera() -> CameraIntrinsics {
     CameraIntrinsics {
         model: CameraModel::Pinhole {
             focal_length_x: 160.0,
@@ -91,7 +91,7 @@ fn plane_texture(x: f64, y: f64) -> f64 {
 }
 
 /// What a ray sees of the textured plane `z = PLANE_Z`.
-fn textured_plane(c: [f64; 3], d: [f64; 3]) -> f64 {
+pub(super) fn textured_plane(c: [f64; 3], d: [f64; 3]) -> f64 {
     let (x, y) = hit(c, d, PLANE_Z);
     plane_texture(x, y)
 }
@@ -110,11 +110,11 @@ fn edited_of(scene: &Scene) -> EditedReconstruction {
 }
 
 /// The plane's outward normal, toward the cameras.
-fn truth() -> Vector3<f64> {
+pub(super) fn truth() -> Vector3<f64> {
     Vector3::new(0.0, 0.0, -1.0)
 }
 
-fn degrees(a: Vector3<f64>, b: Vector3<f64>) -> f64 {
+pub(super) fn degrees(a: Vector3<f64>, b: Vector3<f64>) -> f64 {
     a.normalize()
         .dot(&b.normalize())
         .clamp(-1.0, 1.0)
@@ -184,7 +184,7 @@ fn every_view() -> GrownPlaneNormalOptions {
 }
 
 /// Six views of the textured plane, from facing it to 50 degrees off.
-fn wide_centres() -> Vec<[f64; 3]> {
+pub(super) fn wide_centres() -> Vec<[f64; 3]> {
     vec![
         centre(0.0, 0.0),
         centre(8.0, 30.0),

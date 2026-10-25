@@ -39,8 +39,8 @@ point. This entry does that fit for every point at once.
 
 Right-click a reconstruction's row in the Scene Graph and choose `Refit All
 Points`. The whole-reconstruction entries read `Bundle Adjust...`,
-`Retriangulate All Points`, `Refit All Points`, `Prune Covered Observations`.
-It acts on the node the menu was opened on, not on the selection, so the panel
+`Retriangulate All Points`, `Refit All Points`, `Refine All Normals`, `Prune
+Covered Observations`. It acts on the node the menu was opened on, not on the selection, so the panel
 reports it as `SceneGraphResponse::refit_all_points` and `dock.rs` answers with
 `AppState::start_refit_all_points`. Its hover text:
 
@@ -68,6 +68,10 @@ reasons, in the order they are checked:
 4. the points carry no patch frame, since a fit registers the frame into every
    view;
 5. no image carries a pose.
+
+The order and the checks are one function, `whole_value_bench_refusal`, which
+`refit_refusal` calls with the two sentences that name a refit's work, and
+which [refine-all-normals.md](refine-all-normals.md)'s gate calls with its own.
 
 Whether every photograph can be read and whether the reconstruction's
 reprojection noise can be measured are not asked by the gate: the first reads
@@ -218,11 +222,11 @@ and beside the other entries' tests.
 - **The Scene tree entry**
   ([`scene_graph/tests.rs`](../../../crates/sfm-explorer/src/scene_graph/tests.rs))
   is live on an embedded_patches node with frames, drawn directly under
-  `Retriangulate All Points` and above `Prune Covered Observations`, and reports
+  `Retriangulate All Points` and above `Refine All Normals`, and reports
   the node it was opened on while another is selected; it is drawn and dead,
   with the gate's sentence, on a `sift_files` node, a node with no frames and a
-  busy node. `Prune Covered Observations` is measured against it as the entry
-  directly above.
+  busy node. `Refine All Normals` is measured against it as the entry directly
+  above.
 - **The operation is cancellable**, held to its claim by the test that cancels
   every operation declaring so
   ([`background/tests.rs`](../../../crates/sfm-explorer/src/background/tests.rs)).

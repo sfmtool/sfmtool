@@ -3473,7 +3473,7 @@ fn the_retriangulate_entry_is_greyed_while_the_node_is_busy() {
 
 /// `Refit All Points` is live on an embedded_patches node with a patch frame
 /// per point, is drawn directly under `Retriangulate All Points` and above
-/// `Prune Covered Observations`, and reports the node it was opened on rather
+/// `Refine All Normals`, and reports the node it was opened on rather
 /// than the selection.
 #[test]
 fn the_refit_entry_is_live_on_an_embedded_patches_node() {
@@ -3498,15 +3498,15 @@ fn the_refit_entry_is_live_on_an_embedded_patches_node() {
             )
         });
     let below = panel
-        .hit_rect(row_id(id, "prune_covered_observations"))
-        .expect("the prune entry");
+        .hit_rect(row_id(id, "refine_all_normals"))
+        .expect("the refine entry");
     assert!(
         entry.top() >= above.bottom() - 1.0 && entry.top() - above.bottom() < entry.height(),
         "the refit entry is not directly under the retriangulation"
     );
     assert!(
         below.top() >= entry.bottom() - 1.0 && below.top() - entry.bottom() < entry.height(),
-        "the refit entry is not directly above the prune"
+        "the refit entry is not directly above the refinement of the normals"
     );
     let response = click(&mut panel, &ctx, &mut state, row_id(id, "refit_all_points"));
     assert_eq!(
@@ -3574,8 +3574,109 @@ fn the_refit_entry_is_greyed_while_the_node_is_busy() {
     state.finish_background_tasks();
 }
 
+/// `Refine All Normals` is live on an embedded_patches node with a patch frame
+/// per point, is drawn directly under `Refit All Points` and above `Prune
+/// Covered Observations`, and reports the node it was opened on rather than
+/// the selection.
+#[test]
+fn the_refine_entry_is_live_on_an_embedded_patches_node() {
+    let mut state = AppState::new();
+    state.append_node(prunable_node("/runs/run_a.sfmr"));
+    state.append_node(prunable_node("/runs/run_b.sfmr"));
+    let selected = state.scene[0].id;
+    let id = state.scene[1].id;
+    state.selected_recon = Some(selected);
+    let (mut panel, ctx) = settled(&mut state);
+
+    open_context_menu(&mut panel, &ctx, &mut state, row_id(id, "node_label"));
+    let above = panel
+        .hit_rect(row_id(id, "refit_all_points"))
+        .expect("the refit entry");
+    let entry = panel
+        .hit_rect(row_id(id, "refine_all_normals"))
+        .unwrap_or_else(|| {
+            panic!(
+                "the reconstruction row's menu offered no {}",
+                super::menus::REFINE_ALL_NORMALS
+            )
+        });
+    let below = panel
+        .hit_rect(row_id(id, "prune_covered_observations"))
+        .expect("the prune entry");
+    assert!(
+        entry.top() >= above.bottom() - 1.0 && entry.top() - above.bottom() < entry.height(),
+        "the refine entry is not directly under the refit"
+    );
+    assert!(
+        below.top() >= entry.bottom() - 1.0 && below.top() - entry.bottom() < entry.height(),
+        "the refine entry is not directly above the prune"
+    );
+    let response = click(
+        &mut panel,
+        &ctx,
+        &mut state,
+        row_id(id, "refine_all_normals"),
+    );
+    assert_eq!(
+        response.refine_all_normals,
+        Some(id),
+        "the entry reported the selection rather than the row it was opened on"
+    );
+}
+
+/// The refine entry's dead state and its hover sentence on a node it cannot
+/// run on, and that clicking it reports nothing.
+fn assert_refine_entry_dead(state: &mut AppState, id: crate::scene::ReconId, why: &str) {
+    let node = state.node(id).expect("loaded");
+    let refusal = crate::state::edits::refine_refusal(node, state.busy_refusal(id).as_deref())
+        .expect("the entry is refused");
+    assert!(refusal.contains(why), "{refusal}");
+    let (mut panel, ctx) = settled(state);
+    open_context_menu(&mut panel, &ctx, state, row_id(id, "node_label"));
+    assert!(
+        panel.hit_rect(row_id(id, "refine_all_normals")).is_some(),
+        "the entry was hidden rather than greyed"
+    );
+    let response = click(&mut panel, &ctx, state, row_id(id, "refine_all_normals"));
+    assert_eq!(response.refine_all_normals, None, "the entry was live");
+}
+
+/// It is greyed by the refit's reasons in the refit's order: on a node whose
+/// observations are `.sift` feature indexes, with a sentence naming the
+/// conversion; on a node whose points carry no patch frame; and while an
+/// operation is running on the node, in the busy sentence.
+#[test]
+fn the_refine_entry_is_greyed_for_the_refit_s_reasons() {
+    let mut state = shared_shoot(1);
+    let id = state.scene[0].id;
+    assert_refine_entry_dead(&mut state, id, "Convert to Embedded Patches");
+
+    let mut state = resectable_scene();
+    let id = state.scene[0].id;
+    assert_refine_entry_dead(&mut state, id, "no patch frame");
+
+    let mut state = AppState::new();
+    state.append_node(prunable_node("/runs/run_a.sfmr"));
+    let id = state.scene[0].id;
+    let (open, held) = std::sync::mpsc::channel::<()>();
+    state
+        .start_background_task(
+            crate::background::Operation::REFINE_ALL_NORMALS,
+            id,
+            Box::new(move |_progress| {
+                let _ = held.recv();
+                crate::background::Finished::Failed("nothing".to_string())
+            }),
+        )
+        .expect("nothing else is running");
+    assert_refine_entry_dead(&mut state, id, "is busy");
+
+    open.send(()).expect("the worker is waiting");
+    state.finish_background_tasks();
+}
+
 /// `Prune Covered Observations` is live on a node that carries a patch frame
-/// per point, sits directly under `Refit All Points`, after the two entries
+/// per point, sits directly under `Refine All Normals`, after the three entries
 /// that re-read the points, and reports the node it was opened on.
 #[test]
 fn the_prune_entry_is_live_on_a_node_with_patch_frames() {
@@ -3586,8 +3687,8 @@ fn the_prune_entry_is_live_on_a_node_with_patch_frames() {
 
     open_context_menu(&mut panel, &ctx, &mut state, row_id(id, "node_label"));
     let above = panel
-        .hit_rect(row_id(id, "refit_all_points"))
-        .expect("the refit entry");
+        .hit_rect(row_id(id, "refine_all_normals"))
+        .expect("the refine entry");
     let entry = panel
         .hit_rect(row_id(id, "prune_covered_observations"))
         .unwrap_or_else(|| {
@@ -3597,8 +3698,8 @@ fn the_prune_entry_is_live_on_a_node_with_patch_frames() {
             )
         });
     assert!(
-        entry.top() >= above.bottom() - 1.0,
-        "the prune entry is not directly under the refit"
+        entry.top() >= above.bottom() - 1.0 && entry.top() - above.bottom() < entry.height(),
+        "the prune entry is not directly under the refinement of the normals"
     );
     let response = click(
         &mut panel,

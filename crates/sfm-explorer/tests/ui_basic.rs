@@ -1596,6 +1596,7 @@ fn the_reconstruction_rows_context_menu_lists_every_entry() {
             ("Bundle Adjust...", false),
             ("Retriangulate All Points", false),
             ("Refit All Points", false),
+            ("Refine All Normals", false),
             ("Prune Covered Observations", false),
             (
                 "Switch SIFT Extraction to sfmtool and Build SIFT Files",

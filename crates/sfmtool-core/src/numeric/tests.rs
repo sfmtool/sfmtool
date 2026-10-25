@@ -312,6 +312,11 @@ const MEDIAN_ALLOWLIST: &[(&str, &str, &str)] = &[
         "delegates: the shared median of the distances the per-point statuses say a refit point that stayed finite travelled",
     ),
     (
+        "sfmtool-core/src/bench/refine_normals.rs",
+        "median_turn_deg",
+        "delegates: the shared median of the turns the per-point statuses say a turned patch was given",
+    ),
+    (
         "sfmtool-core/src/geometry/focal_vote.rs",
         "log_median",
         "delegates: the shared median of the logs, exponentiated",

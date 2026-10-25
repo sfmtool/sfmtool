@@ -305,6 +305,11 @@ pub(crate) enum Command {
     RefitAllPoints {
         reconstruction_label: String,
     },
+    /// Turn the patch of every finite point of one node to its grown-plane
+    /// normal, as Track View's Grown Plane Normal and Commit do for one track.
+    RefineAllNormals {
+        reconstruction_label: String,
+    },
     /// Retire every observation of one node a finer tracked one covers.
     PruneCoveredObservations {
         reconstruction_label: String,
@@ -1529,6 +1534,9 @@ pub(crate) fn apply_with_window(
         Command::RefitAllPoints {
             reconstruction_label,
         } => edit::refit_all_points(state, &reconstruction_label),
+        Command::RefineAllNormals {
+            reconstruction_label,
+        } => edit::refine_all_normals(state, &reconstruction_label),
         Command::PruneCoveredObservations {
             reconstruction_label,
             options,

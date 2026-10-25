@@ -308,6 +308,64 @@ fn refit_all_points_is_refused_without_patch_frames() {
     assert_eq!(version_count(&state), 1);
 }
 
+/// The refinement of every normal goes to a worker under the operation name
+/// the Background Tasks panel shows, and the version it comes back with is the
+/// node's next one, its report the Action Log's sentence. Over the bench's
+/// fixture, as for the refit.
+#[test]
+fn refine_all_normals_defers_and_comes_back_with_a_version() {
+    let (mut state, _) = crate::bench::tests::state();
+    let mut viewer = Viewer3D::new();
+    viewer.panel_size = [1280, 720];
+    state.window = Some(FakeWindow::default().info());
+    let map = json!({ "reconstruction_label": "demo" })
+        .as_object()
+        .cloned()
+        .expect("an object");
+    let command = tools::parse("refine_all_normals", Some(&map)).expect("a well-formed call");
+    let pending = match agent(&mut state, &mut viewer, command) {
+        Outcome::Deferred(super::super::Deferred::Background(pending)) => pending,
+        Outcome::Done(Err(e)) => panic!("expected a deferral, got refusal: {e}"),
+        _ => panic!("the refinement must defer"),
+    };
+    assert_eq!(pending.operation_name, "Refine all normals");
+    state.finish_background_tasks();
+
+    let reply = match super::super::edit::background_reply(&state, &pending).expect("it finished") {
+        Ok(ToolOutput::Json(value)) => value,
+        Ok(ToolOutput::Png { .. }) => panic!("expected JSON, got an image"),
+        Err(e) => panic!("expected success, got refusal: {e}"),
+    };
+    assert_eq!(version_count(&state), 2);
+    assert_eq!(
+        reply["label"],
+        json!("Refined the normals of demo"),
+        "{reply}"
+    );
+    let report = reply["report"].as_str().expect("a report");
+    assert!(report.contains("finite points turned"), "{report}");
+}
+
+/// A node whose points carry no patch frame is refused at once, in the greyed
+/// menu entry's words, and nothing starts.
+#[test]
+fn refine_all_normals_is_refused_without_patch_frames() {
+    let (mut state, mut viewer) = editable();
+    let map = json!({ "reconstruction_label": "run_a" })
+        .as_object()
+        .cloned()
+        .expect("an object");
+    let command = tools::parse("refine_all_normals", Some(&map)).expect("a well-formed call");
+    match agent(&mut state, &mut viewer, command) {
+        Outcome::Done(Err(e)) => {
+            assert!(e.to_string().contains("no patch frame"), "{e}")
+        }
+        _ => panic!("a node with no patch frames must be refused"),
+    }
+    assert!(state.running_tasks().next().is_none());
+    assert_eq!(version_count(&state), 1);
+}
+
 /// The prune goes to a worker, and the version it comes back with is the
 /// node's next one.
 #[test]

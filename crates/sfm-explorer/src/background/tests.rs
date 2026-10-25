@@ -693,6 +693,7 @@ fn each_operation_declares_the_spec_s_queue_lock_and_quiet_value() {
         ("Convert to embedded patches", Slow, true, false),
         ("Retriangulate all points", Slow, true, false),
         ("Refit all points", Slow, true, false),
+        ("Refine all normals", Slow, true, false),
         ("Switch camera model", Slow, true, false),
         ("Prune covered observations", Slow, true, false),
         ("Add image to tracks", Slow, true, false),
@@ -980,6 +981,19 @@ fn real_task(operation: Operation) -> RealTask {
             let (state, id) = crate::bench::tests::state();
             let job = state
                 .refit_all_points_job(id)
+                .expect("the fixture carries keypoints, frames and poses");
+            RealTask {
+                state,
+                id,
+                job: Some(job),
+                _workspace: None,
+            }
+        }
+        // Every finite point's normal refined, over the same fixture.
+        "Refine all normals" => {
+            let (state, id) = crate::bench::tests::state();
+            let job = state
+                .refine_all_normals_job(id)
                 .expect("the fixture carries keypoints, frames and poses");
             RealTask {
                 state,

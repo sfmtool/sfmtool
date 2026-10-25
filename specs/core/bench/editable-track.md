@@ -3212,6 +3212,9 @@ photographs.** It is the step
 being evaluated. It is Track View's *Grown Plane Normal* and the wire's
 `fit_bench_track_normal` with `method` `grown_plane`, both at its default
 options, and it has a Python binding (`sfmtool.bench.grown_plane_normal`).
+`bench::refine_normals` runs it, followed by the commit's record, on every
+finite point of a reconstruction ([refine-normals.md](refine-normals.md)), the
+viewer's *Refine All Normals*.
 It takes the reference and the working grid by
 `grid_plane_normal`'s rules, picks a few of the other `in` views by their
 geometry, and for each view picked fits the plane's tilt and the view's image

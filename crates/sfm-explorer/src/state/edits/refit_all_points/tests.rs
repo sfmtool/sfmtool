@@ -27,7 +27,7 @@ fn newest(state: &AppState) -> &Entry {
 /// A state holding one `embedded_patches` node of twelve framed points, with a
 /// textured photograph cached for every image but `missing`, which then has
 /// no file to be read from either.
-fn refit_state(missing: Option<usize>) -> (AppState, ReconId) {
+pub(crate) fn refit_state(missing: Option<usize>) -> (AppState, ReconId) {
     let mut state = AppState::new();
     state.append_node(SceneNode::demo(projected_embedded_demo(12)));
     let id = state.selected_recon.expect("a selected reconstruction");

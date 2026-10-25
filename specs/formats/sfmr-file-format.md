@@ -1127,8 +1127,9 @@ does which:
 - **The points an edit touches, scored again.** The points that
   `classify_points_at_infinity` changes and the bearings `find_points_at_infinity`
   adds; `materialize_points_at_infinity`, for the bearings it places; the
-  bench's commit and Refit All Points; Switch Camera Model, for the points its
-  cameras see; sfmtool's own bundle adjustment, for the points it solves; Move
+  bench's commit, Refit All Points and Refine All Normals; Switch Camera Model,
+  for the points its cameras see; sfmtool's own bundle adjustment, for the
+  points it solves; Move
   Camera, for every track the moved image observes, moved or kept; Resect
   Image, for every point a target image observes; Retriangulate, for the points
   it moves; Add Image to Tracks, for the points that gain an observation; Prune
