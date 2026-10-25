@@ -1261,13 +1261,14 @@ crosses the outline's edges, and reads the pixels between alternate crossings,
 so it counts the same pixels a test of every centre against every edge counts,
 which a test checks on concave, self-crossing and off-photograph outlines.
 
-**A keypoint whose ray misses the patch's plane.** Anchoring fails when the
-keypoint's ray does not meet the patch's plane in front of the camera, and the
-tile is then rendered through the patch where it stands; the viewing angle is
-read at the same patch frame, so it is the angle at the patch's centre rather
-than at the keypoint. On the review cases this happens to one view of one track
-(a 360° rig), whose angle reads 10° at the patch's centre where the keypoint's
-ray reads 111°.
+**A keypoint the slide refuses.** A view's tile is cut through the patch slid
+onto its keypoint's ray, where that ray meets the plane through the patch's
+centre facing the camera ([patch-cloud.md](patch-cloud.md)). The slide refuses
+a keypoint whose ray is at or past a right angle to the line of sight from the
+camera to the centre (`r·v ≤ 0`), which only a ray-path lens, a fisheye or an
+equirectangular one, can see. The tile is then rendered through the patch where
+it stands, and the viewing angle is read at the same patch frame, so it is the
+angle at the patch's centre rather than at the keypoint.
 
 **The self-similarity of a tile that crosses the border.** The bench reads a
 tile's self-similarity over its samples on the photograph, so a partial tile
