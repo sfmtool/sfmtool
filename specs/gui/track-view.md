@@ -2055,7 +2055,7 @@ In Edited mode only:
   "Searching the descriptor index") and adds what it finds, unpinned and `out`,
   with `search (N)` in *From*; it is a row gesture because what a search searches
   from is one sighting's patch. With no index beside the node, or a stale one,
-  the entry is the remedy instead, *Build Index Files* or *Rebuild Search
+  the entry is the remedy instead, *Build Index Files* or *Rebuild Index
   Files*, which starts the build of the node's index files and runs no search
   ([`sift-index.md`](sift-index.md) § "The search entry"). Directly above it
   stands *Build SIFT Files* (*Switch SIFT Extraction to sfmtool and Build SIFT

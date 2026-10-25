@@ -233,7 +233,7 @@ loaded value, which the human can undo. Two of them do write files on disk:
 `build_index_files` writes the node's SIFT index and cluster patches beside its
 `.sfmr`, replacing the ones there, and `build_sift_files` writes the images'
 `.sift` files in the workspace, rewriting only those older than their
-photographs. Both files can be built again from the photographs), and every one
+photographs. Every one of these files can be built again from the photographs), and every one
 of them `openWorldHint: false`. Every
 `inputSchema` is closed (`additionalProperties: false`).
 

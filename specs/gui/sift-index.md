@@ -135,7 +135,7 @@ part of a node that is files beside it rather than something the node holds.
   selected, and a label drawn after the row wins every pointer hit that lands on
   it, which leaves the name the one part of the row with no menu and no hover
   ([`scene-graph.md`](scene-graph.md) § "Tree rows").
-- Its context menu carries *Build Index Files* (reading *Rebuild Search
+- Its context menu carries *Build Index Files* (reading *Rebuild Index
   Files* when either index file is open), *Open...*, which opens a `.kdf`, and
   *Close Index Files* (live only when a index file is open). Each is greyed
   with its own sentence while the node is busy.
