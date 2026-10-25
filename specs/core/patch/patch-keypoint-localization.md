@@ -227,7 +227,8 @@ For one point with patch views `G`:
      the shift is searched again over `±REANCHOR_MARGIN`. The new frame, shift
      and score are taken where that search finds a peak whose total shift from
      the start stays within `±margin` on both axes, so the search never
-     reaches past `±search`; otherwise the first search's stand. (Why, below.)
+     reaches past `±search`; otherwise the first search's frame, shift and score
+     stand. (Why, below.)
 5. **Gates.** A searched view is dropped when its keypoint leaves the frame,
    when its keypoint sits more than `max_shift_px` from the point's projection
    (an absolute distance from `project_i(X_p)` in source px, not the move from

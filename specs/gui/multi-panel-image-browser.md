@@ -548,8 +548,9 @@ differs by stage:
   patch gives the square with the perspective the photograph really has. It is
   the square Track View's tile is cut through, so the outline over the
   photograph and the tile beside it are one square. Where the slide refuses
-  the keypoint's ray (at or past a right angle to the line of sight, which only
-  a ray-path lens sees) the outline is the patch as it stands, as the tile is. The patch's own projection is the hollow centre the offset segments run
+  the keypoint's ray (at or past a right angle to the line of sight, which
+  takes a field of view wider than a right angle or a centre behind the
+  camera) the outline is the patch as it stands, as the tile is. The patch's own projection is the hollow centre the offset segments run
   to. The outline is the curve a distorting lens really maps that square to,
   rather than the quadrilateral through its four corners:
   `OrientedPatch::boundary` supplies the samples

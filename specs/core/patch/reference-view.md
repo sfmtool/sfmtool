@@ -1265,8 +1265,9 @@ which a test checks on concave, self-crossing and off-photograph outlines.
 onto its keypoint's ray, where that ray meets the plane through the patch's
 centre facing the camera ([patch-cloud.md](patch-cloud.md)). The slide refuses
 a keypoint whose ray is at or past a right angle to the line of sight from the
-camera to the centre (`r·v ≤ 0`), which only a ray-path lens, a fisheye or an
-equirectangular one, can see. The tile is then rendered through the patch where
+camera to the centre (`r·v ≤ 0`), which takes a field of view wider than a
+right angle, as a fisheye or an equirectangular lens has, or a centre behind
+the camera. The tile is then rendered through the patch where
 it stands, and the viewing angle is read at the same patch frame, so it is the
 angle at the patch's centre rather than at the keypoint.
 

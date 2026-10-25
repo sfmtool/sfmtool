@@ -1998,30 +1998,27 @@ and the observation's patch is the surfel translated by `A_j − X_p`, parallel 
 `(s, t)` frame and are unaffected by the anchor.
 
 Edge cases: there is no anchor when `d · (X_p − o) <= 0`, a ray at or past a
-right angle to the line of sight, which only a wide-angle model can produce — a
+right angle to the line of sight, which only a field of view wider than a right
+angle or a point behind camera `i` can produce — a
 consumer needing the anchor MAY fall back to `A_j = X_p`; the keypoint itself
 stays a valid 2D observation. For a **point at infinity** (`w = 0`) the
 patch is a region of the direction sphere rather than a plane (see the patch-frame
 section), and the anchor is defined analogously on that frame.
 
-**Files anchored on the patch plane.** Some files in circulation were written by
-producers that took the anchor where the keypoint's ray meets the patch plane
-`Π_p` (`λ = ((X_p − o) · n) / (d · n)`) rather than the plane facing the camera.
-Their keypoints mean the same thing, the pixel where the photograph sees the
-point, and their patch frames and bitmaps are stored the same way; only the
-square a reader derives at an observation (its anchor, the affine shape below,
-and any render through it, such as the reference observation's render the
-bitmap was taken from) can differ. The two anchors lie on the same ray and
-coincide where the keypoint is the point's projection; for the stored
-observations of three reference reconstructions (keypoints a median 0.2 to
-0.75 px and a 95th percentile 0.6 to 2.9 px from the projections) the two
-squares' corners are a median 0.004 to 0.006 px apart, under 0.08 px at the
-95th percentile and 0.32 px at the 99th, and up to 1.8 px for an oblique
-observation with a larger gap. A reader therefore reads every file by the
-anchor defined above, whichever producer wrote it, and needs no way to tell
-them apart: no field and no stored value changes meaning, so the version is
-unchanged. A consumer that needs the old anchor exactly can compute it from
-the same stored values.
+**Files anchored on the patch plane.** A file's writer may have derived each
+observation's square from the anchor where the keypoint's ray meets the patch
+plane `Π_p` (`λ = ((X_p − o) · n) / (d · n)`). Such a file's keypoints mean the
+same thing, the pixel where the photograph sees the point, and its patch frames
+and bitmaps are stored the same way; only the square a reader derives at an
+observation (its anchor, the affine shape below, and any render through it,
+such as the reference observation's render the bitmap was taken from) can
+differ. The two anchors lie on the same ray and coincide where the keypoint is
+the point's projection, and the two squares part further as the keypoint's
+distance from that projection and the angle between `Π_p` and the plane facing
+the camera grow. No field and no stored value records which anchor a writer
+used, and none changes meaning: a reader reads every file by the anchor
+defined above, and the version is unchanged. A consumer that needs the
+patch-plane anchor computes it from the same stored values.
 
 ##### Deriving keypoint shape, scale, and orientation
 
