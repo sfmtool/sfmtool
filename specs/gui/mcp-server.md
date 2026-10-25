@@ -6667,9 +6667,10 @@ Other candidates, in rough order of value:
 | `set_image_detail_display` `intrinsics.grid_cols` | `8, 12, 16, 24, 32` (`IntrinsicsDisplaySettings::GRID_LADDER`) | The only densities accepted, for the same reason. |
 | `set_image_detail_display` `max_features` | `≥ 1`, or `null` for all | `0` is refused: "no features" is `overlay_mode: "none"`. |
 | `set_viewer_3d_display` numbers | Each slider's range and decimals (`viewer_3d::display::Field::control`) | The only values accepted, the ends included; a value inside is rounded to the decimals the slider shows. The ranges are listed beside the document in § "`get_viewer_3d_display` / `set_viewer_3d_display`". |
-| `bundle_adjust` `release_focal` | `false`, every camera's focal is held | The default for every camera of one of the two decisions each row of the Bundle Adjust dialog collects. |
-| `bundle_adjust` `release_distortion` | `false`, every camera's distortion is held | The other; `true` needs the same camera's focal. |
-| `bundle_adjust` `cameras` | empty, every camera takes the two defaults | An entry's left-out field takes the call's default, so an entry states only what differs. |
+| `bundle_adjust` `release_focal` | `false`, every camera's focal is held | The default for every camera of one of the three decisions each row of the Bundle Adjust dialog collects. |
+| `bundle_adjust` `release_distortion` | `false`, every camera's distortion is held | The second; `true` needs the same camera's focal. |
+| `bundle_adjust` `release_principal_point` | `false`, every camera's principal point is held | The third; accepted on every model, with or without the focal. |
+| `bundle_adjust` `cameras` | empty, every camera takes the three defaults | An entry's left-out field takes the call's default, so an entry states only what differs. |
 | `bundle_adjust` `free_points_cross` | `true`, free points cross | The core function's default, `FreePointPolicy::CROSS`; `false` is the dialog's crossing checkbox cleared. |
 | `bundle_adjust` `schedule` | `[[50, 5], [12, 2], [4, 1]]` (`DEFAULT_SCHEDULE`) | The core function's default, whatever the dialog last ran on the node; a `null` trim is unbounded. |
 | `switch_camera_model` `camera_model` | the camera's own model | Which makes the call a refit of a spline camera's spline. |
