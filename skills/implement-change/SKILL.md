@@ -163,11 +163,14 @@ git push -u <fork> <branch>           # only when asked to push
 
 Push only once the suites the change requires (the implementer brief's
 **Checks** list) have passed in full on the branch's last commit. The auditor
-of the last round runs them before it returns CLEAN. If its report says a
-suite did not run or failed for the environment, such as the Windows
-`ui_basic` real-mouse test on a locked desktop, name that suite and the reason
-in your report and in the PR's Testing section, rather than counting it as a
-pass.
+of the last round runs them before it returns CLEAN. One failure is excused:
+on Windows, the `ui_basic` real-mouse test
+`a_real_right_click_opens_the_reconstruction_rows_context_menu` failing with
+"could not aim at the viewer's own window", as it does on a locked desktop.
+When that is the only failure and every other `ui_basic` test passed, push
+and open the PR anyway; name the test and the reason in your report and in
+the PR's Testing section, and say that CI's `ui-test-windows` job runs it.
+Any other suite that did not run or failed blocks the push.
 
 Report to the user, or return to the calling skill:
 
@@ -315,8 +318,10 @@ and hosts the pictures:
 >   `pixi run -e ui ui-test` as well. On Windows its real-mouse test
 >   `a_real_right_click_opens_the_reconstruction_rows_context_menu` fails with
 >   "could not aim at the viewer's own window" when the desktop is locked or
->   another window covers the viewer. Report that as an environment failure,
->   not a pass.
+>   another window covers the viewer. That failure alone does not block the
+>   push, because CI's `ui-test-windows` job runs the test on a real desktop,
+>   but every other `ui_basic` test must pass. Report it as not run, not as a
+>   pass.
 >
 > Narrower runs are fine while you work, but the suites above must pass on
 > your final commit. Report any suite you did not run in
@@ -367,10 +372,13 @@ and hosts the pictures:
 >    it edits: a full `pixi run test` after a `sfmtool-py` change,
 >    `pixi run -e ui ui-test` after a `sfm-explorer` change, and
 >    `cargo test` and `cargo clippy` with `--workspace` after any Rust change.
->    A failing suite is SUBSTANTIVE unless the fix is SIMPLE. A Windows
->    real-mouse `ui_basic` failure ("could not aim at the viewer's own
->    window", from a locked desktop) is an environment failure: report it as
->    not run, not as a pass. If you already have a SUBSTANTIVE finding, you
+>    A failing suite is SUBSTANTIVE unless the fix is SIMPLE, with one
+>    exception: on Windows, the real-mouse `ui_basic` test
+>    `a_real_right_click_opens_the_reconstruction_rows_context_menu` failing
+>    with "could not aim at the viewer's own window" (a locked desktop) is
+>    not SUBSTANTIVE and does not stop you returning CLEAN, as long as every
+>    other `ui_basic` test passed. Report it as not run, not as a pass; CI's
+>    `ui-test-windows` job runs it. If you already have a SUBSTANTIVE finding, you
 >    may skip the long suites, since the next round's auditor runs them; say
 >    which you skipped. Never push.
 > 5. Classify each issue:

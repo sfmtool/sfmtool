@@ -47,8 +47,10 @@ run them in full on the last commit:
   `test_*_registration.py` modules check invariants across files
 - Changes to `sfm-explorer` (anything the viewer draws, any MCP tool) →
   `pixi run -e ui ui-test` too, since `ui_basic` lists every entry of some
-  menus. On Windows its real-mouse test fails when the desktop is locked;
-  that is a suite not run, not a pass.
+  menus. On Windows its real-mouse test fails with "could not aim at the
+  viewer's own window" when the desktop is locked; report that test as not
+  run, not as a pass. That failure alone does not block a push or a PR, since
+  CI's `ui-test-windows` job runs it, but the rest of `ui_basic` must pass.
 
 ### Rust visibility in the viewer
 
