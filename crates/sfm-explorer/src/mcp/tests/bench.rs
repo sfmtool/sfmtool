@@ -2723,6 +2723,56 @@ fn fit_and_set_stage_run_as_background_tasks_and_the_evaluation_follows_them() {
     );
 }
 
+/// `fit_bench_track_normal` with `method` `grown_plane` is Track View's *Grown
+/// Plane Normal*: it runs on a worker under the operation name the panel
+/// shows, and its report names the step and says how many views joined. It
+/// takes no `pieces` or `overlap_percent`, and `photometric`, Track View's
+/// retired *Fit Normal*, is no longer a method.
+#[test]
+fn fit_bench_track_normal_runs_the_grown_plane_and_refuses_what_it_does_not_take() {
+    let (mut state, mut viewer) = benchable();
+    let item = on_the_bench(&mut state, &mut viewer);
+
+    let turned = worked(
+        &mut state,
+        &mut viewer,
+        "fit_bench_track_normal",
+        json!({ "reconstruction_label": "run_a", "method": "grown_plane" }),
+    );
+    let report = turned["report"].as_str().expect("a report");
+    assert!(
+        report.starts_with(&format!("Grown-plane normal of {item}: ")),
+        "{turned}"
+    );
+    assert!(report.contains("views joined"), "{turned}");
+    let task = call(&mut state, &mut viewer, "get_background_tasks", json!({}))["fast"]
+        ["last_finished"]
+        .clone();
+    assert_eq!(task["operation"], json!("Grown plane normal"), "{task}");
+
+    for (arguments, says) in [
+        (
+            json!({ "reconstruction_label": "run_a", "method": "grown_plane", "pieces": 3 }),
+            "takes pieces and overlap_percent only with method finite_difference or grid_plane",
+        ),
+        (
+            json!({ "reconstruction_label": "run_a", "method": "grown_plane",
+                    "overlap_percent": 25 }),
+            "takes pieces and overlap_percent only with method finite_difference or grid_plane",
+        ),
+        (
+            json!({ "reconstruction_label": "run_a", "method": "photometric" }),
+            "the methods are finite_difference, grid_plane and grown_plane",
+        ),
+    ] {
+        let map = arguments.as_object().cloned().expect("an object");
+        let refused = tools::parse("fit_bench_track_normal", Some(&map))
+            .err()
+            .unwrap_or_else(|| panic!("{arguments} was accepted"));
+        assert!(refused.to_string().contains(says), "{refused}");
+    }
+}
+
 /// The ellipse along a patch names its unit the way the wire's `_deg` and
 /// `_px` suffixes and the `world_space_unit` values do: a finite patch in the
 /// reconstruction's own unit, a patch at infinity in `"deg"`.
@@ -4335,7 +4385,7 @@ fn a_sift_files_bench_is_view_only_until_converted_and_rebenched() {
         ),
         (
             "fit_bench_track_normal",
-            json!({ "reconstruction_label": "run_a", "method": "photometric" }),
+            json!({ "reconstruction_label": "run_a", "method": "grown_plane" }),
         ),
         (
             "set_bench_track_stage",

@@ -701,7 +701,7 @@ fn each_operation_declares_the_spec_s_queue_lock_and_quiet_value() {
         ("Open", Fast, false, false),
         ("Fit track", Fast, true, false),
         ("Set track stage", Fast, true, false),
-        ("Fit normal", Fast, true, false),
+        ("Grown plane normal", Fast, true, false),
         ("Finite difference normal", Fast, true, false),
         ("Grid plane normal", Fast, true, false),
         ("Search descriptors", Fast, true, false),
@@ -1046,14 +1046,14 @@ fn real_task(operation: Operation) -> RealTask {
         // on the bench and a textured photograph cached for every image.
         "Fit track"
         | "Set track stage"
-        | "Fit normal"
+        | "Grown plane normal"
         | "Finite difference normal"
         | "Grid plane normal" => {
             let (mut state, id) = crate::bench::tests::state();
             let label = crate::bench::tests::put_on_bench(&mut state, id);
             let job = match operation.name {
                 "Fit track" => state.bench_fit_job(id, &label, None),
-                "Fit normal" => state.bench_normal_job(id, &label, NormalStep::Photometric),
+                "Grown plane normal" => state.bench_normal_job(id, &label, NormalStep::GrownPlane),
                 "Finite difference normal" => state.bench_normal_job(
                     id,
                     &label,
@@ -1962,7 +1962,7 @@ fn waiting_tasks_take_one_line_a_queue_and_leave_the_newest_stage_shown() {
         held.push(gate);
     };
     queue(&mut state, Operation::RETRIANGULATE_ALL_POINTS);
-    queue(&mut state, Operation::BENCH_FIT_NORMAL);
+    queue(&mut state, Operation::BENCH_GROWN_PLANE_NORMAL);
     state.poll_background_tasks();
 
     let frame = |state: &mut AppState, height: f32| {
@@ -1983,7 +1983,7 @@ fn waiting_tasks_take_one_line_a_queue_and_leave_the_newest_stage_shown() {
             "Retriangulate all points",
             "Fast",
             "Fit track",
-            "Fit normal",
+            "Grown plane normal",
         ] {
             assert!(
                 texts.iter().any(|text| text == line),
@@ -3505,7 +3505,7 @@ fn asked_for_tasks_start_ahead_of_quiet_ones_and_a_source_keeps_one_entry() {
     let mut second_gate = Gate::new();
     let second = state
         .start_background_task(
-            Operation::BENCH_FIT_NORMAL,
+            Operation::BENCH_GROWN_PLANE_NORMAL,
             c,
             waiting_job(second_gate.held()),
         )

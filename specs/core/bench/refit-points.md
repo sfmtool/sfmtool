@@ -554,8 +554,9 @@ From Python a track naming an image past the image set cannot reach the run:
 - **Changing which observations a point has.** Every verdict is pinned `in`, so
   no observation is turned out, added or searched for. Deciding which sightings
   a track should have is the bench's work.
-- **Turning the patch.** The fit keeps the way the patch faces. *Fit Normal* and
-  the finite-difference normals are per-track bench steps.
+- **Turning the patch.** The fit keeps the way the patch faces. The normal
+  steps, *Finite Diff Normal*, *Grid Plane Normal* and *Grown Plane Normal*,
+  are per-track bench steps.
 - **Refitting a list of points.** The run is over every point; one point is
   *Fit* and *Commit* on the bench.
 - **Refitting a held point.** The value owns its coordinate. Realigning a held

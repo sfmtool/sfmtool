@@ -865,19 +865,24 @@ pub(super) fn specs() -> Vec<ToolSpec> {
         ToolSpec {
             name: "fit_bench_track_normal",
             description: "Estimate which way a track-stage bench track's patch faces and turn \
-                          it there, keeping its centre; Track View's Fit Normal, Finite Diff \
-                          Normal and Grid Plane Normal. method \"photometric\" searches for \
-                          the normal at which the in sightings agree best, within about 25 \
-                          degrees of the patch's normal and of the mean viewing direction, so \
-                          a normal further away is reached by calling it again. method \
-                          \"finite_difference\" fits a row of pieces square pieces through the \
-                          centre along each of the patch's two axes and turns the patch to \
-                          the plane through the two lines their fitted centres lie on; method \
-                          \"grid_plane\" fits a pieces-by-pieces grid tiling the whole patch \
-                          and turns it to the least-squares plane through every fitted \
-                          centre. For both, neighbouring pieces overlap by overlap_percent of \
-                          a piece's side, and where the fitted centres give only one line the \
-                          tilt about that line is left as it was. Every method's turn stops \
+                          it there, keeping its centre; Track View's Finite Diff Normal, Grid \
+                          Plane Normal and Grown Plane Normal. method \"finite_difference\" \
+                          fits a row of pieces square pieces through the centre along each of \
+                          the patch's two axes and turns the patch to the plane through the \
+                          two lines their fitted centres lie on; method \"grid_plane\" fits a \
+                          pieces-by-pieces grid tiling the whole patch and turns it to the \
+                          least-squares plane through every fitted centre. For both, \
+                          neighbouring pieces overlap by overlap_percent of a piece's side, \
+                          and where the fitted centres give only one line the tilt about that \
+                          line is left as it was. method \"grown_plane\" fits one plane to the \
+                          photographs, growing a window from each picked view's keypoint to \
+                          the whole patch and combining the views' planes, and takes no pieces \
+                          or overlap_percent; it trusts the keypoints it is given, so fit the \
+                          track first where they may be off. It turns the patch whenever a \
+                          view joined, unless the turn is large on weak evidence, writes the \
+                          keypoints of the views it joined or fitted the shift of, and its \
+                          report gives the plane's sigma along its weakest and strongest \
+                          directions and says when that precision is low. Every method's turn stops \
                           where any observation's camera would see the patch past the tilt \
                           cap, and the step ends by rendering its bitmap again and reading \
                           the track back. Refused at the cluster stage, at infinity, and with fewer \
@@ -915,7 +920,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                         "method",
                         json!({
                             "type": "string",
-                            "enum": ["photometric", "finite_difference", "grid_plane"],
+                            "enum": ["finite_difference", "grid_plane", "grown_plane"],
                             "description": "How the normal is estimated.",
                         }),
                     ),

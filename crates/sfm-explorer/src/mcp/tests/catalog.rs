@@ -375,7 +375,7 @@ fn representative_tool_calls() -> Vec<(&'static str, Value)> {
         ),
         (
             "fit_bench_track_normal",
-            json!({ "reconstruction_label": "alpha", "method": "photometric" }),
+            json!({ "reconstruction_label": "alpha", "method": "grown_plane" }),
         ),
         (
             "set_bench_track_stage",

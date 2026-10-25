@@ -1642,12 +1642,13 @@ fn a_descriptor_search_with_no_index_is_refused_before_the_worker() {
 /// Each normal step runs on the worker and comes home under its own name.
 ///
 /// The fixture's photographs are a pattern in screen space rather than views
-/// of one surface, so the photometric search may find no normal the views
-/// agree on; either way the task ran on the worker and the Action Log row
-/// names the step. The finite difference fits its pieces, which the pattern
-/// supports, and pushes one version labelled with the settings it was pressed
-/// at. Settings core would refuse are refused before a task starts. Whether the
-/// estimates are right is core's to test, over a scene with a surface in it.
+/// of one surface, so the grown plane may find no plane the views agree on;
+/// it still ends with the track read back, so it pushes one version, and its
+/// Action Log row names the step and says how many views joined. The finite
+/// difference fits its pieces, which the pattern supports, and pushes one
+/// version labelled with the settings it was pressed at. Settings core would
+/// refuse are refused before a task starts. Whether the estimates are right is
+/// core's to test, over a scene with a surface in it.
 #[test]
 fn a_normal_step_runs_on_the_worker_and_is_named_for_what_it_did() {
     use super::{NormalStep, SplitSettings};
@@ -1657,7 +1658,7 @@ fn a_normal_step_runs_on_the_worker_and_is_named_for_what_it_did() {
     state.action_log.clear();
     let before = versions(&state, id);
     state
-        .start_bench_normal(id, &label, NormalStep::Photometric)
+        .start_bench_normal(id, &label, NormalStep::GrownPlane)
         .expect("a framed finite track with three sightings");
     assert!(
         state.running_tasks().next().is_some(),
@@ -1665,13 +1666,26 @@ fn a_normal_step_runs_on_the_worker_and_is_named_for_what_it_did() {
     );
     state.finish_background_tasks();
     let logged = rows(&state);
-    let pushed = versions(&state, id) - before;
-    let named = format!("Fitted the normal of {label}");
-    let refused = format!("Cannot fit the normal of {label}: ");
+    assert_eq!(versions(&state, id), before + 1, "{logged:?}");
+    let named = format!("Grown-plane normal of {label}");
+    assert_eq!(
+        state
+            .node(id)
+            .expect("loaded")
+            .history
+            .versions()
+            .last()
+            .expect("a version")
+            .label,
+        named
+    );
     assert!(
-        (pushed == 1 && logged.iter().any(|(_, text)| text.starts_with(&named)))
-            || (pushed == 0 && logged.iter().any(|(_, text)| text.starts_with(&refused))),
-        "{pushed} versions, {logged:?}"
+        logged
+            .iter()
+            .any(|(_, text)| text.starts_with(&format!("{named}: "))
+                && text.contains("views joined")
+                && text.contains("turned")),
+        "{logged:?}"
     );
 
     let settings = SplitSettings {

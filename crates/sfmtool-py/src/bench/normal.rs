@@ -1,11 +1,11 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Python bindings for the bench's normal steps: *Fit Normal*
-//! (`fit_normal`), *Finite Diff Normal* and today's *Grid Plane Normal*
-//! (`finite_difference_normal` with its two layouts), the cell-registered
-//! grid-plane normal (`grid_plane_normal`) and the grown-plane normal
-//! (`grown_plane_normal`).
+//! Python bindings for the bench's normal steps: the photometric normal
+//! search (`fit_normal`), Track View's *Finite Diff Normal* and today's *Grid
+//! Plane Normal* (`finite_difference_normal` with its two layouts), the
+//! cell-registered grid-plane normal (`grid_plane_normal`) and Track View's
+//! *Grown Plane Normal* (`grown_plane_normal`).
 //!
 //! Each takes a track-stage track and gives back the turned track and a report,
 //! as every other step does, and refuses with the core's sentence.
@@ -740,7 +740,7 @@ fn parse_layout(word: &str) -> PyResult<PieceLayout> {
 }
 
 /// Turn a track-stage `track`'s patch to the normal its ``in`` sightings agree
-/// on best, by the photometric normal search: the bench's *Fit Normal*.
+/// on best, by the photometric normal search.
 ///
 /// The centre does not move. The step ends as a fit does, reading the turned
 /// track back with its bitmap rendered again. ``images`` and the four

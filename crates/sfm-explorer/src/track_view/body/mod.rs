@@ -153,9 +153,9 @@ pub(crate) struct TrackBodyResponse {
     pub(crate) rename: Option<(String, String)>,
     /// *Fit*.
     pub(crate) fit: bool,
-    /// *Fit Normal*, *Finite Diff Normal* or *Grid Plane Normal*, carrying
-    /// which, and for the last two the *per axis* and *overlap* settings it
-    /// was pressed at.
+    /// *Finite Diff Normal*, *Grid Plane Normal* or *Grown Plane Normal*,
+    /// carrying which, and for the first two the *per axis* and *overlap*
+    /// settings it was pressed at.
     pub(crate) normal: Option<NormalStep>,
     /// The *Stage* toggle, carrying the stage it asks for.
     pub(crate) set_stage: Option<StageKind>,
@@ -763,15 +763,6 @@ impl TrackBody {
             }
             if entry(
                 ui,
-                FIT_NORMAL_LABEL,
-                refusals.normal.clone(),
-                "Turn the patch to the normal at which its sightings agree best, \
-                keeping its centre",
-            ) {
-                response.normal = Some(NormalStep::Photometric);
-            }
-            if entry(
-                ui,
                 FINITE_DIFF_NORMAL_LABEL,
                 refusals.normal.clone(),
                 "Cut the patch into smaller pieces along each of its axes, fit each \
@@ -791,6 +782,18 @@ impl TrackBody {
                 response.normal = Some(NormalStep::GridPlane(self.split_settings));
             }
             self.show_split_settings(ui, refusals.normal.is_some());
+            if entry(
+                ui,
+                GROWN_PLANE_NORMAL_LABEL,
+                refusals.normal.clone(),
+                "Fit one plane to the photographs, growing a window from each \
+                 picked view's keypoint out to the whole patch, and turn the patch \
+                 to it, keeping its centre and writing the keypoints of the views \
+                 that agree with it. It trusts the keypoints: Fit first where they \
+                 may be off",
+            ) {
+                response.normal = Some(NormalStep::GrownPlane);
+            }
             if entry(
                 ui,
                 stage_label,
@@ -2118,10 +2121,6 @@ const ACCEPT_WALK_LABEL: &str = "Accept walk";
 /// the row its patch bitmap is rendered from, and pins it.
 const SET_REFERENCE_LABEL: &str = "Set as reference";
 
-/// The toolbar entry that turns the patch to its photometric normal, in one
-/// constant so the tests aim at the label drawn.
-const FIT_NORMAL_LABEL: &str = "Fit Normal";
-
 /// The toolbar entry that turns the patch to the plane its fitted pieces lie
 /// on.
 const FINITE_DIFF_NORMAL_LABEL: &str = "Finite Diff Normal";
@@ -2129,6 +2128,10 @@ const FINITE_DIFF_NORMAL_LABEL: &str = "Finite Diff Normal";
 /// The toolbar entry that turns the patch to the plane through a grid of its
 /// fitted pieces.
 const GRID_PLANE_NORMAL_LABEL: &str = "Grid Plane Normal";
+
+/// The toolbar entry that turns the patch to the one plane its views agree
+/// on, fitted to the photographs view by view.
+const GROWN_PLANE_NORMAL_LABEL: &str = "Grown Plane Normal";
 
 /// The Edited-mode checkbox that says whether Image Detail's dot drag moves the
 /// patch or one sighting, in one constant so the tests aim at the label drawn.

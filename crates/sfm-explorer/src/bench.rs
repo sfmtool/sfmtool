@@ -38,9 +38,9 @@ use std::sync::Arc;
 
 use sfmtool_core::bench::{
     self, Bench, BenchItem, ClusterSeed, CreateTrackOptions, EditableTrack, EvaluateOptions,
-    FiniteDifferenceOptions, FitNormalOptions, FitOptions, GeometrySearchOptions, ImageDeletion,
-    ItemId, NormalError, Observation, ObservationSeed, PieceLayout, Provenance, SearchOptions,
-    Stage, StageKind, Thresholds, Verdict,
+    FiniteDifferenceOptions, FitOptions, GeometrySearchOptions, GrownPlaneNormalOptions,
+    ImageDeletion, ItemId, NormalError, Observation, ObservationSeed, PieceLayout, Provenance,
+    SearchOptions, Stage, StageKind, Thresholds, Verdict,
 };
 use sfmtool_core::features::kdforest::ImageKeypoints;
 use sfmtool_core::readable::Readable;
@@ -2138,11 +2138,10 @@ impl AppState {
     /// Estimate the normal of the track called `label` by `step` and turn its
     /// patch to it, on a worker thread.
     ///
-    /// The two normal steps of `specs/core/bench/editable-track.md` §
-    /// "Estimating the normal": [`NormalStep::Photometric`] is Track View's
-    /// *Fit Normal* and [`NormalStep::FiniteDifference`] its *Finite Diff
-    /// Normal*. Both move the patch's normal and leave its centre, and both
-    /// end, as a fit does, with the track read back and its bitmap rendered again.
+    /// The normal steps of `specs/core/bench/editable-track.md` § "Estimating
+    /// the normal" that Track View offers, one per [`NormalStep`]. Each moves
+    /// the patch's normal and leaves its centre, and each ends, as a fit does,
+    /// with the track read back and its bitmap rendered again.
     ///
     /// **What the track alone decides is decided here**, through
     /// [`sfmtool_core::bench::normal_preconditions`], for the reason
@@ -2541,42 +2540,44 @@ impl AppState {
     }
 }
 
-/// Which of the two normal steps [`AppState::start_bench_normal`] runs.
+/// Which of the three normal steps [`AppState::start_bench_normal`] runs.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum NormalStep {
-    /// *Fit Normal*: the normal the photographs agree on most.
-    Photometric,
     /// *Finite Diff Normal*: a row of pieces along each axis, cut as the
     /// settings say, and the normal across the two lines through them.
     FiniteDifference(SplitSettings),
     /// *Grid Plane Normal*: a grid of pieces over the whole patch, cut as the
     /// settings say, and the normal of the plane through them.
     GridPlane(SplitSettings),
+    /// *Grown Plane Normal*: the one plane the views agree on, fitted to the
+    /// photographs view by view (`sfmtool_core::bench::grown_plane_normal`).
+    /// It also writes the keypoints of the views it joined and of those
+    /// whose shift alone it fitted.
+    GrownPlane,
 }
 
 impl NormalStep {
     /// The background operation the step runs as.
     fn operation(&self) -> Operation {
         match self {
-            NormalStep::Photometric => Operation::BENCH_FIT_NORMAL,
             NormalStep::FiniteDifference(_) => Operation::BENCH_FINITE_DIFFERENCE_NORMAL,
             NormalStep::GridPlane(_) => Operation::BENCH_GRID_PLANE_NORMAL,
+            NormalStep::GrownPlane => Operation::BENCH_GROWN_PLANE_NORMAL,
         }
     }
 
     /// The verb a refusal's sentence is built on: "Cannot {verb} {label}".
     fn verb(&self) -> &'static str {
         match self {
-            NormalStep::Photometric => "fit the normal of",
             NormalStep::FiniteDifference(_) => "take the finite-difference normal of",
             NormalStep::GridPlane(_) => "take the grid-plane normal of",
+            NormalStep::GrownPlane => "take the grown-plane normal of",
         }
     }
 
     /// The history row the step's version is labelled with.
     fn version_label(&self, label: &str) -> String {
         match self {
-            NormalStep::Photometric => format!("Fitted the normal of {label}"),
             NormalStep::FiniteDifference(split) => format!(
                 "Finite-difference normal of {label} ({} pieces along each axis, {:.0}% overlap)",
                 split.pieces, split.overlap_percent
@@ -2585,14 +2586,15 @@ impl NormalStep {
                 "Grid-plane normal of {label} ({}x{} pieces, {:.0}% overlap)",
                 split.pieces, split.pieces, split.overlap_percent
             ),
+            NormalStep::GrownPlane => format!("Grown-plane normal of {label}"),
         }
     }
 
     /// The half of the step's validation that is about its settings.
     fn check(&self) -> Result<(), bench::NormalError> {
         match self {
-            NormalStep::Photometric => Ok(()),
             NormalStep::FiniteDifference(split) | NormalStep::GridPlane(split) => split.check(),
+            NormalStep::GrownPlane => Ok(()),
         }
     }
 }
@@ -2874,13 +2876,6 @@ impl AppState {
             }
             let views = decoded.views();
             let outcome = match &step {
-                NormalStep::Photometric => bench::fit_normal(
-                    &track,
-                    &edited,
-                    &views,
-                    &FitNormalOptions::default(),
-                    &p_work,
-                ),
                 NormalStep::FiniteDifference(split) => bench::finite_difference_normal(
                     &track,
                     &edited,
@@ -2893,6 +2888,13 @@ impl AppState {
                     &edited,
                     &views,
                     &split.options(PieceLayout::Grid),
+                    &p_work,
+                ),
+                NormalStep::GrownPlane => bench::grown_plane_normal(
+                    &track,
+                    &edited,
+                    &views,
+                    &GrownPlaneNormalOptions::default(),
                     &p_work,
                 ),
             };

@@ -1531,12 +1531,12 @@ when the focused item was already what the call asked for.
 // set_bench_track_reference  { "reconstruction_label": "bull", "observation": 3 }
 // apply_bench_track_thresholds { "reconstruction_label": "bull", "min_zncc": 0.8 }
 // fit_bench_track           { "reconstruction_label": "bull" }
-// fit_bench_track_normal    { "reconstruction_label": "bull", "method": "photometric" }
 // fit_bench_track_normal    { "reconstruction_label": "bull",
 //                             "method": "finite_difference", "pieces": 3,
 //                             "overlap_percent": 25 }
 // fit_bench_track_normal    { "reconstruction_label": "bull",
 //                             "method": "grid_plane", "pieces": 3 }
+// fit_bench_track_normal    { "reconstruction_label": "bull", "method": "grown_plane" }
 // set_bench_track_stage        { "reconstruction_label": "bull", "stage": "track" }
 // select_bench_observations    { "reconstruction_label": "bull", "observations": [3, 5, 8] }
 // split_bench_track            { "reconstruction_label": "bull", "observations": [3, 5, 8] }

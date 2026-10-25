@@ -206,7 +206,7 @@ and press the viewer's widgets the way a person's eyes, mouse and keyboard do
 | `select_bench_observations` | write | Replace the selected observations of the focused item: Track View's highlighted rows |
 | `commit_bench_track` | write | Write a bench track into the reconstruction |
 | `fit_bench_track` | write | Localize, re-triangulate and re-render the bitmap of a bench track, then read it back, on a worker thread |
-| `fit_bench_track_normal` | write | Turn a track-stage bench track's patch to a normal estimated photometrically, from a row of fitted pieces along each axis, or from the plane through a grid of fitted pieces, keeping its centre, then read it back, on a worker thread |
+| `fit_bench_track_normal` | write | Turn a track-stage bench track's patch to a normal estimated from a row of fitted pieces along each axis, from the plane through a grid of fitted pieces, or from one plane grown and fitted to the photographs, keeping its centre, then read it back, on a worker thread |
 | `set_bench_track_stage` | write | Move a track between its cluster and track representations, on a worker thread |
 | `search_bench_track_descriptors` | write | Find the photographs holding the patch around one observation, and add each, unpinned and `out`, on a worker thread |
 | `search_bench_track_geometry` | write | Project a track's surfel into every camera, and add each photograph that matches it, unpinned and `out`, on a worker thread |
@@ -4809,17 +4809,24 @@ reprojection noise; a reconstruction holding no finite point measures none, and
 a fit or upgrade there without it fails, saying so.
 
 **`fit_bench_track_normal` turns the patch and keeps its centre.** It is Track
-View's *Fit Normal*, *Finite Diff Normal* and *Grid Plane Normal*, chosen by the
-required `method`: `photometric`, `finite_difference` or `grid_plane`. The two
-piece methods take `pieces` (default 2) and `overlap_percent` (default 0), and
-`photometric` refuses either. It is refused in the call, before a photograph is
+View's *Finite Diff Normal*, *Grid Plane Normal* and *Grown Plane Normal*,
+chosen by the required `method`: `finite_difference`, `grid_plane` or
+`grown_plane`. The two piece methods take `pieces` (default 2) and
+`overlap_percent` (default 0), and `grown_plane` refuses either. `grown_plane`
+runs `grown_plane_normal` at its default options; it writes the keypoints of
+the views that joined its plane and of those whose shift alone it fitted, and
+its `report` gives the plane's σ along its weakest and strongest directions
+and says *low confidence* when that precision is low, as Track View's Action
+Log row does ([track-view.md](track-view.md) § "The toolbar"). It is refused in
+the call, before a photograph is
 read, at the cluster stage, with no patch yet, at infinity and with fewer than
-two `in` observations, in a sentence that starts *"Cannot fit the normal of
-…"*, *"Cannot take the finite-difference normal of …"* or *"Cannot take the
-grid-plane normal of …"*. It runs on a worker and answers in the two levels `fit_bench_track`
+two `in` observations, in a sentence that starts *"Cannot take the
+finite-difference normal of …"*, *"Cannot take the grid-plane normal of …"* or
+*"Cannot take the grown-plane normal of …"*. It runs on a worker and answers in the two levels `fit_bench_track`
 does: inside the reply window, an edit's reply (`serial`, `cursor`, `label`,
 `dirty`, `report`, `changed`), and after it a `running: true` handle whose
-`operation` is `Fit normal`, `Finite difference normal` or `Grid plane normal`.
+`operation` is `Finite difference normal`, `Grid plane normal` or `Grown plane
+normal`.
 Like the other bench steps that run on a worker, the reply carries no `item`.
 
 **A fit's sentence names the representation the rays earned.** Finite or at

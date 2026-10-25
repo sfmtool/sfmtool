@@ -1875,12 +1875,12 @@ impl Args<'_> {
     }
 
     /// The normal step `method` names, with `pieces` and `overlap_percent` for
-    /// the finite difference. Their ranges are the step's to judge, so that a
+    /// the two piece methods. Their ranges are the step's to judge, so that a
     /// refusal reads the same from the wire as from the toolbar.
     fn normal_step(&self) -> Result<crate::bench::NormalStep, ToolError> {
         use crate::bench::{NormalStep, SplitSettings};
         let step = match self.optional_string("method")?.as_deref() {
-            Some("photometric") => NormalStep::Photometric,
+            Some("grown_plane") => NormalStep::GrownPlane,
             Some(method @ ("finite_difference" | "grid_plane")) => {
                 let defaults = SplitSettings::default();
                 let split = SplitSettings {
@@ -1897,17 +1897,17 @@ impl Args<'_> {
             }
             Some(other) => {
                 return Err(self.error(format!(
-                    "does not know the method {other:?} — the methods are photometric, \
-                     finite_difference and grid_plane."
+                    "does not know the method {other:?} — the methods are finite_difference, \
+                     grid_plane and grown_plane."
                 )))
             }
             None => {
                 return Err(self.error(
-                    "needs method — photometric, finite_difference or grid_plane.".to_string(),
+                    "needs method — finite_difference, grid_plane or grown_plane.".to_string(),
                 ))
             }
         };
-        if matches!(step, NormalStep::Photometric)
+        if matches!(step, NormalStep::GrownPlane)
             && (self.optional_usize("pieces")?.is_some()
                 || self.optional_f64("overlap_percent")?.is_some())
         {

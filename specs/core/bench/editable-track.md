@@ -3008,7 +3008,9 @@ from the patch's normal and from the mean viewing direction and covers
 reached by running the step again; the refinement is not idempotent by design,
 and a second run re-seeds from the first's answer. `min_views` is two here,
 where the kernel's own default is three, so the step runs on any track a fit
-runs on. A search that scores no normal is refused as `NotScored`.
+runs on. A search that scores no normal is refused as `NotScored`. No Track
+View entry or wire method runs it; its callers are its Python binding
+(`sfmtool.bench.fit_normal`) and the tests.
 
 **`finite_difference_normal` reads the normal from where smaller pieces fit.**
 Along each of the patch's two in-plane axes it places `pieces` square pieces
@@ -3207,9 +3209,10 @@ unchanged as unstable.
 **`grown_plane_normal` fits one plane shared by every view to the
 photographs.** It is the step
 [grown-plane-normal.md](../../drafts/grown-plane-normal.md) designs, still
-being evaluated, and so far only a library step with a Python binding
-(`sfmtool.bench.grown_plane_normal`): no Track View entry or wire method calls
-it. It takes the reference and the working grid by
+being evaluated. It is Track View's *Grown Plane Normal* and the wire's
+`fit_bench_track_normal` with `method` `grown_plane`, both at its default
+options, and it has a Python binding (`sfmtool.bench.grown_plane_normal`).
+It takes the reference and the working grid by
 `grid_plane_normal`'s rules, picks a few of the other `in` views by their
 geometry, and for each view picked fits the plane's tilt and the view's image
 shift so that the view's samples through the plane agree with the

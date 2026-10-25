@@ -495,15 +495,15 @@ impl Operation {
         quiet: false,
     };
 
-    /// One bench track's patch turned to the normal the photographs agree on
-    /// most (`sfmtool_core::bench::fit_normal`).
+    /// One bench track's patch turned to the one plane its views agree on,
+    /// fitted to the photographs (`sfmtool_core::bench::grown_plane_normal`).
     ///
-    /// Cancellable on either side of the decode, in front of the search and
-    /// of the turn, and inside the reading it ends with. The search itself is
-    /// one kernel call over a handful of views and runs to its end once
-    /// entered.
-    pub(crate) const BENCH_FIT_NORMAL: Operation = Operation {
-        name: "Fit normal",
+    /// Cancellable on either side of the decode, inside the step, which polls
+    /// the flag in front of every pick, every window stage of a view's growth
+    /// and every shift-only fit, and inside the reading it ends with. A cancel
+    /// leaves the track as it was.
+    pub(crate) const BENCH_GROWN_PLANE_NORMAL: Operation = Operation {
+        name: "Grown plane normal",
         cancellable: true,
         kind: Kind::Bench,
         queue: Queue::Fast,
@@ -794,7 +794,7 @@ impl Operation {
         Operation::ADD_IMAGE_TO_TRACKS,
         Operation::BENCH_FIT,
         Operation::BENCH_SET_STAGE,
-        Operation::BENCH_FIT_NORMAL,
+        Operation::BENCH_GROWN_PLANE_NORMAL,
         Operation::BENCH_FINITE_DIFFERENCE_NORMAL,
         Operation::BENCH_GRID_PLANE_NORMAL,
         Operation::BENCH_SEARCH,

@@ -726,14 +726,14 @@ upload is kept against the track's `Arc` and dropped with the tiles.
 #### The toolbar
 
 In Edited mode, two rows. The first opens with where the focused item's evaluation stands, and
-then acts on the track: *Fit*, *Fit Normal*, *Finite Diff Normal*, *Grid Plane
-Normal* with their *per axis* and *overlap* boxes, the *Stage* toggle (which
+then acts on the track: *Fit*, *Finite Diff Normal*, *Grid Plane Normal* with
+their *per axis* and *overlap* boxes, *Grown Plane Normal*, the *Stage* toggle (which
 names the stage it would move to), *Split off N rows*, *Duplicate*, *Commit* and *Discard*. The
 second is the *Lock* box, the *Surface Tiling Mode* box (§ "Surface Tiling
 Mode") and *Rename*, which opens a field in place and commits on Enter. Each entry is enabled, or greyed with a hover text naming what is
 missing, and the refusal is the core step's own sentence asked of the very
 track the button would act on, so the button and the step cannot disagree.
-*Commit* asks the core commit; *Fit*, the two normal entries and the *Stage*
+*Commit* asks the core commit; *Fit*, the three normal entries and the *Stage*
 toggle ask `fit_preconditions`, `normal_preconditions` and
 `set_stage_preconditions`, the halves of those steps' validation that read no
 photograph. A track with no patch therefore greys both
@@ -797,15 +797,14 @@ track stage with fewer than two `in` observations, while the evaluation still
 runs for it, because one sighting is something to report.
 
 **The three normal entries turn the patch and leave its centre.** *Fit* moves
-the patch along the sightings' rays and keeps the way it faces; *Fit Normal*,
-*Finite Diff Normal* and *Grid Plane Normal* do the opposite, each estimating a
-normal and turning
+the patch along the sightings' rays and keeps the way it faces; *Finite Diff
+Normal*, *Grid Plane Normal* and *Grown Plane Normal* do the opposite, each
+estimating a normal and turning
 the patch to it by the same least rotation the 3D viewer's arrowhead drag makes,
 then reading the track back, rendering its stored bitmap and scoring every row
 against it, as a fit does
 ([`../core/bench/editable-track.md`](../core/bench/editable-track.md) §
-"Estimating the normal"). *Fit Normal* takes the normal at which the `in`
-sightings' tiles agree best. *Finite Diff Normal* fits a row of smaller square
+"Estimating the normal"). *Finite Diff Normal* fits a row of smaller square
 pieces through the centre along each of the patch's two axes and takes the
 plane through the two lines their centres land on. *Grid Plane Normal* fits a
 grid of pieces tiling the whole patch and takes the plane through all their
@@ -816,8 +815,29 @@ for *Finite Diff Normal* and that many by that many for *Grid Plane Normal*; and
 `2 per axis` and `0% overlap`. The version each of the two pushes, and its
 Action Log row, names the cut it was made with: `Finite-difference normal of
 <label> (3 pieces along each axis, 25% overlap)` for the rows, `Grid-plane
-normal of <label> (3x3 pieces, 25% overlap)` for the grid. All
-three entries run on a worker like *Fit*, push one version, and grey
+normal of <label> (3x3 pieces, 25% overlap)` for the grid.
+
+*Grown Plane Normal* runs `grown_plane_normal`
+([`../drafts/grown-plane-normal.md`](../drafts/grown-plane-normal.md)) at
+its default options, and the boxes do not apply to it. It fits one plane to
+the photographs: for each of a few `in` views it picks, a window grows from
+the view's keypoint to the whole patch, the views' planes are combined, and
+the patch is turned to the combined plane whenever a view joined, unless the
+turn is large on weak evidence. It trusts the keypoints it is given, so on a
+track whose keypoints may be off, *Fit* comes first. Unlike the other two it
+also moves sightings: it writes the keypoint of each view that joined the
+plane and of each view whose shift alone it fitted there. Its version is
+`Grown-plane normal of <label>`, and its Action Log row adds the step's own
+report: how many views joined and how many were left out or fitted by shift
+alone, how many pairs were kept, the plane's σ along its weakest and strongest
+directions in degrees, *low confidence* when the weakest σ with each view
+counted once is over the step's bar (3.67° by default), and either how many
+keypoints it wrote or *normal left unchanged* with the reason, then the turn
+and the reading, as in `Grown-plane normal of bull-nose: 2 of 3 views joined,
+1 left out, 7 shift only; σ 4.20° weakest, 1.10° strongest, low confidence; 10
+keypoints written, turned 8.4°, …`.
+
+All three entries run on a worker like *Fit*, push one version, and grey
 with `normal_preconditions`' sentence at the cluster stage, at infinity, and
 with fewer than two `in` observations; the boxes grey with them. The boxes are
 tool settings, as *Lock* is: changing one is no step, and they keep their values
