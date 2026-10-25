@@ -158,7 +158,12 @@ This is a **local refiner**, and its guarantees hold only inside that scope:
 ## Objective
 
 Each view other than the reference maximizes its **Enhanced Correlation
-Coefficient** against the template `T`, over its 2-DOF in-plane offset `δ_v`:
+Coefficient** against the template `T`, over its 2-DOF offset `δ_v` within the
+plane of its **frame**: the patch slid onto the view's seed keypoint
+(`seed_frame`, through `OrientedPatch::anchored_at_keypoint`,
+[patch-cloud.md](patch-cloud.md)), with the patch's axes and size, `δ_v`
+counting from its centre. A view seeded at the projection, or whose seed the
+slide refuses, is stated on the patch itself:
 
 ```
 S_v(δ_v) = Σ_k w_k · ẑ(I_v(x_k(δ_v)))_k · T_k
@@ -209,9 +214,22 @@ For each view other than the reference, from its seed:
    problem) keeps the seed.
 4. Stop when the accepted step is below `convergence_px` or after
    `max_gn_steps` steps.
+5. **Solve again at the reached keypoint.** Where the view moved more than
+   `REANCHOR_MIN_OFFSET` (half a grid px), its frame becomes the patch slid
+   onto the keypoint it reached, its tile is rendered again through that
+   frame, and steps 1 to 4 run once more from offset zero, bounded by what is
+   left of `max_offset_px` after the first move, so the two moves together
+   stay within `max_offset_px` of the seed; with nothing left the second solve
+   only scores the new render there. The second result is kept only where it
+   scores at least what the first reached; otherwise the first stands, so the
+   refinement still never ends below its seed. (The first solve reads every
+   offset as a shift of one render within the frame's plane, where the patch
+   slid onto that offset's keypoint sits on the same ray at another depth; the
+   departure's 95th percentile is 0.002 to 0.02 px under 1 grid px of offset
+   and 0.03 to 0.16 px from 1 to 2 on the three ground truths.)
 
 Output per view: the refined `δ_v` mapped to `keypoint_v` by projecting the
-re-anchored patch centre, as the localizer does
+centre of its frame moved by `δ_v`, as the localizer does
 ([patch-keypoint-localization.md](patch-keypoint-localization.md#mapping-a-shift-to-a-keypoint)).
 
 ## Parameters (defaults)
@@ -269,7 +287,7 @@ the localizer's context-tile idea
 ([keypoint-localization-search-cache.md](keypoint-localization-search-cache.md))
 adapted to fractional reads:
 
-- The tile is centred at the view's **seed** offset and sized
+- The tile is rendered through the view's frame, centred on its seed, and sized
   `R + 2·(⌈max_offset_px⌉ + 2)`, so every offset the line search can accept
   reads in bounds (an out-of-coverage read falls back to a direct render, which
   in practice does not happen). It stores the sampler's unquantized values

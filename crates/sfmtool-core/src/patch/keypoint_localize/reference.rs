@@ -126,7 +126,8 @@ pub struct ViewSearch {
     /// peak.
     pub peak_zncc: f64,
     /// Whether the peak sits on the edge of the searched window, where the true
-    /// maximum may lie outside it.
+    /// maximum may lie outside it: the final peak, after the search made again
+    /// at a found keypoint, placed in the window the first search covered.
     pub at_edge: bool,
     /// Whether the window's highest peak was on its edge and the keypoint is
     /// instead the local maximum an ascent from the start reached (see
@@ -468,7 +469,9 @@ impl TrackReferences {
         // As the localizer does: past `REANCHOR_MIN_SHIFT` the shift was read
         // as a sub-window of a render about the seed, so the view is rendered
         // again through the patch slid onto the keypoint found and searched
-        // within `REANCHOR_MARGIN` of it.
+        // within `REANCHOR_MARGIN` of it. The second peak is taken where it is
+        // still within `±margin` of the start, the window searched, and then
+        // `at_edge` says whether it lies on that window's edge.
         if let Some(found) = out
             .keypoint
             .filter(|_| sh.dx.hypot(sh.dy) > REANCHOR_MIN_SHIFT)
@@ -505,10 +508,14 @@ impl TrackReferences {
                     c,
                     c,
                 ) {
-                    out.peak_zncc = again.peak;
-                    let center =
-                        shifted_center(&frame, again.dx, again.dy, self.wpp[0], self.wpp[1]);
-                    out.keypoint = project(view, &center, patch.w).map(|(x, y)| [x, y]);
+                    let (ix, iy) = (sh.ix + again.ix, sh.iy + again.iy);
+                    if ix.abs() <= margin && iy.abs() <= margin {
+                        out.peak_zncc = again.peak;
+                        out.at_edge = on_edge(ix, iy);
+                        let center =
+                            shifted_center(&frame, again.dx, again.dy, self.wpp[0], self.wpp[1]);
+                        out.keypoint = project(view, &center, patch.w).map(|(x, y)| [x, y]);
+                    }
                 }
             }
         }

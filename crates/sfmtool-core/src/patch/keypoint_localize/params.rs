@@ -52,6 +52,9 @@ pub struct KeypointLocalizeParams {
     /// The reach of each view's search around its starting keypoint, in
     /// patch-grid px: the context tile is rendered this much larger than the
     /// scored core on every side, and the shift is searched over `±search`.
+    /// The search made again at a found keypoint past 1 grid px (rendered
+    /// through the patch slid onto it, over `±2` grid px) takes its peak only
+    /// within the same `±search` of the start, so no view reaches further.
     pub search: f64,
     /// Drop a view whose keypoint sits more than this many *source-image*
     /// pixels from the point's projection `project_i(X_p)` (an absolute

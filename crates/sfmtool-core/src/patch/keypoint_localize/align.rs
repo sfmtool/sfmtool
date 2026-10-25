@@ -385,6 +385,7 @@ pub(super) fn align_to_reference(
                     &template,
                     r,
                     params,
+                    margin,
                     progress,
                 )?;
             }
@@ -437,7 +438,9 @@ pub(super) const REANCHOR_MARGIN: i64 = 2;
 
 /// Render `st`'s view again through the patch slid onto the keypoint its
 /// search found and search `±REANCHOR_MARGIN` about it, taking that frame and
-/// shift where the search finds a peak. One render and one small search per
+/// shift where the search finds a peak that is still within `±margin` of the
+/// view's start on both axes, the window the first search covered, so the
+/// search never reaches past `±search`. One render and one small search per
 /// view; the shift left is under `REANCHOR_MARGIN`, where the sub-window's
 /// departure from the slid patch is a few hundredths of a pixel.
 #[allow(clippy::too_many_arguments)]
@@ -453,6 +456,7 @@ fn reanchor(
     template: &Template,
     r: usize,
     params: &KeypointLocalizeParams,
+    margin: i64,
     progress: &Progress<'_>,
 ) -> Result<(), LocalizeError> {
     let centre = shifted_center(&st.patch_frame, st.off[0], st.off[1], wpp_u, wpp_v);
@@ -489,6 +493,10 @@ fn reanchor(
         c0,
         params.search_strategy,
     ) {
+        let reach = margin as f64;
+        if (st.off[0] + d[0]).abs() > reach || (st.off[1] + d[1]).abs() > reach {
+            return Ok(());
+        }
         // The frame is now the one slid onto this keypoint, which stands as
         // the view's start: a zero shift from it is that keypoint.
         st.patch_frame = frame;

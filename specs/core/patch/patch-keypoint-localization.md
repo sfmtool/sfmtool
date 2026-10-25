@@ -122,8 +122,11 @@ The keypoint and its anchor relationship are defined in
 keypoint_j = project_i(X_p) + δ_j        # image px
 ```
 
-`δ_j` is the in-plane shift of the surfel centre for view `i`. The reader
-recovers it by unprojecting the keypoint onto the patch plane. The naive
+`δ_j` is the shift of the surfel centre for view `i`, across the line of
+sight: the reader recovers the shifted centre where the keypoint's ray meets
+the plane through `X_p` facing camera `i`
+(`OrientedPatch::anchored_at_keypoint`, [patch-cloud.md](patch-cloud.md)), the
+centre of the patch slid onto that ray. The naive
 keypoint, `project_i(X_p)`, can sit slightly off where the surfel's appearance
 actually lands in a view; localization chooses `δ_j` so the keypoint sits on the
 image content.
@@ -187,10 +190,14 @@ For one point with patch views `G`:
    near-parallel to the plane (`|d̂ · n̂|` below `min_grazing_cos`), where the
    in-plane anchor is ill-conditioned, and a view the point does not project
    into.
-2. **Seed.** Each remaining view's starting keypoint is unprojected onto the
-   patch plane to its starting offset `start[v]`, in patch-grid px from `X_p`
-   (zero for a view started at the projection). The sampler for every render of
-   the view is chosen once, at that keypoint.
+2. **Seed.** Each remaining view's search is stated on its own **frame**: the
+   patch slid onto its starting keypoint (`seed_frame`, through
+   `OrientedPatch::anchored_at_keypoint`), with the patch's axes and size. Its
+   offsets are in patch-grid px from that frame's centre along its axes, and
+   the start is offset zero. A view with no starting keypoint, or one whose
+   keypoint the slide refuses, starts from the patch itself, at the
+   projection. The sampler for every render of the view is chosen once, at
+   that keypoint.
 3. **Resolve the reference** and render the template, as above. Where nothing
    renders to align to (the reference's tile leaves the frame or is flat at its
    keypoint, the slide refuses its keypoint, or the rule finds
@@ -199,8 +206,8 @@ For one point with patch views `G`:
    `max_shift_px` gate. The refiner does the
    same, so both report no reference for such a point.
 4. **Per view other than the reference:**
-   - render one **context tile**, the `R×R` core extended by `margin =
-     ⌈search⌉` grid px on every side, centred on `start[v]`;
+   - render one **context tile** through the view's frame, the `R×R` core
+     extended by `margin = ⌈search⌉` grid px on every side;
    - read the **member self-similarity gate** on the tile's core (below), and
      drop the view if it fails;
    - **search** the integer shift over `±margin` that maximizes the windowed
@@ -210,10 +217,17 @@ For one point with patch views `G`:
      then refine it to sub-pixel by the vertex of a quadratic fitted to the
      3×3 cells around the peak (see
      [Sub-pixel step](keypoint-localization-search-cache.md#sub-pixel-hand-off)).
-     The view's
-     final offset is `start[v]` plus that shift, and its score is the ZNCC at
-     the integer peak. A view no shift could be scored for (its core out of
-     frame at every shift) is dropped.
+     The view's offset is that shift, and its score is the ZNCC at the
+     integer peak. A view no shift could be scored for (its core out of frame
+     at every shift) is dropped.
+   - **render again at the found keypoint** where the shift is more than
+     `REANCHOR_MIN_SHIFT` (1 grid px): the view's frame becomes the patch slid
+     onto the keypoint the shift names, a context tile `REANCHOR_MARGIN` (2)
+     grid px wider than the core on every side is rendered through it, and
+     the shift is searched again over `±REANCHOR_MARGIN`. The new frame, shift
+     and score are taken where that search finds a peak whose total shift from
+     the start stays within `±margin` on both axes, so the search never
+     reaches past `±search`; otherwise the first search's stand. (Why, below.)
 5. **Gates.** A searched view is dropped when its keypoint leaves the frame,
    when its keypoint sits more than `max_shift_px` from the point's projection
    (an absolute distance from `project_i(X_p)` in source px, not the move from
@@ -243,29 +257,41 @@ from the kept views at their new keypoints.
 
 **Every render is from the source photograph.** The context tile is rendered
 once per view from the source image, and every candidate shift reads it at an
-integer offset, which is exactly the render at that shift, so no tile is ever
-re-warped from another tile and interpolation blur cannot compound.
+integer offset, so no tile is ever re-warped from another tile and
+interpolation blur cannot compound. A read at shift `d` is the view's frame
+moved by `d` within its own plane. The patch slid onto the keypoint that shift
+names sits on the same ray, at the depth of the plane through `X_p` facing the
+camera, so the read departs from it by about `|d|·sin θ / depth` of the depth
+(`θ` the viewing angle). Measured at the tile's corners on the three ground
+truths, its 95th percentile is 0.005 to 0.05 px for shifts under 1 grid px,
+0.03 to 0.28 px from 1 to 3, and 0.08 to 0.76 px from 3 to 10, growing a little
+with the keypoint's gap. Past 1 grid px the view is rendered again through the
+patch slid onto the found keypoint, and the shift left is under 2 grid px.
 
 **A starting keypoint is not clipped.** The tile is centred on it, so the search
-reaches `±search` grid px around wherever it starts, and `max_shift_px` then
-judges where the view ended. `keypoint_grid_offset` gives the same offset the
-seeding computes, on the params' own grid, for a caller that wants to know how
-far a keypoint sits from the projection in grid px.
+reaches `±search` grid px around wherever it starts, the search made again at
+the found keypoint included, and `max_shift_px` then judges where the view
+ended. `keypoint_grid_offset` gives how far a keypoint sits from the projection
+in grid px on the params' own grid: the length of the patch's slide onto it,
+read on the patch's axes turned to face the camera.
 
 ## Mapping a shift to a keypoint
 
-`off[v] = start[v] + shift` locates the patch centre on the plane in patch-grid
-units, measured from `X_p`. The keypoint is the image projection of that centre:
+`off[v]` locates the patch centre in patch-grid units on the view's frame `F_v`
+(the patch slid onto the view's start, or onto the found keypoint after the
+search is made again), measured from the frame's centre `c_v`. The keypoint is
+the image projection of that centre:
 
 ```
-center_v = X_p + off[v].s · wpp_u · û_p − off[v].t · wpp_v · v̂_p   # patch centre on the plane
+center_v = c_v + off[v].s · wpp_u · û_p − off[v].t · wpp_v · v̂_p   # moved within F_v's plane
 keypoint_j = ray_to_pixel_i(R_i · center_v + t_i)
 ```
 
 Grid rows count downward from `+v̂`, so a positive `t` steps along `−v̂`, as in
-`WarpMap::from_patch`. Unprojecting the emitted keypoint back onto the plane
-recovers `center_v`: the inverse of the format spec's reader relationship
-(`keypoint → anchor` by ray∩plane), so a producer and a reader round-trip.
+`WarpMap::from_patch`. A view whose final offset is zero from a frame slid onto
+its keypoint returns that keypoint as given. The reader's relationship
+(`keypoint → anchor`, the format spec) slides the patch onto the emitted
+keypoint's ray; its centre is on the same ray as `center_v`.
 
 ## Outputs
 
