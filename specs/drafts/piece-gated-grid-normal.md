@@ -1,7 +1,7 @@
 # Piece-Gated Grid Normal
 
 **Status:** Draft. Decided:
-- the bench's *Grid Plane Normal* is the baseline this draft improves on, because the photometric normal search is known to be the weaker estimator, which is why Surface Tiling Mode runs the Grid Plane Normal and not *Fit Normal*;
+- the bench's *Grid Plane Normal* is the baseline this draft improves on, because the photometric normal search is known to be the weaker estimator, which is why Surface Tiling Mode runs the Grid Plane Normal and not the photometric search;
 - each part of the patch is measured by registering one cell of the three-by-three ZNCC grid split, by a shift search on one render per view, the measurement the piecewise refinement of cluster patches makes, instead of by a full bench fit per piece;
 - each cell is gated in each view before any geometry, by the piecewise refinement's rules (peak curvature, cell ZNCC, search bound, and a robust affine fit per view), and those rules are shared code with the piecewise refinement, not a copy;
 - the surviving cells are triangulated and a plane fitted through them with the weighting, residual floors, Tukey loop and three-way determinacy verdict of the [cell plane normal kernel](../core/patch/cell-plane-normals.md), with that math factored out so it takes per-view pixels from a track as well as a cluster file's columns;
