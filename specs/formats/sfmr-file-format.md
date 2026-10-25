@@ -781,6 +781,10 @@ Binary array mapping each image to its camera:
 - **Format**: Index into cameras array
 - **Example**: `[0, 0, 0, 1, 1, 1]` (first 3 images use camera 0, next 3 use camera 1)
 
+Every image is read through its camera's intrinsics exactly; the file stores
+no per-image intrinsics. A per-image adjustment of the focal and the principal
+point is proposed in [per-image-intrinsics.md](../drafts/per-image-intrinsics.md).
+
 #### `images/quaternions_wxyz.{N}.4.float64.zst`
 
 Camera rotation quaternions in WXYZ format:

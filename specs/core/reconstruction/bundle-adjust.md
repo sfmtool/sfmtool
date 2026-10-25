@@ -392,7 +392,9 @@ on it.
   kernel returned for it: itself at its solved focal where its release has the
   focal, with its solved `k1` or spline where its release has the distortion,
   and itself unchanged where it was held. Nothing else about any lens moves: the principal
-  point, and every other model's distortion, stay where they are.
+  point, and every other model's distortion, stay where they are. Releasing the
+  principal point, and a focal and principal point adjusted per image, is
+  proposed in [per-image-intrinsics.md](../../drafts/per-image-intrinsics.md).
 - **Positions and representations.** Each point in the solve takes its solved
   coordinate, and `w` follows the kernel's returned representation.
 - **The stored error.** Each point's error column becomes the RMS of that

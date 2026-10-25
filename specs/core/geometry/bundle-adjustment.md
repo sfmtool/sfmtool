@@ -1731,7 +1731,9 @@ validation, and outputs are unchanged.
 - Optimizing distortion beyond the `k1` of `SIMPLE_RADIAL_FISHEYE` and the
   spline of `SFMTOOL_FISHEYE` / `SFMTOOL_PINHOLE`, or the principal point;
   `opt_f`/`opt_k1`/`opt_bspline` cover each camera's focal and those two radial
-  releases only.
+  releases only. Releasing the principal point, shared per camera and adjusted
+  per image, is proposed in
+  [per-image-intrinsics.md](../../drafts/per-image-intrinsics.md).
 - Gauge fixing and covariance estimation. The kernel holds no pose fixed to
   set the gauge and reports no uncertainty. A caller that wants a gauge states
   it through the point constraints (held points, or ranged points, which fix

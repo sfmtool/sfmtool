@@ -305,6 +305,9 @@ reconstruction. What it does is covered headlessly.
   switched to a spline model first.
 - Adjusting a selection -- one image's pose, one region's points. The edit is the
   whole node.
+- Releasing the principal point. The camera rows release the focal and the lens
+  distortion; a principal-point release, shared per camera and per image, is
+  proposed in [`per-image-intrinsics.md`](../../drafts/per-image-intrinsics.md).
 - Choosing the iteration budget or the trim floors (`min_track`, `min_obs`)
   from the dialog. They are the core function's defaults, and a value that needs
   different ones needs a different tool.
