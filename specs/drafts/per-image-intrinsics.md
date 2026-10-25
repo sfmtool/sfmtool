@@ -3,12 +3,12 @@
 **Status:** Draft. Decided:
 - the bundle adjustment first releases each camera's shared principal point, with a checkbox in SfM Explorer's Bundle Adjust dialog and an argument on its MCP tool (PR 1);
 - an `.sfmr` file stores, per image, a small adjustment of its camera's focal and principal point, as one optional `images/` column per adjustable parameter, with each camera recording in `cameras/metadata.json` which parameters vary per image; this is format version 13 (PR 2);
-- the focal adjustment is a relative scale, `f_i = f·(1 + s_i)`, and the principal-point adjustment is per axis as a fraction of the image size, `cx_i = cx + a_x,i·width` and `cy_i = cy + a_y,i·height`, so that both carry over unchanged when a reconstruction moves from low-resolution proxies to the full-resolution photographs;
+- the focal adjustment is a relative scale, `f_i = f·(1 + s_i)`, and the principal-point adjustment is stored on both axes as a fraction of the image's shorter side `m = min(width, height)`, the **short-side unit**, `cx_i = cx + a_x,i·m` and `cy_i = cy + a_y,i·m`, so that both carry over when a reconstruction moves from low-resolution proxies to the full-resolution photographs, and an offset reads the same in x and y;
 - one accessor, `image_intrinsics(i)`, returns an image's camera with its adjustment applied, borrowed when there is none, and nothing else reads the raw columns (PR 2); every consumer that looks up an image's camera goes through it, and COLMAP export writes each camera that has a non-zero adjustment on any of its images as one COLMAP camera per image, with the adjustment applied (PR 3);
-- the bundle adjustment releases the adjustments per image, each held toward zero by a Gaussian prior whose width is a fraction of the image (PR 4);
+- the bundle adjustment releases the adjustments per image, each held toward zero by a Gaussian prior whose width is derived for each camera from the solve itself: a first pass under a loose prior that only stops runaways, a robust spread of the adjustments weighted by how well each is determined, and further passes under that spread, which the report states (PR 4);
 - one camera entry per image is rejected as the way to do this.
 
-Not decided: the default widths of the per-image priors (provisionally 2% for each, to be measured on more datasets, Kerry Park among them); a focal model driven by the EXIF subject distance. See [Open questions](#open-questions).
+Not decided: the floor on a derived prior width and how many derive and re-solve passes are needed, both to be checked on ordinary solves rather than the hand-curated ground truths; a focal model driven by the EXIF subject distance. See [Open questions](#open-questions).
 
 Amends:
 - [core/geometry/bundle-adjustment.md](../core/geometry/bundle-adjustment.md): the kernel's lens block, which releases no principal point, and its image block, which holds the pose alone
@@ -36,31 +36,33 @@ The measurements below were made by an experiment outside the tree, a joint bund
 | + per-image principal point | 0.322 px |
 | + per-image focal and principal point | 0.280 px |
 
-- The per-image principal-point offsets spread over about 21 px in x (1.0% of the width) and 20 px in y (1.3% of the height), about a shared offset of roughly (−7, +19) px. They drift along the capture sequence and correlate only weakly with the direction of gravity in the camera frame, which fits the stabilised lens's position at the moment of capture.
+- The per-image principal-point offsets spread over about 21 px in x and 20 px in y (1.4% and 1.3% of the short side, 1536 px), about a shared offset of roughly (−7, +19) px. They drift along the capture sequence and correlate only weakly with the direction of gravity in the camera frame, which fits the stabilised lens's position at the moment of capture.
 - The per-image focal scale spreads over 1.3 to 1.6%, and correlates at −0.89 with the EXIF `SubjectDistance`: focus breathing.
 - Without a prior, one image with 63 observations moved its principal point by −626 px. That is why the per-image release in PR 4 has a prior.
 
-**`seoul_bull_sculpture`** (17 images, 270×480, `SIMPLE_RADIAL`, its checked-in ground truth) shows the same effect at a smaller size: held-out median 0.233 px at the baseline, 0.199 px with a shared principal point (a shared x offset of about −10.6 px), 0.142 px with a per-image principal point. The per-image offsets spread over about 3.2 px in x (1.2% of the width) and 3.7 px in y (0.8% of the height), and the focal scale over 0.5%.
+**`seoul_bull_sculpture`** (17 images, 270×480, `SIMPLE_RADIAL`, its checked-in ground truth) shows the same effect at a smaller size: held-out median 0.233 px at the baseline, 0.199 px with a shared principal point (a shared x offset of about −10.6 px), 0.142 px with a per-image principal point. The per-image offsets spread over about 3.2 px in x and 3.7 px in y (1.2% and 1.4% of the short side, 270 px), and the focal scale over 0.5%.
 
 **Kerry Park** (two fisheyes on a rig) was not measured.
+
+Both datasets measured are hand-curated ground truths, cleaner than what a solve produces: their noise level is low and their adjustments are spread less than an ordinary reconstruction's would be. The spreads above show that the effect is real and how large it is in these two, not what width a prior should have in general, which is why PR 4 derives the width from each solve instead of fixing it.
 
 The experiment is not reproducible in the tree yet: the dino ground truth is not checked in, and the kernel cannot release any of these parameters. PR 4's tests use synthetic scenes, and a script that repeats the held-out measurement on the checked-in ground truths is listed in [Open questions](#open-questions).
 
 ## The adjustment
 
-An image `i` taken through camera `c` (width `w`, height `h`, focal `f`, or `fx` and `fy` on a two-focal model, principal point `(cx, cy)`) is read through the camera's model and distortion with
+An image `i` taken through camera `c` (width `w`, height `h`, short side `m = min(w, h)`, focal `f`, or `fx` and `fy` on a two-focal model, principal point `(cx, cy)`) is read through the camera's model and distortion with
 
 ```
 f_i  = f  · (1 + s_i)          (fx and fy both, on a two-focal model)
-cx_i = cx + a_x,i · w
-cy_i = cy + a_y,i · h
+cx_i = cx + a_x,i · m
+cy_i = cy + a_y,i · m
 ```
 
 and nothing else changed. `s_i`, `a_x,i` and `a_y,i` are the image's **intrinsic adjustment**. All three are `0` for an image whose camera does not vary them, and an image whose three are `0` is read through the shared camera exactly.
 
 **Why a relative focal scale.** The scale is dimensionless, so it means the same at any resolution: a camera resized by a factor `k` has its focal multiplied by `k`, and `f_i` follows with `s_i` unchanged. A proxy workflow can therefore solve on low-resolution copies of the photographs, switch to the originals by resizing the shared camera, and keep every adjustment as it is. `(1 + s)` was chosen over `exp(s)` because the stored number then reads directly as "this image's focal is 1.3% longer", and because over the 1 to 2% range the evidence shows the two differ by less than `s²/2`, 0.02% at most. The one thing `exp(s)` gives that `(1 + s)` does not, a focal that cannot reach zero, is a step guard here (`s > −1`, and the image's focal above `1e-6` like the shared one). On a two-focal model the one scale moves `fx` and `fy` together, which keeps the aspect ratio the shared camera holds.
 
-**Why a fraction of the image size, per axis.** A resize maps a pixel coordinate as `x' = x·w'/w` and `y' = y·h'/h`, exactly under the format's pixel convention (origin at the top-left corner of the image, half-pixel centres; [sfmr-file-format.md](../formats/sfmr-file-format.md) § "Pixel space"). An offset stored as a fraction of the width in x and of the height in y is therefore unchanged by any resize, including one that changes the aspect ratio. It is not stored as a fraction of the focal, because the focal can itself be released, per camera and per image, and an offset that changed in pixels whenever the focal moved would couple two parameters the solve should keep apart.
+**Why a fraction of the short side, on both axes.** The **short-side unit** of an image is `m = min(w, h)` pixels, and this project uses it as the unit for a quantity measured across an image that should mean the same at any resolution and in any direction. A resize maps a pixel coordinate as `x' = x·w'/w` and `y' = y·h'/h`, exactly under the format's pixel convention (origin at the top-left corner of the image, half-pixel centres; [sfmr-file-format.md](../formats/sfmr-file-format.md) § "Pixel space"). Under a uniform resize by `k`, which is what a proxy workflow does, `m` becomes `k·m` and every offset `a·m` scales with the image, so the stored fractions carry over unchanged. A resize whose rounding changes the aspect ratio slightly (2040×1536 to 408×307, a fifth with the height rounded) scales x by 0.2 and y by 307/1536 ≈ 0.1999, and an offset in the short-side unit is then off by that difference, under 0.1% of itself, far below a pixel; fractions of the width in x and of the height in y would have been exact there. The short-side unit is chosen anyway because it is the same length in x and y: a stabilised lens that shifts sideways by some distance on the sensor moves the principal point by the same number of pixels whichever way it moves, and the stored offset says the same number on both axes, so one isotropic prior width in the stored unit is one isotropic width in pixels. It is not stored as a fraction of the focal, because the focal can itself be released, per camera and per image, and an offset that changed in pixels whenever the focal moved would couple two parameters the solve should keep apart.
 
 **The distortion centre moves with the principal point.** In every model here the distortion is applied in normalised coordinates before the focal and principal point are, so the distortion centre is the principal point. A shift of the principal point, shared or per image, moves the distortion centre with it. That is what the evidence measures, and it is what a stabilised lens does.
 
@@ -92,7 +94,7 @@ PR 1 adds no prior on the shared principal point. It is one parameter pair fitte
 - `sfm xform --bundle-adjust`: `BundleAdjustTransform.release_principal_point` ([_bundle_adjust.py](../../src/sfmtool/xform/_bundle_adjust.py)), which today reaches only the pycolmap path and which the `--bundle-adjust` parser always leaves `False` (`sfm densify` passes its own `release_principal_point` to pycolmap and does not build the transform), is passed to the sfmtool path as well, and its docstring stops saying sfmtool's adjustment always holds the principal point. The `--bundle-adjust` value gains no key in PR 1.
 - The glossary's **release** entry adds the principal point.
 
-**Tests.** In the kernel: the `cx`, `cy` columns against a central difference of the projection on every model; on a distortion-free `SIMPLE_PINHOLE` scene with a field of about 60°, a principal point planted 2% of the width off centre recovered from the centre with noise-free observations; on the same scene narrowed to a field of about 5°, the solve converging with the principal point inside the image and the residual median no higher than with it held, which pins the degeneracy's behaviour without asserting a recovery the data cannot support; a candidate off the sensor rejected. In the reconstruction adjustment: the release written back and reported, a held principal point unchanged, and two cameras releasing each its own. In the viewer: the checkbox's answer reaching the release list, the label and the Action Log line; `ui_basic` for the dialog's rows.
+**Tests.** In the kernel: the `cx`, `cy` columns against a central difference of the projection on every model; on a distortion-free `SIMPLE_PINHOLE` scene with a field of about 60°, a principal point planted 2% of the short side off centre on both axes recovered from the centre with noise-free observations; on the same scene narrowed to a field of about 5°, the solve converging with the principal point inside the image and the residual median no higher than with it held, which pins the degeneracy's behaviour without asserting a recovery the data cannot support; a candidate off the sensor rejected. In the reconstruction adjustment: the release written back and reported, a held principal point unchanged, and two cameras releasing each its own. In the viewer: the checkbox's answer reaching the release list, the label and the Action Log line; `ui_basic` for the dialog's rows.
 
 ## PR 2: the format columns and the accessor
 
@@ -103,7 +105,7 @@ PR 2 makes the adjustment representable everywhere a reconstruction is held, and
 | Entry | Shape | Holds |
 |-------|-------|-------|
 | `images/focal_adjustments.{N}.float64.zst` | `(N,)` | `s_i`: the image's focal is its camera's times `1 + s_i` |
-| `images/principal_point_adjustments_xy.{N}.2.float64.zst` | `(N, 2)` | `[a_x,i, a_y,i]`: the image's principal point is its camera's plus `a_x,i·width` in x and `a_y,i·height` in y |
+| `images/principal_point_adjustments_xy.{N}.2.float64.zst` | `(N, 2)` | `[a_x,i, a_y,i]`, in the short-side unit: the image's principal point is its camera's plus `a_x,i·m` in x and `a_y,i·m` in y, where `m = min(width, height)` of the image's camera |
 
 Each camera in `cameras/metadata.json` gains an optional key `per_image_adjustments`, a list naming the parameters that vary per image for that camera, `"focal"` and `"principal_point"`, in that order. A camera that varies neither has no key, so the cameras JSON of a file without adjustments is byte for byte what version 12 writes. The key is what tells a zero adjustment that was solved for apart from one that was never enabled.
 
@@ -137,7 +139,8 @@ impl SfmrReconstruction {
 
 impl CameraIntrinsics {
     /// This camera with `adjustment` applied: every focal times `1 + focal`,
-    /// the principal point moved by the fractions of the width and height.
+    /// the principal point moved on each axis by its fraction of the
+    /// camera's short side, `min(width, height)`.
     pub fn with_adjustment(&self, adjustment: &IntrinsicAdjustment) -> CameraIntrinsics;
 }
 ```
@@ -172,29 +175,62 @@ The columns, at the image's adjusted camera:
 
 ```
 ∂(u, v)/∂s_i   = ((u − cx_i), (v − cy_i)) / (1 + s_i)     (= f·(x_d, y_d))
-∂(u, v)/∂a_x,i = (w, 0)
-∂(u, v)/∂a_y,i = (0, h)
+∂(u, v)/∂a_x,i = (m, 0)
+∂(u, v)/∂a_y,i = (0, m)
 ```
 
 The shared focal's column becomes `(u − cx_i)/f`, the existing column read about the image's principal point, and the spline columns take the image's focal `f_i` in place of `f`.
 
-**The prior.** Each released adjustment is held toward zero by a Gaussian prior. The principal point's is isotropic in pixels, with standard deviation `σ_pp = p_pp · max(w, h)`; the focal scale's is `σ_s = p_s`. With the data cost approximately `Σ r²` in pixels for residuals inside the loss scale, the prior enters the round's cost as
+**The prior.** Each released adjustment is held toward zero by a Gaussian prior whose widths belong to the image's camera `c`: `σ_pp,c` for the principal point, in the short-side unit and the same on both axes, so `σ_pp,c·m` pixels in x and in y; and `σ_s,c` for the focal scale, a fraction. With the data cost approximately `Σ r²` in pixels for residuals inside the loss scale, the prior enters the round's cost as
 
 ```
-σ_n² · Σ_i ( ((a_x,i·w)² + (a_y,i·h)²) / σ_pp²  +  s_i² / σ_s² )
+σ_n² · Σ_i ( (a_x,i² + a_y,i²) / σ_pp,c²  +  s_i² / σ_s,c² )
 ```
 
-where `σ_n` is the reprojection noise level measured at the start of the round over its kept observations (the measure `round_noise` takes after the final round today), fixed for the round so that the cost the damping ladder compares is one function per round, as the spline penalty's `f_ref` is. The prior's rows are added to each image block after the data and before the damping, like the spline penalty's. The widths are settings, `BundleAdjustOptions::image_prior: ImagePriorOptions { focal_sigma, principal_point_sigma }`, both fractions, defaulting provisionally to `0.02`: on the evidence, two to three times the principal-point spread `dino_dog_toy` and `seoul_bull_sculpture` show (41 px against about 21 px on the dino's long side of 2040, 9.6 px against about 3.7 px on the bull's 480) and above the focal-scale spread of 0.5 to 1.6%, so a real adjustment is pulled only a little, while an image like the one that ran to −626 px is held. The defaults are fixed only after the measurement in [Open questions](#open-questions).
+where `σ_n` is the reprojection noise level measured at the start of the round over its kept observations (the measure `round_noise` takes after the final round today), fixed for the round so that the cost the damping ladder compares is one function per round, as the spline penalty's `f_ref` is. The offsets and their width are in the same unit, so `m` cancels. The prior's rows are added to each image block after the data and before the damping, like the spline penalty's.
+
+**Deriving the widths.** The widths are not fixed numbers. The ground truths the evidence came from are cleaner than an ordinary solve, so a width read off them would hold the adjustments of a typical reconstruction too tightly, and the right width differs between cameras anyway: a stabilised phone lens moves its principal point by a percent of the image, a fixed lens by nothing. So the kernel derives each camera's widths from the solve itself, an empirical Bayes estimate:
+
+1. **A loose first pass.** The first round of the schedule runs every camera's prior at the loose widths. Their only job is to stop a runaway, an image like the dino's with 63 observations whose principal point ran to −626 px (41% of its short side) without a prior; they are wide enough that any adjustment the data actually supports is pulled very little.
+2. **The spread, weighted by information.** After a round converges, for each camera with a per-image release and each released parameter, the kernel reads how well every image's adjustment is determined: its variance `v_i = σ_n² · [H_i⁻¹]_aa`, where `H_i` is that image's own block of the reduced system at the round's last linearisation, the data part only (no prior rows, no damping), with the points already eliminated. Inverting the whole block, pose and adjustment together, counts the adjustment's coupling with the same image's rotation and position against it, which is the near-degeneracy that let the runaway happen. Each image weighs `1/v_i`, and an image whose block is not positive definite weighs nothing. The camera's spread is `1.4826` times the weighted median of `|a|` over its posed images; for the principal point the x and y offsets are pooled as two samples per image, each weighted by its own axis's variance, which the short-side unit makes comparable. The median makes one wild image count as one sample whatever its value, and the weight makes an image with few observations count for almost nothing. The factor makes the median absolute value of a zero-mean Gaussian sample its standard deviation. The spread is measured about zero rather than about the median, because the prior is centred at zero: with the shared parameter held, an offset every image shares is part of what the prior must allow.
+3. **The width.** The camera's width for the next round is the spread clamped between the floor and the loose width. The floor keeps a camera whose images do not vary from being pinned to exactly zero by a spread that rounds to nothing; the loose width as a cap keeps a derived width from releasing more than the first pass did. A camera with fewer than two images of non-zero weight keeps the loose width, since one image has no spread.
+4. **The report.** Each camera's derived widths, and the spread they came from before clamping, go into the report (below).
+
+**Where the derivation runs in the schedule.** The kernel derives the widths again before every round after the first, from the round just finished, and the round runs under them. The rounds are where the cost is already fixed and re-measured, `σ_n` included, so changing the widths between rounds keeps each round's cost one function, as the damping ladder needs; changing them inside a round would not. And re-deriving each time follows the trim: the first round, at a 50 px trim and a 5 px loss scale, still holds gross outliers that spread the adjustments wider than the clean observations do, so the final round runs under a width measured on the set the 12 px round left. With `DEFAULT_SCHEDULE`'s three rounds that is two derivations, the final round under widths from the second round's solution. A schedule of one round runs that round a second time under widths derived from the first, so that every solve with a per-image release derives at least once.
+
+**The options.** The settings are the loose widths, the floor and an override, `BundleAdjustOptions::image_prior: ImagePriorOptions`:
+
+```rust
+/// A prior's widths for one camera: the focal scale's as a fraction, the
+/// principal point's in the short-side unit.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ImagePriorWidths {
+    pub focal: f64,
+    pub principal_point: f64,
+}
+
+pub struct ImagePriorOptions {
+    /// The widths of the first round, and the most a derived width may be.
+    pub loose: ImagePriorWidths,
+    /// The least a derived width may be.
+    pub floor: ImagePriorWidths,
+    /// When set, every camera's prior has these widths in every round and
+    /// nothing is derived.
+    pub fixed: Option<ImagePriorWidths>,
+}
+```
+
+`Default` gives `loose` `0.1` for both (154 px on the dino's short side of 1536, seven to eight times the spreads either ground truth shows, and the runaway at four widths), `floor` `0.001` for both, provisionally (see [Open questions](#open-questions)), and `fixed` `None`. `fixed` is for a caller that knows the widths, such as a test or a camera measured before; the widths it gives are used as they are, without the floor or the cap.
 
 The prior is what makes the per-image release well posed. For one image a principal-point shift and a rotation of that image alone differ only by the field-curvature term of PR 1 and the distortion centre's motion, and a focal scale and a move of that camera along its optical axis differ only by the scene's depth variation; with few observations either difference is below the noise.
 
 **Step guards.** A candidate step is rejected and re-damped when an image's focal `f·(1 + s_i)` is not finite and above `1e-6`, or its principal point is not finite or leaves the image, as for the shared parameters.
 
-**Write-back and the report.** Each posed image of a camera with a per-image release takes its solved adjustment, and the camera's `per_image_adjustments` gains the released parameters, so that a solved zero is recorded as solved. An unposed image keeps the adjustment it had. Each `CameraAdjustment` gains `image_adjustments: Option<ImageAdjustmentSpread>`, present when the camera released a per-image parameter: the number of images, the mean and standard deviation of the focal scale (as fractions) and of the principal-point offset (in pixels per axis), and `near_prior: Vec<NearPrior>`, the images whose adjustment ended more than two prior standard deviations from zero, each with the parameter and its distance in standard deviations. An adjustment that far out is one the data pulled well past what the prior expects, so these are the images a person should look at. The Action Log entry adds one line per such camera, and the version label names the per-image releases (`, focal and principal point released per image`).
+**Write-back and the report.** Each posed image of a camera with a per-image release takes its solved adjustment, and the camera's `per_image_adjustments` gains the released parameters, so that a solved zero is recorded as solved. An unposed image keeps the adjustment it had. Each `CameraAdjustment` gains `image_adjustments: Option<ImageAdjustmentSpread>`, present when the camera released a per-image parameter: the number of images, the mean and standard deviation of the focal scale (as fractions) and of the principal-point offset (in pixels per axis); the prior, `prior: ImagePriorWidths`, the widths the final round ran under, with `prior_derived: bool`, false when `fixed` set them, and `spread: ImagePriorWidths`, the last derivation's weighted spread before it was clamped, so a person sees whether the floor or the cap decided the width; and `near_prior: Vec<NearPrior>`, the images whose adjustment ended more than two prior widths from zero, each with the parameter and its distance in widths. The derived widths are the solve's own estimate of how far this camera's lens moves between photographs, so they are an output worth reading in their own right. An adjustment more than two widths out is one the data pulled well past what the rest of the camera's images show, so these are the images a person should look at. The Action Log entry adds one line per such camera, naming its derived widths, and the version label names the per-image releases (`, focal and principal point released per image`).
 
-**The surfaces.** Python: `opt_image_f=False` and `opt_image_pp=False` on `EditedReconstruction.bundle_adjust` and on the kernel binding, `"image_focal"` and `"image_principal_point"` keys in `releases`, the two prior widths as keywords, and the spread in the report; the kernel binding takes and returns the `(N, 3)` adjustments. MCP: `release_image_focal` and `release_image_principal_point`, defaults and per-camera fields. The dialog: **Release focal length per image** and **Release principal point per image** on each camera row, with screenshots. `sfm xform --bundle-adjust` gains no key in PR 4.
+**The surfaces.** Python: `opt_image_f=False` and `opt_image_pp=False` on `EditedReconstruction.bundle_adjust` and on the kernel binding, `"image_focal"` and `"image_principal_point"` keys in `releases`, an `image_prior` keyword taking a dict with the keys `loose`, `floor` and `fixed`, each a dict with `focal` and `principal_point` (`fixed` may be `None`), and the spread and widths in the report; the kernel binding takes and returns the `(N, 3)` adjustments and returns each camera's widths. MCP: `release_image_focal` and `release_image_principal_point`, defaults and per-camera fields; the prior takes its default options, and the reply carries each camera's derived widths. The dialog: **Release focal length per image** and **Release principal point per image** on each camera row, with screenshots. `sfm xform --bundle-adjust` gains no key in PR 4.
 
-**Tests.** On a synthetic scene with planted per-image principal-point offsets of about 1% of the width and focal scales of about 1%, the released solve recovering each within a tolerance set by the observation count; an image with few observations and a zero planted adjustment staying within its prior, where with a very wide prior it drifts; the column checks against central differences; parity with no per-image release; the write-back setting the camera's flags; the spread and the near-prior list.
+**Tests.** On a synthetic scene with planted per-image principal-point offsets of about 1% of the short side and focal scales of about 1%, the released solve recovering each within a tolerance set by the observation count. On a synthetic scene whose adjustments are drawn with a known spread, the derived width recovering that spread within a tolerance set by the number of images; the same scene with one added image of few observations and a large planted adjustment deriving nearly the same width, so that an image with little information does not inflate it; a camera with no planted variation deriving the floor; `fixed` used as given, with nothing derived; a one-round schedule deriving once. An image with few observations and a zero planted adjustment staying within its prior, where with a very wide fixed prior it drifts; the column checks against central differences; parity with no per-image release; the write-back setting the camera's flags; the spread, the widths and the near-prior list in the report.
 
 ## Later
 
@@ -209,11 +245,12 @@ Glossary entries the PRs add when they land:
 |------|-------|----|
 | **release** (extended) | adds the shared principal point (`CameraRelease::principal_point`, `opt_pp`, `release_principal_point`), and the per-image focal and principal point (`image_focal`, `image_principal_point`) | 1, 4 |
 | **intrinsic adjustment** | an image's focal scale and principal-point offset from its camera's shared intrinsics; `IntrinsicAdjustment`, `SfmrImage::intrinsic_adjustment`, the `images/focal_adjustments` and `images/principal_point_adjustments_xy` columns. Not *per-image camera*, which would read as the rejected camera entry per image. The stored names say *adjustment* rather than *offset* because a zero adjustment then reads as "no adjustment" for both parameters | 2 |
+| **short-side unit** | `min(width, height)` of an image, in pixels: the unit a quantity measured across an image is stored in when it should mean the same at any resolution and the same length in x and y; the principal-point adjustments and their prior widths are fractions of it. Not *image size*, which reads as both dimensions, and not *diagonal* or *long side*, which make the offsets of a wide image look smaller than those of a square one with the same sensor height | 2 |
 | **image intrinsics** | the intrinsics an image was taken with, its camera's with its adjustment applied; `image_intrinsics(i)` | 2 |
 
 ## Open questions
 
-- **The prior widths.** 2% for each is provisional. Measure the held-out error against the prior width on `seoul_bull_sculpture`, `dino_dog_toy` and Kerry Park (whose two fisheyes are the first case with a rig and a wide field), with a script under `scripts/` that repeats the held-out split, before fixing the defaults.
+- **The derivation's floor and passes.** The floor of `0.001` is provisional, and so is whether the derivation between rounds is enough or the final round should run once more under widths derived from its own solution. Both are to be checked on solves noisier than the hand-curated ground truths, which understate an ordinary solve's noise and spread: Kerry Park (whose two fisheyes are the first case with a rig and a wide field) and the raw output of `sfm solve` on `dino_dog_toy` and `seoul_bull_sculpture` among them, with a script under `scripts/` that repeats the held-out split and compares the derived widths with the held-out error at fixed widths around them.
 - **Conditioning of the shared principal point.** Whether the report should carry the solved principal point's standard deviation, read from the final linearization's reduced system with the gauge's null space projected out, so that a narrow-field solve can say its principal point is not determined rather than only how far it moved.
 - **The CLI.** Whether `sfm xform --bundle-adjust` gains keys for the principal point and the per-image releases.
 - **Two-focal models.** The focal-scale column `(u − cx_i, v − cy_i)/(1 + s_i)` is exact on a two-focal model as well, since one scale moves both focals. Whether PR 4 widens the per-image focal release past `focal_is_releasable` is open.
