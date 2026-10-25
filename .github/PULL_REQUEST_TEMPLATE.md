@@ -22,10 +22,12 @@ Thanks for contributing to sfmtool! A few notes before you fill this out:
 ## Screenshots
 
 <!--
-Include screenshots when the change is something you can see: in the SfM
-Explorer viewer, in an image a CLI command writes, or on a docs page. For a
-visual fix, a before/after pair is the most useful. Write "n/a" or delete this
-section when there is nothing to see.
+Screenshots are required when the change is something you can see: in the
+SfM Explorer viewer, in an image a CLI command writes, or on a docs page. Small
+changes count, such as a new menu entry, a changed label or tooltip. When the
+change alters something that already existed, show a before/after pair. Write
+"n/a" only when there is nothing to see, and say what you checked, for example
+"n/a: Rust core only, no viewer, CLI image or docs change".
 
 Check that a screenshot shows no sensitive data. Prefer screenshots of the
 checked-in test data under `test-data/images/`, such as

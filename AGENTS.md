@@ -142,6 +142,17 @@ and no warning that a template existed. Keep the checklist items and the
 License block verbatim, ticking what applies and marking the rest `n/a` with
 the reason, rather than deleting the lines.
 
+**A visible change needs screenshots in the PR.** That is any change to what
+the viewer draws (a menu entry, a label, a tooltip, a panel, a layout, a
+colour, the 3D view's rendering), to an image a CLI command writes, or to a
+docs page, with a before/after pair when something that already existed
+changed. No visible change is too small to need them: a new menu entry or a
+renamed label counts. Write `n/a` only for a change with nothing visible, and
+say what was checked ("n/a: Rust core only, no viewer, CLI image or docs
+change"). `skills/implement-change/SKILL.md` § "Screenshots" says how to take
+them on copies of `test-data`, crop out local paths and usernames, and host
+them on the fork.
+
 ### Writing style
 
 Specs, doc comments, commit messages and PR descriptions are written in plain

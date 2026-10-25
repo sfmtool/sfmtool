@@ -127,7 +127,8 @@ reason to the user.
 Launch a fresh agent with the [auditor brief](#auditor-brief) below, the
 branch name, the base, the change and the same task-specific instructions.
 Tell it what the implementer said it changed and what it deliberately left
-out, and name the claims most worth checking (a new code path, a moved
+out, whether it said the change is visible and what it said to screenshot,
+and name the claims most worth checking (a new code path, a moved
 section, numbers, anything the implementer says it inferred). For a decline,
 tell it the implementer's decision and stated reason, so it can check that the
 change really is wrong, or really needs a maintainer. Give it no other part of
@@ -167,12 +168,76 @@ Report to the user, or return to the calling skill:
 - the outcome (done or declined, and why), with the audit outcome (clean,
   number of simple audit fixes, a second audit round);
 - the behaviour changes, separately from the spec and doc edits;
+- whether the change is visible, as the implementer and auditor agreed, and
+  the screenshot links once they are taken;
 - the checks run and their results;
 - anything the agents noticed outside the change.
 
 Do not open a pull request unless the user asks. When asked, write the body
 from `.github/PULL_REQUEST_TEMPLATE.md` as `AGENTS.md` § "Opening a pull
-request" describes.
+request" describes. For a visible change, the screenshots come first: launch
+one more agent with the [screenshot brief](#screenshot-brief), after the
+audit and on its own like the others, and open the pull request only once it
+has returned the image links. A visible change is anything the viewer draws,
+an image a CLI command writes, or a docs page, however small: a new menu entry
+or a renamed label counts. The Screenshots section says `n/a` only when the
+implementer and auditor agree nothing is visible, and then says what was
+checked.
+
+## Screenshots
+
+How the screenshot agent, or anyone opening a PR for a visible change, takes
+and hosts the pictures:
+
+1. **Data.** Copy the dataset directory you need from `test-data/images/`
+   (the images, the `.sfmr` and its `.sfm-workspace.json`) into the
+   scratchpad, and work on that copy. `viewer.py launch --copy` puts its copy
+   beside the source, so pointing it at `test-data` directly writes into
+   `test-data`.
+2. **After.** `pixi run cargo build --release -p sfm-explorer`, then
+   `pixi run python skills/gui-bug-bash/viewer.py launch --session
+   <scratchpad>/shots-after --copy <copy>.sfmr`. It picks a random free port
+   and prints it. Drive the viewer with
+   `pixi run python skills/gui-bug-bash/mcp.py --port P TOOL '{json}'`
+   (`skills/gui-bug-bash/SKILL.md` lists the tools) to the state to show, and
+   take each picture with `screenshot` and `--out-dir`/`--name`.
+3. **Before**, when something that already existed changed. Make a worktree
+   of `<base>/main` in the scratchpad (`git worktree add <scratchpad>/before
+   <base>/main`) and build it with `pixi run cargo build --release -p
+   sfm-explorer --manifest-path <scratchpad>/before/Cargo.toml`, which builds
+   into the worktree's own `target/` and leaves the checkout's build alone.
+   Launch the worktree's copy of the launcher
+   (`pixi run python <scratchpad>/before/skills/gui-bug-bash/viewer.py
+   launch …`), which runs the binary built beside it, and shoot the same state
+   as the after picture. Stop that viewer and `git worktree remove` the
+   worktree afterwards.
+4. **Privacy.** Crop each picture to what changed: a panel (`panel_name`), and
+   with `crop_px` the menu, row or widget inside it; for a menu that reaches
+   outside its panel, crop the window instead. Look at every PNG before using
+   it: no local path, username or personal data may show. The Background Tasks
+   and Action Log panels show full paths in their "Open" rows, so crop those
+   rows out or clear the panel first.
+
+   For an image a CLI command writes, run the command on the scratchpad copy
+   and use its output; for a docs page, screenshot the page from
+   `pixi run docs-serve`. The same privacy check and hosting apply.
+5. **Hosting.** Put the PNGs in one orphan commit "Screenshots for <branch>"
+   on a `pr-<branch>-screenshots` branch of the fork, built without touching
+   the checkout:
+
+   ```bash
+   tree=$(for f in <dir>/*.png; do
+     printf '100644 blob %s\t%s\n' "$(git hash-object -w "$f")" "$(basename "$f")"
+   done | git mktree)
+   sha=$(git commit-tree "$tree" -m "Screenshots for <branch>" \
+     -m "Signed-off-by: $(git config user.name) <$(git config user.email)>")
+   git push <fork> "$sha:refs/heads/pr-<branch>-screenshots"
+   ```
+
+   Link each one as
+   `https://raw.githubusercontent.com/<fork owner>/sfmtool/<sha>/<file>.png`.
+   The Screenshots sections of PRs #1038 and #1041 are examples.
+6. Stop every viewer started (`viewer.py stop --session <dir>`).
 
 ## Practical notes
 
@@ -234,7 +299,12 @@ request" describes.
 > `target/debug/incremental`. Leave no background processes running.
 >
 > **Final answer:** DECISION (DONE or DECLINE, and for a decline which kind),
-> a short rationale, files changed, commits
+> a short rationale, VISIBLE (yes or no: does the change alter anything the
+> viewer draws, such as a menu entry, label, tooltip, panel, layout, colour or
+> 3D-view rendering, an image a CLI command writes, or a docs page; no change
+> is too small to count; for yes, what to screenshot, in what state, and
+> whether a before picture is needed; for no, what you checked), files
+> changed, commits
 > (`git log --oneline <base>/main..HEAD`), checks run and their results, and
 > anything you noticed outside the change.
 
@@ -261,7 +331,10 @@ request" describes.
 >    fact that is still true was lost. Check that the change does what was
 >    asked, stays in scope, has tests for changed behaviour, keeps the specs
 >    in step with the code, and follows the writing style (plain, literal,
->    present tense).
+>    present tense). Check the implementer's VISIBLE claim against the diff:
+>    a change to anything the viewer draws, an image a CLI command writes, or
+>    a docs page is visible however small, such as a new menu entry or a
+>    renamed label.
 > 4. Run the checks that apply (the spec-link test; ruff and tests for Python;
 >    `pixi run cargo` fmt, test, clippy and `pixi run doc` for Rust). Never
 >    push.
@@ -277,5 +350,25 @@ request" describes.
 >
 > Leave no background processes running. **Final answer:** VERDICT = CLEAN (no
 > issues, or only SIMPLE ones that you fixed) or NEEDS-FIX (one or more
-> SUBSTANTIVE issues, listed). Then the issues, what you fixed, and the check
-> results. Be concise.
+> SUBSTANTIVE issues, listed). Then VISIBLE (yes or no, and what to
+> screenshot, correcting the implementer's answer if it was wrong), the
+> issues, what you fixed, and the check results. Be concise.
+
+## Screenshot brief
+
+> You are taking the screenshots for a visible change committed on the branch
+> checked out, for its pull request. You are the only agent running, so
+> building is allowed. Do not invoke the `implement-change` skill. Read
+> `AGENTS.md` § "Opening a pull request" and `skills/implement-change/SKILL.md`
+> § "Screenshots", and follow the latter.
+>
+> **The change:** <the change>
+>
+> **What to show:** <the VISIBLE answers of the implementer and auditor>
+>
+> The base is `<base>/main` and the fork remote is `<fork>`. Change nothing
+> on the branch and leave the checkout as you found it.
+>
+> **Final answer:** for each picture, its link and a one-sentence caption
+> saying what it shows and in what state, the dataset copied, and the
+> `pr-<branch>-screenshots` commit. Leave no viewer or worktree behind.
