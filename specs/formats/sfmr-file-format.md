@@ -2004,6 +2004,25 @@ stays a valid 2D observation. For a **point at infinity** (`w = 0`) the
 patch is a region of the direction sphere rather than a plane (see the patch-frame
 section), and the anchor is defined analogously on that frame.
 
+**Files anchored on the patch plane.** Some files in circulation were written by
+producers that took the anchor where the keypoint's ray meets the patch plane
+`Π_p` (`λ = ((X_p − o) · n) / (d · n)`) rather than the plane facing the camera.
+Their keypoints mean the same thing, the pixel where the photograph sees the
+point, and their patch frames and bitmaps are stored the same way; only the
+square a reader derives at an observation (its anchor, the affine shape below,
+and any render through it, such as the reference observation's render the
+bitmap was taken from) can differ. The two anchors lie on the same ray and
+coincide where the keypoint is the point's projection; for the stored
+observations of three reference reconstructions (keypoints a median 0.2 to
+0.75 px and a 95th percentile 0.6 to 2.9 px from the projections) the two
+squares' corners are a median 0.004 to 0.006 px apart, under 0.08 px at the
+95th percentile and 0.32 px at the 99th, and up to 1.8 px for an oblique
+observation with a larger gap. A reader therefore reads every file by the
+anchor defined above, whichever producer wrote it, and needs no way to tell
+them apart: no field and no stored value changes meaning, so the version is
+unchanged. A consumer that needs the old anchor exactly can compute it from
+the same stored values.
+
 ##### Deriving keypoint shape, scale, and orientation
 
 The keypoint is stored as a bare 2D coordinate, but its local **affine shape**
