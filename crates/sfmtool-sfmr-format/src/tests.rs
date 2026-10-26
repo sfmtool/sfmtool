@@ -3495,8 +3495,7 @@ fn data_with_every_optional_column() -> SfmrData {
         }));
     data.reference_observations = Some(Array1::from_vec(vec![0, 1, 0, -1, 0]));
     with_point_constraints(&mut data);
-    // The per-image adjustment columns, at zero so that a guarded write
-    // stores them.
+    // The per-image adjustment columns, at zero.
     data.cameras[0].per_image_adjustments = vec!["focal".into(), "principal_point".into()];
     data.focal_adjustments = Some(Array1::zeros(3));
     data.principal_point_adjustments_xy = Some(Array2::zeros((3, 2)));

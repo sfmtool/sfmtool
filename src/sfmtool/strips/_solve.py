@@ -58,11 +58,9 @@ class _SolveStrips:
         self.patch = patch
         self.names = list(recon.image_names)
         self.positions = np.asarray(recon.positions, np.float64)
-        cameras = list(recon.cameras)
-        cam_idx = np.asarray(recon.camera_indexes)
         quats = np.asarray(recon.quaternions_wxyz, np.float64)
         trans = np.asarray(recon.translations, np.float64)
-        self.cam_of = [cameras[int(cam_idx[i])] for i in range(len(self.names))]
+        self.cam_of = [recon.image_intrinsics(i) for i in range(len(self.names))]
         self.pose_of = [
             RigidTransform.from_wxyz_translation(quats[i].tolist(), trans[i].tolist())
             for i in range(len(self.names))

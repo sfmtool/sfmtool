@@ -126,10 +126,19 @@ what it read before adjustments existed. The camera column and `cameras`
 indexed by it remain for what means the shared camera: which camera an image
 belongs to, the lens a bundle adjustment releases, and the lens a model switch
 refits. SfM Explorer reads each image's intrinsics wherever it draws or
-measures one image ([../../gui/camera-views.md](../../gui/camera-views.md)). The
-Python package reads the shared camera in places, which
-[per-image-intrinsics.md](../../drafts/per-image-intrinsics.md#pr-3-every-consumer-reads-the-images-intrinsics)
-amends, and the file boundary refuses a non-zero adjustment.
+measures one image ([../../gui/camera-views.md](../../gui/camera-views.md)), and
+so does the Python package, through the binding's `image_intrinsics(i)`. A
+`.sfmr` file stores the adjustments, and `load` and `save` read and write them
+as held.
+
+The binding exposes the stored values as `focal_adjustments`,
+`principal_point_adjustments_xy` and `per_image_adjustments`, in the form
+`read_sfmr` gives them (a column is `None` when no camera varies its parameter
+and every value is zero), and `clone_with_changes` takes the same three keys.
+A Python routine that rebuilds the image set from parts, such as a merge,
+passes them, since an image otherwise keeps the adjustment at its index.
+`CameraIntrinsics.with_adjustment(focal, principal_point)` applies one to a
+camera.
 
 `per_image_adjustments` is addressed by camera index, like `cameras`, and an
 edit that adds or removes cameras keeps the two in step. An image's intrinsic

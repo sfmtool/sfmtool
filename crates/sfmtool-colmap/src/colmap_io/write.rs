@@ -24,6 +24,13 @@ const INVALID_POINT3D_ID: u64 = u64::MAX;
 /// camera, one frame per image) are synthesized so COLMAP consumers always
 /// see a complete set of files. See `specs/formats/sfmr-file-format.md`,
 /// "Implicit Rig and Frame Values".
+///
+/// Each entry of `data.cameras` is written as one COLMAP camera, and each image
+/// names its entry through `data.camera_indexes`. COLMAP has no per-image
+/// intrinsics and neither does [`ColmapWriteData`], so a caller whose images
+/// carry intrinsic adjustments passes one camera per image of each camera with
+/// a non-zero adjustment, each that image's intrinsics, as the Python
+/// `save_colmap_binary` does.
 pub fn write_colmap_binary(dir: &Path, data: &ColmapWriteData) -> Result<(), ColmapIoError> {
     validate_write_data(data)?;
     std::fs::create_dir_all(dir)?;

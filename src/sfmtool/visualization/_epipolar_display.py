@@ -237,13 +237,11 @@ def _read_and_undistort(
     h1, w1 = bitmap1.to_array().shape[:2]
     h2, w2 = bitmap2.to_array().shape[:2]
 
-    cameras = recon.cameras
-    camera_indexes = recon.camera_indexes
     cam1 = colmap_camera_from_intrinsics(
-        cameras[camera_indexes[image1_idx]], width=w1, height=h1
+        recon.image_intrinsics(image1_idx), width=w1, height=h1
     )
     cam2 = colmap_camera_from_intrinsics(
-        cameras[camera_indexes[image2_idx]], width=w2, height=h2
+        recon.image_intrinsics(image2_idx), width=w2, height=h2
     )
 
     options = pycolmap.UndistortCameraOptions()
@@ -686,8 +684,8 @@ def draw_epipolar_visualization(
     if image1_idx == image2_idx:
         raise ValueError("Cannot visualize epipolar geometry with the same image")
 
-    cam1_intrinsics = recon.cameras[recon.camera_indexes[image1_idx]]
-    cam2_intrinsics = recon.cameras[recon.camera_indexes[image2_idx]]
+    cam1_intrinsics = recon.image_intrinsics(image1_idx)
+    cam2_intrinsics = recon.image_intrinsics(image2_idx)
 
     if rectify and (
         "FISHEYE" in cam1_intrinsics.model or "FISHEYE" in cam2_intrinsics.model

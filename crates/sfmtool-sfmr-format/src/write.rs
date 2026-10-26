@@ -226,30 +226,8 @@ pub fn write_sfmr(path: &Path, data: &mut SfmrData) -> Result<(), SfmrError> {
 /// Sorts tracks by `(point_indexes, image_indexes)` if not already sorted.
 /// See [`WriteOptions`] for available options. By default, depth statistics
 /// are recomputed from the reconstruction data to ensure trustworthiness.
-///
-/// A value that holds a non-zero per-image intrinsic adjustment is refused
-/// with [`SfmrError::Unsupported`], naming the first such image, and nothing
-/// is written: this build does not yet read per-image intrinsic adjustments
-/// everywhere an image's camera is read, so it does not write a file that
-/// [`crate::read_sfmr`] would refuse. All-zero columns and the cameras'
-/// `per_image_adjustments` keys are written.
+/// The per-image intrinsic adjustments are written as given.
 pub fn write_sfmr_with_options(
-    path: &Path,
-    data: &mut SfmrData,
-    options: &WriteOptions,
-) -> Result<(), SfmrError> {
-    refuse_per_image_adjustments(
-        &data.image_names,
-        data.focal_adjustments.as_ref(),
-        data.principal_point_adjustments_xy.as_ref(),
-    )?;
-    write_sfmr_file(path, data, options)
-}
-
-/// [`write_sfmr_with_options`] without its refusal of non-zero per-image
-/// intrinsic adjustments: every rule of the format checked, and the
-/// adjustments written as given.
-pub(crate) fn write_sfmr_file(
     path: &Path,
     data: &mut SfmrData,
     options: &WriteOptions,

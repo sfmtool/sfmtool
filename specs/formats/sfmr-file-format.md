@@ -836,15 +836,13 @@ a reader refuses a file that breaks any of these rules:
   at most once, in that order;
 - a file below version 13 has neither the columns nor the key.
 
-**This build refuses a non-zero adjustment.** Not every consumer of an image's
-camera in this build applies the adjustment yet, and one that does not would
-read an adjusted image wrongly. So `read_sfmr` refuses a file, and
-`write_sfmr_with_options` refuses a value, that holds any non-zero adjustment,
-with an error that names the first such image and says this build does not yet
-read per-image intrinsic adjustments. All-zero columns and the cameras' keys
-are read and written. A value held in memory may hold non-zero adjustments.
-Moving every consumer to the adjusted intrinsics and lifting this refusal is
-PR 3 of [per-image-intrinsics.md](../drafts/per-image-intrinsics.md).
+`read_sfmr` and `write_sfmr_with_options` read and write the adjustments as
+stored, bit for bit. Every consumer that reads one image's camera reads it with
+the image's adjustment applied, through `image_intrinsics(i)`. A format with no
+per-image intrinsics receives each image's intrinsics on export: a COLMAP
+export writes a camera with a non-zero adjustment on any of its images as one
+COLMAP camera per image of it
+([to-colmap-bin-command.md](../cli/colmap-interop/to-colmap-bin-command.md)).
 
 ##### `images/focal_adjustments.{N}.float64.zst` (Optional, version 13+)
 
@@ -2214,8 +2212,7 @@ For the structure, a file fails verification when:
   a rule of
   [Per-image intrinsic adjustments](#per-image-intrinsic-adjustments-optional-version-13),
   including a file below version 13 that carries either (a non-zero
-  adjustment is valid: the verifier does not refuse what this build's reader
-  does);
+  adjustment is valid);
 - the `has_*` flags in `points3d/metadata.json` break a presence rule between
   the optional per-point columns and `feature_source`;
 - in a version 2+ file, `positions_xyzw` is not `point_count` rows of 32 bytes,
@@ -2566,8 +2563,7 @@ nor key, so its cameras and images sections are unchanged and only the version
 in `metadata.json` differs. A version 13 file with no column maps back to
 version 12 unchanged apart from the version number; one with columns maps back
 by dropping them and the keys, which reads every image through its camera
-exactly. This build refuses a non-zero adjustment on read and on write (see
-[Per-image intrinsic adjustments](#per-image-intrinsic-adjustments-optional-version-13)).
+exactly.
 
 ### Version 11 → Version 12
 

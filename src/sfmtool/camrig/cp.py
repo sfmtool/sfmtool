@@ -289,8 +289,14 @@ def copy_from_sfmr(
     `camera_index` copies one pool camera as a single-sensor rig; `rig_index`
     copies a whole rig. With neither set the selector defaults to the lone rig,
     or the lone camera of a rig-less reconstruction. Returns a summary dict.
+
+    A `.camrig` holds no per-image data, so a camera is copied as the shared
+    camera, without its images' intrinsic adjustments. The summary's
+    `adjusted_cameras` lists the copied cameras whose images have a non-zero
+    adjustment, for the caller to say so.
     """
     from .._sfmtool.reconstruction import SfmrReconstruction
+    from ..camera.cameras import _adjusted_cameras
 
     source = Path(source)
     output = Path(output)
@@ -298,14 +304,41 @@ def copy_from_sfmr(
         recon = SfmrReconstruction.load(source)
     except Exception as e:
         raise CamrigCpError(f"could not load {source}: {e}") from None
+    summary = _copy_from_sfmr(
+        source,
+        output,
+        recon,
+        rig_index=rig_index,
+        camera_index=camera_index,
+        pattern=pattern,
+        name=name,
+        zstd_level=zstd_level,
+    )
+    copied = summary.pop("source_cameras")
+    summary["adjusted_cameras"] = [c for c in _adjusted_cameras(recon) if c in copied]
+    return summary
 
+
+def _copy_from_sfmr(
+    source: Path,
+    output: Path,
+    recon,
+    *,
+    rig_index: int | None,
+    camera_index: int | None,
+    pattern: str | None,
+    name: str | None,
+    zstd_level: int,
+) -> dict:
+    """`copy_from_sfmr` on a loaded reconstruction. The summary carries
+    `source_cameras`, the indexes of the source cameras copied."""
     cameras = [c.to_dict() for c in recon.cameras]
     if not cameras:
         raise CamrigCpError(f"{source} contains no cameras — nothing to copy.")
     rfd = recon.rig_frame_data
 
     if camera_index is not None:
-        return _single_camera_camrig(
+        summary = _single_camera_camrig(
             output,
             cameras=cameras,
             camera_index=camera_index,
@@ -316,6 +349,7 @@ def copy_from_sfmr(
             zstd_level=zstd_level,
             source_label=str(source),
         )
+        return {**summary, "source_cameras": [camera_index]}
 
     if rfd is None:
         if rig_index not in (None, 0):
@@ -328,7 +362,7 @@ def copy_from_sfmr(
                 "Use --camera to copy a single camera."
             )
         if len(cameras) == 1:
-            return _single_camera_camrig(
+            summary = _single_camera_camrig(
                 output,
                 cameras=cameras,
                 camera_index=0,
@@ -339,6 +373,7 @@ def copy_from_sfmr(
                 zstd_level=zstd_level,
                 source_label=str(source),
             )
+            return {**summary, "source_cameras": [0]}
         raise CamrigCpError(
             f"{source} has no rig data and {len(cameras)} cameras; pass "
             f"--camera N (0..{len(cameras) - 1}) to choose one."
@@ -358,9 +393,16 @@ def copy_from_sfmr(
             f"--rig {rig_index} is out of range; {source} has {len(rigs)} "
             f"rig(s) (0..{len(rigs) - 1})."
         )
-    return _rig_camrig_from_sfmr(
+    rig = rfd["rigs_metadata"]["rigs"][rig_index]
+    offset = int(rig["sensor_offset"])
+    sensor_camera = np.asarray(rfd["sensor_camera_indexes"])
+    copied = sorted(
+        {int(c) for c in sensor_camera[offset : offset + int(rig["sensor_count"])]}
+    )
+    summary = _rig_camrig_from_sfmr(
         output, recon, cameras, rfd, rig_index, name, zstd_level
     )
+    return {**summary, "source_cameras": copied}
 
 
 def copy_from_camrig(

@@ -351,9 +351,6 @@ pub(crate) const ADJUSTMENT: sfmtool_core::IntrinsicAdjustment =
 
 /// `recon` with `adjustment` on image `image`, and the image's camera listing
 /// both parameters as varying per image.
-///
-/// A value in memory only: reading or writing an `.sfmr` file still
-/// refuses a non-zero adjustment.
 pub(crate) fn with_adjustment(
     mut recon: sfmtool_core::SfmrReconstruction,
     image: usize,

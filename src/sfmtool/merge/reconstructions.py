@@ -39,6 +39,7 @@ def merge_reconstructions(
     image_name_to_camera = {}
     for img_idx, img_name in enumerate(reconstructions[0].image_names):
         img_key = Path(img_name).as_posix()
+        # The shared camera: this step counts the cameras, not the lenses.
         cam_idx = reconstructions[0].camera_indexes[img_idx]
         camera = reconstructions[0].cameras[cam_idx]
         image_name_to_camera[img_key] = camera
@@ -49,7 +50,7 @@ def merge_reconstructions(
     # [2/7] Merge cameras
     click.echo("\n[2/7] Merging cameras...")
     step_start = time.perf_counter()
-    merged_cameras, camera_mapping = _merge_cameras(
+    merged_cameras, merged_flags, camera_mapping = _merge_cameras(
         reconstructions, image_name_to_camera
     )
     click.echo(f"  Merged cameras: {len(merged_cameras)}")
@@ -122,6 +123,7 @@ def merge_reconstructions(
     step_start = time.perf_counter()
     result = _create_merged_reconstruction(
         cameras=merged_cameras,
+        per_image_adjustments=merged_flags,
         images=merged_images,
         points=merged_points,
         tracks=merged_tracks,
@@ -143,8 +145,16 @@ def merge_reconstructions(
 def _merge_cameras(
     reconstructions: list[SfmrReconstruction],
     image_name_to_camera: dict,
-) -> tuple[list, list[dict[int, int]]]:
-    """Merge cameras from all reconstructions using union-find."""
+) -> tuple[list, list[list[str]], list[dict[int, int]]]:
+    """Merge cameras from all reconstructions using union-find.
+
+    Two cameras that took the same image become one. They must vary the same
+    parameters per image (their `per_image_adjustments`), since the merged
+    camera's images keep their intrinsic adjustments; cameras that differ there
+    raise ``ValueError``, naming both. Returns the merged cameras, the merged
+    cameras' `per_image_adjustments`, and each reconstruction's camera mapping.
+    """
+    flags = [recon.per_image_adjustments for recon in reconstructions]
     union_find_data = {}
 
     def find(cam):
@@ -177,12 +187,23 @@ def _merge_cameras(
     # Union cameras that share images
     for img_name, camera_ids in image_to_cameras.items():
         if len(camera_ids) > 1:
+            first_recon, first_cam = camera_ids[0]
             for i in range(1, len(camera_ids)):
+                recon_idx, cam_idx = camera_ids[i]
+                if flags[recon_idx][cam_idx] != flags[first_recon][first_cam]:
+                    raise ValueError(
+                        _flags_differ_message(
+                            img_name,
+                            (first_recon, first_cam, flags[first_recon][first_cam]),
+                            (recon_idx, cam_idx, flags[recon_idx][cam_idx]),
+                        )
+                    )
                 union(camera_ids[0], camera_ids[i])
 
     # Build merged camera list
     root_to_merged_idx = {}
     merged_cameras = []
+    merged_flags = []
 
     for recon_idx, recon in enumerate(reconstructions):
         for cam_idx in range(len(recon.cameras)):
@@ -194,6 +215,7 @@ def _merge_cameras(
                 camera = reconstructions[root_recon_idx].cameras[root_cam_idx]
                 root_to_merged_idx[root] = len(merged_cameras)
                 merged_cameras.append(camera)
+                merged_flags.append(list(flags[root_recon_idx][root_cam_idx]))
 
     # Build camera mapping for each reconstruction
     camera_mapping = []
@@ -205,7 +227,23 @@ def _merge_cameras(
             mapping[cam_idx] = root_to_merged_idx[root]
         camera_mapping.append(mapping)
 
-    return merged_cameras, camera_mapping
+    return merged_cameras, merged_flags, camera_mapping
+
+
+def _flags_differ_message(img_name: str, first: tuple, other: tuple) -> str:
+    """Why two cameras that took image `img_name` cannot become one: each of
+    `first` and `other` is `(reconstruction, camera, per_image_adjustments)`."""
+
+    def varies(names):
+        return " and ".join(names) if names else "nothing"
+
+    (r1, c1, f1), (r2, c2, f2) = first, other
+    return (
+        f"Image {img_name} was taken through camera {c1} of reconstruction {r1}, "
+        f"which varies {varies(f1)} per image, and camera {c2} of reconstruction "
+        f"{r2}, which varies {varies(f2)} per image. The merge makes two cameras "
+        "one only when they vary the same parameters per image."
+    )
 
 
 def _camera_to_tuple(cam) -> tuple:
@@ -220,10 +258,13 @@ def _merge_images(
 ) -> tuple[dict, dict[str, list[tuple[int, int]]]]:
     """Merge images from all reconstructions.
 
-    For overlapping images (same relative path), uses the first occurrence's pose.
+    For overlapping images (same relative path), uses the first occurrence's
+    pose and intrinsic adjustment.
     """
     merged_names = []
     merged_camera_indexes = []
+    merged_focal_adjustments = []
+    merged_principal_point_adjustments = []
     merged_quaternions = []
     merged_translations = []
     merged_feature_tool_hashes = []
@@ -260,6 +301,8 @@ def _merge_images(
         r_ft_hashes = recon.feature_tool_hashes
         r_sift_hashes = recon.sift_content_hashes
         r_thumbs = recon.thumbnails_y_x_rgb
+        r_focal = recon.focal_adjustments
+        r_principal_point = recon.principal_point_adjustments_xy
         for old_idx, img_name in enumerate(r_names):
             img_key = Path(img_name).as_posix()
 
@@ -277,6 +320,14 @@ def _merge_images(
                 merged_camera_indexes.append(new_cam_idx)
                 merged_quaternions.append(r_quats[old_idx])
                 merged_translations.append(r_trans[old_idx])
+                merged_focal_adjustments.append(
+                    0.0 if r_focal is None else r_focal[old_idx]
+                )
+                merged_principal_point_adjustments.append(
+                    (0.0, 0.0)
+                    if r_principal_point is None
+                    else r_principal_point[old_idx]
+                )
                 merged_feature_tool_hashes.append(r_ft_hashes[old_idx])
                 merged_sift_hashes.append(r_sift_hashes[old_idx])
                 if has_thumbnails:
@@ -301,6 +352,10 @@ def _merge_images(
         "camera_indexes": np.array(merged_camera_indexes, dtype=np.int32),
         "quaternions_wxyz": np.array(merged_quaternions),
         "translations": np.array(merged_translations),
+        "focal_adjustments": np.array(merged_focal_adjustments, dtype=np.float64),
+        "principal_point_adjustments_xy": np.array(
+            merged_principal_point_adjustments, dtype=np.float64
+        ).reshape(-1, 2),
         "feature_tool_hashes": merged_feature_tool_hashes,
         "sift_hashes": merged_sift_hashes,
         "thumbnails_y_x_rgb": (
@@ -322,6 +377,7 @@ def _merge_images(
 
 def _create_merged_reconstruction(
     cameras,
+    per_image_adjustments,
     images,
     points,
     tracks,
@@ -350,6 +406,13 @@ def _create_merged_reconstruction(
         cameras=cameras,
         camera_indexes=np.ascontiguousarray(images["camera_indexes"], dtype=np.uint32),
         image_names=images["names"],
+        per_image_adjustments=per_image_adjustments,
+        focal_adjustments=np.ascontiguousarray(
+            images["focal_adjustments"], dtype=np.float64
+        ),
+        principal_point_adjustments_xy=np.ascontiguousarray(
+            images["principal_point_adjustments_xy"], dtype=np.float64
+        ),
         quaternions_wxyz=np.ascontiguousarray(
             images["quaternions_wxyz"], dtype=np.float64
         ),

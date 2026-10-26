@@ -347,6 +347,66 @@ def _conjugate_rig_sensor_poses(rig_frame_data: dict | None) -> dict | None:
     return out
 
 
+def _colmap_cameras(recon) -> tuple[list, np.ndarray, list[int | None]]:
+    """The cameras a COLMAP export writes, and each image's index into them.
+
+    COLMAP has one set of intrinsics per camera and none per image. A camera
+    with a non-zero intrinsic adjustment on any of its images is written as one
+    camera per image of it, each that image's intrinsics
+    (``recon.image_intrinsics(i)``) in the camera's own model; every other
+    camera is written once, as it is. The cameras keep their order, a split
+    camera's images following in image order.
+
+    Returns ``(cameras, camera_indexes, camera_map)``: the cameras to write,
+    each image's index into them, and for each camera of ``recon`` its index
+    among them, or ``None`` for a camera written once per image.
+    """
+    from ..camera.cameras import _adjusted_cameras
+
+    split = set(_adjusted_cameras(recon))
+    camera_indexes = np.asarray(recon.camera_indexes)
+    cameras = []
+    new_indexes = np.zeros(len(camera_indexes), dtype=np.uint32)
+    camera_map: list[int | None] = []
+    for c, camera in enumerate(recon.cameras):
+        if c not in split:
+            camera_map.append(len(cameras))
+            new_indexes[camera_indexes == c] = len(cameras)
+            cameras.append(camera)
+            continue
+        camera_map.append(None)
+        for i in np.flatnonzero(camera_indexes == c):
+            new_indexes[i] = len(cameras)
+            cameras.append(recon.image_intrinsics(int(i)))
+    return cameras, new_indexes, camera_map
+
+
+def _colmap_rig_frame_data(rig_frame_data: dict | None, camera_map) -> dict | None:
+    """``rig_frame_data`` with each sensor's camera renumbered for the cameras
+    `_colmap_cameras` writes.
+
+    A COLMAP rig sensor holds one camera, so a sensor whose camera is written
+    once per image cannot be described; that is refused with ``ValueError``,
+    naming the camera.
+    """
+    if rig_frame_data is None:
+        return None
+    sensor_cameras = [int(c) for c in rig_frame_data["sensor_camera_indexes"]]
+    for c in sensor_cameras:
+        if camera_map[c] is None:
+            raise ValueError(
+                f"Camera {c} is the camera of a rig sensor and its images have "
+                "per-image intrinsic adjustments. COLMAP has no per-image "
+                "intrinsics, so the export would write it as one camera per "
+                "image, and a COLMAP rig sensor holds one camera."
+            )
+    out = dict(rig_frame_data)
+    out["sensor_camera_indexes"] = np.array(
+        [camera_map[c] for c in sensor_cameras], dtype=np.uint32
+    )
+    return out
+
+
 def _detect_infinity_points(recon):
     """Classify points at infinity on a freshly imported reconstruction.
 
@@ -453,6 +513,10 @@ def pycolmap_to_rust_sfmr(
 
     When ``classify_infinity`` is true (the default), points whose depth the
     solve could not pin down are reclassified as points at infinity.
+
+    Each COLMAP camera becomes one camera, and no image gets an intrinsic
+    adjustment: a COLMAP reconstruction with one camera per image reads as one
+    camera per image.
     """
     from .._sfmtool.reconstruction import SfmrReconstruction
 
@@ -767,6 +831,12 @@ def save_colmap_binary(
     .sfmr spec (one trivial single-sensor rig per camera, one frame per
     image) so rigs.bin and frames.bin are always present.
 
+    COLMAP has no per-image intrinsics, so a camera with a non-zero intrinsic
+    adjustment on any of its images is written as one COLMAP camera per image
+    of it, each with that image's intrinsics; every other camera is written
+    once. A reconstruction whose rig sensor has such a camera is refused with
+    ``ValueError``, since a COLMAP rig sensor holds one camera.
+
     The canonical poses/points are converted back to COLMAP convention on the
     way out (inverse of the import conversion). Pass
     ``apply_world_rotation=False`` for an in-pipeline round trip (D3), applying
@@ -782,6 +852,12 @@ def save_colmap_binary(
     from .._sfmtool.fileio import write_colmap_binary
 
     recon = materialize_infinity_for_export(recon, "COLMAP binary export")
+
+    cameras, camera_indexes, camera_map = _colmap_cameras(recon)
+    # sensor_from_rig poses convert with a plain S-conjugation (involutive).
+    rig_frame_data = _conjugate_rig_sensor_poses(
+        _colmap_rig_frame_data(recon.rig_frame_data, camera_map)
+    )
 
     output_dir = Path(output_dir)
     workspace_dir = recon.workspace_dir
@@ -851,9 +927,9 @@ def save_colmap_binary(
     )
 
     data = {
-        "cameras": recon.cameras,
+        "cameras": cameras,
         "image_names": recon.image_names,
-        "camera_indexes": recon.camera_indexes,
+        "camera_indexes": camera_indexes,
         "quaternions_wxyz": quaternions_wxyz,
         "translations_xyz": translations_xyz,
         "positions_xyz": positions_xyz,
@@ -865,12 +941,10 @@ def save_colmap_binary(
         "keypoints_per_image": keypoints_per_image,
     }
 
-    # sensor_from_rig poses convert with a plain S-conjugation (involutive).
-    rig_frame_data = _conjugate_rig_sensor_poses(recon.rig_frame_data)
     if rig_frame_data is not None:
         data["rig_frame_data"] = rig_frame_data
 
-    num_cameras = len(recon.cameras)
+    num_cameras = len(cameras)
     num_images = len(recon.image_names)
     num_points = len(positions_xyz)
 

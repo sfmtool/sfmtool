@@ -71,8 +71,6 @@ def build_frustum_intersection_pairs(
         )
 
     num_images = recon.image_count
-    cameras_meta = recon.cameras
-    camera_indexes = recon.camera_indexes
     hist_counts = recon.depth_histogram_counts
     images_data = depth_stats["images"]
 
@@ -86,8 +84,7 @@ def build_frustum_intersection_pairs(
     hist_max_z = np.full(num_images, np.nan, dtype=np.float64)
 
     for img_idx in range(num_images):
-        cam_idx = camera_indexes[img_idx]
-        camera = cameras_meta[cam_idx]
+        camera = recon.image_intrinsics(img_idx)
         K = camera.intrinsic_matrix()
         fx_arr[img_idx] = K[0, 0]
         fy_arr[img_idx] = K[1, 1]

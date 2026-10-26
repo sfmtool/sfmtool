@@ -466,6 +466,27 @@ impl PyCameraIntrinsics {
         Ok(PyCameraIntrinsics { inner })
     }
 
+    /// This camera with an intrinsic adjustment applied: the focal (both
+    /// focals on a two-focal model) times ``1 + focal``, and the principal
+    /// point moved by ``principal_point`` times the short side,
+    /// ``min(width, height)``. The model, the size and the distortion are
+    /// kept. An image's intrinsics are its camera's with its adjustment
+    /// applied (``SfmrReconstruction.image_intrinsics``).
+    ///
+    /// Args:
+    ///     focal: The focal scale ``s``.
+    ///     principal_point: The offset ``(a_x, a_y)`` in the short-side unit.
+    #[pyo3(signature = (focal=0.0, principal_point=(0.0, 0.0)))]
+    fn with_adjustment(&self, focal: f64, principal_point: (f64, f64)) -> PyCameraIntrinsics {
+        let adjustment = sfmtool_core::IntrinsicAdjustment {
+            focal,
+            principal_point: [principal_point.0, principal_point.1],
+        };
+        PyCameraIntrinsics {
+            inner: self.inner.with_adjustment(&adjustment),
+        }
+    }
+
     /// Build a pinhole camera whose FoV is the smallest that covers every
     /// pixel in this camera (no cropping, may have black borders).
     ///

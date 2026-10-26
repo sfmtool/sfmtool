@@ -91,9 +91,7 @@ where
 /// principal-point offset of each image in its camera's short side,
 /// `min(width, height)`, and `per_image_adjustments` names, per camera, which
 /// of `"focal"` and `"principal_point"` vary per image. A column is `None`
-/// exactly when no camera names its parameter. A file whose adjustments are
-/// not all zero raises `OSError`: this build does not yet read per-image
-/// intrinsic adjustments.
+/// exactly when no camera names its parameter.
 ///
 /// `positions_xyzw` is the homogeneous `(P, 4)` point array. Every optional
 /// column is emitted as `None` when the file does not carry it: the normals and
@@ -590,9 +588,7 @@ pub(crate) fn parse_sfmr_data_from_dict(
 /// absent — which is what a `sift_files` dict carries for the patch frame,
 /// while an `embedded_patches` dict must carry it, since the format requires
 /// the frame there. A missing `per_image_adjustments` means no camera varies
-/// anything per image. A dict holding a non-zero per-image intrinsic
-/// adjustment raises `OSError` and writes nothing: this build does not yet
-/// read per-image intrinsic adjustments.
+/// anything per image.
 ///
 /// KNOWN LIMITATION: this always writes the current
 /// [`sfmtool_sfmr_format::SFMR_FORMAT_VERSION`] regardless of the `metadata["version"]`

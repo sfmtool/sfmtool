@@ -54,6 +54,14 @@ required positional argument (matching the positional `OUTPUT` convention of
 Populates the database with camera intrinsics, pose priors, keypoints, descriptors, and
 (by default) two-view geometries with fundamental matrices for guided matching.
 
+The cameras follow `sfm to-colmap-bin`'s rule
+([to-colmap-bin-command.md](to-colmap-bin-command.md#cameras)): a camera with a
+non-zero intrinsic adjustment on any of its images is written as one camera per
+image of it, each that image's intrinsics, and every other camera once. A COLMAP
+solve started from the database therefore begins at each image's intrinsics, and
+each fundamental matrix is computed from the two images' own intrinsics. The
+database holds no rigs, so no rig is refused here.
+
 ### From `.matches`
 
 Populates the database with cameras, keypoints, descriptors, and pre-computed matches and

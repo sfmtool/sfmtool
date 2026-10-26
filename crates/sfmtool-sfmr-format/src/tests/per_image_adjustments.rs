@@ -3,15 +3,12 @@
 
 //! The per-image intrinsic adjustments of version 13: the two optional
 //! `images/` columns, the cameras' `per_image_adjustments` key, the rules a
-//! reader, a writer and a verifier hold them to, and the refusal of a non-zero
-//! adjustment at the file boundary.
+//! reader, a writer and a verifier hold them to.
 
 use super::{
     archive_names, images_digest, make_embedded_test_data, make_test_data, read_json_entry_of,
     restamp_hashes, rewrite_entries,
 };
-use crate::read::read_sfmr_file;
-use crate::write::write_sfmr_file;
 use crate::*;
 use ndarray::{Array1, Array2};
 
@@ -44,8 +41,8 @@ fn data_with_adjustments() -> SfmrData {
     data
 }
 
-/// `data_with_adjustments` with every adjustment zero, which the guard lets
-/// through: the flags are kept, the values are not adjustments.
+/// `data_with_adjustments` with every adjustment zero: the flags are kept,
+/// the values are not adjustments.
 fn data_with_zero_adjustments() -> SfmrData {
     let mut data = data_with_adjustments();
     data.focal_adjustments = Some(Array1::zeros(3));
@@ -80,7 +77,7 @@ fn both_columns_and_the_camera_key_round_trip_bit_for_bit() {
         let path = dir.join(name);
         let focal = data.focal_adjustments.clone().unwrap();
         let principal_point = data.principal_point_adjustments_xy.clone().unwrap();
-        write_sfmr_file(&path, &mut data, &WriteOptions::default()).unwrap();
+        write_sfmr_with_options(&path, &mut data, &WriteOptions::default()).unwrap();
         assert_eq!(data.metadata.version, 13);
 
         let names = archive_names(&path);
@@ -90,7 +87,7 @@ fn both_columns_and_the_camera_key_round_trip_bit_for_bit() {
             "{names:?}"
         );
 
-        let loaded = read_sfmr_file(&path).unwrap();
+        let loaded = read_sfmr(&path).unwrap();
         assert_eq!(
             bits1(loaded.focal_adjustments.as_ref().unwrap()),
             bits1(&focal)
@@ -219,14 +216,14 @@ fn a_version_12_file_reads_with_zero_adjustments_and_saves_as_version_13_without
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// Write `data_with_adjustments` without the guard, rewrite it with `edit`,
+/// Write `data_with_adjustments`, rewrite it with `edit`,
 /// and return the reader's error and the verifier's errors.
 fn read_and_verify_edited(
     dir: &std::path::Path,
     edit: impl Fn(&str, &[u8]) -> Option<Vec<u8>>,
 ) -> (String, Vec<String>) {
     let good = dir.join("good.sfmr");
-    write_sfmr_file(
+    write_sfmr_with_options(
         &good,
         &mut data_with_adjustments(),
         &WriteOptions::default(),
@@ -234,7 +231,7 @@ fn read_and_verify_edited(
     .unwrap();
     let bad = dir.join("bad.sfmr");
     rewrite_entries(&good, &bad, edit);
-    let err = match read_sfmr_file(&bad) {
+    let err = match read_sfmr(&bad) {
         Ok(_) => panic!("the reader accepted the edited file"),
         Err(e) => e.to_string(),
     };
@@ -285,7 +282,7 @@ fn a_listing_camera_without_its_column_is_refused() {
     let dir = temp_dir("sfmr_test_per_image_adjustments_missing_column");
     let good = dir.join("good.sfmr");
     let mut data = data_with_adjustments();
-    write_sfmr_file(&good, &mut data, &WriteOptions::default()).unwrap();
+    write_sfmr_with_options(&good, &mut data, &WriteOptions::default()).unwrap();
     // Drop the focal entry from the archive.
     let bad = dir.join("bad.sfmr");
     {
@@ -307,7 +304,7 @@ fn a_listing_camera_without_its_column_is_refused() {
         }
         zip.finish().unwrap();
     }
-    assert!(read_sfmr_file(&bad).is_err());
+    assert!(read_sfmr(&bad).is_err());
     // The verifier cannot hash an entry that is not there, and says so as an
     // error rather than a list of failures.
     assert!(verify_sfmr(&bad).is_err());
@@ -315,7 +312,7 @@ fn a_listing_camera_without_its_column_is_refused() {
     // The writer refuses the same value.
     let mut data = data_with_adjustments();
     data.focal_adjustments = None;
-    let err = write_sfmr_file(&dir.join("w.sfmr"), &mut data, &WriteOptions::default())
+    let err = write_sfmr_with_options(&dir.join("w.sfmr"), &mut data, &WriteOptions::default())
         .unwrap_err()
         .to_string();
     assert!(err.contains("images/focal_adjustments is absent"), "{err}");
@@ -332,7 +329,7 @@ fn a_non_zero_row_under_a_camera_that_does_not_list_it_is_refused() {
 
     let mut data = data_with_adjustments();
     data.principal_point_adjustments_xy.as_mut().unwrap()[[2, 1]] = 0.5;
-    let err = write_sfmr_file(&dir.join("w.sfmr"), &mut data, &WriteOptions::default())
+    let err = write_sfmr_with_options(&dir.join("w.sfmr"), &mut data, &WriteOptions::default())
         .unwrap_err()
         .to_string();
     assert!(
@@ -355,7 +352,7 @@ fn a_non_finite_value_or_a_focal_at_or_below_minus_one_is_refused() {
 
         let mut data = data_with_adjustments();
         data.focal_adjustments = Some(Array1::from_vec(values.to_vec()));
-        let err = write_sfmr_file(&dir.join("w.sfmr"), &mut data, &WriteOptions::default())
+        let err = write_sfmr_with_options(&dir.join("w.sfmr"), &mut data, &WriteOptions::default())
             .unwrap_err()
             .to_string();
         assert!(err.contains(needle), "{tag}: {err}");
@@ -365,7 +362,7 @@ fn a_non_finite_value_or_a_focal_at_or_below_minus_one_is_refused() {
     let mut data = data_with_adjustments();
     data.focal_adjustments = Some(Array1::from_vec(vec![-0.999, 0.0, 0.0]));
     let dir = temp_dir("sfmr_test_per_image_adjustments_above_minus_one");
-    write_sfmr_file(&dir.join("ok.sfmr"), &mut data, &WriteOptions::default()).unwrap();
+    write_sfmr_with_options(&dir.join("ok.sfmr"), &mut data, &WriteOptions::default()).unwrap();
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -405,53 +402,8 @@ fn a_file_below_version_13_with_the_columns_or_the_key_is_refused() {
 }
 
 #[test]
-fn the_guard_refuses_a_non_zero_adjustment_on_read_and_on_write() {
-    let dir = temp_dir("sfmr_test_per_image_adjustments_guard");
-
-    // On write: nothing is written, and the message names the first image.
-    let path = dir.join("refused.sfmr");
-    let mut data = data_with_zero_adjustments();
-    data.principal_point_adjustments_xy.as_mut().unwrap()[[1, 0]] = 0.004;
-    let err = write_sfmr(&path, &mut data).unwrap_err();
-    assert!(matches!(err, SfmrError::Unsupported(_)), "{err}");
-    let message = err.to_string();
-    assert!(
-        message.contains("image 1") && message.contains("frame_002.jpg"),
-        "{message}"
-    );
-    assert!(
-        message.contains("does not yet read per-image intrinsic adjustments"),
-        "{message}"
-    );
-    assert!(!path.exists());
-
-    // The first image wins, whichever column it is in.
-    data.focal_adjustments.as_mut().unwrap()[0] = 0.01;
-    let message = write_sfmr(&path, &mut data).unwrap_err().to_string();
-    assert!(message.contains("image 0"), "{message}");
-
-    // On read: a file another build wrote with a non-zero adjustment.
-    let adjusted = dir.join("adjusted.sfmr");
-    write_sfmr_file(
-        &adjusted,
-        &mut data_with_adjustments(),
-        &WriteOptions::default(),
-    )
-    .unwrap();
-    let Err(err) = read_sfmr(&adjusted) else {
-        panic!("the reader accepted a non-zero adjustment");
-    };
-    assert!(matches!(err, SfmrError::Unsupported(_)), "{err}");
-    let message = err.to_string();
-    assert!(message.contains("image 0"), "{message}");
-    assert!(
-        message.contains("does not yet read per-image intrinsic adjustments"),
-        "{message}"
-    );
-    // It is a valid file all the same.
-    assert!(verify_sfmr(&adjusted).unwrap().0);
-
-    // All-zero columns and the cameras' keys pass both ways.
+fn all_zero_columns_and_the_camera_key_round_trip() {
+    let dir = temp_dir("sfmr_test_per_image_adjustments_zero");
     let zero = dir.join("zero.sfmr");
     write_sfmr(&zero, &mut data_with_zero_adjustments()).unwrap();
     let loaded = read_sfmr(&zero).unwrap();

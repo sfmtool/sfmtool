@@ -180,12 +180,18 @@ def refine_camera_poses(
 ):
     """Refine camera poses using merged 3D points and pycolmap's absolute pose estimation.
 
-    Uses parallel processing to refine poses for all images concurrently.
+    Uses parallel processing to refine poses for all images concurrently. Each
+    image is read through its own intrinsics: its merged camera with its
+    intrinsic adjustment (``merged_images["focal_adjustments"]`` and
+    ``["principal_point_adjustments_xy"]``) applied.
     """
     click.echo("  Refining camera poses using merged 3D points...")
 
-    # Pre-serialize CameraIntrinsics to dicts for pickling across processes
+    # Each image's intrinsics, pre-serialized to dicts for pickling across
+    # processes; every image without an adjustment shares its camera's dict.
     camera_dicts = [cam.to_dict() for cam in merged_cameras]
+    focal_adjustments = merged_images["focal_adjustments"]
+    principal_point_adjustments = merged_images["principal_point_adjustments_xy"]
 
     # Build image_idx -> [(feat_idx, point_id), ...]
     image_observations = {}
@@ -210,7 +216,16 @@ def refine_camera_poses(
     tasks = []
     for img_idx, img_name in enumerate(merged_images["names"]):
         cam_idx = merged_images["camera_indexes"][img_idx]
-        cam_dict = camera_dicts[cam_idx]
+        focal = float(focal_adjustments[img_idx])
+        principal_point = tuple(float(v) for v in principal_point_adjustments[img_idx])
+        if focal == 0.0 and principal_point == (0.0, 0.0):
+            cam_dict = camera_dicts[cam_idx]
+        else:
+            cam_dict = (
+                merged_cameras[cam_idx]
+                .with_adjustment(focal=focal, principal_point=principal_point)
+                .to_dict()
+            )
         observations = image_observations.get(img_idx, [])
 
         tasks.append(
@@ -292,6 +307,8 @@ def refine_camera_poses(
         "camera_indexes": merged_images["camera_indexes"],
         "quaternions_wxyz": np.array(refined_quaternions),
         "translations": np.array(refined_translations),
+        "focal_adjustments": focal_adjustments,
+        "principal_point_adjustments_xy": principal_point_adjustments,
         "feature_tool_hashes": merged_images["feature_tool_hashes"],
         "sift_hashes": merged_images["sift_hashes"],
         "thumbnails_y_x_rgb": merged_images["thumbnails_y_x_rgb"],

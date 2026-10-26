@@ -8,7 +8,9 @@ with a camera of an sfmtool spline model (`SFMTOOL_FISHEYE`, `SFMTOOL_PINHOLE`),
 which pycolmap does not know, goes through sfmtool's own reconstruction-level
 bundle adjustment with the focal and the lens distortion released (the spline,
 and k1 on any SIMPLE_RADIAL_FISHEYE camera beside it), and the principal point
-too where ``release_principal_point`` is set.
+too where ``release_principal_point`` is set. So does one with a non-zero
+per-image intrinsic adjustment: pycolmap has no per-image intrinsics, and
+sfmtool's adjustment holds each image's adjustment and writes it back.
 
 Either path releases every camera's lens by default. ``cameras=`` limits the
 release to the cameras it names and holds the rest.
@@ -34,6 +36,7 @@ from .._sfmtool.reconstruction import (
     SfmrReconstruction,
     distortion_is_releasable,
 )
+from ..camera.cameras import _adjusted_image_mask
 from ._switch_camera_model import format_outermost_keypoint
 
 # The camera models only sfmtool's own bundle adjustment can refine.
@@ -121,16 +124,25 @@ class BundleAdjustTransform:
         self._released(recon)
         if any(c.model in SPLINE_MODELS for c in recon.cameras):
             return self._apply_sfmtool(recon)
+        if _adjusted_image_mask(recon).any():
+            print(
+                "  Running bundle adjustment (sfmtool; an image has a per-image "
+                "intrinsic adjustment, which pycolmap cannot hold)..."
+            )
+            return self._apply_sfmtool(recon, announce=False)
         if not self.cross:
             raise click.UsageError(
                 "--bundle-adjust cross=off applies to sfmtool's adjustment, which "
-                "runs when a camera has a spline model; pycolmap's adjustment "
-                "solves every point finite and reclassifies the points at "
-                "infinity afterwards"
+                "runs when a camera has a spline model or an image has a "
+                "per-image intrinsic adjustment; pycolmap's adjustment solves "
+                "every point finite and reclassifies the points at infinity "
+                "afterwards"
             )
         return self._apply_pycolmap(recon)
 
-    def _apply_sfmtool(self, recon: SfmrReconstruction) -> SfmrReconstruction:
+    def _apply_sfmtool(
+        self, recon: SfmrReconstruction, announce: bool = True
+    ) -> SfmrReconstruction:
         """Adjust through sfmtool's own solve, releasing each camera's focal and,
         where its model has one the solve can free, its lens distortion.
 
@@ -140,10 +152,11 @@ class BundleAdjustTransform:
         principal point moves too where ``release_principal_point`` is set,
         on any model.
         """
-        print(
-            "  Running bundle adjustment (sfmtool; a camera has a spline model, "
-            "which pycolmap cannot refine)..."
-        )
+        if announce:
+            print(
+                "  Running bundle adjustment (sfmtool; a camera has a spline "
+                "model, which pycolmap cannot refine)..."
+            )
         # Each released camera frees its focal, its principal point when asked
         # and, where its model has any the solve can free, its lens distortion;
         # a held camera frees none of them.

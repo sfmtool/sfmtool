@@ -423,6 +423,10 @@ pycolmap knows neither sfmtool spline model, so a reconstruction with any camera
 of `SFMTOOL_FISHEYE` or `SFMTOOL_PINHOLE` (as `--camera-model` produces) is
 adjusted by sfmtool's own reconstruction-level bundle adjustment instead
 ([`../../../core/reconstruction/bundle-adjust.md`](../../../core/reconstruction/bundle-adjust.md)),
+and so is one with a non-zero per-image intrinsic adjustment on any image
+([`../../../formats/sfmr-file-format.md`](../../../formats/sfmr-file-format.md#per-image-intrinsic-adjustments-optional-version-13)),
+since pycolmap has no per-image intrinsics and sfmtool's adjustment holds each
+image's adjustment and writes it back unchanged,
 with every camera's focal released, and the lens distortion released on each
 camera whose model has some the solve can release: the spline, and `k1` on a
 `SIMPLE_RADIAL_FISHEYE` camera beside it. The principal point is held on both

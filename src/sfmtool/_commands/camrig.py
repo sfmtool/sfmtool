@@ -266,6 +266,16 @@ def cp(source, output_file, rig_index, camera_index, sensors_expr, pattern, name
             "  note:     written geometry-only (no image patterns could be "
             "inferred for every sensor)"
         )
+    adjusted = summary.get("adjusted_cameras")
+    if adjusted:
+        which = ("camera " if len(adjusted) == 1 else "cameras ") + ", ".join(
+            str(c) for c in adjusted
+        )
+        click.echo(
+            f"  note:     {which} copied as the shared camera, without the "
+            "per-image intrinsic adjustments of its images: a .camrig holds no "
+            "per-image data"
+        )
 
 
 @camrig.command("spherical-tiles")

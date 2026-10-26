@@ -142,9 +142,13 @@ Single-camera reconstructions hoist intrinsics to the top level (matches
 }
 ```
 
-Multi-camera reconstructions move intrinsics into each frame entry instead
-of the top level. `applied_transform` and `ply_file_path` are always at the
-top level.
+Multi-camera reconstructions, and reconstructions with a non-zero per-image
+intrinsic adjustment on any image, move intrinsics into each frame entry instead
+of the top level, every frame carrying its own `w`, `h`, `fl_x`, `fl_y`, `cx`,
+`cy` and distortion keys. Nerfstudio's dataparser reads each of these either
+from the top level or from every frame, so one adjusted image puts the
+intrinsics in every frame. `applied_transform` and `ply_file_path` are always
+at the top level.
 
 Field notes:
 
@@ -154,8 +158,11 @@ Field notes:
 - `frames` is ordered by image index in the source reconstruction.
 - `colmap_im_id` is 1-based and contiguous, matching what
   `to-colmap-bin`'s `images.bin` would assign.
+- Each frame's intrinsics are its image's, `image_intrinsics(i)`: its
+  camera's with its intrinsic adjustment applied.
 - Single- vs multi-camera is auto-detected via
-  `len(unique(camera_indexes)) == 1`.
+  `len(unique(camera_indexes)) == 1`, and a reconstruction with an adjusted
+  image counts as multi-camera.
 
 ### 3. `sparse_pc.ply`
 
@@ -220,7 +227,10 @@ output is not replicated.
 
 When set, the command writes `sparse/{cameras,images,points3D,rigs,frames}.bin`
 into the output directory using the existing `colmap.io.save_colmap_binary`
-function (the same code path as `sfm to-colmap-bin`). Off by default —
+function (the same code path as `sfm to-colmap-bin`, so a camera with an
+adjusted image is written once per image, and a rig whose sensor camera would
+be split is refused; see
+[to-colmap-bin-command.md](to-colmap-bin-command.md#cameras)). Off by default —
 nerfstudio doesn't read these files for training, and skipping them keeps
 the output smaller.
 

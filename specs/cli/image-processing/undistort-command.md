@@ -118,6 +118,18 @@ Output images keep the source resolution. The cameras in the output
 and `camera_indexes` and `rig_frame_data.sensor_camera_indexes` are remapped
 accordingly.
 
+An image with an intrinsic adjustment
+([sfmr-file-format.md](../../formats/sfmr-file-format.md#per-image-intrinsic-adjustments-optional-version-13))
+is read through its own intrinsics, its camera's with the adjustment applied,
+and written through its camera's pinhole with the same adjustment applied.
+Both principal points move by the same number of pixels, since the pinhole
+keeps the image's size, and both focals scale by the same factor, so the
+pinhole's fit to the image is kept to within how far the distortion varies
+over the offset. The output keeps every image's adjustment, and each pinhole
+camera varies per image what its source camera varied. The pinhole is fitted
+once per camera. The images without an adjustment share their camera's warp
+map; an adjusted image's is built for it alone.
+
 ### Image poses
 
 Image quaternions and translations are unchanged. Undistortion affects only
@@ -137,7 +149,8 @@ refer to rows of those files, so the lookup still finds them after the
 workspace has been re-extracted with another tool or other options.
 
 **Positions.** Each keypoint `(x, y)` in the distorted image is mapped to the
-pinhole frame via `pinhole.project(distorted.unproject(x, y))`. Keypoints that
+pinhole frame via `pinhole.project(distorted.unproject(x, y))`, both cameras the
+image's own (see [Cameras](#cameras)). Keypoints that
 land outside `[0, pinhole.width) × [0, pinhole.height)` are dropped.
 
 **Affine shapes.** Each keypoint's 2×2 affine shape `A` (the matrix that maps

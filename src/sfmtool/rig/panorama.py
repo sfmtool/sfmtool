@@ -207,14 +207,12 @@ def load_sources(
     ``FileNotFoundError`` for the first image that cannot be read.
     """
     image_dir = Path(image_dir)
-    cameras = recon.cameras
-    camera_indexes = recon.camera_indexes
     quats = recon.quaternions_wxyz
     image_names = recon.image_names
 
     sources = []
     for i, name in enumerate(image_names):
-        cam = cameras[camera_indexes[i]]
+        cam = recon.image_intrinsics(i)
         q = RotQuaternion(quats[i, 0], quats[i, 1], quats[i, 2], quats[i, 3])
         path = image_dir / name
         sources.append((cam, q, read_image_rgb(path)))

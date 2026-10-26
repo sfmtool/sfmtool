@@ -179,6 +179,12 @@ type, so it becomes `generic` with empty attributes.
 a sensor subset needs no rebasing. `--camera` produces a lone sensor at the
 identity pose.
 
+A `.camrig` holds no per-image data, so a camera copied out of a `.sfmr` is
+the shared camera, without its images' intrinsic adjustments
+([sfmr-file-format.md](../../formats/sfmr-file-format.md#per-image-intrinsic-adjustments-optional-version-13)).
+When a copied camera has a non-zero adjustment on any of its images, `cp`
+prints a note naming the camera and saying that the adjustments are not copied.
+
 ### Usage Examples
 
 ```bash

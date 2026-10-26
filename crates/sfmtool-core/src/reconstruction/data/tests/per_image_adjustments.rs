@@ -2,8 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! An image's intrinsic adjustment: applied by `image_intrinsics`, carried with
-//! its image through the edits that move images, and through the `.sfmr`
-//! boundary, where a non-zero one is refused.
+//! its image through the edits that move images, and through a `.sfmr` file.
 
 use std::borrow::Cow;
 
@@ -191,20 +190,41 @@ fn a_flag_without_a_value_writes_a_zero_column() {
 }
 
 #[test]
-fn a_save_refuses_a_non_zero_adjustment_and_keeps_a_zero_one() {
+fn a_save_keeps_every_adjustment_and_refuses_one_its_camera_does_not_vary() {
     let dir = std::env::temp_dir().join("sfmr_core_per_image_adjustments_save");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join(".sfm-workspace.json"), "{}").unwrap();
 
+    // A non-zero adjustment comes back on load bit for bit, with its
+    // camera's flags.
     let path = dir.join("adjusted.sfmr");
-    let err = adjusted_demo().save(&path).unwrap_err().to_string();
-    assert!(err.contains("image 0"), "{err}");
-    assert!(
-        err.contains("does not yet read per-image intrinsic adjustments"),
-        "{err}"
+    let adjusted = adjusted_demo();
+    adjusted.save(&path).unwrap();
+    let loaded = SfmrReconstruction::load(&path, &Progress::none()).unwrap();
+    assert_eq!(
+        loaded.image_set.per_image_adjustments,
+        adjusted.image_set.per_image_adjustments
     );
-    assert!(!path.exists());
+    for (a, b) in loaded
+        .image_set
+        .images
+        .iter()
+        .zip(&adjusted.image_set.images)
+    {
+        assert_eq!(
+            a.intrinsic_adjustment.focal.to_bits(),
+            b.intrinsic_adjustment.focal.to_bits()
+        );
+        assert_eq!(
+            a.intrinsic_adjustment.principal_point.map(f64::to_bits),
+            b.intrinsic_adjustment.principal_point.map(f64::to_bits)
+        );
+    }
+    assert_eq!(
+        loaded.content_xxh128().unwrap().content_xxh128,
+        adjusted.content_xxh128().unwrap().content_xxh128
+    );
 
     // An adjustment under a camera that does not vary it is refused as well,
     // rather than dropped by the save.
@@ -212,8 +232,7 @@ fn a_save_refuses_a_non_zero_adjustment_and_keeps_a_zero_one() {
     unflagged.image_set.per_image_adjustments.clear();
     assert!(unflagged.save(&dir.join("unflagged.sfmr")).is_err());
 
-    // The flags with every adjustment zero are a file this build writes, and
-    // they come back on load.
+    // The flags with every adjustment zero come back on load as well.
     let mut flagged = SfmrReconstruction::demo(16);
     flagged.image_set.per_image_adjustments = vec![PerImageAdjustments {
         focal: true,
@@ -231,10 +250,6 @@ fn a_save_refuses_a_non_zero_adjustment_and_keeps_a_zero_one() {
         .images
         .iter()
         .all(|im| im.intrinsic_adjustment.is_zero()));
-
-    // The content hash of an adjusted value is computed in memory, where a
-    // non-zero adjustment is allowed.
-    assert!(adjusted_demo().content_xxh128().is_ok());
 
     let _ = std::fs::remove_dir_all(&dir);
 }

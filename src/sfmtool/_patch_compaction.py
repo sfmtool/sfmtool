@@ -374,6 +374,7 @@ def compact_to_embedded_patches(
     # stores can round a near-edge value up to exactly the width/height, which the
     # writer's `< width` (f32) check then rejects — failing the whole save. Clamp
     # each stored keypoint to the largest in-frame f32 for its image's camera.
+    # The shared camera's size is the image's: an adjustment does not change it.
     cam_idx = np.asarray(recon.camera_indexes)
     cams = recon.cameras
     img_w = np.array([cams[int(c)].width for c in cam_idx], dtype=np.float32)

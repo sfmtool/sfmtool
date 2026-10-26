@@ -89,6 +89,11 @@ def create_colmap_db_from_reconstruction(
     keypoints/descriptors from .sift files, and optionally two-view geometries
     with fundamental matrices computed from relative poses.
 
+    The cameras follow the COLMAP export's rule: a camera with a non-zero
+    intrinsic adjustment on any of its images is written as one camera per
+    image of it, each with that image's intrinsics, so a COLMAP solve started
+    from the database begins at each image's intrinsics.
+
     Args:
         recon: SfmrReconstruction containing camera parameters, poses, and tracks
         output_db_path: Path where the COLMAP database should be created
@@ -104,10 +109,10 @@ def create_colmap_db_from_reconstruction(
     print("Creating COLMAP database from reconstruction...")
 
     from .convention import pose_canonical_to_colmap
+    from .io import _colmap_cameras
 
-    cameras_meta = recon.cameras
+    cameras_meta, camera_indexes, _ = _colmap_cameras(recon)
     image_names = recon.image_names
-    camera_indexes = recon.camera_indexes
 
     # `to-colmap-db` is an external boundary (the generic write_colmap_db writes
     # poses verbatim), so convert canonical poses to COLMAP convention here:

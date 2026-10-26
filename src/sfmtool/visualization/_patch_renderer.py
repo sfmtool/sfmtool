@@ -133,7 +133,7 @@ def _render_image(
     ``quads_world`` and ``normal_rgb`` are precomputed once by the caller (they
     do not depend on the image), so this only does the per-image projection.
     """
-    cam = recon.cameras[int(recon.camera_indexes[img_idx])]
+    cam = recon.image_intrinsics(img_idx)
     rot = np.asarray(
         RotQuaternion.from_wxyz_array(
             recon.quaternions_wxyz[img_idx]

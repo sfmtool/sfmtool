@@ -164,6 +164,31 @@ SFMTOOL_PINHOLE = "SFMTOOL_PINHOLE"
 SFMTOOL_SPLINE_MODELS = (SFMTOOL_FISHEYE, SFMTOOL_PINHOLE)
 
 
+def _adjusted_image_mask(recon) -> np.ndarray:
+    """Whether each image of ``recon`` has a non-zero intrinsic adjustment.
+
+    An ``(N,)`` bool array: ``True`` where the image's intrinsics differ from
+    its camera's (``recon.image_intrinsics(i)``), ``False`` where it is read
+    through its camera exactly.
+    """
+    mask = np.zeros(recon.image_count, dtype=bool)
+    focal = recon.focal_adjustments
+    if focal is not None:
+        mask |= np.asarray(focal) != 0.0
+    principal_point = recon.principal_point_adjustments_xy
+    if principal_point is not None:
+        mask |= np.any(np.asarray(principal_point) != 0.0, axis=1)
+    return mask
+
+
+def _adjusted_cameras(recon) -> list[int]:
+    """The cameras of ``recon`` with a non-zero intrinsic adjustment on any of
+    their images, in index order."""
+    mask = _adjusted_image_mask(recon)
+    camera_indexes = np.asarray(recon.camera_indexes)
+    return sorted({int(c) for c in camera_indexes[mask]})
+
+
 def get_intrinsic_matrix(camera) -> np.ndarray:
     """Extract intrinsic matrix K from a camera object.
 

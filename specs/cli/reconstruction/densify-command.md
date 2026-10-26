@@ -73,6 +73,16 @@ sfm densify <INPUT.sfmr> <OUTPUT.sfmr> [OPTIONS...]
    or isolation criteria.
 6. **Align** — Align the result back to the original coordinate frame.
 
+Step 2 matches each image through its own intrinsics. Steps 3 to 5 run through
+pycolmap, which has no per-image intrinsics: the reconstruction would reach it as
+one camera per image of each camera with an adjusted image
+([to-colmap-bin-command.md](../colmap-interop/to-colmap-bin-command.md#cameras)),
+and its bundle adjustment would refine each such camera, distortion included, from
+one image's observations. So a reconstruction with a non-zero per-image intrinsic
+adjustment
+([sfmr-file-format.md](../../formats/sfmr-file-format.md#per-image-intrinsic-adjustments-optional-version-13))
+is refused before any work, with an error naming a camera that has one.
+
 ## Usage Examples
 
 ```bash

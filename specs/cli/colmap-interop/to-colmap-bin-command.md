@@ -75,6 +75,25 @@ that their parallax is at most one pixel in every camera that observes them, and
 the command prints how many points it moved. A reconstruction without points at
 infinity is written unchanged.
 
+## Cameras
+
+COLMAP has one set of intrinsics per camera and none per image, while a `.sfmr`
+image can carry an intrinsic adjustment of its camera's focal and principal
+point ([sfmr-file-format.md](../../formats/sfmr-file-format.md#per-image-intrinsic-adjustments-optional-version-13)).
+So a camera with a non-zero adjustment on any of its images is written as one
+COLMAP camera per image of it, each that image's intrinsics (its camera's with
+its adjustment applied) in the camera's own model. Every other camera is
+written once, as it is. The cameras keep their order, a split camera's images
+following in image order, and `camera_id` is 1-based over the written list.
+
+A COLMAP rig sensor holds one camera, so a reconstruction with rig data whose
+sensor's camera would be split is refused with an error naming the camera,
+before anything is written. The implicit rigs written for a reconstruction
+without rig data are built from the written cameras, one per camera.
+
+Import does not fold cameras back: `sfm from-colmap-bin` reads each COLMAP
+camera as one camera and gives no image an adjustment.
+
 ## Range Semantics
 
 With `N` images in the input and `K` kept by `--range`:
@@ -92,7 +111,8 @@ With `N` images in the input and `K` kept by `--range`:
 4. **3D points — `--filter-points`.** Drop points with zero remaining
    observations, remap point IDs to be contiguous. Matches
    `xform --include-range` behavior.
-5. **Cameras.** Kept unchanged. Unused cameras are not pruned.
+5. **Cameras.** Kept unchanged, then split per image as in
+   [Cameras](#cameras). Unused cameras are not pruned.
 6. **Rig / frame data.** Frames that contain no kept image are dropped.
    Rigs and sensors are unchanged.
 
@@ -141,6 +161,11 @@ it shares with `sfm to-nerfstudio`. That helper parses `--range` with
 and calls `subset_by_image_indices`. The shim then hands the result to
 `save_colmap_binary` in [`colmap/io.py`](../../../src/sfmtool/colmap/io.py),
 which calls `materialize_infinity_for_export` before converting and writing.
+`save_colmap_binary` builds the written cameras with `_colmap_cameras` and
+renumbers the rig sensors' cameras with `_colmap_rig_frame_data`, which refuses
+a split sensor camera. The Rust writer it calls,
+[`write_colmap_binary`](../../../crates/sfmtool-colmap/src/colmap_io/write.rs),
+writes the cameras it is handed and knows nothing of adjustments.
 
 ## Testing
 
@@ -148,3 +173,7 @@ CLI and end-to-end tests are in
 [`tests/test_colmap_interop.py`](../../../tests/test_colmap_interop.py): the
 non-`.sfmr` input error, a full export, points at infinity, `--range` with and
 without `--filter-points`, and the range error cases.
+[`tests/test_per_image_intrinsics.py`](../../../tests/test_per_image_intrinsics.py)
+checks a camera with an adjusted image written once per image with each image's
+intrinsics beside a camera written whole, and the refusal of a split rig sensor
+camera.

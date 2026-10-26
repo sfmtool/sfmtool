@@ -498,9 +498,15 @@ def print_reconstruction_summary(
     # Camera information
     from ..camera.cameras import _CAMERA_PARAM_NAMES
 
+    # Each camera's shared intrinsics, and which of them its images adjust.
+    per_image_adjustments = recon.per_image_adjustments
     click.echo("\nCameras:")
     for idx, cam in enumerate(recon.cameras):
         click.echo(f"  Camera {idx}: {cam.model} {cam.width}x{cam.height}")
+        if per_image_adjustments[idx]:
+            click.echo(
+                "    Adjusted per image: " + ", ".join(per_image_adjustments[idx])
+            )
         params = cam.parameters
         if params:
             canonical_order = _CAMERA_PARAM_NAMES.get(cam.model)

@@ -167,6 +167,15 @@ struct DeferredChanges {
     /// the outer `Option` is "was the kwarg passed", the inner one "with a
     /// dict, or with `None` to drop the columns".
     observation_readings: Option<Option<sfmtool_core::reconstruction::ObservationReadings>>,
+    /// `focal_adjustments`, applied once the image count is settled: the
+    /// outer `Option` is "was the kwarg passed", the inner one "with an
+    /// array, or with `None` for every scale zero".
+    focal_adjustments: Option<Option<Vec<f64>>>,
+    /// `principal_point_adjustments_xy`, applied with `focal_adjustments`.
+    principal_point_adjustments_xy: Option<Option<Vec<[f64; 2]>>>,
+    /// `per_image_adjustments`, one list of names per camera, checked against
+    /// the camera count once `cameras` has settled it.
+    per_image_adjustments: Option<Vec<sfmtool_core::reconstruction::PerImageAdjustments>>,
 }
 
 /// Apply one per-point keyword argument (positions, colors,
@@ -535,6 +544,52 @@ fn apply_image_field(
                 recon.metadata.world_space_unit = Some(value.extract()?);
             }
         }
+        "focal_adjustments" => {
+            deferred.focal_adjustments = Some(if value.is_none() {
+                None
+            } else {
+                let arr = extract_array1!(value, "focal_adjustments", f64)?;
+                Some(to_contiguous!(arr).into_owned())
+            });
+        }
+        "principal_point_adjustments_xy" => {
+            deferred.principal_point_adjustments_xy = Some(if value.is_none() {
+                None
+            } else {
+                let arr = extract_array2!(value, "principal_point_adjustments_xy", f64)?;
+                if arr.shape()[1] != 2 {
+                    return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                        "clone_with_changes(): 'principal_point_adjustments_xy' must have \
+                         shape (N, 2), got shape ({}, {})",
+                        arr.shape()[0],
+                        arr.shape()[1]
+                    )));
+                }
+                let flat = to_contiguous!(arr);
+                Some(flat.as_chunks::<2>().0.to_vec())
+            });
+        }
+        "per_image_adjustments" => {
+            let lists: Vec<Vec<String>> = if value.is_none() {
+                Vec::new()
+            } else {
+                value.extract()?
+            };
+            let flags = lists
+                .iter()
+                .enumerate()
+                .map(|(c, names)| {
+                    sfmtool_core::reconstruction::PerImageAdjustments::from_names(names).map_err(
+                        |e| {
+                            pyo3::exceptions::PyValueError::new_err(format!(
+                                "clone_with_changes(): 'per_image_adjustments' camera {c}: {e}"
+                            ))
+                        },
+                    )
+                })
+                .collect::<PyResult<Vec<_>>>()?;
+            deferred.per_image_adjustments = Some(flags);
+        }
         _ => return Ok(false),
     }
     Ok(true)
@@ -668,7 +723,8 @@ fn apply_observation_field(
 /// Apply the deferred changes and rebuild the derived fields, in this order:
 ///
 /// 1. `image_names`, then `camera_indexes`: the names can change the image
-///    count, and the camera indexes are checked against the result.
+///    count, and the camera indexes are checked against the result; then the
+///    intrinsic adjustments, checked against the image and camera counts.
 /// 2. The observation source, whose per-image hash columns are checked against
 ///    the settled image count.
 /// 3. The depth histogram, reset when the image count changed.
@@ -712,9 +768,18 @@ fn finalize(
         constraint_reference_images,
         reference_observations,
         observation_readings,
+        focal_adjustments,
+        principal_point_adjustments_xy,
+        per_image_adjustments,
     } = deferred;
 
     apply_image_count_changes(&mut recon, image_names, camera_indexes)?;
+    apply_intrinsic_adjustments(
+        &mut recon,
+        focal_adjustments,
+        principal_point_adjustments_xy,
+        per_image_adjustments,
+    )?;
 
     // Recombine the observation-source columns into the enum once the image
     // count is settled. Any column not supplied falls back to the current value.
@@ -838,6 +903,63 @@ fn apply_image_count_changes(
         for (i, im) in recon.image_set.images.iter_mut().enumerate() {
             im.camera_index = indexes[i];
         }
+    }
+    Ok(())
+}
+
+/// Apply `focal_adjustments`, `principal_point_adjustments_xy` and
+/// `per_image_adjustments` once the image count and the cameras are settled.
+/// A column passed as `None` sets every image's value of it to zero, and an
+/// empty or `None` `per_image_adjustments` lets no camera vary anything. An
+/// image left with a non-zero value its camera does not vary is refused on
+/// save, as the format requires.
+fn apply_intrinsic_adjustments(
+    recon: &mut SfmrReconstruction,
+    focal_adjustments: Option<Option<Vec<f64>>>,
+    principal_point_adjustments_xy: Option<Option<Vec<[f64; 2]>>>,
+    per_image_adjustments: Option<Vec<sfmtool_core::reconstruction::PerImageAdjustments>>,
+) -> PyResult<()> {
+    let image_count = recon.image_set.images.len();
+    let check_rows = |name: &str, rows: usize| {
+        if rows == image_count {
+            Ok(())
+        } else {
+            Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "clone_with_changes(): '{name}' length ({rows}) must match image count \
+                 ({image_count})"
+            )))
+        }
+    };
+    if let Some(values) = focal_adjustments {
+        if let Some(values) = &values {
+            check_rows("focal_adjustments", values.len())?;
+        }
+        for (i, im) in recon.image_set.images.iter_mut().enumerate() {
+            im.intrinsic_adjustment.focal = values.as_ref().map_or(0.0, |v| v[i]);
+        }
+    }
+    if let Some(rows) = principal_point_adjustments_xy {
+        if let Some(rows) = &rows {
+            check_rows("principal_point_adjustments_xy", rows.len())?;
+        }
+        for (i, im) in recon.image_set.images.iter_mut().enumerate() {
+            im.intrinsic_adjustment.principal_point = rows.as_ref().map_or([0.0, 0.0], |r| r[i]);
+        }
+    }
+    if let Some(flags) = per_image_adjustments {
+        let camera_count = recon.image_set.cameras.len();
+        if !flags.is_empty() && flags.len() != camera_count {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "clone_with_changes(): 'per_image_adjustments' has {} entries, one per \
+                 camera is {camera_count}",
+                flags.len()
+            )));
+        }
+        recon.image_set.per_image_adjustments = if flags.iter().any(|f| f.any()) {
+            flags
+        } else {
+            Vec::new()
+        };
     }
     Ok(())
 }

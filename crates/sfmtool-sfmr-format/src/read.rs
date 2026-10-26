@@ -68,25 +68,9 @@ pub fn read_sfmr_content_hash(path: &Path) -> Result<ContentHash, SfmrError> {
 
 /// Read a complete `.sfmr` file into columnar data.
 ///
-/// A file that holds a non-zero per-image intrinsic adjustment is refused
-/// with [`SfmrError::Unsupported`], naming the first such image: this build
-/// does not yet read per-image intrinsic adjustments everywhere an image's
-/// camera is read. All-zero columns and the cameras' `per_image_adjustments`
-/// keys read as stored.
+/// Every rule of the format is checked. The per-image intrinsic adjustments
+/// are read as stored.
 pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
-    let data = read_sfmr_file(path)?;
-    refuse_per_image_adjustments(
-        &data.image_names,
-        data.focal_adjustments.as_ref(),
-        data.principal_point_adjustments_xy.as_ref(),
-    )?;
-    Ok(data)
-}
-
-/// [`read_sfmr`] without its refusal of non-zero per-image intrinsic
-/// adjustments: every rule of the format checked, and the adjustments read
-/// as stored.
-pub(crate) fn read_sfmr_file(path: &Path) -> Result<SfmrData, SfmrError> {
     let file = std::fs::File::open(path).map_err(|e| SfmrError::IoPath {
         operation: "Failed to open file",
         path: path.to_path_buf(),

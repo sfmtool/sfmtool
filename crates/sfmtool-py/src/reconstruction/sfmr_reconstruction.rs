@@ -282,6 +282,56 @@ impl PySfmrReconstruction {
         })
     }
 
+    /// Each image's focal scale `s`, shape `(N,)` float64: its focal is its
+    /// camera's times `1 + s`. `None` when no camera varies the focal per
+    /// image and every image's scale is zero, as `read_sfmr` gives the column.
+    #[getter]
+    fn focal_adjustments<'py>(&self, py: Python<'py>) -> Option<Bound<'py, PyArray1<f64>>> {
+        let image_set = &self.inner.image_set;
+        let listed = image_set.per_image_adjustments.iter().any(|f| f.focal);
+        let values: Vec<f64> = image_set
+            .images
+            .iter()
+            .map(|im| im.intrinsic_adjustment.focal)
+            .collect();
+        (listed || values.iter().any(|&v| v != 0.0)).then(|| PyArray1::from_vec(py, values))
+    }
+
+    /// Each image's principal-point offset, shape `(N, 2)` float64, in the
+    /// short-side unit `min(width, height)` of its camera. `None` when no
+    /// camera varies the principal point per image and every image's offset
+    /// is zero, as `read_sfmr` gives the column.
+    #[getter]
+    fn principal_point_adjustments_xy<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> Option<Bound<'py, PyArray2<f64>>> {
+        let image_set = &self.inner.image_set;
+        let listed = image_set
+            .per_image_adjustments
+            .iter()
+            .any(|f| f.principal_point);
+        let rows: Vec<[f64; 2]> = image_set
+            .images
+            .iter()
+            .map(|im| im.intrinsic_adjustment.principal_point)
+            .collect();
+        (listed || rows.iter().any(|r| *r != [0.0, 0.0])).then(|| {
+            ndarray::Array2::from_shape_fn((rows.len(), 2), |(i, k)| rows[i][k]).into_pyarray(py)
+        })
+    }
+
+    /// Per camera, the parameters its images vary: a list of `"focal"` and
+    /// `"principal_point"`, in that order, empty for a camera that varies
+    /// nothing.
+    #[getter]
+    fn per_image_adjustments(&self) -> Vec<Vec<String>> {
+        let image_set = &self.inner.image_set;
+        (0..image_set.cameras.len())
+            .map(|c| image_set.camera_per_image_adjustments(c).names())
+            .collect()
+    }
+
     /// List of image names (paths relative to the workspace).
     #[getter]
     fn image_names(&self) -> Vec<String> {
@@ -1561,7 +1611,13 @@ impl PySfmrReconstruction {
     /// ``feature_tool_hashes``, ``sift_content_hashes``, ``thumbnails_y_x_rgb``,
     /// ``rig_frame_data``, ``world_space_unit``, ``feature_source``,
     /// ``keypoints_xy`` (a ``(K, 2)`` float32 array or ``None``),
-    /// ``image_file_hashes`` (a ``list[bytes]`` or ``None``). To produce an
+    /// ``image_file_hashes`` (a ``list[bytes]`` or ``None``),
+    /// ``focal_adjustments`` (an ``(N,)`` float64 array, or ``None`` for every
+    /// image's scale zero), ``principal_point_adjustments_xy`` (an ``(N, 2)``
+    /// float64 array or ``None``) and ``per_image_adjustments`` (one list of
+    /// names per camera, as :attr:`per_image_adjustments` gives it). An image
+    /// keeps its intrinsic adjustment by index unless these are passed, so a
+    /// caller that reorders or replaces the images passes them too. To produce an
     /// ``embedded_patches`` reconstruction, set ``feature_source``,
     /// ``keypoints_xy``, and ``image_file_hashes`` together.
     ///

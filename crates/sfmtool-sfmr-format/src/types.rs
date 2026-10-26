@@ -57,11 +57,6 @@ pub enum SfmrError {
 
     #[error("Hash verification failed: {0}")]
     HashMismatch(String),
-
-    /// The file, or the value about to be written, is valid but holds
-    /// something this build does not read yet.
-    #[error("Unsupported: {0}")]
-    Unsupported(String),
 }
 
 impl From<ArchiveIoError> for SfmrError {
@@ -683,50 +678,6 @@ pub fn validate_per_image_adjustments(
         }
     }
     Ok(())
-}
-
-/// The first image whose per-image intrinsic adjustment is not zero, or
-/// `None` when every row of both columns is zero or a column is absent.
-pub(crate) fn first_adjusted_image(
-    focal_adjustments: Option<&Array1<f64>>,
-    principal_point_adjustments_xy: Option<&Array2<f64>>,
-) -> Option<usize> {
-    // `v != 0.0` holds for a NaN too, so a NaN counts as an adjustment.
-    let focal = focal_adjustments.and_then(|values| values.iter().position(|&v| v != 0.0));
-    let principal_point = principal_point_adjustments_xy.and_then(|values| {
-        values
-            .rows()
-            .into_iter()
-            .position(|row| row.iter().any(|&v| v != 0.0))
-    });
-    match (focal, principal_point) {
-        (Some(a), Some(b)) => Some(a.min(b)),
-        (a, b) => a.or(b),
-    }
-}
-
-/// Refuse a value or a file that holds a non-zero per-image intrinsic
-/// adjustment, naming the first such image.
-///
-/// This build stores and reads the adjustment columns, but not every consumer
-/// of an image's camera applies them yet, and one that does not would read an
-/// adjusted image wrongly. So [`crate::read_sfmr`] and
-/// [`crate::write_sfmr_with_options`] stop at this boundary; all-zero columns
-/// and the cameras' `per_image_adjustments` keys pass. A value built in memory
-/// may hold non-zero adjustments.
-pub(crate) fn refuse_per_image_adjustments(
-    image_names: &[String],
-    focal_adjustments: Option<&Array1<f64>>,
-    principal_point_adjustments_xy: Option<&Array2<f64>>,
-) -> Result<(), SfmrError> {
-    match first_adjusted_image(focal_adjustments, principal_point_adjustments_xy) {
-        None => Ok(()),
-        Some(i) => Err(SfmrError::Unsupported(format!(
-            "image {i} ({:?}) has a non-zero per-image intrinsic adjustment, and this build \
-             does not yet read per-image intrinsic adjustments",
-            image_names.get(i).map_or("", String::as_str)
-        ))),
-    }
 }
 
 /// Which of the optional pieces that the presence rules relate a file carries.

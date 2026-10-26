@@ -22,8 +22,15 @@ At least two reconstructions are required.
 
 ## Merge Process
 
-1. **Deduplicate cameras** — Merge camera intrinsics across reconstructions.
-2. **Merge images** — Combine image sets, handling duplicates.
+1. **Deduplicate cameras** — Merge camera intrinsics across reconstructions:
+   two cameras that took the same image become one, which keeps the first
+   input's intrinsics. They become one only when they vary the same parameters
+   per image (their `per_image_adjustments`, see
+   [sfmr-file-format.md](../../formats/sfmr-file-format.md#per-image-intrinsic-adjustments-optional-version-13));
+   otherwise the merge stops with an error naming the image and both cameras.
+   The merged camera varies what they vary.
+2. **Merge images** — Combine image sets, handling duplicates. An image in
+   several inputs takes its pose and its intrinsic adjustment from the first.
 3. **Find correspondences** — Match 3D points across reconstructions via shared feature
    observations using union-find.
 4. **Filter by percentile** — Reject point correspondences with distances above the
@@ -31,7 +38,8 @@ At least two reconstructions are required.
 5. **Merge points and tracks** — Average corresponding point positions, combine observation
    lists.
 6. **Refine poses** — Run parallel PnP+RANSAC to refine camera poses in the merged
-   reconstruction.
+   reconstruction, each image through its own intrinsics: its merged camera with
+   its adjustment applied.
 7. **Combine tracks** — Build the final unified track data. Where an input
    carries [observation readings](../../formats/sfmr-file-format.md#observation-readings-optional-version-12),
    each merged observation takes the row of the input observation with the

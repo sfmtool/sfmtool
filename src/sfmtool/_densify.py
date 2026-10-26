@@ -94,14 +94,14 @@ def _match_single_pair(
     image_names: list[str],
     quaternions: np.ndarray,
     translations: np.ndarray,
-    camera_indexes: np.ndarray,
-    cameras: list[pycolmap.Camera],
+    image_cameras: list[pycolmap.Camera],
     max_features: int | None,
     window_size: int,
     distance_threshold: float | None,
     geometric_config: GeometricFilterConfig | None = None,
 ) -> tuple[tuple[int, int], list[tuple[int, int]]]:
-    """Match a single image pair."""
+    """Match a single image pair, each image through its own camera in
+    ``image_cameras``."""
     image_path_i = workspace_dir / image_names[img_i]
     image_path_j = workspace_dir / image_names[img_j]
 
@@ -123,8 +123,8 @@ def _match_single_pair(
         else:
             affine_j = None
 
-    cam_i = cameras[camera_indexes[img_i]]
-    cam_j = cameras[camera_indexes[img_j]]
+    cam_i = image_cameras[img_i]
+    cam_j = image_cameras[img_j]
 
     # The .sfmr poses are canonical; the epipolar-guided matcher expects
     # COLMAP/OpenCV-frame poses, so S-flip the camera frames (S-only, D3), then
@@ -165,14 +165,14 @@ def match_image_pairs(
     pairs: list[tuple[int, int]],
     quaternions: np.ndarray,
     translations: np.ndarray,
-    camera_indexes: np.ndarray,
-    cameras: list[pycolmap.Camera],
+    image_cameras: list[pycolmap.Camera],
     max_features: int | None = None,
     window_size: int = 30,
     distance_threshold: float | None = None,
     geometric_config: GeometricFilterConfig | None = None,
 ) -> dict[tuple[int, int], list[tuple[int, int]]]:
-    """Run sweep matching on image pairs."""
+    """Run sweep matching on image pairs, with one camera per image in
+    ``image_cameras``."""
     all_matches = {}
 
     for idx, (img_i, img_j) in enumerate(pairs):
@@ -186,8 +186,7 @@ def match_image_pairs(
             image_names,
             quaternions,
             translations,
-            camera_indexes,
-            cameras,
+            image_cameras,
             max_features,
             window_size,
             distance_threshold,
@@ -594,15 +593,30 @@ def densify_reconstruction(
     4. Triangulate new points (preserving existing points)
     5. Merge duplicate points, bundle adjust, filter, bundle adjust again
     6. Align back to original coordinate space
+
+    Steps 4 and 5 run through pycolmap, which has no per-image intrinsics, so a
+    reconstruction with a non-zero per-image intrinsic adjustment is refused
+    with ``ValueError``.
     """
+    from .camera.cameras import _adjusted_cameras
+
+    adjusted = _adjusted_cameras(recon)
+    if adjusted:
+        raise ValueError(
+            f"Camera {adjusted[0]} has per-image intrinsic adjustments. Densify "
+            "triangulates and bundle adjusts through pycolmap, which has no "
+            "per-image intrinsics: it would solve one camera per image, each "
+            "with its own lens distortion."
+        )
     image_names = recon.image_names
-    camera_indexes = recon.camera_indexes
     quaternions = recon.quaternions_wxyz
     translations = recon.translations
-    cameras_meta = recon.cameras
     workspace_dir = Path(recon.workspace_dir)
 
-    cameras = [colmap_camera_from_intrinsics(cam) for cam in cameras_meta]
+    image_cameras = [
+        colmap_camera_from_intrinsics(recon.image_intrinsics(i))
+        for i in range(recon.image_count)
+    ]
 
     # Find covisibility pairs
     click.echo("Finding covisibility pairs...")
@@ -634,8 +648,7 @@ def densify_reconstruction(
         covis_pairs_to_match,
         quaternions,
         translations,
-        camera_indexes,
-        cameras,
+        image_cameras,
         max_features=max_features,
         window_size=sweep_window_size,
         distance_threshold=distance_threshold,
@@ -685,8 +698,7 @@ def densify_reconstruction(
                 frustum_pairs_to_match,
                 quaternions,
                 translations,
-                camera_indexes,
-                cameras,
+                image_cameras,
                 max_features=max_features,
                 window_size=sweep_window_size,
                 distance_threshold=distance_threshold,
