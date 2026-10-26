@@ -586,4 +586,6 @@ pub(super) fn compute_observation_offsets(counts: &[u32]) -> Vec<usize> {
 }
 
 #[cfg(test)]
+pub(crate) mod adjusted_fixture;
+#[cfg(test)]
 mod tests;

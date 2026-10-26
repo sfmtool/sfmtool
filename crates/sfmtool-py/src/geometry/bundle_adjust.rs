@@ -452,6 +452,9 @@ pub fn bundle_adjust<'py>(
                 cameras: &cams,
                 image_camera: image_camera.as_slice().into(),
                 releases: None,
+                // The binding takes no adjustments: every image is read
+                // through its camera exactly.
+                image_adjustments: None,
             },
             &mut quats,
             &mut trans,

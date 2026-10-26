@@ -629,3 +629,38 @@ fn the_default_fit_angle_is_the_fits_and_survives_a_refusal() {
         })
     );
 }
+
+#[test]
+fn every_image_keeps_its_adjustment_through_a_switch() {
+    // The switch refits the shared camera and leaves each image's intrinsic
+    // adjustment as it was, since the adjustment is relative to whatever the
+    // camera is. The errors it reports, and the ones it stores, are read
+    // through each image's intrinsics: before the switch they are the exact
+    // projections the keypoints were made at.
+    use crate::reconstruction::data::adjusted_fixture::{adjust_and_reproject, varied_adjustment};
+    let mut recon = scene(vec![kerry_cam0()], |_| 0);
+    adjust_and_reproject(&mut recon, varied_adjustment);
+    let (out, report) = switch_camera_model(
+        &recon,
+        &[0],
+        &target("SFMTOOL_FISHEYE"),
+        &SwitchCameraModelOptions::default(),
+    )
+    .unwrap();
+    for (a, b) in out.image_set.images.iter().zip(&recon.image_set.images) {
+        assert_eq!(a.intrinsic_adjustment, b.intrinsic_adjustment);
+    }
+    let obs = &report.cameras[0].observations;
+    assert!(obs.before.median_px < 1e-3, "{:?}", obs.before);
+    assert!(obs.after.median_px < 0.5, "{:?}", obs.after);
+    let mut rescored = out.clone();
+    rescored.recompute_point_errors().unwrap();
+    for (a, b) in out.point_set.points.iter().zip(&rescored.point_set.points) {
+        assert!(
+            (a.rms_reprojection_error - b.rms_reprojection_error).abs() < 1e-5,
+            "{} against {}",
+            a.rms_reprojection_error,
+            b.rms_reprojection_error
+        );
+    }
+}

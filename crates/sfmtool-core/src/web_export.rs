@@ -47,7 +47,7 @@ use crate::camera::PhotographCache;
 use crate::patch::display_bitmaps::{render_display_patch_bitmaps, DISPLAY_PYRAMID_LEVELS};
 use crate::progress::{Cancelled, Progress};
 use crate::reconstruction::thumbnail::{display_thumbnail_row, resize_area, ThumbnailSource};
-use crate::{progress_note, SfmrReconstruction, THUMBNAIL_SIZE};
+use crate::{progress_note, CameraIntrinsics, SfmrReconstruction, THUMBNAIL_SIZE};
 
 use atlas::{AtlasLayout, RgbPage};
 
@@ -453,7 +453,8 @@ pub fn build_web_export(
     let mut cameras = Vec::with_capacity(images.len());
     let per_page = thumb_layout.map(|layout| layout.per_page());
     for (i, image) in images.iter().enumerate() {
-        let camera = &recon.image_set.cameras[image.camera_index as usize];
+        let camera = recon.image_intrinsics(i);
+        let camera: &CameraIntrinsics = &camera;
         let c = image.camera_center();
         let rel = [c.x - centre.x, c.y - centre.y, c.z - centre.z];
         let grid = lens_grid(image, camera, &centre, frustum_length);
@@ -771,7 +772,7 @@ fn start_view(
     radius: f64,
 ) -> Value {
     let image = &recon.image_set.images[index];
-    let camera = recon.image_set.camera_for_image(index);
+    let camera = recon.image_intrinsics(index);
     let eye = image.camera_center() - centre;
     let forward = image.quaternion_wxyz.inverse() * Vector3::new(0.0, 0.0, -1.0);
     let along = (-eye).dot(&forward);

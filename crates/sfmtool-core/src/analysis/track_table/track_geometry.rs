@@ -136,7 +136,7 @@ pub fn compute_position_diagnostics(
         if len > 1e-12 {
             dirs.push(dir / len);
             centers.push(center);
-            let (fx, fy) = image_set.cameras[image.camera_index as usize].focal_lengths();
+            let (fx, fy) = image_set.image_intrinsics(img_idx).focal_lengths();
             sigma.push(noise / fx.max(fy));
         }
     }

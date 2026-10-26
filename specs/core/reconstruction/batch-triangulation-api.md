@@ -663,7 +663,9 @@ println!("{sigma_px:.4} px, {} outliers left out", noise.outlier_count);
   camera's robust spread `s = 1.4826 · median |r|` over the per-axis
   components of its residuals sets a gate, and an observation whose residual
   is longer than `OUTLIER_GATE · s` is counted in `outlier_count` and left out.
-  The gate is per camera so that a noisier camera keeps its own tail.
+  The gate is per camera so that a noisier camera keeps its own tail. Each
+  residual is read through its image's intrinsics, the camera with the image's
+  intrinsic adjustment applied, and counted with its camera's.
 - **Why the gate is 30 spreads.** The residuals of real solves are not
   Gaussian, and a gate set for a Gaussian (4 to 6 spreads) cuts into the tail
   `σ` is meant to cover. Measured on the Kerry Park ground truth, the in-repo
@@ -759,7 +761,8 @@ it is 0.2142 px over 3,571 observations with none left out; on the in-repo seoul
 Every consumer of the test that holds a reconstruction (the reports, the
 reclassification and discovery passes, the bench) builds a track's rays the
 same way: each `(image, pixel)` observation through `observed_ray`, at that
-image's camera and pose and the measured noise. Two pieces in
+image's intrinsics (its camera with its intrinsic adjustment applied) and pose
+and the measured noise. Two pieces in
 [analysis/point_or_bearing.rs](../../../crates/sfmtool-core/src/analysis/point_or_bearing.rs)
 carry that. `observation_ray` and `track_rays` build rays from any
 observations, stored or not: discovery's tracks are assembled from `.sift`

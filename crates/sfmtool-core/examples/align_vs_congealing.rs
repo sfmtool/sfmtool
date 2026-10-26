@@ -335,10 +335,9 @@ fn main() {
     }
     let images = &recon.image_set.images;
     let poses: Vec<RigidTransform> = images.iter().map(pose_of).collect();
-    let cams: Vec<&CameraIntrinsics> = images
-        .iter()
-        .map(|i| &recon.image_set.cameras[i.camera_index as usize])
-        .collect();
+    // Each image's intrinsics: its camera's with its adjustment applied.
+    let intrinsics = recon.image_set.all_image_intrinsics();
+    let cams: Vec<&CameraIntrinsics> = intrinsics.iter().map(|c| c.as_ref()).collect();
     let cloud = PatchCloud::from_stored_patch_frames(&recon).expect("patch frames");
     let r = recon
         .point_set

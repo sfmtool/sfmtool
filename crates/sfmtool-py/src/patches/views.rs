@@ -117,7 +117,8 @@ impl PyramidSet {
 /// [`sfmtool_core::patch::normal_refine::ProjectedImage`] assembly are identical
 /// for a reconstruction and a bare set of views.
 pub(crate) struct PosedViews {
-    /// Per-image camera intrinsics (resolved via each view's camera index).
+    /// Per-image intrinsics: each view's camera, with the image's intrinsic
+    /// adjustment applied for a reconstruction.
     pub(crate) cameras: Vec<CameraIntrinsics>,
     /// Per-image `cam_from_world` pose.
     pub(crate) poses: Vec<RigidTransform>,
@@ -129,11 +130,9 @@ impl PosedViews {
     }
 
     pub(crate) fn from_reconstruction(recon: &sfmtool_core::SfmrReconstruction) -> Self {
-        let cameras = recon
-            .image_set
-            .images
-            .iter()
-            .map(|im| recon.image_set.cameras[im.camera_index as usize].clone())
+        // Each image's intrinsics: its camera's with its adjustment applied.
+        let cameras = (0..recon.image_set.images.len())
+            .map(|i| recon.image_intrinsics(i).into_owned())
             .collect();
         let poses = recon
             .image_set

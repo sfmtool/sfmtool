@@ -117,7 +117,7 @@ impl SfmrReconstruction {
             let feature_index = feature_indexes.map(|f| f[start + k]);
             let img_idx = obs.image_index as usize;
             let image = &self.image_set.images[img_idx];
-            let camera = &self.image_set.cameras[image.camera_index as usize];
+            let camera = self.image_intrinsics(img_idx);
             let (fx, fy) = camera.focal_lengths();
             let (u, v) = (pixels[[start + k, 0]] as f64, pixels[[start + k, 1]] as f64);
             let mut inspection = ObservationInspection {

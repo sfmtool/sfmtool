@@ -15,10 +15,12 @@
 //! shows the same number. See `specs/core/analysis/track-table.md`.
 
 use rayon::prelude::*;
+use std::borrow::Cow;
 
 use crate::progress::{Cancelled, Progress};
 use crate::reconstruction::bundle_adjust::is_posed;
 use crate::reconstruction::{EditedReconstruction, PointView};
+use crate::CameraIntrinsics;
 
 mod observation_quality;
 mod query;
@@ -311,6 +313,8 @@ const BLOCK: usize = 8192;
 struct Context<'a> {
     recon: &'a EditedReconstruction,
     centroid: nalgebra::Point3<f64>,
+    /// Every image's intrinsics, built once rather than once per observation.
+    intrinsics: Vec<Cow<'a, CameraIntrinsics>>,
 }
 
 impl TrackTable {
@@ -354,6 +358,7 @@ impl TrackTable {
         let context = Context {
             recon,
             centroid: recon.base.image_set.camera_centroid(),
+            intrinsics: recon.base.image_set.all_image_intrinsics(),
         };
 
         // The computed columns cost a triangulation or a pass over every pair
@@ -563,12 +568,18 @@ fn point_values(
                 (length - images.len()) as f64
             }
             TrackTableColumn::RmsErrorPx => f64::from(point.rms_reprojection_error),
-            TrackTableColumn::MaxErrorPx => observation_quality::max_error_px(image_set, view),
+            TrackTableColumn::MaxErrorPx => {
+                observation_quality::max_error_px(image_set, &context.intrinsics, view)
+            }
             TrackTableColumn::BackFacingObservations => angles
-                .get_or_insert_with(|| observation_quality::viewing_angles(image_set, view))
+                .get_or_insert_with(|| {
+                    observation_quality::viewing_angles(image_set, &context.intrinsics, view)
+                })
                 .map_or(f64::NAN, |(_, count)| count),
             TrackTableColumn::MaxViewingAngleDeg => angles
-                .get_or_insert_with(|| observation_quality::viewing_angles(image_set, view))
+                .get_or_insert_with(|| {
+                    observation_quality::viewing_angles(image_set, &context.intrinsics, view)
+                })
                 .map_or(f64::NAN, |(largest, _)| largest),
             TrackTableColumn::X => finite(point.position.x),
             TrackTableColumn::Y => finite(point.position.y),

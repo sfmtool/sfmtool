@@ -260,7 +260,9 @@ the report carries the held state per camera is an
 
 **The report carries each camera's outermost observation.** Measured under the
 camera the solve returned, as a radius and an incidence angle, because that is
-the camera whose domain the next adjustment would edit. Only the observations:
+the camera whose domain the next adjustment would edit; each keypoint is
+measured through its image's intrinsics, that camera with the image's
+adjustment applied. Only the observations:
 the adjustment reads nothing off disk, so the features detected in the images'
 `.sift` files are for a caller to read with `outermost_keypoints`.
 
@@ -411,9 +413,18 @@ on it.
   focal, with its solved `k1` or spline where its release has the distortion,
   at its solved principal point where its release has the principal point, and
   itself unchanged where it was held. Nothing else about any lens moves: every
-  other model's distortion stays where it is. A focal and principal point
-  adjusted per image, rather than shared by every image of a camera, are
-  proposed in [per-image-intrinsics.md](../../drafts/per-image-intrinsics.md).
+  other model's distortion stays where it is.
+- **Intrinsic adjustments.** Each image keeps the intrinsic adjustment it came
+  in with. The solve holds them: each posed image's adjustment goes to the
+  kernel as `BaCameras::image_adjustments`, so every observation, both runs'
+  residuals and the stored errors are read through the image's intrinsics, its
+  camera with its adjustment applied, while the released focal, distortion and
+  principal point are the camera's shared ones
+  ([`../geometry/bundle-adjustment.md`](../geometry/bundle-adjustment.md)
+  § "Held image adjustments"). A value whose adjustments are all zero passes
+  none, and the solve is the one without them bit for bit. Releasing the
+  adjustments per image is proposed in
+  [per-image-intrinsics.md](../../drafts/per-image-intrinsics.md).
 - **Positions and representations.** Each point in the solve takes its solved
   coordinate, and `w` follows the kernel's returned representation.
 - **The stored error.** Each point's error column becomes the RMS of that
@@ -594,6 +605,11 @@ fixture needs no pixels, because the adjustment reads none. What it pins:
   down.
 - The input value untouched.
 - A released focal found from 6 % off, reported, and written into the camera.
+- The same with every image carrying its own intrinsic adjustment and its
+  keypoints made through it: the solve holds the adjustments, its residual
+  median ends under `10⁻³` px and every adjustment comes back as it went in,
+  while the same pixels with the adjustments dropped end with a median over
+  0.05 px.
 - A value whose images are taken through two cameras adjusted rather than
   refused, each image read through its own lens: the poses converge, and each
   camera's report entry counts its images and holds its focal.

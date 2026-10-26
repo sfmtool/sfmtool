@@ -97,7 +97,9 @@ impl SfmrReconstruction {
     /// residuals are the bearing's, which is the model under question. Of the
     /// rest, an observation whose residual is more than [`OUTLIER_GATE`]
     /// robust spreads of its camera's residuals is counted as an outlier and
-    /// left out of the RMS.
+    /// left out of the RMS. Each observation's point is projected through its
+    /// image's intrinsics, its camera's with the image's intrinsic adjustment
+    /// applied, and its residual counts toward its camera's spread and level.
     ///
     /// # Example
     ///
@@ -142,6 +144,9 @@ impl SfmrReconstruction {
     ) -> Vec<ObservationResidual> {
         let images = &self.image_set.images;
         let points = &self.point_set.points;
+        // Each residual is read through its image's intrinsics, and counted
+        // with the other residuals of its image's camera.
+        let intrinsics = self.image_set.all_image_intrinsics();
         let mut out = Vec::new();
         for (row, obs) in self.point_set.tracks.iter().enumerate() {
             let point = &points[obs.point_index as usize];
@@ -154,7 +159,7 @@ impl SfmrReconstruction {
             }
             let image = &images[obs.image_index as usize];
             let camera_index = image.camera_index as usize;
-            let camera = &self.image_set.cameras[camera_index];
+            let camera = &intrinsics[obs.image_index as usize];
             // The test gives a pixel observed_ray declines no ray, so it does
             // not count towards the noise the rays are weighted by either. The
             // noise level passed here only scales the weight, which is unused.

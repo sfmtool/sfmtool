@@ -177,7 +177,7 @@ pub fn move_camera(
     let stored_rotation = stored.quaternion_wxyz;
     let stored_centre = stored.camera_center();
     let residual_before_px = residual_quantiles_px(
-        recon.image_set.camera_for_image(image),
+        &recon.image_intrinsics(image),
         &pose_of(recon, image),
         &image_reprojection_samples(recon, image),
     );
@@ -292,7 +292,7 @@ pub fn move_camera(
     }
     out.rescore_points_from_inline_keypoints(&moved);
     report.residual_after_px = residual_quantiles_px(
-        out.image_set.camera_for_image(image),
+        &out.image_intrinsics(image),
         &pose_of(&out, image),
         &image_reprojection_samples(&out, image),
     );

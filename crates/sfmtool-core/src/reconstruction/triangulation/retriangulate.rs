@@ -583,9 +583,12 @@ pub fn retriangulate_points(
     let image_set = &work.base.image_set;
     let estimates = {
         let _phase = p_solve.phase("retriangulate");
+        // Each observation's ray is cast, and its reprojection read, through
+        // its image's intrinsics.
+        let intrinsics = image_set.image_intrinsics_list();
         triangulate_points_through_cameras(
-            &image_set.cameras,
-            &gathered.image_camera,
+            &intrinsics.intrinsics,
+            &intrinsics.image_entry,
             ObservationSet {
                 uv: &gathered.uv,
                 obs_image: &gathered.obs_image,
@@ -658,8 +661,6 @@ struct Gathered {
     /// The live indexes not in `targets` because the value holds their
     /// coordinate, ascending.
     held: Vec<u32>,
-    /// Per image, the index of the camera it was taken through.
-    image_camera: Vec<u32>,
     uv: Vec<f64>,
     obs_image: Vec<u32>,
     obs_point: Vec<u32>,
@@ -708,10 +709,6 @@ fn gather(
             )
         })
         .collect();
-    // Each image names the camera that took it, and the solve casts an
-    // observation's ray, and reads its reprojection, through that camera.
-    let image_camera: Vec<u32> = image_set.images.iter().map(|i| i.camera_index).collect();
-
     // Every image gets a row, so an observation's image index indexes these
     // pose arrays directly. An unposed image's row is not a pose, and the array
     // form drops the rays it would have cast rather than casting them through a
@@ -773,7 +770,6 @@ fn gather(
     Ok(Gathered {
         targets,
         held,
-        image_camera,
         uv,
         obs_image,
         obs_point,
@@ -976,6 +972,8 @@ fn write_overlay(
 ) -> Result<(EditedReconstruction, PointMap, Vec<RetriangulatedPoint>), RetriangulateError> {
     let mut next = edited.clone();
     let centroid = edited.base.image_set.camera_centroid();
+    // Every image's intrinsics, for scoring the moved points.
+    let intrinsics = edited.base.image_set.all_image_intrinsics();
     let pruned = pruned_per_slot(gathered, estimates);
     let mut points = Vec::with_capacity(gathered.targets.len() + gathered.held.len());
     let mut moves = Vec::new();
@@ -1024,8 +1022,12 @@ fn write_overlay(
             })
             .collect();
         if let Some(pixels) = pixels {
-            record.point.rms_reprojection_error =
-                rms_reprojection_error_px(&edited.base.image_set, &record.point, pixels);
+            record.point.rms_reprojection_error = rms_reprojection_error_px(
+                &edited.base.image_set,
+                &intrinsics,
+                &record.point,
+                pixels,
+            );
         }
         let to = next.replace_point(index, record)?;
         moves.push((index, to));

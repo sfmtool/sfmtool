@@ -13,7 +13,8 @@ before it trims. The default schedule tightens the threshold from 50 px to
 12 px to 4 px, so gross outliers are removed before the fine fit. The images
 may be taken through one or more cameras: each camera keeps its own lens
 parameters in the solve, and every observation is read through the camera of
-its own image.
+its own image, with that image's intrinsic adjustment applied where it has one
+(the solve holds the adjustment; see "Held image adjustments").
 
 This is the optimizer that the trimmed pose-only refinement
 (`crates/sfmtool-core/src/geometry/pose_refine.rs`) is the single-pose
@@ -30,8 +31,9 @@ model (otherwise that command uses pycolmap).
   parameters and initial focal. A camera here is what the `.sfmr` calls one:
   one of the reconstruction's cameras, which images reference by index. Rigs are not
   modelled: every image keeps its own free pose.
-- `n_img` **images**, each taken through one of the cameras (`image_camera[i]`)
-  and each with a
+- `n_img` **images**, each taken through one of the cameras (`image_camera[i]`),
+  optionally with an intrinsic adjustment of that camera's focal and principal
+  point (`image_adjustments[i]`), and each with a
   world-to-camera pose `(R_i, t_i)` in the canonical convention
   (`x_cam = R·X + t`; the camera looks along `−Z`, a point in front has
   `z < 0`), rotations supplied as WXYZ unit quaternions.
@@ -69,6 +71,7 @@ pub struct BaCameras<'a> {
     pub cameras: &'a [CameraIntrinsics], // n_cam, each with its initial focal
     pub image_camera: Cow<'a, [u32]>,    // n_img, an index into `cameras`
     pub releases: Option<&'a [CameraRelease]>, // n_cam; None = the flags alone
+    pub image_adjustments: Option<Cow<'a, [IntrinsicAdjustment]>>, // n_img, held; None = none
 }
 
 /// What one camera may release; `Default` and `HELD` release nothing.
@@ -714,18 +717,58 @@ Every rule the single block follows applies to each block separately:
 
 ### What reads the camera, per observation
 
-Everything that reads a camera reads the camera of the observation's image,
-`cameras[image_camera[obs_img[k]]]`: the projection, its Jacobian and the lens
-columns; the trim's in-front measure; and `pixel_to_ray` in the inter-round
-re-estimation. The in-front floor is the scene's, not a camera's, so it reads
-no camera.
+Everything that reads a camera reads the intrinsics of the observation's image:
+the camera `cameras[image_camera[obs_img[k]]]` with the image's adjustment
+applied, which is the camera itself for an image with none. That is the
+projection, its Jacobian and the lens columns; the trim's in-front measure; and
+`pixel_to_ray` in the inter-round re-estimation. The in-front floor is the
+scene's, not a camera's, so it reads no camera.
 
 Under `FreePointPolicy::cross` the storage decision reads each camera twice
 more. The noise level pools every camera's residuals and gates each camera's
-against its own robust spread, as the stored measure does, and each ray's noise
-weight is the projection derivative of its own image's camera, so a track seen
-through two lenses weights each sighting by the pixels per radian of the lens
-that took it.
+against its own robust spread, as the stored measure does, each residual read
+through its image's intrinsics and gated with its camera's, and each ray's noise
+weight is the projection derivative of its own image's intrinsics, so a track
+seen through two lenses weights each sighting by the pixels per radian of the
+lens that took it. The noise level's floor is the cameras' keypoint resolution.
+
+### Held image adjustments
+
+`BaCameras::image_adjustments` gives each image an intrinsic adjustment of its
+camera, a focal scale `s_i` and a principal-point offset `a_i` in the short-side
+unit `m = min(width, height)`, so that image `i` reads its camera at
+`f_i = f·(1 + s_i)` (both focals on a two-focal model) and
+`(cx_i, cy_i) = (cx, cy) + a_i·m`
+([`IntrinsicAdjustment`](../../../crates/sfmtool-core/src/camera/intrinsics.rs)).
+The solve holds the adjustments: they are inputs, read wherever a camera is
+read (above), and nothing solves them. The released parameters are still the
+camera's shared ones, with each image's adjustment applied on top of them, so a
+camera's lens block is unchanged and its columns from an adjusted image are:
+
+```
+∂(u, v)/∂f       = (1 + s_i)·(x_d, y_d) = (u − cx_i, v − cy_i) / f
+∂(u, v)/∂k1      = f_i·θ³·û
+∂(u, v)/∂cⱼ      = f_i·(Bⱼ(d) + B'ⱼ(d)·(d − d_max)₊)·û
+∂(u, v)/∂(cx,cy) = I
+```
+
+the unadjusted columns with the image's focal in place of `f` and the focal
+column read about the image's principal point. The focal column keeps `f` in
+its denominator because the parameter is the shared focal, which the image's
+focal is `1 + s_i` times. The `k1` step guard's imaged field reads each
+observation's pixel radius about its image's principal point divided by
+`1 + s_i`, since the image's map folds at `1 + s_i` times the shared map's
+radius. The principal point's step guard checks the shared principal point; an
+image's adjusted principal point is not checked.
+
+An image with an adjustment is linearised through an entry of its own, after
+the cameras', whose camera is the adjusted one and whose lens slots are its
+camera's, and the robust cost the damping ladder compares reads the same
+entries. Those entries are built per image per evaluation, never per
+observation. `image_adjustments` of `None`, or of all-zero adjustments, adds no
+entry and reads every camera as it is, so the solve is the one without
+adjustments bit for bit. A length other than `n_img` is a caller error and
+panics with the other shape checks.
 
 ### Parity
 
@@ -802,7 +845,9 @@ raises for a camera that is neither `SFMTOOL_FISHEYE` nor `SFMTOOL_PINHOLE`, and
 for an undefined spline; `opt_k1` together with `opt_bspline` raises first, so
 the caller sees the exclusion rather than whichever model gate happens to fire.
 An empty `cameras`, an `image_camera` whose length is not `n_img`, and an index
-past `cameras` raise `ValueError` as well.
+past `cameras` raise `ValueError` as well. The binding takes no image
+adjustments: it reads every image through its camera exactly
+(`image_adjustments: None`).
 
 `held`, `distance` and `distance_from` are the flat form of the kernel's
 `PointConstraints`: the binding assembles them, so a caller states each point's
@@ -987,6 +1032,18 @@ Python's point of view).
   still on the image; in a solve with every flag on, a camera whose release
   has only the principal point recovers its own and keeps its focal, and a
   held camera beside it comes back bit for bit.
+- **Held image adjustments**: with each image read through its own focal scale
+  and principal-point offset, the focal, `k1`, spline and principal-point
+  columns of the `SIMPLE_RADIAL_FISHEYE`, `SFMTOOL_PINHOLE` and
+  `SFMTOOL_FISHEYE` blocks match a central difference of the adjusted
+  projection in the shared parameter; on the 60° principal-point scene with
+  observations made through per-image adjustments of up to 1.2% in focal and
+  0.8% of the short side in principal point, the solve holding them recovers
+  the planted principal point to 0.05 px with every residual and the noise
+  level under `10⁻³` px, while the same pixels read without the adjustments
+  leave residuals over 0.2 px; on the planted pinhole spline's scene with
+  per-image adjustments the spline is recovered from none; and all-zero
+  adjustments give the solve with none bit for bit.
 - **Directions carry the `k1` release**: on a scene whose finite cloud sits near the
   optical axis (no `θ³` signal) and whose far field is marked at infinity,
   `opt_k1` recovers the planted curvature — and the same solve with the

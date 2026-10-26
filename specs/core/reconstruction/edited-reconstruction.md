@@ -98,13 +98,38 @@ impl PointSet {
 impl ImageSet {
     pub fn image_count(&self) -> usize;
     pub fn camera_count(&self) -> usize;
+    // The shared camera, without the image's adjustment.
     pub fn camera_for_image(&self, image_index: usize) -> &CameraIntrinsics;
     // The camera with the image's intrinsic adjustment applied, borrowed when
     // the adjustment is zero.
     pub fn image_intrinsics(&self, image_index: usize) -> Cow<'_, CameraIntrinsics>;
+    // `image_intrinsics` of every image, in image order.
+    pub fn all_image_intrinsics(&self) -> Vec<Cow<'_, CameraIntrinsics>>;
+    // Every image's intrinsics as a camera list and a per-image index into it.
+    pub fn image_intrinsics_list(&self) -> ImageIntrinsicsList<'_>;
     pub fn camera_per_image_adjustments(&self, camera_index: usize) -> PerImageAdjustments;
 }
 ```
+
+Every consumer in `sfmtool-core` that projects through one image, casts a ray
+from one, or reads its focal reads `image_intrinsics`: the reprojection errors
+and the reprojection noise, triangulation and the bundle adjustment's
+re-estimation, resection, Add Image to Tracks, the bench, the patch renders and
+affine shapes, the point-or-bearing test and its analyses, the outermost
+keypoint, moving a camera and the web export. A loop over the observations of
+many images reads `all_image_intrinsics`, built once, so an adjusted camera is
+built once per image rather than once per observation; a routine that takes a
+camera list and a per-image camera column, such as the batch triangulation,
+takes `image_intrinsics_list`, the cameras followed by one adjusted copy per
+image whose adjustment is not zero
+([`ImageIntrinsicsList`](../../../crates/sfmtool-core/src/camera/intrinsics.rs)).
+With every adjustment zero, each of these borrows the cameras and reads exactly
+what it read before adjustments existed. `camera_for_image` and the camera
+column itself remain for what means the shared camera: which camera an image
+belongs to, the lens a bundle adjustment releases, and the lens a model switch
+refits. The viewer and the Python package read the shared camera in places,
+which [per-image-intrinsics.md](../../drafts/per-image-intrinsics.md#pr-3-every-consumer-reads-the-images-intrinsics)
+amends, and the file boundary refuses a non-zero adjustment.
 
 `per_image_adjustments` is addressed by camera index, like `cameras`, and an
 edit that adds or removes cameras keeps the two in step. An image's intrinsic

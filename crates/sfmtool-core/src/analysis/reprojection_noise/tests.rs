@@ -359,3 +359,35 @@ fn round_off_residuals_are_not_outliers() {
     }
     assert!(noise.per_camera_sigma_px.iter().flatten().count() > 0);
 }
+
+#[test]
+fn residuals_are_read_through_each_images_intrinsics() {
+    // Noise-free observations made through each image's own intrinsics: the
+    // level is the keypoints' resolution and every stored error is near zero.
+    // The same pixels read through the shared cameras are off by the
+    // adjustments, a few pixels on this 1920 × 1080 camera.
+    use crate::reconstruction::data::adjusted_fixture::{adjust_and_reproject, varied_adjustment};
+    use crate::IntrinsicAdjustment;
+    let mut recon = as_embedded(&noisy_demo(500, [0.0, 0.0], 3));
+    adjust_and_reproject(&mut recon, varied_adjustment);
+    let sigma = recon.reprojection_noise().unwrap().sigma_px.unwrap();
+    assert!(sigma < 1e-3, "sigma {sigma}");
+    let mut scored = recon.clone();
+    scored.recompute_point_errors().unwrap();
+    for (p, point) in scored.point_set.points.iter().enumerate() {
+        assert!(
+            point.rms_reprojection_error < 1e-3,
+            "point {p}: {} px",
+            point.rms_reprojection_error
+        );
+    }
+    let errors = recon.compute_observation_reprojection_errors(3).unwrap();
+    assert!(errors.iter().all(|&(_, e)| e < 1e-3), "{errors:?}");
+
+    let mut shared = recon.clone();
+    for image in &mut shared.image_set.images {
+        image.intrinsic_adjustment = IntrinsicAdjustment::default();
+    }
+    let sigma = shared.reprojection_noise().unwrap().sigma_px.unwrap();
+    assert!(sigma > 1.0, "sigma {sigma}");
+}

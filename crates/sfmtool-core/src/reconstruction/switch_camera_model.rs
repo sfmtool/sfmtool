@@ -12,6 +12,7 @@
 //! tracks are not touched; the stored per-point errors of the points those
 //! images observe are recomputed.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt;
 
@@ -268,6 +269,7 @@ pub fn switch_camera_model(
 
     let image_set = &recon.image_set;
     let tracks = &recon.point_set.tracks;
+    // Which shared camera each observation's image belongs to.
     let camera_of_row =
         |row: usize| image_set.images[tracks[row].image_index as usize].camera_index;
     // Which slot of `chosen` each camera is, or `None` for a camera left alone.
@@ -307,13 +309,18 @@ pub fn switch_camera_model(
     for (&c, refit) in chosen.iter().zip(&refits) {
         out.image_set.cameras[c] = refit.camera.clone();
     }
+    // Only the shared cameras are refitted: every image keeps its intrinsic
+    // adjustment as it is, since the adjustment is relative to whatever its
+    // camera is. The errors below are read through each image's intrinsics.
+    let before_intrinsics = recon.image_set.all_image_intrinsics();
+    let after_intrinsics = out.image_set.all_image_intrinsics();
 
     // Each touched point's stored error, over every one of its observations
     // under the cameras the value now holds.
     let mut sums = vec![0.0f64; n_pt];
     let mut counts = vec![0u32; n_pt];
     for &row in &touched_rows {
-        if let Some(e) = row_error(&out, row, pixels[row]) {
+        if let Some(e) = row_error(&out, &after_intrinsics, row, pixels[row]) {
             let p = tracks[row].point_index as usize;
             sums[p] += e * e;
             counts[p] += 1;
@@ -335,8 +342,8 @@ pub fn switch_camera_model(
         let slot = slot_of[camera_of_row(row) as usize].expect("a switched row");
         rows_of[slot].push(Row {
             theta_deg,
-            before: row_error(recon, row, pixels[row]),
-            after: row_error(&out, row, pixels[row]),
+            before: row_error(recon, &before_intrinsics, row, pixels[row]),
+            after: row_error(&out, &after_intrinsics, row, pixels[row]),
         });
     }
     // One entry per chosen camera, in the same ascending order, or none at all
@@ -396,6 +403,8 @@ pub fn fit_camera_switch(
 ) -> Result<CameraIntrinsicsRefit, SwitchCameraModelError> {
     let image_set = &recon.image_set;
     let count = image_set.cameras.len();
+    // The shared camera: the switch refits the lens all its images share, and
+    // each image's adjustment rides on whatever camera it becomes.
     let Some(source) = image_set.cameras.get(camera) else {
         return Err(SwitchCameraModelError::UnknownCamera { camera, count });
     };
@@ -567,17 +576,23 @@ fn observation_pixels(
     Ok(out)
 }
 
-/// Row `row`'s reprojection error under the cameras `recon` holds, or `None`
+/// Row `row`'s reprojection error through its image's intrinsics in `recon`,
+/// read from `intrinsics` (the image set's `all_image_intrinsics`), or `None`
 /// where there is no pixel to measure against or the model gives the point
 /// none.
-fn row_error(recon: &SfmrReconstruction, row: usize, pixel: Option<[f64; 2]>) -> Option<f64> {
+fn row_error(
+    recon: &SfmrReconstruction,
+    intrinsics: &[Cow<'_, CameraIntrinsics>],
+    row: usize,
+    pixel: Option<[f64; 2]>,
+) -> Option<f64> {
     let observation = &recon.point_set.tracks[row];
     let image = &recon.image_set.images[observation.image_index as usize];
     let point = &recon.point_set.points[observation.point_index as usize];
     observation_reprojection_error(
         &image.quaternion_wxyz,
         &image.translation_xyz,
-        &recon.image_set.cameras[image.camera_index as usize],
+        &intrinsics[observation.image_index as usize],
         &point.position,
         point.is_at_infinity(),
         pixel?,

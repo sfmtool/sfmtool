@@ -29,8 +29,8 @@ as `sfmtool_core::reconstruction::outermost_keypoint`, and is bound as
 
 ```rust
 pub struct KeypointReach {
-    pub radius_px: f64, // distance from the camera's principal point
-    pub theta_deg: f64, // incidence angle the camera's model gives the pixel
+    pub radius_px: f64, // distance from its image's principal point
+    pub theta_deg: f64, // incidence angle its image's intrinsics give the pixel
     pub image: usize,   // the image it is in, by image index
     pub xy: [f64; 2],
 }
@@ -66,7 +66,10 @@ for camera in outermost_keypoints(&recon, &[0, 1], true) {
 pixel distance from the principal point, which is a property of the photograph
 alone, and its angle is then read through the camera's model. A caller that has
 just refitted or solved a camera measures under that camera, so the angle
-follows the model the domain is being chosen for. The radius does not.
+follows the model the domain is being chosen for. The radius does not. Both
+are read through the intrinsics of the image the keypoint is in: the camera
+with that image's intrinsic adjustment applied, whose principal point the
+radius is measured from.
 
 **Two populations, both reported.** The observations are always there, and are
 what the reconstruction can actually constrain; the detected features say how

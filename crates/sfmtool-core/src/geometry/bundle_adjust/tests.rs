@@ -4369,6 +4369,7 @@ fn check_ranged_jacobian(refs: &[usize], observers: &[usize], what: &str) {
         cx,
         cy,
         f: 500.0,
+        f_image: 500.0,
         opt_f: false,
         opt_k1: false,
         opt_bspline: false,
@@ -4633,6 +4634,7 @@ fn the_storage_decision_measures_its_noise_and_decides_on_the_test() {
             cameras: &cams,
             image_camera: image_camera.as_slice().into(),
             releases: None,
+            image_adjustments: None,
         },
         &mut s.quats,
         &mut s.trans,
@@ -5107,6 +5109,7 @@ fn inverse_depth_jacobian_matches_a_difference_of_the_residual() {
             cx,
             cy,
             f: 500.0,
+            f_image: 500.0,
             opt_f: false,
             opt_k1: false,
             opt_bspline: false,
@@ -5208,6 +5211,7 @@ fn an_inverse_depth_stops_at_zero() {
         solve_lm::<BASE_CAM_COLS>(
             &mut lenses,
             &[0; 6],
+            &[],
             &mut s.quats,
             &mut s.trans,
             &mut s.points,
@@ -5669,6 +5673,7 @@ fn run_cameras(
             cameras: cams,
             image_camera: image_camera.into(),
             releases: None,
+            image_adjustments: None,
         },
         &mut s.quats,
         &mut s.trans,
@@ -7052,6 +7057,7 @@ fn run_at_the_guard(
             cameras: cams,
             image_camera: image_camera.into(),
             releases: None,
+            image_adjustments: None,
         },
         &mut s.quats,
         &mut s.trans,
@@ -7565,6 +7571,7 @@ fn principal_point_columns_match_a_central_difference_on_every_model() {
             cx,
             cy,
             f: cam.focal_lengths().0,
+            f_image: cam.focal_lengths().0,
             opt_f: false,
             opt_k1: false,
             opt_bspline: false,
@@ -7719,6 +7726,7 @@ fn releasing_the_principal_point_needs_no_focal_and_narrows_per_camera() {
             cameras: &cameras,
             image_camera: image_camera.as_slice().into(),
             releases: Some(&releases),
+            image_adjustments: None,
         },
         &mut s.quats,
         &mut s.trans,
@@ -7954,26 +7962,39 @@ fn nudged(cam: &CameraIntrinsics, p: LensParam, d: f64) -> CameraIntrinsics {
 /// at the identity pose. A slot outside the observation's own camera's block,
 /// and a slot of that block no release of its model fills, must carry exactly
 /// nothing.
+///
+/// Image `j` carries the intrinsic adjustment `adjustments[j]`: its
+/// observations are projected through camera `j` with it applied, as the solve
+/// reads an adjusted image, while the parameters differenced are camera `j`'s
+/// shared ones.
 fn check_released_lens_columns<const CAM_COLS: usize>(
     cams: &[CameraIntrinsics],
+    adjustments: &[IntrinsicAdjustment],
     thetas_deg: &[&[f64]],
 ) {
+    let images: Vec<CameraIntrinsics> = cams
+        .iter()
+        .zip(adjustments)
+        .map(|(cam, a)| cam.with_adjustment(a))
+        .collect();
     let lin: Vec<LinLens> = {
         let mut slot0 = 0;
         cams.iter()
-            .map(|cam| {
-                let (cx, cy) = cam.principal_point();
+            .zip(&images)
+            .map(|(cam, image)| {
+                let (cx, cy) = image.principal_point();
                 let spline = cam.model.radial_spline();
                 let (n_coeffs, d_max, radial) = match spline {
                     Some((c, d_max, radial)) => (c.len(), d_max, radial),
                     None => (0, 0.0, SplineRadial::IncidenceAngle),
                 };
                 let lens = LinLens {
-                    cam,
+                    cam: image,
                     analytic: cam.model.supports_pixel_jacobian(),
                     cx,
                     cy,
                     f: cam.focal_lengths().0,
+                    f_image: image.focal_lengths().0,
                     opt_f: true,
                     opt_k1: matches!(cam.model, CameraModel::SimpleRadialFisheye { .. }),
                     opt_bspline: spline.is_some(),
@@ -8004,7 +8025,7 @@ fn check_released_lens_columns<const CAM_COLS: usize>(
     let n_obs = xp.len();
     let uv: Vec<[f64; 2]> = (0..n_obs)
         .map(|k| {
-            let (u, v) = cams[obs_ci[k]]
+            let (u, v) = images[obs_ci[k]]
                 .ray_to_pixel([xp[k].x, xp[k].y, xp[k].z])
                 .expect("in domain");
             [u + 0.5, v - 0.5]
@@ -8066,8 +8087,15 @@ fn check_released_lens_columns<const CAM_COLS: usize>(
             let want = match param {
                 Some(p) => {
                     let r = [xp[k].x, xp[k].y, xp[k].z];
-                    let (up, vp) = nudged(cam, p, h).ray_to_pixel(r).expect("in domain");
-                    let (um, vm) = nudged(cam, p, -h).ray_to_pixel(r).expect("in domain");
+                    let a = &adjustments[j];
+                    let (up, vp) = nudged(cam, p, h)
+                        .with_adjustment(a)
+                        .ray_to_pixel(r)
+                        .expect("in domain");
+                    let (um, vm) = nudged(cam, p, -h)
+                        .with_adjustment(a)
+                        .ray_to_pixel(r)
+                        .expect("in domain");
                     [(up - um) / (2.0 * h), (vp - vm) / (2.0 * h)]
                 }
                 None => [0.0, 0.0],
@@ -8095,11 +8123,43 @@ fn check_released_lens_columns<const CAM_COLS: usize>(
 
 #[test]
 fn released_lens_columns_beside_the_principal_point_match_a_central_difference() {
+    check_released_lens_columns_on_three_cameras(&[IntrinsicAdjustment::default(); 3]);
+}
+
+#[test]
+fn released_lens_columns_under_image_adjustments_match_a_central_difference() {
+    // Each image reads its camera through its own focal scale and
+    // principal-point offset. The shared focal's column is then the distorted
+    // coordinate times `1 + s`, read about the image's principal point; the
+    // `k1` and spline columns carry the image's focal; the principal point's
+    // stays the identity.
+    check_released_lens_columns_on_three_cameras(&[
+        IntrinsicAdjustment {
+            focal: 0.013,
+            principal_point: [0.008, -0.011],
+        },
+        IntrinsicAdjustment {
+            focal: -0.017,
+            principal_point: [-0.006, 0.004],
+        },
+        IntrinsicAdjustment {
+            focal: 0.021,
+            principal_point: [0.012, 0.009],
+        },
+    ]);
+}
+
+/// The lens columns of a `SIMPLE_RADIAL_FISHEYE` alone in the base-width
+/// block, then beside an `SFMTOOL_PINHOLE` and an `SFMTOOL_FISHEYE` in the
+/// spline-width block, image `j` read through camera `j` with
+/// `adjustments[j]` applied.
+fn check_released_lens_columns_on_three_cameras(adjustments: &[IntrinsicAdjustment; 3]) {
     let radial = radial_fisheye(130.0, 0.025).with_principal_point(PLANTED_PP.0, PLANTED_PP.1);
     let fisheye_thetas: &[f64] = &[8.0, 35.0, 62.0, 88.0, 104.0];
     // k1 beside the principal point in the base-width block.
     check_released_lens_columns::<BASE_PP_CAM_COLS>(
         std::slice::from_ref(&radial),
+        &adjustments[..1],
         &[fisheye_thetas],
     );
     // Then in the spline-width block, which the second and third cameras'
@@ -8115,6 +8175,170 @@ fn released_lens_columns_beside_the_principal_point_match_a_central_difference()
         .collect();
     check_released_lens_columns::<BSPLINE_PP_CAM_COLS>(
         &[radial, pinhole, fisheye],
+        adjustments,
         &[fisheye_thetas, &pinhole_thetas, fisheye_thetas],
     );
+}
+
+#[test]
+fn held_image_adjustments_are_read_by_every_observation() {
+    // The principal point's recovery scene, its observations made through each
+    // image's own intrinsics: the planted camera with a focal scale of up to
+    // 1.2 % and a principal-point offset of up to 0.8 % of the short side
+    // (about 4 px) per image. The solve releases the shared principal point
+    // from the centre and holds the adjustments, reading every observation,
+    // the trim, the re-estimation and the noise level through them: it
+    // recovers the planted point and fits every observation. The same pixels
+    // read through the shared camera leave residuals of pixels.
+    let truth = pinhole_with_field(60.0, 320.0 + 0.02 * 640.0, 240.0);
+    let start = pinhole_with_field(60.0, 320.0, 240.0);
+    let n_img = 8;
+    let mut s = scene_filling_field(truth.clone(), n_img, 120);
+    let adjustments: Vec<IntrinsicAdjustment> = (0..n_img)
+        .map(|i| IntrinsicAdjustment {
+            focal: 0.012 * jitter(i, 41),
+            principal_point: [0.008 * jitter(i, 42), 0.008 * jitter(i, 43)],
+        })
+        .collect();
+    let images: Vec<CameraIntrinsics> = adjustments
+        .iter()
+        .map(|a| truth.with_adjustment(a))
+        .collect();
+    reproject(&mut s, |i| &images[i]);
+    let run = |mut s: Scene, adjustments: Option<&[IntrinsicAdjustment]>| {
+        bundle_adjust(
+            &BaCameras {
+                cameras: std::slice::from_ref(&start),
+                image_camera: Cow::Owned(vec![0; n_img]),
+                releases: None,
+                image_adjustments: adjustments.map(Cow::Borrowed),
+            },
+            &mut s.quats,
+            &mut s.trans,
+            &mut s.points,
+            &s.uv,
+            &s.obs_img,
+            &s.obs_pt,
+            None,
+            None,
+            FreePointPolicy::default(),
+            None,
+            DEFAULT_PROTECTED_LOSS_SCALE,
+            false,
+            false,
+            false,
+            true,
+            &DEFAULT_SCHEDULE,
+            60,
+            2,
+            12,
+            &Progress::none(),
+        )
+    };
+    let out = run(s.clone(), Some(&adjustments));
+    let (cx, cy) = out.cameras[0].principal_point();
+    assert!(
+        (cx - 332.8).abs() < 0.05 && (cy - 240.0).abs() < 0.05,
+        "principal point ({cx}, {cy}), planted at (332.8, 240)"
+    );
+    let worst = out.residual_norms.iter().copied().fold(0.0f64, f64::max);
+    assert!(worst < 1e-3, "largest residual {worst} px");
+    let decision = out.free_point_decision.expect("crossing on");
+    assert!(decision.converged, "the final round did not converge");
+    let sigma = decision.sigma_px.expect("a noise level");
+    assert!(sigma < 1e-3, "noise level {sigma} px");
+    // The camera that comes back is the shared one, with no adjustment in it.
+    assert_eq!(out.cameras[0].focal_lengths(), start.focal_lengths());
+
+    // All-zero adjustments are the solve with none, to the bit.
+    let zeros = vec![IntrinsicAdjustment::default(); n_img];
+    let (a, b) = (run(s.clone(), Some(&zeros)), run(s.clone(), None));
+    assert_eq!(a.cameras, b.cameras);
+    assert_eq!(
+        a.residual_norms
+            .iter()
+            .map(|r| r.to_bits())
+            .collect::<Vec<_>>(),
+        b.residual_norms
+            .iter()
+            .map(|r| r.to_bits())
+            .collect::<Vec<_>>()
+    );
+    // And without the adjustments these pixels cannot be fitted: each image's
+    // pose takes up most of its adjustment, but not the edges of its field.
+    let worst_shared = b
+        .residual_norms
+        .iter()
+        .copied()
+        .filter(|r| r.is_finite())
+        .fold(0.0f64, f64::max);
+    assert!(
+        worst_shared > 0.2 && worst_shared < 50.0,
+        "largest residual {worst_shared} px through the shared camera"
+    );
+}
+
+#[test]
+fn a_spline_is_recovered_under_held_image_adjustments() {
+    // The planted pinhole spline's scene, its observations made through each
+    // image's focal scale and principal-point offset. The spline is the
+    // shared camera's, and its columns carry each image's focal: the solve
+    // recovers the planted spline from none, with the adjustments held.
+    let f = 250.0;
+    let truth = sfmtool_pinhole(f, &PLANTED_PINHOLE_BSPLINE);
+    let (mut s, _) = make_pinhole_scene_for(truth.clone(), 10, 500);
+    let n_img = s.quats.len();
+    let adjustments: Vec<IntrinsicAdjustment> = (0..n_img)
+        .map(|i| IntrinsicAdjustment {
+            focal: 0.012 * jitter(i, 51),
+            principal_point: [0.006 * jitter(i, 52), 0.006 * jitter(i, 53)],
+        })
+        .collect();
+    let images: Vec<CameraIntrinsics> = adjustments
+        .iter()
+        .map(|a| truth.with_adjustment(a))
+        .collect();
+    reproject(&mut s, |i| &images[i]);
+    let start = sfmtool_pinhole(f, &[0.0; 6]);
+    let out = bundle_adjust(
+        &BaCameras {
+            cameras: std::slice::from_ref(&start),
+            image_camera: Cow::Owned(vec![0; n_img]),
+            releases: None,
+            image_adjustments: Some(Cow::Borrowed(&adjustments)),
+        },
+        &mut s.quats,
+        &mut s.trans,
+        &mut s.points,
+        &s.uv,
+        &s.obs_img,
+        &s.obs_pt,
+        None,
+        None,
+        FreePointPolicy::default(),
+        None,
+        DEFAULT_PROTECTED_LOSS_SCALE,
+        false,
+        false,
+        true,
+        false,
+        &DEFAULT_SCHEDULE,
+        60,
+        2,
+        12,
+        &Progress::none(),
+    );
+    for (i, (c, t)) in ba_bspline(&out)
+        .iter()
+        .zip(&PLANTED_PINHOLE_BSPLINE)
+        .enumerate()
+    {
+        assert!(
+            (c - t).abs() < 0.01,
+            "coefficient {i}: {c} (want {t}; full spline {:?})",
+            ba_bspline(&out)
+        );
+    }
+    let worst = out.residual_norms.iter().cloned().fold(0.0f64, f64::max);
+    assert!(worst < 0.5, "worst reprojection {worst} px after the rung");
 }

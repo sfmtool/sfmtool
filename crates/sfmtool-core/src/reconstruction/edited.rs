@@ -988,7 +988,7 @@ impl EditedReconstruction {
         self.posed_lenses().len()
     }
 
-    /// The camera indexes the **posed** images of this value are taken
+    /// The shared camera indexes the **posed** images of this value are taken
     /// through, ascending and each once: the cameras a bundle adjustment
     /// solves, and so the ones a caller offering its focal release checks.
     pub fn posed_lenses(&self) -> Vec<u32> {

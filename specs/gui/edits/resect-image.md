@@ -77,7 +77,10 @@ Everything below `## Invocation` lives in `sfmtool-core` as one function,
 GUI wraps it in [resect.rs](../../../crates/sfm-explorer/src/resect.rs), which adds
 the refusal for a missing or stale file, the version and the status line. The
 same function is what an offline caller uses, with as many targets as it wants
-to hold out, through the `sfmtool.geometry.resect_images` binding.
+to hold out, through the `sfmtool.geometry.resect_images` binding. Every ray it
+casts and every pixel it projects to, for a target or a held-out image, goes
+through that image's intrinsics, its camera with its intrinsic adjustment
+applied.
 
 ```rust
 pub enum ResectSource<'a> {
@@ -475,6 +478,9 @@ Core (`sfmtool-core`, headless):
   recovers the original within the estimator's tolerance, and the held-out
   re-triangulation never reads the target's observations (a target with
   corrupted observation coordinates still yields correct held-out positions).
+  With every image carrying its own intrinsic adjustment and its keypoints made
+  through it, the pose recovers to within 0.02°, and read through the
+  target's shared camera instead it is off by more than 0.1°.
 - Two targets held out together: both poses recover, and with **both** targets'
   observations corrupted the held-out positions of the points they share are
   still the truth — a hold-out that dropped only the image being estimated

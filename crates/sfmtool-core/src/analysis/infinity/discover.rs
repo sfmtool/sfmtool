@@ -30,7 +30,7 @@ use nalgebra::{Point3, Vector3};
 
 use super::convert::camera_extents;
 use crate::analysis::point_or_bearing::{
-    observation_ray, ObservationRay, PointOrBearingError, RayBatch,
+    observation_ray_through, ObservationRay, PointOrBearingError, RayBatch,
 };
 use crate::analysis::reprojection_noise::ReprojectionNoise;
 use crate::features::feature_match::descriptor::descriptor_distance_l2_squared;
@@ -371,13 +371,16 @@ fn candidate_rays(
         ray_images: Vec::new(),
         members: Vec::with_capacity(candidates.len()),
     };
+    let intrinsics = image_set.all_image_intrinsics();
     for track in candidates {
         let observed: Vec<((u32, u32), ObservationRay)> = track
             .members
             .iter()
             .filter_map(|&(img, feat)| {
                 let pixel = pixels[&(img, feat)];
-                observation_ray(image_set, img as usize, pixel, sigma_px).map(|r| ((img, feat), r))
+                let through = intrinsics.get(img as usize)?;
+                observation_ray_through(image_set, through, img as usize, pixel, sigma_px)
+                    .map(|r| ((img, feat), r))
             })
             .collect();
         if observed.len() >= min_views {
@@ -448,14 +451,11 @@ impl UnionFind {
     }
 }
 
-/// Largest focal length (pixels) for each image's camera.
+/// Largest focal length (pixels) of each image's intrinsics.
 fn per_image_focal_max(recon: &SfmrReconstruction) -> Vec<f64> {
-    recon
-        .image_set
-        .images
-        .iter()
-        .map(|im| {
-            let (fx, fy) = recon.image_set.cameras[im.camera_index as usize].focal_lengths();
+    (0..recon.image_set.images.len())
+        .map(|i| {
+            let (fx, fy) = recon.image_intrinsics(i).focal_lengths();
             fx.max(fy)
         })
         .collect()
@@ -543,8 +543,11 @@ impl SfmrReconstruction {
         // and to measure an appended point's reprojection error.
         let mut obs_xy: HashMap<(u32, u32), [f64; 2]> = HashMap::new();
 
+        // Every image's intrinsics, built once: the keypoints' rays below and
+        // the appended bearings' errors are both read through them.
+        let intrinsics = self.image_set.all_image_intrinsics();
         for (img_idx, image) in self.image_set.images.iter().enumerate() {
-            let camera = &self.image_set.cameras[image.camera_index as usize];
+            let camera = &intrinsics[img_idx];
             let sift_path = self.sift_path_for_image(img_idx);
             let sift =
                 sfmtool_sift_format::read_sift_partial(&sift_path, read_count).map_err(|e| {
@@ -636,7 +639,7 @@ impl SfmrReconstruction {
                     continue;
                 };
                 let image = &self.image_set.images[img as usize];
-                let camera = &self.image_set.cameras[image.camera_index as usize];
+                let camera = &intrinsics[img as usize];
                 if let Some(e) = observation_reprojection_error(
                     &image.quaternion_wxyz,
                     &image.translation_xyz,

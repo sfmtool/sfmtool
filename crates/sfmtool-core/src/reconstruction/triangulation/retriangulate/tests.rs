@@ -1957,3 +1957,43 @@ fn a_ranged_point_that_stays_a_position_keeps_its_constraint() {
         );
     }
 }
+
+#[test]
+fn rays_are_cast_through_each_images_intrinsics() {
+    // Every image carries its own intrinsic adjustment, and its keypoints are
+    // the truth's projections through it. Rays cast through the image's
+    // intrinsics meet at the truth, and the stored error is measured through
+    // them too; rays cast through the shared camera would land each point off
+    // it by the adjustment's pixels.
+    use crate::reconstruction::data::adjusted_fixture::{adjust_and_reproject, varied_adjustment};
+    let mut truth = truth();
+    adjust_and_reproject(&mut truth, varied_adjustment);
+    let start = edited(nudge(truth.clone()));
+    let (next, _, report) = retriangulate_points(
+        &start,
+        RetriangulateWhich::All,
+        &RetriangulateOptions::default(),
+        &Progress::none(),
+    )
+    .expect("the fixture retriangulates");
+    assert_eq!(report.moved(), POINTS);
+    for p in 0..POINTS {
+        assert!(
+            error(&next.base, &truth, p) < TRUTH_TOLERANCE,
+            "point {p} landed at {:?}",
+            next.base.point_set.points[p].position
+        );
+        let stored = next.base.point_set.points[p].rms_reprojection_error;
+        assert!(stored < 0.01, "point {p}: {stored} px");
+    }
+    // The adjustments ride along unchanged.
+    for (a, b) in next
+        .base
+        .image_set
+        .images
+        .iter()
+        .zip(&truth.image_set.images)
+    {
+        assert_eq!(a.intrinsic_adjustment, b.intrinsic_adjustment);
+    }
+}

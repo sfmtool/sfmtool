@@ -1807,3 +1807,45 @@ fn two_cameras_release_each_its_own_principal_point() {
         source.image_set.cameras[0].focal_lengths()
     );
 }
+
+#[test]
+fn held_image_adjustments_are_honoured_and_kept() {
+    // Every image carries its own intrinsic adjustment and its keypoints are
+    // the truth's projections through it. The solve releases the shared focal
+    // from 6 % off and holds the adjustments: it reads every observation
+    // through its image's intrinsics, so it comes back to the truth with no
+    // residual left, and every adjustment comes back as it went in. With the
+    // adjustments dropped from the same pixels, the solve cannot fit them.
+    use crate::reconstruction::data::adjusted_fixture::{adjust_and_reproject, varied_adjustment};
+    let mut source = truth();
+    adjust_and_reproject(&mut source, varied_adjustment);
+    let mut source = perturb(source);
+    source.image_set.cameras[0] = source.image_set.cameras[0].with_focal(FOCAL * 1.06);
+    let options = BundleAdjustOptions::uniform(1, CameraRelease::FOCAL);
+
+    let (out, report) = bundle_adjust(&source, &options, &Progress::none()).expect("well posed");
+    assert!(
+        report.median_residual_after < 1e-3,
+        "median {} px",
+        report.median_residual_after
+    );
+    let camera = &report.cameras[0];
+    assert!(
+        (camera.focal_after - FOCAL).abs() < 0.02 * FOCAL,
+        "{report:?}"
+    );
+    for (a, b) in out.image_set.images.iter().zip(&source.image_set.images) {
+        assert_eq!(a.intrinsic_adjustment, b.intrinsic_adjustment);
+    }
+
+    let mut dropped = source.clone();
+    for image in &mut dropped.image_set.images {
+        image.intrinsic_adjustment = Default::default();
+    }
+    let (_, report) = bundle_adjust(&dropped, &options, &Progress::none()).expect("well posed");
+    assert!(
+        report.median_residual_after > 0.05,
+        "median {} px with the adjustments dropped",
+        report.median_residual_after
+    );
+}

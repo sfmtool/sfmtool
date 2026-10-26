@@ -12,6 +12,7 @@
 //! declaration every camera model is derived from. See
 //! `specs/core/camera/camera-model-registry.md`.
 
+use std::borrow::Cow;
 use std::fmt;
 
 use nalgebra::Matrix3;
@@ -1019,6 +1020,71 @@ impl IntrinsicAdjustment {
     /// camera exactly.
     pub fn is_zero(&self) -> bool {
         self.focal == 0.0 && self.principal_point == [0.0, 0.0]
+    }
+}
+
+/// Every image's intrinsics as one list of cameras and, per image, an index
+/// into it: the form a routine takes that indexes a camera list by a per-image
+/// column, such as the bundle adjustment's re-estimation and the batch
+/// triangulation.
+///
+/// The list is the cameras themselves, followed by one copy of its camera with
+/// the adjustment applied for each image whose intrinsic adjustment is not
+/// zero, in image order. An image with a zero adjustment indexes its camera.
+/// With no non-zero adjustment both halves are borrowed from the caller, so a
+/// routine handed this list reads exactly the cameras and the column it was
+/// handed before adjustments existed.
+#[derive(Clone, Debug)]
+pub struct ImageIntrinsicsList<'a> {
+    /// The cameras, then one adjusted copy per image with a non-zero
+    /// adjustment.
+    pub intrinsics: Cow<'a, [CameraIntrinsics]>,
+    /// Per image, the index of its intrinsics in `intrinsics`.
+    pub image_entry: Cow<'a, [u32]>,
+}
+
+impl<'a> ImageIntrinsicsList<'a> {
+    /// The list for images taken through `cameras[image_camera[i]]` with
+    /// `adjustments[i]` applied. `adjustments` is one per image, or empty for
+    /// every image unadjusted.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `adjustments` is neither empty nor one per image, or an
+    /// adjusted image's camera index is past `cameras`.
+    pub fn new(
+        cameras: &'a [CameraIntrinsics],
+        image_camera: &'a [u32],
+        adjustments: &[IntrinsicAdjustment],
+    ) -> Self {
+        assert!(
+            adjustments.is_empty() || adjustments.len() == image_camera.len(),
+            "adjustments must be empty or one per image"
+        );
+        if adjustments.iter().all(IntrinsicAdjustment::is_zero) {
+            return Self {
+                intrinsics: Cow::Borrowed(cameras),
+                image_entry: Cow::Borrowed(image_camera),
+            };
+        }
+        let mut intrinsics = cameras.to_vec();
+        let mut image_entry = image_camera.to_vec();
+        for ((entry, &c), adjustment) in image_entry.iter_mut().zip(image_camera).zip(adjustments) {
+            if adjustment.is_zero() {
+                continue;
+            }
+            *entry = intrinsics.len() as u32;
+            intrinsics.push(cameras[c as usize].with_adjustment(adjustment));
+        }
+        Self {
+            intrinsics: Cow::Owned(intrinsics),
+            image_entry: Cow::Owned(image_entry),
+        }
+    }
+
+    /// The intrinsics of image `image`.
+    pub fn of(&self, image: usize) -> &CameraIntrinsics {
+        &self.intrinsics[self.image_entry[image] as usize]
     }
 }
 

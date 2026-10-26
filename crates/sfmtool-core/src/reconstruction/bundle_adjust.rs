@@ -17,7 +17,7 @@ use super::data::{ImageSet, SfmrReconstruction};
 
 use super::outermost_keypoint::{outermost_keypoints, KeypointReach};
 use crate::camera::distortion::bspline::MIN_BSPLINE_COEFFS;
-use crate::camera::{CameraIntrinsics, CameraModel};
+use crate::camera::{CameraIntrinsics, CameraModel, IntrinsicAdjustment};
 pub use crate::geometry::bundle_adjust::CameraRelease;
 use crate::geometry::bundle_adjust::{
     BaCameras, BaSchedule, DistanceReference, FreePointDecision, FreePointPolicy, PointConstraints,
@@ -459,9 +459,11 @@ pub fn bundle_adjust(
         return Err(BundleAdjustError::NoPosedImages);
     }
 
-    // The cameras of the solve: the image set's cameras the posed images use, in
-    // camera index order, and each posed image's index into that list. A camera only
-    // unposed images use sits the solve out with them.
+    // The cameras of the solve: the image set's shared cameras the posed images
+    // use, in camera index order, and each posed image's index into that list.
+    // A camera only unposed images use sits the solve out with them. Each posed
+    // image's intrinsic adjustment goes in beside them, held, so the solve reads
+    // every image through its own intrinsics while it releases the shared lens.
     let mut used: Vec<u32> = posed
         .iter()
         .map(|&i| image_set.images[i].camera_index)
@@ -523,10 +525,18 @@ pub fn bundle_adjust(
     // Every kernel flag on, and each camera's own release narrowing them: the
     // checks above leave only releases its model admits, so the kernel frees
     // exactly what the report below says it did.
+    let image_adjustments: Vec<IntrinsicAdjustment> = posed
+        .iter()
+        .map(|&i| image_set.images[i].intrinsic_adjustment)
+        .collect();
     let ba_cameras = BaCameras {
         cameras: &source_cameras,
         image_camera: image_camera.as_slice().into(),
         releases: Some(&releases),
+        image_adjustments: image_adjustments
+            .iter()
+            .any(|a| !a.is_zero())
+            .then(|| image_adjustments.as_slice().into()),
     };
 
     // The solve is all of the time; the other three walk arrays the size of the

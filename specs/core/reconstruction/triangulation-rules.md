@@ -47,7 +47,11 @@ Two forms, both CSR over tracks in the order the caller supplies:
   `distance` rules, and its `likelihood` noise weight taken, through its own
   image's camera. Both are one body: the one-camera form is the list form
   with a list of one and every image on it, so the arithmetic, and the
-  bytes, are the same.
+  bytes, are the same. A caller holding a reconstruction passes
+  `ImageSet::image_intrinsics_list`, whose list holds one adjusted copy per
+  image with a non-zero intrinsic adjustment, so each observation is read
+  through its image's intrinsics: the edits' retriangulation, the bench's
+  point fit and the bundle adjustment's re-estimation all do.
 
 Per track the caller may also pass an incoming state: a position and a flag
 saying the point is currently a direction. The state is read only by the
@@ -646,6 +650,10 @@ The in-front flag comes back beside the verdicts, which is what makes
   index in the caller's own indexing, and otherwise reports each status in the
   caller's indexing at the row the fold put it in, as `All` over the same
   overlay does.
+- **Image intrinsics.** Over the same arc with every image carrying its own
+  intrinsic adjustment and its keypoints made through it, every point lands on
+  the truth and stores an error under a hundredth of a pixel, and every
+  adjustment comes back unchanged.
 - **Several cameras.** Over the same arc with images alternating between a
   pinhole and an equidistant fisheye of a different focal and principal point,
   tracks seen through one camera only, and a track seen through both, land on

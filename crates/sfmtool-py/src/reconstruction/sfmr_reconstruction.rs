@@ -1123,12 +1123,9 @@ impl PySfmrReconstruction {
             .iter()
             .map(|im| im.camera_center())
             .collect();
-        let focal_max: Vec<f64> = recon
-            .image_set
-            .images
-            .iter()
-            .map(|im| {
-                let (fx, fy) = recon.image_set.cameras[im.camera_index as usize].focal_lengths();
+        let focal_max: Vec<f64> = (0..recon.image_set.images.len())
+            .map(|i| {
+                let (fx, fy) = recon.image_intrinsics(i).focal_lengths();
                 fx.max(fy)
             })
             .collect();

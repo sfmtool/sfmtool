@@ -29,6 +29,7 @@ use crate::reconstruction::triangulation::point_or_bearing::{
     BearingScore, PointBearingFit, PointBearingFitOptions,
 };
 use crate::reconstruction::{ImageSet, ReconstructionError, SfmrReconstruction};
+use crate::CameraIntrinsics;
 
 /// One observation as the point-or-bearing test reads it.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -57,7 +58,8 @@ pub struct RayBatch {
 }
 
 /// The ray, camera centre and noise weight of `pixel` in image `image_index`
-/// of `image_set`, at per-axis pixel noise `sigma_px`.
+/// of `image_set`, at per-axis pixel noise `sigma_px`, cast through the image's
+/// intrinsics ([`ImageSet::image_intrinsics`]).
 ///
 /// `None` when the index is past the image set, the pixel is not finite, or
 /// [`observed_ray`] declines it (a `sigma_px` that is not finite and positive,
@@ -68,12 +70,32 @@ pub fn observation_ray(
     pixel: [f64; 2],
     sigma_px: f64,
 ) -> Option<ObservationRay> {
+    let image = image_set.images.get(image_index)?;
+    image_set.cameras.get(image.camera_index as usize)?;
+    observation_ray_through(
+        image_set,
+        &image_set.image_intrinsics(image_index),
+        image_index,
+        pixel,
+        sigma_px,
+    )
+}
+
+/// [`observation_ray`] through `intrinsics`, the intrinsics of image
+/// `image_index` that a caller looping over many observations has already
+/// built, so that an adjusted camera is not built again for each one.
+pub(crate) fn observation_ray_through(
+    image_set: &ImageSet,
+    intrinsics: &CameraIntrinsics,
+    image_index: usize,
+    pixel: [f64; 2],
+    sigma_px: f64,
+) -> Option<ObservationRay> {
     if !(pixel[0].is_finite() && pixel[1].is_finite()) {
         return None;
     }
     let image = image_set.images.get(image_index)?;
-    let camera = image_set.cameras.get(image.camera_index as usize)?;
-    let ray = observed_ray(camera, &image.quaternion_wxyz, pixel, sigma_px)?;
+    let ray = observed_ray(intrinsics, &image.quaternion_wxyz, pixel, sigma_px)?;
     Some(ObservationRay {
         dir: ray.dir,
         center: image.camera_center(),
@@ -117,12 +139,16 @@ pub fn track_rays(
     sigma_px: f64,
 ) -> RayBatch {
     let m = offsets.len().saturating_sub(1);
+    let intrinsics = image_set.all_image_intrinsics();
     let per_track: Vec<Vec<ObservationRay>> = (0..m)
         .into_par_iter()
         .map(|t| {
             observations[offsets[t]..offsets[t + 1]]
                 .iter()
-                .filter_map(|&(image, pixel)| observation_ray(image_set, image, pixel, sigma_px))
+                .filter_map(|&(image, pixel)| {
+                    let through = intrinsics.get(image)?;
+                    observation_ray_through(image_set, through, image, pixel, sigma_px)
+                })
                 .collect()
         })
         .collect();

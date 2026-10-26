@@ -66,8 +66,9 @@ pub struct OutermostKeypoints {
 /// The outermost keypoint of each of `cameras`, observed and detected, in
 /// ascending camera order.
 ///
-/// A keypoint's reach is its pixel distance from the camera's principal point,
-/// and its angle is the incidence angle the camera's own model gives that pixel,
+/// A keypoint's reach is its pixel distance from its image's principal point,
+/// and its angle is the incidence angle that image's intrinsics give that pixel
+/// ([`ImageSet::image_intrinsics`](super::data::ImageSet::image_intrinsics)),
 /// so a caller holding a camera after a refit or a solve measures under that
 /// camera. **Observed** is over the reconstruction's observations of images that
 /// use the camera: the inline keypoint where the value carries one, otherwise the
@@ -135,7 +136,10 @@ pub fn outermost_keypoints(
         let Some(&slot) = slot_of.get(&c) else {
             continue;
         };
-        let camera = &image_set.cameras[c];
+        // Each keypoint is measured through the intrinsics of the image it is
+        // in, the camera's with that image's adjustment applied.
+        let camera = image_set.image_intrinsics(i);
+        let camera = camera.as_ref();
         let entry = &mut out[slot];
         entry.images += 1;
         let positions = if read_sift_files {

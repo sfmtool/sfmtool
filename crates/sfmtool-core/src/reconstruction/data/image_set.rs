@@ -12,7 +12,7 @@ use sfmtool_sfmr_format::{
     parse_per_image_adjustment_names, DepthStatistics, RigFrameData, PER_IMAGE_ADJUSTMENT_NAMES,
 };
 
-use crate::camera::CameraIntrinsics;
+use crate::camera::{CameraIntrinsics, ImageIntrinsicsList};
 use crate::reconstruction::bundle_adjust::is_posed;
 
 use super::SfmrImage;
@@ -113,7 +113,9 @@ impl ImageSet {
         self.cameras.len()
     }
 
-    /// The camera an image was taken with.
+    /// The shared camera of image `image_index`, without the image's intrinsic
+    /// adjustment. A caller that projects through the image reads
+    /// [`Self::image_intrinsics`] instead.
     pub fn camera_for_image(&self, image_index: usize) -> &CameraIntrinsics {
         &self.cameras[self.images[image_index].camera_index as usize]
     }
@@ -136,6 +138,46 @@ impl ImageSet {
         }
     }
 
+    /// [`Self::image_intrinsics`] of every image, in image order: what a loop
+    /// over observations of many images reads, so that an adjusted camera is
+    /// built once per image rather than once per observation.
+    pub fn all_image_intrinsics(&self) -> Vec<Cow<'_, CameraIntrinsics>> {
+        (0..self.images.len())
+            .map(|i| self.image_intrinsics(i))
+            .collect()
+    }
+
+    /// Every image's intrinsics as a camera list and a per-image index into
+    /// it, for a routine that takes a camera list and a per-image camera
+    /// column. Borrows the cameras when no image has a non-zero adjustment.
+    ///
+    /// # Panics
+    ///
+    /// Panics when an image with a non-zero adjustment names a camera past the
+    /// cameras.
+    pub fn image_intrinsics_list(&self) -> ImageIntrinsicsList<'_> {
+        let mut image_entry: Vec<u32> = self.images.iter().map(|i| i.camera_index).collect();
+        if self.images.iter().all(|i| i.intrinsic_adjustment.is_zero()) {
+            return ImageIntrinsicsList {
+                intrinsics: Cow::Borrowed(&self.cameras),
+                image_entry: Cow::Owned(image_entry),
+            };
+        }
+        let mut intrinsics = self.cameras.clone();
+        for (entry, image) in image_entry.iter_mut().zip(&self.images) {
+            if image.intrinsic_adjustment.is_zero() {
+                continue;
+            }
+            let camera = &self.cameras[image.camera_index as usize];
+            *entry = intrinsics.len() as u32;
+            intrinsics.push(camera.with_adjustment(&image.intrinsic_adjustment));
+        }
+        ImageIntrinsicsList {
+            intrinsics: Cow::Owned(intrinsics),
+            image_entry: Cow::Owned(image_entry),
+        }
+    }
+
     /// Which parts of camera `camera_index`'s intrinsics vary per image:
     /// nothing when [`Self::per_image_adjustments`] is empty or does not reach
     /// that camera.
@@ -150,13 +192,19 @@ impl ImageSet {
     /// `None` when the index is past the set or the camera model has no ray
     /// there.
     ///
-    /// The pose and the lens are both this set's, so every edit that
+    /// The pose and the image's intrinsics ([`Self::image_intrinsics`]) are
+    /// both this set's, so every edit that
     /// triangulates a track -- a shortened one, or one whose camera moved --
     /// assembles its rays here rather than each spelling the pixel-to-world
     /// chain out again.
     pub fn world_ray(&self, image_index: usize, pixel: [f64; 2]) -> Option<nalgebra::Vector3<f64>> {
         let image = self.images.get(image_index)?;
         let camera = self.cameras.get(image.camera_index as usize)?;
+        let camera = if image.intrinsic_adjustment.is_zero() {
+            Cow::Borrowed(camera)
+        } else {
+            Cow::Owned(camera.with_adjustment(&image.intrinsic_adjustment))
+        };
         let ray = camera.pixel_to_ray(pixel[0], pixel[1]);
         let cam = nalgebra::Vector3::new(ray[0], ray[1], ray[2]);
         if !cam.iter().all(|c| c.is_finite()) || cam.norm() <= 0.0 {

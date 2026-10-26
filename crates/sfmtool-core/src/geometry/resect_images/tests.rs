@@ -1411,7 +1411,9 @@ fn a_member_behind_its_camera_or_outside_its_frame_does_not_agree() {
     let world = a_point_seen_by(&truth, &[0]);
     let uv = pixel_of(&truth, 0, &world);
     let uv = [f64::from(uv[0]), f64::from(uv[1])];
-    let residual = |p: Point3<f64>, uv: [f64; 2]| member_residual(&truth, 0, uv, [p.x, p.y, p.z]);
+    let camera = truth.image_intrinsics(0);
+    let residual =
+        |p: Point3<f64>, uv: [f64; 2]| member_residual(&truth, &camera, 0, uv, [p.x, p.y, p.z]);
     assert!(residual(world, uv) < 1e-3);
 
     // The point mirrored through the camera centre: on the line of the
@@ -2079,5 +2081,54 @@ fn scene_scale_averages_the_two_middles_of_an_even_population() {
     assert!(
         (scale - 2.0).abs() > 0.5,
         "scene_scale fell back to the lower-middle median: {scale}"
+    );
+}
+
+#[test]
+fn a_pose_is_recovered_through_each_images_intrinsics() {
+    // Every image carries its own intrinsic adjustment and its keypoints are
+    // the truth's projections through it. The held-out structure is cast
+    // through the other images' intrinsics and the target's pose is fitted
+    // through its own, so the truth comes back; fitted through its shared
+    // camera, the target's principal-point offset of about 4 px on an 800 px
+    // focal turns its rotation by a few tenths of a degree.
+    use crate::reconstruction::data::adjusted_fixture::{adjust_and_reproject, varied_adjustment};
+    let mut truth = orbit();
+    adjust_and_reproject(&mut truth, varied_adjustment);
+    let target = 0;
+    let true_pose = truth.image_set.images[target].clone();
+    let mut source = truth.clone();
+    let spin = UnitQuaternion::from_axis_angle(&Vector3::y_axis(), 0.35);
+    source.image_set.images[target].quaternion_wxyz = spin * true_pose.quaternion_wxyz;
+    source.image_set.images[target].translation_xyz =
+        true_pose.translation_xyz + Vector3::new(0.6, -0.3, 0.2);
+
+    let resect = |source: &SfmrReconstruction| {
+        let out = resect_image(
+            source,
+            target,
+            ResectSource::Tracks,
+            &ResectImageOptions::default(),
+        )
+        .expect("the orbit has support");
+        assert!(out.report.accepted, "refused: {:?}", out.report.refusal);
+        let fitted = out.reconstruction.image_set.images[target].clone();
+        (
+            angle_deg(&fitted.quaternion_wxyz, &true_pose.quaternion_wxyz),
+            (fitted.camera_center() - true_pose.camera_center()).norm(),
+            fitted.intrinsic_adjustment,
+        )
+    };
+    let (angle, centre, adjustment) = resect(&source);
+    assert!(angle < 0.02, "rotation off by {angle}°");
+    assert!(centre < 0.01, "centre off by {centre}");
+    assert_eq!(adjustment, true_pose.intrinsic_adjustment);
+
+    let mut shared = source.clone();
+    shared.image_set.images[target].intrinsic_adjustment = Default::default();
+    let (angle, _, _) = resect(&shared);
+    assert!(
+        angle > 0.1,
+        "rotation off by only {angle}° through the shared camera"
     );
 }

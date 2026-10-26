@@ -126,7 +126,10 @@ pub struct CellPlaneClusters<'a> {
 pub struct CellPlaneCameras<'a> {
     /// One entry per camera.
     pub cameras: &'a [CameraIntrinsics],
-    /// One entry per image: the index into `cameras`.
+    /// One entry per image: the index into `cameras` of the intrinsics it is
+    /// read through. A caller whose images carry intrinsic adjustments gives
+    /// each adjusted image an entry of its own, as
+    /// [`ImageIntrinsicsList`](crate::camera::ImageIntrinsicsList) lays out.
     pub image_camera: &'a [u32],
     /// One entry per image: its `cam_from_world` pose, `None` when unposed.
     pub cam_from_world: &'a [Option<RigidTransform>],

@@ -2903,7 +2903,7 @@ fn on_photograph(camera: &crate::camera::CameraIntrinsics, pixel: [f64; 2]) -> b
         && pixel[1] < f64::from(camera.height)
 }
 
-/// The camera and the pose of one image of the reconstruction.
+/// The intrinsics and the pose of one image of the reconstruction.
 fn view_of(
     edited: &EditedReconstruction,
     image: u32,
@@ -2919,10 +2919,12 @@ fn view_of(
         .images
         .get(image as usize)
         .ok_or(TrackEditError::NoSuchImage { image })?;
-    let camera = image_set
+    image_set
         .cameras
         .get(row.camera_index as usize)
         .ok_or(TrackEditError::NoSuchImage { image })?;
+    // The image's intrinsics: its camera's with its adjustment applied.
+    let camera = image_set.image_intrinsics(image as usize).into_owned();
     let q = row.quaternion_wxyz.quaternion();
     let pose = crate::geometry::RigidTransform::from_wxyz_translation(
         [q.w, q.i, q.j, q.k],
@@ -2932,7 +2934,7 @@ fn view_of(
             row.translation_xyz.z,
         ],
     );
-    Ok((camera.clone(), pose))
+    Ok((camera, pose))
 }
 
 /// What one painting did.

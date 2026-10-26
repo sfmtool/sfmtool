@@ -219,7 +219,11 @@ models, and is fitted like any other source too.
 ### What is written back
 
 Each switched camera is replaced by its fitted camera. Nothing else in the image
-set, the point set or the observation columns changes. The stored error of
+set, the point set or the observation columns changes: in particular each
+image keeps its intrinsic adjustment as it is, since the adjustment is relative
+to whatever its camera is, and the fit refits the shared camera alone. Every
+reprojection error below, before and after, is read through each image's
+intrinsics, its camera with its adjustment applied. The stored error of
 every point observed in an image that uses a switched camera is recomputed as
 the root mean square of its reprojection errors over all its observations, the convention
 `SfmrReconstruction::recompute_point_errors` writes; a point with none that
@@ -301,6 +305,9 @@ exact projection, plus one point 95° off the first image's axis:
 - the outermost observation being the wide one, at its angle under the switched
   camera, with nothing detected beside no `.sift` file;
 - only the named cameras changing;
+- with every image carrying its own intrinsic adjustment and its keypoints made
+  through it, every adjustment kept, the `before` errors under `10⁻³` px and the
+  stored errors the ones a recompute gives;
 - `fit_camera_switch` giving the camera and report the switch installs, for a
   change of model, a source with no trusted bound and a refit of a spline, and
   the switch's refusals; `default_fit_angle` giving the angle and source such a

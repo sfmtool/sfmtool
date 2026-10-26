@@ -529,7 +529,8 @@ pub fn resect_images(
     // held-out position or a held-out bearing, in point order.
     let mut pairs_of: HashMap<usize, Vec<Pair>> = HashMap::new();
     for &t in image_indexes {
-        let camera = &recon.image_set.cameras[recon.image_set.images[t].camera_index as usize];
+        let camera = recon.image_intrinsics(t);
+        let camera: &CameraIntrinsics = &camera;
         let rows = &target_rows[&t];
         let points = &observed[&t];
         let mut out = Vec::with_capacity(rows.len());
@@ -561,7 +562,8 @@ pub fn resect_images(
     };
     if let Some(support) = &cluster_support {
         for &t in image_indexes {
-            let camera = &recon.image_set.cameras[recon.image_set.images[t].camera_index as usize];
+            let camera = recon.image_intrinsics(t);
+            let camera: &CameraIntrinsics = &camera;
             let pairs = pairs_of.get_mut(&t).expect("every target has pairs");
             pairs.extend(
                 support[&t]
@@ -577,7 +579,8 @@ pub fn resect_images(
     let estimates: HashMap<usize, Estimate> = image_indexes
         .par_iter()
         .map(|&t| {
-            let camera = &recon.image_set.cameras[recon.image_set.images[t].camera_index as usize];
+            let camera = recon.image_intrinsics(t);
+            let camera: &CameraIntrinsics = &camera;
             let pairs = &pairs_of[&t];
             let finite = pairs.iter().filter(|p| p.source != Source::Bearing).count();
             let bearings: Vec<BearingPair> = pairs
@@ -971,6 +974,7 @@ fn triangulate_groups(
     groups: &[Vec<(usize, [f64; 2])>],
     replace: &[Option<Pose>],
 ) -> Vec<Option<[f64; 3]>> {
+    let intrinsics = recon.image_set.all_image_intrinsics();
     let mut dirs: Vec<Vector3<f64>> = Vec::new();
     let mut centers: Vec<Point3<f64>> = Vec::new();
     let mut offsets: Vec<usize> = vec![0];
@@ -983,8 +987,7 @@ fn triangulate_groups(
                     recon.image_set.images[image].translation_xyz,
                 ),
             };
-            let camera =
-                &recon.image_set.cameras[recon.image_set.images[image].camera_index as usize];
+            let camera = &intrinsics[image];
             let ray = camera.pixel_to_ray(uv[0], uv[1]);
             let world = rotation.inverse() * Vector3::new(ray[0], ray[1], ray[2]);
             let norm = world.norm();
@@ -1022,6 +1025,7 @@ fn held_out_bearings(
     pixel_of: &HashMap<usize, [f64; 2]>,
     posed_others: &[bool],
 ) -> HashMap<usize, Vector3<f64>> {
+    let intrinsics = recon.image_set.all_image_intrinsics();
     let mut out = HashMap::new();
     for &p in all_observed {
         if !recon.point_set.points[p].is_at_infinity() {
@@ -1038,8 +1042,7 @@ fn held_out_bearings(
             let Some(uv) = pixel_of.get(&row) else {
                 continue;
             };
-            let camera =
-                &recon.image_set.cameras[recon.image_set.images[image].camera_index as usize];
+            let camera = &intrinsics[image];
             let ray = camera.pixel_to_ray(uv[0], uv[1]);
             let world = recon.image_set.images[image].quaternion_wxyz.inverse()
                 * Vector3::new(ray[0], ray[1], ray[2]);

@@ -61,7 +61,8 @@ impl SfmrReconstruction {
         }
 
         let image = &self.image_set.images[image_index];
-        let camera = &self.image_set.cameras[image.camera_index as usize];
+        let intrinsics = self.image_intrinsics(image_index);
+        let camera: &CameraIntrinsics = &intrinsics;
 
         let inline = self.keypoints_xy();
         // Feature positions from the image's `.sift` file, read only when there
@@ -193,7 +194,8 @@ impl SfmrReconstruction {
             return Vec::new();
         };
         let image = &self.image_set.images[image_index];
-        let camera = &self.image_set.cameras[image.camera_index as usize];
+        let intrinsics = self.image_intrinsics(image_index);
+        let camera: &CameraIntrinsics = &intrinsics;
         self.point_set
             .tracks
             .iter()
@@ -229,15 +231,22 @@ impl SfmrReconstruction {
     /// [`Self::compute_observation_reprojection_errors`] instead.
     fn inline_point_reprojection_errors(&self) -> Option<Vec<f32>> {
         let keypoints_xy = self.keypoints_xy()?;
+        let intrinsics = self.image_set.all_image_intrinsics();
         let out = (0..self.point_set.points.len())
-            .map(|point_idx| self.inline_point_error(keypoints_xy, point_idx))
+            .map(|point_idx| self.inline_point_error(keypoints_xy, &intrinsics, point_idx))
             .collect();
         Some(out)
     }
 
     /// The RMS reprojection error (px) of point `point_idx` against the inline
-    /// `keypoints_xy` column, by [`rms_reprojection_error_px`].
-    fn inline_point_error(&self, keypoints_xy: &Array2<f32>, point_idx: usize) -> f32 {
+    /// `keypoints_xy` column, by [`rms_reprojection_error_px`]. `intrinsics`
+    /// is [`super::ImageSet::all_image_intrinsics`] of this value.
+    fn inline_point_error(
+        &self,
+        keypoints_xy: &Array2<f32>,
+        intrinsics: &[Cow<'_, CameraIntrinsics>],
+        point_idx: usize,
+    ) -> f32 {
         let start = self.point_set.observation_offsets[point_idx];
         let observations = self
             .observations_for_point(point_idx)
@@ -252,6 +261,7 @@ impl SfmrReconstruction {
             });
         rms_reprojection_error_px(
             &self.image_set,
+            intrinsics,
             &self.point_set.points[point_idx],
             observations,
         )
@@ -275,11 +285,12 @@ impl SfmrReconstruction {
         let Some(keypoints_xy) = self.keypoints_xy() else {
             return false;
         };
+        let intrinsics = self.image_set.all_image_intrinsics();
         let errors: Vec<(usize, f32)> = points
             .iter()
             .enumerate()
             .filter(|&(_, &rescore)| rescore)
-            .map(|(p, _)| (p, self.inline_point_error(keypoints_xy, p)))
+            .map(|(p, _)| (p, self.inline_point_error(keypoints_xy, &intrinsics, p)))
             .collect();
         for (p, error) in errors {
             self.point_set.points[p].rms_reprojection_error = error;
@@ -494,8 +505,13 @@ impl SfmrReconstruction {
 ///
 /// The one per-point statistic behind [`SfmrReconstruction::recompute_point_errors`]
 /// on the inline-keypoint path and the edits that score a point again.
+///
+/// Each observation is projected through its image's intrinsics, read from
+/// `intrinsics`, which is [`super::ImageSet::all_image_intrinsics`] of
+/// `image_set`, built once by a caller that scores many points.
 pub(crate) fn rms_reprojection_error_px(
     image_set: &super::ImageSet,
+    intrinsics: &[Cow<'_, CameraIntrinsics>],
     point: &super::Point3D,
     observations: impl IntoIterator<Item = (usize, [f64; 2])>,
 ) -> f32 {
@@ -503,7 +519,7 @@ pub(crate) fn rms_reprojection_error_px(
     let mut count = 0u32;
     for (image_index, observed) in observations {
         let image = &image_set.images[image_index];
-        let camera = &image_set.cameras[image.camera_index as usize];
+        let camera = &intrinsics[image_index];
         if let Some(e) = observation_reprojection_error(
             &image.quaternion_wxyz,
             &image.translation_xyz,

@@ -12,7 +12,8 @@
 
 use nalgebra::Vector3;
 
-use super::{ImageSet, Point3D, SfmrReconstruction};
+use super::{ImageSet, Point3D, SfmrImage, SfmrReconstruction};
+use crate::camera::CameraIntrinsics;
 
 /// The projected affine shape of one patch frame in one image.
 ///
@@ -23,7 +24,8 @@ use super::{ImageSet, Point3D, SfmrReconstruction};
 /// the patch's in-plane half-*vectors*, not unit axes.
 ///
 /// Returns `None` when the frame is degenerate, the image index names no image,
-/// or the projection falls behind the camera.
+/// or the projection falls behind the camera. The frame is projected through
+/// the image's intrinsics ([`ImageSet::image_intrinsics`]).
 pub fn patch_affine_shape(
     point: &Point3D,
     u: Vector3<f64>,
@@ -32,11 +34,30 @@ pub fn patch_affine_shape(
     image_index: usize,
     keypoint_xy: [f32; 2],
 ) -> Option<[[f32; 2]; 2]> {
+    let image = image_set.images.get(image_index)?;
+    image_set.cameras.get(image.camera_index as usize)?;
+    affine_shape_through(
+        point,
+        u,
+        v,
+        image,
+        &image_set.image_intrinsics(image_index),
+        keypoint_xy,
+    )
+}
+
+/// [`patch_affine_shape`] in `image` through `camera`, the image's intrinsics.
+fn affine_shape_through(
+    point: &Point3D,
+    u: Vector3<f64>,
+    v: Vector3<f64>,
+    image: &SfmrImage,
+    camera: &CameraIntrinsics,
+    keypoint_xy: [f32; 2],
+) -> Option<[[f32; 2]; 2]> {
     if u.norm_squared() == 0.0 || v.norm_squared() == 0.0 {
         return None; // no patch for this point
     }
-    let image = image_set.images.get(image_index)?;
-    let camera = image_set.cameras.get(image.camera_index as usize)?;
     let r = image.quaternion_wxyz.to_rotation_matrix();
 
     // Where to evaluate the frame. For a point at infinity the patch is
@@ -109,6 +130,13 @@ impl SfmrReconstruction {
         image_index: usize,
         keypoint_xy: [f32; 2],
     ) -> Option<[[f32; 2]; 2]> {
+        let (point, u, v) = self.patch_frame_of(point_idx)?;
+        patch_affine_shape(point, u, v, &self.image_set, image_index, keypoint_xy)
+    }
+
+    /// Point `point_idx` and its patch frame's half-vectors, or `None` when the
+    /// value carries no patch frames or the index is past the points.
+    fn patch_frame_of(&self, point_idx: usize) -> Option<(&Point3D, Vector3<f64>, Vector3<f64>)> {
         let u_arr = self.point_set.patch_u_halfvec_xyz.as_ref()?;
         let v_arr = self.point_set.patch_v_halfvec_xyz.as_ref()?;
         let point = self.point_set.points.get(point_idx)?;
@@ -122,7 +150,7 @@ impl SfmrReconstruction {
             v_arr[[point_idx, 1]] as f64,
             v_arr[[point_idx, 2]] as f64,
         );
-        patch_affine_shape(point, u, v, &self.image_set, image_index, keypoint_xy)
+        Some((point, u, v))
     }
 
     /// Per-point maximum keypoint feature size (px) for an `embedded_patches`
@@ -139,15 +167,22 @@ impl SfmrReconstruction {
     pub fn max_embedded_feature_size_per_point(&self) -> Option<Vec<f32>> {
         let keypoints_xy = self.keypoints_xy()?;
         let mut out = vec![0.0f32; self.point_count()];
+        // Every image's intrinsics, built once rather than per observation.
+        let intrinsics = self.image_set.all_image_intrinsics();
         for (point_idx, slot) in out.iter_mut().enumerate() {
+            let Some((point, u, v)) = self.patch_frame_of(point_idx) else {
+                continue;
+            };
             let start = self.point_set.observation_offsets[point_idx];
             let mut max_size = 0.0f32;
             for (k, obs) in self.observations_for_point(point_idx).iter().enumerate() {
                 let obs_global = start + k;
                 let xy = [keypoints_xy[[obs_global, 0]], keypoints_xy[[obs_global, 1]]];
-                if let Some(a) =
-                    self.observation_affine_shape(point_idx, obs.image_index as usize, xy)
-                {
+                let i = obs.image_index as usize;
+                let Some(image) = self.image_set.images.get(i) else {
+                    continue;
+                };
+                if let Some(a) = affine_shape_through(point, u, v, image, &intrinsics[i], xy) {
                     let col0 = (a[0][0] * a[0][0] + a[1][0] * a[1][0]).sqrt();
                     let col1 = (a[0][1] * a[0][1] + a[1][1] * a[1][1]).sqrt();
                     max_size = max_size.max(0.5 * (col0 + col1));

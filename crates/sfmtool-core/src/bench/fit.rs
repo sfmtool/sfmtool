@@ -1098,7 +1098,8 @@ fn ranged_coordinate(
             translations.extend_from_slice(&[f64::NAN; 3]);
         }
     }
-    let image_camera: Vec<u32> = image_set.images.iter().map(|i| i.camera_index).collect();
+    // Each observation's ray is cast through its image's intrinsics.
+    let intrinsics = image_set.image_intrinsics_list();
     let mut uv = Vec::with_capacity(ins.len() * 2);
     let mut obs_image = Vec::with_capacity(ins.len());
     for &i in ins {
@@ -1110,8 +1111,8 @@ fn ranged_coordinate(
     }
     let obs_point = vec![0u32; obs_image.len()];
     let answer = triangulate_points_through_cameras(
-        &image_set.cameras,
-        &image_camera,
+        &intrinsics.intrinsics,
+        &intrinsics.image_entry,
         ObservationSet {
             uv: &uv,
             obs_image: &obs_image,

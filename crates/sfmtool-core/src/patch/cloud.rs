@@ -839,8 +839,9 @@ impl PatchCloud {
             .map(|o| o.image_index)
             .collect();
 
-        // Per-image pose + camera model (the image's camera, cloned per image so
-        // the shared routine indexes everything by image).
+        // Per-image pose and intrinsics (the image's camera with its adjustment
+        // applied, one per image so the shared routine indexes everything by
+        // image).
         let cam_quats: Vec<UnitQuaternion<f64>> = recon
             .image_set
             .images
@@ -853,11 +854,8 @@ impl PatchCloud {
             .iter()
             .map(|im| im.translation_xyz)
             .collect();
-        let cam_intrinsics: Vec<CameraIntrinsics> = recon
-            .image_set
-            .images
-            .iter()
-            .map(|im| recon.image_set.cameras[im.camera_index as usize].clone())
+        let cam_intrinsics: Vec<CameraIntrinsics> = (0..recon.image_set.images.len())
+            .map(|i| recon.image_intrinsics(i).into_owned())
             .collect();
 
         // FeatureSize is the one policy that reads the workspace `.sift` files:

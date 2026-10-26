@@ -8,13 +8,15 @@
 //!
 //! See `specs/core/analysis/track-table.md` § "The columns".
 
+use std::borrow::Cow;
+
 use crate::geometry::RigidTransform;
 use crate::patch::normal_refine::viewing_angle;
 use crate::patch::self_similarity::{zncc_self_similarity_radius, PatchTile, SelfSimilarityParams};
 use crate::patch::stored_bitmap::stored_bitmap_planes;
 use crate::reconstruction::data::observation_reprojection_error;
 use crate::reconstruction::{ImageSet, PointView};
-use crate::RotQuaternion;
+use crate::{CameraIntrinsics, RotQuaternion};
 
 /// The largest reprojection error among the track's observations, in pixels:
 /// each observation's inline keypoint against the point's projection into its
@@ -22,7 +24,11 @@ use crate::RotQuaternion;
 /// whose point does not project (behind the camera, or outside the lens's
 /// domain) is skipped, as the stored RMS error skips it; NaN when none
 /// projects or the reconstruction holds no inline keypoints.
-pub(super) fn max_error_px(image_set: &ImageSet, view: &PointView<'_>) -> f64 {
+pub(super) fn max_error_px(
+    image_set: &ImageSet,
+    intrinsics: &[Cow<'_, CameraIntrinsics>],
+    view: &PointView<'_>,
+) -> f64 {
     let point = view.point();
     let at_infinity = point.is_at_infinity();
     let mut largest = f64::NAN;
@@ -33,7 +39,7 @@ pub(super) fn max_error_px(image_set: &ImageSet, view: &PointView<'_>) -> f64 {
         let Some(image) = image_set.images.get(obs.image_index as usize) else {
             continue;
         };
-        let camera = &image_set.cameras[image.camera_index as usize];
+        let camera = &intrinsics[obs.image_index as usize];
         if let Some(error) = observation_reprojection_error(
             &image.quaternion_wxyz,
             &image.translation_xyz,
@@ -58,7 +64,11 @@ pub(super) fn max_error_px(image_set: &ImageSet, view: &PointView<'_>) -> f64 {
 /// and at the patch's stored centre otherwise, as a render without a
 /// keypoint is. An observation whose camera sits on the patch's centre has no
 /// angle and is skipped. The largest is NaN when no observation has an angle.
-pub(super) fn viewing_angles(image_set: &ImageSet, view: &PointView<'_>) -> Option<(f64, f64)> {
+pub(super) fn viewing_angles(
+    image_set: &ImageSet,
+    intrinsics: &[Cow<'_, CameraIntrinsics>],
+    view: &PointView<'_>,
+) -> Option<(f64, f64)> {
     let patch = view.patch_frame()?;
     let mut largest = f64::NAN;
     let mut back_facing = 0usize;
@@ -66,7 +76,7 @@ pub(super) fn viewing_angles(image_set: &ImageSet, view: &PointView<'_>) -> Opti
         let Some(image) = image_set.images.get(obs.image_index as usize) else {
             continue;
         };
-        let camera = &image_set.cameras[image.camera_index as usize];
+        let camera = &intrinsics[obs.image_index as usize];
         let cam_from_world = RigidTransform::new(
             RotQuaternion::from_nalgebra(image.quaternion_wxyz),
             image.translation_xyz,

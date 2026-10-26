@@ -644,7 +644,9 @@ pub fn add_image_to_tracks(
         ..options.refine.clone()
     };
 
-    // Poses and cameras from the value, so a view can never disagree with it.
+    // Poses and intrinsics from the value, so a view can never disagree with
+    // it: each image is read through its camera with its adjustment applied.
+    let intrinsics = image_set.all_image_intrinsics();
     let poses: Vec<RigidTransform> = image_set
         .images
         .iter()
@@ -659,7 +661,7 @@ pub fn add_image_to_tracks(
             let im = &image_set.images[i];
             let pyramid = pyramids[i]?;
             is_posed(&im.quaternion_wxyz, &im.translation_xyz).then(|| ProjectedImage {
-                camera: &image_set.cameras[im.camera_index as usize],
+                camera: &intrinsics[i],
                 cam_from_world: &poses[i],
                 pyramid,
             })

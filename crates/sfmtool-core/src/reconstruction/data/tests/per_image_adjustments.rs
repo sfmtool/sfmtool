@@ -251,3 +251,33 @@ fn the_flags_name_their_parameters_in_the_formats_order() {
     assert!(!PerImageAdjustments::default().any());
     assert!(PerImageAdjustments::from_names(&["skew"]).is_err());
 }
+
+#[test]
+fn the_intrinsics_list_holds_one_entry_per_adjusted_image() {
+    // With no adjustment the list is the cameras themselves, borrowed, and
+    // the camera column.
+    let plain = SfmrReconstruction::demo(16);
+    let list = plain.image_set.image_intrinsics_list();
+    assert!(matches!(list.intrinsics, Cow::Borrowed(_)));
+    assert_eq!(list.intrinsics.len(), plain.camera_count());
+    for i in 0..plain.image_count() {
+        assert_eq!(list.image_entry[i], plain.image_set.images[i].camera_index);
+    }
+
+    // With every image but one adjusted, each adjusted image has an entry of
+    // its own after the cameras, and every image reads its own intrinsics.
+    let mut recon = adjusted_demo();
+    recon.image_set.images[2].intrinsic_adjustment = IntrinsicAdjustment::default();
+    let list = recon.image_set.image_intrinsics_list();
+    assert_eq!(
+        list.intrinsics.len(),
+        recon.camera_count() + recon.image_count() - 1
+    );
+    assert_eq!(list.image_entry[2], 0);
+    let all = recon.image_set.all_image_intrinsics();
+    assert_eq!(all.len(), recon.image_count());
+    for (i, intrinsics) in all.iter().enumerate() {
+        assert_eq!(list.of(i), recon.image_intrinsics(i).as_ref());
+        assert_eq!(intrinsics.as_ref(), recon.image_intrinsics(i).as_ref());
+    }
+}

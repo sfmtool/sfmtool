@@ -404,7 +404,10 @@ pub fn triangulate_points_from_observations(
 ///
 /// `image_camera` holds, per image, the index into `cameras` of the camera that
 /// took it, so each observation's ray is `pixel_to_ray` through its own lens,
-/// and its likelihood-rule weight reads that lens's projection derivative.
+/// and its likelihood-rule weight reads that lens's projection derivative. A
+/// caller whose images carry intrinsic adjustments passes an
+/// [`ImageIntrinsicsList`](crate::camera::ImageIntrinsicsList), so each
+/// observation is read through its image's intrinsics.
 pub(crate) fn triangulate_points_through_cameras(
     cameras: &[CameraIntrinsics],
     image_camera: &[u32],

@@ -36,12 +36,14 @@
 //! A cluster with two or more kept members in the target does not say which of
 //! its pixels the point is at, so it contributes nothing to that target.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 use nalgebra::Vector3;
 use sfmtool_matches_format::{ClusterMemberStatus, MatchesData};
 
 use crate::reconstruction::SfmrReconstruction;
+use crate::CameraIntrinsics;
 
 use super::{triangulate_groups, Pose, ResectImageError};
 
@@ -202,6 +204,7 @@ pub(super) fn cluster_support(
     let groups: Vec<Sightings> = candidates.iter().map(|c| c.0.clone()).collect();
     let no_replacement: Vec<Option<Pose>> = vec![None; recon.image_set.images.len()];
     let placed = triangulate_groups(recon, &groups, &no_replacement);
+    let intrinsics = recon.image_set.all_image_intrinsics();
 
     for ((others, answers), position) in candidates.into_iter().zip(placed) {
         let Some(world) = position else {
@@ -210,7 +213,7 @@ pub(super) fn cluster_support(
             }
             continue;
         };
-        if worst_residual(recon, &others, world) > max_residual_px {
+        if worst_residual(recon, &intrinsics, &others, world) > max_residual_px {
             for (t, _) in answers {
                 targets_out.get_mut(&t).expect("a target").inconsistent += 1;
             }
@@ -228,16 +231,22 @@ pub(super) fn cluster_support(
 }
 
 /// The largest distance, in pixels, between a member of `sightings` and where
-/// `world` projects in that member's image ([`member_residual`]).
-fn worst_residual(recon: &SfmrReconstruction, sightings: &Sightings, world: [f64; 3]) -> f64 {
+/// `world` projects in that member's image ([`member_residual`]), through the
+/// image's entry of `intrinsics`, the image set's `all_image_intrinsics`.
+fn worst_residual(
+    recon: &SfmrReconstruction,
+    intrinsics: &[Cow<'_, CameraIntrinsics>],
+    sightings: &Sightings,
+    world: [f64; 3],
+) -> f64 {
     sightings
         .iter()
-        .map(|&(image, uv)| member_residual(recon, image, uv, world))
+        .map(|&(image, uv)| member_residual(recon, &intrinsics[image], image, uv, world))
         .fold(0.0, f64::max)
 }
 
 /// How far, in pixels, `world` projects from `uv` in image `image` at its
-/// stored pose.
+/// stored pose, through `camera`, the image's intrinsics.
 ///
 /// Infinite when the point is behind the camera, when its projection falls
 /// outside the frame, or when `uv` is not a finite pixel. "Behind" is judged
@@ -245,12 +254,12 @@ fn worst_residual(recon: &SfmrReconstruction, sightings: &Sightings, world: [f64
 /// fisheye wider than 180° keeps the points it can see beside its image plane.
 pub(super) fn member_residual(
     recon: &SfmrReconstruction,
+    camera: &CameraIntrinsics,
     image: usize,
     uv: [f64; 2],
     world: [f64; 3],
 ) -> f64 {
     let stored = &recon.image_set.images[image];
-    let camera = &recon.image_set.cameras[stored.camera_index as usize];
     let local = stored.quaternion_wxyz * Vector3::new(world[0], world[1], world[2])
         + stored.translation_xyz;
     let ray = camera.pixel_to_ray(uv[0], uv[1]);

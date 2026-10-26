@@ -14,6 +14,7 @@
 //! every point at infinity at a finite depth for a consumer that cannot store
 //! `w = 0`; that depth is supplied, not measured, so the two are not inverses.
 
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use nalgebra::{Point3, Vector3};
@@ -28,6 +29,7 @@ use crate::reconstruction::triangulation::{
     bearing_score_batch, is_finite, DEFAULT_DEPTH_LIKELIHOOD_RATIO_THRESHOLD,
 };
 use crate::reconstruction::SfmrReconstruction;
+use crate::CameraIntrinsics;
 
 /// The minimum depth of a promoted point, as a fraction of the reconstruction's
 /// scene scale: the median distance from a finite point to the centre of a
@@ -236,13 +238,11 @@ pub fn camera_extents(centers: &[Point3<f64>]) -> f64 {
 }
 
 impl SfmrReconstruction {
-    /// Largest focal length (pixels) for each image's camera.
+    /// Largest focal length (pixels) of each image's intrinsics.
     fn per_image_focal_max(&self) -> Vec<f64> {
-        self.image_set
-            .images
-            .iter()
-            .map(|im| {
-                let (fx, fy) = self.image_set.cameras[im.camera_index as usize].focal_lengths();
+        (0..self.image_set.images.len())
+            .map(|i| {
+                let (fx, fy) = self.image_set.image_intrinsics(i).focal_lengths();
                 fx.max(fy)
             })
             .collect()
@@ -364,6 +364,8 @@ impl SfmrReconstruction {
         // also measures from.
         let origin = self.image_set.camera_centroid();
         let min_depth = self.min_point_depth();
+        // Every image's intrinsics, built once for the changed points' errors.
+        let intrinsics = self.image_set.all_image_intrinsics();
 
         let mut recon = self.clone_for_edit();
         let mut patch_fixes: Vec<(usize, PatchFix)> = Vec::new();
@@ -462,7 +464,7 @@ impl SfmrReconstruction {
             }
             point.normal = Vector3::zeros();
             point.rms_reprojection_error =
-                self.observed_error(p, &point.position, point.w == 0.0, &pixels);
+                self.observed_error(p, &point.position, point.w == 0.0, &pixels, &intrinsics);
         }
 
         // A changed point's normal was just zeroed, so its confidence drops to
@@ -534,13 +536,16 @@ impl SfmrReconstruction {
     /// `pixels` (rows as `tracks`), were the point at `position` (a direction
     /// when `at_infinity`). Observations with no pixel or no projection are
     /// left out, and with none left the error is 0, as `recompute_point_errors`
-    /// gives.
+    /// gives. `intrinsics` is [`ImageSet::all_image_intrinsics`] of this value.
+    ///
+    /// [`ImageSet::all_image_intrinsics`]: crate::reconstruction::data::ImageSet::all_image_intrinsics
     fn observed_error(
         &self,
         p: usize,
         position: &Point3<f64>,
         at_infinity: bool,
         pixels: &Array2<f32>,
+        intrinsics: &[Cow<'_, CameraIntrinsics>],
     ) -> f32 {
         let start = self.point_set.observation_offsets[p];
         let mut sum = 0.0f64;
@@ -554,7 +559,7 @@ impl SfmrReconstruction {
             if let Some(e) = observation_reprojection_error(
                 &image.quaternion_wxyz,
                 &image.translation_xyz,
-                &self.image_set.cameras[image.camera_index as usize],
+                &intrinsics[obs.image_index as usize],
                 position,
                 at_infinity,
                 pixel,

@@ -32,7 +32,7 @@ use crate::camera::distortion::bspline::{
     basis_at, bspline_is_monotone, delta_and_deriv as bspline_delta_and_deriv, smoothing_weight,
     BSPLINE_SUPPORT, MIN_BSPLINE_COEFFS,
 };
-use crate::camera::intrinsics::SplineRadial;
+use crate::camera::intrinsics::{ImageIntrinsicsList, IntrinsicAdjustment, SplineRadial};
 use crate::camera::CameraModel;
 use crate::geometry::pose_refine::project_with_jac;
 use crate::progress::Progress;
@@ -442,6 +442,16 @@ pub struct BaCameras<'a> {
     /// every flag on and states the choice here. A length other than the camera
     /// count is a caller error, checked with the others.
     pub releases: Option<&'a [CameraRelease]>,
+    /// Each image's intrinsic adjustment, one per image, or `None` for every
+    /// image read through its camera exactly.
+    ///
+    /// The solve holds them: every observation is projected, differentiated,
+    /// trimmed and re-estimated through its camera with its image's adjustment
+    /// applied, while a released focal, distortion or principal point is still
+    /// the camera's shared one, the adjustment applied on top of it. A length
+    /// other than the image count is a caller error, checked with the others.
+    /// All-zero adjustments are the same solve as `None`, to the bit.
+    pub image_adjustments: Option<Cow<'a, [IntrinsicAdjustment]>>,
 }
 
 /// What the solve may move of one camera's lens, besides the poses and points
@@ -498,6 +508,7 @@ impl<'a> BaCameras<'a> {
             cameras: std::slice::from_ref(camera),
             image_camera: Cow::Owned(vec![0; n_img]),
             releases: None,
+            image_adjustments: None,
         }
     }
 
@@ -525,6 +536,23 @@ impl<'a> BaCameras<'a> {
                 self.cameras.len(),
                 "releases and cameras length mismatch"
             );
+        }
+        if let Some(adjustments) = &self.image_adjustments {
+            assert_eq!(
+                adjustments.len(),
+                n_img,
+                "image_adjustments and quats length mismatch"
+            );
+        }
+    }
+
+    /// The image adjustments the solve reads: one per image, or empty when
+    /// there are none or every one is zero, which the solve reads as no
+    /// adjustment at all.
+    fn held_adjustments(&self) -> &[IntrinsicAdjustment] {
+        match self.image_adjustments.as_deref() {
+            Some(a) if a.iter().any(|a| !a.is_zero()) => a,
+            _ => &[],
         }
     }
 }
@@ -832,7 +860,10 @@ fn bspline_step_admissible(bspline: &[f64], d_max: f64) -> bool {
 /// observation is projected, differentiated, trimmed and re-estimated through
 /// the camera of its own image, and each camera keeps its own lens block in the
 /// reduced system, so two cameras' lens parameters couple only through the
-/// poses and points they both observe.
+/// poses and points they both observe. Where [`BaCameras::image_adjustments`]
+/// gives an image an intrinsic adjustment, its observations are read through
+/// its camera with that adjustment applied, and the adjustment is held: the
+/// released lens parameters are the camera's shared ones.
 ///
 /// Per schedule round: retriangulate every point from all supplied
 /// observations at the current poses (rounds after the first), trim to
@@ -968,6 +999,7 @@ pub fn bundle_adjust(
     bundle_adjust_staged(
         cameras.cameras,
         &cameras.image_camera,
+        cameras.held_adjustments(),
         cameras.releases,
         quats,
         trans,
@@ -1434,10 +1466,15 @@ fn retriangulate_round(
 /// are left out, as the stored measure leaves out points at infinity: they are
 /// the bearing's, which is the model under question. An observation the camera
 /// model cannot image at that state carries no residual and is left out too.
+///
+/// Each residual is read through its image's intrinsics, `intrinsics`, and gated
+/// with the other residuals of its image's camera, `cams[image_camera[i]]`,
+/// whose keypoint resolutions are the floor.
 #[allow(clippy::too_many_arguments)]
 fn round_noise(
     cams: &[CameraIntrinsics],
     image_camera: &[u32],
+    intrinsics: &ImageIntrinsicsList<'_>,
     quats: &[UnitQuaternion<f64>],
     trans: &[Vector3<f64>],
     points: &[[f64; 3]],
@@ -1461,7 +1498,7 @@ fn round_noise(
             let i = obs_img[k] as usize;
             let camera = image_camera[i] as usize;
             let c = quats[i] * Vector3::new(x[0], x[1], x[2]) + trans[i];
-            let (u, v) = cams[camera].ray_to_pixel([c.x, c.y, c.z])?;
+            let (u, v) = intrinsics.of(i).ray_to_pixel([c.x, c.y, c.z])?;
             let residual = [u - uv[k][0], v - uv[k][1]];
             (residual[0].is_finite() && residual[1].is_finite())
                 .then_some(ObservationResidual { camera, residual })
@@ -1481,7 +1518,8 @@ fn round_noise(
 /// through its reference and distance; `cp_dir` flags direction points; `s2s`
 /// is the per-kept-observation squared loss scale (uniform except where a
 /// protected observation widens it). `cams` are the cameras at the candidate
-/// state and `obs_cam` the camera of each kept observation. A point with an
+/// state, an adjusted image's own entry among them, and `obs_cam` the entry
+/// each kept observation is read through. A point with an
 /// anchor in `inverse` is the direction `points[c]` and the inverse depth
 /// `inv_depth[c]` about that anchor (see [`inverse_depth_ray`]).
 #[allow(clippy::too_many_arguments)]
@@ -1567,10 +1605,11 @@ fn inverse_depth_ray(
 /// call, which is how the reference-camera columns of a ranged point are
 /// checked against a difference of the residual they claim to differentiate.
 struct LinState<'a> {
-    /// One entry per camera: that camera at the current state and its lens
-    /// block.
+    /// One entry per camera, that camera at the current state and its lens
+    /// block, then one per compact image with an intrinsic adjustment.
     lenses: &'a [LinLens<'a>],
-    /// The camera of each compact image, an index into `lenses`.
+    /// The entry of `lenses` each compact image is read through: its
+    /// camera's, or its own where it has an adjustment.
     ci_cam: &'a [usize],
     /// Compact poses.
     q: &'a [UnitQuaternion<f64>],
@@ -1599,13 +1638,24 @@ struct LinState<'a> {
 /// One camera as a linearization reads it: the camera at the current state,
 /// which of its parameters are released, and where its lens block starts in
 /// the reduced system.
+///
+/// An image with an intrinsic adjustment is read through an entry of its own:
+/// `cam`, `cx`, `cy` and `f_image` are the image's, with the adjustment
+/// applied, while `f`, the releases and `slot0` are its camera's, so its lens
+/// columns land in the shared camera's block.
 struct LinLens<'a> {
     cam: &'a CameraIntrinsics,
     /// Whether the model carries an analytic pixel Jacobian.
     analytic: bool,
+    /// The principal point the observation is projected about: the camera's,
+    /// moved by the image's adjustment.
     cx: f64,
     cy: f64,
+    /// The camera's shared focal, the parameter the focal slot holds.
     f: f64,
+    /// The focal the observation is projected with, `f·(1 + s)` under the
+    /// image's focal scale `s`, and `f` itself without one.
+    f_image: f64,
     opt_f: bool,
     opt_k1: bool,
     opt_bspline: bool,
@@ -1646,7 +1696,7 @@ fn observation_blocks<const CAM_COLS: usize>(
     let pp_c = pose_c - 2;
     let lens = &st.lenses[st.ci_cam[ci]];
     let (q, t, xp, uv, cam) = (st.q, st.t, st.xp, st.uv, lens.cam);
-    let f = lens.f;
+    let (f, f_image) = (lens.f, lens.f_image);
     let dir = st.cp_dir[cp];
     let inverse = st.cp_inverse.get(cp).copied().flatten();
     let (rot_pt, p_cam) = match inverse {
@@ -1693,25 +1743,29 @@ fn observation_blocks<const CAM_COLS: usize>(
             // ∂(u, v)/∂f. Exact for every model the `opt_f` gate
             // admits: the focal is a pure multiplier of an
             // `f`-independent distorted coordinate, so the
-            // derivative is that coordinate.
+            // derivative is that coordinate. Under an image's focal
+            // scale the image's focal is `f·(1 + s)`, so the column of
+            // the shared `f` is `(1 + s)·x_d = (u − cx_i)/f`, read about
+            // the image's own principal point.
             cam_j[(0, F_SLOT)] = (u - lens.cx) / f;
             cam_j[(1, F_SLOT)] = (v - lens.cy) / f;
         }
         if lens.opt_k1 {
-            // ∂(u, v)/∂k1 = f·θ³·û — direction rows included,
-            // they project through the same map.
-            let (du, dv) = k1_column(f, p_cam);
+            // ∂(u, v)/∂k1 = f_i·θ³·û at the image's focal — direction
+            // rows included, they project through the same map.
+            let (du, dv) = k1_column(f_image, p_cam);
             cam_j[(0, K1_SLOT)] = du;
             cam_j[(1, K1_SLOT)] = dv;
         }
         if lens.opt_bspline {
-            // ∂(u, v)/∂cᵢ = f·Bᵢ(θ)·û for the ≤ 4 active basis
-            // functions — direction rows included, they project
-            // through the same map. Gauge-anchored functions
+            // ∂(u, v)/∂cᵢ = f_i·Bᵢ(θ)·û at the image's focal, for the
+            // ≤ 4 active basis functions — direction rows included, they
+            // project through the same map. Gauge-anchored functions
             // (full index < 2) carry no coefficient: their slot
             // keeps the pinned K1_SLOT dummy and their column
             // stays exactly zero.
-            let (first, cols) = bspline_columns(f, lens.n_coeffs, lens.d_max, lens.radial, p_cam);
+            let (first, cols) =
+                bspline_columns(f_image, lens.n_coeffs, lens.d_max, lens.radial, p_cam);
             for (j, col) in cols.iter().enumerate() {
                 let full = first + j;
                 if full < 2 {
@@ -1725,7 +1779,9 @@ fn observation_blocks<const CAM_COLS: usize>(
         if pp_cols && lens.opt_pp {
             // ∂(u, v)/∂(cx, cy) = I on every model: each projects as
             // `u = fx·x_d + cx`, `v = fy·y_d + cy` with `(x_d, y_d)` read off
-            // the ray alone -- direction rows included.
+            // the ray alone -- direction rows included. An image's offset
+            // `a·m` is added to the shared `(cx, cy)`, so its column is the
+            // same identity.
             cam_j[(0, pp_c)] = 1.0;
             cam_j[(1, pp_c + 1)] = 1.0;
         }
@@ -2110,6 +2166,29 @@ enum LensStep {
     Rejected,
 }
 
+/// The cameras a round's observations are read through at the shared cameras
+/// `cams`: `cams` themselves, then entry `cams.len() + r` as camera
+/// `view_camera[cams.len() + r]` with `view_adjustment[r]` applied. Borrowed
+/// when no entry is adjusted, so a solve with no adjustment reads the cameras
+/// it always did.
+fn entries_at<'c>(
+    cams: &'c [CameraIntrinsics],
+    view_camera: &[usize],
+    view_adjustment: &[IntrinsicAdjustment],
+) -> Cow<'c, [CameraIntrinsics]> {
+    if view_adjustment.is_empty() {
+        return Cow::Borrowed(cams);
+    }
+    let mut out = cams.to_vec();
+    out.extend(
+        view_adjustment
+            .iter()
+            .zip(&view_camera[cams.len()..])
+            .map(|(a, &j)| cams[j].with_adjustment(a)),
+    );
+    Cow::Owned(out)
+}
+
 /// Pins `slot` of a reduced system: an identity row and column and a zero
 /// gradient entry, so the slot solves to zero and holds its value.
 fn pin_slot(s: &mut DMatrix<f64>, g: &mut DVector<f64>, slot: usize) {
@@ -2201,6 +2280,7 @@ fn penalty_cost<'a>(penalties: &[SplinePenalty], spline_of: impl Fn(usize) -> &'
 fn solve_lm<const CAM_COLS: usize>(
     lenses: &mut [Lens<'_>],
     image_camera: &[u32],
+    adjustments: &[IntrinsicAdjustment],
     quats: &mut [UnitQuaternion<f64>],
     trans: &mut [Vector3<f64>],
     points: &mut [[f64; 3]],
@@ -2275,6 +2355,27 @@ fn solve_lm<const CAM_COLS: usize>(
     for &j in &obs_cam {
         live[j] = true;
     }
+    // The entry each compact image is read through: its camera's, or, for an
+    // image with an intrinsic adjustment, an entry of its own after the
+    // cameras'. `view_camera` is the camera each entry belongs to, and
+    // `view_adjustment` the adjustment of each entry past the cameras. With no
+    // adjustment every image reads its camera's entry, as before adjustments
+    // existed.
+    let mut ci_view: Vec<usize> = ci_cam.clone();
+    let mut view_camera: Vec<usize> = (0..n_cam).collect();
+    let mut view_adjustment: Vec<IntrinsicAdjustment> = Vec::new();
+    if !adjustments.is_empty() {
+        for (ci, &i) in img_ids.iter().enumerate() {
+            let a = adjustments[i];
+            if a.is_zero() {
+                continue;
+            }
+            ci_view[ci] = view_camera.len();
+            view_camera.push(ci_cam[ci]);
+            view_adjustment.push(a);
+        }
+    }
+    let obs_view: Vec<usize> = obs_ci.iter().map(|&ci| ci_view[ci]).collect();
     // Free points solved in inverse depth: the anchor of each, `None` for every
     // other point. A free point whose position sits exactly on its anchor has
     // no direction from it, and stays a position for the round.
@@ -2447,12 +2548,24 @@ fn solve_lm<const CAM_COLS: usize>(
     // Each camera's imaged field, as its kept observations report it: the
     // largest pixel radius from its principal point at the start of the round.
     // The `k1` step guard asks whether that camera's distorted map stays
-    // monotone out to here.
+    // monotone out to here. An adjusted image's radius is measured from its own
+    // principal point and divided by its focal scale `1 + s`, so that it is
+    // compared with the fold radius of the shared focal: the image folds at
+    // `(1 + s)` times the shared radius.
     let mut field_r = vec![0.0f64; n_cam];
     for (kk, &k) in kept.iter().enumerate() {
         let j = obs_cam[kk];
         let [cx, cy] = lenses[j].pp;
-        field_r[j] = f64::max(field_r[j], (uv[k][0] - cx).hypot(uv[k][1] - cy));
+        let v = obs_view[kk];
+        let r = if v < n_cam {
+            (uv[k][0] - cx).hypot(uv[k][1] - cy)
+        } else {
+            let a = view_adjustment[v - n_cam];
+            let m = f64::from(lenses[j].base.width.min(lenses[j].base.height));
+            let (cx, cy) = (cx + a.principal_point[0] * m, cy + a.principal_point[1] * m);
+            (uv[k][0] - cx).hypot(uv[k][1] - cy) / (1.0 + a.focal)
+        };
+        field_r[j] = f64::max(field_r[j], r);
     }
     // Per-kept-observation squared loss scale: the round's scale everywhere,
     // widened by `protected_loss_scale` for protected observations.
@@ -2481,8 +2594,8 @@ fn solve_lm<const CAM_COLS: usize>(
             x
         };
         robust_cost(
-            cams,
-            &obs_cam,
+            &entries_at(cams, &view_camera, &view_adjustment),
+            &obs_view,
             q,
             t,
             xp,
@@ -2558,15 +2671,23 @@ fn solve_lm<const CAM_COLS: usize>(
             &x
         };
         let blocks: Vec<ObsBlocks<CAM_COLS>> = {
-            let lin: Vec<LinLens<'_>> = (0..n_cam)
-                .map(|j| {
-                    let (cx, cy) = cams[j].principal_point();
+            let entries = entries_at(&cams, &view_camera, &view_adjustment);
+            let lin: Vec<LinLens<'_>> = (0..entries.len())
+                .map(|v| {
+                    let j = view_camera[v];
+                    let (cx, cy) = entries[v].principal_point();
+                    let f_image = if v < n_cam {
+                        fs[j]
+                    } else {
+                        fs[j] * (1.0 + view_adjustment[v - n_cam].focal)
+                    };
                     LinLens {
-                        cam: &cams[j],
+                        cam: &entries[v],
                         analytic: analytic[j],
                         cx,
                         cy,
                         f: fs[j],
+                        f_image,
                         opt_f: lenses[j].opt_f,
                         opt_k1: lenses[j].opt_k1,
                         opt_bspline: lenses[j].opt_bspline,
@@ -2580,7 +2701,7 @@ fn solve_lm<const CAM_COLS: usize>(
                 .collect();
             let st = LinState {
                 lenses: &lin,
-                ci_cam: &ci_cam,
+                ci_cam: &ci_view,
                 q: &q,
                 t: &t,
                 xp,
@@ -3342,6 +3463,7 @@ fn decide_free_points(
 fn bundle_adjust_staged(
     cameras: &[CameraIntrinsics],
     image_camera: &[u32],
+    adjustments: &[IntrinsicAdjustment],
     releases: Option<&[CameraRelease]>,
     quats: &mut [UnitQuaternion<f64>],
     trans: &mut [Vector3<f64>],
@@ -3442,10 +3564,13 @@ fn bundle_adjust_staged(
         // unbounded trim.
         let trim_px = stage.trim_px.min(INVALID_RESIDUAL);
         let cams_now: Vec<CameraIntrinsics> = lenses.iter().map(Lens::camera).collect();
+        // Every image's intrinsics at the round's cameras: what the
+        // re-estimation casts rays through and the trim measures with.
+        let intrinsics_now = ImageIntrinsicsList::new(&cams_now, image_camera, adjustments);
         if rnd > 0 {
             retriangulate_round(
-                &cams_now,
-                image_camera,
+                &intrinsics_now.intrinsics,
+                &intrinsics_now.image_entry,
                 quats,
                 trans,
                 points,
@@ -3465,8 +3590,8 @@ fn bundle_adjust_staged(
             .cross
             .then(|| free_point_anchors(quats, trans, obs_img, obs_pt, cons, points.len()));
         let (norms, depths) = residual_norms_depths(
-            &cams_now,
-            image_camera,
+            &intrinsics_now.intrinsics,
+            &intrinsics_now.image_entry,
             quats,
             trans,
             points,
@@ -3525,6 +3650,7 @@ fn bundle_adjust_staged(
                 solve_lm::<{ $cols }>(
                     &mut lenses,
                     image_camera,
+                    adjustments,
                     quats,
                     trans,
                     points,
@@ -3555,6 +3681,7 @@ fn bundle_adjust_staged(
     }
 
     let cams_final: Vec<CameraIntrinsics> = lenses.iter().map(Lens::camera).collect();
+    let intrinsics_final = ImageIntrinsicsList::new(&cams_final, image_camera, adjustments);
     // The storage decision: every free point is scored at the state the solve
     // ended at and the noise level its final round measures, over the
     // observations that round kept, and stored as the test says. A final round
@@ -3565,6 +3692,7 @@ fn bundle_adjust_staged(
         let noise = round_noise(
             &cams_final,
             image_camera,
+            &intrinsics_final,
             quats,
             trans,
             points,
@@ -3579,8 +3707,8 @@ fn bundle_adjust_staged(
         let sigma = noise.sigma_px.filter(|_| !progress.is_cancelled());
         let unscored_points = sigma.map_or_else(Vec::new, |s| {
             decide_free_points(
-                &cams_final,
-                image_camera,
+                &intrinsics_final.intrinsics,
+                &intrinsics_final.image_entry,
                 quats,
                 trans,
                 points,
@@ -3651,8 +3779,8 @@ fn bundle_adjust_staged(
         }
     });
     let (norms, _depths) = residual_norms_depths(
-        &cams_final,
-        image_camera,
+        &intrinsics_final.intrinsics,
+        &intrinsics_final.image_entry,
         quats,
         trans,
         points,
