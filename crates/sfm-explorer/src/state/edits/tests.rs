@@ -2972,3 +2972,159 @@ fn the_free_point_clause_counts_the_unscored_points() {
          finite, 25 to directions, 2 not scored"
     );
 }
+
+/// [`adjustment`] with each image's focal and principal point released as
+/// stated, which also moves the shared value of each kind.
+fn per_image(
+    camera: usize,
+    image_focal: bool,
+    image_principal_point: bool,
+    distortion: bool,
+) -> sfmtool_core::CameraAdjustment {
+    use sfmtool_core::reconstruction::bundle_adjust::{
+        ImageAdjustmentParameter, ImageAdjustmentSpread, ImagePriorWidths, NearPrior,
+    };
+    let mut c = adjustment(camera, image_focal, image_principal_point, distortion);
+    c.image_focal_released = image_focal;
+    c.image_principal_point_released = image_principal_point;
+    c.image_adjustments = Some(ImageAdjustmentSpread {
+        images: 3,
+        focal_mean: 0.0,
+        focal_std: 0.004,
+        principal_point_mean: [0.0, 0.0],
+        principal_point_std: [19.0, 21.0],
+        prior: ImagePriorWidths {
+            focal: if image_focal { 0.0042 } else { f64::NAN },
+            principal_point: if image_principal_point {
+                0.0131
+            } else {
+                f64::NAN
+            },
+        },
+        prior_derived: true,
+        spread: ImagePriorWidths {
+            focal: 0.0042,
+            principal_point: 0.0131,
+        },
+        near_prior: vec![
+            NearPrior {
+                image: 4,
+                parameter: ImageAdjustmentParameter::PrincipalPoint,
+                widths: 2.5,
+            },
+            NearPrior {
+                image: 4,
+                parameter: ImageAdjustmentParameter::Focal,
+                widths: 2.1,
+            },
+            NearPrior {
+                image: 7,
+                parameter: ImageAdjustmentParameter::PrincipalPoint,
+                widths: 3.0,
+            },
+        ],
+    });
+    c
+}
+
+#[test]
+fn the_label_names_the_parts_released_per_image() {
+    use super::release_clause;
+    assert_eq!(
+        release_clause(&[per_image(0, true, true, false)]),
+        ", focal and principal point released per image"
+    );
+    assert_eq!(
+        release_clause(&[per_image(0, false, true, false)]),
+        ", principal point released per image"
+    );
+    assert_eq!(
+        release_clause(&[per_image(0, true, false, true)]),
+        ", lens distortion released, focal released per image"
+    );
+    let mut shared_focal = per_image(0, false, true, false);
+    shared_focal.focal_released = true;
+    assert_eq!(
+        release_clause(&[shared_focal]),
+        ", focal released, principal point released per image"
+    );
+    assert_eq!(
+        release_clause(&[
+            per_image(0, false, true, false),
+            adjustment(1, true, false, false)
+        ]),
+        ", camera 0 principal point released per image, camera 1 focal released"
+    );
+}
+
+#[test]
+fn the_entry_names_each_camera_s_per_image_widths() {
+    use super::image_prior_clause;
+    let short_side = |_| 1536.0;
+    assert_eq!(
+        image_prior_clause(&[per_image(0, true, true, false)], short_side),
+        ", per-image widths focal 0.42 %, principal point 1.31 % of the short side \
+         (20.1 px), derived, 2 images beyond two widths"
+    );
+    let mut fixed = per_image(1, false, true, false);
+    fixed.image_adjustments.as_mut().unwrap().prior_derived = false;
+    fixed
+        .image_adjustments
+        .as_mut()
+        .unwrap()
+        .near_prior
+        .truncate(1);
+    assert_eq!(
+        image_prior_clause(&[adjustment(0, true, false, false), fixed], short_side),
+        ", camera 1 per-image widths principal point 1.31 % of the short side (20.1 px), \
+         fixed, 1 image beyond two widths"
+    );
+    assert_eq!(
+        image_prior_clause(&[adjustment(0, true, true, false)], short_side),
+        ""
+    );
+}
+
+#[test]
+fn a_per_image_principal_point_is_named_in_the_label_and_the_entry() {
+    // The demo camera is a two-focal PINHOLE, whose principal point can be
+    // released per image. Each image takes its own offset, the camera takes
+    // their mean, and the entry names the camera's change and the widths.
+    let (mut state, id) = adjustable_state();
+    let before = state.scene[0].recon().image_set.cameras[0].principal_point();
+    let options = sfmtool_core::BundleAdjustOptions::uniform(
+        1,
+        sfmtool_core::reconstruction::bundle_adjust::CameraRelease {
+            image_principal_point: true,
+            ..sfmtool_core::reconstruction::bundle_adjust::CameraRelease::HELD
+        },
+    );
+
+    state.start_bundle_adjust(id, &options).expect("well posed");
+    state.finish_background_tasks();
+
+    assert_eq!(
+        state.scene[0].history.current_version().label,
+        "Bundle adjusted run_a, principal point released per image"
+    );
+    let recon = state.scene[0].recon();
+    assert!(
+        recon
+            .image_set
+            .camera_per_image_adjustments(0)
+            .principal_point
+    );
+    let after = recon.image_set.cameras[0].principal_point();
+    let last = texts(&state).last().expect("one entry").clone();
+    let expected = format!(
+        ", principal point ({:.1}, {:.1}) → ({:.1}, {:.1})",
+        before.0, before.1, after.0, after.1
+    );
+    assert!(last.contains(&expected), "{last} lacks {expected}");
+    assert!(
+        last.contains(", per-image widths principal point "),
+        "{last}"
+    );
+    assert!(last.contains(", derived"), "{last}");
+    assert!(!last.contains("per-image widths focal"), "{last}");
+}

@@ -697,6 +697,18 @@ fn nested_argument_names_agree_with_the_catalog() {
                 "cameras": [{ "camera_intrinsics_index": 0 }],
             }),
         ),
+        (
+            "bundle_adjust",
+            "image_prior",
+            json!({
+                "reconstruction_label": "alpha",
+                "image_prior": {
+                    "loose": { "focal": 0.1 },
+                    "floor": { "focal": 0.001 },
+                    "fixed": { "focal": 0.01 },
+                },
+            }),
+        ),
     ];
     let calls = representative_tool_calls();
     let walked = closed_nested_objects();
@@ -706,12 +718,28 @@ fn nested_argument_names_agree_with_the_catalog() {
             continue;
         }
         let properties = object["properties"].as_object().expect("nested object");
+        // A closed object one level deeper, such as each of `image_prior`'s
+        // widths, is walked below from the same base call, which must carry
+        // it.
+        let mut deeper = Vec::new();
         for (name, schema) in properties {
             let inner = schema.get("items").unwrap_or(schema);
-            assert!(
-                !(inner["additionalProperties"] == json!(false) && inner["properties"].is_object()),
-                "{tool}.{field}.{name} is a closed object a level deeper than this test walks"
-            );
+            if inner["additionalProperties"] == json!(false) && inner["properties"].is_object() {
+                assert!(
+                    !is_array && schema.get("items").is_none(),
+                    "{tool}.{field}.{name} is a closed object inside an array, which this \
+                     test does not walk"
+                );
+                for (deep, deep_schema) in inner["properties"].as_object().expect("properties") {
+                    assert!(
+                        !(deep_schema["additionalProperties"] == json!(false)
+                            && deep_schema["properties"].is_object()),
+                        "{tool}.{field}.{name}.{deep} is a closed object two levels deeper \
+                         than this test walks"
+                    );
+                }
+                deeper.push((name.clone(), inner.clone()));
+            }
         }
         let base = bases
             .iter()
@@ -743,6 +771,33 @@ fn nested_argument_names_agree_with_the_catalog() {
                     "{tool}.{field} advertises {name:?} but rejects it: {error}"
                 );
             }
+        }
+
+        for (name, inner) in &deeper {
+            assert!(
+                base[&field][name].is_object(),
+                "{tool}.{field}'s base call needs {name} to probe it"
+            );
+            for deep in inner["properties"].as_object().expect("properties").keys() {
+                let mut arguments = base.clone();
+                arguments[&field][name][deep] = json!("<probe>");
+                if let Err(error) = tools::parse(tool, arguments.as_object()) {
+                    assert!(
+                        !error.0.contains("has no argument"),
+                        "{tool}.{field}.{name} advertises {deep:?} but rejects it: {error}"
+                    );
+                }
+            }
+            let mut arguments = base.clone();
+            arguments[&field][name]["unknown_argument"] = json!(true);
+            let error = tools::parse(tool, arguments.as_object()).expect_err("unknown nested key");
+            assert!(
+                error.0.starts_with(&format!(
+                    "{tool}.{field}.{name} has no argument \"unknown_argument\" — "
+                )),
+                "{tool}.{field}.{name}: {error}"
+            );
+            checked += 1;
         }
 
         let mut arguments = base;

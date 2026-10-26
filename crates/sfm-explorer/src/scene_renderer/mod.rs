@@ -44,6 +44,7 @@ use crate::scene::{ImageRef, PointRef, ReconId};
 use gpu_types::*;
 use picking::PickTables;
 use recon::ReconResources;
+use upload::BgMeshKey;
 
 // Re-export public constants so external modules can use `crate::scene_renderer::*`.
 pub use gpu_types::{
@@ -170,6 +171,12 @@ pub struct SceneRenderer {
     /// than an index: keyed by index alone, a file replacement kept showing the
     /// old background for the same position in the new reconstruction.
     bg_image_loaded: Option<ImageRef>,
+    /// What the background mesh in `bg_image_distorted_vertex_buffer` was
+    /// built from: the image, its intrinsics and its camera-to-world rotation.
+    /// The photograph depends on the image alone, the mesh on all three, so a
+    /// version that changes an image's intrinsics (its camera or its intrinsic
+    /// adjustment) or its pose rebuilds the mesh and keeps the texture.
+    bg_image_mesh_key: Option<BgMeshKey>,
 
     // ── Per-reconstruction resources ──
     /// One bundle per loaded node. Uploads write into a bundle; a node leaving
@@ -274,6 +281,7 @@ impl SceneRenderer {
             bg_image_sampler: None,
             bg_image_texture: None,
             bg_image_loaded: None,
+            bg_image_mesh_key: None,
             recons: HashMap::new(),
             recon_order: Vec::new(),
             pick_tables: PickTables::default(),

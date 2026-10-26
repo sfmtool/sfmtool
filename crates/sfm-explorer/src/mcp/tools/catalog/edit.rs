@@ -434,7 +434,13 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           each camera releases is decided camera by camera: release_focal, \
                           release_distortion and release_principal_point are the defaults every \
                           camera takes, and cameras overrides them for the cameras it names. A \
-                          camera with none of them is held. The label says what each camera \
+                          camera with none of them is held. release_image_focal and \
+                          release_image_principal_point solve each image's own focal and \
+                          principal point, held toward the mean of the camera's images by a \
+                          prior whose width the solve derives (image_prior sets it), with the \
+                          camera's value moved to that mean; the reply's image_adjustments says, \
+                          per such camera, how far its images spread, the prior's widths and \
+                          the images beyond two widths. The label says what each camera \
                           released, and the report names each released camera's focal and \
                           principal point before and after. By default every free point \
                           is solved in inverse depth and stored as a position or a direction by \
@@ -482,6 +488,48 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                         ),
                     ),
                     (
+                        "release_image_focal",
+                        flag(
+                            "The default for every camera: solve a focal length for each of its \
+                             images, a scale of the camera's, as well as the poses and points. \
+                             The camera's focal moves to the mean of its images', so this \
+                             releases it too, and stands for the focal a distortion release \
+                             needs. Refused, naming the camera, on a model whose focal the \
+                             adjustment cannot solve. Defaults to false.",
+                        ),
+                    ),
+                    (
+                        "release_image_principal_point",
+                        flag(
+                            "The default for every camera: solve a principal point for each of \
+                             its images, an offset of the camera's, as well as the poses and \
+                             points. The camera's principal point moves to the mean of its \
+                             images', so this releases it too. Accepted on every camera model. \
+                             Defaults to false.",
+                        ),
+                    ),
+                    (
+                        "image_prior",
+                        json!({
+                            "type": "object",
+                            "description":
+                                "The widths of the prior that holds each image's focal scale and \
+                                 principal-point offset toward the mean of its camera's images, \
+                                 the focal's a fraction and the principal point's a fraction of \
+                                 the image's short side. loose is the first round's widths and \
+                                 the most a derived width may be (default 0.1 each), floor the \
+                                 least (default 0.001 each), and fixed, when given, the widths \
+                                 every round runs under, derived from nothing. Omitted, each \
+                                 camera's widths are derived from the solve.",
+                            "properties": {
+                                "loose": prior_widths_schema("The first round's widths and the most a derived width may be."),
+                                "floor": prior_widths_schema("The least a derived width may be."),
+                                "fixed": prior_widths_schema("Widths every round runs under, derived from nothing; null or omitted derives them."),
+                            },
+                            "additionalProperties": false,
+                        }),
+                    ),
+                    (
                         "free_points_cross",
                         flag(
                             "Solve every free point in inverse depth and store it as a position \
@@ -521,8 +569,9 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                         json!({
                             "type": "array",
                             "description":
-                                "Per-camera overrides of release_focal, release_distortion and \
-                                 release_principal_point. \
+                                "Per-camera overrides of release_focal, release_distortion, \
+                                 release_principal_point, release_image_focal and \
+                                 release_image_principal_point. \
                                  Each entry names a camera by camera_intrinsics_index, the index \
                                  get_camera_intrinsics and get_camera_image report, and states \
                                  what it releases; a field left out takes the call's default. A \
@@ -541,6 +590,8 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                                     "release_focal": flag("Solve this camera's focal length. Omit for the call's release_focal."),
                                     "release_distortion": flag("Solve this camera's lens distortion, together with its focal. Omit for the call's release_distortion."),
                                     "release_principal_point": flag("Solve this camera's principal point. Omit for the call's release_principal_point."),
+                                    "release_image_focal": flag("Solve each of this camera's images' focal scale. Omit for the call's release_image_focal."),
+                                    "release_image_principal_point": flag("Solve each of this camera's images' principal-point offset. Omit for the call's release_image_principal_point."),
                                 },
                                 "required": ["camera_intrinsics_index"],
                                 "additionalProperties": false,

@@ -680,9 +680,9 @@ fn path_tells_two_buttons_of_one_name_apart() {
     assert!(sentence.ends_with("dialogs are open."), "{sentence}");
 }
 
-/// The Bundle Adjust dialog's camera row carries its three release
-/// checkboxes, and the principal point's is enabled on a camera whose focal
-/// cannot be released: the demo's two-focal `PINHOLE`.
+/// The Bundle Adjust dialog's camera row carries its five release
+/// checkboxes, and the principal point's, shared and per image, are enabled on
+/// a camera whose focal cannot be released: the demo's two-focal `PINHOLE`.
 #[test]
 fn the_bundle_adjust_row_offers_the_principal_point_on_any_model() {
     let mut harness = Harness::new();
@@ -690,6 +690,7 @@ fn the_bundle_adjust_row_offers_the_principal_point_on_any_model() {
     harness.state.open_bundle_adjust(demo);
     // A new window widens to its row over its first few frames; until then the
     // row's last checkbox is clipped out of it.
+    harness.settle();
     harness.settle();
     harness.settle();
     let frame = harness.settle();
@@ -704,6 +705,10 @@ fn the_bundle_adjust_row_offers_the_principal_point_on_any_model() {
     assert_eq!(enabled("Release focal length"), json!(false));
     assert_eq!(enabled("Release lens distortion"), json!(false));
     assert_eq!(enabled("Release principal point"), json!(true));
+    // Per image, the focal is greyed for the same reason and the principal
+    // point offered on any model.
+    assert_eq!(enabled("Release focal length per image"), json!(false));
+    assert_eq!(enabled("Release principal point per image"), json!(true));
 }
 
 // ── What the input tools will resolve through ───────────────────────────

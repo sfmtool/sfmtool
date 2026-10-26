@@ -168,6 +168,7 @@ fn each_row_releases_its_own_camera_and_the_rest_are_held() {
             focal: true,
             distortion: true,
             principal_point: false,
+            ..RowState::default()
         };
         p.rows[2].focal = true;
     });
@@ -184,11 +185,13 @@ fn a_release_the_camera_s_model_cannot_take_is_never_answered() {
             focal: true,
             distortion: true,
             principal_point: false,
+            ..RowState::default()
         };
         p.rows[2] = RowState {
             focal: true,
             distortion: true,
             principal_point: false,
+            ..RowState::default()
         };
     });
     assert_eq!(answer.releases, vec![HELD, HELD, HELD, FOCAL]);
@@ -206,6 +209,7 @@ fn the_principal_point_is_answered_on_every_model_and_needs_no_focal() {
             focal: true,
             distortion: false,
             principal_point: true,
+            ..RowState::default()
         };
     });
     let pp = CameraRelease {
@@ -386,4 +390,82 @@ fn the_dialog_opens_on_a_node_with_the_schedule_last_run_there() {
 
     prompt.ask(other, "other".to_string(), BundleAdjustGates::default());
     assert_eq!(prompt.schedule_box(), Some("(50, 5) (12, 2) (4, 1)"));
+}
+
+#[test]
+fn the_per_image_releases_are_answered_without_the_shared_one_of_their_kind() {
+    // Camera 0 ticks both per-image boxes beside its shared focal; camera 1,
+    // the OPENCV_FISHEYE, ticks both and has its focal refused; camera 3 ticks
+    // the per-image principal point beside the shared one.
+    let answer = rig_answer(|p| {
+        p.rows[0] = RowState {
+            focal: true,
+            image_focal: true,
+            image_principal_point: true,
+            ..RowState::default()
+        };
+        p.rows[1] = RowState {
+            image_focal: true,
+            image_principal_point: true,
+            ..RowState::default()
+        };
+        p.rows[2] = RowState {
+            principal_point: true,
+            image_principal_point: true,
+            ..RowState::default()
+        };
+    });
+    let both = CameraRelease {
+        image_focal: true,
+        image_principal_point: true,
+        ..HELD
+    };
+    let image_pp = CameraRelease {
+        image_principal_point: true,
+        ..HELD
+    };
+    assert_eq!(answer.releases, vec![both, image_pp, HELD, image_pp]);
+}
+
+#[test]
+fn a_per_image_focal_carries_the_distortion() {
+    let answer = rig_answer(|p| {
+        p.rows[0] = RowState {
+            distortion: true,
+            image_focal: true,
+            ..RowState::default()
+        };
+    });
+    assert_eq!(
+        answer.releases[0],
+        CameraRelease {
+            distortion: true,
+            image_focal: true,
+            ..HELD
+        }
+    );
+}
+
+#[test]
+fn drawing_a_row_keeps_its_distortion_beside_a_per_image_focal_and_its_own_boxes() {
+    // A drawn row whose per-image focal is ticked keeps its distortion, and
+    // drawing the shared boxes ticked and greyed leaves what the user set in
+    // them alone, so clearing a per-image box gives the shared one back.
+    let mut prompt = BundleAdjustPrompt::default();
+    prompt.ask(ReconId::next(), "kerry".to_string(), rig());
+    prompt.pending.as_mut().unwrap().rows[0] = RowState {
+        distortion: true,
+        image_focal: true,
+        image_principal_point: true,
+        ..RowState::default()
+    };
+
+    assert_eq!(frame(&mut prompt, Vec::new()), None);
+
+    let row = prompt.pending.as_ref().expect("still up").rows[0];
+    assert!(row.distortion, "the drawn row lost its distortion");
+    assert!(
+        !row.focal && !row.principal_point,
+        "the shared boxes were set"
+    );
 }

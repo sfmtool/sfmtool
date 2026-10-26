@@ -710,12 +710,16 @@ fn bundle_adjust_parses_its_camera_entries() {
                 release_focal: None,
                 release_distortion: Some(true),
                 release_principal_point: Some(true),
+                release_image_focal: None,
+                release_image_principal_point: None,
             },
             super::super::CameraReleaseOverride {
                 camera_intrinsics_index: 0,
                 release_focal: Some(false),
                 release_distortion: Some(false),
                 release_principal_point: None,
+                release_image_focal: None,
+                release_image_principal_point: None,
             },
         ]
     );
@@ -785,6 +789,107 @@ fn bundle_adjust_parses_its_schedule() {
         let error = schedule(value.clone()).expect_err("refused at the parse");
         assert!(error.0.contains(expected), "{value}: {error}");
     }
+}
+
+/// The per-image releases, each camera's override of them, and the prior's
+/// widths parse into the request; a prior the wire cannot state is refused at
+/// the parse.
+#[test]
+fn bundle_adjust_parses_its_per_image_releases_and_prior() {
+    let map = json!({
+        "reconstruction_label": "a",
+        "release_image_principal_point": true,
+        "cameras": [{ "camera_intrinsics_index": 1, "release_image_focal": true,
+                      "release_image_principal_point": false }],
+        "image_prior": { "floor": { "principal_point": 0.002 },
+                         "fixed": { "focal": 0.01 } }
+    })
+    .as_object()
+    .cloned()
+    .expect("an object");
+    let Command::BundleAdjust {
+        release_image_focal,
+        release_image_principal_point,
+        cameras,
+        image_prior,
+        ..
+    } = tools::parse("bundle_adjust", Some(&map)).expect("a well-formed call")
+    else {
+        panic!("not a bundle_adjust");
+    };
+    assert!(!release_image_focal && release_image_principal_point);
+    assert_eq!(cameras[0].release_image_focal, Some(true));
+    assert_eq!(cameras[0].release_image_principal_point, Some(false));
+    let defaults = sfmtool_core::geometry::ImagePriorOptions::default();
+    assert_eq!(image_prior.loose, defaults.loose);
+    assert_eq!(image_prior.floor.principal_point, 0.002);
+    assert_eq!(image_prior.floor.focal, defaults.floor.focal);
+    assert_eq!(
+        image_prior.fixed,
+        Some(sfmtool_core::geometry::ImagePriorWidths {
+            focal: 0.01,
+            principal_point: defaults.loose.principal_point,
+        })
+    );
+
+    for (prior, expected) in [
+        (json!({ "wide": {} }), "has no argument"),
+        (json!({ "loose": { "f": 0.1 } }), "has no argument"),
+        (json!({ "loose": { "focal": 0.0 } }), "positive number"),
+        (json!({ "floor": 3 }), "wants floor to be an object"),
+        (json!([0.1]), "wants image_prior to be an object"),
+    ] {
+        let map = json!({ "reconstruction_label": "a", "image_prior": prior.clone() })
+            .as_object()
+            .cloned()
+            .expect("an object");
+        let error = tools::parse("bundle_adjust", Some(&map)).expect_err("refused at the parse");
+        assert!(error.0.contains(expected), "{prior}: {error}");
+    }
+}
+
+/// A per-image release on the wire releases each image's principal point, the
+/// label says so, and the reply carries the spread of the camera's images and
+/// the prior's widths.
+#[test]
+fn bundle_adjust_reports_the_per_image_spread() {
+    let (mut state, mut viewer) = editable();
+    perturb(&mut state, 0.02);
+    let reply = adjusted(
+        &mut state,
+        &mut viewer,
+        json!({ "reconstruction_label": "run_a", "release_image_principal_point": true }),
+    );
+    let report = reply["report"].as_str().expect("a report");
+    assert!(
+        report.contains("principal point released per image"),
+        "{report}"
+    );
+    assert!(
+        report.contains(", per-image widths principal point "),
+        "{report}"
+    );
+    let rows = reply["image_adjustments"]
+        .as_array()
+        .expect("the per-image spread");
+    assert_eq!(rows.len(), 1, "{reply}");
+    let row = &rows[0];
+    assert_eq!(row["camera_intrinsics_index"], 0);
+    assert_eq!(row["release_image_principal_point"], true);
+    assert_eq!(row["release_image_focal"], false);
+    assert_eq!(row["prior_derived"], true);
+    assert!(row["prior"]["principal_point"].as_f64().is_some(), "{row}");
+    assert_eq!(row["prior"]["focal"], Value::Null);
+    assert!(row["principal_point_std_px"].as_array().is_some(), "{row}");
+    assert!(row["near_prior"].as_array().is_some(), "{row}");
+
+    // A run with nothing released per image carries no such field.
+    let reply = adjusted(
+        &mut state,
+        &mut viewer,
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    assert_eq!(reply["image_adjustments"], Value::Null, "{reply}");
 }
 
 /// A schedule given on the wire is the one the solve runs, the entry names it,
@@ -2541,9 +2646,12 @@ fn the_editing_defaults_are_what_the_schemas_say() {
             release_focal: true,
             release_distortion: false,
             release_principal_point: false,
+            release_image_focal: false,
+            release_image_principal_point: false,
             cameras: Vec::new(),
             free_points_cross: true,
             schedule: None,
+            image_prior: Default::default(),
         }
     );
     assert_eq!(
@@ -2560,9 +2668,12 @@ fn the_editing_defaults_are_what_the_schemas_say() {
             release_focal: true,
             release_distortion: true,
             release_principal_point: false,
+            release_image_focal: false,
+            release_image_principal_point: false,
             cameras: Vec::new(),
             free_points_cross: true,
             schedule: None,
+            image_prior: Default::default(),
         }
     );
     assert_eq!(
@@ -2575,9 +2686,12 @@ fn the_editing_defaults_are_what_the_schemas_say() {
             release_focal: false,
             release_distortion: false,
             release_principal_point: true,
+            release_image_focal: false,
+            release_image_principal_point: false,
             cameras: Vec::new(),
             free_points_cross: true,
             schedule: None,
+            image_prior: Default::default(),
         }
     );
     assert_eq!(
@@ -2590,9 +2704,12 @@ fn the_editing_defaults_are_what_the_schemas_say() {
             release_focal: false,
             release_distortion: false,
             release_principal_point: false,
+            release_image_focal: false,
+            release_image_principal_point: false,
             cameras: Vec::new(),
             free_points_cross: false,
             schedule: None,
+            image_prior: Default::default(),
         }
     );
     assert_eq!(

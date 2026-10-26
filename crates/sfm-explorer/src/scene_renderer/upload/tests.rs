@@ -1611,6 +1611,56 @@ fn upload_bg_image_skips_reloading_the_same_image() {
 }
 
 #[test]
+fn a_change_of_the_image_s_intrinsics_or_pose_rebuilds_the_mesh_and_keeps_the_photograph() {
+    // The photograph depends on the image, the mesh on its intrinsics and its
+    // pose too. A version that gives the image an intrinsic adjustment, gives
+    // its camera another focal, or turns it, rebuilds the mesh from what the
+    // image now has, and the photograph, replaced on disk to tell, is not
+    // decoded again.
+    let (device, queue) = device();
+    let (mut recon, dir) = recon_with_real_bg_image("intrinsics");
+    let mut r = SceneRenderer::new();
+    r.upload_bg_image(&device, &queue, &recon, image(0));
+    let key = |r: &SceneRenderer| r.bg_image_mesh_key.clone().expect("a mesh");
+    assert_eq!(key(&r).intrinsics, recon.image_set.cameras[0]);
+    image::RgbImage::new(16, 8)
+        .save(dir.path().join(BG_NAME))
+        .expect("overwrite test png");
+
+    recon.image_set.images[0].intrinsic_adjustment = sfmtool_core::IntrinsicAdjustment {
+        focal: 0.02,
+        principal_point: [0.01, -0.01],
+    };
+    r.upload_bg_image(&device, &queue, &recon, image(0));
+    let adjusted = recon.image_set.image_intrinsics(0).into_owned();
+    assert_ne!(adjusted, recon.image_set.cameras[0]);
+    assert_eq!(key(&r).intrinsics, adjusted);
+
+    let camera = &mut recon.image_set.cameras[0];
+    *camera = camera.with_adjustment(&sfmtool_core::IntrinsicAdjustment {
+        focal: 0.1,
+        principal_point: [0.0, 0.0],
+    });
+    r.upload_bg_image(&device, &queue, &recon, image(0));
+    assert_eq!(
+        key(&r).intrinsics,
+        recon.image_set.image_intrinsics(0).into_owned()
+    );
+
+    let turn = nalgebra::UnitQuaternion::from_euler_angles(0.0, 0.1, 0.0);
+    recon.image_set.images[0].quaternion_wxyz = turn * recon.image_set.images[0].quaternion_wxyz;
+    r.upload_bg_image(&device, &queue, &recon, image(0));
+    assert_eq!(
+        key(&r).rotation,
+        recon.image_set.images[0].camera_to_world_rotation_flat()
+    );
+
+    let texture = r.bg_image_texture.as_ref().expect("bg texture");
+    assert_eq!((texture.width(), texture.height()), (8, 4), "decoded again");
+    drop(dir);
+}
+
+#[test]
 fn upload_bg_image_ignores_an_unreadable_image() {
     let (device, queue) = device();
     // demo's workspace_dir is empty and its image names don't exist on disk.
@@ -1648,6 +1698,7 @@ fn clear_bg_image_resets_every_background_field() {
     assert!(r.bg_image_texture.is_none());
     assert!(r.bg_image_bind_group.is_none());
     assert_eq!(r.bg_image_loaded, None);
+    assert_eq!(r.bg_image_mesh_key, None);
     assert!(r.bg_image_distorted_vertex_buffer.is_none());
     assert!(r.bg_image_distorted_index_buffer.is_none());
     assert_eq!(r.bg_image_distorted_index_count, 0);

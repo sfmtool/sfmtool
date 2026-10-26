@@ -402,9 +402,14 @@ pub(crate) fn parse(
             release_principal_point: args
                 .optional_bool("release_principal_point")?
                 .unwrap_or(false),
+            release_image_focal: args.optional_bool("release_image_focal")?.unwrap_or(false),
+            release_image_principal_point: args
+                .optional_bool("release_image_principal_point")?
+                .unwrap_or(false),
             cameras: args.camera_releases("cameras")?,
             free_points_cross: args.optional_bool("free_points_cross")?.unwrap_or(true),
             schedule: args.schedule("schedule")?,
+            image_prior: args.image_prior("image_prior")?,
         },
         // The proposal form applies the open proposal, whose fit is already
         // stated, so it takes none of the fit's arguments.
@@ -1635,15 +1640,80 @@ impl Args<'_> {
         Ok(Some(schedule))
     }
 
+    /// `bundle_adjust`'s prior on the per-image releases: the core function's
+    /// default when absent or `null`.
+    ///
+    /// A closed object of `loose`, `floor` and `fixed`, each optional; each of
+    /// those a closed object of `focal` and `principal_point`, each a positive
+    /// number, a left-out one at its default, and `fixed` also `null`, which
+    /// derives the widths.
+    fn image_prior(
+        &self,
+        key: &str,
+    ) -> Result<sfmtool_core::geometry::ImagePriorOptions, ToolError> {
+        let mut options = sfmtool_core::geometry::ImagePriorOptions::default();
+        let expected = "an object of loose, floor and fixed";
+        let map = match self.map.get(key) {
+            None | Some(Value::Null) => return Ok(options),
+            Some(value) => value
+                .as_object()
+                .ok_or_else(|| self.wrong_type(key, expected, value))?,
+        };
+        let inner = Args {
+            tool: "bundle_adjust.image_prior",
+            map,
+        };
+        inner.reject_unknown(&["loose", "floor", "fixed"])?;
+        let widths =
+            |field: &str,
+             default: sfmtool_core::geometry::ImagePriorWidths|
+             -> Result<Option<sfmtool_core::geometry::ImagePriorWidths>, ToolError> {
+                let expected = "an object of focal and principal_point";
+                let map = match inner.map.get(field) {
+                    None | Some(Value::Null) => return Ok(None),
+                    Some(value) => value
+                        .as_object()
+                        .ok_or_else(|| inner.wrong_type(field, expected, value))?,
+                };
+                let tool = format!("bundle_adjust.image_prior.{field}");
+                let widths = Args { tool: &tool, map };
+                widths.reject_unknown(&["focal", "principal_point"])?;
+                let mut out = default;
+                for (name, slot) in [
+                    ("focal", &mut out.focal),
+                    ("principal_point", &mut out.principal_point),
+                ] {
+                    if let Some(width) = widths.optional_f64(name)? {
+                        if !(width.is_finite() && width > 0.0) {
+                            return Err(widths.error(format!(
+                                "wants {name} to be a positive number — got {width}."
+                            )));
+                        }
+                        *slot = width;
+                    }
+                }
+                Ok(Some(out))
+            };
+        if let Some(loose) = widths("loose", options.loose)? {
+            options.loose = loose;
+        }
+        if let Some(floor) = widths("floor", options.floor)? {
+            options.floor = floor;
+        }
+        options.fixed = widths("fixed", options.loose)?;
+        Ok(options)
+    }
+
     /// `bundle_adjust`'s per-camera release overrides; empty when absent.
     ///
     /// Each element is a closed object: `camera_intrinsics_index`, required,
-    /// and `release_focal`, `release_distortion` and `release_principal_point`,
-    /// each optional. A field left out stays `None`, for the call's default to
-    /// fill.
+    /// and `release_focal`, `release_distortion`, `release_principal_point`,
+    /// `release_image_focal` and `release_image_principal_point`, each
+    /// optional. A field left out stays `None`, for the call's default to fill.
     fn camera_releases(&self, key: &str) -> Result<Vec<super::CameraReleaseOverride>, ToolError> {
         let expected = "an array of objects, each with camera_intrinsics_index and optionally \
-                        release_focal, release_distortion and release_principal_point";
+                        release_focal, release_distortion, release_principal_point, \
+                        release_image_focal and release_image_principal_point";
         let value = match self.map.get(key) {
             None | Some(Value::Null) => return Ok(Vec::new()),
             Some(value) => value,
@@ -1667,6 +1737,9 @@ impl Args<'_> {
                     release_focal: inner.optional_bool("release_focal")?,
                     release_distortion: inner.optional_bool("release_distortion")?,
                     release_principal_point: inner.optional_bool("release_principal_point")?,
+                    release_image_focal: inner.optional_bool("release_image_focal")?,
+                    release_image_principal_point: inner
+                        .optional_bool("release_image_principal_point")?,
                 })
             })
             .collect()

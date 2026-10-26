@@ -7,9 +7,10 @@
 //! See `specs/gui/edits/bundle-adjust.md`. The adjustment takes its decisions
 //! about the lens from the user, camera by camera -- whether each camera's
 //! focal length is released, whether with it the lens distortion the
-//! adjustment can free, and whether its principal point is -- one about the
-//! points: whether a point may cross between a position and a direction -- and
-//! the trim schedule. That is the whole dialog: one row of three checkboxes per
+//! adjustment can free, whether its principal point is, and whether each of
+//! its images' focal length and principal point are -- one about the points:
+//! whether a point may cross between a position and a direction -- and the
+//! trim schedule. That is the whole dialog: one row of five checkboxes per
 //! camera, the crossing checkbox,
 //! the schedule's text box with its presets, `Run` and `Cancel`. Everything
 //! else about the solve is the core function's defaults. A spline
@@ -131,8 +132,9 @@ pub(crate) fn parse_schedule(text: &str) -> Result<Vec<BaSchedule>, String> {
 
 /// One camera the posed images use, as its row in the dialog shows it: which
 /// camera, how many posed images it takes, and why its focal or distortion
-/// checkbox is greyed. Its principal-point checkbox is never greyed, since
-/// every model can release its principal point.
+/// checkbox is greyed. Its principal-point checkboxes are never greyed for the
+/// model, since every model can release its principal point, shared or per
+/// image; its per-image focal checkbox is greyed for the focal's reason.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct CameraGate {
     /// The camera's index among the image set's cameras.
@@ -248,12 +250,17 @@ pub struct BundleAdjustPrompt {
     last_schedule: HashMap<ReconId, Vec<BaSchedule>>,
 }
 
-/// One camera row's three checkboxes, as the user left them.
+/// One camera row's five checkboxes, as the user left them. A ticked per-image
+/// box shows the shared box of its kind ticked and greyed, without changing
+/// what the shared box itself holds, so clearing the per-image box gives the
+/// shared box back as the user left it.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 struct RowState {
     focal: bool,
     distortion: bool,
     principal_point: bool,
+    image_focal: bool,
+    image_principal_point: bool,
 }
 
 /// The question being asked: which node, what the controls say, and why each
@@ -273,17 +280,24 @@ struct Pending {
 
 impl Pending {
     /// What camera row `j` releases: what its checkboxes say, less anything its
-    /// model cannot release, and the distortion only with the focal. The
-    /// principal point is released on any model, with or without the focal.
+    /// model cannot release, and the distortion only with the focal, shared or
+    /// per image. The principal point is released on any model, with or
+    /// without the focal. A per-image release is passed as it is, without the
+    /// shared one of its kind, which it already moves.
     fn release(&self, j: usize) -> CameraRelease {
         let gate = &self.gates.cameras[j];
         let row = self.rows[j];
-        let focal = row.focal && gate.focal_refusal.is_none();
+        let focal_ok = gate.focal_refusal.is_none();
+        let image_focal = row.image_focal && focal_ok;
+        let focal = row.focal && focal_ok && !image_focal;
         CameraRelease {
             focal,
-            distortion: focal && row.distortion && gate.distortion_refusal.is_none(),
-            principal_point: row.principal_point,
-            ..CameraRelease::HELD
+            distortion: (focal || image_focal)
+                && row.distortion
+                && gate.distortion_refusal.is_none(),
+            principal_point: row.principal_point && !row.image_principal_point,
+            image_focal,
+            image_principal_point: row.image_principal_point,
         }
     }
 
@@ -448,17 +462,21 @@ fn schedule_row(ui: &mut egui::Ui, text: &mut String) {
 }
 
 /// The camera rows: per camera the posed images use, its index, model and
-/// image count, and its "Release focal length", "Release lens distortion" and
-/// "Release principal point" checkboxes.
+/// image count, and its "Release focal length", "Release lens distortion",
+/// "Release principal point", "Release focal length per image" and "Release
+/// principal point per image" checkboxes.
 ///
 /// A checkbox the camera's model cannot take is greyed, with the reason as its
 /// hover text. The distortion checkbox is also greyed while the same row's
-/// focal is clear, and cleared when the focal is: neither k1 nor the spline
-/// can change the scale at the centre of the image, which is the focal's job.
-/// The principal-point checkbox is enabled on every model and needs no focal.
+/// focal is released neither shared nor per image, and cleared when it is not:
+/// neither k1 nor the spline can change the scale at the centre of the image,
+/// which is the focal's job. The principal-point checkboxes are enabled on
+/// every model and need no focal. A ticked per-image box shows the shared box
+/// of its kind ticked and greyed, since releasing a value per image moves the
+/// camera's value to the images' mean.
 fn camera_rows(ui: &mut egui::Ui, pending: &mut Pending) {
     egui::Grid::new("bundle_adjust_cameras")
-        .num_columns(4)
+        .num_columns(6)
         .spacing([12.0, 4.0])
         .show(ui, |ui| {
             for (gate, row) in pending.gates.cameras.iter().zip(pending.rows.iter_mut()) {
@@ -467,22 +485,26 @@ fn camera_rows(ui: &mut egui::Ui, pending: &mut Pending) {
                     "Camera {}  {}  {} image{plural}",
                     gate.camera, gate.camera_model, gate.images
                 ));
-                ui.add_enabled_ui(gate.focal_refusal.is_none(), |ui| {
-                    ui.checkbox(&mut row.focal, "Release focal length")
-                        .on_disabled_hover_text(gate.focal_refusal.clone().unwrap_or_default())
-                        .on_hover_text(
-                            "Solve this camera's focal length along with the poses and the \
-                             points, instead of holding it where it is.",
-                        );
-                });
-                if !row.focal {
+                let image_focal = row.image_focal && gate.focal_refusal.is_none();
+                shared_checkbox(
+                    ui,
+                    &mut row.focal,
+                    image_focal,
+                    "Release focal length",
+                    gate.focal_refusal.as_deref(),
+                    "Solve this camera's focal length along with the poses and the points, \
+                     instead of holding it where it is.",
+                    "focal length",
+                );
+                let focal = (row.focal || row.image_focal) && gate.focal_refusal.is_none();
+                if !focal {
                     row.distortion = false;
                 }
                 let distortion_why = gate.distortion_refusal.clone().or_else(|| {
-                    (!row.focal || gate.focal_refusal.is_some()).then(|| {
+                    (!focal).then(|| {
                         format!(
                             "The lens distortion of camera {} is released only together with its \
-                             focal length.",
+                             focal length, shared or per image.",
                             gate.camera
                         )
                     })
@@ -496,14 +518,72 @@ fn camera_rows(ui: &mut egui::Ui, pending: &mut Pending) {
                              SFMTOOL_PINHOLE.",
                         );
                 });
-                ui.checkbox(&mut row.principal_point, "Release principal point")
-                    .on_hover_text(
-                        "Solve this camera's principal point, the pixel its optical axis passes \
-                         through, along with the poses and the points. With a narrow field of \
-                         view the data barely tell it from a turn of every image, so check how \
-                         far it moved.",
-                    );
+                shared_checkbox(
+                    ui,
+                    &mut row.principal_point,
+                    row.image_principal_point,
+                    "Release principal point",
+                    None,
+                    "Solve this camera's principal point, the pixel its optical axis passes \
+                     through, along with the poses and the points. With a narrow field of view \
+                     the data barely tell it from a turn of every image, so check how far it \
+                     moved.",
+                    "principal point",
+                );
+                ui.add_enabled_ui(gate.focal_refusal.is_none(), |ui| {
+                    ui.checkbox(&mut row.image_focal, "Release focal length per image")
+                        .on_disabled_hover_text(gate.focal_refusal.clone().unwrap_or_default())
+                        .on_hover_text(
+                            "Solve a focal length for each image of this camera, a small scale \
+                             of the camera's that autofocus changes from one photograph to the \
+                             next. Each image is held toward the mean of the camera's images by \
+                             a prior whose width the solve derives, and the camera's focal \
+                             length moves to that mean.",
+                        );
+                });
+                ui.checkbox(
+                    &mut row.image_principal_point,
+                    "Release principal point per image",
+                )
+                .on_hover_text(
+                    "Solve a principal point for each image of this camera, a small offset of \
+                     the camera's that a stabilised lens changes from one photograph to the \
+                     next. Each image is held toward the mean of the camera's images by a prior \
+                     whose width the solve derives, and the camera's principal point moves to \
+                     that mean.",
+                );
                 ui.end_row();
             }
         });
+}
+
+/// A shared release's checkbox: the user's own `value`, or, while the
+/// per-image release of its kind is ticked (`implied`), shown ticked and
+/// greyed with the reason as its hover text. `refusal` greys it for the
+/// camera's model instead.
+fn shared_checkbox(
+    ui: &mut egui::Ui,
+    value: &mut bool,
+    implied: bool,
+    text: &str,
+    refusal: Option<&str>,
+    hover: &str,
+    what: &str,
+) {
+    if implied {
+        let mut ticked = true;
+        ui.add_enabled_ui(false, |ui| {
+            ui.checkbox(&mut ticked, text)
+                .on_disabled_hover_text(format!(
+                    "Released with the {what} per image: the camera's {what} moves to the mean \
+                 of its images'."
+                ));
+        });
+        return;
+    }
+    ui.add_enabled_ui(refusal.is_none(), |ui| {
+        ui.checkbox(value, text)
+            .on_disabled_hover_text(refusal.unwrap_or_default())
+            .on_hover_text(hover);
+    });
 }

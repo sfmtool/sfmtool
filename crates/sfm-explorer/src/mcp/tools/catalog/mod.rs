@@ -47,6 +47,29 @@ fn flag(description: &str) -> Value {
     json!({ "type": "boolean", "description": description })
 }
 
+/// One camera's widths of the prior on its per-image releases, as
+/// `bundle_adjust`'s `image_prior` states each of its three: `focal` and
+/// `principal_point`, each a positive number, a left-out one at its default.
+fn prior_widths_schema(description: &str) -> Value {
+    json!({
+        "type": ["object", "null"],
+        "description": description,
+        "properties": {
+            "focal": {
+                "type": "number",
+                "exclusiveMinimum": 0,
+                "description": "The focal scale's width, a fraction.",
+            },
+            "principal_point": {
+                "type": "number",
+                "exclusiveMinimum": 0,
+                "description": "The principal-point offset's width, a fraction of the image's short side.",
+            },
+        },
+        "additionalProperties": false,
+    })
+}
+
 fn reconstruction_label_schema() -> Value {
     json!({
         "type": "string",

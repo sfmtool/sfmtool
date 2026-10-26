@@ -12,6 +12,7 @@
 mod additions;
 mod atlas;
 mod bg_image;
+pub(crate) use bg_image::BgMeshKey;
 mod frustums;
 mod overlay;
 pub(crate) use overlay::PointMarks;

@@ -446,7 +446,10 @@ pub(super) fn bundle_adjust(
             principal_point: entry
                 .release_principal_point
                 .unwrap_or(defaults.principal_point),
-            ..defaults
+            image_focal: entry.release_image_focal.unwrap_or(defaults.image_focal),
+            image_principal_point: entry
+                .release_image_principal_point
+                .unwrap_or(defaults.image_principal_point),
         };
     }
     options.releases = releases;
@@ -777,6 +780,44 @@ pub(super) fn cancel_background_tasks(state: &mut AppState, named: Option<&[u64]
     Ok(json!({ "cancelling": cancelling, "removed": removed, "refused": refused }))
 }
 
+/// The `image_adjustments` rows of a `bundle_adjust` reply: one per camera of
+/// the solve that released a per-image parameter, with the spread of its
+/// images' adjustments and the prior they were solved under. A width or spread
+/// the solve has none of (a parameter not released per image, or not derived)
+/// is `null`, which is how JSON writes the report's `NaN`.
+fn image_adjustments_json(cameras: &[sfmtool_core::CameraAdjustment]) -> Vec<serde_json::Value> {
+    let number = |x: f64| if x.is_finite() { json!(x) } else { json!(null) };
+    let widths = |w: &sfmtool_core::geometry::ImagePriorWidths| json!({ "focal": number(w.focal), "principal_point": number(w.principal_point) });
+    cameras
+        .iter()
+        .filter_map(|c| {
+            let spread = c.image_adjustments.as_ref()?;
+            Some(json!({
+                "camera_intrinsics_index": c.camera,
+                "release_image_focal": c.image_focal_released,
+                "release_image_principal_point": c.image_principal_point_released,
+                "images": spread.images,
+                "focal_mean": spread.focal_mean,
+                "focal_std": spread.focal_std,
+                "principal_point_mean_px": spread.principal_point_mean,
+                "principal_point_std_px": spread.principal_point_std,
+                "prior": widths(&spread.prior),
+                "prior_derived": spread.prior_derived,
+                "spread": widths(&spread.spread),
+                "near_prior": spread
+                    .near_prior
+                    .iter()
+                    .map(|n| json!({
+                        "image_index": n.image,
+                        "parameter": n.parameter.name(),
+                        "widths": n.widths,
+                    }))
+                    .collect::<Vec<_>>(),
+            }))
+        })
+        .collect()
+}
+
 /// Whether a deferred `bundle_adjust` can be answered yet, and with what.
 ///
 /// `None` means "ask again next frame", which is the only thing this waits by:
@@ -854,10 +895,19 @@ pub(super) fn background_reply(
             }
             (&super::Answer::Version(node), Ok(report)) => {
                 version_reply(state, node, Some(report.clone())).map(|mut reply| {
-                    reply
-                        .as_object_mut()
-                        .expect("a version reply is an object")
-                        .insert("changed".into(), json!(outcome.changed));
+                    let object = reply.as_object_mut().expect("a version reply is an object");
+                    object.insert("changed".into(), json!(outcome.changed));
+                    // A bundle adjustment that released something per image
+                    // says, per such camera, how its images' adjustments ended
+                    // and under what prior.
+                    let spreads = outcome
+                        .adjusted_cameras
+                        .as_deref()
+                        .map(image_adjustments_json)
+                        .unwrap_or_default();
+                    if !spreads.is_empty() {
+                        object.insert("image_adjustments".into(), json!(spreads));
+                    }
                     super::ToolOutput::Json(reply)
                 })
             }

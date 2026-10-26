@@ -10,6 +10,7 @@ use super::super::gpu_types::{
 use super::super::SceneRenderer;
 use crate::scene::ImageRef;
 use sfmtool_core::camera::image::ImageU8;
+use sfmtool_core::camera::CameraIntrinsics;
 use sfmtool_core::SfmrReconstruction;
 use wgpu::util::DeviceExt;
 
@@ -43,12 +44,26 @@ pub(super) fn bg_image_mesh(
     generate_bg_distorted_mesh(&camera, &r, subdivisions)
 }
 
+/// What one background mesh was built from: the image, its intrinsics (its
+/// camera with its intrinsic adjustment applied) and its camera-to-world
+/// rotation. [`bg_image_mesh`] reads exactly these, so a mesh whose key still
+/// matches is the one a rebuild would make.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct BgMeshKey {
+    pub(crate) image: ImageRef,
+    pub(crate) intrinsics: CameraIntrinsics,
+    pub(crate) rotation: [f64; 9],
+}
+
 impl SceneRenderer {
     /// Load a full-resolution camera image for the background in camera view mode.
     ///
     /// Creates a single 2D texture at the image's native resolution and rebuilds
-    /// the background image bind group. Skips reloading if the same image is
-    /// already loaded.
+    /// the background image bind group, skipping the reload when the same image
+    /// is already loaded. The mesh is rebuilt whenever what it is built from
+    /// changed, so a version that gives the image other intrinsics or another
+    /// pose redraws the photograph where its rays now point without decoding it
+    /// again.
     pub fn upload_bg_image(
         &mut self,
         device: &wgpu::Device,
@@ -56,14 +71,53 @@ impl SceneRenderer {
         recon: &SfmrReconstruction,
         image: ImageRef,
     ) {
-        if self.bg_image_loaded == Some(image) {
-            return; // already loaded
-        }
-
         let image_index = image.index();
         let Some(img) = recon.image_set.images.get(image_index) else {
             return;
         };
+        if self.bg_image_loaded != Some(image) && !self.load_bg_texture(device, queue, recon, image)
+        {
+            return;
+        }
+        let intrinsics = recon.image_set.image_intrinsics(image_index);
+        let rotation = img.camera_to_world_rotation_flat();
+        if self.bg_image_mesh_key.as_ref().is_some_and(|key| {
+            key.image == image && key.rotation == rotation && key.intrinsics == *intrinsics
+        }) {
+            return; // the mesh is the one a rebuild would make
+        }
+        let (vertices, indices) = bg_image_mesh(recon, image_index);
+        let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("bg distorted vertices"),
+            contents: bytemuck::cast_slice(&vertices),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        let ibuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("bg distorted indices"),
+            contents: bytemuck::cast_slice(&indices),
+            usage: wgpu::BufferUsages::INDEX,
+        });
+        self.bg_image_distorted_vertex_buffer = Some(vbuf);
+        self.bg_image_distorted_index_buffer = Some(ibuf);
+        self.bg_image_distorted_index_count = indices.len() as u32;
+        self.bg_image_mesh_key = Some(BgMeshKey {
+            image,
+            intrinsics: intrinsics.into_owned(),
+            rotation,
+        });
+    }
+
+    /// Decode `image`'s photograph into the background texture and rebuild
+    /// the bind group around it. Returns whether it did: a photograph that
+    /// cannot be read leaves every field as it was.
+    fn load_bg_texture(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        recon: &SfmrReconstruction,
+        image: ImageRef,
+    ) -> bool {
+        let img = &recon.image_set.images[image.index()];
         let image_path = recon.workspace_dir.join(&img.name);
         // The photograph decoder every reader shares: the contents choose the
         // format, and the EXIF orientation is ignored, so the texture lines up
@@ -72,7 +126,7 @@ impl SceneRenderer {
             Ok(img) => img,
             Err(e) => {
                 log::warn!("Failed to load bg image {}: {}", image_path.display(), e);
-                return;
+                return false;
             }
         };
 
@@ -146,21 +200,7 @@ impl SceneRenderer {
         self.bg_image_texture = Some(texture);
         self.bg_image_loaded = Some(image);
         log::info!("Loaded bg image {} ({}×{})", image_path.display(), w, h);
-
-        let (vertices, indices) = bg_image_mesh(recon, image_index);
-        let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("bg distorted vertices"),
-            contents: bytemuck::cast_slice(&vertices),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-        let ibuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("bg distorted indices"),
-            contents: bytemuck::cast_slice(&indices),
-            usage: wgpu::BufferUsages::INDEX,
-        });
-        self.bg_image_distorted_vertex_buffer = Some(vbuf);
-        self.bg_image_distorted_index_buffer = Some(ibuf);
-        self.bg_image_distorted_index_count = indices.len() as u32;
+        true
     }
 
     /// Clear the background image when leaving camera view mode.
@@ -168,6 +208,7 @@ impl SceneRenderer {
         self.bg_image_bind_group = None;
         self.bg_image_texture = None;
         self.bg_image_loaded = None;
+        self.bg_image_mesh_key = None;
         self.bg_image_distorted_vertex_buffer = None;
         self.bg_image_distorted_index_buffer = None;
         self.bg_image_distorted_index_count = 0;

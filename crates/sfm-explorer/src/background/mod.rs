@@ -942,6 +942,10 @@ pub(crate) enum Finished {
     /// [`Finished::Produced`] carries it, and the switch's report for the
     /// camera, which the wire's reply carries as its `fit` object.
     SwitchedCamera(Box<SwitchedCamera>),
+    /// A bundle adjustment: the next value as [`Finished::Produced`] carries
+    /// it, and the adjustment's report for each camera of the solve, which the
+    /// wire's reply carries where a camera released something per image.
+    BundleAdjusted(Box<BundleAdjusted>),
     /// One bench item's next value, and everything the GUI thread needs to
     /// install it.
     ///
@@ -1044,6 +1048,21 @@ pub(crate) struct SwitchedCamera {
     pub(crate) switch: sfmtool_core::reconstruction::switch_camera_model::CameraSwitch,
 }
 
+/// What a bundle adjustment produced: the value, installed as
+/// [`Finished::Produced`] installs one, and the report for each camera.
+pub(crate) struct BundleAdjusted {
+    /// What the adjustment returned.
+    pub(crate) value: SfmrReconstruction,
+    /// The map from the input's rows to that value's.
+    pub(crate) map: PointMap,
+    /// The version's label.
+    pub(crate) version_label: String,
+    /// The Action Log sentence, up to the serials.
+    pub(crate) text: String,
+    /// The adjustment's report for each camera of the solve.
+    pub(crate) cameras: Vec<sfmtool_core::CameraAdjustment>,
+}
+
 /// How a index-files build ended, beside whatever it wrote.
 ///
 /// The three endings of [`Finished`] itself, for a build that may have written
@@ -1100,6 +1119,12 @@ pub(crate) struct FinishedTask {
     #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
     pub(crate) switched_camera:
         Option<Box<sfmtool_core::reconstruction::switch_camera_model::CameraSwitch>>,
+    /// What a bundle adjustment reported for each camera of its solve, which
+    /// `bundle_adjust` answers with the per-image spread of once it lands.
+    /// `None` for every other operation, and for a run that was refused or
+    /// cancelled.
+    #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
+    pub(crate) adjusted_cameras: Option<Vec<sfmtool_core::CameraAdjustment>>,
     /// Whether it pushed a version of the node it ran on.
     ///
     /// False for a run that ended in [`Finished::NoChange`] as well as for one
@@ -1798,6 +1823,7 @@ impl AppState {
             found_nearby: None,
             found_points: None,
             switched_camera: None,
+            adjusted_cameras: None,
             changed: false,
             took: Duration::ZERO,
             detail: Vec::new(),
@@ -1966,6 +1992,8 @@ impl AppState {
         // A proposal's Apply installs as any produced value does; its switch
         // report is kept for the reply.
         let mut switched_camera = None;
+        // An adjustment's report per camera, kept for the reply.
+        let mut adjusted_cameras = None;
         // Whether the kernel met the cancel flag and stopped, which the record
         // keeps beside the sentence so the panel can say so.
         let mut cancelled = false;
@@ -1982,6 +2010,22 @@ impl AppState {
                 Finished::Produced {
                     // The task's answer is shared with nothing, so this is a move.
                     value: Arc::unwrap_or_clone(value),
+                    map,
+                    version_label,
+                    text,
+                }
+            }
+            Finished::BundleAdjusted(run) => {
+                let BundleAdjusted {
+                    value,
+                    map,
+                    version_label,
+                    text,
+                    cameras,
+                } = *run;
+                adjusted_cameras = Some(cameras);
+                Finished::Produced {
+                    value,
                     map,
                     version_label,
                     text,
@@ -2177,7 +2221,9 @@ impl AppState {
                     _ => Ok(crate::state::open::opened_sentence(self, &made)),
                 }
             }
-            Finished::SwitchedCamera(_) => unreachable!("unwrapped into Produced above"),
+            Finished::SwitchedCamera(_) | Finished::BundleAdjusted(_) => {
+                unreachable!("unwrapped into Produced above")
+            }
             Finished::Quiet => unreachable!("a quiet task does not land through finish"),
             // Nothing to install and nothing to push, so the row is the whole
             // of it: the node's caches still describe the value it holds.
@@ -2252,6 +2298,7 @@ impl AppState {
             found_nearby,
             found_points,
             switched_camera: switched_camera.filter(|_| outcome.is_ok()),
+            adjusted_cameras: adjusted_cameras.filter(|_| outcome.is_ok()),
             changed: installed.is_some(),
             took,
             detail: kept,

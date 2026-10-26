@@ -200,6 +200,63 @@ fn principal_point_changes(cameras: &[sfmtool_core::CameraAdjustment]) -> String
     }
 }
 
+/// The Action Log's clause for the per-image releases: for each camera that
+/// released a per-image parameter, the widths of the prior its final round ran
+/// under, whether they were derived or fixed, and how many of its images ended
+/// more than two widths from the camera's mean; nothing when no camera
+/// released one.
+///
+/// A solve over one camera reads `, per-image widths focal 0.42 %, principal
+/// point 1.31 % of the short side (20.1 px), derived, 2 images beyond two
+/// widths`, naming only the parameters released per image; one over several
+/// names each camera by its index, `, camera 1 per-image widths …`.
+/// `short_side` is each camera's short side in pixels, by camera index.
+fn image_prior_clause(
+    cameras: &[sfmtool_core::CameraAdjustment],
+    short_side: impl Fn(usize) -> f64,
+) -> String {
+    let one = cameras.len() == 1;
+    cameras
+        .iter()
+        .filter_map(|c| {
+            let spread = c.image_adjustments.as_ref()?;
+            let mut parts = Vec::new();
+            if c.image_focal_released {
+                parts.push(format!("focal {:.2} %", 100.0 * spread.prior.focal));
+            }
+            if c.image_principal_point_released {
+                let width = spread.prior.principal_point;
+                parts.push(format!(
+                    "principal point {:.2} % of the short side ({:.1} px)",
+                    100.0 * width,
+                    width * short_side(c.camera)
+                ));
+            }
+            let how = if spread.prior_derived {
+                "derived"
+            } else {
+                "fixed"
+            };
+            let beyond: std::collections::BTreeSet<usize> =
+                spread.near_prior.iter().map(|n| n.image).collect();
+            let beyond = match beyond.len() {
+                0 => String::new(),
+                1 => ", 1 image beyond two widths".to_string(),
+                n => format!(", {n} images beyond two widths"),
+            };
+            let camera = if one {
+                String::new()
+            } else {
+                format!("camera {} ", c.camera)
+            };
+            Some(format!(
+                ", {camera}per-image widths {}, {how}{beyond}",
+                parts.join(", ")
+            ))
+        })
+        .collect()
+}
+
 /// The Action Log entry's schedule clause: `, schedule (inf, 1000)` when the
 /// adjustment ran a schedule other than the core function's default, and
 /// nothing when it ran the default.
@@ -256,25 +313,50 @@ fn free_point_clause(decision: Option<&sfmtool_core::geometry::FreePointDecision
 /// already says only poses and points moved. A camera's released parts are
 /// named in the order focal, principal point, lens distortion: `, focal and
 /// principal point released`, `, focal, principal point and lens distortion
-/// released`. When every camera released the same thing, one phrase: `, focal
-/// released` over one camera, and `, focal released on every camera` over
-/// several. When the cameras differ, each is named by its index, `, camera 0
-/// focal and lens distortion released, camera 1 held`, because the label is
-/// the one line that says which lens moved.
+/// released`. The parts released per image follow as a phrase of their own,
+/// `, focal and principal point released per image`, or after the shared ones,
+/// `, lens distortion released, focal released per image`; a part released
+/// per image is not named again among the shared ones, though its shared value
+/// moves with it. When every camera released the same thing, one phrase: `,
+/// focal released` over one camera, and `, focal released on every camera`
+/// over several. When the cameras differ, each is named by its index, `,
+/// camera 0 focal and lens distortion released, camera 1 held`, because the
+/// label is the one line that says which lens moved.
 fn release_clause(cameras: &[sfmtool_core::CameraAdjustment]) -> String {
+    let list = |parts: &[&str]| match parts {
+        [] => String::new(),
+        [one] => one.to_string(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    };
     let words = |c: &sfmtool_core::CameraAdjustment| {
-        let parts: Vec<&str> = [
-            (c.focal_released, "focal"),
-            (c.principal_point_released, "principal point"),
+        let pick = |pairs: [(bool, &'static str); 3]| -> Vec<&'static str> {
+            pairs
+                .into_iter()
+                .filter_map(|(released, part)| released.then_some(part))
+                .collect()
+        };
+        let shared = pick([
+            (c.focal_released && !c.image_focal_released, "focal"),
+            (
+                c.principal_point_released && !c.image_principal_point_released,
+                "principal point",
+            ),
             (c.distortion_released, "lens distortion"),
-        ]
-        .into_iter()
-        .filter_map(|(released, part)| released.then_some(part))
-        .collect();
-        match parts.as_slice() {
-            [] => "held".to_string(),
-            [one] => format!("{one} released"),
-            [rest @ .., last] => format!("{} and {last} released", rest.join(", ")),
+        ]);
+        let per_image = pick([
+            (c.image_focal_released, "focal"),
+            (c.image_principal_point_released, "principal point"),
+            (false, ""),
+        ]);
+        match (shared.is_empty(), per_image.is_empty()) {
+            (true, true) => "held".to_string(),
+            (false, true) => format!("{} released", list(&shared)),
+            (true, false) => format!("{} released per image", list(&per_image)),
+            (false, false) => format!(
+                "{} released, {} released per image",
+                list(&shared),
+                list(&per_image)
+            ),
         }
     };
     let Some(first) = cameras.first().map(words) else {
@@ -1688,6 +1770,10 @@ impl AppState {
             let schedule = schedule_clause(&options.schedule);
             let focal = focal_changes(&report.cameras);
             let principal_point = principal_point_changes(&report.cameras);
+            let image_prior = image_prior_clause(&report.cameras, |c| {
+                let camera = &adjusted.image_set.cameras[c];
+                f64::from(camera.width.min(camera.height))
+            });
             let free_points = free_point_clause(report.free_point_decision.as_ref());
             let deleted = if report.points_deleted > 0 {
                 format!(", {} points deleted", report.points_deleted)
@@ -1695,19 +1781,20 @@ impl AppState {
                 String::new()
             };
             let text = format!(
-                "{version_label}: {} images, {} points, {} observations, median residual {:.3} → {:.3} px{schedule}{focal}{principal_point}{free_points}{deleted}",
+                "{version_label}: {} images, {} points, {} observations, median residual {:.3} → {:.3} px{schedule}{focal}{principal_point}{image_prior}{free_points}{deleted}",
                 report.images,
                 report.points,
                 report.observations,
                 report.median_residual_before,
                 report.median_residual_after,
             );
-            Finished::Produced {
+            Finished::BundleAdjusted(Box::new(crate::background::BundleAdjusted {
                 value: adjusted,
                 map,
                 version_label,
                 text,
-            }
+                cameras: report.cameras,
+            }))
         }))
     }
 
