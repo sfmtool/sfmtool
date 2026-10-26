@@ -568,6 +568,44 @@ fn fixed_widths_are_used_as_given() {
 }
 
 #[test]
+fn a_narrow_prior_leaves_the_images_mean_free() {
+    // Every image through the same principal point, 6 px right of and 4 px
+    // above the starting camera's, under a fixed width far narrower than that
+    // offset, in one round. The prior is centred on the images' mean rather
+    // than on zero, so it holds the images to each other and not to the
+    // starting camera: the images move together, and the re-centring hands
+    // their common offset to the camera.
+    let truth = wide_pinhole(326.0, 236.0);
+    let planted = vec![IntrinsicAdjustment::default(); 20];
+    let mut s = per_image_scene(&truth, 20, 400, &planted, 0.3, 21, |_| 60);
+    perturb_poses(&mut s);
+    let narrow = ImagePriorWidths {
+        focal: 1e-5,
+        principal_point: 1e-5,
+    };
+    let options = ImagePriorOptions {
+        fixed: Some(narrow),
+        ..ImagePriorOptions::default()
+    };
+    let out = run_image(
+        &mut s,
+        &wide_pinhole(320.0, 240.0),
+        &[],
+        IMAGE_PP,
+        Some(&options),
+        &[BaSchedule {
+            trim_px: f64::INFINITY,
+            loss_scale: 1.0,
+        }],
+    );
+    let (cx, cy) = out.cameras[0].principal_point();
+    assert!(
+        (cx - 326.0).abs() < 1.5 && (cy - 236.0).abs() < 1.5,
+        "principal point ({cx}, {cy}), the images' (326, 236)"
+    );
+}
+
+#[test]
 fn a_one_round_schedule_derives_once() {
     // A single round runs a second time under widths derived from the first,
     // so its prior is derived and the spread it came from is reported.
