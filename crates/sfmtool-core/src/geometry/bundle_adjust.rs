@@ -2189,8 +2189,7 @@ impl<'a> Lens<'a> {
     ) -> Self {
         // The analytic focal column `∂(u, v)/∂f = (u − cx)/f` is exact only
         // on the models `focal_is_releasable` admits (its doc says why), and
-        // the image's focal-scale column `(u − cx_i)/(1 + s)` on the same
-        // ones. Every other model degrades to a fixed focal here; the binding
+        // the image's log-focal-scale column `u − cx_i` on the same ones. Every other model degrades to a fixed focal here; the binding
         // rejects it loudly first. A per-image release holds the shared value
         // of its kind for the solve.
         let opt_image_f = opt_image_f && focal_is_releasable(&base.model);

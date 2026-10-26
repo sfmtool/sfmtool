@@ -121,8 +121,8 @@ fn check_releases(
                  is {model}"
             )));
         }
-        // Each image's focal-scale column `(u − cx_i)/(1 + s)` is exact on the
-        // same five models.
+        // Each image's log-focal-scale column `u − cx_i` is exact on the same
+        // five models.
         if opt_image_f && !focal_is_releasable(camera) {
             return Err(pyo3::exceptions::PyValueError::new_err(format!(
                 "opt_image_f requires every camera to be SIMPLE_PINHOLE, \
