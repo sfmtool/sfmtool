@@ -4627,6 +4627,47 @@ fn weighted_median(samples: &mut [(f64, f64)]) -> f64 {
     samples.last().map_or(f64::NAN, |s| s.0)
 }
 
+/// The spread `s` of de-shrunk deviations `(d̂, v)` over `slots` of `dev`,
+/// each sample of variance `s² + v`: `s² = max(0, m² − median_w v)` with
+/// `m = 1.4826·median_w |d̂ − c|`, `c` each slot's weighted median of `d̂`,
+/// and every median weighted by `1/(s² + v)`.
+///
+/// The weight is each sample's precision as a sample of the spread, so an
+/// image whose own noise swamps the spread counts little and images whose
+/// noise is well under it count alike. Since it reads `s`, it is iterated from
+/// the round's width, the current estimate, with `s` never under `floor` in
+/// the weight. The centre is each slot's weighted median rather than the mean
+/// the deviations are taken from, so an image that moves the mean by its share,
+/// which moves every deviation alike, does not widen the spread.
+fn robust_spread(dev: &[Vec<(f64, f64)>; 3], slots: &[usize], start: f64, floor: f64) -> f64 {
+    let mut s = start;
+    for _ in 0..8 {
+        let weight_of = |v: f64| {
+            let w = s.max(floor);
+            1.0 / (w * w + v)
+        };
+        let mut distances: Vec<(f64, f64)> = Vec::new();
+        let mut variances: Vec<(f64, f64)> = Vec::new();
+        for &k in slots {
+            let mut signed: Vec<(f64, f64)> =
+                dev[k].iter().map(|&(d, v)| (d, weight_of(v))).collect();
+            let centre = weighted_median(&mut signed);
+            for &(d, v) in &dev[k] {
+                distances.push(((d - centre).abs(), weight_of(v)));
+                variances.push((v, weight_of(v)));
+            }
+        }
+        let m = 1.4826 * weighted_median(&mut distances);
+        let next = (m * m - weighted_median(&mut variances)).max(0.0).sqrt();
+        let settled = (next - s).abs() <= 1e-6 * s.max(floor);
+        s = next;
+        if settled {
+            break;
+        }
+    }
+    s
+}
+
 /// Derive one camera's prior widths for the next round from the round just
 /// finished: per released parameter, the robust spread of the images'
 /// deviations from their mean, with the round's prior pull undone and the
@@ -4641,10 +4682,10 @@ fn weighted_median(samples: &mut [(f64, f64)]) -> f64 {
 /// pull the round's prior had on the image's own block. The adjustment's
 /// variance, its covariance `V_i = σ_noise²·H_i⁻¹` with every other image held,
 /// is read at `σ_noise`, the level of the round's solved residuals. The spread is
-/// `s² = max(0, (1.4826·median_w |d̂|)² − median_w v)`, both medians weighted by
-/// `1/v`; the principal point pools its two axes as two samples per image. A
-/// parameter with fewer than two images of positive weight keeps the loose
-/// width and reports a `NaN` spread. Returns the next widths and the spreads.
+/// [`robust_spread`]'s; the principal point pools its two axes as two samples
+/// per image. A parameter with fewer than two images of usable variance keeps
+/// the loose width and reports a `NaN` spread. Returns the next widths and the
+/// spreads.
 fn derive_image_prior_widths(
     samples: &[(IntrinsicAdjustment, Option<Matrix3<f64>>)],
     focal: bool,
@@ -4685,11 +4726,10 @@ fn derive_image_prior_widths(
         inv_var(round.principal_point, principal_point),
         inv_var(round.principal_point, principal_point),
     );
-    // Per parameter kind (focal scale, principal point): the `(|d̂|, 1/v)` and
-    // `(v, 1/v)` samples, and how many images carry a positive weight.
-    // Per slot (focal scale, `a_x`, `a_y`): the signed `(d̂, 1/v)` samples.
+    // Per slot (focal scale, `a_x`, `a_y`): the de-shrunk deviation `d̂` of
+    // each image with a usable variance, and that variance `v`; and per
+    // parameter kind how many images have one.
     let mut dev: [Vec<(f64, f64)>; 3] = [Vec::new(), Vec::new(), Vec::new()];
-    let mut var: [Vec<(f64, f64)>; 2] = [Vec::new(), Vec::new()];
     let mut weighted_images = [0usize; 2];
     for (a, inv) in samples {
         let Some(inv) = inv else { continue };
@@ -4711,10 +4751,8 @@ fn derive_image_prior_widths(
             if !(v.is_finite() && v > 0.0) {
                 continue;
             }
-            let kind = usize::from(k > 0);
-            dev[k].push((d_hat[k], 1.0 / v));
-            var[kind].push((v, 1.0 / v));
-            counted[kind] = true;
+            dev[k].push((d_hat[k], v));
+            counted[usize::from(k > 0)] = true;
         }
         for kind in 0..2 {
             weighted_images[kind] += usize::from(counted[kind]);
@@ -4724,20 +4762,13 @@ fn derive_image_prior_widths(
         if !on || weighted_images[kind] < 2 {
             continue;
         }
-        // The spread is the median absolute distance of the de-shrunk
-        // deviations from their own weighted median, per axis, so that an
-        // image that moves the mean by its share, moving every deviation
-        // alike, does not widen it.
         let slots: &[usize] = if kind == 0 { &[0] } else { &[1, 2] };
-        let mut distances: Vec<(f64, f64)> = Vec::new();
-        for &k in slots {
-            let centre = weighted_median(&mut dev[k].clone());
-            distances.extend(dev[k].iter().map(|&(d, w)| ((d - centre).abs(), w)));
-        }
-        let mad = 1.4826 * weighted_median(&mut distances);
-        let s = (mad * mad - weighted_median(&mut var[kind]))
-            .max(0.0)
-            .sqrt();
+        let (round_width, floor) = if kind == 0 {
+            (round.focal, options.floor.focal)
+        } else {
+            (round.principal_point, options.floor.principal_point)
+        };
+        let s = robust_spread(&dev, slots, round_width, floor);
         if kind == 0 {
             spread.focal = s;
             next.focal = s.max(options.floor.focal).min(options.loose.focal);
