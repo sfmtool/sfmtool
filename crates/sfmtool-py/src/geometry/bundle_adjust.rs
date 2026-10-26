@@ -5,14 +5,17 @@
 //! ([`sfmtool_core::geometry::bundle_adjust()`]).
 
 use nalgebra::{Quaternion, UnitQuaternion, Vector3};
-use numpy::{PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyUntypedArrayMethods};
+use numpy::{
+    IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyUntypedArrayMethods,
+};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-use sfmtool_core::camera::{CameraIntrinsics, CameraModel};
+use sfmtool_core::camera::{CameraIntrinsics, CameraModel, IntrinsicAdjustment};
 use sfmtool_core::geometry::{
     bundle_adjust as core_bundle_adjust, BaCameras, BaSchedule, DistanceReference,
-    FreePointDecision, FreePointPolicy, PointConstraints,
+    FreePointDecision, FreePointPolicy, ImagePrior, ImagePriorOptions, ImagePriorWidths,
+    PointConstraints,
 };
 use sfmtool_core::progress::Progress;
 use sfmtool_core::reconstruction::bundle_adjust::focal_is_releasable;
@@ -95,6 +98,7 @@ fn check_releases(
     opt_f: bool,
     opt_k1: bool,
     opt_bspline: bool,
+    opt_image_f: bool,
 ) -> PyResult<()> {
     // The two distortion rungs live on different models, so no camera could
     // ever satisfy both releases — reject the combination up front with the
@@ -115,6 +119,15 @@ fn check_releases(
                 "opt_f requires every camera to be SIMPLE_PINHOLE, EQUIDISTANT_FISHEYE, \
                  SIMPLE_RADIAL_FISHEYE, SFMTOOL_FISHEYE or SFMTOOL_PINHOLE; camera {j} \
                  is {model}"
+            )));
+        }
+        // Each image's focal-scale column `(u − cx_i)/(1 + s)` is exact on the
+        // same five models.
+        if opt_image_f && !focal_is_releasable(camera) {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "opt_image_f requires every camera to be SIMPLE_PINHOLE, \
+                 EQUIDISTANT_FISHEYE, SIMPLE_RADIAL_FISHEYE, SFMTOOL_FISHEYE or \
+                 SFMTOOL_PINHOLE; camera {j} is {model}"
             )));
         }
         // The curvature rung exists on exactly one model — no other camera has
@@ -207,6 +220,23 @@ fn check_releases(
 ///     opt_pp: Release each camera's principal point, on any model; it needs
 ///         no focal release beside it. A candidate step that would put a
 ///         principal point outside its image is rejected.
+///     opt_image_f: Release each image's focal scale, on the models ``opt_f``
+///         admits. The camera's focal is held in the solve and takes the
+///         images' mean after every round.
+///     opt_image_pp: Release each image's principal-point offset, on any
+///         model. The camera's principal point is held in the solve and takes
+///         the images' mean after every round.
+///     image_adjustments: Optional (n_img, 3) float64 array of each image's
+///         intrinsic adjustment, ``[focal, a_x, a_y]``: the focal scale (the
+///         image's focal is the camera's times ``1 + focal``) and the
+///         principal-point offset in units of the image's short side. Held
+///         unless a per-image release moves it; absent is every image read
+///         through its camera exactly.
+///     image_prior: Optional dict choosing the widths of the prior on a
+///         per-image release: ``loose`` and ``floor`` (each a dict of
+///         ``focal`` and ``principal_point``, defaults 0.1 and 0.001), and
+///         ``fixed`` (such a dict, or ``None`` to derive the widths from the
+///         solve, the default).
 ///     schedule: [(trim_px, loss_scale), ...] staged rounds
 ///         (default [(50, 5), (12, 2), (4, 1)]); must not be empty.
 ///     max_iters: LM iteration budget per round (default 60).
@@ -217,7 +247,8 @@ fn check_releases(
 /// Returns:
 ///     A dict ``{"cameras", "quaternions_wxyz" (n_img, 4), "translations"
 ///     (n_img, 3), "points" (n_pt, 3), "residual_norms" (n_obs,),
-///     "point_at_infinity" (n_pt,), "free_point_decision"}``. ``cameras`` holds one
+///     "point_at_infinity" (n_pt,), "free_point_decision", "image_adjustments"
+///     (n_img, 3), "image_priors"}``. ``cameras`` holds one
 ///     ``CameraIntrinsics`` per input camera, in order, with its released
 ///     parameters replaced by the solved ones. ``point_at_infinity`` is
 ///     ``True`` where the returned row is a direction and ``False`` where it
@@ -228,12 +259,21 @@ fn check_releases(
 ///     ``to_direction`` and ``unscored``. ``residual_norms`` are unweighted
 ///     reprojection norms at the final state, ``+inf`` where the point is
 ///     non-finite, behind the camera or outside the model domain.
+///     ``image_adjustments`` is every image's adjustment after the solve, in
+///     the input's layout. ``image_priors`` holds one entry per camera:
+///     ``None`` where the camera released nothing per image, and otherwise a
+///     dict of ``widths`` (the widths the final round ran under, ``NaN`` for a
+///     parameter not released per image), ``derived`` and ``spread`` (the last
+///     derivation's spread before it was clamped, ``NaN`` where nothing was
+///     derived), each widths dict holding ``focal`` and ``principal_point``.
 ///
 /// Raises:
 ///     ValueError: On a shape mismatch, an empty ``cameras`` or ``schedule``,
 ///         an index out of range in ``image_camera``, ``obs_image`` or
 ///         ``obs_point``, a malformed ``distance_from`` entry, a release some
-///         camera's model does not admit, ``opt_k1`` with ``opt_bspline``, a
+///         camera's model does not admit, ``opt_k1`` with ``opt_bspline``,
+///         ``image_adjustments`` of the wrong shape, an ``image_prior`` with an
+///         unknown key or a width that is not positive and finite, a
 ///         ``protected_loss_scale`` that is not positive and finite, or
 ///         a point constraint the kernel refuses (held and ranged together, a
 ///         non-positive distance, a finite distance with no origin, an origin
@@ -259,6 +299,10 @@ fn check_releases(
     opt_k1=false,
     opt_bspline=false,
     opt_pp=false,
+    opt_image_f=false,
+    opt_image_pp=false,
+    image_adjustments=None,
+    image_prior=None,
     schedule=vec![(50.0, 5.0), (12.0, 2.0), (4.0, 1.0)],
     max_iters=60,
     min_track=2,
@@ -286,6 +330,10 @@ pub fn bundle_adjust<'py>(
     opt_k1: bool,
     opt_bspline: bool,
     opt_pp: bool,
+    opt_image_f: bool,
+    opt_image_pp: bool,
+    image_adjustments: Option<PyReadonlyArray2<'py, f64>>,
+    image_prior: Option<Bound<'py, PyDict>>,
     schedule: Vec<(f64, f64)>,
     max_iters: usize,
     min_track: usize,
@@ -329,7 +377,8 @@ pub fn bundle_adjust<'py>(
     }
     // Every requested release must be one each camera's model admits; the
     // binding raises rather than letting the kernel degrade it.
-    check_releases(&cams, opt_f, opt_k1, opt_bspline)?;
+    check_releases(&cams, opt_f, opt_k1, opt_bspline, opt_image_f)?;
+    let prior = image_prior_from_py(image_prior.as_ref())?;
 
     let n_img = quaternions_wxyz.shape()[0];
     let image_camera: Vec<u32> = to_contiguous!(image_camera).into_owned();
@@ -345,6 +394,27 @@ pub fn bundle_adjust<'py>(
             cams.len()
         )));
     }
+    let adjustments: Option<Vec<IntrinsicAdjustment>> = match image_adjustments {
+        Some(a) => {
+            if a.shape() != [n_img, 3] {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "image_adjustments must have shape (n_img, 3): {:?} given for {n_img} \
+                     images",
+                    a.shape()
+                )));
+            }
+            let flat = to_contiguous!(a);
+            Some(
+                flat.chunks(3)
+                    .map(|r| IntrinsicAdjustment {
+                        focal: r[0],
+                        principal_point: [r[1], r[2]],
+                    })
+                    .collect(),
+            )
+        }
+        None => None,
+    };
     let n_pt = points.shape()[0];
     if let Some(ref mask) = point_at_infinity {
         if mask.shape()[0] != n_pt {
@@ -452,9 +522,7 @@ pub fn bundle_adjust<'py>(
                 cameras: &cams,
                 image_camera: image_camera.as_slice().into(),
                 releases: None,
-                // The binding takes no adjustments: every image is read
-                // through its camera exactly.
-                image_adjustments: None,
+                image_adjustments: adjustments.map(Into::into),
             },
             &mut quats,
             &mut trans,
@@ -471,9 +539,9 @@ pub fn bundle_adjust<'py>(
             opt_k1,
             opt_bspline,
             opt_pp,
-            false,
-            false,
-            None,
+            opt_image_f,
+            opt_image_pp,
+            Some(&prior),
             &stages,
             max_iters,
             min_track,
@@ -521,7 +589,126 @@ pub fn bundle_adjust<'py>(
         "free_point_decision",
         free_point_decision_to_py(py, out.free_point_decision.as_ref())?,
     )?;
+    let adjustment_rows: Vec<[f64; 3]> = out
+        .image_adjustments
+        .iter()
+        .map(|a| [a.focal, a.principal_point[0], a.principal_point[1]])
+        .collect();
+    d.set_item(
+        "image_adjustments",
+        numpy::ndarray::Array2::from_shape_vec(
+            (adjustment_rows.len(), 3),
+            adjustment_rows.into_iter().flatten().collect(),
+        )
+        .map_err(value_err)?
+        .into_pyarray(py),
+    )?;
+    let priors = pyo3::types::PyList::empty(py);
+    for prior in &out.image_priors {
+        priors.append(image_prior_to_py(py, prior.as_ref())?)?;
+    }
+    d.set_item("image_priors", priors)?;
     Ok(d)
+}
+
+/// One camera's prior widths as the dict every binding reports them in:
+/// ``focal`` and ``principal_point``.
+pub(crate) fn widths_to_py<'py>(
+    py: Python<'py>,
+    widths: &ImagePriorWidths,
+) -> PyResult<Bound<'py, PyDict>> {
+    let d = PyDict::new(py);
+    d.set_item("focal", widths.focal)?;
+    d.set_item("principal_point", widths.principal_point)?;
+    Ok(d)
+}
+
+/// The kernel's report of one camera's per-image prior as a dict of
+/// ``widths``, ``derived`` and ``spread``, or ``None`` where the camera
+/// released nothing per image.
+fn image_prior_to_py<'py>(
+    py: Python<'py>,
+    prior: Option<&ImagePrior>,
+) -> PyResult<Bound<'py, PyAny>> {
+    let Some(prior) = prior else {
+        return Ok(py.None().into_bound(py));
+    };
+    let d = PyDict::new(py);
+    d.set_item("widths", widths_to_py(py, &prior.widths)?)?;
+    d.set_item("derived", prior.derived)?;
+    d.set_item("spread", widths_to_py(py, &prior.spread)?)?;
+    Ok(d.into_any())
+}
+
+/// Read one widths dict of an ``image_prior`` argument, starting from
+/// `default`: ``focal`` and ``principal_point``, each a positive finite
+/// number, any other key refused.
+fn widths_from_py(
+    what: &str,
+    obj: &Bound<'_, PyAny>,
+    default: ImagePriorWidths,
+) -> PyResult<ImagePriorWidths> {
+    let dict = obj.cast::<PyDict>().map_err(|_| {
+        pyo3::exceptions::PyValueError::new_err(format!(
+            "image_prior['{what}'] must be a dict of 'focal' and 'principal_point'"
+        ))
+    })?;
+    let mut widths = default;
+    for (key, value) in dict.iter() {
+        let key: String = key.extract()?;
+        let width: f64 = value.extract().map_err(|_| {
+            pyo3::exceptions::PyValueError::new_err(format!(
+                "image_prior['{what}']['{key}'] must be a number"
+            ))
+        })?;
+        match key.as_str() {
+            "focal" => widths.focal = width,
+            "principal_point" => widths.principal_point = width,
+            _ => {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "image_prior['{what}'] has no key '{key}'; its keys are 'focal' and \
+                     'principal_point'"
+                )))
+            }
+        }
+        if !(width.is_finite() && width > 0.0) {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "image_prior['{what}']['{key}'] is {width}; a prior width is a positive \
+                 finite number"
+            )));
+        }
+    }
+    Ok(widths)
+}
+
+/// Read an ``image_prior`` argument: a dict of ``loose``, ``floor`` and
+/// ``fixed`` (each a widths dict, ``fixed`` also ``None``), each missing key at
+/// its default, any other key refused. `None` is the default options.
+pub(crate) fn image_prior_from_py(obj: Option<&Bound<'_, PyDict>>) -> PyResult<ImagePriorOptions> {
+    let mut options = ImagePriorOptions::default();
+    let Some(dict) = obj else {
+        return Ok(options);
+    };
+    for (key, value) in dict.iter() {
+        let key: String = key.extract()?;
+        match key.as_str() {
+            "loose" => options.loose = widths_from_py("loose", &value, options.loose)?,
+            "floor" => options.floor = widths_from_py("floor", &value, options.floor)?,
+            "fixed" => {
+                options.fixed = if value.is_none() {
+                    None
+                } else {
+                    Some(widths_from_py("fixed", &value, options.loose)?)
+                }
+            }
+            _ => {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "image_prior has no key '{key}'; its keys are 'loose', 'floor' and 'fixed'"
+                )))
+            }
+        }
+    }
+    Ok(options)
 }
 
 /// The storage decision as the dict both adjustment bindings report it in, or

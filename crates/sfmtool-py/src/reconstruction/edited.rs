@@ -830,10 +830,28 @@ impl PyEditedReconstruction {
     ///         images use (default ``False``). Accepted on every camera model,
     ///         with or without ``opt_f``; a step that would put a principal
     ///         point off its image is rejected.
+    ///     opt_image_f: Release each posed image's focal scale, on every camera
+    ///         the posed images use (default ``False``), on the models
+    ///         ``opt_f`` accepts. The camera's focal is held in the solve and
+    ///         takes its images' mean after every round, so it moves too; with
+    ///         ``opt_f`` it is the same release. Counts as the focal that
+    ///         ``opt_distortion`` needs.
+    ///     opt_image_pp: Release each posed image's principal-point offset, on
+    ///         every camera the posed images use (default ``False``), on every
+    ///         model. The camera's principal point takes its images' mean
+    ///         after every round.
+    ///     image_prior: The widths of the prior that holds each image's
+    ///         adjustment toward its camera's mean: a dict of ``loose`` and
+    ///         ``floor`` (each a dict of ``focal`` and ``principal_point``,
+    ///         defaults 0.1 and 0.001; the principal point's in units of the
+    ///         image's short side) and ``fixed`` (such a dict, or ``None``,
+    ///         the default, to derive each camera's widths from the solve).
     ///     releases: One entry per camera of the image set, in camera index order,
     ///         each a dict ``{"focal": bool, "distortion": bool,
-    ///         "principal_point": bool}`` (a missing key is ``False``).
-    ///         Overrides ``opt_f``, ``opt_distortion`` and ``opt_pp``.
+    ///         "principal_point": bool, "image_focal": bool,
+    ///         "image_principal_point": bool}`` (a missing key is ``False``).
+    ///         Overrides ``opt_f``, ``opt_distortion``, ``opt_pp``,
+    ///         ``opt_image_f`` and ``opt_image_pp``.
     ///         A camera with neither is held; an entry for a camera no posed
     ///         image uses is ignored. Every refusal ``opt_f`` and
     ///         ``opt_distortion`` raise applies to each entry and names the
@@ -864,7 +882,20 @@ impl PyEditedReconstruction {
     ///     is the before unless the principal point was released) and
     ///     ``outermost_observed``, the camera's outermost
     ///     observation under the solved camera (a dict of ``radius_px``,
-    ///     ``theta_deg``, ``image`` and ``xy``, or ``None``). It also carries
+    ///     ``theta_deg``, ``image`` and ``xy``, or ``None``),
+    ///     ``image_focal_released``, ``image_principal_point_released`` and
+    ///     ``image_adjustments``: ``None`` where the camera released nothing
+    ///     per image, and otherwise a dict of ``images``, ``focal_mean`` and
+    ///     ``focal_std`` (fractions), ``principal_point_mean`` and
+    ///     ``principal_point_std`` (``(x, y)`` in pixels), ``prior`` and
+    ///     ``spread`` (dicts of ``focal`` and ``principal_point``, ``NaN`` for
+    ///     a parameter not released per image or not derived),
+    ///     ``prior_derived``, and ``near_prior``, a list of dicts of
+    ///     ``image``, ``parameter`` (``"focal"`` or ``"principal_point"``) and
+    ///     ``widths``, the images whose adjustment ended more than two prior
+    ///     widths from the camera's mean. ``focal_released`` and
+    ///     ``principal_point_released`` are true where the per-image release
+    ///     of the kind was. It also carries
     ///     ``free_point_decision``, the storage decision as
     ///     ``geometry.bundle_adjust`` reports it (``sigma_px``,
     ///     ``observation_count``, ``outlier_count``, ``decided``,
@@ -878,13 +909,16 @@ impl PyEditedReconstruction {
     /// camera, ``switch_camera_model`` to its own spline model with
     /// ``coeff_count`` and ``spline_domain_deg``.
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (*, opt_f=false, opt_distortion=false, opt_pp=false, releases=None, schedule=None, max_iters=60, min_track=2, min_obs=12, free_points_cross=true))]
+    #[pyo3(signature = (*, opt_f=false, opt_distortion=false, opt_pp=false, opt_image_f=false, opt_image_pp=false, image_prior=None, releases=None, schedule=None, max_iters=60, min_track=2, min_obs=12, free_points_cross=true))]
     fn bundle_adjust(
         &self,
         py: Python<'_>,
         opt_f: bool,
         opt_distortion: bool,
         opt_pp: bool,
+        opt_image_f: bool,
+        opt_image_pp: bool,
+        image_prior: Option<Bound<'_, PyDict>>,
         releases: Option<Vec<Bound<'_, PyDict>>>,
         schedule: Option<Vec<(f64, f64)>>,
         max_iters: usize,
@@ -904,7 +938,8 @@ impl PyEditedReconstruction {
                     focal: opt_f,
                     distortion: opt_distortion,
                     principal_point: opt_pp,
-                    ..CameraRelease::HELD
+                    image_focal: opt_image_f,
+                    image_principal_point: opt_image_pp,
                 };
                 value.image_set.cameras.len()
             ],
@@ -927,7 +962,7 @@ impl PyEditedReconstruction {
             free_points: FreePointPolicy {
                 cross: free_points_cross,
             },
-            image_prior: Default::default(),
+            image_prior: crate::geometry::bundle_adjust::image_prior_from_py(image_prior.as_ref())?,
         };
         let (next, report) = py
             .detach(|| core_bundle_adjust(&value, &options, &Progress::none()))
@@ -955,6 +990,15 @@ impl PyEditedReconstruction {
             c.set_item(
                 "outermost_observed",
                 super::switch_camera_model::reach_to_py(py, camera.outermost_observed.as_ref())?,
+            )?;
+            c.set_item("image_focal_released", camera.image_focal_released)?;
+            c.set_item(
+                "image_principal_point_released",
+                camera.image_principal_point_released,
+            )?;
+            c.set_item(
+                "image_adjustments",
+                image_adjustment_spread_to_py(py, camera.image_adjustments.as_ref())?,
             )?;
             cameras.append(c)?;
         }
@@ -1049,9 +1093,41 @@ fn row_map_forward(map: &RowMap, index_bound: u32) -> Vec<i64> {
         .collect()
 }
 
+/// What a per-image release did to one camera's images, as the dict the report
+/// carries, or ``None`` where the camera released nothing per image.
+fn image_adjustment_spread_to_py<'py>(
+    py: Python<'py>,
+    spread: Option<&sfmtool_core::reconstruction::bundle_adjust::ImageAdjustmentSpread>,
+) -> PyResult<Bound<'py, PyAny>> {
+    let Some(spread) = spread else {
+        return Ok(py.None().into_bound(py));
+    };
+    let widths = crate::geometry::bundle_adjust::widths_to_py;
+    let d = PyDict::new(py);
+    d.set_item("images", spread.images)?;
+    d.set_item("focal_mean", spread.focal_mean)?;
+    d.set_item("focal_std", spread.focal_std)?;
+    d.set_item("principal_point_mean", spread.principal_point_mean)?;
+    d.set_item("principal_point_std", spread.principal_point_std)?;
+    d.set_item("prior", widths(py, &spread.prior)?)?;
+    d.set_item("prior_derived", spread.prior_derived)?;
+    d.set_item("spread", widths(py, &spread.spread)?)?;
+    let near = PyList::empty(py);
+    for n in &spread.near_prior {
+        let e = PyDict::new(py);
+        e.set_item("image", n.image)?;
+        e.set_item("parameter", n.parameter.name())?;
+        e.set_item("widths", n.widths)?;
+        near.append(e)?;
+    }
+    d.set_item("near_prior", near)?;
+    Ok(d.into_any())
+}
+
 /// One entry of ``bundle_adjust``'s ``releases``: a dict of ``focal``,
-/// ``distortion`` and ``principal_point``, each a bool and ``False`` where missing. Any other key
-/// raises, so a misspelt release is not silently a held camera.
+/// ``distortion``, ``principal_point``, ``image_focal`` and
+/// ``image_principal_point``, each a bool and ``False`` where missing. Any
+/// other key raises, so a misspelt release is not silently a held camera.
 fn camera_release_from_py(index: usize, entry: &Bound<'_, PyDict>) -> PyResult<CameraRelease> {
     let mut release = CameraRelease::HELD;
     for (key, value) in entry.iter() {
@@ -1065,10 +1141,13 @@ fn camera_release_from_py(index: usize, entry: &Bound<'_, PyDict>) -> PyResult<C
             "focal" => release.focal = flag,
             "distortion" => release.distortion = flag,
             "principal_point" => release.principal_point = flag,
+            "image_focal" => release.image_focal = flag,
+            "image_principal_point" => release.image_principal_point = flag,
             _ => {
                 return Err(PyValueError::new_err(format!(
                     "releases[{index}] has the key '{key}'; an entry takes 'focal', \
-                     'distortion' and 'principal_point'"
+                     'distortion', 'principal_point', 'image_focal' and \
+                     'image_principal_point'"
                 )))
             }
         }

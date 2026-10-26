@@ -644,13 +644,80 @@ class TestSwitchCameraModel:
         _, report = opencv.bundle_adjust(releases=[{"principal_point": True}])
         assert report["cameras"][0]["principal_point_released"]
 
+    def test_each_image_is_released_and_reported(self, embedded):
+        # SIMPLE_RADIAL's focal is not one the adjustment's columns are exact
+        # for, so its images' focal scales are refused, naming the camera.
+        with pytest.raises(ValueError, match="per image on camera 0, a SIMPLE_RADIAL"):
+            embedded.bundle_adjust(opt_image_f=True)
+        spline, _ = embedded.switch_camera_model("SFMTOOL_PINHOLE", coeff_count=6)
+        adjusted, report = spline.bundle_adjust(opt_image_f=True, opt_image_pp=True)
+        value = adjusted.materialize()[0]
+        assert value.per_image_adjustments == [["focal", "principal_point"]]
+        focal = np.asarray(value.focal_adjustments)
+        offsets = np.asarray(value.principal_point_adjustments_xy)
+        assert np.all(focal != 0.0)
+        # The adjustments average zero: the camera holds their mean.
+        assert abs(focal.mean()) < 1e-12
+        np.testing.assert_allclose(offsets.mean(axis=0), 0.0, atol=1e-12)
+        camera = report["cameras"][0]
+        assert (
+            camera["image_focal_released"] and camera["image_principal_point_released"]
+        )
+        assert camera["focal_released"] and camera["principal_point_released"]
+        spread = camera["image_adjustments"]
+        assert spread["images"] == len(focal)
+        assert abs(spread["focal_mean"]) < 1e-12
+        assert spread["focal_std"] == pytest.approx(focal.std(), rel=1e-9)
+        short = min(value.cameras[0].width, value.cameras[0].height)
+        assert spread["principal_point_std"] == pytest.approx(
+            tuple(offsets.std(axis=0) * short), rel=1e-9
+        )
+        assert spread["prior_derived"]
+        assert set(spread["prior"]) == {"focal", "principal_point"}
+        assert set(spread["spread"]) == {"focal", "principal_point"}
+        for near in spread["near_prior"]:
+            assert near["parameter"] in ("focal", "principal_point")
+            assert near["widths"] > 2.0
+
+    def test_the_per_image_releases_are_chosen_per_camera_with_their_prior(
+        self, embedded
+    ):
+        fixed = {"focal": 0.004, "principal_point": 0.005}
+        adjusted, report = embedded.bundle_adjust(
+            releases=[{"image_principal_point": True}],
+            image_prior={"fixed": fixed},
+        )
+        camera = report["cameras"][0]
+        assert not camera["image_focal_released"]
+        assert camera["image_principal_point_released"]
+        spread = camera["image_adjustments"]
+        assert not spread["prior_derived"]
+        assert np.isnan(spread["prior"]["focal"])
+        assert spread["prior"]["principal_point"] == 0.005
+        value = adjusted.materialize()[0]
+        assert value.per_image_adjustments == [["principal_point"]]
+        assert value.focal_adjustments is None
+
+        # No per-image release reports no spread.
+        _, held = embedded.bundle_adjust(opt_pp=True)
+        assert held["cameras"][0]["image_adjustments"] is None
+
+    def test_a_bad_image_prior_is_refused(self, embedded):
+        with pytest.raises(ValueError, match="image_prior has no key 'wide'"):
+            embedded.bundle_adjust(opt_image_pp=True, image_prior={"wide": None})
+        with pytest.raises(ValueError, match="a prior width is a positive finite"):
+            embedded.bundle_adjust(
+                opt_image_pp=True, image_prior={"fixed": {"focal": -1.0}}
+            )
+
     def test_a_bad_release_list_is_refused(self, embedded):
         switched, _ = embedded.switch_camera_model("SFMTOOL_FISHEYE", coeff_count=6)
         with pytest.raises(ValueError, match="2 entries and the reconstruction has 1"):
             switched.bundle_adjust(releases=[{}, {}])
         with pytest.raises(
             ValueError,
-            match="'focus'; an entry takes 'focal', 'distortion' and 'principal_point'",
+            match="'focus'; an entry takes 'focal', 'distortion', 'principal_point', "
+            "'image_focal' and 'image_principal_point'",
         ):
             switched.bundle_adjust(releases=[{"focus": True}])
         with pytest.raises(ValueError, match="camera 0 .* together with its focal"):

@@ -36,8 +36,9 @@ pub mod viewing_angle;
 pub use batch_resection::{resect_images_batch, BatchResection, ResectOptions};
 pub use bundle_adjust::{
     bundle_adjust, BaCameras, BaSchedule, BundleAdjustment, CameraRelease, DistanceReference,
-    FreePointDecision, FreePointPolicy, PointConstraint, PointConstraints, PointConstraintsError,
-    DEFAULT_PROTECTED_LOSS_SCALE, DEFAULT_SCHEDULE,
+    FreePointDecision, FreePointPolicy, ImagePrior, ImagePriorOptions, ImagePriorWidths,
+    PointConstraint, PointConstraints, PointConstraintsError, DEFAULT_PROTECTED_LOSS_SCALE,
+    DEFAULT_SCHEDULE,
 };
 pub use estimate_intrinsics::{
     escalation_reasons, estimate_intrinsics, ColumnPolicy, EscalationReason, IntrinsicsEstimate,

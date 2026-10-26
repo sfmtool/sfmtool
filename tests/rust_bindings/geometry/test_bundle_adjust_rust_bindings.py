@@ -1458,3 +1458,116 @@ def test_opt_f_names_the_camera_that_cannot_release_its_focal():
     )
     with pytest.raises(ValueError, match="camera 1 is PINHOLE"):
         _run_cameras(s, [_TWO_CAMERAS[0], pinhole], opt_f=True)
+
+
+# ── Per-image adjustments ──────────────────────────────────────────────────
+
+
+def _adjusted_scene(offsets):
+    """``_scene`` of 8 images whose image ``i`` is observed through the camera
+    with ``offsets[i]`` (focal scale, a_x, a_y) applied."""
+    s = _scene(n_img=8, n_pt=60)
+    cam = s["cam"]
+    rays = []
+    for i, p in zip(s["obs_image"], s["obs_point"]):
+        r = _quat_to_matrix(s["quats"][i])
+        rays.append(r @ s["points"][p] + s["trans"][i])
+    rays = np.asarray(rays)
+    uv = np.empty((len(rays), 2))
+    for i in range(len(s["quats"])):
+        rows = s["obs_image"] == i
+        f, ax, ay = offsets[i]
+        uv[rows] = cam.with_adjustment(f, (ax, ay)).ray_to_pixel_batch(
+            np.ascontiguousarray(rays[rows])
+        )
+    s["uv"] = uv
+    return s
+
+
+_OFFSETS = np.array(
+    [[0.0, 0.004 * np.cos(1.3 * i), 0.004 * np.sin(0.7 * i + 1.0)] for i in range(8)]
+)
+
+
+def test_held_image_adjustments_are_read_by_every_observation():
+    s = _adjusted_scene(_OFFSETS)
+    out = _run(s, image_adjustments=_OFFSETS)
+    assert np.max(out["residual_norms"]) < 1e-5
+    npt.assert_array_equal(out["image_adjustments"], _OFFSETS)
+    assert out["image_priors"] == [None]
+    # Read through the shared camera alone, the same pixels do not fit.
+    bare = _run(s)
+    assert np.max(bare["residual_norms"]) > 0.05
+    npt.assert_array_equal(bare["image_adjustments"], np.zeros((8, 3)))
+
+
+def test_opt_image_pp_solves_each_image_about_the_mean():
+    s = _adjusted_scene(_OFFSETS)
+    out = _run(s, opt_image_pp=True)
+    adj = out["image_adjustments"]
+    assert adj.shape == (8, 3)
+    # The images' offsets average zero, and the camera holds their mean.
+    npt.assert_allclose(adj[:, 1:].mean(axis=0), 0.0, atol=1e-15)
+    cx, cy = _pp(out)
+    mean = _OFFSETS[:, 1:].mean(axis=0)
+    assert abs(cx - (320.0 + 480.0 * mean[0])) < 0.5, cx
+    assert abs(cy - (240.0 + 480.0 * mean[1])) < 0.5, cy
+    assert np.median(out["residual_norms"]) < 0.05
+    assert _focal(out) == 500.0
+    np.testing.assert_array_equal(adj[:, 0], 0.0)
+    (prior,) = out["image_priors"]
+    assert prior["derived"]
+    assert np.isnan(prior["widths"]["focal"])
+    assert prior["widths"]["principal_point"] > 0.0
+
+
+def test_a_fixed_image_prior_is_used_as_given():
+    s = _adjusted_scene(_OFFSETS)
+    out = _run(
+        s,
+        opt_image_f=True,
+        opt_image_pp=True,
+        image_prior={"fixed": {"focal": 0.02, "principal_point": 0.03}},
+    )
+    (prior,) = out["image_priors"]
+    assert prior == {
+        "widths": {"focal": 0.02, "principal_point": 0.03},
+        "derived": False,
+        "spread": {
+            "focal": pytest.approx(np.nan, nan_ok=True),
+            "principal_point": pytest.approx(np.nan, nan_ok=True),
+        },
+    }
+
+
+def test_per_image_argument_validation():
+    s = _adjusted_scene(_OFFSETS)
+    with pytest.raises(
+        ValueError, match=r"image_adjustments must have shape \(n_img, 3\)"
+    ):
+        _run(s, image_adjustments=_OFFSETS[:, :2])
+    with pytest.raises(ValueError, match="image_prior has no key 'wide'"):
+        _run(s, opt_image_pp=True, image_prior={"wide": {}})
+    with pytest.raises(ValueError, match=r"image_prior\['floor'\] has no key 'f'"):
+        _run(s, opt_image_pp=True, image_prior={"floor": {"f": 0.1}})
+    with pytest.raises(ValueError, match="a prior width is a positive finite number"):
+        _run(s, opt_image_pp=True, image_prior={"loose": {"focal": 0.0}})
+
+
+def test_opt_image_f_names_the_camera_that_cannot_release_its_focal():
+    s = _two_camera_scene()
+    pinhole = CameraIntrinsics.from_dict(
+        {
+            "model": "PINHOLE",
+            "width": 640,
+            "height": 480,
+            "parameters": {
+                "focal_length_x": 620.0,
+                "focal_length_y": 620.0,
+                "principal_point_x": 327.0,
+                "principal_point_y": 235.0,
+            },
+        }
+    )
+    with pytest.raises(ValueError, match="opt_image_f .* camera 1 is PINHOLE"):
+        _run_cameras(s, [_TWO_CAMERAS[0], pinhole], opt_image_f=True)
