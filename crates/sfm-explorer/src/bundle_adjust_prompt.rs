@@ -171,6 +171,8 @@ pub(crate) fn camera_gates(edited: &EditedReconstruction) -> Vec<CameraGate> {
         .posed_lenses()
         .into_iter()
         .map(|c| {
+            // The shared camera: what a release solves is the lens all the
+            // camera's images share, each image's adjustment held on top.
             let camera = &image_set.cameras[c as usize];
             let camera_model = camera.model_name();
             CameraGate {

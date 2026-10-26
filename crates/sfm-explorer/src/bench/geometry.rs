@@ -421,15 +421,16 @@ fn turned_shape(
 
 // ---- Reading a pointer against a projected patch ---------------------------
 
-/// The camera and the pose of one image, or `None` when the image or its camera
-/// is not in the image set.
+/// The intrinsics and the pose of one image, or `None` when the image or its
+/// camera is not in the image set. The intrinsics are the image's own, its
+/// camera with its intrinsic adjustment applied.
 pub(crate) fn view_of(
     image_set: &ImageSet,
     image: usize,
 ) -> Option<(CameraIntrinsics, RigidTransform)> {
     let row = image_set.images.get(image)?;
-    let camera = image_set.cameras.get(row.camera_index as usize)?;
-    Some((camera.clone(), crate::scene::cam_from_world(row)))
+    let camera = crate::scene::image_intrinsics(image_set, image)?.into_owned();
+    Some((camera, crate::scene::cam_from_world(row)))
 }
 
 /// The ray one pixel of a photograph names: the camera's centre and the unit

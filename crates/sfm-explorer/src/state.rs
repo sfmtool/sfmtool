@@ -1293,7 +1293,8 @@ impl AppState {
         self.action_log.record(Kind::Scene, text);
     }
 
-    /// The camera an image uses, when the image ref still resolves.
+    /// The camera an image uses, when the image ref still resolves: which
+    /// shared camera it belongs to, not the intrinsics it was taken with.
     pub fn camera_of(&self, image: ImageRef) -> Option<CameraRef> {
         let node = self.node(image.recon)?;
         let camera = node

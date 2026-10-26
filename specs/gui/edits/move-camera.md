@@ -133,7 +133,8 @@ Three things update every frame, and all three are cheap:
 2. **The residual readout**, in the lock banner: the median and 90th-percentile
    reprojection residual of this image's observations under the pending pose,
    against their stored keypoints, beside the same two numbers under the stored
-   pose. It is `O(K)` projections for a track count `K` in the hundreds to low
+   pose, each projected through the image's own intrinsics (its camera with its
+   intrinsic adjustment applied). It is `O(K)` projections for a track count `K` in the hundreds to low
    thousands, well under a millisecond, and it is the number the reviewer is
    really steering by when the photograph lines up. `n/a` where the value
    carries no inline keypoints.

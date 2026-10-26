@@ -18,7 +18,7 @@ use crate::image_detail::ImageDetail;
 use crate::image_menu::ImageMenuAction;
 use crate::intrinsics_detail::IntrinsicsDetail;
 use crate::platform;
-use crate::scene::{selected_node, CameraRef, ImageRef, PointRef, ReconId, SceneNode};
+use crate::scene::{selected_node, ImageRef, PointRef, ReconId, SceneNode};
 use crate::scene_graph::{SceneGraphPanel, SceneGraphResponse};
 use crate::state::{AppState, FeatureDisplaySettings, IntrinsicsDisplaySettings, OverlayMode};
 use crate::track_table_panel::TrackTablePanel;
@@ -751,15 +751,18 @@ impl TabContext<'_> {
                 ),
                 None => (None, None),
             };
-            // The camera the selected image resolves to — the subject of
-            // the intrinsics layer, and `None` with no image selected.
-            let camera = selected_image.and_then(|idx| {
-                let camera_index = recon.image_set.images.get(idx)?.camera_index as usize;
+            // The intrinsics the selected image was taken with, its camera
+            // with its intrinsic adjustment applied — the subject of the
+            // intrinsics layer, and `None` with no image selected.
+            let image_intrinsics = selected_image.and_then(|idx| {
                 Some((
-                    CameraRef::new(id, camera_index),
-                    recon.image_set.cameras.get(camera_index)?,
+                    crate::image_detail::ImageIntrinsicsKey::of_image(id, &recon.image_set, idx)?,
+                    crate::scene::image_intrinsics(&recon.image_set, idx)?,
                 ))
             });
+            let camera = image_intrinsics
+                .as_ref()
+                .map(|(key, intrinsics)| (*key, &**intrinsics));
             // What the panel's controls were before this frame ran.
             // The toolbar, the gear popup and the `I` key inside
             // `ImageDetail::show` all write straight into the two
@@ -1491,7 +1494,10 @@ pub(crate) fn show_overlay_toolbar(
     settings: &mut FeatureDisplaySettings,
     intrinsics: &mut IntrinsicsDisplaySettings,
     detail: &mut ImageDetail,
-    camera: Option<(CameraRef, &sfmtool_core::camera::CameraIntrinsics)>,
+    camera: Option<(
+        crate::image_detail::ImageIntrinsicsKey,
+        &sfmtool_core::camera::CameraIntrinsics,
+    )>,
     proposal: Option<&crate::camera_model_proposal::CameraModelProposal>,
 ) {
     // One unwrapped row of controls, so in a narrow dock cell it is wider than
@@ -1523,7 +1529,10 @@ fn show_overlay_toolbar_row(
     settings: &mut FeatureDisplaySettings,
     intrinsics: &mut IntrinsicsDisplaySettings,
     detail: &mut ImageDetail,
-    camera: Option<(CameraRef, &sfmtool_core::camera::CameraIntrinsics)>,
+    camera: Option<(
+        crate::image_detail::ImageIntrinsicsKey,
+        &sfmtool_core::camera::CameraIntrinsics,
+    )>,
     proposal: Option<&crate::camera_model_proposal::CameraModelProposal>,
 ) {
     ui.horizontal(|ui| {

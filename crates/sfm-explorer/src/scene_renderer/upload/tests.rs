@@ -3135,3 +3135,120 @@ fn an_additions_surfel_row_is_found_past_the_base_rows() {
     assert_eq!(rows[0].target, [4.0, 5.0, 6.0, 1.0]);
     assert_eq!(rows[0].size_factor, 2.0);
 }
+
+// ── per-image intrinsics ────────────────────────────────────────────────
+
+/// The image the adjustment tests give a non-zero intrinsic adjustment. Demo
+/// point 3 is observed by images 3 and 4, so its rays pass through it.
+const ADJUSTED: usize = 3;
+
+/// A frustum geometry as bytes, so two builds compare exactly.
+fn frustum_bytes(geometry: &super::frustums::FrustumGeometry) -> [Vec<u8>; 4] {
+    [
+        bytemuck::cast_slice::<_, u8>(&geometry.edges).to_vec(),
+        bytemuck::cast_slice::<_, u8>(&geometry.pinhole_quads).to_vec(),
+        bytemuck::cast_slice::<_, u8>(&geometry.distorted_vertices).to_vec(),
+        bytemuck::cast_slice::<_, u8>(&geometry.distorted_indices).to_vec(),
+    ]
+}
+
+/// The three ways image [`ADJUSTED`] can be read: through the shared camera,
+/// with the test adjustment on top of it, and on a camera entry of its own
+/// holding the adjusted intrinsics.
+fn adjusted_triple(
+    recon: SfmrReconstruction,
+) -> (SfmrReconstruction, SfmrReconstruction, SfmrReconstruction) {
+    use crate::test_support::{image_on_own_camera, with_adjustment, ADJUSTMENT};
+    let adjusted = with_adjustment(recon.clone(), ADJUSTED, ADJUSTMENT);
+    let own = image_on_own_camera(&adjusted, ADJUSTED);
+    (recon, adjusted, own)
+}
+
+/// An image with an intrinsic adjustment draws its frustum through its own
+/// intrinsics: exactly the frustum of the same image on a camera entry that
+/// holds those intrinsics, and not the shared camera's, for the flat pinhole
+/// quad and the tessellated distorted and fisheye grids alike.
+#[test]
+fn a_frustum_is_built_through_its_image_s_own_intrinsics() {
+    for recon in [
+        demo(16),
+        with_camera_model(demo(16), radial_distorted()),
+        with_camera_model(demo(16), fisheye()),
+    ] {
+        let (shared, adjusted, own) = adjusted_triple(recon);
+        let geometry = |recon: &SfmrReconstruction| {
+            frustum_bytes(&super::frustums::frustum_geometry(recon, 1.0, true))
+        };
+        assert_eq!(geometry(&adjusted), geometry(&own));
+        assert_ne!(geometry(&adjusted), geometry(&shared));
+    }
+}
+
+/// The background photograph's mesh is laid along the rays of the image's own
+/// intrinsics.
+#[test]
+fn the_background_mesh_is_built_through_its_image_s_own_intrinsics() {
+    for recon in [demo(16), with_camera_model(demo(16), fisheye())] {
+        let (shared, adjusted, own) = adjusted_triple(recon);
+        let mesh = |recon: &SfmrReconstruction| {
+            let (vertices, indices) = super::bg_image::bg_image_mesh(recon, ADJUSTED);
+            (bytemuck::cast_slice::<_, u8>(&vertices).to_vec(), indices)
+        };
+        assert_eq!(mesh(&adjusted), mesh(&own));
+        assert_ne!(mesh(&adjusted), mesh(&shared));
+    }
+}
+
+/// A track ray leaves its image through the image's own intrinsics, so the
+/// ray from the adjusted image moves and the other image's does not.
+#[test]
+fn track_rays_leave_through_their_image_s_own_intrinsics() {
+    let (shared, adjusted, own) = adjusted_triple(demo(4));
+    let cache = sift_cache(shared.image_set.images.len(), 8);
+    let rays = |recon: &SfmrReconstruction| {
+        let edges = track_ray_edges(&edited_of(recon), point(3), &cache, &identity());
+        assert_eq!(edges.len(), 2, "point 3 is observed by images 3 and 4");
+        edges
+            .iter()
+            .map(|e| [e.endpoint_a, e.endpoint_b])
+            .collect::<Vec<_>>()
+    };
+    let (shared, adjusted, own) = (rays(&shared), rays(&adjusted), rays(&own));
+    assert_eq!(adjusted, own);
+    // The demo's two observations are in image order: image 3, then image 4.
+    assert_ne!(
+        adjusted[0], shared[0],
+        "the adjusted image's ray did not move"
+    );
+    assert_eq!(adjusted[1], shared[1], "the other image's ray moved");
+}
+
+/// With every adjustment zero, a camera that lists both parameters as varying
+/// per image draws exactly what it drew before adjustments existed: the
+/// frustums, the background mesh and the track rays are the same bytes.
+#[test]
+fn zero_adjustments_draw_exactly_the_shared_camera() {
+    use crate::test_support::with_adjustment;
+    for recon in [demo(4), with_camera_model(demo(4), fisheye())] {
+        let listed = with_adjustment(recon.clone(), ADJUSTED, Default::default());
+        assert!(listed.image_set.camera_per_image_adjustments(0).any());
+        assert_eq!(
+            frustum_bytes(&super::frustums::frustum_geometry(&listed, 1.0, true)),
+            frustum_bytes(&super::frustums::frustum_geometry(&recon, 1.0, true)),
+        );
+        let (a, b) = (
+            super::bg_image::bg_image_mesh(&listed, ADJUSTED),
+            super::bg_image::bg_image_mesh(&recon, ADJUSTED),
+        );
+        assert_eq!(
+            (bytemuck::cast_slice::<_, u8>(&a.0), a.1),
+            (bytemuck::cast_slice::<_, u8>(&b.0), b.1)
+        );
+        let cache = sift_cache(recon.image_set.images.len(), 8);
+        let rays = |recon: &SfmrReconstruction| {
+            let edges = track_ray_edges(&edited_of(recon), point(3), &cache, &identity());
+            bytemuck::cast_slice::<_, u8>(&edges).to_vec()
+        };
+        assert_eq!(rays(&listed), rays(&recon));
+    }
+}

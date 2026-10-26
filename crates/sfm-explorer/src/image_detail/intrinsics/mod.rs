@@ -35,13 +35,23 @@
 //! # Caching
 //!
 //! Nothing here is per-frame work. [`CameraLayer`] is computed once per
-//! [`crate::scene::CameraRef`] and [`LayerModel`] and held by
+//! [`ImageIntrinsicsKey`] and [`LayerModel`] and held by
 //! [`super::ImageDetail`], because the displacement field is a few hundred ray
 //! round trips and `undistort` is iterative for the OpenCV family. It is
-//! rebuilt only when the camera, the grid density or the node changes. The
-//! model is part of the key so the layer of an open proposal's proposed
-//! camera is never served for the current camera. The change field and the
-//! observation layer are cached by the proposal's generation.
+//! rebuilt only when the camera, the image's intrinsic adjustment, the grid
+//! density or the node changes. The model is part of the key so the layer of
+//! an open proposal's proposed camera is never served for the current camera.
+//! The change field and the observation layer are cached by the proposal's
+//! generation as well.
+//!
+//! # The image's intrinsics
+//!
+//! The layer is drawn through the image's own intrinsics: its camera with the
+//! image's intrinsic adjustment applied, to the current camera and to an open
+//! proposal's alike, since the photograph was taken through those. An image
+//! with no adjustment is drawn through its camera exactly, and shares its
+//! camera's cached layer. When the image's camera varies some parameter per
+//! image, the legend states the image's adjustment ([`adjustment_lines`]).
 
 mod axes;
 mod change_field;
@@ -55,10 +65,14 @@ mod tests;
 pub(crate) use change_field::ChangeLayer;
 pub(crate) use controls::show_intrinsics_controls;
 
+use std::borrow::Cow;
+
 use axes::AxisGeometry;
 use egui::{Align2, Color32, FontId, Pos2, Rect, Stroke};
 use sfmtool_core::camera::report;
 use sfmtool_core::camera::CameraIntrinsics;
+use sfmtool_core::reconstruction::{ImageSet, PerImageAdjustments};
+use sfmtool_core::IntrinsicAdjustment;
 
 use crate::camera_model_proposal::CameraModelProposal;
 use crate::state::{FieldMode, IntrinsicsDisplaySettings};
@@ -71,6 +85,70 @@ pub(crate) enum LayerModel {
     /// An open camera model proposal's proposed camera, by the proposal's
     /// generation.
     Proposed(u64),
+}
+
+/// Which image intrinsics a layer is drawn through: the camera, and the
+/// intrinsic adjustment of the image shown, which the layer applies to
+/// whichever camera it draws, the current one or an open proposal's.
+///
+/// The adjustment is held as its bits so the key can be hashed. Every zero
+/// adjustment is one key, so the images of a camera with no adjustment share
+/// the camera's layers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct ImageIntrinsicsKey {
+    /// The image's camera.
+    pub(crate) camera: crate::scene::CameraRef,
+    /// The bits of the adjustment's focal scale and principal-point offset.
+    adjustment: [u64; 3],
+}
+
+impl ImageIntrinsicsKey {
+    /// The key of `camera` under `adjustment`.
+    pub(crate) fn new(camera: crate::scene::CameraRef, adjustment: &IntrinsicAdjustment) -> Self {
+        let adjustment = if adjustment.is_zero() {
+            [0; 3]
+        } else {
+            [
+                adjustment.focal.to_bits(),
+                adjustment.principal_point[0].to_bits(),
+                adjustment.principal_point[1].to_bits(),
+            ]
+        };
+        Self { camera, adjustment }
+    }
+
+    /// The key of image `index` of `image_set`, in node `recon`, or `None`
+    /// when the image or its camera is not in the set.
+    pub(crate) fn of_image(
+        recon: crate::scene::ReconId,
+        image_set: &ImageSet,
+        index: usize,
+    ) -> Option<Self> {
+        let image = image_set.images.get(index)?;
+        let camera = image.camera_index as usize;
+        image_set.cameras.get(camera)?;
+        Some(Self::new(
+            crate::scene::CameraRef::new(recon, camera),
+            &image.intrinsic_adjustment,
+        ))
+    }
+
+    /// The image's intrinsic adjustment.
+    pub(crate) fn adjustment(&self) -> IntrinsicAdjustment {
+        IntrinsicAdjustment {
+            focal: f64::from_bits(self.adjustment[0]),
+            principal_point: [
+                f64::from_bits(self.adjustment[1]),
+                f64::from_bits(self.adjustment[2]),
+            ],
+        }
+    }
+
+    /// `camera` with the image's adjustment applied: borrowed when the
+    /// adjustment is zero.
+    pub(crate) fn apply<'a>(&self, camera: &'a CameraIntrinsics) -> Cow<'a, CameraIntrinsics> {
+        crate::scene::adjusted_intrinsics(camera, &self.adjustment())
+    }
 }
 
 /// Near-white, the one colour that survives an arbitrary colormap underneath.
@@ -135,7 +213,7 @@ impl View {
 }
 
 /// One camera's overlay products, computed once and cached by
-/// [`crate::scene::CameraRef`].
+/// [`ImageIntrinsicsKey`].
 pub(crate) struct CameraLayer {
     /// The grid the displacement field was sampled on, `(cols, rows)`. Part of
     /// the cache's validity: changing the density rebuilds the field.
@@ -295,12 +373,18 @@ impl super::ImageDetail {
     ///
     /// The principal-point marker is deliberately not here: it draws last, over
     /// the features, from [`draw_principal_point`].
+    ///
+    /// `camera` is the image's intrinsics, `key`'s camera with `key`'s
+    /// adjustment applied, and the proposed camera is drawn with the same
+    /// adjustment applied. `varies` is which parameters the image's camera
+    /// varies per image, whose values for this image the legend states.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn draw_intrinsics(
         &mut self,
         painter: &egui::Painter,
-        camera_ref: crate::scene::CameraRef,
+        key: ImageIntrinsicsKey,
         camera: &CameraIntrinsics,
+        varies: PerImageAdjustments,
         image: usize,
         proposal: Option<&CameraModelProposal>,
         view: &View,
@@ -309,11 +393,16 @@ impl super::ImageDetail {
         pointer: Option<Pos2>,
     ) -> Option<String> {
         let proposed = proposal
-            .filter(|p| p.camera_ref() == camera_ref)
-            .and_then(|p| p.fit.as_ref().ok().map(|refit| (p, &refit.camera)));
-        let (axes_model, axes_camera) = match proposed {
+            .filter(|p| p.camera_ref() == key.camera)
+            .and_then(|p| {
+                p.fit
+                    .as_ref()
+                    .ok()
+                    .map(|refit| (p, key.apply(&refit.camera)))
+            });
+        let (axes_model, axes_camera) = match &proposed {
             Some((p, proposed)) if !settings.axes_on_current_model => {
-                (LayerModel::Proposed(p.generation), proposed)
+                (LayerModel::Proposed(p.generation), &**proposed)
             }
             _ => (LayerModel::Current, camera),
         };
@@ -322,7 +411,7 @@ impl super::ImageDetail {
         // rings have been switched on: the ladder is a function of the scale,
         // and a pinch gesture would otherwise rebuild two polylines and a
         // handful of contours sixty times a second.
-        let layer = self.intrinsics_layer(camera_ref, axes_model, axes_camera, settings.grid_cols);
+        let layer = self.intrinsics_layer(key, axes_model, axes_camera, settings.grid_cols);
         let bucket = axes::scale_bucket(view.scale);
         let stale = layer
             .geometry
@@ -346,12 +435,15 @@ impl super::ImageDetail {
 
         // The field on top of the grid: the grid is the frame, the field is the
         // measurement sitting in it. Both are still beneath the features.
-        let mut lines = legend_lines(settings);
-        let change = proposed.filter(|_| settings.field == FieldMode::ChangeToProposed);
+        let mut lines = adjustment_lines(varies, &key.adjustment(), camera);
+        lines.extend(legend_lines(settings));
+        let change = proposed
+            .as_ref()
+            .filter(|_| settings.field == FieldMode::ChangeToProposed);
         match change {
             Some((proposal, proposed)) => {
                 if settings.distortion {
-                    if let Some(change) = self.change_layer(proposal, settings.grid_cols) {
+                    if let Some(change) = self.change_layer(proposal, key, settings.grid_cols) {
                         let (change_lines, rings) = change.draw(
                             painter,
                             camera,
@@ -364,7 +456,7 @@ impl super::ImageDetail {
                         ring_labels = rings;
                     }
                 }
-                let image = crate::scene::ImageRef::new(camera_ref.recon, image);
+                let image = crate::scene::ImageRef::new(key.camera.recon, image);
                 let observations = self.observation_layer(image, proposal);
                 lines.extend(change_field::draw_observations(
                     painter,
@@ -374,12 +466,8 @@ impl super::ImageDetail {
                 ));
             }
             None => {
-                let layer = self.intrinsics_layer(
-                    camera_ref,
-                    LayerModel::Current,
-                    camera,
-                    settings.grid_cols,
-                );
+                let layer =
+                    self.intrinsics_layer(key, LayerModel::Current, camera, settings.grid_cols);
                 if settings.distortion && !layer.arrows.is_empty() {
                     layer.auto_scale =
                         distortion_field::auto_scale(layer.max_px, layer.cell_px(camera), view.fit);
@@ -396,7 +484,7 @@ impl super::ImageDetail {
         // Not painted here: the panel has one tooltip, and this is the text the
         // feature layer appends its own to. See [`mod@hover`].
         let limit_deg = self
-            .intrinsics_layer(camera_ref, LayerModel::Current, camera, settings.grid_cols)
+            .intrinsics_layer(key, LayerModel::Current, camera, settings.grid_cols)
             .limit_deg;
         pointer
             .filter(|pos| panel.contains(*pos))
@@ -433,6 +521,40 @@ fn draw_legend(painter: &egui::Painter, panel: Rect, lines: &[String]) -> Option
         y += step;
     }
     Some(plate)
+}
+
+/// The legend's lines stating the image's intrinsic adjustment, one per
+/// parameter its camera varies per image (`varies`), and none when the camera
+/// varies nothing, so a camera without per-image parameters draws the legend it
+/// always did.
+///
+/// The focal scale is a percentage of the camera's focal. The principal-point
+/// offset is in pixels and in percent of the image's short side, the unit it
+/// is stored in, read off `camera`'s size.
+pub(super) fn adjustment_lines(
+    varies: PerImageAdjustments,
+    adjustment: &IntrinsicAdjustment,
+    camera: &CameraIntrinsics,
+) -> Vec<String> {
+    let mut lines = Vec::new();
+    if varies.focal {
+        lines.push(format!(
+            "focal adjustment {}%",
+            signed_to(100.0 * adjustment.focal, 2)
+        ));
+    }
+    if varies.principal_point {
+        let short_side = f64::from(camera.width.min(camera.height));
+        let [a_x, a_y] = adjustment.principal_point;
+        lines.push(format!(
+            "principal-point adjustment ({}, {}) px {MIDDOT} ({}%, {}%) of the short side",
+            signed(a_x * short_side),
+            signed(a_y * short_side),
+            signed_to(100.0 * a_x, 2),
+            signed_to(100.0 * a_y, 2),
+        ));
+    }
+    lines
 }
 
 /// The legend's lines for the current settings.
@@ -552,10 +674,15 @@ pub(super) const DELTA: &str = "Δ";
 /// A signed number with one decimal, using the typographic minus the rest of
 /// the layer's labels use.
 fn signed(value: f64) -> String {
+    signed_to(value, 1)
+}
+
+/// A signed number with `decimals` decimals, using the typographic minus.
+fn signed_to(value: f64, decimals: usize) -> String {
     if value < 0.0 {
-        format!("{}{:.1}", MINUS, -value)
+        format!("{MINUS}{:.*}", decimals, -value)
     } else {
-        format!("+{value:.1}")
+        format!("+{value:.decimals$}")
     }
 }
 

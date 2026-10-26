@@ -165,6 +165,8 @@ impl IntrinsicsDetail {
             return response;
         };
         let reference = CameraRef::new(node.id, index);
+        // The panel shows and edits the shared camera, the lens all its images
+        // share; the selected image's pose block below reads the image's own.
         let camera = &node.recon().image_set.cameras[index];
         let derived = self
             .derived
@@ -178,7 +180,10 @@ impl IntrinsicsDetail {
         let image = selected_image
             .filter(|&i| i < node.recon().image_set.images.len())
             .filter(|&i| node.recon().image_set.images[i].camera_index as usize == index);
-        let pose = image.map(|i| extrinsics::Pose::resolve(node, i, camera, self.pose_frame));
+        let pose = image.map(|i| {
+            let intrinsics = node.recon().image_set.image_intrinsics(i);
+            extrinsics::Pose::resolve(node, i, &intrinsics, self.pose_frame)
+        });
         let mut proposal = proposal.filter(|p| p.camera_ref() == reference);
         // Greyed while this camera's own proposal is open below the button: a
         // second open would be the one already there.

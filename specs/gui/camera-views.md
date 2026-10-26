@@ -52,6 +52,20 @@ pub struct SfmrCamera {
 The relationship is: `recon.images[i]` (an `SfmrImage`) references
 `recon.cameras[image.camera_index]`.
 
+**Each image is drawn through its own intrinsics.** An image may carry an
+intrinsic adjustment of its camera's focal and principal point
+([../formats/sfmr-file-format.md](../formats/sfmr-file-format.md#per-image-intrinsic-adjustments-optional-version-13)),
+so the intrinsics an image was taken with are its camera's with that
+adjustment applied, `ImageSet::image_intrinsics(i)`. Everything in this spec
+that reads an image's intrinsics reads those: the frustum's opening and its
+image quad, the background photograph's mesh, the field of view camera view
+fits, and the ray a pixel of the photograph names. An image whose adjustment is
+zero, which is every image of a file without adjustments, is drawn through its
+camera exactly. The geometry is built when it changes, not every frame
+([`frustum_geometry`](../../crates/sfm-explorer/src/scene_renderer/upload/frustums.rs),
+[`bg_image_mesh`](../../crates/sfm-explorer/src/scene_renderer/upload/bg_image.rs)),
+so each image's intrinsics are read once per build.
+
 There is already a `camera/frustum.rs` module with `compute_frustum_corners()` that takes
 raw arrays (`&[f64; 3]` center, `&[f64; 9]` rotation, individual intrinsic floats).
 It returns `[f64; 24]` (8 corners × 3 coords: near TL/TR/BR/BL then far TL/TR/BR/BL).
@@ -188,8 +202,8 @@ near_z = 0                                          (apex at camera center)
 far_z  = length_scale * frustum_size_multiplier     (stub depth)
 ```
 
-The intrinsics (fx, fy, width, height) determine the opening angle and
-aspect ratio of each pyramid. `frustum_size_multiplier` defaults to `0.5`.
+The image's intrinsics (fx, fy, the principal point, width, height) determine
+the opening angle and aspect ratio of each pyramid. `frustum_size_multiplier` defaults to `0.5`.
 
 Frustum geometry is re-uploaded when any of these change:
 - `length_scale` (UI slider)
@@ -604,7 +618,7 @@ operation is performed with N = the selected frustum's image index.
 
 ### FOV best-fit
 
-The camera's intrinsics define two fields of view:
+The image's intrinsics define two fields of view:
 
 ```
 vfov_cam = 2 * atan(height / (2 * fy))
@@ -1535,8 +1549,8 @@ degrees.
 
 #### Unit-sphere mesh generation
 
-`generate_bg_distorted_mesh` calls `pixel_to_ray` for each grid vertex to
-get a unit ray direction in camera local space:
+`generate_bg_distorted_mesh` calls `pixel_to_ray` of the image's intrinsics
+for each grid vertex to get a unit ray direction in camera local space:
 
 ```rust
 let ray = camera.pixel_to_ray(s * w, t * h);

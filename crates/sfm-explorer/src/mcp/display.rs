@@ -586,7 +586,8 @@ fn geometry_for(state: &AppState, image: ImageRef) -> Result<Option<ViewGeometry
     }))
 }
 
-/// `image`'s size in its own pixels, from the lens it was shot through.
+/// `image`'s size in its own pixels, from the lens it was shot through: the
+/// shared camera's size, which an intrinsic adjustment leaves alone.
 fn image_size_px(state: &AppState, image: ImageRef) -> Option<[f32; 2]> {
     let node = state.node(image.recon)?;
     let image_set = &node.recon().image_set;

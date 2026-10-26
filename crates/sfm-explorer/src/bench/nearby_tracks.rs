@@ -234,7 +234,7 @@ impl AppState {
         let id = image.recon;
         let image_name = self.image_name(image);
         let camera = self
-            .image_camera(image)
+            .image_intrinsics(image)
             .ok_or_else(|| format!("{image_name} has no camera."))?;
         let (clamped, _) = bench::clamp_to_photograph(&camera, pixel);
         if clamped.is_some() {

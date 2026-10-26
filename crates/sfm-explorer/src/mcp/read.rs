@@ -431,7 +431,14 @@ pub(super) fn get_camera_image(
     let node = state.node(id).expect("just resolved");
     let recon = node.recon();
     let image = &recon.image_set.images[index];
+    // The shared camera names the model and the size; the image's own
+    // intrinsics, the camera with the image's intrinsic adjustment applied,
+    // give the focal and the principal point it was taken with.
     let camera = &recon.image_set.cameras[image.camera_index as usize];
+    let intrinsics = recon.image_set.image_intrinsics(index);
+    let (fx, fy) = intrinsics.focal_lengths();
+    let (cx, cy) = intrinsics.principal_point();
+    let adjustment = image.intrinsic_adjustment;
     let quaternion = image.quaternion_wxyz;
     Ok(json!({
         "reconstruction_label": node.label,
@@ -442,6 +449,14 @@ pub(super) fn get_camera_image(
             "camera_model": camera.model.model_name(),
             "width": camera.width,
             "height": camera.height,
+        },
+        "intrinsic_adjustment": {
+            "focal": adjustment.focal,
+            "principal_point": adjustment.principal_point,
+        },
+        "image_intrinsics": {
+            "focal_lengths": [fx, fy],
+            "principal_point": [cx, cy],
         },
         "quaternion_wxyz": [quaternion.w, quaternion.i, quaternion.j, quaternion.k],
         "translation_xyz": render::vector(&image.translation_xyz),
@@ -495,6 +510,8 @@ pub(super) fn get_camera_intrinsics(
     resolve_camera_intrinsics(state, id, index)?;
     let node = state.node(id).expect("just resolved");
     let recon = node.recon();
+    // The shared camera, as the Camera Intrinsics panel shows it; each image's
+    // own intrinsics are `get_camera_image`'s `image_intrinsics`.
     let camera = &recon.image_set.cameras[index];
     let users: Vec<usize> = recon
         .image_set
@@ -509,6 +526,13 @@ pub(super) fn get_camera_intrinsics(
     object.insert("reconstruction_label".into(), json!(node.label));
     object.insert("camera_intrinsics_index".into(), json!(index));
     object.insert("camera_image_indices".into(), json!(users));
+    // Which of the camera's parameters vary per image, by name, in the order
+    // the `.sfmr` file lists them: empty when every image reads the camera as
+    // it is.
+    object.insert(
+        "per_image_adjustments".into(),
+        json!(recon.image_set.camera_per_image_adjustments(index).names()),
+    );
     // How far out this camera's photographs reach, beside the spline domain
     // an agent may set from it. The detected keypoint reads the images'
     // `.sift` positions, a few milliseconds per camera, so it is read on
@@ -583,7 +607,7 @@ pub(super) fn get_point(state: &mut AppState, query: &crate::goto_point::PointQu
         .map(|(k, observation)| {
             let image_index = observation.image_index as usize;
             let image = &recon.image_set.images[image_index];
-            let camera = &recon.image_set.cameras[image.camera_index as usize];
+            let camera = recon.image_set.image_intrinsics(image_index);
             let xy = observation_xy(
                 state,
                 recon_id,
@@ -592,7 +616,7 @@ pub(super) fn get_point(state: &mut AppState, query: &crate::goto_point::PointQu
                 view.keypoint_xy(k),
             );
             let (reproj_error, _) =
-                crate::metrics::compute_observation_metrics(point, image, camera, xy);
+                crate::metrics::compute_observation_metrics(point, image, &camera, xy);
             let mut entry = json!({
                 "camera_image_index": image_index,
                 "name": image.name,

@@ -395,3 +395,73 @@ fn clearing_everything_leaves_only_the_reconstruction() {
     assert_eq!(selection["point"], Value::Null);
     assert_eq!(selection["reconstruction_label"], "alpha");
 }
+
+/// `get_camera_image` reports the image's intrinsic adjustment and the focal
+/// and principal point it was taken with, and `get_camera_intrinsics` which
+/// parameters its camera varies per image.
+#[test]
+fn get_camera_image_reports_the_image_s_own_intrinsics() {
+    use crate::test_support::{with_adjustment, ADJUSTMENT};
+
+    let (_, mut viewer) = two_reconstructions();
+    let mut state = AppState::new();
+    state.append_node(SceneNode::from_path(
+        std::path::Path::new("/runs/alpha.sfmr"),
+        with_adjustment(recon(8, "A"), 5, ADJUSTMENT),
+    ));
+    let image = |state: &mut AppState, viewer: &mut Viewer3D, index: usize| {
+        call(
+            state,
+            viewer,
+            "get_camera_image",
+            json!({ "camera_image": index }),
+        )
+    };
+
+    // The demo camera: focal 1000 px, principal point (960, 540), 1920 × 1080.
+    let adjusted = image(&mut state, &mut viewer, 5);
+    assert_eq!(
+        adjusted["intrinsic_adjustment"],
+        json!({ "focal": 0.01, "principal_point": [0.02, -0.01] })
+    );
+    let intrinsics = &adjusted["image_intrinsics"];
+    let number = |value: &Value| value.as_f64().expect("a number");
+    for (k, expected) in [(0, 1010.0), (1, 1010.0)] {
+        let got = number(&intrinsics["focal_lengths"][k]);
+        assert!((got - expected).abs() < 1e-9, "{intrinsics}");
+    }
+    for (k, expected) in [(0, 960.0 + 21.6), (1, 540.0 - 10.8)] {
+        let got = number(&intrinsics["principal_point"][k]);
+        assert!((got - expected).abs() < 1e-9, "{intrinsics}");
+    }
+    // The shared camera's block is unchanged.
+    assert_eq!(adjusted["camera_intrinsics"]["camera_model"], "PINHOLE");
+
+    // An image of the same camera with no adjustment reads the camera as it is.
+    let plain = image(&mut state, &mut viewer, 4);
+    assert_eq!(
+        plain["intrinsic_adjustment"],
+        json!({ "focal": 0.0, "principal_point": [0.0, 0.0] })
+    );
+    assert_eq!(
+        plain["image_intrinsics"],
+        json!({ "focal_lengths": [1000.0, 1000.0], "principal_point": [960.0, 540.0] })
+    );
+
+    let lens = |state: &mut AppState, viewer: &mut Viewer3D, index: usize| {
+        call(
+            state,
+            viewer,
+            "get_camera_intrinsics",
+            json!({ "camera_intrinsics_index": index }),
+        )
+    };
+    assert_eq!(
+        lens(&mut state, &mut viewer, 1)["per_image_adjustments"],
+        json!(["focal", "principal_point"])
+    );
+    assert_eq!(
+        lens(&mut state, &mut viewer, 0)["per_image_adjustments"],
+        json!([])
+    );
+}

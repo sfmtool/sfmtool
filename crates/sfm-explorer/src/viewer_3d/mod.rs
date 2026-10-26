@@ -1474,7 +1474,9 @@ impl Viewer3D {
         let reconstruction = node.recon();
         let img_idx = image_ref.index();
         let image = &reconstruction.image_set.images[img_idx];
-        let camera = &reconstruction.image_set.cameras[image.camera_index as usize];
+        // The field of view the photograph was taken with: the image's own
+        // focal, adjustment included.
+        let camera = reconstruction.image_set.image_intrinsics(img_idx);
 
         let (world_pose, end_position) = transformed_pose(image, node.transform());
         let r_world_from_cam = world_pose.inverse();
@@ -1717,7 +1719,7 @@ impl Viewer3D {
 
         let reconstruction = node.recon();
         let image = &reconstruction.image_set.images[image_ref.index()];
-        let lens = &reconstruction.image_set.cameras[image.camera_index as usize];
+        let lens = reconstruction.image_set.image_intrinsics(image_ref.index());
         let ray = lens.pixel_to_ray(f64::from(pixel[0]), f64::from(pixel[1]));
         let (world_pose, _) = transformed_pose(image, node.transform());
         let bearing = world_pose.inverse() * Vector3::new(ray[0], ray[1], ray[2]);

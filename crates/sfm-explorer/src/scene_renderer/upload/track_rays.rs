@@ -94,7 +94,11 @@ pub(super) fn track_ray_edges(
         .enumerate()
         .filter_map(|(k, obs)| {
             let image = &recon.image_set.images[obs.image_index as usize];
-            let camera = &recon.image_set.cameras[image.camera_index as usize];
+            // The ray leaves through the image's own intrinsics. Built when the
+            // selected point changes, for the one point's observations, so an
+            // adjusted image's intrinsics are built once per observation here
+            // rather than once per frame.
+            let camera = recon.image_set.image_intrinsics(obs.image_index as usize);
             let center = image.camera_center();
             let endpoint_a = [center.x as f32, center.y as f32, center.z as f32];
 

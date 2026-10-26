@@ -26,7 +26,9 @@ mod overlay;
 mod tests;
 mod view;
 
-pub(crate) use intrinsics::{show_intrinsics_controls, CameraLayer, ChangeLayer, LayerModel};
+pub(crate) use intrinsics::{
+    show_intrinsics_controls, CameraLayer, ChangeLayer, ImageIntrinsicsKey, LayerModel,
+};
 pub(crate) use overlay::{BenchMenu, START_CLUSTER_LABEL};
 #[cfg(feature = "mcp")]
 pub(crate) use view::look_at;
@@ -35,7 +37,7 @@ pub(crate) use view::{Look, ViewGeometry};
 use crate::camera_model_proposal::{CameraModelProposal, ObservationReprojection};
 use crate::document::VersionSerial;
 use crate::platform::{GestureEvent, ScrollInput};
-use crate::scene::{CameraRef, ImageRef, PointRef, ReconId};
+use crate::scene::{ImageRef, PointRef, ReconId};
 use crate::state::edits::PointGesture;
 use crate::state::{
     CachedSiftFeatures, FeatureDisplaySettings, IntrinsicsDisplaySettings, OverlayMode,
@@ -105,19 +107,22 @@ pub struct ImageDetail {
     loaded_image: Option<(ImageRef, egui::TextureHandle)>,
     /// Prepared feature overlay for the current image.
     feature_overlay: Option<FeatureOverlayState>,
-    /// The intrinsics layer's per-camera products, keyed by [`CameraRef`] and
-    /// the model they were computed from: the current camera, or an open
-    /// camera model proposal's proposed camera by its generation, so the one is
-    /// never served for the other.
+    /// The intrinsics layer's products, keyed by the image intrinsics they
+    /// were drawn through ([`ImageIntrinsicsKey`]: the camera and the image's
+    /// intrinsic adjustment) and the model they were computed from: the
+    /// current camera, or an open camera model proposal's proposed camera by
+    /// its generation, so the one is never served for the other.
     ///
-    /// Bounded by the number of *distinct* intrinsics across the loaded nodes,
-    /// which is small even for a per-image-intrinsics solve, plus at most one
-    /// proposed entry, so there is no eviction beyond
-    /// [`ImageDetail::forget_recon`] and a proposed entry's replacement.
-    intrinsics: HashMap<(CameraRef, LayerModel), CameraLayer>,
-    /// The **Change to proposed** field of the proposal last drawn, by its
-    /// camera, its generation and the grid density.
-    change_layer: Option<(CameraRef, u64, usize, ChangeLayer)>,
+    /// Bounded by the number of distinct cameras across the loaded nodes, plus
+    /// one entry per image with a non-zero adjustment that has been shown, and
+    /// the same again for the open proposal, so there is no eviction beyond
+    /// [`ImageDetail::forget_recon`] and the replacement of an older
+    /// proposal's entries.
+    intrinsics: HashMap<(ImageIntrinsicsKey, LayerModel), CameraLayer>,
+    /// The **Change to proposed** field of the proposal last drawn, by the
+    /// image intrinsics it was drawn through, the proposal's generation and the
+    /// grid density.
+    change_layer: Option<(ImageIntrinsicsKey, u64, usize, ChangeLayer)>,
     /// The observation layer of the image last drawn under a proposal, by the
     /// image and the proposal's generation.
     observation_layer: Option<(ImageRef, u64, Vec<ObservationReprojection>)>,
@@ -324,11 +329,11 @@ impl ImageDetail {
         {
             self.feature_overlay = None;
         }
-        self.intrinsics.retain(|(camera, _), _| camera.recon != id);
+        self.intrinsics.retain(|(key, _), _| key.camera.recon != id);
         if self
             .change_layer
             .as_ref()
-            .is_some_and(|(camera, ..)| camera.recon == id)
+            .is_some_and(|(key, ..)| key.camera.recon == id)
         {
             self.change_layer = None;
         }
@@ -342,28 +347,31 @@ impl ImageDetail {
     }
 
     /// The cached intrinsics-layer report for `camera`, the camera `model`
-    /// names, rebuilt when the grid density changes.
+    /// names with the adjustment `image` names applied, rebuilt when the grid
+    /// density changes.
     ///
     /// Called from the toolbar as well as from the draw pass, so the popup's
     /// footer and the on-image legend are reading one computation rather than
-    /// two that could disagree. A proposed entry replaces any other proposed
-    /// entry of the camera, since only the open proposal's is ever drawn.
+    /// two that could disagree. A proposed entry replaces the camera's entries
+    /// of any older proposal, since only the open proposal's are ever drawn.
     pub(crate) fn intrinsics_layer(
         &mut self,
-        camera_ref: CameraRef,
+        image: ImageIntrinsicsKey,
         model: LayerModel,
         camera: &CameraIntrinsics,
         grid_cols: usize,
     ) -> &mut CameraLayer {
-        let key = (camera_ref, model);
+        let key = (image, model);
         let stale = self
             .intrinsics
             .get(&key)
             .is_none_or(|layer| layer.grid.0 != grid_cols.max(1));
         if stale {
-            if let LayerModel::Proposed(_) = model {
-                self.intrinsics
-                    .retain(|(c, m), _| *c != camera_ref || !matches!(m, LayerModel::Proposed(_)));
+            if let LayerModel::Proposed(generation) = model {
+                self.intrinsics.retain(|(k, m), _| {
+                    k.camera != image.camera
+                        || !matches!(m, LayerModel::Proposed(g) if *g != generation)
+                });
             }
             self.intrinsics
                 .insert(key, CameraLayer::compute(camera, grid_cols));
@@ -375,24 +383,26 @@ impl ImageDetail {
 
     /// The two reports the gear popup's footer reads, computed if they are not
     /// cached: the current camera's layer, and the change field of
-    /// `proposal` when it is open on the camera with a fitted camera.
+    /// `proposal` when it is open on the camera with a fitted camera. `camera`
+    /// is the image's intrinsics, the camera `key` names with `key`'s
+    /// adjustment applied.
     pub(crate) fn popup_layers(
         &mut self,
-        camera: Option<(CameraRef, &CameraIntrinsics)>,
+        camera: Option<(ImageIntrinsicsKey, &CameraIntrinsics)>,
         proposal: Option<&CameraModelProposal>,
         grid_cols: usize,
     ) -> (Option<&CameraLayer>, Option<&ChangeLayer>) {
-        let Some((camera_ref, camera)) = camera else {
+        let Some((key, camera)) = camera else {
             return (None, None);
         };
-        self.intrinsics_layer(camera_ref, LayerModel::Current, camera, grid_cols);
-        let proposal = proposal.filter(|p| p.camera_ref() == camera_ref);
+        self.intrinsics_layer(key, LayerModel::Current, camera, grid_cols);
+        let proposal = proposal.filter(|p| p.camera_ref() == key.camera);
         let has_change = match proposal {
-            Some(proposal) => self.change_layer(proposal, grid_cols).is_some(),
+            Some(proposal) => self.change_layer(proposal, key, grid_cols).is_some(),
             None => false,
         };
         (
-            self.intrinsics.get(&(camera_ref, LayerModel::Current)),
+            self.intrinsics.get(&(key, LayerModel::Current)),
             self.change_layer
                 .as_ref()
                 .filter(|_| has_change)
@@ -400,29 +410,35 @@ impl ImageDetail {
         )
     }
 
-    /// The **Change to proposed** field of `proposal` over its camera's image,
-    /// cached by the camera, the proposal's generation and the grid density.
+    /// The **Change to proposed** field of `proposal` over one image of its
+    /// camera, both cameras with the adjustment `image` names applied, cached
+    /// by the image intrinsics, the proposal's generation and the grid density.
     ///
     /// `None` when the proposal's fit was refused, which leaves no proposed
     /// camera to compare with.
     pub(crate) fn change_layer(
         &mut self,
         proposal: &CameraModelProposal,
+        image: ImageIntrinsicsKey,
         grid_cols: usize,
     ) -> Option<&mut ChangeLayer> {
         let refit = proposal.fit.as_ref().ok()?;
-        let camera_ref = proposal.camera_ref();
         let cols = grid_cols.max(1);
         let stale = !matches!(
             &self.change_layer,
-            Some((c, g, n, _)) if *c == camera_ref && *g == proposal.generation && *n == cols
+            Some((k, g, n, _)) if *k == image && *g == proposal.generation && *n == cols
         );
         if stale {
             self.change_layer = Some((
-                camera_ref,
+                image,
                 proposal.generation,
                 cols,
-                ChangeLayer::compute(&proposal.source, &refit.camera, cols, refit.theta_fit_deg),
+                ChangeLayer::compute(
+                    &image.apply(&proposal.source),
+                    &image.apply(&refit.camera),
+                    cols,
+                    refit.theta_fit_deg,
+                ),
             ));
         }
         self.change_layer.as_mut().map(|(.., layer)| layer)
@@ -907,15 +923,15 @@ impl ImageDetail {
             intrinsics_display.enabled = !intrinsics_display.enabled;
         }
         // The image set and its cameras are the base's: no point edit moves an
-        // image, and a bulk edit that does hands the node a new base.
+        // image, and a bulk edit that does hands the node a new base. The layer
+        // is drawn through the image's own intrinsics, its camera with its
+        // intrinsic adjustment applied.
         let image_set = &edited.base.image_set;
-        let camera_ref = image_set
-            .images
-            .get(img_idx)
-            .map(|image| CameraRef::new(recon_id, image.camera_index as usize));
-        let camera = camera_ref
-            .and_then(|camera_ref| image_set.cameras.get(camera_ref.index()))
-            .cloned();
+        let camera_ref = ImageIntrinsicsKey::of_image(recon_id, image_set, img_idx);
+        let camera = camera_ref.and_then(|_| crate::scene::image_intrinsics(image_set, img_idx));
+        let varies = camera_ref
+            .map(|key| image_set.camera_per_image_adjustments(key.camera.index()))
+            .unwrap_or_default();
         let view = View {
             origin: image_rect.min,
             scale: base_scale * self.zoom,
@@ -926,6 +942,7 @@ impl ImageDetail {
                 &painter,
                 camera_ref,
                 camera,
+                varies,
                 img_idx,
                 proposal,
                 &view,

@@ -44,15 +44,17 @@ pub(super) struct Pose {
     pub quaternion_wxyz: [f64; 4],
     /// Camera centre in world coordinates, `C = −Rᵀt`.
     pub centre: Point3<f64>,
-    /// `P = K · S · [R|t]`, or `None` for a model that is not a linear
-    /// projection.
+    /// `P = K · S · [R|t]`, with `K` the image's own (its camera's with its
+    /// intrinsic adjustment applied), or `None` for a model that is not a
+    /// linear projection.
     pub projection: Option<Matrix3x4<f64>>,
     /// Whether this is the stored pose put through the node's transform.
     pub transformed: bool,
 }
 
 impl Pose {
-    /// Resolve image `index`'s pose in `frame`.
+    /// Resolve image `index`'s pose in `frame`, with `camera` the image's
+    /// intrinsics.
     ///
     /// `frame` is honoured only when the node actually carries a transform;
     /// asking for the transformed pose of an untransformed node yields the

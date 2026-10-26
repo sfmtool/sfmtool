@@ -82,7 +82,7 @@ fn project(image_set: &ImageSet, i: usize, world: Point3<f64>) -> [f32; 2] {
     let image = &image_set.images[i];
     let cam = image.quaternion_wxyz * world.coords + image.translation_xyz;
     let (u, v) = image_set
-        .camera_for_image(i)
+        .image_intrinsics(i)
         .ray_to_pixel([cam.x, cam.y, cam.z])
         .expect("the point is in front of every camera of this scene");
     [u as f32, v as f32]
@@ -520,7 +520,7 @@ fn the_report_measures_the_residual_before_and_after() {
     // The same numbers a caller can compute for itself from the value that came
     // back, which is what the viewer's own readout does every frame.
     let direct = residual_quantiles_px(
-        moved.image_set.camera_for_image(0),
+        &moved.image_set.image_intrinsics(0),
         &pose(&moved, 0),
         &image_reprojection_samples(&moved, 0),
     )

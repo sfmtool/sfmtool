@@ -2471,6 +2471,8 @@ impl AppState {
         let dimensions = self.node(image.recon).and_then(|node| {
             let recon = node.recon();
             let entry = recon.image_set.images.get(image.index())?;
+            // The shared camera's size, which is the image's: an intrinsic
+            // adjustment moves the focal and the principal point, not the size.
             let camera = recon.image_set.cameras.get(entry.camera_index as usize)?;
             Some((camera.width, camera.height))
         });
@@ -2990,16 +2992,13 @@ impl AppState {
                     .enumerate()
                     .filter(|&(i, image)| {
                         own.contains(&i)
-                            || image_set
-                                .cameras
-                                .get(image.camera_index as usize)
-                                .is_none_or(|camera| {
-                                    sfmtool_core::patch::view_selection::view_could_see_patch(
-                                        patch,
-                                        camera,
-                                        &crate::scene::cam_from_world(image),
-                                    )
-                                })
+                            || crate::scene::image_intrinsics(image_set, i).is_none_or(|camera| {
+                                sfmtool_core::patch::view_selection::view_could_see_patch(
+                                    patch,
+                                    &camera,
+                                    &crate::scene::cam_from_world(image),
+                                )
+                            })
                     })
                     .map(|(i, _)| i)
                     .collect()
@@ -3109,7 +3108,7 @@ impl AppState {
                 });
             }
         };
-        let Some(camera) = self.image_camera(image) else {
+        let Some(camera) = self.image_intrinsics(image) else {
             return Ok(placed);
         };
         let (clamped_from, pixel) = sfmtool_core::bench::clamp_to_photograph(&camera, placed.pixel);
@@ -3120,12 +3119,12 @@ impl AppState {
         })
     }
 
-    /// The lens of one camera image, for the clamp and for anything else that
-    /// needs the photograph's own extent.
-    fn image_camera(&self, image: ImageRef) -> Option<sfmtool_core::camera::CameraIntrinsics> {
+    /// The intrinsics of one camera image, its camera with its intrinsic
+    /// adjustment applied, for the clamp and for anything else that needs the
+    /// photograph's own extent.
+    fn image_intrinsics(&self, image: ImageRef) -> Option<sfmtool_core::camera::CameraIntrinsics> {
         let image_set = &self.node(image.recon)?.recon().image_set;
-        let row = image_set.images.get(image.index())?;
-        image_set.cameras.get(row.camera_index as usize).cloned()
+        crate::scene::image_intrinsics(image_set, image.index()).map(std::borrow::Cow::into_owned)
     }
 
     /// Where one `.sift` feature sits and what keypoint frame it carries, read

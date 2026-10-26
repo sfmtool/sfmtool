@@ -544,6 +544,38 @@ pub fn cam_from_world(image: &sfmtool_core::SfmrImage) -> sfmtool_core::geometry
     )
 }
 
+/// The intrinsics image `index` of `image_set` was taken with: its camera's,
+/// with the image's intrinsic adjustment applied
+/// ([`ImageSet::image_intrinsics`](sfmtool_core::reconstruction::ImageSet::image_intrinsics)),
+/// or `None` when the image or its camera is not in the set.
+///
+/// What every panel that projects into one image, casts a ray from it or reads
+/// its focal or principal point reads, so the viewer draws an image through
+/// the intrinsics the bundle adjustment fitted it with. Borrowed when the
+/// adjustment is zero, which is every image of a file without adjustments.
+pub(crate) fn image_intrinsics(
+    image_set: &sfmtool_core::reconstruction::ImageSet,
+    index: usize,
+) -> Option<std::borrow::Cow<'_, sfmtool_core::CameraIntrinsics>> {
+    let image = image_set.images.get(index)?;
+    image_set.cameras.get(image.camera_index as usize)?;
+    Some(image_set.image_intrinsics(index))
+}
+
+/// `camera` with `adjustment` applied, borrowed when the adjustment is zero:
+/// what [`image_intrinsics`] gives for a camera the image set does not hold,
+/// such as a camera model proposal's proposed camera.
+pub(crate) fn adjusted_intrinsics<'a>(
+    camera: &'a sfmtool_core::CameraIntrinsics,
+    adjustment: &sfmtool_core::IntrinsicAdjustment,
+) -> std::borrow::Cow<'a, sfmtool_core::CameraIntrinsics> {
+    if adjustment.is_zero() {
+        std::borrow::Cow::Borrowed(camera)
+    } else {
+        std::borrow::Cow::Owned(camera.with_adjustment(adjustment))
+    }
+}
+
 /// What zoom-to-fit frames, in the **shared world space**: the positions of
 /// finite points, and the bearings of points at infinity kept apart from them,
 /// since a bearing is a unit direction and framing it as a position would

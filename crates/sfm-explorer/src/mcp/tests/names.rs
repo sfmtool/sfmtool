@@ -196,7 +196,13 @@ fn the_image_detail_toolbar_and_its_gear_popup_name_their_controls() {
             &mut settings,
             &mut intrinsics,
             &mut detail,
-            Some((CameraRef::new(node.id, 0), &camera)),
+            Some((
+                crate::image_detail::ImageIntrinsicsKey::new(
+                    CameraRef::new(node.id, 0),
+                    &Default::default(),
+                ),
+                &camera,
+            )),
             None,
         );
     };

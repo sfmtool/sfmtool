@@ -53,7 +53,8 @@ pub(crate) struct CameraLock {
     /// node's **own** frame. What `Escape` puts back and the dead band
     /// measures against.
     pub(crate) stored: Se3Transform,
-    /// The lens the residual readout projects through.
+    /// The intrinsics the residual readout projects through: the image's own,
+    /// its camera with its intrinsic adjustment applied.
     camera: CameraIntrinsics,
     /// This image's observations as of the lock: the point where the value has
     /// it and the pixel that saw it. Fixed, because nothing in the value moves
@@ -133,7 +134,7 @@ pub(crate) fn enter(viewer: &mut Viewer3D, state: &mut AppState) -> Result<(), S
     let recon = node.recon();
     let stored = sfmtool_core::reconstruction::move_camera::pose_of(recon, image.index());
     let samples = edited_image_reprojection_samples(edited, image.index());
-    let camera = recon.image_set.camera_for_image(image.index()).clone();
+    let camera = recon.image_set.image_intrinsics(image.index()).into_owned();
     let stored_residual = residual_quantiles_px(&camera, &stored, &samples);
     let highlighted: HashSet<u32> = edited
         .live_indexes()

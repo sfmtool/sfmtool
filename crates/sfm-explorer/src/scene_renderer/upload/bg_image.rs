@@ -5,13 +5,43 @@
 
 use super::super::distorted_mesh::generate_bg_distorted_mesh;
 use super::super::gpu_types::{
-    BG_DISTORTION_SUBDIVISIONS, BG_FISHEYE_SUBDIVISIONS, BG_PINHOLE_SUBDIVISIONS,
+    BgDistortedVertex, BG_DISTORTION_SUBDIVISIONS, BG_FISHEYE_SUBDIVISIONS, BG_PINHOLE_SUBDIVISIONS,
 };
 use super::super::SceneRenderer;
 use crate::scene::ImageRef;
 use sfmtool_core::camera::image::ImageU8;
 use sfmtool_core::SfmrReconstruction;
 use wgpu::util::DeviceExt;
+
+/// The background photograph's mesh for image `image_index`: a tessellated
+/// grid of world-space ray directions through the image's own intrinsics (its
+/// camera with its intrinsic adjustment applied), so the photograph lies where
+/// its pixels' rays point.
+///
+/// Uses the same camera-to-world rotation as the frustum wireframes, so the
+/// background shader can use the standard `view_proj = projection * view`
+/// pipeline. Split out from [`SceneRenderer::upload_bg_image`] so the mesh is
+/// assertable without a photograph on disk or a GPU buffer readback.
+///
+/// # Panics
+///
+/// Panics when `image_index` is past the images.
+pub(super) fn bg_image_mesh(
+    recon: &SfmrReconstruction,
+    image_index: usize,
+) -> (Vec<BgDistortedVertex>, Vec<u32>) {
+    let img = &recon.image_set.images[image_index];
+    let camera = recon.image_set.image_intrinsics(image_index);
+    let r = img.camera_to_world_rotation_flat();
+    let subdivisions = if camera.model.is_fisheye() {
+        BG_FISHEYE_SUBDIVISIONS
+    } else if camera.has_distortion() {
+        BG_DISTORTION_SUBDIVISIONS
+    } else {
+        BG_PINHOLE_SUBDIVISIONS
+    };
+    generate_bg_distorted_mesh(&camera, &r, subdivisions)
+}
 
 impl SceneRenderer {
     /// Load a full-resolution camera image for the background in camera view mode.
@@ -117,19 +147,7 @@ impl SceneRenderer {
         self.bg_image_loaded = Some(image);
         log::info!("Loaded bg image {} ({}×{})", image_path.display(), w, h);
 
-        // Generate tessellated mesh with world-space ray directions.
-        // Uses the same camera-to-world rotation as frustum wireframes, so the
-        // BG shader can use the standard view_proj = projection * view pipeline.
-        let camera = &recon.image_set.cameras[img.camera_index as usize];
-        let r = img.camera_to_world_rotation_flat();
-        let subdivisions = if camera.model.is_fisheye() {
-            BG_FISHEYE_SUBDIVISIONS
-        } else if camera.has_distortion() {
-            BG_DISTORTION_SUBDIVISIONS
-        } else {
-            BG_PINHOLE_SUBDIVISIONS
-        };
-        let (vertices, indices) = generate_bg_distorted_mesh(camera, &r, subdivisions);
+        let (vertices, indices) = bg_image_mesh(recon, image_index);
         let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("bg distorted vertices"),
             contents: bytemuck::cast_slice(&vertices),

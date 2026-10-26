@@ -36,6 +36,7 @@ pub(super) fn show_header(
     refusal: Option<&str>,
 ) -> bool {
     let mut switch = false;
+    // The images the shared camera took.
     let uses = node
         .recon()
         .image_set

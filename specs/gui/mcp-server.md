@@ -664,6 +664,9 @@ looking at is the one at the cursor, and this block reports it.
   "camera_intrinsics_index": 0,
   "camera_intrinsics": { "camera_model": "OPENCV",
                          "width": 270, "height": 480 },
+  "intrinsic_adjustment": { "focal": 0.0, "principal_point": [0.0, 0.0] },
+  "image_intrinsics": { "focal_lengths": [402.1, 402.1],
+                        "principal_point": [135.0, 240.0] },
   "quaternion_wxyz": [0.98, 0.01, -0.17, 0.04],
   "translation_xyz": [0.10, -1.88, 0.51],
   "center": [0.28, -1.85, 0.49],
@@ -679,6 +682,7 @@ looking at is the one at the cursor, and this block reports it.
               "radial_distortion_k1": -0.031, "radial_distortion_k2": 0.004,
               "tangential_distortion_p1": 0.0, "tangential_distortion_p2": 0.0 },
   "camera_image_indices": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
+  "per_image_adjustments": [],
   "outermost_keypoint": {
     "observed": { "radius_px": 262.4, "theta_deg": 34.1,
                   "camera_image_index": 7, "xy": [12.8, 470.1] },
@@ -798,6 +802,23 @@ caller to take as `u_axis × v_axis`: it is the outward normal
 where the point has no patch frame, which is every point of a `sift_files`
 value. For a point at infinity `center` is the bearing and the patch is tangent
 to the direction sphere, which the `at_infinity` beside it says.
+
+**An image's own intrinsics.** An image may carry an intrinsic adjustment of
+its camera's focal and principal point
+([../formats/sfmr-file-format.md](../formats/sfmr-file-format.md#per-image-intrinsic-adjustments-optional-version-13)).
+`get_camera_image` reports it as `intrinsic_adjustment`, as the file stores it:
+`focal` the focal scale as a fraction (the image's focal is the camera's times
+`1 + focal`) and `principal_point` the offset in fractions of the image's short
+side, all zero for an image read through its camera as it is. Beside it,
+`image_intrinsics` gives what the adjustment comes to in pixels: the image's
+`focal_lengths` `[fx, fy]` and `principal_point` `[cx, cy]`, its camera's with
+the adjustment applied. The `camera_intrinsics` block stays the shared
+camera's model and size, which no adjustment changes. `get_camera_intrinsics`
+reports the shared camera, and its `per_image_adjustments` names which of
+`"focal"` and `"principal_point"` the camera varies per image, in the order the
+`.sfmr` file lists them, and is empty when it varies neither. Every figure a
+reply computes through one image reads that image's intrinsics: a `get_point`
+track observation's `reproj_error`, and `get_camera_image`'s error summary.
 
 `get_camera_intrinsics`'s `outermost_keypoint` is how far out the camera's
 photographs reach

@@ -657,13 +657,15 @@ impl AppState {
             let (value, map) = edited.materialize();
             (Arc::new(value), Some(map))
         };
+        // The shared camera: the proposal refits the lens all the camera's
+        // images share, and each image keeps its adjustment on top of it.
         let source = node.recon().image_set.cameras[camera.index()].clone();
         // One read of each image's `.sift` file feeds both the outermost
         // extent, over the version's base as the switch reports it, and the
         // keypoints of the value the fits read.
         let (keypoint_extent, observations) =
             observations::read_camera_keypoints(&edited.base, &value, camera.index());
-        let rug = observations::rug_angles(&source, &observations);
+        let rug = observations::rug_angles(&value.image_set, &observations);
         let targets = targets_for(&source);
         let value_for_default = Arc::clone(&value);
         let mut proposal = CameraModelProposal {

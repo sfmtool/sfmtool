@@ -301,6 +301,8 @@ impl ImageBrowser {
         let mut thumb_positions: Vec<(f32, f32)> = Vec::with_capacity(num_images);
         let mut x = 0.0_f32;
         for i in 0..num_images {
+            // The shared camera's size, which is the image's: an intrinsic
+            // adjustment leaves the size alone.
             let cam = &recon.image_set.cameras[recon.image_set.images[i].camera_index as usize];
             let aspect = cam.width as f32 / cam.height as f32;
             let w = img_height * aspect;

@@ -55,6 +55,8 @@
 //! to the same Jacobian the *Zoom* column reads, so a view is drawn with the
 //! sampler the bench's kernels render it with.
 
+use std::borrow::Cow;
+
 use sfmtool_core::bench::{EditableTrack, Stage};
 use sfmtool_core::camera::image::ImageU8Pyramid;
 use sfmtool_core::camera::sampler::Sampler;
@@ -106,9 +108,9 @@ pub(crate) fn patch_jacobian(
     observation: usize,
 ) -> Option<PatchJacobian> {
     let (patch_frame, camera, pose, keypoint) = track_tile_geometry(recon, track, observation)?;
-    let anchored = super::patch::render_patch_frame(patch_frame, camera, &pose, Some(keypoint));
+    let anchored = super::patch::render_patch_frame(patch_frame, &camera, &pose, Some(keypoint));
     let resolution = crate::bench::patch_resolution(recon) as usize;
-    patch_grid_jacobian(&anchored, camera, &pose, resolution).map(PatchJacobian)
+    patch_grid_jacobian(&anchored, &camera, &pose, resolution).map(PatchJacobian)
 }
 
 /// The sampler one observation's track-stage tile and its hover view are
@@ -126,15 +128,16 @@ pub(crate) fn tile_sampler(
 }
 
 /// What a track-stage row's tile is warped through: the track's patch, the
-/// observation's camera and pose, and where the observation sits. `None` at
-/// the cluster stage and wherever one of them is missing.
+/// observation's image intrinsics (its camera with its intrinsic adjustment
+/// applied) and pose, and where the observation sits. `None` at the cluster
+/// stage and wherever one of them is missing.
 fn track_tile_geometry<'a>(
     recon: &'a SfmrReconstruction,
     track: &'a EditableTrack,
     observation: usize,
 ) -> Option<(
     &'a OrientedPatch,
-    &'a CameraIntrinsics,
+    Cow<'a, CameraIntrinsics>,
     RigidTransform,
     [f64; 2],
 )> {
@@ -145,7 +148,7 @@ fn track_tile_geometry<'a>(
     let site = crate::bench::observation_site(row)?;
     let patch_frame = payload.patch_frame.as_ref()?;
     let image = recon.image_set.images.get(row.image as usize)?;
-    let camera = recon.image_set.cameras.get(image.camera_index as usize)?;
+    let camera = crate::scene::image_intrinsics(&recon.image_set, row.image as usize)?;
     Some((
         patch_frame,
         camera,
@@ -177,7 +180,7 @@ pub(super) fn image(
                 track_tile_geometry(recon, track, observation)?;
             Some(super::patch::patch_color_image(
                 patch_frame,
-                camera,
+                &camera,
                 &pose,
                 Some(keypoint),
                 src,
@@ -266,7 +269,8 @@ pub(super) fn context(
         Stage::Track(payload) => {
             let patch_frame = payload.patch_frame.as_ref()?;
             let image = recon.image_set.images.get(img_idx)?;
-            let camera = recon.image_set.cameras.get(image.camera_index as usize)?;
+            let camera = crate::scene::image_intrinsics(&recon.image_set, img_idx)?;
+            let camera: &CameraIntrinsics = &camera;
             let pose = crate::scene::cam_from_world(image);
             let anchored = patch_frame.anchored_at_keypoint(camera, &pose, site.pixel);
             let mut wide = anchored.clone().unwrap_or_else(|| patch_frame.clone());

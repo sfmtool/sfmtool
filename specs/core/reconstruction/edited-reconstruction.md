@@ -98,8 +98,6 @@ impl PointSet {
 impl ImageSet {
     pub fn image_count(&self) -> usize;
     pub fn camera_count(&self) -> usize;
-    // The shared camera, without the image's adjustment.
-    pub fn camera_for_image(&self, image_index: usize) -> &CameraIntrinsics;
     // The camera with the image's intrinsic adjustment applied, borrowed when
     // the adjustment is zero.
     pub fn image_intrinsics(&self, image_index: usize) -> Cow<'_, CameraIntrinsics>;
@@ -124,11 +122,13 @@ takes `image_intrinsics_list`, the cameras followed by one adjusted copy per
 image whose adjustment is not zero
 ([`ImageIntrinsicsList`](../../../crates/sfmtool-core/src/camera/intrinsics.rs)).
 With every adjustment zero, each of these borrows the cameras and reads exactly
-what it read before adjustments existed. `camera_for_image` and the camera
-column itself remain for what means the shared camera: which camera an image
+what it read before adjustments existed. The camera column and `cameras`
+indexed by it remain for what means the shared camera: which camera an image
 belongs to, the lens a bundle adjustment releases, and the lens a model switch
-refits. The viewer and the Python package read the shared camera in places,
-which [per-image-intrinsics.md](../../drafts/per-image-intrinsics.md#pr-3-every-consumer-reads-the-images-intrinsics)
+refits. SfM Explorer reads each image's intrinsics wherever it draws or
+measures one image ([../../gui/camera-views.md](../../gui/camera-views.md)). The
+Python package reads the shared camera in places, which
+[per-image-intrinsics.md](../../drafts/per-image-intrinsics.md#pr-3-every-consumer-reads-the-images-intrinsics)
 amends, and the file boundary refuses a non-zero adjustment.
 
 `per_image_adjustments` is addressed by camera index, like `cameras`, and an

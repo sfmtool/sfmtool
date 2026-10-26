@@ -6488,3 +6488,37 @@ fn a_row_s_menu_offers_the_sift_files_build_above_the_index_build() {
         "the entry started the index build"
     );
 }
+
+/// A track-stage tile is warped through its observation's image intrinsics:
+/// with the test adjustment on the first observation's image, the tile's patch
+/// Jacobian, its picture and its hover view's projection are exactly those of
+/// the same image on a camera entry holding the adjusted intrinsics, and not
+/// the shared camera's.
+#[test]
+fn a_tile_is_warped_through_its_image_s_own_intrinsics() {
+    use crate::test_support::{image_on_own_camera, with_adjustment, ADJUSTMENT};
+
+    let (state, id, label, _, _) = on_the_bench();
+    let track = state.bench_track(id, &label).expect("on the bench").clone();
+    let image = track.observations[0].image as usize;
+    let src = state
+        .cached_photograph(id, image)
+        .expect("a cached photograph");
+    let shared = state.node(id).expect("loaded").recon().clone();
+    let adjusted = with_adjustment(shared.clone(), image, ADJUSTMENT);
+    let own = image_on_own_camera(&adjusted, image);
+
+    let read = |recon: &sfmtool_core::SfmrReconstruction| {
+        let jacobian = super::tile::patch_jacobian(recon, &track, 0).expect("a Jacobian");
+        let tile = super::tile::image(recon, &track, 0, &src).expect("a tile");
+        let context = super::tile::context(recon, &track, 0, &src).expect("a context");
+        (jacobian, tile, context.projection_px)
+    };
+    let (shared, adjusted, own) = (read(&shared), read(&adjusted), read(&own));
+    assert_eq!(adjusted, own);
+    assert_ne!(adjusted.0, shared.0, "the Jacobian read the shared camera");
+    assert_ne!(
+        adjusted.2, shared.2,
+        "the projection read the shared camera"
+    );
+}

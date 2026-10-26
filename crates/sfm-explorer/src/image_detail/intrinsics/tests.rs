@@ -1151,7 +1151,10 @@ fn the_layer_cache_does_not_serve_the_proposed_camera_as_the_current_one() {
     let mut detail = super::super::ImageDetail::new();
     proposal_detail_frames(&mut state, &mut detail, 900.0);
     let proposal = state.camera_model_proposal.as_ref().unwrap();
-    let camera_ref = proposal.camera_ref();
+    let camera_ref = super::ImageIntrinsicsKey::new(
+        proposal.camera_ref(),
+        &sfmtool_core::IntrinsicAdjustment::default(),
+    );
     let generation = proposal.generation;
     let current = &state.scene[0].recon().image_set.cameras[0];
     let proposed = detail
@@ -1360,4 +1363,125 @@ fn ring_labels_stay_inside_the_panel_and_off_the_other_labels() {
         }
     }
     assert!(drawn > 0, "no ring label was drawn");
+}
+
+// ── The image's intrinsics ──────────────────────────────────────────────
+
+#[test]
+fn the_legend_states_only_the_parameters_the_camera_varies_per_image() {
+    use crate::test_support::ADJUSTMENT;
+    use sfmtool_core::reconstruction::PerImageAdjustments;
+
+    // The demo camera: 1920 × 1080, so a short side of 1080 px.
+    let camera = sfmtool_core::SfmrReconstruction::demo(1).image_set.cameras[0].clone();
+    let lines = |focal, principal_point| {
+        super::adjustment_lines(
+            PerImageAdjustments {
+                focal,
+                principal_point,
+            },
+            &ADJUSTMENT,
+            &camera,
+        )
+    };
+    assert!(lines(false, false).is_empty());
+    assert_eq!(lines(true, false), ["focal adjustment +1.00%"]);
+    assert_eq!(
+        lines(false, true),
+        ["principal-point adjustment (+21.6, −10.8) px · (+2.00%, −1.00%) of the short side"]
+    );
+    assert_eq!(lines(true, true).len(), 2);
+}
+
+/// The demo panel fixture with its reconstruction put through `edit` first.
+fn edited_panel_fixture(
+    edit: impl FnOnce(sfmtool_core::SfmrReconstruction) -> sfmtool_core::SfmrReconstruction,
+) -> crate::scene::SceneNode {
+    crate::scene::SceneNode::from_path(
+        std::path::Path::new("/runs/demo.sfmr"),
+        edit(sfmtool_core::SfmrReconstruction::demo(64)),
+    )
+}
+
+/// Every shape one panel frame of `node`'s image 0 drew with the layer on,
+/// over a stand-in photograph of the camera's full size, so the layer's
+/// marks land on the panel where the photograph's pixels are.
+fn layer_frame(node: &crate::scene::SceneNode) -> Vec<String> {
+    let (_, sift, _) = demo_panel_fixture();
+    let camera = &node.recon().image_set.cameras[0];
+    let (w, h) = (camera.width, camera.height);
+    let image =
+        sfmtool_core::camera::image::ImageU8::new(w, h, 3, vec![90u8; (w * h * 3) as usize]);
+    let mut shapes = Vec::new();
+    flatten(
+        &panel_frame(
+            node,
+            &sift,
+            &image,
+            &crate::state::FeatureDisplaySettings::default(),
+            &mut IntrinsicsDisplaySettings::default(),
+        ),
+        &mut shapes,
+    );
+    shapes
+}
+
+/// The layer is drawn through the image's own intrinsics: an adjusted image
+/// draws exactly what the same image on a camera entry holding its adjusted
+/// intrinsics draws, the principal point and its offset label included, and
+/// the legend states the adjustment once the camera lists it per image.
+#[test]
+fn the_layer_is_drawn_through_the_image_s_own_intrinsics() {
+    use crate::test_support::{image_on_own_camera, with_adjustment, ADJUSTMENT};
+
+    let unlisted = |recon| {
+        let mut recon = with_adjustment(recon, 0, ADJUSTMENT);
+        recon.image_set.per_image_adjustments.clear();
+        recon
+    };
+    let adjusted = layer_frame(&edited_panel_fixture(unlisted));
+    let own = layer_frame(&edited_panel_fixture(|recon| {
+        image_on_own_camera(&unlisted(recon), 0)
+    }));
+    let shared = layer_frame(&edited_panel_fixture(|recon| recon));
+    assert_eq!(adjusted, own);
+    assert_ne!(adjusted, shared);
+    // The demo's principal point is the image centre, so only the adjusted
+    // one is labelled with an offset: 2% and −1% of the 1080 px short side.
+    let offset = |shapes: &[String]| shapes.iter().any(|s| s.contains("Δ (+21.6, −10.8) px"));
+    assert!(offset(&adjusted), "{adjusted:?}");
+    assert!(!shapes_mention(&shared, "Δ"));
+    assert!(!shapes_mention(&adjusted, "adjustment"));
+
+    let listed = layer_frame(&edited_panel_fixture(|recon| {
+        with_adjustment(recon, 0, ADJUSTMENT)
+    }));
+    assert!(
+        shapes_mention(&listed, "focal adjustment +1.00%"),
+        "{listed:?}"
+    );
+    assert!(
+        shapes_mention(&listed, "principal-point adjustment (+21.6, −10.8) px"),
+        "{listed:?}"
+    );
+}
+
+/// A camera that lists its parameters as varying per image, with every
+/// adjustment zero, draws the shared camera and says the adjustment is zero.
+#[test]
+fn a_zero_adjustment_draws_the_shared_camera_and_says_so() {
+    use crate::test_support::with_adjustment;
+
+    let listed = layer_frame(&edited_panel_fixture(|recon| {
+        with_adjustment(recon, 0, Default::default())
+    }));
+    assert!(
+        shapes_mention(&listed, "focal adjustment +0.00%"),
+        "{listed:?}"
+    );
+    assert!(!shapes_mention(&listed, "Δ"), "{listed:?}");
+}
+
+fn shapes_mention(shapes: &[String], text: &str) -> bool {
+    shapes.iter().any(|s| s.contains(text))
 }

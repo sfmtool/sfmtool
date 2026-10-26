@@ -17,7 +17,9 @@ fn demo_node() -> SceneNode {
 /// toolbar has been drawn into a dock cell `cell_width` wide.
 fn available_after_toolbar(cell_width: f32, overlay_mode: OverlayMode) -> egui::Rect {
     let node = demo_node();
-    let camera_ref = CameraRef::new(node.id, 0);
+    let camera_ref =
+        crate::image_detail::ImageIntrinsicsKey::of_image(node.id, &node.recon().image_set, 0)
+            .expect("image 0 and its camera");
     let camera = &node.recon().image_set.cameras[0];
     let mut settings = FeatureDisplaySettings {
         overlay_mode,

@@ -113,13 +113,6 @@ impl ImageSet {
         self.cameras.len()
     }
 
-    /// The shared camera of image `image_index`, without the image's intrinsic
-    /// adjustment. A caller that projects through the image reads
-    /// [`Self::image_intrinsics`] instead.
-    pub fn camera_for_image(&self, image_index: usize) -> &CameraIntrinsics {
-        &self.cameras[self.images[image_index].camera_index as usize]
-    }
-
     /// The intrinsics image `image_index` was taken with: its camera's, with
     /// the image's intrinsic adjustment applied. Borrowed when the adjustment
     /// is all zero, which is every image of a file without adjustments.

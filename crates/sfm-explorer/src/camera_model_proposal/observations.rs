@@ -11,12 +11,19 @@
 //! Both read the keypoints from here, so they describe one set. The same pass
 //! over the images' `.sift` files gives the outermost keypoint extent the
 //! proposal strip shows beside the spline domain, so each file is read once.
+//!
+//! The proposal refits the shared camera, and each image keeps its intrinsic
+//! adjustment on top of whichever camera it ends up with, as the switch
+//! itself does. So every reading here is through an image's own intrinsics:
+//! the current camera with the image's adjustment applied, and the proposed
+//! camera with the same adjustment applied.
 
 use std::path::Path;
 
 use sfmtool_core::camera::report::off_axis_angle_deg;
 use sfmtool_core::reconstruction::outermost_keypoint::KeypointReach;
-use sfmtool_core::SfmrReconstruction;
+use sfmtool_core::reconstruction::ImageSet;
+use sfmtool_core::{CameraIntrinsics, SfmrReconstruction};
 
 use super::{CameraModelProposal, KeypointExtent};
 
@@ -52,7 +59,8 @@ pub(crate) struct ObservationReprojection {
 /// switch reports it (`outermost_keypoints` with its `.sift` files read), and
 /// `value` the value the fits read: the base itself, or its materialisation.
 /// The extent is the one `outermost_keypoints` gives: the outermost observation
-/// and the outermost detected feature, by radius from the principal point. An
+/// and the outermost detected feature, by radius from the principal point,
+/// each measured through its own image's intrinsics. An
 /// observation's keypoint is the value's inline one where it carries the
 /// column, and otherwise the feature the image's `.sift` file holds. An
 /// observation whose file cannot be read, or whose keypoint is not finite, is
@@ -78,15 +86,18 @@ pub(super) fn read_camera_keypoints_with(
     let mut extent = KeypointExtent::default();
     let mut out = Vec::new();
     let image_set = &base.image_set;
-    let Some(lens) = image_set.cameras.get(camera) else {
+    if image_set.cameras.get(camera).is_none() {
         return (extent, out);
-    };
+    }
     let base_rows = rows_by_image(base, camera);
     let value_rows = rows_by_image(value, camera);
     for (image, row) in image_set.images.iter().enumerate() {
+        // Which images the shared camera took.
         if row.camera_index as usize != camera {
             continue;
         }
+        let lens = image_set.image_intrinsics(image);
+        let lens: &CameraIntrinsics = &lens;
         let positions = read(&base.sift_path_for_image(image));
         let feature = |positions: &Option<Vec<[f32; 2]>>, index: u32| {
             positions
@@ -131,7 +142,8 @@ pub(super) fn read_camera_keypoints_with(
     (extent, out)
 }
 
-/// The observation rows of each image of `camera` in `recon`, by image.
+/// The observation rows of each image of `camera` in `recon`, by image: the
+/// images the shared camera took.
 fn rows_by_image(recon: &SfmrReconstruction, camera: usize) -> Vec<Vec<usize>> {
     let image_set = &recon.image_set;
     let mut rows_of: Vec<Vec<usize>> = vec![Vec::new(); image_set.images.len()];
@@ -153,7 +165,7 @@ fn rows_by_image(recon: &SfmrReconstruction, camera: usize) -> Vec<Vec<usize>> {
 /// larger radius from the principal point.
 fn keep_outer(
     best: &mut Option<KeypointReach>,
-    camera: &sfmtool_core::CameraIntrinsics,
+    camera: &CameraIntrinsics,
     image: usize,
     xy: [f64; 2],
 ) {
@@ -174,52 +186,65 @@ fn keep_outer(
 
 impl CameraModelProposal {
     /// The rug: the incidence angle of each observation under the current
-    /// camera, ascending, one per observation.
+    /// camera, through its image's intrinsics, ascending, one per observation.
     pub(crate) fn rug(&self) -> &[f64] {
         &self.rug
     }
 
     /// Each observation of `image`, with the keypoint and the observed
-    /// point's reprojection under the current and the proposed camera, through
-    /// the image's stored pose. A point at infinity is reprojected as the
-    /// direction it is. Empty for an image the proposal's camera did not take.
+    /// point's reprojection under the current and the proposed camera, each
+    /// with the image's intrinsic adjustment applied, through the image's
+    /// stored pose. A point at infinity is reprojected as the direction it is.
+    /// Empty for an image the proposal's camera did not take.
     pub(crate) fn image_reprojections(&self, image: usize) -> Vec<ObservationReprojection> {
         let Some(row) = self.value.image_set.images.get(image) else {
             return Vec::new();
         };
+        // Which images the shared camera took.
         if row.camera_index as usize != self.camera {
             return Vec::new();
         }
         let pose = crate::scene::cam_from_world(row);
-        let proposed = self.fit.as_ref().ok().map(|refit| &refit.camera);
+        let adjustment = &row.intrinsic_adjustment;
+        let current = crate::scene::adjusted_intrinsics(&self.source, adjustment);
+        let proposed = self
+            .fit
+            .as_ref()
+            .ok()
+            .map(|refit| crate::scene::adjusted_intrinsics(&refit.camera, adjustment));
         let start = self.observations.partition_point(|o| o.image < image);
         self.observations[start..]
             .iter()
             .take_while(|o| o.image == image)
             .filter_map(|o| {
                 let point = self.value.point_set.points.get(o.point)?;
-                let project = |camera: &sfmtool_core::CameraIntrinsics| {
+                let project = |camera: &CameraIntrinsics| {
                     camera.project_homogeneous(&pose, point.position.coords, point.w)
                 };
                 Some(ObservationReprojection {
                     keypoint: o.xy,
-                    current: project(&self.source),
-                    proposed: proposed.and_then(project),
+                    current: project(&current),
+                    proposed: proposed.as_deref().and_then(project),
                 })
             })
             .collect()
     }
 }
 
-/// The rug of `observations` under `camera`: their incidence angles,
-/// ascending.
-pub(crate) fn rug_angles(
-    camera: &sfmtool_core::CameraIntrinsics,
-    observations: &[ObservedKeypoint],
-) -> Vec<f64> {
+/// The rug of `observations` of `image_set`'s images: their incidence angles,
+/// each through its image's intrinsics, ascending. The intrinsics are built
+/// once per image, not once per observation.
+pub(crate) fn rug_angles(image_set: &ImageSet, observations: &[ObservedKeypoint]) -> Vec<f64> {
+    let intrinsics = image_set.all_image_intrinsics();
     let mut angles: Vec<f64> = observations
         .iter()
-        .map(|o| off_axis_angle_deg(camera, o.xy[0], o.xy[1]))
+        .filter_map(|o| {
+            Some(off_axis_angle_deg(
+                intrinsics.get(o.image)?,
+                o.xy[0],
+                o.xy[1],
+            ))
+        })
         .filter(|theta| theta.is_finite())
         .collect();
     angles.sort_by(f64::total_cmp);

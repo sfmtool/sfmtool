@@ -35,7 +35,7 @@ fn with_projected_keypoints(mut recon: SfmrReconstruction) -> SfmrReconstruction
         let point = &recon.point_set.points[observation.point_index as usize];
         let camera = recon
             .image_set
-            .camera_for_image(observation.image_index as usize);
+            .image_intrinsics(observation.image_index as usize);
         let cam = image.quaternion_wxyz * point.position.coords + image.translation_xyz;
         if let Some((u, v)) = camera.ray_to_pixel([cam.x, cam.y, cam.z]) {
             keypoints[[row, 0]] = u as f32;
@@ -259,7 +259,7 @@ fn the_readout_equals_a_direct_computation_and_rises_as_the_camera_moves() {
 
     // The same numbers the core computes for that pose over the same value.
     let direct = sfmtool_core::reconstruction::move_camera::residual_quantiles_px(
-        state.scene[0].recon().image_set.camera_for_image(IMAGE),
+        &state.scene[0].recon().image_set.image_intrinsics(IMAGE),
         &pending,
         &sfmtool_core::reconstruction::move_camera::edited_image_reprojection_samples(
             state.scene[0].edited(),
@@ -581,4 +581,35 @@ fn a_lock_whose_node_is_closed_under_it_is_dropped_rather_than_left_held() {
     // to take another camera in hand.
     assert_eq!(exit_implicitly(&mut viewer, &mut state), None);
     assert!(viewer.camera_lock.is_none());
+}
+
+/// The readout measures through the image's own intrinsics: with keypoints
+/// made through an adjusted image's intrinsics, the stored pose still agrees
+/// with itself, where the shared camera would leave a residual of pixels.
+#[test]
+fn the_readout_measures_through_the_image_s_own_intrinsics() {
+    let adjusted = crate::test_support::with_adjustment(
+        SfmrReconstruction::demo(64),
+        IMAGE,
+        crate::test_support::ADJUSTMENT,
+    );
+    let (mut state, mut viewer, _id) = looking_through(with_projected_keypoints(adjusted));
+    enter(&mut viewer, &mut state).expect("camera view of a posed image");
+    let lock = viewer.camera_lock.as_ref().expect("a held lock");
+    let stored = residuals(lock, &stored_pose(&state)).1.expect("keypoints");
+    assert!(
+        stored[0] < 1e-3,
+        "the stored pose disagrees with itself: {stored:?}"
+    );
+
+    let shared = sfmtool_core::reconstruction::move_camera::residual_quantiles_px(
+        &state.scene[0].recon().image_set.cameras[0],
+        &stored_pose(&state),
+        &sfmtool_core::reconstruction::move_camera::edited_image_reprojection_samples(
+            state.scene[0].edited(),
+            IMAGE,
+        ),
+    )
+    .expect("keypoints");
+    assert!(shared[0] > 1.0, "the adjustment moved nothing: {shared:?}");
 }

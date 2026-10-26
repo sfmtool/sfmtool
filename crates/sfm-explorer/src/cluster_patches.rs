@@ -500,6 +500,8 @@ impl ClusterPlan {
             camera_dims: images
                 .iter()
                 .map(|image| {
+                    // The shared camera's size, which is the image's: an
+                    // intrinsic adjustment leaves the size alone.
                     let camera = &recon.image_set.cameras[image.camera_index as usize];
                     [camera.width, camera.height]
                 })

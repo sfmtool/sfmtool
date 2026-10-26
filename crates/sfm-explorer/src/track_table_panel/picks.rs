@@ -191,7 +191,7 @@ pub(super) fn pick_reference(
         let read = (|| {
             let keypoint = view.keypoint_xy(k)?;
             let image = recon.image_set.images.get(index)?;
-            let camera = recon.image_set.cameras.get(image.camera_index as usize)?;
+            let camera = crate::scene::image_intrinsics(&recon.image_set, index)?;
             let pyramid = photographs.get(&crate::state::photograph_path(recon, index)?)?;
             let level = pyramid.level(0);
             (level.width() == camera.width && level.height() == camera.height).then_some((
@@ -213,7 +213,7 @@ pub(super) fn pick_reference(
         .iter()
         .zip(&poses)
         .map(|(f, cam_from_world)| ProjectedImage {
-            camera: f.1,
+            camera: &f.1,
             cam_from_world,
             pyramid: &f.4,
         })

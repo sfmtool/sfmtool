@@ -1056,3 +1056,46 @@ fn one_pass_gives_the_outermost_extent_and_reads_each_sift_file_once() {
         );
     }
 }
+
+/// An image with an intrinsic adjustment is reprojected under both cameras
+/// with its adjustment applied: the proposal refits the shared camera, and the
+/// image keeps its adjustment on top of whichever camera it ends up with.
+#[test]
+fn an_adjusted_images_observations_are_reprojected_with_its_adjustment() {
+    use crate::test_support::ADJUSTMENT;
+
+    let mut node = fisheye_node("/runs/kerry.sfmr");
+    node.recon_mut().image_set.images[2].intrinsic_adjustment = ADJUSTMENT;
+    let mut state = AppState::new();
+    state.append_node(node);
+    let id = state.scene[0].id;
+    state
+        .open_camera_model_proposal(CameraRef::new(id, 0), None)
+        .expect("opens");
+    let proposal = state.camera_model_proposal.as_ref().expect("open");
+    let recon = state.scene[0].recon();
+    let refit = proposal.fit.as_ref().expect("a fitted camera");
+    let current = recon.image_set.image_intrinsics(2);
+    let proposed = refit.camera.with_adjustment(&ADJUSTMENT);
+    let pose = crate::scene::cam_from_world(&recon.image_set.images[2]);
+    let rows: Vec<usize> = (0..recon.point_set.tracks.len())
+        .filter(|&r| recon.point_set.tracks[r].image_index == 2)
+        .collect();
+    let layer = proposal.image_reprojections(2);
+    assert_eq!(layer.len(), rows.len());
+    let xy = recon.keypoints_xy().expect("inline keypoints");
+    for &row in &rows {
+        let keypoint = [f64::from(xy[[row, 0]]), f64::from(xy[[row, 1]])];
+        let observation = layer
+            .iter()
+            .find(|o| o.keypoint == keypoint)
+            .expect("the observation");
+        let point = &recon.point_set.points[recon.point_set.tracks[row].point_index as usize];
+        let project = |camera: &sfmtool_core::CameraIntrinsics| {
+            camera.project_homogeneous(&pose, point.position.coords, point.w)
+        };
+        assert_eq!(observation.current, project(&current));
+        assert_eq!(observation.proposed, project(&proposed));
+        assert_ne!(observation.current, project(&recon.image_set.cameras[0]));
+    }
+}

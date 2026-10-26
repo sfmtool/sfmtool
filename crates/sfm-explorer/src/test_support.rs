@@ -339,3 +339,59 @@ pub(crate) fn assert_timed_from_the_work(log: &mut ActionLog) {
          it was timed from the write rather than from the work",
     );
 }
+
+/// A non-zero intrinsic adjustment of the size a phone camera's images show:
+/// a focal one percent longer, and a principal point moved by two percent of
+/// the short side right and one percent up.
+pub(crate) const ADJUSTMENT: sfmtool_core::IntrinsicAdjustment =
+    sfmtool_core::IntrinsicAdjustment {
+        focal: 0.01,
+        principal_point: [0.02, -0.01],
+    };
+
+/// `recon` with `adjustment` on image `image`, and the image's camera listing
+/// both parameters as varying per image.
+///
+/// A value in memory only: reading or writing an `.sfmr` file still
+/// refuses a non-zero adjustment.
+pub(crate) fn with_adjustment(
+    mut recon: sfmtool_core::SfmrReconstruction,
+    image: usize,
+    adjustment: sfmtool_core::IntrinsicAdjustment,
+) -> sfmtool_core::SfmrReconstruction {
+    let image_set = &mut recon.image_set;
+    let camera = image_set.images[image].camera_index as usize;
+    image_set.images[image].intrinsic_adjustment = adjustment;
+    image_set
+        .per_image_adjustments
+        .resize(image_set.cameras.len(), Default::default());
+    image_set.per_image_adjustments[camera] = sfmtool_core::reconstruction::PerImageAdjustments {
+        focal: true,
+        principal_point: true,
+    };
+    recon
+}
+
+/// `recon` with image `image` moved onto a camera entry of its own that holds
+/// the image's intrinsics, its adjustment applied, and with no adjustment.
+///
+/// What an adjusted image has to draw exactly as: the same photograph through
+/// the same intrinsics, said the old way.
+pub(crate) fn image_on_own_camera(
+    recon: &sfmtool_core::SfmrReconstruction,
+    image: usize,
+) -> sfmtool_core::SfmrReconstruction {
+    let mut out = recon.clone();
+    let intrinsics = recon.image_set.image_intrinsics(image).into_owned();
+    let image_set = &mut out.image_set;
+    image_set.cameras.push(intrinsics);
+    if !image_set.per_image_adjustments.is_empty() {
+        image_set
+            .per_image_adjustments
+            .resize(image_set.cameras.len(), Default::default());
+    }
+    image_set.images[image].camera_index = (image_set.cameras.len() - 1) as u32;
+    image_set.images[image].intrinsic_adjustment = Default::default();
+    out.metadata.camera_count = image_set.cameras.len() as u32;
+    out
+}

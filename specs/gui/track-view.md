@@ -1521,8 +1521,11 @@ resolution, 24. The tile is drawn at 64 texels a side (`patch::PATCH_RES`) only
 so that it looks crisp in its cell; no number in the table, a hover or a reply
 is read at that resolution.
 
-The zoom is pure geometry: the patch, the observation's camera and pose, and
-where the observation sits. `tile::patch_jacobian` reads it with core's
+The zoom is pure geometry: the patch, the observation's image intrinsics (its
+camera with the image's intrinsic adjustment applied) and pose, and where the
+observation sits. The tile, its hover view and the crop's outline are warped
+and projected through the same image intrinsics, so an adjusted image's row
+shows the photograph as that image's lens took it. `tile::patch_jacobian` reads it with core's
 `camera::warp_map::patch_grid_jacobian` at `R` grid px a side, with no photograph,
 and the body caches the answer per row beside the tiles, dropping it whenever it
 drops them (a step on the track, or the reconstruction leaving the scene). So a

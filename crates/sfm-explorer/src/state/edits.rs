@@ -480,7 +480,8 @@ pub(crate) struct DecodedViews {
 /// Where one photometric step's photographs are to come from, before any of
 /// them has been decoded.
 ///
-/// What crosses to a **worker**: the poses and the cameras, which are cheap,
+/// What crosses to a **worker**: the poses and each image's intrinsics (its
+/// camera with its intrinsic adjustment applied), which are cheap,
 /// per image the path its photograph is read from (or nothing, for an image
 /// the step does not read), and the viewer's photograph cache
 /// ([`AppState::photographs`]). Building one reads nothing, so it costs the GUI
@@ -2078,7 +2079,7 @@ impl AppState {
         let mut poses = Vec::with_capacity(recon.image_count());
         let mut paths = Vec::with_capacity(recon.image_count());
         for (i, im) in recon.image_set.images.iter().enumerate() {
-            cameras.push(recon.image_set.cameras[im.camera_index as usize].clone());
+            cameras.push(recon.image_set.image_intrinsics(i).into_owned());
             let q = im.quaternion_wxyz;
             poses.push(RigidTransform::from_wxyz_translation(
                 [q.w, q.i, q.j, q.k],

@@ -986,7 +986,13 @@ fn the_image_detail_toolbar_s_dropdowns_are_named_by_their_labels() {
                     &mut settings,
                     &mut intrinsics,
                     &mut detail,
-                    Some((CameraRef::new(node.id, 0), camera)),
+                    Some((
+                        crate::image_detail::ImageIntrinsicsKey::new(
+                            CameraRef::new(node.id, 0),
+                            &Default::default(),
+                        ),
+                        camera,
+                    )),
                     None,
                 );
             });

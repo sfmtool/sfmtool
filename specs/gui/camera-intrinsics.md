@@ -651,6 +651,27 @@ Everything below is computed in image pixel coordinates and mapped through the
 panel's existing image-to-panel transform, so it pans and zooms with the
 photograph.
 
+**Through the image's own intrinsics.** The layer reads the image's
+intrinsics, `ImageSet::image_intrinsics(i)`: its camera's with the image's
+intrinsic adjustment applied
+([../formats/sfmr-file-format.md](../formats/sfmr-file-format.md#per-image-intrinsic-adjustments-optional-version-13)),
+since that is the lens the photograph was taken through. The principal point,
+its offset from the centre, the axes and rings, the distortion field and the
+hover readout are all that image's. While a camera model proposal is open, the
+proposed camera is drawn with the same adjustment applied, as the switch keeps
+each image's adjustment on top of whichever camera it becomes. An image whose
+adjustment is zero, which is every image of a file without adjustments, is drawn
+through its camera exactly.
+
+**The adjustment, in the legend.** When the image's camera varies some
+parameter per image (its `per_image_adjustments` is not empty), the legend
+leads with one line per varied parameter stating this image's value:
+`focal adjustment +1.00%`, the focal scale as a percentage of the camera's
+focal, and `principal-point adjustment (+21.6, −10.8) px · (+2.00%, −1.00%) of
+the short side`, the offset in pixels and in percent of the image's short side,
+the unit it is stored in. A zero adjustment is stated as zero. A camera that
+varies nothing per image adds no line, so the legend reads as it always did.
+
 **Principal point.** A reticle at `(cx, cy)` — a 3.5 px open ring with four
 arms reaching outward from just outside it — drawn last and fully opaque per the
 compositing rules above. This is the one mark that must never be lost under a
@@ -1286,7 +1307,7 @@ means the selected image uses the camera above. Header:
 | Quaternion | `w, x, y, z` |
 | Camera centre `C` | `−Rᵀt`, in world units, suffixed with `metadata.world_space_unit` when the file names one |
 | Axes in world | `right`, `up`, `forward` = `Rᵀe₀`, `Rᵀe₁`, `−Rᵀe₂` |
-| `P = K · S · [R \| t]` | 3×4, **perspective models only** — for fisheye and equirectangular models the row is replaced by `Not a linear projection — this model has no 3×4 P` rather than being silently omitted or, worse, printed anyway |
+| `P = K · S · [R \| t]` | 3×4, **perspective models only** — for fisheye and equirectangular models the row is replaced by `Not a linear projection — this model has no 3×4 P` rather than being silently omitted or, worse, printed anyway. `K` is the image's own, its camera's with its intrinsic adjustment applied, so `P` projects into this photograph; the panel's parameter rows above stay the shared camera's |
 
 A caption states the convention once — *world-to-camera, canonical `.sfmr` frame:
 Z-up world, camera looks down −Z with +Y up* — naming
@@ -1443,15 +1464,15 @@ family, and the arrow field is a few hundred round trips.
 
 | Product | Cost | Cached on | Invalidated by |
 |---------|------|-----------|----------------|
-| Distortion field | `cols × rows` ray round trips | `(CameraRef, LayerModel)` and the grid density | camera change, grid density change, node close; a proposed entry is replaced by the next proposed one of the camera |
+| Distortion field | `cols × rows` ray round trips | `(ImageIntrinsicsKey, LayerModel)` and the grid density: the camera and the image's intrinsic adjustment, so every image with a zero adjustment shares its camera's entry and each adjusted image shown has its own | camera change, grid density change, node close; a newer proposal's entries replace the camera's older proposed ones |
 | Radial profile | `samples × 32 azimuths` | `CameraRef` — the sample count is a constant, so it is not part of the key | camera change, node close |
 | FOV / derived rows | 4 corners + 4 edges | `CameraRef` | camera change, node close |
 | Proposed derived rows and change profile | the same, for the proposed camera, and `samples × 32 azimuths` for the change | `(CameraRef, generation)`, one entry | a change of the proposal's inputs, node close |
-| Change field (Image Detail) | `cols × rows` ray round trips | `(CameraRef, generation, cols)`, one entry | a change of the proposal's inputs or the grid density, node close |
+| Change field (Image Detail) | `cols × rows` ray round trips | `(ImageIntrinsicsKey, generation, cols)`, one entry | another adjustment, a change of the proposal's inputs or the grid density, node close |
 | Observation layer (Image Detail) | one reprojection per observation of the image, under each camera | `(ImageRef, generation)`, one entry | another image, a change of the proposal's inputs, node close |
 | Rug, the proposal's keypoints and its outermost keypoint | one pass over the camera's images, reading each image's `.sift` file once for all three | the open proposal | read when it opens |
 | Trustworthy bound | a ~360-step sweep × 8 azimuths, refined | `CameraRef` | camera change, node close |
-| Axis polylines | ~1 sample per 4 panel px | `(CameraRef, zoom bucket)` | camera change, zoom crossing a bucket |
+| Axis polylines | ~1 sample per 4 panel px | `(ImageIntrinsicsKey, zoom bucket)` | camera change, zoom crossing a bucket |
 | Hover readout | 1 round trip | not cached | — |
 
 Axis polylines and the change mode's rings are the only products that depend
@@ -1729,6 +1750,20 @@ name.
 ---
 
 ## Decisions
+
+**An image's adjustment is stated in Image Detail's legend** (2026-10-25).
+The viewer shows an image's intrinsic adjustment in one place: the intrinsics
+layer's legend, and only when the image's camera varies some parameter per
+image. Image Detail is where one photograph is looked at through its lens, and
+the layer already draws the principal point the adjustment moves, so the
+number sits beside the mark it explains. The Camera Intrinsics panel shows and
+edits the shared camera, and a per-image line there would sit among the shared
+parameters as if it were one of them; its pose block does read the image's own
+`K` for `P`, since `P` is a statement about this photograph. Stating the value
+only for a camera that lists per-image parameters keeps every existing file's
+panel unchanged, and stating a zero adjustment as zero, rather than leaving the
+line out, says that the parameter is varied and this image's happens to be zero.
+MCP's `get_camera_image` reports the same numbers.
 
 **Independent layer, not an `OverlayMode` variant** (2026-08-23). The first
 draft made the intrinsics overlay an eighth exclusive mode, matching the
