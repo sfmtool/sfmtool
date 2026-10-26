@@ -819,8 +819,9 @@ after a camera is resized: the offset is in the **short-side unit** `m`, the
 image's shorter side in pixels, on both axes, so that one offset means the same
 number of pixels in x and in y. In every model the distortion is applied in
 normalised coordinates before the focal and principal point are, so the
-distortion centre moves with the principal point. The motivation, and the
-bundle adjustment that will solve the adjustments, are in
+distortion centre moves with the principal point. No bundle adjustment in this
+build solves the adjustments; the motivation, and the bundle adjustment that
+solves them, are in the draft
 [per-image-intrinsics.md](../drafts/per-image-intrinsics.md).
 
 The two columns are each present exactly when at least one camera lists its
