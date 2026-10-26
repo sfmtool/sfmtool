@@ -8342,3 +8342,112 @@ fn a_spline_is_recovered_under_held_image_adjustments() {
     let worst = out.residual_norms.iter().cloned().fold(0.0f64, f64::max);
     assert!(worst < 0.5, "worst reprojection {worst} px after the rung");
 }
+
+#[test]
+fn two_cameras_recover_their_own_lenses_under_interleaved_held_adjustments() {
+    // Two cameras of different models, alternate images each: a
+    // `SIMPLE_PINHOLE` and an `SFMTOOL_PINHOLE` with a spline, each with its
+    // own focal and principal point. Some images of each carry a focal scale
+    // and a principal-point offset, the rest none, and camera 1's adjusted
+    // image 1 comes between camera 0's images 0 and 2, so an adjusted image's
+    // entry is not at its camera's index. Every observation is made through
+    // its image's adjusted intrinsics. The solve starts both cameras off,
+    // camera 1's spline from none, releases each camera's focal, principal
+    // point and, on camera 1, the spline, and recovers each camera's planted
+    // values: an entry whose columns landed in the other camera's block, or
+    // that was read without its adjustment, would leave residuals of pixels.
+    let truth = [
+        simple_pinhole_at(250.0).with_principal_point(246.0, 236.0),
+        sfmtool_pinhole(275.0, &PLANTED_PINHOLE_BSPLINE).with_principal_point(233.0, 247.0),
+    ];
+    let n_img = 10;
+    let (mut s, _) = make_pinhole_scene_for(truth[0].clone(), n_img, 500);
+    let image_camera: Vec<u32> = (0..n_img).map(|i| (i % 2) as u32).collect();
+    let adjusted = [1, 2, 3, 6, 7];
+    let adjustments: Vec<IntrinsicAdjustment> = (0..n_img)
+        .map(|i| {
+            if adjusted.contains(&i) {
+                IntrinsicAdjustment {
+                    focal: 0.012 * jitter(i, 61),
+                    principal_point: [0.006 * jitter(i, 62), 0.006 * jitter(i, 63)],
+                }
+            } else {
+                IntrinsicAdjustment::default()
+            }
+        })
+        .collect();
+    assert!(adjusted.iter().all(|&i| !adjustments[i].is_zero()));
+    let images: Vec<CameraIntrinsics> = (0..n_img)
+        .map(|i| truth[image_camera[i] as usize].with_adjustment(&adjustments[i]))
+        .collect();
+    reproject(&mut s, |i| &images[i]);
+    let started = [
+        simple_pinhole_at(250.0 * 1.03).with_principal_point(240.0, 240.0),
+        sfmtool_pinhole(275.0 * 0.97, &[0.0; 6]).with_principal_point(240.0, 240.0),
+    ];
+    let releases = [
+        CameraRelease {
+            focal: true,
+            principal_point: true,
+            ..CameraRelease::HELD
+        },
+        CameraRelease::ALL,
+    ];
+    let out = bundle_adjust(
+        &BaCameras {
+            cameras: &started,
+            image_camera: image_camera.as_slice().into(),
+            releases: Some(&releases),
+            image_adjustments: Some(Cow::Borrowed(&adjustments)),
+        },
+        &mut s.quats,
+        &mut s.trans,
+        &mut s.points,
+        &s.uv,
+        &s.obs_img,
+        &s.obs_pt,
+        None,
+        None,
+        FreePointPolicy::default(),
+        None,
+        DEFAULT_PROTECTED_LOSS_SCALE,
+        true,
+        true,
+        true,
+        true,
+        &DEFAULT_SCHEDULE,
+        60,
+        2,
+        12,
+        &Progress::none(),
+    );
+    for (j, (got, want)) in out.cameras.iter().zip(&truth).enumerate() {
+        let (f, f_want) = (got.focal_lengths().0, want.focal_lengths().0);
+        assert!(
+            (f - f_want).abs() < 0.05,
+            "camera {j}: focal {f} (want {f_want})"
+        );
+        let ((cx, cy), (cx_want, cy_want)) = (got.principal_point(), want.principal_point());
+        assert!(
+            (cx - cx_want).abs() < 0.05 && (cy - cy_want).abs() < 0.05,
+            "camera {j}: principal point ({cx}, {cy}) (want ({cx_want}, {cy_want}))"
+        );
+    }
+    let spline = out.cameras[1]
+        .model
+        .radial_spline()
+        .map(|(b, _, _)| b.to_vec())
+        .expect("camera 1 keeps its spline");
+    for (i, (c, t)) in spline.iter().zip(&PLANTED_PINHOLE_BSPLINE).enumerate() {
+        assert!(
+            (c - t).abs() < 1e-3,
+            "camera 1's coefficient {i}: {c} (want {t}; full spline {spline:?})"
+        );
+    }
+    assert!(
+        out.cameras[0].model.radial_spline().is_none(),
+        "camera 0 is still a SIMPLE_PINHOLE"
+    );
+    let worst = out.residual_norms.iter().copied().fold(0.0f64, f64::max);
+    assert!(worst < 1e-3, "largest residual {worst} px");
+}

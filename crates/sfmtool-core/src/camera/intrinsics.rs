@@ -1046,7 +1046,9 @@ pub struct ImageIntrinsicsList<'a> {
 impl<'a> ImageIntrinsicsList<'a> {
     /// The list for images taken through `cameras[image_camera[i]]` with
     /// `adjustments[i]` applied. `adjustments` is one per image, or empty for
-    /// every image unadjusted.
+    /// every image unadjusted. `image_camera` is borrowed or owned as the
+    /// caller holds it, and is `image_entry` itself when no adjustment is
+    /// non-zero.
     ///
     /// # Panics
     ///
@@ -1054,9 +1056,10 @@ impl<'a> ImageIntrinsicsList<'a> {
     /// adjusted image's camera index is past `cameras`.
     pub fn new(
         cameras: &'a [CameraIntrinsics],
-        image_camera: &'a [u32],
+        image_camera: impl Into<Cow<'a, [u32]>>,
         adjustments: &[IntrinsicAdjustment],
     ) -> Self {
+        let image_camera = image_camera.into();
         assert!(
             adjustments.is_empty() || adjustments.len() == image_camera.len(),
             "adjustments must be empty or one per image"
@@ -1064,17 +1067,18 @@ impl<'a> ImageIntrinsicsList<'a> {
         if adjustments.iter().all(IntrinsicAdjustment::is_zero) {
             return Self {
                 intrinsics: Cow::Borrowed(cameras),
-                image_entry: Cow::Borrowed(image_camera),
+                image_entry: image_camera,
             };
         }
         let mut intrinsics = cameras.to_vec();
-        let mut image_entry = image_camera.to_vec();
-        for ((entry, &c), adjustment) in image_entry.iter_mut().zip(image_camera).zip(adjustments) {
+        let mut image_entry = image_camera.into_owned();
+        for (entry, adjustment) in image_entry.iter_mut().zip(adjustments) {
             if adjustment.is_zero() {
                 continue;
             }
+            let c = *entry as usize;
             *entry = intrinsics.len() as u32;
-            intrinsics.push(cameras[c as usize].with_adjustment(adjustment));
+            intrinsics.push(cameras[c].with_adjustment(adjustment));
         }
         Self {
             intrinsics: Cow::Owned(intrinsics),

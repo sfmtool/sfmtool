@@ -12,7 +12,7 @@ use sfmtool_sfmr_format::{
     parse_per_image_adjustment_names, DepthStatistics, RigFrameData, PER_IMAGE_ADJUSTMENT_NAMES,
 };
 
-use crate::camera::{CameraIntrinsics, ImageIntrinsicsList};
+use crate::camera::{CameraIntrinsics, ImageIntrinsicsList, IntrinsicAdjustment};
 use crate::reconstruction::bundle_adjust::is_posed;
 
 use super::SfmrImage;
@@ -156,26 +156,10 @@ impl ImageSet {
     /// Panics when an image with a non-zero adjustment names a camera past the
     /// cameras.
     pub fn image_intrinsics_list(&self) -> ImageIntrinsicsList<'_> {
-        let mut image_entry: Vec<u32> = self.images.iter().map(|i| i.camera_index).collect();
-        if self.images.iter().all(|i| i.intrinsic_adjustment.is_zero()) {
-            return ImageIntrinsicsList {
-                intrinsics: Cow::Borrowed(&self.cameras),
-                image_entry: Cow::Owned(image_entry),
-            };
-        }
-        let mut intrinsics = self.cameras.clone();
-        for (entry, image) in image_entry.iter_mut().zip(&self.images) {
-            if image.intrinsic_adjustment.is_zero() {
-                continue;
-            }
-            let camera = &self.cameras[image.camera_index as usize];
-            *entry = intrinsics.len() as u32;
-            intrinsics.push(camera.with_adjustment(&image.intrinsic_adjustment));
-        }
-        ImageIntrinsicsList {
-            intrinsics: Cow::Owned(intrinsics),
-            image_entry: Cow::Owned(image_entry),
-        }
+        let image_camera: Vec<u32> = self.images.iter().map(|i| i.camera_index).collect();
+        let adjustments: Vec<IntrinsicAdjustment> =
+            self.images.iter().map(|i| i.intrinsic_adjustment).collect();
+        ImageIntrinsicsList::new(&self.cameras, image_camera, &adjustments)
     }
 
     /// Which parts of camera `camera_index`'s intrinsics vary per image:
