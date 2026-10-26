@@ -656,8 +656,11 @@ class TestSwitchCameraModel:
         focal = np.asarray(value.focal_adjustments)
         offsets = np.asarray(value.principal_point_adjustments_xy)
         assert np.all(focal != 0.0)
-        # The adjustments average zero: the camera holds their mean.
-        assert abs(focal.mean()) < 1e-12
+        # The adjustments average zero: the camera holds their mean. The
+        # focal's mean is that of its log focal scale log(1 + focal), the
+        # geometric mean of 1 + focal.
+        log_focal = np.log1p(focal)
+        assert abs(log_focal.mean()) < 1e-12
         np.testing.assert_allclose(offsets.mean(axis=0), 0.0, atol=1e-12)
         camera = report["cameras"][0]
         assert (
@@ -667,7 +670,7 @@ class TestSwitchCameraModel:
         spread = camera["image_adjustments"]
         assert spread["images"] == len(focal)
         assert abs(spread["focal_mean"]) < 1e-12
-        assert spread["focal_std"] == pytest.approx(focal.std(), rel=1e-9)
+        assert spread["focal_std"] == pytest.approx(log_focal.std(), rel=1e-9)
         short = min(value.cameras[0].width, value.cameras[0].height)
         assert spread["principal_point_std"] == pytest.approx(
             tuple(offsets.std(axis=0) * short), rel=1e-9

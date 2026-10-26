@@ -178,6 +178,12 @@ const IMAGE_PP: CameraRelease = CameraRelease {
     ..CameraRelease::HELD
 };
 
+/// The release of each image's focal scale alone.
+const IMAGE_F: CameraRelease = CameraRelease {
+    image_focal: true,
+    ..CameraRelease::HELD
+};
+
 /// The release of each image's focal scale and principal point.
 const IMAGE_BOTH: CameraRelease = CameraRelease {
     image_focal: true,
@@ -188,9 +194,9 @@ const IMAGE_BOTH: CameraRelease = CameraRelease {
 #[test]
 fn image_adjustment_columns_match_a_central_difference() {
     // One image at the identity pose, read through its camera with an
-    // adjustment applied, and one point off the axis. The focal-scale column
-    // is checked on the models whose focal the kernel releases, the offset's
-    // on every model.
+    // adjustment applied, and one point off the axis. The log focal scale's
+    // column is checked on the models whose focal the kernel releases, the
+    // offset's on every model.
     let point = Vector3::new(0.3, -0.2, -5.0);
     let adjustment = IntrinsicAdjustment {
         focal: 0.012,
@@ -212,7 +218,6 @@ fn image_adjustment_columns_match_a_central_difference() {
             cy,
             f: cam.focal_lengths().0,
             f_image: image.focal_lengths().0,
-            s: adjustment.focal,
             m: f64::from(cam.width.min(cam.height)),
             opt_f: false,
             opt_k1: false,
@@ -262,7 +267,9 @@ fn image_adjustment_columns_match_a_central_difference() {
             let moved = |d: f64| {
                 let mut a = adjustment;
                 match k {
-                    0 => a.focal += d,
+                    // The focal's parameter is the log focal scale
+                    // `t = ln(1 + s)`, so the difference steps `t`.
+                    0 => a.focal = (a.focal.ln_1p() + d).exp_m1(),
                     1 => a.principal_point[0] += d,
                     _ => a.principal_point[1] += d,
                 }
@@ -323,7 +330,10 @@ fn planted_per_image_adjustments_are_recovered_about_their_mean() {
     // not zero: the focal 1% long and the principal point (6, −4) px off
     // centre on average. The solve starts every image at the shared camera
     // with no adjustment, and recovers each image's intrinsics: the camera
-    // takes the mean, and the adjustments end with a mean of zero.
+    // takes the mean, and the adjustments end with a mean of zero. The focal's
+    // mean is the geometric mean of `1 + s`, the mean of the log focal scale;
+    // the arithmetic mean differs from it by about `var(s)/2`, 2e-5 here,
+    // far beyond the tolerance.
     let truth = wide_pinhole(326.0, 236.0);
     let n_img = 20;
     let planted: Vec<IntrinsicAdjustment> = (0..n_img)
@@ -337,7 +347,7 @@ fn planted_per_image_adjustments_are_recovered_about_their_mean() {
     let start = wide_pinhole(320.0, 240.0);
     let out = run_image(&mut s, &start, &[], IMAGE_BOTH, None, &DEFAULT_SCHEDULE);
     let n = n_img as f64;
-    let scale = planted.iter().map(|a| 1.0 + a.focal).sum::<f64>() / n;
+    let scale = (planted.iter().map(|a| a.focal.ln_1p()).sum::<f64>() / n).exp();
     let mean = |k: usize| planted.iter().map(|a| a.principal_point[k]).sum::<f64>() / n;
     let (mx, my) = (mean(0), mean(1));
     // The camera holds the mean.
@@ -373,11 +383,15 @@ fn planted_per_image_adjustments_are_recovered_about_their_mean() {
             );
         }
     }
-    // The mean adjustment is zero, to rounding.
+    // The mean adjustment is zero, to rounding: the mean of the log focal
+    // scale, so the geometric mean of `1 + s` is one.
     let mean_of = |value: &dyn Fn(&IntrinsicAdjustment) -> f64| {
         out.image_adjustments.iter().map(value).sum::<f64>() / n
     };
-    assert!(mean_of(&|a| a.focal).abs() < 1e-14, "mean focal scale");
+    assert!(
+        mean_of(&|a| a.focal.ln_1p()).abs() < 1e-15,
+        "mean log focal scale"
+    );
     assert!(
         mean_of(&|a| a.principal_point[0]).abs() < 1e-15,
         "mean x offset"
@@ -606,6 +620,86 @@ fn a_narrow_prior_leaves_the_images_mean_free() {
 }
 
 #[test]
+fn a_narrow_focal_prior_leaves_the_images_mean_free() {
+    // Every image through the same focal, 3% longer than the starting
+    // camera's, under a fixed focal width far narrower than that, in one
+    // round. The prior is centred on the mean of the images' log focal scales
+    // rather than on zero, so the images move together and the re-centring
+    // hands their common scale to the camera.
+    let truth = wide_pinhole(320.0, 240.0);
+    let planted = vec![
+        IntrinsicAdjustment {
+            focal: 0.03,
+            principal_point: [0.0, 0.0],
+        };
+        20
+    ];
+    let mut s = per_image_scene(&truth, 20, 400, &planted, 0.3, 21, |_| 60);
+    perturb_poses(&mut s);
+    let options = ImagePriorOptions {
+        fixed: Some(ImagePriorWidths {
+            focal: 1e-5,
+            principal_point: 1e-5,
+        }),
+        ..ImagePriorOptions::default()
+    };
+    let out = run_image(
+        &mut s,
+        &truth,
+        &[],
+        IMAGE_F,
+        Some(&options),
+        &[BaSchedule {
+            trim_px: f64::INFINITY,
+            loss_scale: 1.0,
+        }],
+    );
+    let f = out.cameras[0].focal_lengths().0;
+    let want = truth.focal_lengths().0 * 1.03;
+    assert!(
+        (f / want - 1.0).abs() < 2e-3,
+        "focal {f}, the images' {want}"
+    );
+}
+
+#[test]
+fn the_derived_focal_width_recovers_a_planted_spread() {
+    // Forty images each seeing 60 points through its own focal, whose log
+    // focal scales are drawn with a spread of 1%, and half a pixel of noise.
+    // The derived focal width is that spread of the log focal scale, within
+    // what forty images can say about it.
+    let truth = wide_pinhole(320.0, 240.0);
+    let planted: Vec<IntrinsicAdjustment> = (0..40)
+        .map(|i| IntrinsicAdjustment {
+            focal: (0.01 * gaussian(i, 43)).exp_m1(),
+            principal_point: [0.0, 0.0],
+        })
+        .collect();
+    let n = planted.len() as f64;
+    let t: Vec<f64> = planted.iter().map(|a| a.focal.ln_1p()).collect();
+    let t_mean = t.iter().sum::<f64>() / n;
+    let tau = (t.iter().map(|x| (x - t_mean).powi(2)).sum::<f64>() / n).sqrt();
+    let mut s = per_image_scene(&truth, 40, 400, &planted, 0.5, 101, |_| 60);
+    perturb_poses(&mut s);
+    let out = run_image(
+        &mut s,
+        &wide_pinhole(320.0, 240.0),
+        &[],
+        IMAGE_F,
+        None,
+        &DEFAULT_SCHEDULE,
+    );
+    let prior = out.image_priors[0].expect("a per-image release");
+    let width = prior.widths.focal;
+    assert!(
+        (0.75 * tau..1.35 * tau).contains(&width),
+        "derived focal width {width}, planted spread {tau}"
+    );
+    assert_eq!(prior.spread.focal, width, "a width the clamp did not set");
+    assert!(prior.widths.principal_point.is_nan());
+}
+
+#[test]
 fn a_one_round_schedule_derives_once() {
     // A single round runs a second time under widths derived from the first,
     // so its prior is derived and the spread it came from is reported.
@@ -736,12 +830,17 @@ fn per_image_flags_with_nothing_released_per_image_change_nothing() {
 
 #[test]
 fn the_image_focal_guard_keeps_the_focal_positive() {
+    // The guard reads the log focal scale `t`: any finite `t` whose focal
+    // `f·exp(t)` is finite and above `1e-6`, so `1 + s = exp(t) > 0` always.
     assert!(image_focal_step_admissible(500.0, 0.0));
     assert!(image_focal_step_admissible(500.0, -0.9));
-    assert!(!image_focal_step_admissible(500.0, -1.0));
-    assert!(!image_focal_step_admissible(500.0, -1.5));
+    assert!(image_focal_step_admissible(500.0, -1.5));
+    assert!(image_focal_step_admissible(500.0, 2.0));
+    assert!(!image_focal_step_admissible(500.0, -25.0));
+    assert!(!image_focal_step_admissible(500.0, 800.0));
     assert!(!image_focal_step_admissible(500.0, f64::NAN));
     assert!(!image_focal_step_admissible(500.0, f64::INFINITY));
+    assert!(!image_focal_step_admissible(500.0, f64::NEG_INFINITY));
     assert!(!image_focal_step_admissible(1e-7, 0.0));
 }
 
@@ -863,4 +962,68 @@ fn the_derivation_undoes_the_prior_and_subtracts_the_noise() {
     );
     assert_eq!(one.principal_point, options.loose.principal_point);
     assert!(one_spread.principal_point.is_nan());
+}
+
+#[test]
+fn the_focal_width_is_derived_from_the_log_focal_scale() {
+    // The same deviations given once as each image's log focal scale
+    // `t = ln(1 + s)` and once as both axes of its principal-point offset, with
+    // the same variances and the same round's width: the derivation reads the
+    // focal through `t`, so the two spreads agree to rounding. The spread of
+    // 20% is wide enough that the stored scales `s` spread differently.
+    let tau = 0.2;
+    let sigma_noise = 0.5;
+    let samples = |focal: bool| -> Vec<(IntrinsicAdjustment, Option<Matrix3<f64>>)> {
+        (0..200)
+            .map(|i| {
+                let v = 0.01 * (0.5 + 0.75 * (jitter(i, 7) + 1.0));
+                let x = tau * gaussian(i, 50) + v.sqrt() * gaussian(i, 60);
+                let mut inv = Matrix3::zeros();
+                for k in 0..3 {
+                    inv[(k, k)] = v / (sigma_noise * sigma_noise);
+                }
+                let a = if focal {
+                    IntrinsicAdjustment {
+                        focal: x.exp_m1(),
+                        principal_point: [0.0, 0.0],
+                    }
+                } else {
+                    IntrinsicAdjustment {
+                        focal: 0.0,
+                        principal_point: [x, x],
+                    }
+                };
+                (a, Some(inv))
+            })
+            .collect()
+    };
+    let round = ImagePriorWidths {
+        focal: 0.1,
+        principal_point: 0.1,
+    };
+    let options = ImagePriorOptions::default();
+    let (_, of_focal) = derive_image_prior_widths(
+        &samples(true),
+        true,
+        false,
+        round,
+        sigma_noise,
+        sigma_noise,
+        &options,
+    );
+    let (_, of_pp) = derive_image_prior_widths(
+        &samples(false),
+        false,
+        true,
+        round,
+        sigma_noise,
+        sigma_noise,
+        &options,
+    );
+    assert!(
+        (of_focal.focal / of_pp.principal_point - 1.0).abs() < 1e-9,
+        "focal spread {}, the same deviations' {}",
+        of_focal.focal,
+        of_pp.principal_point
+    );
 }

@@ -843,9 +843,12 @@ impl PyEditedReconstruction {
     ///     image_prior: The widths of the prior that holds each image's
     ///         adjustment toward its camera's mean: a dict of ``loose`` and
     ///         ``floor`` (each a dict of ``focal`` and ``principal_point``,
-    ///         defaults 0.1 and 0.001; the principal point's in units of the
-    ///         image's short side) and ``fixed`` (such a dict, or ``None``,
-    ///         the default, to derive each camera's widths from the solve).
+    ///         defaults 0.1 and 0.001; the focal's of the log focal scale
+    ///         ``log(1 + s)``, read as a fraction, and the principal point's in
+    ///         units of the image's short side) and ``fixed`` (such a dict, or
+    ///         ``None``, the default, to derive each camera's widths from the
+    ///         solve). The focal scale is held and re-centred as its log, so
+    ///         the camera's focal takes the geometric mean of its images'.
     ///     releases: One entry per camera of the image set, in camera index order,
     ///         each a dict ``{"focal": bool, "distortion": bool,
     ///         "principal_point": bool, "image_focal": bool,
@@ -886,7 +889,8 @@ impl PyEditedReconstruction {
     ///     ``image_focal_released``, ``image_principal_point_released`` and
     ///     ``image_adjustments``: ``None`` where the camera released nothing
     ///     per image, and otherwise a dict of ``images``, ``focal_mean`` and
-    ///     ``focal_std`` (fractions), ``principal_point_mean`` and
+    ///     ``focal_std`` (of the log focal scale ``log(1 + s)``, the units of
+    ///     the prior's focal width, read as fractions), ``principal_point_mean`` and
     ///     ``principal_point_std`` (``(x, y)`` in pixels), ``prior`` and
     ///     ``spread`` (dicts of ``focal`` and ``principal_point``, ``NaN`` for
     ///     a parameter not released per image or not derived),

@@ -1896,14 +1896,15 @@ fn a_per_image_release_writes_each_image_back_and_reports_the_spread() {
             principal_point: true,
         }
     );
-    // Each posed image took a solved adjustment, and they average zero.
+    // Each posed image took a solved adjustment, and they average zero: the
+    // focal as its log focal scale `ln(1 + s)`.
     let posed = &out.image_set.images[..5];
     assert!(posed.iter().all(|i| !i.intrinsic_adjustment.is_zero()));
     let mean = |k: usize| {
         posed
             .iter()
             .map(|i| match k {
-                0 => i.intrinsic_adjustment.focal,
+                0 => i.intrinsic_adjustment.focal.ln_1p(),
                 _ => i.intrinsic_adjustment.principal_point[k - 1],
             })
             .sum::<f64>()
@@ -1959,6 +1960,13 @@ fn a_per_image_release_writes_each_image_back_and_reports_the_spread() {
         .collect();
     let sd = (xs.iter().map(|x| x * x).sum::<f64>() / 5.0).sqrt() * f64::from(IMG_H);
     assert!((spread.principal_point_std[0] - sd).abs() < 1e-9);
+    // The focal's is of the log focal scale `ln(1 + s)`, the prior's units.
+    let ts: Vec<f64> = posed
+        .iter()
+        .map(|i| i.intrinsic_adjustment.focal.ln_1p())
+        .collect();
+    let sd_t = (ts.iter().map(|t| t * t).sum::<f64>() / 5.0).sqrt();
+    assert!((spread.focal_std - sd_t).abs() < 1e-12);
 }
 
 #[test]
@@ -1996,7 +2004,7 @@ fn the_report_names_the_images_beyond_two_prior_widths() {
         assert!(near.image < 5, "the unposed image is not reported");
         let a = out.image_set.images[near.image].intrinsic_adjustment;
         let want = match near.parameter {
-            ImageAdjustmentParameter::Focal => a.focal.abs() / 0.002,
+            ImageAdjustmentParameter::Focal => a.focal.ln_1p().abs() / 0.002,
             ImageAdjustmentParameter::PrincipalPoint => {
                 a.principal_point[0].hypot(a.principal_point[1]) / 0.002
             }

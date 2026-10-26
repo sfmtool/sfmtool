@@ -521,12 +521,13 @@ impl CameraRelease {
 /// far, as a Gaussian's standard deviation, each image's adjustment is expected
 /// to lie from the mean of the camera's images.
 ///
-/// `focal` is the focal scale's width, a fraction like the scale itself;
-/// `principal_point` is the principal-point offset's, in the short-side unit
-/// `min(width, height)` and the same on both axes.
+/// `focal` is the width of the log focal scale `t = ln(1 + s)`, which reads as
+/// a fraction of the focal for small values, as the scale `s` does, since
+/// `t ≈ s`; `principal_point` is the principal-point offset's, in the
+/// short-side unit `min(width, height)` and the same on both axes.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ImagePriorWidths {
-    /// The focal scale's width, a fraction.
+    /// The width of the log focal scale `ln(1 + s)`, read as a fraction.
     pub focal: f64,
     /// The principal-point offset's width, in the short-side unit.
     pub principal_point: f64,
@@ -744,12 +745,12 @@ const BSPLINE_PP_CAM_COLS: usize = BSPLINE_CAM_COLS + 2;
 /// An image's pose columns: `δθ×3`, `δt×3`.
 const POSE_COLS: usize = 6;
 
-/// An image's intrinsic-adjustment columns, after its pose: the focal scale
-/// `s`, then the principal-point offset `a_x`, `a_y`, each in the image's own
-/// block of the reduced system.
+/// An image's intrinsic-adjustment columns, after its pose: the log focal scale
+/// `t = ln(1 + s)`, then the principal-point offset `a_x`, `a_y`, each in the
+/// image's own block of the reduced system.
 const IMG_ADJ_COLS: usize = 3;
 
-/// The focal scale's slot, relative to the start of an image's block in the
+/// The log focal scale's slot, relative to the start of an image's block in the
 /// reduced system; `a_x` and `a_y` follow it.
 const IMG_S_SLOT: usize = POSE_COLS;
 
@@ -839,12 +840,21 @@ const fn lens_block_width(n_coeffs: usize) -> usize {
     pp_slot(n_coeffs) + 2
 }
 
-/// Whether a candidate image focal scale is one a lens can have: finite, with
-/// `1 + s > 0`, and the image's focal `f·(1 + s)` finite and above `1e-6`, the
-/// counterpart of the shared focal's guard.
-fn image_focal_step_admissible(f: f64, s: f64) -> bool {
-    let f_image = f * (1.0 + s);
-    s.is_finite() && 1.0 + s > 0.0 && f_image.is_finite() && f_image > 1e-6
+/// Whether a candidate log focal scale `t = ln(1 + s)` is one a lens can have:
+/// finite, with the image's focal `f·(1 + s)` finite and above `1e-6`, the
+/// counterpart of the shared focal's guard. The focal is read through the
+/// stored scale `s = exp(t) − 1`, as the projection reads it, so `1 + s > 0`
+/// follows.
+fn image_focal_step_admissible(f: f64, t: f64) -> bool {
+    let f_image = f * (1.0 + t.exp_m1());
+    t.is_finite() && f_image.is_finite() && f_image > 1e-6
+}
+
+/// The log focal scale `t = ln(1 + s)` of a stored focal scale `s`, the
+/// parameter the per-image focal release solves, holds and re-centres.
+#[inline]
+fn log_focal_scale(s: f64) -> f64 {
+    s.ln_1p()
 }
 
 /// Whether a candidate principal point is one a lens can have: finite, and on
@@ -1078,7 +1088,11 @@ fn bspline_step_admissible(bspline: &[f64], d_max: f64) -> bool {
 /// in the round by a Gaussian prior whose widths `image_prior` chooses (`None`
 /// for [`ImagePriorOptions::default`], which derives them from the solve), and
 /// after every round the camera takes that mean while each image keeps its
-/// difference from it, which leaves every image's intrinsics as they were.
+/// difference from it, which leaves every image's intrinsics as they were. The
+/// focal scale `s` is solved, held and re-centred as its logarithm
+/// `t = ln(1 + s)`, since a focal scale is multiplicative: the mean it is held
+/// toward and re-centred by is the mean of `t`, the geometric mean of `1 + s`.
+/// It is stored and returned as `s`.
 /// The solved adjustments come back in [`BundleAdjustment::image_adjustments`]
 /// and each camera's widths in [`BundleAdjustment::image_priors`]. With
 /// neither flag on, or no camera releasing either, the solve is the one before
@@ -1826,8 +1840,6 @@ struct LinLens<'a> {
     /// The focal the observation is projected with, `f·(1 + s)` under the
     /// image's focal scale `s`, and `f` itself without one.
     f_image: f64,
-    /// The image's focal scale `s`; zero for a camera's own entry.
-    s: f64,
     /// The camera's short side `min(width, height)`, the unit of the
     /// principal-point offset.
     m: f64,
@@ -1967,13 +1979,14 @@ fn observation_blocks<const CAM_COLS: usize>(
         }
         if carries_image_cols(CAM_COLS) {
             if lens.opt_image_f {
-                // ∂(u, v)/∂s for the image's focal scale: the image's focal
-                // is `f·(1 + s)` (both focals on a two-focal model), a pure
-                // multiplier of the distorted coordinate, so the column is
-                // `f·x_d = (u − cx_i)/(1 + s)`, read about the image's own
+                // ∂(u, v)/∂t for the image's log focal scale
+                // `t = ln(1 + s)`: the image's focal is `f·exp(t)` (both
+                // focals on a two-focal model), a pure multiplier of the
+                // distorted coordinate, so the column is
+                // `f·exp(t)·x_d = u − cx_i`, read about the image's own
                 // principal point.
-                cam_j[(0, adj_c)] = (u - lens.cx) / (1.0 + lens.s);
-                cam_j[(1, adj_c)] = (v - lens.cy) / (1.0 + lens.s);
+                cam_j[(0, adj_c)] = u - lens.cx;
+                cam_j[(1, adj_c)] = v - lens.cy;
             }
             if lens.opt_image_pp {
                 // ∂(u, v)/∂(a_x, a_y) = m·I: the offset is in the short-side
@@ -2405,7 +2418,7 @@ struct ImageRoundResult {
     /// Per image of `images`, the inverse of its data-only block of the
     /// reduced system at the round's last linearisation (the points eliminated,
     /// no prior, no damping), over the adjustment slots its camera releases, in
-    /// the order focal scale, `a_x`, `a_y`, and zero in a slot its camera does
+    /// the order log focal scale, `a_x`, `a_y`, and zero in a slot its camera does
     /// not release. Multiplied by `σ_n²` it is the adjustments' covariance with
     /// every other image and the shared camera held. `None` where the block is
     /// not positive definite, or the camera releases nothing per image.
@@ -2413,11 +2426,11 @@ struct ImageRoundResult {
 }
 
 /// Component `k` of an adjustment in the order of an image's adjustment slots:
-/// the focal scale, `a_x`, `a_y`.
+/// the log focal scale `ln(1 + s)`, `a_x`, `a_y`.
 #[inline]
 fn adj_component(a: &IntrinsicAdjustment, k: usize) -> f64 {
     match k {
-        0 => a.focal,
+        0 => log_focal_scale(a.focal),
         1 => a.principal_point[0],
         _ => a.principal_point[1],
     }
@@ -2425,7 +2438,8 @@ fn adj_component(a: &IntrinsicAdjustment, k: usize) -> f64 {
 
 /// The prior's cost on the compact adjustments `adj`: per camera with a
 /// per-image release, `w·Σ (x_i − x̄)²` over its images `cam_imgs[j]` for each
-/// released parameter, with `w = σ_n²/σ²`.
+/// released parameter (the focal as its log scale, [`adj_component`]), with
+/// `w = σ_n²/σ²`.
 fn image_prior_cost(
     lenses: &[Lens<'_>],
     cam_imgs: &[Vec<usize>],
@@ -2440,11 +2454,11 @@ fn image_prior_cost(
         let n = imgs.len() as f64;
         let [w_f, w_pp] = weights[j];
         if lenses[j].opt_image_f {
-            let mean = imgs.iter().map(|&c| adj[c].focal).sum::<f64>() / n;
+            let mean = imgs.iter().map(|&c| adj_component(&adj[c], 0)).sum::<f64>() / n;
             cost += w_f
                 * imgs
                     .iter()
-                    .map(|&c| (adj[c].focal - mean).powi(2))
+                    .map(|&c| (adj_component(&adj[c], 0) - mean).powi(2))
                     .sum::<f64>();
         }
         if lenses[j].opt_image_pp {
@@ -3056,7 +3070,6 @@ fn solve_lm<const CAM_COLS: usize>(
                         cy,
                         f: fs[j],
                         f_image,
-                        s,
                         m: f64::from(lenses[j].base.width.min(lenses[j].base.height)),
                         opt_f: lenses[j].opt_f,
                         opt_k1: lenses[j].opt_k1,
@@ -3564,10 +3577,11 @@ fn solve_lm<const CAM_COLS: usize>(
                 continue;
             };
             // Each image's candidate adjustment, and its guards: an image's
-            // focal scale keeps its focal positive and finite, and an image's
-            // principal point, where its camera releases one and the image's
-            // is not the shared one, stays on the image. A failure rejects the
-            // whole step.
+            // log focal scale stays finite and keeps its focal finite and
+            // positive, and an image's principal point, where its camera
+            // releases one and the image's is not the shared one, stays on the
+            // image. A failure rejects the whole step. The step is in the log
+            // focal scale `t`, and the stored scale is `s = exp(t) − 1`.
             let mut adj_cand = adj.clone();
             let mut image_ok = true;
             for (c, &j) in ci_cam.iter().enumerate() {
@@ -3575,11 +3589,12 @@ fn solve_lm<const CAM_COLS: usize>(
                 if image_cols {
                     let o = img_slot(c) + IMG_S_SLOT;
                     if lens.opt_image_f {
-                        adj_cand[c].focal += delta[o];
-                        if !image_focal_step_admissible(f_cand[j], adj_cand[c].focal) {
+                        let t = log_focal_scale(adj_cand[c].focal) + delta[o];
+                        if !image_focal_step_admissible(f_cand[j], t) {
                             image_ok = false;
                             break;
                         }
+                        adj_cand[c].focal = t.exp_m1();
                     }
                     if lens.opt_image_pp {
                         adj_cand[c].principal_point[0] += delta[o + 1];
@@ -3845,7 +3860,7 @@ fn solve_lm<const CAM_COLS: usize>(
 /// three rotation slots, the translation where `translation` says the image
 /// carries one, and the released adjustment slots. Inverting the whole block
 /// counts each adjustment's coupling with the same image's pose against it.
-/// The result is in the order focal scale, `a_x`, `a_y`, zero in a slot not
+/// The result is in the order log focal scale, `a_x`, `a_y`, zero in a slot not
 /// released. `None` where that block is not positive definite.
 fn image_adjustment_inv_info(
     h: &SMatrix<f64, 9, 9>,
@@ -4562,9 +4577,10 @@ fn image_priors_of(
 /// image of the camera keeps its difference from that mean, so that every
 /// image's intrinsics are unchanged and the mean adjustment over `solved` is
 /// zero. The principal point moves by the mean offset, `cx += mean(a_x)·m`;
-/// the focal is multiplied by the mean of `1 + s`, and each `1 + s` divided by
-/// it. Applied to every image of the camera, the ones the round did not solve
-/// included.
+/// the focal takes the mean `t̄` of the log focal scales `t = ln(1 + s)`,
+/// `f ← f·exp(t̄)` and `t −= t̄`, which multiplies the focal by the geometric
+/// mean of `1 + s` and divides each `1 + s` by it. Applied to every image of
+/// the camera, the ones the round did not solve included.
 fn recentre_adjustments(
     lenses: &mut [Lens<'_>],
     image_camera: &[u32],
@@ -4602,10 +4618,14 @@ fn recentre_adjustments(
             }
         }
         if lens.opt_image_f {
-            let scale = of_camera.iter().map(|&i| 1.0 + adj[i].focal).sum::<f64>() / n;
-            lens.f *= scale;
+            let mean = of_camera
+                .iter()
+                .map(|&i| log_focal_scale(adj[i].focal))
+                .sum::<f64>()
+                / n;
+            lens.f *= mean.exp();
             for &i in &images {
-                adj[i].focal = (1.0 + adj[i].focal) / scale - 1.0;
+                adj[i].focal = (log_focal_scale(adj[i].focal) - mean).exp_m1();
             }
         }
     }
@@ -4674,7 +4694,9 @@ fn robust_spread(dev: &[Vec<(f64, f64)>; 3], slots: &[usize], start: f64, floor:
 /// Derive one camera's prior widths for the next round from the round just
 /// finished: per released parameter, the robust spread of the images'
 /// deviations from their mean, with the round's prior pull undone and the
-/// measurement noise subtracted, clamped to `[floor, loose]`.
+/// measurement noise subtracted, clamped to `[floor, loose]`. The focal's
+/// parameter is the log focal scale `ln(1 + s)` ([`adj_component`]), the one
+/// the round solved and its prior held.
 ///
 /// `samples` holds each image of the camera the round solved: its adjustment,
 /// and the inverse `H_i⁻¹` of its data-only block over the adjustment slots
@@ -4729,7 +4751,7 @@ fn derive_image_prior_widths(
         inv_var(round.principal_point, principal_point),
         inv_var(round.principal_point, principal_point),
     );
-    // Per slot (focal scale, `a_x`, `a_y`): the de-shrunk deviation `d̂` of
+    // Per slot (log focal scale, `a_x`, `a_y`): the de-shrunk deviation `d̂` of
     // each image with a usable variance, and that variance `v`; and per
     // parameter kind how many images have one.
     let mut dev: [Vec<(f64, f64)>; 3] = [Vec::new(), Vec::new(), Vec::new()];

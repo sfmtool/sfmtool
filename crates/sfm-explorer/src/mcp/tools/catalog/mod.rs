@@ -58,7 +58,7 @@ fn prior_widths_schema(description: &str) -> Value {
             "focal": {
                 "type": "number",
                 "exclusiveMinimum": 0,
-                "description": "The focal scale's width, a fraction.",
+                "description": "The focal scale's width, of its log ln(1 + focal), read as a fraction.",
             },
             "principal_point": {
                 "type": "number",

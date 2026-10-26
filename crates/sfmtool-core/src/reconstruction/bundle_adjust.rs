@@ -420,13 +420,18 @@ pub struct CameraAdjustment {
 /// The statistics are over the camera's posed images. After the re-centring
 /// the mean is zero to rounding, so the standard deviations say how far the
 /// camera's lens moved between photographs as the solve found it.
+///
+/// The focal's statistics are of the log focal scale `t = ln(1 + s)`, the
+/// parameter the solve held and re-centred, in the prior's units: for small
+/// values `t` reads as a fraction of the focal, as `s` does.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ImageAdjustmentSpread {
     /// The camera's posed images.
     pub images: usize,
-    /// The mean of their focal scales, a fraction.
+    /// The mean of their log focal scales `ln(1 + s)`, read as a fraction.
     pub focal_mean: f64,
-    /// The standard deviation of their focal scales, a fraction.
+    /// The standard deviation of their log focal scales `ln(1 + s)`, read as
+    /// a fraction.
     pub focal_std: f64,
     /// The mean of their principal-point offsets, `[x, y]` in pixels.
     pub principal_point_mean: [f64; 2],
@@ -456,8 +461,8 @@ pub struct NearPrior {
     pub image: usize,
     /// Which of its adjustments.
     pub parameter: ImageAdjustmentParameter,
-    /// How far from the mean, in prior widths: `|s − s̄|/σ` for the focal
-    /// scale, `‖a − ā‖/σ` for the principal-point offset.
+    /// How far from the mean, in prior widths: `|t − t̄|/σ` for the focal
+    /// scale, with `t = ln(1 + s)`, `‖a − ā‖/σ` for the principal-point offset.
     pub widths: f64,
 }
 
@@ -1074,13 +1079,13 @@ fn image_adjustment_spread(
             / n;
         (mean, var.sqrt())
     };
-    let (focal_mean, focal_std) = mean_std(&|a| a.focal);
+    let (focal_mean, focal_std) = mean_std(&|a| a.focal.ln_1p());
     let (x_mean, x_std) = mean_std(&|a| a.principal_point[0]);
     let (y_mean, y_std) = mean_std(&|a| a.principal_point[1]);
     let mut near_prior = Vec::new();
     for (&i, a) in images.iter().zip(&adjustments) {
         if release.image_focal {
-            let widths = (a.focal - focal_mean).abs() / prior.widths.focal;
+            let widths = (a.focal.ln_1p() - focal_mean).abs() / prior.widths.focal;
             if widths > 2.0 {
                 near_prior.push(NearPrior {
                     image: i,

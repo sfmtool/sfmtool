@@ -222,7 +222,9 @@ fn check_releases(
 ///         principal point outside its image is rejected.
 ///     opt_image_f: Release each image's focal scale, on the models ``opt_f``
 ///         admits. The camera's focal is held in the solve and takes the
-///         images' mean after every round.
+///         images' mean after every round. The scale is solved, held and
+///         re-centred as its log ``log(1 + focal)``, so that mean is the
+///         geometric mean of ``1 + focal``.
 ///     opt_image_pp: Release each image's principal-point offset, on any
 ///         model. The camera's principal point is held in the solve and takes
 ///         the images' mean after every round.
@@ -234,7 +236,8 @@ fn check_releases(
 ///         through its camera exactly.
 ///     image_prior: Optional dict choosing the widths of the prior on a
 ///         per-image release: ``loose`` and ``floor`` (each a dict of
-///         ``focal`` and ``principal_point``, defaults 0.1 and 0.001), and
+///         ``focal`` and ``principal_point``, defaults 0.1 and 0.001; the
+///         focal's of ``log(1 + focal)``, read as a fraction), and
 ///         ``fixed`` (such a dict, or ``None`` to derive the widths from the
 ///         solve, the default).
 ///     schedule: [(trim_px, loss_scale), ...] staged rounds

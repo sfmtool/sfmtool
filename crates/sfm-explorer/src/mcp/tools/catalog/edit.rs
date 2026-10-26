@@ -515,8 +515,9 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                             "description":
                                 "The widths of the prior that holds each image's focal scale and \
                                  principal-point offset toward the mean of its camera's images, \
-                                 the focal's a fraction and the principal point's a fraction of \
-                                 the image's short side. loose is the first round's widths and \
+                                 the focal's of the log focal scale ln(1 + focal), read as a \
+                                 fraction, and the principal point's a fraction of the \
+                                 image's short side. loose is the first round's widths and \
                                  the most a derived width may be (default 0.1 each), floor the \
                                  least (default 0.001 each), and fixed, when given, the widths \
                                  every round runs under, derived from nothing. Omitted, each \
