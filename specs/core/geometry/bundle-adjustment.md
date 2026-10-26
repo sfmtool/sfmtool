@@ -1307,6 +1307,10 @@ Python's point of view).
     moves the width by less than 15%;
   - images that do not vary derive the floor; `fixed` widths are used as given
     and nothing is derived; a one-round schedule derives once;
+  - images that share one offset, `(6, −4)` px from the starting camera's principal
+    point, solved in one round under a fixed width far narrower than it, move
+    together, and the camera ends within 1.5 px of their principal point: the
+    prior holds the images to their mean, not to zero;
   - an image with no observation keeps its intrinsics through the re-centring
     while its camera moves;
   - the shared and per-image release of one kind gives the per-image release's
