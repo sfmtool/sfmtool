@@ -277,6 +277,11 @@ fn a_nan_minority_stays_above_a_low_quantile() {
 /// Paths are relative to `crates/`.
 const MEDIAN_ALLOWLIST: &[(&str, &str, &str)] = &[
     (
+        "sfmtool-core/src/geometry/bundle_adjust.rs",
+        "weighted_median",
+        "a different operation: the median under per-sample weights, which the          per-image prior's derivation weighs each image's deviation by",
+    ),
+    (
         "sfmtool-core/src/numeric.rs",
         "median_in_place",
         "the shared median itself",
