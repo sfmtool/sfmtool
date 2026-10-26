@@ -229,7 +229,7 @@ When set, the command writes `sparse/{cameras,images,points3D,rigs,frames}.bin`
 into the output directory using the existing `colmap.io.save_colmap_binary`
 function (the same code path as `sfm to-colmap-bin`, so a camera with an
 adjusted image is written once per image, and a rig whose sensor camera would
-be split is refused; see
+be split is refused before any file is written; see
 [to-colmap-bin-command.md](to-colmap-bin-command.md#cameras)). Off by default —
 nerfstudio doesn't read these files for training, and skipping them keeps
 the output smaller.

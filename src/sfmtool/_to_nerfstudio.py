@@ -225,6 +225,12 @@ def export_to_nerfstudio(
                 f"Camera {i} ({cam.model}) has nonzero distortion. "
                 "Run `sfm undistort` first to produce a pinhole reconstruction."
             )
+    if include_colmap:
+        from .colmap.io import _colmap_cameras, _colmap_rig_frame_data
+
+        # Refuse a rig sensor camera the COLMAP export would split before any
+        # file is written, rather than after the images are placed.
+        _colmap_rig_frame_data(recon.rig_frame_data, _colmap_cameras(recon)[2])
 
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
