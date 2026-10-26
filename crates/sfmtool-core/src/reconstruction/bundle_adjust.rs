@@ -13,15 +13,17 @@
 
 use nalgebra::{Point3, UnitQuaternion, Vector3};
 
-use super::data::{ImageSet, SfmrReconstruction};
+use super::data::{ImageSet, PerImageAdjustments, SfmrReconstruction};
 
 use super::outermost_keypoint::{outermost_keypoints, KeypointReach};
 use crate::camera::distortion::bspline::MIN_BSPLINE_COEFFS;
 use crate::camera::{CameraIntrinsics, CameraModel, IntrinsicAdjustment};
-pub use crate::geometry::bundle_adjust::CameraRelease;
 use crate::geometry::bundle_adjust::{
     BaCameras, BaSchedule, DistanceReference, FreePointDecision, FreePointPolicy, PointConstraints,
     PointConstraintsError, DEFAULT_PROTECTED_LOSS_SCALE, DEFAULT_SCHEDULE,
+};
+pub use crate::geometry::bundle_adjust::{
+    CameraRelease, ImagePrior, ImagePriorOptions, ImagePriorWidths,
 };
 use crate::numeric::median_in_place;
 use crate::progress::Progress;
@@ -75,8 +77,17 @@ pub struct BundleAdjustOptions {
     ///   kernel's columns for it are exact everywhere. A step that would put
     ///   it off the image is rejected. It carries no prior: one pair of
     ///   numbers fitted from every image of the camera.
+    /// - [`CameraRelease::image_focal`] releases each image's focal scale, on
+    ///   the models the focal itself is accepted on, and
+    ///   [`CameraRelease::image_principal_point`] each image's principal-point
+    ///   offset, on every model. Either holds the camera's shared value of its
+    ///   kind in the solve and moves it to the images' mean after every round,
+    ///   so it is the same release with or without the shared one beside it,
+    ///   and a per-image focal satisfies the distortion's need for a focal.
+    ///   Each image is held toward that mean by the prior
+    ///   [`Self::image_prior`] chooses.
     ///
-    /// A camera with none of the three is held, so a rig can release some
+    /// A camera with none of the five is held, so a rig can release some
     /// cameras and hold the rest.
     /// With every camera held the solve still runs, and refines the poses and
     /// the points alone.
@@ -101,6 +112,9 @@ pub struct BundleAdjustOptions {
     /// says; [`FreePointPolicy::NO_CROSS`] keeps each point in the representation
     /// it has in the value. Ranged and held points keep theirs either way.
     pub free_points: FreePointPolicy,
+    /// The widths of the prior on a per-image release: derived for each
+    /// camera from the solve by default, or fixed.
+    pub image_prior: ImagePriorOptions,
 }
 
 impl Default for BundleAdjustOptions {
@@ -112,6 +126,7 @@ impl Default for BundleAdjustOptions {
             min_track: DEFAULT_MIN_TRACK,
             min_obs: DEFAULT_MIN_OBS,
             free_points: FreePointPolicy::default(),
+            image_prior: ImagePriorOptions::default(),
         }
     }
 }
@@ -175,6 +190,14 @@ pub enum BundleAdjustError {
     /// A camera in the solve was asked to release its focal, and its model is
     /// one the kernel's focal column is not exact for.
     FocalNotReleasable {
+        /// The camera's index among the reconstruction's cameras.
+        camera: usize,
+        /// Its model's name.
+        camera_model: &'static str,
+    },
+    /// A camera in the solve was asked to release each image's focal scale,
+    /// and its model is one the kernel's focal column is not exact for.
+    ImageFocalNotReleasable {
         /// The camera's index among the reconstruction's cameras.
         camera: usize,
         /// Its model's name.
@@ -253,11 +276,21 @@ impl std::fmt::Display for BundleAdjustError {
                  EQUIDISTANT_FISHEYE, SIMPLE_RADIAL_FISHEYE, SFMTOOL_FISHEYE and \
                  SFMTOOL_PINHOLE"
             ),
+            BundleAdjustError::ImageFocalNotReleasable {
+                camera,
+                camera_model,
+            } => write!(
+                f,
+                "the focal cannot be released per image on camera {camera}, a {camera_model}; \
+                 the adjustment's focal-scale column is exact for SIMPLE_PINHOLE, \
+                 EQUIDISTANT_FISHEYE, SIMPLE_RADIAL_FISHEYE, SFMTOOL_FISHEYE and \
+                 SFMTOOL_PINHOLE"
+            ),
             BundleAdjustError::DistortionWithoutFocal { camera } => write!(
                 f,
                 "the lens distortion of camera {camera} is released only together with its \
-                 focal length, because neither k1 nor the spline can change the scale at the \
-                 centre of the image"
+                 focal length, shared or per image, because neither k1 nor the spline can \
+                 change the scale at the centre of the image"
             ),
             BundleAdjustError::DistortionNotReleasable {
                 camera,
@@ -349,15 +382,21 @@ pub struct CameraAdjustment {
     /// Its focal before the solve, the model's first where it carries two.
     pub focal_before: f64,
     /// Its focal after the solve, which is the one before it unless the focal
-    /// was released.
+    /// was released, shared or per image.
     pub focal_after: f64,
-    /// Whether its focal was released.
+    /// Whether its focal was released: shared, or per image, which moves the
+    /// shared focal to the images' mean.
     pub focal_released: bool,
     /// Whether its lens distortion was released: `k1` on a
     /// `SIMPLE_RADIAL_FISHEYE`, the spline on a spline model.
     pub distortion_released: bool,
-    /// Whether its principal point was released.
+    /// Whether its principal point was released: shared, or per image, which
+    /// moves the shared principal point to the images' mean.
     pub principal_point_released: bool,
+    /// Whether each image's focal scale was released.
+    pub image_focal_released: bool,
+    /// Whether each image's principal-point offset was released.
+    pub image_principal_point_released: bool,
     /// Its principal point before the solve, `[cx, cy]` in pixels.
     pub principal_point_before: [f64; 2],
     /// Its principal point after the solve, which is the one before it unless
@@ -370,6 +409,76 @@ pub struct CameraAdjustment {
     /// nothing off disk, so the features detected in the images' `.sift` files
     /// are [`outermost_keypoints`]'s to report.
     pub outermost_observed: Option<KeypointReach>,
+    /// What the per-image release did to the camera's images; `None` when the
+    /// camera released no per-image parameter.
+    pub image_adjustments: Option<ImageAdjustmentSpread>,
+}
+
+/// How a camera's images' intrinsic adjustments ended after a per-image
+/// release, and the prior they were solved under.
+///
+/// The statistics are over the camera's posed images. After the re-centring
+/// the mean is zero to rounding, so the standard deviations say how far the
+/// camera's lens moved between photographs as the solve found it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImageAdjustmentSpread {
+    /// The camera's posed images.
+    pub images: usize,
+    /// The mean of their focal scales, a fraction.
+    pub focal_mean: f64,
+    /// The standard deviation of their focal scales, a fraction.
+    pub focal_std: f64,
+    /// The mean of their principal-point offsets, `[x, y]` in pixels.
+    pub principal_point_mean: [f64; 2],
+    /// The standard deviation of their principal-point offsets, `[x, y]` in
+    /// pixels.
+    pub principal_point_std: [f64; 2],
+    /// The widths the final round ran under: the focal scale's as a fraction,
+    /// the principal point's in the short-side unit. `NaN` for a parameter not
+    /// released per image.
+    pub prior: ImagePriorWidths,
+    /// Whether the widths were derived from the solve, rather than fixed.
+    pub prior_derived: bool,
+    /// The last derivation's spread before it was clamped, in the widths'
+    /// units: a width at the floor or the loose width with a spread beyond it
+    /// says the clamp decided it. `NaN` where nothing was derived.
+    pub spread: ImagePriorWidths,
+    /// The images whose adjustment ended more than two prior widths from the
+    /// camera's mean, the ones a person should look at.
+    pub near_prior: Vec<NearPrior>,
+}
+
+/// One image whose adjustment ended more than two prior widths from its
+/// camera's mean.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct NearPrior {
+    /// The image's index in the reconstruction.
+    pub image: usize,
+    /// Which of its adjustments.
+    pub parameter: ImageAdjustmentParameter,
+    /// How far from the mean, in prior widths: `|s − s̄|/σ` for the focal
+    /// scale, `‖a − ā‖/σ` for the principal-point offset.
+    pub widths: f64,
+}
+
+/// One of the parameters an intrinsic adjustment holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImageAdjustmentParameter {
+    /// The focal scale.
+    Focal,
+    /// The principal-point offset.
+    PrincipalPoint,
+}
+
+impl ImageAdjustmentParameter {
+    /// The parameter's name on every surface: `"focal"` or
+    /// `"principal_point"`, the words a camera's `per_image_adjustments` list.
+    pub fn name(self) -> &'static str {
+        match self {
+            ImageAdjustmentParameter::Focal => "focal",
+            ImageAdjustmentParameter::PrincipalPoint => "principal_point",
+        }
+    }
 }
 
 /// Bundle-adjust `recon`, returning the adjusted value and a report.
@@ -504,13 +613,19 @@ pub fn bundle_adjust(
         .collect();
     for ((&c, camera), release) in used.iter().zip(&source_cameras).zip(&releases) {
         let camera_index = c as usize;
-        if release.distortion && !release.focal {
+        if release.distortion && !release.focal && !release.image_focal {
             return Err(BundleAdjustError::DistortionWithoutFocal {
                 camera: camera_index,
             });
         }
         if release.focal && !focal_is_releasable(camera) {
             return Err(BundleAdjustError::FocalNotReleasable {
+                camera: camera_index,
+                camera_model: camera.model_name(),
+            });
+        }
+        if release.image_focal && !focal_is_releasable(camera) {
+            return Err(BundleAdjustError::ImageFocalNotReleasable {
                 camera: camera_index,
                 camera_model: camera.model_name(),
             });
@@ -529,13 +644,14 @@ pub fn bundle_adjust(
         .iter()
         .map(|&i| image_set.images[i].intrinsic_adjustment)
         .collect();
+    let releases_image = releases
+        .iter()
+        .any(|r| r.image_focal || r.image_principal_point);
     let ba_cameras = BaCameras {
         cameras: &source_cameras,
         image_camera: image_camera.as_slice().into(),
         releases: Some(&releases),
-        image_adjustments: image_adjustments
-            .iter()
-            .any(|a| !a.is_zero())
+        image_adjustments: (releases_image || image_adjustments.iter().any(|a| !a.is_zero()))
             .then(|| image_adjustments.as_slice().into()),
     };
 
@@ -664,6 +780,9 @@ pub fn bundle_adjust(
         false,
         false,
         false,
+        false,
+        false,
+        None,
         &[],
         options.max_iters,
         options.min_track,
@@ -696,9 +815,12 @@ pub fn bundle_adjust(
         // models, and the kernel decides each per camera.
         true,
         true,
-        // The principal point, which each camera's release narrows like the
-        // rest.
+        // The principal point and the per-image releases, which each camera's
+        // release narrows like the rest.
         true,
+        true,
+        true,
+        Some(&options.image_prior),
         &options.schedule,
         options.max_iters,
         options.min_track,
@@ -743,6 +865,21 @@ pub fn bundle_adjust(
     for (&c, solved_camera) in used.iter().zip(&solved.cameras) {
         out.image_set.cameras[c as usize] = solved_camera.clone();
     }
+    // A camera with a per-image release: each posed image takes its solved
+    // adjustment, each unposed image of the camera the shift its shared value
+    // took, so that its intrinsics are as they were, and the camera records the
+    // released parameters as varying per image.
+    if releases_image {
+        write_back_image_adjustments(
+            &mut out.image_set,
+            &posed,
+            &used,
+            &releases,
+            &source_cameras,
+            &solved.cameras,
+            &solved.image_adjustments,
+        );
+    }
     // The outermost observation of each camera's images, under the camera the
     // solve returned; the value carries inline keypoints, so nothing is read.
     let used_indexes: Vec<usize> = used.iter().map(|&c| c as usize).collect();
@@ -755,12 +892,18 @@ pub fn bundle_adjust(
             images: image_camera.iter().filter(|&&k| k as usize == j).count(),
             focal_before: source_cameras[j].focal_lengths().0,
             focal_after: solved.cameras[j].focal_lengths().0,
-            focal_released: releases[j].focal,
+            focal_released: releases[j].focal || releases[j].image_focal,
             distortion_released: releases[j].distortion,
-            principal_point_released: releases[j].principal_point,
+            principal_point_released: releases[j].principal_point
+                || releases[j].image_principal_point,
+            image_focal_released: releases[j].image_focal,
+            image_principal_point_released: releases[j].image_principal_point,
             principal_point_before: source_cameras[j].principal_point().into(),
             principal_point_after: solved.cameras[j].principal_point().into(),
             outermost_observed: outermost[j].observed,
+            image_adjustments: solved.image_priors[j].map(|prior| {
+                image_adjustment_spread(&out.image_set, c as usize, &posed, &releases[j], prior)
+            }),
         })
         .collect();
 
@@ -831,6 +974,144 @@ pub fn bundle_adjust(
         free_point_decision: solved.free_point_decision,
     };
     Ok((out, report))
+}
+
+/// Write a per-image release's answer into `image_set`, which already holds the
+/// solved cameras: each posed image of a camera that released a per-image
+/// parameter takes its solved adjustment from `solved` (one per posed image, in
+/// `posed` order); each unposed image of such a camera takes the shift the
+/// re-centring gave its camera's shared value, so that its intrinsics are the
+/// ones it had; and the camera's `per_image_adjustments` gains the released
+/// parameters. `used`, `releases`, `before` and `after` are per camera of the
+/// solve.
+fn write_back_image_adjustments(
+    image_set: &mut ImageSet,
+    posed: &[usize],
+    used: &[u32],
+    releases: &[CameraRelease],
+    before: &[CameraIntrinsics],
+    after: &[CameraIntrinsics],
+    solved: &[IntrinsicAdjustment],
+) {
+    let camera_count = image_set.cameras.len();
+    if image_set.per_image_adjustments.len() < camera_count {
+        image_set
+            .per_image_adjustments
+            .resize(camera_count, PerImageAdjustments::default());
+    }
+    let mut is_posed = vec![false; image_set.images.len()];
+    for (slot, &i) in posed.iter().enumerate() {
+        is_posed[i] = true;
+        let c = image_set.images[i].camera_index;
+        let j = used
+            .binary_search(&c)
+            .expect("a posed image's camera is in the solve");
+        let release = releases[j];
+        let adjustment = &mut image_set.images[i].intrinsic_adjustment;
+        if release.image_focal {
+            adjustment.focal = solved[slot].focal;
+        }
+        if release.image_principal_point {
+            adjustment.principal_point = solved[slot].principal_point;
+        }
+    }
+    for (j, (&c, release)) in used.iter().zip(releases).enumerate() {
+        if !(release.image_focal || release.image_principal_point) {
+            continue;
+        }
+        let flags = &mut image_set.per_image_adjustments[c as usize];
+        flags.focal |= release.image_focal;
+        flags.principal_point |= release.image_principal_point;
+        let m = f64::from(before[j].width.min(before[j].height));
+        let (f_before, f_after) = (before[j].focal_lengths().0, after[j].focal_lengths().0);
+        let (pp_before, pp_after) = (before[j].principal_point(), after[j].principal_point());
+        for (i, image) in image_set.images.iter_mut().enumerate() {
+            if is_posed[i] || image.camera_index != c {
+                continue;
+            }
+            let adjustment = &mut image.intrinsic_adjustment;
+            if release.image_focal {
+                adjustment.focal = (1.0 + adjustment.focal) * f_before / f_after - 1.0;
+            }
+            if release.image_principal_point {
+                adjustment.principal_point[0] -= (pp_after.0 - pp_before.0) / m;
+                adjustment.principal_point[1] -= (pp_after.1 - pp_before.1) / m;
+            }
+        }
+    }
+}
+
+/// The report of camera `camera`'s per-image release over its posed images in
+/// `image_set`, which holds the written-back adjustments, under the prior the
+/// kernel reports.
+fn image_adjustment_spread(
+    image_set: &ImageSet,
+    camera: usize,
+    posed: &[usize],
+    release: &CameraRelease,
+    prior: ImagePrior,
+) -> ImageAdjustmentSpread {
+    let m = {
+        let cam = &image_set.cameras[camera];
+        f64::from(cam.width.min(cam.height))
+    };
+    let images: Vec<usize> = posed
+        .iter()
+        .copied()
+        .filter(|&i| image_set.images[i].camera_index as usize == camera)
+        .collect();
+    let adjustments: Vec<IntrinsicAdjustment> = images
+        .iter()
+        .map(|&i| image_set.images[i].intrinsic_adjustment)
+        .collect();
+    let n = adjustments.len().max(1) as f64;
+    let mean_std = |value: &dyn Fn(&IntrinsicAdjustment) -> f64| {
+        let mean = adjustments.iter().map(value).sum::<f64>() / n;
+        let var = adjustments
+            .iter()
+            .map(|a| (value(a) - mean).powi(2))
+            .sum::<f64>()
+            / n;
+        (mean, var.sqrt())
+    };
+    let (focal_mean, focal_std) = mean_std(&|a| a.focal);
+    let (x_mean, x_std) = mean_std(&|a| a.principal_point[0]);
+    let (y_mean, y_std) = mean_std(&|a| a.principal_point[1]);
+    let mut near_prior = Vec::new();
+    for (&i, a) in images.iter().zip(&adjustments) {
+        if release.image_focal {
+            let widths = (a.focal - focal_mean).abs() / prior.widths.focal;
+            if widths > 2.0 {
+                near_prior.push(NearPrior {
+                    image: i,
+                    parameter: ImageAdjustmentParameter::Focal,
+                    widths,
+                });
+            }
+        }
+        if release.image_principal_point {
+            let widths = (a.principal_point[0] - x_mean).hypot(a.principal_point[1] - y_mean)
+                / prior.widths.principal_point;
+            if widths > 2.0 {
+                near_prior.push(NearPrior {
+                    image: i,
+                    parameter: ImageAdjustmentParameter::PrincipalPoint,
+                    widths,
+                });
+            }
+        }
+    }
+    ImageAdjustmentSpread {
+        images: images.len(),
+        focal_mean,
+        focal_std,
+        principal_point_mean: [x_mean * m, y_mean * m],
+        principal_point_std: [x_std * m, y_std * m],
+        prior: prior.widths,
+        prior_derived: prior.derived,
+        spread: prior.spread,
+        near_prior,
+    }
 }
 
 /// Whether a stored pose is one at all. Every `.sfmr` image row has the fields;

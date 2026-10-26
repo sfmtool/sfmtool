@@ -590,9 +590,12 @@ fn two_cameras_are_adjusted_each_through_its_own_lens() {
                 focal_released: false,
                 distortion_released: false,
                 principal_point_released: false,
+                image_focal_released: false,
+                image_principal_point_released: false,
                 principal_point_before: [320.0, 240.0],
                 principal_point_after: [320.0, 240.0],
                 outermost_observed: report.cameras[0].outermost_observed,
+                image_adjustments: None,
             },
             CameraAdjustment {
                 camera: 1,
@@ -602,9 +605,12 @@ fn two_cameras_are_adjusted_each_through_its_own_lens() {
                 focal_released: false,
                 distortion_released: false,
                 principal_point_released: false,
+                image_focal_released: false,
+                image_principal_point_released: false,
                 principal_point_before: [327.0, 235.0],
                 principal_point_after: [327.0, 235.0],
                 outermost_observed: report.cameras[1].outermost_observed,
+                image_adjustments: None,
             },
         ]
     );
@@ -1469,9 +1475,8 @@ fn a_distortion_release_without_the_focal_is_refused() {
         let options = releasing(&[
             CameraRelease::FOCAL,
             CameraRelease {
-                focal: false,
                 distortion: true,
-                principal_point: false,
+                ..CameraRelease::HELD
             },
         ]);
         let error = bundle_adjust(&truth, &options, &Progress::none()).err();
@@ -1693,9 +1698,8 @@ fn pp_error(camera: &CameraIntrinsics, target: (f64, f64)) -> f64 {
 
 /// The principal point alone.
 const PRINCIPAL_POINT: CameraRelease = CameraRelease {
-    focal: false,
-    distortion: false,
     principal_point: true,
+    ..CameraRelease::HELD
 };
 
 #[test]
@@ -1848,4 +1852,251 @@ fn held_image_adjustments_are_honoured_and_kept() {
         "median {} px with the adjustments dropped",
         report.median_residual_after
     );
+}
+
+// ── The per-image release ───────────────────────────────────────────────────
+
+/// Each image's focal scale and principal point released.
+const PER_IMAGE: CameraRelease = CameraRelease {
+    image_focal: true,
+    image_principal_point: true,
+    ..CameraRelease::HELD
+};
+
+/// The truth with every image's keypoints made through its own adjustment,
+/// handed to the solve with every adjustment zero and every pose and point
+/// perturbed, and image 5 unposed with an adjustment of its own.
+fn per_image_source() -> SfmrReconstruction {
+    use crate::reconstruction::data::adjusted_fixture::{adjust_and_reproject, varied_adjustment};
+    let mut source = truth();
+    adjust_and_reproject(&mut source, varied_adjustment);
+    let mut source = perturb(source);
+    for image in &mut source.image_set.images {
+        image.intrinsic_adjustment = Default::default();
+    }
+    source.image_set.images[5].translation_xyz = Vector3::new(f64::NAN, 0.0, 0.0);
+    source.image_set.images[5].intrinsic_adjustment = IntrinsicAdjustment {
+        focal: 0.02,
+        principal_point: [-0.01, 0.005],
+    };
+    source
+}
+
+#[test]
+fn a_per_image_release_writes_each_image_back_and_reports_the_spread() {
+    let source = per_image_source();
+    let options = BundleAdjustOptions::uniform(1, PER_IMAGE);
+    let (out, report) = bundle_adjust(&source, &options, &Progress::none()).expect("well posed");
+
+    // The camera records both parameters as varying per image.
+    assert_eq!(
+        out.image_set.camera_per_image_adjustments(0),
+        PerImageAdjustments {
+            focal: true,
+            principal_point: true,
+        }
+    );
+    // Each posed image took a solved adjustment, and they average zero.
+    let posed = &out.image_set.images[..5];
+    assert!(posed.iter().all(|i| !i.intrinsic_adjustment.is_zero()));
+    let mean = |k: usize| {
+        posed
+            .iter()
+            .map(|i| match k {
+                0 => i.intrinsic_adjustment.focal,
+                _ => i.intrinsic_adjustment.principal_point[k - 1],
+            })
+            .sum::<f64>()
+            / 5.0
+    };
+    for k in 0..3 {
+        assert!(mean(k).abs() < 1e-14, "mean adjustment {k}: {}", mean(k));
+    }
+    // The unposed image kept the intrinsics it had, while its camera moved.
+    let before = source.image_set.image_intrinsics(5).into_owned();
+    let after = out.image_set.image_intrinsics(5).into_owned();
+    assert_ne!(out.image_set.cameras[0], source.image_set.cameras[0]);
+    let (fb, fa) = (before.focal_lengths().0, after.focal_lengths().0);
+    assert!((fa / fb - 1.0).abs() < 1e-12, "focal {fb} → {fa}");
+    let (pb, pa) = (before.principal_point(), after.principal_point());
+    assert!((pa.0 - pb.0).abs() < 1e-9 && (pa.1 - pb.1).abs() < 1e-9);
+    // The solve fits the pixels the images' own intrinsics made.
+    assert!(
+        report.median_residual_after < 0.5 * report.median_residual_before,
+        "{report:?}"
+    );
+
+    let camera = &report.cameras[0];
+    assert!(camera.image_focal_released && camera.image_principal_point_released);
+    assert!(camera.focal_released && camera.principal_point_released);
+    assert!(!camera.distortion_released);
+    assert_eq!(
+        [
+            out.image_set.cameras[0].principal_point().0,
+            out.image_set.cameras[0].principal_point().1
+        ],
+        camera.principal_point_after
+    );
+    assert_eq!(
+        out.image_set.cameras[0].focal_lengths().0,
+        camera.focal_after
+    );
+    let spread = camera
+        .image_adjustments
+        .as_ref()
+        .expect("a per-image release");
+    assert_eq!(spread.images, 5);
+    assert!(spread.focal_mean.abs() < 1e-14);
+    assert!(spread.principal_point_mean.iter().all(|m| m.abs() < 1e-9));
+    assert!(spread.focal_std > 0.0);
+    assert!(spread.principal_point_std.iter().all(|&s| s > 0.0));
+    assert!(spread.prior_derived);
+    assert!(spread.prior.focal.is_finite() && spread.prior.principal_point.is_finite());
+    // The standard deviation is in pixels: the offsets' own in the short side.
+    let xs: Vec<f64> = posed
+        .iter()
+        .map(|i| i.intrinsic_adjustment.principal_point[0])
+        .collect();
+    let sd = (xs.iter().map(|x| x * x).sum::<f64>() / 5.0).sqrt() * f64::from(IMG_H);
+    assert!((spread.principal_point_std[0] - sd).abs() < 1e-9);
+}
+
+#[test]
+fn the_report_names_the_images_beyond_two_prior_widths() {
+    // Under fixed widths a fifth of the adjustments the pixels were made
+    // through, the images are reported beyond two widths, each at its own
+    // distance from the mean; under wide ones none is.
+    let source = per_image_source();
+    let narrow = BundleAdjustOptions {
+        image_prior: ImagePriorOptions {
+            fixed: Some(ImagePriorWidths {
+                focal: 0.002,
+                principal_point: 0.002,
+            }),
+            ..ImagePriorOptions::default()
+        },
+        ..BundleAdjustOptions::uniform(1, PER_IMAGE)
+    };
+    let wide = BundleAdjustOptions {
+        image_prior: ImagePriorOptions {
+            fixed: Some(ImagePriorWidths {
+                focal: 1.0,
+                principal_point: 1.0,
+            }),
+            ..ImagePriorOptions::default()
+        },
+        ..BundleAdjustOptions::uniform(1, PER_IMAGE)
+    };
+    let (out, report) = bundle_adjust(&source, &narrow, &Progress::none()).expect("well posed");
+    let spread = report.cameras[0].image_adjustments.clone().unwrap();
+    assert!(!spread.prior_derived);
+    assert_eq!(spread.prior.focal, 0.002);
+    for near in &spread.near_prior {
+        assert!(near.widths > 2.0);
+        assert!(near.image < 5, "the unposed image is not reported");
+        let a = out.image_set.images[near.image].intrinsic_adjustment;
+        let want = match near.parameter {
+            ImageAdjustmentParameter::Focal => a.focal.abs() / 0.002,
+            ImageAdjustmentParameter::PrincipalPoint => {
+                a.principal_point[0].hypot(a.principal_point[1]) / 0.002
+            }
+        };
+        assert!((near.widths / want - 1.0).abs() < 1e-6);
+    }
+    assert!(!spread.near_prior.is_empty());
+    let (_, report) = bundle_adjust(&source, &wide, &Progress::none()).expect("well posed");
+    assert!(report.cameras[0]
+        .image_adjustments
+        .as_ref()
+        .unwrap()
+        .near_prior
+        .is_empty());
+}
+
+#[test]
+fn a_per_image_principal_point_alone_keeps_the_focal_and_its_flags() {
+    let source = per_image_source();
+    let release = CameraRelease {
+        image_principal_point: true,
+        ..CameraRelease::HELD
+    };
+    let (out, report) = bundle_adjust(
+        &source,
+        &BundleAdjustOptions::uniform(1, release),
+        &Progress::none(),
+    )
+    .expect("well posed");
+    assert_eq!(
+        out.image_set.camera_per_image_adjustments(0),
+        PerImageAdjustments {
+            focal: false,
+            principal_point: true,
+        }
+    );
+    assert_eq!(
+        out.image_set.cameras[0].focal_lengths(),
+        source.image_set.cameras[0].focal_lengths()
+    );
+    for (a, b) in out.image_set.images.iter().zip(&source.image_set.images) {
+        assert_eq!(a.intrinsic_adjustment.focal, b.intrinsic_adjustment.focal);
+    }
+    let camera = &report.cameras[0];
+    assert!(!camera.focal_released && camera.principal_point_released);
+    let spread = camera.image_adjustments.as_ref().unwrap();
+    assert!(spread.prior.focal.is_nan() && spread.spread.focal.is_nan());
+}
+
+#[test]
+fn an_image_focal_release_on_a_model_that_cannot_take_one_is_refused() {
+    let truth = truth_through(vec![pinhole(), opencv_fisheye()], |i| (i % 2) as u32);
+    let options = releasing(&[
+        CameraRelease::HELD,
+        CameraRelease {
+            image_focal: true,
+            ..CameraRelease::HELD
+        },
+    ]);
+    let error = bundle_adjust(&truth, &options, &Progress::none()).err();
+    assert_eq!(
+        error,
+        Some(BundleAdjustError::ImageFocalNotReleasable {
+            camera: 1,
+            camera_model: "OPENCV_FISHEYE",
+        })
+    );
+    let message = error.unwrap().to_string();
+    assert!(
+        message.contains("camera 1") && message.contains("per image"),
+        "{message}"
+    );
+}
+
+#[test]
+fn a_distortion_release_beside_a_per_image_focal_is_accepted() {
+    let source = perturb(truth_through(vec![spline_fisheye(vec![0.0; 4])], |_| 0));
+    let release = CameraRelease {
+        distortion: true,
+        image_focal: true,
+        ..CameraRelease::HELD
+    };
+    let (_, report) = bundle_adjust(
+        &source,
+        &BundleAdjustOptions::uniform(1, release),
+        &Progress::none(),
+    )
+    .expect("a per-image focal stands for the focal");
+    assert!(report.cameras[0].distortion_released);
+    assert!(report.cameras[0].focal_released);
+}
+
+#[test]
+fn a_solve_with_no_per_image_release_reports_no_spread() {
+    let (out, report) = bundle_adjust(
+        &perturbed(),
+        &BundleAdjustOptions::uniform(1, CameraRelease::FOCAL),
+        &Progress::none(),
+    )
+    .expect("well posed");
+    assert!(report.cameras[0].image_adjustments.is_none());
+    assert!(out.image_set.per_image_adjustments.is_empty());
 }

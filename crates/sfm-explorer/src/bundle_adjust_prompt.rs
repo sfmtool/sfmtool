@@ -283,6 +283,7 @@ impl Pending {
             focal,
             distortion: focal && row.distortion && gate.distortion_refusal.is_none(),
             principal_point: row.principal_point,
+            ..CameraRelease::HELD
         }
     }
 

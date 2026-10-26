@@ -1272,6 +1272,9 @@ fn adjustment(
             [1020.0, 768.0]
         },
         outermost_observed: None,
+        image_focal_released: false,
+        image_principal_point_released: false,
+        image_adjustments: None,
     }
 }
 

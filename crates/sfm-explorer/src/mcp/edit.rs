@@ -446,6 +446,7 @@ pub(super) fn bundle_adjust(
             principal_point: entry
                 .release_principal_point
                 .unwrap_or(defaults.principal_point),
+            ..defaults
         };
     }
     options.releases = releases;

@@ -904,6 +904,7 @@ impl PyEditedReconstruction {
                     focal: opt_f,
                     distortion: opt_distortion,
                     principal_point: opt_pp,
+                    ..CameraRelease::HELD
                 };
                 value.image_set.cameras.len()
             ],
@@ -926,6 +927,7 @@ impl PyEditedReconstruction {
             free_points: FreePointPolicy {
                 cross: free_points_cross,
             },
+            image_prior: Default::default(),
         };
         let (next, report) = py
             .detach(|| core_bundle_adjust(&value, &options, &Progress::none()))
