@@ -231,36 +231,139 @@ class TestOtherWriters:
         with pytest.raises(ValueError, match="per-image intrinsic adjustments"):
             densify_reconstruction(recon)
 
-    def test_undistort_writes_each_image_through_its_own_intrinsics(
-        self, seoul_bull_workspace, tmp_path
-    ):
-        from sfmtool._undistort_images import undistort_reconstruction_images
 
+def _undistort(recon, output_dir):
+    from sfmtool._undistort_images import undistort_reconstruction_images
+
+    _, _, sfmr_path = undistort_reconstruction_images(
+        recon=recon, output_dir=output_dir, resampling_filter="bilinear"
+    )
+    return SfmrReconstruction.load(Path(sfmr_path))
+
+
+def _retake_with_adjustment(recon, i):
+    """Rewrite image ``i``'s pixels and ``.sift`` keypoints in ``recon``'s
+    workspace as if its camera had taken it with the test adjustment, and
+    return the image's camera and adjusted intrinsics.
+
+    Both go from the camera's intrinsics to the adjusted ones, so the image is
+    one that the adjusted reconstruction describes exactly.
+    """
+    from sfmtool.fileio import read_image_rgb, write_image_rgb
+    from sfmtool.flow import WarpMap
+    from sfmtool.sift.file import SiftReader, get_sift_path_from_recon, write_sift
+
+    camera = recon.cameras[int(recon.camera_indexes[i])]
+    adjusted = camera.with_adjustment(focal=FOCAL, principal_point=PRINCIPAL_POINT)
+    name = recon.image_names[i]
+
+    image_path = Path(recon.workspace_dir) / name
+    image = read_image_rgb(image_path)
+    warp = WarpMap.from_cameras(src=camera, dst=adjusted)
+    write_image_rgb(image_path, warp.remap_bilinear(image))
+
+    sift_path = get_sift_path_from_recon(recon, name)
+    with SiftReader(sift_path) as reader:
+        feature_tool_metadata = reader.feature_tool_metadata
+        metadata = reader.metadata
+        positions = reader.read_positions().astype(np.float64)
+        affine_shapes = reader.read_affine_shapes()
+        descriptors = reader.read_descriptors()
+        thumbnail = reader.read_thumbnail()
+    positions = adjusted.project_batch(camera.unproject_batch(positions))
+    write_sift(
+        sift_path,
+        feature_tool_metadata,
+        metadata,
+        positions.astype(np.float32),
+        affine_shapes,
+        descriptors,
+        thumbnail,
+    )
+    return camera, adjusted
+
+
+class TestUndistort:
+    """Undistortion removes each image's adjustment along with its distortion:
+    every image of a camera is written through the camera's one pinhole."""
+
+    def test_the_output_has_no_adjustments(self, seoul_bull_workspace, tmp_path):
         recon = _adjusted(SfmrReconstruction.load(seoul_bull_workspace))
-        _, _, sfmr_path = undistort_reconstruction_images(
-            recon=recon, output_dir=tmp_path / "undistorted"
-        )
-        out = SfmrReconstruction.load(Path(sfmr_path))
+        out = _undistort(recon, tmp_path / "undistorted")
 
-        # The pinhole camera varies what its source camera varied, and every
-        # image keeps its adjustment.
-        assert out.per_image_adjustments == [BOTH]
-        assert out.focal_adjustments.tobytes() == recon.focal_adjustments.tobytes()
-        assert (
-            out.principal_point_adjustments_xy.tobytes()
-            == recon.principal_point_adjustments_xy.tobytes()
-        )
-        assert out.image_intrinsics(2) == out.cameras[0].with_adjustment(
-            focal=FOCAL, principal_point=PRINCIPAL_POINT
-        )
+        assert out.per_image_adjustments == [[]]
+        assert out.focal_adjustments is None
+        assert out.principal_point_adjustments_xy is None
+        assert out.image_intrinsics(2) == out.cameras[0]
 
-        # Image 2's features moved through its own intrinsics into its own
-        # pinhole, so each observation sits as far from its point as before.
-        # Through the shared camera they would be off by about the offset,
-        # 2.7 px on this 270 px short side.
+        # Image 2's keypoints were read through its own intrinsics, which do
+        # not describe them here (the image was not retaken), so each
+        # observation stays as far from its point as it was: about the offset,
+        # 2.7 px on this 270 px short side. Read through the shared camera they
+        # would sit at the unadjusted error instead.
         before = np.nanmedian(recon.compute_observation_reprojection_errors(2)[:, 1])
         after = np.nanmedian(out.compute_observation_reprojection_errors(2)[:, 1])
+        assert before > 1.0
         assert after == pytest.approx(before, abs=0.3)
+
+    def test_an_adjusted_image_is_warped_into_the_shared_pinhole(
+        self, seoul_bull_workspace, tmp_path
+    ):
+        from sfmtool.fileio import read_image_rgb
+        from sfmtool.flow import WarpMap
+        from sfmtool.sift.file import SiftReader, get_sift_path_from_recon
+
+        plain = SfmrReconstruction.load(seoul_bull_workspace)
+        plain_out = _undistort(plain, tmp_path / "plain")
+
+        # Image 2 retaken with the adjustment, and a reconstruction that says
+        # so: its undistortion should be the plain image's.
+        camera, _ = _retake_with_adjustment(plain, 2)
+        recon = _adjusted(plain)
+        out = _undistort(recon, tmp_path / "adjusted")
+
+        assert out.cameras == plain_out.cameras
+        assert out.per_image_adjustments == [[]]
+        assert out.focal_adjustments is None
+
+        # Each keypoint of image 2 lands where the shared pinhole projects it,
+        # which is where the plain run put it.
+        name = recon.image_names[2]
+        with SiftReader(get_sift_path_from_recon(out, name)) as reader:
+            positions = reader.read_positions()
+        with SiftReader(get_sift_path_from_recon(plain_out, name)) as reader:
+            plain_positions = reader.read_positions()
+        assert positions.shape == plain_positions.shape
+        np.testing.assert_allclose(positions, plain_positions, atol=1e-3)
+
+        # So every observation reprojects through its camera's pinhole as it
+        # did in the plain run.
+        def by_feature(errors):
+            return errors[np.argsort(errors[:, 0], kind="stable")]
+
+        for i in range(out.image_count):
+            errors = by_feature(out.compute_observation_reprojection_errors(i))
+            plain_errors = by_feature(
+                plain_out.compute_observation_reprojection_errors(i)
+            )
+            np.testing.assert_allclose(errors, plain_errors, atol=1e-3)
+
+        # Image 2's pixels match the plain run's, away from the border the
+        # retake left black. Warping it as if it had no adjustment puts its
+        # content a few pixels off.
+        pixels = read_image_rgb(Path(out.workspace_dir) / name).astype(np.float64)
+        expected = read_image_rgb(Path(plain_out.workspace_dir) / name).astype(
+            np.float64
+        )
+        retaken = read_image_rgb(Path(recon.workspace_dir) / name)
+        unadjusted_warp = WarpMap.from_cameras(src=camera, dst=out.cameras[0])
+        misread = unadjusted_warp.remap_bilinear(retaken).astype(np.float64)
+        h, w = pixels.shape[:2]
+        inner = (slice(h // 8, h - h // 8), slice(w // 8, w - w // 8))
+        difference = np.mean(np.abs(pixels[inner] - expected[inner]))
+        misread_difference = np.mean(np.abs(misread[inner] - expected[inner]))
+        # About 2.5 against 14 grey levels here.
+        assert difference < 0.3 * misread_difference
 
 
 class TestMerge:

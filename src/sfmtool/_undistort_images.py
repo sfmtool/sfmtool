@@ -12,9 +12,10 @@ For each image in a reconstruction, this module:
 5. Writes a workspace config (.sfm-workspace.json)
 
 Each image is read through its own intrinsics, its camera's with its intrinsic
-adjustment applied, and written through its camera's pinhole with the same
-adjustment applied, so the undistorted reconstruction keeps every image's
-adjustment and each camera's ``per_image_adjustments``.
+adjustment applied, and written through its camera's pinhole, which has no
+adjustment. Undistortion removes the adjustment along with the distortion, so
+the undistorted reconstruction has no adjustments and no camera lists any in
+``per_image_adjustments``.
 """
 
 import json
@@ -266,8 +267,6 @@ def undistort_reconstruction_images(
     image_names = recon.image_names
     cameras_meta = recon.cameras
     camera_indexes = recon.camera_indexes
-    focal_adjustments = recon.focal_adjustments
-    principal_point_adjustments = recon.principal_point_adjustments_xy
 
     # The source features are the ones the reconstruction was built from, as
     # its metadata records them, not whatever the workspace config names now.
@@ -305,8 +304,8 @@ def undistort_reconstruction_images(
     }
 
     # Build pinhole cameras and warp maps per camera (not per image). An image
-    # with an intrinsic adjustment has a warp map of its own, built for it and
-    # not kept.
+    # with an intrinsic adjustment is warped from a source of its own into its
+    # camera's pinhole, so its warp map is built for it and not kept.
     pinhole_cameras = {}
     warp_maps = {}
 
@@ -337,12 +336,6 @@ def undistort_reconstruction_images(
         # camera's with the image's intrinsic adjustment applied.
         cam_idx = camera_indexes[i]
         shared_cam = cameras_meta[cam_idx]
-        adjustment = (
-            0.0 if focal_adjustments is None else float(focal_adjustments[i]),
-            (0.0, 0.0)
-            if principal_point_adjustments is None
-            else tuple(float(v) for v in principal_point_adjustments[i]),
-        )
         cam_meta = recon.image_intrinsics(i)
 
         # Load the image as RGB, or as RGBA when the file has an alpha channel
@@ -353,7 +346,9 @@ def undistort_reconstruction_images(
         height, width = image.shape[:2]
 
         # Build (or reuse) the pinhole camera for this camera index, fitted to
-        # the shared camera.
+        # the shared camera. It is not fitted to each image's intrinsics: an
+        # image with a principal-point offset loses a sliver on one side
+        # (--fit inside) or shows a slightly wider border there (--fit outside).
         if cam_idx not in pinhole_cameras:
             if fit == "outside":
                 pinhole = shared_cam.best_fit_outside_pinhole(width, height)
@@ -365,20 +360,15 @@ def undistort_reconstruction_images(
             _print_camera_params("Original", shared_cam)
             _print_camera_params("Undistorted", pinhole)
 
-        # The pinhole this image is written through: its camera's, with the
-        # image's adjustment applied. Both principal points move by the same
-        # number of pixels and both focals scale alike, so the pinhole's fit to
-        # the image holds to within how much the distortion changes over the
-        # offset.
+        # Every image of the camera is written through its pinhole, with no
+        # adjustment: the warp from the image's own intrinsics removes the
+        # adjustment along with the distortion.
         pinhole = pinhole_cameras[cam_idx]
-        if adjustment == (0.0, (0.0, 0.0)):
+        if cam_meta == shared_cam:
             if cam_idx not in warp_maps:
                 warp_maps[cam_idx] = WarpMap.from_cameras(src=cam_meta, dst=pinhole)
             warp = warp_maps[cam_idx]
         else:
-            pinhole = pinhole.with_adjustment(
-                focal=adjustment[0], principal_point=adjustment[1]
-            )
             warp = WarpMap.from_cameras(src=cam_meta, dst=pinhole)
 
         # Step 1: Warp the image
@@ -550,11 +540,6 @@ def undistort_reconstruction_images(
         rig_frame_data = dict(rig_frame_data)
         rig_frame_data["sensor_camera_indexes"] = new_sensor_cam_idxs
 
-    # Each pinhole camera varies per image what its source camera varied, and
-    # each image keeps its adjustment.
-    old_flags = recon.per_image_adjustments
-    new_flags = [old_flags[idx] for idx in sorted_cam_idxs]
-
     # === .sfmr metadata ===
     try:
         from importlib.metadata import version as get_version
@@ -612,13 +597,9 @@ def undistort_reconstruction_images(
         metadata=metadata,
         rig_frame_data=rig_frame_data,
     )
-    # A column goes with a camera that lists its parameter; a camera no image
-    # used is not written, and neither is a column only it listed.
-    sfmr_dict["per_image_adjustments"] = new_flags
-    if any("focal" in f for f in new_flags):
-        sfmr_dict["focal_adjustments"] = focal_adjustments
-    if any("principal_point" in f for f in new_flags):
-        sfmr_dict["principal_point_adjustments_xy"] = principal_point_adjustments
+    # The images were warped into their cameras' pinholes, so no image has an
+    # adjustment: the dict carries no adjustment columns and no camera's
+    # per_image_adjustments, and the output reads like an unadjusted file.
 
     sfmr_out_dir = output_dir / "sfmr"
     sfmr_out_dir.mkdir(parents=True, exist_ok=True)
