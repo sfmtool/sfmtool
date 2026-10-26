@@ -203,7 +203,8 @@ far_z  = length_scale * frustum_size_multiplier     (stub depth)
 ```
 
 The image's intrinsics (fx, fy, the principal point, width, height) determine
-the opening angle and aspect ratio of each pyramid. `frustum_size_multiplier` defaults to `0.5`.
+the opening angle and aspect ratio of each pyramid. `frustum_size_multiplier`
+defaults to `0.5`.
 
 Frustum geometry is re-uploaded when any of these change:
 - `length_scale` (UI slider)

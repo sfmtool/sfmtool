@@ -1525,12 +1525,13 @@ The zoom is pure geometry: the patch, the observation's image intrinsics (its
 camera with the image's intrinsic adjustment applied) and pose, and where the
 observation sits. The tile, its hover view and the crop's outline are warped
 and projected through the same image intrinsics, so an adjusted image's row
-shows the photograph as that image's lens took it. `tile::patch_jacobian` reads it with core's
-`camera::warp_map::patch_grid_jacobian` at `R` grid px a side, with no photograph,
-and the body caches the answer per row beside the tiles, dropping it whenever it
-drops them (a step on the track, or the reconstruction leaving the scene). So a
-row whose photograph is still decoding, or cannot be read, prints its zoom all
-the same and keeps its place when the rows are ordered by *Zoom*, and the table
+shows the photograph as that image's lens took it. `tile::patch_jacobian` reads
+it with core's `camera::warp_map::patch_grid_jacobian` at `R` grid px a side,
+with no photograph, and the body caches the answer per row beside the tiles,
+dropping it whenever it drops them (a step on the track, or the reconstruction
+leaving the scene). So a row whose photograph is still decoding, or cannot be
+read, prints its zoom all the same and keeps its place when the rows are
+ordered by *Zoom*, and the table
 and the wire, which has no photograph to warp, always give the same numbers. A
 patch whose centre projects has a zoom even where the middle of its tile is off
 the photograph: what the zoom describes is the warp, which extends past the

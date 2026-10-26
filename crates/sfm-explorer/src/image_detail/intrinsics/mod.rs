@@ -134,7 +134,7 @@ impl ImageIntrinsicsKey {
     }
 
     /// The image's intrinsic adjustment.
-    pub(crate) fn adjustment(&self) -> IntrinsicAdjustment {
+    fn adjustment(&self) -> IntrinsicAdjustment {
         IntrinsicAdjustment {
             focal: f64::from_bits(self.adjustment[0]),
             principal_point: [
@@ -531,7 +531,7 @@ fn draw_legend(painter: &egui::Painter, panel: Rect, lines: &[String]) -> Option
 /// The focal scale is a percentage of the camera's focal. The principal-point
 /// offset is in pixels and in percent of the image's short side, the unit it
 /// is stored in, read off `camera`'s size.
-pub(super) fn adjustment_lines(
+fn adjustment_lines(
     varies: PerImageAdjustments,
     adjustment: &IntrinsicAdjustment,
     camera: &CameraIntrinsics,
