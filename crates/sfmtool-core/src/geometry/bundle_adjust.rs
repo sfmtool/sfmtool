@@ -445,12 +445,15 @@ pub struct BaCameras<'a> {
     /// Each image's intrinsic adjustment, one per image, or `None` for every
     /// image read through its camera exactly.
     ///
-    /// The solve holds them: every observation is projected, differentiated,
-    /// trimmed and re-estimated through its camera with its image's adjustment
-    /// applied, while a released focal, distortion or principal point is still
-    /// the camera's shared one, the adjustment applied on top of it. A length
-    /// other than the image count is a caller error, checked with the others.
-    /// All-zero adjustments are the same solve as `None`, to the bit.
+    /// Every observation is projected, differentiated, trimmed and re-estimated
+    /// through its camera with its image's adjustment applied, while a released
+    /// focal, distortion or principal point is still the camera's shared one,
+    /// the adjustment applied on top of it. The solve holds the adjustments
+    /// unless the image's camera releases them per image (`opt_image_f`,
+    /// `opt_image_pp`), and returns them in
+    /// [`BundleAdjustment::image_adjustments`]. A length other than the image
+    /// count is a caller error, checked with the others. All-zero adjustments
+    /// with no per-image release are the same solve as `None`, to the bit.
     pub image_adjustments: Option<Cow<'a, [IntrinsicAdjustment]>>,
 }
 
@@ -470,7 +473,7 @@ pub struct CameraRelease {
     /// Release the principal point, `(cx, cy)`, on any model.
     pub principal_point: bool,
     /// Release each image's focal scale, the `focal` of its
-    /// [`IntrinsicAdjustment`], on the models [`focal_is_releasable`] admits.
+    /// [`IntrinsicAdjustment`], on the models the focal itself is released on.
     /// The camera's shared focal is held during the solve and takes the images'
     /// mean after every round, so this moves the shared focal as well, and with
     /// [`Self::focal`] it is the same release.

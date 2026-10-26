@@ -2,8 +2,9 @@
 
 This file records the measurements behind the free-point choices of
 [bundle-adjustment.md](bundle-adjustment.md#free-points-inverse-depth-and-the-storage-decision),
-and, in its last section, those behind the regularization and the step-guard
-retry of a released spline.
+and, in its last two sections, those behind the regularization and the
+step-guard retry of a released spline, and those behind the per-image release
+of each image's focal and principal point.
 Under `FreePointPolicy::CROSS` the bundle adjustment solves every free point in
 inverse depth and decides once, at the end of the solve, whether it is stored as
 a position or as a direction, by the point-or-bearing test at the noise level
@@ -613,3 +614,112 @@ schedule A goes from 0.674 to 0.6761 px with a tail of 0.0130, 0.0164 and
 of 0.0131, 0.0163 and 0.0158 and an end slope of 0.96, both converged: the
 medians and tails of the run with both changes above.
 
+## Per-image intrinsic adjustments
+
+These measurements are behind the per-image release
+([bundle-adjustment.md](bundle-adjustment.md#the-per-image-release)) and the
+`.sfmr` columns it writes
+([sfmr-file-format.md](../../formats/sfmr-file-format.md#per-image-intrinsic-adjustments-optional-version-13)).
+
+### The evidence for adjusting per image
+
+The first measurements were made by an experiment outside the tree, a joint
+bundle adjustment of poses, points and intrinsics with a Huber loss and nothing
+trimmed. Each is a **held-out** median reprojection error: the solve is fitted
+on half the points; the other half are then triangulated with the poses and
+intrinsics fixed, and their reprojection error is measured. A parameter that
+only fits noise lowers the fitted half's error and not the held-out half's.
+
+**`dino_dog_toy`** (85 photographs, a Pixel 7 Pro main camera, 6.81 mm f/1.85
+with optical image stabilisation, 2040×1536, EXIF subject distance 0.15 to
+0.45 m). Its candidate ground truth has one shared `SFMTOOL_PINHOLE` camera, and
+its residuals grow radially toward the image edge in a way no single shared
+camera fits.
+
+| Released | Held-out median |
+|----------|-----------------|
+| shared focal and radial distortion (baseline) | 0.818 px |
+| + shared principal point, tangential, thin prism, aspect and skew | 0.757 px |
+| + per-image focal | 0.732 px |
+| + per-image principal point | 0.322 px |
+| + per-image focal and principal point | 0.280 px |
+
+- The per-image principal-point offsets spread over about 21 px in x and 20 px
+  in y (1.4% and 1.3% of the short side, 1536 px), about a shared offset of
+  roughly (−7, +19) px. They drift along the capture sequence and correlate only
+  weakly with the direction of gravity in the camera frame, which fits the
+  stabilised lens's position at the moment of capture.
+- The per-image focal scale spreads over 1.3 to 1.6%, and correlates at −0.89
+  with the EXIF `SubjectDistance`: focus breathing.
+- Without a prior, one image with 63 observations moved its principal point by
+  −626 px, which is why the per-image release has a prior.
+
+**`seoul_bull_sculpture`** (17 images, 270×480, `SIMPLE_RADIAL`, its checked-in
+ground truth) shows the same effect at a smaller size: held-out median 0.233 px
+at the baseline, 0.199 px with a shared principal point (a shared x offset of
+about −10.6 px), 0.142 px with a per-image principal point. The per-image
+offsets spread over about 3.2 px in x and 3.7 px in y (1.2% and 1.4% of the
+short side, 270 px), and the focal scale over 0.5%.
+
+Kerry Park (two fisheyes on a rig) was not measured. Both datasets measured are
+hand-curated ground truths, cleaner than what a solve produces: their noise
+level is low and their adjustments spread less than an ordinary
+reconstruction's would. The spreads show that the effect is real and how large
+it is in these two, not what width a prior should have in general, which is why
+the release derives the width from each solve instead of fixing it. The
+experiment is not reproducible in the tree: the dino ground truth is not checked
+in, and a script that repeats the held-out measurement on the checked-in ground
+truths is an [open question](bundle-adjustment.md#open-questions).
+
+### The release on the dino candidate
+
+The kernel's own release, run through `EditedReconstruction.bundle_adjust` on
+`dino_dog_toy_ground_truth_candidate_v009.sfmr` (85 images, one
+`SFMTOOL_PINHOLE` camera of 2040×1536 whose spline has four coefficients, 21557
+observations with inline keypoints, not checked in). These are fitted medians,
+the report's `median_residual_after`, not held-out ones, under the kernel's
+soft-L1 rather than the experiment's Huber; the start's median is 0.898 px.
+
+| Released | `[(inf, 1)]` | default schedule |
+|----------|--------------|------------------|
+| nothing (poses and points) | 0.758 px | 0.718 px |
+| shared principal point | 0.715 px | 0.695 px |
+| per-image principal point | 0.322 px | 0.320 px |
+| per-image focal and principal point | 0.286 px | 0.285 px |
+| the same, with the spline | 0.286 px | 0.284 px |
+
+- Released per image alone, the principal point's derived width is 0.0131 of
+  the short side (20.1 px) under `[(inf, 1)]` and 0.0130 (19.9 px) under the
+  default schedule, and the solved offsets' standard deviation 19.5 px on each
+  axis, against the experiment's 20 to 21 px. The camera's principal point moves
+  to (1013.7, 789.6) px, an offset of (−6.3, +21.6) px from the centre. Six and
+  seven images end beyond two widths.
+- With the focal released per image as well, the focal scale's width is 1.2%
+  under both schedules and the scales' standard deviation 1.2%, against the
+  experiment's 1.3 to 1.6%; the principal point's width is 1.2 to 1.3%.
+- No point is deleted in any of the runs.
+
+The derivation first weighted each image by `1/v`, its own variance. On this
+reconstruction every image's focal scale is determined to a variance far under
+the spread (`√v` about 0.0004 against a spread of 0.012), and that weight let
+the few best-determined images decide the focal width alone: 0.37 to 0.50% of
+the focal, half the scales' standard deviation of 0.93 to 1.0%, with 38 to 46
+of the 85 images beyond two widths. Weighting each image by `1/(s² + v)`, its
+precision as a sample of the spread, gives the widths above, with six to ten
+images beyond two widths.
+
+### Recovery on synthetic scenes
+
+On the per-image tests' scenes (60° pinhole, images looking from a cap of
+directions at points of their own), a planted spread of offsets of 0.4% of the
+short side over forty images is derived 21 to 31% above it, on three noise
+draws, with sixty observations per image at 0.5 px of noise, and 4 to 47% above
+it with 25 observations at 0.7 px, where each image's variance is about the
+spread's square: high, as the derivation's leftover error is expected to be.
+Deriving again on the same observations moves the width by under 2% over five
+more rounds. Images that all look at the same point,
+from one arc or from a cap of directions, leave the per-image focal and
+principal point a family of exact solutions, the critical motion for a varying
+focal: from noise-free observations such scenes end with residuals under
+`10⁻⁶` px and offsets 0.4 to 0.9 px from the planted ones, which only the prior
+chooses among.

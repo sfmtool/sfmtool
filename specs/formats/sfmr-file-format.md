@@ -819,10 +819,57 @@ after a camera is resized: the offset is in the **short-side unit** `m`, the
 image's shorter side in pixels, on both axes, so that one offset means the same
 number of pixels in x and in y. In every model the distortion is applied in
 normalised coordinates before the focal and principal point are, so the
-distortion centre moves with the principal point. No bundle adjustment in this
-build solves the adjustments; the motivation, and the bundle adjustment that
-solves them, are in the draft
-[per-image-intrinsics.md](../drafts/per-image-intrinsics.md).
+distortion centre moves with the principal point. The adjustments exist for a
+lens whose focal and principal point move a little between photographs: a phone
+camera's autofocus changes its focal with the focus distance, and its optical
+image stabilisation shifts the lens sideways
+([bundle-adjustment-measurements.md](../core/geometry/bundle-adjustment-measurements.md#per-image-intrinsic-adjustments)).
+The bundle adjustment solves them under a prior centred on the mean of each
+camera's images, the camera holding that mean
+([bundle-adjustment.md](../core/geometry/bundle-adjustment.md#the-per-image-release)),
+and records a solved parameter in its camera's `per_image_adjustments`.
+
+**Why a relative focal scale.** The scale is dimensionless, so it means the
+same at any resolution: a camera resized by a factor `k` has its focal
+multiplied by `k`, and `f_i` follows with `s_i` unchanged. A proxy workflow can
+therefore solve on low-resolution copies of the photographs, switch to the
+originals by resizing the shared camera, and keep every adjustment as it is.
+`(1 + s)` was chosen over `exp(s)` because the stored number then reads directly
+as "this image's focal is 1.3% longer", and because over the 1 to 2% range the
+adjustments take the two differ by less than `s²/2`, 0.02% at most. The one
+thing `exp(s)` gives that `(1 + s)` does not, a focal that cannot reach zero, is
+the rule above that a focal adjustment is above `−1`, and the bundle
+adjustment's step guard. On a two-focal model the one scale moves `fx` and `fy`
+together, which keeps the aspect ratio the shared camera holds.
+
+**Why a fraction of the short side, on both axes.** A resize maps a pixel
+coordinate as `x' = x·w'/w` and `y' = y·h'/h`, exactly under the pixel
+convention ([Pixel space](#pixel-space)). Under a uniform resize by `k`, which
+is what a proxy workflow does, `m` becomes `k·m` and every offset `a·m` scales
+with the image, so the stored fractions carry over unchanged. A resize whose
+rounding changes the aspect ratio slightly (2040×1536 to 408×307, a fifth with
+the height rounded) scales x by 0.2 and y by 307/1536 ≈ 0.1999, and an offset in
+the short-side unit is then off by that difference, under 0.1% of itself;
+fractions of the width in x and of the height in y would have been exact there.
+The short-side unit is chosen anyway because it is the same length in x and y: a
+stabilised lens that shifts sideways by some distance on the sensor moves the
+principal point by the same number of pixels whichever way it moves, and the
+stored offset says the same number on both axes, so one isotropic prior width
+in the stored unit is one isotropic width in pixels. It is not a fraction of the
+focal, because the focal can itself be released, per camera and per image, and
+an offset that changed in pixels whenever the focal moved would couple two
+parameters a solve should keep apart. Not the diagonal or the long side either,
+which would make the offsets of a wide image look smaller than those of a
+square one with the same sensor height.
+
+**Rejected: one camera entry per image.** A reconstruction can give every image its own camera entry, which also lets
+each image's focal and principal point differ. But each image would then carry
+its own unshared copy of the distortion, and a bundle adjustment releasing the
+distortion would solve one spline per image, each from that image's
+observations alone. The distortion is the part of the lens the images do share,
+and the part that needs observations from many images to reach the edge of the
+field. The adjustment keeps it shared and lets only the three parameters that
+do vary move per image.
 
 The two columns are each present exactly when at least one camera lists its
 parameter in [`per_image_adjustments`](#4-cameras-camerasmetadatajsonzst), and

@@ -5,8 +5,8 @@
 
 Each test gives some images of a real reconstruction a non-zero adjustment of
 their camera's focal and principal point, and checks that a consumer reads, writes
-or carries each image's own intrinsics. See
-``specs/drafts/per-image-intrinsics.md`` § "PR 3".
+or carries each image's own intrinsics. See ``specs/formats/sfmr-file-format.md``
+§ "Per-image intrinsic adjustments" and the specs of each export it links.
 """
 
 from pathlib import Path

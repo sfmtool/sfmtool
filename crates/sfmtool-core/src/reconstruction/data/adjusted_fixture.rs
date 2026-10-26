@@ -59,7 +59,8 @@ pub(crate) fn adjust_and_reproject(
 
 /// A small adjustment distinct for each image: a focal scale within ±1.5% and
 /// a principal-point offset within ±1% of the short side on each axis, the
-/// size the evidence of `specs/drafts/per-image-intrinsics.md` shows.
+/// size the measurements of `specs/core/geometry/bundle-adjustment-measurements.md`
+/// § "Per-image intrinsic adjustments" show.
 pub(crate) fn varied_adjustment(i: usize) -> IntrinsicAdjustment {
     let t = i as f64;
     IntrinsicAdjustment {

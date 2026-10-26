@@ -3994,6 +3994,10 @@ The two bulk edits.
 //                 "cameras": [{ "camera_intrinsics_index": 1, "release_focal": false,
 //                               "release_distortion": false }] }
 // bundle_adjust { "reconstruction_label": "seoul_bull", "release_principal_point": true }
+// bundle_adjust { "reconstruction_label": "dino_dog_toy", "release_image_focal": true,
+//                 "release_image_principal_point": true }
+// bundle_adjust { "reconstruction_label": "dino_dog_toy", "release_image_principal_point": true,
+//                 "image_prior": { "fixed": { "principal_point": 0.013 } } }
 // bundle_adjust { "reconstruction_label": "seoul_bull", "free_points_cross": false }
 // bundle_adjust { "reconstruction_label": "dino_dog_toy", "release_focal": true,
 //                 "schedule": [[null, 1000]] }
@@ -4021,14 +4025,34 @@ the wire: its four entries are the tools `resect_camera_image`,
 dialog collects, camera by camera: whether each camera's focal is released,
 whether its lens distortion (`k1` on `SIMPLE_RADIAL_FISHEYE`, the spline on
 `SFMTOOL_FISHEYE` and `SFMTOOL_PINHOLE`) is released with it, and whether its
-principal point is released, which any model can do with or without its focal.
-`release_focal`, `release_distortion` and `release_principal_point` are the
-defaults every camera of the node's image set takes, each `false` when left
-out, and `cameras` overrides them: a list of `{ camera_intrinsics_index,
-release_focal?, release_distortion?, release_principal_point? }`, one entry per
-camera that differs, each naming its camera by the index `get_camera_intrinsics`
-and `get_camera_image` report, and a field it leaves out taking the call's
-default. A camera with none of the three is held. An entry naming a camera the node does not have, or one camera
+principal point is released, which any model can do with or without its focal,
+and whether each of its images' focal and principal point are released.
+`release_focal`, `release_distortion`, `release_principal_point`,
+`release_image_focal` and `release_image_principal_point` are the defaults every
+camera of the node's image set takes, each `false` when left out, and `cameras`
+overrides them: a list of `{ camera_intrinsics_index, release_focal?,
+release_distortion?, release_principal_point?, release_image_focal?,
+release_image_principal_point? }`, one entry per camera that differs, each
+naming its camera by the index `get_camera_intrinsics` and `get_camera_image`
+report, and a field it leaves out taking the call's default. A camera with none
+of the five is held.
+
+A per-image release solves each image's focal scale or principal-point offset,
+the dialog's **Release focal length per image** and **Release principal point
+per image**, held toward the mean of the camera's images by a prior, and moves
+the camera's value to that mean
+([../core/geometry/bundle-adjustment.md](../core/geometry/bundle-adjustment.md)
+§ "The per-image release"); with the shared release of the same kind beside it,
+it is the same release. A per-image focal is refused on the models a shared
+focal is, and stands for the focal a distortion needs. `image_prior` sets the
+prior's widths, an object of `loose`, `floor` and `fixed`, each an object of
+`focal` (a fraction) and `principal_point` (a fraction of the image's short
+side), each a positive number, a left-out one at its default: `loose` is the
+first round's widths and the most a derived width may be (0.1 each), `floor`
+the least (0.001 each), and `fixed`, given, the widths every round runs under,
+derived from nothing. Omitted or `null`, each camera's widths are derived from
+the solve. An unknown key at either level, or a width that is not a positive
+number, is refused at the parse. An entry naming a camera the node does not have, or one camera
 twice, is refused before anything starts, and a camera no posed image uses is
 not in the solve, so what it is given is ignored. `free_points_cross` is the
 dialog's crossing checkbox: by default every free point is solved in inverse
@@ -4066,7 +4090,40 @@ when they differ. The report's focal clause names each released camera's focal
 before and after, its principal-point clause each released camera's principal
 point before and after, `, principal point (1020.0, 768.0) → (1013.1, 787.2)`,
 and its free-point clause what the storage decision did,
-`, free points decided at 0.412 px: 3 to finite, 25 to directions`.
+`, free points decided at 0.412 px: 3 to finite, 25 to directions`. The label
+names the parts released per image, `, focal and principal point released per
+image`, and the report each such camera's prior, `, per-image widths focal
+0.42 %, principal point 1.31 % of the short side (20.1 px), derived, 2 images
+beyond two widths`.
+
+A run in which some camera released a per-image parameter answers with
+`image_adjustments` beside the version and the report, one row per such camera,
+and carries no such field otherwise:
+
+```jsonc
+"image_adjustments": [
+  {
+    "camera_intrinsics_index": 0,
+    "release_image_focal": true,
+    "release_image_principal_point": true,
+    "images": 85,                              // its posed images
+    "focal_mean": 0.0, "focal_std": 0.0122,    // the focal scales, fractions
+    "principal_point_mean_px": [0.0, 0.0],     // the offsets, pixels
+    "principal_point_std_px": [18.2, 18.4],
+    "prior": { "focal": 0.0120, "principal_point": 0.0127 }, // the final round's widths
+    "prior_derived": true,                     // false under image_prior.fixed
+    "spread": { "focal": 0.0120, "principal_point": 0.0127 }, // before the clamp
+    "near_prior": [                            // beyond two widths from the mean
+      { "image_index": 52, "parameter": "principal_point", "widths": 3.2 }
+    ]
+  }
+]
+```
+
+The means are zero to rounding, since the camera holds them. A width or spread
+the solve has none of, for a parameter not released per image or a width not
+derived, is `null`, which is how JSON writes the report's `NaN`. A spread at or
+beyond the floor or the loose width says the clamp decided the width.
 
 **`bundle_adjust` runs on a worker thread**, so the window stays usable while it
 solves and this call answers one of two ways
@@ -6480,7 +6537,10 @@ where a test hands no host over.
   elements of an array of objects such as `bundle_adjust`'s `cameras`. A
   catalog-wide regression adds an unknown key to every representative call, and
   a second walks the catalog for every closed nested object and probes both
-  directions of its schema. `set_window_layout`'s document is the exception: the
+  directions of its schema, one level further down where a nested object holds
+  closed objects of its own: `bundle_adjust`'s `image_prior` names its keys and
+  those of its three widths objects in the parser, and the walk probes both
+  levels, so they cannot drift either. `set_window_layout`'s document is the exception: the
   layout parser reads it, and its `window` keys are one constant that a test
   compares with the schema. The vocabulary rule is asserted the same way, including
   that a panel argument is `panel_name` and never
@@ -6688,10 +6748,13 @@ Other candidates, in rough order of value:
 | `set_image_detail_display` `intrinsics.grid_cols` | `8, 12, 16, 24, 32` (`IntrinsicsDisplaySettings::GRID_LADDER`) | The only densities accepted, for the same reason. |
 | `set_image_detail_display` `max_features` | `≥ 1`, or `null` for all | `0` is refused: "no features" is `overlay_mode: "none"`. |
 | `set_viewer_3d_display` numbers | Each slider's range and decimals (`viewer_3d::display::Field::control`) | The only values accepted, the ends included; a value inside is rounded to the decimals the slider shows. The ranges are listed beside the document in § "`get_viewer_3d_display` / `set_viewer_3d_display`". |
-| `bundle_adjust` `release_focal` | `false`, every camera's focal is held | The default for every camera of one of the three decisions each row of the Bundle Adjust dialog collects. |
+| `bundle_adjust` `release_focal` | `false`, every camera's focal is held | The default for every camera of one of the five decisions each row of the Bundle Adjust dialog collects. |
 | `bundle_adjust` `release_distortion` | `false`, every camera's distortion is held | The second; `true` needs the same camera's focal. |
 | `bundle_adjust` `release_principal_point` | `false`, every camera's principal point is held | The third; accepted on every model, with or without the focal. |
-| `bundle_adjust` `cameras` | empty, every camera takes the three defaults | An entry's left-out field takes the call's default, so an entry states only what differs. |
+| `bundle_adjust` `release_image_focal` | `false`, every image's focal scale is held | The fourth; refused where `release_focal` is, and moves the camera's focal to its images' mean. |
+| `bundle_adjust` `release_image_principal_point` | `false`, every image's principal-point offset is held | The fifth; accepted on every model, and moves the camera's principal point to its images' mean. |
+| `bundle_adjust` `image_prior` | each camera's widths derived from the solve, loose 0.1 and floor 0.001 | The core function's `ImagePriorOptions::default()`; the dialog has no control for it. |
+| `bundle_adjust` `cameras` | empty, every camera takes the five defaults | An entry's left-out field takes the call's default, so an entry states only what differs. |
 | `bundle_adjust` `free_points_cross` | `true`, free points cross | The core function's default, `FreePointPolicy::CROSS`; `false` is the dialog's crossing checkbox cleared. |
 | `bundle_adjust` `schedule` | `[[50, 5], [12, 2], [4, 1]]` (`DEFAULT_SCHEDULE`) | The core function's default, whatever the dialog last ran on the node; a `null` trim is unbounded. |
 | `switch_camera_model` `camera_model` | the camera's own model | Which makes the call a refit of a spline camera's spline. |

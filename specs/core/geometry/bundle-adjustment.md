@@ -13,8 +13,10 @@ before it trims. The default schedule tightens the threshold from 50 px to
 12 px to 4 px, so gross outliers are removed before the fine fit. The images
 may be taken through one or more cameras: each camera keeps its own lens
 parameters in the solve, and every observation is read through the camera of
-its own image, with that image's intrinsic adjustment applied where it has one
-(the solve holds the adjustment; see "Held image adjustments").
+its own image, with that image's intrinsic adjustment applied where it has one:
+held (see "Held image adjustments"), or solved under a prior centred on the mean
+of the camera's images where the caller releases it (see "The per-image
+release").
 
 This is the optimizer that the trimmed pose-only refinement
 (`crates/sfmtool-core/src/geometry/pose_refine.rs`) is the single-pose
@@ -57,6 +59,7 @@ callers refill).
 The kernel lives in
 [bundle_adjust.rs](../../../crates/sfmtool-core/src/geometry/bundle_adjust.rs)
 (`bundle_adjust`, `BaCameras`, `BaSchedule`, `BundleAdjustment`,
+`CameraRelease`, `ImagePriorOptions`, `ImagePriorWidths`, `ImagePrior`,
 `PointConstraint`, `PointConstraints`, `DistanceReference`, `FreePointPolicy`,
 `FreePointDecision`), bound as `sfmtool.geometry.bundle_adjust`.
 
@@ -71,7 +74,7 @@ pub struct BaCameras<'a> {
     pub cameras: &'a [CameraIntrinsics], // n_cam, each with its initial focal
     pub image_camera: Cow<'a, [u32]>,    // n_img, an index into `cameras`
     pub releases: Option<&'a [CameraRelease]>, // n_cam; None = the flags alone
-    pub image_adjustments: Option<Cow<'a, [IntrinsicAdjustment]>>, // n_img, held; None = none
+    pub image_adjustments: Option<Cow<'a, [IntrinsicAdjustment]>>, // n_img; None = none
 }
 
 /// What one camera may release; `Default` and `HELD` release nothing.
@@ -79,6 +82,27 @@ pub struct CameraRelease {
     pub focal: bool,
     pub distortion: bool,      // k1 or the spline, whichever the model carries
     pub principal_point: bool, // (cx, cy), on any model
+    pub image_focal: bool,           // each image's focal scale; holds the shared focal
+    pub image_principal_point: bool, // each image's offset; holds the shared principal point
+}
+
+/// The widths of one camera's prior on its images' adjustments.
+pub struct ImagePriorWidths {
+    pub focal: f64,           // the focal scale's, a fraction
+    pub principal_point: f64, // the offset's, in the short-side unit
+}
+
+pub struct ImagePriorOptions {
+    pub loose: ImagePriorWidths,         // the first round's, and the cap (0.1, 0.1)
+    pub floor: ImagePriorWidths,         // the least a derived width may be (0.001, 0.001)
+    pub fixed: Option<ImagePriorWidths>, // every round's, derived from nothing
+}
+
+/// The prior one camera's per-image release ran under.
+pub struct ImagePrior {
+    pub widths: ImagePriorWidths, // the final round's; NaN where not released per image
+    pub derived: bool,            // false under `fixed`
+    pub spread: ImagePriorWidths, // the last derivation's, before the clamp
 }
 
 impl<'a> BaCameras<'a> {
@@ -103,6 +127,9 @@ pub fn bundle_adjust(
     opt_k1: bool,
     opt_bspline: bool,
     opt_pp: bool,
+    opt_image_f: bool,
+    opt_image_pp: bool,
+    image_prior: Option<&ImagePriorOptions>, // None = ImagePriorOptions::default()
     schedule: &[BaSchedule],             // default 50/5 → 12/2 → 4/1
     max_iters: usize,                    // LM iterations per round
     min_track: usize,                    // trim survivors per point (2)
@@ -115,6 +142,8 @@ pub struct BundleAdjustment {
     pub residual_norms: Vec<f64>,        // n_obs
     pub point_at_infinity: Vec<bool>,    // n_pt, the representation each ended with
     pub free_point_decision: Option<FreePointDecision>, // the storage decision; None under NO_CROSS or on a degenerate exit
+    pub image_adjustments: Vec<IntrinsicAdjustment>, // n_img, after the solve
+    pub image_priors: Vec<Option<ImagePrior>>,       // n_cam; None without a per-image release
 }
 ```
 
@@ -125,7 +154,8 @@ let out = bundle_adjust(
     &BaCameras::shared(&cam, quats.len()),
     &mut quats, &mut trans, &mut points, &uv, &obs_img, &obs_pt,
     None, None, FreePointPolicy::default(), None, DEFAULT_PROTECTED_LOSS_SCALE,
-    true, false, false, false, &DEFAULT_SCHEDULE, 60, 2, 12, &Progress::none(),
+    true, false, false, false, false, false, None, &DEFAULT_SCHEDULE, 60, 2, 12,
+    &Progress::none(),
 );
 let solved_focal = out.cameras[0].focal_lengths().0;
 ```
@@ -138,16 +168,18 @@ kernel's other shape checks. `image_camera` is a `Cow` so that
 `BaCameras::shared` can own the all-zero column it builds, while a caller with a
 column of its own lends it (`image_camera: column.as_slice().into()`).
 
-**Why `releases` narrows the flags rather than replacing them.** The four
+**Why `releases` narrows the flags rather than replacing them.** The six
 flags are the kernel's whole-solve switches, and every caller that has one
 decision for every camera keeps passing them as it always has, with `releases:
 None`. A caller that decides camera by camera -- the reconstruction-level
 adjustment, whose caller states a release per camera -- passes every flag on
 and one `CameraRelease` per camera, and camera `j` releases its focal under
 `opt_f && releases[j].focal`, its `k1` under `opt_k1 && releases[j].distortion`,
-its spline under `opt_bspline && releases[j].distortion` and its principal point
-under `opt_pp && releases[j].principal_point`, each still only where its model
-admits it. With `releases: None` every camera takes the flags as they are
+its spline under `opt_bspline && releases[j].distortion`, its principal point
+under `opt_pp && releases[j].principal_point`, and its images' focal scales and
+principal-point offsets under `opt_image_f && releases[j].image_focal` and
+`opt_image_pp && releases[j].image_principal_point`, each still only where its
+model admits it. With `releases: None` every camera takes the flags as they are
 (`CameraRelease::ALL`). A list whose length is not `n_cam` is a caller error
 and panics with the other shape checks.
 
@@ -155,8 +187,10 @@ and panics with the other shape checks.
 write into its own image set. The result carries the whole `CameraIntrinsics` per
 input camera, in order: the input camera with its released parameters replaced
 by the solved ones (the focal under `opt_f`, `k1` under `opt_k1`, the spline
-under `opt_bspline`, where its model admits the release, and the principal point
-under `opt_pp`), and equal to the input camera otherwise. A caller copies it rather than reassembling it from scalars.
+under `opt_bspline`, where its model admits the release, the principal point
+under `opt_pp`, and the shared value a per-image release re-centres), and equal
+to the input camera otherwise. A caller copies it rather than reassembling it
+from scalars.
 
 `progress` is where the rounds and the LM iterations inside them are reported: a
 phase per schedule round with an iteration count under it, so a caller knows
@@ -557,8 +591,10 @@ cost = Σ_i s² · ρ(r_i² / s²),   ρ(z) = 2·(√(1 + z) − 1),   s = loss_
   exposes this pair per camera, as a `CameraRelease` of `focal` and
   `distortion` for each camera, which it passes as `BaCameras::releases` with
   every flag on, so each camera frees whichever of `k1` and the spline its model
-  has, and refuses the distortion without the focal. The same `CameraRelease`
-  carries `principal_point`, which stands apart from this staging. That is how the
+  has, and refuses the distortion without the focal, shared or per image (a
+  per-image focal moves the camera's focal to its images' mean). The same
+  `CameraRelease` carries `principal_point` and the per-image releases, which
+  stand apart from this staging. That is how the
   viewer's Bundle Adjust dialog, the MCP `bundle_adjust` tool and `sfm xform
   --bundle-adjust` on a spline camera reach it.
 - **Jacobian.** The projection block `∂(u, v)/∂p_cam` — analytic from
@@ -672,11 +708,15 @@ other camera's block, so two cameras' lens parameters couple only through the
 poses and points they both observe. A few cameras add a few slots beside the
 `6·n_im` pose slots, so the dense solve costs what it does with one.
 
-The per-observation camera block keeps a fixed width, one of four, each a
+The per-observation camera block keeps a fixed width, one of six, each a
 compile-time instantiation of the solve: `2 + 6` columns when no camera
 releases a spline or a principal point, `2 + 4 + 6` when some camera releases a
-spline, and each of those with the principal point's two columns before the
-pose (`4 + 6`, `4 + 4 + 6`) when some camera releases its principal point. In
+spline, each of those with the principal point's two columns before the pose
+(`4 + 6`, `4 + 4 + 6`) when some camera releases its principal point, and each
+of those two with the image's three adjustment columns after the pose
+(`4 + 6 + 3`, `4 + 4 + 6 + 3`) when some camera releases a per-image parameter
+(see "The per-image release"), where each image's block in the reduced system
+is nine wide rather than six. In
 the spline instantiations a spline column that carries no coefficient (one of
 the gauge-anchored pair, or any spline column of a camera whose spline is not
 released) points at the observing camera's own `k1` slot and is exactly zero,
@@ -707,8 +747,9 @@ Every rule the single block follows applies to each block separately:
   stepped, and comes back exactly as it went in.
 - **Step guards.** A candidate step is rejected, and re-damped, when any
   camera's candidate focal is not finite and above `1e-6`, its principal point
-  is not finite or lies off its own image, or its distortion step is not
-  finite. A camera whose `k1` folds inside its own imaged field
+  is not finite or lies off its own image, its distortion step is not finite,
+  or an image's focal or adjusted principal point fails the per-image guards
+  ("The per-image release"). A camera whose `k1` folds inside its own imaged field
   (the largest pixel radius of its own kept observations about its own
   principal point), or whose spline breaks monotonicity on its own domain, has
   its distortion held for a retry of the step, and only that camera's: the
@@ -740,8 +781,8 @@ unit `m = min(width, height)`, so that image `i` reads its camera at
 `f_i = f·(1 + s_i)` (both focals on a two-focal model) and
 `(cx_i, cy_i) = (cx, cy) + a_i·m`
 ([`IntrinsicAdjustment`](../../../crates/sfmtool-core/src/camera/intrinsics.rs)).
-The solve holds the adjustments: they are inputs, read wherever a camera is
-read (above), and nothing solves them. The released parameters are still the
+Unless a camera releases them per image ("The per-image release", below), the
+solve holds them: they are inputs, read wherever a camera is read (above). The released parameters are still the
 camera's shared ones, with each image's adjustment applied on top of them, so a
 camera's lens block is unchanged and its columns from an adjusted image are:
 
@@ -758,8 +799,8 @@ its denominator because the parameter is the shared focal, which the image's
 focal is `1 + s_i` times. The `k1` step guard's imaged field reads each
 observation's pixel radius about its image's principal point divided by
 `1 + s_i`, since the image's map folds at `1 + s_i` times the shared map's
-radius. The principal point's step guard checks the shared principal point; an
-image's adjusted principal point is not checked.
+radius. Where the camera releases its principal point, the step guard checks
+each image's adjusted principal point as well as the shared one.
 
 An image with an adjustment is linearised through an entry of its own, after
 the cameras', whose camera is the adjusted one and whose lens slots are its
@@ -769,6 +810,193 @@ observation. `image_adjustments` of `None`, or of all-zero adjustments, adds no
 entry and reads every camera as it is, so the solve is the one without
 adjustments bit for bit. A length other than `n_img` is a caller error and
 panics with the other shape checks.
+
+### The per-image release
+
+`opt_image_f` and `opt_image_pp` release each image's intrinsic adjustment:
+its focal scale `s_i` on the models `opt_f` admits (`focal_is_releasable`), and
+its principal-point offset `a_i` on every model, narrowed per camera by
+`CameraRelease::image_focal` and `CameraRelease::image_principal_point`. They
+are for a lens whose focal and principal point move a little from one
+photograph to the next: a phone camera's autofocus changes its focal with the
+focus distance, and its optical image stabilisation shifts the lens sideways,
+which moves the principal point
+([`bundle-adjustment-measurements.md`](bundle-adjustment-measurements.md#per-image-intrinsic-adjustments)).
+The distortion stays the camera's, being the part the images share and the part
+that needs observations from many images to reach the edge of the field.
+
+**Per-image values only.** A camera that releases a per-image parameter holds
+its shared value of the same kind for the solve: `image_focal` holds the shared
+focal and `image_principal_point` the shared principal point, whatever `opt_f`,
+`opt_pp` and the camera's `focal` and `principal_point` say. The data depend on
+a shared value and an image's adjustment only through their sum, so releasing
+both would leave a direction no observation sees. Holding the shared value
+removes it; the prior below acts only on each image's deviation from the mean
+of the camera's images, so the data alone decide that mean; and after every
+round the camera takes the mean (below), which is how the shared value moves.
+Asking for the shared and the per-image release of one parameter is therefore
+the per-image release alone, bit for bit. A per-image focal stands for the focal
+a spline release needs: the images' mean scale is the central scale the spline
+cannot express.
+
+**The columns.** Each image's block of the reduced system grows to
+`[δθ×3, δt×3, s, a_x, a_y]`, nine wide, in a solve where some camera releases a
+per-image parameter, and stays six wide otherwise; an image's slots its camera
+does not release are pinned. The per-observation camera block carries the same
+three columns after the pose in two more instantiations, `BASE_IMG_CAM_COLS`
+and `BSPLINE_IMG_CAM_COLS`, which also carry the shared principal point's two
+columns, so the widths stay one instantiation each and number six. At the
+image's adjusted camera:
+
+```
+∂(u, v)/∂s_i   = (u − cx_i, v − cy_i) / (1 + s_i)     (= f·(x_d, y_d))
+∂(u, v)/∂a_x,i = (m, 0)
+∂(u, v)/∂a_y,i = (0, m)
+```
+
+exact on every model the release admits, as the shared focal's and principal
+point's are. An image of a camera that releases a per-image parameter is read
+through a lens entry of its own whatever its adjustment, since the adjustment
+moves within a round.
+
+**The prior.** Each camera `c` holds its images' deviations from their mean with
+a Gaussian prior of widths `σ_s,c` (the focal scale's, a fraction) and
+`σ_pp,c` (the principal point's, in the short-side unit, the same on both axes):
+
+```
+σ_n² · Σ_i ( ‖a_i − ā‖² / σ_pp,c²  +  (s_i − s̄)² / σ_s,c² )
+```
+
+over the camera's images the round solves (its posed images with a kept
+observation), with `ā` and `s̄` their means. `σ_n` is the reprojection noise
+level at the state the round starts from, over its kept observations, measured
+as the storage decision measures it (`round_noise`), or the round's loss scale
+where it measures nothing; it is fixed for the round, so the cost the damping
+ladder compares is one function per round, as the spline penalty's `f_ref` is.
+The prior is in the data's units, `Σ r²` in pixels, and the offsets and their
+width share a unit, so `m` cancels. A camera with one image in the round has no
+deviation to hold, and that image is solved by its data alone.
+
+The prior couples the images of a camera. With `w = σ_n²/σ²` and `n` images it
+adds `w·(I − 𝟏𝟏ᵀ/n)` to the camera's per-image slots of one parameter and
+`w·(x_i − x̄)` to each image's gradient entry, after the data and before the
+damping, and its value to the cost the ladder compares. It is added exactly,
+into the dense reduced system: that system is already dense and factored by
+LU, so the `n²` entries per camera and parameter add no structure the solve
+must respect and cost nothing beside the `(9·n_im)²` it holds, and the prior
+reads no point, so the Schur elimination is unchanged. A camera-level mean as a
+slot of its own, with each image's prior centred on it, reaches the same
+minimum once that slot is eliminated, but adds slots, a mean to pin for a camera
+of one image, and a sparse block the dense factorization cannot use.
+
+**Deriving the widths.** The widths are derived for each camera from the solve,
+an empirical Bayes estimate, because the right width differs between cameras (a
+stabilised phone lens moves its principal point by a percent of the image, a
+fixed lens by nothing) and a width read off a clean reconstruction holds an
+ordinary one too tightly:
+
+1. *A loose first round.* The first round runs every prior at
+   `ImagePriorOptions::loose`, wide enough that a deviation the data support is
+   pulled very little; its job is to stop a runaway, an image with few
+   observations whose principal point would otherwise follow the rotation it is
+   nearly degenerate with off the image.
+2. *Each image's variance.* After a round, each image's data-only block `H_i` of
+   the reduced system is read at the round's last linearisation: its pose and
+   adjustment slots, the points eliminated undamped, before the prior and the
+   damping (a ranged point's reference columns, a share of another image's
+   observation, are left out). Inverting the whole block over the slots that
+   move counts the adjustment's coupling with the same image's pose against it,
+   which is the near-degeneracy the prior exists for. `V_i = σ_e²·[H_i⁻¹]_aa` is
+   then the adjustment's covariance with every other image and the shared
+   camera held, where `σ_e` is the noise level of the round's solved residuals,
+   read at the state the round ended at: the level it started from still holds
+   the start's error, which in a first round from an unadjusted camera can be
+   ten times the noise. An image whose block is not positive definite gives no
+   sample.
+3. *Undoing the prior's pull.* The solved deviation `d_i = a_i − ā` was pulled
+   toward the mean by the round's prior, whose curvature on the image's own
+   block is `W = σ_n²·P⁻¹` (`P = diag(σ_s², σ_pp², σ_pp²)`, the round's widths).
+   The deviation the data alone give is `d̂_i = (I + H_i⁻¹·W)·d_i`, every
+   released parameter together, since one image's focal scale and principal
+   point can be correlated. This is exact for the image's own block with every
+   other image held; the prior's own diagonal there is `w·(1 − 1/n)` rather than
+   `w`, a factor left out, which makes `d̂_i` slightly small for a camera of few
+   images. Without the undoing, a width derived from pulled deviations and
+   solved under again would shrink the next spread, running the width down to
+   the floor wherever the images' variances are comparable to the spread.
+4. *The spread.* `d̂_i` is the true deviation plus noise of variance `v_i`, so
+   its variance is `τ² + v_i` for a spread `τ`. The camera's spread `s` solves
+   `s² = max(0, m² − median_w v)` with `m = 1.4826·median_w |d̂ − c|`, every
+   median weighted by `1/(s² + v_i)`, each sample's precision as a sample of the
+   spread, and iterated from the round's width; `c` is each axis's weighted
+   median of `d̂`. The principal point pools its two axes as two samples per
+   image. Medians, so one wild image counts as one sample; the weight, so an
+   image whose noise swamps the spread counts little while images whose noise is
+   well under it count alike; the centre a median rather than the mean, so an
+   image that moves the mean by its share, which moves every deviation alike,
+   does not widen the spread. `1.4826` makes the median absolute deviation of a
+   Gaussian its standard deviation. What remains errs high: `d̂_i` carries the
+   other images' errors as well as its own, so its noise is larger than the
+   conditional `v_i` the subtraction removes.
+5. *The width.* The camera's next width is `s` clamped to
+   `[ImagePriorOptions::floor, ImagePriorOptions::loose]`: the floor keeps a
+   camera whose images do not vary from being pinned to its mean by a spread
+   that rounds to nothing, and the loose width as a cap keeps a derived width
+   from releasing more than the first round did. A parameter with fewer than
+   two images giving a sample keeps the loose width and has no spread.
+
+The widths are derived again before every round after the first, from the round
+just finished, and the round runs under them: the rounds are where the cost is
+already fixed and re-measured, and re-deriving follows the trim, so the final
+round runs under a width measured on the observations the earlier rounds left.
+The previous width enters a derivation only through the pull the undoing
+removes, so deriving again on the same observations gives the same width up to
+the linearisation, rather than ratcheting it down. A schedule of one round runs
+that round a second time under widths derived from the first, so every derived
+prior is derived at least once; with `ImagePriorOptions::fixed` every round runs
+under the fixed widths as given, without the floor or the cap, and nothing is
+derived.
+
+**Re-centring after every round.** After each round, every camera with a
+per-image release takes the mean of the released adjustments over its images
+the round solved, and every image of the camera keeps its difference from it:
+`cx += mean(a_x)·m`, `cy += mean(a_y)·m` and `a_i −= mean(a)` for the principal
+point; `f ← f·mean(1 + s_i)` (every focal of a two-focal model) and
+`1 + s_i ← (1 + s_i)/mean(1 + s_i)` for the focal, so the mean scale is exactly
+zero. It is applied to every image of the camera in the solve's arrays, the ones
+the round did not solve included, so every image's intrinsics are unchanged by
+it, to rounding. The mean is over the images the round solved, the set the
+prior's mean is over, because those are the images whose adjustments the data
+fixed. It runs after every round rather than once at the end so that the shared
+value is the images' mean at the start of every round: the spline penalty's
+`f_ref`, the `k1` guard's imaged field and the shared principal point's guard
+read the shared value, and each reads it as the camera's typical image only when
+the adjustments are centred on it. The prior and the derivation measure about
+the mean, so the re-centring changes neither.
+
+**Step guards.** A candidate step is rejected and re-damped when an image's
+focal scale is not finite or leaves `1 + s_i` not positive, its focal
+`f·(1 + s_i)` is not finite and above `1e-6` (`image_focal_step_admissible`), or
+its adjusted principal point is not finite or leaves the image. The principal
+point's test reads every image of a camera that releases its principal point,
+shared or per image, whose adjustment is released or not zero; an image at a
+zero held adjustment is the shared principal point, which its own guard checks.
+
+**The result.** `BundleAdjustment::image_adjustments` holds every image's
+adjustment after the solve, and `image_priors` one `Option<ImagePrior>` per
+camera: `widths`, the widths the final round ran under (`NaN` for a parameter
+the camera does not release per image), `derived`, false under `fixed`, and
+`spread`, the last derivation's spread before it was clamped (`NaN` for a
+parameter not released per image or with fewer than two samples, and both `NaN`
+when nothing was derived). The camera in `cameras` carries the re-centred shared
+values.
+
+**Parity.** A solve in which no camera releases a per-image parameter takes the
+six-wide image blocks and the instantiations it took before the release existed,
+reads all-zero adjustments as none, and computes the same output bit for bit:
+the kernel's, the reconstruction-level adjustment's, growth's and rotation
+initialisation's test scenes (377 solves) gave identical outputs before and
+after the release was added.
 
 ### Parity
 
@@ -820,6 +1048,11 @@ bundle_adjust(
                                # SFMTOOL_PINHOLE with a defined spline;
                                # exclusive with opt_k1
     opt_pp=False,              # any camera model
+    opt_image_f=False,         # each image's focal scale, on the opt_f models
+    opt_image_pp=False,        # each image's principal-point offset, any model
+    image_adjustments=None,    # (n_img, 3) [focal, a_x, a_y]; None = none
+    image_prior=None,          # {"loose", "floor", "fixed"}: dicts of focal
+                               # and principal_point; None = the defaults
     schedule=[(50.0, 5.0), (12.0, 2.0), (4.0, 1.0)],
     max_iters=60,
     min_track=2,
@@ -829,7 +1062,9 @@ bundle_adjust(
                                # translations (n_img, 3), points (n_pt, 3),
                                # residual_norms (n_obs,),
                                # point_at_infinity (n_pt,),
-                               # free_point_decision (dict or None)
+                               # free_point_decision (dict or None),
+                               # image_adjustments (n_img, 3),
+                               # image_priors (list of dict or None)
 ```
 
 `cameras` in the result holds one `CameraIntrinsics` per input camera, in
@@ -845,9 +1080,16 @@ raises for a camera that is neither `SFMTOOL_FISHEYE` nor `SFMTOOL_PINHOLE`, and
 for an undefined spline; `opt_k1` together with `opt_bspline` raises first, so
 the caller sees the exclusion rather than whichever model gate happens to fire.
 An empty `cameras`, an `image_camera` whose length is not `n_img`, and an index
-past `cameras` raise `ValueError` as well. The binding takes no image
-adjustments: it reads every image through its camera exactly
-(`image_adjustments: None`).
+past `cameras` raise `ValueError` as well. `opt_image_f` raises for a camera
+whose focal `opt_f` would refuse. `image_adjustments` is the kernel's
+`BaCameras::image_adjustments`, one `[focal, a_x, a_y]` row per image, held
+unless a per-image release moves it, and `image_adjustments` in the result is
+`BundleAdjustment::image_adjustments` in the same layout. `image_prior` is
+`ImagePriorOptions` as a dict of `loose`, `floor` and `fixed`, each a dict of
+`focal` and `principal_point` (`fixed` also `None`), a missing key at its
+default; an unknown key, or a width that is not positive and finite, raises.
+`image_priors` holds one entry per camera, `None` where it released nothing per
+image, and otherwise a dict of `widths`, `derived` and `spread`.
 
 `held`, `distance` and `distance_from` are the flat form of the kernel's
 `PointConstraints`: the binding assembles them, so a caller states each point's
@@ -1044,6 +1286,36 @@ Python's point of view).
   leave residuals over 0.2 px; on the planted pinhole spline's scene with
   per-image adjustments the spline is recovered from none; and all-zero
   adjustments give the solve with none bit for bit.
+- **The per-image release**
+  ([`bundle_adjust/tests/per_image.rs`](../../../crates/sfmtool-core/src/geometry/bundle_adjust/tests/per_image.rs)),
+  on scenes whose images look from a cap of directions, each at its own point
+  and rolled, since images whose axes meet in one point leave the per-image
+  focal a family of exact solutions:
+  - the focal-scale and offset columns match a central difference of the
+    adjusted projection on every model each is released on, and point at the
+    image's own slots;
+  - from noise-free observations made through per-image focal scales and
+    offsets about a common part that is not zero (1% long, `(6, −4)` px), every
+    image's intrinsics are recovered to `10⁻⁷`, the camera holding the planted
+    mean and the adjustments averaging zero to rounding;
+  - the derived width recovers a planted spread of offsets (0.4% of the short
+    side over forty images with half a pixel of noise) within `[0.75, 1.35]` of
+    it, and, where each image's variance is comparable to the spread's square
+    (25 observations at 0.7 px), within `[0.7, 1.4]`, the width after five more
+    rounds on the same observations within 5% of the first;
+  - one more image of eight observations through an offset twelve spreads out
+    moves the width by less than 15%;
+  - images that do not vary derive the floor; `fixed` widths are used as given
+    and nothing is derived; a one-round schedule derives once;
+  - an image with no observation keeps its intrinsics through the re-centring
+    while its camera moves;
+  - the shared and per-image release of one kind gives the per-image release's
+    solve bit for bit, and flags on with nothing released per image give the
+    solve with the flags off bit for bit;
+  - the focal guard refuses a scale that leaves the focal not positive, and an
+    image whose observations pull its principal point off the image ends on it;
+  - the derivation alone, on samples made as a round makes them, undoes a pull
+    to under 60% of the spread and recovers the spread within 15%.
 - **Directions carry the `k1` release**: on a scene whose finite cloud sits near the
   optical axis (no `θ³` signal) and whose far field is marked at infinity,
   `opt_k1` recovers the planted curvature — and the same solve with the
@@ -1222,7 +1494,8 @@ bundle_adjust(&BaCameras::shared(&cam, quats.len()),
               None, Some(&cons),
               FreePointPolicy { cross: true },
               None, DEFAULT_PROTECTED_LOSS_SCALE,
-              true, false, false, &DEFAULT_SCHEDULE, 60, 2, 12, &Progress::none());
+              true, false, false, false, false, false, None,
+              &DEFAULT_SCHEDULE, 60, 2, 12, &Progress::none());
 ```
 
 An absent `constraints` is every point free, and with `FreePointPolicy::NO_CROSS`
@@ -1861,9 +2134,9 @@ validation, and outputs are unchanged.
 - Per-observation camera models: an observation's camera is its image's.
 - Optimizing distortion beyond the `k1` of `SIMPLE_RADIAL_FISHEYE` and the
   spline of `SFMTOOL_FISHEYE` / `SFMTOOL_PINHOLE`; `opt_k1`/`opt_bspline`
-  cover those two radial releases only. A focal and principal point adjusted
-  per image, rather than shared by every image of a camera, are proposed in
-  [per-image-intrinsics.md](../../drafts/per-image-intrinsics.md).
+  cover those two radial releases only. Each image's focal and principal point
+  are adjusted per image ("The per-image release"); its distortion is always
+  its camera's.
 - Gauge fixing and covariance estimation. The kernel holds no pose fixed to
   set the gauge and reports no uncertainty. A caller that wants a gauge states
   it through the point constraints (held points, or ranged points, which fix
@@ -1876,6 +2149,29 @@ validation, and outputs are unchanged.
 
 ## Open questions
 
+- **The per-image prior's floor and passes.** The floor of `0.001` on a derived
+  width is provisional, and so is whether deriving between rounds is enough or
+  the final round should run once more under widths derived from its own
+  solution. Both are to be checked on solves noisier than the hand-curated
+  ground truths, which understate an ordinary solve's noise and spread: Kerry
+  Park (the first case with a rig and a wide field, not yet measured) and the
+  raw output of `sfm solve` on `dino_dog_toy` and `seoul_bull_sculpture` among
+  them, with a script under `scripts/` that repeats the held-out measurement of
+  [`bundle-adjustment-measurements.md`](bundle-adjustment-measurements.md#per-image-intrinsic-adjustments)
+  and compares the derived widths with the held-out error at fixed widths
+  around them.
+- **A per-image focal on a two-focal model.** The focal-scale column
+  `(u − cx_i, v − cy_i)/(1 + s_i)` is exact on a two-focal model too, since one
+  scale moves both focals; whether to release it past `focal_is_releasable` is
+  open.
+- **A focal driven by the subject distance.** On `dino_dog_toy` the per-image
+  focal scale follows the EXIF `SubjectDistance` closely. A camera could model
+  it as `f_i = f₀ + a/D_i`, two shared parameters fitted from every image, in
+  place of one free scale per image: a different parameterisation.
+- **The dino ground truth.** The `dino_dog_toy` candidate ground truth's spline
+  was fitted with one shared principal point and focal, and has absorbed part of
+  what the per-image adjustments model. Rebuilding it with them, and refitting
+  its spline, is not yet done.
 - **The conditioning of a released principal point.** On a narrow field the
   data barely tell a principal-point shift from a turn of every image, and the
   reconstruction-level report states only how far the principal point moved.

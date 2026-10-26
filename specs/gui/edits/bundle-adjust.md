@@ -71,7 +71,7 @@ and in what form. One more is about the points, and one about which
 observations the solve keeps.
 
 - **One row per camera** the posed images use, in camera index order: `Camera 0
-  SFMTOOL_FISHEYE  24 images`, then three checkboxes, all clear by default. A
+  SFMTOOL_FISHEYE  24 images`, then five checkboxes, all clear by default. A
   camera only unposed images use is not in the solve and has no row. A lens that
   moves is a different claim about the capture than a pose that does, so the
   smaller claim is the default, and a camera left clear is held.
@@ -83,10 +83,10 @@ observations the solve keeps.
     `SIMPLE_RADIAL_FISHEYE`, the radial spline on `SFMTOOL_FISHEYE` and
     `SFMTOOL_PINHOLE`. It is **disabled** when the camera's model is none of
     those, with a hover explanation naming the camera and the three models to
-    switch it to first. It is also disabled while the same row's **Release focal
-    length** is clear, and cleared with it: neither `k1` nor the spline can
-    change the scale at the centre of the image, which is the focal's job, so a
-    camera's distortion is released only together with its own focal
+    switch it to first. It is also disabled while the same row releases its
+    focal neither shared nor per image, and cleared then: neither `k1` nor the
+    spline can change the scale at the centre of the image, which is the focal's
+    job, so a camera's distortion is released only together with its own focal
     ([`../../core/reconstruction/bundle-adjust.md`](../../core/reconstruction/bundle-adjust.md)).
   - **Release principal point** releases that camera's principal point, the
     pixel its optical axis passes through. It is **enabled on every model** and
@@ -95,10 +95,29 @@ observations the solve keeps.
     Its hover text says what it solves, and that on a narrow field of view the
     data barely tell it from a turn of every image, so its change in the Action
     Log is worth reading.
+  - **Release focal length per image** releases a focal length for each image
+    of that camera, a small scale of the camera's that autofocus changes from
+    one photograph to the next. It is **disabled** where **Release focal
+    length** is, for the same reason and with the same hover text.
+  - **Release principal point per image** releases a principal point for each
+    image of that camera, a small offset of the camera's that a stabilised lens
+    changes from one photograph to the next, on every model.
+
+  Each image is held toward the mean of its camera's images by a prior whose
+  widths the solve derives, and the camera's own value moves to that mean
+  ([`../../core/geometry/bundle-adjustment.md`](../../core/geometry/bundle-adjustment.md)
+  § "The per-image release"), which each per-image box's hover text says. So a
+  ticked per-image box shows the shared box of its kind **ticked and greyed**,
+  its hover text saying that the per-image release moves the camera's value to
+  the mean of its images'. What the user set in the shared box is kept, so
+  clearing the per-image box gives it back as it was; the release the row
+  answers is the per-image one alone, which the core function reads as the
+  same as both.
 
   So a rig that mixes an `OPENCV_FISHEYE` camera with spline cameras releases
   the spline cameras and holds the other, whose focal and distortion
-  checkboxes are greyed; its principal point can still be released.
+  checkboxes, shared and per image, are greyed; its principal point can still
+  be released, shared or per image.
 
   A spline camera's coefficient count and domain end are not in this dialog:
   they choose how the lens curve is parameterized, which the adjustment only
@@ -164,9 +183,11 @@ version and the history entry, in
 [state/edits.rs](../../../crates/sfm-explorer/src/state/edits.rs).
 
 The dialog sets three options. The camera rows are `releases`, which holds one
-`CameraRelease` per camera of the node's image set: each row's three checkboxes
-for its camera, less anything its model cannot take, and held for a camera with
-no row. The crossing checkbox is `free_points`, and the Schedule box is
+`CameraRelease` per camera of the node's image set: each row's five checkboxes
+for its camera, less anything its model cannot take and less a shared release
+its per-image box of the same kind stands for, and held for a camera with no
+row. The prior on the per-image releases is the core function's default,
+derived from the solve. The crossing checkbox is `free_points`, and the Schedule box is
 `schedule`. The iteration budget and the two floors are the core function's
 defaults, which are the kernel's.
 
@@ -211,6 +232,12 @@ released parts named in the order focal, principal point, lens distortion:
   distortion released, camera 1 held`, because the label is the line in the
   Edit History that says which lens moved.
 
+The parts a camera released per image follow as a phrase of their own, `,
+focal and principal point released per image`, or after its shared parts, `,
+lens distortion released, focal released per image`; a part released per image
+is not named again among the shared ones, though its shared value moves with it
+and the Action Log states that change.
+
 ### The Action Log
 
 One entry, of kind `Edit`, the label plus what the solve did:
@@ -221,8 +248,9 @@ residual 1.402 → 0.631 px (v3 → v4)`
 with the schedule appended when it is not the default, `, schedule (inf,
 1000)`, written as the dialog's box writes it, then each camera's focal change
 appended when the focal was released, then each camera's principal-point change
-when the principal point was released, what the
-storage decision did, `, free points decided at 0.412 px: 3 to finite, 25 to
+when the principal point was released (a release per image of either moves the
+camera's value, so its change is stated too), each per-image release's prior,
+what the storage decision did, `, free points decided at 0.412 px: 3 to finite, 25 to
 directions` (` before the final round converged` after the level when the final
 round stopped on its iteration budget or settled with a distortion held at its
 step guard, `, 2 not scored` after the counts when
@@ -235,7 +263,15 @@ its camera index, `, camera 0 focal 2803.5 → 2794.1, camera 1 focal 1401.2 →
 1399.8`, because a list of numbers alone would not say which lens moved. The
 principal point's change is written the same way, `, principal point (1020.0,
 768.0) → (1013.1, 787.2)` over one camera and `, camera 1 principal point
-(1020.0, 768.0) → (1013.1, 787.2)` over several. The
+(1020.0, 768.0) → (1013.1, 787.2)` over several. A camera that released a
+per-image parameter adds the widths of the prior its final round ran under,
+whether they were derived or fixed, and how many of its images ended more than
+two widths from its mean, `, per-image widths focal 0.42 %, principal point
+1.31 % of the short side (20.1 px), derived, 2 images beyond two widths`,
+naming only the parameters it released per image, and `, camera 1 per-image
+widths …` over several cameras. The derived widths are the solve's own estimate
+of how far the lens moves between photographs, and the images beyond two widths
+are the ones to look at. The
 three counts
 are what went **into** the solve, which is not always the whole node: an unposed
 image is not in it, and neither is a point nothing posed observes.
@@ -284,7 +320,12 @@ Explorer (`sfm-explorer` lib tests, headless):
   the entry's free-point clause by default, and
   none with the crossing off; no schedule clause for the default, and for
   `(inf, 1000)` the clause naming it and the dialog reopened on the node
-  holding it.
+  holding it; the label naming the parts released per image, alone and after
+  shared ones, over one camera and several; the per-image widths clause
+  derived and fixed, with its count of images beyond two widths, and none
+  without a per-image release; and the principal point released per image on
+  the demo's two-focal `PINHOLE`, named in the label, the camera's change and
+  the widths in the entry, and the camera marked as varying it.
 - `bundle_adjust_prompt/tests.rs`: the dialog's default (every camera held
   and the points crossing), the crossing checkbox cleared answering
   `FreePointPolicy::NO_CROSS`,
@@ -292,7 +333,11 @@ Explorer (`sfm-explorer` lib tests, headless):
   and the rest held, a release the camera's model cannot take never answered,
   a row's distortion released only with its own focal and cleared when a drawn
   row's focal is clear, the principal point answered on every model with or
-  without the focal, the refusal text naming the camera, the keys that run
+  without the focal, the per-image releases answered without the shared one of
+  their kind and the per-image focal refused where the shared one is, a
+  per-image focal carrying the distortion, a drawn row keeping its distortion
+  beside a per-image focal and leaving its shared boxes as the user set them,
+  the refusal text naming the camera, the keys that run
   and cancel it, an ordinary frame answering nothing, and a second ask not
   stacking a second dialog; the schedule box's text read and written for the
   default and each preset, spaces, commas and `inf` accepted, each malformed
@@ -300,10 +345,14 @@ Explorer (`sfm-explorer` lib tests, headless):
   schedule the box states and doing nothing while it states none, and the box
   opening with the schedule last run on that node and the default on another.
 - `mcp/tests/widgets.rs`: the dialog's camera row listing **Release focal
-  length** and **Release lens distortion** greyed and **Release principal
-  point** enabled on the demo's `PINHOLE` camera.
+  length**, **Release lens distortion** and **Release focal length per image**
+  greyed and **Release principal point** and **Release principal point per
+  image** enabled on the demo's `PINHOLE` camera.
 - `mcp/tests/edit.rs`: the wire's `release_principal_point` and the per-camera
-  field parsed; the wire's `schedule` parsed with `null` as the
+  field parsed; the per-image releases, their per-camera fields and
+  `image_prior` parsed, a malformed prior refused at the parse, and a run
+  releasing the principal point per image answering with its
+  `image_adjustments`; the wire's `schedule` parsed with `null` as the
   unbounded trim, each malformed or out-of-range schedule refused at the
   parse, and a run under `[[null, 1000]]` naming it in the report and
   opening the dialog with it.
@@ -329,9 +378,8 @@ reconstruction. What it does is covered headlessly.
   switched to a spline model first.
 - Adjusting a selection -- one image's pose, one region's points. The edit is the
   whole node.
-- Releasing a focal and principal point per image. The camera rows release
-  what every image of a camera shares; a per-image adjustment is proposed in
-  [`per-image-intrinsics.md`](../../drafts/per-image-intrinsics.md).
+- Choosing the per-image prior's widths from the dialog. They are derived from
+  the solve; a caller that knows them states them on the wire or in Python.
 - Choosing the iteration budget or the trim floors (`min_track`, `min_obs`)
   from the dialog. They are the core function's defaults, and a value that needs
   different ones needs a different tool.

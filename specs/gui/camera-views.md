@@ -691,6 +691,7 @@ The loader state:
 ```
 bg_image_texture: Option<Texture>       // GPU texture with full-res image
 bg_image_loaded: Option<ImageRef>       // which image is loaded
+bg_image_mesh_key: Option<BgMeshKey>    // what the mesh was built from
 ```
 
 When viewing camera N:
@@ -699,6 +700,13 @@ When viewing camera N:
   file's contents choose the decoder and the EXIF orientation is ignored, as
   in [reading-and-writing-images.md](../core/camera/reading-and-writing-images.md)),
   create GPU texture at full resolution, rebuild bind group
+- Then, if `bg_image_mesh_key` does not hold this image with its intrinsics
+  (its camera with its intrinsic adjustment applied) and its camera-to-world
+  rotation, rebuild the mesh (below) and the key. The photograph depends on the
+  image alone and the mesh on all three, so a version that changes an image's
+  camera, its intrinsic adjustment (a bundle adjustment that releases it per
+  image writes one) or its pose redraws the photograph where its rays now point,
+  without decoding it again.
 
 When exiting camera view: `clear_bg_image()` releases the texture and bind
 group. (Future enhancement: retain the texture for faster re-entry.)
