@@ -39,6 +39,7 @@ impl PyCameraIntrinsics {
             model: model.to_string(),
             width,
             height,
+            per_image_adjustments: Vec::new(),
             parameters: params,
         };
         let inner = CameraIntrinsics::try_from(&sfmr_camera)
@@ -154,6 +155,7 @@ impl PyCameraIntrinsics {
             model,
             width,
             height,
+            per_image_adjustments: Vec::new(),
             parameters,
         };
         let inner = CameraIntrinsics::try_from(&sfmr_camera)

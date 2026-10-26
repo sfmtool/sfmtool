@@ -488,7 +488,7 @@ class TestReferenceObservations:
         out = tmp_path / "no_column.sfmr"
         write_sfmr(out, data, skip_recompute_depth_stats=True)
         assert np.all(read_sfmr(out)["reference_observations"] == -1)
-        assert read_sfmr_metadata(out)["version"] == 12
+        assert read_sfmr_metadata(out)["version"] == 13
 
 
 class TestPatchColumnValidation:
@@ -835,3 +835,96 @@ class TestMinimalSave:
         meta = read_sfmr_metadata(out)
         assert meta["workspace"]["absolute_path"] == str(recon.workspace_dir)
         assert meta["tool_options"] == {**inherited, "transforms": ["Nothing"]}
+
+
+class TestPerImageIntrinsicAdjustments:
+    """Format version 13 stores per image an adjustment of its camera's focal
+    and principal point, which this build reads and writes only at zero."""
+
+    def test_a_file_without_them_reads_none_and_empty_lists(self, seoul_bull_sfmr_only):
+        data = read_sfmr(seoul_bull_sfmr_only)
+        assert data["focal_adjustments"] is None
+        assert data["principal_point_adjustments_xy"] is None
+        assert data["per_image_adjustments"] == [[] for _ in data["cameras"]]
+
+    def test_zero_columns_and_the_camera_key_round_trip(
+        self, seoul_bull_sfmr_only, tmp_path
+    ):
+        data = read_sfmr(seoul_bull_sfmr_only)
+        n_img = len(data["image_names"])
+        data["per_image_adjustments"] = [
+            ["focal", "principal_point"] for _ in data["cameras"]
+        ]
+        data["focal_adjustments"] = np.zeros(n_img)
+        data["principal_point_adjustments_xy"] = np.zeros((n_img, 2))
+        out = tmp_path / "flagged.sfmr"
+        write_sfmr(out, data)
+        again = read_sfmr(out)
+        assert read_sfmr_metadata(out)["version"] == 13
+        assert again["per_image_adjustments"] == data["per_image_adjustments"]
+        assert again["focal_adjustments"].dtype == np.float64
+        assert again["focal_adjustments"].shape == (n_img,)
+        assert again["principal_point_adjustments_xy"].shape == (n_img, 2)
+        assert not again["focal_adjustments"].any()
+        ok, errors = verify_sfmr(out)
+        assert ok, errors
+
+    def test_a_non_zero_adjustment_is_refused_on_write(
+        self, seoul_bull_sfmr_only, tmp_path
+    ):
+        data = read_sfmr(seoul_bull_sfmr_only)
+        n_img = len(data["image_names"])
+        data["per_image_adjustments"] = [["focal"] for _ in data["cameras"]]
+        data["focal_adjustments"] = np.zeros(n_img)
+        data["focal_adjustments"][2] = 0.01
+        out = tmp_path / "adjusted.sfmr"
+        with pytest.raises(
+            OSError, match="does not yet read per-image intrinsic adjustments"
+        ):
+            write_sfmr(out, data)
+        assert not out.exists()
+
+    def test_a_column_without_the_key_is_refused(self, seoul_bull_sfmr_only, tmp_path):
+        data = read_sfmr(seoul_bull_sfmr_only)
+        data["focal_adjustments"] = np.zeros(len(data["image_names"]))
+        with pytest.raises(OSError, match="no camera lists"):
+            write_sfmr(tmp_path / "unlisted.sfmr", data)
+
+    def test_image_intrinsics_is_the_camera_without_an_adjustment(
+        self, seoul_bull_sfmr_only
+    ):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        cameras = recon.cameras
+        for i, c in enumerate(recon.camera_indexes):
+            assert recon.image_intrinsics(i) == cameras[c]
+        with pytest.raises(IndexError):
+            recon.image_intrinsics(recon.image_count)
+
+    def test_image_intrinsics_applies_an_adjustment_held_in_memory(
+        self, embedded_patches_sfmr
+    ):
+        data = read_sfmr(embedded_patches_sfmr)
+        n_img = len(data["image_names"])
+        data["per_image_adjustments"] = [
+            ["focal", "principal_point"] for _ in data["cameras"]
+        ]
+        data["focal_adjustments"] = np.zeros(n_img)
+        data["focal_adjustments"][1] = 0.02
+        data["principal_point_adjustments_xy"] = np.zeros((n_img, 2))
+        data["principal_point_adjustments_xy"][1] = [0.01, -0.005]
+        recon = SfmrReconstruction.from_data(Path(embedded_patches_sfmr).parent, data)
+
+        camera = recon.cameras[int(recon.camera_indexes[1])]
+        adjusted = recon.image_intrinsics(1)
+        short_side = min(camera.width, camera.height)
+        fx, fy = camera.focal_lengths
+        cx, cy = camera.principal_point
+        assert adjusted.focal_lengths == (fx * (1 + 0.02), fy * (1 + 0.02))
+        assert adjusted.principal_point == (
+            cx + 0.01 * short_side,
+            cy - 0.005 * short_side,
+        )
+        assert recon.image_intrinsics(0) == recon.cameras[int(recon.camera_indexes[0])]
+        # A save stops at the file boundary.
+        with pytest.raises(OSError, match="image 1"):
+            recon.save(Path(embedded_patches_sfmr).parent / "adjusted.sfmr")

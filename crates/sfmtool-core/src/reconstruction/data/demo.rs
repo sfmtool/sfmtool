@@ -80,6 +80,7 @@ impl SfmrReconstruction {
                 camera_index: 0,
                 quaternion_wxyz: rotation,
                 translation_xyz: translation,
+                intrinsic_adjustment: Default::default(),
             });
         }
 
@@ -207,6 +208,7 @@ impl SfmrReconstruction {
             content_hash: ContentHash::default(),
             image_set: ImageSet {
                 cameras,
+                per_image_adjustments: Vec::new(),
                 images,
                 // Demo data has no photographs, and a zero column would be the
                 // placeholder rows the format forbids.

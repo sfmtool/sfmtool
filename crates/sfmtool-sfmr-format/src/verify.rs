@@ -92,6 +92,7 @@ pub fn verify_sfmr(path: &Path) -> Result<(bool, Vec<String>), SfmrError> {
         &stored,
         &depth_stats_raw,
         &histogram_raw,
+        &cameras,
         &mut errors,
     )?;
     section_digests.push(images_hash);
@@ -298,6 +299,7 @@ fn verify_images_section<R: Read + Seek>(
     stored: &ContentHash,
     depth_stats_raw: &[u8],
     histogram_raw: &[u8],
+    cameras: &[SfmrCamera],
     errors: &mut Vec<String>,
 ) -> Result<(u128, Vec<u8>), SfmrError> {
     // === Images hash (lexicographic path order) ===
@@ -305,6 +307,33 @@ fn verify_images_section<R: Read + Seek>(
     let is_embedded = metadata.feature_source == FEATURE_SOURCE_EMBEDDED_PATCHES;
     let is_pre_v10 = metadata.version < 10;
     let mut images_hasher = Xxh3::new();
+
+    // The per-image intrinsic adjustment columns (version 13+) are hashed
+    // wherever the archive holds them, so a column that no camera's key
+    // accounts for still reaches the digest and the rules below name it.
+    let focal_name = entries::images_focal_adjustments(image_count);
+    let principal_point_name = entries::images_principal_point_adjustments_xy(image_count);
+    let mut listed = [false; 2];
+    let mut names_ok = true;
+    for (c, camera) in cameras.iter().enumerate() {
+        match parse_per_image_adjustment_names(&camera.per_image_adjustments) {
+            Ok(flags) => {
+                listed[0] |= flags[0];
+                listed[1] |= flags[1];
+            }
+            Err(e) => {
+                names_ok = false;
+                errors.push(format!("camera {c}: {e}"));
+            }
+        }
+    }
+    let read_optional = |archive: &mut ZipArchive<R>, name: &str, listed: bool| {
+        if listed || archive.index_for_name(name).is_some() {
+            read_zst_entry(archive, name).map(Some)
+        } else {
+            Ok(None)
+        }
+    };
 
     // images/camera_indexes (captured for the keypoint bounds check below)
     let camera_indexes_raw = read_zst_entry(archive, &entries::images_camera_indexes(image_count))?;
@@ -315,7 +344,13 @@ fn verify_images_section<R: Read + Seek>(
     }
     // images/feature_tool_hashes (sift_files) or image_file_hashes
     // (embedded_patches) — same lexicographic slot, mirrors the writer.
+    // images/focal_adjustments sorts between the two.
+    let focal_raw;
     if is_embedded {
+        focal_raw = read_optional(archive, &focal_name, listed[0])?;
+        if let Some(raw) = &focal_raw {
+            images_hasher.update(raw);
+        }
         images_hasher.update(&read_zst_entry(
             archive,
             &entries::images_image_file_hashes(image_count),
@@ -325,6 +360,10 @@ fn verify_images_section<R: Read + Seek>(
             archive,
             &entries::images_feature_tool_hashes(image_count),
         )?);
+        focal_raw = read_optional(archive, &focal_name, listed[0])?;
+        if let Some(raw) = &focal_raw {
+            images_hasher.update(raw);
+        }
     }
     // images/metadata.json
     let images_meta_raw = read_zst_entry(archive, entries::images_metadata())?;
@@ -333,6 +372,12 @@ fn verify_images_section<R: Read + Seek>(
     let has_thumbnails = crate::read::images_meta_has_thumbnails(&images_meta);
     // images/names.json
     images_hasher.update(&read_zst_entry(archive, entries::images_names())?);
+    // images/principal_point_adjustments_xy (version 13+; after names.json,
+    // before quaternions_wxyz)
+    let principal_point_raw = read_optional(archive, &principal_point_name, listed[1])?;
+    if let Some(raw) = &principal_point_raw {
+        images_hasher.update(raw);
+    }
     // images/observed_depth_histogram_counts (pre-version-10 files only)
     if is_pre_v10 {
         images_hasher.update(histogram_raw);
@@ -369,6 +414,69 @@ fn verify_images_section<R: Read + Seek>(
             format_hash(images_hash),
             stored.images_xxh128
         ));
+    }
+
+    // === Validate the per-image intrinsic adjustments (version 13+) ===
+    // Below version 13 a file carries neither the cameras' key nor the
+    // columns; from it on, the rules are the reader's and the writer's.
+    let keyed = cameras.iter().any(|c| !c.per_image_adjustments.is_empty());
+    if metadata.version < SFMR_PER_IMAGE_ADJUSTMENTS_VERSION {
+        if keyed || focal_raw.is_some() || principal_point_raw.is_some() {
+            errors.push(format!(
+                "a version {} file carries per-image intrinsic adjustments, which version \
+                 {SFMR_PER_IMAGE_ADJUSTMENTS_VERSION} introduced",
+                metadata.version
+            ));
+        }
+    } else if names_ok {
+        // A malformed key has been reported above, once.
+        let to_f64 = |raw: &[u8]| -> Vec<f64> {
+            raw.as_chunks::<8>()
+                .0
+                .iter()
+                .map(|b| f64::from_le_bytes(*b))
+                .collect()
+        };
+        let check = (|| -> Result<(), String> {
+            let focal = focal_raw.as_deref().map(|raw| {
+                if raw.len() != image_count * 8 {
+                    return Err(format!(
+                        "images/focal_adjustments holds {} bytes, not {}",
+                        raw.len(),
+                        image_count * 8
+                    ));
+                }
+                Ok(ndarray::Array1::from_vec(to_f64(raw)))
+            });
+            let principal_point = principal_point_raw.as_deref().map(|raw| {
+                if raw.len() != image_count * 16 {
+                    return Err(format!(
+                        "images/principal_point_adjustments_xy holds {} bytes, not {}",
+                        raw.len(),
+                        image_count * 16
+                    ));
+                }
+                Ok(ndarray::Array2::from_shape_vec((image_count, 2), to_f64(raw)).unwrap())
+            });
+            let focal = focal.transpose()?;
+            let principal_point = principal_point.transpose()?;
+            if camera_indexes_raw.len() != image_count * 4 {
+                return Err(format!(
+                    "images/camera_indexes holds {} bytes, not {}",
+                    camera_indexes_raw.len(),
+                    image_count * 4
+                ));
+            }
+            validate_per_image_adjustments(
+                cameras,
+                raw_to_u32(&camera_indexes_raw).as_ref(),
+                focal.as_ref(),
+                principal_point.as_ref(),
+            )
+        })();
+        if let Err(e) = check {
+            errors.push(e);
+        }
     }
 
     Ok((images_hash, camera_indexes_raw))

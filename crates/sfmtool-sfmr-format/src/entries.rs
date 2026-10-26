@@ -166,6 +166,17 @@ pub(crate) fn images_sift_content_hashes(image_count: impl std::fmt::Display) ->
     format!("images/sift_content_hashes.{image_count}.uint128.zst")
 }
 
+/// `images/focal_adjustments` — focal scale per image (v13+, optional).
+pub(crate) fn images_focal_adjustments(image_count: impl std::fmt::Display) -> String {
+    format!("images/focal_adjustments.{image_count}.float64.zst")
+}
+
+/// `images/principal_point_adjustments_xy` — principal-point offset per
+/// image, in the short-side unit (v13+, optional).
+pub(crate) fn images_principal_point_adjustments_xy(image_count: impl std::fmt::Display) -> String {
+    format!("images/principal_point_adjustments_xy.{image_count}.2.float64.zst")
+}
+
 /// `images/thumbnails_y_x_rgb` — fixed square RGB thumbnail per image, with
 /// [`THUMBNAIL_SIZE`](crate::THUMBNAIL_SIZE) as its edge.
 pub(crate) fn images_thumbnails_y_x_rgb(image_count: impl std::fmt::Display) -> String {

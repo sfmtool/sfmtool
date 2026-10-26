@@ -6,6 +6,7 @@ use ndarray::{Array1, Array2, Array4};
 use std::collections::BTreeMap;
 
 mod observation_readings;
+mod per_image_adjustments;
 
 /// Create minimal valid SfmrData for testing.
 fn make_test_data() -> SfmrData {
@@ -71,6 +72,7 @@ fn make_test_data() -> SfmrData {
             model: "PINHOLE".into(),
             width: 1920,
             height: 1080,
+            per_image_adjustments: Vec::new(),
             parameters: [
                 ("focal_length_x".into(), 1000.0),
                 ("focal_length_y".into(), 1000.0),
@@ -112,6 +114,8 @@ fn make_test_data() -> SfmrData {
         sift_content_hashes: Some(vec![[1u8; 16]; image_count]),
         image_file_hashes: None,
         thumbnails_y_x_rgb: Some(Array4::zeros((image_count, 128, 128, 3))),
+        focal_adjustments: None,
+        principal_point_adjustments_xy: None,
         // Points sit at negative z: in front of the identity camera in the
         // canonical convention (the camera looks down −Z).
         positions_xyzw: Array2::from_shape_vec(
@@ -684,9 +688,11 @@ fn test_content_hash_populated() {
 
     write_sfmr(&path, &mut data).unwrap();
     let loaded = read_sfmr(&path).unwrap();
-    // Frozen at format version 12, which stamps the new version into
-    // `metadata.json`, hashed; this fixture has no patch frame and so no
-    // reference observations. Before that it was frozen at version 11, which
+    // Frozen at format version 13, which stamps the new version into
+    // `metadata.json`, hashed; this fixture has no per-image adjustments, so
+    // its cameras and images sections are what version 12 wrote. Before that
+    // it was frozen at version 12, where this fixture had no patch frame and so
+    // no reference observations, and before that at version 11, which
     // writes `has_thumbnails` into `images/metadata.json`, and before that at
     // b7ce9ece, where version 10
     // moved the depth statistics out of `images/` and into `derived/`, whose
@@ -699,7 +705,7 @@ fn test_content_hash_populated() {
     // that; otherwise the writer has regressed.
     assert_eq!(
         loaded.content_hash.content_xxh128,
-        "81e4230743699b80eef7f860fe01c020"
+        "b3a059ecc67ea7e09b9f123454d88aa8"
     );
 
     // All hashes should be non-empty 32-char hex strings
@@ -1039,6 +1045,8 @@ fn test_empty_reconstruction() {
         sift_content_hashes: Some(vec![]),
         image_file_hashes: None,
         thumbnails_y_x_rgb: Some(Array4::zeros((0, 128, 128, 3))),
+        focal_adjustments: None,
+        principal_point_adjustments_xy: None,
         positions_xyzw: Array2::zeros((0, 4)),
         colors_rgb: Array2::zeros((0, 3)),
         reprojection_errors: Array1::from_vec(vec![]),
@@ -1103,6 +1111,7 @@ fn test_multiple_cameras() {
         model: "OPENCV".into(),
         width: 3840,
         height: 2160,
+        per_image_adjustments: Vec::new(),
         parameters: [
             ("focal_length_x".into(), 2000.0),
             ("focal_length_y".into(), 2000.0),
@@ -3123,6 +3132,7 @@ fn json_maps_serialize_in_sorted_key_order() {
         model: "OPENCV_FISHEYE".into(),
         width: 1920,
         height: 1080,
+        per_image_adjustments: Vec::new(),
         parameters: [
             ("radial_distortion_k1".into(), 0.1),
             ("focal_length_x".into(), 1000.0),
@@ -3280,6 +3290,14 @@ fn entry_names_are_pinned() {
     assert_eq!(
         e::images_sift_content_hashes(11),
         "images/sift_content_hashes.11.uint128.zst"
+    );
+    assert_eq!(
+        e::images_focal_adjustments(11),
+        "images/focal_adjustments.11.float64.zst"
+    );
+    assert_eq!(
+        e::images_principal_point_adjustments_xy(11),
+        "images/principal_point_adjustments_xy.11.2.float64.zst"
     );
     // The 128s here are the fixed thumbnail edge, not a dimension.
     assert_eq!(
@@ -3477,6 +3495,11 @@ fn data_with_every_optional_column() -> SfmrData {
         }));
     data.reference_observations = Some(Array1::from_vec(vec![0, 1, 0, -1, 0]));
     with_point_constraints(&mut data);
+    // The per-image adjustment columns, at zero so that a guarded write
+    // stores them.
+    data.cameras[0].per_image_adjustments = vec!["focal".into(), "principal_point".into()];
+    data.focal_adjustments = Some(Array1::zeros(3));
+    data.principal_point_adjustments_xy = Some(Array2::zeros((3, 2)));
     data
 }
 
@@ -3747,6 +3770,11 @@ fn a_file_written_before_the_split_keeps_its_timestamp_and_its_hashes() {
     data.patch_u_halfvec_xyz = None;
     data.patch_v_halfvec_xyz = None;
     data.patch_bitmaps_y_x_rgba = None;
+    // And without the per-image adjustments, which a version-7 file cannot
+    // carry either.
+    data.cameras[0].per_image_adjustments.clear();
+    data.focal_adjustments = None;
+    data.principal_point_adjustments_xy = None;
     data.reference_observations = None;
     write_sfmr(&current, &mut data).unwrap();
 

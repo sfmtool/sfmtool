@@ -322,6 +322,7 @@ pub(in crate::bench) fn fixture_of(
                 camera_index: 0,
                 quaternion_wxyz: UnitQuaternion::from_quaternion(Quaternion::new(w, x, y, z)),
                 translation_xyz: scene.poses[i].translation,
+                intrinsic_adjustment: Default::default(),
             }
         })
         .collect();

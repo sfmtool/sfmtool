@@ -292,6 +292,7 @@ fn read_cameras_bin(path: &Path) -> Result<(Vec<SfmrCamera>, HashMap<u32, u32>),
             model: model_name.to_string(),
             width: width as u32,
             height: height as u32,
+            per_image_adjustments: Vec::new(),
             parameters,
         }));
         id_map.insert(camera_id, idx as u32);

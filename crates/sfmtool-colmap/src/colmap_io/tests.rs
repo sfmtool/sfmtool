@@ -11,6 +11,7 @@ fn make_pinhole_camera(width: u32, height: u32, fx: f64, fy: f64, cx: f64, cy: f
         model: "PINHOLE".into(),
         width,
         height,
+        per_image_adjustments: Vec::new(),
         parameters: [
             ("focal_length_x".into(), fx),
             ("focal_length_y".into(), fy),
@@ -223,6 +224,7 @@ fn test_camera_model_round_trip() {
             model: "SIMPLE_PINHOLE".into(),
             width: 640,
             height: 480,
+            per_image_adjustments: Vec::new(),
             parameters: [
                 ("focal_length".into(), 500.0),
                 ("principal_point_x".into(), 320.0),
@@ -235,6 +237,7 @@ fn test_camera_model_round_trip() {
             model: "PINHOLE".into(),
             width: 1920,
             height: 1080,
+            per_image_adjustments: Vec::new(),
             parameters: [
                 ("focal_length_x".into(), 1000.0),
                 ("focal_length_y".into(), 1001.0),
@@ -248,6 +251,7 @@ fn test_camera_model_round_trip() {
             model: "SIMPLE_RADIAL".into(),
             width: 800,
             height: 600,
+            per_image_adjustments: Vec::new(),
             parameters: [
                 ("focal_length".into(), 600.0),
                 ("principal_point_x".into(), 400.0),
@@ -261,6 +265,7 @@ fn test_camera_model_round_trip() {
             model: "RADIAL".into(),
             width: 800,
             height: 600,
+            per_image_adjustments: Vec::new(),
             parameters: [
                 ("focal_length".into(), 600.0),
                 ("principal_point_x".into(), 400.0),
@@ -275,6 +280,7 @@ fn test_camera_model_round_trip() {
             model: "OPENCV".into(),
             width: 1920,
             height: 1080,
+            per_image_adjustments: Vec::new(),
             parameters: [
                 ("focal_length_x".into(), 1000.0),
                 ("focal_length_y".into(), 1000.0),
@@ -292,6 +298,7 @@ fn test_camera_model_round_trip() {
             model: "FULL_OPENCV".into(),
             width: 3840,
             height: 2160,
+            per_image_adjustments: Vec::new(),
             parameters: [
                 ("focal_length_x".into(), 2000.0),
                 ("focal_length_y".into(), 2000.0),
@@ -313,6 +320,7 @@ fn test_camera_model_round_trip() {
             model: "OPENCV_FISHEYE".into(),
             width: 1280,
             height: 720,
+            per_image_adjustments: Vec::new(),
             parameters: [
                 ("focal_length_x".into(), 500.0),
                 ("focal_length_y".into(), 500.0),
@@ -673,6 +681,7 @@ fn equidistant_camera() -> SfmrCamera {
         model: "EQUIDISTANT_FISHEYE".into(),
         width: 480,
         height: 480,
+        per_image_adjustments: Vec::new(),
         parameters: [
             ("focal_length".into(), 130.0),
             ("principal_point_x".into(), 240.0),
@@ -688,6 +697,7 @@ fn simple_radial_fisheye_camera(k: f64) -> SfmrCamera {
         model: "SIMPLE_RADIAL_FISHEYE".into(),
         width: 480,
         height: 480,
+        per_image_adjustments: Vec::new(),
         parameters: [
             ("focal_length".into(), 130.0),
             ("principal_point_x".into(), 240.0),
@@ -800,6 +810,7 @@ fn sfmtool_fisheye_camera() -> SfmrCamera {
         model: "SFMTOOL_FISHEYE".into(),
         width: 480,
         height: 480,
+        per_image_adjustments: Vec::new(),
         parameters: [
             ("focal_length".into(), 130.0),
             ("principal_point_x".into(), 240.0),
@@ -889,6 +900,7 @@ fn sfmtool_pinhole_camera() -> SfmrCamera {
         model: "SFMTOOL_PINHOLE".into(),
         width: 1920,
         height: 1080,
+        per_image_adjustments: Vec::new(),
         parameters: [
             ("focal_length".into(), 1210.4),
             ("principal_point_x".into(), 960.0),

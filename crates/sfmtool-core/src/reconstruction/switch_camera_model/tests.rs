@@ -71,6 +71,7 @@ fn scene(cameras: Vec<CameraIntrinsics>, camera_of: impl Fn(usize) -> u32) -> Sf
                 camera_index: camera_of(i),
                 quaternion_wxyz: rotation,
                 translation_xyz: -(rotation * centre),
+                intrinsic_adjustment: Default::default(),
             }
         })
         .collect();

@@ -4,15 +4,60 @@
 //! The image side of a reconstruction: the cameras, the posed images, and
 //! everything measured per image.
 
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use ndarray::Array4;
-use sfmtool_sfmr_format::{DepthStatistics, RigFrameData};
+use sfmtool_sfmr_format::{
+    parse_per_image_adjustment_names, DepthStatistics, RigFrameData, PER_IMAGE_ADJUSTMENT_NAMES,
+};
 
 use crate::camera::CameraIntrinsics;
 use crate::reconstruction::bundle_adjust::is_posed;
 
 use super::SfmrImage;
+
+/// Which parts of one camera's intrinsics vary per image: the in-memory form
+/// of the camera's `per_image_adjustments` key in an `.sfmr` file.
+///
+/// A flag that is set says the camera's images carry their own adjustment of
+/// that parameter, so a zero there was solved for rather than never enabled.
+/// The default varies nothing.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PerImageAdjustments {
+    /// Each image of the camera has its own focal scale.
+    pub focal: bool,
+    /// Each image of the camera has its own principal-point offset.
+    pub principal_point: bool,
+}
+
+impl PerImageAdjustments {
+    /// Whether the camera varies anything per image.
+    pub fn any(&self) -> bool {
+        self.focal || self.principal_point
+    }
+
+    /// The flags a camera's stored `per_image_adjustments` list names, or a
+    /// message saying why the list is not one the format allows.
+    pub fn from_names<S: AsRef<str>>(names: &[S]) -> Result<Self, String> {
+        let [focal, principal_point] = parse_per_image_adjustment_names(names)?;
+        Ok(Self {
+            focal,
+            principal_point,
+        })
+    }
+
+    /// The camera's stored `per_image_adjustments` list: the set flags'
+    /// names, in the format's order, and empty when none is set.
+    pub fn names(&self) -> Vec<String> {
+        [self.focal, self.principal_point]
+            .into_iter()
+            .zip(PER_IMAGE_ADJUSTMENT_NAMES)
+            .filter(|&(set, _)| set)
+            .map(|(_, name)| name.to_string())
+            .collect()
+    }
+}
 
 /// The cameras, the posed images, and the per-image columns -- one half of a
 /// [`SfmrReconstruction`](super::SfmrReconstruction), the half a point never
@@ -21,12 +66,21 @@ use super::SfmrImage;
 /// Everything here is addressed by image index, so an operation that adds,
 /// drops or reorders images works on this set and an operation that only
 /// moves points leaves it alone. The columns are parallel to `images`, except
-/// `cameras`, which `SfmrImage::camera_index` indexes into, and
-/// `rig_frame_data`, which groups images into rig frames.
+/// `cameras` and `per_image_adjustments`, which `SfmrImage::camera_index`
+/// indexes into, and `rig_frame_data`, which groups images into rig frames.
 #[derive(Clone)]
 pub struct ImageSet {
     /// Camera intrinsic parameters, indexed by `SfmrImage::camera_index`.
     pub cameras: Vec<CameraIntrinsics>,
+    /// Per camera, which parts of its intrinsics vary per image, parallel to
+    /// `cameras`; or empty when no camera varies anything, the way an empty
+    /// `BundleAdjustOptions::releases` means every camera held. An edit that
+    /// adds or removes cameras keeps it in step with `cameras`.
+    ///
+    /// The adjustments themselves are on the images,
+    /// [`SfmrImage::intrinsic_adjustment`]; these flags say which of them a
+    /// save writes as solved values, the cameras' `per_image_adjustments` key.
+    pub per_image_adjustments: Vec<PerImageAdjustments>,
     /// Registered images with poses.
     pub images: Vec<SfmrImage>,
     /// `(N, THUMBNAIL_SIZE, THUMBNAIL_SIZE, 3)` RGB thumbnails of the source
@@ -62,6 +116,34 @@ impl ImageSet {
     /// The camera an image was taken with.
     pub fn camera_for_image(&self, image_index: usize) -> &CameraIntrinsics {
         &self.cameras[self.images[image_index].camera_index as usize]
+    }
+
+    /// The intrinsics image `image_index` was taken with: its camera's, with
+    /// the image's intrinsic adjustment applied. Borrowed when the adjustment
+    /// is all zero, which is every image of a file without adjustments.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `image_index` is past the images, or the image's camera
+    /// index past the cameras.
+    pub fn image_intrinsics(&self, image_index: usize) -> Cow<'_, CameraIntrinsics> {
+        let image = &self.images[image_index];
+        let camera = &self.cameras[image.camera_index as usize];
+        if image.intrinsic_adjustment.is_zero() {
+            Cow::Borrowed(camera)
+        } else {
+            Cow::Owned(camera.with_adjustment(&image.intrinsic_adjustment))
+        }
+    }
+
+    /// Which parts of camera `camera_index`'s intrinsics vary per image:
+    /// nothing when [`Self::per_image_adjustments`] is empty or does not reach
+    /// that camera.
+    pub fn camera_per_image_adjustments(&self, camera_index: usize) -> PerImageAdjustments {
+        self.per_image_adjustments
+            .get(camera_index)
+            .copied()
+            .unwrap_or_default()
     }
 
     /// The unit world-space ray `pixel` states in image `image_index`, or

@@ -263,6 +263,25 @@ impl PySfmrReconstruction {
             .collect()
     }
 
+    /// The intrinsics image `image_index` was taken with: its camera's, with
+    /// the image's intrinsic adjustment applied (its focal times `1 + s`, its
+    /// principal point moved by its offset times the camera's short side,
+    /// `min(width, height)`). Equal to its camera for an image without an
+    /// adjustment.
+    ///
+    /// Raises `IndexError` for an index past the images.
+    fn image_intrinsics(&self, image_index: usize) -> PyResult<PyCameraIntrinsics> {
+        if image_index >= self.inner.image_count() {
+            return Err(pyo3::exceptions::PyIndexError::new_err(format!(
+                "image index {image_index} is past the {} images",
+                self.inner.image_count()
+            )));
+        }
+        Ok(PyCameraIntrinsics {
+            inner: self.inner.image_intrinsics(image_index).into_owned(),
+        })
+    }
+
     /// List of image names (paths relative to the workspace).
     #[getter]
     fn image_names(&self) -> Vec<String> {

@@ -67,7 +67,26 @@ pub fn read_sfmr_content_hash(path: &Path) -> Result<ContentHash, SfmrError> {
 }
 
 /// Read a complete `.sfmr` file into columnar data.
+///
+/// A file that holds a non-zero per-image intrinsic adjustment is refused
+/// with [`SfmrError::Unsupported`], naming the first such image: this build
+/// does not yet read per-image intrinsic adjustments everywhere an image's
+/// camera is read. All-zero columns and the cameras' `per_image_adjustments`
+/// keys read as stored.
 pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
+    let data = read_sfmr_file(path)?;
+    refuse_per_image_adjustments(
+        &data.image_names,
+        data.focal_adjustments.as_ref(),
+        data.principal_point_adjustments_xy.as_ref(),
+    )?;
+    Ok(data)
+}
+
+/// [`read_sfmr`] without its refusal of non-zero per-image intrinsic
+/// adjustments: every rule of the format checked, and the adjustments read
+/// as stored.
+pub(crate) fn read_sfmr_file(path: &Path) -> Result<SfmrData, SfmrError> {
     let file = std::fs::File::open(path).map_err(|e| SfmrError::IoPath {
         operation: "Failed to open file",
         path: path.to_path_buf(),
@@ -80,7 +99,7 @@ pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
     let point_count = metadata.point_count as usize;
     let cameras = read_cameras(&mut archive, &metadata)?;
     let (images_meta, points3d_meta, tracks_meta) = read_section_metadata(&mut archive, &metadata)?;
-    let images = read_images_section(&mut archive, &metadata, &images_meta)?;
+    let images = read_images_section(&mut archive, &metadata, &images_meta, &cameras)?;
     let points = read_points_section(&mut archive, &metadata, &points3d_meta)?;
     let tracks = read_tracks_section(
         &mut archive,
@@ -119,6 +138,8 @@ pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
         sift_content_hashes: images.sift_content_hashes,
         image_file_hashes: images.image_file_hashes,
         thumbnails_y_x_rgb: images.thumbnails_y_x_rgb,
+        focal_adjustments: images.focal_adjustments,
+        principal_point_adjustments_xy: images.principal_point_adjustments_xy,
         depth_statistics: images.depth_statistics,
         observed_depth_histogram_counts: images.observed_depth_histogram_counts,
         positions_xyzw: points.positions_xyzw,
@@ -234,6 +255,8 @@ struct ImagesSection {
     sift_content_hashes: Option<Vec<[u8; 16]>>,
     image_file_hashes: Option<Vec<[u8; 16]>>,
     thumbnails_y_x_rgb: Option<Array4<u8>>,
+    focal_adjustments: Option<Array1<f64>>,
+    principal_point_adjustments_xy: Option<Array2<f64>>,
     depth_statistics: DepthStatistics,
     observed_depth_histogram_counts: Array2<u32>,
 }
@@ -242,6 +265,7 @@ fn read_images_section(
     archive: &mut zip::ZipArchive<std::fs::File>,
     metadata: &SfmrMetadata,
     images_meta: &serde_json::Value,
+    cameras: &[SfmrCamera],
 ) -> Result<ImagesSection, SfmrError> {
     let image_count = metadata.image_count as usize;
     // Version 10 moved depth statistics from images to derived.
@@ -341,6 +365,9 @@ fn read_images_section(
         None
     };
 
+    let (focal_adjustments, principal_point_adjustments_xy) =
+        read_per_image_adjustments(archive, metadata, cameras, &camera_indexes)?;
+
     // Depth statistics, under `images/` before version 10 and `derived/` from
     // version 10 on.
     let depth_statistics: DepthStatistics =
@@ -365,9 +392,83 @@ fn read_images_section(
         sift_content_hashes,
         image_file_hashes,
         thumbnails_y_x_rgb,
+        focal_adjustments,
+        principal_point_adjustments_xy,
         depth_statistics,
         observed_depth_histogram_counts,
     })
+}
+
+/// The focal and the principal-point adjustment columns, each `None` where
+/// absent.
+type AdjustmentColumns = (Option<Array1<f64>>, Option<Array2<f64>>);
+
+/// The per-image intrinsic adjustment columns (version 13+), each present
+/// exactly when some camera lists its parameter in `per_image_adjustments`,
+/// checked against the format's rules.
+///
+/// A file below version 13 carries neither the columns nor the key, and is
+/// refused when it does; it reads with no column, which is every adjustment
+/// zero. An entry that no camera's key accounts for is refused as well, so a
+/// column is never silently ignored.
+fn read_per_image_adjustments(
+    archive: &mut zip::ZipArchive<std::fs::File>,
+    metadata: &SfmrMetadata,
+    cameras: &[SfmrCamera],
+    camera_indexes: &Array1<u32>,
+) -> Result<AdjustmentColumns, SfmrError> {
+    let image_count = metadata.image_count as usize;
+    let focal_name = entries::images_focal_adjustments(image_count);
+    let principal_point_name = entries::images_principal_point_adjustments_xy(image_count);
+    if metadata.version < SFMR_PER_IMAGE_ADJUSTMENTS_VERSION {
+        let keyed = cameras.iter().any(|c| !c.per_image_adjustments.is_empty());
+        let stored = [&focal_name, &principal_point_name]
+            .into_iter()
+            .any(|name| archive.index_for_name(name).is_some());
+        if keyed || stored {
+            return Err(SfmrError::InvalidFormat(format!(
+                "a version {} file carries per-image intrinsic adjustments, which version \
+                 {SFMR_PER_IMAGE_ADJUSTMENTS_VERSION} introduced",
+                metadata.version
+            )));
+        }
+        return Ok((None, None));
+    }
+    let mut listed = [false; 2];
+    for (c, camera) in cameras.iter().enumerate() {
+        let flags = parse_per_image_adjustment_names(&camera.per_image_adjustments)
+            .map_err(|e| SfmrError::InvalidFormat(format!("camera {c}: {e}")))?;
+        listed[0] |= flags[0];
+        listed[1] |= flags[1];
+    }
+    // An entry without a listing camera is read anyway, so that the shared
+    // rules below name it rather than this reader skipping it unseen.
+    let focal_adjustments = if listed[0] || archive.index_for_name(&focal_name).is_some() {
+        let values: Vec<f64> = read_binary_array(archive, &focal_name, image_count)?;
+        Some(Array1::from_vec(values))
+    } else {
+        None
+    };
+    let principal_point_adjustments_xy = if listed[1]
+        || archive.index_for_name(&principal_point_name).is_some()
+    {
+        let values: Vec<f64> = read_binary_array(archive, &principal_point_name, image_count * 2)?;
+        Some(
+            Array2::from_shape_vec((image_count, 2), values).map_err(|e| {
+                SfmrError::ShapeMismatch(format!("principal_point_adjustments_xy reshape: {e}"))
+            })?,
+        )
+    } else {
+        None
+    };
+    validate_per_image_adjustments(
+        cameras,
+        camera_indexes.as_slice().unwrap(),
+        focal_adjustments.as_ref(),
+        principal_point_adjustments_xy.as_ref(),
+    )
+    .map_err(SfmrError::InvalidFormat)?;
+    Ok((focal_adjustments, principal_point_adjustments_xy))
 }
 
 struct PointsSection {

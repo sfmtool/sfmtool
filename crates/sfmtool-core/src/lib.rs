@@ -46,7 +46,7 @@ pub mod web_export;
 // Headline types reachable as `sfmtool_core::Foo`, leaning on each group's
 // own facade re-exports (`camera::{Camera, CameraIntrinsics, CameraModel}`,
 // `geometry::{RigidTransform, RotQuaternion, Se3Transform}`, etc.).
-pub use camera::{Camera, CameraIntrinsics, CameraModel};
+pub use camera::{Camera, CameraIntrinsics, CameraModel, IntrinsicAdjustment};
 pub use geometry::{RigidTransform, RotQuaternion, Se3Transform};
 pub use progress::Progress;
 /// The reconstruction-level bundle adjustment, which is a different function
@@ -57,9 +57,9 @@ pub use reconstruction::{
 };
 pub use reconstruction::{
     move_camera, EditError, EditedReconstruction, ImageSet, MoveCameraError, MoveCameraReport,
-    ObservationSource, Point3D, PointConstraintColumns, PointMap, PointRecord, PointSet, PointView,
-    ReconstructionError, RecordObservation, ReprojectionSample, RowMap, SfmrImage,
-    SfmrReconstruction, SiftKeypointFill, TrackObservation,
+    ObservationSource, PerImageAdjustments, Point3D, PointConstraintColumns, PointMap, PointRecord,
+    PointSet, PointView, ReconstructionError, RecordObservation, ReprojectionSample, RowMap,
+    SfmrImage, SfmrReconstruction, SiftKeypointFill, TrackObservation,
 };
 /// The progress parameter is its own crate, so the file-format crates can
 /// report through the very type this one does without depending on this one.

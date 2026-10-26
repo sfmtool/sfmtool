@@ -1283,6 +1283,7 @@ fn build_camera(
         model: camera_model.to_string(),
         width: source.width,
         height: source.height,
+        per_image_adjustments: Vec::new(),
         parameters,
     })
     .ok()

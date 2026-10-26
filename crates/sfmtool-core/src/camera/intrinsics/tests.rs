@@ -815,6 +815,7 @@ fn try_from_unknown_model() {
         model: "UNKNOWN_MODEL".to_string(),
         width: 640,
         height: 480,
+        per_image_adjustments: Vec::new(),
         parameters: BTreeMap::new(),
     };
     let err = CameraIntrinsics::try_from(&sfmr).unwrap_err();
@@ -832,6 +833,7 @@ fn try_from_missing_parameter() {
         model: "PINHOLE".to_string(),
         width: 640,
         height: 480,
+        per_image_adjustments: Vec::new(),
         parameters: params,
     };
     let err = CameraIntrinsics::try_from(&sfmr).unwrap_err();

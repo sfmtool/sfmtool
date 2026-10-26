@@ -554,6 +554,7 @@ impl From<&CameraIntrinsics> for SfmrCamera {
             width: cam.width,
             height: cam.height,
             parameters,
+            per_image_adjustments: Vec::new(),
         }
     }
 }

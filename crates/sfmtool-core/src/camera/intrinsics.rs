@@ -876,6 +876,150 @@ impl CameraIntrinsics {
         }
         out
     }
+
+    /// This camera with `adjustment` applied: every focal times
+    /// `1 + adjustment.focal`, and the principal point moved on each axis by
+    /// its fraction of the camera's short side, `min(width, height)`.
+    ///
+    /// Nothing else changes: the model, the size and the distortion are the
+    /// camera's. A zero adjustment gives the camera back exactly.
+    pub fn with_adjustment(&self, adjustment: &IntrinsicAdjustment) -> CameraIntrinsics {
+        let scale = 1.0 + adjustment.focal;
+        let short_side = f64::from(self.width.min(self.height));
+        let [a_x, a_y] = adjustment.principal_point;
+        let mut out = self.clone();
+        let (focals, principal_point): (Vec<&mut f64>, [&mut f64; 2]) = match &mut out.model {
+            CameraModel::SimplePinhole {
+                focal_length,
+                principal_point_x,
+                principal_point_y,
+            }
+            | CameraModel::SimpleRadial {
+                focal_length,
+                principal_point_x,
+                principal_point_y,
+                ..
+            }
+            | CameraModel::Radial {
+                focal_length,
+                principal_point_x,
+                principal_point_y,
+                ..
+            }
+            | CameraModel::SimpleRadialFisheye {
+                focal_length,
+                principal_point_x,
+                principal_point_y,
+                ..
+            }
+            | CameraModel::RadialFisheye {
+                focal_length,
+                principal_point_x,
+                principal_point_y,
+                ..
+            }
+            | CameraModel::EquidistantFisheye {
+                focal_length,
+                principal_point_x,
+                principal_point_y,
+            }
+            | CameraModel::SfmtoolFisheye {
+                focal_length,
+                principal_point_x,
+                principal_point_y,
+                ..
+            }
+            | CameraModel::SfmtoolPinhole {
+                focal_length,
+                principal_point_x,
+                principal_point_y,
+                ..
+            } => (vec![focal_length], [principal_point_x, principal_point_y]),
+            CameraModel::Pinhole {
+                focal_length_x,
+                focal_length_y,
+                principal_point_x,
+                principal_point_y,
+            }
+            | CameraModel::OpenCV {
+                focal_length_x,
+                focal_length_y,
+                principal_point_x,
+                principal_point_y,
+                ..
+            }
+            | CameraModel::OpenCVFisheye {
+                focal_length_x,
+                focal_length_y,
+                principal_point_x,
+                principal_point_y,
+                ..
+            }
+            | CameraModel::ThinPrismFisheye {
+                focal_length_x,
+                focal_length_y,
+                principal_point_x,
+                principal_point_y,
+                ..
+            }
+            | CameraModel::RadTanThinPrismFisheye {
+                focal_length_x,
+                focal_length_y,
+                principal_point_x,
+                principal_point_y,
+                ..
+            }
+            | CameraModel::FullOpenCV {
+                focal_length_x,
+                focal_length_y,
+                principal_point_x,
+                principal_point_y,
+                ..
+            }
+            | CameraModel::Equirectangular {
+                focal_length_x,
+                focal_length_y,
+                principal_point_x,
+                principal_point_y,
+            } => (
+                vec![focal_length_x, focal_length_y],
+                [principal_point_x, principal_point_y],
+            ),
+        };
+        for focal in focals {
+            *focal *= scale;
+        }
+        let [cx, cy] = principal_point;
+        *cx += a_x * short_side;
+        *cy += a_y * short_side;
+        out
+    }
+}
+
+/// An image's **intrinsic adjustment**: how far the intrinsics it was taken
+/// with differ from its camera's shared ones.
+///
+/// The image's focal (both focals on a two-focal model) is its camera's times
+/// `1 + focal`, and its principal point is its camera's plus
+/// `principal_point[0]·m` in x and `principal_point[1]·m` in y, where `m` is
+/// the camera's short side, `min(width, height)`. Both are relative, so an
+/// adjustment means the same after the camera is resized. The default is
+/// zero, which reads the image through its camera exactly.
+/// [`CameraIntrinsics::with_adjustment`] applies one.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct IntrinsicAdjustment {
+    /// The focal scale `s`: the image's focal is its camera's times `1 + s`.
+    pub focal: f64,
+    /// The principal-point offset `[a_x, a_y]`, in the short-side unit.
+    pub principal_point: [f64; 2],
+}
+
+impl IntrinsicAdjustment {
+    /// Whether this adjustment is zero, so that the image is read through its
+    /// camera exactly.
+    pub fn is_zero(&self) -> bool {
+        self.focal == 0.0 && self.principal_point == [0.0, 0.0]
+    }
 }
 
 #[cfg(test)]

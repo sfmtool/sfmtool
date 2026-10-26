@@ -95,6 +95,7 @@ fn truth_through(
                 camera_index: camera_of(i),
                 quaternion_wxyz: rotation,
                 translation_xyz: -(rotation * centre),
+                intrinsic_adjustment: Default::default(),
             }
         })
         .collect();

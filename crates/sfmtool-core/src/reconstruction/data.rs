@@ -24,6 +24,7 @@
 //! [`image_set`] and [`point_set`]; `specs/core/reconstruction/edited-reconstruction.md`
 //! says why the line falls where it does.
 
+use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
 use nalgebra::{Point3, UnitQuaternion, Vector3};
@@ -33,6 +34,9 @@ use sfmtool_sfmr_format::{
     ContentHash, SfmrMetadata, NO_REFERENCE_IMAGE, POINT_CONSTRAINT_FREE, POINT_CONSTRAINT_HELD,
     POINT_CONSTRAINT_RANGED,
 };
+
+use crate::camera::intrinsics::IntrinsicAdjustment;
+use crate::camera::CameraIntrinsics;
 
 mod affine_shape;
 mod conversion;
@@ -44,7 +48,7 @@ mod recompute;
 mod sift_keypoints;
 
 pub use affine_shape::patch_affine_shape;
-pub use image_set::ImageSet;
+pub use image_set::{ImageSet, PerImageAdjustments};
 pub(crate) use point_set::observation_confidence_byte;
 pub use point_set::{ObservationSource, PointSet};
 pub use readings::{
@@ -250,6 +254,14 @@ pub struct SfmrImage {
     pub quaternion_wxyz: UnitQuaternion<f64>,
     /// World-to-camera translation vector.
     pub translation_xyz: Vector3<f64>,
+    /// How the intrinsics this image was taken with differ from its camera's:
+    /// zero, the default, for an image read through its camera exactly.
+    ///
+    /// It travels with the image, so an edit that reorders, filters, merges or
+    /// copies images carries it. Read an image's lens through
+    /// [`ImageSet::image_intrinsics`], which applies it, rather than from this
+    /// field.
+    pub intrinsic_adjustment: IntrinsicAdjustment,
 }
 
 impl SfmrImage {
@@ -489,6 +501,12 @@ impl SfmrReconstruction {
     /// Number of camera models.
     pub fn camera_count(&self) -> usize {
         self.image_set.camera_count()
+    }
+
+    /// The intrinsics image `image_index` was taken with. See
+    /// [`ImageSet::image_intrinsics`].
+    pub fn image_intrinsics(&self, image_index: usize) -> Cow<'_, CameraIntrinsics> {
+        self.image_set.image_intrinsics(image_index)
     }
 
     /// Returns a point's observations. See [`PointSet::observations_for_point`].

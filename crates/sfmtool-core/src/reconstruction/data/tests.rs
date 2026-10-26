@@ -9,6 +9,7 @@ use crate::progress::{Event, Progress};
 
 use super::*;
 
+mod per_image_adjustments;
 mod readings;
 
 /// One phase a load closed: its name, its depth, and what it said it did.

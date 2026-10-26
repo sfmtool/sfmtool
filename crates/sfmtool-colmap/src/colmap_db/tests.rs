@@ -16,6 +16,7 @@ fn make_pinhole_camera(width: u32, height: u32, fx: f64, fy: f64, cx: f64, cy: f
         model: "PINHOLE".into(),
         width,
         height,
+        per_image_adjustments: Vec::new(),
         parameters: [
             ("focal_length_x".into(), fx),
             ("focal_length_y".into(), fy),
@@ -423,6 +424,7 @@ fn sfmtool_fisheye_fails_the_db_export_path() {
         model: "SFMTOOL_FISHEYE".into(),
         width: 480,
         height: 480,
+        per_image_adjustments: Vec::new(),
         parameters: [
             ("focal_length".into(), 130.0),
             ("principal_point_x".into(), 240.0),
@@ -479,6 +481,7 @@ fn sfmtool_pinhole_fails_the_db_export_path() {
         model: "SFMTOOL_PINHOLE".into(),
         width: 1920,
         height: 1080,
+        per_image_adjustments: Vec::new(),
         parameters: [
             ("focal_length".into(), 1210.4),
             ("principal_point_x".into(), 960.0),
@@ -533,6 +536,7 @@ fn test_multiple_cameras() {
             model: "SIMPLE_RADIAL".into(),
             width: 640,
             height: 480,
+            per_image_adjustments: Vec::new(),
             parameters: [
                 ("focal_length".into(), 500.0),
                 ("principal_point_x".into(), 320.0),

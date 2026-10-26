@@ -410,6 +410,7 @@ fn apply_image_field(
                     camera_index: 0,
                     quaternion_wxyz: UnitQuaternion::identity(),
                     translation_xyz: Vector3::zeros(),
+                    intrinsic_adjustment: Default::default(),
                 });
             }
             recon.image_set.images.truncate(n);
@@ -478,6 +479,19 @@ fn apply_image_field(
                     })
                 })
                 .collect::<PyResult<Vec<_>>>()?;
+            // Keep the per-camera flags in step with the cameras. Camera `c`
+            // keeps its flags while it is still there, and a camera past the
+            // old count varies nothing. A caller that renumbers the cameras
+            // passes `camera_indexes` too, and an image left with an
+            // adjustment its new camera does not vary is refused on save.
+            let count = recon.image_set.cameras.len();
+            let flags = &mut recon.image_set.per_image_adjustments;
+            if !flags.is_empty() {
+                flags.resize(count, Default::default());
+                if !flags.iter().any(|f| f.any()) {
+                    flags.clear();
+                }
+            }
         }
         "thumbnails_y_x_rgb" if value.is_none() => {
             // Drop the column: every row of everything else is kept.
@@ -805,6 +819,7 @@ fn apply_image_count_changes(
                 camera_index: 0,
                 quaternion_wxyz: UnitQuaternion::identity(),
                 translation_xyz: Vector3::zeros(),
+                intrinsic_adjustment: Default::default(),
             });
         }
         recon.image_set.images.truncate(n);

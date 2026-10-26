@@ -226,7 +226,30 @@ pub fn write_sfmr(path: &Path, data: &mut SfmrData) -> Result<(), SfmrError> {
 /// Sorts tracks by `(point_indexes, image_indexes)` if not already sorted.
 /// See [`WriteOptions`] for available options. By default, depth statistics
 /// are recomputed from the reconstruction data to ensure trustworthiness.
+///
+/// A value that holds a non-zero per-image intrinsic adjustment is refused
+/// with [`SfmrError::Unsupported`], naming the first such image, and nothing
+/// is written: this build does not yet read per-image intrinsic adjustments
+/// everywhere an image's camera is read, so it does not write a file that
+/// [`crate::read_sfmr`] would refuse. All-zero columns and the cameras'
+/// `per_image_adjustments` keys are written.
 pub fn write_sfmr_with_options(
+    path: &Path,
+    data: &mut SfmrData,
+    options: &WriteOptions,
+) -> Result<(), SfmrError> {
+    refuse_per_image_adjustments(
+        &data.image_names,
+        data.focal_adjustments.as_ref(),
+        data.principal_point_adjustments_xy.as_ref(),
+    )?;
+    write_sfmr_file(path, data, options)
+}
+
+/// [`write_sfmr_with_options`] without its refusal of non-zero per-image
+/// intrinsic adjustments: every rule of the format checked, and the
+/// adjustments written as given.
+pub(crate) fn write_sfmr_file(
     path: &Path,
     data: &mut SfmrData,
     options: &WriteOptions,
@@ -405,6 +428,15 @@ fn write_sfmr_into<S: EntrySink>(
         )
         .map_err(SfmrError::InvalidFormat)?;
     }
+    // The per-image intrinsic adjustments, against the cameras that list
+    // them: the reader and verifier refuse what this refuses.
+    validate_per_image_adjustments(
+        &data.cameras,
+        data.camera_indexes.as_slice().unwrap(),
+        data.focal_adjustments.as_ref(),
+        data.principal_point_adjustments_xy.as_ref(),
+    )
+    .map_err(SfmrError::InvalidFormat)?;
 
     let mut sink = open_sink()?;
     let mut section_digests = sfmtool_archive_io::SectionDigests::new();
@@ -614,10 +646,31 @@ fn write_images<S: EntrySink>(
         &mut images_hasher,
     )?;
 
+    // images/focal_adjustments (optional, version 13+). It sorts after
+    // feature_tool_hashes and before image_file_hashes, so its slot is after
+    // the hash column in a sift_files file and before it in an
+    // embedded_patches one.
+    let focal_adjustments: Option<Vec<f64>> = data
+        .focal_adjustments
+        .as_ref()
+        .map(|a| a.iter().copied().collect());
+    let write_focal = |sink: &mut S, hasher: &mut Xxh3| -> Result<(), SfmrError> {
+        if let Some(values) = &focal_adjustments {
+            binary_hashed(
+                sink,
+                &entries::images_focal_adjustments(image_count),
+                bytemuck::cast_slice(values),
+                hasher,
+            )?;
+        }
+        Ok(())
+    };
+
     // images/feature_tool_hashes (sift_files) or images/image_file_hashes
     // (embedded_patches). Files are emitted in lexicographic path order (see
     // spec §Hashing); both names occupy the same slot, after depth_statistics.json.
     if is_embedded {
+        write_focal(sink, &mut images_hasher)?;
         let hash_bytes: Vec<u8> = data
             .image_file_hashes
             .as_ref()
@@ -645,6 +698,7 @@ fn write_images<S: EntrySink>(
             &hash_bytes,
             &mut images_hasher,
         )?;
+        write_focal(sink, &mut images_hasher)?;
     }
 
     // images/metadata.json
@@ -660,6 +714,18 @@ fn write_images<S: EntrySink>(
     // images/names.json
     let bytes = sink.write_json(entries::images_names(), &data.image_names)?;
     images_hasher.update(&bytes);
+
+    // images/principal_point_adjustments_xy (optional, version 13+; after
+    // names.json, before quaternions_wxyz)
+    if let Some(offsets) = &data.principal_point_adjustments_xy {
+        let values: Vec<f64> = offsets.iter().copied().collect();
+        binary_hashed(
+            sink,
+            &entries::images_principal_point_adjustments_xy(image_count),
+            bytemuck::cast_slice(&values),
+            &mut images_hasher,
+        )?;
+    }
 
     // images/quaternions_wxyz
     binary_hashed(

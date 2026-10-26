@@ -202,6 +202,7 @@ impl SfmrReconstruction {
                 images: new_images,
                 rig_frame_data: new_rig_frame_data,
                 cameras: self.image_set.cameras.clone(),
+                per_image_adjustments: self.image_set.per_image_adjustments.clone(),
                 // The thumbnails are pixels of the source images, which a
                 // similarity of the scene does not touch, so the new value
                 // shares the old one's array rather than copying it.
@@ -579,6 +580,7 @@ impl SfmrReconstruction {
             content_hash: self.content_hash.clone(),
             image_set: ImageSet {
                 cameras: self.image_set.cameras.clone(),
+                per_image_adjustments: self.image_set.per_image_adjustments.clone(),
                 images: new_images,
                 thumbnails_y_x_rgb: new_thumbnails,
                 depth_statistics: new_depth_statistics,

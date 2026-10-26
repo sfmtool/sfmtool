@@ -2,7 +2,7 @@
 
 **Status:** Draft. Decided:
 - the bundle adjustment first releases each camera's shared principal point, with a checkbox in SfM Explorer's Bundle Adjust dialog and an argument on its MCP tool (PR 1, built; see [PR 1](#pr-1-releasing-the-shared-principal-point));
-- an `.sfmr` file stores, per image, a small adjustment of its camera's focal and principal point, as one optional `images/` column per adjustable parameter, with each camera recording in `cameras/metadata.json` which parameters vary per image; this is format version 13 (PR 2);
+- an `.sfmr` file stores, per image, a small adjustment of its camera's focal and principal point, as one optional `images/` column per adjustable parameter, with each camera recording in `cameras/metadata.json` which parameters vary per image; this is format version 13 (PR 2, built with the accessor below and a refusal of any non-zero adjustment at the file boundary, which PR 3 lifts);
 - the focal adjustment is a relative scale, `f_i = f·(1 + s_i)`, and the principal-point adjustment is stored on both axes as a fraction of the image's shorter side `m = min(width, height)`, the **short-side unit**, `cx_i = cx + a_x,i·m` and `cy_i = cy + a_y,i·m`, so that both carry over when a reconstruction moves from low-resolution proxies to the full-resolution photographs, and an offset reads the same in x and y;
 - one accessor, `image_intrinsics(i)`, returns an image's camera with its adjustment applied, borrowed when there is none, and nothing else reads the raw columns (PR 2); every consumer that looks up an image's camera goes through it, and COLMAP export writes each camera that has a non-zero adjustment on any of its images as one COLMAP camera per image, with the adjustment applied (PR 3);
 - the bundle adjustment releases the adjustments per image, each held toward zero by a Gaussian prior whose width is derived for each camera from the solve itself: a first pass under a loose prior that only stops runaways, a robust spread of the adjustments, with the prior's pull undone and the measurement noise subtracted, weighted by how well each is determined, and further passes under that spread, which the report states (PR 4);
@@ -83,58 +83,13 @@ What the later PRs build on:
 
 ## PR 2: the format columns and the accessor
 
-PR 2 makes the adjustment representable everywhere a reconstruction is held, and readable through one function, while no writer can yet produce a non-zero one.
+PR 2 is built. It made the adjustment representable everywhere a reconstruction is held, and readable through one function, while no writer can produce a non-zero one. The standing specs describe it: [sfmr-file-format.md](../formats/sfmr-file-format.md#per-image-intrinsic-adjustments-optional-version-13) the version 13 columns `images/focal_adjustments` and `images/principal_point_adjustments_xy`, each camera's `per_image_adjustments` key, the rules a reader, a writer and a verifier hold them to, their hash slots and the migration from version 12; [edited-reconstruction.md](../core/reconstruction/edited-reconstruction.md) the in-memory form; and the [glossary](../GLOSSARY.md) the words *intrinsic adjustment*, *image intrinsics* and *short-side unit*.
 
-**The `.sfmr` format, version 13.** The images section gains two optional columns:
-
-| Entry | Shape | Holds |
-|-------|-------|-------|
-| `images/focal_adjustments.{N}.float64.zst` | `(N,)` | `s_i`: the image's focal is its camera's times `1 + s_i` |
-| `images/principal_point_adjustments_xy.{N}.2.float64.zst` | `(N, 2)` | `[a_x,i, a_y,i]`, in the short-side unit: the image's principal point is its camera's plus `a_x,i·m` in x and `a_y,i·m` in y, where `m = min(width, height)` of the image's camera |
-
-Each camera in `cameras/metadata.json` gains an optional key `per_image_adjustments`, a list naming the parameters that vary per image for that camera, `"focal"` and `"principal_point"`, in that order. A camera that varies neither has no key, so the cameras JSON of a file without adjustments is byte for byte what version 12 writes. The key is what tells a zero adjustment that was solved for apart from one that was never enabled.
-
-The rules a reader checks, refusing the file otherwise:
-- a column is present exactly when at least one camera lists its parameter;
-- a row whose image's camera does not list the parameter holds exactly `0` (a writer writes `+0.0`);
-- every value is finite, and every focal adjustment is above `−1`;
-- `per_image_adjustments` names only `"focal"` and `"principal_point"`, each at most once;
-- a file below version 13 has neither the columns nor the key.
-
-`float64`, the type of the poses beside them, so that a solved adjustment round-trips exactly. Both columns are part of `images_xxh128` in their lexicographic slots: `focal_adjustments` after `feature_tool_hashes` (or after `camera_indexes` in an `embedded_patches` file) and before `image_file_hashes` and `metadata.json`; `principal_point_adjustments_xy` after `names.json` and before `quaternions_wxyz`. The camera key is part of `cameras_xxh128`, which hashes the cameras JSON. `SFMR_FORMAT_VERSION` becomes 13, with a `SFMR_PER_IMAGE_ADJUSTMENTS_VERSION = 13` beside `SFMR_REFERENCE_OBSERVATIONS_VERSION` ([types.rs](../../crates/sfmtool-sfmr-format/src/types.rs)). Migration is mechanical: a version 12 file reads with every adjustment zero and no camera listing any parameter, and saves as version 13 with neither columns nor key; a version 13 file with no column maps back to version 12 unchanged apart from the version number.
-
-In the format crate, `SfmrData` gains `focal_adjustments: Option<Array1<f64>>` and `principal_point_adjustments_xy: Option<Array2<f64>>`, and `SfmrCamera` gains `per_image_adjustments: Vec<String>`, skipped in the JSON when empty. The PR files the columns into [sfmr-file-format.md](../formats/sfmr-file-format.md) (images section, cameras section, content hash, a "Version 12 → Version 13" section and the history line), in the present tense.
-
-**In memory.** The adjustment travels with its image, so `SfmrImage` gains `intrinsic_adjustment: IntrinsicAdjustment`, a `Copy` struct `{ focal: f64, principal_point: [f64; 2] }` whose `Default` is all zero. Every edit that reorders, filters, merges or copies images then carries it without a change of its own; the five non-test places that build an `SfmrImage` (the reader's conversion, the demo, `reconstruction/edit.rs` and two in the bindings' `clone.rs`) set it. The per-camera flags go on the image set beside `cameras`: `ImageSet::per_image_adjustments: Vec<PerImageAdjustments>`, one `PerImageAdjustments { focal: bool, principal_point: bool }` per camera, or empty when no camera varies anything, the way an empty `BundleAdjustOptions::releases` means every camera held. An edit that adds or removes cameras keeps it in step with `cameras`.
-
-**The accessor.** One function applies an adjustment:
-
-```rust
-impl ImageSet {
-    /// The intrinsics image `image_index` was taken with: its camera's, with the
-    /// image's intrinsic adjustment applied. Borrowed when the adjustment is all
-    /// zero, which is every image of a file without adjustments.
-    pub fn image_intrinsics(&self, image_index: usize) -> Cow<'_, CameraIntrinsics>;
-}
-
-impl SfmrReconstruction {
-    /// `self.image_set.image_intrinsics(image_index)`.
-    pub fn image_intrinsics(&self, image_index: usize) -> Cow<'_, CameraIntrinsics>;
-}
-
-impl CameraIntrinsics {
-    /// This camera with `adjustment` applied: every focal times `1 + focal`,
-    /// the principal point moved on each axis by its fraction of the
-    /// camera's short side, `min(width, height)`.
-    pub fn with_adjustment(&self, adjustment: &IntrinsicAdjustment) -> CameraIntrinsics;
-}
-```
-
-It is named for what it returns, the image's intrinsics, as `refit_camera_intrinsics` is named for the intrinsics rather than the camera: a *camera* in this project also has a pose, and an *image* already means an entry of the image set addressed by index. `Cow` because almost every image of almost every file has no adjustment, and a consumer on a hot path (a projection per observation) should not clone a spline camera per call. Nothing else reads `intrinsic_adjustment` or the raw columns: a consumer that wants an image's lens calls `image_intrinsics`, and a consumer that wants the shared camera (the Camera Intrinsics panel, the camera model switch, the bundle adjustment's lens block) reads `cameras[camera_index]` and says so. `ImageSet::camera_for_image` keeps returning the shared camera until PR 3 moves its callers and removes it. Python gets `SfmrReconstruction.image_intrinsics(i)` and the two columns and the camera key in the `read_sfmr` / `write_sfmr` dict.
-
-**The guard.** Until every consumer reads through the accessor, a non-zero adjustment in a file would be read wrongly by the ones that do not. So in PR 2 `read_sfmr` and `write_sfmr_with_options` refuse a file, or a value, with any non-zero adjustment, with an `SfmrError` that names the first such image and says this build does not yet read per-image intrinsic adjustments. All-zero columns and camera keys are accepted, so a version 13 file can carry the flags. The guard is at the file boundary only: a value built in memory may hold non-zero adjustments, which is how PR 3's tests check each consumer before the guard is lifted.
-
-**Tests.** A round trip of both columns and the camera key, bit for bit; each reader refusal; a version 12 file reading with zero adjustments and saving as version 13 with no columns; the images and cameras hashes changing with the columns and the key; `image_intrinsics` borrowing on a zero adjustment and applying a non-zero one exactly, on a single-focal and a two-focal model; an image filter and an image reorder carrying the adjustment with its image; the guard refusing a non-zero row on read and on write.
+What PRs 3 and 4 build on:
+- **In memory.** Each `SfmrImage` carries `intrinsic_adjustment: IntrinsicAdjustment`, a `Copy` struct `{ focal: f64, principal_point: [f64; 2] }` whose `Default` is zero, so every edit that reorders, filters, merges or copies images carries it. The per-camera flags are `ImageSet::per_image_adjustments: Vec<PerImageAdjustments>`, one `{ focal: bool, principal_point: bool }` per camera, or empty when no camera varies anything; `ImageSet::camera_per_image_adjustments(c)` reads one camera's. A save writes a column when some camera's flag is set, and also when an image holds a non-zero value of it under a camera whose flag is not, so that the writer refuses that value rather than dropping it.
+- **The accessor.** `ImageSet::image_intrinsics(i)` and `SfmrReconstruction::image_intrinsics(i)` return `Cow<CameraIntrinsics>`, borrowed when the image's adjustment is zero; `CameraIntrinsics::with_adjustment` applies one. Python has `SfmrReconstruction.image_intrinsics(i)`, and the `read_sfmr` / `write_sfmr` dicts carry the two columns and a `per_image_adjustments` list of names per camera. `ImageSet::camera_for_image` still returns the shared camera, for PR 3 to move its callers and remove.
+- **The guard.** `read_sfmr` and `write_sfmr_with_options` refuse any non-zero adjustment with `SfmrError::Unsupported`, naming the first such image and saying this build does not yet read per-image intrinsic adjustments. All-zero columns and the keys pass, `verify_sfmr` does not refuse a non-zero adjustment, and `content_hash_of` and `SfmrReconstruction::content_xxh128` hash a value that holds one. A value built in memory, through `SfmrReconstruction::from_sfmr_data` or the binding's `from_data`, may hold non-zero adjustments, which is how PR 3's tests check each consumer before PR 3c lifts the guard.
+- **Decided in the build.** The reader also refuses a `per_image_adjustments` list out of the order `"focal"`, `"principal_point"`, so a list has one spelling. When `clone_with_changes(cameras=…)` changes the camera count, camera `c` keeps its flags while it is still there and a new camera varies nothing.
 
 ## PR 3: every consumer reads the image's intrinsics
 

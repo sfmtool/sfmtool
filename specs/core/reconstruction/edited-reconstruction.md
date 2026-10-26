@@ -46,7 +46,8 @@ pub struct SfmrReconstruction {
 
 pub struct ImageSet {
     pub cameras: Vec<CameraIntrinsics>,
-    pub images: Vec<SfmrImage>,
+    pub per_image_adjustments: Vec<PerImageAdjustments>, // per camera; empty = none varies
+    pub images: Vec<SfmrImage>, // each carries its own intrinsic_adjustment
     pub thumbnails_y_x_rgb: Option<Arc<Array4<u8>>>,
     pub depth_statistics: DepthStatistics,
     pub depth_histogram_counts: Vec<Vec<u32>>,
@@ -98,8 +99,18 @@ impl ImageSet {
     pub fn image_count(&self) -> usize;
     pub fn camera_count(&self) -> usize;
     pub fn camera_for_image(&self, image_index: usize) -> &CameraIntrinsics;
+    // The camera with the image's intrinsic adjustment applied, borrowed when
+    // the adjustment is zero.
+    pub fn image_intrinsics(&self, image_index: usize) -> Cow<'_, CameraIntrinsics>;
+    pub fn camera_per_image_adjustments(&self, camera_index: usize) -> PerImageAdjustments;
 }
 ```
+
+`per_image_adjustments` is addressed by camera index, like `cameras`, and an
+edit that adds or removes cameras keeps the two in step. An image's intrinsic
+adjustment travels on its `SfmrImage`, so every edit that reorders, filters or
+copies images carries it without a step of its own; see
+[sfmr-file-format.md](../../formats/sfmr-file-format.md#per-image-intrinsic-adjustments-optional-version-13).
 
 `SfmrReconstruction` keeps a forwarding method for each of the reads a caller
 makes most often, so `recon.point_count()`, `recon.image_count()`,

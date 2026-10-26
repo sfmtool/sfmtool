@@ -57,6 +57,11 @@ pub enum SfmrError {
 
     #[error("Hash verification failed: {0}")]
     HashMismatch(String),
+
+    /// The file, or the value about to be written, is valid but holds
+    /// something this build does not read yet.
+    #[error("Unsupported: {0}")]
+    Unsupported(String),
 }
 
 impl From<ArchiveIoError> for SfmrError {
@@ -82,6 +87,18 @@ pub struct SfmrCamera {
     pub width: u32,
     pub height: u32,
     pub parameters: BTreeMap<String, f64>,
+    /// The parameters that vary per image for this camera (version 13+), each
+    /// a name from [`PER_IMAGE_ADJUSTMENT_NAMES`], in that order: `"focal"`
+    /// when its images' rows of `images/focal_adjustments` are in use, and
+    /// `"principal_point"` when their rows of
+    /// `images/principal_point_adjustments_xy` are.
+    ///
+    /// Empty for a camera whose images are all read through it exactly, and
+    /// then left out of the JSON, so the cameras entry of a file without
+    /// adjustments is byte for byte what version 12 writes. The key is what
+    /// tells a zero adjustment that was solved for from one never enabled.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub per_image_adjustments: Vec<String>,
 }
 
 impl SfmrCamera {
@@ -547,6 +564,171 @@ pub(crate) fn validate_reference_observations(
     Ok(())
 }
 
+/// The names a camera's `per_image_adjustments` may list, in the order it
+/// lists them: index `0` is the focal, index `1` the principal point.
+pub const PER_IMAGE_ADJUSTMENT_NAMES: [&str; 2] = ["focal", "principal_point"];
+
+/// Which parameters a camera's `per_image_adjustments` lists, as one flag per
+/// entry of [`PER_IMAGE_ADJUSTMENT_NAMES`]: `[focal, principal_point]`.
+///
+/// A list names only those two, each at most once, in that order, so every
+/// list has one spelling and two files that say the same thing hash the same.
+pub fn parse_per_image_adjustment_names<S: AsRef<str>>(names: &[S]) -> Result<[bool; 2], String> {
+    let mut flags = [false; 2];
+    let mut last: Option<usize> = None;
+    for name in names {
+        let name = name.as_ref();
+        let Some(k) = PER_IMAGE_ADJUSTMENT_NAMES.iter().position(|&n| n == name) else {
+            return Err(format!(
+                "per_image_adjustments names {name:?}, not one of {PER_IMAGE_ADJUSTMENT_NAMES:?}"
+            ));
+        };
+        if flags[k] {
+            return Err(format!("per_image_adjustments names {name:?} twice"));
+        }
+        if last.is_some_and(|l| l > k) {
+            return Err(format!(
+                "per_image_adjustments lists {names:?}, out of the order {PER_IMAGE_ADJUSTMENT_NAMES:?}",
+                names = names.iter().map(AsRef::as_ref).collect::<Vec<_>>()
+            ));
+        }
+        flags[k] = true;
+        last = Some(k);
+    }
+    Ok(flags)
+}
+
+/// Check the per-image intrinsic adjustment columns against the cameras that
+/// list them: each camera's `per_image_adjustments` well formed; a column
+/// present exactly when some camera lists its parameter, one row per image
+/// (two values per row for the principal point); every value finite and every
+/// focal adjustment above `-1`; and every row of an image whose camera does not
+/// list the parameter exactly `0`.
+///
+/// Read, write and verify all route through this, so a file the writer
+/// accepts is one the reader and the verifier accept.
+pub fn validate_per_image_adjustments(
+    cameras: &[SfmrCamera],
+    camera_indexes: &[u32],
+    focal_adjustments: Option<&Array1<f64>>,
+    principal_point_adjustments_xy: Option<&Array2<f64>>,
+) -> Result<(), String> {
+    let mut flags = Vec::with_capacity(cameras.len());
+    for (c, camera) in cameras.iter().enumerate() {
+        flags.push(
+            parse_per_image_adjustment_names(&camera.per_image_adjustments)
+                .map_err(|e| format!("camera {c}: {e}"))?,
+        );
+    }
+    let image_count = camera_indexes.len();
+    // Each column as rows of its values, `None` where it is absent.
+    let focal_rows: Option<Vec<Vec<f64>>> =
+        focal_adjustments.map(|a| a.iter().map(|&v| vec![v]).collect());
+    let principal_point_rows: Option<Vec<Vec<f64>>> =
+        principal_point_adjustments_xy.map(|a| a.rows().into_iter().map(|r| r.to_vec()).collect());
+    let shapes = [
+        focal_adjustments.map(|a| a.shape().to_vec()),
+        principal_point_adjustments_xy.map(|a| a.shape().to_vec()),
+    ];
+    let columns = [
+        ("images/focal_adjustments", focal_rows, vec![image_count]),
+        (
+            "images/principal_point_adjustments_xy",
+            principal_point_rows,
+            vec![image_count, 2],
+        ),
+    ];
+    for (k, (name, column, expected_shape)) in columns.into_iter().enumerate() {
+        let listed = flags.iter().any(|f| f[k]);
+        let parameter = PER_IMAGE_ADJUSTMENT_NAMES[k];
+        let Some(rows) = column else {
+            if listed {
+                return Err(format!(
+                    "a camera lists {parameter:?} in per_image_adjustments but {name} is absent"
+                ));
+            }
+            continue;
+        };
+        if !listed {
+            return Err(format!(
+                "{name} is present but no camera lists {parameter:?} in per_image_adjustments"
+            ));
+        }
+        let shape = shapes[k].as_deref().unwrap_or_default();
+        if shape != expected_shape.as_slice() {
+            return Err(format!(
+                "{name} has shape {shape:?}, not {expected_shape:?} for {image_count} images"
+            ));
+        }
+        for (i, row) in rows.iter().enumerate() {
+            if let Some(v) = row.iter().find(|v| !v.is_finite()) {
+                return Err(format!("{name} row {i} is not finite: {v}"));
+            }
+            if k == 0 && row[0] <= -1.0 {
+                return Err(format!(
+                    "{name} row {i} is {}, at or below -1, which leaves the image no focal",
+                    row[0]
+                ));
+            }
+            let c = camera_indexes[i] as usize;
+            let camera_lists = flags
+                .get(c)
+                .ok_or_else(|| format!("image {i}: camera index {c} out of range"))?[k];
+            if !camera_lists && row.iter().any(|&v| v != 0.0) {
+                return Err(format!(
+                    "{name} row {i} is {row:?}, but image {i}'s camera {c} does not list \
+                     {parameter:?} in per_image_adjustments, so its row must be 0"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The first image whose per-image intrinsic adjustment is not zero, or
+/// `None` when every row of both columns is zero or a column is absent.
+pub(crate) fn first_adjusted_image(
+    focal_adjustments: Option<&Array1<f64>>,
+    principal_point_adjustments_xy: Option<&Array2<f64>>,
+) -> Option<usize> {
+    // `v != 0.0` holds for a NaN too, so a NaN counts as an adjustment.
+    let focal = focal_adjustments.and_then(|values| values.iter().position(|&v| v != 0.0));
+    let principal_point = principal_point_adjustments_xy.and_then(|values| {
+        values
+            .rows()
+            .into_iter()
+            .position(|row| row.iter().any(|&v| v != 0.0))
+    });
+    match (focal, principal_point) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (a, b) => a.or(b),
+    }
+}
+
+/// Refuse a value or a file that holds a non-zero per-image intrinsic
+/// adjustment, naming the first such image.
+///
+/// This build stores and reads the adjustment columns, but not every consumer
+/// of an image's camera applies them yet, and one that does not would read an
+/// adjusted image wrongly. So [`crate::read_sfmr`] and
+/// [`crate::write_sfmr_with_options`] stop at this boundary; all-zero columns
+/// and the cameras' `per_image_adjustments` keys pass. A value built in memory
+/// may hold non-zero adjustments.
+pub(crate) fn refuse_per_image_adjustments(
+    image_names: &[String],
+    focal_adjustments: Option<&Array1<f64>>,
+    principal_point_adjustments_xy: Option<&Array2<f64>>,
+) -> Result<(), SfmrError> {
+    match first_adjusted_image(focal_adjustments, principal_point_adjustments_xy) {
+        None => Ok(()),
+        Some(i) => Err(SfmrError::Unsupported(format!(
+            "image {i} ({:?}) has a non-zero per-image intrinsic adjustment, and this build \
+             does not yet read per-image intrinsic adjustments",
+            image_names.get(i).map_or("", String::as_str)
+        ))),
+    }
+}
+
 /// Which of the optional pieces that the presence rules relate a file carries.
 ///
 /// The writer fills this from the columns it was handed, and the reader and
@@ -612,6 +794,13 @@ impl OptionalPresence {
 /// Current `.sfmr` format version. [`crate::write_sfmr`] always writes this
 /// version; [`crate::read_sfmr`] accepts any version up to it.
 ///
+/// Version 13 added the per-image intrinsic adjustments: the optional columns
+/// `images/focal_adjustments` and `images/principal_point_adjustments_xy` (see
+/// [`SfmrData::focal_adjustments`]) and each camera's optional
+/// `per_image_adjustments` key (see [`SfmrCamera::per_image_adjustments`]),
+/// which says whether a column is present. A file below version 13 has
+/// neither and reads with every adjustment zero.
+///
 /// Version 12 added `tracks/reference_observations`, per point the index of the
 /// observation the point's patch bitmap is, or is to be, rendered from, among
 /// the point's own observations, `-1` for no reference chosen (see
@@ -669,7 +858,14 @@ impl OptionalPresence {
 /// in `sfmtool-core` (`SfmrReconstruction::load`), which owns the `S`/`W`
 /// convention math (`geometry::convention`) that this lower-level crate
 /// cannot depend on.
-pub const SFMR_FORMAT_VERSION: u32 = 12;
+pub const SFMR_FORMAT_VERSION: u32 = 13;
+
+/// The first `.sfmr` version that stores per-image intrinsic adjustments:
+/// `images/focal_adjustments`, `images/principal_point_adjustments_xy` and the
+/// cameras' `per_image_adjustments` key.
+///
+/// A file below it carries none of them; the reader refuses one that does.
+pub const SFMR_PER_IMAGE_ADJUSTMENTS_VERSION: u32 = 13;
 
 /// The first `.sfmr` version that stores `tracks/reference_observations`.
 ///
@@ -898,6 +1094,25 @@ pub struct SfmrData {
     /// photograph `image_names[i]`, and a writer that cannot produce a row for
     /// every image stores none. A read never fills it in.
     pub thumbnails_y_x_rgb: Option<Array4<u8>>,
+    /// `(N,)` per image, its focal scale `s`: the image's focal (both focals
+    /// on a two-focal model) is its camera's times `1 + s`. `None` when no
+    /// camera lists `"focal"` in [`SfmrCamera::per_image_adjustments`], which
+    /// is every image read at its camera's focal.
+    ///
+    /// On disk this is `images/focal_adjustments` (version 13+), present
+    /// exactly when some camera lists `"focal"`. A row whose image's camera
+    /// does not list it is `0`; every row is finite and above `-1`.
+    pub focal_adjustments: Option<Array1<f64>>,
+    /// `(N, 2)` per image, its principal-point offset `[a_x, a_y]` in the
+    /// **short-side unit** `m = min(width, height)` of the image's camera: the
+    /// image's principal point is its camera's plus `a_x·m` in x and `a_y·m`
+    /// in y. `None` when no camera lists `"principal_point"` in
+    /// [`SfmrCamera::per_image_adjustments`].
+    ///
+    /// On disk this is `images/principal_point_adjustments_xy` (version 13+),
+    /// present exactly when some camera lists `"principal_point"`. A row whose
+    /// image's camera does not list it is `[0, 0]`; every value is finite.
+    pub principal_point_adjustments_xy: Option<Array2<f64>>,
 
     // Points3D
     /// `(P, 4)` homogeneous 3D point positions in world coordinates.

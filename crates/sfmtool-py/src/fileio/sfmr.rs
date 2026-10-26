@@ -81,7 +81,19 @@ where
 ///   observation_readings (a dict of the eight reading columns and their
 ///   `"options"`, or `None`), point_indexes, observation_counts, reference_observations,
 ///   observed_depth_histogram_counts, thumbnails_y_x_rgb (numpy arrays;
-///   `thumbnails_y_x_rgb` is `None` for a file without thumbnails).
+///   `thumbnails_y_x_rgb` is `None` for a file without thumbnails),
+///   focal_adjustments, principal_point_adjustments_xy (numpy arrays or
+///   `None`), per_image_adjustments (`list[list[str]]`, one per camera).
+///
+/// The per-image intrinsic adjustments (version 13+): `focal_adjustments` is
+/// the `(N,)` float64 focal scale `s` of each image (its focal is its camera's
+/// times `1 + s`), `principal_point_adjustments_xy` the `(N, 2)` float64
+/// principal-point offset of each image in its camera's short side,
+/// `min(width, height)`, and `per_image_adjustments` names, per camera, which
+/// of `"focal"` and `"principal_point"` vary per image. A column is `None`
+/// exactly when no camera names its parameter. A file whose adjustments are
+/// not all zero raises `OSError`: this build does not yet read per-image
+/// intrinsic adjustments.
 ///
 /// `positions_xyzw` is the homogeneous `(P, 4)` point array. Every optional
 /// column is emitted as `None` when the file does not carry it: the normals and
@@ -133,6 +145,14 @@ pub fn read_sfmr(py: Python<'_>, path: PathBuf) -> PyResult<Py<PyAny>> {
         })
         .collect::<PyResult<Vec<_>>>()?;
     dict.set_item("cameras", PyList::new(py, cameras)?)?;
+    // Per camera, the parameters that vary per image: the cameras'
+    // `per_image_adjustments` key, which a `CameraIntrinsics` does not carry.
+    let per_image_adjustments: Vec<Vec<String>> = data
+        .cameras
+        .iter()
+        .map(|c| c.per_image_adjustments.clone())
+        .collect();
+    dict.set_item("per_image_adjustments", per_image_adjustments)?;
     dict.set_item("depth_statistics", serde_to_py(py, &data.depth_statistics)?)?;
 
     // String list
@@ -244,6 +264,15 @@ pub fn read_sfmr(py: Python<'_>, path: PathBuf) -> PyResult<Py<PyAny>> {
         "thumbnails_y_x_rgb",
         data.thumbnails_y_x_rgb.map(|t| t.into_pyarray(py)),
     )?;
+    dict.set_item(
+        "focal_adjustments",
+        data.focal_adjustments.map(|a| a.into_pyarray(py)),
+    )?;
+    dict.set_item(
+        "principal_point_adjustments_xy",
+        data.principal_point_adjustments_xy
+            .map(|a| a.into_pyarray(py)),
+    )?;
 
     // Rig/frame data (optional)
     match &data.rig_frame_data {
@@ -283,7 +312,23 @@ pub(crate) fn parse_sfmr_data_from_dict(
     skip_recompute_depth_stats: bool,
 ) -> PyResult<SfmrData> {
     let metadata: SfmrMetadata = py_to_serde(py, &get_item(data, "metadata")?)?;
-    let cameras = extract_cameras_as_sfmr(&get_item(data, "cameras")?)?;
+    let mut cameras = extract_cameras_as_sfmr(&get_item(data, "cameras")?)?;
+    // The cameras' `per_image_adjustments` key, one list per camera; a dict
+    // without it varies nothing per image. The names and the columns are
+    // the format writer's to check.
+    if let Some(value) = get_optional_item(data, "per_image_adjustments")? {
+        let lists: Vec<Vec<String>> = value.extract()?;
+        if lists.len() != cameras.len() {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "'per_image_adjustments' has {} entries, one per camera is {}",
+                lists.len(),
+                cameras.len()
+            )));
+        }
+        for (camera, names) in cameras.iter_mut().zip(lists) {
+            camera.per_image_adjustments = names;
+        }
+    }
     let image_names: Vec<String> = get_item(data, "image_names")?.extract()?;
 
     let camera_indexes: PyReadonlyArray1<u32> = get_item(data, "camera_indexes")?.extract()?;
@@ -453,6 +498,16 @@ pub(crate) fn parse_sfmr_data_from_dict(
                 })
             });
 
+    // The per-image intrinsic adjustment columns, each `None` or absent where
+    // no camera varies its parameter.
+    let focal_adjustments =
+        optional_array::<f64, ndarray::Ix1>(data, "focal_adjustments", "a 1D float64 array")?;
+    let principal_point_adjustments_xy = optional_array::<f64, ndarray::Ix2>(
+        data,
+        "principal_point_adjustments_xy",
+        "a 2D float64 array",
+    )?;
+
     // Extract optional rig/frame data from the dict
     let rig_frame_data = extract_rig_frame_data(py, data)?;
 
@@ -486,6 +541,8 @@ pub(crate) fn parse_sfmr_data_from_dict(
         sift_content_hashes,
         image_file_hashes,
         thumbnails_y_x_rgb,
+        focal_adjustments,
+        principal_point_adjustments_xy,
         positions_xyzw: positions_xyzw.as_array().as_standard_layout().into_owned(),
         colors_rgb: colors_rgb.as_array().as_standard_layout().into_owned(),
         reprojection_errors: reprojection_errors
@@ -532,7 +589,10 @@ pub(crate) fn parse_sfmr_data_from_dict(
 /// `patch_bitmaps_y_x_rgba`). A missing or `None` value means the column is
 /// absent — which is what a `sift_files` dict carries for the patch frame,
 /// while an `embedded_patches` dict must carry it, since the format requires
-/// the frame there.
+/// the frame there. A missing `per_image_adjustments` means no camera varies
+/// anything per image. A dict holding a non-zero per-image intrinsic
+/// adjustment raises `OSError` and writes nothing: this build does not yet
+/// read per-image intrinsic adjustments.
 ///
 /// KNOWN LIMITATION: this always writes the current
 /// [`sfmtool_sfmr_format::SFMR_FORMAT_VERSION`] regardless of the `metadata["version"]`

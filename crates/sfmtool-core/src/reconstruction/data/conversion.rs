@@ -20,14 +20,15 @@ use sfmtool_sfmr_format::{
     NO_REFERENCE_OBSERVATION,
 };
 
+use crate::camera::intrinsics::IntrinsicAdjustment;
 use crate::camera::CameraIntrinsics;
 use crate::progress::Progress;
 use crate::progress_note;
 
 use super::{
-    compute_observation_offsets, count_points_at_infinity, ImageSet, ObservationSource, Point3D,
-    PointConstraintColumns, PointSet, SfmrImage, SfmrReconstruction, SiftKeypointFill,
-    TrackObservation,
+    compute_observation_offsets, count_points_at_infinity, ImageSet, ObservationSource,
+    PerImageAdjustments, Point3D, PointConstraintColumns, PointSet, SfmrImage, SfmrReconstruction,
+    SiftKeypointFill, TrackObservation,
 };
 
 /// Unit quaternion from raw WXYZ components, keeping the caller's bits when
@@ -247,6 +248,30 @@ impl SfmrReconstruction {
         let observation_count = data.metadata.observation_count as usize;
         let num_buckets = data.depth_statistics.num_histogram_buckets as usize;
 
+        // The per-image intrinsic adjustments, checked against the cameras that
+        // list them before any row is read: the format reader has done so for
+        // a file, and the raw PyO3 `from_data` builder reaches here unchecked.
+        sfmtool_sfmr_format::validate_per_image_adjustments(
+            &data.cameras,
+            data.camera_indexes.as_standard_layout().as_slice().unwrap(),
+            data.focal_adjustments.as_ref(),
+            data.principal_point_adjustments_xy.as_ref(),
+        )
+        .map_err(SfmrError::InvalidFormat)?;
+        let per_image_adjustments: Vec<PerImageAdjustments> = data
+            .cameras
+            .iter()
+            .map(|c| PerImageAdjustments::from_names(&c.per_image_adjustments))
+            .collect::<Result<_, _>>()
+            .map_err(SfmrError::InvalidFormat)?;
+        // Empty when no camera varies anything, which is every file below
+        // version 13.
+        let per_image_adjustments = if per_image_adjustments.iter().any(|p| p.any()) {
+            per_image_adjustments
+        } else {
+            Vec::new()
+        };
+
         // Convert images
         let mut images = Vec::with_capacity(image_count);
         for i in 0..image_count {
@@ -265,6 +290,14 @@ impl SfmrReconstruction {
                 camera_index: data.camera_indexes[i],
                 quaternion_wxyz: quaternion,
                 translation_xyz: Vector3::new(tx, ty, tz),
+                // An absent column is every image at zero.
+                intrinsic_adjustment: IntrinsicAdjustment {
+                    focal: data.focal_adjustments.as_ref().map_or(0.0, |a| a[i]),
+                    principal_point: data
+                        .principal_point_adjustments_xy
+                        .as_ref()
+                        .map_or([0.0, 0.0], |a| [a[[i, 0]], a[[i, 1]]]),
+                },
             });
         }
 
@@ -379,6 +412,7 @@ impl SfmrReconstruction {
             content_hash: data.content_hash,
             image_set: ImageSet {
                 cameras,
+                per_image_adjustments,
                 images,
                 thumbnails_y_x_rgb: data.thumbnails_y_x_rgb.map(Arc::new),
                 depth_statistics: data.depth_statistics,
@@ -580,13 +614,49 @@ impl SfmrReconstruction {
             }
         }
 
-        // Convert CameraIntrinsics → SfmrCamera for serialization
+        // Convert CameraIntrinsics → SfmrCamera for serialization, each with
+        // the parameters it varies per image.
         let cameras: Vec<SfmrCamera> = self
             .image_set
             .cameras
             .iter()
-            .map(SfmrCamera::from)
+            .enumerate()
+            .map(|(c, camera)| SfmrCamera {
+                per_image_adjustments: self.image_set.camera_per_image_adjustments(c).names(),
+                ..SfmrCamera::from(camera)
+            })
             .collect();
+
+        // The per-image intrinsic adjustment columns: each present when a
+        // camera varies its parameter, and also when an image holds a non-zero
+        // value of it under a camera that does not, so that the writer refuses
+        // that value rather than a save dropping it unseen.
+        let adjustments: Vec<_> = self
+            .image_set
+            .images
+            .iter()
+            .map(|im| im.intrinsic_adjustment)
+            .collect();
+        let flags: Vec<PerImageAdjustments> = (0..self.image_set.cameras.len())
+            .map(|c| self.image_set.camera_per_image_adjustments(c))
+            .collect();
+        let focal_adjustments = (flags.iter().any(|f| f.focal)
+            || adjustments.iter().any(|a| a.focal != 0.0))
+        .then(|| {
+            // `+ 0.0` turns a `-0.0` into `+0.0`, which is the zero a writer
+            // stores, and leaves every other value as it is.
+            adjustments
+                .iter()
+                .map(|a| a.focal + 0.0)
+                .collect::<Array1<f64>>()
+        });
+        let principal_point_adjustments_xy = (flags.iter().any(|f| f.principal_point)
+            || adjustments.iter().any(|a| a.principal_point != [0.0, 0.0]))
+        .then(|| {
+            Array2::from_shape_fn((image_count, 2), |(i, k)| {
+                adjustments[i].principal_point[k] + 0.0
+            })
+        });
 
         SfmrData {
             workspace_dir: Some(self.workspace_dir.clone()),
@@ -613,6 +683,8 @@ impl SfmrReconstruction {
             sift_content_hashes,
             image_file_hashes,
             thumbnails_y_x_rgb: self.image_set.thumbnails_y_x_rgb.as_deref().cloned(),
+            focal_adjustments,
+            principal_point_adjustments_xy,
             positions_xyzw,
             colors_rgb,
             reprojection_errors,

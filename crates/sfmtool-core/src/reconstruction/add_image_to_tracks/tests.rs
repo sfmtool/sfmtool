@@ -149,6 +149,7 @@ fn capture(points: &[(Point3<f64>, &[u32])]) -> Capture {
                 camera_index: 0,
                 quaternion_wxyz: q,
                 translation_xyz: t,
+                intrinsic_adjustment: Default::default(),
             }
         })
         .collect();

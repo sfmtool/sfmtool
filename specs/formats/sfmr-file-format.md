@@ -184,6 +184,8 @@ reconstruction.sfmr (ZIP archive)
 │   ├── sift_content_hashes.{N}.uint128.zst    # (sift_files only) feature file content verification
 │   ├── image_file_hashes.{N}.uint128.zst      # (embedded_patches only) source image identity (version 4+)
 │   ├── thumbnails_y_x_rgb.{N}.128.128.3.uint8.zst # (Optional, v11+) 128x128 image thumbnails (RGB)
+│   ├── focal_adjustments.{N}.float64.zst      # (Optional, v13+) per-image focal scale
+│   ├── principal_point_adjustments_xy.{N}.2.float64.zst # (Optional, v13+) per-image principal-point offset, short-side unit
 │   └── metadata.json.zst                      # Image metadata
 ├── derived/                                   # Recomputable from the sections above (v10+)
 │   ├── depth_statistics.json.zst              # Per-image depth stats
@@ -246,7 +248,7 @@ JSON structure describing the reconstruction:
 
 ```json
 {
-  "version": 12,
+  "version": 13,
   "feature_source": "sift_files",
   "operation": "sfm_solve",
   "tool": "colmap",
@@ -411,10 +413,10 @@ order in which the section hashes combine into `content_xxh128` is stated once,
 in the `content_xxh128` entry below.
 
 - `metadata_xxh128`: Hash of the uncompressed JSON content of `metadata.json.zst`
-- `cameras_xxh128`: Hash of the uncompressed JSON content of `cameras/metadata.json.zst`
+- `cameras_xxh128`: Hash of the uncompressed JSON content of `cameras/metadata.json.zst`, so it covers each camera's `per_image_adjustments` key (version 13+)
 - `rigs_xxh128`: (Optional) The `rigs/` section hash. Present only when the `rigs/` section exists.
 - `frames_xxh128`: (Optional) The `frames/` section hash. Present only when the `frames/` section exists.
-- `images_xxh128`: The `images/` section hash. Before version 10 it also covered the depth statistics and histogram files, which are now the `derived/` section. The mode-dependent per-image hash files are included as present: `feature_tool_hashes` + `sift_content_hashes` for a `sift_files` file, or `image_file_hashes` for an `embedded_patches` file. The optional `thumbnails_y_x_rgb` participates only when present, in its lexicographic slot (after `sift_content_hashes`, before `translations_xyz`). The `images/metadata.json` bytes, which carry the `has_thumbnails` flag, are always included, so two files that differ only in whether they carry thumbnails hash differently.
+- `images_xxh128`: The `images/` section hash. Before version 10 it also covered the depth statistics and histogram files, which are now the `derived/` section. The mode-dependent per-image hash files are included as present: `feature_tool_hashes` + `sift_content_hashes` for a `sift_files` file, or `image_file_hashes` for an `embedded_patches` file. The optional `thumbnails_y_x_rgb` participates only when present, in its lexicographic slot (after `sift_content_hashes`, before `translations_xyz`). The optional per-image intrinsic adjustment columns (version 13+) participate only when present, each in its lexicographic slot: `focal_adjustments` after `feature_tool_hashes` (in an `embedded_patches` file, after `camera_indexes`) and before `image_file_hashes` and `metadata.json`; `principal_point_adjustments_xy` after `names.json` and before `quaternions_wxyz`. The `images/metadata.json` bytes, which carry the `has_thumbnails` flag, are always included, so two files that differ only in whether they carry thumbnails hash differently.
 - `points3d_xxh128`: The `points3d/` section hash. Includes the optional per-point arrays — `normals_xyz`, `normal_confidence`, the constraint triple `point_constraints` / `constraint_distances` / `constraint_reference_images` (in their lexicographic slots: `constraint_distances` and `constraint_reference_images` after `colors_rgb` and before `metadata.json`, `point_constraints` after the patch-frame files and before `positions_xyzw`), and the patch-frame files `patch_u_halfvec_xyz`, `patch_v_halfvec_xyz`, `patch_bitmaps_y_x_rgba` — only when they are present.
 - `tracks_xxh128`: The `tracks/` section hash. `feature_indexes` is present for a `sift_files` file and absent for an `embedded_patches` one. `keypoints_xy` participates whenever it is present — always in an `embedded_patches` file, and in a `sift_files` file when it carries the optional inline copy — in its lexicographic slot (after `image_indexes`, before `metadata.json`). The optional `observation_confidence` column participates when present, in its lexicographic slot (after `metadata.json`, before `observation_counts`). `reference_observations` participates when present (version 12+, exactly when `points3d/metadata.json` has `has_uv_frames`), in its lexicographic slot, after `point_indexes`. The eight observation-reading columns participate when `has_observation_readings` is set, each in its lexicographic slot: `blur_matched_bitmap_zncc` first, before `feature_indexes`; `plain_bitmap_zncc` after `observation_counts`, before `point_indexes`; and the six `zncc_self_similarity_*` columns last, after `reference_observations`, in the order `cos_view_angle`, `ellipse_axes`, `ellipse_axes_is_at_least`, `ellipse_major_angle`, `tilt_angle`, `zoom`.
 - `derived_xxh128`: (Version 10+, required) The `derived/` section hash, over `depth_statistics.json.zst` then `observed_depth_histogram_counts`. Verified like every other section hash, and **not** part of `content_xxh128`. A version 10+ file without it fails verification; a file below version 10 has no such field, because its depth statistics are part of `images_xxh128`.
@@ -497,7 +499,8 @@ Array of camera intrinsic parameters:
       "focal_length_y": 3454.12,
       "principal_point_x": 2312.0,
       "principal_point_y": 1736.0
-    }
+    },
+    "per_image_adjustments": ["focal", "principal_point"]
   },
   {
     "model": "OPENCV",
@@ -516,6 +519,18 @@ Array of camera intrinsic parameters:
   }
 ]
 ```
+
+**`per_image_adjustments`** (version 13+, optional) lists the parts of the
+camera's intrinsics that vary per image: `"focal"` when each of its images has
+its own focal scale in
+[`images/focal_adjustments`](#imagesfocal_adjustmentsnfloat64zst-optional-version-13),
+and `"principal_point"` when each has its own principal-point offset in
+[`images/principal_point_adjustments_xy`](#imagesprincipal_point_adjustments_xyn2float64zst-optional-version-13).
+It names only those two, each at most once, in that order. A camera that
+varies neither has no key, so the cameras entry of a file without adjustments
+is byte for byte what version 12 writes. The key is what tells a zero
+adjustment that was solved for apart from one that was never enabled; the
+distortion, and every other parameter, stays the camera's for all its images.
 
 **Supported camera models and parameter names:**
 
@@ -781,9 +796,70 @@ Binary array mapping each image to its camera:
 - **Format**: Index into cameras array
 - **Example**: `[0, 0, 0, 1, 1, 1]` (first 3 images use camera 0, next 3 use camera 1)
 
-Every image is read through its camera's intrinsics exactly; the file stores
-no per-image intrinsics. A per-image adjustment of the focal and the principal
-point is proposed in [per-image-intrinsics.md](../drafts/per-image-intrinsics.md).
+An image is read through its camera's intrinsics, with the image's
+**intrinsic adjustment** applied where its camera lists a parameter in
+`per_image_adjustments` (version 13+): the two columns below. An image whose
+camera lists nothing is read through the camera exactly.
+
+#### Per-image intrinsic adjustments (Optional, version 13+)
+
+An image `i` taken through camera `c` (width `w`, height `h`, focal `f`, or `fx`
+and `fy` on a two-focal model, principal point `(cx, cy)`) is read through the
+camera's model and distortion with
+
+```
+f_i  = f  · (1 + s_i)          (fx and fy both, on a two-focal model)
+cx_i = cx + a_x,i · m
+cy_i = cy + a_y,i · m          where m = min(w, h)
+```
+
+and nothing else changed. `s_i` is the image's focal scale and `[a_x,i, a_y,i]`
+its principal-point offset, both stored relative so that they mean the same
+after a camera is resized: the offset is in the **short-side unit** `m`, the
+image's shorter side in pixels, on both axes, so that one offset means the same
+number of pixels in x and in y. In every model the distortion is applied in
+normalised coordinates before the focal and principal point are, so the
+distortion centre moves with the principal point. The motivation, and the
+bundle adjustment that will solve the adjustments, are in
+[per-image-intrinsics.md](../drafts/per-image-intrinsics.md).
+
+The two columns are each present exactly when at least one camera lists its
+parameter in [`per_image_adjustments`](#4-cameras-camerasmetadatajsonzst), and
+a reader refuses a file that breaks any of these rules:
+
+- a column is present exactly when some camera lists its parameter;
+- a row whose image's camera does not list the parameter holds exactly `0` (a
+  writer writes `+0.0`);
+- every value is finite, and every focal adjustment is above `−1`;
+- `per_image_adjustments` names only `"focal"` and `"principal_point"`, each
+  at most once, in that order;
+- a file below version 13 has neither the columns nor the key.
+
+**This build refuses a non-zero adjustment.** Not every consumer of an image's
+camera in this build applies the adjustment yet, and one that does not would
+read an adjusted image wrongly. So `read_sfmr` refuses a file, and
+`write_sfmr_with_options` refuses a value, that holds any non-zero adjustment,
+with an error that names the first such image and says this build does not yet
+read per-image intrinsic adjustments. All-zero columns and the cameras' keys
+are read and written. A value held in memory may hold non-zero adjustments.
+Moving every consumer to the adjusted intrinsics and lifting this refusal is
+PR 3 of [per-image-intrinsics.md](../drafts/per-image-intrinsics.md).
+
+##### `images/focal_adjustments.{N}.float64.zst` (Optional, version 13+)
+
+- **Shape**: `(N,)` where N = image_count
+- **Data type**: `float64` (little-endian), the type of the poses, so a solved
+  adjustment round-trips exactly
+- **Format**: `s_i`, the image's focal scale: its focal is its camera's times
+  `1 + s_i`. Above `−1`.
+
+##### `images/principal_point_adjustments_xy.{N}.2.float64.zst` (Optional, version 13+)
+
+- **Shape**: `(N, 2)` where N = image_count
+- **Data type**: `float64` (little-endian)
+- **Format**: `[a_x,i, a_y,i]` in the short-side unit: the image's principal
+  point is its camera's plus `a_x,i·m` in x and `a_y,i·m` in y, where
+  `m = min(width, height)` of the image's camera
 
 #### `images/quaternions_wxyz.{N}.4.float64.zst`
 
@@ -2133,6 +2209,12 @@ For the structure, a file fails verification when:
   nothing more), `feature_source` is not one of its two values, or
   `world_space_unit` is not one of the five units;
 - a `frames/` section is present without a `rigs/` section;
+- a camera's `per_image_adjustments` or an image's intrinsic adjustment breaks
+  a rule of
+  [Per-image intrinsic adjustments](#per-image-intrinsic-adjustments-optional-version-13),
+  including a file below version 13 that carries either (a non-zero
+  adjustment is valid: the verifier does not refuse what this build's reader
+  does);
 - the `has_*` flags in `points3d/metadata.json` break a presence rule between
   the optional per-point columns and `feature_source`;
 - in a version 2+ file, `positions_xyzw` is not `point_count` rows of 32 bytes,
@@ -2193,6 +2275,22 @@ describes. Other parts of this spec are implemented by:
   section metadata are derived. `sfmtool-core` asserts at compile time that it
   equals `sfmtool_sift_format::THUMBNAIL_SIZE`, and Python sees it as
   `sfmtool.THUMBNAIL_SIZE`, because the SIFT extractors produce the pixels.
+- The per-image intrinsic adjustments: in memory each image carries its own
+  as `SfmrImage::intrinsic_adjustment`, an
+  [`IntrinsicAdjustment`](../../crates/sfmtool-core/src/camera/intrinsics.rs)
+  that is zero by default, and the cameras' keys are
+  `ImageSet::per_image_adjustments`, one `PerImageAdjustments` per camera or
+  empty when no camera varies anything
+  ([image_set.rs](../../crates/sfmtool-core/src/reconstruction/data/image_set.rs)).
+  `ImageSet::image_intrinsics(i)` (and `SfmrReconstruction::image_intrinsics`,
+  and `image_intrinsics(i)` on the Python `SfmrReconstruction`) returns the
+  intrinsics image `i` was taken with, borrowed when its adjustment is zero;
+  `CameraIntrinsics::with_adjustment` applies one. The shared rules are
+  `validate_per_image_adjustments` in the format crate's
+  [types.rs](../../crates/sfmtool-sfmr-format/src/types.rs), which read, write
+  and verify all call. The `read_sfmr` / `write_sfmr` dicts carry the columns
+  as `focal_adjustments` and `principal_point_adjustments_xy` and the keys as
+  `per_image_adjustments`, one list of names per camera.
 - Points at infinity: `SfmrReconstruction::classify_points_at_infinity` applies
   the point-or-bearing test and stores each scored point as finite or at
   `w = 0` as the test decides, and `materialize_points_at_infinity` places
@@ -2441,17 +2539,34 @@ appropriate units (e.g., "xyz: (1234.0, -567.0, 2891.0) mm" instead of bare numb
 
 ## Versioning and Migration
 
-The format spans twelve versions (`1` to `12`), all valid; each extends the
+The format spans thirteen versions (`1` to `13`), all valid; each extends the
 previous, and how an older file maps to the current model is given below.
-Version 12 is the current format version: a reader accepts any version up to
+Version 13 is the current format version: a reader accepts any version up to
 it. This section is the one place the versions and their changes are
 described; [Version History](#version-history) is an index into it.
 
 A conforming writer always writes the current version. It does not choose its
 version by which optional columns a file carries: every optional column (normals
-in 3, observation confidence in 6, constraints in 7, thumbnails in 11, observation readings in 12) was
+in 3, observation confidence in 6, constraints in 7, thumbnails in 11, observation readings in 12, per-image intrinsic adjustments in 13) was
 introduced this way, and a writer that picked its version by content would make
 "which version is this file" a question about its columns.
+
+### Version 12 → Version 13
+
+| Change | Detail |
+|---|---|
+| `images/focal_adjustments.{N}.float64.zst` | New **optional** column: per image, its focal scale `s`, so that its focal is its camera's times `1 + s` ([Per-image intrinsic adjustments](#per-image-intrinsic-adjustments-optional-version-13)). Present exactly when some camera lists `"focal"`. Folded into `images_xxh128` in its lexicographic slot, after `feature_tool_hashes` (after `camera_indexes` in an `embedded_patches` file) and before `image_file_hashes` and `metadata.json`. |
+| `images/principal_point_adjustments_xy.{N}.2.float64.zst` | New **optional** column: per image, its principal-point offset in the short-side unit, `min(width, height)` of its camera, on both axes. Present exactly when some camera lists `"principal_point"`. Folded into `images_xxh128` after `names.json` and before `quaternions_wxyz`. |
+| `cameras/metadata.json` `per_image_adjustments` | New optional key on each camera, naming the parameters that vary per image, `"focal"` and `"principal_point"` in that order; absent on a camera that varies neither. Part of `cameras_xxh128`. |
+
+Migration is mechanical. A version 12 file reads with every adjustment zero and
+no camera listing any parameter, and saves as version 13 with neither columns
+nor key, so its cameras and images sections are unchanged and only the version
+in `metadata.json` differs. A version 13 file with no column maps back to
+version 12 unchanged apart from the version number; one with columns maps back
+by dropping them and the keys, which reads every image through its camera
+exactly. This build refuses a non-zero adjustment on read and on write (see
+[Per-image intrinsic adjustments](#per-image-intrinsic-adjustments-optional-version-13)).
 
 ### Version 11 → Version 12
 
@@ -2674,6 +2789,10 @@ row, reads `tracks/points3d_indexes` as `tracks/point_indexes` and both
 One line per version, newest first. Each version's changes are described in
 the migration section it links to.
 
+- **Version 13**: optional per-image intrinsic adjustments, the
+  `images/focal_adjustments` and `images/principal_point_adjustments_xy`
+  columns and the cameras' `per_image_adjustments` key. See
+  [Version 12 → Version 13](#version-12--version-13).
 - **Version 12**: `tracks/reference_observations`, required with the patch
   frame, and the optional per-observation readings. See
   [Version 11 → Version 12](#version-11--version-12).

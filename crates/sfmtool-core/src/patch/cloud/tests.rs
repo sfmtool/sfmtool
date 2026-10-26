@@ -1363,11 +1363,13 @@ fn from_tracks_feature_size_reads_the_view_camera_model() {
 fn one_image_set(camera: CameraIntrinsics, pose: &RigidTransform) -> ImageSet {
     ImageSet {
         cameras: vec![camera],
+        per_image_adjustments: Vec::new(),
         images: vec![SfmrImage {
             name: "view.jpg".to_string(),
             camera_index: 0,
             quaternion_wxyz: *pose.rotation.as_nalgebra(),
             translation_xyz: pose.translation,
+            intrinsic_adjustment: Default::default(),
         }],
         thumbnails_y_x_rgb: None,
         depth_statistics: DepthStatistics {

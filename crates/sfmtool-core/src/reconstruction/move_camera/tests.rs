@@ -73,6 +73,7 @@ fn image_row(name: &str, rotation: UnitQuaternion<f64>, centre: Point3<f64>) -> 
         camera_index: 0,
         quaternion_wxyz: rotation,
         translation_xyz: -(rotation * centre.coords),
+        intrinsic_adjustment: Default::default(),
     }
 }
 
