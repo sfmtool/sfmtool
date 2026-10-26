@@ -269,8 +269,9 @@ whether they were derived or fixed, and how many of its images ended more than
 two widths from its mean, `, per-image widths focal 0.42 %, principal point
 1.31 % of the short side (20.1 px), derived, 2 images beyond two widths`,
 naming only the parameters it released per image, and `, camera 1 per-image
-widths …` over several cameras. The derived widths are the solve's own estimate
-of how far the lens moves between photographs, and the images beyond two widths
+widths …` over several cameras. The focal's width is of the log focal scale
+`ln(1 + s)` the solve holds, which reads as a percentage of the focal. The
+derived widths are the solve's own estimate of how far the lens moves between photographs, and the images beyond two widths
 are the ones to look at. The
 three counts
 are what went **into** the solve, which is not always the whole node: an unposed

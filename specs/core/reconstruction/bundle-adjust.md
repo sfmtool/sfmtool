@@ -120,8 +120,8 @@ pub struct CameraAdjustment {
 /// How a camera's images' adjustments ended, over its posed images.
 pub struct ImageAdjustmentSpread {
     pub images: usize,
-    pub focal_mean: f64,                 // fractions; zero after the re-centring
-    pub focal_std: f64,
+    pub focal_mean: f64,                 // of ln(1 + s), read as fractions;
+    pub focal_std: f64,                  // the mean zero after the re-centring
     pub principal_point_mean: [f64; 2],  // px
     pub principal_point_std: [f64; 2],   // px
     pub prior: ImagePriorWidths,         // the final round's; NaN where not released
@@ -133,7 +133,7 @@ pub struct ImageAdjustmentSpread {
 pub struct NearPrior {
     pub image: usize,                       // its index in the reconstruction
     pub parameter: ImageAdjustmentParameter, // Focal or PrincipalPoint
-    pub widths: f64,                        // |s − s̄|/σ_s, or ‖a − ā‖/σ_pp
+    pub widths: f64,                        // |t − t̄|/σ_t, t = ln(1 + s), or ‖a − ā‖/σ_pp
 }
 
 pub enum BundleAdjustError {
@@ -256,7 +256,9 @@ camera's images by a prior whose widths the kernel derives from the solve
 ([`../geometry/bundle-adjustment.md`](../geometry/bundle-adjustment.md)
 § "The per-image release"). The kernel holds the camera's shared value of the
 same kind and re-centres after every round: the camera takes the images' mean
-and each image keeps its difference. So the shared value moves with a per-image
+and each image keeps its difference, the focal's as its log focal scale
+`ln(1 + s)`, so the camera's focal takes the geometric mean of its images'.
+So the shared value moves with a per-image
 release, a release of both is the per-image release alone, and the report says
 the shared value was released (`focal_released`, `principal_point_released`)
 beside the per-image flags. A per-image focal is refused on the models a shared
@@ -471,7 +473,9 @@ on it.
   kinds; each of its unposed images takes the shift its camera's shared value
   took, `a −= (cx_after − cx_before)/m` per axis and
   `1 + s ← (1 + s)·f_before/f_after`, so that its intrinsics are the ones it
-  had; and the camera's `per_image_adjustments` gains the released parameters,
+  had (the focal's is the shift the kernel's re-centring gave every image of
+  the camera, `ln(1 + s) −= ln(f_after/f_before)`, the logs of the geometric
+  means it moved the focal by); and the camera's `per_image_adjustments` gains the released parameters,
   so a solved zero is recorded as solved.
 - **Positions and representations.** Each point in the solve takes its solved
   coordinate, and `w` follows the kernel's returned representation.
@@ -584,7 +588,7 @@ would leave the frame carrying the gauge drift of the solve.
 | `min_track` | `2` | Trim survivors a point needs to stay in a round's solve. |
 | `min_obs` | `12` | Trim survivors below which a round exits degenerate. |
 | `free_points` | `FreePointPolicy::CROSS` | Whether free points cross between a position and a direction by the storage decision; `NO_CROSS` honours the value's representation. |
-| `image_prior` | `ImagePriorOptions::default()`: loose 0.1, floor 0.001, derived | The widths of the prior on a per-image release, the focal scale's a fraction and the principal point's in the short-side unit: the first round's and the cap, the floor, and `fixed` widths that replace the derivation. |
+| `image_prior` | `ImagePriorOptions::default()`: loose 0.1, floor 0.001, derived | The widths of the prior on a per-image release, the focal's of the log focal scale `ln(1 + s)`, read as a fraction, and the principal point's in the short-side unit: the first round's and the cap, the floor, and `fixed` widths that replace the derivation. |
 
 The defaults after `releases` are the kernel's own
 ([`../geometry/bundle-adjustment.md`](../geometry/bundle-adjustment.md)), stated
@@ -698,11 +702,11 @@ fixture needs no pixels, because the adjustment reads none. What it pins:
 - The per-image release, on the fixture with every image's keypoints made
   through its own adjustment and handed in with none, image 5 unposed with an
   adjustment of its own: each posed image written back with a solved
-  adjustment, the five averaging zero to `10⁻¹⁴`, the camera's
+  adjustment, the five averaging zero to `10⁻¹⁴` (the focal in `ln(1 + s)`), the camera's
   `per_image_adjustments` marking both parameters, the unposed image's
   intrinsics unchanged to `10⁻¹²` while its camera moved, the residual median
   halved, and the report's flags, spread (its standard deviation in pixels the
-  adjustments' own), prior and derivation; under fixed widths a fifth of the
+  adjustments' own, and the focal's that of `ln(1 + s)`), prior and derivation; under fixed widths a fifth of the
   adjustments, the images beyond two widths each at its own distance from the
   mean and the unposed image not among them, and none under wide ones; the
   principal point released per image alone keeping the focal, every focal

@@ -88,7 +88,7 @@ pub struct CameraRelease {
 
 /// The widths of one camera's prior on its images' adjustments.
 pub struct ImagePriorWidths {
-    pub focal: f64,           // the focal scale's, a fraction
+    pub focal: f64,           // the log focal scale ln(1 + s)'s, read as a fraction
     pub principal_point: f64, // the offset's, in the short-side unit
 }
 
@@ -839,8 +839,23 @@ the per-image release alone, bit for bit. A per-image focal stands for the focal
 a spline release needs: the images' mean scale is the central scale the spline
 cannot express.
 
+**The log focal scale.** The focal is solved, held and re-centred in log space:
+the parameter is `t_i = ln(1 + s_i)`, so the image's focal is `f·exp(t_i)`. A
+focal scale is multiplicative, and in `t` a focal `k` times the camera's and
+one `1/k` times it lie the same distance from it, `±ln k`, where in `s` they
+lie `k − 1` and `1 − 1/k` away; the prior, the mean it centres on, the
+re-centring and the widths below all read `t`, so they treat the two alike.
+Storage is unchanged: the file, `IntrinsicAdjustment::focal`, the kernel's
+`image_adjustments` in and out and every accessor hold `s`, with
+`f_i = f·(1 + s_i)`. The kernel converts where it reads and writes the
+parameter, `t = ln(1 + s)` (`s.ln_1p()`) in and `s = exp(t) − 1`
+(`t.exp_m1()`) out. For small scales `t ≈ s − s²/2`, so `t` reads as a fraction
+of the focal as `s` does and a width keeps its meaning to first order,
+`σ_t ≈ σ_s`; the mean of `t` and the arithmetic mean of `s` differ by about
+`var(s)/2`, which for the 1% spread of a phone's autofocus is `5·10⁻⁵`.
+
 **The columns.** Each image's block of the reduced system grows to
-`[δθ×3, δt×3, s, a_x, a_y]`, nine wide, in a solve where some camera releases a
+`[δθ×3, δt×3, t_i, a_x, a_y]`, nine wide, in a solve where some camera releases a
 per-image parameter, and stays six wide otherwise; an image's slots its camera
 does not release are pinned. The per-observation camera block carries the same
 three columns after the pose in two more instantiations, `BASE_IMG_CAM_COLS`
@@ -849,26 +864,29 @@ columns, so the widths stay one instantiation each and number six. At the
 image's adjusted camera:
 
 ```
-∂(u, v)/∂s_i   = (u − cx_i, v − cy_i) / (1 + s_i)     (= f·(x_d, y_d))
+∂(u, v)/∂t_i   = (u − cx_i, v − cy_i)     (= f·exp(t_i)·(x_d, y_d))
 ∂(u, v)/∂a_x,i = (m, 0)
 ∂(u, v)/∂a_y,i = (0, m)
 ```
 
 exact on every model the release admits, as the shared focal's and principal
-point's are. An image of a camera that releases a per-image parameter is read
-through a lens entry of its own whatever its adjustment, since the adjustment
-moves within a round.
+point's are: the model projects `u = f_i·x_d + cx_i` with `x_d` independent of
+the focal, and `∂f_i/∂t_i = f_i`, so the focal column is the pixel's offset from
+the image's own principal point. An image of a camera that releases a
+per-image parameter is read through a lens entry of its own whatever its
+adjustment, since the adjustment moves within a round.
 
 **The prior.** Each camera `c` holds its images' deviations from their mean with
-a Gaussian prior of widths `σ_s,c` (the focal scale's, a fraction) and
-`σ_pp,c` (the principal point's, in the short-side unit, the same on both axes):
+a Gaussian prior of widths `σ_t,c` (the log focal scale's, read as a fraction)
+and `σ_pp,c` (the principal point's, in the short-side unit, the same on both
+axes):
 
 ```
-σ_n² · Σ_i ( ‖a_i − ā‖² / σ_pp,c²  +  (s_i − s̄)² / σ_s,c² )
+σ_n² · Σ_i ( ‖a_i − ā‖² / σ_pp,c²  +  (t_i − t̄)² / σ_t,c² )
 ```
 
 over the camera's images the round solves (its posed images with a kept
-observation), with `ā` and `s̄` their means. `σ_n` is the reprojection noise
+observation), with `ā` and `t̄` their means. `σ_n` is the reprojection noise
 level at the state the round starts from, over its kept observations, measured
 as the storage decision measures it (`round_noise`), or the round's loss scale
 where it measures nothing; it is fixed for the round, so the cost the damping
@@ -915,7 +933,7 @@ ordinary one too tightly:
    sample.
 3. *Undoing the prior's pull.* The solved deviation `d_i = a_i − ā` was pulled
    toward the mean by the round's prior, whose curvature on the image's own
-   block is `W = σ_n²·P⁻¹` (`P = diag(σ_s², σ_pp², σ_pp²)`, the round's widths).
+   block is `W = σ_n²·P⁻¹` (`P = diag(σ_t², σ_pp², σ_pp²)`, the round's widths).
    The deviation the data alone give is `d̂_i = (I + H_i⁻¹·W)·d_i`, every
    released parameter together, since one image's focal scale and principal
    point can be correlated. This is exact for the image's own block with every
@@ -945,6 +963,12 @@ ordinary one too tightly:
    from releasing more than the first round did. A parameter with fewer than
    two images giving a sample keeps the loose width and has no spread.
 
+Every step reads the focal as the log focal scale `t_i`: the deviation is
+`t_i − t̄`, the variance is that of `t_i`, since the solve's column is `t`'s, and
+the spread, the floor and the loose width are of `t`. `ImagePriorOptions` keeps
+its defaults, 0.1 loose and 0.001 floor, which read as the same fractions of the
+focal they would of `s`.
+
 The widths are derived again before every round after the first, from the round
 just finished, and the round runs under them: the rounds are where the cost is
 already fixed and re-measured, and re-deriving follows the trim, so the final
@@ -961,11 +985,13 @@ derived.
 per-image release takes the mean of the released adjustments over its images
 the round solved, and every image of the camera keeps its difference from it:
 `cx += mean(a_x)·m`, `cy += mean(a_y)·m` and `a_i −= mean(a)` for the principal
-point; `f ← f·mean(1 + s_i)` (every focal of a two-focal model) and
-`1 + s_i ← (1 + s_i)/mean(1 + s_i)` for the focal, so the mean scale is exactly
-zero. It is applied to every image of the camera in the solve's arrays, the ones
-the round did not solve included, so every image's intrinsics are unchanged by
-it, to rounding. The mean is over the images the round solved, the set the
+point; `f ← f·exp(t̄)` (every focal of a two-focal model) and `t_i −= t̄` for
+the focal, with `t̄` the mean of the log focal scales, so that the mean of `t`
+is zero to rounding. In `s` that is `f ← f·g` and `1 + s_i ← (1 + s_i)/g` with
+`g` the geometric mean of `1 + s_i`, which differs from the arithmetic mean by
+about `var(s)/2`. It is applied to every image of the camera in the solve's
+arrays, the ones the round did not solve included, so every image's intrinsics
+are unchanged by it, to rounding. The mean is over the images the round solved, the set the
 prior's mean is over, because those are the images whose adjustments the data
 fixed. It runs after every round rather than once at the end so that the shared
 value is the images' mean at the start of every round: the spline penalty's
@@ -975,12 +1001,14 @@ the adjustments are centred on it. The prior and the derivation measure about
 the mean, so the re-centring changes neither.
 
 **Step guards.** A candidate step is rejected and re-damped when an image's
-focal scale is not finite or leaves `1 + s_i` not positive, its focal
-`f·(1 + s_i)` is not finite and above `1e-6` (`image_focal_step_admissible`), or
-its adjusted principal point is not finite or leaves the image. The principal
-point's test reads every image of a camera that releases its principal point,
-shared or per image, whose adjustment is released or not zero; an image at a
-zero held adjustment is the shared principal point, which its own guard checks.
+log focal scale `t_i` is not finite, its focal `f·(1 + s_i)` with
+`s_i = exp(t_i) − 1` is not finite and above `1e-6`
+(`image_focal_step_admissible`), or its adjusted principal point is not finite
+or leaves the image. `1 + s_i = exp(t_i)` is then positive by construction. The
+principal point's test reads every image of a camera that releases its
+principal point, shared or per image, whose adjustment is released or not zero;
+an image at a zero held adjustment is the shared principal point, which its own
+guard checks.
 
 **The result.** `BundleAdjustment::image_adjustments` holds every image's
 adjustment after the solve, and `image_priors` one `Option<ImagePrior>` per
@@ -1291,18 +1319,21 @@ Python's point of view).
   on scenes whose images look from a cap of directions, each at its own point
   and rolled, since images whose axes meet in one point leave the per-image
   focal a family of exact solutions:
-  - the focal-scale and offset columns match a central difference of the
-    adjusted projection on every model each is released on, and point at the
-    image's own slots;
+  - the log focal scale's and the offset's columns match a central difference
+    of the adjusted projection, in `t = ln(1 + s)` for the focal, on every
+    model each is released on, and point at the image's own slots;
   - from noise-free observations made through per-image focal scales and
     offsets about a common part that is not zero (1% long, `(6, −4)` px), every
     image's intrinsics are recovered to `10⁻⁷`, the camera holding the planted
-    mean and the adjustments averaging zero to rounding;
+    mean, the geometric mean of `1 + s` for the focal, and the adjustments
+    averaging zero to rounding, the focal's in `t`;
   - the derived width recovers a planted spread of offsets (0.4% of the short
     side over forty images with half a pixel of noise) within `[0.75, 1.35]` of
     it, and, where each image's variance is comparable to the spread's square
     (25 observations at 0.7 px), within `[0.7, 1.4]`, the width after five more
-    rounds on the same observations within 5% of the first;
+    rounds on the same observations within 5% of the first; the derived focal
+    width recovers a planted spread of 1% in `t` over forty images within
+    `[0.75, 1.35]` of it;
   - one more image of eight observations through an offset twelve spreads out
     moves the width by less than 15%;
   - images that do not vary derive the floor; `fixed` widths are used as given
@@ -1310,16 +1341,21 @@ Python's point of view).
   - images that share one offset, `(6, −4)` px from the starting camera's principal
     point, solved in one round under a fixed width far narrower than it, move
     together, and the camera ends within 1.5 px of their principal point: the
-    prior holds the images to their mean, not to zero;
+    prior holds the images to their mean, not to zero; likewise images that
+    share one focal 3% longer than the starting camera's end with the camera
+    within 0.2% of it;
   - an image with no observation keeps its intrinsics through the re-centring
     while its camera moves;
   - the shared and per-image release of one kind gives the per-image release's
     solve bit for bit, and flags on with nothing released per image give the
     solve with the flags off bit for bit;
-  - the focal guard refuses a scale that leaves the focal not positive, and an
-    image whose observations pull its principal point off the image ends on it;
+  - the focal guard refuses a log focal scale that is not finite or leaves the
+    focal not finite and above `1e-6`, and an image whose observations pull its
+    principal point off the image ends on it;
   - the derivation alone, on samples made as a round makes them, undoes a pull
-    to under 60% of the spread and recovers the spread within 15%.
+    to under 60% of the spread and recovers the spread within 15%, and reads
+    the focal in `t`: the same deviations given as log focal scales and as
+    principal-point offsets derive the same spread.
 - **Directions carry the `k1` release**: on a scene whose finite cloud sits near the
   optical axis (no `θ³` signal) and whose far field is marked at infinity,
   `opt_k1` recovers the planted curvature — and the same solve with the
@@ -2164,8 +2200,8 @@ validation, and outputs are unchanged.
   [`bundle-adjustment-measurements.md`](bundle-adjustment-measurements.md#per-image-intrinsic-adjustments)
   and compares the derived widths with the held-out error at fixed widths
   around them.
-- **A per-image focal on a two-focal model.** The focal-scale column
-  `(u − cx_i, v − cy_i)/(1 + s_i)` is exact on a two-focal model too, since one
+- **A per-image focal on a two-focal model.** The log focal scale's column
+  `(u − cx_i, v − cy_i)` is exact on a two-focal model too, since one
   scale moves both focals; whether to release it past `focal_is_releasable` is
   open.
 - **A focal driven by the subject distance.** On `dino_dog_toy` the per-image

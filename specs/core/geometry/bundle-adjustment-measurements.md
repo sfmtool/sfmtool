@@ -696,7 +696,11 @@ soft-L1 rather than the experiment's Huber; the start's median is 0.898 px.
   seven images end beyond two widths.
 - With the focal released per image as well, the focal scale's width is 1.2%
   under both schedules and the scales' standard deviation 1.2%, against the
-  experiment's 1.3 to 1.6%; the principal point's width is 1.2 to 1.3%.
+  experiment's 1.3 to 1.6%; the principal point's width is 1.2 to 1.3%. Both
+  focal figures are of the log focal scale `ln(1 + s)`, which the release
+  solves; the stored scales `s` have the same standard deviation to 0.5%, and
+  their arithmetic mean ends at `7.5·10⁻⁵` where the mean of `ln(1 + s)` is
+  zero, about `var(s)/2`.
 - No point is deleted in any of the runs.
 
 The derivation first weighted each image by `1/v`, its own variance. On this

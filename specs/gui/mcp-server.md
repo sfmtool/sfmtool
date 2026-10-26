@@ -4040,15 +4040,15 @@ of the five is held.
 A per-image release solves each image's focal scale or principal-point offset,
 the dialog's **Release focal length per image** and **Release principal point
 per image**, held toward the mean of the camera's images by a prior, and moves
-the camera's value to that mean
+the camera's value to that mean, the focal's the geometric mean
 ([../core/geometry/bundle-adjustment.md](../core/geometry/bundle-adjustment.md)
 § "The per-image release"); with the shared release of the same kind beside it,
 it is the same release. A per-image focal is refused on the models a shared
 focal is, and stands for the focal a distortion needs. `image_prior` sets the
 prior's widths, an object of `loose`, `floor` and `fixed`, each an object of
-`focal` (a fraction) and `principal_point` (a fraction of the image's short
-side), each a positive number, a left-out one at its default: `loose` is the
-first round's widths and the most a derived width may be (0.1 each), `floor`
+`focal` (of the log focal scale `ln(1 + focal)`, read as a fraction) and
+`principal_point` (a fraction of the image's short side), each a positive
+number, a left-out one at its default: `loose` is the first round's widths and the most a derived width may be (0.1 each), `floor`
 the least (0.001 each), and `fixed`, given, the widths every round runs under,
 derived from nothing. Omitted or `null`, each camera's widths are derived from
 the solve. An unknown key at either level, or a width that is not a positive
@@ -4107,7 +4107,7 @@ and carries no such field otherwise:
     "release_image_focal": true,
     "release_image_principal_point": true,
     "images": 85,                              // its posed images
-    "focal_mean": 0.0, "focal_std": 0.0122,    // the focal scales, fractions
+    "focal_mean": 0.0, "focal_std": 0.0122,    // ln(1 + focal), read as fractions
     "principal_point_mean_px": [0.0, 0.0],     // the offsets, pixels
     "principal_point_std_px": [18.2, 18.4],
     "prior": { "focal": 0.0120, "principal_point": 0.0127 }, // the final round's widths
@@ -4120,7 +4120,13 @@ and carries no such field otherwise:
 ]
 ```
 
-The means are zero to rounding, since the camera holds them. A width or spread
+The means are zero to rounding, since the camera holds them. The focal's
+figures, `focal_mean`, `focal_std`, its width, its spread and a `focal` row's
+`widths`, are of the log focal scale `ln(1 + focal)`, the parameter the solve
+holds and re-centres, since a focal scale is multiplicative: for small values
+it reads as a fraction of the focal, as `focal` does, and the camera's focal is
+the geometric mean of its images'. The stored `focal` stays the scale itself.
+A width or spread
 the solve has none of, for a parameter not released per image or a width not
 derived, is `null`, which is how JSON writes the report's `NaN`. A spread at or
 beyond the floor or the loose width says the clamp decided the width.
