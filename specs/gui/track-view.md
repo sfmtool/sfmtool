@@ -995,8 +995,9 @@ never writes the reconstruction it did not name.
 Each step is the call its button makes (`start_bench_fit`,
 `start_bench_geometry_search`, `start_bench_normal` with
 `NormalStep::GrownPlane`, `commit_bench_track`), so each is refused, runs on a
-worker, pushes its version and writes its row exactly as a press would. `AppState::drive_surface_tiling` runs once per frame,
-after the background task is polled and the live evaluation driven. It starts
+worker, pushes its version and writes its row exactly as a press would.
+`AppState::drive_surface_tiling` runs once per frame, after the background task
+is polled and the live evaluation driven. It starts
 the next step once the step before it has finished **and** the focused item's
 evaluation is no longer *Evaluating*, which is the moment a person pressing the
 buttons in turn would see *Evaluated* and press the next. The wait matters most
