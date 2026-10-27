@@ -237,7 +237,7 @@ outlives the node it was editing, or that is caught by a background task, is
 dropped.
 
 With Track View's **Surface Tiling Mode** on, a released drag that changed the
-patch is followed by Fit, Find matches by geometry, Fit, Grid Plane Normal, Fit
+patch is followed by Fit, Find matches by geometry, Fit, Grown Plane Normal, Fit
 and Commit, each its own version, once per drag rather than per frame; the dock
 applies the drag through `AppState::edit_bench_patch_by_gesture`, the call
 Image Detail's handle drags go through too, which starts

@@ -11,7 +11,6 @@ use sfmtool_core::bench::Verdict;
 use super::{search_row, TilingStep, TILING_STEPS};
 use crate::action_log::Kind;
 use crate::bench::tests::{put_on_bench, state};
-use crate::bench::SplitSettings;
 use crate::scene::ReconId;
 use crate::state::AppState;
 
@@ -276,7 +275,7 @@ fn a_move_while_the_drop_waits_ends_it() {
             &PatchEdit::Translate {
                 by: [0.01, 0.0, 0.0],
             },
-            Some(SplitSettings::default()),
+            true,
         )
         .expect("a move in the mode");
 
@@ -341,10 +340,17 @@ fn a_move_runs_fit_search_fit_normal_fit_and_commit_in_order() {
     state.settle_bench_evaluation();
     state.action_log.clear();
 
-    state.start_surface_tiling(id, &label, SplitSettings::default());
+    state.start_surface_tiling(id, &label);
     assert_eq!(
         state.surface_tiling_status(id, &label).as_deref(),
         Some("Step 1 of 6: Fit")
+    );
+    assert_eq!(
+        rows(&state)[0].2,
+        format!(
+            "Surface tiling {label} after the move: Fit, Find matches by geometry, Fit, \
+             Grown Plane Normal, Fit, Commit"
+        )
     );
     let started = run_sequence(&mut state);
 
@@ -356,7 +362,8 @@ fn a_move_runs_fit_search_fit_normal_fit_and_commit_in_order() {
         "a step failed: {logged:?}"
     );
     // Each step wrote the row it writes when its button is pressed, in the
-    // sequence's order, and the last is the commit's edit row.
+    // sequence's order, and the last is the commit's edit row. The normal
+    // step is Grown Plane Normal, whose row carries no piece count.
     let find = |from: usize, kind: Kind, prefix: &str| {
         logged[from..]
             .iter()
@@ -366,7 +373,7 @@ fn a_move_runs_fit_search_fit_normal_fit_and_commit_in_order() {
     };
     let fit = format!("Fitted {label}");
     let search = format!("{label}: Geometry search from observation");
-    let normal = format!("Grid-plane normal of {label}");
+    let normal = format!("Grown-plane normal of {label}");
     let first = find(0, Kind::Bench, &fit);
     let searched = find(first + 1, Kind::Bench, &search);
     let second = find(searched + 1, Kind::Bench, &fit);
@@ -394,7 +401,7 @@ fn unfocusing_the_item_stops_the_sequence_with_a_row() {
     let (mut state, id) = state();
     let label = put_on_bench(&mut state, id);
     state.settle_bench_evaluation();
-    state.start_surface_tiling(id, &label, SplitSettings::default());
+    state.start_surface_tiling(id, &label);
     state.drive_surface_tiling();
     assert!(
         state.running_tasks().next().is_some(),
@@ -420,7 +427,7 @@ fn a_version_the_sequence_did_not_push_stops_it() {
     let (mut state, id) = state();
     let label = put_on_bench(&mut state, id);
     state.settle_bench_evaluation();
-    state.start_surface_tiling(id, &label, SplitSettings::default());
+    state.start_surface_tiling(id, &label);
 
     // A verdict set by hand before the first step starts.
     state
@@ -447,7 +454,7 @@ fn a_second_move_starts_the_sequence_again_from_the_first_fit() {
     let (mut state, id) = state();
     let label = put_on_bench(&mut state, id);
     state.settle_bench_evaluation();
-    state.start_surface_tiling(id, &label, SplitSettings::default());
+    state.start_surface_tiling(id, &label);
     state.drive_surface_tiling();
     state.finish_background_tasks();
     state.settle_bench_evaluation();
@@ -458,7 +465,7 @@ fn a_second_move_starts_the_sequence_again_from_the_first_fit() {
         Some(TilingStep::SearchGeometry)
     );
 
-    state.start_surface_tiling(id, &label, SplitSettings::default());
+    state.start_surface_tiling(id, &label);
 
     assert_eq!(
         state.surface_tiling.as_ref().map(|s| s.step()),
@@ -502,12 +509,12 @@ fn a_second_move_of_a_duplicate_replaces_the_point_its_first_wrote() {
     let points = |state: &AppState| state.node(id).expect("loaded").point_count();
     let before = points(&state);
 
-    state.start_surface_tiling(id, &copy, SplitSettings::default());
+    state.start_surface_tiling(id, &copy);
     run_sequence(&mut state);
     assert_eq!(points(&state), before + 1, "{:?}", rows(&state));
 
     state.action_log.clear();
-    state.start_surface_tiling(id, &copy, SplitSettings::default());
+    state.start_surface_tiling(id, &copy);
     run_sequence(&mut state);
     let logged = rows(&state);
     assert_eq!(points(&state), before + 1, "{logged:?}");
@@ -526,24 +533,23 @@ fn only_a_move_that_changed_the_patch_in_the_mode_starts_the_sequence() {
     use crate::bench::PatchEdit;
     let (mut state, id) = state();
     let label = put_on_bench(&mut state, id);
-    let split = Some(SplitSettings::default());
 
     let moved = PatchEdit::Translate {
         by: [0.01, 0.0, 0.0],
     };
     state
-        .edit_bench_patch_by_gesture(id, &label, &moved, None)
+        .edit_bench_patch_by_gesture(id, &label, &moved, false)
         .expect("a move with the mode off");
     assert!(state.surface_tiling.is_none(), "the mode is off");
 
     let still = PatchEdit::Translate { by: [0.0; 3] };
     state
-        .edit_bench_patch_by_gesture(id, &label, &still, split)
+        .edit_bench_patch_by_gesture(id, &label, &still, true)
         .expect("a move that changed nothing");
     assert!(state.surface_tiling.is_none(), "nothing moved");
 
     state
-        .edit_bench_patch_by_gesture(id, &label, &moved, split)
+        .edit_bench_patch_by_gesture(id, &label, &moved, true)
         .expect("a move in the mode");
     assert_eq!(
         state.surface_tiling.as_ref().map(|s| s.step()),
@@ -567,7 +573,7 @@ fn a_step_whose_task_fails_stops_the_sequence() {
     let (mut state, id) = state();
     let label = put_on_bench(&mut state, id);
     state.settle_bench_evaluation();
-    state.start_surface_tiling(id, &label, SplitSettings::default());
+    state.start_surface_tiling(id, &label);
     // With no photograph to read, the fit's worker fails.
     state.photographs.clear();
     state.drive_surface_tiling();
@@ -602,7 +608,7 @@ fn a_step_its_starter_refuses_stops_the_sequence() {
             .expect("a verdict step");
     }
     state.settle_bench_evaluation();
-    state.start_surface_tiling(id, &label, SplitSettings::default());
+    state.start_surface_tiling(id, &label);
 
     state.drive_surface_tiling();
 
@@ -630,7 +636,7 @@ fn a_refused_commit_stops_the_sequence_at_its_last_step() {
             .expect("a verdict step");
     }
     state.settle_bench_evaluation();
-    state.start_surface_tiling(id, &label, SplitSettings::default());
+    state.start_surface_tiling(id, &label);
     // As if the five steps before it had run.
     state.surface_tiling.as_mut().expect("started").next = TILING_STEPS.len() - 1;
     let before = versions(&state, id);
@@ -673,7 +679,7 @@ fn a_step_waits_until_the_evaluation_has_caught_up() {
             &PatchEdit::Translate {
                 by: [0.01, 0.0, 0.0],
             },
-            Some(SplitSettings::default()),
+            true,
         )
         .expect("a move in the mode");
     assert_eq!(

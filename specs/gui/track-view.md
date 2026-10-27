@@ -895,7 +895,7 @@ run of steps by hand, starting from the track just committed: *Discard* and
 *Edit* puts the committed point back on the bench, and the point holds only the
 `in` observations the commit wrote), the *Keep* heading's pin to hand every
 verdict back to the thresholds, *Duplicate*, the move, *Fit*, the row menu's
-*Find matches by geometry*, *Fit*, *Grid Plane Normal*, *Fit* and *Commit*. The
+*Find matches by geometry*, *Fit*, *Grown Plane Normal*, *Fit* and *Commit*. The
 mode takes all of them but the duplicate and the move, and it drops the copy's
 `out` rows after handing its verdicts back rather than before. It is the
 *Surface Tiling Mode* box on the toolbar's second row, after *Lock*, and the
@@ -906,9 +906,6 @@ steps it takes are
 impl TrackView {
     /// Whether the box is ticked: what the dock and Ctrl+D read.
     pub(crate) fn surface_tiling(&self) -> bool;
-    /// The *per axis* and *overlap* boxes, which the sequence's Grid Plane
-    /// Normal is cut with.
-    pub(crate) fn split_settings(&self) -> SplitSettings;
 }
 
 impl AppState {
@@ -918,9 +915,9 @@ impl AppState {
     pub(crate) fn duplicate_for_surface_tiling(&mut self, id: ReconId, label: &str)
         -> Result<String, String>;
     /// A released handle gesture of the 3D viewer or Image Detail, and, with
-    /// `tiling` set and the patch moved, the sequence after it.
+    /// `tiling` true and the patch moved, the sequence after it.
     pub(crate) fn edit_bench_patch_by_gesture(&mut self, id: ReconId, label: &str,
-        edit: &PatchEdit, tiling: Option<SplitSettings>) -> Result<(), String>;
+        edit: &PatchEdit, tiling: bool) -> Result<(), String>;
     /// Once per frame, after the background task is polled and the live
     /// evaluation driven: start the sequence's next step when it is due.
     pub(crate) fn drive_surface_tiling(&mut self) -> TilingDriven;
@@ -980,11 +977,11 @@ of a handle over the 3D viewer's bench figure or over Image Detail's bench
 layer that changes the patch (a slide, a move along the normal, a resize, a
 spin or a tilt) is applied as it always is, one version through
 `edit_bench_patch`, and then starts a **tiling sequence** on the focused item:
-*Fit*, *Find matches by geometry*, *Fit*, *Grid Plane Normal*, *Fit*,
+*Fit*, *Find matches by geometry*, *Fit*, *Grown Plane Normal*, *Fit*,
 *Commit*. Both panels' handles reach the dock's one call,
 `edit_bench_patch_by_gesture`, so a drag over a photograph and a drag out in
 the world start the same sequence, once per released gesture. A row `Surface
-tiling bull-nose after the move: Fit, Find matches by geometry, Fit, Grid
+tiling bull-nose after the move: Fit, Find matches by geometry, Fit, Grown
 Plane Normal, Fit, Commit` says it started. A release that changed nothing
 starts none, and neither does an edit that leaves the patch where it is: a
 sighting placed on its own or a cluster sighting's shape set or turned
@@ -996,10 +993,9 @@ search, the normal and the commit after a move calls them, and a tool call
 never writes the reconstruction it did not name.
 
 Each step is the call its button makes (`start_bench_fit`,
-`start_bench_geometry_search`, `start_bench_normal` with the *per axis* and
-*overlap* boxes as they stood when the sequence started, `commit_bench_track`),
-so each is refused, runs on a worker, pushes its version and writes its row
-exactly as a press would. `AppState::drive_surface_tiling` runs once per frame,
+`start_bench_geometry_search`, `start_bench_normal` with
+`NormalStep::GrownPlane`, `commit_bench_track`), so each is refused, runs on a
+worker, pushes its version and writes its row exactly as a press would. `AppState::drive_surface_tiling` runs once per frame,
 after the background task is polled and the live evaluation driven. It starts
 the next step once the step before it has finished **and** the focused item's
 evaluation is no longer *Evaluating*, which is the moment a person pressing the
@@ -1015,6 +1011,19 @@ the named row first and then from every `in` row, so the named row is the one
 whose appearance leads. The reference is the sighting the Fit just before
 rendered the patch from, which the rule chose as the best view of the patch, so
 it is the row a person would right-click.
+
+**The normal step is *Grown Plane Normal*, at its default options.** It takes
+no settings, so the *per axis* and *overlap* boxes, which cut the patch for
+*Finite Diff Normal* and *Grid Plane Normal*, do not reach the sequence. It
+trusts the keypoints it is given, and it comes after the second *Fit*, which
+has just fitted the keypoints of the cameras the search added. Besides turning
+the patch it writes the keypoints of the views it joined to the plane and of
+those whose shift alone it fitted there (*Grown Plane Normal* under § "The
+toolbar"). The third *Fit* localizes each sighting from where it now is, so it
+starts from those keypoints and settles every sighting on the turned patch
+before the commit. The keypoints are written in the same one version as the
+turn, so the sequence takes the step as one version and one row, as it does
+every other.
 
 **A sequence stops rather than guesses.** It ends with a failed Bench row,
 `Surface tiling of bull-nose stopped at Find matches by geometry (step 2 of 6):
@@ -2470,7 +2479,7 @@ texels, so their geometry is checked without reading pixels off the screen.
   move's sequence; dropping no row is a no-effect row and dropping every row
   is refused; a 3D viewer move
   starts a sequence only with the mode on and only when it changed the patch;
-  a sequence runs Fit, the geometry search, Fit, Grid Plane Normal, Fit and
+  a sequence runs Fit, the geometry search, Fit, Grown Plane Normal, Fit and
   Commit in that order with each step's own row and no failed row, the item
   still focused and seated on the point written; a second sequence on a
   duplicate replaces the point its first created; the search starts from the

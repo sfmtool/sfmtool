@@ -344,10 +344,7 @@ impl TabContext<'_> {
     /// drag over a photograph and one out in the world start the same
     /// sequence.
     fn apply_patch_gesture(&mut self, id: ReconId, label: &str, edit: &crate::bench::PatchEdit) {
-        let tiling = self
-            .track_view
-            .surface_tiling()
-            .then(|| self.track_view.split_settings());
+        let tiling = self.track_view.surface_tiling();
         if let Err(why) = self
             .state
             .edit_bench_patch_by_gesture(id, label, edit, tiling)

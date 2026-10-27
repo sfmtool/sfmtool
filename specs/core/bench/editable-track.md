@@ -3046,7 +3046,7 @@ grid uses the whole patch and reads every centre together; the cross costs
 nine cells.** It is the estimator
 [piece-gated-grid-normal.md](../../drafts/piece-gated-grid-normal.md) designs
 to replace `PieceLayout::Grid`, and it stands beside that layout until the two
-have been compared; Track View, Surface Tiling Mode and the wire still run
+have been compared; Track View's *Grid Plane Normal* and the wire still run
 `PieceLayout::Grid`. The cells are the three-by-three split of the ZNCC grid
 (§ "The ZNCC grid") on a working grid of `working_resolution` samples a side.
 The reference is the fit's: the reference the track holds where its row is

@@ -122,12 +122,6 @@ impl TrackView {
         self.body.surface_tiling()
     }
 
-    /// How the *per axis* and *overlap* boxes cut the patch, which a Surface
-    /// Tiling Mode sequence's *Grid Plane Normal* takes.
-    pub(crate) fn split_settings(&self) -> crate::bench::SplitSettings {
-        self.body.split_settings()
-    }
-
     /// Tick or clear the *Surface Tiling Mode* box without drawing a frame.
     #[cfg(test)]
     pub(crate) fn set_surface_tiling(&mut self, on: bool) {

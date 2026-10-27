@@ -378,7 +378,7 @@ pub struct TrackBody {
     /// *Duplicate* then also hands the copy's verdicts back to the thresholds
     /// and drops the observations they leave `out`, and a move of the patch by
     /// a handle of the 3D viewer or Image Detail runs Fit, Find matches by
-    /// geometry, Fit, Grid Plane Normal, Fit and Commit
+    /// geometry, Fit, Grown Plane Normal, Fit and Commit
     /// ([`crate::bench::surface_tiling`]). A tool setting for the reason
     /// [`TrackBody::lock`] is: off when the viewer starts, kept for the
     /// session.
@@ -474,13 +474,6 @@ impl TrackBody {
     /// Whether the *Surface Tiling Mode* box is ticked.
     pub(crate) fn surface_tiling(&self) -> bool {
         self.surface_tiling
-    }
-
-    /// How *Finite Diff Normal* and *Grid Plane Normal* cut the patch, as the
-    /// *per axis* and *overlap* boxes stand: what a Surface Tiling Mode
-    /// sequence's *Grid Plane Normal* is cut with.
-    pub(crate) fn split_settings(&self) -> SplitSettings {
-        self.split_settings
     }
 
     /// Tick or clear the *Surface Tiling Mode* box, for the tests that drive
@@ -943,7 +936,7 @@ impl TrackBody {
                  verdicts back to the thresholds and drops the observations they leave \
                  out; each move, turn or resize of the patch with the handles of the 3D \
                  viewer or Image Detail then runs Fit, Find matches by geometry, Fit, \
-                 Grid Plane Normal, Fit and Commit",
+                 Grown Plane Normal, Fit and Commit",
             );
         if checkbox.changed() {
             if self.surface_tiling {

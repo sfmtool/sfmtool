@@ -19,7 +19,7 @@
 //! - **A move of the patch in the mode**, by a handle in the 3D viewer or in
 //!   Image Detail ([`AppState::edit_bench_patch_by_gesture`]), starts a
 //!   [`TilingSequence`] ([`AppState::start_surface_tiling`]): Fit, Find
-//!   matches by geometry, Fit, Grid Plane Normal, Fit and Commit, each through
+//!   matches by geometry, Fit, Grown Plane Normal, Fit and Commit, each through
 //!   the starter its button calls, so each pushes its own version and writes
 //!   its own row. [`AppState::drive_surface_tiling`] runs once per frame and
 //!   starts the next step once the one before it has finished and the track's
@@ -42,7 +42,7 @@ use sfmtool_core::bench::{EditableTrack, ItemId, StageKind, Verdict};
 use crate::action_log::Kind;
 use crate::background::TaskState;
 use crate::bench::live::Evaluation;
-use crate::bench::{FocusedItem, NormalStep, PatchEdit, SplitSettings};
+use crate::bench::{FocusedItem, NormalStep, PatchEdit};
 use crate::document::VersionSerial;
 use crate::scene::ReconId;
 use crate::state::AppState;
@@ -59,10 +59,9 @@ enum TilingStep {
     /// The observation table's *Find matches by geometry*
     /// ([`AppState::start_bench_geometry_search`]), from [`search_row`].
     SearchGeometry,
-    /// Track View's *Grid Plane Normal* ([`AppState::start_bench_normal`]),
-    /// cut as the *per axis* and *overlap* boxes stood when the sequence
-    /// started.
-    GridPlaneNormal,
+    /// Track View's *Grown Plane Normal* ([`AppState::start_bench_normal`]
+    /// with [`NormalStep::GrownPlane`]), which takes no settings.
+    GrownPlaneNormal,
     /// Track View's *Commit* ([`AppState::commit_bench_track`]).
     Commit,
     /// The `out` observations dropped
@@ -77,7 +76,7 @@ impl TilingStep {
         match self {
             TilingStep::Fit => "Fit",
             TilingStep::SearchGeometry => "Find matches by geometry",
-            TilingStep::GridPlaneNormal => "Grid Plane Normal",
+            TilingStep::GrownPlaneNormal => "Grown Plane Normal",
             TilingStep::Commit => "Commit",
             TilingStep::DropOut => "Drop the out observations",
         }
@@ -88,14 +87,17 @@ impl TilingStep {
 ///
 /// The first Fit lets the sightings follow the moved patch and triangulates
 /// it where they agree; the geometry search then has a placed patch to project
-/// into every camera; the second Fit takes the cameras it added; Grid Plane
-/// Normal turns the patch to the surface under it; the third Fit settles the
-/// sightings on the turned patch; and the commit writes the point.
+/// into every camera; the second Fit takes the cameras it added and fits
+/// their keypoints; Grown Plane Normal, which trusts the keypoints it is
+/// given, turns the patch to the plane the views agree on and writes the
+/// keypoints of the views it fitted; the third Fit starts from those keypoints
+/// and settles the sightings on the turned patch; and the commit writes the
+/// point.
 const TILING_STEPS: [TilingStep; 6] = [
     TilingStep::Fit,
     TilingStep::SearchGeometry,
     TilingStep::Fit,
-    TilingStep::GridPlaneNormal,
+    TilingStep::GrownPlaneNormal,
     TilingStep::Fit,
     TilingStep::Commit,
 ];
@@ -121,8 +123,6 @@ pub(crate) struct TilingSequence {
     /// The steps, in order: [`TILING_STEPS`] after a move,
     /// [`DUPLICATE_STEPS`] after a duplicate.
     steps: &'static [TilingStep],
-    /// How *Grid Plane Normal* cuts the patch.
-    split: SplitSettings,
     /// The position in `steps` of the step to start next, or of the step
     /// running while `waiting_on` is set.
     next: usize,
@@ -285,7 +285,6 @@ impl AppState {
             node: id,
             item,
             steps: &DUPLICATE_STEPS,
-            split: SplitSettings::default(),
             next: 0,
             waiting_on: None,
             serial: self.scene[index].history.current_version().serial,
@@ -297,8 +296,7 @@ impl AppState {
     /// ([`Self::edit_bench_patch`]), and, in Surface Tiling Mode, the sequence
     /// after it.
     ///
-    /// `tiling` is `None` with the mode off, and otherwise how the sequence's
-    /// *Grid Plane Normal* cuts the patch. The sequence starts only when the
+    /// `tiling` says whether the mode is on. The sequence starts only when the
     /// edit changed the track-stage patch ([`PatchEdit::moves_patch`]): a
     /// release that put it back where it was is a no-effect row and nothing
     /// more, as it is with the mode off, and so is an edit of one sighting
@@ -308,17 +306,17 @@ impl AppState {
         id: ReconId,
         label: &str,
         edit: &PatchEdit,
-        tiling: Option<SplitSettings>,
+        tiling: bool,
     ) -> Result<(), String> {
         let edited = self.edit_bench_patch(id, label, edit)?;
-        let Some(split) = tiling else {
+        if !tiling {
             return Ok(());
-        };
+        }
         let at_track_stage = self
             .bench_track(id, label)
             .is_some_and(|track| track.stage_kind() == StageKind::Track);
         if edited.changed && edit.moves_patch() && at_track_stage {
-            self.start_surface_tiling(id, label, split);
+            self.start_surface_tiling(id, label);
         }
         Ok(())
     }
@@ -333,8 +331,8 @@ impl AppState {
     /// first Fit. A duplicate's drop still waiting is ended with its row
     /// first: the move has changed what the evaluation will judge, so the
     /// verdicts it would drop by are no longer about the ground the copy came
-    /// from. `split` is how its *Grid Plane Normal* cuts the patch.
-    fn start_surface_tiling(&mut self, id: ReconId, label: &str, split: SplitSettings) {
+    /// from.
+    fn start_surface_tiling(&mut self, id: ReconId, label: &str) {
         let (Ok(index), Some(item)) = (
             self.node_index(id),
             self.bench(id).and_then(|bench| bench.id(label)),
@@ -369,7 +367,6 @@ impl AppState {
             node: id,
             item,
             steps: &TILING_STEPS,
-            split,
             next: 0,
             waiting_on: None,
             serial,
@@ -493,9 +490,8 @@ impl AppState {
                     )),
                 }
             }
-            TilingStep::GridPlaneNormal => {
-                let split = self.surface_tiling.as_ref().expect("still running").split;
-                self.start_bench_normal(id, &label, NormalStep::GridPlane(split))
+            TilingStep::GrownPlaneNormal => {
+                self.start_bench_normal(id, &label, NormalStep::GrownPlane)
             }
             TilingStep::Commit => {
                 match self.commit_bench_track(id, &label) {

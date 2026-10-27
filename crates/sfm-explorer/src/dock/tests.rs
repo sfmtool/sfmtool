@@ -208,7 +208,7 @@ fn clearing_surface_tiling_mode_stops_the_sequence() {
             &crate::bench::PatchEdit::Translate {
                 by: [0.01, 0.0, 0.0],
             },
-            Some(crate::bench::SplitSettings::default()),
+            true,
         )
         .expect("a move in the mode");
     assert!(
