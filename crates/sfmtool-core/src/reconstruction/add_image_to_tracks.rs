@@ -383,10 +383,12 @@ pub struct CandidateReport {
     /// The bar the rule set.
     pub bar: f64,
     /// The new view's readings on its tile at the final keypoint, as an
-    /// accepted candidate's observation stores them: its self-similarity
-    /// ellipse, viewing angle, tilt direction and zoom, and its plain and
-    /// blur-matched scores against the stored bitmap, `NaN` where the template
-    /// is not the stored bitmap. [`ObservationReading::NOT_MEASURED`] until the
+    /// accepted candidate's observation stores them: the tile rendered on the
+    /// stored bitmaps' grid where the value has a bitmap column (else the
+    /// localizer's), its self-similarity ellipse, viewing angle, tilt
+    /// direction and zoom, and its plain and blur-matched scores against the
+    /// point's stored bitmap whichever template the search read, `NaN` where
+    /// the point has none. [`ObservationReading::NOT_MEASURED`] until the
     /// score is read.
     pub reading: ObservationReading,
     /// The options [`Self::reading`] was taken under: the resolution the

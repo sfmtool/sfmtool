@@ -1805,8 +1805,8 @@ scores are the same.
 - **Beside the readings**: `tracks/blur_matched_bitmap_zncc`
   ([Observation readings](#observation-readings-optional-version-12)) holds the
   same score as `float32`, except on rows Add Image to Tracks wrote while
-  searching against a template rendered from the observations rather than the
-  stored bitmap: there this column holds the score against that template and
+  searching against the render of the point's reference observation rather
+  than the stored bitmap: there this column holds the score against that render and
   the `float32` reading the score against the stored bitmap. A reader that has
   both reads the `float32` score;
   this column stays, since it is present without the readings and the bench

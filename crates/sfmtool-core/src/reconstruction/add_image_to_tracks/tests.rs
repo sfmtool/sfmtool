@@ -780,7 +780,8 @@ fn the_template_is_the_stored_bitmap_where_there_is_one() {
 /// with a stored bitmap is still read against that bitmap: its row is the one
 /// a writer of the column reads, its tile rendered on the bitmap's grid at the
 /// keypoint written and scored against the stored bitmap, whether or not the
-/// localizer's grid is the bitmap's.
+/// localizer's grid is the bitmap's. A point whose bitmap row is all zero has
+/// no stored bitmap, so its row has `NaN` scores.
 #[test]
 fn rendered_template_rows_are_scored_against_the_stored_bitmap() {
     use crate::patch::observation_reading::read_view_tile;
@@ -789,8 +790,10 @@ fn rendered_template_rows_are_scored_against_the_stored_bitmap() {
 
     let points: Vec<(Point3<f64>, &[u32])> = grid_points().into_iter().map(|p| (p, FOUR)).collect();
     let mut cap = capture(&points);
-    let column = stored_bitmaps(&cap, &points, Vector3::zeros());
+    let mut column = stored_bitmaps(&cap, &points, Vector3::zeros());
     let bitmap_r = column.shape()[1];
+    let zeroed = points.len() / 2;
+    column.index_axis_mut(ndarray::Axis(0), zeroed).fill(0);
     cap.recon.point_set.patch_bitmaps_y_x_rgba = Some(std::sync::Arc::new(column.clone()));
     let poses = poses_of(&cap);
     let camera = pinhole();
@@ -823,6 +826,15 @@ fn rendered_template_rows_are_scored_against_the_stored_bitmap() {
             assert_eq!(c.template, Some(TemplateKind::ReferenceObservation));
             let row = readings.rows[next.point_set.observation_offsets[p] + 4];
             assert_eq!(row, c.reading);
+            if p == zeroed {
+                assert!(
+                    row.is_measured()
+                        && row.plain_bitmap_zncc.is_nan()
+                        && row.blur_matched_bitmap_zncc.is_nan(),
+                    "resolution {resolution} zeroed point {p}: {row:?}"
+                );
+                continue;
+            }
             assert!(
                 row.plain_bitmap_zncc.is_finite() && row.blur_matched_bitmap_zncc.is_finite(),
                 "resolution {resolution} point {p}: {row:?}"
@@ -859,7 +871,7 @@ fn rendered_template_rows_are_scored_against_the_stored_bitmap() {
             );
         }
         assert!(
-            added > 0,
+            added > 0 && report.candidates[zeroed].refusal.is_none(),
             "resolution {resolution}: {:?}",
             report.refusal_counts()
         );
