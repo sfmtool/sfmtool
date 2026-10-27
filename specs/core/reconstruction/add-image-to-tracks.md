@@ -225,10 +225,17 @@ the column, their blur-matched score (`zncc`) in `observation_confidence` on
 the byte scale the bench commit uses (`round(255·clamp(z, 0, 1))`), raised to `1` because `0` means
 unmeasured. Each also carries its
 [observation readings](../../formats/sfmr-file-format.md#observation-readings-optional-version-12)
-(`CandidateReport::reading`), read on the tile its score was read on: the
-tile's self-similarity ellipse, viewing angle, tilt and zoom, and its plain
-and blur-matched scores against the template where the template is the point's
-stored bitmap, `NaN` where it is the render the point would store. A value
+(`CandidateReport::reading`), read as `read_cloud_observations` reads a row,
+whichever template the search read: the target's tile rendered at its final
+keypoint on the stored bitmaps' grid where the value has a bitmap column (on the
+localizer's grid where it has none), its self-similarity ellipse, viewing angle,
+tilt and zoom, and its plain and blur-matched scores by `BitmapScorer` against
+the point's stored bitmap. Where the template is the stored bitmap these are
+the scores the bars judged; under `TemplateSource::Rendered` they are read
+separately from the score the bars judge, on a second render where the
+localizer's grid is not the bitmap's. A point with no stored bitmap (no bitmap
+column, or an all-zero row) has `NaN` scores. Every new row of one call is read
+on one grid, so all of them stand under one set of options. A value
 without readings gains the columns under the options the new views were read
 under, every existing row not measured; one whose
 readings stand under other options than those the new views were read under
@@ -412,7 +419,10 @@ different texture is refused by every rule; a point out of frame is
 `not_in_frame`; a camera behind the plane is `back_facing`; two points at one
 place keep one observation; the confidence column grows in lockstep; each
 added observation carries its candidate's readings, every existing row not
-measured where the value had none; the new
+measured where the value had none; under the rendered template an added
+observation of a point with a stored bitmap is read against that bitmap on the
+bitmap's grid, as `read_view_tile` reads it, at the localizer's grid and at
+another; the new
 view's score, judged and stored in the confidence column, is its blur-matched
 score against the template, as `BitmapScorer` reads it directly; a missing
 reference image leaves that reference out; the preconditions refuse by name.

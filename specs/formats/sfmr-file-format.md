@@ -1804,7 +1804,11 @@ scores are the same.
   observations they write, where the file has the column.
 - **Beside the readings**: `tracks/blur_matched_bitmap_zncc`
   ([Observation readings](#observation-readings-optional-version-12)) holds the
-  same score as `float32`. A reader that has both reads the `float32` score;
+  same score as `float32`, except on rows Add Image to Tracks wrote while
+  searching against a template rendered from the observations rather than the
+  stored bitmap: there this column holds the score against that template and
+  the `float32` reading the score against the stored bitmap. A reader that has
+  both reads the `float32` score;
   this column stays, since it is present without the readings and the bench
   reads it back into a track put on the bench where they are absent.
 
@@ -2029,8 +2033,10 @@ sorts), present or absent together, flagged by `has_observation_readings`:
     ([../core/bench/editable-track.md](../core/bench/editable-track.md) §
     "Commit"), so Track at Pixel's tracks, which reach a file through a commit,
     are written that way too; Add Image to Tracks writes the new view's readings
-    from the tile it scored, under its resolution, the localizer's sampler and
-    its window, its scores where the template is the stored bitmap;
+    from its tile at the new keypoint, at the stored bitmaps' resolution where
+    there are bitmaps and the localizer's otherwise, under the localizer's
+    sampler and window, with its scores against the point's stored bitmap
+    whichever template it searched with, `NaN` where it stores none;
   - `sfm embed-patches` (after its last round, against the bitmaps it stores),
     `sfm xform --localize-keypoints`, `--refine-keypoints` and
     `--refine-normals` read every observation again on its render, under their

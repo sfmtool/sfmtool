@@ -45,7 +45,10 @@ use crate::patch::keypoint_subpixel::{
 use crate::patch::normal_refine::ProjectedImage;
 use crate::patch::observation_reading::{observation_reading, view_tile_ellipse, zoom_of_jacobian};
 use crate::patch::reference_view::render_view_tile;
-use crate::patch::stored_bitmap::{bitmap_from_tile, bitmap_planes, BitmapScorer};
+use crate::patch::self_similarity::SelfSimilarityEllipse;
+use crate::patch::stored_bitmap::{
+    bitmap_from_tile, bitmap_planes, stored_bitmap_planes, BitmapScorer,
+};
 use crate::progress::{Cancelled, Progress};
 use crate::progress_info;
 use crate::reconstruction::bundle_adjust::is_posed;
@@ -998,7 +1001,7 @@ impl Context<'_, '_> {
         };
         out.pair_zncc = score.pair_zncc;
         let (references_z, z, reading, reading_options) =
-            self.bitmap_scores(&patch, &local, &references, &ref_keypoints, keypoint);
+            self.bitmap_scores(pi, &patch, &local, &references, &ref_keypoints, keypoint);
         settle_score(&mut out, references_z, z);
         out.reading = reading;
         out.reading_options = Some(reading_options);
@@ -1016,8 +1019,14 @@ impl Context<'_, '_> {
     /// against the render it would store. The reference observation reads `1`
     /// where the template is its render. `local` is the measured point's
     /// views, the target first; `ref_keypoints` is parallel to `local[1..]`.
+    ///
+    /// Also returns the new view's row of observation readings and the options
+    /// it was read under. Its scores are against `point`'s stored bitmap,
+    /// whichever template the search read, and `NaN` where the point has
+    /// none.
     fn bitmap_scores(
         &self,
+        point: usize,
         patch: &OrientedPatch,
         local: &[ProjectedImage<'_>],
         references: &TrackReferences,
@@ -1070,27 +1079,59 @@ impl Context<'_, '_> {
                 }
             })
             .collect();
-        // The new view's tile, read once for its score and its stored row.
-        // The scores are stored only where the template is the point's stored
-        // bitmap; a template the point would store is not in the file.
+        // The new view's tile at the template's grid, read for its score.
         let tile = render(0, keypoint, r);
         let ellipse = view_tile_ellipse(&tile);
-        let matrix = ellipse
-            .axes
-            .iter()
-            .all(|a| a.is_finite())
-            .then_some(ellipse.matrix);
-        let score = scorer.score(&tile.planes(), matrix);
+        let score = scorer.score(&tile.planes(), finite_matrix(&ellipse));
+        // Its stored row, read as a writer of the column reads one
+        // (`read_cloud_observations`): on the tile at the stored bitmaps' grid
+        // where the value has a bitmap column, else the localizer's, with its
+        // scores against the point's stored bitmap where it has one, whichever
+        // template the search read. One grid for every row of a call keeps
+        // the rows under one set of options.
+        let column = self.recon.point_set.patch_bitmaps_y_x_rgba.as_deref();
+        let reading_r = column.map_or(self.localize.resolution as usize, |b| b.shape()[1]);
+        let reread;
+        let (reading_tile, reading_ellipse) = if reading_r == r {
+            (&tile, ellipse)
+        } else {
+            reread = render(0, keypoint, reading_r);
+            let ellipse = view_tile_ellipse(&reread);
+            (&reread, ellipse)
+        };
+        let scores = if stored {
+            Some((score.plain_zncc, score.blur_matched_zncc))
+        } else {
+            column
+                .and_then(|b| stored_bitmap_planes(b.index_axis(ndarray::Axis(0), point)))
+                .map(|planes| {
+                    let score = BitmapScorer::new(&planes, self.localize.window)
+                        .score(&reading_tile.planes(), finite_matrix(&reading_ellipse));
+                    (score.plain_zncc, score.blur_matched_zncc)
+                })
+        };
         let reading = observation_reading(
-            Some(&ellipse),
-            tile.viewing_angle.map(|a| a.angle_deg),
-            tile.viewing_angle.and_then(|a| a.tilt_direction_deg),
-            tile.jacobian.map(zoom_of_jacobian),
-            stored.then_some((score.plain_zncc, score.blur_matched_zncc)),
+            Some(&reading_ellipse),
+            reading_tile.viewing_angle.map(|a| a.angle_deg),
+            reading_tile
+                .viewing_angle
+                .and_then(|a| a.tilt_direction_deg),
+            reading_tile.jacobian.map(zoom_of_jacobian),
+            scores,
         );
-        let options = observation_reading_options(self.localize.sampler, r, self.localize.window);
+        let options =
+            observation_reading_options(self.localize.sampler, reading_r, self.localize.window);
         (references_z, score.blur_matched_zncc, reading, options)
     }
+}
+
+/// `ellipse`'s matrix where its axes are finite, for [`BitmapScorer::score`].
+fn finite_matrix(ellipse: &SelfSimilarityEllipse) -> Option<[[f64; 2]; 2]> {
+    ellipse
+        .axes
+        .iter()
+        .all(|a| a.is_finite())
+        .then_some(ellipse.matrix)
 }
 
 /// Write a measured candidate's blur-matched scores into its report. A new

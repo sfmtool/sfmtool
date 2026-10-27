@@ -776,6 +776,96 @@ fn the_template_is_the_stored_bitmap_where_there_is_one() {
     }
 }
 
+/// Searched against the rendered template, an added observation of a point
+/// with a stored bitmap is still read against that bitmap: its row is the one
+/// a writer of the column reads, its tile rendered on the bitmap's grid at the
+/// keypoint written and scored against the stored bitmap, whether or not the
+/// localizer's grid is the bitmap's.
+#[test]
+fn rendered_template_rows_are_scored_against_the_stored_bitmap() {
+    use crate::patch::observation_reading::read_view_tile;
+    use crate::patch::reference_view::render_view_tile;
+    use crate::patch::stored_bitmap::{stored_bitmap_planes, BitmapScorer};
+
+    let points: Vec<(Point3<f64>, &[u32])> = grid_points().into_iter().map(|p| (p, FOUR)).collect();
+    let mut cap = capture(&points);
+    let column = stored_bitmaps(&cap, &points, Vector3::zeros());
+    let bitmap_r = column.shape()[1];
+    cap.recon.point_set.patch_bitmaps_y_x_rgba = Some(std::sync::Arc::new(column.clone()));
+    let poses = poses_of(&cap);
+    let camera = pinhole();
+    let target = ProjectedImage {
+        camera: &camera,
+        cam_from_world: &poses[TARGET],
+        pyramid: &cap.pyramids[TARGET],
+    };
+    for resolution in [bitmap_r as u32, 16] {
+        let mut options = AddImageToTracksOptions {
+            position_gate: PositionGate::Off,
+            ..fixed()
+        };
+        options.localize.resolution = resolution;
+        assert_eq!(options.template, TemplateSource::Rendered);
+        let (next, report) = run(&cap, &options);
+        let readings = next
+            .point_set
+            .observation_readings
+            .as_ref()
+            .expect("a measured row adds the column");
+        assert_eq!(readings.options.resolution as usize, bitmap_r);
+        let mut added = 0;
+        for (p, (world, _)) in points.iter().enumerate() {
+            let c = &report.candidates[p];
+            if c.refusal.is_some() {
+                continue;
+            }
+            added += 1;
+            assert_eq!(c.template, Some(TemplateKind::ReferenceObservation));
+            let row = readings.rows[next.point_set.observation_offsets[p] + 4];
+            assert_eq!(row, c.reading);
+            assert!(
+                row.plain_bitmap_zncc.is_finite() && row.blur_matched_bitmap_zncc.is_finite(),
+                "resolution {resolution} point {p}: {row:?}"
+            );
+            let planes = stored_bitmap_planes(column.index_axis(ndarray::Axis(0), p)).unwrap();
+            let mut scorer = BitmapScorer::new(&planes, options.localize.window);
+            let tile = render_view_tile(
+                &patch_at(*world),
+                &target,
+                c.keypoint,
+                bitmap_r,
+                options.localize.sampler,
+                &Progress::none(),
+            );
+            // The capture's patch is exact where the call's is read from the
+            // `f32` half-vectors, so the two agree to a few `f32` ulps.
+            let expected = read_view_tile(&tile, Some(&mut scorer), false);
+            let close = |a: f32, b: f32| (a - b).abs() <= 1e-5 * b.abs().max(1.0);
+            let pairs = [
+                (row.plain_bitmap_zncc, expected.plain_bitmap_zncc),
+                (
+                    row.blur_matched_bitmap_zncc,
+                    expected.blur_matched_bitmap_zncc,
+                ),
+                (row.ellipse_axes[0], expected.ellipse_axes[0]),
+                (row.ellipse_axes[1], expected.ellipse_axes[1]),
+                (row.cos_view_angle, expected.cos_view_angle),
+                (row.zoom[0], expected.zoom[0]),
+                (row.zoom[1], expected.zoom[1]),
+            ];
+            assert!(
+                pairs.iter().all(|&(a, b)| close(a, b)),
+                "resolution {resolution} point {p}: {row:?} against {expected:?}"
+            );
+        }
+        assert!(
+            added > 0,
+            "resolution {resolution}: {:?}",
+            report.refusal_counts()
+        );
+    }
+}
+
 /// Without bitmaps, the template is the point's stored reference observation
 /// rendered at its keypoint: moving that keypoint moves where the new view is
 /// placed by as much, the reference reads `1.0`, and neither its keypoint nor
