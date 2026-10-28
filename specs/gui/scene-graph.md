@@ -372,9 +372,9 @@ fixed-height for virtualization.
   to its grown-plane normal, as Track View's *Grown Plane Normal* does for one
   track with every observation kept, and commits it, as the node's next
   version and on a worker thread ([background-tasks.md](background-tasks.md),
-  [edits/refine-all-normals.md](edits/refine-all-normals.md)). It rewrites the
-  keypoints of the views the step uses and renders each patch bitmap again,
-  moves no camera, no lens and no point's centre, skips points at infinity,
+  [edits/refine-all-normals.md](edits/refine-all-normals.md)). It renders each
+  patch bitmap again, moves no camera, no lens, no point's centre and no
+  keypoint, skips points at infinity,
   deletes no point and creates none, and reads every photograph the points
   observe. It sits directly under `Refit All Points`, which moves each point
   and keeps the way it faces where this turns each patch and keeps its centre.

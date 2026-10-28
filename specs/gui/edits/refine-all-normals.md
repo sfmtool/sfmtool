@@ -4,10 +4,10 @@ An action on a reconstruction's row in the Scene Graph that turns the patch of
 every finite point of the reconstruction to face along the surface the
 photographs show, as Track View's *Grown Plane Normal* followed by *Commit* does
 for one track with every observation kept: one plane is fitted to the
-photographs each point is seen in, the patch is turned to it, the keypoints of
-the photographs the fit used are rewritten, its stored bitmap is rendered again,
-and each observation's readings are taken again. No point's centre moves, and
-points at infinity are skipped. It runs on a worker thread, can be cancelled,
+photographs each point is seen in, the patch is turned to it about its centre,
+its stored bitmap is rendered again, and each observation's readings are taken
+again. No point's centre moves, no keypoint moves, and points at infinity are
+skipped. It runs on a worker thread, can be cancelled,
 and installs the answer as the node's next **version**, which an undo steps back
 out of. No camera and no lens moves.
 
@@ -49,9 +49,9 @@ as `SceneGraphResponse::refine_all_normals` and `dock.rs` answers with
 `AppState::start_refine_all_normals`. Its hover text:
 
 > Turn every finite point's patch to its grown-plane normal, as Track View's
-> Grown Plane Normal does with every observation kept: rewrite the keypoints of
-> the views the step uses and render each patch bitmap again, as one version.
-> Moves no camera and no point's centre, and skips points at infinity. Reads
+> Grown Plane Normal does with every observation kept, and render each patch
+> bitmap again, as one version. Moves no camera, no point's centre and no
+> keypoint, and skips points at infinity. Reads
 > every photograph the points observe. Runs on a worker thread and can be
 > cancelled; Undo (Ctrl+Z) puts the points back.
 
@@ -70,8 +70,8 @@ with sentences that name this entry's work:
    model proposal first."*), which the menu passes in with the busy one;
 3. the observations carry no inline keypoint (a `sift_files` reconstruction):
    *"This reconstruction's observations are .sift feature indexes with no
-   inline keypoints, and refining a normal rewrites the keypoints of the views
-   it uses. Convert to Embedded Patches first."*;
+   inline keypoints, and refining a normal writes each point's record,
+   keypoints included, as a commit does. Convert to Embedded Patches first."*;
 4. the points carry no patch frame: *"This reconstruction's points carry no
    patch frame for the grown-plane normal to turn."*;
 5. no image carries a pose.
@@ -156,16 +156,16 @@ statuses, a count of zero left out:
 
 ```text
 Refined the normals of seoul_bull: 3 of 8 finite points turned, 1 of them as
-stored, 1 of them with low confidence, 11 keypoints written, 3 points left their
-normal unchanged (1 with no view joined, 2 with a large turn on weak evidence),
-2 points left as they were (1 with too few observations, 1 with no bitmap to
-render), 2 points at infinity skipped, median turn 4.0° (v3 → v4)
+stored, 1 of them with low confidence, 3 points left their normal unchanged (1
+with no view joined, 2 with a large turn on weak evidence), 2 points left as
+they were (1 with too few observations, 1 with no bitmap to render), 2 points
+at infinity skipped, median turn 4.0° (v3 → v4)
 ```
 
 In order: the points turned out of the finite points; how many of them agree
 with what was stored and were not rewritten (`as stored`); how many of them
 were turned to a plane found with low confidence, which the step turns to
-rather than rejecting; the keypoints written; the points whose normal the step
+rather than rejecting; the points whose normal the step
 kept, with why; the points the step refused or rendered no bitmap for, with the
 reason for each group; the points at infinity skipped; and the median turn. The
 words for each reason a point is left as it was come from one exhaustive match
@@ -220,8 +220,10 @@ over Refit All Points' fixture, and beside the other entries' tests.
 
 - **Moving a point, a camera or a lens.** The centres, the poses and the
   cameras are the input; moving the points is `Refit All Points`.
-- **Fitting the keypoints first.** The step trusts the keypoints it is given;
-  a reviewer whose keypoints may be off runs `Refit All Points` first.
+- **Fitting the keypoints.** The step trusts the keypoints it is given and
+  moves none of them, so a second run starts from the same keypoints. A
+  reviewer whose keypoints may be off runs `Refit All Points` first, and one
+  who wants them relocalized on the turned patches runs it after.
 - **Changing which observations a point has.** Every observation is kept `in`.
 - **Refining the selection or a list of points.** The run is over every point;
   one point is *Grown Plane Normal* and *Commit* on the bench.

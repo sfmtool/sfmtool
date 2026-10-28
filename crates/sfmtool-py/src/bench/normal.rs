@@ -514,37 +514,23 @@ fn attempt_dict<'py>(py: Python<'py>, attempt: &GrownPlaneAttempt) -> PyResult<B
 fn grown_view_dict<'py>(py: Python<'py>, view: &GrownPlaneView) -> PyResult<Bound<'py, PyDict>> {
     let d = PyDict::new(py);
     match view {
-        GrownPlaneView::Reference { keypoint } => {
-            d.set_item("kind", "reference")?;
-            d.set_item("keypoint", maybe_vector(py, *keypoint))?;
-        }
+        GrownPlaneView::Reference => d.set_item("kind", "reference")?,
         GrownPlaneView::Joined {
             shift,
             grid_zncc,
             distance,
             held_zncc,
-            was,
-            keypoint,
         } => {
             d.set_item("kind", "joined")?;
             d.set_item("shift", PyArray1::from_vec(py, shift.to_vec()))?;
             d.set_item("grid_zncc", *grid_zncc)?;
             d.set_item("distance", *distance)?;
             d.set_item("held_zncc", *held_zncc)?;
-            d.set_item("was", maybe_vector(py, *was))?;
-            d.set_item("keypoint", maybe_vector(py, *keypoint))?;
         }
-        GrownPlaneView::ShiftOnly {
-            shift,
-            grid_zncc,
-            was,
-            keypoint,
-        } => {
+        GrownPlaneView::ShiftOnly { shift, grid_zncc } => {
             d.set_item("kind", "shift_only")?;
             d.set_item("shift", PyArray1::from_vec(py, shift.to_vec()))?;
             d.set_item("grid_zncc", *grid_zncc)?;
-            d.set_item("was", maybe_vector(py, *was))?;
-            d.set_item("keypoint", maybe_vector(py, *keypoint))?;
         }
         GrownPlaneView::LeftOut {
             reason,
@@ -663,7 +649,6 @@ fn sequence_dict<'py>(
     d.set_item("shift_only", sequence.shift_only())?;
     d.set_item("matched", sequence.matched())?;
     d.set_item("pairs_kept", sequence.pairs_kept())?;
-    d.set_item("written", sequence.written)?;
     Ok(d)
 }
 
@@ -1122,14 +1107,16 @@ fn grid_plane_normal(
 /// Every default is the Rust step's, and a setting outside what the step
 /// takes is refused before the photographs are decoded.
 ///
-/// The patch is turned to the final plane whenever a view joined and the
-/// turn is not a large one on weak evidence, and the reference's, each
-/// joined view's and each shift-only view's that passed the floor keypoints
-/// are written; when no view joined, or the turn is a large one on weak
-/// evidence, the track is given back as it was, read again, and in the
-/// second case no view has its shift alone fitted. The centre
-/// does not move. ``images`` and the last four keywords are :func:`fit`'s,
-/// and set the reading the step ends with.
+/// The patch is turned about its centre to the final plane whenever a view
+/// joined and the turn is not a large one on weak evidence; when no view
+/// joined, or the turn is a large one on weak evidence, the track is given
+/// back as it was, read again, and in the second case no view has its shift
+/// alone fitted. The centre does not move and **no keypoint is written**:
+/// every keypoint stays where it was given, and the shifts the fit solved
+/// for are only reported. A caller who wants the keypoints relocalized
+/// against the turned patch runs :func:`fit` afterwards. ``images`` and the
+/// last four keywords are :func:`fit`'s, and set the reading the step ends
+/// with.
 ///
 /// Returns ``(EditableTrack, report)``, the report described under
 /// :func:`grid_plane_normal`. Here ``estimate`` has ``kind`` ``"grown_plane"``
@@ -1150,18 +1137,15 @@ fn grid_plane_normal(
 /// ``discounted_sigma_strong_deg`` with each kept pair's halved, and
 /// ``low_confidence``), ``turned``, ``joined``, ``left_out``, ``shift_only``,
 /// ``matched`` (views grown against the reference), ``pairs_kept``,
-/// ``written`` (keypoints written, the reference's among them), ``views``,
-/// ``trace``, ``picks`` and ``pairs``.
+/// ``views``, ``trace``, ``picks`` and ``pairs``.
 ///
 /// ``views`` has one dict per observation, ``kind`` naming what the step made
-/// of it: ``"reference"`` with ``keypoint`` (the one written, or ``None``);
+/// of it: ``"reference"``;
 /// ``"joined"`` with ``distance`` and ``held_zncc`` (its
 /// plane's distance from the final plane and its score there), ``shift``
 /// (``(2,)``, image px, moved to the final plane) and
-/// ``grid_zncc`` at the final plane, ``was`` (the keypoint before the step,
-/// or ``None``) and ``keypoint`` (the one written, or ``None`` off the
-/// photograph); ``"shift_only"`` with ``shift``, ``grid_zncc``,
-/// ``was`` and ``keypoint`` (``None`` under the floor or off the photograph);
+/// ``grid_zncc`` at the final plane; ``"shift_only"`` with ``shift`` and
+/// ``grid_zncc`` at the final plane;
 /// ``"left_out"`` with ``reason`` (``"under_floor"``, ``"stopped_early"``,
 /// ``"too_far"``, ``"held_under_floor"`` or ``"no_keypoint"``), ``distance``
 /// and ``held_zncc``; or

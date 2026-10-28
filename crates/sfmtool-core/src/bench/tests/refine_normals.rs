@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Refining every finite point's normal: each turned point's answer is the
-//! bench's Grown Plane Normal and Commit of it, its centre does not move, a
-//! point at infinity is skipped and counted, a point the step leaves unchanged
+//! bench's Grown Plane Normal and Commit of it, its centre and its keypoints
+//! do not move, a point at infinity is skipped and counted, a point the step
+//! leaves unchanged
 //! or refuses keeps every column it had, held and ranged points are refined
 //! and keep their constraint, and the run reports its points, can be
 //! cancelled and refuses what it cannot refine.
@@ -139,8 +140,9 @@ fn every_finite_point_is_turned_onto_the_plane_as_the_bench_turns_and_commits_it
     assert_eq!(report.turned(), 3, "{report:?}");
     assert_eq!(report.unchanged(), 0, "{report:?}");
     assert_eq!(report.at_infinity(), 0, "{report:?}");
-    assert!(report.keypoints_written() >= 3, "{report:?}");
     assert!(report.median_turn_deg() > 20.0, "{report:?}");
+    // The patches turned and no keypoint moved.
+    assert_eq!(out.point_set.keypoints_xy(), recon.point_set.keypoints_xy());
 
     // No index moves, and no observation is added or removed.
     assert_eq!(out.point_count(), recon.point_count());
@@ -162,7 +164,7 @@ fn every_finite_point_is_turned_onto_the_plane_as_the_bench_turns_and_commits_it
 
         // The record written is the one the bench's Grown Plane Normal and
         // Commit write for the point alone: the turned frame, the keypoints
-        // the step wrote, the bitmap it rendered and the readings it took.
+        // as given, the bitmap it rendered and the readings it took.
         let (bench, created) =
             create_track(&Bench::new(), &edited, p, &CreateTrackOptions::default())
                 .expect("a live point");
@@ -193,6 +195,50 @@ fn every_finite_point_is_turned_onto_the_plane_as_the_bench_turns_and_commits_it
             "point {p}: the bitmap was rendered again"
         );
     }
+}
+
+/// Every keypoint but the first of each point pushed `nudge` px off its
+/// content.
+fn nudged(recon: &SfmrReconstruction, nudge: [f32; 2]) -> SfmrReconstruction {
+    let mut out = recon.clone();
+    let offsets = out.point_set.observation_offsets.clone();
+    let crate::reconstruction::data::ObservationSource::EmbeddedPatches { keypoints_xy, .. } =
+        &mut out.point_set.observations
+    else {
+        panic!("embedded_patches");
+    };
+    for p in 0..recon.point_count() {
+        for row in offsets[p] + 1..offsets[p + 1] {
+            keypoints_xy[[row, 0]] += nudge[0];
+            keypoints_xy[[row, 1]] += nudge[1];
+        }
+    }
+    out
+}
+
+#[test]
+fn keypoints_off_their_content_stay_where_they_were_given_through_two_runs() {
+    // Pushed off the content by less than the step's growth recovers, so the
+    // views still join and the shifts the fit solves for are not zero: the
+    // step used to write those shifts into the keypoints.
+    let scene = plane_scene();
+    let recon = nudged(&tilted_value(&scene, &three_points(), 25.0), [0.6, -0.4]);
+    let (first, report) = refine_over(&scene, &recon);
+    assert_eq!(report.turned(), 3, "{report:?}");
+    assert!(report.median_turn_deg() > 20.0, "{report:?}");
+    assert_eq!(
+        first.point_set.keypoints_xy(),
+        recon.point_set.keypoints_xy()
+    );
+
+    // A second run starts from the keypoints the first was given, and moves
+    // none of them either.
+    let (second, again) = refine_over(&scene, &first);
+    assert_eq!(again.read(), 3, "{again:?}");
+    assert_eq!(
+        second.point_set.keypoints_xy(),
+        recon.point_set.keypoints_xy()
+    );
 }
 
 // ---- Points at infinity ------------------------------------------------------
@@ -261,7 +307,7 @@ fn a_flat_wall_turns_nothing_and_every_point_keeps_its_columns() {
     let (out, report) = refine_over(&scene, &recon);
     assert_eq!(report.turned(), 0, "{report:?}");
     assert_eq!(report.none_joined(), 3, "{report:?}");
-    assert_eq!(report.keypoints_written(), 0);
+    assert_eq!(out.point_set.keypoints_xy(), recon.point_set.keypoints_xy());
     assert!(report.median_turn_deg().is_nan());
     for p in 0..3u32 {
         assert_eq!(

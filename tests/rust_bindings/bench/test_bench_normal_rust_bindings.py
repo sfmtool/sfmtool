@@ -89,6 +89,16 @@ def _normal(track):
     return cross / np.linalg.norm(cross)
 
 
+def _keypoints(track):
+    """Each observation's keypoint, ``None`` where it has none."""
+    return [
+        None
+        if not o.get("track") or "keypoint" not in o["track"]
+        else o["track"]["keypoint"].tolist()
+        for o in track.observations
+    ]
+
+
 def _check_common(report, before, after):
     assert set(report) == {"normal", "estimate", "tilt", "evaluate", "text"}
     np.testing.assert_allclose(report["normal"], _normal(after), atol=1e-9)
@@ -253,17 +263,9 @@ class TestGridPlaneNormal:
 
 
 GROWN_VIEW_KEYS = {
-    "reference": {"kind", "keypoint"},
-    "joined": {
-        "kind",
-        "shift",
-        "grid_zncc",
-        "distance",
-        "held_zncc",
-        "was",
-        "keypoint",
-    },
-    "shift_only": {"kind", "shift", "grid_zncc", "was", "keypoint"},
+    "reference": {"kind"},
+    "joined": {"kind", "shift", "grid_zncc", "distance", "held_zncc"},
+    "shift_only": {"kind", "shift", "grid_zncc"},
     "left_out": {"kind", "reason", "distance", "held_zncc"},
     "not_attempted": {"kind"},
 }
@@ -309,6 +311,8 @@ class TestGrownPlaneNormal:
     def test_the_report_carries_the_sequence(self, fitted, grown):
         turned, report = grown
         _check_common(report, fitted, turned)
+        # The step writes no keypoint, whether or not it turned the patch.
+        assert _keypoints(turned) == _keypoints(fitted)
         seq = report["estimate"]
         assert seq["kind"] == "grown_plane"
         assert isinstance(seq["reference"], int)
@@ -430,7 +434,6 @@ class TestGrownPlaneNormal:
                 >= precision["sigma_weak_deg"] - 1e-12
             )
             assert isinstance(precision["low_confidence"], bool)
-            assert seq["written"] >= 1
         else:
             assert seq["normal"] is None and seq["precision"] is None
             np.testing.assert_allclose(_normal(turned), _normal(fitted), atol=1e-9)
@@ -491,7 +494,7 @@ class TestGrownPlaneNormal:
         assert seq["precision"] == found["precision"]
         assert seq["joined"] == found["joined"]
         assert seq["shift_only"] == 0
-        assert seq["written"] == 0
+        assert _keypoints(kept) == _keypoints(fitted)
         assert "normal left unchanged: large turn on weak evidence" in report["text"]
 
     def test_bad_settings_are_refused(self, fitted, edited, images):
@@ -580,7 +583,7 @@ class TestGrownPlaneNormal:
         assert names.count("pair fit") == len(seq["pairs"])
         assert names.count("selection") == len(seq["picks"])
         assert names.count("shift-only fit") == seq["shift_only"]
-        for once in ("setup", "turn and write"):
+        for once in ("setup", "turn"):
             assert names.count(once) == 1
         # Every phase lies within the step's.
         step = phases[0]

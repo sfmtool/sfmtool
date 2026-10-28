@@ -89,10 +89,9 @@ impl TilingStep {
 /// it where they agree; the geometry search then has a placed patch to project
 /// into every camera; the second Fit takes the cameras it added and fits
 /// their keypoints; Grown Plane Normal, which trusts the keypoints it is
-/// given, turns the patch to the plane the views agree on and writes the
-/// keypoints of the views it fitted; the third Fit starts from those keypoints
-/// and settles the sightings on the turned patch; and the commit writes the
-/// point.
+/// given, turns the patch about its centre to the plane the views agree on,
+/// keeping every keypoint; the third Fit relocalizes the sightings on the
+/// turned patch; and the commit writes the point.
 const TILING_STEPS: [TilingStep; 6] = [
     TilingStep::Fit,
     TilingStep::SearchGeometry,

@@ -47,7 +47,8 @@ pub(crate) fn refine_refusal(node: &crate::scene::SceneNode, busy: Option<&str>)
         node,
         busy,
         "This reconstruction's observations are .sift feature indexes with no inline \
-         keypoints, and refining a normal rewrites the keypoints of the views it uses. \
+         keypoints, and refining a normal writes each point's record, keypoints included, \
+         as a commit does. \
          Convert to Embedded Patches first.",
         "This reconstruction's points carry no patch frame for the grown-plane normal to \
          turn.",
@@ -106,13 +107,6 @@ fn refine_summary(report: &RefineNormalsReport) -> String {
     let low = report.low_confidence();
     if low > 0 {
         text.push_str(&format!(", {low} of them with low confidence"));
-    }
-    let written = report.keypoints_written();
-    if written > 0 {
-        text.push_str(&format!(
-            ", {} written",
-            counted(written, "keypoint", "keypoints")
-        ));
     }
     let (none_joined, weak_turn) = (report.none_joined(), report.weak_turn());
     if none_joined + weak_turn > 0 {
@@ -191,8 +185,8 @@ impl AppState {
     /// Start a refinement of the normal of every finite point of `id` on a
     /// worker thread.
     ///
-    /// A bulk edit: each turned point's patch frame, the keypoints the step
-    /// wrote, its patch bitmap and its readings are written, so the next
+    /// A bulk edit: each turned point's patch frame, its patch bitmap and its
+    /// readings are written, and no keypoint moves, so the next
     /// version is a whole new base. No point is deleted and none is created,
     /// so the indexes do not move, apart from pending point edits closing up
     /// when the job folds the overlay in.

@@ -223,11 +223,12 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           grown-plane normal, as Track View's Grown Plane Normal followed by Commit does for \
                           one track with every observation kept: one plane is fitted to the \
                           photographs, the patch is turned to it whenever a view joined unless \
-                          the turn is large on weak evidence, the keypoints of the views that \
-                          joined the plane or had their shift fitted to it are written, and the \
-                          stored bitmap is rendered again and each observation's readings taken \
-                          again. The step trusts the keypoints it is given, so refit_all_points \
-                          first where they may be off. Moves no camera, no lens and no point's \
+                          the turn is large on weak evidence, and the stored bitmap is rendered \
+                          again and each observation's readings taken again. The step trusts \
+                          the keypoints it is given, so refit_all_points first where they may \
+                          be off, and moves none of them, so a second run starts from the same \
+                          keypoints; refit_all_points afterwards relocalizes them against the \
+                          turned patches. Moves no camera, no lens and no point's \
                           centre, and reads every photograph the points observe; one that \
                           cannot be read refuses the run. Points at infinity are skipped and \
                           counted. Held and ranged points are refined too and keep their \
@@ -237,7 +238,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           and creates none, so every index still means what it meant unless a \
                           point edit is pending, in which case the deleted slots close up \
                           first, as delete_point describes. The report counts the points \
-                          turned, unchanged, with low confidence, the keypoints written, the \
+                          turned, unchanged, with low confidence, the \
                           points whose normal was left unchanged and why, the points left as \
                           they were and why, the points at infinity skipped, and the median \
                           turn. One version, and it runs on a worker thread, so a refinement \

@@ -826,18 +826,20 @@ the photographs: for each of a few `in` views it picks, a window grows from
 the view's keypoint to the whole patch, the views' planes are combined, and
 the patch is turned to the combined plane whenever a view joined, unless the
 turn is large on weak evidence. It trusts the keypoints it is given, so on a
-track whose keypoints may be off, *Fit* comes first. Unlike the other two it
-also moves sightings: it writes the keypoint of each view that joined the
-plane and of each view whose shift alone it fitted there. Its version is
+track whose keypoints may be off, *Fit* comes first. Like the other two it
+turns the patch about its centre and moves no sighting: the image shift it
+fits for each view is its own unknown and is not written, so every keypoint
+stays where it was, and a *Fit* after it relocalizes them on the turned
+patch. Its version is
 `Grown-plane normal of <label>`, and its Action Log row adds the step's own
 report: how many views joined and how many were left out or fitted by shift
 alone, how many pairs were kept, the plane's σ along its weakest and strongest
 directions in degrees, *low confidence* when the weakest σ with each view
-counted once is over the step's bar (3.67° by default), and either how many
-keypoints it wrote or *normal left unchanged* with the reason, then the turn
-and the reading, as in `Grown-plane normal of bull-nose: 2 of 3 views joined,
-1 left out, 7 shift only; σ 4.20° weakest, 1.10° strongest, low confidence; 10
-keypoints written, turned 8.4°, …`.
+counted once is over the step's bar (3.67° by default), and *normal left
+unchanged* with the reason where it kept the normal, then the turn and the
+reading, as in `Grown-plane normal of bull-nose: 2 of 3 views joined, 1 left
+out, 7 shift only; σ 4.20° weakest, 1.10° strongest, low confidence, turned
+8.4°, …`.
 
 All three entries run on a worker like *Fit*, push one version, and grey
 with `normal_preconditions`' sentence at the cluster stage, at infinity, and
@@ -1017,14 +1019,11 @@ it is the row a person would right-click.
 no settings, so the *per axis* and *overlap* boxes, which cut the patch for
 *Finite Diff Normal* and *Grid Plane Normal*, do not reach the sequence. It
 trusts the keypoints it is given, and it comes after the second *Fit*, which
-has just fitted the keypoints of the cameras the search added. Besides turning
-the patch it writes the keypoints of the views it joined to the plane and of
-those whose shift alone it fitted there (*Grown Plane Normal* under § "The
-toolbar"). The third *Fit* localizes each sighting from where it now is, so it
-starts from those keypoints and settles every sighting on the turned patch
-before the commit. The keypoints are written in the same one version as the
-turn, so the sequence takes the step as one version and one row, as it does
-every other.
+has just fitted the keypoints of the cameras the search added. It turns the
+patch about its centre and moves no keypoint (*Grown Plane Normal* under §
+"The toolbar"). The third *Fit* localizes each sighting from where it is, so
+it relocalizes every sighting on the turned patch before the commit. The
+sequence takes the step as one version and one row, as it does every other.
 
 **A sequence stops rather than guesses.** It ends with a failed Bench row,
 `Surface tiling of bull-nose stopped at Find matches by geometry (step 2 of 6):

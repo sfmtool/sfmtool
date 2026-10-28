@@ -7,8 +7,8 @@
 //!
 //! `specs/core/bench/refine-normals.md` is the design. A point's refinement is
 //! three bench steps: [`track_of_point`] builds its track,
-//! [`grown_plane_normal`] turns its patch to the one plane its views agree on,
-//! writes the keypoints of the views it uses and renders the bitmap again, and
+//! [`grown_plane_normal`] turns its patch to the one plane its views agree on
+//! about its centre, keeping every keypoint, and renders the bitmap again, and
 //! `point_record` builds the record a commit would write. What this module adds
 //! is the loop, the skip of points at infinity, the rule for a point the step
 //! leaves unchanged or refuses, and the write, which is
@@ -67,8 +67,6 @@ pub enum RefineNormalsOutcome {
         turn_deg: f64,
         /// How many views joined the plane.
         joined: usize,
-        /// How many keypoints the step wrote, the reference's among them.
-        written: usize,
         /// The plane's weakest `σ`, with each view counted once, is over
         /// [`GrownPlaneNormalOptions::low_confidence_sigma_deg`].
         low_confidence: bool,
@@ -77,7 +75,7 @@ pub enum RefineNormalsOutcome {
         /// pick only the display render made, so the point was not rewritten.
         unchanged: bool,
     },
-    /// The step ran and left the normal and the keypoints as they were, so
+    /// The step ran and left the normal as it was, so
     /// the point keeps every column it had.
     LeftUnchanged(NormalLeftUnchanged),
     /// The step refused the point, and it keeps every column it had.
@@ -193,21 +191,6 @@ impl RefineNormalsReport {
     /// Points at infinity, which the run skipped.
     pub fn at_infinity(&self) -> usize {
         self.count(|o| matches!(o, RefineNormalsOutcome::AtInfinity))
-    }
-
-    /// Keypoints written, summed over the turned points that were rewritten.
-    pub fn keypoints_written(&self) -> usize {
-        self.points
-            .iter()
-            .map(|p| match p.outcome {
-                RefineNormalsOutcome::Turned {
-                    written,
-                    unchanged: false,
-                    ..
-                } => written,
-                _ => 0,
-            })
-            .sum()
     }
 
     /// Points the step refused with an error `is` accepts, such as
@@ -364,10 +347,9 @@ impl From<RefitPointsError> for RefineNormalsError {
 /// point on the bench, presses *Grown Plane Normal* and presses *Commit*, with
 /// every observation `in` and pinned: [`track_of_point`],
 /// [`grown_plane_normal`] with [`RefineNormalsOptions::normal`] (the patch
-/// turned to the one plane its views agree on, the keypoints of the views
-/// joined to the plane or fitted for their shift written, the bitmap rendered
-/// again and the track read back), and the record a commit would build from
-/// the turned track. The point's centre does not move. No index moves: the
+/// turned to the one plane its views agree on, the bitmap rendered again and
+/// the track read back), and the record a commit would build from the turned
+/// track. The point's centre does not move. No index moves: the
 /// returned value has the input's points at the input's indexes, each track
 /// keeps its images and its length, and [`RefineNormalsReport::points`] holds
 /// one status per point.
@@ -375,6 +357,15 @@ impl From<RefitPointsError> for RefineNormalsError {
 /// `images` is one [`ProjectedImage`] per image of `recon`, indexed by image
 /// index, as [`grown_plane_normal`] takes them. Reading the photographs is
 /// the caller's.
+///
+/// **No keypoint moves.** The step turns each patch about its centre and
+/// keeps every keypoint it was given, so the run changes a point's patch
+/// frame and what follows from it (its bitmap, the bitmap's reference
+/// observation and colour, its observations' readings and blur-matched
+/// scores), and a second run starts from the same keypoints as the first. A
+/// caller who wants the keypoints
+/// relocalized against the turned patches runs
+/// [`refit_points`](super::refit_points()) afterwards.
 ///
 /// **Every finite point is refined, held and ranged ones included**, and
 /// keeps its constraint: the step moves no centre, so a held coordinate and a
@@ -564,7 +555,6 @@ fn refine_one(
         status(RefineNormalsOutcome::Turned {
             turn_deg: report.tilt.degrees,
             joined: sequence.joined(),
-            written: sequence.written,
             low_confidence: sequence.precision.is_some_and(|p| p.low_confidence),
             unchanged,
         }),

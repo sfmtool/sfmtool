@@ -3225,7 +3225,8 @@ every shift-only fit made, from the shift the view's keypoint implies, with
 no search for another, so a view whose keypoint is off by more than its
 growth recovers is left out, and a view with no keypoint is left out as
 `NoKeypoint` without a growth. Fitting the keypoints is a separate step a
-caller runs first, such as `fit`. It combines the views' own planes by a robust
+caller runs, such as `fit`: first where they may be off, and after the step
+to relocalize them against the turned patch. It combines the views' own planes by a robust
 information-weighted mean, with no fit of the views together, adds the
 planes of the widest pairs of kept views matched against each other, and
 when it turns the patch fits the shift alone of every view it did not
@@ -3233,10 +3234,11 @@ pick. Unlike `grid_plane_normal` it turns
 the patch whenever one view joined, however low the plane's precision, unless
 the turn is a large one on weak evidence (by default at least 70° and under
 3 times the plane's weakest `σ`), when it keeps the starting normal and the
-keypoints and reports the plane it found; it reports the precision in
-`NormalEstimate::GrownPlane`; and between the turn
-and the read-back it writes the reference's keypoint as it was and each joined
-view's where the plane and its shift put the patch.
+keypoints and reports the plane it found; and it reports the precision in
+`NormalEstimate::GrownPlane`. Like every normal step it turns the patch about
+its centre with `tilt_patch` and writes no keypoint: the image shifts it
+solves for are the tilt fit's own unknowns, reported per view, and every
+keypoint stays where it was given.
 
 The photometric estimate and the finite difference differ in what they can be
 fooled by. The photometric one
@@ -3956,11 +3958,11 @@ and its ratio to `sigma_weak_deg`, or `None`),
 `precision` (`None`, or `sigma_weak_deg`, `sigma_strong_deg`,
 `discounted_sigma_weak_deg`, `discounted_sigma_strong_deg` and
 `low_confidence`), `turned`, `joined`, `left_out`, `shift_only`, `matched`,
-`pairs_kept`, `written`, `views`, `trace`, `picks` and `pairs`. `views` holds
+`pairs_kept`, `views`, `trace`, `picks` and `pairs`. `views` holds
 one dict per observation whose `kind` names the `GrownPlaneView`:
-`"reference"` with `keypoint`; `"joined"` with `shift`, `grid_zncc`,
-`distance`, `held_zncc`, `was` and `keypoint`; `"shift_only"` with
-`shift`, `grid_zncc`, `was` and `keypoint`; `"left_out"` with `reason`
+`"reference"`; `"joined"` with `shift`, `grid_zncc`,
+`distance` and `held_zncc`; `"shift_only"` with
+`shift` and `grid_zncc`; `"left_out"` with `reason`
 (`"under_floor"`, `"stopped_early"`, `"too_far"`, `"held_under_floor"` or
 `"no_keypoint"`), `distance` and `held_zncc`; and `"not_attempted"`. `trace` holds one dict per try with
 `observation`, `image`, `angle_deg`, `outcome` (`"matched"` or

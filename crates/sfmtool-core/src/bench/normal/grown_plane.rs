@@ -33,9 +33,10 @@
 //! other and their planes added to the mean (`selected`). The patch is turned
 //! to the combined plane whenever a view joined, unless the turn is large and
 //! the evidence for it weak, when the starting normal is kept; on a turn,
-//! each joined view's keypoint is written where that plane and its shift put
-//! the patch, and each view not picked has its shift alone fitted at that
-//! plane, over a mid-size window and then briefly over the whole grid.
+//! each view not picked has its shift alone fitted at that plane, over a
+//! mid-size window and then briefly over the whole grid. The shifts are the
+//! tilt fit's own unknowns and are reported, never written: the turn is made
+//! about the patch centre, so every keypoint stays as it was given.
 //!
 //! `specs/drafts/grown-plane-normal.md` is the design.
 
@@ -53,7 +54,7 @@ use crate::reconstruction::edited::EditedReconstruction;
 use super::super::evaluate::{check_views, seed_of, stored_patch_resolution, track_reference};
 use super::super::fit::FitOptions;
 use super::super::steps::tilt_degrees;
-use super::super::track::{EditableTrack, TrackMeasurement};
+use super::super::track::EditableTrack;
 use super::grid_plane::{working_side, MIN_WORKING_RESOLUTION};
 use super::{
     normal_preconditions, patch_frame_of, read_back, NormalError, NormalEstimate, NormalReport,
@@ -432,45 +433,34 @@ pub struct GrownPlanePick {
 /// What the step made of one observation of the track.
 #[derive(Debug, Clone, PartialEq)]
 pub enum GrownPlaneView {
-    /// The reference, with the keypoint the step wrote for it after the
-    /// turn: the one it had before the step, or the anchor's projection
-    /// where it had none. `None` when the step did not turn the patch and
-    /// nothing was written.
-    Reference { keypoint: Option<[f64; 2]> },
+    /// The reference.
+    Reference,
     /// Its own plane is in the final plane. `distance` and `held_zncc` are
     /// its kept growth's plane's distance from the final plane and its score
-    /// there. `shift` is its growth's shift
+    /// there. `shift` is its growth's image shift, px, from where its slid
+    /// patch's centre projects (its keypoint where the slide followed it),
     /// moved to the final plane by its own normal matrix, and `grid_zncc` its
     /// robust grid score there, the same value as `held_zncc`: the
     /// combination's last held check read it at the final plane and that
-    /// shift. `was` is its keypoint before the step and `keypoint` the one
-    /// the step wrote, both image px; `keypoint` is `None` where that pixel
-    /// is off the photograph, or the turn was not made, and nothing was
-    /// written. Where the turn was not made, `shift` is its growth's own
-    /// shift, not moved.
+    /// shift. Where the turn was not made, `shift` is its growth's own
+    /// shift, not moved. The shift is one of the tilt fit's own unknowns and
+    /// is not written to the keypoint.
     Joined {
         shift: [f64; 2],
         grid_zncc: f64,
         distance: Option<f64>,
         held_zncc: Option<f64>,
-        was: Option<[f64; 2]>,
-        keypoint: Option<[f64; 2]>,
     },
     /// Not picked by the selection: its shift alone was fitted at the final
     /// plane from its keypoint-implied shift, over a mid-size window and then
     /// for two iterations over the whole grid, and it is not in the plane.
-    /// `keypoint` is written when `grid_zncc` reaches
-    /// [`GrownPlaneNormalOptions::min_held_zncc`] and the pixel is on the
-    /// photograph, and is `None` otherwise.
-    ShiftOnly {
-        shift: [f64; 2],
-        grid_zncc: f64,
-        was: Option<[f64; 2]>,
-        keypoint: Option<[f64; 2]>,
-    },
+    /// `grid_zncc` is its score there, which
+    /// [`GrownPlaneNormalOptions::min_held_zncc`] is the floor for. Its
+    /// keypoint is not written.
+    ShiftOnly { shift: [f64; 2], grid_zncc: f64 },
     /// Left out, with the refusal, distance and held score that left it out:
     /// [`GrownPlaneRefusal::NoKeypoint`] for a view with no keypoint-implied
-    /// shift, under every outcome. The step writes no keypoint for it.
+    /// shift, under every outcome.
     LeftOut {
         reason: GrownPlaneRefusal,
         distance: Option<f64>,
@@ -478,8 +468,7 @@ pub enum GrownPlaneView {
     },
     /// Not tried: not `in`, a second row in an image already tried, no
     /// reference was found, or not picked by a selection that joined no view
-    /// or whose turn was not made ([`GrownPlaneOutcome::WeakTurn`]). The step
-    /// writes no keypoint for it.
+    /// or whose turn was not made ([`GrownPlaneOutcome::WeakTurn`]).
     NotAttempted,
 }
 
@@ -536,8 +525,6 @@ pub struct GrownPlaneSequence {
     pub turn_deg: Option<f64>,
     /// `None` when no view joined.
     pub precision: Option<GrownPlanePrecision>,
-    /// How many keypoints the step wrote, the reference's among them.
-    pub written: usize,
 }
 
 impl GrownPlaneSequence {
@@ -636,7 +623,7 @@ impl std::fmt::Display for GrownPlaneSequence {
                         self.turn_sigma_ratio().unwrap_or(f64::NAN)
                     )
                 } else {
-                    write!(f, "; {} keypoints written", self.written)
+                    Ok(())
                 }
             }
             None => write!(f, ", normal left unchanged"),
@@ -712,13 +699,15 @@ impl std::fmt::Display for GrownPlaneSequence {
 /// as given, the views not picked have no shift fitted, the track is read
 /// back, and the report gives the plane found, its precision, the views,
 /// picks and pairs. Otherwise the patch is turned to the final plane with
-/// [`tilt_patch`](crate::bench::tilt_patch), the reference's keypoint is
-/// written back as it was before the step, each joined view's at the anchor's
-/// projection plus its shift moved to the final plane, and each shift-only
-/// view's that passed the floor at its fitted shift, and the track is read
-/// back with its bitmap rendered; the report gives the plane's precision and
-/// says when it is low. When none joined, the normal and the keypoints are
-/// left as given and the track is read back. The centre does not move.
+/// [`tilt_patch`](crate::bench::tilt_patch), and the track is read back with
+/// its bitmap rendered; the report gives the plane's precision and says when
+/// it is low. When none joined, the normal is left as given and the track is
+/// read back.
+///
+/// **The step writes no keypoint.** The turn is made about the patch centre,
+/// which does not move, and keeps each keypoint where it was given; the
+/// shifts the fit solved for stay in the report. A caller who wants the
+/// keypoints relocalized against the turned patch runs a fit afterwards.
 ///
 /// A track at infinity is refused, as by every normal step: its patch faces
 /// along its own bearing and has no plane to fit.
@@ -727,7 +716,7 @@ impl std::fmt::Display for GrownPlaneSequence {
 /// `grown plane view` for each try. A detailed `progress` adds `setup`,
 /// `selection` for each pick, `mean` for each combination of planes, `pairs`
 /// with a `pair fit` per pair, `shift-only fit` for each view not picked,
-/// and `turn and write` under the step; `growth` under each try; and
+/// and `turn` under the step; `growth` under each try; and
 /// `window stage`, `whole-grid stage` and `judge` under each growth, each
 /// noted with what it reached. The
 /// result is the same with detail on or off.
@@ -802,7 +791,7 @@ pub fn grown_plane_normal(
     let Some(reference) = reference else {
         progress_note!(setup, "no reference");
         drop(setup);
-        let turn = progress.detail_phase("turn and write");
+        let turn = progress.detail_phase("turn");
         let sequence = GrownPlaneSequence {
             reference: None,
             working_resolution: 0,
@@ -815,7 +804,6 @@ pub fn grown_plane_normal(
             normal: None,
             turn_deg: None,
             precision: None,
-            written: 0,
         };
         return read_back(
             track,
@@ -905,7 +893,6 @@ pub fn grown_plane_normal(
                 row,
                 image_index: observation.image,
                 image,
-                keypoint,
                 kp_shift,
                 angle_deg,
                 direction,
@@ -952,11 +939,10 @@ pub fn grown_plane_normal(
         normal: None,
         turn_deg: None,
         precision: None,
-        written: 0,
     };
     let Some(tilt) = outcome.tilt else {
         record_views(&mut sequence.views, reference, &candidates, &outcome.fates);
-        let mut turn = progress.detail_phase("turn and write");
+        let mut turn = progress.detail_phase("turn");
         progress_note!(turn, "no view joined, normal left unchanged");
         return read_back(
             track,
@@ -986,7 +972,7 @@ pub fn grown_plane_normal(
     if weak_turn(turn_deg, weak, options) {
         sequence.outcome = GrownPlaneOutcome::WeakTurn;
         record_views(&mut sequence.views, reference, &candidates, &outcome.fates);
-        let mut turn = progress.detail_phase("turn and write");
+        let mut turn = progress.detail_phase("turn");
         progress_note!(
             turn,
             "large turn on weak evidence, {turn_deg:.1}\u{b0} at {:.1}\u{3c3}: normal left unchanged",
@@ -1006,20 +992,10 @@ pub fn grown_plane_normal(
     sequence.outcome = GrownPlaneOutcome::Turned;
     state.fit_shift_only(tilt, &mut outcome.fates, progress)?;
 
-    let mut turn = progress.detail_phase("turn and write");
+    let mut turn = progress.detail_phase("turn");
     let finals = state.final_views(tilt, &outcome.fates);
     record_views(&mut sequence.views, reference, &candidates, &finals);
-    let writes = keypoint_writes(
-        &grid,
-        &ref_image,
-        ref_keypoint,
-        reference,
-        &candidates,
-        options.min_held_zncc,
-        &mut sequence.views,
-    );
-    sequence.written = writes.len();
-    progress_note!(turn, "{} keypoints written", writes.len());
+    progress_note!(turn, "turned {turn_deg:.2}\u{b0}, keypoints kept");
     read_back(
         track,
         edited,
@@ -1028,28 +1004,21 @@ pub fn grown_plane_normal(
         NormalEstimate::GrownPlane(Box::new(sequence)),
         &options.fit,
         &turn,
-        move |turned: &mut EditableTrack| {
-            for (row, p) in writes {
-                turned.observations[row].track = Some(TrackMeasurement {
-                    keypoint: Some([p[0] as f32, p[1] as f32]),
-                    ..TrackMeasurement::default()
-                });
-            }
-        },
+        |_| {},
     )
 }
 
 /// Fill `views` from what became of each candidate: the reference, each
 /// joined view's growth that was kept and its shift and score at the final
 /// plane, each shift-only view's fit, and each view left out with its
-/// refusal. The written keypoints are filled in later.
+/// refusal.
 fn record_views(
     views: &mut [GrownPlaneView],
     reference: usize,
     candidates: &[Candidate<'_>],
     fates: &[Fate],
 ) {
-    views[reference] = GrownPlaneView::Reference { keypoint: None };
+    views[reference] = GrownPlaneView::Reference;
     for (candidate, fate) in candidates.iter().zip(fates) {
         views[candidate.row] = match fate {
             Fate::Joined {
@@ -1062,14 +1031,10 @@ fn record_views(
                 grid_zncc: held.unwrap_or(f64::NAN),
                 distance: *distance,
                 held_zncc: *held,
-                was: candidate.keypoint,
-                keypoint: None,
             },
             Fate::ShiftOnly { shift, grid_zncc } => GrownPlaneView::ShiftOnly {
                 shift: *shift,
                 grid_zncc: *grid_zncc,
-                was: candidate.keypoint,
-                keypoint: None,
             },
             Fate::LeftOut {
                 reason,
@@ -1083,67 +1048,6 @@ fn record_views(
             Fate::NotTried => GrownPlaneView::NotAttempted,
         };
     }
-}
-
-/// The keypoints the step writes after the turn, as `(row, pixel)`: the
-/// reference's as it was before the step (the anchor's projection where it
-/// had none), each joined view's at the projection of its slid patch's centre
-/// plus its shift at the final plane, the pixel its score there was read
-/// around, and each
-/// shift-only view's the same way where its score reaches `floor`. A pixel
-/// off its photograph is not written. Each is recorded in `views` too.
-fn keypoint_writes(
-    grid: &Grid,
-    ref_image: &ViewImage<'_>,
-    ref_keypoint: Option<[f64; 2]>,
-    reference: usize,
-    candidates: &[Candidate<'_>],
-    floor: f64,
-    views: &mut [GrownPlaneView],
-) -> Vec<(usize, [f64; 2])> {
-    let mut writes = Vec::new();
-    let ref_pixel = ref_keypoint
-        .or_else(|| grid.anchor_pixel(ref_image))
-        .filter(|&p| on_photograph(ref_image, p));
-    if let Some(p) = ref_pixel {
-        writes.push((reference, p));
-    }
-    views[reference] = GrownPlaneView::Reference {
-        keypoint: ref_pixel,
-    };
-    for candidate in candidates {
-        let at = |shift: [f64; 2]| {
-            grid.anchor_pixel(&candidate.image)
-                .map(|at| [at[0] + shift[0], at[1] + shift[1]])
-                .filter(|&p| on_photograph(&candidate.image, p))
-        };
-        match &mut views[candidate.row] {
-            GrownPlaneView::Joined {
-                shift, keypoint, ..
-            } => {
-                *keypoint = at(*shift);
-            }
-            GrownPlaneView::ShiftOnly {
-                shift,
-                grid_zncc,
-                keypoint,
-                ..
-            } => {
-                *keypoint = (*grid_zncc >= floor).then(|| at(*shift)).flatten();
-            }
-            _ => continue,
-        }
-        if let GrownPlaneView::Joined {
-            keypoint: Some(p), ..
-        }
-        | GrownPlaneView::ShiftOnly {
-            keypoint: Some(p), ..
-        } = &views[candidate.row]
-        {
-            writes.push((candidate.row, *p));
-        }
-    }
-    writes
 }
 
 /// The ratio of a turn to the weakest-direction `σ`: 0 where `sigma_deg` is
@@ -1184,14 +1088,6 @@ fn verdict_words(refusal: Option<GrownPlaneRefusal>) -> &'static str {
     }
 }
 
-/// Whether `pixel` lies on `view`'s photograph, `[0, width) × [0, height)`.
-fn on_photograph(view: &ViewImage<'_>, pixel: [f64; 2]) -> bool {
-    pixel[0] >= 0.0
-        && pixel[1] >= 0.0
-        && pixel[0] < f64::from(view.camera.width)
-        && pixel[1] < f64::from(view.camera.height)
-}
-
 /// The stages' window half-widths on a grid of `side` samples: the first
 /// window's, then each of `window_fractions` of the side rounded, those no
 /// wider than the first dropped, in increasing order without repeats.
@@ -1213,8 +1109,6 @@ struct Candidate<'a> {
     row: usize,
     image_index: u32,
     image: ViewImage<'a>,
-    /// Its keypoint before the step.
-    keypoint: Option<[f64; 2]>,
     /// The keypoint less the projection of the view's slid patch's centre:
     /// zero, up to rounding, where the slide followed the keypoint, and the
     /// keypoint's gap from the unslid centre's projection where the slide

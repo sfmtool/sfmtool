@@ -61,7 +61,7 @@ beside the reference it could try), ``grown_pairs`` (each pair's images,
 angle, kept flag, refusal and own plane's error ``own_deg``),
 ``grown_picks`` (the selection's picks, each with its ladder ``rung``), ``grown_view_kinds`` (a count of
 each per-view word),
-``grown_left_out_reasons``, ``grown_written``, ``grown_working_resolution``,
+``grown_left_out_reasons``, ``grown_working_resolution``,
 ``grown_window_half_widths``, ``grown_turned_deg``, ``grown_ms`` (the call's
 wall time), ``grown_text``, ``grown_frame`` and ``grown_trace``, one entry
 per try with the error of the combined plane after it (``combined_deg``) and
@@ -342,7 +342,6 @@ def run_grown(row, track, edited, ds, grown_options, to_cam, gt):
     row["grown_candidates"] = sum(
         v["kind"] not in ("reference", "not_attempted") for v in seq["views"]
     )
-    row["grown_written"] = seq["written"]
     precision = seq["precision"]
     row["grown_sigma_weak_deg"] = (
         None if precision is None else precision["sigma_weak_deg"]

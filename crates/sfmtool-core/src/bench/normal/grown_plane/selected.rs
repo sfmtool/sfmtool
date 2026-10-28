@@ -569,8 +569,8 @@ impl Sequence<'_, '_, '_> {
     /// Candidate `i`'s shift alone at the final plane `tilt`, in a
     /// `shift-only fit` phase: from its keypoint-implied shift, the first
     /// window's ZNCC read and the shift fitted with the tilt held
-    /// ([`Self::fit_shift`]). A fit under the floor is kept as it is, and its
-    /// keypoint is not written.
+    /// ([`Self::fit_shift`]). A fit under the floor is kept as it is; the
+    /// note says which side of the floor it is on.
     fn shift_only(&self, i: usize, tilt: [f64; 2], progress: &Progress<'_>) -> Fate {
         let options = self.options;
         let candidate = &self.candidates[i];
@@ -584,7 +584,7 @@ impl Sequence<'_, '_, '_> {
             "image {}: first window ZNCC {z1:.3}, grid ZNCC {grid_zncc:.3}, {}, {} renders",
             candidate.image_index,
             if grid_zncc >= options.min_held_zncc {
-                "written"
+                "at or over the floor"
             } else {
                 "under the floor"
             },

@@ -781,9 +781,9 @@ impl TrackBody {
                 refusals.normal.clone(),
                 "Fit one plane to the photographs, growing a window from each \
                  picked view's keypoint out to the whole patch, and turn the patch \
-                 to it, keeping its centre and writing the keypoints of the views \
-                 that agree with it. It trusts the keypoints: Fit first where they \
-                 may be off",
+                 to it, keeping its centre and every keypoint. It trusts the \
+                 keypoints: Fit first where they may be off, and after it to \
+                 relocalize them on the turned patch",
             ) {
                 response.normal = Some(NormalStep::GrownPlane);
             }

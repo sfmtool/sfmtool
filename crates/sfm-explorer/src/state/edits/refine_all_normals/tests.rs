@@ -174,17 +174,16 @@ fn a_reconstruction_with_no_keypoints_is_refused_in_the_menu_s_own_words() {
 
 #[test]
 fn the_entry_counts_what_happened_to_each_point() {
-    let turned = |turn_deg, written, low_confidence, unchanged| RefineNormalsOutcome::Turned {
+    let turned = |turn_deg, low_confidence, unchanged| RefineNormalsOutcome::Turned {
         turn_deg,
         joined: 3,
-        written,
         low_confidence,
         unchanged,
     };
     let outcomes = [
-        turned(4.0, 5, false, false),
-        turned(10.0, 6, true, false),
-        turned(2.0, 4, false, true),
+        turned(4.0, false, false),
+        turned(10.0, true, false),
+        turned(2.0, false, true),
         RefineNormalsOutcome::LeftUnchanged(NormalLeftUnchanged::NoneJoined),
         RefineNormalsOutcome::LeftUnchanged(NormalLeftUnchanged::WeakTurn { turn_deg: 80.0 }),
         RefineNormalsOutcome::LeftUnchanged(NormalLeftUnchanged::WeakTurn { turn_deg: 75.0 }),
@@ -206,7 +205,7 @@ fn the_entry_counts_what_happened_to_each_point() {
     assert_eq!(
         super::refine_summary(&report),
         "3 of 8 finite points turned, 1 of them as stored, 1 of them with low confidence, \
-         11 keypoints written, 3 points left their normal unchanged (1 with no view joined, \
+         3 points left their normal unchanged (1 with no view joined, \
          2 with a large turn on weak evidence), 2 points left as they were (1 with too few \
          observations, 1 with no bitmap to render), 2 points at infinity skipped, median \
          turn 4.0\u{b0}"

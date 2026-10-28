@@ -4591,10 +4591,9 @@ on the worker, as a failed entry.
 Track View's *Grown Plane Normal* followed by *Commit*, for every finite point
 at once: one plane is fitted to the photographs each point is seen in, the
 patch is turned to it whenever a view joined unless the turn is large on weak
-evidence, the keypoints of the views that joined the plane or had their shift
-fitted to it are written, the stored bitmap is rendered again and each
-observation's readings are taken again. No point's centre, no camera and no
-lens moves, and points at infinity are skipped
+evidence, the stored bitmap is rendered again and each observation's readings
+are taken again. No point's centre, no keypoint, no camera and no lens moves,
+and points at infinity are skipped
 ([edits/refine-all-normals.md](edits/refine-all-normals.md)).
 
 ```jsonc
@@ -4611,12 +4610,14 @@ cache, and a photograph that cannot be read fails the run with *"Cannot read
 photographs, in front of each stage and in front of each point's step, so
 `cancel_background_tasks` stops it and a cancelled refinement pushes no
 version. The step trusts the keypoints it is given, so where they may be off,
-`refit_all_points` comes first.
+`refit_all_points` comes first. It moves no keypoint, so a second refinement
+starts from the same keypoints, and `refit_all_points` after it relocalizes
+them on the turned patches.
 
 Its `report` is the Action Log sentence, which counts the per-point statuses:
 the points turned out of the finite points, how many of them agree with what
 was stored and how many were turned to a plane found with low confidence, the
-keypoints written, the points whose normal the step kept with why (no view
+points whose normal the step kept with why (no view
 joined, or a large turn on weak evidence), the points left as they were with
 the reason for each, the points at infinity skipped, and the median turn.
 
@@ -4947,9 +4948,9 @@ View's *Finite Diff Normal*, *Grid Plane Normal* and *Grown Plane Normal*,
 chosen by the required `method`: `finite_difference`, `grid_plane` or
 `grown_plane`. The two piece methods take `pieces` (default 2) and
 `overlap_percent` (default 0), and `grown_plane` refuses either. `grown_plane`
-runs `grown_plane_normal` at its default options; it writes the keypoints of
-the views that joined its plane and of those whose shift alone it fitted, and
-its `report` gives the plane's σ along its weakest and strongest directions
+runs `grown_plane_normal` at its default options; like the piece methods it
+moves no keypoint, so a `fit_bench_track` after it relocalizes the keypoints
+on the turned patch, and its `report` gives the plane's σ along its weakest and strongest directions
 and says *low confidence* when that precision is low, as Track View's Action
 Log row does ([track-view.md](track-view.md) § "The toolbar"). It is refused in
 the call, before a photograph is

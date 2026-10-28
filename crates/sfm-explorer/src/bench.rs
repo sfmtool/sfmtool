@@ -2553,8 +2553,8 @@ pub(crate) enum NormalStep {
     GridPlane(SplitSettings),
     /// *Grown Plane Normal*: the one plane the views agree on, fitted to the
     /// photographs view by view (`sfmtool_core::bench::grown_plane_normal`).
-    /// It also writes the keypoints of the views it joined and of those
-    /// whose shift alone it fitted.
+    /// Like the other two it turns the patch about its centre and moves no
+    /// keypoint.
     GrownPlane,
 }
 

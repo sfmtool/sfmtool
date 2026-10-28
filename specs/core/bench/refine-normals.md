@@ -3,11 +3,11 @@
 `bench::refine_normals` does to every finite point of a reconstruction what the
 bench does to one point when a person puts it on the bench, presses *Grown
 Plane Normal* and presses *Commit*, with every observation kept: one plane is
-fitted to the photographs the point is seen in, the point's patch is turned to
-face along that plane's normal, the keypoints of the photographs the fit used
-are rewritten, the stored bitmap is rendered again from the reference
-observation and each observation's readings are taken again. The point's
-centre does not move. It returns a new reconstruction holding the answers, with
+fitted to the photographs the point is seen in, the point's patch is turned
+about its centre to face along that plane's normal, the stored bitmap is
+rendered again from the reference observation and each observation's readings
+are taken again. The point's centre does not move and no keypoint moves. It
+returns a new reconstruction holding the answers, with
 every point at the index it had, and a report with one status per point. It
 moves no camera and no lens, and leaves points at infinity as they are.
 
@@ -56,7 +56,6 @@ pub enum RefineNormalsOutcome {
     Turned {
         turn_deg: f64,
         joined: usize,
-        written: usize,
         low_confidence: bool,
         unchanged: bool,
     },
@@ -134,8 +133,7 @@ println!(
 - `Turned { .. }`: the step turned the patch, and the record is the answer.
   `turn_deg` is the turn the patch was given (the tilt the step reached, which
   a view's tilt cap can stop short of the plane), `joined` the views that
-  joined the plane, `written` the keypoints the step wrote, the reference's
-  among them, and `low_confidence` the step's flag that the plane's weakest
+  joined the plane, and `low_confidence` the step's flag that the plane's weakest
   `σ`, with each view counted once, is over its bar. `unchanged` says the
   record agrees with the stored one (`PointRecord::agrees_with`) and the stored
   reference is not one only the display render picked, so the point was not
@@ -156,7 +154,6 @@ println!(
 The counts are read off the statuses: `read` (every status but `AtInfinity`),
 `turned`, `unchanged`, `low_confidence` (of the turned points), `none_joined`,
 `weak_turn`, `kept` (`NotRefined` and `NoBitmap`), `at_infinity`,
-`keypoints_written` (summed over the turned points that were rewritten),
 `with_error(is)` and `median_turn_deg` (`NaN` where none was turned).
 
 `RefineNormalsError` refuses the run as a whole, before anything is copied:
@@ -179,13 +176,15 @@ else:
    ([`editable-track.md`](editable-track.md) § "Estimating the normal"). It
    fits one plane through the patch's centre to the photographs, view by view,
    and when a view joined and the turn is not large on weak evidence it turns
-   the patch to that plane by the least rotation, writes the reference's
-   keypoint back as it was, writes the keypoint of each view that joined the
-   plane and of each view whose shift alone it fitted there and that passed its
-   floor, renders the stored bitmap again from the reference observation, and
-   reads the track back: every row's tile, its readings and its score against
-   the new bitmap. It trusts the keypoints it is given, so on a reconstruction
-   whose keypoints may be off, a refit comes first.
+   the patch to that plane by the least rotation about its centre, renders the
+   stored bitmap again from the reference observation, and reads the track
+   back: every row's tile, its readings and its score against the new bitmap.
+   It writes no keypoint: the turn keeps each keypoint's gap from the centre's
+   projection, and the image shifts the plane fit solves for are reported, not
+   written. It trusts the keypoints it is given, so on a reconstruction whose
+   keypoints may be off, a refit comes first; a refit after the run
+   (`refit_points`, the viewer's *Refit All Points*) relocalizes the keypoints
+   against the turned patches.
 3. **The record.** `bench::commit::point_record` builds the `PointRecord` the
    commit writes for the turned track, as for the refit: the stored position,
    the turned frame, the new bitmap and its reference observation, the colour
@@ -219,9 +218,8 @@ it reads a ranged point's direction at its distance for the same reason
 moves no centre: the position written is the stored one, bit for bit, so a
 held coordinate and a ranged distance both still describe the point. The
 record carries the point's stored constraint triple, so the point is written
-held or ranged as it was. The keypoints the step writes change what the
-point's rays say, as a refit's do, but a constraint is a statement about the
-coordinate, which the run does not touch.
+held or ranged as it was. The step writes no keypoint either, so the point's
+rays say what they said before the run.
 
 A ranged point at an infinite distance is stored with `w = 0`, so it is
 skipped as a point at infinity.
@@ -268,7 +266,7 @@ the same value and photographs give the same output bit for bit for any thread
 count.
 
 A refinement is not idempotent: a second run starts each step from the normal
-and the keypoints the first wrote.
+the first wrote. It starts from the same keypoints, since no run moves one.
 
 ### Run time
 
@@ -289,7 +287,6 @@ time (a one-thread rayon pool) is one run.
 | Refinement, 1 thread | 7.95 s | 30.0 s |
 | Points turned, of the finite points; with low confidence | 258 of 266; 168 | 360 of 382; 172 |
 | Normals left unchanged: no view joined; large turn on weak evidence | 2; 6 | 4; 18 |
-| Keypoints written | 1129 | 3020 |
 | Median turn | 17.0° | 5.2° |
 
 A refinement costs about 6 to 8 ms of one thread per observation, about six
@@ -308,12 +305,17 @@ on the grown plane normal's synthetic textured plane seen from six views out to
   start 25 degrees off the plane are each turned to within 2 degrees of it,
   their centres unchanged bit for bit, and each record written agrees with the
   one `create_track`, `grown_plane_normal` and `commit` write for that point
-  alone, the keypoints and the rendered bitmap included; no index moves.
+  alone, the keypoints and the rendered bitmap included; no index moves, and
+  every keypoint is the input's.
+- **Keypoints off their content stay put**: with every keypoint but each
+  point's first pushed 0.6 px and −0.4 px off its content, the three points
+  are still turned more than 20 degrees, every keypoint comes back as given,
+  and a second run on the first run's output moves none of them either.
 - **A point at infinity** is skipped, counted, and comes back as it was.
 - **Held and ranged points** are turned and keep their constraint triple and
   their position.
 - **A flat wall** joins no view, so every point is left unchanged, comes back
-  as it was, and no readings column is added.
+  as it was, its keypoints included, and no readings column is added.
 - **A point with one observation** is refused with `TooFewObservations` and
   comes back as it was.
 - **The run's stages** are `refine normals` and `write back`, and the count

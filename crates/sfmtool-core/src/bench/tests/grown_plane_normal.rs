@@ -161,6 +161,20 @@ fn keypoint_of(track: &EditableTrack, row: usize) -> Option<[f64; 2]> {
         .map(|k| [f64::from(k[0]), f64::from(k[1])])
 }
 
+/// Every row of `after` holds the keypoint `before` holds, bit for bit.
+fn assert_keypoints_kept(before: &EditableTrack, after: &EditableTrack) {
+    assert_eq!(before.observations.len(), after.observations.len());
+    for (row, (a, b)) in before
+        .observations
+        .iter()
+        .zip(&after.observations)
+        .enumerate()
+    {
+        let keypoint = |o: &crate::bench::Observation| o.track.as_ref().and_then(|m| m.keypoint);
+        assert_eq!(keypoint(a), keypoint(b), "row {row}");
+    }
+}
+
 /// The track's row in image `image`.
 fn row_of(track: &EditableTrack, image: u32) -> usize {
     track
@@ -197,9 +211,9 @@ pub(super) fn wide_centres() -> Vec<[f64; 3]> {
 
 /// From 25 degrees off, the patch is turned to within a degree of the plane.
 /// The plane's `σ` stays over the target, so the selection matches all five
-/// views; every one joins on its one growth, each written
-/// keypoint is at the point's projection and the reference keeps its own, and
-/// each joined view's score at the final plane is its held score. The two
+/// views; every one joins on its one growth with a shift under half a pixel,
+/// every keypoint is kept as given, and each joined view's score at the final
+/// plane is its held score. The two
 /// pairs are kept, and halving their information raises `σ`.
 #[test]
 fn a_textured_plane_started_far_off_is_turned_onto_it() {
@@ -228,15 +242,13 @@ fn a_textured_plane_started_far_off_is_turned_onto_it() {
     assert!((patch_frame_of(&turned).center - WORLD).norm() < 1e-9);
     assert!(turned.track().expect("track stage").bitmap.is_some());
 
-    let reference = sequence.reference.expect("a reference");
-    assert_eq!(
-        keypoint_of(&turned, reference),
-        keypoint_of(&track, reference),
-        "the reference keeps its keypoint"
-    );
+    // The patch turned 25 degrees and no keypoint moved, the reference's
+    // included.
+    assert!(report.tilt.degrees > 20.0, "{report}");
+    assert_keypoints_kept(&track, &turned);
     for (row, view) in sequence.views.iter().enumerate() {
         if let GrownPlaneView::Joined {
-            keypoint,
+            shift,
             grid_zncc,
             held_zncc,
             ..
@@ -244,17 +256,11 @@ fn a_textured_plane_started_far_off_is_turned_onto_it() {
         {
             // The score at the final plane is the last held score.
             assert_eq!(Some(*grid_zncc), *held_zncc, "row {row}");
-            let written = keypoint.expect("on the photograph");
-            let truth = scene.project(track.observations[row].image as usize, WORLD);
-            assert!(
-                distance_px(written, truth) < 0.5,
-                "row {row}: {written:?} vs {truth:?}"
-            );
-            let held = keypoint_of(&turned, row).expect("written");
-            assert!(distance_px(held, written) < 1e-3);
+            // Each keypoint is at the point's projection, so the fit's shift
+            // is near zero.
+            assert!(distance_px(*shift, [0.0; 2]) < 0.5, "row {row}: {shift:?}");
         }
     }
-    assert_eq!(sequence.written, centres.len(), "{report}");
     assert_eq!(sequence.pairs.len(), 2, "{sequence:#?}");
     assert_eq!(sequence.pairs_kept(), 2, "{sequence:#?}");
     let sentence = report.to_string();
@@ -262,7 +268,7 @@ fn a_textured_plane_started_far_off_is_turned_onto_it() {
         sentence.starts_with("5 of 5 views joined, 2 of 2 pairs kept; "),
         "{sentence}"
     );
-    assert!(sentence.contains("6 keypoints written"), "{sentence}");
+    assert!(!sentence.contains("written"), "{sentence}");
 }
 
 /// A view whose top cells see another surface still joins under the robust
@@ -365,14 +371,7 @@ fn a_large_turn_on_weak_evidence_keeps_the_start() {
         (a.u_axis, a.v_axis, a.center),
         (b.u_axis, b.v_axis, b.center)
     );
-    for row in 0..track.observations.len() {
-        assert_eq!(
-            keypoint_of(&kept, row),
-            keypoint_of(&track, row),
-            "row {row}"
-        );
-    }
-    assert_eq!(sequence.written, 0);
+    assert_keypoints_kept(&track, &kept);
     assert_eq!(sequence.shift_only(), 0, "{report}");
 
     // What was found is still reported: the plane, near the truth, its turn
@@ -391,14 +390,9 @@ fn a_large_turn_on_weak_evidence_keeps_the_start() {
     assert!(ratio < options.min_turn_sigma_ratio, "{report}");
     assert_eq!(sequence.joined(), centres.len() - 1, "{report}");
     assert!(!sequence.picks.is_empty());
-    for view in &sequence.views {
-        if let GrownPlaneView::Joined { keypoint, .. } = view {
-            assert_eq!(*keypoint, None);
-        }
-    }
     assert_eq!(
         sequence.views[sequence.reference.expect("a reference")],
-        GrownPlaneView::Reference { keypoint: None }
+        GrownPlaneView::Reference
     );
     let sentence = report.to_string();
     assert!(
@@ -443,7 +437,7 @@ fn a_large_turn_on_strong_evidence_is_made() {
         degrees(patch_frame_of(&turned).normal(), truth()) < 1.0,
         "{report}"
     );
-    assert_eq!(sequence.written, centres.len(), "{report}");
+    assert_keypoints_kept(&track, &turned);
 }
 
 /// A view that sees the texture on a plane turned 25 degrees from the one
@@ -502,7 +496,8 @@ fn checker(x: f64, y: f64) -> f64 {
 /// On repeating texture, with each view's pose turned so that its content
 /// sits 6 to 7 px from where the pose projects the point and its keypoint on
 /// the content, every view grows from its keypoint-implied shift and joins on
-/// its first growth, written on the content. With the views' keypoints
+/// its first growth, with a shift near zero that keeps it on the content, and
+/// keeps its keypoint. With the views' keypoints
 /// removed, no view has a shift to grow from: each is left out as having no
 /// keypoint, never tried, and the normal is left as given.
 #[test]
@@ -540,21 +535,15 @@ fn the_keypoint_implied_shift_takes_the_right_peak_on_repeating_texture() {
     // The reference is the camera whose pose is right.
     let (track, _) = set_reference(&track, row_of(&track, 0)).expect("an in row");
 
-    let written_off = |track: &EditableTrack, options: &GrownPlaneNormalOptions| {
-        let (turned, report) = run(&scene, &edited, track, options);
-        let sequence = sequence_of(&report).clone();
-        let mut worst: f64 = 0.0;
-        for (row, view) in sequence.views.iter().enumerate() {
-            if let GrownPlaneView::Joined { .. } = view {
-                let truth = content[track.observations[row].image as usize];
-                let held = keypoint_of(&turned, row).expect("written");
-                worst = worst.max(distance_px(held, truth));
-            }
+    let (turned, report) = run(&scene, &edited, &track, &every_view());
+    let sequence = sequence_of(&report).clone();
+    assert_keypoints_kept(&track, &turned);
+    let mut worst: f64 = 0.0;
+    for view in &sequence.views {
+        if let GrownPlaneView::Joined { shift, .. } = view {
+            worst = worst.max(distance_px(*shift, [0.0; 2]));
         }
-        (sequence, worst)
-    };
-
-    let (sequence, worst) = written_off(&track, &every_view());
+    }
     assert_eq!(sequence.joined(), 3, "{sequence:#?}");
     for entry in &sequence.trace {
         assert_eq!(entry.outcome, GrownPlaneTryOutcome::Matched, "{entry:#?}");
@@ -695,9 +684,8 @@ fn a_view_whose_keypoint_is_off_past_the_growth_is_left_out() {
 /// A view the selection does not pick, holding a keypoint 6 px off the
 /// content along one axis and 2 px along the other, has its shift alone
 /// fitted from that keypoint, through the patch slid onto it, and from
-/// nowhere else: the fit stays near the keypoint, under the floor, and no
-/// keypoint is written for the view, which keeps the keypoint the turn gives
-/// it.
+/// nowhere else: the fit stays near the keypoint, under the floor, and the
+/// view keeps its keypoint, as every view does.
 #[test]
 fn a_shift_only_fit_keeps_the_keypoint_implied_shift() {
     let mut centres = vec![centre(0.0, 0.0)];
@@ -744,14 +732,8 @@ fn a_shift_only_fit_keeps_the_keypoint_implied_shift() {
     assert!(sequence.turned(), "{report}");
     assert_eq!(picked(&report), picked(&before));
     match &sequence.views[off] {
-        GrownPlaneView::ShiftOnly {
-            shift,
-            grid_zncc,
-            keypoint,
-            ..
-        } => {
+        GrownPlaneView::ShiftOnly { shift, grid_zncc } => {
             assert!(*grid_zncc < options.min_held_zncc, "{grid_zncc}");
-            assert_eq!(*keypoint, None);
             // The shift is read from the view's keypoint, where the patch
             // slid onto it is centred, so the content sits at minus the
             // keypoint's offset. The fit stays nearer the keypoint.
@@ -764,10 +746,7 @@ fn a_shift_only_fit_keeps_the_keypoint_implied_shift() {
         }
         other => panic!("shift only, not {other:?}"),
     }
-    // Not written: the keypoint is the one the turn gives the view.
-    let held = keypoint_of(&turned, off).expect("a keypoint");
-    let truth = scene.project(image, WORLD);
-    assert!(distance_px(held, truth) > 3.0, "{held:?} vs {truth:?}");
+    assert_keypoints_kept(&moved, &turned);
 }
 
 /// A flat wall: no view joins, and the normal and every keypoint are left as
@@ -785,20 +764,13 @@ fn a_flat_wall_joins_no_view_and_changes_nothing() {
     assert_eq!(sequence.outcome, GrownPlaneOutcome::NoneJoined);
     assert_eq!((sequence.normal, sequence.turn_deg), (None, None));
     assert!(sequence.precision.is_none());
-    assert_eq!(sequence.written, 0);
     assert_eq!(report.tilt.degrees, 0.0);
     let (a, b) = (patch_frame_of(&track), patch_frame_of(&turned));
     assert_eq!(
         (a.u_axis, a.v_axis, a.center),
         (b.u_axis, b.v_axis, b.center)
     );
-    for row in 0..track.observations.len() {
-        assert_eq!(
-            keypoint_of(&turned, row),
-            keypoint_of(&track, row),
-            "row {row}"
-        );
-    }
+    assert_keypoints_kept(&track, &turned);
     assert!(
         report.to_string().contains("normal left unchanged"),
         "{report}"
@@ -1041,7 +1013,7 @@ fn the_grown_plane_normals_detail_phases_change_nothing() {
         let picked = max_selected_views.min(candidates);
         assert_eq!(sequence.picks.len(), picked, "{sequence:#?}");
         assert_eq!(shift_only, candidates - picked, "{sequence:#?}");
-        for once in ["setup", "turn and write", "grown plane normal"] {
+        for once in ["setup", "turn", "grown plane normal"] {
             assert_eq!(names(&detailed_phases, once), 1, "{once}");
         }
         let own = [
@@ -1056,7 +1028,7 @@ fn the_grown_plane_normals_detail_phases_change_nothing() {
             "pair fit",
             "selection",
             "shift-only fit",
-            "turn and write",
+            "turn",
         ];
         for (name, _, note) in &detailed_phases {
             assert!(!own.contains(name) || note.is_some(), "{name} has no note");
@@ -1160,8 +1132,8 @@ fn wide_pairs_sharpen_the_plane_over_reference_matches_alone() {
 /// plane, the views of the widest ring that most raise the weakest predicted
 /// information, and stops once the combined
 /// plane's `σ` reaches the target, having matched far fewer views than there
-/// are. Every other view is fitted for its shift alone at the final plane and
-/// written at the point's projection.
+/// are. Every other view is fitted for its shift alone at the final plane,
+/// with a shift near zero, and keeps its keypoint.
 #[test]
 fn the_selection_reaches_the_target_sigma_matching_few_views() {
     let mut centres = vec![centre(0.0, 0.0)];
@@ -1221,16 +1193,12 @@ fn the_selection_reaches_the_target_sigma_matching_few_views() {
         "{report}"
     );
     for (row, view) in sequence.views.iter().enumerate() {
-        if let GrownPlaneView::ShiftOnly { keypoint, .. } = view {
-            let written = keypoint.expect("passed the floor, on the photograph");
-            let truth = scene.project(track.observations[row].image as usize, WORLD);
-            assert!(
-                distance_px(written, truth) < 0.5,
-                "row {row}: {written:?} vs {truth:?}"
-            );
+        if let GrownPlaneView::ShiftOnly { shift, grid_zncc } = view {
+            assert!(*grid_zncc >= options.min_held_zncc, "row {row}: {view:?}");
+            assert!(distance_px(*shift, [0.0; 2]) < 0.5, "row {row}: {shift:?}");
         }
     }
-    assert_eq!(sequence.written, centres.len(), "{report}");
+    assert_keypoints_kept(&track, &turned);
 }
 
 /// The selection's settings, with its first rung at 12 degrees and a target
@@ -1515,10 +1483,11 @@ fn a_growth_that_cannot_reach_the_floor_stops_early() {
 
 /// The views the selection does not pick hold keypoints 1.5 px off the
 /// content along each axis. Each one's shift-only fit, over a mid-size
-/// window and then briefly over the whole grid, moves its keypoint back onto
-/// the content, where the step writes it.
+/// window and then briefly over the whole grid, finds the shift that puts
+/// the patch back on the content, and the step reports that shift and keeps
+/// every keypoint where it was given, though the patch turns.
 #[test]
-fn the_shift_only_fit_places_keypoints_on_the_content() {
+fn the_shift_only_fit_finds_the_shift_to_the_content_and_keeps_the_keypoints() {
     let mut centres = vec![centre(0.0, 0.0)];
     for (ring, from) in [10.0, 20.0, 30.0, 40.0].into_iter().enumerate() {
         for k in 0..4 {
@@ -1550,28 +1519,25 @@ fn the_shift_only_fit_places_keypoints_on_the_content() {
     assert!(sequence.turned(), "{report}");
     let shift_only = sequence.shift_only();
     assert!(shift_only >= 10, "{report}");
-    let mut written = 0;
+    assert!(report.tilt.degrees > 10.0, "{report}");
+    let mut fitted = 0;
     for (row, view) in sequence.views.iter().enumerate() {
-        if let GrownPlaneView::ShiftOnly {
-            keypoint,
-            was,
-            grid_zncc,
-            ..
-        } = view
-        {
+        if let GrownPlaneView::ShiftOnly { shift, grid_zncc } = view {
             let truth = scene.project(track.observations[row].image as usize, WORLD);
-            let was = was.expect("a keypoint before the step");
-            assert!(distance_px(was, truth) > 2.0);
+            let given = keypoint_of(&track, row).expect("a keypoint before the step");
+            assert!(distance_px(given, truth) > 2.0);
             assert!(*grid_zncc >= 0.5, "row {row}: {view:?}");
-            let at = keypoint.expect("passed the floor, on the photograph");
+            // The shift carries the patch from the keypoint to the content.
+            let to_content = [truth[0] - given[0], truth[1] - given[1]];
             assert!(
-                distance_px(at, truth) < 0.5,
-                "row {row}: {at:?} vs {truth:?}"
+                distance_px(*shift, to_content) < 0.5,
+                "row {row}: {shift:?} vs {to_content:?}"
             );
-            let held = keypoint_of(&turned, row).expect("written");
-            assert!(distance_px(held, at) < 1e-3);
-            written += 1;
+            fitted += 1;
         }
     }
-    assert_eq!(written, shift_only);
+    assert_eq!(fitted, shift_only);
+    // Not written: every keypoint, 1.5 px off the content or not, is the one
+    // the step was given.
+    assert_keypoints_kept(&track, &turned);
 }

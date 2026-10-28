@@ -237,9 +237,9 @@ fn show_refine_normals_entry(ui: &mut egui::Ui, node: &SceneNode, out: &mut Tree
         .on_disabled_hover_text(refusal.unwrap_or_default())
         .on_hover_text(
             "Turn every finite point's patch to its grown-plane normal, as Track View's Grown \
-             Plane Normal does with every observation kept: rewrite the keypoints of the views \
-             the step uses and render each patch bitmap again, as one version. Moves no camera \
-             and no point's centre, and skips points at infinity. Reads every photograph the \
+             Plane Normal does with every observation kept, and render each patch bitmap \
+             again, as one version. Moves no camera, no point's centre and no keypoint, and \
+             skips points at infinity. Reads every photograph the \
              points observe. Runs on a worker thread and can be cancelled; Undo (Ctrl+Z) puts \
              the points back.",
         );
