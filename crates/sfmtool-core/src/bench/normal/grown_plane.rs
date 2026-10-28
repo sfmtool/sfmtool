@@ -57,7 +57,7 @@ use super::super::steps::tilt_degrees;
 use super::super::track::EditableTrack;
 use super::grid_plane::{working_side, MIN_WORKING_RESOLUTION};
 use super::{
-    normal_preconditions, patch_frame_of, read_back, NormalError, NormalEstimate, NormalReport,
+    normal_preconditions, patch_frame_of, turn_and_read, NormalError, NormalEstimate, NormalReport,
 };
 
 mod combine;
@@ -805,7 +805,7 @@ pub fn grown_plane_normal(
             turn_deg: None,
             precision: None,
         };
-        return read_back(
+        return turn_and_read(
             track,
             edited,
             images,
@@ -813,7 +813,6 @@ pub fn grown_plane_normal(
             NormalEstimate::GrownPlane(Box::new(sequence)),
             &options.fit,
             &turn,
-            |_| {},
         );
     };
 
@@ -944,7 +943,7 @@ pub fn grown_plane_normal(
         record_views(&mut sequence.views, reference, &candidates, &outcome.fates);
         let mut turn = progress.detail_phase("turn");
         progress_note!(turn, "no view joined, normal left unchanged");
-        return read_back(
+        return turn_and_read(
             track,
             edited,
             images,
@@ -952,7 +951,6 @@ pub fn grown_plane_normal(
             NormalEstimate::GrownPlane(Box::new(sequence)),
             &options.fit,
             &turn,
-            |_| {},
         );
     };
 
@@ -978,7 +976,7 @@ pub fn grown_plane_normal(
             "large turn on weak evidence, {turn_deg:.1}\u{b0} at {:.1}\u{3c3}: normal left unchanged",
             turn_sigma_ratio(turn_deg, weak)
         );
-        return read_back(
+        return turn_and_read(
             track,
             edited,
             images,
@@ -986,7 +984,6 @@ pub fn grown_plane_normal(
             NormalEstimate::GrownPlane(Box::new(sequence)),
             &options.fit,
             &turn,
-            |_| {},
         );
     }
     sequence.outcome = GrownPlaneOutcome::Turned;
@@ -996,7 +993,7 @@ pub fn grown_plane_normal(
     let finals = state.final_views(tilt, &outcome.fates);
     record_views(&mut sequence.views, reference, &candidates, &finals);
     progress_note!(turn, "turned {turn_deg:.2}\u{b0}, keypoints kept");
-    read_back(
+    turn_and_read(
         track,
         edited,
         images,
@@ -1004,7 +1001,6 @@ pub fn grown_plane_normal(
         NormalEstimate::GrownPlane(Box::new(sequence)),
         &options.fit,
         &turn,
-        |_| {},
     )
 }
 

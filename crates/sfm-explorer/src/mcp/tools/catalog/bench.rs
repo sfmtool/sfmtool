@@ -878,11 +878,12 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           photographs, growing a window from each picked view's keypoint to \
                           the whole patch and combining the views' planes, and takes no pieces \
                           or overlap_percent; it trusts the keypoints it is given, so fit the \
-                          track first where they may be off. It turns the patch whenever a \
-                          view joined, unless the turn is large on weak evidence, about the \
-                          patch centre, so it moves no keypoint (fit the track afterwards to \
-                          relocalize them against the turned patch), and its report gives the plane's sigma along its weakest and strongest \
-                          directions and says when that precision is low. Every method's turn stops \
+                          track first where they may be off. It turns the patch about its \
+                          centre whenever a view joined, unless the turn is large on weak \
+                          evidence, and moves no keypoint (fit the track afterwards to \
+                          relocalize them against the turned patch), and its report gives \
+                          the plane's sigma along its weakest and strongest directions and \
+                          says when that precision is low. Every method's turn stops \
                           where any observation's camera would see the patch past the tilt \
                           cap, and the step ends by rendering its bitmap again and reading \
                           the track back. Refused at the cluster stage, at infinity, and with fewer \

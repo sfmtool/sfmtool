@@ -847,35 +847,8 @@ fn turn_and_read(
     options: &FitOptions,
     progress: &Progress<'_>,
 ) -> Result<(EditableTrack, NormalReport), NormalError> {
-    read_back(
-        track,
-        edited,
-        images,
-        normal,
-        estimate,
-        options,
-        progress,
-        |_| {},
-    )
-}
-
-/// [`turn_and_read`] with `write` run on the turned track before it is read
-/// back: for a step that writes keypoints of its own, found by its own search
-/// rather than kept where the turn leaves them.
-#[allow(clippy::too_many_arguments)]
-fn read_back(
-    track: &EditableTrack,
-    edited: &EditedReconstruction,
-    images: &[ProjectedImage<'_>],
-    normal: Vector3<f64>,
-    estimate: NormalEstimate,
-    options: &FitOptions,
-    progress: &Progress<'_>,
-    write: impl FnOnce(&mut EditableTrack),
-) -> Result<(EditableTrack, NormalReport), NormalError> {
     progress.check_cancel()?;
-    let (mut turned, tilt) = tilt_patch(track, edited, normal)?;
-    write(&mut turned);
+    let (turned, tilt) = tilt_patch(track, edited, normal)?;
     let (rendered, evaluate) = evaluate_rendering_bitmap(
         &turned,
         edited,
