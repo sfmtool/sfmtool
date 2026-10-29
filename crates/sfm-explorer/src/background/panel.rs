@@ -41,6 +41,7 @@ use crate::action_log::{detail_row, detail_text, ActionLog, Breakdown};
 use crate::background::{Ended, FinishedTask, Queue, TaskState};
 use crate::progress::{Collector, Count, Detail, Live, StageCount};
 use crate::state::AppState;
+use crate::widget_name::set_widget_name;
 
 /// Marks the phase that has not closed yet, beside the time it has been open.
 ///
@@ -78,6 +79,10 @@ const LINE_SPACING: f32 = 4.0;
 /// would take a quarter of a line the panel's width has no room for. Its
 /// tooltip says what it does.
 pub(super) const CANCEL: &str = "\u{1f5d9}";
+
+/// The Cancel button's accessible name: its glyph, then the word it stands
+/// for.
+pub(super) const CANCEL_NAME: &str = "\u{1f5d9} Cancel";
 
 /// What leads a waiting task's line, where a queue's line has its name.
 pub(super) const WAITING: &str = "waiting";
@@ -402,6 +407,7 @@ fn show_running(ui: &mut egui::Ui, state: &AppState, id: u64, asked: &mut Asked)
             refusal.is_none() && !stopping,
             egui::Button::new(CANCEL).small(),
         );
+        set_widget_name(&button, CANCEL_NAME);
         let button = match (refusal.as_deref(), stopping) {
             (Some(refusal), _) => button.on_disabled_hover_text(refusal),
             (None, true) => button.on_disabled_hover_text(STOPPING_HOVER),
@@ -689,8 +695,9 @@ fn show_waiting(ui: &mut egui::Ui, state: &AppState, queue: Queue, asked: &mut A
         .collect();
 
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        if ui
-            .add(egui::Button::new(CANCEL).small())
+        let button = ui.add(egui::Button::new(CANCEL).small());
+        set_widget_name(&button, CANCEL_NAME);
+        if button
             .on_hover_text("Take it out of the queue before it starts.")
             .clicked()
         {

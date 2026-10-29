@@ -250,6 +250,7 @@ pub(super) fn show_camera_images_group(
             row_id(id, "camera_images_eye"),
             &mut node.show_camera_images,
             None,
+            "Show camera images",
             "Show this node's camera frustums and image quads",
         );
         let shown = node.show_camera_images;

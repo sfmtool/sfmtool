@@ -19,6 +19,9 @@ use sfmtool_core::camera::CameraIntrinsics;
 /// than failing, and nothing else would notice.
 pub(crate) const GEAR: &str = "⚙";
 
+/// The gear's accessible name: its glyph, then what its popup holds.
+pub(crate) const GEAR_NAME: &str = "⚙ Intrinsics settings";
+
 /// Draw the layer's contribution to the Image Detail toolbar.
 ///
 /// `layer` is the cached report for the camera currently on screen, or `None`
@@ -38,9 +41,10 @@ pub(crate) fn show_intrinsics_controls(
     ui.separator();
     ui.checkbox(&mut settings.enabled, "Intrinsics");
     ui.add_enabled_ui(settings.enabled, |ui| {
-        ui.menu_button(GEAR, |ui| {
+        let gear = ui.menu_button(GEAR, |ui| {
             settings_popup(ui, settings, camera, layer, change)
         });
+        set_widget_name(&gear.response, GEAR_NAME);
     });
 }
 

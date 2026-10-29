@@ -564,7 +564,8 @@ the waiting line.
 └────────────────────────────────────┘
 ```
 
-`x` stands for the close glyph Cancel is drawn as. The fill behind the running
+`x` stands for the close glyph Cancel is drawn as; the button is named
+`🗙 Cancel` in `get_widgets`. The fill behind the running
 line, which the sketches leave out, lies under the text, here at 61 %:
 
 ```

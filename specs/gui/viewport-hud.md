@@ -57,7 +57,9 @@ The HUD is **open by default**. The controls are the point of the panel, and a
 viewport that starts by hiding them just trades a menu round-trip for a click.
 It collapses to a single gear glyph for when the full-bleed viewport matters
 more (design principle #4, *Dark, Cinematic Aesthetic*) — the translucent fill
-keeps it from fighting the scene while open.
+keeps it from fighting the scene while open. The gear is the button named
+`⚙ Display controls` in `get_widgets`, and the close button of the open panel
+`🗙 Collapse display controls`: each glyph, then the words of its hover text.
 
 ```
 ┌────────────────────────────────────────────────────────────┐

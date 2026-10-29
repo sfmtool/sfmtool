@@ -601,6 +601,7 @@ fn show_node(ui: &mut egui::Ui, node: &mut SceneNode, ctx: &NodeContext, out: &m
                     row_id(node.id, "patches_eye"),
                     &mut node.show_patches,
                     None,
+                    "Show patches",
                     "Show this node's patches",
                 );
                 let shown = node.show_patches;
@@ -941,6 +942,7 @@ fn show_node_header(
         row_id(id, "node_eye"),
         &mut node.visible,
         Some(ctx.visible),
+        "Show reconstruction",
         "Show this reconstruction",
     );
     let visible = node.visible;
@@ -965,6 +967,7 @@ fn show_node_header(
         &mut soloed,
         None,
         SOLO_GLYPH,
+        "Solo",
         "Solo: draw only this reconstruction. Click again to show them all — \
          the other nodes' eyes are left exactly as you set them.",
     );
@@ -978,6 +981,7 @@ fn show_node_header(
         &mut node.interactive,
         None,
         CURSOR_GLYPH,
+        "Interactive",
         "Let hover and clicks in the 3D viewport reach this reconstruction",
     );
     let interactive = node.interactive;
@@ -1230,6 +1234,7 @@ fn show_points_group(
             row_id(id, "points_eye"),
             &mut node.show_points,
             None,
+            "Show points",
             "Show this node's 3D points",
         );
         let shown = node.show_points;
@@ -1250,6 +1255,7 @@ fn show_points_group(
                 &mut node.show_points_at_infinity,
                 None,
                 INFINITY_GLYPH,
+                "Show points at infinity",
                 "Draw this node's w = 0 points — directions with no parallax",
             );
             let shown = node.show_points_at_infinity;

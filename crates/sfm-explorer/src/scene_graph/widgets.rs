@@ -15,22 +15,30 @@ use eframe::egui;
 use crate::scene::SceneNode;
 
 use super::{EYE_GLYPH, ROW_HEIGHT, TOGGLE_WIDTH};
+use crate::widget_name::set_widget_name;
 
 #[cfg(test)]
 mod tests;
 
 /// The master/group eye. Dimmed when off; the tooltip says what it governs.
+/// `what` completes its accessible name, as for [`glyph_toggle`].
 pub(super) fn eye_toggle(
     ui: &mut egui::Ui,
     id: egui::Id,
     on: &mut bool,
     lit: Option<bool>,
+    what: &str,
     tooltip: &str,
 ) -> egui::Response {
-    glyph_toggle(ui, id, on, lit, EYE_GLYPH, tooltip)
+    glyph_toggle(ui, id, on, lit, EYE_GLYPH, what, tooltip)
 }
 
 /// A one-glyph toggle button: full-strength when lit, weak otherwise.
+///
+/// Its accessible name is the glyph followed by `what`, the words that say
+/// what it controls (`👁 Show points`), so `get_widgets` and a screen reader
+/// name it by the glyph a person sees and by what it does. The name does not
+/// change with the toggle's state.
 ///
 /// `lit` is normally `None` — paint the glyph from the flag it toggles. The
 /// master eye passes `Some(effective visibility)` instead, so a node hidden by
@@ -47,6 +55,7 @@ pub(super) fn glyph_toggle(
     on: &mut bool,
     lit: Option<bool>,
     glyph: &str,
+    what: &str,
     tooltip: &str,
 ) -> egui::Response {
     let color = if lit.unwrap_or(*on) {
@@ -57,10 +66,9 @@ pub(super) fn glyph_toggle(
     let button = egui::Button::new(egui::RichText::new(glyph).color(color))
         .frame(false)
         .min_size(egui::vec2(TOGGLE_WIDTH, ROW_HEIGHT));
-    let response = ui
-        .push_id(id, |ui| ui.add(button))
-        .inner
-        .on_hover_text(tooltip);
+    let response = ui.push_id(id, |ui| ui.add(button)).inner;
+    set_widget_name(&response, &format!("{glyph} {what}"));
+    let response = response.on_hover_text(tooltip);
     if response.clicked() {
         *on = !*on;
     }

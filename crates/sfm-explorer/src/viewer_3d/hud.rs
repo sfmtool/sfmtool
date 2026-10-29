@@ -17,6 +17,7 @@ use eframe::egui;
 
 use crate::action_log::Kind;
 use crate::state::AppState;
+use crate::widget_name::set_widget_name;
 
 use super::display::{Field, FieldValue};
 use super::Viewer3D;
@@ -59,6 +60,11 @@ const HUD_FILL_OPACITY: f32 = 0.88;
 /// guards this.
 const HUD_EXPAND_GLYPH: &str = "⚙";
 const HUD_COLLAPSE_GLYPH: &str = "🗙";
+
+/// The accessible names of the two buttons: the glyph each shows, then the
+/// words of its hover text.
+pub(super) const HUD_EXPAND_NAME: &str = "⚙ Display controls";
+pub(super) const HUD_COLLAPSE_NAME: &str = "🗙 Collapse display controls";
 
 /// Stable id of one collapsible section, independent of the `Ui` that hosts it.
 ///
@@ -179,11 +185,9 @@ impl Viewer3D {
             .constrain_to(viewport)
             .show(&ctx, |ui| {
                 if !expanded {
-                    if ui
-                        .button(HUD_EXPAND_GLYPH)
-                        .on_hover_text("Display controls")
-                        .clicked()
-                    {
+                    let expand = ui.button(HUD_EXPAND_GLYPH);
+                    set_widget_name(&expand, HUD_EXPAND_NAME);
+                    if expand.on_hover_text("Display controls").clicked() {
                         self.hud_open = true;
                         self.hud_opened_by_click = !fits;
                     }
@@ -200,8 +204,9 @@ impl Viewer3D {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Display").strong());
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui
-                                .button(HUD_COLLAPSE_GLYPH)
+                            let collapse = ui.button(HUD_COLLAPSE_GLYPH);
+                            set_widget_name(&collapse, HUD_COLLAPSE_NAME);
+                            if collapse
                                 .on_hover_text("Collapse display controls")
                                 .clicked()
                             {

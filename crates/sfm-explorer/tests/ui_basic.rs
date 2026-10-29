@@ -1535,7 +1535,7 @@ fn the_scene_panel_lists_the_loaded_reconstruction() {
         |listing| {
             (find_widget(listing, "label", "demo").is_some()
                 && find_widget(listing, "label", "Camera Images (8)").is_some()
-                && find_widget(listing, "button", "S").is_some())
+                && find_widget(listing, "button", "S Solo").is_some())
             .then_some(())
         },
     );

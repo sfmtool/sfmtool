@@ -455,8 +455,12 @@ fixed-height for virtualization.
   U+1F5B1 TRACKBALL, U+221E INFINITY — all in egui's bundled proportional
   fonts, which `scene_graph/tests.rs` pins); solo is the letter `S`, dimmed the
   same way, because no bundled pictograph says "only this one" and a mixer's
-  solo button has said `S` for fifty years. The selection accent bar and the
-  tint swatch are *painted* rather than written: no bundled proportional glyph
+  solo button has said `S` for fifty years. Each is named in the
+  accessibility tree, and so in `get_widgets`, by its glyph and then what it
+  controls, the same whichever state it is in: `👁 Show reconstruction`,
+  `👁 Show camera images`, `👁 Show points`, `👁 Show patches`,
+  `∞ Show points at infinity`, `S Solo` and `🖱 Interactive`. The selection
+  accent bar and the tint swatch are *painted* rather than written: no bundled proportional glyph
   is a vertical bar, and a painted rect answers no pointer hit — which is what
   keeps it from competing with the row-wide click target.
 - The master eye is lit from **effective** visibility, so a node another node's
