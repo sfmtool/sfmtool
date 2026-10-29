@@ -461,7 +461,7 @@ measured. `k` such cameras cost `k` races; the cases with more than one are rare
 enough not to justify a combinatorial search over all `2ᵏ` combinations.
 
 A weight between rows and columns is not solved for, because the wrong choice is
-a local minimum: a continuous blend `t = λ·y + (1 − λ)·x`, which is rows at
+a local minimum: a continuous blend `t = λ·y − (1 − λ)·x`, which is rows at
 `λ = 1` and columns at `λ = 0`, released from `λ = 0` stays there
 ([Alternatives considered](#alternatives-considered)).
 
@@ -575,8 +575,8 @@ score. Solves were capped at 150 to 400 evaluations; 100 against 400 changed the
 held-out RMS by under 0.0003 px. The scratch solver wrote the rolling-shutter
 term in the kernels' optical frame (y down, `t` growing down the image for
 rows). That is the same family of maps as the one above, with
-`ω = (−ωx, ωy, ωz)` of its rates for rows, so every fit and score here holds
-unchanged; only a quoted rate's sign depends on the convention.
+`ω = (−ωx, ωy, ωz)` of its rates for rows and `ω = (ωx, −ωy, −ωz)` for columns,
+so every fit and score here holds unchanged; only a quoted rate's sign depends on the convention.
 
 **Held-out RMS, px:**
 
@@ -664,8 +664,11 @@ better and has a physical reading; it could serve as a fallback for a camera
 whose scanlines are unknown and not worth two solves
 ([open question](#open-questions)).
 
-**A continuous readout blend.** `t = λ·y + (1 − λ)·x` with one `λ ∈ [0, 1]` per
-camera and shared rates. The solve's cost (px², priors included) at fixed `λ`:
+**A continuous readout blend.** `t = λ·y − (1 − λ)·x` with one `λ ∈ [0, 1]` per
+camera and shared rates. The scratch solver wrote it as `λ·y_o + (1 − λ)·x_o` in
+the optical frame, which is the negative of this `t` and so the same fit with
+every rate negated. In this draft's frame, `λ·y + (1 − λ)·x` runs along the other
+diagonal and is not what was measured between `λ = 0` and `λ = 1`. The solve's cost (px², priors included) at fixed `λ`:
 
 | λ | 0 | 0.25 | 0.5 | 0.75 | 1 |
 |---|---|---|---|---|---|
